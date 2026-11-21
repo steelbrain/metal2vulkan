@@ -154,7 +154,7 @@ const STAGE_MODULE: &[(&str, Verdict)] = &[
         "private_bytes",
         Fact("the bytes FunctionStorageAssumed's announcement may name"),
     ),
-    ("stats", Fact("counts of the module, for diagnostics")),
+    ("stats", Applied),
 ];
 
 const COMPUTE_PIPELINE: &[(&str, Verdict)] = &[

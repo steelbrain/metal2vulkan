@@ -549,6 +549,10 @@ pub(crate) const REQUIRED: &[Feature] = &[
     feature!(vulkan12.host_query_reset),
     feature!(vulkan13.synchronization2 => Synchronization2),
     feature!(vulkan13.dynamic_rendering),
+    // A kernel past the stage bound is created only from its helper's cache data, with
+    // `VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT`, so the process never compiles
+    // it (`crate::stage`). Vulkan 1.3 requires it.
+    feature!(vulkan13.pipeline_creation_cache_control),
 ];
 
 /// The features of the portability subset the runtime requires of a device that lists

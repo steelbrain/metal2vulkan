@@ -311,6 +311,7 @@ surface! {
         fn grid_tile;
         const GRID_TILE_THREADS;
         const DEEP_THREADGROUP;
+        const COMPILED_STAGE_WEIGHT;
         struct ComputePipeline N;
         struct ComputePipelineMetalInfo N;
         struct CompileReport N;

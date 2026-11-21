@@ -413,7 +413,9 @@ fn run(
         device.new_compute_pipeline_state(&descriptor, |samplers| numbered(samplers))
     })?;
     // Every pipeline the dispatch runs, made before anything is submitted.
-    state.prepare_dispatch(dispatch, threads_per_group, &lengths);
+    state
+        .prepare_dispatch(dispatch, threads_per_group, &lengths)
+        .map_err(|error| ExecutorError::Failed(format!("the dispatch's pipeline: {error}")))?;
     let created = device
         .counters()
         .metrics()

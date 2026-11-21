@@ -12,11 +12,8 @@
 //!   names the Metal construct, and its [`Needs`] says what would change the answer:
 //!   [`Needs::AnyOf`] lists alternative sets of device [`Capability`]s (a device that enables
 //!   every capability of one set compiles it), [`Needs::NotImplemented`] is a gap of this
-//!   translator version on every device, [`Needs::NotRepresentable`] has no Vulkan 1.2+
-//!   mechanism, and
-//!   [`Needs::StageBound`] is a stage the device's plan writes heavier than the translator hands
-//!   any driver of a device [`Device::from_queries`](crate::device::Device::from_queries) made.
-//!   The runtime adds
+//!   translator version on every device, and [`Needs::NotRepresentable`] has no Vulkan 1.2+
+//!   mechanism. The runtime adds
 //!   [`Needs::MetalGpuFamily`]: Metal's own refusal
 //!   on a device without the family, and [`Needs::MetalRefuses`]: Metal's own refusal of the
 //!   form on the devices it was measured on. The translator does not return different output in place
@@ -306,9 +303,7 @@ pub struct Unsupported {
     pub location: Option<Location>,
     /// The symbol the refused construct names, for diagnostics only: an unknown intrinsic, the
     /// callee of a call that needs linking, the pixel format a refused texture, view or copy
-    /// holds, or, for a stage past the size the
-    /// translator hands a driver ([`Feature::StageSize`]), the stage's entry weight and the bound
-    /// it passed (`entry weight 532213, past the bound 99109`). Opaque like every [`DiagName`].
+    /// holds. Opaque like every [`DiagName`].
     pub symbol: Option<DiagName>,
 }
 
@@ -460,13 +455,6 @@ pub enum Needs {
     NotImplemented,
     /// No Vulkan 1.2+ mechanism exists for these semantics.
     NotRepresentable,
-    /// The stage, as this device's plan writes it, is heavier than the translator hands any
-    /// driver: its entry weight passes the heaviest stage measured to compile within host-sized memory
-    /// ([`Unsupported::symbol`] names the weight and the bound). The weight is the plan's, so a
-    /// device whose plan writes the stage lighter translates it: one that keeps its widest
-    /// simdgroup mode pinned where this one emulates simdgroups. A gap of the translator rather
-    /// than of the device: no device is handed a stage past the bound.
-    StageBound,
     /// A device that claims this Metal GPU family (`MTLGPUFamily`'s raw value, 1010 for Apple10),
     /// which the device does not: Metal itself refuses the input on a device without the family,
     /// so the refusal is Metal's own answer rather than a gap. Only the runtime refuses so, by the
@@ -606,10 +594,6 @@ pub enum Feature {
     ImageAtomics,
     /// Too many descriptors of one kind in a stage or pipeline.
     DescriptorCount,
-    /// A stage module heavier than the translator hands the device's driver: past the heaviest
-    /// measured to compile within host-sized memory, on a device
-    /// [`Device::from_queries`](crate::device::Device::from_queries) made ([`Needs::StageBound`]).
-    StageSize,
     /// A buffer window beyond the descriptor range limits.
     BufferRange,
 

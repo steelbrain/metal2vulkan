@@ -322,8 +322,8 @@ pub struct SimdPlan {
 
 /// Whether [`widest_pin`] weighs a kernel for the `Emulated` tier, or the kernel keeps the
 /// `Direct` tier's pin to the device's widest mode whatever its pressure: a kernel whose emulated
-/// module passed the bound every stage of a profile `Device::from_queries` built is held under is
-/// planned again keeping it (`pipeline::compile`'s stage bound, `device::profile::StageBound`).
+/// module passed the compiled stage bound is planned again keeping it (`pipeline::compile`'s stage
+/// bound).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WidestPin {
     /// [`widest_pin`] weighs the kernel.

@@ -73,6 +73,13 @@ pub enum Error {
     },
     /// A Metal feature the runtime does not build yet: a typed known gap.
     Unsupported(Gap),
+    /// [`Device::new_compute_pipeline_state`](crate::Device::new_compute_pipeline_state), a
+    /// dispatch, or [`ComputePipelineState::prepare_dispatch`](crate::ComputePipelineState::prepare_dispatch):
+    /// a `VkPipeline` of a kernel past the stage bound whose cache data the cache directory does
+    /// not hold, which this process never compiles. The consumer's helper compiles it
+    /// ([`Device::fill_stage`](crate::Device::fill_stage)), and the call is made again. Metal has no
+    /// counterpart: Metal compiles every pipeline in its own compiler service.
+    StageUnfilled(crate::StageRequest),
     /// A call that needs one of the runtime's threads, after
     /// [`Device::quiesce`](crate::Device::quiesce) stopped them. Metal has no counterpart.
     Quiesced,
@@ -1322,6 +1329,42 @@ pub enum Gap {
         /// What the pass sets beside the plane, or into it.
         kind: LinearPlanePassKind,
     },
+    /// A pipeline of a function whose module weighs more than the compiled stage bound
+    /// (`metal2vulkan::pipeline::COMPILED_STAGE_WEIGHT`, the heaviest measured to compile within
+    /// host-sized memory), which this process never compiles, that the device does not make:
+    /// what `cause` names. A kernel's `VkPipeline` is made from its helper's cache data alone
+    /// ([`Device::fill_stage`](crate::Device::fill_stage)). Metal's counterpart is the pipeline
+    /// state's make, which Metal's compiler service compiles.
+    ///
+    /// Basis: device (ANV, Mesa 26.2.6, took 3.65 GiB to compile a stage of entry weight 99,109
+    /// and passed 16 GiB on one of 532,213; a driver whose helper's compile met its cap or time,
+    /// or that keeps no pipeline cache data, gives no data to make the pipeline from).
+    StageSize {
+        /// The heaviest stage's entry weight (`ModuleStats::entry_weight`).
+        weight: u64,
+        /// Why it is not made.
+        cause: StageGap,
+    },
+}
+
+/// Why a pipeline past the stage bound is not made ([`Gap::StageSize`]).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum StageGap {
+    /// The kernel's entry holds a breach: what ended its helper's compile, or the driver's
+    /// compile-required answer to the helper's cache data
+    /// ([`Device::record_stage_breach`](crate::Device::record_stage_breach)). Kept until the
+    /// driver's version changes.
+    Breach(crate::StageBreach),
+    /// The device has no cache directory
+    /// ([`DeviceOptions::pipeline_cache_dir`](crate::DeviceOptions::pipeline_cache_dir)) to keep a
+    /// helper's cache data in.
+    NoCacheDirectory,
+    /// The device's driver writes no pipeline cache header, so its cache data holds no compile
+    /// another process can hand it: lavapipe's (an empty cache's data is 20 bytes in Mesa 26.2.4).
+    NoPipelineCache,
+    /// A render pipeline's vertex or fragment stage: no helper compiles render stages.
+    RenderStage,
 }
 
 /// What a render pass sets beside a surface plane that renders as a linear colour attachment
@@ -1978,6 +2021,12 @@ impl fmt::Display for Error {
                 functions.join(", ")
             ),
             Error::Unsupported(gap) => write!(f, "{gap}"),
+            Error::StageUnfilled(request) => write!(
+                f,
+                "a kernel of entry weight {} is past the stage bound, and the cache directory \
+                 holds no helper's compile of it",
+                request.weight()
+            ),
         }
     }
 }
@@ -2487,6 +2536,17 @@ impl fmt::Display for Gap {
                     }
                 })
             }
+            Gap::StageSize { weight, cause } => {
+                write!(f, "a stage of entry weight {weight} past the stage bound is not made: ")?;
+                match cause {
+                    StageGap::Breach(breach) => write!(f, "its helper's compile met {breach:?}"),
+                    StageGap::NoCacheDirectory => f.write_str("the device has no cache directory"),
+                    StageGap::NoPipelineCache => {
+                        f.write_str("the device's driver keeps no pipeline cache data")
+                    }
+                    StageGap::RenderStage => f.write_str("no helper compiles a render stage"),
+                }
+            }
         }
     }
 }
@@ -2600,7 +2660,8 @@ impl std::error::Error for Error {
             | Error::Limit(_)
             | Error::NoSuchBlock(_)
             | Error::Quiesced
-            | Error::Unsupported(_) => None,
+            | Error::Unsupported(_)
+            | Error::StageUnfilled(_) => None,
         }
     }
 }

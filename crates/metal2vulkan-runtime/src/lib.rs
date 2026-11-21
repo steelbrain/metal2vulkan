@@ -55,6 +55,7 @@ mod render_encoder;
 mod ring;
 mod sampler;
 mod shadow;
+mod stage;
 mod staging;
 mod submit;
 mod submit_calls;
@@ -77,7 +78,7 @@ pub use device::{Device, DeviceOptions, RawDevice};
 pub use encoder::{ComputeCommandEncoder, Dispatch, DispatchType, Resource, ResourceUsage};
 pub use error::{
     DrawKind, Error, Gap, IndirectCommandsKind, KernelInputKind, Limit, LinearPlanePassKind,
-    Refusal, RenderPassKind, RenderPipelineKind, TextureViewKind,
+    Refusal, RenderPassKind, RenderPipelineKind, StageGap, TextureViewKind,
 };
 pub use event::{Event, SharedEvent};
 pub use export::{Export, ExportHandle};
@@ -142,6 +143,7 @@ pub use render_encoder::{
     IndexBuffer, RenderCommandEncoder, ScissorRect, Viewport, VisibilityResultMode,
 };
 pub use sampler::SamplerState;
+pub use stage::{serve_stage, StageBreach, StageFill, StageRequest};
 pub use surface::{
     PlaneLayout, PlaneSpec, Surface, SurfaceCopy, SurfaceExport, SurfaceForm, SurfaceSpec,
 };

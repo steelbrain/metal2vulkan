@@ -1458,6 +1458,23 @@ pub(crate) struct EncoderLimits {
 }
 
 impl Core {
+    /// A digest of what the device enabled: its extensions, the consumer's features and the
+    /// translator's profile of the device (its features, properties and limits). Two devices of
+    /// one physical device opened with the same [`DeviceOptions`] have one; the stage keys and a
+    /// helper's device check it (`crate::stage`).
+    pub(crate) fn enables(&self) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        for name in &self.extensions {
+            h.update(name.as_bytes_with_nul());
+        }
+        for feature in &self.consumer_features {
+            h.update(format!("{feature:?};"));
+        }
+        h.update(self.translator.profile().fingerprint());
+        h.finalize().into()
+    }
+
     /// The most bytes a dispatch's slots of the private arena take: the device's
     /// ([`EncoderLimits::arena_budget`]), or in a device test the one the test set.
     pub(crate) fn arena_budget(&self) -> u64 {

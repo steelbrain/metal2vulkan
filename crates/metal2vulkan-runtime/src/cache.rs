@@ -611,7 +611,7 @@ fn write_at(file: &File, buf: &[u8]) -> io::Result<()> {
 
 /// The bytes of the file at `path`, where they are `len` long (any length with none); `None`
 /// where they are not.
-fn read_whole(path: &Path, len: Option<u64>) -> io::Result<Option<Vec<u8>>> {
+pub(crate) fn read_whole(path: &Path, len: Option<u64>) -> io::Result<Option<Vec<u8>>> {
     let mut opened = File::open(path)?;
     let held = opened.metadata()?.len();
     if len.is_some_and(|len| len != held) {
@@ -671,7 +671,7 @@ pub(crate) fn prune_blobs(dir: &Path, own: &str) {
 
 /// Writes `parts`, one after another, to `path` through a temporary file beside it, named for this
 /// process and this write, then renamed over it.
-fn write_whole(path: &Path, parts: &[&[u8]]) -> io::Result<()> {
+pub(crate) fn write_whole(path: &Path, parts: &[&[u8]]) -> io::Result<()> {
     static WRITES: AtomicU64 = AtomicU64::new(0);
     let mut temp = path.as_os_str().to_owned();
     temp.push(format!(
@@ -798,6 +798,9 @@ pub(crate) struct Caches {
     dir: Option<PathBuf>,
     /// The device's blob in it, named once the reaper has read the device's header.
     blob: OnceLock<PathBuf>,
+    /// The pipeline cache header the device's driver writes ([`usable_header`]), set before the
+    /// reaper makes the cache; unset where the driver writes none.
+    header: OnceLock<[u8; 32]>,
     pipelines: Mutex<Pipelines>,
     /// Signalled once the reaper made the cache.
     made: Condvar,
@@ -1102,6 +1105,7 @@ impl Caches {
             store: dir.map(|dir| Store::open(dir.to_owned(), cap, counters.clone())),
             dir: dir.map(Path::to_owned),
             blob: OnceLock::new(),
+            header: OnceLock::new(),
             pipelines: Mutex::new(Pipelines {
                 made: false,
                 seeding: false,
@@ -1247,6 +1251,23 @@ impl Caches {
         )
     }
 
+    /// The cache directory, where the device has one.
+    pub(crate) fn dir(&self) -> Option<&Path> {
+        self.dir.as_deref()
+    }
+
+    /// The pipeline cache header the device's driver writes ([`usable_header`]), once the reaper
+    /// made the device's cache, which the calling thread waits for (microseconds, at the device's
+    /// start); none where the driver writes none.
+    pub(crate) fn header(&self) -> Option<[u8; 32]> {
+        let mut pipelines = lock(&self.pipelines);
+        while !pipelines.made {
+            pipelines = (self.made.wait(pipelines)).unwrap_or_else(PoisonError::into_inner);
+        }
+        drop(pipelines);
+        self.header.get().copied()
+    }
+
     fn translation_file(key: &[u8]) -> String {
         format!("{TRANSLATIONS}/{}", hex(key))
     }
@@ -1345,6 +1366,9 @@ impl Caches {
         // SAFETY: the cache is the device's.
         let size = empty.map_or(0, |cache| unsafe { data_size(device, cache) });
         counters.set(Gauge::PipelineCacheBytes, size);
+        if let Some(header) = header {
+            let _ = self.header.set(header);
+        }
         let mut pipelines = lock(&self.pipelines);
         pipelines.current = empty.map(|cache| Arc::new(PipelineCache(cache)));
         pipelines.written = size;

@@ -16,10 +16,6 @@ fn one_of_each() -> Vec<Error> {
             Feature::IndirectRenderState,
             1010,
         )),
-        Error::Unsupported(Unsupported {
-            needs: Needs::StageBound,
-            ..Unsupported::not_implemented(Feature::StageSize)
-        }),
         Error::NeedsInput(RuntimeInput::VertexDescriptor { attribute: 3 }),
         Error::InvalidInput(InputError::new(
             InputErrorKind::Container(ContainerError::BadMagic),
@@ -54,16 +50,14 @@ fn retry_table() {
             Error::Unsupported(u) => match u.needs {
                 Needs::AnyOf(_) => Retry::Never,
                 Needs::NotImplemented | Needs::NotRepresentable => Retry::Never,
-                // A defect of the device's driver: another device translates the input. A stage
-                // past the bound: another device's plan may write it lighter. A Metal GPU
-                // family the device does not claim: another device, one that claims it, may. A
+                // A defect of the device's driver: another device translates the input. A Metal
+                // GPU family the device does not claim: another device, one that claims it, may. A
                 // form Metal refuses on the measured devices: an unmeasured device is not refused
                 // so. A device capability outside the compile layer's vocabulary: a device with
                 // it runs the input.
-                Needs::StageBound
-                | Needs::DeviceCapability(_)
-                | Needs::MetalGpuFamily(_)
-                | Needs::MetalRefuses(_) => Retry::Never,
+                Needs::DeviceCapability(_) | Needs::MetalGpuFamily(_) | Needs::MetalRefuses(_) => {
+                    Retry::Never
+                }
             },
             Error::NeedsInput(_) => Retry::Never,
             Error::InvalidInput(_) => Retry::Never,

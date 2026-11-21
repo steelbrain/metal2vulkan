@@ -166,8 +166,8 @@ impl DeviceProfile {
 
     /// Everything [`DeviceProfile::compile_entry`] does before emission (decode, specialize,
     /// analyze, select), and what it cost against `budget`: its first plan, which a kernel whose
-    /// emitted module passes the bound every stage of a profile `Device::from_queries` built is
-    /// held under replaces (`device::profile::StageBound`).
+    /// emulated module passes the compiled stage bound replaces with a plan keeping its pin
+    /// (`pipeline::compile`'s stage bound).
     pub fn plan_entry(
         &self,
         d: &EntryDescriptor<'_>,

@@ -689,7 +689,9 @@ mod on_device {
             for (prepared, size, (grid, how)) in cases {
                 let lengths = [(0, length(size))];
                 let before = counters.metrics();
-                state.prepare_dispatch(prepared, size, &lengths);
+                state
+                    .prepare_dispatch(prepared, size, &lengths)
+                    .expect("made ahead");
                 let ahead = counters.metrics();
                 assert_eq!(
                     (
@@ -700,7 +702,9 @@ mod on_device {
                     (1, 1, 0),
                     "{name}: {prepared:?} by {size:?}: what the call made"
                 );
-                state.prepare_dispatch(prepared, size, &lengths);
+                state
+                    .prepare_dispatch(prepared, size, &lengths)
+                    .expect("made ahead");
                 let again = counters.metrics();
                 assert_eq!(
                     (again.made_ahead_variants, again.pipelines_created),
@@ -732,7 +736,9 @@ mod on_device {
             ];
             for ((grid, size, how), length, runs) in refusals {
                 let before = counters.metrics();
-                state.prepare_dispatch(Dispatch::Threads(grid), size, &[(0, length)]);
+                state
+                    .prepare_dispatch(Dispatch::Threads(grid), size, &[(0, length)])
+                    .expect("made ahead");
                 let ahead = counters.metrics();
                 assert_eq!(
                     (
@@ -808,7 +814,9 @@ mod on_device {
             let (grid, size) = ([8, 4, 1], [4, 2, 1]);
             let lengths = [(0, length(size))];
             let from = next(&counters);
-            state.prepare_dispatch(Dispatch::Threads(grid), size, &lengths);
+            state
+                .prepare_dispatch(Dispatch::Threads(grid), size, &lengths)
+                .expect("made ahead");
             let make = one(name, counters.variant_makes(from), "prepare_dispatch");
             let key = (state.dispatch_variant(Dispatch::Threads(grid), size, &lengths))
                 .map(|(variant, _)| variant);
@@ -963,7 +971,9 @@ mod on_device {
             let mut met = HashSet::new();
             for (&(dispatch, size, length, pipeline), variant) in table.iter().zip(&keys) {
                 let before = counters.metrics();
-                first.prepare_dispatch(dispatch, size, &[(0, length)]);
+                first
+                    .prepare_dispatch(dispatch, size, &[(0, length)])
+                    .expect("made ahead");
                 let after = counters.metrics();
                 let new = u64::from(met.insert(*variant));
                 assert_eq!(
@@ -990,7 +1000,9 @@ mod on_device {
                     "{name}: {entry:?}: the content's key"
                 );
                 let (dispatch, size, length, _) = entry;
-                again.prepare_dispatch(dispatch, size, &[(0, length)]);
+                again
+                    .prepare_dispatch(dispatch, size, &[(0, length)])
+                    .expect("made ahead");
             }
             assert_eq!(
                 counters.metrics().made_ahead_variants - before.made_ahead_variants,
@@ -1004,7 +1016,9 @@ mod on_device {
             assert!(!keys.contains(&other_key), "{name}: another content's key");
             let before = counters.metrics();
             let (dispatch, at, bytes, _) = table[0];
-            other.prepare_dispatch(dispatch, at, &[(0, bytes)]);
+            other
+                .prepare_dispatch(dispatch, at, &[(0, bytes)])
+                .expect("made ahead");
             assert_eq!(
                 counters.metrics().made_ahead_variants - before.made_ahead_variants,
                 1,
@@ -1051,7 +1065,9 @@ mod on_device {
                 let (key, made) = (state.dispatch_variant(dispatch, size, &lengths))
                     .unwrap_or_else(|| panic!("{name}: {size:?}: no key"));
                 assert!(!made, "{name}: {size:?}: made before its make");
-                state.prepare_dispatch(dispatch, size, &lengths);
+                state
+                    .prepare_dispatch(dispatch, size, &lengths)
+                    .expect("made ahead");
                 let answer = state.dispatch_variant(dispatch, size, &lengths);
                 assert_eq!(
                     answer,
@@ -1107,7 +1123,9 @@ mod on_device {
             let counters = device.counters();
             let (groups, size) = ([3, 1, 1], [80, 1, 1]);
             let before = counters.metrics();
-            state.prepare_dispatch(Dispatch::Threadgroups(groups), size, &[]);
+            state
+                .prepare_dispatch(Dispatch::Threadgroups(groups), size, &[])
+                .expect("made ahead");
             let ahead = counters.metrics();
             assert_eq!(
                 (
@@ -1175,7 +1193,9 @@ mod on_device {
                     How::Groups => crate::Dispatch::Threadgroups(grid),
                     How::Indirect => crate::Dispatch::Indirect,
                 };
-                state.prepare_dispatch(dispatch, size, &[(0, length)]);
+                state
+                    .prepare_dispatch(dispatch, size, &[(0, length)])
+                    .expect("made ahead");
             }
             grid_template_run(name, device, &state, (grid, size, how), length)
                 .unwrap_or_else(|error| panic!("{name}: {how:?} {grid:?}: {error}"));

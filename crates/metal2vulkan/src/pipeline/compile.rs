@@ -65,6 +65,7 @@ use crate::spirv::ir::TypedModule;
 
 pub use entry::{EntryDescriptor, EntryPlan, StandaloneModule};
 pub(crate) use stage_bound::StageBounds;
+pub use stage_bound::COMPILED_STAGE_WEIGHT;
 
 /// Which entry of a bitcode module to compile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -3159,6 +3160,7 @@ fn lower_bounded<K>(
             merged,
             held,
         },
+        entry_weight,
     ) = stage_bound::emit(r, p, bounds, m)?;
     let function_tables = spec.function_tables.clone();
     let reaches_command_buffers = spec.may_encode_indirect_commands();
@@ -3257,7 +3259,10 @@ fn lower_bounded<K>(
         precision.push(PrecisionNote::DeviceSampling);
         precision.sort_unstable();
     }
-    let stats = crate::spirv::verify::verify(&module, p, m)?;
+    let stats = crate::pipeline::artifact::ModuleStats {
+        entry_weight,
+        ..crate::spirv::verify::verify(&module, p, m)?
+    };
     let kept = keep(&module);
     let mut symbols =
         crate::pipeline::link::contract::stage_symbols(&module, &plan.families.stage_io.interface)?;

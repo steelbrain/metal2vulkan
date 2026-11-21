@@ -50,7 +50,9 @@ impl Pool {
                         return;
                     }
                     tally[0].fetch_add(1, SeqCst);
-                    state.prepare_dispatch(grid, size, &lengths);
+                    // A kernel past the stage bound is refused at its dispatch too, which the
+                    // player reports as the dispatch's own error.
+                    let _ = state.prepare_dispatch(grid, size, &lengths);
                     tally[1].fetch_add(1, SeqCst);
                 };
                 let named = std::thread::Builder::new().name(format!("m2v-prepass-{at}"));

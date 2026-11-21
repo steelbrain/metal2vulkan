@@ -60,6 +60,7 @@ use crate::kernel_map::KernelKey;
 use crate::reaper::{Free, Job};
 use crate::ring::CHUNK;
 use crate::sampler::{canonical, constexpr_notes, hold_constexpr, release_constexpr};
+use crate::stage::{Create, Heavy};
 use crate::times::host_time;
 use ash::vk;
 use metal2vulkan::cache::Hash256;
@@ -395,6 +396,9 @@ pub(crate) struct Kernel {
     /// The module's entry point.
     entry: CString,
     pub(crate) interface: Interface,
+    /// The module, where it is past the stage bound: each `VkPipeline` is made from its helper's
+    /// cache data alone (`crate::stage`).
+    heavy: Option<Heavy>,
     /// The `VkPipeline`s made so far, by their specialization.
     variants: Variants,
 }
@@ -1044,7 +1048,8 @@ impl Compiled {
         // below its 1024; the device's own limit is no declared bound. The `VkPipeline`s a whole
         // grid and a ragged one run are made, where the module takes no threadgroup memory length
         // from the encoder. A make that fails here is made again by the dispatch that needs it,
-        // which reports its own error.
+        // which reports its own error; a make refused for the stage bound refuses the state's,
+        // which the consumer's helper then fills.
         let interface = &compiled.whole.interface;
         let declared = descriptor.max_total_threads_per_threadgroup.is_some()
             || interface.metal_max_total_threads < METAL_MAX_THREADS;
@@ -1056,7 +1061,11 @@ impl Compiled {
                 if let Some((kernel, module, local, lengths)) = found {
                     if kernel.interface.threadgroups.is_empty() {
                         let variant = compiled.dispatch_key(module, local, lengths);
-                        kernel.make_ahead(&compiled.core, variant, VariantStart::State);
+                        let made = kernel.make_ahead(&compiled.core, variant, VariantStart::State);
+                        match made {
+                            Err(error) if past_stage_bound(&error) => return Err(error),
+                            Ok(_) | Err(_) => {}
+                        }
                     }
                 }
             }
@@ -1241,6 +1250,15 @@ pub(crate) fn made_through_cache(
     core.counters.count(Metric::PipelinesCreated);
     core.counters.rise(Gauge::Pipelines);
     Ok(pipeline)
+}
+
+/// Whether `error` is a refusal of a kernel past the stage bound: a make that only the consumer's
+/// helper, or nothing, lets succeed.
+fn past_stage_bound(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::StageUnfilled(_) | Error::Unsupported(Gap::StageSize { .. })
+    )
 }
 
 /// The runtime's view of the translator's kernel, or what the kernel reads that the compute
@@ -1635,28 +1653,36 @@ impl ComputePipelineState {
     /// returns at once where that is made, or another thread is making it: a dispatch that needs
     /// it then waits for that thread alone. It makes nothing where the dispatch would refuse its
     /// threadgroup size, its variant or its threadgroup memory, or records nothing (a grid with no
-    /// threads, a kernel that writes no memory), and it reports nothing: every error is the
-    /// dispatch's own. What the dispatch checks of the encoder's bindings is not checked here. A
-    /// make that failed is made again by the next call or dispatch that needs it.
+    /// threads, a kernel that writes no memory), and it reports no other error than a kernel's past
+    /// the stage bound: every other is the dispatch's own. What the dispatch checks of the
+    /// encoder's bindings is not checked here. A make that failed is made again by the next call
+    /// or dispatch that needs it.
     ///
     /// Counted as [`Metrics::made_ahead_variants`](crate::Metrics::made_ahead_variants).
+    ///
+    /// Err: the refusal the dispatch would meet of a kernel past the stage bound:
+    /// [`Error::StageUnfilled`], whose request the consumer's helper fills before the dispatch is
+    /// encoded ([`Device::fill_stage`](crate::Device::fill_stage)), or [`Gap::StageSize`].
     pub fn prepare_dispatch(
         &self,
         dispatch: Dispatch,
         threads_per_threadgroup: [u32; 3],
         threadgroup_memory_lengths: &[(u32, u32)],
-    ) {
+    ) -> Result<(), Error> {
         let compiled = &self.inner.compiled;
         let (size, set) = (threads_per_threadgroup, threadgroup_memory_lengths);
         let Some((kernel, module, local, lengths)) = compiled.dispatched(dispatch, size, set)
         else {
-            return;
+            return Ok(());
         };
         let core = &compiled.core;
         let variant = compiled.dispatch_key(module, local, lengths);
-        if let Some(nanos) = kernel.make_ahead(core, variant, VariantStart::Ahead) {
-            core.counters.made_ahead(nanos);
+        match kernel.make_ahead(core, variant, VariantStart::Ahead) {
+            Ok(Some(nanos)) => core.counters.made_ahead(nanos),
+            Err(error) if past_stage_bound(&error) => return Err(error),
+            Ok(None) | Err(_) => {}
         }
+        Ok(())
     }
 
     /// No Metal counterpart: a hook for a consumer's pre-pass, beside
@@ -1919,6 +1945,7 @@ impl Kernel {
     ) -> Result<Kernel, Unmade> {
         let interface = interface(&pipeline, required_size).map_err(Unmade::Unsupplied)?;
         let stage = pipeline.stage;
+        let heavy = Heavy::of(&stage);
         // The translator's entry points hold no NUL; one that did would name no entry point.
         let entry = CString::new(stage.entry_point)
             .map_err(|_| Unmade::Unsupplied(KernelInputKind::EntryPoint))?;
@@ -1928,6 +1955,7 @@ impl Kernel {
             module,
             entry,
             interface,
+            heavy,
             variants: Variants::default(),
         })
     }
@@ -2006,25 +2034,25 @@ impl Kernel {
 
     /// A make of `variant` ahead of its dispatches, started by `start`: none where it is made or a
     /// thread is making it; else made on the calling thread, and its nanoseconds where it was
-    /// made.
+    /// made, or the make's error.
     pub(crate) fn make_ahead(
         &self,
         core: &Core,
         variant: DispatchVariant,
         start: VariantStart,
-    ) -> Option<u64> {
+    ) -> Result<Option<u64>, Error> {
         let variants = &self.variants;
         let key = variant.key();
         if variants.in_cells(key).is_ok() {
-            return None;
+            return Ok(None);
         }
         let more = lock(&variants.more);
         if variants.made(&more, key).is_some() || more.pending(key).is_some() {
-            return None;
+            return Ok(None);
         }
         let began = host_time();
-        let made = self.make_pending(core, more, variant, start, None).ok();
-        made.map(|_| host_time().saturating_sub(began))
+        self.make_pending(core, more, variant, start, None)?;
+        Ok(Some(host_time().saturating_sub(began)))
     }
 
     /// Makes `variant`, which `more`, the lock held, shows neither made nor pending, started by
@@ -2108,6 +2136,21 @@ impl Kernel {
         let info = vk::ComputePipelineCreateInfo::default()
             .stage(stage)
             .layout(core.layout);
+        if let Some(heavy) = &self.heavy {
+            let ids: Vec<u32> = constants.iter().map(|&(id, _)| id).collect();
+            let create = Create {
+                entry: &self.entry,
+                flags: self.interface.stage_flags,
+                subgroup: self.interface.required_subgroup_size,
+                ids: &ids,
+                data: &values,
+            };
+            let info = info.flags(vk::PipelineCreateFlags::FAIL_ON_PIPELINE_COMPILE_REQUIRED);
+            return crate::stage::made(core, heavy, &create, |cache| {
+                // SAFETY: as below; the cache is made of the pipeline's entry alone.
+                unsafe { core.device.create_compute_pipelines(cache, &[info], None) }
+            });
+        }
         made_through_cache(core, "vkCreateComputePipelines", |cache| {
             // SAFETY: the module, the layout and the cache are the device's, and the
             // specialization gives each of the kernel's constants a 4-byte value.

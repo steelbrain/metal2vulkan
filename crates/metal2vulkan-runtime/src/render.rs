@@ -69,7 +69,7 @@
 use crate::cache::{self, Lowerings};
 use crate::counters::{FirstUse, Gauge, Metric};
 use crate::device::{lock, Core};
-use crate::error::{Error, Gap, Refusal, RenderPipelineKind};
+use crate::error::{Error, Gap, Refusal, RenderPipelineKind, StageGap};
 use crate::hazard::Access;
 use crate::kernel_map::KernelKey;
 use crate::pass::Pass;
@@ -1010,6 +1010,17 @@ impl RenderCompiled {
         }
         if let Some(kind) = unbuilt(&pipeline, translator.profile().enabled()) {
             return Err(Error::Unsupported(Gap::RenderPipeline { kind }));
+        }
+        // A stage past the stage bound is compiled in no process of the runtime's, and no helper
+        // compiles a render stage.
+        let heaviest = (pipeline.stages.iter())
+            .map(|stage| stage.stats.entry_weight)
+            .max();
+        if let Some(weight) = heaviest.filter(|&weight| weight > crate::stage::bound()) {
+            return Err(Error::Unsupported(Gap::StageSize {
+                weight,
+                cause: StageGap::RenderStage,
+            }));
         }
         let nonzero_first_instance = translator
             .profile()

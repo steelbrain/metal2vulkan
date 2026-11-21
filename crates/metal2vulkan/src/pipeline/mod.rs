@@ -143,6 +143,7 @@ pub use compile::api::{CompileReport, RenderPipelineKeys};
 // Translating one entry of a bare module.
 pub use compile::{
     EntryDescriptor, EntryPlan, EntryRef, LinkedSource, StageEntries, StandaloneModule,
+    COMPILED_STAGE_WEIGHT,
 };
 pub use facts::{Mechanism, RuntimeFact, UniformViewChoice};
 // The `DispatchRegion` push field's bytes, which a consumer of the identity domains pushes with

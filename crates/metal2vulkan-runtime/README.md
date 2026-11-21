@@ -2423,7 +2423,9 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   own variant's make, a first-use wait. The call makes nothing where the dispatch would refuse
   its threadgroup size, its variant or its threadgroup memory, or would record nothing (a grid
   with no threads, a kernel that writes no memory), and reports no error: the dispatch reports
-  its own. What the dispatch checks of the encoder's bindings is not checked. A make that failed
+  its own. The one error it reports is a make refused for the stage bound (`Error::StageUnfilled`,
+  or `Gap::StageSize`; Kernels past the stage bound, below), which the dispatch reports too until
+  the consumer's helper fills the entry. What the dispatch checks of the encoder's bindings is not checked. A make that failed
   is made again by the next call or dispatch that needs it. What a dispatch records is the same
   whether or not its pipeline was made ahead. `Metrics::made_ahead_variants` counts what the
   calls made, with their time in `made_ahead_variant_nanos`.
@@ -2520,6 +2522,9 @@ the lowerings from one device to the next:
   longer holds is a miss too, counted (`Metrics::render_records_stale`): the state decodes,
   specializes and lowers as with no record, and keeps the record again. Records are written and
   counted as lowerings are, within the cap below.
+- `stages/`: the cache data of each `VkPipeline` of a kernel past the stage bound, one file per
+  pipeline, which the consumer's helper compiled (Kernels past the stage bound, below). At most
+  256 MiB and 32 files, apart from the blobs and the lowerings' cap.
 
 **The pipeline cache.** The reaper makes an empty cache first when it starts, which a creation that
 comes before it waits for (microseconds). Then, off every guest thread, it reads the blob, makes a
@@ -2590,6 +2595,52 @@ power loss, is a miss and is removed: nothing unchecked reaches the driver. A fa
 write, a full disk included, is a miss too, and never fails a call; in a directory the device can
 read and not write, its hits stay where they are and it writes nothing. A `state` that is missing
 or does not check is rebuilt from the generations' names, with young counted full.
+
+### Kernels past the stage bound
+
+A driver's compiler takes memory that grows faster than the stage, in the process that creates the
+pipeline. The translator states each module's entry weight (`ModuleStats::entry_weight`: the
+entry's instructions, each call counted as its callee's body); `COMPILED_STAGE_WEIGHT`, 99,109, is
+the heaviest measured to compile within host-sized memory on the slowest compiler measured (ANV,
+Mesa 26.2.6, on the Iris Xe of RPL-P: 132 s and a 3.65 GiB peak resident set; one of 532,213 passed
+16 GiB). No Vulkan query states how large a stage a device's compiler takes, so the bound is one
+for every device. A kernel past it is never compiled in the process that runs the program: each
+of its `VkPipeline`s is compiled in a helper process the consumer starts, caps and times, and is
+created here from that compile's cache data alone.
+
+- The make of such a `VkPipeline` (at the state's creation, a `prepare_dispatch` call or a
+  dispatch) reads the pipeline's entry under `stages/` in the cache directory. With data, it
+  makes a `VkPipelineCache` of that entry alone, creates the pipeline through it with
+  `VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT`, and destroys the cache: the
+  device's own pipeline cache and its blob never hold it. `Metrics::pipelines_from_stage_fills`
+  counts these creates, which `pipelines_created` counts too.
+- With no entry, the make is refused with `Error::StageUnfilled`, carrying a `StageRequest`. Two
+  requests of one pipeline compare equal and hash alike (by the pipeline's stage key, the name of
+  its entry), so a consumer joins the makes, the `prepare_dispatch` calls and the dispatches that
+  meet one pipeline into one helper run. The consumer starts its helper process, whose main calls
+  `serve_stage` with an instance made as its own process's and the `DeviceOptions` the device was
+  opened with, and hands the helper's two pipes to `Device::fill_stage` on a thread of its own.
+  That call writes the request, reads the helper's cache data and keeps it as the entry
+  (`Metrics::stage_fills`); the make then succeeds when asked again. A request holds the module's
+  words, the pipeline's entry point, specialization and pinned subgroup size, and the device's
+  `deviceUUID`, `driverUUID`, pipeline cache header and enables, so the helper opens the same
+  device with the same features; a helper whose device differs is answered `StageFill::NoDevice`
+  or `StageFill::Enables`, and one of another build of the runtime `StageFill::Version`.
+- rt starts, caps, times and kills no process. A consumer that ends its helper for its memory cap
+  or its time limit keeps that with `Device::record_stage_breach` (`StageBreach::Memory`,
+  `StageBreach::Time`); a compile the driver failed is kept as `StageBreach::Compile` by
+  `fill_stage`. A breach is an entry of the same directory, and refuses the pipeline's makes
+  (`Gap::StageSize`, `StageGap::Breach`) with no helper asked again. So does cache data the driver
+  answers compile-required for (`StageBreach::CompileRequired`): it is not filled a second time.
+  The stage key holds the driver's pipeline cache header, so a new driver version asks again.
+- The entries are files of the cache directory only: nothing of an entry stays in memory past
+  the call that reads or writes it. Each holds its key again under a magic, its length and its
+  checksum; one that does not check, names another key or holds data that does not begin with the
+  device's header is a miss and is removed. A hit marks its file used. `stages/` holds at most
+  256 MiB and 32 entries; each write removes the entries past that, the least recently used first.
+- A device with no cache directory, and one whose driver writes no pipeline cache header
+  (lavapipe in Mesa 26.2.4), keeps no entry: the make is refused (`Gap::StageSize`,
+  `StageGap::NoCacheDirectory` or `StageGap::NoPipelineCache`).
 
 ### Known gaps of pipeline states
 
@@ -2783,12 +2834,12 @@ or does not check is rebuilt from the generations' names, with young counted ful
 - NVIDIA 615.71.09 on GA10x gives sign-extended bits for a mask over a signed clamp, to exactly N
   bits' range, of a sum or difference of two values sign-extended from N bits; not reproduced on
   620.70.06.
-- A kernel whose translated entry weighs more than 99,109 instructions (each call counted as its
-  callee's body) is made on no device: that is the heaviest stage measured to compile within
-  host-sized memory on the slowest compiler measured (ANV, Mesa 26.2.6, on the Iris Xe of RPL-P).
-  One that emulated its SIMD groups only in place of the 32-lane pin is translated again pinned,
-  and every other is refused (`Error::Translation`: `Feature::StageSize`, `Needs::StageBound`)
-  where Metal makes it.
+- A kernel past the stage bound is made only from its helper's compile (Kernels past the stage
+  bound, above). On a device with no cache directory, or whose driver writes no pipeline cache
+  header (lavapipe in Mesa 26.2.4), on a driver that answers compile-required for its helper's
+  cache data, and where the helper passed the consumer's cap or time, it is refused
+  (`Gap::StageSize`) where Metal makes it. A dispatch of it waits for the consumer's helper, where
+  Metal compiles in the program's process.
 - A loop asks the driver nothing about unrolling unless its AIR does (`#pragma unroll`,
   `#pragma nounroll`) or the translator wrote the loop itself (`DontUnroll`), so the driver's
   choice decides, and it can differ from Metal's compiler's. RADV (Mesa 26.2.6) unrolls a
@@ -2966,6 +3017,9 @@ or does not check is rebuilt from the generations' names, with young counted ful
 
 ### Known gaps of render pipeline states
 
+- A render pipeline whose vertex or fragment stage weighs more than the stage bound (Kernels past
+  the stage bound) is refused (`Gap::StageSize`, `StageGap::RenderStage`) where Metal makes it: no
+  helper compiles a render stage.
 - Refused at creation by `Gap::RenderPipeline`, naming its `RenderPipelineKind`: depth and
   stencil attachment formats that differ, as of separate depth and stencil textures
   (`DepthStencilFormats`: Vulkan's pipeline takes one format for both,
@@ -3954,6 +4008,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `hostQueryReset` | `VkPhysicalDeviceVulkan12Features` | a command buffer's timestamp queries reset on the host as it retires |
 | `synchronization2` | `VkPhysicalDeviceVulkan13Features` | barriers, layout changes and submission |
 | `dynamicRendering` | `VkPhysicalDeviceVulkan13Features` | render passes |
+| `pipelineCreationCacheControl` | `VkPhysicalDeviceVulkan13Features` | a kernel past the stage bound created from its helper's cache data alone, never compiled in the process (Kernels past the stage bound); Vulkan 1.3 requires it |
 
 ### Portability features
 

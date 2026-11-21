@@ -2325,16 +2325,15 @@ fn a_pressured_kernel_takes_the_emulated_tier_in_place_of_the_widest_mode() {
     );
 }
 
-/// Every stage is held under the compiled bound (here bounds the test sets), whatever the driver:
-/// the pressured kernel of `a_pressured_kernel_takes_the_emulated_tier_in_place_of_the_widest_mode`,
-/// whose emulated module passes the bound, is planned again keeping the `Direct` tier's pin to 32
-/// lanes, its answers Metal's; under a bound its `Direct` module passes too, it is refused
-/// (`Feature::StageSize`, `Needs::StageBound`, and as its symbol the module's entry weight and the
-/// bound it passed).
+/// Every stage is weighed against the compiled bound (here bounds the test sets), whatever the
+/// driver: the pressured kernel of
+/// `a_pressured_kernel_takes_the_emulated_tier_in_place_of_the_widest_mode`, whose emulated module
+/// passes the bound, is planned again keeping the `Direct` tier's pin to 32 lanes, its answers
+/// Metal's; under a bound its `Direct` module passes too, it is made as it weighs, its stats naming
+/// its entry weight (`ModuleStats::entry_weight`), for the runtime to compile apart.
 #[test]
-fn every_stage_from_queries_keeps_the_widest_pin_or_is_refused() {
+fn every_stage_from_queries_keeps_the_widest_pin_or_states_its_weight() {
     use crate::device::Device;
-    use crate::error::{DiagName, Feature, Needs};
     use crate::lower::simd::{WIDEST_PIN, WIDEST_PIN_FLOOR, WIDEST_PIN_WORDS};
     use crate::pipeline::compile::{compile_bitcode_bounded, StageBounds};
     use crate::pipeline::testing::meter;
@@ -2357,28 +2356,24 @@ fn every_stage_from_queries_keeps_the_widest_pin_or_is_refused() {
     assert_eq!((plan.simd.1, uses(&plan, WIDEST_PIN)), (Tier::Emulated, 1));
     let emulated = weight(&emulated);
     // Under a bound the emulated module passes: planned again keeping the pin, exact at 32 lanes.
-    let (_, plan, module) = compile(queries, compiled(emulated - 1)).expect("planned again");
+    let (function, plan, module) = compile(queries, compiled(emulated - 1)).expect("planned again");
     assert_eq!((plan.simd.1, uses(&plan, WIDEST_PIN)), (Tier::Direct, 0));
     assert_eq!(plan.subgroup.size, Some(32));
     let pinned = weight(&module);
     assert!(pinned < emulated, "pinned {pinned}, emulated {emulated}");
+    assert_eq!(function.module_stats().entry_weight, pinned);
     assert_eq!(run_words(&plan, &module, 64, SubgroupSize::W32), want);
-    // Under a bound the pinned module passes too: refused, naming its weight and the bound.
-    match compile(queries, compiled(pinned - 1)).expect_err("past the bound") {
-        Error::Unsupported(u) if u.feature == Feature::StageSize => {
-            let named = format!("entry weight {pinned}, past the bound {}", pinned - 1);
-            assert_eq!(u.symbol, Some(DiagName::new(named.as_str())), "{u}");
-            assert!(u.to_string().contains(&named), "{u}");
-            assert_eq!(u.needs, Needs::StageBound);
-        }
-        refused => panic!("{refused:?}"),
-    }
+    // Under a bound the pinned module passes too: made as it weighs, pinned, its weight stated.
+    let (function, plan, module) = compile(queries, compiled(pinned - 1)).expect("past the bound");
+    assert_eq!((plan.simd.1, uses(&plan, WIDEST_PIN)), (Tier::Direct, 0));
+    assert_eq!(weight(&module), pinned);
+    assert_eq!(function.module_stats().entry_weight, pinned);
 }
 
 /// One input, one answer, whichever path compiles it: on the Iris Xe, the pressured kernel of
-/// `every_stage_from_queries_keeps_the_widest_pin_or_is_refused`, past a bound its emulated
-/// module passes (planned again keeping the pin) and past one its pinned module passes too
-/// (refused, `Feature::StageSize`), is charged the same work units compiled alone
+/// `every_stage_from_queries_keeps_the_widest_pin_or_states_its_weight`, past a bound its emulated
+/// module passes and past one its pinned module passes too (planned again keeping the pin, its
+/// weight stated, both times), is charged the same work units compiled alone
 /// (`Device::compile_function`) and compiled from a creation's entries
 /// (`Device::compile_function_from_entries`), whether the entry there was made or found. So at
 /// exactly that many work units both paths give the bound's answer, and at one fewer both are
@@ -2388,7 +2383,7 @@ fn every_stage_from_queries_keeps_the_widest_pin_or_is_refused() {
 #[test]
 fn a_kernel_past_the_stage_bound_gets_one_answer_through_either_path() {
     use crate::device::Device;
-    use crate::error::{Feature, Limit, Unsupported};
+    use crate::error::Limit;
     use crate::library::Library;
     use crate::lower::simd::{WIDEST_PIN_FLOOR, WIDEST_PIN_WORDS};
     use crate::pipeline::compile::{
@@ -2422,15 +2417,17 @@ fn a_kernel_past_the_stage_bound_gets_one_answer_through_either_path() {
     let emulated = weight(u64::MAX);
     let pinned = weight(emulated - 1);
     assert!(pinned < emulated, "pinned {pinned}, emulated {emulated}");
-    // Its answer, as a planned-again `Direct` module's word count or the refusal's feature.
+    // Its answer, as a planned-again `Direct` module's word count and entry weight, or the limit.
     let answer = |compiled: Result<crate::library::CompiledFunction, Error>| match compiled {
-        Ok(c) => Ok(c.artifact().module.words.len()),
-        Err(Error::Unsupported(Unsupported { feature, .. })) => Err(Ok(feature)),
-        Err(Error::LimitExceeded(limit)) => Err(Err(limit)),
+        Ok(c) => Ok((
+            c.artifact().module.words.len(),
+            c.module_stats().entry_weight,
+        )),
+        Err(Error::LimitExceeded(limit)) => Err(limit),
         Err(e) => panic!("{e:?}"),
     };
     let capped = |work| Meter::with_caps(&Budget::default(), work, crate::budget::LEDGER_BYTES);
-    for (cap, planned_again) in [(emulated - 1, true), (pinned - 1, false)] {
+    for cap in [emulated - 1, pinned - 1] {
         // The work units each path is charged: alone, from entries that make the entry, and from
         // the same entries again, which find it.
         let entries = StageEntries::new();
@@ -2442,10 +2439,7 @@ fn a_kernel_past_the_stage_bound_gets_one_answer_through_either_path() {
         let (alone, made, found) = (work(None), work(Some(&entries)), work(Some(&entries)));
         assert_eq!(entries.counts(), (1, 1), "made once, then found");
         let (want, w) = alone.clone();
-        match &want {
-            Ok(_) => assert!(planned_again, "{want:?}"),
-            Err(refused) => assert_eq!(*refused, Ok(Feature::StageSize)),
-        }
+        assert_eq!(want.map(|(_, weight)| weight), Ok(pinned), "bound {cap}");
         assert_eq!(
             (made, found),
             ((want.clone(), w), (want.clone(), w)),
@@ -2453,7 +2447,7 @@ fn a_kernel_past_the_stage_bound_gets_one_answer_through_either_path() {
         );
         // At exactly that many work units, the bound's answer through both paths; at one fewer,
         // the work cap's through both.
-        for (budget, expected) in [(w, want.clone()), (w - 1, Err(Err(Limit::WorkUnits)))] {
+        for (budget, expected) in [(w, want.clone()), (w - 1, Err(Limit::WorkUnits))] {
             for via in [None, Some(&entries)] {
                 let mut m = capped(budget);
                 let got = answer(compile_stage_bounded(&fd, iris, via, &mut m, at(cap)));
@@ -2471,11 +2465,7 @@ fn a_kernel_past_the_stage_bound_gets_one_answer_through_either_path() {
         let entry = EntryRef::Name("device_half");
         plan_bitcode(&bc, entry, &consts, iris, &LowerInputs::new(), &mut m).expect("planned");
         let got = answer(compile_stage_bounded(&fd, iris, None, &mut m, at(cap)));
-        assert_eq!(
-            got,
-            Err(Err(Limit::WorkUnits)),
-            "bound {cap}, charged twice"
-        );
+        assert_eq!(got, Err(Limit::WorkUnits), "bound {cap}, charged twice");
     }
 }
 
@@ -2485,14 +2475,12 @@ fn a_kernel_past_the_stage_bound_gets_one_answer_through_either_path() {
 /// offers the widest mode's pin and which has maximal reconvergence, the kernel emulates its
 /// simdgroups, a module past the compiled bound, and is planned again keeping the pin, a module
 /// under it. The same description without maximal reconvergence emulates its simdgroups for the
-/// lockstep pair, so it has no pin to keep: it is refused as `Needs::StageBound`, its symbol
-/// naming the emulated module's weight and the bound, under any driver (Intel's Windows driver
-/// too).
+/// lockstep pair, so it has no pin to keep: it is made as it weighs, past the bound, its stats
+/// naming the emulated module's weight, under any driver (Intel's Windows driver too).
 #[test]
-fn the_stage_bound_fixture_keeps_the_pin_or_is_refused() {
+fn the_stage_bound_fixture_keeps_the_pin_or_states_its_weight() {
     use crate::device::profile::DeviceProfile;
     use crate::device::{Device, DeviceDescription};
-    use crate::error::{DiagName, Feature, Needs};
     use crate::lower::simd::WIDEST_PIN;
     use crate::pipeline::compile::{compile_bitcode_bounded, compile_bitcode_kept, StageBounds};
     use crate::pipeline::testing::meter;
@@ -2557,14 +2545,10 @@ fn the_stage_bound_fixture_keeps_the_pin_or_is_refused() {
         assert_eq!((plan.simd.1, uses(&plan, WIDEST_PIN)), (Tier::Emulated, 0));
         let alone = weight(&module);
         assert!(alone > bound, "emulated {alone}");
-        match kept(p) {
-            Err(Error::Unsupported(u)) if u.feature == Feature::StageSize => {
-                let named = format!("entry weight {alone}, past the bound {bound}");
-                assert_eq!(u.symbol, Some(DiagName::new(named.as_str())), "{u}");
-                assert_eq!(u.needs, Needs::StageBound);
-            }
-            got => panic!("{:?}", got.map(|_| ())),
-        }
+        let (function, plan, module) = kept(p).expect("made as it weighs");
+        assert_eq!((plan.simd.1, uses(&plan, WIDEST_PIN)), (Tier::Emulated, 0));
+        assert_eq!(weight(&module), alone);
+        assert_eq!(function.module_stats().entry_weight, alone);
     }
 }
 

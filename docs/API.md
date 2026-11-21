@@ -508,6 +508,14 @@ assert!(stats.reachable_blocks <= stats.blocks);
   a program far larger than its own blocks; the two read alike in `blocks` alone. Lowering emits
   such functions itself: the handle-table search (unrolled branch-free steps) and the root-table
   search (a loop), each emitted once and called at every access.
+- `entry_weight` is what a driver compiles once it has inlined every call: the entry's
+  instructions with each call counted as its callee's body, after repeated regions are rolled
+  into loops. A stage past `pipeline::COMPILED_STAGE_WEIGHT` (99,109, the heaviest measured to
+  compile within host-sized memory on the slowest compiler measured) is one whose creation may
+  take the host's memory: the translator makes it all the same, and `metal2vulkan-runtime`
+  compiles such a kernel only in a helper process the consumer caps (its README, "Kernels past
+  the stage bound"). A kernel past the bound only because it emulates its SIMD groups is planned
+  again keeping the device's widest subgroup mode pinned, where that plan is lighter.
 - Compare one module against the next of the same shader, not one shader against another. Measured
   cost per block differed several-fold between a synthetic module and a real workload, so a
   per-block figure taken from one shader predicts nothing for the next; `instructions` is the
@@ -1614,9 +1622,6 @@ match floor.compile_function(&min_lod, &LoweringInputs::new(), &Budget::standard
 - `AnyOf`: alternative sets of device capabilities; a device that enables every capability of one
   set compiles it.
 - `NotImplemented`: a gap of this version. `NotRepresentable`: no Vulkan mechanism exists.
-- `StageBound`: a stage that the device's plan writes heavier than the translator hands any
-  driver (the heaviest measured to compile within host-sized memory); `symbol` names its entry
-  weight and the bound. A device whose plan writes it lighter compiles it.
 - `MetalGpuFamily`: a Metal GPU family the device does not claim, where Metal itself refuses the
   input without it.
 

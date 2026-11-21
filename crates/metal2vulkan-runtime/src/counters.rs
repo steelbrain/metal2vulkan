@@ -256,10 +256,14 @@ pub(crate) enum Metric {
     Resolves,
     /// [`Metrics::preprocess_regions_remade`].
     PreprocessRegionsRemade,
+    /// [`Metrics::stage_fills`].
+    StageFills,
+    /// [`Metrics::pipelines_from_stage_fills`].
+    PipelinesFromStageFills,
 }
 
 /// The number of [`Metric`]s.
-const METRICS: usize = Metric::PreprocessRegionsRemade as usize + 1;
+const METRICS: usize = Metric::PipelinesFromStageFills as usize + 1;
 
 /// Every [`Metric`], in its order: each at its own index.
 const METRIC_ORDER: [Metric; METRICS] = [
@@ -299,6 +303,8 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::SparseBinds,
     Metric::Resolves,
     Metric::PreprocessRegionsRemade,
+    Metric::StageFills,
+    Metric::PipelinesFromStageFills,
 ];
 
 // Each metric of the order is at its own index.
@@ -660,6 +666,8 @@ struct Atomics {
     sparse_binds: AtomicU64,
     resolves: AtomicU64,
     preprocess_regions_remade: AtomicU64,
+    stage_fills: AtomicU64,
+    pipelines_from_stage_fills: AtomicU64,
     /// Each [`Part`]'s calls, at its index: their count, bytes, total and longest nanoseconds,
     /// and those over each of [`OVER_NANOS`].
     parts: [[AtomicU64; 7]; PARTS],
@@ -806,6 +814,8 @@ impl Counters {
             Metric::SparseBinds => &a.sparse_binds,
             Metric::Resolves => &a.resolves,
             Metric::PreprocessRegionsRemade => &a.preprocess_regions_remade,
+            Metric::StageFills => &a.stage_fills,
+            Metric::PipelinesFromStageFills => &a.pipelines_from_stage_fills,
         }
     }
 
@@ -1628,6 +1638,8 @@ impl Counters {
             sparse_binds: a.sparse_binds.load(Relaxed),
             resolves: a.resolves.load(Relaxed),
             preprocess_regions_remade: a.preprocess_regions_remade.load(Relaxed),
+            stage_fills: a.stage_fills.load(Relaxed),
+            pipelines_from_stage_fills: a.pipelines_from_stage_fills.load(Relaxed),
             takes: part(Part::Take),
             take_lock_waits: part(Part::TakeLock),
             take_makes: part(Part::TakeMake),
@@ -2425,6 +2437,15 @@ pub struct Metrics {
     /// within a second after the device freed an idle one past its bound of idle regions (128
     /// MiB): regions given back and made again, each at its own `vkAllocateMemory`.
     pub preprocess_regions_remade: u64,
+    /// No Metal counterpart: cache data of kernels past the stage bound that
+    /// [`Device::fill_stage`](crate::Device::fill_stage) took from the consumer's helper and kept
+    /// in the cache directory, one entry each.
+    pub stage_fills: u64,
+    /// No Metal counterpart: `VkPipeline`s of kernels past the stage bound made from their
+    /// entries' cache data alone, with `VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT`,
+    /// so the driver compiled nothing for them in this process. Each is counted in
+    /// [`pipelines_created`](Self::pipelines_created) too.
+    pub pipelines_from_stage_fills: u64,
     /// Takes from the pool on the consumer's threads, each whole: a block of
     /// [`Device::take_block`](crate::Device::take_block) and a texture block, carved from a free
     /// range or from an allocation the take made ([`take_makes`](Self::take_makes)); their bytes

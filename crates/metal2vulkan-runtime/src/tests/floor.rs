@@ -102,6 +102,7 @@ fn at_the_floor() -> Queried {
     features.vulkan12.host_query_reset = vk::TRUE;
     features.vulkan13.synchronization2 = vk::TRUE;
     features.vulkan13.dynamic_rendering = vk::TRUE;
+    features.vulkan13.pipeline_creation_cache_control = vk::TRUE;
     features.robustness2.null_descriptor = vk::TRUE;
     features.line_rasterization.bresenham_lines = vk::TRUE;
 
@@ -613,6 +614,10 @@ fn each_missing_feature_is_named() {
         (
             |f| f.vulkan13.dynamic_rendering = vk::FALSE,
             feature(V13, "dynamicRendering"),
+        ),
+        (
+            |f| f.vulkan13.pipeline_creation_cache_control = vk::FALSE,
+            feature(V13, "pipelineCreationCacheControl"),
         ),
         (
             |f| f.robustness2.null_descriptor = vk::FALSE,

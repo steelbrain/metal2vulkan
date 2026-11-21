@@ -26,7 +26,7 @@ Columns:
 
 | Kind | Variants | With a site | Reach system | Reach app | Reach rare | Reach none | Unassessed |
 |---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 135 | 120 | 8 | 33 | 73 | 21 | 0 |
+| Translator and front-end refusals | 134 | 119 | 8 | 33 | 72 | 21 | 0 |
 | Binder refusals at a device limit | 9 | 9 | 0 | 1 | 7 | 1 | 0 |
 | Translation caps | 14 | 14 | 0 | 0 | 7 | 7 | 0 |
 | Rate maps the compile layer does not compile | 5 | 5 | 0 | 0 | 4 | 1 | 0 |
@@ -34,13 +34,13 @@ Columns:
 | Devices below the runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Refusal` | 77 | 77 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Limit` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
-| The runtime's `Gap` | 30 | 30 | 0 | 0 | 0 | 0 | 0 |
+| The runtime's `Gap` | 31 | 31 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
 | Kind | `metal-measured` | `metal-documented` | `metal-takes` | `device` | `ours` | `unknown` | `delegated` | `-` |
 |---|---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 0 | 0 | 0 | 44 | 54 | 0 | 0 | 37 |
+| Translator and front-end refusals | 0 | 0 | 0 | 43 | 54 | 0 | 0 | 37 |
 | Binder refusals at a device limit | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
 | Translation caps | 0 | 0 | 0 | 0 | 14 | 0 | 0 | 0 |
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 5 |
@@ -48,7 +48,7 @@ Columns:
 | Devices below the runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The runtime's `Refusal` | 22 | 21 | 0 | 0 | 34 | 0 | 0 | 0 |
 | The runtime's `Limit` | 0 | 0 | 0 | 13 | 4 | 0 | 0 | 0 |
-| The runtime's `Gap` | 0 | 0 | 0 | 2 | 28 | 0 | 0 | 0 |
+| The runtime's `Gap` | 0 | 0 | 0 | 3 | 28 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -90,7 +90,6 @@ Columns:
 | `Int64Atomics` | 64-bit atomics | devices short of a Vulkan feature the site names; devices without buffer device addresses (`addressed_needs`) | `device` | 2: `crates/metal2vulkan/src/lower/access/atomic.rs (select, 2 sites)` | `rare`: 64-bit atomics |
 | `ImageAtomics` | Image atomics beyond 32-bit integers | devices without a capability the site computes (`gaps`) | `device` | 1: `crates/metal2vulkan/src/lower/texture/slot.rs (atomic_format)` | `rare`: texture atomics beyond 32-bit integers |
 | `DescriptorCount` | Too many descriptors of one kind in a stage or pipeline | devices short of a device limit the site names; devices without VkLimit::MaxUniformBufferRange | `device` | 3: `crates/metal2vulkan/src/lower/access/mod.rs (accept_placement)`, `crates/metal2vulkan/src/lower/select.rs (finish)` (+1) | `app`: many textures or buffers in one stage on a smaller device |
-| `StageSize` | A stage module heavier than the translator hands the device's driver | devices whose plan writes the stage past the stage bound | `device` | 1: `crates/metal2vulkan/src/pipeline/compile/stage_bound.rs (refused)` | `rare`: a kernel heavier than the heaviest stage measured to compile within host-sized memory, as the device's plan writes it (from_queries), or too large for a driver measured to corrupt one past its bound or to outgrow host memory below it |
 | `BufferRange` | A buffer window beyond the descriptor range limits | devices without buffer device addresses (`addressed_needs`); every device (no Vulkan mechanism) | `device` | 6: `crates/metal2vulkan/src/bind/graphics.rs (patch_binding, 3 sites)`, `crates/metal2vulkan/src/bind/instantiate.rs (bind_buffers)` (+2) | `app`: a buffer window past a device's descriptor range |
 | `Int64Arithmetic` | 64-bit integer arithmetic | devices without VkFeature::ShaderInt64 | `device` | 2: `crates/metal2vulkan/src/lower/arith/legal.rs (check_scalar)`, `crates/metal2vulkan/src/lower/select.rs (selector_form)` | `rare`: 64-bit integers on a device without shaderInt64 |
 | `Float64Arithmetic` | 64-bit float arithmetic | devices without VkFeature::ShaderFloat64 | `device` | 2: `crates/metal2vulkan/src/device/metal.rs (unsupported_features)`, `crates/metal2vulkan/src/lower/arith/legal.rs (check_scalar)` | `rare`: doubles (MSL has none outside Apple's own code) |
@@ -390,6 +389,7 @@ Columns:
 | `RenderPass` | A render pass of something the runtime does not build yet (`CommandBuffer::render_command_encoder`) | every device (a public call's own check of its arguments) | `ours`: the replay streams' passes render into one to two color attachments and a stencil or a depth attachment, each a level of a 2D texture of one sample, with no resolve and a clear depth of 1, none naming two textures for its depth and stencil; each other kind is built when a replay stream makes one; `DepthStencilViews` and `ClearDepth` are what Vulkan's rendering under the floor takes no form of | 6: `crates/metal2vulkan-runtime/src/pass.rs (check)`, `crates/metal2vulkan-runtime/src/pass.rs (ops)` (+4) | `-` |
 | `Draw` | A draw or render encoder state the runtime does not build yet (`RenderCommandEncoder`) | every device (a public call's own check of its arguments) | `ours`: the replay streams draw lines and triangles through one viewport Vulkan's is, with pipeline states of their pass's formats, filled and clipped; each other kind is built when a replay stream draws one), and device for [`DrawKind::DividedBaseInstance`] (a device that does not report `supportsNonZeroFirstInstance` | 12: `crates/metal2vulkan-runtime/src/render_encoder.rs (attachment_reads, 3 sites)`, `crates/metal2vulkan-runtime/src/render_encoder.rs (checked)` (+8) | `-` |
 | `LinearPlanePass` | A render pass over a surface plane that renders as a linear colour attachment alone, in a shape the device does not render... | at the device's limit | `device`: VK_NV_linear_color_attachment renders such a format as a colour attachment only "as long as all the color attachments in the render pass instance have VK_IMAGE_TILING_LINEAR tiling"; the RTX 3090's driver lost the device rendering a linear colour attachment beside a depth or stencil attachment | 1: `crates/metal2vulkan-runtime/src/pass.rs (check)` | `-` |
+| `StageSize` | A pipeline of a function whose module weighs more than the compiled stage bound (`metal2vulkan::pipeline::COMPILED_STAGE_WEIGHT`, the heaviest... | at the device's limit | `device`: ANV, Mesa 26.2.6, took 3.65 GiB to compile a stage of entry weight 99,109 and passed 16 GiB on one of 532,213; a driver whose helper's compile met its cap or time, or that keeps no pipeline cache data, gives no data to make the pipeline from | 3: `crates/metal2vulkan-runtime/src/pipeline.rs (past_stage_bound)`, `crates/metal2vulkan-runtime/src/render.rs (of)` (+1) | `-` |
 
 ## Appendix: every site
 
@@ -431,7 +431,6 @@ Each refusal's sites, with the function that builds it.
 - `feature::Int64Atomics`: `crates/metal2vulkan/src/lower/access/atomic.rs (select, 2 sites)`
 - `feature::ImageAtomics`: `crates/metal2vulkan/src/lower/texture/slot.rs (atomic_format)`
 - `feature::DescriptorCount`: `crates/metal2vulkan/src/lower/access/mod.rs (accept_placement)`; `crates/metal2vulkan/src/lower/select.rs (finish)`; `crates/metal2vulkan/src/pipeline/link.rs (limit_error)`
-- `feature::StageSize`: `crates/metal2vulkan/src/pipeline/compile/stage_bound.rs (refused)`
 - `feature::BufferRange`: `crates/metal2vulkan/src/bind/graphics.rs (patch_binding, 3 sites)`; `crates/metal2vulkan/src/bind/instantiate.rs (bind_buffers)`; `crates/metal2vulkan/src/lower/access/function_table.rs (select)`; `crates/metal2vulkan/src/lower/access/mod.rs (place_slots)`
 - `feature::Int64Arithmetic`: `crates/metal2vulkan/src/lower/arith/legal.rs (check_scalar)`; `crates/metal2vulkan/src/lower/select.rs (selector_form)`
 - `feature::Float64Arithmetic`: `crates/metal2vulkan/src/device/metal.rs (unsupported_features)`; `crates/metal2vulkan/src/lower/arith/legal.rs (check_scalar)`
@@ -676,4 +675,5 @@ Each refusal's sites, with the function that builds it.
 - `rt:Gap::RenderPass`: `crates/metal2vulkan-runtime/src/pass.rs (check)`; `crates/metal2vulkan-runtime/src/pass.rs (ops)`; `crates/metal2vulkan-runtime/src/pass.rs (resolve)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (later_store)`; `crates/metal2vulkan-runtime/src/texture.rs (attachment_view)`; `crates/metal2vulkan-runtime/src/texture.rs (resolve_attachment)`
 - `rt:Gap::Draw`: `crates/metal2vulkan-runtime/src/render_encoder.rs (attachment_reads, 3 sites)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (checked)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (draw)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (draw_patches)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (draw_patches_indirect)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (set_scissor_rects)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (set_triangle_fill_mode)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (set_viewports)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (set_visibility_result_mode)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (shadow_copies)`
 - `rt:Gap::LinearPlanePass`: `crates/metal2vulkan-runtime/src/pass.rs (check)`
+- `rt:Gap::StageSize`: `crates/metal2vulkan-runtime/src/pipeline.rs (past_stage_bound)`; `crates/metal2vulkan-runtime/src/render.rs (of)`; `crates/metal2vulkan-runtime/src/stage.rs (gap)`
 

@@ -126,8 +126,7 @@ pub enum Outcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UnsupportedReason {
-    /// Not implemented by this translator version, or a stage past its stage bound
-    /// (`Needs::StageBound`).
+    /// Not implemented by this translator version.
     NotImplemented,
     /// No Vulkan 1.2+ mechanism exists.
     NotRepresentable,
@@ -411,8 +410,7 @@ impl From<&Error> for Outcome {
                         feature,
                         capability: capabilities_key(alternatives),
                     },
-                    // A stage past the stage bound is the translator's own gap.
-                    Needs::NotImplemented | Needs::StageBound => Outcome::Unsupported {
+                    Needs::NotImplemented => Outcome::Unsupported {
                         reason: UnsupportedReason::NotImplemented,
                         feature,
                     },

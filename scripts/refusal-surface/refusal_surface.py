@@ -378,8 +378,6 @@ def conditions(kind, needs_text):
         return {"devices without " + c for c in caps}
     if kind == "MetalGpuFamily":
         return {"devices that do not claim the Metal GPU family"}
-    if kind == "StageBound":
-        return {"devices whose plan writes the stage past the stage bound"}
     return {"varies (" + kind + ")"}
 
 

@@ -88,6 +88,7 @@ mod shadow;
 mod signed_zeros;
 mod sites;
 mod spill;
+mod stage;
 mod staging;
 #[cfg(m2v_gpu)]
 mod stamps;

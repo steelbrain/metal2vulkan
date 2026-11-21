@@ -390,7 +390,9 @@ mod on_device {
                 }
             }
             for &(dispatch, size, _) in &table {
-                state.prepare_dispatch(dispatch, size, &[]);
+                state
+                    .prepare_dispatch(dispatch, size, &[])
+                    .expect("made ahead");
             }
             let after = counters.metrics();
             let pipelines: HashSet<&str> = table.iter().map(|entry| entry.2).collect();
