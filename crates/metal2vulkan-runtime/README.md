@@ -1443,7 +1443,9 @@ made, with no lock, and never rewritten for layouts.
   Metal does not make, counted (`Metrics::over_copies`). A program that rounds its pitch past the
   device's own (`Device::minimum_linear_texture_alignment`), or offsets its texture off the
   image's memory alignment, takes them: NVIDIA lays a linear image's rows at the row
-  rounded to 128 bytes, AMD to 256, so a pitch rounded to 256 is copied on NVIDIA. A render
+  rounded to 128 bytes, AMD to 256, so a pitch rounded to 256 is copied on NVIDIA; the Iris Xe
+  lays them at the row itself (the answer is the texel's bytes), so a pitch rounded past the row
+  is copied there. A render
   target over a buffer is copied on NVIDIA, whose linear tiling does not take it in place. A
   render target whose advertised subresource ends past its own rows or its buffer is copied too:
   llvmpipe (lavapipe) advertises a linear image's height rounded up to 4 rows and stores whole
