@@ -224,8 +224,10 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   through its buffer slots and the device addresses it loads (an argument buffer's pointer
   member, a stored `gpuAddress`) or makes from integers, and reads, writes, sizes or tests for nil
   its texture slots and its argument buffers' textures, those of an argument buffer a pointer
-  member reaches included, updates its texture slots atomically (a slot declared `R32ui` or
-  `R32i`, the storage-image array's element at its ID's index), and samples its texture slots
+  member reaches included, reads and writes its `ulong` texture slots (an `RG32` unsigned image,
+  declared `Rg32ui` where it is a storage image, the element at its ID's index), updates its
+  texture slots atomically (a slot declared `R32ui` or `R32i`, the storage-image array's element
+  at its ID's index), and samples its texture slots
   through its runtime sampler slots and its constexpr samplers and reads them through those (MSL
   4.1's `read(sampler, coord)`, its border texel from bits 0-11 of the ID's word). Any other
   function is refused as `Unsupported{IdentityDomains}`, whose symbol names the first such form

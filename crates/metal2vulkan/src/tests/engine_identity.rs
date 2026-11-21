@@ -37,6 +37,10 @@
 //!   array's. It passes L3 and, on the CPU interpreter, adds to the texels of the element its
 //!   pushed resource ID names and answers the texels they held, guarded by the element's size on
 //!   a device without robust image access.
+//! - A kernel's plain `ulong` texture slots (`engine/unk_ulong_rw`'s `unk_ulong_access`: two
+//!   reads and a write) are `RG32` unsigned images, the sampled array's unsigned class and the
+//!   storage array's declared `Rg32ui`. It passes L3 and, on the CPU interpreter, joins each
+//!   read's two words and splits the write's at the elements their pushed resource IDs name.
 //! - A slot's read through a runtime sampler that clamps to its border color
 //!   (`engine/kernel_read_through`'s `rt_arg`) takes the border texels from bits 0-11 of the
 //!   slot's resource ID's word, with no `BorderTexels` specialization or fact. It passes L3 and,
@@ -131,8 +135,8 @@ use crate::pipeline::interface::PushLoc;
 use crate::pipeline::layout::BindingSource;
 use crate::pipeline::link::{link, LinkInputs};
 use crate::pipeline::sym::{
-    Axis, HandleClass, ImageAccess, PushField, ResourceKind, ResourceSlot, SampledType, SlotClass,
-    SlotRef, SpecKey, Stage, StorageFormatClass,
+    Axis, HandleClass, ImageAccess, ImageDim, PushField, ResourceKind, ResourceSlot, SampledType,
+    SlotClass, SlotRef, SpecKey, Stage, StorageFormatClass,
 };
 use crate::pipeline::testing::{
     compile, compile_kept, compile_with, engine_dir, link_and_validate, llvm_assemble, profile,
@@ -1768,6 +1772,171 @@ fn a_texture_atomic_is_the_r32_storage_element_its_resource_id_names() {
                 "{stem}: element {}",
                 other.element
             );
+        }
+    }
+}
+
+/// The `RG32Uint` words of texel `n` of element `e` and the `ulong` they hold (low word first).
+fn ulong_texel(e: u32, n: u32) -> ([u32; 4], u64) {
+    let lo = 0xA000_0000 | e << 20 | n;
+    let hi = 0x0B00_0000 | e << 20 | n << 4;
+    ([lo, hi, 0, 1], u64::from(hi) << 32 | u64::from(lo))
+}
+
+/// A kernel's plain `ulong` texture slots under the identity domains (the owned fixture
+/// `unk_ulong_access`: a sample-access and a read-access `texture2d<ulong>`, and a write-access
+/// `texture3d<ulong>`) are `RG32` unsigned images, elements of the set-1 arrays at the indices
+/// their pushed resource IDs hold: the two read slots the sampled array's unsigned 2D class, the
+/// written one the storage array's 3D class declared `Rg32ui`. It passes L3 and, on the CPU
+/// interpreter over 20 threads, each read joins its element's two words into `(v, 0, 0, 1)`,
+/// `(0, 0, 0, 1)` outside the texture (threads 16 and on, rows 2 and 3), and the write stores the
+/// sum's two words, inside the texture alone.
+#[test]
+fn ulong_texture_slots_are_rg32_elements_their_resource_ids_name() {
+    let Some(bc) = assemble("unk_ulong_rw") else {
+        return;
+    };
+    const LANES: u32 = 20;
+    const L: [u32; 3] = [LANES, 1, 1];
+    // The sample-access texture at index 1 and the read-access one at 2 of the sampled array,
+    // the written one at 3 of the storage array.
+    const S: u32 = 1;
+    const R: u32 = 2;
+    const W: u32 = 3;
+    let word = vector_word(PixelFormat::RG32Uint);
+    let mut profiles: Vec<(String, DeviceProfile)> = PROFILES
+        .iter()
+        .map(|stem| {
+            let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+            (stem.to_string(), p)
+        })
+        .collect();
+    profiles.push((
+        "moltenvk-m3 without robustImageAccess2".to_string(),
+        identity_without("moltenvk-m3", &[VkFeature::RobustImageAccess2]),
+    ));
+    for (stem, p) in &profiles {
+        let (a, plan, module) =
+            compile_kept(&bc, "unk_ulong_access", p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        let linked = link(&[&a], &LinkInputs::standalone(), p).unwrap_or_else(|e| panic!("{e}"));
+        let mut classes: Vec<_> = (linked.table.bindings.iter())
+            .filter_map(|(slot, at)| match slot.kind {
+                ResourceKind::Heap(HandleClass::Image(c)) => Some((*at, *slot, c)),
+                _ => None,
+            })
+            .collect();
+        classes.sort_by_key(|(at, _, _)| *at);
+        let [(sampled_at, sampled, s_class), (storage_at, storage, w_class)] = classes[..] else {
+            panic!("{stem}: {classes:?}");
+        };
+        assert_eq!(
+            (
+                (
+                    sampled_at,
+                    s_class.dim,
+                    s_class.access,
+                    s_class.sampled_type,
+                    s_class.format
+                ),
+                (
+                    storage_at,
+                    w_class.dim,
+                    w_class.access,
+                    w_class.sampled_type,
+                    w_class.format
+                ),
+            ),
+            (
+                (
+                    (1, 0),
+                    ImageDim::D2,
+                    ImageAccess::Sampled,
+                    SampledType::Uint,
+                    StorageFormatClass::NotStorage
+                ),
+                (
+                    (1, 1),
+                    ImageDim::D3,
+                    ImageAccess::Storage,
+                    SampledType::Uint,
+                    StorageFormatClass::Format(vk::Format::R32G32_UINT)
+                ),
+            ),
+            "{stem}"
+        );
+        let out_bytes = 2 * 32 * LANES as usize;
+        let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
+        for field in &plan.push.fields {
+            let PushLoc::Push { offset } = field.loc else {
+                panic!("{stem}: {field:?} spilled");
+            };
+            let o = offset as usize;
+            let bytes = match field.field {
+                PushField::SlotGuestBase(s) => match (s.class, s.index) {
+                    (SlotClass::Buffer, 0) => slot_word(OUT),
+                    (SlotClass::Texture, i @ 0..=2) => resource_id([S, R, W][i as usize], word),
+                    _ => panic!("{stem}: unexpected slot {s:?}"),
+                },
+                PushField::DispatchRegion => {
+                    let region = region_bytes([0; 3], L, L).expect("packs");
+                    push[o..o + 32].copy_from_slice(&region);
+                    continue;
+                }
+                PushField::SlotBounds(_) => {
+                    push[o..o + 8].copy_from_slice(&bounds_word(out_bytes, 0));
+                    continue;
+                }
+                PushField::ZeroAddress => ZERO_UNMAPPED,
+                _ => panic!("{stem}: unexpected push field {field:?}"),
+            };
+            push[o..o + 8].copy_from_slice(&bytes.to_le_bytes());
+        }
+        // An `RG32` view's read outside the image under `robustImageAccess2`; without it the
+        // shader checks every access, and the images trap on one outside them.
+        let robust = p
+            .fields()
+            .images
+            .robust_image_access2
+            .then_some([0, 0, 0, 1]);
+        let image =
+            |slot, e: u32| texture(slot, e, [8, 2], |x, y| ulong_texel(e, y * 8 + x).0, robust);
+        let images = vec![image(sampled, S), image(sampled, R), image(storage, W)];
+        let res = Resources {
+            buffers: vec![Buffer {
+                slot: None,
+                address: Some(OUT),
+                bytes: vec![0xAB; out_bytes],
+            }],
+            push,
+            spec: local_size3(L),
+        };
+        let (got, after) = run_with_images(&module, &Config::default(), res, images)
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let out: Vec<u64> = (got.buffers[0].as_chunks::<8>().0.iter())
+            .map(|c| u64::from_le_bytes(*c))
+            .collect();
+        for t in 0..LANES {
+            let n = (t & 7) + 8 * ((t >> 3) & 1);
+            let at = 8 * t as usize;
+            if t < 16 {
+                let (vs, vr) = (ulong_texel(S, n).1, ulong_texel(R, n).1);
+                assert_eq!(out[at..at + 4], [vs, 0, 0, 1], "{stem}: lane {t} sampled");
+                assert_eq!(out[at + 4..at + 8], [vr, 0, 0, 1], "{stem}: lane {t} read");
+                let sum = vs.wrapping_add(vr);
+                let stored = after[2].texels[n as usize];
+                assert_eq!(
+                    [stored[0], stored[1]],
+                    [sum as u32, (sum >> 32) as u32],
+                    "{stem}: lane {t} written"
+                );
+            } else {
+                assert_eq!(
+                    out[at..at + 8],
+                    [0, 0, 0, 1, 0, 0, 0, 1],
+                    "{stem}: lane {t}"
+                );
+            }
         }
     }
 }

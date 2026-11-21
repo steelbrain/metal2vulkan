@@ -1763,12 +1763,15 @@ impl SlotPlan {
 
 /// Under the identity domains, the class of the set-1 array whose elements texture slot
 /// declaration `decl` takes: its shape, numeric type and depth comparison, sampled, or a storage
-/// image without a format (the floor's `shaderStorageImageWriteWithoutFormat`) or of a texture
-/// atomic's `R32ui` / `R32i` ([`atomic_format`]: the format Metal requires of the bound texture
-/// there, whose storage element is of that format). `None` for a declaration the identity arrays
-/// hold no element of yet: a cube viewed as an array, level views, a texture buffer, its parts or
-/// rows, planes, an extended-range, RGBX or `ulong` form, or a storage image with another format
-/// or a conversion.
+/// image without a format (the floor's `shaderStorageImageWriteWithoutFormat`), of a texture
+/// atomic's `R32ui` / `R32i` ([`atomic_format`]) or of a `ulong` texture's `Rg32ui`
+/// ([`ulong_format`]), each the format Metal requires of the bound texture there, whose storage
+/// element is of that format. A `ulong` slot is an `RG32` unsigned image whose two words the
+/// shader joins and splits, so its class is the unsigned integer one of its shape. `None` for a
+/// declaration the identity arrays hold no element of yet: a cube viewed as an array, level views,
+/// a texture buffer, its parts or rows, planes, an extended-range or RGBX form, a `ulong` slot a
+/// `ulong` atomic updates (an `R64ui` image), or a storage image with another format or a
+/// conversion.
 pub(crate) fn identity_class(decl: &ImageDecl) -> Option<ImageHandleClass> {
     let plain = !decl.cube_as_array
         && decl.level_views.is_none()
@@ -1778,8 +1781,7 @@ pub(crate) fn identity_class(decl: &ImageDecl) -> Option<ImageHandleClass> {
         && decl.planes_sampler.is_none()
         && !decl.rows
         && decl.parts.is_none()
-        && decl.class == StorageImageClass::Identity
-        && decl.texel != TexelClass::Uint64;
+        && decl.class == StorageImageClass::Identity;
     let dim = match decl.dim {
         Dim::D1 => SymDim::D1,
         Dim::D2 => SymDim::D2,
@@ -1793,6 +1795,9 @@ pub(crate) fn identity_class(decl: &ImageDecl) -> Option<ImageHandleClass> {
         (true, crate::spv::ImageFormat::Unknown) => StorageFormatClass::Unknown,
         (true, crate::spv::ImageFormat::R32ui) => StorageFormatClass::Format(vk::Format::R32_UINT),
         (true, crate::spv::ImageFormat::R32i) => StorageFormatClass::Format(vk::Format::R32_SINT),
+        (true, crate::spv::ImageFormat::Rg32ui) => {
+            StorageFormatClass::Format(vk::Format::R32G32_UINT)
+        }
         (true, _) => return None,
     };
     if !plain {
@@ -1802,7 +1807,10 @@ pub(crate) fn identity_class(decl: &ImageDecl) -> Option<ImageHandleClass> {
         dim,
         arrayed: decl.arrayed,
         multisampled: decl.multisampled,
-        sampled_type: decl.texel.sampled_type(),
+        sampled_type: match decl.texel {
+            TexelClass::Uint64 => SampledType::Uint,
+            texel => texel.sampled_type(),
+        },
         depth_compare: decl.depth,
         access: match storage {
             true => ImageAccess::Storage,
