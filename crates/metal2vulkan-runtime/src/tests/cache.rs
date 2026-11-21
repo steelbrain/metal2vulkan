@@ -660,8 +660,9 @@ fn a_directory_keeps_at_most_four_blobs_the_oldest_removed() {
     assert!(scratch.0.join("state").exists(), "the state stays");
 }
 
-/// The lowerings waiting for the reaper: a file that would take the queue past its bound is
-/// refused and nothing is queued; the rest come out in order, and each taken makes room.
+/// The lowerings waiting for the reaper: a file that would take a queue holding files past its
+/// bound is refused and nothing is queued; the rest come out in order, and each taken makes room.
+/// An empty queue takes a file larger than the bound, alone, and refuses the next until it is taken.
 #[test]
 fn the_write_queue_refuses_a_file_past_its_bound() {
     let mut pending = Pending::new(10);
@@ -677,6 +678,13 @@ fn the_write_queue_refuses_a_file_past_its_bound() {
     assert_eq!(pending.pop(), Some(("b".into(), vec![2; 6])));
     assert_eq!(pending.pop(), Some(("c".into(), vec![3; 4])));
     assert_eq!(pending.pop(), None);
+    assert!(
+        pending.push("e".into(), vec![5; 11]),
+        "larger than the bound, into an empty queue: kept alone"
+    );
+    assert!(!pending.push("f".into(), vec![6]), "behind it: dropped");
+    assert_eq!(pending.pop(), Some(("e".into(), vec![5; 11])));
+    assert!(pending.push("f".into(), vec![6]), "room again");
 }
 
 #[test]

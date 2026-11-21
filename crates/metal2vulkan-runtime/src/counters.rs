@@ -2188,8 +2188,10 @@ pub struct Metrics {
     /// difference of two reads does not apply to it.
     pub pipeline_cache_lock_wait_max_nanos: u64,
     /// Lowerings, refusals and render contents' records not kept in the cache directory: each was
-    /// handed to the reaper, which writes them off every guest thread, while the ones waiting for
-    /// it held 8 MiB, and was dropped rather than waited for. A later device lowers it again.
+    /// handed to the reaper, which writes them off every guest thread, where it would have taken
+    /// the ones waiting for it past 8 MiB, and was dropped rather than waited for (one larger than
+    /// 8 MiB alone is kept where none waits). A later device lowers it again. Metal has no
+    /// counterpart: Metal's compiler service keeps its own cache.
     pub cache_writes_dropped: u64,
     /// Bytes written to the cache directory ([`DeviceOptions::pipeline_cache_dir`]): lowered
     /// kernels, and the device's pipeline cache blob each time it is written: once creation is

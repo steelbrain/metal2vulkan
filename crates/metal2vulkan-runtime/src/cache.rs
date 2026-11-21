@@ -74,7 +74,8 @@
 //! old; a hit in old is renamed into young, which is its mark of use. Generations start at 1, and
 //! the first has no old: a lookup there tries young alone. A write goes into young, made by the
 //! reaper: a state hands its lowering over ([`keep_translation`]) and returns, and a lowering that
-//! would take the ones waiting past [`PENDING_BYTES`] is dropped and counted, never waited for. The
+//! would take the ones waiting past [`PENDING_BYTES`] is dropped and counted, never waited for,
+//! except that one larger than that by itself is queued where nothing else waits. The
 //! bytes young holds are counted in `state`, 24 bytes beside the generations: young's number, its
 //! bytes and a checksum of both, read and written under a lock on the file, which every store on
 //! the directory, in this process or another, holds open for its life. The write that takes young
@@ -135,7 +136,8 @@ const BLOB: &str = "pipelines";
 /// The most blobs a cache directory keeps: four kinds of device or driver versions.
 pub(crate) const BLOBS_KEPT: usize = 4;
 /// The most bytes of lowerings waiting for the reaper to write them: about the 9.16 MB a long
-/// recorded session's 282 lowerings fill. A lowering past it is not kept.
+/// recorded session's 282 lowerings fill. A lowering larger than this alone is queued where none
+/// waits, so the heaviest kernels, the costliest to lower again, are kept too.
 pub(crate) const PENDING_BYTES: u64 = 8 << 20;
 /// What a translation file holds where the translator refused the lowering: bytes no lowering
 /// encodes to, and that a file cut short is not.
@@ -925,9 +927,10 @@ struct Pipelines {
 pub(crate) struct PipelineCache(vk::PipelineCache);
 
 /// Hands the bytes of a lowered function of key digest `key` to the reaper, which writes them to
-/// the store, off every guest thread. Where the lowerings waiting for it hold [`PENDING_BYTES`]
-/// already, they are dropped and counted (`Metrics::cache_writes_dropped`), never waited for: a
-/// lowering is only a cache, and a later state lowers it again.
+/// the store, off every guest thread. Where it would take the lowerings waiting for it past
+/// [`PENDING_BYTES`], it is dropped and counted (`Metrics::cache_writes_dropped`), never waited
+/// for: a lowering is only a cache, and a later state lowers it again. One larger than the bound
+/// by itself is queued where none waits.
 pub(crate) fn keep_translation(core: &Core, key: &[u8], bytes: Vec<u8>) {
     keep(core, Caches::translation_file(key), bytes);
 }
@@ -967,7 +970,8 @@ pub(crate) fn keep_observer(core: &Core, key: &[u8]) {
     keep_translation(core, key, OBSERVES.to_vec());
 }
 
-/// The files waiting for the reaper to write them, in order, at most `bound` bytes of them.
+/// The files waiting for the reaper to write them, in order: at most `bound` bytes of them, or one
+/// file larger than that alone.
 pub(crate) struct Pending {
     files: VecDeque<(String, Vec<u8>)>,
     bytes: u64,
@@ -975,7 +979,7 @@ pub(crate) struct Pending {
 }
 
 impl Pending {
-    /// An empty queue of at most `bound` bytes.
+    /// An empty queue of at most `bound` bytes, or of one file larger than that.
     pub(crate) fn new(bound: u64) -> Pending {
         Pending {
             files: VecDeque::new(),
@@ -984,11 +988,12 @@ impl Pending {
         }
     }
 
-    /// Queues `bytes` under `file`; false, queuing nothing, where they would take the queue past
-    /// its bound.
+    /// Queues `bytes` under `file`; false, queuing nothing, where they would take a queue that
+    /// holds a file past its bound. An empty queue takes a file of any size, so a file larger than
+    /// the bound is kept, alone: what it holds is bytes already in memory, made before the push.
     pub(crate) fn push(&mut self, file: String, bytes: Vec<u8>) -> bool {
         let len = bytes.len() as u64;
-        if self.bytes.saturating_add(len) > self.bound {
+        if !self.files.is_empty() && self.bytes.saturating_add(len) > self.bound {
             return false;
         }
         self.bytes += len;

@@ -2686,9 +2686,10 @@ nothing is written.
 half of `DeviceOptions::pipeline_cache_cap` (128 MiB where it is `None`: half of it is about seven
 times the 9.16 MB a long recorded session's 282 lowerings fill). A lookup tries young, then old, and
 a hit in old moves the file into young by a rename. A new file goes into young, written by the
-reaper off every guest thread: a state hands its lowering over and returns, and where the lowerings
-waiting for the reaper hold 8 MiB it is dropped and counted (`Metrics::cache_writes_dropped`), never
-waited for, and lowered again by a later device. The write that takes young past half the cap starts
+reaper off every guest thread: a state hands its lowering over and returns, and where it would take
+the lowerings waiting for the reaper past 8 MiB it is dropped and counted
+(`Metrics::cache_writes_dropped`), never waited for, and lowered again by a later device. A lowering
+larger than 8 MiB by itself is queued where none waits, so the heaviest kernels are kept too. The write that takes young past half the cap starts
 the next generation: young becomes old, and the old one is removed whole, by a thread the store
 starts for it. So a file stays for at least half the cap, and at most the whole cap, of files
 written or moved after its last use. Half the cap is what the store is sure to keep: a set of
