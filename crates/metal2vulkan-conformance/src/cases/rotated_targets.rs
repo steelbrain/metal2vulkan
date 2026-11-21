@@ -37,7 +37,9 @@
 //! Nothing here can fault a GPU: single-sampled targets of the case's own extent, one full-screen
 //! triangle a pass, no loop, and every fetch inside its buffer.
 
+use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Input, MetalSource, Side};
+use crate::degradation::Degradation;
 use crate::recording::ShaderRef;
 use crate::render::{
     Blend, BlendColorChannels, ColorState, PassColor, Plane, ReadAt, RenderPass,
@@ -336,6 +338,22 @@ impl RotatedTarget {
     fn target(format: PixelFormat) -> TargetSpec {
         TargetSpec::read(format, [WIDTH, HEIGHT]).shared()
     }
+
+    /// Whether the state's blend is not exact by construction on the rotated target, the
+    /// translator's rule for `PrecisionNote::RotatedBlendRounding`: a blend but a minimum or a
+    /// maximum of the colour, which takes no factor, and one whose four factors are all `Zero` or
+    /// `One`.
+    fn rounds(&self) -> bool {
+        use BlendFactor as F;
+        self.state
+            .blend
+            .is_some_and(|[(sr, dr, rgb), (sa, da, _)]| {
+                !matches!(rgb, BlendOperation::Min | BlendOperation::Max)
+                    && ![sr, dr, sa, da]
+                        .iter()
+                        .all(|f| matches!(f, F::Zero | F::One))
+            })
+    }
 }
 
 /// The buffers and library every format's leg shares, made once before either leg runs.
@@ -481,6 +499,16 @@ impl Case for RotatedTarget {
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
         shader_refs(FILLS, &[VERTEX, FILL_FLOAT])
+    }
+
+    fn allowances(&self) -> Vec<Allowance> {
+        // A blend not exact by construction announces its rounding on the `ARGB8Unorm` target
+        // (`rotated-blend-rounding`). A declaration of the notices site alone: every texel
+        // compares exactly.
+        (self.rounds())
+            .then(|| crate::replay::notice_allowance(Degradation::RotatedBlendRounding.code()))
+            .into_iter()
+            .collect()
     }
 
     fn inputs(&self) -> Result<Vec<Input>, String> {
