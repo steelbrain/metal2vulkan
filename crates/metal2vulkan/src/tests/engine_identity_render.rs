@@ -24,6 +24,12 @@
 //!   of the position's layout pulls it through the slot's pushed address at the layout's pushed
 //!   stride (`VertexBufferStride`); the de-indexed and private list forms stay refused.
 //!
+//! - On `Device::from_queries`' profile of lavapipe, which enables `shaderOutputLayer`, a vertex
+//!   function that writes `[[render_target_array_index]]` (the owned fixture `engine/rt6_layered`'s
+//!   `rt6_layered_vertex`, which reads it from `constant` memory at its instance) compiles in its
+//!   one form: it pushes the pass's length (`RenderTargetArrayLength`) in its window, depends on
+//!   `RuntimeFact::RenderTargetArrayLength` with no dropped layer, and declares `Layer`.
+//!
 //! `llvm-as` assembles the fixture; a missing tool skips visibly. No GPU is used.
 
 use crate::budget::Budget;
@@ -37,6 +43,7 @@ use crate::pipeline::descriptor::{
     ColorAttachmentDescriptor, FunctionDescriptor, RenderPipelineDescriptor, StageSource,
     VertexAttributeDescriptor, VertexBufferLayoutDescriptor, VertexDescriptor,
 };
+use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{PushField, SlotClass, SlotRef, Stage};
 use crate::pipeline::testing::{description, engine_dir, llvm_assemble, AssembleError};
@@ -79,6 +86,60 @@ fn descriptor(library: &Library) -> RenderPipelineDescriptor {
     d.fragment = Some(function("colored_fragment"));
     d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::BGRA8Unorm));
     d
+}
+
+/// Under the identity domains on lavapipe's profile, `rt6_layered_vertex` pushes the pass's
+/// length in its window, depends on it with no dropped layer and declares `Layer`, beside
+/// `rt6_layered_fragment`, which reads the index as written; both modules pass L3.
+#[test]
+fn from_queries_pushes_the_pass_s_length_to_a_vertex_function_that_writes_its_slice() {
+    let ll = engine_dir().join("rt6_layered.ll");
+    let library = match llvm_assemble(&ll) {
+        Ok(bitcode) => Library::from_air(&bitcode).expect("the library"),
+        Err(AssembleError::Missing(why)) => {
+            eprintln!("SKIPPED: {why}");
+            return;
+        }
+        Err(e) => panic!("{}: {e:?}", ll.display()),
+    };
+    let function = |name| {
+        StageSource::Function(FunctionDescriptor::new(
+            library.function(name).expect("the function"),
+        ))
+    };
+    let mut d = RenderPipelineDescriptor::new(function("rt6_layered_vertex"));
+    d.fragment = Some(function("rt6_layered_fragment"));
+    d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::R32Uint));
+    let desc = description("lavapipe").unwrap_or_else(|e| panic!("{e}"));
+    let device = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
+    assert!(
+        (device.profile().enabled().features).contains(&VkFeature::ShaderOutputLayer),
+        "lavapipe's profile enables shaderOutputLayer"
+    );
+    let p = (device.compile_render_pipeline(&d, &Budget::standard()))
+        .unwrap_or_else(|e| panic!("lavapipe: {e:?}"));
+    let vertex = &p.interface.push[0];
+    assert_eq!(vertex.stage, Stage::Vertex);
+    assert!(
+        (vertex.fields.iter()).any(|f| f.field == PushField::RenderTargetArrayLength
+            && matches!(f.loc, PushLoc::Push { .. })),
+        "the vertex function pushes the pass's length in its window"
+    );
+    assert!(
+        (p.dependencies.iter()).any(|dependency| dependency.fact
+            == RuntimeFact::RenderTargetArrayLength {
+                layer_dropped: false
+            }),
+        "the vertex function depends on the length, its layer kept"
+    );
+    assert!(
+        p.graphics.declares_layer,
+        "the vertex function declares Layer"
+    );
+    for stage in &p.stages {
+        check_words_valid(&stage.spirv, &p.requirements, device.profile())
+            .unwrap_or_else(|e| panic!("lavapipe: {:?}: {e}", stage.stage));
+    }
 }
 
 #[test]

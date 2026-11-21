@@ -206,7 +206,10 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   its position (its own sample where the pass is multisampled), level 0, the sampled-texture
   array's element at the index the consumer pushes for that attachment
   (`PushField::FetchedColor { color, texels }`, `texels` the read's numeric class), and a
-  read-only signed-integer attachment joins `signed_color_attachments`. Every precision note is
+  read-only signed-integer attachment joins `signed_color_attachments`. A vertex function that
+  writes `[[render_target_array_index]]` compiles in the variant that writes `Layer`, which stores
+  0 for an index at or past the render pass's length the consumer pushes
+  (`PushField::RenderTargetArrayLength`, `renderTargetArrayLength` at least 1). Every precision note is
   static there: no constant or binder decides one. So far they lower a kernel that reaches memory
   through its buffer slots and the device addresses it loads (an argument buffer's pointer
   member, a stored `gpuAddress`) or makes from integers, and reads, writes, sizes or tests for nil
