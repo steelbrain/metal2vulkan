@@ -17,8 +17,9 @@
 //! every buffer endpoint's call-site `align` at least 16 and its offset proven a multiple of 16
 //! (`MemoryPlan::proven_align`: the call-site `align` alone is no proof, `memory::leaf`'s
 //! placement), and every other endpoint word-aligned, moves 16-byte `uvec4` units instead: a
-//! buffer slot with a `uvec4` view moves each unit as one element of it, and every other memory as
-//! its four words. Every unit is one leaf load and store
+//! buffer slot with a `uvec4` view moves each unit as one element of it, a device address as one
+//! access (`memory::leaf`'s whole words), and every other memory as its four words. Every unit is
+//! one leaf load and store
 //! (`memory::leaf`), each contained exactly as a plain access of that leaf, so a byte store never
 //! disturbs a neighbour (the sub-word atomics); an arena unit at a constant offset that ends inside
 //! the arena's translation-time size has no check, which could only pass. `memset` stores the byte

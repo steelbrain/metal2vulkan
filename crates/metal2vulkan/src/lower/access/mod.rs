@@ -771,9 +771,10 @@ pub struct AccessPlan {
     /// Memory-plan slots reached under the identity domains from their address as it is, which
     /// the binder holds to a multiple of their argument's alignment ([`address_alignment`],
     /// `RuntimeFact::AddressAlignment`), at least the granularity their accesses reach
-    /// ([`AccessPlan::reach`]): no access rounds the address (`psb::prepare_direct`), and `uvec2`
-    /// and `uvec4` units are taken at offsets proven multiples of their size. Every other
-    /// device-address slot is reached from the word below each access (`psb::prepare_at`).
+    /// ([`AccessPlan::reach`]): no access rounds the address (`psb::prepare_direct`), and a leaf
+    /// at an offset proven a multiple of 8 or 16 is accessed at that alignment (`memory::leaf`'s
+    /// whole words). Every other device-address slot is reached from the word below each access
+    /// (`psb::prepare_at`).
     pub aligned: BTreeSet<usize>,
     /// The granularity in bytes at which the static-root accesses of each memory-plan slot reach
     /// its memory, the widest over them ([`note_reach`]): an access whose leaf is one narrow unit

@@ -155,6 +155,27 @@ impl WordMem for SourceMem {
         Err(BuildError::Dangling(Dangling::Value(value)))
     }
 
+    fn whole(&self) -> bool {
+        match &self.0 {
+            Mem::View(_) => false,
+            Mem::Psb(m) => m.whole(),
+        }
+    }
+
+    fn read_whole(
+        &mut self,
+        fb: &mut FunctionBuilder<'_>,
+        off: SValue,
+        at: u32,
+        ty: crate::spirv::ids::TypeId,
+        align: u32,
+    ) -> BResult<SValue> {
+        match &mut self.0 {
+            Mem::View(v) => Err(BuildError::Dangling(Dangling::Global(v.global))),
+            Mem::Psb(m) => m.read_whole(fb, off, at, ty, align),
+        }
+    }
+
     fn write_bits(
         &mut self,
         _: &mut FunctionBuilder<'_>,

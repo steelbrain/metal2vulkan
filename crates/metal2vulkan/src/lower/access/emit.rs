@@ -245,6 +245,41 @@ impl WordMem for Mem {
             Mem::Psb(m) => m.write_unit(fb, bytes, index, value),
         }
     }
+
+    fn whole(&self) -> bool {
+        match self {
+            Mem::View(m) => m.whole(),
+            Mem::Psb(m) => m.whole(),
+        }
+    }
+
+    fn read_whole(
+        &mut self,
+        fb: &mut FunctionBuilder<'_>,
+        off: SValue,
+        at: u32,
+        ty: TypeId,
+        align: u32,
+    ) -> BResult<SValue> {
+        match self {
+            Mem::View(m) => m.read_whole(fb, off, at, ty, align),
+            Mem::Psb(m) => m.read_whole(fb, off, at, ty, align),
+        }
+    }
+
+    fn write_whole(
+        &mut self,
+        fb: &mut FunctionBuilder<'_>,
+        off: SValue,
+        at: u32,
+        value: SValue,
+        align: u32,
+    ) -> BResult<()> {
+        match self {
+            Mem::View(m) => m.write_whole(fb, off, at, value, align),
+            Mem::Psb(m) => m.write_whole(fb, off, at, value, align),
+        }
+    }
 }
 
 /// One candidate slot, ready to access: its word memory, the byte offset in it, and the
@@ -290,8 +325,8 @@ pub(super) fn prepare(
     let ops = WordOps::of(crate::lower::sync::memory_model::coherence(cx.plan));
     if let Some(SlotLowering::Psb { start }) = lowering {
         // Under the identity domains a slot whose address the binder holds to its argument's
-        // alignment is reached from that address as it is (its biased word), with `uvec2` and
-        // `uvec4` units at offsets proven multiples of their size; any other from the word below
+        // alignment is reached from that address as it is (its biased word), a leaf at an offset
+        // proven a multiple of 8 or 16 accessed at that alignment; any other from the word below
         // each access.
         let aligned = cx.plan.families.access.aligned.contains(&t.slot);
         let a = if cx.plan.families.access.identity {
@@ -312,12 +347,7 @@ pub(super) fn prepare(
         };
         let units = cx.plan.families.access.psb_units;
         let read_only = cx.plan.families.access.unwritten.contains(&t.slot);
-        let mut mem = a
-            .mem
-            .with(ops)
-            .with_units(units)
-            .with_vectors(aligned)
-            .read_only(read_only);
+        let mut mem = a.mem.with(ops).with_units(units).read_only(read_only);
         let checked = cx.plan.families.access.variable.contains(&choice.slot)
             && leaf::known(fb, m)?.is_none();
         if checked {

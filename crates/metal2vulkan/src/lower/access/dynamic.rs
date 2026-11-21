@@ -1196,15 +1196,8 @@ pub(super) fn wide_at(
         Some(d) => fb.binary(BinOp::IAdd, b.at, d)?,
         None => b.at,
     };
-    let three = k64(fb, 3)?;
-    let low = fb.binary(BinOp::BitwiseAnd, at, three)?;
-    let aligned = fb.binary(BinOp::ISub, at, low)?;
+    let (aligned, low) = super::psb::split_word(fb, at)?;
     let base = fb.binary(BinOp::IAdd, b.host, aligned)?;
-    let u32_ = fb.module().ty(SType::Int {
-        width: 32,
-        signed: false,
-    })?;
-    let low = fb.convert(ConvOp::UConvert, low, u32_)?;
     let (base, low, inb) = match b.bounds {
         Some((size, sink)) => {
             let inb = contain::in_bounds(fb, at, size, u64::from(leaf.bytes))?;

@@ -33,6 +33,12 @@
 //! `storageBuffer8BitAccess` and `storageBuffer16BitAccess` cover the `PhysicalStorageBuffer`
 //! storage class as they cover `StorageBuffer`. A sub-word store there is one narrow store; without
 //! the access it stays the two word atomics ([`PsbMem`]'s `write_bits`).
+//!
+//! **Whole words.** A leaf of whole words is one access of up to 16 bytes at the device address of
+//! its first word (`memory::leaf`'s whole words; [`PsbMem`]'s `whole_place`), not one per word:
+//! from the word below the access, that word; from a slot's own address, the slot's address plus
+//! the offset, which a leaf proven a multiple of 8 or 16 takes as it is, with that `Aligned`
+//! operand, and any other rounds down to a multiple of 4.
 
 use super::SLOT_ADDRESS_BIAS;
 use crate::device::DeviceProfile;
@@ -96,6 +102,21 @@ fn entry_field(
     )
 }
 
+/// `x` (a `u64`) rounded down to a multiple of 4, and its remainder (0 to 3) as a `u32`: the word
+/// below a byte and the byte's offset in it. A leaf of whole words reads only the word, and the
+/// remainder's instructions are then removed as dead.
+pub fn split_word(fb: &mut FunctionBuilder<'_>, x: Value) -> BResult<(Value, Value)> {
+    let mask = k64(fb, !3)?;
+    let word = fb.binary(BinOp::BitwiseAnd, x, mask)?;
+    let three = k64(fb, 3)?;
+    let low = fb.binary(BinOp::BitwiseAnd, x, three)?;
+    let u32_ = fb.module().ty(Type::Int {
+        width: 32,
+        signed: false,
+    })?;
+    Ok((word, fb.convert(ConvOp::UConvert, low, u32_)?))
+}
+
 /// The 64-bit displacement from the bind offset (a `u64`) that the `u32` offset `m` of a
 /// static-root fat pointer stands for, in a slot whose window starts at `start` (module doc:
 /// `start + zext((m − start) mod 2³²)`, wrapping).
@@ -139,15 +160,8 @@ pub fn prepare(
     let bind = entry_field(fb, table, root, BIND_OFFSET)?;
     let disp = displacement(fb, m, start)?;
     let off = fb.binary(BinOp::IAdd, bind, disp)?;
-    let three = k64(fb, 3)?;
-    let low = fb.binary(BinOp::BitwiseAnd, off, three)?;
-    let aligned = fb.binary(BinOp::ISub, off, low)?;
+    let (aligned, low) = split_word(fb, off)?;
     let base = fb.binary(BinOp::IAdd, host, aligned)?;
-    let u32_ = fb.module().ty(Type::Int {
-        width: 32,
-        signed: false,
-    })?;
-    let low = fb.convert(ConvOp::UConvert, low, u32_)?;
     if !contained {
         return Ok(PsbAccess {
             mem: PsbMem::at(base),
@@ -207,14 +221,7 @@ pub fn prepare_at(fb: &mut FunctionBuilder<'_>, address: Value, m: Value) -> BRe
     let u64_ = u64_ty(fb)?;
     let disp = fb.convert(ConvOp::SConvert, m, u64_)?;
     let at = fb.binary(BinOp::IAdd, address, disp)?;
-    let three = k64(fb, 3)?;
-    let low = fb.binary(BinOp::BitwiseAnd, at, three)?;
-    let base = fb.binary(BinOp::ISub, at, low)?;
-    let u32_ = fb.module().ty(Type::Int {
-        width: 32,
-        signed: false,
-    })?;
-    let low = fb.convert(ConvOp::UConvert, low, u32_)?;
+    let (base, low) = split_word(fb, at)?;
     Ok(PsbAccess {
         mem: PsbMem {
             reach: Reach::Below,
@@ -351,21 +358,6 @@ impl PsbMem {
         }
     }
 
-    /// The same words, also loading and storing 8- and 16-byte units (`uvec2`, `uvec4`) at
-    /// offsets proven multiples of their size, where `vectors`: a memory whose base the offsets
-    /// are proven from, under the identity domains, where a slot's device address is its Metal
-    /// address.
-    pub fn with_vectors(self, vectors: bool) -> PsbMem {
-        PsbMem {
-            units: Units {
-                vec2: vectors,
-                vec4: vectors,
-                ..self.units
-            },
-            ..self
-        }
-    }
-
     /// A `PhysicalStorageBuffer` place of the `bytes`-byte unit `index` (a `u32` index of such
     /// units, `bytes` 1, 2, 4, 8 or 16) of type `ty`, to load from where `load`.
     fn place_of(
@@ -459,22 +451,52 @@ impl PsbMem {
         }
     }
 
-    /// The `PhysicalStorageBuffer` place of the `uvecN` unit `index` (`N = lanes`, 2 or 4), to
-    /// load from where `load`.
-    fn vec_ptr(
+    /// The `PhysicalStorageBuffer` place of a `pointee` (at most 16 bytes) at byte `at` past the
+    /// word holding byte `off` of the memory, to load from where `load`, and the `Aligned` operand
+    /// of an access through it: `align` where the memory's base is its Metal address and `off`
+    /// is proven a multiple of `align`, else 4.
+    ///
+    /// A memory based at the word below one access ([`Reach::Rounded`], [`Reach::Below`]) holds
+    /// that access's byte offset in the word, below 4: its first word is the base. A slot's own
+    /// address ([`Reach::Direct`]) is held to its argument's alignment, so a proven multiple of 8
+    /// or 16 is the address's own; any other offset is rounded down to a multiple of 4, as the
+    /// word path reads it.
+    fn whole_place(
         &self,
         fb: &mut FunctionBuilder<'_>,
-        lanes: u32,
-        index: Value,
-        load: bool,
-    ) -> BResult<Value> {
-        let u32_ = fb.module().ty(Type::Int {
-            width: 32,
-            signed: false,
-        })?;
-        let len = if lanes == 2 { 2 } else { 4 };
-        let ty = fb.module().ty(Type::Vector { elem: u32_, len })?;
-        self.place_of(fb, 4 * lanes, index, ty, load)
+        (off, at): (Value, u32),
+        pointee: TypeId,
+        (load, align): (bool, u32),
+    ) -> BResult<(Value, u32)> {
+        match self.reach {
+            Reach::Rounded | Reach::Below => {
+                let addr = match at {
+                    0 => self.base,
+                    at => {
+                        let d = k64(fb, u64::from(at))?;
+                        fb.binary(BinOp::IAdd, self.base, d)?
+                    }
+                };
+                Ok((self.place(fb, addr, pointee, load)?, 4))
+            }
+            Reach::Direct => {
+                let (off, align) = match align {
+                    8 | 16 => (off, align),
+                    _ => {
+                        let mask = k32(fb, !3)?;
+                        (u32_op(fb, BinOp::BitwiseAnd, off, mask)?, 4)
+                    }
+                };
+                let (x, c) = fb.sum_of(off).unwrap_or((off, 0));
+                let bias = c.wrapping_add(at).wrapping_add(SLOT_ADDRESS_BIAS as u32);
+                let bias = k32(fb, bias)?;
+                let biased = u32_op(fb, BinOp::IAdd, x, bias)?;
+                let u64_ = u64_ty(fb)?;
+                let d = fb.convert(ConvOp::UConvert, biased, u64_)?;
+                let addr = fb.binary(BinOp::IAdd, self.base, d)?;
+                Ok((self.place(fb, addr, pointee, load)?, align))
+            }
+        }
     }
 
     /// The `PhysicalStorageBuffer` place of a `pointee` at word `word` (a `u32` index) of the
@@ -530,26 +552,34 @@ impl WordMem for PsbMem {
         self.units
     }
 
-    fn read_vec(
+    fn whole(&self) -> bool {
+        true
+    }
+
+    fn read_whole(
         &mut self,
         fb: &mut FunctionBuilder<'_>,
-        lanes: u32,
-        index: Value,
+        off: Value,
+        at: u32,
+        ty: TypeId,
+        align: u32,
     ) -> BResult<Value> {
-        let p = self.vec_ptr(fb, lanes, index, true)?;
-        let access = self.ops.access(fb, unit_access(4 * lanes), false)?;
+        let (p, align) = self.whole_place(fb, (off, at), ty, (true, align))?;
+        let access = self.ops.access(fb, unit_access(align), false)?;
         fb.load(p, access)
     }
 
-    fn write_vec(
+    fn write_whole(
         &mut self,
         fb: &mut FunctionBuilder<'_>,
-        lanes: u32,
-        index: Value,
+        off: Value,
+        at: u32,
         value: Value,
+        align: u32,
     ) -> BResult<()> {
-        let p = self.vec_ptr(fb, lanes, index, false)?;
-        let access = self.ops.access(fb, unit_access(4 * lanes), true)?;
+        let ty = fb.value_ty(value)?;
+        let (p, align) = self.whole_place(fb, (off, at), ty, (false, align))?;
+        let access = self.ops.access(fb, unit_access(align), true)?;
         fb.store(p, value, access)
     }
 

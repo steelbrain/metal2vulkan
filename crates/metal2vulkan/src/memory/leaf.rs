@@ -41,6 +41,19 @@
 //! Every word read or written holds at least one byte of the leaf, so an in-bounds leaf never
 //! touches a word past the padded range (sizes are multiples of 16).
 //!
+//! **Whole words**. A memory at a device address ([`WordMem::whole`]: a `PhysicalStorageBuffer`
+//! place, `lower::access::psb`) moves a [`Path::Vec4`], [`Path::Vec2`] or [`Path::Aligned`] leaf's
+//! words in one access per 16 bytes, not one per word: a leaf whose register value is its words'
+//! bits in 32-bit lanes (a `float`, an `int`, or a vector of 2 to 4 of them) is loaded and stored
+//! as that type, any other as one `u32` or `uvecN` converted as its words are. The access reads or
+//! writes exactly the words the word path does, at the word holding the leaf's first byte (the
+//! multiple of 4 at or below its offset, the placement below), and its `Aligned` operand is what
+//! the offset is proven to be: 16 or 8 for [`Path::Vec4`] and [`Path::Vec2`] where the memory's
+//! base is the slot's own address, 4 otherwise. Vulkan asks an `Aligned` operand to be a multiple
+//! of the access type's widest scalar (`VUID-StandaloneSpirv-PhysicalStorageBuffer64-06314`),
+//! which 4 is for every type the form uses (a 64-bit lane goes through a `uvecN`). A store whose
+//! bytes end inside a word keeps the word path, which merges that word.
+//!
 //! **Size**. Address arithmetic on translation-time constants is folded ([`u32_op`]), so a constant
 //! offset costs no instruction; a vector's lanes are converted to or from their words as one vector
 //! (one bitcast, one exact narrow-float conversion, one shift placing sub-word lanes), not lane by
@@ -553,6 +566,40 @@ pub trait WordMem {
         _lanes: u32,
         _index: Value,
         _value: Value,
+    ) -> BResult<()> {
+        Err(dangling())
+    }
+    /// Whether this memory also loads and stores a leaf's whole words directly
+    /// ([`WordMem::read_whole`]): a device address, where one `PhysicalStorageBuffer` access of a
+    /// type of up to 16 bytes moves them.
+    fn whole(&self) -> bool {
+        false
+    }
+    /// Load the value of type `ty` (a `u32`, a `uvecN`, or a type of their bits; at most 16
+    /// bytes, its scalars at most 4 bytes wide) at byte `at` (a multiple of 16) past the word
+    /// that holds byte `off`, the first word of a leaf at offset `off` (a multiple of 4 by its
+    /// alignment: an offset that is not one reads the word below it, the module doc's placement).
+    /// The leaf's offset is proven a multiple of `align` (4, 8 or 16). Called only where
+    /// [`WordMem::whole`].
+    fn read_whole(
+        &mut self,
+        _fb: &mut FunctionBuilder<'_>,
+        _off: Value,
+        _at: u32,
+        _ty: TypeId,
+        _align: u32,
+    ) -> BResult<Value> {
+        Err(dangling())
+    }
+    /// Store `value` (as [`WordMem::read_whole`]'s `ty`) at byte `at` past the word that holds
+    /// byte `off`. Called only where [`WordMem::whole`].
+    fn write_whole(
+        &mut self,
+        _fb: &mut FunctionBuilder<'_>,
+        _off: Value,
+        _at: u32,
+        _value: Value,
+        _align: u32,
     ) -> BResult<()> {
         Err(dangling())
     }
@@ -1222,6 +1269,105 @@ fn funnel_up(fb: &mut FunctionBuilder<'_>, prev: Value, cur: Value, sh: Value) -
     or(fb, x, y)
 }
 
+/// The `Aligned` operand of a whole leaf's access: the multiple of 16 or 8 its offset is proven to
+/// be ([`Path::Vec4`], [`Path::Vec2`]), else 4.
+fn whole_align(leaf: &Leaf) -> u32 {
+    match leaf.path {
+        Path::Vec4 => 16,
+        Path::Vec2 => 8,
+        _ => 4,
+    }
+}
+
+/// Whether `leaf`'s register value is its words' own bits in a type of 32-bit lanes (a `float`,
+/// a `u32` of an `i32`, or a vector of 2 to 4 of them, filling its bytes): its whole access loads
+/// and stores that type, with no conversion.
+fn native32(leaf: &Leaf) -> bool {
+    vec_bits(leaf) && leaf.form.bits() == 32
+}
+
+/// The pieces of `words` words a whole leaf moves in: up to four words each, at byte `16 · k`
+/// of piece `k`.
+fn pieces(words: u32) -> impl Iterator<Item = (u32, u32)> {
+    (0..words.div_ceil(4)).map(move |k| (16 * k, (words - 4 * k).min(4)))
+}
+
+/// The type of a piece of `n` words (1 to 4): `u32` or `uvecN`.
+fn piece_ty(fb: &mut FunctionBuilder<'_>, n: u32) -> BResult<TypeId> {
+    match n {
+        1 => u32_ty(fb),
+        n => uvec_ty(fb, u8::try_from(n).map_err(|_| dangling())?),
+    }
+}
+
+/// Load the leaf of whole words at `off` of a memory that moves them directly
+/// ([`WordMem::whole`]): one access of its register type where that is its words' bits in 32-bit
+/// lanes ([`native32`]), else one `u32` or `uvecN` per 16 bytes, converted.
+fn load_whole(
+    fb: &mut FunctionBuilder<'_>,
+    mem: &mut dyn WordMem,
+    leaf: &Leaf,
+    off: Value,
+) -> BResult<Value> {
+    let align = whole_align(leaf);
+    if native32(leaf) {
+        let ty = ops::ty(fb, leaf.form)?;
+        return mem.read_whole(fb, off, 0, ty, align);
+    }
+    let mut words = Vec::with_capacity(leaf.words() as usize);
+    for (at, n) in pieces(leaf.words()) {
+        let ty = piece_ty(fb, n)?;
+        let v = mem.read_whole(fb, off, at, ty, align)?;
+        if n == leaf.words() && vec_bits(leaf) {
+            let ty = ops::ty(fb, leaf.form)?;
+            return as_bits(fb, v, ty);
+        }
+        match n {
+            1 => words.push(v),
+            _ => {
+                for i in 0..n {
+                    words.push(fb.composite_extract(v, &[i])?);
+                }
+            }
+        }
+    }
+    value_of(fb, leaf, &words)
+}
+
+/// Store `v` as the leaf of whole words (its bytes a multiple of 4) at `off` of a memory that moves
+/// them directly ([`WordMem::whole`]), as [`load_whole`] loads it.
+fn store_whole(
+    fb: &mut FunctionBuilder<'_>,
+    mem: &mut dyn WordMem,
+    leaf: &Leaf,
+    off: Value,
+    v: Value,
+) -> BResult<()> {
+    let align = whole_align(leaf);
+    if native32(leaf) {
+        return mem.write_whole(fb, off, 0, v, align);
+    }
+    if leaf.words() <= 4 && vec_bits(leaf) {
+        let ty = piece_ty(fb, leaf.words())?;
+        let x = as_bits(fb, v, ty)?;
+        return mem.write_whole(fb, off, 0, x, align);
+    }
+    let words = words_of(fb, leaf, v)?;
+    for (at, n) in pieces(leaf.words()) {
+        let first = (at / 4) as usize;
+        let part = words.get(first..first + n as usize).ok_or_else(dangling)?;
+        let x = match part {
+            [w] => *w,
+            _ => {
+                let ty = piece_ty(fb, n)?;
+                fb.composite_construct(ty, part)?
+            }
+        };
+        mem.write_whole(fb, off, at, x, align)?;
+    }
+    Ok(())
+}
+
 /// Load `leaf` at byte offset `off` (a `u32`) of `mem`; the register value.
 pub fn load(
     fb: &mut FunctionBuilder<'_>,
@@ -1229,6 +1375,9 @@ pub fn load(
     leaf: &Leaf,
     off: Value,
 ) -> BResult<Value> {
+    if mem.whole() && matches!(leaf.path, Path::Vec4 | Path::Vec2 | Path::Aligned) {
+        return load_whole(fb, mem, leaf, off);
+    }
     let words = match leaf.path {
         // The leaf's one `uvec4` unit at `off / 16`, or `uvec2` unit at `off / 8`.
         Path::Vec4 | Path::Vec2 if mem.units().has(leaf.bytes) => {
@@ -1302,6 +1451,14 @@ pub fn store(
     off: Value,
     v: Value,
 ) -> BResult<bool> {
+    // Whole words moved directly: no partial word to merge.
+    if mem.whole()
+        && matches!(leaf.path, Path::Vec4 | Path::Vec2 | Path::Aligned)
+        && leaf.bytes % 4 == 0
+    {
+        store_whole(fb, mem, leaf, off, v)?;
+        return Ok(false);
+    }
     // The leaf's one `uvec4` unit at `off / 16`, or `uvec2` unit at `off / 8`.
     if matches!(leaf.path, Path::Vec4 | Path::Vec2) && mem.units().has(leaf.bytes) {
         let x = vec_of(fb, leaf, v)?;
