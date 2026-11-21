@@ -10,7 +10,7 @@
 //!   holds every sample and the count is 4 times the samples, Metal's answer. `rt6_mark_coverage`
 //!   runs as the device runs it: every pixel's word holds every sample, and it ran at least once
 //!   a pixel.
-//! - A pass of no area or of no sample count is `Refusal::NoAttachmentPass`, one past the device's
+//! - A pass of no area or of 0 samples is `Refusal::NoAttachmentPass`, one past the device's
 //!   `maxFramebufferWidth` is `Gap::RenderPass` of `NoAttachment`, and a draw of a pipeline state
 //!   of another sample count than the pass's is `DrawKind::AttachmentFormats`.
 
@@ -110,7 +110,6 @@ mod on_device {
                 (pass(0, 2, 1), "no width"),
                 (pass(2, 0, 1), "no height"),
                 (pass(2, 2, 0), "Metal's default count"),
-                (pass(2, 2, 3), "3 samples"),
             ];
             for (d, what) in refused {
                 match command_buffer.render_command_encoder(&d) {
@@ -141,7 +140,7 @@ mod on_device {
             run(name, &command_buffer);
             println!(
                 "{name}: (fragment, samples, runs) {runs:?}; every pixel's every sample marked; \
-                 another state's count, no area, no count and past the device's width refused"
+                 another state's count, no area, 0 samples and past the device's width refused"
             );
         });
     }

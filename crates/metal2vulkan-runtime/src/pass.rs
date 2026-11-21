@@ -363,7 +363,8 @@ pub struct RenderPassDescriptor {
     /// attachment is that tall.
     pub render_target_height: u32,
     /// `defaultRasterSampleCount`: the samples of a pass with no attachment, 0 by default as in
-    /// Metal. Such a pass draws with pipeline states of that `raster_sample_count`
+    /// Metal, where such a pass is refused. It draws with pipeline states of that
+    /// `raster_sample_count`
     /// ([`DrawKind::AttachmentFormats`](crate::DrawKind::AttachmentFormats) otherwise), which
     /// reach their answers through memory alone. A pass with an attachment takes its
     /// attachments' samples and reads none of this, as Metal's does.
@@ -931,7 +932,7 @@ impl Pass {
             // rendering of no attachment takes the pipeline's samples alone.
             let size = [d.render_target_width, d.render_target_height];
             let count = d.default_raster_sample_count;
-            if size.contains(&0) || !(count.is_power_of_two() && count <= 64) {
+            if size.contains(&0) || count == 0 {
                 return Err(Error::Refused(Refusal::NoAttachmentPass {
                     width: size[0],
                     height: size[1],

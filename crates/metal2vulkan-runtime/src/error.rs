@@ -854,11 +854,12 @@ pub enum Refusal {
         pixel_format: PixelFormat,
     },
     /// A render pass with no attachment whose `renderTargetWidth` or `renderTargetHeight` is 0,
-    /// or whose `defaultRasterSampleCount` is no sample count, a power of two up to 64 (Metal's
-    /// default 0 included).
+    /// or whose `defaultRasterSampleCount` is 0, Metal's default.
     ///
-    /// Basis: ours (such a pass has no area or no samples to render at, and Vulkan's rendering
-    /// has an area, VUID-VkRenderingInfo-None-08994 and -08995).
+    /// Basis: metal-measured (an Apple M3 Max, macOS 27.0.1, the API validation layer off,
+    /// m3-max-62174, `probes/no_attachment_passes.m`: a side of 0 makes no encoder, nil, and a
+    /// count of 0 ends the process at the encoder, SIGABRT, where 64 by 64 pixels at 1 sample
+    /// makes one).
     NoAttachmentPass {
         /// `renderTargetWidth`.
         width: u32,

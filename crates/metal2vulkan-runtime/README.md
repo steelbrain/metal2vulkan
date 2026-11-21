@@ -2992,8 +2992,9 @@ or does not check is rebuilt from the generations' names, with young counted ful
   `defaultRasterSampleCount` samples: one dynamic rendering of no attachment, whose draws'
   pipeline states have that `rasterSampleCount` and no attachment format, and write their answers
   to memory. Vulkan takes the samples from the pipeline (`framebufferNoAttachmentsSampleCounts`
-  the translator's query for its state). A side of 0 or a count that is no sample count, Metal's
-  default 0 included, is `Refusal::NoAttachmentPass`; a side past the device's
+  the translator's query for its state). A side of 0 or a count of 0, Metal's default, is
+  `Refusal::NoAttachmentPass`, as plain Metal makes no encoder of either (an Apple M3 Max, job
+  m3-max-62174: nil for a side of 0, the process ended for a count of 0); a side past the device's
   `maxFramebufferWidth` or `maxFramebufferHeight`, `Gap::RenderPass` of `NoAttachment` (every
   venue dumped reports 16384 or more, Metal's largest side).
 - A pass of `renderTargetArrayLength` N of 2 or more is one rendering of `layerCount` N: every
