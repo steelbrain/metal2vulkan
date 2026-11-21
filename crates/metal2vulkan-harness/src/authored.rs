@@ -264,9 +264,12 @@ pub enum OwnRow {
     /// 1 GiB (four fills of a 256 MiB `Private` buffer), releasing the textures and views, then
     /// waiting for the command buffer committed two before it, so that three are in flight. The
     /// releases waiting, the live textures and the texture blocks' bytes, read after the 100th
-    /// and the 200th iteration with that work in flight, are each to grow by no more than eight
-    /// iterations' worth between the two reads: a release that waits for work committed after it
-    /// grows them, and fails the row.
+    /// and the 200th iteration with that work in flight, are each to stay within its bound at
+    /// both reads: four iterations' worth of releases waiting and of live textures, one for each
+    /// command buffer in flight and one for the one being made, and five of the texture blocks'
+    /// bytes, as the runtime today frees an image two command buffers after its views. A release
+    /// that waits for more work than that, or a texture never freed, passes a bound and fails the
+    /// row.
     ReleasesUnderWork,
 }
 

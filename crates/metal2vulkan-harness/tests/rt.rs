@@ -31,8 +31,8 @@ fn a_range_given_back_is_the_next_taken_and_live_buffers_lie_apart() {
 }
 
 /// The runtime's row `releases_under_work` passes its check: textures released while three
-/// command buffers keep the GPU running leave no more waiting at the 200th iteration than at the
-/// 100th, give or take eight iterations' worth.
+/// command buffers keep the GPU running leave, at the 100th and the 200th iteration, no more
+/// waiting and live than the work in flight accounts for.
 #[test]
 fn releases_under_work_in_flight_stay_flat() {
     let device = rt::system_default(None).unwrap();

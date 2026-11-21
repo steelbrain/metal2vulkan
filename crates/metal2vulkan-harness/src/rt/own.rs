@@ -83,8 +83,13 @@ const SIDE: u32 = 64;
 const FILL_LEN: u64 = 256 << 20;
 const FILLS: u32 = 4;
 
-/// The iterations' worth a gauge of the releases row may grow from its first read to its second.
-const FLAT_ITERATIONS: u64 = 8;
+/// The iterations' worth of releases waiting and of live textures the releases row allows at
+/// each read: one for each command buffer in flight and one for the one being made.
+const HELD_ITERATIONS: u64 = IN_FLIGHT as u64 + 1;
+
+/// The iterations' worth of the texture blocks' bytes the releases row allows at each read: the
+/// iterations whose images today's runtime still holds ([`releases_under_work`]).
+const PLACED_ITERATIONS: u64 = 2 * IN_FLIGHT as u64 - 1;
 
 /// `row` on a device of its own on `physical`.
 pub(super) fn run(physical: &rt::PhysicalDevice, row: OwnRow) -> Result<OwnReport> {
@@ -175,38 +180,55 @@ fn releases_under_work(device: &rt::Device) -> Result<OwnReport> {
     drop((buffer, block));
     let (textures, bytes) = each.ok_or("no iteration ran")?;
     let [first, second] = [&reads[0], &reads[1]];
-    // Each texture and view leaves its image or views and its index.
+    // The bounds, held at both reads, in what the first iteration added. A read follows the wait
+    // for the command buffer committed `IN_FLIGHT - 1` iterations before. Each texture and view
+    // leaves its image or views and its index, released at its drop against the command buffers
+    // committed by then: `HELD_ITERATIONS` iterations' worth of releases waiting and of live
+    // textures, one for each command buffer in flight and one for the one being made. An image
+    // stays longer, in today's structure: the upload that zeroed it rides its iteration's command
+    // buffer and holds it until that retires, and its release is then queued against every
+    // command buffer committed so far, the `IN_FLIGHT - 1` after its own. So an iteration's views
+    // stay `IN_FLIGHT` iterations and its images `PLACED_ITERATIONS`, here 3 and 5, and the texture
+    // blocks' bytes, the images' places, are allowed `PLACED_ITERATIONS` iterations' worth. A
+    // runtime that frees an image sooner only lowers the reads.
     let gauges = [
         (
             "releases_waiting",
             first.releases_waiting,
             second.releases_waiting,
-            2 * textures,
+            2 * textures * HELD_ITERATIONS,
         ),
-        ("textures", first.textures, second.textures, textures),
+        (
+            "textures",
+            first.textures,
+            second.textures,
+            textures * HELD_ITERATIONS,
+        ),
         (
             "texture_block_bytes",
             first.texture_block_bytes,
             second.texture_block_bytes,
-            bytes,
+            bytes * PLACED_ITERATIONS,
         ),
     ];
     let shown = (gauges.iter())
-        .map(|(gauge, first, second, _)| format!("{gauge} {first} -> {second}"))
+        .map(|(gauge, first, second, bound)| {
+            format!("{gauge} {first} -> {second} (at most {bound})")
+        })
         .collect::<Vec<_>>()
         .join(", ");
     let [at, then] = READ_AFTER;
     let line = format!(
         "{shown} from iteration {at} to {then}, {IN_FLIGHT} command buffers writing 1 GiB each in flight"
     );
-    let grown: Vec<&str> = (gauges.iter())
-        .filter(|(_, first, second, each)| *second > first + each * FLAT_ITERATIONS)
+    let over: Vec<&str> = (gauges.iter())
+        .filter(|(_, first, second, bound)| first.max(second) > bound)
         .map(|(gauge, ..)| *gauge)
         .collect();
-    if !grown.is_empty() {
+    if !over.is_empty() {
         return Err(format!(
-            "{} grew by more than {FLAT_ITERATIONS} iterations' worth under the work: {line}",
-            grown.join(", ")
+            "{} passed its bound under the work: {line}",
+            over.join(", ")
         )
         .into());
     }
