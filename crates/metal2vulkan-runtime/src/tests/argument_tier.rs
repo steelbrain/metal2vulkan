@@ -544,7 +544,9 @@ mod on_device {
     /// Shared block (an allocation of its own) and of a texture at an index drop, holds both.
     /// Nothing reads either. Past twice the idle age the allocation is not freed, the index is in
     /// use and `releases_waiting` counts what waits; once the event is set and the command buffer
-    /// retires, the allocation is freed, nothing waits and the grant may be returned.
+    /// retires, the allocation is freed, nothing waits and the grant may be returned. The reaper
+    /// thread is held from before the releases until then, so the grant's return waits on the
+    /// block-maker thread alone, as `releases_waiting` falls only after it vacated the index.
     #[test]
     fn every_device_holds_a_release_until_the_work_committed_before_it_retires() {
         use crate::tests::command::on_device::{shared_event, within};
@@ -564,6 +566,13 @@ mod on_device {
             let command_buffer = queue.command_buffer().expect("a command buffer");
             (command_buffer.encode_wait_for_event(event.as_event(), 1)).expect("a wait");
             command_buffer.commit().expect("a commit");
+            // The reaper holds at this job until `resume` drops, at the end or in a panic.
+            let (resume, parked) = std::sync::mpsc::channel::<()>();
+            (device.core().reaper).give(crate::reaper::Job::Teardown(Box::new(
+                move |_: &std::sync::Arc<crate::device::Core>| {
+                    let _ = parked.recv();
+                },
+            )));
             let freed = counters.metrics().allocations_freed;
             drop((texture, block));
             std::thread::sleep(std::time::Duration::from_nanos(
@@ -590,6 +599,7 @@ mod on_device {
                     && counters.gauges().releases_waiting == 0
             });
             (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            drop(resume);
             println!("{name}: {waiting} releases held under the work, then gone");
         });
     }

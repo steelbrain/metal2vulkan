@@ -926,7 +926,8 @@ impl Device {
     /// neither. No work in flight may read a displaced texture through the index (the program's
     /// duty, as it is Metal's; nothing checks it). A released one it may: its index, elements,
     /// views and image go once every command buffer committed before the release retired
-    /// ([`Gauges::releases_waiting`](crate::Gauges::releases_waiting)), so that work reads it as
+    /// ([`Gauges::releases_waiting`](crate::Gauges::releases_waiting)), the index then on the
+    /// block-maker thread's next pass ([`Device::release_indices`]), so that work reads it as
     /// it was. Metal leaves that read undefined: a program that released textures a frame in
     /// flight still sampled finished every run with no command buffer error on two Macs, with the
     /// answer it gave with the textures held on a Radeon Pro 5300M, and one a few channel levels

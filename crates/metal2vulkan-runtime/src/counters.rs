@@ -2771,7 +2771,9 @@ pub struct Gauges {
     pub surface_import_bytes: u64,
     /// Releases of textures' indices, views and images, texture views' views, sampler states'
     /// indices and device samplers that wait for the command buffers committed before them to
-    /// retire, which may reach them through set 1 with no handle of them: 0 once that work has
-    /// retired, and with nothing in flight at the release.
+    /// retire, which may reach them through set 1 with no handle of them; none where nothing was
+    /// in flight at the release. One stops counting once that work has retired and the
+    /// block-maker thread has taken it: an index vacated, so its grant may be returned, an object
+    /// handed to the reaper thread, which frees it next.
     pub releases_waiting: u64,
 }

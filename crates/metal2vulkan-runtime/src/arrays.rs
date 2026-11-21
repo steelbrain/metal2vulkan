@@ -1000,7 +1000,9 @@ impl Device {
     ///
     /// Err: [`Refusal::IndicesNotGranted`] where one of its indices is not granted;
     /// [`Refusal::IndicesInUse`] where a texture or a sampler state lives at one, until its last
-    /// handle is gone and the command buffers committed before that retired.
+    /// handle is gone and, where work was in flight then, the block-maker thread has vacated the
+    /// index: on its first pass after the completion thread's round that retired the command
+    /// buffers committed before the release, behind the frees ahead of it there.
     pub fn release_indices(&self, grant: IndexGrant) -> Result<(), Error> {
         lock(&self.core().arrays.grants).release(grant)
     }

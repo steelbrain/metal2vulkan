@@ -1145,8 +1145,11 @@ made, with no lock, and never rewritten for layouts.
   written). A different sampler state stays the program's duty.
   Making one at an index not granted is `Refusal::IndicesNotGranted`. Where nothing took it, the
   index is free again once its owner's last handle is gone, and with it the last command buffer
-  that used it, and every command buffer committed before that has retired; its elements read
-  their default again from then.
+  that used it: at once where nothing was in flight then, and otherwise once every command buffer
+  committed before that has retired and the block-maker thread has vacated it, on its first pass
+  after the completion thread's round that retired them, behind the frees ahead of it there
+  (`Gauges::releases_waiting` reads 0 only after that). Its elements read their default again
+  from then, and `Device::release_indices` may return its grant.
 
 ## Textures
 
@@ -1967,7 +1970,11 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   UHD 630) does so at once; ANV (an Iris Xe) takes the store with no fault. On RADV (a 780M), the
   command buffers of the submission a reset cut can report completed, since the reset signals its
   semaphore before any call reports the loss: the loss is reported by the next call, where Metal
-  ends the faulting command buffer with an error. The runtime refuses a kernel that stores through
+  ends the faulting command buffer with an error. On a device whose driver reports no loss for
+  such a read, it can stall the device with no error, and the runtime's waits end only on a loss
+  the driver reports: on an RTX 3090 a read of freed memory hung its context (Xid 109) for 10
+  minutes with no loss reported until its process was killed (job m3-max-62569). The runtime
+  refuses a kernel that stores through
   a pointer to an address nothing maps, and took a store 64 TiB past a buffer without a fault. A
   bad address that faults ends the GPU's work for every guest process on NVIDIA and RADV: the
   consequence of one device and direct addresses, which the owner accepted.
