@@ -1715,6 +1715,54 @@ fn sixty_four_bit_bit_fields_work_per_lane() {
     );
 }
 
+/// A rotate or funnel shift by a constant amount ([`math::funnel_by`], which selection takes where
+/// the amount is a constant) answers its definition for every amount `c` in `0..2N` at 8, 16, 32 and
+/// 64 bits: `k = c mod N` is 0 and each in-range value, each twice. The reference is the run-time
+/// form's ([`int_ref`] with `c` as the amount), over the width's edges and random values.
+#[test]
+fn funnel_shifts_by_a_constant_answer_their_definition() {
+    let mut rng = Rng(0x0F5C_0F5C);
+    for bits in [8u8, 16, 32, 64] {
+        let f = int(bits);
+        let n = u64::from(bits);
+        let mut vals: Vec<u64> = width_edges(bits).to_vec();
+        vals.extend(int_values(bits, &mut rng, 3));
+        for op in [IntFn::Rotate, IntFn::Fshl, IntFn::Fshr] {
+            let operands = if op == IntFn::Rotate { 1 } else { 2 };
+            let cases: Vec<Case> = vals
+                .iter()
+                .flat_map(|&a| vals.iter().map(move |&b| (a, b)))
+                .map(|(a, b)| {
+                    if operands == 1 {
+                        vec![vec![a]]
+                    } else {
+                        vec![vec![a], vec![b]]
+                    }
+                })
+                .collect();
+            for c in 0..2 * n {
+                let k = (c % n) as u8;
+                check(
+                    &format!("{op:?} i{bits} by {c}"),
+                    &vec![f; operands],
+                    f,
+                    &|fb, x| math::funnel_by(fb, op, f, k, x),
+                    &cases,
+                    &|v| {
+                        let args = if operands == 1 {
+                            vec![v[0][0], c]
+                        } else {
+                            vec![v[0][0], v[1][0], c]
+                        };
+                        int_ref(op, bits, &args).map(|r| vec![r])
+                    },
+                    false,
+                );
+            }
+        }
+    }
+}
+
 /// Every integer function answers its definition at every width: part `part` of `of` of the
 /// functions at each width.
 fn integer_functions(part: usize, of: usize) {

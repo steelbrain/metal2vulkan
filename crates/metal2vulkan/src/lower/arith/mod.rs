@@ -279,6 +279,14 @@ pub enum ArithStrategy {
         f: IntFn,
         form: Form,
     },
+    /// A rotate or funnel shift (`f`: [`IntFn::Rotate`], [`IntFn::Fshl`] or [`IntFn::Fshr`]) by a
+    /// constant amount; `k` is the amount modulo the width, taken at translation
+    /// ([`math::funnel_by`]).
+    IntFnBy {
+        f: IntFn,
+        k: u8,
+        form: Form,
+    },
     /// A float function; `contract` (from the call's fast-math flags) governs the multiply and
     /// add of a sequence such as `mix`.
     FloatFn {
@@ -449,6 +457,7 @@ impl FamilyStrategy for ArithStrategy {
             | S::ExtractBools { .. }
             | S::InsertBools { .. } => "arith.aggregate",
             S::IntFn { .. } => "arith.int_fn",
+            S::IntFnBy { .. } => "arith.int_fn.by_constant",
             S::FloatFn { form, .. } if form.is_narrow() => "arith.float_fn.narrow",
             S::FloatFn { f, .. } => match f.precision() {
                 FloatPrecision::Exact => "arith.float_fn",
@@ -553,7 +562,7 @@ impl FamilyStrategy for ArithStrategy {
             S::ExtractBools { path, .. } | S::InsertBools { path, .. } => {
                 40u32.saturating_add(u32::try_from(path.len()).unwrap_or(u32::MAX))
             }
-            S::IntFn { f, form } => f.words(form.bits()),
+            S::IntFn { f, form } | S::IntFnBy { f, form, .. } => f.words(form.bits()),
             S::FloatFn { f, form, .. } => f.words(*form),
             S::Fma(f) => f.words(),
             // The device's division, the truncation, its negation, and the fused multiply-add.
@@ -1812,7 +1821,20 @@ fn select_call(
             if !ok {
                 return Err(not_lowered());
             }
-            ArithStrategy::IntFn { f: op, form: f }
+            // A rotate or funnel shift by a constant amount shifts by constants.
+            let amount = match op {
+                IntFn::Rotate => args.get(1),
+                IntFn::Fshl | IntFn::Fshr => args.get(2),
+                _ => None,
+            };
+            match amount.and_then(|v| const_int(cx, *v)) {
+                Some(c) => ArithStrategy::IntFnBy {
+                    f: op,
+                    k: (c % u64::from(f.bits())) as u8,
+                    form: f,
+                },
+                None => ArithStrategy::IntFn { f: op, form: f },
+            }
         }
         Fun::Float(op) => select_float_fn(cx, (op, fast), call.fmf, f)?,
     })
@@ -2583,6 +2605,8 @@ fn arity(s: &ArithStrategy) -> Option<usize> {
     use ArithStrategy as S;
     match s {
         S::IntFn { f, .. } => Some(f.arity()),
+        // The constant amount is the last operand, and the shifts take it from `k`.
+        S::IntFnBy { f, .. } => Some(f.arity() - 1),
         S::FloatFn { f, .. } => Some(f.arity()),
         // A constant element index is a literal, never materialized.
         S::Copy
@@ -2780,6 +2804,7 @@ fn value(
             fb.composite_insert(x, agg, path)?
         }
         S::IntFn { f, form } => math::int_fn(fb, *f, *form, xs)?,
+        S::IntFnBy { f, k, form } => math::funnel_by(fb, *f, *form, *k, xs)?,
         S::Wide(w) => {
             let routine = match w.routine() {
                 Some(d) => match cx.decl.families.arith.divides.get(&d) {

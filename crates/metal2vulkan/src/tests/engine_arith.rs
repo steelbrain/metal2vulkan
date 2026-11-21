@@ -909,6 +909,7 @@ declare i1 @air.convert.u.i1.s.i32(i32)
 declare i16 @llvm.ctpop.i16(i16)
 declare i32 @llvm.ctlz.i32(i32, i1)
 declare i32 @llvm.fshl.i32(i32, i32, i32)
+declare i32 @llvm.fshr.i32(i32, i32, i32)
 declare i8 @llvm.abs.i8(i8, i1)
 declare i8 @air.add_sat.s.i8(i8, i8)
 declare i32 @air.convert.s.i32.f.f32(float)
@@ -1382,6 +1383,43 @@ fn no_module_holds_a_signed_remainder_opcode() {
                 kk.name
             );
         }
+    }
+}
+
+/// A funnel shift or rotate by a constant amount shifts by two constants: no module holds the
+/// run-time form's `OpUMod` of the amount or `OpISub` of the shift paired with it, on any profile,
+/// and the kernel computes LLVM's answer on the interpreter: `fshl(a, a, 13)` (a rotate),
+/// `fshr(a, b, 37)` (37 mod 32 = 5) and `fshl(a, b, 32)` (0: `a`).
+#[test]
+fn a_funnel_shift_by_a_constant_shifts_by_constants() {
+    const NAME: &str = "funnel_by_constants";
+    let (a, b) = (0x8123_4567u32, 0x0FED_CBA9u32);
+    let joined = (u64::from(a) << 32) | u64::from(b);
+    let want = a.rotate_left(13) ^ ((joined >> 5) as u32) ^ a;
+    let body = format!(
+        "{}{}  %f = call i32 @llvm.fshl.i32(i32 %a, i32 %a, i32 13)\n  \
+         %g = call i32 @llvm.fshr.i32(i32 %a, i32 %b, i32 37)\n  \
+         %h = call i32 @llvm.fshl.i32(i32 %a, i32 %b, i32 32)\n  %x = xor i32 %f, %g\n  \
+         %r = xor i32 %x, %h\n",
+        oi("a", a),
+        oi("b", b)
+    );
+    let Some(bitcode) = assemble("funnel", &module(&[k(NAME, body, want)])) else {
+        return;
+    };
+    for stem in PROFILES {
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
+        let art = compile(&bitcode, NAME, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let words = &art.module.words;
+        assert_eq!(
+            (
+                count_op(words, crate::spv::Op::UMod),
+                count_op(words, crate::spv::Op::ISub)
+            ),
+            (0, 0),
+            "{stem}"
+        );
+        assert_eq!(interpret(&bitcode, NAME, &p), want, "{stem}");
     }
 }
 

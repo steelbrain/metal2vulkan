@@ -274,6 +274,41 @@ fn funnel_left(
     mask(fb, f, r)
 }
 
+/// Rotate or funnel shift `op` ([`IntFn::Rotate`], [`IntFn::Fshl`], [`IntFn::Fshr`]) of `args`
+/// (held integers of form `f`, without the amount) by the constant amount `k`, already taken
+/// modulo the width `N`: `a` where `k` is 0 (`b` for a right funnel shift), else
+/// `(a << k) | (b >> (N - k))` left and `(a << (N - k)) | (b >> k)` right (a rotate's `b` is `a`).
+/// Both shifts are in `1..N`, so neither reaches the width, which SPIR-V leaves undefined; a
+/// run-time amount keeps [`int_fn`]'s form, which avoids it with a shift by one.
+pub fn funnel_by(
+    fb: &mut FunctionBuilder<'_>,
+    op: IntFn,
+    f: Form,
+    k: u8,
+    args: &[Value],
+) -> BResult<Value> {
+    let a = arg(args, 0)?;
+    let b = match op {
+        IntFn::Rotate => a,
+        _ => arg(args, 1)?,
+    };
+    if k == 0 {
+        return Ok(if op == IntFn::Fshr { b } else { a });
+    }
+    let (n, k) = (u64::from(f.bits()), u64::from(k));
+    let (left, right) = if op == IntFn::Fshr {
+        (n - k, k)
+    } else {
+        (k, n - k)
+    };
+    let left = splat(fb, f, left)?;
+    let right = splat(fb, f, right)?;
+    let hi = bin(fb, BinOp::ShiftLeftLogical, a, left)?;
+    let lo = bin(fb, BinOp::ShiftRightLogical, b, right)?;
+    let r = bin(fb, BinOp::BitwiseOr, hi, lo)?;
+    mask(fb, f, r)
+}
+
 /// `s mod N`.
 fn amount(fb: &mut FunctionBuilder<'_>, f: Form, s: Value) -> BResult<Value> {
     let n = splat(fb, f, u64::from(f.bits()))?;
