@@ -1216,13 +1216,42 @@ mod tests {
         }
     }
 
-    /// Every case of the family is in the table, states its inputs, and loosens nothing.
+    /// Every case of the family is in the table, states its inputs, and loosens nothing but a
+    /// `Boolean` word, to nonzero.
     ///
     /// A visibility result is a number Metal wrote; a number that differs is a bug, never a
-    /// near-equivalent. A case that ever loosened a word would fail here.
+    /// near-equivalent, but for the one accepted difference `BOOLEAN_COUNT`: a `Boolean` word is
+    /// the count of samples that passed, right where it is nonzero exactly where Metal's is. A
+    /// case that loosened a `Counting` word, or a word another way, would fail here.
     #[test]
-    fn every_case_is_tabled_and_loosens_nothing() {
+    fn every_case_is_tabled_and_loosens_only_a_boolean_word() {
         for case in all() {
+            let boolean: Vec<String> = (case.shape.passes.iter())
+                .flat_map(|pass| pass.iter())
+                .filter_map(|act| match act {
+                    Act::Mode(VisibilityResultMode::Boolean, offset) => Some(format!("/{offset}")),
+                    _ => None,
+                })
+                .collect();
+            for allowance in case.allowances() {
+                assert_eq!(
+                    (allowance.loosening, allowance.justified_by),
+                    (
+                        Loosening::Nonzero,
+                        Justification::AcceptedDifference(BOOLEAN_COUNT.to_owned())
+                    ),
+                    "{}",
+                    case.name()
+                );
+                assert!(
+                    boolean
+                        .iter()
+                        .any(|offset| allowance.path.ends_with(offset)),
+                    "{}: {} is no Boolean word",
+                    case.name(),
+                    allowance.path
+                );
+            }
             assert!(
                 TABLE.iter().any(|(name, _)| *name == case.name()),
                 "{}: no row in the table",
@@ -1236,7 +1265,6 @@ mod tests {
             );
             assert_eq!(case.metal_source(), MetalSource::Run);
             case.shaders().unwrap();
-            assert!(case.allowances().is_empty(), "{}", case.name());
         }
     }
 

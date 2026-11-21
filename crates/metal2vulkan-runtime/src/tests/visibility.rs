@@ -64,8 +64,8 @@ mod on_device {
         // SAFETY: the buffer holds `count` words, which the finished command buffers wrote and
         // whose writes reach the host.
         let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr(), 8 * count) };
-        (bytes.chunks_exact(8))
-            .map(|word| u64::from_le_bytes(word.try_into().expect("8 bytes")))
+        (bytes.as_chunks::<8>().0.iter())
+            .map(|word| u64::from_le_bytes(*word))
             .collect()
     }
 

@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1319 |
 | distinct SDK items the Metal leg reaches, of any status | 806 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7353 |
+| ledger rows (a case whose gap is recorded) | 7343 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -4873,10 +4873,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pipeline-facts-render-multisampled-direct` | refused: no stream uses it yet (libs census 11-19, m3-max-51379..51431: 0 tile pipelines). A tile getter of a drawing state: rt makes no tile render state, so i… |
 | `pipeline-facts-render-multisampled-direct` | refused: no stream uses it yet (libs census 11-19, m3-max-51379..51431: 0 tile pipelines). A tile getter of a drawing state: rt makes no tile render state, so i… |
 | `pipeline-facts-render-multisampled-direct` | refused: no stream uses it yet (libs census 11-19, m3-max-51379..51431: 0 tile pipelines). A tile getter of a drawing state: rt makes no tile render state, so i… |
-| `host-page-writes-visibility-writable` | Gap::Draw (VisibilityResults): the rt README, Known gaps of render encoders, "a visibility result mode but `Disabled` (`VisibilityResults`, `set_visibility_resu… |
-| `host-page-writes-visibility-writable` | Gap::Draw (VisibilityResults): the rt README, Known gaps of render encoders, "a visibility result mode but `Disabled` (`VisibilityResults`, `set_visibility_resu… |
-| `host-page-writes-visibility-writable` | Gap::Draw (VisibilityResults): the rt README, Known gaps of render encoders, "a visibility result mode but `Disabled` (`VisibilityResults`, `set_visibility_resu… |
-| `host-page-writes-visibility-writable` | Gap::Draw (VisibilityResults): the rt README, Known gaps of render encoders, "a visibility result mode but `Disabled` (`VisibilityResults`, `set_visibility_resu… |
 | `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
 | `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
 | `point-viewport-coverage` | An accepted difference (docs/API.md section 10, Draws and index buffers): Metal states no clipping rule for a point (`MTLPrimitiveType.point`; the MSL specifica… |
@@ -8479,21 +8475,15 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `two-plane-heap-blits` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGB10A8_2P_X… |
 | `two-plane-pad-fills` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGB10A8_2P_X… |
 | `two-plane-row-blits` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGB10A8_2P_X… |
-| `visibility-boolean-accumulate` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no setVisibilityResultMode:offset:). rt refuses … |
-| `visibility-boolean-indirect-no-instances` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no setVisibilityResultMode:offset:). rt refuses … |
-| `visibility-boolean-occluded` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no setVisibilityResultMode:offset:). rt refuses … |
-| `visibility-boolean-offsets` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no setVisibilityResultMode:offset:). rt refuses … |
-| `visibility-boolean-revisit-after-covering` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no setVisibilityResultMode:offset:). rt refuses … |
-| `visibility-boolean-revisit-after-nothing` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no setVisibilityResultMode:offset:). rt refuses … |
-| `visibility-counting-accumulate` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no setVisibilityResultMode:offset:). rt refuses … |
-| `visibility-counting-accumulate-one-command-buffer` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no setVisibilityResultMode:offset:). rt refuses … |
-| `visibility-counting-accumulate-one-command-buffer` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no setVisibilityResultMode:offset:). rt refuses … |
-| `visibility-counting-accumulate-revisit` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no setVisibilityResultMode:offset:). rt refuses … |
-| `visibility-counting-four-samples` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no setVisibilityResultMode:offset:). rt refuses … |
-| `visibility-counting-occluded` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no setVisibilityResultMode:offset:). rt refuses … |
-| `visibility-counting-offsets` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no setVisibilityResultMode:offset:). rt refuses … |
-| `visibility-counting-revisit` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no setVisibilityResultMode:offset:). rt refuses … |
-| `visibility-counting-revisit-after-disabled` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no setVisibilityResultMode:offset:). rt refuses … |
+| `visibility-boolean-accumulate` | Gap::Draw (AccumulatedVisibilityResults): the rt README, Known gaps of render encoders, "a `Boolean` or `Counting` visibility result mode in a pass whose `visib… |
+| `visibility-boolean-revisit-after-covering` | Metal's own refusal (Refusal::VisibilityResultOffsetTaken): Apple's page for setVisibilityResultMode(_:offset:) says "You can set a specific offset value only o… |
+| `visibility-boolean-revisit-after-nothing` | Metal's own refusal (Refusal::VisibilityResultOffsetTaken): Apple's page for setVisibilityResultMode(_:offset:) says "You can set a specific offset value only o… |
+| `visibility-counting-accumulate` | Gap::Draw (AccumulatedVisibilityResults): the rt README, Known gaps of render encoders, "a `Boolean` or `Counting` visibility result mode in a pass whose `visib… |
+| `visibility-counting-accumulate-one-command-buffer` | Gap::Draw (AccumulatedVisibilityResults): the rt README, Known gaps of render encoders, "a `Boolean` or `Counting` visibility result mode in a pass whose `visib… |
+| `visibility-counting-accumulate-one-command-buffer` | Gap::Draw (AccumulatedVisibilityResults): the rt README, Known gaps of render encoders, "a `Boolean` or `Counting` visibility result mode in a pass whose `visib… |
+| `visibility-counting-accumulate-revisit` | Gap::Draw (AccumulatedVisibilityResults): the rt README, Known gaps of render encoders, "a `Boolean` or `Counting` visibility result mode in a pass whose `visib… |
+| `visibility-counting-revisit` | Metal's own refusal (Refusal::VisibilityResultOffsetTaken): Apple's page for setVisibilityResultMode(_:offset:) says "You can set a specific offset value only o… |
+| `visibility-counting-revisit-after-disabled` | Metal's own refusal (Refusal::VisibilityResultOffsetTaken): Apple's page for setVisibilityResultMode(_:offset:) says "You can set a specific offset value only o… |
 | `visible-tables-compute-a-private-function-has-no-handle` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no visible function table). rt refuses it (the k… |
 | `visible-tables-compute-an-unlinked-function-has-no-handle` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no visible function table). rt refuses it (the k… |
 | `visible-tables-compute-count-3-two-entries-written` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no visible function table). rt refuses it (the k… |
