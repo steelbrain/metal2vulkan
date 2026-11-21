@@ -2642,6 +2642,14 @@ created here from that compile's cache data alone.
   (lavapipe in Mesa 26.2.4), keeps no entry: the make is refused (`Gap::StageSize`,
   `StageGap::NoCacheDirectory` or `StageGap::NoPipelineCache`).
 
+Measured with one kernel of entry weight 842,031, whose request is 15,969,892 bytes, each step in a
+process of its own with the drivers' own disk caches off. The helper's fill (its instance, its
+device and the compile) took 53.6 s on a Radeon 780M (RADV, Mesa 26.2.6) and 129.3 s on an RTX
+2080 (NVIDIA 620.70.06), and kept an entry of 5,866,121 and 7,594,869 bytes. A make in a new
+process, the device's blobs removed, created the pipeline from the entry alone in 3 ms and 33 ms;
+with the entry removed too, the make was refused unfilled. A create with the flag through an empty
+cache is answered compile-required on both.
+
 ### Known gaps of pipeline states
 
 - A narrow integer's high bits (an 8- or 16-bit value held in a 32-bit word) are cleared by
