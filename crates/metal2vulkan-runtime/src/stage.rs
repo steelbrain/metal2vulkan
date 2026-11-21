@@ -261,8 +261,8 @@ fn words_digest(words: &[u32]) -> [u8; 32] {
     let mut h = Sha256::new();
     let mut page = [0u8; 4096];
     for chunk in words.chunks(page.len() / 4) {
-        for (bytes, word) in page.chunks_exact_mut(4).zip(chunk) {
-            bytes.copy_from_slice(&word.to_le_bytes());
+        for (bytes, word) in page.as_chunks_mut::<4>().0.iter_mut().zip(chunk) {
+            *bytes = word.to_le_bytes();
         }
         h.update(&page[..chunk.len() * 4]);
     }

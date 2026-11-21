@@ -135,7 +135,8 @@ RUNTIME_FLOOR = {
         "VkPhysicalDeviceVulkan13Features": {member: True for member in (
             "subgroupSizeControl", "computeFullSubgroups", "robustImageAccess",
             "shaderDemoteToHelperInvocation", "shaderTerminateInvocation",
-            "shaderZeroInitializeWorkgroupMemory", "synchronization2", "dynamicRendering")},
+            "shaderZeroInitializeWorkgroupMemory", "synchronization2", "dynamicRendering",
+            "pipelineCreationCacheControl")},
         "VkPhysicalDeviceRobustness2FeaturesEXT": {"nullDescriptor": True,
                                                    "robustImageAccess2": True},
         "VkPhysicalDeviceLineRasterizationFeaturesEXT": {"bresenhamLines": True},
