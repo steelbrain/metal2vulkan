@@ -523,10 +523,14 @@ assert!(stats.reachable_blocks <= stats.blocks);
   blocks are the program's, while a module that calls a many-block function from many sites holds
   a program far larger than its own blocks; the two read alike in `blocks` alone. Lowering emits
   such functions itself: the handle-table search (unrolled branch-free steps) and the root-table
-  search (a loop), each emitted once and called at every access.
+  search (a loop), each emitted once and called at every access. A region of 500 or more
+  instructions that a function holds more than once (a function the program calls from several
+  places, inlined at each) is written once too, as a routine declared `DontInline` and called
+  from each place: NVIDIA's driver compiles it once, and RADV and ANV (Mesa 26.2.6) compile the
+  same code with or without the control.
 - `entry_weight` is what a driver compiles once it has inlined every call: the entry's
   instructions with each call counted as its callee's body, after repeated regions are rolled
-  into loops. A stage past `pipeline::COMPILED_STAGE_WEIGHT` (99,109, the heaviest measured to
+  into loops (a region written as a routine counts at each of its calls). A stage past `pipeline::COMPILED_STAGE_WEIGHT` (99,109, the heaviest measured to
   compile within host-sized memory on the slowest compiler measured) is one whose creation may
   take the host's memory: the translator makes it all the same, and `metal2vulkan-runtime`
   compiles such a kernel only in a helper process the consumer caps (its README, "Kernels past

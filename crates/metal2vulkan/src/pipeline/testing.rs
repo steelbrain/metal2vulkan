@@ -414,6 +414,7 @@ fn typed_module_of(
         crate::lower::emit::emit_module(&spec, &plan, m)?;
     crate::spirv::roll::roll_entry(&mut module, m)?;
     crate::spirv::hoist::hoist_uniform_loads(&mut module, p.robustness(), m)?;
+    crate::spirv::outline::outline_entry(&mut module, m)?;
     crate::spirv::verify::verify(&module, p, m)?;
     Ok((plan, module))
 }

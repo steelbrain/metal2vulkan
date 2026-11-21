@@ -14,7 +14,8 @@
 //! `?:` arm or a `&&`/`||` operand. A value SPIRV-Cross would forward into its one reader without
 //! the dependencies of its operands is written the same way (`forwards_without_dependencies`), so
 //! it is evaluated where the module does, before any later write overwrites what it reads. A kept
-//! routine (a texel routine's sum or a sampling routine's emulation) is declared `DontInline`.
+//! routine (a texel routine's sum, a sampling routine's emulation, or a repeated region
+//! `spirv::outline` wrote once) is declared `DontInline`.
 //!
 //! Every number link assigns (descriptor set and binding, `Location`/`Component`, `SpecId`) is a
 //! literal operand of an `OpDecorate`. The serializer writes 0 there and records a relocation

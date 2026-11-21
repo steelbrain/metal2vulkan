@@ -14,6 +14,7 @@ pub mod ids;
 #[cfg(test)]
 pub mod interp;
 pub mod ir;
+pub mod outline;
 pub mod requirements;
 pub mod roll;
 pub mod serialize;
