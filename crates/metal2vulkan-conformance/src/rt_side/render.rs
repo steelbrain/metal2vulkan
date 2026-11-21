@@ -643,6 +643,27 @@ impl RtSide<'_> {
                     0,
                 )
                 .map_err(of_rt),
+            RenderStep::DrawIndirect {
+                primitive,
+                arguments,
+                offset,
+            } => (encoder.draw_primitives_indirect(*primitive, buffer(*arguments)?, *offset))
+                .map_err(of_rt),
+            RenderStep::DrawIndexedIndirect {
+                primitive,
+                index_type,
+                indices: held,
+                index_offset,
+                arguments,
+                offset,
+            } => encoder
+                .draw_indexed_primitives_indirect(
+                    *primitive,
+                    indices(*held, *index_offset, *index_type)?,
+                    buffer(*arguments)?,
+                    *offset,
+                )
+                .map_err(of_rt),
             RenderStep::TessellationFactorBuffer {
                 buffer: held,
                 offset,
