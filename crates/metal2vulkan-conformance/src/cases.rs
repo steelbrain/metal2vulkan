@@ -169,6 +169,7 @@ pub mod shader_stencil;
 pub mod shared_creator_formats;
 pub mod shared_events;
 pub mod shared_exponent_storage;
+pub mod signed_remainders;
 pub mod simdgroup_lockstep;
 pub mod snorm_tile_store;
 pub mod sparse_heaps;
@@ -232,6 +233,7 @@ pub fn all() -> Vec<Box<dyn Case>> {
     for case in math_routines::all() {
         cases.push(Box::new(case));
     }
+    cases.push(Box::new(signed_remainders::case()));
     cases.push(Box::new(stage_in_regions::stage_in_region_clamps()));
     for case in compressed_decode::all() {
         cases.push(Box::new(case));
