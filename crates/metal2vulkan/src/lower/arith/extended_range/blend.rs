@@ -2001,7 +2001,7 @@ fn signed_product(fb: &mut FunctionBuilder<'_>, f: Form, x: Value, y: Value) -> 
 }
 
 /// `s` (a `vec4`) clamped: its color lanes to `(lo, hi)`, alpha to `[0, 1]`, a NaN to the low
-/// end. A read of the `half` shadow clamps so too (`super::tile_read`).
+/// end.
 pub(super) fn clamped(
     fb: &mut FunctionBuilder<'_>,
     s: Value,

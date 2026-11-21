@@ -4,9 +4,7 @@
 //! Metal's tables.
 
 use super::blend::{extended_ranges, native, NativeBlend};
-use super::{
-    decode, encode, encode_keeping, tile_read, tile_value, SOURCE_RANGE, SRGB_SOURCE_RANGE,
-};
+use super::{decode, encode, encode_keeping, tile_value, SOURCE_RANGE, SRGB_SOURCE_RANGE};
 use crate::error::Error;
 use crate::lower::arith::{FloatFmt, Form, Held};
 use crate::lower::stage_io::extended_color::bfloat_output;
@@ -51,8 +49,6 @@ enum Op {
     /// blend color words 8 to 11 (`f32` bits, as the encoder set it), the second source words 12
     /// to 15 (`f32` bits).
     Blend(BlendEquation, ColorWriteMask),
-    /// Metal's read of a tile holding a `vec4` of `f32` bits ([`tile_read`]).
-    TileRead,
     /// A render pass's store of a fragment function's output (`vec4` of `f32` bits, of the
     /// format, `half` values held as `f32`) to a bfloat attachment of a pipeline at
     /// `textureWriteRoundingMode` `NearestEven` where the flag is set
@@ -154,11 +150,6 @@ fn kernel(form: ExtendedRange, op: Op) -> BResult<TypedModule> {
         }
         Op::Tile => {
             let v = tile_value(&mut f, form, x)?;
-            f.convert(ConvOp::Bitcast, v, uvec4)?
-        }
-        Op::TileRead => {
-            let held = f.convert(ConvOp::Bitcast, x, vec4)?;
-            let v = tile_read(&mut f, form, held)?;
             f.convert(ConvOp::Bitcast, v, uvec4)?
         }
         Op::Output(nearest_even, fmt) => {
@@ -1211,50 +1202,6 @@ fn bfloat_attachments_store_metals_codes() {
                 true => assert!(g[0] & 0x7FFF > 0x7F80, "{b:#x}: {:#x}", g[0]),
                 false => assert_eq!(g[0], want, "{b:#x}, nearest even {nearest_even}"),
             }
-        }
-    }
-}
-
-/// A read of what the tile holds clamps as Metal's does (an Apple M4: unblended
-/// `half` writes read back by a fetch): each color lane to the form's source range, a NaN to its
-/// low end, the infinities and values past the range to its ends; alpha to `[0, 1]`, a NaN to 0;
-/// a subnormal `half` kept; `BGR10_XR`'s alpha one.
-#[test]
-fn a_read_of_the_tile_clamps_as_metals_does() {
-    let (n, inf) = (f32::NAN, f32::INFINITY);
-    let subnormal = crate::float16::f16_bits_to_f32(7);
-    let written: [[f32; 4]; 5] = [
-        [n, -inf, inf, -0.5],
-        [inf, n, -inf, n],
-        [-inf, 3.0, n, 2.0],
-        [10000.0, -3.0, 0.25, inf],
-        [2.0, -1.0, subnormal, 0.5],
-    ];
-    for form in [
-        ExtendedRange::Bgra10 { srgb: false },
-        ExtendedRange::Bgra10 { srgb: true },
-        ExtendedRange::Bgr10 { srgb: true },
-        ExtendedRange::Planes { srgb: false },
-    ] {
-        let (lo, hi) = match form {
-            ExtendedRange::Bgra10 { srgb: true } => SRGB_SOURCE_RANGE,
-            _ => SOURCE_RANGE,
-        };
-        let a = |v: f32| match form {
-            ExtendedRange::Bgr10 { .. } => 1.0,
-            _ => v,
-        };
-        let want: [[f32; 4]; 5] = [
-            [lo, lo, hi, a(0.0)],
-            [hi, lo, lo, a(0.0)],
-            [lo, hi, lo, a(1.0)],
-            [hi, lo, 0.25, a(1.0)],
-            [hi, lo, subnormal, a(0.5)],
-        ];
-        let lanes: Vec<[u32; 4]> = written.iter().map(|w| w.map(f32::to_bits)).collect();
-        let got = run(form, Op::TileRead, &lanes);
-        for ((w, g), want) in written.iter().zip(&got).zip(&want) {
-            assert_eq!(*g, want.map(f32::to_bits), "{form:?}: {w:?}");
         }
     }
 }

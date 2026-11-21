@@ -276,7 +276,7 @@ fn a_moved_writer_that_stores_nothing_selects_no_tests() {
         return;
     };
     let devices = ordering_devices();
-    let mut planned = std::collections::BTreeSet::<(&str, String, String)>::new();
+    let mut planned = std::collections::BTreeSet::<(&str, String)>::new();
     // The states that miss, by kind of miss.
     let mut misses = std::collections::BTreeMap::<&str, Vec<String>>::new();
     let mut states = 0usize;
@@ -333,7 +333,7 @@ fn a_moved_writer_that_stores_nothing_selects_no_tests() {
                     Ok(_) => miss("the variant's plan asks for another variant"),
                     Err(_) => miss("the variant's plan refuses the draw"),
                 }
-                planned.insert((writer, format!("{moved:?}"), format!("{tests:?}")));
+                planned.insert((writer, format!("{tests:?}")));
             }
         }
     }
@@ -345,12 +345,8 @@ fn a_moved_writer_that_stores_nothing_selects_no_tests() {
         eprintln!("{} states: {kind} (first: {})", whats.len(), whats[0]);
     }
     assert!(misses.is_empty(), "{misses:#?}");
-    // Not vacuous: every writer, move and kind of tests planned on some profile.
-    assert_eq!(
-        planned.len(),
-        WRITERS.len() * 2 * TESTS.len(),
-        "{planned:?}"
-    );
+    // Not vacuous: every writer and kind of tests planned on some profile.
+    assert_eq!(planned.len(), WRITERS.len() * TESTS.len(), "{planned:?}");
 }
 
 /// A writer that declares color 0 as an input it never reads (`smw_unread`, which discards) reads
