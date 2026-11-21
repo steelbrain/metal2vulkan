@@ -385,15 +385,6 @@ pub struct HeapPlan {
     /// Some group of its heap class is left out-of-bounds stores and some out-of-bounds loads
     /// by the device, so the class's array is decorated `Volatile`; set by [`finish`].
     pub volatile: bool,
-    /// The shader makes some of its comparisons, reading its members without comparison; set by
-    /// `sampler::select`.
-    pub compares_plain: bool,
-    /// The float class of its shape and its declaration, for a compared group whose comparisons
-    /// the shader makes ([`HeapPlan::compares_plain`]); set by [`finish`]. Its samples without
-    /// comparison read the members there, and its comparisons the depth-comparison class, whose
-    /// depth view ANV clamps into `[0, 1]` and RADV holds a denormal in as zero (runtime lane
-    /// `depth_compares` through argument buffers).
-    pub plain: Option<(ImageHandleClass, ImageDecl)>,
     /// Its float reads decode a member of a form a heap reads (`ExtendedRange::HEAP_READ`) where
     /// the handle's class index names one; set by `select_read`.
     pub reads_raw: bool,
@@ -430,8 +421,6 @@ impl HeapPlan {
             class: None,
             decl: None,
             volatile: false,
-            compares_plain: false,
-            plain: None,
             reads_raw: false,
             raw: None,
             cross_reads: Default::default(),
@@ -1606,18 +1595,6 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             h.class = Some(class);
             h.decl = Some(decl);
             h.volatile = volatile_classes.contains(&class);
-            // The float class of the shape, which the binder holds every depth member in too
-            // (`declare_heap`), declared without `Depth`.
-            h.plain = (class.depth_compare && h.compares_plain).then_some((
-                ImageHandleClass {
-                    depth_compare: false,
-                    ..class
-                },
-                ImageDecl {
-                    depth: false,
-                    ..decl
-                },
-            ));
             // The unsigned integer class of a sampled float group whose reads decode raw members.
             let sampled_float = class.access == ImageAccess::Sampled
                 && class.sampled_type == SampledType::Float

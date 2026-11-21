@@ -453,7 +453,7 @@ fn image_in(
             let h = match class {
                 Some(k) => heap_cross_element(cx, fb, (group, k), handle)?,
                 None if unreadable => heap_readable_element(cx, fb, group, handle)?,
-                None => heap_element(cx, fb, (group, false), handle)?,
+                None => heap_element(cx, fb, group, handle)?,
             };
             return Ok(Loaded {
                 decl: h.decl,
@@ -755,17 +755,15 @@ fn heap_alpha_one(fb: &mut FunctionBuilder<'_>, h: HeapFlags) -> BResult<SValue>
 
 /// Element `handle` of heap group `group`'s array: its declaration, the image loaded through a
 /// `NonUniform` access chain, whether the handle is live (not the null element), and the handle
-/// where it carries the out-of-bounds-alpha flag. A read without comparison (`plain`) of a group
-/// whose comparisons the shader makes reads the group's float class (`HeapPlan::plain`); every
-/// other access the group's own class.
+/// where it carries the out-of-bounds-alpha flag, in the group's own class.
 pub(crate) fn heap_element(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
-    (group, plain): (u32, bool),
+    group: u32,
     handle: ValueId,
 ) -> BResult<HeapElement> {
     let h = cx.plan.families.texture.heap.get(&group);
-    let declared = h.and_then(|h| h.plain.filter(|_| plain).or(h.class.zip(h.decl)));
+    let declared = h.and_then(|h| h.class.zip(h.decl));
     let Some(declared) = declared else {
         return Err(cx.fail(format!("heap group {group} is not declared")));
     };

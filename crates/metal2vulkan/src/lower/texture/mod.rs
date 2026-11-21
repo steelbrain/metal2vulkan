@@ -1422,15 +1422,6 @@ pub fn declare(
         }
         d.heap.insert(class, g);
     }
-    // The float classes the shader's heap comparisons read their members through, each declared
-    // once, after the groups' own: a group of that class decorates it.
-    for (class, decl) in plan.families.texture.heap.values().filter_map(|h| h.plain) {
-        if d.heap.contains_key(&class) {
-            continue;
-        }
-        let g = heap_array(mb, plan.stage, class, decl)?;
-        d.heap.insert(class, g);
-    }
     // The unsigned integer classes the reads of raw heap members fetch them from, each declared
     // once, and the routines decoding them.
     for (class, decl) in plan.families.texture.heap.values().filter_map(|h| h.raw) {

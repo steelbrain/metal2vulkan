@@ -678,7 +678,7 @@ pub(super) fn sampled_image(
             let Some(use_) = cx.plan.families.sampler.heap_identity.get(&key).copied() else {
                 return Err(cx.fail(format!("heap sampler {key:?} has no identity use")));
             };
-            let element = heap_element(cx, fb, (key.group, !key.compare), handle)?;
+            let element = heap_element(cx, fb, key.group, handle)?;
             let sampler = identity_sampler(cx, fb, key.sampler, use_)?;
             let si = fb.sampled_image(element.img, sampler)?;
             let image = CombinedImage {
@@ -692,7 +692,7 @@ pub(super) fn sampled_image(
             let Some(g) = cx.decl.families.sampler.heap.get(&key).copied() else {
                 return Err(cx.fail(format!("heap sampler {key:?} is not declared")));
             };
-            let element = heap_element(cx, fb, (key.group, !key.compare), handle)?;
+            let element = heap_element(cx, fb, key.group, handle)?;
             let ptr = fb.module().global_value(g)?;
             let sampler = fb.load(ptr, MemAccess::default())?;
             let si = fb.sampled_image(element.img, sampler)?;
@@ -711,7 +711,7 @@ pub(super) fn sampled_image(
             let Some(g) = cx.decl.families.sampler.heap_samplers.get(&key).copied() else {
                 return Err(cx.fail(format!("argument sampler array {key:?} is not declared")));
             };
-            let element = heap_element(cx, fb, (key.group, !key.compare), handle)?;
+            let element = heap_element(cx, fb, key.group, handle)?;
             // The element of the sampler handle's table entry; a missed or null handle is the null
             // entry's element 0, the neutral sampler.
             let index = heap_sampler_field(cx, fb, sampler, EntryField::Element)?;
@@ -734,7 +734,7 @@ pub(super) fn sampled_image(
             let Some(g) = cx.decl.families.sampler.heap_arrays.get(&key).copied() else {
                 return Err(cx.fail(format!("constexpr sampler array {key:?} is not declared")));
             };
-            let element = heap_element(cx, fb, (key.group, !key.compare), handle)?;
+            let element = heap_element(cx, fb, key.group, handle)?;
             // The element the sampler handle names (element 0 where it names none, whose result
             // `sampling_value` makes zero), which may differ between invocations.
             let (index, _) = array_element(cx, fb, sampler, key)?;

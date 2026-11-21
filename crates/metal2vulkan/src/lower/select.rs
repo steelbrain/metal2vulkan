@@ -1998,12 +1998,6 @@ fn identity_refusal(plan: &Plan) -> Option<String> {
                     .to_owned(),
             );
         }
-        if h.plain.is_some() {
-            return Some(
-                "an argument buffer's depth texture both compared and sampled without comparison"
-                    .to_owned(),
-            );
-        }
         if h.raw.is_some() {
             return Some(
                 "an argument buffer's texture read as the raw texels of an extended-range member"
