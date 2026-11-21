@@ -2540,6 +2540,12 @@ or does not check is rebuilt from the generations' names, with young counted ful
   -51726, -51757, -51772, -51839 and -51840. No tool translates every pipeline state of the
   recorded streams under the identity domains without a GPU, so the count is of these streams
   to these frames.
+- A 64-bit texture atomic (`atomic_min` or `atomic_max` on a `ulong` texture), which Metal's
+  feature set tables give the Apple8 family and later ("GPU devices in the Apple8 family support
+  64-bit atomic minimum and maximum using ulong, on both buffers and textures, only on macOS"),
+  is lowered to a 64-bit image atomic, which needs `shaderImageInt64Atomics`. Device creation
+  enables no 64-bit image atomic, so a state over a function that calls one is
+  `Error::Translation` of `Unsupported{ImageAtomics}`, needing that feature, on every device.
 - Every `VkPipeline` is made through the device's `VkPipelineCache` (The cache directory, above),
   which is empty on a host's first run. Cold, the driver's time for a recorded session's render
   pipelines made through it, against the same pipelines made past any cache (states-only plays):

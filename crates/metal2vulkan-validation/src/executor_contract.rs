@@ -155,7 +155,8 @@ fn encoder_operation_is_executable(operation: crate::air::calls::CommandEncoderO
 }
 
 /// The requirements a module's `air.*` calls state by their names alone: an implicit imageblock
-/// texture whose format no literal names, and an indirect command no executor encodes.
+/// texture whose format no literal names, an indirect command no executor encodes, and a 64-bit
+/// texture atomic, which the runtime refuses ([`calls_ulong_texture_atomic`]).
 pub fn unsupported_air_requirements(
     calls: &BTreeMap<String, usize>,
 ) -> BTreeSet<ToolingRequirement> {
@@ -172,7 +173,24 @@ pub fn unsupported_air_requirements(
     }) {
         requirements.insert(ToolingRequirement::IndirectCommandBuffer);
     }
+    if calls_ulong_texture_atomic(calls) {
+        requirements.insert(ToolingRequirement::UlongTextureAtomic);
+    }
     requirements
+}
+
+/// Whether the module calls an atomic on a Metal `ulong` texture (`atomic_min` or `atomic_max`,
+/// the only ones Apple's compiler takes of one): a [`ulong_texture_calls`] call whose operation is
+/// an atomic, which the translator lowers to a 64-bit image atomic
+/// ([`ToolingRequirement::UlongTextureAtomic`]).
+pub fn calls_ulong_texture_atomic(calls: &BTreeMap<String, usize>) -> bool {
+    use metal2vulkan_air::intrinsics::{AirIntrinsic, TexOp};
+    ulong_texture_calls(calls).any(|name| {
+        matches!(
+            AirIntrinsic::parse(name),
+            Some(AirIntrinsic::Texture(texture)) if matches!(texture.op, TexOp::Atomic(_))
+        )
+    })
 }
 
 /// The module's `air.*` texture operations on a Metal `ulong` texture: those the product's
@@ -2112,8 +2130,9 @@ mod tests {
     }
 
     /// Each texture operation on a `ulong` texel, in every shape the public fixtures spell, is a
-    /// `ulong` texture call, and no executor's gap. The same operations on a 32-bit texel are no
-    /// `ulong` texture call.
+    /// `ulong` texture call; a read or a write is no executor's gap, and an atomic is the runtime's
+    /// ([`ToolingRequirement::UlongTextureAtomic`]). The same operations on a 32-bit texel are no
+    /// `ulong` texture call and no gap.
     #[test]
     fn ulong_texture_operations_are_named_by_their_texel() {
         let fixtures = [
@@ -2136,12 +2155,18 @@ mod tests {
                     .count()
             );
             operations += ulong.len();
-            assert!(unsupported_air_requirements(&calls).is_empty());
+            let atomic = ulong.iter().any(|name| name.contains("atomic_"));
+            assert_eq!(calls_ulong_texture_atomic(&calls), atomic);
+            assert_eq!(
+                unsupported_air_requirements(&calls),
+                BTreeSet::from_iter(atomic.then_some(ToolingRequirement::UlongTextureAtomic))
+            );
             let narrow = calls
                 .keys()
                 .map(|name| (name.replace(".u.v4i64", ".u.v4i32"), 1))
                 .collect::<BTreeMap<_, _>>();
             assert!(!calls_ulong_texture(&narrow));
+            assert!(unsupported_air_requirements(&narrow).is_empty());
         }
         // The distinct operations the two modules spell: reads, writes, and atomic minima and
         // maxima of the six shapes, the 2D ones at 32- and 16-bit coordinates.
