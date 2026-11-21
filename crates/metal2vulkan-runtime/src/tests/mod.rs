@@ -27,6 +27,7 @@ mod export;
 mod fault;
 mod fence;
 mod fetch;
+mod filter_nest;
 mod first_use_sites;
 mod floor;
 mod gpu_span;
