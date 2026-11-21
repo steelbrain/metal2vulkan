@@ -1703,7 +1703,9 @@ made, with no lock, and never rewritten for layouts.
   a queue has room on the device's `VkQueue`, each of its command buffers goes at once, alone. It
   has room while fewer than two of its submissions are not yet seen complete, and while fewer than
   three are whose expected GPU runs (below) behind the oldest, with the next's, sum to 16 ms or
-  less; a run not yet known passes that. So a queue keeps on the `VkQueue` no more than about 16
+  less; a run not yet known counts as past 16 ms. So a queue whose run is not yet known (none of
+  its command buffers has retired with its GPU times) has room for two submissions, and its third
+  command buffer waits for one seen complete. A queue keeps on the `VkQueue` no more than about 16
   ms of work behind what runs, and one behind it always, and a command buffer of another queue
   committed later waits behind no more of it. Without room, the ones committed meanwhile are held
   in one group of at most sixteen, each scheduled as it joins; one the group does not take is held
