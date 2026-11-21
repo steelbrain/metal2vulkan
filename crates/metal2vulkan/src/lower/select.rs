@@ -465,11 +465,6 @@ impl Plan {
         {
             tally(&mut out, name.into(), 0, words);
         }
-        // The barriers a device's lockstep stands for: uses, no words.
-        let device = self.families.simd.device_lockstep;
-        if device != 0 {
-            tally(&mut out, simd::DEVICE_LOCKSTEP.into(), device, 0);
-        }
         // A kernel emulated in place of the widest mode's pin: one use, no words.
         if self.families.simd.widest_pin {
             tally(&mut out, simd::WIDEST_PIN.into(), 1, 0);
@@ -1759,12 +1754,7 @@ fn finish(
     simd::full_quads(&mut cx)?;
     // The threadgroup arena's words, now that every access and the tier are known.
     access::local::choose_words(&mut cx, tier);
-    let requirement = SubgroupRequirement {
-        // A vertex function's subgroups its driver runs as Metal does without the stage listed: its
-        // module needs that fact in place of the stage.
-        metal_vertex_simdgroups: cx.families.simd.prefix_lane,
-        ..subgroup::requirement(tier, stage, &p.fields().subgroup)
-    };
+    let requirement = subgroup::requirement(tier, stage, &p.fields().subgroup);
     let dispatch = match stage {
         Stage::Kernel | Stage::Object | Stage::Mesh => Some(dispatch::plan_kernel(&mut cx, tier)?),
         Stage::Vertex | Stage::Fragment => None,

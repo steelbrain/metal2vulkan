@@ -1156,17 +1156,16 @@ fn a_fragment_quad_lane_is_its_subgroup_lane_or_its_place_in_the_pixel_quad() {
 /// committed profile and the wave64-only device ([`wave64`], the shape of AMD GCN):
 /// - on every profile whose fragment stage runs 32-lane subgroups (`Tier::Direct`), or 64- or
 ///   128-lane ones split into 32-lane clusters (`Tier::Cluster32`, the wave64 device: the lane is
-///   the subgroup lane's low five bits) it requires no property and records
-///   `PrecisionNote::FragmentSimdgroupGrouping`;
+///   the subgroup lane's low five bits) it records `PrecisionNote::FragmentSimdgroupGrouping`;
 /// - where the stage's subgroups are narrower than 32 (`Tier::PartialFragment`) it is refused
-///   `SimdWidth`, needing the property or what the stage lacks for 32 lanes; where the stage has no
+///   `SimdWidth`, needing what the stage lacks for 32 lanes; where the stage has no
 ///   subgroup tier, that refusal (`SubgroupOperations`);
 /// - `fragment_lane_shuffles` on a 32-lane stage without `shaderQuadControl` is refused needing
 ///   it: its shuffles and ballot count Metal's helpers, which only full quads give.
 ///
 /// Each compiled function passes L3 and reads `SubgroupLocalInvocationId`. A
-/// `[[threads_per_simdgroup]]` parameter is 32 on every profile, with no subgroup capability, no
-/// property and no note.
+/// `[[threads_per_simdgroup]]` parameter is 32 on every profile, with no subgroup capability and no
+/// note.
 #[test]
 fn a_fragment_simdgroup_lane_is_the_lane_of_a_32_lane_simdgroup_where_the_tier_gives_one() {
     use crate::device::subgroup::width_needs;
@@ -1174,7 +1173,6 @@ fn a_fragment_simdgroup_lane_is_the_lane_of_a_32_lane_simdgroup_where_the_tier_g
     let Some(bc) = assemble("gsm2_fragment_lanes") else {
         return;
     };
-    let property = VkProperty::MetalFragmentSimdgroups;
     let note = PrecisionNote::FragmentSimdgroupGrouping;
     let lane = OpBits::BASIC;
     let shuffles = lane.union(OpBits::BALLOT).union(OpBits::SHUFFLE);
@@ -1194,10 +1192,6 @@ fn a_fragment_simdgroup_lane_is_the_lane_of_a_32_lane_simdgroup_where_the_tier_g
             let tier = subgroup::tier(&SimdClass::CrossLane(ops), Stage::Fragment, model);
             match (compile(&bc, entry, &p), &tier) {
                 (Ok(a), Ok(t @ (Tier::Direct | Tier::Cluster32))) => {
-                    assert!(
-                        !a.requirements.properties.contains(&property),
-                        "{stem} {entry}: the property"
-                    );
                     assert!(a.precision.contains(&note), "{stem} {entry}: the note");
                     noted += 1;
                     let (_, words) = link_and_validate(&a, &p)
@@ -1232,10 +1226,10 @@ fn a_fragment_simdgroup_lane_is_the_lane_of_a_32_lane_simdgroup_where_the_tier_g
                     );
                 }
                 (Err(Error::Unsupported(u)), Ok(Tier::PartialFragment)) => {
-                    let needs = Needs::AnyOf(vec![
-                        vec![Capability::Property(property)],
-                        width_needs(Stage::Fragment, model.stage(Stage::Fragment)),
-                    ]);
+                    let needs = Needs::AnyOf(vec![width_needs(
+                        Stage::Fragment,
+                        model.stage(Stage::Fragment),
+                    )]);
                     assert_eq!(
                         (u.feature, u.needs),
                         (Feature::SimdWidth, needs),
@@ -1250,7 +1244,6 @@ fn a_fragment_simdgroup_lane_is_the_lane_of_a_32_lane_simdgroup_where_the_tier_g
             }
         }
         let a = compile(&bc, "fragment_simd_width", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        assert!(!a.requirements.properties.contains(&property), "{stem}");
         assert!(!a.precision.contains(&note), "{stem}: the width's note");
         let (_, words) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
         let text = spirv_dis(&words);

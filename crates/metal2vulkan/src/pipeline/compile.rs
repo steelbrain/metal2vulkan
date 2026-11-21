@@ -3351,32 +3351,12 @@ fn lower_bounded<K>(
         unbound,
     );
     let mut requirements = module.requirements.clone();
-    // Pairs only the device's simdgroup lockstep orders.
-    if plan.families.simd.device_lockstep != 0 {
-        requirements
-            .properties
-            .insert(crate::device::requirements::VkProperty::SimdgroupLockstep);
-    }
     // Every sample, gather and comparison is the device's own sampler's, which the stage records
     // and requires.
     if plan.families.sampler.device_sampling {
         requirements
             .properties
             .insert(crate::device::requirements::VkProperty::DeviceSampling);
-    }
-    // A fragment's simdgroup lane read from its subgroup lane because the device's fragment
-    // subgroups are Metal's simdgroups.
-    if plan.families.simd.metal_lane {
-        requirements
-            .properties
-            .insert(crate::device::requirements::VkProperty::MetalFragmentSimdgroups);
-    }
-    // A fragment's quads run whole without `RequireFullQuadsKHR` because the device runs its
-    // helpers as Metal does.
-    if plan.families.simd.metal_full_quads {
-        requirements
-            .properties
-            .insert(crate::device::requirements::VkProperty::MetalFullQuads);
     }
     // Center varyings read as they are as their pixel form, because the device reads them at
     // the pixel center as Metal does.

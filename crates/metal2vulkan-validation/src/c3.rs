@@ -279,10 +279,8 @@ pub enum AnswerGap {
     /// measured one), so no required size reaches 32 lanes, and nothing relates the invocations
     /// of two subgroups. A function whose answer reads the simdgroup's members records
     /// `PrecisionNote::FragmentSimdgroupGrouping`, which the runtime announces
-    /// (`metal2vulkan-degrade-fragment-simdgroup-grouping`): a device takes that note unless its
-    /// driver runs the fragment on Metal (`DriverDeviation::MetalFragmentSimdgroups`), and such a
-    /// device runs Metal's own 32-lane simdgroups and lacks the gap, so the gap's answer is
-    /// always announced.
+    /// (`metal2vulkan-degrade-fragment-simdgroup-grouping`): every device takes that note, so the
+    /// gap's answer is always announced.
     FragmentSubgroupUnderTwoQuads,
     /// Apple's rasterizer draws a triangle it clips as pieces, and a pixel a shared edge crosses
     /// runs its fragments once per piece, each reading that piece's coverage as `[[sample_mask]]`

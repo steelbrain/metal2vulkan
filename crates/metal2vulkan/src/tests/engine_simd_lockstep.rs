@@ -35,7 +35,6 @@
 use std::collections::BTreeMap;
 
 use crate::budget::{Budget, Meter, SPIRV_WORDS};
-use crate::device::requirements::VkProperty;
 use crate::device::subgroup::{OpBits, SimdClass, SubgroupRequirement, Tier};
 use crate::device::DevicePolicy;
 use crate::error::Error;
@@ -45,7 +44,7 @@ use crate::pipeline::compile::{compile_bitcode, EntryRef};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::sym::{Axis, ResourceKind, ResourceSlot, SpecKey, Stage};
 use crate::pipeline::testing::{
-    compile, llvm_assemble, profile, typed_module, typed_module_with, AssembleError, Scratch,
+    llvm_assemble, profile, typed_module, typed_module_with, AssembleError, Scratch,
 };
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources, SubgroupSize};
 use crate::spirv::ir::TypedModule;
@@ -1573,8 +1572,7 @@ fn a_conflict_in_one_simdgroup_takes_a_simdgroup_barrier() {
 }
 
 /// The arm's read, then the loop's writes: no subgroup barrier may stand between them. Emulated
-/// simdgroups order the pair, on lavapipe and roadmap-2022 alike, and no module requires
-/// `VkProperty::SimdgroupLockstep`.
+/// simdgroups order the pair, on lavapipe and roadmap-2022 alike.
 #[test]
 fn a_conflict_no_subgroup_barrier_orders_takes_emulated_simdgroups() {
     let expect = |t: u32| {
@@ -1583,15 +1581,6 @@ fn a_conflict_no_subgroup_barrier_orders_takes_emulated_simdgroups() {
         } else {
             0
         }
-    };
-    let requires = |profile_name: &str| {
-        let bc = assemble("arm_then_loop", ARM_THEN_LOOP).expect("assembled once already");
-        let p = profile(profile_name, DevicePolicy::default()).expect("profile");
-        compile(&bc, "arm_then_loop", &p)
-            .unwrap_or_else(|e| panic!("{profile_name}: {e}"))
-            .requirements
-            .properties
-            .contains(&VkProperty::SimdgroupLockstep)
     };
     for profile_name in ["lavapipe", "runtime-floor"] {
         let Some(plan) = check(
@@ -1615,9 +1604,7 @@ fn a_conflict_no_subgroup_barrier_orders_takes_emulated_simdgroups() {
             0,
             "{profile_name}"
         );
-        assert_eq!(uses(&plan, "barrier.lockstep.device"), 0, "{profile_name}");
         assert_eq!(plan.simd.1, Tier::Emulated, "{profile_name}");
-        assert!(!requires(profile_name), "{profile_name}");
     }
 }
 
@@ -1973,15 +1960,12 @@ fn in_lockstep(words: &mut [u32], mut step: impl FnMut(usize, u32, &[u32]) -> Op
     }
 }
 
-/// The owned fixture `rtl_lockstep`, the runtime lane `driver_deviations`' lockstep gate: Apple's
-/// compiler keeps each kernel's read of another thread's word and its write of its own in one loop
-/// each thread leaves after its own count, so no barrier position is uniform in the simdgroup.
-/// lavapipe and roadmap-2022 take emulated simdgroups, and no module requires
-/// `VkProperty::SimdgroupLockstep`. Each reads what lockstep reads, which the lane checks on the
-/// device
-/// (`rtl_lockstep_divergent_loop`'s 64 threads run 1 to 5 iterations of `words[t] = words[t ^ 16] *
-/// 3 + i + 1`; `rtl_lockstep_until`'s add the word 8 lanes on to their own while it is below a
-/// limit, at most 8 times).
+/// The owned fixture `rtl_lockstep`: Apple's compiler keeps each kernel's read of another thread's
+/// word and its write of its own in one loop each thread leaves after its own count, so no barrier
+/// position is uniform in the simdgroup. lavapipe and roadmap-2022 take emulated simdgroups. Each
+/// reads what lockstep reads (`rtl_lockstep_divergent_loop`'s 64 threads run 1 to 5 iterations of
+/// `words[t] = words[t ^ 16] * 3 + i + 1`; `rtl_lockstep_until`'s add the word 8 lanes on to their
+/// own while it is below a limit, at most 8 times).
 #[test]
 fn the_lockstep_gate_fixture_takes_emulated_simdgroups() {
     let path = crate::pipeline::testing::engine_dir().join("rtl_lockstep.ll");
@@ -2026,18 +2010,11 @@ fn the_lockstep_gate_fixture_takes_emulated_simdgroups() {
             let (plan, m) = typed_module(&bc, kernel, &p)
                 .unwrap_or_else(|e| panic!("{kernel} on {profile_name}: {e}"));
             let at = format!("{kernel} on {profile_name}");
-            assert_eq!(uses(&plan, "barrier.lockstep.device"), 0, "{at}");
             assert!(
                 uses(&plan, "barrier.lockstep.emulated.simdgroup") > 0,
                 "{at}"
             );
             assert_eq!(plan.simd.1, Tier::Emulated, "{at}");
-            let requires = compile(&bc, kernel, &p)
-                .unwrap_or_else(|e| panic!("{at}: {e}"))
-                .requirements
-                .properties
-                .contains(&VkProperty::SimdgroupLockstep);
-            assert!(!requires, "{at}");
             for &w in lanes {
                 assert_eq!(run_over(&plan, &m, input, w), want, "{at} at {w:?}");
             }
@@ -2140,7 +2117,6 @@ fn a_threads_own_device_word_takes_no_barrier() {
             "barrier.lockstep.threadgroup",
             "barrier.lockstep.simdgroup",
             "barrier.lockstep.emulated.simdgroup",
-            "barrier.lockstep.device",
         ] {
             assert_eq!(uses(&plan, name), 0, "{name} on {profile_name}");
         }
@@ -2162,7 +2138,6 @@ fn a_branchs_two_arms_take_no_device_barrier() {
             "barrier.lockstep.threadgroup",
             "barrier.lockstep.simdgroup",
             "barrier.lockstep.emulated.simdgroup",
-            "barrier.lockstep.device",
         ] {
             assert_eq!(uses(&plan, name), 0, "{name} on {profile_name}");
         }
@@ -2170,12 +2145,11 @@ fn a_branchs_two_arms_take_no_device_barrier() {
 }
 
 /// The lockstep census names of the inserted barriers.
-const LOCKSTEP_NAMES: [&str; 5] = [
+const LOCKSTEP_NAMES: [&str; 4] = [
     "barrier.lockstep.threadgroup",
     "barrier.lockstep.threadgroup.rows",
     "barrier.lockstep.simdgroup",
     "barrier.lockstep.emulated.simdgroup",
-    "barrier.lockstep.device",
 ];
 
 /// A pair in a block only some threads of each simdgroup run takes a subgroup barrier, and the

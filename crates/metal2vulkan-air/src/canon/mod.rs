@@ -325,15 +325,9 @@ pub struct Lockstep {
     /// Some inserted simdgroup barrier stands where the lanes of a subgroup are not known to
     /// reach it together, so it orders its pair only on emulated simdgroups, whose predicated
     /// walk takes every thread of the workgroup through it: the kernel takes the `Emulated` tier.
-    /// Never set for a device whose lockstep orders those pairs (`device`), nor where a subgroup
-    /// barrier in divergent flow orders the threads that run it together (maximal reconvergence on
-    /// 32-lane subgroups).
+    /// Never set where a subgroup barrier in divergent flow orders the threads that run it together
+    /// (maximal reconvergence on 32-lane subgroups).
     pub emulated: bool,
-    /// On a device that runs a simdgroup's 32 threads in lockstep
-    /// (`VkProperty::SimdgroupLockstep`): the barrier positions that only emulated simdgroups would
-    /// make exact, left out because the device's lockstep orders their pairs as Apple's does. The
-    /// module then requires the property. 0 elsewhere.
-    pub device: u32,
     /// Every inserted simdgroup barrier orders only pairs whose threads meet where a simdgroup
     /// spans two rows of its threadgroup (two of its threads then share their position's `x`, or
     /// hold different `y`s or `z`s): in a threadgroup whose simdgroups each lie within one row (a
@@ -343,8 +337,8 @@ pub struct Lockstep {
     /// simdgroup barrier at its place would, and needs no subgroup size, so a pipeline for such
     /// threadgroups keeps them and leaves out only the simdgroup barriers, and with them the
     /// subgroup size they pinned: an exact removal. Decided where a subgroup barrier keeps a
-    /// 32-lane tier (maximal reconvergence on 32-lane subgroups, without the device's own
-    /// lockstep); `false` elsewhere and where no barrier is inserted.
+    /// 32-lane tier (maximal reconvergence on 32-lane subgroups); `false` elsewhere and where no
+    /// barrier is inserted.
     pub rows: bool,
     /// The inserted threadgroup barriers that order only pairs whose threads meet where a
     /// simdgroup spans two rows of its threadgroup, sorted: each runs only in a threadgroup whose

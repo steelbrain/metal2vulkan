@@ -216,10 +216,6 @@ impl DeviceProfile {
     pub fn takes_driver_deviation(&self, deviation: DriverDeviation) -> bool {
         let f = &self.fields;
         match deviation {
-            DriverDeviation::SimdgroupLockstep => f
-                .enabled
-                .properties
-                .contains(&VkProperty::SimdgroupLockstep),
             DriverDeviation::MetalCenterVaryings => f
                 .enabled
                 .properties
@@ -232,14 +228,6 @@ impl DeviceProfile {
                 .enabled
                 .properties
                 .contains(&VkProperty::MetalHalfStorageNans),
-            DriverDeviation::MetalFragmentSimdgroups => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalFragmentSimdgroups),
-            DriverDeviation::MetalVertexSimdgroups => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalVertexSimdgroups),
             DriverDeviation::MetalHalfTexelWrites => f
                 .enabled
                 .properties
@@ -264,9 +252,6 @@ impl DeviceProfile {
                 .enabled
                 .properties
                 .contains(&VkProperty::MetalFirstVertexIndices),
-            DriverDeviation::MetalFullQuads => {
-                f.enabled.properties.contains(&VkProperty::MetalFullQuads)
-            }
             DriverDeviation::MetalNormalizedVertexFetch => f
                 .enabled
                 .properties

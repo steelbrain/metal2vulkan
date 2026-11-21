@@ -191,7 +191,6 @@ fn fixed_wave64_is_cluster32_without_a_pin() {
             size: None,
             full_subgroups: true,
             local_size_multiple: 64,
-            metal_vertex_simdgroups: false,
         }
     );
     assert_eq!(tier(&shuffle, Stage::Fragment, &m), Ok(Tier::Cluster32));
@@ -217,7 +216,6 @@ fn pinnable_ranges_prefer_32() {
             size: Some(32),
             full_subgroups: true,
             local_size_multiple: 32,
-            metal_vertex_simdgroups: false,
         }
     );
     assert_eq!(
@@ -226,7 +224,6 @@ fn pinnable_ranges_prefer_32() {
             size: Some(32),
             full_subgroups: false,
             local_size_multiple: 1,
-            metal_vertex_simdgroups: false,
         }
     );
     // A range above 32 pins the smallest cluster size.
@@ -255,7 +252,6 @@ fn a_subgroup_requirement_states_its_device_facts() {
         size: Some(32),
         full_subgroups: true,
         local_size_multiple: 32,
-        metal_vertex_simdgroups: false,
     };
     let r = facts(pinned, Stage::Kernel);
     assert_eq!(r.features, [VkFeature::SubgroupSizeControl].into());
@@ -385,26 +381,6 @@ fn missing_stage_or_operations_are_named() {
         tier(&SimdClass::Quad, Stage::Fragment, &m),
         Ok(Tier::Direct)
     );
-}
-
-/// A vertex function's requirement of the subgroups its driver runs as Metal does without the
-/// stage listed states the measured fact in place of the stage its module's operations name, and
-/// adds nothing to a module of none.
-#[test]
-fn a_measured_vertex_stage_states_its_fact_in_place_of_the_stage() {
-    use crate::device::requirements::Requirements;
-    let measured = SubgroupRequirement {
-        metal_vertex_simdgroups: true,
-        ..SubgroupRequirement::NONE
-    };
-    let mut r = Requirements::default();
-    r.properties
-        .insert(VkProperty::SubgroupStage(Stage::Vertex));
-    measured.add_device_facts(Stage::Vertex, &mut r);
-    assert_eq!(r.properties, [VkProperty::MetalVertexSimdgroups].into());
-    let mut none = Requirements::default();
-    measured.add_device_facts(Stage::Vertex, &mut none);
-    assert_eq!(none, Requirements::default());
 }
 
 /// A class the device has (its compute stage's, which Vulkan always lists) but a stage lacks, as

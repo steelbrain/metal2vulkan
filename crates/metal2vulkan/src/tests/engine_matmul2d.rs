@@ -42,8 +42,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::budget::SPIRV_WORDS;
-use crate::device::requirements::{SpirvCapability, VkProperty};
-use crate::device::subgroup::Tier;
+use crate::device::requirements::SpirvCapability;
 use crate::device::DevicePolicy;
 use crate::error::{Error, Feature, Needs};
 use crate::library::{FunctionArtifact, FunctionConstantValue, FunctionConstantValues};
@@ -245,19 +244,6 @@ fn kernel(bc: &[u8], entry: &str, v: u32, stem: &str) -> Kernel {
     link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
     let (plan, module) =
         typed_module_specialized(bc, entry, &p, &consts).unwrap_or_else(|e| panic!("{what}: {e}"));
-    // Only lavapipe's 8-lane subgroups emulate simdgroups, and a 32-lane device whose simdgroups
-    // do not run in lockstep, where a kernel's threadgroup stores need it (`tns_mm_int`'s byte
-    // copies to threadgroup memory on `amd-rdna2-apu-radv`).
-    let lockstep = p
-        .fields()
-        .enabled
-        .properties
-        .contains(&VkProperty::SimdgroupLockstep);
-    assert!(
-        plan.simd.1 != Tier::Emulated || stem == "lavapipe" || !lockstep,
-        "{what}: {:?}",
-        plan.simd
-    );
     Kernel {
         what,
         plan,

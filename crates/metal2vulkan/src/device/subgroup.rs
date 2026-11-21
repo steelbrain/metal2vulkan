@@ -154,10 +154,6 @@ pub struct SubgroupRequirement {
     pub full_subgroups: bool,
     /// Every dispatch region's local size must be a multiple of this (1: no constraint).
     pub local_size_multiple: u32,
-    /// A vertex function's subgroups are the ones its driver runs as Metal does though the device
-    /// does not list the vertex stage (`DriverDeviation::MetalVertexSimdgroups`): its module needs
-    /// `VkProperty::MetalVertexSimdgroups` in place of `SubgroupStage(Vertex)`.
-    pub metal_vertex_simdgroups: bool,
 }
 
 impl SubgroupRequirement {
@@ -166,7 +162,6 @@ impl SubgroupRequirement {
         size: None,
         full_subgroups: false,
         local_size_multiple: 1,
-        metal_vertex_simdgroups: false,
     };
 
     /// Add to `r` what this requirement of a `stage` function needs of the device beyond its
@@ -177,10 +172,7 @@ impl SubgroupRequirement {
     ///   `subgroupSizeControl`, the stage in `requiredSubgroupSizeStages`, and the size inside
     ///   `[minSubgroupSize, maxSubgroupSize]`;
     /// - full subgroups (`REQUIRE_FULL_SUBGROUPS`) need the stage flag, whose feature is
-    ///   `computeFullSubgroups`;
-    /// - a vertex function's subgroups that the driver runs as Metal does without the device
-    ///   listing the stage (`metal_vertex_simdgroups`) need that measured fact,
-    ///   `VkProperty::MetalVertexSimdgroups`, in place of the stage the module's operations name.
+    ///   `computeFullSubgroups`.
     ///
     /// A requirement that pins nothing and needs no full subgroups adds nothing. A limit `r`
     /// already names keeps the stricter value.
@@ -198,9 +190,6 @@ impl SubgroupRequirement {
         }
         if self.full_subgroups {
             r.stage_flags.insert(StageCreateFlag::RequireFullSubgroups);
-        }
-        if self.metal_vertex_simdgroups && r.properties.remove(&VkProperty::SubgroupStage(stage)) {
-            r.properties.insert(VkProperty::MetalVertexSimdgroups);
         }
     }
 }
@@ -348,8 +337,7 @@ fn subgroup_tier(
     }
     if !st.ops.contains(ops) {
         // The device's classes are the compute stage's, which Vulkan always lists: a class the
-        // device has but the stage lacks is one measured nowhere in a stage the device does not
-        // list (`DriverDeviation::MetalVertexSimdgroups`), which listing it would give.
+        // device has but the stage lacks is one the stage would have where the device listed it.
         let mut missing = Vec::new();
         for op in SUBGROUP_OPS {
             let bit = OpBits::of(op);
@@ -462,7 +450,6 @@ pub fn requirement(t: Tier, stage: Stage, model: &SubgroupModel) -> SubgroupRequ
         size: st.pinnable.then_some(size),
         full_subgroups: compute,
         local_size_multiple: if compute { size } else { 1 },
-        metal_vertex_simdgroups: false,
     }
 }
 

@@ -1134,9 +1134,8 @@ pub enum PrecisionNote {
     /// A fragment function runs a simdgroup operation (a reduction, scan, vote, ballot, shuffle,
     /// broadcast or AGX multiply-add) or reads its `[[thread_index_in_simdgroup]]`, or discards,
     /// asks whether its thread is a helper (`quad_is_helper_thread`, `simd_is_helper_thread`) and
-    /// runs a quad operation, on a device whose fragment subgroups are not Metal's simdgroups (the
-    /// profile does not take
-    /// [`DriverDeviation::MetalFragmentSimdgroups`](crate::error::DriverDeviation::MetalFragmentSimdgroups)).
+    /// runs a quad operation, on every device: a device's fragment subgroups are not Metal's
+    /// simdgroups.
     /// A simdgroup operation runs over the pixels the device's rasterizer packs into a subgroup,
     /// so a sum, a ballot or a shuffle combines other pixels than on an Apple GPU, whose packing is
     /// measured, and the lane is the pixel's place in the device's subgroup, or in its aligned 32

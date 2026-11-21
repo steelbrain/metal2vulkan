@@ -490,10 +490,6 @@ pub enum Needs {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DriverDeviation {
-    /// The device runs each 32 consecutive invocations of a compute workgroup in lockstep, as
-    /// an Apple GPU runs a Metal simdgroup (`VkProperty::SimdgroupLockstep`). Unmeasured, a kernel
-    /// that needs that order takes emulated simdgroups, exact.
-    SimdgroupLockstep,
     /// The device reads a center-sampled varying (a smooth input decorated neither `Centroid`
     /// nor `Sample`) of a multisampled pipeline at the pixel center in every fragment
     /// invocation, a sample-rate one's included, as Metal reads it
@@ -523,27 +519,6 @@ pub enum DriverDeviation {
     /// computed either way; where the profile takes it the module requires the property, and
     /// unmeasured such a write records `PrecisionNote::DeviceNanEncoding`.
     MetalHalfStorageNans,
-    /// The device's fragment subgroups are Metal's simdgroups
-    /// (`VkProperty::MetalFragmentSimdgroups`): the driver hands the fragment function to Metal, so
-    /// a fragment subgroup holds the pixels (at sample rate, the samples) Apple's rasterizer packs
-    /// into one simdgroup, and its `SubgroupLocalInvocationId` is Metal's
-    /// `thread_index_in_simdgroup`. Where the profile takes it, a fragment function's
-    /// `[[thread_index_in_simdgroup]]` is that builtin. Unmeasured, the lane and the simdgroup
-    /// operations run over the device's own grouping, which Metal does not rule out, and record
-    /// `PrecisionNote::FragmentSimdgroupGrouping`: which pixels share a simdgroup, and in what
-    /// order, is the rasterizer's packing, which nothing in Vulkan states or pins. So is which
-    /// quads of a function that discards Apple's GPU shades as several partial quads: unmeasured,
-    /// a quad operation beside a helper query in such a function records the note too.
-    MetalFragmentSimdgroups,
-    /// The device runs a vertex function's subgroup operations as Metal runs its simdgroup
-    /// functions, though its `subgroupSupportedStages` leaves the vertex stage out
-    /// (`VkProperty::MetalVertexSimdgroups`): the driver hands the vertex function to Metal, which
-    /// runs it in simdgroups of 32 consecutive vertices. Where the profile takes it, the profile's
-    /// vertex stage has subgroups, at the device's subgroup size, of the operation classes measured
-    /// exact there: basic, vote, arithmetic, ballot and shuffle. A vertex module that uses them
-    /// requires the property in place of `VkProperty::SubgroupStage(Vertex)`. Unmeasured, the stage
-    /// has none, as the device states.
-    MetalVertexSimdgroups,
     /// The device stores a `half` texel's write as Metal stores it once the shader hands it the
     /// half widened to `float` in a 16-bit float storage image, and the NaN `0x7fc00000` in a
     /// packed small float one (`VkProperty::MetalHalfTexelWrites`): the half's own bits, a
@@ -596,16 +571,6 @@ pub enum DriverDeviation {
     /// pipeline's synthesized geometry stages, which store the first vertex's at every vertex,
     /// and is refused on a device without `geometryShader`.
     MetalFirstVertexIndices,
-    /// The device runs a fragment function's quads whole, its helper invocations taking part in
-    /// every group operation, as Metal runs a fragment function's helper threads
-    /// (`VkProperty::MetalFullQuads`): the driver hands the fragment function to Metal, whose
-    /// simdgroup functions read, combine and count a quad's helpers wherever the primitive or the
-    /// target cuts the quad. Vulkan gives that only under `RequireFullQuadsKHR`
-    /// (`shaderQuadControl`). Where the profile takes it and lacks `shaderQuadControl`, a
-    /// fragment function whose group operations observe other lanes declares no such mode and
-    /// requires the property in place of the feature. Unmeasured, such a function needs the
-    /// feature.
-    MetalFullQuads,
     /// The device's fixed-function vertex input converts the codes of a normalized format (the
     /// 8- and 16-bit `Normalized` formats of either sign, `UChar4Normalized_BGRA`,
     /// `Int1010102Normalized`, `UInt1010102Normalized`, through their `UNORM` and `SNORM` vertex

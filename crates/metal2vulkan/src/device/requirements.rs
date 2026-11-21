@@ -594,12 +594,6 @@ pub enum VkProperty {
     /// instruction requires it, but one that requires
     /// [`VkProperty::InterpolateAtOffsetFromSevenSixteenths`] instead.
     InterpolateAtOffsetCentered,
-    /// The device runs each 32 consecutive invocations of a compute workgroup in lockstep, as an
-    /// Apple GPU runs a Metal simdgroup (the driver's measured deviation
-    /// [`DriverDeviation::SimdgroupLockstep`](crate::error::DriverDeviation::SimdgroupLockstep)).
-    /// No Vulkan query reports it. A kernel whose threadgroup accesses only that lockstep orders,
-    /// at a place no subgroup barrier may stand, requires it rather than emulated simdgroups.
-    SimdgroupLockstep,
     /// `storageImageSampleCounts` has this sample count: a multisampled shadow of the stencil.
     StorageImageSampleCount(u32),
     /// `supportedDepthResolveModes` (`VkPhysicalDeviceDepthStencilResolveProperties`, Vulkan 1.2)
@@ -653,21 +647,6 @@ pub enum VkProperty {
     /// No Vulkan query reports it. A module that writes such a NaN requires it; without it, the
     /// module records `PrecisionNote::DeviceNanEncoding`.
     MetalHalfStorageNans,
-    /// The device's fragment subgroups are Metal's simdgroups, and `SubgroupLocalInvocationId` in
-    /// a fragment shader is Metal's `thread_index_in_simdgroup` (the driver's measured deviation
-    /// [`DriverDeviation::MetalFragmentSimdgroups`](crate::error::DriverDeviation::MetalFragmentSimdgroups)).
-    /// No Vulkan query reports it. A fragment module that reads its simdgroup lane requires it;
-    /// without it, the lane is the device's own grouping's, with
-    /// `PrecisionNote::FragmentSimdgroupGrouping`, where the stage runs 32-lane subgroups, and is
-    /// refused elsewhere.
-    MetalFragmentSimdgroups,
-    /// The device runs a vertex shader's subgroup operations as Metal runs its simdgroup functions
-    /// though `subgroupSupportedStages` leaves the vertex stage out (the driver's measured
-    /// deviation
-    /// [`DriverDeviation::MetalVertexSimdgroups`](crate::error::DriverDeviation::MetalVertexSimdgroups)).
-    /// No Vulkan query reports it. A vertex module that uses subgroup operations requires it in
-    /// place of `SubgroupStage(Vertex)` on such a device.
-    MetalVertexSimdgroups,
     /// The device stores the widened `half` a shader writes to a 16-bit float storage image as
     /// the half's own bits, a signalling NaN's unquieted, and the NaN `0x7fc00000` written to a
     /// packed small float one as the format's canonical NaN (the driver's measured deviation
@@ -719,14 +698,6 @@ pub enum VkProperty {
     /// vertices to its builtin requires it; without it, the index goes through the pipeline's
     /// synthesized geometry stages.
     MetalFirstVertexIndices,
-    /// The device runs a fragment shader's quads whole, its helper invocations taking part in
-    /// every group operation, as Metal runs a fragment function's helper threads (the driver's
-    /// measured deviation
-    /// [`DriverDeviation::MetalFullQuads`](crate::error::DriverDeviation::MetalFullQuads)).
-    /// No Vulkan query reports it: Vulkan gives it only under `RequireFullQuadsKHR`. A fragment
-    /// module whose group operations observe other lanes requires it in place of
-    /// `shaderQuadControl` on a device without that feature.
-    MetalFullQuads,
     /// `provokingVertexModePerPipeline` (`VkPhysicalDeviceProvokingVertexPropertiesEXT`, where
     /// `VK_EXT_provoking_vertex` is listed): the pipelines bound within one render pass instance
     /// may have different provoking vertex modes. Without it "all pipelines bound within a render

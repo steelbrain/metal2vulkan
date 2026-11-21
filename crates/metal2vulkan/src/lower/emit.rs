@@ -1485,10 +1485,10 @@ pub fn emit_module(e: &Entry, plan: &Plan, m: &mut Meter) -> Result<Emitted, Err
             // The entry hook: what must happen before any instruction of the body (the pulled
             // vertex fetch) or must not depend on where the body first uses it (a push field; a
             // dispatch builtin parameter) is emitted in the function's first block, ahead of
-            // the walk. The simdgroup lane counted at entry comes first, ahead of any branch
-            // the other hooks emit, where every invocation of the simdgroup is active.
-            let r = crate::lower::simd::emit_entry(&mut em.cx, &mut fb)
-                .and_then(|()| em.cx.load_push_fields(&mut fb))
+            // the walk.
+            let r = em
+                .cx
+                .load_push_fields(&mut fb)
                 // The floor's tail, read in the first block (`lower::push::emit_tail_guard`).
                 .and_then(|()| em.cx.emit_tail_guard(&mut fb))
                 .and_then(|()| dispatch::emit_entry(&mut em.cx, &mut fb))

@@ -285,11 +285,6 @@ pub struct SimdPlan {
     /// flow: an emulated site or threadgroup barrier in the `Emulated` tier, a workgroup barrier in
     /// every other tier.
     pub predication: Option<divergent::Predication>,
-    /// The places of the kernel's lockstep order that only emulated simdgroups would make exact and
-    /// that the device's own lockstep orders instead (`air::Lockstep::device`): the module requires
-    /// `VkProperty::SimdgroupLockstep`, and the census counts them as [`DEVICE_LOCKSTEP`]. 0
-    /// elsewhere.
-    pub device_lockstep: u32,
     /// The kernel took the `Emulated` tier in place of the `Direct` tier's pin to the device's
     /// widest mode ([`widest_pin`]), which the census counts as [`WIDEST_PIN`].
     pub widest_pin: bool,
@@ -307,44 +302,23 @@ pub struct SimdPlan {
     /// The fragment entry declares `RequireFullQuadsKHR`, so every quad starts with its four
     /// invocations and the helpers take part in the group operations, as Metal's do.
     pub full_quads: bool,
-    /// The fragment entry's quads run whole because the device runs a fragment function's helper
-    /// threads as Metal does though it lacks `shaderQuadControl`
-    /// (`DriverDeviation::MetalFullQuads`): it declares no mode, and the module requires
-    /// `VkProperty::MetalFullQuads` ([`full_quads`]).
-    pub metal_full_quads: bool,
     /// A fragment's `[[thread_index_in_quadgroup]]` on a profile without the fragment quad tier:
     /// the stage interface's `FragCoord` object the lane is derived from ([`select_param`]). `None`
     /// where the lane is the subgroup lane's low two bits.
     pub quad_lane_coord: Option<usize>,
-    /// A fragment's `[[thread_index_in_simdgroup]]` is the subgroup lane because the device's
-    /// fragment subgroups are Metal's simdgroups ([`select_param`]): the module requires
-    /// `VkProperty::MetalFragmentSimdgroups`.
-    pub metal_lane: bool,
-    /// A fragment's `[[thread_index_in_simdgroup]]` is the lane of the device's grouping on a
-    /// profile whose fragment subgroups are not Metal's simdgroups ([`select_param`]): the
-    /// function records `PrecisionNote::FragmentSimdgroupGrouping`, and [`finish`] refuses it
-    /// unless the stage's tier gives 32-lane simdgroups, the ones its operations and
-    /// `[[threads_per_simdgroup]]` name: a 32-lane subgroup (`Tier::Direct`, the subgroup lane) or
-    /// a 32-lane cluster of a 64- or 128-lane one (`Tier::Cluster32`, the subgroup lane's low five
-    /// bits).
+    /// A fragment's `[[thread_index_in_simdgroup]]` is the lane of the device's grouping
+    /// ([`select_param`]): the function records `PrecisionNote::FragmentSimdgroupGrouping`, and
+    /// [`finish`] refuses it unless the stage's tier gives 32-lane simdgroups, the ones its
+    /// operations and `[[threads_per_simdgroup]]` name: a 32-lane subgroup (`Tier::Direct`, the
+    /// subgroup lane) or a 32-lane cluster of a 64- or 128-lane one (`Tier::Cluster32`, the
+    /// subgroup lane's low five bits).
     pub device_lane: bool,
     /// Some operation reads or combines other lanes of the simdgroup (a simdgroup-scope group
     /// operation, an AGX multiply-add), or the function reads the lane itself, so its answer
     /// depends on which invocations share the simdgroup ([`finish`]). A quad operation does not set
     /// it.
     pub simdgroup_members: bool,
-    /// The lane is the count of the active lanes below the invocation's, taken once in the entry
-    /// block: a vertex function's simdgroups on a driver that runs them as Metal does though it
-    /// does not list the vertex stage (`DriverDeviation::MetalVertexSimdgroups`), whose
-    /// SPIR-V-to-Metal translation refuses `SubgroupLocalInvocationId` in a vertex function. Metal
-    /// makes a vertex simdgroup's active lanes its low lanes, so at entry the count is the lane
-    /// (measured on the M3 Max and the M4). [`declare`] makes the lane a `Private` word the entry
-    /// hook ([`emit_entry`]) writes.
-    pub prefix_lane: bool,
 }
-
-/// The census name of the places the device's simdgroup lockstep orders, with no words.
-pub const DEVICE_LOCKSTEP: &str = "barrier.lockstep.device";
 
 /// Whether [`widest_pin`] weighs a kernel for the `Emulated` tier, or the kernel keeps the
 /// `Direct` tier's pin to the device's widest mode whatever its pressure: a kernel whose emulated
@@ -426,17 +400,12 @@ pub fn raise(c: SimdClass, ops: OpBits) -> SimdClass {
 /// `Cluster32` by subgroup size alone, so the final class selects the tier whose classes it
 /// holds, or the refusal `select` then reports.
 pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
-    cx.families.simd.device_lockstep = cx.entry.lockstep.device;
     // A fragment function's simdgroups are the pixels the device's rasterizer packs into a
-    // subgroup, which are Metal's only where the driver runs the fragment on Metal: elsewhere an
-    // operation over the simdgroup's members combines a simdgroup Metal allows, not the
-    // reference's. So does a quad operation beside a helper query in a function that discards,
+    // subgroup, so an operation over the simdgroup's members combines a simdgroup Metal allows, not
+    // the reference's. So does a quad operation beside a helper query in a function that discards,
     // whose quads Apple's GPU may split ([`discarding_quads_observed`]).
     if cx.stage == Stage::Fragment
         && (cx.families.simd.simdgroup_members || discarding_quads_observed(cx))
-        && !cx
-            .profile
-            .takes_driver_deviation(crate::error::DriverDeviation::MetalFragmentSimdgroups)
     {
         cx.precision
             .insert(PrecisionNote::FragmentSimdgroupGrouping);
@@ -470,48 +439,16 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     // `[[threads_per_simdgroup]]` names 32 of them: a 32-lane subgroup (`Direct`), or a 32-lane
     // cluster of a 64- or 128-lane subgroup (`Cluster32`), whose lane is the subgroup lane's low
     // five bits, as its operations' lanes are. On a subgroup narrower than 32 (`PartialFragment`)
-    // the lane is refused, needing Metal's own grouping or a 32-lane fragment stage; a refused
-    // tier is `select`'s refusal.
+    // the lane is refused, needing a 32-lane fragment stage; a refused tier is `select`'s
+    // refusal.
     if cx.families.simd.device_lane {
         let model = &cx.profile.fields().subgroup;
         if subgroup::tier(&cx.simd, cx.stage, model) == Ok(Tier::PartialFragment) {
-            use crate::device::requirements::VkProperty;
             return Err(Unsupported::needs_any_of(
                 Feature::SimdWidth,
-                vec![
-                    vec![Capability::Property(VkProperty::MetalFragmentSimdgroups)],
-                    subgroup::width_needs(cx.stage, model.stage(cx.stage)),
-                ],
+                vec![subgroup::width_needs(cx.stage, model.stage(cx.stage))],
             )
             .into());
-        }
-    }
-    // A vertex function's simdgroup operations on a driver measured to run them as Metal does
-    // though it does not list the vertex stage: the lane is the active-lane count below the
-    // invocation, at entry, an exclusive scan of the arithmetic class the stage has. A
-    // post-tessellation vertex function runs as a tessellation evaluation stage, where nothing
-    // was measured: it needs the stage listed.
-    if cx.stage == Stage::Vertex
-        && cx.simd != SimdClass::None
-        && cx
-            .profile
-            .takes_driver_deviation(crate::error::DriverDeviation::MetalVertexSimdgroups)
-        && !cx.profile.fields().enabled.properties.contains(
-            &crate::device::requirements::VkProperty::SubgroupStage(Stage::Vertex),
-        )
-    {
-        if cx.families.tessellation.eval.is_some() {
-            return Err(Unsupported::needs(
-                Feature::SubgroupOperations,
-                Capability::Property(crate::device::requirements::VkProperty::SubgroupStage(
-                    Stage::Vertex,
-                )),
-            )
-            .into());
-        }
-        if cx.families.simd.groups {
-            cx.families.simd.prefix_lane = true;
-            cx.simd = raise(cx.simd, OpBits::ARITHMETIC);
         }
     }
     let barriers = &cx.families.barrier;
@@ -534,30 +471,20 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// Complete a fragment function's plan once its tier is chosen: where its group operations
-/// read, combine, or count other lanes ([`SimdPlan::observes_lanes`]), the entry runs full quads
-/// ([`SimdPlan::full_quads`]); a profile without `shaderQuadControl` whose device runs a fragment
-/// function's helpers as Metal does (`DriverDeviation::MetalFullQuads`) runs them whole without
-/// the mode ([`SimdPlan::metal_full_quads`]), and any other profile without the feature refuses
-/// it. Metal runs the helpers of a quad the primitive or the target cuts, and they take part: a
-/// fill or shuffle reads a helper's value, a reduction folds it in (measured on the M3 Max and the
-/// M4). Vulkan launches and activates them for every group operation only under
-/// `RequireFullQuadsKHR`; without it a helper may be absent or inactive, and no other form gives
-/// its value but a driver that hands the function to Metal. After the tier, so a stage without
-/// the classes is refused as before.
+/// Complete a fragment function's plan once its tier is chosen: where its group operations read,
+/// combine, or count other lanes ([`SimdPlan::observes_lanes`]), the entry runs full quads
+/// ([`SimdPlan::full_quads`]), and a profile without `shaderQuadControl` refuses it. Metal runs the
+/// helpers of a quad the primitive or the target cuts, and they take part: a fill or shuffle reads
+/// a helper's value, a reduction folds it in (measured on the M3 Max and the M4). Vulkan launches
+/// and activates them for every group operation only under `RequireFullQuadsKHR`; without it a
+/// helper may be absent or inactive, and no other form gives its value. After the tier, so a stage
+/// without the classes is refused as before.
 pub fn full_quads(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     if cx.stage != Stage::Fragment || !cx.families.simd.observes_lanes {
         return Ok(());
     }
     if cx.profile.fields().subgroup.quad_control {
         cx.families.simd.full_quads = true;
-        return Ok(());
-    }
-    if cx
-        .profile
-        .takes_driver_deviation(crate::error::DriverDeviation::MetalFullQuads)
-    {
-        cx.families.simd.metal_full_quads = true;
         return Ok(());
     }
     Err(Unsupported::needs(
@@ -654,15 +581,11 @@ pub fn declare(
             ..Declared::default()
         });
     }
-    let lane = if simd.prefix_lane {
-        mb.plain_global(crate::spirv::ir::StorageClass::Private, u32_, None)?
-    } else {
-        mb.builtin(
-            crate::spv::BuiltIn::SubgroupLocalInvocationId,
-            IoDir::Input,
-            u32_,
-        )?
-    };
+    let lane = mb.builtin(
+        crate::spv::BuiltIn::SubgroupLocalInvocationId,
+        IoDir::Input,
+        u32_,
+    )?;
     let size = if plan.simd.1 == Tier::PartialFragment && !simd.partly_live.is_empty() {
         Some(mb.builtin(crate::spv::BuiltIn::SubgroupSize, IoDir::Input, u32_)?)
     } else {
@@ -674,26 +597,6 @@ pub fn declare(
         emu: None,
         vote,
     })
-}
-
-/// The work before the body, in the function's first block, where every invocation of the
-/// simdgroup is active: the lane of a [`SimdPlan::prefix_lane`] function, the exclusive sum of 1
-/// over the subgroup, stored to the `Private` word [`declare`] made for it.
-pub fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
-    if !cx.plan.families.simd.prefix_lane {
-        return Ok(());
-    }
-    let Some(var) = cx.decl.families.simd.lane else {
-        return Err(cx.fail("the prefix lane's word is not declared"));
-    };
-    let one = group::k(fb, 1)?;
-    let below = fb.group_arith(
-        GroupArith::IAdd,
-        crate::spirv::builder::ops::group::GroupMode::ExclusiveScan,
-        one,
-    )?;
-    let p = fb.module().global_value(var)?;
-    fb.store(p, below, crate::spirv::ir::MemAccess::default())
 }
 
 /// Whether strategy `s` is a matrix or AGX multiply-add (`matrix::tile_mad`).
@@ -832,10 +735,8 @@ pub fn partly_live_words(s: &Strategy, tier: Tier) -> u32 {
 ///   rasterizer's packing: on the M3 Max and the M4 a primitive that covers an aligned 8x4 block
 ///   whole runs it as one simdgroup, its quads in row-major order, and elsewhere the covered quads
 ///   of several blocks and primitives share one. Nothing in Vulkan states or pins a device's
-///   packing. The lane is the tier's simdgroup lane and raises the basic class. Where the profile
-///   takes `DriverDeviation::MetalFragmentSimdgroups` (the driver runs the fragment on Metal) that
-///   is Metal's lane, and the module requires `VkProperty::MetalFragmentSimdgroups`. Elsewhere it
-///   is the lane of the device's grouping, which Metal does not rule out: the function records
+///   packing. The lane is the tier's simdgroup lane and raises the basic class. It is the lane of
+///   the device's grouping, which Metal does not rule out: the function records
 ///   `PrecisionNote::FragmentSimdgroupGrouping`, as its simdgroup operations do, and [`finish`]
 ///   refuses it `Unsupported{SimdWidth}` unless the stage's tier gives 32-lane simdgroups (a
 ///   32-lane subgroup, or a 32-lane cluster of a wider one, whose lane is the subgroup lane's low
@@ -845,7 +746,6 @@ pub fn partly_live_words(s: &Strategy, tier: Tier) -> u32 {
 /// - `[[threads_per_simdgroup]]`: 32, as `get_simdgroup_size` is, raising no class.
 pub fn select_param(cx: &mut SelectCx<'_>, b: &crate::air::abi::ParamBinding) -> Result<(), Error> {
     use crate::air::abi::{Builtin, ParamRole};
-    use crate::error::DriverDeviation;
     let builtin = match &b.role {
         ParamRole::Builtin(
             builtin @ (Builtin::ThreadIndexInQuadgroup
@@ -869,17 +769,10 @@ pub fn select_param(cx: &mut SelectCx<'_>, b: &crate::air::abi::ParamBinding) ->
                     Unsupported::not_implemented(Feature::PixelCoverageAtSampleRate).into(),
                 );
             }
-            if cx
-                .profile
-                .takes_driver_deviation(DriverDeviation::MetalFragmentSimdgroups)
-            {
-                cx.families.simd.metal_lane = true;
-            } else {
-                // The device's own grouping, announced as its operations' is ([`finish`]
-                // checks the tier gives 32-lane simdgroups).
-                cx.families.simd.device_lane = true;
-                cx.families.simd.simdgroup_members = true;
-            }
+            // The device's own grouping, announced as its operations' is ([`finish`] checks
+            // the tier gives 32-lane simdgroups).
+            cx.families.simd.device_lane = true;
+            cx.families.simd.simdgroup_members = true;
             OpBits::BASIC
         }
         _ => {

@@ -182,13 +182,11 @@ fn fragment_quads(p: &DeviceProfile) -> bool {
 /// needing demote. Where the discard has its form and the device runs no subgroup operation in the
 /// fragment stage (the runtime's floor), the simdgroup operation is refused needing that stage.
 ///
-/// Where the discard form allows it but the profile lacks `shaderQuadControl` and its driver does
-/// not run Metal's helpers (`DriverDeviation::MetalFullQuads`), the simdgroup operation is refused
-/// needing it: it counts the helpers Metal runs, which only full quads give.
+/// Where the discard form allows it but the profile lacks `shaderQuadControl`, the simdgroup
+/// operation is refused needing it: it counts the helpers Metal runs, which only full quads give.
 fn simd_after_discard(bc: &[u8], entry: &str, stem: &str, p: &DeviceProfile) {
     let formed = fragment_quads(p) || p.fields().fragment.demote_to_helper;
-    let full_quads = p.fields().subgroup.quad_control
-        || p.takes_driver_deviation(crate::error::DriverDeviation::MetalFullQuads);
+    let full_quads = p.fields().subgroup.quad_control;
     if formed && !p.fields().subgroup.fragment.supported {
         let stage = crate::pipeline::sym::Stage::Fragment;
         assert_eq!(

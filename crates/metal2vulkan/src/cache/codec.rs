@@ -921,7 +921,7 @@ codec_struct! {
         api_version, spirv_capabilities, spirv_extensions, features, extensions, properties,
         limits, formats, stage_flags, denorm_independence, rounding_independence,
     }
-    SubgroupRequirement { size, full_subgroups, local_size_multiple, metal_vertex_simdgroups }
+    SubgroupRequirement { size, full_subgroups, local_size_multiple }
 }
 
 codec_enum! {
@@ -1041,14 +1041,13 @@ codec_enum! {
         RoundingIndependenceAll, Rgba4OpaqueBlackSwizzled, FramebufferColorSampleCount(f0),
         FramebufferIntegerColorSampleCount(f0), FramebufferDepthSampleCount(f0),
         FramebufferStencilSampleCount(f0), FramebufferNoAttachmentsSampleCount(f0),
-        InterpolateAtOffsetCentered, SimdgroupLockstep, StorageImageSampleCount(f0),
+        InterpolateAtOffsetCentered, StorageImageSampleCount(f0),
         DepthResolveMode(f0), StencilResolveMode(f0), IndependentResolveNone, IndependentResolve,
         VariableSampleLocations, SampleLocationSampleCount(f0), ColorAttachmentSampleCount(f0, f1),
         MetalCenterVaryings, MetalHalfStorageWrites, MetalHalfStorageNans,
-        MetalFragmentSimdgroups, MetalVertexSimdgroups,
         MetalHalfTexelWrites, MetalNormStorageWrites, DeviceSampling,
         MetalDepth16Stores, MetalDepth16BiasedStores, MetalInterpolation, MetalFirstVertexIndices,
-        MetalFullQuads, ProvokingVertexModePerPipeline,
+        ProvokingVertexModePerPipeline,
         MetalNormalizedVertexFetch, MetalAlphaCoverage, InterpolateAtOffsetFromSevenSixteenths,
         MetalSmallFloatNans,
         SubgroupGeometryStage,
