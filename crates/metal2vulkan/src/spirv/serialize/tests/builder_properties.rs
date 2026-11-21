@@ -127,7 +127,7 @@ fn op(f: &mut FunctionBuilder<'_>, g: &mut Gen, pool: &mut Pool) -> BResult<()> 
                 BinOp::ISub,
                 BinOp::IMul,
                 BinOp::SDiv,
-                BinOp::SRem,
+                BinOp::BitwiseOr,
                 BinOp::ShiftRightArithmetic,
             ];
             match g.rng.below(OPS.len() + 2) {

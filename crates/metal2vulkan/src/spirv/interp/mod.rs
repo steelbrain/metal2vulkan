@@ -190,7 +190,7 @@ pub enum TrapKind {
     /// The run exceeded [`Config::step_limit`] lane-steps.
     StepLimit(u64),
     DivideByZero,
-    /// `SDiv`/`SRem`/`SMod` of the minimum value by -1.
+    /// `SDiv` of the minimum value by -1.
     SignedOverflow,
     /// A shift by at least the base's width.
     ShiftOutOfRange {

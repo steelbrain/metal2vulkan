@@ -712,20 +712,6 @@ pub(super) fn int_op(op: BinOp, w: u8, a: u64, b: u64) -> IResult<u64> {
             signed_ok()?;
             (sa / sb) as u64 & m
         }
-        BinOp::SRem => {
-            signed_ok()?;
-            (sa % sb) as u64 & m
-        }
-        BinOp::SMod => {
-            signed_ok()?;
-            let r = sa % sb;
-            let r = if r != 0 && (r < 0) != (sb < 0) {
-                r + sb
-            } else {
-                r
-            };
-            r as u64 & m
-        }
         BinOp::BitwiseOr => a | b,
         BinOp::BitwiseXor => a ^ b,
         BinOp::BitwiseAnd => a & b,
@@ -770,8 +756,6 @@ fn binary(p: &Prog<'_>, op: BinOp, a: Value, va: &Val, vb: &Val) -> IResult<Val>
         | B::UDiv
         | B::SDiv
         | B::UMod
-        | B::SRem
-        | B::SMod
         | B::BitwiseOr
         | B::BitwiseXor
         | B::BitwiseAnd => {

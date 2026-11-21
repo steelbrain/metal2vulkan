@@ -5,6 +5,7 @@
 use super::*;
 use crate::pipeline::sym::{Axis, ResourceKind, ResourceSlot, SpecKey, Stage};
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn, LoopFn, LoopSpec};
+use crate::spirv::builder::ops::arith::RemainderSign;
 use crate::spirv::builder::ops::group::GroupMode;
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
@@ -387,8 +388,10 @@ fn integer_float_and_conversion_ops() {
         // -7 / 2 = -3, -7 srem 2 = -1, -7 smod 2 = 1.
         let m7 = k(f, i32_, (-7i32) as u32 as u64);
         let two = k(f, i32_, 2);
-        for op in [BinOp::SDiv, BinOp::SRem, BinOp::SMod] {
-            let r = f.binary(op, m7, two)?;
+        let q = f.binary(BinOp::SDiv, m7, two)?;
+        outs.push(f.convert(ConvOp::Bitcast, q, u32_)?);
+        for sign in [RemainderSign::Dividend, RemainderSign::Divisor] {
+            let r = f.signed_remainder(m7, two, sign)?;
             outs.push(f.convert(ConvOp::Bitcast, r, u32_)?);
         }
         // Arithmetic shift right of -8 by 1 = -4.

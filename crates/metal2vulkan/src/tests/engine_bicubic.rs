@@ -32,8 +32,8 @@ use crate::pipeline::sym::{
     Axis, PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage,
 };
 use crate::pipeline::testing::{
-    compile, compile_with, engine_dir, link_and_validate, llvm_assemble, profile, typed_module,
-    typed_module_with, AssembleError,
+    compile, compile_with, count_op, engine_dir, link_and_validate, llvm_assemble, profile,
+    typed_module, typed_module_with, AssembleError,
 };
 use crate::pipeline::PrecisionNote;
 use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Order, Resources};
@@ -753,6 +753,17 @@ fn bicubic_samples_match_the_reference_filter() {
         assert!(
             a.precision
                 .contains(&PrecisionNote::BicubicFilterArithmetic),
+            "{name}"
+        );
+        // A repeating tap wraps by the builder's defined remainder: Vulkan makes `OpSMod` and
+        // `OpSRem` poison for a negative operand where the device does not enable `maintenance8`.
+        let words = &a.module.words;
+        assert_eq!(
+            (
+                count_op(words, crate::spv::Op::SMod),
+                count_op(words, crate::spv::Op::SRem)
+            ),
+            (0, 0),
             "{name}"
         );
         link_and_validate(&a, &p).expect("L3");

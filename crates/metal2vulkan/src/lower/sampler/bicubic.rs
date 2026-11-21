@@ -92,6 +92,7 @@ use crate::metal::bicubic::BicubicTexels;
 use crate::metal::sampler::SamplerWord;
 use crate::metal::{SamplerAddressMode, SamplerBorderColor};
 use crate::pipeline::sym::{PushField, SamplerRef};
+use crate::spirv::builder::ops::arith::RemainderSign;
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::{BResult, BuildError, OperandRule};
 use crate::spirv::ids::{ConstId, TypeId, Value as SValue};
@@ -477,8 +478,8 @@ struct Axis {
 ///   lets a device assume no float operand or result is an infinity or a NaN unless
 ///   `SignedZeroInfNanPreserve` is requested, which this lowering does not request. `NClamp`,
 ///   the comparisons, and `OpConvertFToS` of an unrepresentable value then give undefined
-///   values. Whatever `i32` `q` holds, each tap is clamped (`SClamp`) or wrapped (`SMod` by the
-///   positive extent) into the level, and integer adds wrap, so every fetch stays in bounds.
+///   values. Whatever `i32` `q` holds, each tap is clamped (`SClamp`) or wrapped (the remainder by
+///   the positive extent, with its sign) into the level, and integer adds wrap, so every fetch stays in bounds.
 /// - A normalized coordinate's `x` is Metal's position on an axis addressed by `address`
 ///   ([`super::position`]): `c` wrapped into one period first where the axis repeats or mirrors,
 ///   then times the extent, rounded to `f32` with ties away from zero. A repeating axis's `x` lies
@@ -658,11 +659,14 @@ fn tap(
             address: TapAddress::Edge,
             ..
         } => (fb.glsl(GlslOp::SClamp, &[i, zero, last])?, None),
-        // The extent is positive, so `SMod` lands in `[0, extent)`.
+        // The extent is positive, so the remainder with its sign lands in `[0, extent)`.
         AxisAddress::Mode {
             address: TapAddress::Repeat,
             ..
-        } => (fb.binary(BinOp::SMod, i, axis.extent)?, None),
+        } => (
+            fb.signed_remainder(i, axis.extent, RemainderSign::Divisor)?,
+            None,
+        ),
         AxisAddress::Mode {
             address: TapAddress::Border,
             ..
@@ -683,7 +687,7 @@ fn tap(
         // addresses each tap of a pixel or normalized sampler.
         AxisAddress::Word { mode, .. } => {
             let edge = fb.glsl(GlslOp::SClamp, &[i, zero, last])?;
-            let wrapped = fb.binary(BinOp::SMod, i, axis.extent)?;
+            let wrapped = fb.signed_remainder(i, axis.extent, RemainderSign::Divisor)?;
             let m = reflected_once(fb, t, i)?;
             let reflected = mirrored(fb, t, m, axis.extent)?;
             let once = fb.glsl(GlslOp::SMin, &[m, last])?;
@@ -728,12 +732,12 @@ fn reflected_once(fb: &mut FunctionBuilder<'_>, t: &Tys, i: SValue) -> BResult<S
 
 /// An index reflected once ([`reflected_once`]), `m` (a non-negative `int`), reflected into a
 /// level of `extent` texels (an `int`) as Metal's mirrored repeat reflects it: `r = m mod 2n`, then
-/// `r` or `2n - 1 - r`. The extent is positive and below `2^30`, so `2n` is too, and `SMod` of the
-/// non-negative `m` lands in `[0, 2n)`.
+/// `r` or `2n - 1 - r`. The extent is positive and below `2^30`, so `2n` is too, and the remainder
+/// of the non-negative `m` by it lands in `[0, 2n)`.
 fn mirrored(fb: &mut FunctionBuilder<'_>, t: &Tys, m: SValue, extent: SValue) -> BResult<SValue> {
     let one = i32_value(fb, t, 1)?;
     let two_n = fb.binary(BinOp::IAdd, extent, extent)?;
-    let r = fb.binary(BinOp::SMod, m, two_n)?;
+    let r = fb.signed_remainder(m, two_n, RemainderSign::Divisor)?;
     let low = fb.binary(BinOp::SLessThan, r, extent)?;
     let top = fb.binary(BinOp::ISub, two_n, one)?;
     let back = fb.binary(BinOp::ISub, top, r)?;

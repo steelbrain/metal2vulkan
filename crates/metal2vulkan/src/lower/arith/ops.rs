@@ -7,6 +7,7 @@
 use crate::air::ir::{BinOp as AirBin, FloatPredicate, IntFlags, IntPredicate};
 use crate::lower::arith::legal::{FloatFmt, Form, Held};
 use crate::lower::arith::narrow;
+use crate::spirv::builder::ops::arith::RemainderSign;
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::{BResult, BuildError, TypeRule};
 use crate::spirv::ids::{TypeId, Value};
@@ -205,12 +206,11 @@ pub fn int_binary(
         AirBin::Xor => bin(fb, BinOp::BitwiseXor, a, b),
         AirBin::SDiv | AirBin::SRem => {
             let (x, y) = (sext(fb, f, a)?, sext(fb, f, b)?);
-            let o = if op == AirBin::SDiv {
-                BinOp::SDiv
+            let r = if op == AirBin::SDiv {
+                bin(fb, BinOp::SDiv, x, y)?
             } else {
-                BinOp::SRem
+                fb.signed_remainder(x, y, RemainderSign::Dividend)?
             };
-            let r = bin(fb, o, x, y)?;
             wrapped(fb, r)
         }
         AirBin::AShr => {

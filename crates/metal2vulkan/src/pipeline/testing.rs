@@ -1080,3 +1080,16 @@ pub fn status_reach_on(p: &DeviceProfile) -> StatusReach {
 }
 
 mod tests;
+
+/// The number of `op` instructions in module `words`.
+pub fn count_op(words: &[u32], op: crate::spv::Op) -> usize {
+    let mut i = 5;
+    let mut n = 0;
+    while i < words.len() {
+        let (len, opcode) = ((words[i] >> 16) as usize, words[i] & 0xFFFF);
+        assert!(len > 0 && i + len <= words.len(), "malformed module");
+        n += usize::from(opcode == op as u32);
+        i += len;
+    }
+    n
+}

@@ -28,7 +28,8 @@ use crate::memory::static_root::analyze_memory;
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
-    compile, description, link_and_validate, llvm_assemble, meter, profile, AssembleError, Scratch,
+    compile, count_op, description, link_and_validate, llvm_assemble, meter, profile,
+    AssembleError, Scratch,
 };
 use crate::spirv::interp::{run, Buffer, Config, Resources};
 
@@ -897,6 +898,7 @@ fn kernels() -> Vec<Kernel> {
         needs: &[Need::Float64],
         note: None,
     });
+    v.extend(signed_remainder_kernels());
     v
 }
 
@@ -950,6 +952,167 @@ declare <2 x float> @air.convert.f.v2f32.f.v2f8e5m2(<2 x i8>)
 declare <4 x float> @air.unpack.snorm.rgb10a2.v4f32(i32)
 declare i32 @air.pack.snorm.rgb10a2.v4f32(<4 x float>)
 ";
+
+/// `%name` = an opaque `i64` with bits `v`: two opaque words ([`oi`]) put together.
+fn o64(name: &str, v: u64) -> String {
+    format!(
+        "{}{}  %{name}.l = zext i32 %{name}.a to i64\n  %{name}.h0 = zext i32 %{name}.b to i64\n  \
+         %{name}.h = shl i64 %{name}.h0, 32\n  %{name} = or i64 %{name}.h, %{name}.l\n",
+        oi(&format!("{name}.a"), v as u32),
+        oi(&format!("{name}.b"), (v >> 32) as u32)
+    )
+}
+
+/// `%name` = an opaque `i<bits>` with the low bits of `v`.
+fn opaque_int(name: &str, bits: u8, v: i64) -> String {
+    match bits {
+        64 => o64(name, v as u64),
+        32 => oi(name, v as u32),
+        _ => on(name, bits, v as u32),
+    }
+}
+
+/// The signed remainders' sweep at `bits`: dividends and divisors of both signs, the most negative
+/// value and the largest among them, and constant divisors of both signs. No divisor is zero, and
+/// the most negative value is never divided by -1: LLVM's `srem` is poison there.
+fn remainder_sweep(bits: u8) -> (Vec<i64>, Vec<i64>, Vec<i64>) {
+    let min = if bits == 64 {
+        i64::MIN
+    } else {
+        -(1i64 << (bits - 1))
+    };
+    let max = if bits == 64 {
+        i64::MAX
+    } else {
+        (1i64 << (bits - 1)) - 1
+    };
+    (
+        vec![min, min + 1, -100, -7, -1, 0, 1, 7, 100, max],
+        vec![min, -7, -3, -1, 1, 3, 7, max],
+        vec![3, -4, min],
+    )
+}
+
+/// The remainder `a srem b` at `bits` (both sign-extended), as LLVM and Metal define it: the
+/// quotient truncated toward zero, so the remainder has the dividend's sign.
+fn srem(bits: u8, a: i64, b: i64) -> i64 {
+    let r = a.wrapping_rem(b);
+    if bits == 64 {
+        r
+    } else {
+        (r << (64 - bits)) >> (64 - bits)
+    }
+}
+
+/// The folded word of results `rs` at `bits`: `acc * 31 + word` from 0, each result's word its
+/// zero-extended bits (a 64-bit result's two halves exclusive-or'd).
+fn remainder_fold(bits: u8, rs: &[i64]) -> u32 {
+    rs.iter().fold(0u32, |acc, &r| {
+        let word = match bits {
+            64 => (r as u64 as u32) ^ ((r as u64 >> 32) as u32),
+            _ => (r as u64 & ((1u64 << bits) - 1)) as u32,
+        };
+        acc.wrapping_mul(31).wrapping_add(word)
+    })
+}
+
+/// The IR folding result `%{r}` (an `i<bits>`) into `%acc{k}` from `%acc{k - 1}`.
+fn fold_ir(bits: u8, r: &str, k: usize) -> String {
+    let word = match bits {
+        64 => format!(
+            "  %{r}.l = trunc i64 %{r} to i32\n  %{r}.s = lshr i64 %{r}, 32\n  \
+             %{r}.h = trunc i64 %{r}.s to i32\n  %{r}.w = xor i32 %{r}.l, %{r}.h\n"
+        ),
+        32 => format!("  %{r}.w = add i32 %{r}, 0\n"),
+        _ => format!("  %{r}.w = zext i{bits} %{r} to i32\n"),
+    };
+    format!(
+        "{word}  %acc{k}.m = mul i32 %acc{}, 31\n  %acc{k} = add i32 %acc{k}.m, %{r}.w\n",
+        k - 1
+    )
+}
+
+/// Kernels of `srem` over [`remainder_sweep`]: scalar `i8`, `i16`, `i32` and `i64`, and two-lane
+/// `i32` and `i64` vectors, by run-time and by constant divisors; each stores
+/// [`remainder_fold`] of its results.
+fn signed_remainder_kernels() -> Vec<Kernel> {
+    let kernels: [(&'static str, u8, bool); 6] = [
+        ("srem_i8", 8, false),
+        ("srem_i16", 16, false),
+        ("srem_i32", 32, false),
+        ("srem_i64", 64, false),
+        ("srem_v2i32", 32, true),
+        ("srem_v2i64", 64, true),
+    ];
+    kernels
+        .into_iter()
+        .map(|(name, bits, vector)| {
+            let (dividends, divisors, constants) = remainder_sweep(bits);
+            let mut body = String::from("  %acc0 = add i32 0, 0\n");
+            for (i, a) in dividends.iter().enumerate() {
+                body.push_str(&opaque_int(&format!("a{i}"), bits, *a));
+            }
+            for (j, b) in divisors.iter().enumerate() {
+                body.push_str(&opaque_int(&format!("b{j}"), bits, *b));
+            }
+            let min = dividends[0];
+            let mut pairs: Vec<(String, String, i64, i64)> = Vec::new();
+            for (i, a) in dividends.iter().enumerate() {
+                for (j, b) in divisors.iter().enumerate() {
+                    if !(*a == min && *b == -1) {
+                        pairs.push((format!("%a{i}"), format!("%b{j}"), *a, *b));
+                    }
+                }
+                for c in &constants {
+                    pairs.push((format!("%a{i}"), c.to_string(), *a, *c));
+                }
+            }
+            let ty = format!("i{bits}");
+            let mut results = Vec::new();
+            let mut k = 0;
+            if vector {
+                for (n, pair) in pairs.chunks(2).enumerate() {
+                    let lanes: Vec<&(String, String, i64, i64)> =
+                        (0..2).map(|l| &pair[l % pair.len()]).collect();
+                    let v = format!("<2 x {ty}>");
+                    for (side, pick) in [("x", 0), ("y", 1)] {
+                        let at = |l: &(String, String, i64, i64)| {
+                            if pick == 0 {
+                                l.0.clone()
+                            } else {
+                                l.1.clone()
+                            }
+                        };
+                        body.push_str(&format!(
+                            "  %{side}{n}.0 = insertelement {v} zeroinitializer, {ty} {}, i32 0\n  \
+                             %{side}{n} = insertelement {v} %{side}{n}.0, {ty} {}, i32 1\n",
+                            at(lanes[0]),
+                            at(lanes[1])
+                        ));
+                    }
+                    body.push_str(&format!("  %q{n} = srem {v} %x{n}, %y{n}\n"));
+                    for (l, lane) in lanes.iter().enumerate() {
+                        let r = format!("q{n}.{l}");
+                        body.push_str(&format!("  %{r} = extractelement {v} %q{n}, i32 {l}\n"));
+                        k += 1;
+                        body.push_str(&fold_ir(bits, &r, k));
+                        results.push(srem(bits, lane.2, lane.3));
+                    }
+                }
+            } else {
+                for (n, (a, b, x, y)) in pairs.iter().enumerate() {
+                    let r = format!("q{n}");
+                    body.push_str(&format!("  %{r} = srem {ty} {a}, {b}\n"));
+                    k += 1;
+                    body.push_str(&fold_ir(bits, &r, k));
+                    results.push(srem(bits, *x, *y));
+                }
+            }
+            body.push_str(&format!("  %r = add i32 %acc{k}, 0\n"));
+            k(name, body, remainder_fold(bits, &results))
+        })
+        .collect()
+}
 
 /// The generated module with every kernel of `ks`.
 fn module(ks: &[Kernel]) -> String {
@@ -1193,17 +1356,33 @@ fn arith_kernels_validate_and_compute_on_every_profile() {
     );
 }
 
-/// The number of `op` instructions in module `words`.
-fn count_op(words: &[u32], op: crate::spv::Op) -> usize {
-    let mut i = 5;
-    let mut n = 0;
-    while i < words.len() {
-        let (len, opcode) = ((words[i] >> 16) as usize, words[i] & 0xFFFF);
-        assert!(len > 0 && i + len <= words.len(), "malformed module");
-        n += usize::from(opcode == op as u32);
-        i += len;
+/// Every signed remainder is the builder's defined form: no module of the sweep
+/// ([`signed_remainder_kernels`]) holds `OpSRem` or `OpSMod`, which Vulkan makes poison for a
+/// negative operand on a device that does not enable `maintenance8`, on any profile. Each kernel's
+/// value is LLVM's `srem` on the interpreter ([`arith_kernels_validate_and_compute_on_every_profile`]).
+#[test]
+fn no_module_holds_a_signed_remainder_opcode() {
+    let ks = signed_remainder_kernels();
+    let Some(bitcode) = assemble("srem", &module(&ks)) else {
+        return;
+    };
+    for stem in PROFILES {
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
+        for kk in &ks {
+            let a = compile(&bitcode, kk.name, &p)
+                .unwrap_or_else(|e| panic!("{} on {stem}: {e}", kk.name));
+            let words = &a.module.words;
+            assert_eq!(
+                (
+                    count_op(words, crate::spv::Op::SRem),
+                    count_op(words, crate::spv::Op::SMod)
+                ),
+                (0, 0),
+                "{} on {stem}",
+                kk.name
+            );
+        }
     }
-    n
 }
 
 /// The function control of each `OpFunction` in module `words`, in order.

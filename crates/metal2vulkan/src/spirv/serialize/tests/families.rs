@@ -4,6 +4,7 @@
 //! requirements enable. A failure is a builder, requirement, or serializer bug.
 
 use super::{assert_spirv_valid, float, int, vec};
+use crate::spirv::builder::ops::arith::RemainderSign;
 use crate::spirv::builder::ops::group::GroupMode;
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::ids::{FuncId, TypeId, Value};
@@ -209,8 +210,6 @@ fn binary_operations() {
                     UDiv,
                     SDiv,
                     UMod,
-                    SRem,
-                    SMod,
                     ShiftRightLogical,
                     ShiftRightArithmetic,
                     ShiftLeftLogical,
@@ -239,6 +238,20 @@ fn binary_operations() {
             }
             f.binary(ShiftLeftLogical, *u, *u8v)
                 .expect("mixed-width shift");
+            // The defined signed remainders, on each integer type and with each sign.
+            for (a, b) in [
+                (u, u),
+                (i, i),
+                (uv, uv),
+                (iv, iv),
+                (u64v, u64v),
+                (u16v, u16v),
+            ] {
+                for sign in [RemainderSign::Dividend, RemainderSign::Divisor] {
+                    f.signed_remainder(*a, *b, sign)
+                        .unwrap_or_else(|e| panic!("{sign:?}: {e}"));
+                }
+            }
             for (a, b) in [(u, u), (uv, uv)] {
                 for op in [IAddCarry, ISubBorrow, UMulExtended] {
                     f.binary(op, *a, *b)

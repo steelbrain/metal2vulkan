@@ -9,6 +9,14 @@ use crate::spirv::ir::{
     ValueOrigin,
 };
 
+/// Whose sign a signed remainder takes ([`FunctionBuilder::signed_remainder`]): the dividend's, as
+/// LLVM's `srem` and Metal's `%` (SPIR-V's `OpSRem`), or the divisor's (`OpSMod`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RemainderSign {
+    Dividend,
+    Divisor,
+}
+
 impl FunctionBuilder<'_> {
     /// A unary operation. Result types: `IsNan`/`IsInf` give `bool` of the operand's component
     /// count, `Any`/`All` a `bool`, everything else the operand's type.
@@ -94,8 +102,6 @@ impl FunctionBuilder<'_> {
             | BinOp::UDiv
             | BinOp::SDiv
             | BinOp::UMod
-            | BinOp::SRem
-            | BinOp::SMod
             | BinOp::BitwiseOr
             | BinOp::BitwiseXor
             | BinOp::BitwiseAnd => {
@@ -485,6 +491,87 @@ impl FunctionBuilder<'_> {
             bits: ConstBits(r),
         })?;
         self.module().const_value(c).map(Some)
+    }
+
+    /// The signed remainder of integer `a` by `b` (scalars or vectors of one shape; the result has
+    /// `a`'s type) with the sign of `sign`'s operand, defined for operands of every sign on every
+    /// device: the unsigned remainder (`OpUMod`) of the operands' magnitudes, negated where the
+    /// dividend is negative, and for [`RemainderSign::Divisor`] then moved by the divisor where it
+    /// is not zero and the operands' signs differ. Vulkan makes `OpSRem` and `OpSMod` poison for a
+    /// negative operand unless the device enables `maintenance8`, so the builder emits neither. A
+    /// magnitude is the operand negated where it is negative, read unsigned, so the most negative
+    /// value's is `2^(w-1)` and its remainder by -1 is 0; a scalar constant's is computed here. A
+    /// zero divisor gives the device's `OpUMod` by zero; Metal leaves that undefined too.
+    pub fn signed_remainder(&mut self, a: Value, b: Value, sign: RemainderSign) -> BResult<Value> {
+        const OP: crate::spv::Op = crate::spv::Op::UMod;
+        let x = self.want(OP, 0, a, Num::is_int)?;
+        let y = self.want(OP, 1, b, Num::is_int)?;
+        if !x.same_shape(&y) {
+            return Err(err(OP, OperandRule::Mismatch(1)));
+        }
+        let u = self.uint_ty(x.width)?;
+        let u = self.vec_of(u, x.n)?;
+        let unsigned = |fb: &mut Self, v: Value| -> BResult<Value> {
+            match fb.value_ty(v)? == u {
+                true => Ok(v),
+                false => fb.convert(ConvOp::Bitcast, v, u),
+            }
+        };
+        let (a, b) = (unsigned(self, a)?, unsigned(self, b)?);
+        let zero = self.module().constant(Constant::Null { ty: u })?;
+        let zero = self.module().const_value(zero)?;
+        let (ma, na) = self.magnitude(a, zero)?;
+        let (mb, nb) = self.magnitude(b, zero)?;
+        let r = self.binary(BinOp::UMod, ma, mb)?;
+        let negated = self.unary(UnOp::SNegate, r)?;
+        let mut out = self.select(na, negated, r)?;
+        if sign == RemainderSign::Divisor {
+            let nonzero = self.binary(BinOp::INotEqual, r, zero)?;
+            let differ = match self.const_bool(nb)? {
+                Some(false) => na,
+                Some(true) => self.unary(UnOp::LogicalNot, na)?,
+                None => self.binary(BinOp::LogicalNotEqual, na, nb)?,
+            };
+            let moved = self.binary(BinOp::LogicalAnd, nonzero, differ)?;
+            let sum = self.binary(BinOp::IAdd, out, b)?;
+            out = self.select(moved, sum, out)?;
+        }
+        match x.ty == u {
+            true => Ok(out),
+            false => self.convert(ConvOp::Bitcast, out, x.ty),
+        }
+    }
+
+    /// The magnitude of integer `v` (of an unsigned type), read unsigned, and whether `v` is
+    /// negative read signed (`zero` is `v`'s type's zero); computed here where `v` is a scalar
+    /// constant.
+    fn magnitude(&mut self, v: Value, zero: Value) -> BResult<(Value, Value)> {
+        if let Some((bits, width, _)) = self.scalar_const(v)? {
+            let mask = if width >= 64 {
+                u64::MAX
+            } else {
+                (1u64 << width) - 1
+            };
+            let negative = (bits >> (width - 1)) & 1 == 1;
+            let m = match negative {
+                true => bits.wrapping_neg() & mask,
+                false => bits,
+            };
+            let ty = self.value_ty(v)?;
+            let m = self.module().constant(Constant::Scalar {
+                ty,
+                bits: ConstBits(m),
+            })?;
+            let bool_ = self.bool_ty(1)?;
+            let n = self.module().constant(Constant::Scalar {
+                ty: bool_,
+                bits: ConstBits(u64::from(negative)),
+            })?;
+            return Ok((self.module().const_value(m)?, self.module().const_value(n)?));
+        }
+        let negative = self.binary(BinOp::SLessThan, v, zero)?;
+        let negated = self.unary(UnOp::SNegate, v)?;
+        Ok((self.select(negative, negated, v)?, negative))
     }
 
     /// `OpSelect`: `cond` is a `bool` or a `bool` vector with the objects' component count; the
