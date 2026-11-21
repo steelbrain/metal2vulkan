@@ -467,8 +467,13 @@ cargo run -p metal2vulkan-validation --release --bin corpus-moltenvk -- \
   (`use_resource`). A 32-bit float depth texture, which the runtime takes no upload of, is filled
   by a draw of the owned `depth_fill` pair, one pass per level and slice, as a guest fills one; a
   case that gives a depth image a depth outside `[0, 1]`, which a draw clamps, carries
-  `depth_outside_unit_range`, the runtime's limit on every device, and runs on Metal alone. A
-  multisampled, sparse, texture-buffer or cube-array texture keeps the case on the executor's own
+  `depth_outside_unit_range`, the runtime's limit on every device, and runs on Metal alone. An
+  out-of-bounds case's facts are read before the state is made, from each variant the translator
+  lowers of the kernel on the runtime device's own translator (`Device::translator`, under
+  `LoweringInputs::kernel_variant`); variants that contain a target differently refuse the case,
+  `not_supported{uncontained:variant ...}` naming the one that differs. Each buffer target sits
+  between guards of its declared reach in a Shared block of its own, read back after the
+  dispatch. A multisampled, sparse, texture-buffer or cube-array texture keeps the case on the executor's own
   context. A pixel format the runtime makes no image of on the device records `not_enabled`, as
   the executor's own context records a format its query lacks. A vertex or fragment case of one
   sample draws through the runtime the same way (`engine::runs_render_through_runtime`): its own
@@ -483,8 +488,8 @@ cargo run -p metal2vulkan-validation --release --bin corpus-moltenvk -- \
   case on the executor's own context. Its device worker enables the
   validation layer through the loader's and the layer's variables, and any message the layer logs
   fails the row. The pipeline state's make is held to 500 MiB of peak live allocations and 20 s.
-  Its row records the state's precision notes and the runtime's fingerprint, and no SPIR-V,
-  status, subgroup shape, containment or artifact. The comparison bounds `ReductionOrder` by the
+  Its row records the state's precision notes, the runtime's fingerprint and an out-of-bounds
+  case's facts, and no SPIR-V, status, subgroup shape, module containment or artifact. The comparison bounds `ReductionOrder` by the
   simdgroup float sums and products the case's AIR calls, the operations the translator's census
   names for that note.
 - **Batches.** `--batch --out OUT` runs every selected case, one process per case, each killed

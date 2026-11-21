@@ -955,10 +955,10 @@ fn every_outcome_kind_round_trips_through_a_bless() {
             ToolingRequirement::FunctionConstantLiteral,
             ToolingRequirement::VertexAttributeLiteral,
         ]))),
-        executor(NotSupported::Uncontained(BTreeSet::from([
-            RobustBufferForm::LoadStore,
-            RobustBufferForm::Atomic,
-        ]))),
+        executor(NotSupported::Uncontained {
+            forms: BTreeSet::from([RobustBufferForm::LoadStore, RobustBufferForm::Atomic]),
+            variant: None,
+        }),
         executor_outcome(
             ExecutorError::Refused(ExecutionRefused::NotFuelBounded(
                 crate::check::loop_free::CycleEvidence::CfgCycle {

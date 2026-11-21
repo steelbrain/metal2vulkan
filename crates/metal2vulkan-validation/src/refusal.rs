@@ -101,7 +101,7 @@ impl Refusal {
             }
             NotSupported::Bind(_)
             | NotSupported::NotEnabled(_)
-            | NotSupported::Uncontained(_)
+            | NotSupported::Uncontained { .. }
             | NotSupported::Restriction { .. } => (RefusalClass::Device, None),
             NotSupported::NotImplemented(_) | NotSupported::Requirements(_) => {
                 (RefusalClass::Executor, None)

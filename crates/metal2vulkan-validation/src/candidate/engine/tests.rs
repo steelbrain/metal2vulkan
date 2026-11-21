@@ -2557,8 +2557,8 @@ fn plain_kernel() -> ComputeCase {
 /// The runtime runs a kernel case of buffers, threadgroup memory and constants, bound textures it
 /// makes and bound samplers, argument buffers of buffers, such textures and samplers, dispatched
 /// by threads or threadgroups and observing a buffer, a texture, an argument-buffer member or
-/// nothing, a 32-bit float depth among its textures (which the run fills by a draw); a case with
-/// anything else (a pipeline state in an argument buffer, an explicit imageblock, an indirect
+/// nothing, a 32-bit float depth among its textures (which the run fills by a draw) and its
+/// out-of-bounds targets among them (`platform::runtime_bounds`); a case with anything else (a pipeline state in an argument buffer, an explicit imageblock, an indirect
 /// dispatch, a texture the runtime does not make: multisampled, sparse, a texture buffer or a cube
 /// array) stays on the executor's own context.
 #[test]
@@ -2670,6 +2670,16 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
         ..texture(TextureType::D2, 1)
     };
     assert!(runs_through_runtime(&authored, &textured(depth)));
+    let bounded = ComputeCase {
+        out_of_bounds: vec![OutOfBoundsTarget {
+            resource: OutOfBoundsResource::Buffer { binding: 0 },
+            form: crate::case::out_of_bounds::ContainmentForm::StorageBuffer,
+            reach_before: 0,
+            reach_after: 256,
+        }],
+        ..plain.clone()
+    };
+    assert!(runs_through_runtime(&authored, &bounded));
     let others = [
         object,
         ComputeCase {

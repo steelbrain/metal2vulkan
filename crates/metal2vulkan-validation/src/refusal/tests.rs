@@ -36,7 +36,10 @@ fn a_refusal_is_classed_by_its_type() {
             RefusalClass::Device,
         ),
         (
-            NotSupported::Uncontained([RobustBufferForm::LoadStore].into()),
+            NotSupported::Uncontained {
+                forms: [RobustBufferForm::LoadStore].into(),
+                variant: None,
+            },
             RefusalClass::Device,
         ),
         (

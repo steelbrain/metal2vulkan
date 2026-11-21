@@ -27,21 +27,32 @@
 //!
 //! The row records what the runtime answers: the state's precision notes and the runtime's
 //! fingerprint (`engine::runtime_fingerprint`). It records no SPIR-V, status, subgroup shape,
-//! containment or artifact: the runtime keeps its modules to itself. Its census's strategies are
-//! the float reductions the case's AIR calls (`check::interface::float_reductions`), which bound
-//! `PrecisionNote::ReductionOrder` per operation, as the translator's census of the same
-//! operations does.
+//! module containment or artifact: the runtime keeps its modules to itself. Its census's
+//! strategies are the float reductions the case's AIR calls (`check::interface::float_reductions`),
+//! which bound `PrecisionNote::ReductionOrder` per operation, as the translator's census of the
+//! same operations does.
+//!
+//! An out-of-bounds case's facts are the modules' the state may dispatch, read before the state is
+//! made (`runtime_bounds`). Each guarded target (`out_of_bounds::guarded`: a buffer, or an argument
+//! buffer's) is a buffer at a 256-byte boundary of a Shared block of its own, between a front
+//! guard of the target's declared reach before it and a back guard of its reach after, each at
+//! least `guards::MIN_GUARD` bytes, filled with `GUARD_FILL` and read back through a buffer over
+//! the whole block once the dispatch has retired (`GuardCount::escaped`). The buffer is all the
+//! memory bound to the target, so it holds no byte past its end (`GuardCount::past_end` 0).
 
-use super::runtime_textures;
+use super::{runtime_bounds, runtime_textures};
 use crate::candidate::device_facts::{active_tools, ActiveTool, RECORDED_LAYERS};
 use crate::candidate::engine::argument_buffers::{self, FieldKey};
+use crate::candidate::engine::guards::{self, GuardCount, GuardReach, MIN_GUARD};
 use crate::candidate::engine::{
     product_refusal, runtime_fingerprint, select_output, ComputeCase, ComputeOutput, ComputeRun,
     RefusedOn, RunAttempt, RuntimeKernel,
 };
+use crate::case::out_of_bounds::OutOfBoundsResource;
 use crate::case::Stage;
 use crate::check::admission::{ExecutorError, NotSupported};
 use crate::coverage::{ExecutedCensus, ExecutionClass, HostClass, Leg, ModuleCensus};
+use crate::executor_contract::out_of_bounds::GUARD_FILL;
 use crate::gpu::wait::new_runtime::{wait_until_retired, Retired};
 use crate::gpu::wait::{with_submission_label, SubmissionBackend, SubmissionLabel};
 use crate::gpu::DeviceType;
@@ -372,6 +383,10 @@ fn run(
 ) -> Result<ComputeRun, ExecutorError> {
     let _grant = sampler_grant(device)?;
     let descriptor = descriptor(case, kernel)?;
+    // How the modules the state may dispatch contain each out-of-bounds target, decided before
+    // anything is made or submitted.
+    let out_of_bounds =
+        runtime_bounds::contained(device, case, &descriptor, Some(execution_class(identity)))?;
     let (threads_per_group, dispatch) = match case.dispatch {
         Dispatch::Threads {
             threads,
@@ -414,7 +429,8 @@ fn run(
         .iter()
         .map(|(&(owner, field), bytes)| {
             let what = format!("argument-buffer buffer {owner}+{field}");
-            Ok(((owner, field), Placed::new(device, &what, bytes)?))
+            let reach = guards::embedded_guard_reach(case, (owner, field));
+            Ok(((owner, field), Placed::within(device, &what, bytes, reach)?))
         })
         .collect::<Result<BTreeMap<FieldKey, Placed>, ExecutorError>>()?;
     let bound = runtime_textures::make(
@@ -436,10 +452,9 @@ fn run(
         .map(|&index| {
             let bytes = argument_buffers::owner_bytes(kernel.buffers, index, &words)
                 .map_err(ExecutorError::Failed)?;
-            Ok((
-                index,
-                Placed::new(device, &format!("buffer {index}"), &bytes)?,
-            ))
+            let what = format!("buffer {index}");
+            let reach = guards::guard_reach(case, index);
+            Ok((index, Placed::within(device, &what, &bytes, reach)?))
         })
         .collect::<Result<BTreeMap<u32, Placed>, ExecutorError>>()?;
     let label = SubmissionLabel {
@@ -510,7 +525,20 @@ fn run(
             .map_err(ExecutorError::Failed)?
         }
     };
-    Ok(ran(
+    // What the dispatch changed around each guarded target.
+    let escaped: BTreeMap<OutOfBoundsResource, GuardCount> = (buffers.iter())
+        .filter_map(|(&index, placed)| {
+            Some((guards::buffer_target(case, index), placed.escaped()?))
+        })
+        .chain(members.iter().filter_map(|(&(owner, field), placed)| {
+            let resource = OutOfBoundsResource::ArgumentBufferBuffer {
+                buffer_binding: owner,
+                field_offset: field,
+            };
+            Some((resource, placed.escaped()?))
+        }))
+        .collect();
+    let mut run = ran(
         identity,
         environment,
         output,
@@ -525,7 +553,9 @@ fn run(
             precision: state.precision_notes().into_iter().collect(),
             containment: None,
         },
-    ))
+    );
+    run.census.out_of_bounds = out_of_bounds.map(|facts| guards::with_escaped(facts, &escaped));
+    Ok(run)
 }
 
 /// The row of a run on the device `identity` names that read `output`, with `module`'s census:
@@ -539,12 +569,7 @@ pub(super) fn ran(
     let census = ExecutedCensus {
         out_of_bounds: None,
         rate_map_pass: None,
-        device: Some(match identity.device_type {
-            vk::PhysicalDeviceType::CPU => ExecutionClass::CpuIcd,
-            _ => ExecutionClass::Host(HostClass(metal2vulkan::vk::DriverId::from_raw(
-                identity.driver_id,
-            ))),
-        }),
+        device: Some(execution_class(identity)),
         product: TRANSLATOR_FINGERPRINT.into(),
         restricted_to: None,
         leg: Some(Leg::Stated),
@@ -559,6 +584,16 @@ pub(super) fn ran(
         status: None,
         comparison: census.comparison_class(),
         census,
+    }
+}
+
+/// The class of the device `identity` names.
+fn execution_class(identity: &Identity) -> ExecutionClass {
+    match identity.device_type {
+        vk::PhysicalDeviceType::CPU => ExecutionClass::CpuIcd,
+        _ => ExecutionClass::Host(HostClass(metal2vulkan::vk::DriverId::from_raw(
+            identity.driver_id,
+        ))),
     }
 }
 
@@ -667,10 +702,20 @@ pub(super) fn made_within<T>(
     }
 }
 
-/// A buffer of the run: a Shared block of its own, and the buffer over it holding the bytes.
+/// A buffer of the run: a Shared block of its own, and the buffer over it holding the bytes,
+/// between guards where it is a guarded out-of-bounds target (the module documentation).
 pub(super) struct Placed {
     pub(super) buffer: rt::Buffer,
+    guard: Option<Guard>,
     _block: rt::Block,
+}
+
+/// The guards of a guarded buffer: a buffer over its whole block, and where in it the guarded
+/// buffer lies.
+struct Guard {
+    whole: rt::Buffer,
+    start: usize,
+    end: usize,
 }
 
 impl Placed {
@@ -698,7 +743,74 @@ impl Placed {
         }
         Ok(Placed {
             buffer,
+            guard: None,
             _block: block,
+        })
+    }
+
+    /// [`Placed::new`], or, with `reach`, the buffer of a guarded target: at a 256-byte boundary
+    /// of its block, a front guard of at least `reach.before` bytes before it and a back guard of
+    /// at least `reach.after` past it, each at least [`MIN_GUARD`], every guard byte
+    /// [`GUARD_FILL`].
+    pub(super) fn within(
+        device: &rt::Device,
+        what: &str,
+        bytes: &[u8],
+        reach: Option<GuardReach>,
+    ) -> Result<Placed, ExecutorError> {
+        let Some(reach) = reach else {
+            return Placed::new(device, what, bytes);
+        };
+        let length = bytes.len() as u64;
+        // A buffer placed at the runtime's placement alignment meets every use it makes of it.
+        let align = device.heap_buffer_size_and_align(length, 0).align;
+        let start = u64::from(reach.before)
+            .max(MIN_GUARD)
+            .next_multiple_of(align);
+        let total = start + length + u64::from(reach.after).max(MIN_GUARD);
+        let block = device
+            .take_block(rt::MemoryClass::Shared, total)
+            .map_err(|error| runtime_error(what, error))?;
+        let whole = device
+            .new_buffer(block.id, 0, total, None)
+            .map_err(|error| runtime_error(what, error))?;
+        let buffer = device
+            .new_buffer(block.id, start, length, None)
+            .map_err(|error| runtime_error(what, error))?;
+        let (Some(guards), Some(contents)) = (whole.contents(), buffer.contents()) else {
+            return Err(ExecutorError::Failed(format!("{what} has no contents")));
+        };
+        // SAFETY: a Shared buffer's contents are its bytes, mapped while it lives, and nothing
+        // else writes them: no work names either buffer yet. The guards are written first, then
+        // the guarded buffer's bytes within them.
+        unsafe {
+            std::ptr::write_bytes(guards.as_ptr(), GUARD_FILL, total as usize);
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), contents.as_ptr(), bytes.len());
+        }
+        Ok(Placed {
+            buffer,
+            guard: Some(Guard {
+                whole,
+                start: start as usize,
+                end: (start + length) as usize,
+            }),
+            _block: block,
+        })
+    }
+
+    /// What the work that named a guarded buffer changed around it: its guard bytes that no
+    /// longer hold [`GUARD_FILL`], and no byte past its end, which the buffer does not hold.
+    /// `None` for a buffer without guards.
+    pub(super) fn escaped(&self) -> Option<GuardCount> {
+        let guard = self.guard.as_ref()?;
+        let contents = guard.whole.contents()?;
+        let length = guard.whole.length() as usize;
+        // SAFETY: as in `within`; the work that named the guarded buffer has retired.
+        let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr(), length) };
+        let changed = |bytes: &[u8]| bytes.iter().filter(|&&byte| byte != GUARD_FILL).count();
+        Some(GuardCount {
+            escaped: (changed(&bytes[..guard.start]) + changed(&bytes[guard.end..])) as u64,
+            past_end: 0,
         })
     }
 

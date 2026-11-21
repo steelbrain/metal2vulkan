@@ -92,11 +92,17 @@ pub enum NotSupported {
     /// vocabulary names (`ToolingRequirement::stops`), which the capability census counts per
     /// executor.
     Requirements(BTreeSet<ToolingRequirement>),
-    /// The opened device leaves out-of-bounds accesses of these forms uncontained under the
-    /// robust buffer encoding the case's module compiled to
-    /// (`HostClass::robust_buffers_uncontained`): an out-of-bounds case that reaches past a target
-    /// of these forms is not run there, since its accesses would reach memory no binding gave it.
-    Uncontained(BTreeSet<crate::coverage::RobustBufferForm>),
+    /// An out-of-bounds case whose run would reach memory no binding gave it, so it is not run
+    /// there: the opened device leaves accesses of `forms` uncontained under the robust buffer
+    /// encoding the case's module compiled to (`HostClass::robust_buffers_uncontained`), or, for a
+    /// run through the runtime, the kernel's `variant` contains one of its targets otherwise than
+    /// the first variant the translator lowered of it (`platform::runtime_bounds`), so which module
+    /// a dispatch runs would decide it.
+    Uncontained {
+        forms: BTreeSet<crate::coverage::RobustBufferForm>,
+        #[serde(default)]
+        variant: Option<metal2vulkan::pipeline::KernelVariant>,
+    },
     /// The run was restricted to a committed profile (`--profiles-layer`) that states capabilities
     /// the device, as it is, lacks: the restricted context's first check refused before it opened.
     /// `gaps` names each member.
@@ -117,11 +123,12 @@ impl NotSupported {
                 "not_supported{{tooling_requirement:{}}}",
                 requirement_names(requirements)
             ),
-            Self::Uncontained(forms) => format!(
+            Self::Uncontained { forms, variant } => format!(
                 "not_supported{{uncontained:{}}}",
                 forms
                     .iter()
-                    .map(|form| form.label())
+                    .map(|form| form.label().to_owned())
+                    .chain(variant.map(|variant| format!("variant {variant:?}")))
                     .collect::<Vec<_>>()
                     .join(",")
             ),
@@ -153,10 +160,20 @@ impl fmt::Display for NotSupported {
                 "{}: the executor does not run these families",
                 self.outcome()
             ),
-            Self::Uncontained(_) => write!(
+            Self::Uncontained { variant: None, .. } => write!(
                 formatter,
                 "{}: the device leaves these forms uncontained under its robust buffer access, so \
                  the case's out-of-bounds accesses are not run there",
+                self.outcome()
+            ),
+            Self::Uncontained {
+                variant: Some(variant),
+                ..
+            } => write!(
+                formatter,
+                "{}: the kernel's {variant:?} module contains an out-of-bounds target otherwise \
+                 than its first module, so which one a dispatch runs would decide the case's \
+                 out-of-bounds accesses, which are not run",
                 self.outcome()
             ),
             Self::Restriction { profile, gaps } => write!(

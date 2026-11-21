@@ -466,6 +466,67 @@ fn a_loaded_pointers_buffer_written_past_its_end_is_guarded() {
     assert_eq!((ran.escaped, ran.past_end), (Some(0), Some(0)), "{ran:?}");
 }
 
+/// The public storage-buffer case (`ob1_storage_buffer`) through the runtime: eight threads load
+/// past a 16-byte source and store past a 64-byte output. Each buffer is a guarded target the
+/// kernel reaches by its device address, every access at a computed index checked against the
+/// buffer in the shader in each variant the translator lowers (`platform::runtime_bounds`): a load
+/// outside reads zero and a store outside does nothing, so the output holds the source's four
+/// words, four zeros, the four stores inside it and its initial bytes, and no guard byte changes.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_device_buffer_accessed_past_its_end_is_contained_through_the_runtime() {
+    use crate::case::out_of_bounds::{ContainmentForm, OutOfBoundsResource, OutOfBoundsTarget};
+    use crate::executor_contract::out_of_bounds::{Check, Medium};
+    let bitcode = llvm_assemble(&engine_dir().join("ob1_storage_buffer.ll")).unwrap();
+    let words = |words: &[u32]| -> Vec<u8> { words.iter().flat_map(|w| w.to_le_bytes()).collect() };
+    let idx = [0u32, 1, 2, 3, 4, 5, 17, 63, 8, 9, 10, 11, 16, 17, 40, 79];
+    let src = [0xA100_0001u32, 0xA100_0002, 0xA100_0003, 0xA100_0004];
+    let mut past = case(
+        "ob1_storage_buffer",
+        words(&idx),
+        Dispatch::Threads {
+            threads: [8, 1, 1],
+            threads_per_group: [8, 1, 1],
+        },
+    );
+    past.buffers.insert(1, words(&src));
+    past.buffers.insert(2, vec![0xab; 64]);
+    let target = |binding| OutOfBoundsTarget {
+        resource: OutOfBoundsResource::Buffer { binding },
+        form: ContainmentForm::StorageBuffer,
+        reach_before: 0,
+        reach_after: 256,
+    };
+    past.out_of_bounds = vec![target(1), target(2)];
+    past.output = ComputeOutput::Buffer {
+        binding: 2,
+        offset: 0,
+        length: 64,
+    };
+    let run = run_through_runtime(&past, &bitcode).unwrap();
+    let stored = [0xA000_0000u32, 0xA000_0001, 0xA000_0002, 0xA000_0003];
+    let want = [&src[..], &[0; 4], &stored, &[0xABAB_ABAB; 4]].concat();
+    assert_eq!(run.output, words(&want));
+    let targets = run
+        .census
+        .out_of_bounds
+        .expect("an out-of-bounds case's census records its targets")
+        .targets;
+    assert_eq!(targets.len(), 2, "{targets:?}");
+    for ran in &targets {
+        assert_eq!(
+            (ran.form, ran.mechanism.medium, ran.mechanism.check),
+            (
+                ContainmentForm::DeviceAddress,
+                Medium::DeviceAddress,
+                Check::Shader
+            ),
+            "{ran:?}"
+        );
+        assert_eq!((ran.escaped, ran.past_end), (Some(0), Some(0)), "{ran:?}");
+    }
+}
+
 /// An instance structure is built as the Metal oracle builds it, each instance with mask
 /// `0xFFFFFFFF`, which Vulkan's 8-bit instance mask cannot hold: the binder's refusal is the
 /// run's typed refusal, never a run. CPU lane only: lavapipe traces rays, and MoltenVK has no ray

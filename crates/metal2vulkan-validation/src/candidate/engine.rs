@@ -123,7 +123,7 @@ use tables::{function_tables, table_buffers, FunctionTable, TableBuffers};
 /// how it decides a match. A change no recorded row can observe (a case kind no earlier executor
 /// ran, or one it refused) needs no bump; its commit says why. The commit that bumps it says what
 /// changed; this comment keeps no history.
-pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v191";
+pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v192";
 
 /// One kernel case in the terms the binder takes: what this executor supports of an
 /// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures, command
@@ -1151,9 +1151,10 @@ pub fn runtime_fingerprint() -> String {
 /// case of buffers (each device buffer array's elements among them), bound textures the runtime
 /// makes (`runtime_texture`) and bound samplers, argument buffers of buffers, such textures and
 /// samplers, threadgroup memory lengths, function constants and linked functions, dispatched by
-/// `dispatchThreads` or `dispatchThreadgroups`, and observing a buffer, a texture, an
-/// argument-buffer buffer or texture, or nothing. Decided by the case's structure alone:
-/// every field the mapping fills is named here, so a new one is decided when it is added.
+/// `dispatchThreads` or `dispatchThreadgroups`, observing a buffer, a texture, an
+/// argument-buffer buffer or texture, or nothing, its out-of-bounds targets among them
+/// (`platform::runtime_bounds`). Decided by the case's structure alone: every field the mapping
+/// fills is named here, so a new one is decided when it is added.
 pub fn runs_through_runtime(authored: &AuthoredCase, case: &ComputeCase) -> bool {
     let ComputeCase {
         entry: _,
@@ -1178,7 +1179,7 @@ pub fn runs_through_runtime(authored: &AuthoredCase, case: &ComputeCase) -> bool
         attribute_strides,
         dispatch,
         output,
-        out_of_bounds,
+        out_of_bounds: _,
         creation_bound: _,
     } = case;
     rate_maps.is_empty()
@@ -1194,7 +1195,6 @@ pub fn runs_through_runtime(authored: &AuthoredCase, case: &ComputeCase) -> bool
         && stage_input.is_none()
         && stage_in_region.is_none()
         && attribute_strides.is_empty()
-        && out_of_bounds.is_empty()
         && matches!(
             dispatch,
             Dispatch::Threads { .. } | Dispatch::Threadgroups { .. }
@@ -1609,7 +1609,11 @@ pub(crate) fn out_of_bounds_run(
         .collect::<Result<Vec<_>, ExecutorError>>()?;
     let uncontained = out_of_bounds::uncontained(&targets, class);
     if !uncontained.is_empty() {
-        return Err(NotSupported::Uncontained(uncontained).into());
+        return Err(NotSupported::Uncontained {
+            forms: uncontained,
+            variant: None,
+        }
+        .into());
     }
     Ok(Some(OutOfBoundsRun { targets }))
 }
