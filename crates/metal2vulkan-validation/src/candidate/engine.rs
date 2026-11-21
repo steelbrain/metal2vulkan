@@ -1565,7 +1565,7 @@ fn not_compiled(refusal: NotCompiled) -> ExecutorError {
 /// Compile `case`'s kernel from `library` for `device` in a killable compile worker, as
 /// [`compute_request`] asks: the product's typed refusal is [`outcome_refusal`]'s, and a stop at
 /// the worker boundary (the deadline, the memory limit, a crashed worker, an artifact that does not
-/// load for `device`, handles that do not answer the request) fails the run.
+/// load for `device`) fails the run.
 pub fn compile_case(
     worker: &CompileWorker,
     device: &WorkerDevice,
@@ -1596,8 +1596,7 @@ fn compile_request(
 #[derive(Debug)]
 pub enum CompileFailure {
     /// The worker boundary stopped the compile (the deadline, the memory limit, a crashed
-    /// worker, an artifact that does not load for the device, handles that do not answer the
-    /// request).
+    /// worker, an artifact that does not load for the device).
     Stopped(WorkerFailure),
     /// The worker compiled nothing: the product's typed outcome, or inputs the tool does not
     /// build.
@@ -1633,10 +1632,7 @@ impl<P> CompileAttempt<P> {
             },
             Ok(compiled) => CompileAttempt {
                 measured: Some(compiled.measured),
-                result: compiled
-                    .result
-                    .map(|compiled| compiled.pipeline)
-                    .map_err(CompileFailure::NotCompiled),
+                result: compiled.result.map_err(CompileFailure::NotCompiled),
             },
         }
     }

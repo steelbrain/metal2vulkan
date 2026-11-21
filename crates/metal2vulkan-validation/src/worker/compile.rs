@@ -26,16 +26,14 @@
 //! 4. The child writes the pipeline's cache artifact bytes (`PipelineArtifact::to_bytes`) to the
 //!    file the parent names in [`ARTIFACT_FILE`], a chunk at a time (`PipelineArtifact::write_to`),
 //!    so reporting holds little beside the pipeline: a constant blob the ledger admits is never
-//!    encoded whole in memory, let alone as base64. It reports the artifact's length with the table
-//!    handles of each request function's linked functions ([`crate::acceptance::LinkedHandles`]),
-//!    together with the SHA-256 of the input bytes it decoded and its product fingerprint. The
+//!    encoded whole in memory, let alone as base64. It reports the artifact's length with the
+//!    SHA-256 of the input bytes it decoded and its product fingerprint. The
 //!    parent requires that digest to be its own input's and that fingerprint to be its own (an
 //!    executable rebuilt since the parent started is another compiler, whose pipeline the parent's
 //!    observations would misattribute), requires the file to hold the reported length, decodes the
 //!    bytes with `PipelineArtifact::from_bytes` for the kind it asked for against its own `Device`
 //!    (so bytes of another profile are `WrongDevice`, and stale, corrupt, or other-kind bytes are
-//!    refused), requires the handles to answer its request (`PipelineRequest::check_handles`), and
-//!    re-checks the deadline after decoding.
+//!    refused), and re-checks the deadline after decoding.
 //! 5. A typed product refusal comes back as its [`Outcome`] (deterministic), a library whose
 //!    source gives no bitcode as the row's outcome (`BitcodeError::attempt`), and pipeline
 //!    inputs the tool does not build for the function as [`NotCompiled::Unmodelled`]; a stop at
@@ -51,8 +49,7 @@
 use super::alloc;
 use super::{run_json, Measured, ProcessFailure, WorkerFailure, DEADLINE};
 use crate::acceptance::{
-    compile_pipeline, AcceptancePipeline, CompiledRequest, LinkedHandles, PipelineCompileError,
-    PipelineRequest,
+    compile_pipeline, AcceptancePipeline, PipelineCompileError, PipelineRequest,
 };
 use crate::engine::{bounded_detail, Outcome, RowSource};
 use crate::hash::sha256_bytes;
@@ -220,19 +217,11 @@ pub enum NotCompiled {
     Unmodelled(crate::acceptance::row::Unmodelled),
 }
 
-/// A pipeline a worker compiled, with the table handles of the functions each of its request's
-/// functions links ([`CompiledRequest::handles`]).
-#[derive(Debug)]
-pub struct Compiled<P> {
-    pub pipeline: P,
-    pub handles: Vec<LinkedHandles>,
-}
-
 /// What one worker compile returned.
 #[derive(Debug)]
 pub struct WorkerCompile<P> {
     /// The pipeline, or why none was built.
-    pub result: Result<Compiled<P>, NotCompiled>,
+    pub result: Result<P, NotCompiled>,
     /// Peak live heap bytes the compile allocated in the worker (its counting allocator).
     pub allocator_peak: Option<u64>,
     /// From preparing the input through decoding the artifact, and the group's peak RSS.
@@ -307,12 +296,8 @@ struct CompileOutput {
 #[derive(Debug, Serialize, Deserialize)]
 enum CompileResult {
     /// The length of the pipeline's cache artifact (`PipelineArtifact::to_bytes`), which the
-    /// worker wrote to its [`ARTIFACT_FILE`], and the table handles of each request function's
-    /// linked functions ([`CompiledRequest::handles`]).
-    Compiled {
-        artifact_bytes: u64,
-        handles: Vec<LinkedHandles>,
-    },
+    /// worker wrote to its [`ARTIFACT_FILE`].
+    Compiled { artifact_bytes: u64 },
     /// The product refused or failed, or a library gave no bitcode: its typed outcome and a
     /// bounded detail.
     NotCompiled { outcome: Outcome, detail: String },
@@ -363,7 +348,7 @@ fn compile_in<P: PipelineArtifact>(
     let output = run.result;
     // The artifact, when the worker reports one; the scratch directory goes once it is read.
     let artifact = match &output.result {
-        CompileResult::Compiled { artifact_bytes, .. } => {
+        CompileResult::Compiled { artifact_bytes } => {
             read_artifact(&artifact_path, *artifact_bytes)
                 .map_err(|error| WorkerFailure::Output(error, measured(run.elapsed)))?
         }
@@ -378,15 +363,7 @@ fn compile_in<P: PipelineArtifact>(
     );
     // The pipeline holds what it decoded (its blob included), so the bytes go now.
     drop(artifact);
-    let result = accepted
-        .and_then(|result| match result {
-            Ok(compiled) => request
-                .check_handles(&compiled.handles)
-                .map(|()| Ok(compiled))
-                .map_err(|error| format!("the compile worker's result: {error}")),
-            Err(refused) => Ok(Err(refused)),
-        })
-        .map_err(|error| WorkerFailure::Output(error, measured(run.elapsed)))?;
+    let result = accepted.map_err(|error| WorkerFailure::Output(error, measured(run.elapsed)))?;
     let measured = measured(run.elapsed);
     // The deadline covers decoding the result (worker recipe step 3): late is a timeout.
     if measured.elapsed > DEADLINE {
@@ -445,7 +422,7 @@ fn compile_input<'a>(
     }
 }
 
-/// The pipeline of `output` (with its handles) if this product compiled it, it answers the input
+/// The pipeline of `output` if this product compiled it, it answers the input
 /// of digest `input_sha256`, and its `artifact` (the bytes the worker wrote) is as long as the
 /// worker reported and loads for `device` as the kind `P`; an `Err` names why the result cannot
 /// be used.
@@ -454,7 +431,7 @@ fn accept<P: PipelineArtifact>(
     artifact: &[u8],
     input_sha256: &str,
     device: &Device,
-) -> Result<Result<Compiled<P>, NotCompiled>, String> {
+) -> Result<Result<P, NotCompiled>, String> {
     if output.product_fingerprint != TRANSLATOR_FINGERPRINT {
         return Err(format!(
             "the compile worker runs product {} and this process product \
@@ -473,10 +450,7 @@ fn accept<P: PipelineArtifact>(
             Ok(Err(NotCompiled::Product(outcome.clone(), detail.clone())))
         }
         CompileResult::Unmodelled { reason } => Ok(Err(NotCompiled::Unmodelled(reason.clone()))),
-        CompileResult::Compiled {
-            artifact_bytes,
-            handles,
-        } => {
+        CompileResult::Compiled { artifact_bytes } => {
             if u64::try_from(artifact.len()).ok() != Some(*artifact_bytes) {
                 return Err(format!(
                     "the compile worker reported a {artifact_bytes}-byte artifact and wrote {} bytes",
@@ -484,12 +458,7 @@ fn accept<P: PipelineArtifact>(
                 ));
             }
             P::from_bytes(artifact, device)
-                .map(|pipeline| {
-                    Ok(Compiled {
-                        pipeline,
-                        handles: handles.clone(),
-                    })
-                })
+                .map(Ok)
                 .map_err(artifact_refused)
         }
     }
@@ -597,7 +566,7 @@ fn serve(
         )
     });
     let result = match compiled {
-        Ok(CompiledRequest { pipeline, handles }) => {
+        Ok(pipeline) => {
             let mut out = Counted {
                 out: artifact,
                 bytes: 0,
@@ -610,7 +579,6 @@ fn serve(
             .map_err(|error| format!("write the compile worker's artifact: {error}"))?;
             CompileResult::Compiled {
                 artifact_bytes: out.bytes,
-                handles,
             }
         }
         Err(PipelineCompileError::Product(error)) => not_compiled(&error),
@@ -718,11 +686,8 @@ mod tests {
             serde_json::from_slice(&serde_json::to_vec(&output).unwrap()).unwrap();
         let pipeline = accept::<ComputePipeline>(&output, &artifact, &digest, device.device())
             .unwrap()
-            .unwrap()
-            .pipeline;
-        let expected = compile_pipeline(&[&bitcode], &request, device.device(), None)
-            .unwrap()
-            .pipeline;
+            .unwrap();
+        let expected = compile_pipeline(&[&bitcode], &request, device.device(), None).unwrap();
         let AcceptancePipeline::Compute(expected) = expected else {
             panic!("a kernel compiles to a compute pipeline");
         };
@@ -749,12 +714,9 @@ mod tests {
             serde_json::from_slice(&serde_json::to_vec(&output).unwrap()).unwrap();
         let pipeline = accept::<RenderPipeline>(&output, &artifact, &digest, device.device())
             .unwrap()
-            .unwrap()
-            .pipeline;
+            .unwrap();
         let AcceptancePipeline::Render(expected) =
-            compile_pipeline(&[&stage_io], &request, device.device(), None)
-                .unwrap()
-                .pipeline
+            compile_pipeline(&[&stage_io], &request, device.device(), None).unwrap()
         else {
             panic!("a vertex function compiles to a vertex-only render pipeline");
         };
@@ -829,12 +791,9 @@ mod tests {
             serde_json::from_slice(&serde_json::to_vec(&output).unwrap()).unwrap();
         let pipeline = accept::<ComputePipeline>(&output, &artifact, &digest, device.device())
             .unwrap()
-            .unwrap()
-            .pipeline;
+            .unwrap();
         let AcceptancePipeline::Compute(expected) =
-            compile_pipeline(&[&bitcode], &request, device.device(), None)
-                .unwrap()
-                .pipeline
+            compile_pipeline(&[&bitcode], &request, device.device(), None).unwrap()
         else {
             panic!("a kernel compiles to a compute pipeline");
         };
@@ -904,12 +863,9 @@ mod tests {
             serde_json::from_slice(&serde_json::to_vec(&output).unwrap()).unwrap();
         let pipeline = accept::<RenderPipeline>(&output, &artifact, &digest, device.device())
             .unwrap()
-            .unwrap()
-            .pipeline;
+            .unwrap();
         let AcceptancePipeline::Render(expected) =
-            compile_pipeline(&[&bitcode], &request, device.device(), None)
-                .unwrap()
-                .pipeline
+            compile_pipeline(&[&bitcode], &request, device.device(), None).unwrap()
         else {
             panic!("a vertex draw compiles to a render pipeline");
         };
@@ -969,12 +925,9 @@ mod tests {
             serde_json::from_slice(&serde_json::to_vec(&output).unwrap()).unwrap();
         let pipeline = accept::<RenderPipeline>(&output, &artifact, &digest, device.device())
             .unwrap()
-            .unwrap()
-            .pipeline;
+            .unwrap();
         let AcceptancePipeline::Render(expected) =
-            compile_pipeline(&libraries, &request, device.device(), None)
-                .unwrap()
-                .pipeline
+            compile_pipeline(&libraries, &request, device.device(), None).unwrap()
         else {
             panic!("a draw compiles to a render pipeline");
         };
@@ -989,9 +942,8 @@ mod tests {
     }
 
     /// A kernel's linked libraries cross the exchange after its own: the worker links the functions
-    /// the request names from them into the pipeline the in-process public API compiles, and
-    /// returns the product's table handles of those functions with it; an input without one of them
-    /// is the exchange's error, not a compile.
+    /// the request names from them into the pipeline the in-process public API compiles; an input
+    /// without one of them is the exchange's error, not a compile.
     #[test]
     fn a_linking_request_crosses_the_exchange_with_its_linked_libraries() {
         use crate::acceptance::LinkedLibrary;
@@ -1028,12 +980,10 @@ mod tests {
             .unwrap()
             .unwrap();
         let expected = compile_pipeline(&libraries, &request, device.device(), None).unwrap();
-        let AcceptancePipeline::Compute(pipeline) = &expected.pipeline else {
+        let AcceptancePipeline::Compute(pipeline) = &expected else {
             panic!("a kernel compiles to a compute pipeline");
         };
-        assert_eq!(&compiled.pipeline, &**pipeline);
-        assert_eq!(compiled.handles, expected.handles);
-        request.check_handles(&compiled.handles).unwrap();
+        assert_eq!(&compiled, &**pipeline);
 
         let (bytes, _) = libraries_input(&device, &libraries[..2], request);
         let refused = served(&bytes, Instant::now()).unwrap_err();
@@ -1177,12 +1127,9 @@ mod tests {
         let (output, artifact) = served(&bytes, Instant::now()).unwrap();
         let pipeline = accept::<ComputePipeline>(&output, &artifact, &digest, device.device())
             .unwrap()
-            .unwrap()
-            .pipeline;
+            .unwrap();
         let AcceptancePipeline::Compute(expected) =
-            compile_pipeline(&[&bitcode], &request, device.device(), None)
-                .unwrap()
-                .pipeline
+            compile_pipeline(&[&bitcode], &request, device.device(), None).unwrap()
         else {
             panic!("a kernel compiles to a compute pipeline");
         };
@@ -1404,9 +1351,7 @@ mod tests {
             constants: FunctionConstantValues::defaults(),
         };
         let AcceptancePipeline::Compute(expected) =
-            compile_pipeline(&[&bitcode], &request, device.device(), None)
-                .unwrap()
-                .pipeline
+            compile_pipeline(&[&bitcode], &request, device.device(), None).unwrap()
         else {
             panic!("a kernel compiles to a compute pipeline");
         };
@@ -1419,8 +1364,7 @@ mod tests {
         )
         .unwrap_or_else(|failure| panic!("{}", failure.message()));
         let pipeline = compiled.result.unwrap();
-        assert_eq!(pipeline.pipeline, *expected);
-        assert!(pipeline.handles.is_empty());
+        assert_eq!(pipeline, *expected);
         assert!(compiled.allocator_peak.is_some_and(|peak| peak > 0));
         assert!(compiled.measured.elapsed < DEADLINE);
         if cfg!(any(target_os = "macos", target_os = "linux")) {

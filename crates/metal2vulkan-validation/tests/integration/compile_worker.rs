@@ -63,9 +63,7 @@ fn every_device_tool_serves_the_compile_worker_with_the_public_apis_pipeline() {
         constants: FunctionConstantValues::defaults(),
     };
     let AcceptancePipeline::Compute(expected) =
-        compile_pipeline(&[&bitcode], &request, device.device(), None)
-            .unwrap()
-            .pipeline
+        compile_pipeline(&[&bitcode], &request, device.device(), None).unwrap()
     else {
         panic!("a kernel compiles to a compute pipeline");
     };
@@ -81,8 +79,7 @@ fn every_device_tool_serves_the_compile_worker_with_the_public_apis_pipeline() {
         )
         .unwrap_or_else(|failure| panic!("{program}: {}", failure.message()));
         let compiled_pipeline = compiled.result.unwrap();
-        assert_eq!(compiled_pipeline.pipeline, *expected, "{program}");
-        assert!(compiled_pipeline.handles.is_empty(), "{program}");
+        assert_eq!(compiled_pipeline, *expected, "{program}");
         assert!(
             compiled.allocator_peak.is_some_and(|peak| peak > 0),
             "{program}"
@@ -128,9 +125,7 @@ fn a_logged_draw_compiles_in_the_worker_as_in_process() {
         shape: None,
     };
     let AcceptancePipeline::Render(expected) =
-        compile_pipeline(&[&bitcode, &bitcode], &request, device.device(), None)
-            .unwrap()
-            .pipeline
+        compile_pipeline(&[&bitcode, &bitcode], &request, device.device(), None).unwrap()
     else {
         panic!("a draw compiles to a render pipeline");
     };
@@ -178,9 +173,7 @@ fn a_vertex_function_and_a_refusal_cross_the_worker_boundary() {
             constants: FunctionConstantValues::defaults(),
         };
         let AcceptancePipeline::Render(expected) =
-            compile_pipeline(&[&bitcode], &request, device.device(), None)
-                .unwrap()
-                .pipeline
+            compile_pipeline(&[&bitcode], &request, device.device(), None).unwrap()
         else {
             panic!("{entry} compiles to a render pipeline");
         };
@@ -305,7 +298,6 @@ fn compile_blob(depth: u32) -> (WorkerCompile<ComputePipeline>, u64) {
     .unwrap_or_else(|failure| panic!("{depth} levels: {}", failure.message()));
     let blob = match &compiled.result {
         Ok(compiled) => compiled
-            .pipeline
             .stage
             .constant_blob
             .as_ref()

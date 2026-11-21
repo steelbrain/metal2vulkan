@@ -271,9 +271,8 @@ fn descriptor(
             .iter()
             .map(|module| module.library.clone())
             .collect();
-        let (linked, _) =
-            crate::acceptance::linked_functions(&libraries, &linked, &function.constants)
-                .map_err(|error| product_refusal(&error))?;
+        let linked = crate::acceptance::linked_functions(&libraries, &linked, &function.constants)
+            .map_err(|error| product_refusal(&error))?;
         let mut made = FunctionDescriptor::new(made)
             .with_specialized(true)
             .with_linked(linked);

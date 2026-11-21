@@ -41,7 +41,7 @@ use metal2vulkan::error::{DescriptorError, Error, RuntimeInput};
 use metal2vulkan::library::{FunctionConstantValues, Library};
 use metal2vulkan::pipeline::Stage;
 use metal2vulkan::pipeline::{
-    ComputePipeline, ComputePipelineDescriptor, FunctionDescriptor, FunctionHandle, LinkedFunction,
+    ComputePipeline, ComputePipelineDescriptor, FunctionDescriptor, LinkedFunction,
     LinkedFunctions, PrecisionNote, RenderPipeline, RenderPipelineDescriptor, StageModule,
     StageSource,
 };
@@ -97,21 +97,6 @@ fn stage_precision_notes(stages: &[StageModule]) -> Vec<PrecisionNote> {
         }
     }
     notes
-}
-
-/// The table handle of each function one request function links: by library of
-/// [`RequestFunction::linked`], then by function of that library's [`LinkedLibrary::functions`],
-/// what `LinkedFunctions::function_handle` answers for it over the linked functions the compile
-/// built (`None` where the product gives it none). A visible-function table of the function's stage
-/// holds these words.
-pub type LinkedHandles = Vec<Vec<Option<FunctionHandle>>>;
-
-/// What [`compile_pipeline`] built: the pipeline and, for each of the request's functions
-/// ([`PipelineRequest::functions`]) in order, the handles of the functions it links.
-#[derive(Clone, Debug)]
-pub struct CompiledRequest {
-    pub pipeline: AcceptancePipeline,
-    pub handles: Vec<LinkedHandles>,
 }
 
 /// An L4 row compiled for a driver: a kernel with the dispatch region its pipeline is created from
@@ -458,36 +443,6 @@ impl PipelineRequest {
             })
             .collect()
     }
-
-    /// Whether `handles` answer this request ([`CompiledRequest::handles`]): one entry per
-    /// function, one list per linked library, one handle per function linked from it.
-    pub fn check_handles(&self, handles: &[LinkedHandles]) -> Result<(), String> {
-        let functions = self.functions();
-        let shape = |linked: &[LinkedLibrary]| {
-            linked
-                .iter()
-                .map(|library| library.functions.len())
-                .collect::<Vec<_>>()
-        };
-        let answered = |handles: &LinkedHandles| handles.iter().map(Vec::len).collect::<Vec<_>>();
-        if functions.len() == handles.len()
-            && functions
-                .iter()
-                .zip(handles)
-                .all(|(function, handles)| shape(&function.linked) == answered(handles))
-        {
-            Ok(())
-        } else {
-            Err(format!(
-                "the handles {:?} do not answer the linked functions {:?}",
-                handles.iter().map(answered).collect::<Vec<_>>(),
-                functions
-                    .iter()
-                    .map(|function| shape(&function.linked))
-                    .collect::<Vec<_>>()
-            ))
-        }
-    }
 }
 
 /// Why [`compile_pipeline`] built no pipeline.
@@ -577,7 +532,7 @@ pub fn compile_row(
         constants: FunctionConstantValues::defaults(),
     };
     match compile_pipeline(&[bitcode], &request, device, deadline) {
-        Ok(compiled) => RowCompile::of(RowPipeline::of(device, compiled.pipeline, stage)),
+        Ok(pipeline) => RowCompile::of(RowPipeline::of(device, pipeline, stage)),
         Err(PipelineCompileError::Product(error)) => {
             RowCompile::NotCompiled(Outcome::from(&error), bounded_detail(&error.to_string()))
         }
@@ -618,9 +573,9 @@ pub fn compile_row_in_worker(
             compile_compute_request(worker, device, std::slice::from_ref(source), &request).map(
                 |compiled| {
                     (
-                        compiled.result.map(|compiled| {
-                            AcceptancePipeline::Compute(Box::new(compiled.pipeline))
-                        }),
+                        compiled
+                            .result
+                            .map(|pipeline| AcceptancePipeline::Compute(Box::new(pipeline))),
                         compiled.measured,
                     )
                 },
@@ -633,9 +588,9 @@ pub fn compile_row_in_worker(
             compile_render_request(worker, device, std::slice::from_ref(source), &request).map(
                 |compiled| {
                     (
-                        compiled.result.map(|compiled| {
-                            AcceptancePipeline::Render(Box::new(compiled.pipeline))
-                        }),
+                        compiled
+                            .result
+                            .map(|pipeline| AcceptancePipeline::Render(Box::new(pipeline))),
                         compiled.measured,
                     )
                 },
@@ -695,7 +650,7 @@ pub fn compile_draw_in_worker(
         (
             compiled
                 .result
-                .map(|compiled| AcceptancePipeline::Render(Box::new(compiled.pipeline))),
+                .map(|pipeline| AcceptancePipeline::Render(Box::new(pipeline))),
             compiled.measured,
         )
     });
@@ -718,15 +673,13 @@ pub fn retained(bitcode: &[u8]) -> RowSource<'static> {
 /// orders them, each with the functions it links (from its [`PipelineRequest::linked_ranges`]);
 /// another number of libraries is [`PipelineCompileError::Libraries`], checked before anything
 /// decodes. A [`PipelineRequest::Row`] derives its descriptor and companion from the library's AIR
-/// ([`row`]). With the pipeline come the handles of each function's linked functions, from the
-/// linked functions the compile built ([`CompiledRequest::handles`]). This is the compile a worker
-/// runs ([`crate::worker::compile`]); device tests that own their inputs call it in process.
+/// ([`row`]). This is the compile a worker runs ([`crate::worker::compile`]); device tests that own their inputs call it in process.
 pub fn compile_pipeline(
     libraries: &[&[u8]],
     request: &PipelineRequest,
     device: &Device,
     deadline: Option<Instant>,
-) -> Result<CompiledRequest, PipelineCompileError> {
+) -> Result<AcceptancePipeline, PipelineCompileError> {
     let takes = request.libraries();
     if libraries.len() != takes {
         return Err(PipelineCompileError::Libraries {
@@ -743,7 +696,7 @@ fn compile_counted(
     request: &PipelineRequest,
     device: &Device,
     deadline: Option<Instant>,
-) -> Result<CompiledRequest, PipelineCompileError> {
+) -> Result<AcceptancePipeline, PipelineCompileError> {
     let ranges = request.linked_ranges();
     // The libraries the `at`-th function of `request.functions()` links (none for a request
     // whose functions link nothing).
@@ -753,19 +706,14 @@ fn compile_counted(
             DescriptorError::MissingStage { stage },
         ))?;
         let function = Library::from_air(bitcode).and_then(|library| library.function(&f.entry))?;
-        let (linked, handles) = linked_functions(
+        let linked = linked_functions(
             libraries.get(linked).unwrap_or_default(),
             &f.linked,
             &f.constants,
         )?;
         let mut function = FunctionDescriptor::new(function).with_linked(linked);
         function.constants = f.constants.clone();
-        Ok::<_, Error>((function, handles))
-    };
-    // A request whose functions link nothing (a plain compute, an L4 row) answers no handles.
-    let unlinked = |pipeline| CompiledRequest {
-        pipeline,
-        handles: Vec::new(),
+        Ok::<_, Error>(function)
     };
     let budget = Budget::with_deadline(deadline);
     let render =
@@ -778,7 +726,7 @@ fn compile_counted(
         };
     Ok(match request {
         PipelineRequest::Compute { entry, constants } => {
-            let (kernel, _) = function(
+            let kernel = function(
                 0,
                 Stage::Kernel,
                 &RequestFunction::new(entry.as_str(), constants.clone()),
@@ -789,7 +737,7 @@ fn compile_counted(
                     &ComputePipelineDescriptor::new(StageSource::Function(kernel)),
                     &budget,
                 )
-                .map(|pipeline| unlinked(AcceptancePipeline::Compute(Box::new(pipeline))))?
+                .map(|pipeline| AcceptancePipeline::Compute(Box::new(pipeline)))?
         }
         PipelineRequest::BoundCompute {
             function: kernel,
@@ -798,16 +746,13 @@ fn compile_counted(
             replay,
         } => {
             use crate::candidate::engine::variants;
-            let (kernel, handles) = function(0, Stage::Kernel, kernel, linked(0))?;
+            let kernel = function(0, Stage::Kernel, kernel, linked(0))?;
             let compile = match replay {
                 true => variants::compile_replay_for_shape,
                 false => variants::compile_compute_for_shape,
             };
             let (pipeline, _) = compile(device, &kernel, shape, dispatch.as_ref(), &budget)?;
-            CompiledRequest {
-                pipeline: AcceptancePipeline::Compute(Box::new(pipeline)),
-                handles: vec![handles],
-            }
+            AcceptancePipeline::Compute(Box::new(pipeline))
         }
         PipelineRequest::VertexDraw {
             function: vertex,
@@ -815,16 +760,9 @@ fn compile_counted(
             shape,
             form,
         } => {
-            let (vertex, handles) = function(0, Stage::Vertex, vertex, linked(0))?;
+            let vertex = function(0, Stage::Vertex, vertex, linked(0))?;
             let descriptor = template.descriptor(StageSource::Function(vertex), None)?;
-            CompiledRequest {
-                pipeline: AcceptancePipeline::Render(Box::new(render(
-                    &descriptor,
-                    shape.as_ref(),
-                    *form,
-                )?)),
-                handles: vec![handles],
-            }
+            AcceptancePipeline::Render(Box::new(render(&descriptor, shape.as_ref(), *form)?))
         }
         PipelineRequest::Draw {
             vertex,
@@ -832,20 +770,17 @@ fn compile_counted(
             template,
             shape,
         } => {
-            let (vertex, vertex_handles) = function(0, Stage::Vertex, vertex, linked(0))?;
-            let (fragment, fragment_handles) = function(1, Stage::Fragment, fragment, linked(1))?;
+            let vertex = function(0, Stage::Vertex, vertex, linked(0))?;
+            let fragment = function(1, Stage::Fragment, fragment, linked(1))?;
             let descriptor = template.descriptor(
                 StageSource::Function(vertex),
                 Some(StageSource::Function(fragment)),
             )?;
-            CompiledRequest {
-                pipeline: AcceptancePipeline::Render(Box::new(render(
-                    &descriptor,
-                    shape.as_ref(),
-                    crate::candidate::engine::variants::DrawForm::Bound,
-                )?)),
-                handles: vec![vertex_handles, fragment_handles],
-            }
+            AcceptancePipeline::Render(Box::new(render(
+                &descriptor,
+                shape.as_ref(),
+                crate::candidate::engine::variants::DrawForm::Bound,
+            )?))
         }
         PipelineRequest::MeshDraw {
             object,
@@ -854,11 +789,10 @@ fn compile_counted(
             template,
             shape,
         } => {
-            let mut handles = Vec::new();
+            let mut stages = 0;
             let mut stage = |f: &MeshFunction, stage: Stage| {
-                let (function, linked_handles) =
-                    function(f.library, stage, &f.function, linked(handles.len()))?;
-                handles.push(linked_handles);
+                let function = function(f.library, stage, &f.function, linked(stages))?;
+                stages += 1;
                 Ok::<_, Error>(StageSource::Function(function))
             };
             let object = object
@@ -883,10 +817,7 @@ fn compile_counted(
                     .0
                 }
             };
-            CompiledRequest {
-                pipeline: AcceptancePipeline::Render(Box::new(pipeline)),
-                handles,
-            }
+            AcceptancePipeline::Render(Box::new(pipeline))
         }
         PipelineRequest::Row {
             entry,
@@ -902,9 +833,8 @@ fn compile_counted(
                     &RequestFunction::new(entry.as_str(), constants.clone()),
                     0..0,
                 )
-                .map(|(function, _)| function)
             };
-            unlinked(match stage {
+            match stage {
                 RowStage::Kernel => {
                     let mut descriptor =
                         ComputePipelineDescriptor::new(StageSource::Function(own(Stage::Kernel)?));
@@ -965,7 +895,7 @@ fn compile_counted(
                         .compile_render_pipeline(&descriptor, &budget)
                         .map(|p| AcceptancePipeline::Render(Box::new(p)))?
                 }
-            })
+            }
         }
     })
 }
@@ -974,14 +904,12 @@ fn compile_counted(
 /// bitcode is `libraries`, one each, in the same order: each library decoded once, each of its
 /// functions in `functions` (the list the Metal oracle puts every linked function into), made with
 /// the function's constants as `newFunctionWithName:constantValues:` makes it: the compile takes
-/// the values of the constants its library declares and ignores the others, as Metal does. With
-/// them come their table handles ([`LinkedHandles`]): each function's
-/// `LinkedFunctions::function_handle` over the whole list.
+/// the values of the constants its library declares and ignores the others, as Metal does.
 pub(crate) fn linked_functions(
     libraries: &[&[u8]],
     linked: &[LinkedLibrary],
     constants: &FunctionConstantValues,
-) -> Result<(LinkedFunctions, LinkedHandles), Error> {
+) -> Result<LinkedFunctions, Error> {
     let mut functions = LinkedFunctions::new();
     for (library, bitcode) in linked.iter().zip(libraries) {
         let decoded = Library::from_air(bitcode)?;
@@ -991,19 +919,7 @@ pub(crate) fn linked_functions(
                 .with_function(LinkedFunction::new(function).with_constants(constants.clone()));
         }
     }
-    // `functions` lists each library's functions in turn, in `linked`'s order.
-    let mut listed = functions.functions.iter();
-    let handles = linked
-        .iter()
-        .map(|library| {
-            listed
-                .by_ref()
-                .take(library.functions.len())
-                .map(|function| functions.function_handle(function))
-                .collect()
-        })
-        .collect();
-    Ok((functions, handles))
+    Ok(functions)
 }
 
 /// What the driver did with one pipeline.
@@ -1468,7 +1384,7 @@ mod tests {
                 projection: Projection::Derived,
                 constants,
             };
-            compile_pipeline(&[&vector], &request, &device, None).map(|c| c.pipeline)
+            compile_pipeline(&[&vector], &request, &device, None)
         };
         // Undefined, the constant reads its type's zero: Metal makes this pipeline too.
         match kernel(FunctionConstantValues::defaults()) {
@@ -1713,10 +1629,8 @@ mod tests {
     /// A request function links the functions of its linked libraries: the caller of the public
     /// linked fixtures compiles only with `linked_scale` and `linked_blend` of the functions
     /// library and `linked_offset` of its own, the libraries following the stage library in request
-    /// order. With the pipeline come the product's table handles of those functions, by library and
-    /// function in request order: `functions` numbered from 2. A compile given fewer or more
-    /// libraries than the request takes is the tool's exchange error before anything decodes, never
-    /// a product outcome.
+    /// order. A compile given fewer or more libraries than the request takes is the tool's exchange
+    /// error before anything decodes, never a product outcome.
     #[test]
     fn a_request_function_links_the_functions_of_its_libraries() {
         let (Some(caller), Some(functions)) = (
@@ -1747,31 +1661,8 @@ mod tests {
         assert_eq!(linked.libraries(), 3);
         let libraries = [caller.as_slice(), functions.as_slice(), caller.as_slice()];
         match compile_pipeline(&libraries, &linked, &device, None) {
-            Ok(CompiledRequest {
-                pipeline: AcceptancePipeline::Compute(pipeline),
-                handles,
-            }) => {
+            Ok(AcceptancePipeline::Compute(pipeline)) => {
                 assert!(pipeline.stage.spirv.len() > 5);
-                linked.check_handles(&handles).unwrap();
-                let words = handles
-                    .iter()
-                    .map(|function| {
-                        function
-                            .iter()
-                            .map(|library| {
-                                library
-                                    .iter()
-                                    .map(|h| h.map(FunctionHandle::word))
-                                    .collect()
-                            })
-                            .collect()
-                    })
-                    .collect::<Vec<Vec<Vec<_>>>>();
-                assert_eq!(words, [[vec![Some(2), Some(3)], vec![Some(4)]]]);
-                assert!(linked.check_handles(&[]).is_err());
-                assert!(linked
-                    .check_handles(&[vec![handles[0][0].clone()]])
-                    .is_err());
             }
             other => panic!("the linked caller did not compile: {other:?}"),
         }
@@ -1845,8 +1736,7 @@ mod tests {
 
     /// Each linked function is made with the request function's constants, as the Metal oracle
     /// makes it with `newFunctionWithName:constantValues:`: every value, those of constants its
-    /// library does not declare among them, which the compile ignores as Metal does. The table
-    /// handles answer the libraries' functions in order.
+    /// library does not declare among them, which the compile ignores as Metal does.
     #[test]
     fn a_linked_function_is_made_with_the_request_functions_constants() {
         let (Some(declares), Some(declares_none)) = (
@@ -1878,18 +1768,7 @@ mod tests {
                 functions: vec!["linked_scale".into(), "linked_blend".into()],
             },
         ];
-        let (functions, handles) = linked_functions(&libraries, &linked, &constants).unwrap();
-        // Each function's table handle, by library and function.
-        let words = handles
-            .iter()
-            .map(|library| {
-                library
-                    .iter()
-                    .map(|h| h.map(FunctionHandle::word))
-                    .collect()
-            })
-            .collect::<Vec<Vec<_>>>();
-        assert_eq!(words, [vec![Some(2)], vec![Some(3), Some(4)]]);
+        let functions = linked_functions(&libraries, &linked, &constants).unwrap();
         let taken = functions
             .functions
             .iter()

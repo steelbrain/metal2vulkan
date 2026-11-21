@@ -610,8 +610,7 @@ pub(crate) fn compile_in_process(
     shape: &BindShape,
 ) -> Result<metal2vulkan::pipeline::RenderPipeline, Error> {
     let (request, bitcode) = draw_request(case, libraries, shape);
-    match crate::acceptance::compile_pipeline(&bitcode, &request, device, None).map(|c| c.pipeline)
-    {
+    match crate::acceptance::compile_pipeline(&bitcode, &request, device, None) {
         Ok(crate::acceptance::AcceptancePipeline::Render(pipeline)) => Ok(*pipeline),
         Ok(other) => panic!("a draw compiled to {other:?}"),
         Err(crate::acceptance::PipelineCompileError::Product(error)) => Err(error),
