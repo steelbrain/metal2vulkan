@@ -18,12 +18,11 @@ fn serving() -> [PathBuf; 2] {
 /// public fixtures give.
 const CASE: &str = r#"{"acceleration_structures":[{"binding":5,"kind":"primitive","primitive_triangles_b64":"AACAvwAAgL8AAAAAAACAPwAAgL8AAAAAAAAAAAAAgD8AAAAA"}],"air_sha256":"3dec51430c72d7901180dcdc22624a135640bf74af06c3a59b100b048a4107c6","argument_buffer_buffers":[],"argument_buffer_intersection_function_tables":[],"argument_buffer_textures":[],"authored_by":"codex:gpt-5.6-sol","buffers":[{"binding":0,"initial_bytes_b64":"q6urq6urq6urq6urq6urq6urq6urq6ur","role":"output"}],"case_id":"21de8b823123dfcac765adf9786fbb1f0741b4543d307064df6832313eb6b575","compare":{"kind":"exact"},"device_buffer_arrays":[],"dispatch":{"grid":[1,1,1],"threads_per_threadgroup":[1,1,1]},"entry":"primitive_as_intersect","execution_safety":"loop_free","function_constants":[],"intersection_function_tables":[],"kernel_stage_inputs":[],"name":"primitive-acceleration-structure-intersection","output":{"binding":0,"kind":"buffer","length":24,"offset":0},"rationale":"A downward ray hits one authored counter-clockwise triangle at unit distance; all observable triangle-intersection result fields are compared exactly.","render_targets":[],"samplers":[],"stage":"kernel","texture_arrays":[],"textures":[],"threadgroup_memory":[],"vertex_inputs":[],"visible_function_references":[],"visible_function_tables":[]}"#;
 
-/// The worker input for [`CASE`] restricted to `restricted_to`, in the stated robustness leg,
-/// with `VK_EXT_device_generated_commands` enabled where supported or not (`generated_commands`),
+/// The worker input for [`CASE`] restricted to `restricted_to`, with `VK_EXT_device_generated_commands` enabled where supported or not (`generated_commands`),
 /// claiming a checked-input digest the case does not have.
 fn input(restricted_to: Option<&str>, generated_commands: bool) -> String {
     format!(
-        r#"{{"root":"/nonexistent/device-worker-corpus","case":{CASE},"device":"Cpu","backend":"vulkan","input_sha256":"{}","wait_timeout_ms":10000,"restricted_to":{},"leg":"stated","generated_commands":{generated_commands}}}"#,
+        r#"{{"root":"/nonexistent/device-worker-corpus","case":{CASE},"device":"Cpu","backend":"vulkan","input_sha256":"{}","wait_timeout_ms":10000,"restricted_to":{},"generated_commands":{generated_commands}}}"#,
         "0".repeat(64),
         serde_json::to_string(&restricted_to).unwrap()
     )

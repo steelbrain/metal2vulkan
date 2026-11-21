@@ -333,7 +333,7 @@ fn select(
 
 /// The environment of a row of `executor` on the device `identity` names, with the tools active
 /// on it: its identity as the executor's own context records it, the executor, the validation it
-/// ran under, no profiles-layer restriction, and the stated leg.
+/// ran under, and no profiles-layer restriction.
 fn environment(identity: &Identity, tools: &[ActiveTool], executor: &str) -> serde_json::Value {
     serde_json::json!({
         "device": identity.device,
@@ -561,7 +561,7 @@ fn run(
 }
 
 /// The row of a run on the device `identity` names that read `output`, with `module`'s census:
-/// what the runtime answers (the module documentation), in the stated leg with no restriction.
+/// what the runtime answers (the module documentation), with no restriction.
 pub(super) fn ran(
     identity: &Identity,
     environment: &serde_json::Value,

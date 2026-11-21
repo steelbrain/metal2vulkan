@@ -103,7 +103,7 @@ pub fn create_acceptance_pipeline(
 /// (`acceptance::unenabled` on [`VulkanContext::opened_description`]); properties, limits, formats,
 /// stage flags, and float-controls independence against the opened device's queried profile, never
 /// against a committed profile; and every robustness feature the device's description states that
-/// the stated leg could not enable (`VulkanContext::unmet_robustness`). The requirements are the
+/// the context could not enable (`VulkanContext::unmet_robustness`). The requirements are the
 /// product's own, which it derives from the module it emits (the old executor's SPIR-V scan, which
 /// read the module's declarations again in the old engine's vocabulary, is retired).
 pub(super) fn unmet_requirements(
@@ -111,11 +111,13 @@ pub(super) fn unmet_requirements(
     requirements: &Requirements,
 ) -> Vec<String> {
     let mut missing = crate::acceptance::unenabled(&context.opened_description, requirements);
-    // The stated leg compiles the robust encodings only where the device enables what its
-    // description states; a context that could not enable one runs nothing.
-    missing.extend(context.unmet_robustness.iter().map(|feature| {
-        format!("{feature:?} (stated by the device's description, not enabled in the stated leg)")
-    }));
+    // The robust encodings compile only where the device enables what its description states; a
+    // context that could not enable one runs nothing.
+    missing.extend(
+        context.unmet_robustness.iter().map(|feature| {
+            format!("{feature:?} (stated by the device's description, not enabled)")
+        }),
+    );
     // A stage flag's feature is both an enable and a device fact: named once.
     for unmet in crate::acceptance::unmet_device_facts(&context.opened, requirements) {
         if !missing.contains(&unmet) {
