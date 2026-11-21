@@ -1,7 +1,7 @@
 //! The runtime through the harness, on the device the cfg names (docs/VALIDATION.md): a range
 //! given back is the next one taken, buffers alive at once lie apart, and a buffer longer than a
 //! pooled block takes a block of its own; and what textures released under work in flight leave
-//! waiting stays flat (`releases_under_work`).
+//! waiting stays within what the work in flight accounts for (`releases_under_work`).
 #![cfg(any(m2v_gpu, m2v_cpu_icd))]
 
 use metal2vulkan_harness::authored::OwnRow;
