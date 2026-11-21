@@ -479,8 +479,8 @@ cargo run -p metal2vulkan-validation --release --bin corpus-vulkan -- \
   writing that sample's texel from a buffer, a color one through an unsigned-integer view of its
   texel size so its bits cross unconverted, a depth one under an always-passing depth test that
   writes. A cube array is made as any cube, of its cubes' faces. A bound sparse
-  texture carries `sparse_texture` and a bound texture buffer `texture_buffer`, which the runtime
-  makes neither of; a kernel's function table carries `kernel_function_table`, its imageblock (a
+  texture carries `sparse_texture`, which the runtime does not make; a bound texture buffer runs
+  on both executors (the runtime makes it over its buffer's bytes); a kernel's function table carries `kernel_function_table`, its imageblock (a
   tile function's included) `kernel_imageblock`, its acceleration structure or
   intersection-function table `kernel_acceleration_structure`, its stage inputs or stage-in region
   `kernel_stage_input`, and a rasterization-rate map, a render pass's or one whose data a buffer
