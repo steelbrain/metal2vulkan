@@ -42,7 +42,7 @@ use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::link::{link, LinkInputs};
 use crate::pipeline::lower_inputs::LoweringInputs;
 use crate::pipeline::relocate::relocate;
-use crate::pipeline::sym::{SlotClass, Stage};
+use crate::pipeline::sym::SlotClass;
 use crate::pipeline::testing::{
     llvm_assemble, meter, status_reach, AssembleError, Scratch, StatusReach,
 };
@@ -315,13 +315,6 @@ fn validate(a: &FunctionArtifact, p: &DeviceProfile) {
     check_words_valid(&words, &a.requirements, p).unwrap_or_else(|e| panic!("L3: {e}"));
 }
 
-/// Whether `a` states an absent read.
-fn absent(a: &FunctionArtifact) -> bool {
-    a.facts.contains(&RuntimeFact::AbsentArgumentRead {
-        stage: Stage::Kernel,
-    })
-}
-
 /// The texture slots `a` binds.
 fn texture_slots(a: &FunctionArtifact) -> Vec<u32> {
     a.interface
@@ -343,7 +336,7 @@ fn a_removed_handle_reached_through_any_shape_is_an_absent_read() {
             let a =
                 compile(&bc, entry, false, &p).unwrap_or_else(|e| panic!("{stem} {entry}: {e}"));
             assert!(
-                !absent(&a) && !a.facts.contains(&RuntimeFact::ExecutionStatus),
+                !a.facts.contains(&RuntimeFact::ExecutionStatus),
                 "{stem} {entry}: {:?}",
                 a.facts
             );
@@ -367,10 +360,7 @@ fn a_present_handle_through_the_same_shapes_is_read() {
     for (stem, p) in committed_profiles().expect("profiles") {
         for entry in KERNELS {
             match compile(&bc, entry, true, &p) {
-                Ok(a) => {
-                    assert!(!absent(&a), "{stem} {entry}: {:?}", a.facts);
-                    validate(&a, &p);
-                }
+                Ok(a) => validate(&a, &p),
                 Err(Error::NeedsInput(_)) => {}
                 Err(e) => panic!("{stem} {entry}: {e}"),
             }

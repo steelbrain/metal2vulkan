@@ -33,8 +33,7 @@ use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::Error;
 use crate::library::{CompiledFunction, FunctionConstantValue, FunctionConstantValues, Library};
 use crate::metal::DataType;
-use crate::pipeline::facts::RuntimeFact;
-use crate::pipeline::sym::{SlotClass, Stage};
+use crate::pipeline::sym::SlotClass;
 use crate::pipeline::testing::{link_and_validate, llvm_assemble, AssembleError};
 use crate::pipeline::{FunctionDescriptor, LoweringInputs};
 use crate::Budget;
@@ -302,14 +301,6 @@ fn a_read_through_the_left_out_texture_is_an_absent_read() {
             return;
         };
         let compiled = compiled.unwrap_or_else(|e| panic!("{stem}: {e:?}"));
-        let fact = RuntimeFact::AbsentArgumentRead {
-            stage: Stage::Kernel,
-        };
-        assert!(
-            !compiled.artifact().facts.contains(&fact),
-            "{stem}: {:?}",
-            compiled.artifact().facts
-        );
         link_and_validate(compiled.artifact(), device.profile())
             .unwrap_or_else(|e| panic!("{stem}: L3: {e:?}"));
         let slots: Vec<u32> = compiled

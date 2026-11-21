@@ -1150,9 +1150,7 @@ pub enum Feature {
     /// pointer-typed imageblock or control-point input, or a sampler merged with a present one. The
     /// argument is not declared (MSL 5.8.1.2) and Metal defines no value for it (its compiler drops
     /// a store of such a read and gives arithmetic on it NaN), and no contained answer for a
-    /// dereference is established. An absent read sets `StatusBits::ABSENT_ARGUMENT_READ` where it
-    /// runs and yields zero (`RuntimeFact::AbsentArgumentRead`); in a vertex or fragment stage
-    /// without its stores and atomics it is refused with what it needs.
+    /// dereference is established. An absent read yields zero.
     /// An absent argument passed by value (its parameter is not a pointer: a vertex attribute, a
     /// stage input, a varying, a color input, a builtin, imageblock data, an indirect constant, a
     /// per-patch attribute) reads zero instead. A read nothing observes is `undef`, or goes; a

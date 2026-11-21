@@ -8,7 +8,7 @@
 //!   function, so Metal leaves the read undefined, and its compiler's answer is that undefined
 //!   behaviour's fallout (a store of the value dropped, arithmetic on it NaN, a texture write of it
 //!   zero: the write of `kernel_absent_texture_reads_zero`'s authored case). The read takes zero
-//!   and marks nothing: no `RuntimeFact::AbsentArgumentRead`, no execution status, no status push
+//!   and marks nothing: no execution status, no status push
 //!   field or binding. An element of a gated-off texture table, and a gated-off sampler merged
 //!   with a present one before the sample, are the absent handle where the read reaches them
 //!   (`src/tests/engine_absent_handles.rs` follows the handle through memory, aggregates and
@@ -50,7 +50,7 @@ use crate::pipeline::link::LinkInputs;
 use crate::pipeline::lower_inputs::LoweringInputs;
 use crate::pipeline::relocate::relocate;
 use crate::pipeline::stage_io::{IoRole, StageBuiltin};
-use crate::pipeline::sym::{SlotClass, Stage};
+use crate::pipeline::sym::SlotClass;
 use crate::pipeline::testing::{
     engine_dir, fixtures_dir, llvm_assemble, llvm_assemble_text, meter, profile, status_reach,
     AssembleError, Scratch, StatusReach,
@@ -268,17 +268,14 @@ fn compile_result(
 }
 
 /// Assert that `entry` with `bools` set compiles, on every committed profile, into a kernel whose
-/// absent reads take zero and mark nothing (no `AbsentArgumentRead`, no `ExecutionStatus`, no
-/// status push field or binding) and validates, or needs a storage texture's format.
+/// absent reads take zero and mark nothing (no `ExecutionStatus`, no status push field or
+/// binding) and validates, or needs a storage texture's format.
 fn absent_read(bc: &[u8], entry: &str, bools: &[(u32, bool)]) {
     for (stem, p) in committed_profiles().expect("profiles") {
         match compile_result(bc, entry, bools, &p) {
             Ok(a) => {
-                let fact = RuntimeFact::AbsentArgumentRead {
-                    stage: Stage::Kernel,
-                };
                 assert!(
-                    !a.facts.contains(&fact) && !a.facts.contains(&RuntimeFact::ExecutionStatus),
+                    !a.facts.contains(&RuntimeFact::ExecutionStatus),
                     "{stem}: {:?}",
                     a.facts
                 );
@@ -296,16 +293,7 @@ fn absent_read(bc: &[u8], entry: &str, bools: &[(u32, bool)]) {
 fn compiles(bc: &[u8], entry: &str, bools: &[(u32, bool)]) {
     for (stem, p) in committed_profiles().expect("profiles") {
         match compile_result(bc, entry, bools, &p) {
-            Ok(a) => {
-                assert!(
-                    !a.facts
-                        .iter()
-                        .any(|f| matches!(f, RuntimeFact::AbsentArgumentRead { .. })),
-                    "{stem}: {:?}",
-                    a.facts
-                );
-                validate(&a, &p);
-            }
+            Ok(a) => validate(&a, &p),
             Err(Error::NeedsInput(_)) => {}
             Err(e) => panic!("{stem}: {entry} {bools:?}: {e}"),
         }
@@ -859,16 +847,12 @@ fn an_absent_read_takes_zero_and_marks_nothing() {
         Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected the module: {why}"),
     };
     let off = [(0, false)];
-    for (entry, stage) in [
-        ("fc_fragment_absent_read", Stage::Fragment),
-        ("fc_kernel_absent_read", Stage::Kernel),
-    ] {
-        let read = RuntimeFact::AbsentArgumentRead { stage };
+    for entry in ["fc_fragment_absent_read", "fc_kernel_absent_read"] {
         for (stem, p) in committed_profiles().expect("profiles") {
             let a = compile_result(&bc, entry, &off, &p)
                 .unwrap_or_else(|e| panic!("{stem} {entry}: {e}"));
             assert!(
-                !a.facts.contains(&read) && !a.facts.contains(&RuntimeFact::ExecutionStatus),
+                !a.facts.contains(&RuntimeFact::ExecutionStatus),
                 "{stem} {entry}: {:?}",
                 a.facts
             );

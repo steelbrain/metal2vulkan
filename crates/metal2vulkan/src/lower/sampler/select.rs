@@ -295,7 +295,7 @@ pub fn select_sampling(
         .ok_or_else(|| cx.invariant("a sampling call without a sampler"))?;
     // A sampling of the absent texture is the absent read, whatever samples it.
     if texture == HandleTarget::One(Candidate::Absent) {
-        return AbsentArgument::select(cx, at, inst, t);
+        return AbsentArgument::select(cx, at, inst);
     }
     // A static texture sampled through an argument buffer's sampler would pair the slot's own
     // image with the heap sampler; it is not implemented.
@@ -305,7 +305,7 @@ pub fn select_sampling(
     let sampler = crate::lower::access::handle::sampler_target(cx, smp, m)?;
     // A sampling through the absent sampler is the absent read too.
     if sampler == HandleTarget::One(Candidate::Absent) {
-        return AbsentArgument::select(cx, at, inst, t);
+        return AbsentArgument::select(cx, at, inst);
     }
     if matches!(texture, HandleTarget::Null) {
         // A sample of the null texture (a `null`, `undef`, or `poison` handle; an absent texture
@@ -352,7 +352,7 @@ pub fn select_sampling(
                     select_slot(cx, call, index, s, Some(hoist.is_some()), m)?
                 }
                 // The absent texture, or the absent sampler.
-                _ => AbsentArgument::select(cx, at, inst, t)?,
+                _ => AbsentArgument::select(cx, at, inst)?,
             };
             let mut lits = Vec::with_capacity(2);
             if tex_handle.is_some() {
@@ -479,7 +479,7 @@ pub fn select_heap_sampling(
         None => match crate::lower::access::handle::sampler_target(cx, smp, m)? {
             // A heap texture sampled through the absent sampler: the absent read.
             HandleTarget::One(Candidate::Absent) => {
-                return AbsentArgument::select(cx, at, inst, t);
+                return AbsentArgument::select(cx, at, inst);
             }
             HandleTarget::One(c) => sampler_of(cx, c)?,
             HandleTarget::Null => return Err(refuse()),
@@ -533,7 +533,7 @@ fn select_heap_switch(
     let mut arms = Vec::with_capacity(cands.len());
     for &c in cands {
         let one = match c {
-            Candidate::Absent => AbsentArgument::select(cx, call.at, call.inst, call.t)?,
+            Candidate::Absent => AbsentArgument::select(cx, call.at, call.inst)?,
             c => {
                 let s = sampler_of(cx, c)?;
                 select_heap_arm(cx, call, heap, s, Some(hoist.is_some()), m)?

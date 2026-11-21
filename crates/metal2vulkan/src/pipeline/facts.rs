@@ -449,14 +449,6 @@ pub enum RuntimeFact {
     /// command, vertex, instance and slot table from the header at its
     /// `PushField::MergedDrawAddress` (`bind::replay`'s `merged.rs`). Its plans state the variant.
     MergedDraws,
-    /// The `stage` function may read an argument its pipeline's function constants removed (a
-    /// texture's read, sample, gather, query, or atomic, or a sample through a removed sampler),
-    /// a read Metal gives no value. Where one runs, the function takes zero for it and sets
-    /// `StatusBits::ABSENT_ARGUMENT_READ` in the command buffer's `ExecutionStatus` buffer (through
-    /// the address the stage's `ExecutionStatus` fact asks for); a consumer that reads the bit
-    /// after the command buffer reports its execution as failed, since none of its results is then
-    /// Metal's. A run that never reaches such a read is Metal's exactly. Nothing binds it.
-    AbsentArgumentRead { stage: Stage },
     /// The fragment function was compiled under `VariantKey::zeroed_colors`
     /// (`LoweringInputs::zeroed_colors`): it writes zero to color attachment `color`, of pixel
     /// format `format`, which its Metal pipeline lacks and the pass has, as plain Metal stores
@@ -922,7 +914,6 @@ impl RuntimeFact {
             RuntimeFact::FoldedGroups => "FoldedGroups",
             RuntimeFact::ReplayBindings => "ReplayBindings",
             RuntimeFact::MergedDraws => "MergedDraws",
-            RuntimeFact::AbsentArgumentRead { .. } => "AbsentArgumentRead",
             RuntimeFact::ZeroedColor { .. } => "ZeroedColor",
             RuntimeFact::DroppedColor { .. } => "DroppedColor",
             RuntimeFact::DepthClampRange => "DepthClampRange",

@@ -1270,7 +1270,6 @@ codec_enum! {
         AmplificationDraws { layered, viewports },
         FoldedGroups,
         ReplayBindings,
-        AbsentArgumentRead { stage },
         ZeroedColor { color, format },
         DroppedColor { color },
         DepthClampRange,

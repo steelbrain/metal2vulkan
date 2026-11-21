@@ -169,9 +169,6 @@ fn every_fact() -> Vec<RuntimeFact> {
             device: true,
         },
         RuntimeFact::TexelRows { slot },
-        RuntimeFact::AbsentArgumentRead {
-            stage: Stage::Fragment,
-        },
         RuntimeFact::ZeroedColor {
             color: 1,
             format: crate::metal::PixelFormat::RGBA8Unorm,
@@ -350,7 +347,6 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::TileImageblock { .. } => 53,
         RuntimeFact::AmplificationDraws { .. } => 54,
         RuntimeFact::FoldedGroups => 56,
-        RuntimeFact::AbsentArgumentRead { .. } => 57,
         RuntimeFact::ZeroedColor { .. } => 59,
         RuntimeFact::DroppedColor { .. } => 60,
         RuntimeFact::DepthClampRange => 61,
@@ -391,7 +387,7 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::PartialThreadgroups => 98,
         RuntimeFact::TexelRows { .. } => 99,
         RuntimeFact::HeapStorageReads { .. } => 100,
-        RuntimeFact::UnitAxes { .. } => 101,
+        RuntimeFact::UnitAxes { .. } => 57,
         RuntimeFact::TexelBufferParts { .. } => 70,
         RuntimeFact::OpenClLineTexture { .. } => 74,
         RuntimeFact::AddressAlignment { .. } => 71,
@@ -403,7 +399,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..102).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..101).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -543,7 +539,6 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 RuntimeFact::AliasedImageblock { .. } => Mechanism::None,
                 RuntimeFact::CallStackDepth { .. }
                 | RuntimeFact::OpenClMode
-                | RuntimeFact::AbsentArgumentRead { .. }
                 | RuntimeFact::SynthesizedGeometry { .. } => Mechanism::None,
             };
             assert_eq!(m, expected, "{stem}: {fact:?}");

@@ -24,7 +24,7 @@ impl ExecutionStatus {
     }
 
     /// What the buffer's bytes report after the command buffer ran. The consumer maps a replay
-    /// fault, an absent argument read, a mesh grid Metal's GPU
+    /// fault, a mesh grid Metal's GPU
     /// discards or the device cannot launch, and a cubic argument sampler's sample
     /// to a command-buffer execution error, and treats resident-set misses by its own policy.
     pub fn decode(bytes: &[u8; ExecutionStatus::BYTES]) -> StatusReport {
@@ -38,7 +38,6 @@ impl ExecutionStatus {
             resident_misses: word(StatusWord::ResidentMisses),
             replay_fault: bits.contains(StatusBits::REPLAY_FAULT),
             replay_faults: ReplayFaults(word(StatusWord::ReplayFaults)),
-            absent_argument_read: bits.contains(StatusBits::ABSENT_ARGUMENT_READ),
             cubic_argument_sampler: bits.contains(StatusBits::CUBIC_ARGUMENT_SAMPLER),
             mesh_grid_discarded: bits.contains(StatusBits::MESH_GRID_DISCARDED),
             mesh_grid_past_limits: bits.contains(StatusBits::MESH_GRID_PAST_LIMITS),
@@ -60,10 +59,6 @@ pub struct StatusReport {
     pub replay_fault: bool,
     /// Why the device replay's preprocess refused commands: the union of their reasons.
     pub replay_faults: ReplayFaults,
-    /// A function read an argument its pipeline's function constants removed, which Metal gives
-    /// no value (`RuntimeFact::AbsentArgumentRead`): the read yielded zero, so no result of the
-    /// command buffer is Metal's.
-    pub absent_argument_read: bool,
     /// A function sampled through an argument buffer's sampler whose min or mag filter is
     /// `Cubic`, whose bicubic filter it does not emulate there
     /// (`RuntimeFact::CubicArgumentSampler`): no result of the command buffer is then Metal's.
@@ -127,9 +122,6 @@ impl StatusBits {
     pub const RESIDENT_MISS: StatusBits = StatusBits(1 << 0);
     /// The device replay's preprocess refused a command; [`StatusWord::ReplayFaults`] holds why.
     pub const REPLAY_FAULT: StatusBits = StatusBits(1 << 1);
-    /// A function read an argument its pipeline's function constants removed, a read Metal
-    /// gives no value, and took zero for it (`RuntimeFact::AbsentArgumentRead`).
-    pub const ABSENT_ARGUMENT_READ: StatusBits = StatusBits(1 << 2);
     /// A function sampled, gathered, or queried through a sampler an argument buffer holds whose
     /// min or mag filter is `Cubic`, whose bicubic filter it does not emulate there
     /// (`RuntimeFact::CubicArgumentSampler`): its result is the device's through a nearest
@@ -235,7 +227,6 @@ mod tests {
         let bits = [
             StatusBits::RESIDENT_MISS,
             StatusBits::REPLAY_FAULT,
-            StatusBits::ABSENT_ARGUMENT_READ,
             StatusBits::CUBIC_ARGUMENT_SAMPLER,
             StatusBits::MESH_GRID_PAST_LIMITS,
             StatusBits::MESH_GRID_DISCARDED,
@@ -246,8 +237,6 @@ mod tests {
             assert_eq!(all & b.0, 0);
             all |= b.0;
         }
-        // The bits are the low ones, none left unused between them.
-        assert_eq!(all, (1 << bits.len()) - 1);
         assert!(StatusBits(all).contains(StatusBits::REPLAY_FAULT));
         assert!(!StatusBits::RESIDENT_MISS.contains(StatusBits::REPLAY_FAULT));
     }
@@ -263,35 +252,30 @@ mod tests {
     #[test]
     fn decode_reports_every_bit_and_counter() {
         let mut bytes = [0u8; ExecutionStatus::BYTES];
-        let bits = StatusBits::ABSENT_ARGUMENT_READ.0 | StatusBits::RESIDENT_MISS.0;
+        let bits = StatusBits::CUBIC_ARGUMENT_SAMPLER.0 | StatusBits::RESIDENT_MISS.0;
         bytes[0..4].copy_from_slice(&bits.to_le_bytes());
         bytes[4..8].copy_from_slice(&7u32.to_le_bytes());
         let r = ExecutionStatus::decode(&bytes);
-        assert!(r.absent_argument_read && r.resident_miss);
+        assert!(r.cubic_argument_sampler && r.resident_miss);
         assert_eq!(r.resident_misses, 7);
         bytes = [0u8; ExecutionStatus::BYTES];
-        bytes[0..4].copy_from_slice(&StatusBits::ABSENT_ARGUMENT_READ.0.to_le_bytes());
+        bytes[0..4].copy_from_slice(&StatusBits::CUBIC_ARGUMENT_SAMPLER.0.to_le_bytes());
         let r = ExecutionStatus::decode(&bytes);
-        assert!(r.absent_argument_read && !r.resident_miss);
+        assert!(r.cubic_argument_sampler && !r.resident_miss);
         assert_eq!(r.resident_misses, 0);
         bytes = [0u8; ExecutionStatus::BYTES];
         bytes[0..4].copy_from_slice(&StatusBits::REPLAY_FAULT.0.to_le_bytes());
         let faults = ReplayFaults::VARIANT.0 | ReplayFaults::RECORD.0;
         bytes[8..12].copy_from_slice(&faults.to_le_bytes());
         let r = ExecutionStatus::decode(&bytes);
-        assert!(r.replay_fault && !r.absent_argument_read);
+        assert!(r.replay_fault && !r.cubic_argument_sampler);
         assert!(r.replay_faults.contains(ReplayFaults::VARIANT));
         assert!(r.replay_faults.contains(ReplayFaults::RECORD));
         assert!(!r.replay_faults.contains(ReplayFaults::ENCODING));
-        bytes = [0u8; ExecutionStatus::BYTES];
-        bytes[0..4].copy_from_slice(&StatusBits::ABSENT_ARGUMENT_READ.0.to_le_bytes());
-        let r = ExecutionStatus::decode(&bytes);
-        assert!(!r.cubic_argument_sampler);
         let mut cubic = [0u8; ExecutionStatus::BYTES];
         cubic[0..4].copy_from_slice(&StatusBits::CUBIC_ARGUMENT_SAMPLER.0.to_le_bytes());
         let c = ExecutionStatus::decode(&cubic);
-        assert!(c.cubic_argument_sampler && !c.absent_argument_read);
-        assert!(r.absent_argument_read && !r.replay_fault);
+        assert!(c.cubic_argument_sampler && !c.replay_fault);
     }
 
     #[test]

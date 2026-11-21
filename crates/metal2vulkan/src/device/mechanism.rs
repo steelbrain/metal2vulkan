@@ -188,9 +188,6 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         RuntimeFact::TexelBufferParts { .. } => Mechanism::Variant,
         // The runtime refuses a dispatch whose slot address is not a multiple of the alignment.
         RuntimeFact::AddressAlignment { .. } => Mechanism::PlanTimeCheck,
-        // The function marks the `ExecutionStatus` buffer its `ExecutionStatus` fact binds; the
-        // consumer reads the bit after the command buffer.
-        RuntimeFact::AbsentArgumentRead { .. } => Mechanism::None,
         // A separate compile of the pipeline, which a pass with colors the pipeline lacks asks
         // for.
         RuntimeFact::ZeroedColor { .. } | RuntimeFact::DroppedColor { .. } => Mechanism::Variant,

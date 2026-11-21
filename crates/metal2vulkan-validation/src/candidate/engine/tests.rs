@@ -96,21 +96,6 @@ fn the_status_starts_zero_and_stops_non_evidence() {
     let at = metal2vulkan::bind::StatusWord::ResidentMisses.byte_offset() as usize;
     missed[at..at + 4].copy_from_slice(&3u32.to_le_bytes());
     assert!(status_verdict(&missed).is_err());
-    // A read of an argument the function constants removed is the product's typed refusal of the
-    // case, not a failed run.
-    let absent = with_status(metal2vulkan::bind::StatusBits::ABSENT_ARGUMENT_READ.0);
-    match status_verdict(&absent) {
-        Err(crate::check::admission::ExecutorError::NotSupported(NotSupported::Product {
-            outcome,
-            at_bind: false,
-            ..
-        })) => assert!(
-            outcome.key().contains("FunctionConstantArgument"),
-            "{}",
-            outcome.key()
-        ),
-        other => panic!("an absent argument read: {other:?}"),
-    }
 }
 
 /// [`compute_case`] of a case whose entry declares no stage input: every case here but the

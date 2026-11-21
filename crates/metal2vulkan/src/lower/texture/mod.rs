@@ -678,14 +678,10 @@ pub enum TextureStrategy {
 
 /// An operation on the absent handle, alone or as a switch-at-use's arm. Metal gives a read through
 /// a removed texture or sampler no value, so a read, query, sample, gather, atomic, or `is_null` is
-/// the absent read: it marks the command buffer's execution status where it runs
-/// (`access::absent::mark`) on a profile whose absent reads mark it, and yields zero. A write or fence of a removed texture is dropped, as Metal drops one, and
-/// marks nothing.
+/// the absent read: it yields zero. A write or fence of a removed texture is dropped, as Metal
+/// drops one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AbsentArgument {
-    /// Whether the operation marks the status: every one but a write or a fence, on a profile
-    /// whose absent reads mark it (`access::absent::require`).
-    pub marks: bool,
     /// What it yields: zero of its result's lowered type, or nothing.
     pub value: NullArm,
 }
@@ -694,24 +690,17 @@ impl AbsentArgument {
     /// The census name.
     const NAME: &'static str = "texture.absent_argument";
 
-    /// The absent operation of call `at` (`inst`), decoded as `t`: its status write's needs stated
-    /// for the stage where it marks (`access::absent::require`).
+    /// The absent operation of call `at` (`inst`).
     pub(crate) fn select(
         cx: &mut SelectCx<'_>,
         at: InstId,
         inst: &Inst,
-        t: &crate::air::intrinsics::Texture,
     ) -> Result<TextureStrategy, Error> {
-        let marks = !matches!(t.op, TexOp::Write | TexOp::Fence)
-            && crate::lower::access::absent::require(cx)?;
         let value = match cx.entry.module.types().get(inst.ty) {
             Some(crate::air::ir::Type::Void) | None => NullArm::Nothing,
             _ => NullArm::Zero(cx.lowered_repr(Value::Inst(at), inst.ty)?),
         };
-        Ok(TextureStrategy::AbsentArgument(AbsentArgument {
-            marks,
-            value,
-        }))
+        Ok(TextureStrategy::AbsentArgument(AbsentArgument { value }))
     }
 }
 
@@ -973,14 +962,8 @@ impl TextureStrategy {
             TextureStrategy::ImageblockSlice(s) => s.words(),
             TextureStrategy::ExtendedSample(e) => e.words(),
             TextureStrategy::InPlaceSample(e) => e.words(),
-            // `access::absent::AbsentRead`'s status write, and the zero, a constant.
-            TextureStrategy::AbsentArgument(a) => {
-                if a.marks {
-                    32
-                } else {
-                    0
-                }
-            }
+            // The zero, a constant.
+            TextureStrategy::AbsentArgument(_) => 0,
         }
     }
 }
@@ -2136,7 +2119,7 @@ pub fn select(
         HandleTarget::One(Candidate::Texture(index)) => {
             select_image(cx, (at, inst), t, &ops, ImageRef::Slot(index), m)
         }
-        HandleTarget::One(Candidate::Absent) => AbsentArgument::select(cx, at, inst, t),
+        HandleTarget::One(Candidate::Absent) => AbsentArgument::select(cx, at, inst),
         HandleTarget::One(_) => Err(cx.invariant("a texture operand with a sampler candidate")),
         // The constant null handle: the null arm alone, with nothing to dispatch on.
         HandleTarget::Null => Ok(TextureStrategy::Switch(Box::new(Switch {
@@ -2155,7 +2138,7 @@ pub fn select(
                         not_rows(cx, index);
                         select_image(cx, (at, inst), t, &ops, ImageRef::Slot(index), m)?
                     }
-                    Candidate::Absent => AbsentArgument::select(cx, at, inst, t)?,
+                    Candidate::Absent => AbsentArgument::select(cx, at, inst)?,
                     _ => return Err(cx.invariant("a texture operand with a sampler candidate")),
                 };
                 arms.push((vec![c.handle()], arm));

@@ -1096,12 +1096,8 @@ pub fn status_verdict(bytes: &[u8; ExecutionStatus::BYTES]) -> Result<StatusRepo
 
 /// The verdict on a run's status report, read before any output: a device replay that refused a
 /// command, a clamped indirect count, or a resident-set miss means the run is not a semantic
-/// observation, a failure; a read of an argument the function constants removed
-/// ([`absent_argument_refusal`]) is the translation's typed refusal.
+/// observation, a failure.
 pub fn report_verdict(report: StatusReport) -> Result<StatusReport, ExecutorError> {
-    if report.absent_argument_read {
-        return Err(absent_argument_refusal());
-    }
     if report.replay_fault {
         return Err(ExecutorError::Failed(format!(
             "the device replay dispatched nothing for command(s) it refused ({:#x}); the output \
@@ -1116,25 +1112,6 @@ pub fn report_verdict(report: StatusReport) -> Result<StatusReport, ExecutorErro
         )));
     }
     Ok(report)
-}
-
-/// The refusal of a run in which a function read an argument its function constants removed
-/// (`StatusBits::ABSENT_ARGUMENT_READ`, which the runtime's execution report states): Metal gives
-/// the read no value, so the translation took zero for it, and nothing the run wrote is evidence.
-/// It is the product's typed refusal of the case, `FunctionConstantArgument`, not representable: no
-/// Vulkan run gives Metal's undefined answer.
-pub fn absent_argument_refusal() -> ExecutorError {
-    let error =
-        metal2vulkan::error::Error::from(metal2vulkan::error::Unsupported::not_representable(
-            metal2vulkan::error::Feature::FunctionConstantArgument,
-        ));
-    refusal_at(
-        Outcome::from(&error),
-        "a function read an argument its function constants removed, which Metal gives no \
-         value: the run read zero"
-            .into(),
-        false,
-    )
 }
 
 /// The translator fingerprint of engine observations: the product and the profile the case

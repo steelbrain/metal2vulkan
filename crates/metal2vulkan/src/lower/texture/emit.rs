@@ -91,9 +91,6 @@ fn value(
         TextureStrategy::ExtendedSample(e) => crate::lower::sampler::extended::emit(cx, fb, e)?,
         TextureStrategy::InPlaceSample(e) => crate::lower::sampler::in_place::emit(cx, fb, e)?,
         TextureStrategy::AbsentArgument(a) => {
-            if a.marks {
-                crate::lower::access::absent::mark(cx, fb)?;
-            }
             return Ok(null_value(cx, fb, &a.value)?.first().copied());
         }
     }))

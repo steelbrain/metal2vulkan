@@ -114,7 +114,6 @@ assoc-const	metal2vulkan::bind::ReplayPreprocessModule::RECORDS_PUSH	pub const R
 assoc-const	metal2vulkan::bind::ReplayPreprocessModule::RESIDENT_PUSH	pub const RESIDENT_PUSH: u32
 assoc-const	metal2vulkan::bind::ReplayPreprocessModule::STATUS_PUSH	pub const STATUS_PUSH: u32
 assoc-const	metal2vulkan::bind::RootTable::SINK_HOST_OFFSET	pub const SINK_HOST_OFFSET: u32
-assoc-const	metal2vulkan::bind::StatusBits::ABSENT_ARGUMENT_READ	pub const ABSENT_ARGUMENT_READ: StatusBits
 assoc-const	metal2vulkan::bind::StatusBits::CUBIC_ARGUMENT_SAMPLER	pub const CUBIC_ARGUMENT_SAMPLER: StatusBits
 assoc-const	metal2vulkan::bind::StatusBits::MESH_GRID_DISCARDED	pub const MESH_GRID_DISCARDED: StatusBits
 assoc-const	metal2vulkan::bind::StatusBits::MESH_GRID_PAST_LIMITS	pub const MESH_GRID_PAST_LIMITS: StatusBits
@@ -328,7 +327,6 @@ assoc-const-value	metal2vulkan::bind::ReplayPreprocessModule::RECORDS_PUSH	16
 assoc-const-value	metal2vulkan::bind::ReplayPreprocessModule::RESIDENT_PUSH	0
 assoc-const-value	metal2vulkan::bind::ReplayPreprocessModule::STATUS_PUSH	8
 assoc-const-value	metal2vulkan::bind::RootTable::SINK_HOST_OFFSET	(SINK_ROOT * ENTRY_BYTES + HOST) as u32
-assoc-const-value	metal2vulkan::bind::StatusBits::ABSENT_ARGUMENT_READ	StatusBits(1 <<2)
 assoc-const-value	metal2vulkan::bind::StatusBits::CUBIC_ARGUMENT_SAMPLER	StatusBits(1 <<3)
 assoc-const-value	metal2vulkan::bind::StatusBits::MESH_GRID_DISCARDED	StatusBits(1 <<5)
 assoc-const-value	metal2vulkan::bind::StatusBits::MESH_GRID_PAST_LIMITS	StatusBits(1 <<4)
@@ -2308,7 +2306,6 @@ field	metal2vulkan::bind::StageTable.buffers	pub buffers: BTreeMap<u32, BoundBuf
 field	metal2vulkan::bind::StageTable.samplers	pub samplers: BTreeMap<u32, BoundSampler>
 field	metal2vulkan::bind::StageTable.textures	pub textures: BTreeMap<u32, BoundTexture>
 field	metal2vulkan::bind::StageTable.threadgroup_lengths	pub threadgroup_lengths: BTreeMap<u32, u32>
-field	metal2vulkan::bind::StatusReport.absent_argument_read	pub absent_argument_read: bool
 field	metal2vulkan::bind::StatusReport.cubic_argument_sampler	pub cubic_argument_sampler: bool
 field	metal2vulkan::bind::StatusReport.mesh_grid_discarded	pub mesh_grid_discarded: bool
 field	metal2vulkan::bind::StatusReport.mesh_grid_past_limits	pub mesh_grid_past_limits: bool
@@ -11047,7 +11044,6 @@ variant	metal2vulkan::pipeline::ResourceKind::TileMap	TileMap
 variant	metal2vulkan::pipeline::ResourceKind::YCbCrPlanes	YCbCrPlanes(crate::bind::YCbCrPlanesSampler)
 variant	metal2vulkan::pipeline::RotatedBlendForm::Premultiplied	Premultiplied
 variant	metal2vulkan::pipeline::RotatedBlendForm::Unmeasured	Unmeasured
-variant	metal2vulkan::pipeline::RuntimeFact::AbsentArgumentRead	AbsentArgumentRead { stage: Stage }
 variant	metal2vulkan::pipeline::RuntimeFact::AccelerationStructureInstanceCount	AccelerationStructureInstanceCount { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::AddressAlignment	AddressAlignment { slot: SlotRef, align: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::AliasedImageblock	AliasedImageblock { data_size: u32 }

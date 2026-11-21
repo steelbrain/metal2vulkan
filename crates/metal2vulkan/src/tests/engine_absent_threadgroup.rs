@@ -36,7 +36,6 @@ use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::link::{link, LinkInputs};
 use crate::pipeline::lower_inputs::LoweringInputs;
 use crate::pipeline::relocate::relocate;
-use crate::pipeline::sym::Stage;
 use crate::pipeline::testing::{
     llvm_assemble, meter, status_reach, AssembleError, Scratch, StatusReach,
 };
@@ -192,13 +191,6 @@ fn validate(a: &FunctionArtifact, p: &DeviceProfile) {
     check_words_valid(&words, &a.requirements, p).unwrap_or_else(|e| panic!("L3: {e}"));
 }
 
-/// Whether `a` states an absent read.
-fn absent(a: &FunctionArtifact) -> bool {
-    a.facts.contains(&RuntimeFact::AbsentArgumentRead {
-        stage: Stage::Kernel,
-    })
-}
-
 /// With `has_tg` false, the loads and the atomic of `at_accesses` are absent reads that take zero,
 /// and the writes of `at_stores` go: on every profile neither kernel marks anything (no fact, no
 /// status push field or binding), and both validate.
@@ -210,7 +202,7 @@ fn absent_threadgroup_memory_reads_zero_and_drops_its_writes() {
             let a =
                 compile(&bc, entry, false, &p).unwrap_or_else(|e| panic!("{stem} {entry}: {e}"));
             assert!(
-                !absent(&a) && !a.facts.contains(&RuntimeFact::ExecutionStatus),
+                !a.facts.contains(&RuntimeFact::ExecutionStatus),
                 "{stem} {entry}: {:?}",
                 a.facts
             );
@@ -242,10 +234,7 @@ fn present_threadgroup_memory_is_read() {
     for (stem, p) in threadgroup_profiles().expect("profiles") {
         for entry in ["at_accesses", "at_stores", "at_compared"] {
             match compile(&bc, entry, true, &p) {
-                Ok(a) => {
-                    assert!(!absent(&a), "{stem} {entry}: {:?}", a.facts);
-                    validate(&a, &p);
-                }
+                Ok(a) => validate(&a, &p),
                 Err(Error::NeedsInput(_)) => {}
                 Err(e) => panic!("{stem} {entry}: {e}"),
             }
