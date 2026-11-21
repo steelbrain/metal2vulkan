@@ -2030,10 +2030,6 @@ pub(crate) mod on_device {
                 ]
             };
             let before = counters.metrics();
-            assert!(
-                before.calibrations >= 1,
-                "{name}: the device start's calibration"
-            );
             let mut spans = [0; 3];
             let mut handled_by = 0;
             for word in 1..=3 {
@@ -2050,6 +2046,12 @@ pub(crate) mod on_device {
                 handled_by += host_time() - end;
             }
             let after = counters.metrics();
+            // The completion thread reads its first calibration as it starts, before it sees any
+            // completion, so three completions seen mean it has.
+            assert!(
+                after.calibrations >= 1,
+                "{name}: the completion thread's starting calibration"
+            );
             let added: Vec<u64> = (sums(after).iter().zip(sums(before)))
                 .map(|(a, b)| a - b)
                 .collect();
