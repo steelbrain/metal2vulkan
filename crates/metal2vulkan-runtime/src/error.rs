@@ -1424,6 +1424,10 @@ pub enum RenderPipelineKind {
     /// A function that reads what a draw does not supply yet: a function table, a table the
     /// binder builds, a parameter block longer than a parameter ring chunk (64 KiB), a push field
     /// or bind-time fact the render encoder does not fill, or an unnormalized constexpr sampler.
+    /// Among the push fields: the stride of a vertex buffer layout of
+    /// `MTLBufferLayoutStrideDynamic` that the vertex function fetches in the shader, as a state
+    /// made for indirect command buffers (`supportIndirectCommandBuffers`) fetches every
+    /// `[[stage_in]]` attribute.
     DrawInput,
 }
 

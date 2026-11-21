@@ -146,11 +146,15 @@ impl LinkInputs {
     }
 
     /// A render pipeline of `desc`'s fixed-function state under `variant`'s pulled vertex
-    /// buffers.
+    /// buffers. Every attribute is pulled under the de-indexed and private list forms and for a
+    /// descriptor made for indirect command buffers (`supportIndirectCommandBuffers`), as their
+    /// vertex stage is compiled.
     pub fn render_variant(desc: &RenderPipelineDescriptor, variant: &VariantKey) -> LinkInputs {
         let mut r = RenderLinkInputs::from(desc);
         r.pulled_vertex_buffers = variant.pulled_vertex_buffers.clone();
-        r.pull_every = variant.primitive_id_indices.is_some() || variant.private_list;
+        r.pull_every = variant.primitive_id_indices.is_some()
+            || variant.private_list
+            || desc.support_indirect_command_buffers;
         r.line_band = variant.line_band;
         LinkInputs::Render(Box::new(r))
     }
@@ -180,7 +184,9 @@ pub struct RenderLinkInputs {
     pub pulled_vertex_buffers: BTreeSet<u32>,
     /// The variant pulls every attribute (`vertex::vertex_fetch_projection_for`'s `pull_every`):
     /// the de-indexed and private list forms (`VariantKey::primitive_id_indices`,
-    /// `VariantKey::private_list`), whose vertex stage is compiled so.
+    /// `VariantKey::private_list`) and a pipeline made for indirect command buffers
+    /// (`RenderPipelineDescriptor::support_indirect_command_buffers`), whose vertex stage is
+    /// compiled so.
     pub pull_every: bool,
     /// `maxVertexAmplificationCount`.
     pub max_vertex_amplification_count: u32,

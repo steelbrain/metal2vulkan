@@ -2856,8 +2856,9 @@ or does not check is rebuilt from the generations' names, with young counted ful
   state without rasterization its discard, which keeps its attachment formats and that state in
   the pipeline. Vertex buffer strides are the descriptor's, so the content's, and baked. It
   renders dynamically into its attachments' formats, with no render pass.
-- Every `[[stage_in]]` attribute is fetched by fixed-function vertex input, the form native
-  Vulkan uses, with no second form: the vertex descriptor's formats, offsets, strides and steps
+- Every `[[stage_in]]` attribute of a state made without `supportIndirectCommandBuffers` is
+  fetched by fixed-function vertex input, the form native Vulkan uses, with no second form (a state
+  made with it fetches every attribute in the shader: Indirect command buffers, below): the vertex descriptor's formats, offsets, strides and steps
   are the `VkPipeline`'s vertex input state. Of Metal's vertex descriptor:
   - formats: each maps to the Vulkan format of its layout and conversion, taken where the
     device's format query reports `VERTEX_BUFFER` for it: an 8- or 16-bit integer format read
@@ -3575,9 +3576,9 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
   execution runs every command of the buffer, and the vertex function returns before its body for
   a command outside the range.
 - A state made with `supportIndirectCommandBuffers` pulls every vertex attribute its vertex function
-  reads, so a command binds no vertex buffer of its own, and its vertex function tests its command
-  against the execution's range; a direct draw of the state tests it against a range of every
-  command.
+  reads, at its layout's stride from the descriptor, so a command binds no vertex buffer of its
+  own, and its vertex function tests its command against the execution's range; a direct draw of
+  the state tests it against a range of every command.
 - A command's buffer slots are not bounds-checked: an execution pushes their bounds as 2^31 - 1
   bytes before the address and `u32::MAX` bytes after it. An access through one past the buffer's
   end reaches the memory there, as an access through a pointer loaded from memory does. An access
@@ -3603,6 +3604,11 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
   outside the range, reset or not, costs its vertex work and draws nothing.
 - A state made with `supportIndirectCommandBuffers` pays one 8-byte load a vertex on its direct
   draws too: its vertex function reads the execution range.
+- A state made with `supportIndirectCommandBuffers` whose vertex descriptor has a layout of
+  `MTLBufferLayoutStrideDynamic` that its vertex function reads is refused at its making
+  (`Gap::RenderPipeline`, `RenderPipelineKind::DrawInput`): its shader fetch would read the
+  stride each bind sets (`setVertexBuffer:offset:attributeStride:atIndex:`, a command's included)
+  from a push field the encoder does not fill.
 - An execution over a range a buffer holds takes a preprocess region for the buffer's whole
   capacity, whatever the range, held until the command buffer completes. A part of 64 commands of
   17 tokens takes 151,808 bytes on NVIDIA's driver (an RTX 2080; 2,372 a command) and 39,680 on

@@ -4150,6 +4150,56 @@ fn a_replayed_draw_reads_its_buffers_through_the_slot_table() {
     }
 }
 
+/// A render pipeline made for indirect command buffers links its vertex input as its vertex stage
+/// is compiled: every `[[stage_in]]` attribute pulled (`RenderLinkInputs::pull_every`), as a
+/// command binds its vertex buffers by address alone. `icb_render_stride_template`'s one
+/// attribute links with no fixed-function binding or attribute, pulled at its layout's stride,
+/// static or per bind, and every stage passes L3.
+#[test]
+fn a_pipeline_for_indirect_command_buffers_pulls_its_stage_in() {
+    use crate::pipeline::VertexStride;
+    let Some(bc) = fixture("icb_render_stride_template") else {
+        return;
+    };
+    let vertex = Library::from_air(&bc)
+        .expect("library")
+        .function("icb_render_stride_template")
+        .expect("vertex");
+    for stem in ["moltenvk-m3", "runtime-floor"] {
+        let dev = device(stem);
+        for (stride, pulled) in [
+            (Some(8), VertexStride::Static(8)),
+            (None, VertexStride::PerBind),
+        ] {
+            let mut d = RenderPipelineDescriptor::new(StageSource::Function(
+                FunctionDescriptor::new(vertex.clone()),
+            ));
+            d.rasterization_enabled = false;
+            d.support_indirect_command_buffers = true;
+            // The attribute's layout at buffer 1: buffer 0 is the function's `out`.
+            let mut v = VertexDescriptor::new();
+            v.layouts
+                .insert(1, VertexBufferLayoutDescriptor::new(stride));
+            v.attributes.insert(
+                0,
+                VertexAttributeDescriptor::new(metal::VertexFormat::UInt, 0, 1),
+            );
+            d.vertex_descriptor = Some(v);
+            let p = dev
+                .compile_render_pipeline(&d, &Budget::standard())
+                .unwrap_or_else(|e| panic!("{stem}, stride {stride:?}: {e}"));
+            let input = &p.vertex_input;
+            assert!(input.bindings.is_empty(), "{stem}, stride {stride:?}");
+            assert!(input.attributes.is_empty(), "{stem}, stride {stride:?}");
+            assert_eq!(input.pulled.len(), 1, "{stem}, stride {stride:?}");
+            assert_eq!(input.pulled[0].stride, pulled, "{stem}");
+            for stage in &p.stages {
+                l3(&stage.spirv, &p.requirements, &dev);
+            }
+        }
+    }
+}
+
 /// A draw replay's variant reads every buffer through the slot table its replay's preprocess
 /// writes, so inline bytes the encoder bound at a slot it reads are no refusal: commands that
 /// inherit the encoder's buffers read them at the consumer's upload of them, whose address the

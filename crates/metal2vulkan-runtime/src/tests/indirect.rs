@@ -146,11 +146,15 @@ mod on_device {
         CullMode, Device, DispatchType, Error, FunctionDescriptor, Gap, IndexBuffer, IndexType,
         IndirectCommandBuffer, IndirectCommandBufferDescriptor, IndirectCommandType,
         IndirectCommandsKind, Library, MemoryClass, PixelFormat, PrimitiveType, Refusal,
-        RenderCommandEncoder, RenderPipelineDescriptor, RenderPipelineState, Resource,
-        ResourceUsage, StageSource, TextureUsage,
+        RenderCommandEncoder, RenderPipelineDescriptor, RenderPipelineKind, RenderPipelineState,
+        Resource, ResourceUsage, StageSource, TextureUsage,
     };
     use ash::vk;
-    use metal2vulkan::pipeline::IndirectDrawLayout;
+    use metal2vulkan::metal::VertexFormat;
+    use metal2vulkan::pipeline::{
+        IndirectDrawLayout, VertexAttributeDescriptor, VertexBufferLayoutDescriptor,
+        VertexDescriptor,
+    };
     use metal2vulkan_devtools::engine_dir;
     use std::time::{Duration, Instant};
 
@@ -748,6 +752,74 @@ mod on_device {
                 }
             });
             println!("{name}: a state of 17 tokens on a device that takes {tokens}");
+        });
+    }
+
+    /// A state made for indirect command buffers fetches its vertex function's `[[stage_in]]`
+    /// attributes in the shader, as a command binds its vertex buffers by address alone
+    /// (`icb_render_stride_template`, rasterization disabled): a direct draw of vertices 1 to 3
+    /// reads each vertex's word at the layout's stride of 8 bytes past its buffer's bind offset of
+    /// 4, and writes it with its vertex id to `out[vid]`. The same state with its layout at
+    /// `MTLBufferLayoutStrideDynamic` is refused by name: its fetch reads the stride each bind
+    /// sets from a push field the encoder does not fill.
+    #[test]
+    fn every_device_pulls_a_flagged_states_stage_in_and_refuses_a_stride_per_bind() {
+        let Some(fetched) = library(&engine_dir().join("icb_render_stride_template.ll")) else {
+            return;
+        };
+        let descriptor = |stride| {
+            let mut d =
+                RenderPipelineDescriptor::new(function(&fetched, "icb_render_stride_template"));
+            d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Uint));
+            d.rasterization_enabled = false;
+            d.support_indirect_command_buffers = true;
+            let mut vertex = VertexDescriptor::new();
+            let attribute = VertexAttributeDescriptor::new(VertexFormat::UInt, 0, 1);
+            vertex.attributes.insert(0, attribute);
+            vertex
+                .layouts
+                .insert(1, VertexBufferLayoutDescriptor::new(stride));
+            d.vertex_descriptor = Some(vertex);
+            d
+        };
+        // Word 1 + 2v holds 0xb0 + v, a filler between: a stride of 4 or no offset reads a filler.
+        let mut data = [0x5555_5555u32; 16];
+        for v in 0..6 {
+            data[1 + 2 * v] = 0xb0 + v as u32;
+        }
+        each_device("icb_stage_in", |name, _, device| {
+            let refused = (device
+                .new_render_pipeline_state(&descriptor(None), crate::tests::no_constexpr_samplers))
+            .err();
+            assert!(
+                matches!(
+                    refused,
+                    Some(Error::Unsupported(Gap::RenderPipeline {
+                        kind: RenderPipelineKind::DrawInput
+                    }))
+                ),
+                "{name}: a stride per bind: {refused:?}"
+            );
+            let state = state(name, &device, &descriptor(Some(8)));
+            assert!(state.support_indirect_command_buffers(), "{name}");
+            let mut buffers = Buffers::new(&device);
+            let attributes = buffers.of(&device, &words(&data));
+            let out = buffers.of(&device, &[0u8; 8 * 8]);
+            drawn(name, &device, &state, |e| {
+                ok(name, e.set_vertex_buffer(Some(&out), 0, 0));
+                ok(name, e.set_vertex_buffer(Some(&attributes), 4, 1));
+                ok(name, e.draw_primitives(PrimitiveType::Triangle, 1, 3, 1, 0));
+            });
+            let contents = out.contents().expect("a Shared buffer");
+            // SAFETY: the buffer holds 16 words, which the finished draw wrote and whose writes
+            // reach the host.
+            let got = unsafe { std::slice::from_raw_parts(contents.as_ptr().cast::<u32>(), 16) };
+            let mut want = [0u32; 16];
+            for v in 1..4u32 {
+                want[2 * v as usize..2 * v as usize + 2].copy_from_slice(&[0xb0 + v, v]);
+            }
+            assert_eq!(got, want, "{name}: each vertex's word and id");
+            println!("{name}: an attribute pulled at its stride; a stride per bind refused");
         });
     }
 

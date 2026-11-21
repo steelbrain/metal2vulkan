@@ -58,11 +58,13 @@
 //!    cannot fetch. It runs after the items above, so the variant's fixed-function bindings are
 //!    exactly the projection's others, attribute for attribute;
 //! 8. the **de-indexed and private list forms** (`VariantKey::primitive_id_indices`,
-//!    `VariantKey::private_list`) pull every remaining fixed-function attribute in the projection
-//!    their compile takes, and link resolves their vertex input the same way
-//!    (`RenderLinkInputs::pull_every`): their draw runs without indices, so fixed-function input
-//!    would fetch at the stream position, where the function reads the vertex its index names. The
-//!    layouts they pull are not a pulled-vertex-buffer variant's (`variant_pulled` keeps item 7's).
+//!    `VariantKey::private_list`) and a pipeline made for indirect command buffers
+//!    (`supportIndirectCommandBuffers`) pull every remaining fixed-function attribute in the
+//!    projection their compile takes, and link resolves their vertex input the same way
+//!    (`RenderLinkInputs::pull_every`): the first two draw without indices, so fixed-function
+//!    input would fetch at the stream position, where the function reads the vertex its index
+//!    names, and a command binds its vertex buffers by address alone. The layouts they pull are
+//!    not a pulled-vertex-buffer variant's (`variant_pulled` keeps item 7's).
 //!
 //! Under the identity domains (`Device::from_queries`' profile) items 2 to 6 pull nothing: item 2's
 //! cases are `metal::vertex::attribute_fetch`'s refusals, and an attribute items 3 to 6 would pull
@@ -347,7 +349,8 @@ fn resolve<'a>(
             moved.insert(r.attr.buffer_index);
         }
     }
-    // The de-indexed and private list forms (item 8).
+    // The de-indexed and private list forms and a pipeline made for indirect command buffers
+    // (item 8).
     if pull_every {
         for r in out.values_mut() {
             r.fetch = AttributeFetch::Pulled;
@@ -386,7 +389,8 @@ pub fn vertex_fetch_projection(
 /// `vertex_fetch_projection` under a pulled-vertex-buffer variant and a form that pulls every
 /// attribute: the attributes of the layouts in `pulled_vertex_buffers`
 /// (`VariantKey::pulled_vertex_buffers`) are pulled (item 7), and every attribute when
-/// `pull_every` (the de-indexed and private list forms, item 8).
+/// `pull_every` (the de-indexed and private list forms and a pipeline made for indirect command
+/// buffers, item 8).
 pub fn vertex_fetch_projection_for(
     desc: Option<&VertexDescriptor>,
     attributes: &BTreeMap<u32, IoNumeric>,

@@ -533,7 +533,8 @@ fn draws(
             RuntimeFact::SampleCount => {}
             // A colour moved into a storage form, which the runtime never moves.
             RuntimeFact::MovableStorageWrites { .. } => {}
-            // A post-tessellation function's pulled attributes and their layouts' strides: the
+            // The pulled attributes and their layouts' strides of a post-tessellation function and
+            // of a state made for indirect command buffers, which pulls every attribute: the
             // content's own descriptor, whose projection link checked. A stride set per bind is
             // refused at its push field below.
             RuntimeFact::VertexFetch { .. } | RuntimeFact::VertexBufferStride { .. } => {}
@@ -668,7 +669,9 @@ fn draws(
                     constexprs.push((place, sampler));
                     FieldValue::ConstexprSampler(place)
                 }
-                // A pulled layout's stride, the descriptor's: one the content fixes.
+                // A pulled layout's stride, the descriptor's: one the content fixes. A stride set
+                // per bind (`MTLBufferLayoutStrideDynamic`) is a push field the encoder does not
+                // fill, nor a command's token.
                 PushField::VertexBufferStride(layout) => {
                     let stride = (pipeline.vertex_input.pulled.iter())
                         .find(|pulled| pulled.buffer_index == layout)
