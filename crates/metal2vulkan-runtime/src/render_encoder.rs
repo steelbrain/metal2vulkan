@@ -2330,16 +2330,19 @@ impl RenderCommandEncoder {
         };
         if !self.facts.held {
             // A buffer argument bound to nothing reads the nil buffer (`Ring::nil`), and a checked
-            // load outside its buffer the zero range (`Ring::zero`).
+            // load outside its buffer the zero range (`Ring::zero`). An execution's commands bind
+            // their own slots, so the encoder's bindings are neither read nor checked for it, and
+            // the next draw checks them.
+            let executes = matches!(call, Call::Commands { .. });
             let (mut nil, mut zero, mut whole) = (0, 0, 0);
             for &(_, table, value) in &draws.fields {
                 match value {
                     FieldValue::BufferAddress { slot, mask } => {
                         match self.tables[table].buffers.get(slot as usize) {
-                            Some(Bound::Buffer { buffer, offset }) => {
+                            Some(Bound::Buffer { buffer, offset }) if !executes => {
                                 check_alignment(slot, mask, buffer, *offset)?
                             }
-                            Some(Bound::Bytes(..)) => {}
+                            Some(Bound::Buffer { .. } | Bound::Bytes(..)) => {}
                             Some(Bound::Empty) | None => nil = self.core.ring.nil(&self.core)?,
                         }
                     }
@@ -2349,7 +2352,7 @@ impl RenderCommandEncoder {
                 }
             }
             self.facts.nil = (nil, zero, whole);
-            self.facts.held = true;
+            self.facts.held = !executes;
         }
         let count = match call {
             Call::Direct { vertex_count, .. } => Some(vertex_count),
