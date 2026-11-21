@@ -193,13 +193,16 @@ fn a_uniform_viewport_takes_the_output_or_goes_nowhere() {
         needs(F::ShaderOutputViewportIndex),
         "multiViewport without the output",
     );
-    // Without `multiViewport`, on the floor too: the raw index alone.
+    // Without `multiViewport`, below the floor too, which requires it: the raw index alone.
     for dev in [
         device(
             "lavapipe",
             &[F::ShaderOutputViewportIndex, F::MultiViewport],
         ),
-        device("runtime-floor", &[]),
+        device(
+            "runtime-floor",
+            &[F::ShaderOutputViewportIndex, F::MultiViewport],
+        ),
     ] {
         let (outputs, builtins) = vertex_io(&bc, "rt6_select", &dev);
         assert_eq!(outputs, [IoRole::ViewportIndex], "{builtins:?}");
@@ -267,10 +270,11 @@ fn indices_that_differ_among_a_primitive_s_vertices_are_refused() {
 }
 
 /// A fragment function that reads the slice or viewport no stage writes reads 0 on a device that
-/// cannot declare the builtin, which it lists: the viewport on the floor, and the slice on the
-/// floor without its `shaderOutputLayer`.
+/// cannot declare the builtin, which it lists: below the floor, the viewport without
+/// `multiViewport` and `shaderOutputViewportIndex`, and the slice without `shaderOutputLayer`,
+/// each of which the floor requires.
 #[test]
-fn on_the_floor_a_read_of_an_index_no_stage_writes_is_zero() {
+fn below_the_floor_a_read_of_an_index_no_stage_writes_is_zero() {
     let Some(amp) = assemble("vertex_amplification.ll") else {
         return;
     };
@@ -283,7 +287,10 @@ fn on_the_floor_a_read_of_an_index_no_stage_writes_is_zero() {
         (
             "amp_fragment",
             vec![StageBuiltin::ViewportIndex],
-            device("runtime-floor", &[]),
+            device(
+                "runtime-floor",
+                &[F::ShaderOutputViewportIndex, F::MultiViewport],
+            ),
         ),
     ] {
         let a = compile(&amp, entry, floor.profile()).unwrap_or_else(|e| panic!("{entry}: {e}"));

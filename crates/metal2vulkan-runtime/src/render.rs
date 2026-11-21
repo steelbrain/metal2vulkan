@@ -814,9 +814,15 @@ fn unbuilt(pipeline: &RenderPipeline, enabled: &EnabledCaps) -> Option<RenderPip
     })
 }
 
-/// The ash form of a translator dynamic state.
+/// The ash form of a translator dynamic state, as the pipeline holds it: the viewport and the
+/// scissor are the with-count states, which set them with their count, as a pipeline holds no
+/// state in both forms (VUID-VkGraphicsPipelineCreateInfo-pDynamicStates-04132 and -04133).
 fn dynamic(state: metal2vulkan::vk::DynamicState) -> vk::DynamicState {
-    vk::DynamicState::from_raw(state.as_raw())
+    match vk::DynamicState::from_raw(state.as_raw()) {
+        vk::DynamicState::VIEWPORT => vk::DynamicState::VIEWPORT_WITH_COUNT,
+        vk::DynamicState::SCISSOR => vk::DynamicState::SCISSOR_WITH_COUNT,
+        other => other,
+    }
 }
 
 impl Fixed {
