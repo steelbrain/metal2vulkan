@@ -232,8 +232,8 @@ enum Invariant {
     /// A fragment function's tile's first word in the pass's tile memory buffer
     /// (`access::tile_memory::base`), computed at entry (`access::tile_memory::emit_entry`).
     TileBase,
-    /// A kernel's slot of the runtime's private arena ([`EmitCx::arena_slot`]), computed in the
-    /// function's first block.
+    /// A kernel's slot of the runtime's private arena, placed as a pointer to its words
+    /// ([`EmitCx::arena_slot`]), in the function's first block.
     ArenaSlot,
     /// The table word of the argument buffer's sampler of a handle, tested for a cubic filter
     /// (`sampler::emit`'s reach test): an operation through the same handle where an earlier test
@@ -411,14 +411,16 @@ impl<'a> EmitCx<'a> {
         Ok(v)
     }
 
-    /// The device address of the invocation's slot of the runtime's memory that holds the
-    /// kernel's private arena (`dispatch::KernelDecl::arena_slot`, of the pushed
-    /// `PushField::PrivateArenaAddress` and the slot's bytes, `RuntimeFact::PrivateArena`),
-    /// computed once in the function's first block, wherever it is first asked for: its operands
-    /// are that push field, which [`EmitCx::load_push_fields`] loads there, the invocation's
-    /// built-ins and constants, so it dominates every access of the arena. Made where it is asked
-    /// for, it would be made again in every block of the body: `dispatch::emit_entry` asks after
-    /// the floor's tail guard closed a construct, and later hooks may close more before the walk.
+    /// The invocation's slot of the runtime's memory that holds the kernel's private arena, placed:
+    /// a `PhysicalStorageBuffer` pointer to its words, a runtime array of `u32` at the slot's
+    /// device address (`dispatch::KernelDecl::arena_slot`, of the pushed
+    /// `PushField::PrivateArenaAddress` and the slot's bytes, `RuntimeFact::PrivateArena`), so
+    /// an access of a word is an access chain from it (`memory::arena::ArenaMem::ptr`). Made once
+    /// in the function's first block, wherever it is first asked for: its operands are that push
+    /// field, which [`EmitCx::load_push_fields`] loads there, the invocation's built-ins and
+    /// constants, so it dominates every access of the arena. Made where it is asked for, it would
+    /// be made again in every block of the body: `dispatch::emit_entry` asks after the floor's
+    /// tail guard closed a construct, and later hooks may close more before the walk.
     pub(crate) fn arena_slot(&mut self, fb: &mut FunctionBuilder<'_>) -> BResult<SValue> {
         if let Some(v) = self.recall(fb, Invariant::ArenaSlot) {
             return Ok(v);
@@ -436,7 +438,16 @@ impl<'a> EmitCx<'a> {
         };
         let v = fb.in_entry_block(|fb| {
             let arena = self.push_field(fb, PushField::PrivateArenaAddress)?;
-            kernel.arena_slot(fb, arena, slot_bytes)
+            let slot = kernel.arena_slot(fb, arena, slot_bytes)?;
+            let u32_ = fb.module().ty(Type::Int {
+                width: 32,
+                signed: false,
+            })?;
+            let words = fb.module().ty(Type::RuntimeArray {
+                elem: u32_,
+                stride: Some(4),
+            })?;
+            fb.device_place(slot, words)
         })?;
         self.remember_at_entry(fb, Invariant::ArenaSlot, v);
         Ok(v)
