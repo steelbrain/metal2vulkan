@@ -1232,11 +1232,28 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 // The bound buffer's bytes before its bind offset and its length, which
                 // instantiation reads from the state.
                 PushField::SlotBounds(slot) if planned(slot).is_some() => {}
-                // The identity domains' zero range is the runtime's own memory, and their
-                // bicubic slot's format treatment the runtime's own field.
-                PushField::ZeroAddress | PushField::BicubicTexels(_) => {
+                // The identity domains' zero range and private arena are the runtime's own
+                // memory, and their bicubic slot's format treatment the runtime's own field.
+                PushField::ZeroAddress
+                | PushField::BicubicTexels(_)
+                | PushField::PrivateArenaAddress => {
                     return Err(not_implemented(Feature::IdentityDomains))
                 }
+                // Under the identity domains a texture's or sampler's word is its resource ID, a
+                // constexpr sampler's the runtime's own sampler, and a fetched color, the
+                // tessellation factors' address and an indirect command's range, sequence and
+                // base the runtime's own: fields the runtime pushes itself, which no binding state
+                // holds.
+                PushField::SlotGuestBase(SlotRef {
+                    class: SlotClass::Texture | SlotClass::Sampler,
+                    ..
+                })
+                | PushField::ConstexprSampler(_)
+                | PushField::FetchedColor { .. }
+                | PushField::TessellationFactorAddress
+                | PushField::IndirectRange
+                | PushField::IndirectSequence
+                | PushField::IndirectBase => return Err(not_implemented(Feature::IdentityDomains)),
                 PushField::SlotBindOffset(SlotRef {
                     class: SlotClass::Texture,
                     ..

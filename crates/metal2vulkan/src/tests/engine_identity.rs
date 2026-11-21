@@ -3690,3 +3690,133 @@ fn a_seq_cst_fence_is_refused_naming_its_form_under_the_identity_domains() {
         }
     }
 }
+
+/// The translator's binder supplies no field the runtime pushes itself under the identity domains:
+/// planning a kernel that samples a texture slot through a sampler slot (owned fixture `sampling`'s
+/// `sample_level`, whose words there are the two resource IDs) is
+/// `Unsupported{IdentityDomains, NotImplemented}`, typed, never an internal invariant. The runtime
+/// binds those words itself and never plans through the binder.
+#[test]
+fn the_binder_refuses_a_texture_and_sampler_slots_resource_ids_typed() {
+    let Some(bc) = assemble("sampling") else {
+        return;
+    };
+    let desc =
+        crate::pipeline::testing::description("moltenvk-m3").unwrap_or_else(|e| panic!("{e}"));
+    let dev = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
+    let lib = Library::from_air(&bc).unwrap_or_else(|e| panic!("{e}"));
+    let f = lib
+        .function("sample_level")
+        .unwrap_or_else(|e| panic!("{e}"));
+    let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
+    let pipe = dev
+        .compile_compute_pipeline(&d, &Budget::standard())
+        .unwrap_or_else(|e| panic!("{e}"));
+    let mut table = StageTable::default();
+    table.buffers.insert(
+        0,
+        BoundBuffer::Buffer {
+            length: 4096,
+            offset: 0,
+            gpu_address: OUT,
+            device_address: Some(OUT),
+            attribute_stride: None,
+        },
+    );
+    table.textures.insert(
+        0,
+        crate::bind::BoundTexture::Texture {
+            facts: crate::bind::TextureFacts::new(
+                crate::metal::TextureType::Type2D,
+                PixelFormat::RGBA8Unorm,
+            ),
+            resource_id: None,
+        },
+    );
+    table.samplers.insert(
+        0,
+        crate::bind::BoundSampler::new(crate::bind::SamplerDescriptor::new()),
+    );
+    let mut state = BindState::default();
+    state.stages.insert(Stage::Kernel, table);
+    match pipe.plan(&dev, &state.shape()) {
+        Err(crate::error::BindError::Unsupported(u)) => {
+            let shown = u.to_string();
+            assert_eq!(
+                (u.feature, u.needs),
+                (Feature::IdentityDomains, Needs::NotImplemented),
+                "{shown}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// The golden table's storage pair under the identity domains (owned fixture
+/// `storage_texture_write`, a write through `texture2d<float, write>`, given each format's storage
+/// choice as its input). A choice the identity arrays hold an element of, the bound format's own
+/// image declared without a format, compiles. Any other is refused naming the slot's form ("texture
+/// argument ... beyond its resource ID"):
+/// - bgra8 where it is not storage-capable, whose choice swizzles red and blue
+///   (`StorageImageClass::SwizzleBgra`), state of the bound texture beyond its resource ID;
+/// - rgba8 where the device reads storage images of it only through its format, whose choice
+///   declares that format, a storage image the identity arrays hold no element of.
+///
+/// The runtime gives no such choice: no input names the bound format, and the slot stays the
+/// write the floor's `shaderStorageImageWriteWithoutFormat` takes.
+#[test]
+fn a_storage_choice_the_identity_arrays_hold_no_element_of_is_refused_naming_the_texture_argument()
+{
+    use crate::pipeline::StorageImageClass;
+    let Some(bc) = assemble("storage_texture_write") else {
+        return;
+    };
+    let (mut compiled, mut swizzled, mut declared) = (0, 0, 0);
+    let profiles = crate::spirv::testing::committed_profiles_with(identity())
+        .unwrap_or_else(|e| panic!("{e}"));
+    for (stem, p) in &profiles {
+        for format in [PixelFormat::BGRA8Unorm, PixelFormat::RGBA8Unorm] {
+            let Ok(choice) = crate::metal::format::storage_image_choice(format, p) else {
+                continue;
+            };
+            let held = choice.class == StorageImageClass::Identity
+                && choice.vk_format == vk::Format::UNDEFINED;
+            match (held, choice.class) {
+                (true, _) => compiled += 1,
+                (false, StorageImageClass::SwizzleBgra) => swizzled += 1,
+                (false, StorageImageClass::Identity) => declared += 1,
+                (false, class) => panic!("{stem}: {format:?}'s choice {class:?}"),
+            }
+            let mut inputs = LowerInputs::new();
+            inputs.storage_images.insert(
+                SlotRef {
+                    stage: Stage::Kernel,
+                    class: SlotClass::Texture,
+                    index: 0,
+                },
+                choice,
+            );
+            match (held, compile_with(&bc, "storage_texture_write", p, &inputs)) {
+                (true, Ok(_)) => {}
+                (false, Err(Error::Unsupported(u))) => {
+                    assert_eq!(
+                        (u.feature, u.needs),
+                        (Feature::IdentityDomains, Needs::NotImplemented),
+                        "{stem} {format:?}"
+                    );
+                    let symbol = u.symbol.map(|f| f.to_string()).unwrap_or_default();
+                    assert!(
+                        symbol.starts_with("texture argument")
+                            && symbol.contains("beyond its resource ID"),
+                        "{stem} {format:?}: {symbol}"
+                    );
+                }
+                (_, other) => panic!("{stem} {format:?}: {:?}", other.map(|_| ())),
+            }
+        }
+    }
+    assert!(
+        compiled > 0 && swizzled > 0 && declared > 0,
+        "compiled {compiled}, swizzled {swizzled}, declared {declared}: a case of each"
+    );
+}

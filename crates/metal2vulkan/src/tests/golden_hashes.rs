@@ -964,8 +964,13 @@ fn shown(lines: &[String]) -> String {
     s
 }
 
-/// The required pair: wherever bgra8 is not storage-capable (its choice swizzles), the bgra8 and
-/// rgba8 storage-texture pipelines both compile and differ.
+/// The required pair: wherever bgra8 is not storage-capable (its choice swizzles), the bgra8
+/// storage-texture pipeline is `Unsupported{IdentityDomains}`, the swizzle being state of the bound
+/// texture beyond its resource ID, and the rgba8 one compiles where its choice is the format's own
+/// image declared without a format and is that refusal where the choice declares the format, a
+/// storage image the identity arrays hold no element of (both in the runtime's known gaps, and
+/// `tests::engine_identity`'s
+/// `a_storage_choice_the_identity_arrays_hold_no_element_of_is_refused_naming_the_texture_argument`).
 fn check_storage_pair(observed: &Table, devices: &[(String, Device)]) -> usize {
     let row = |format| {
         observed
@@ -983,9 +988,18 @@ fn check_storage_pair(observed: &Table, devices: &[(String, Device)]) -> usize {
             continue;
         }
         let (r, b) = (&rgba.cells[i], &bgra.cells[i]);
+        let refused = "Unsupported{IdentityDomains; NotImplemented}";
+        let formatless = storage_image_choice(PixelFormat::RGBA8Unorm, dev.profile())
+            .is_ok_and(|c| c.vk_format == crate::vk::Format::UNDEFINED);
         assert!(
-            r.len() == 16 && b.len() == 16 && r != b,
-            "{stem}: the bgra8 ({b}) and rgba8 ({r}) storage pipelines must both compile and differ"
+            b == refused
+                && (if formatless {
+                    r.len() == 16
+                } else {
+                    r == refused
+                }),
+            "{stem}: the bgra8 storage pipeline ({b}) must be refused, and the rgba8 one ({r}) \
+             compile where its choice declares no format ({formatless}) and be refused elsewhere"
         );
         swizzled += 1;
     }

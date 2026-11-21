@@ -79,6 +79,15 @@ one whose `maxPushConstantsSize` is below the 256-byte push window every stage i
 or policy. A
 `Device` is cheap to clone; every compile and plan takes it.
 
+The guide's examples are quoted from `examples/api_preview.rs`. Its tour device takes
+`DevicePolicy::RESIDENT_TABLES`, because its binding plans (sections 5 and 6) are the translator's
+binder's, which plans the resident-table domains. A runtime's device takes `DevicePolicy::default()`
+and pushes the identity domains' own fields itself: the binder refuses each of them,
+`Unsupported{IdentityDomains}` (a texture's or sampler's resource ID in `PushField::SlotGuestBase`,
+`PushField::ConstexprSampler`, `PushField::FetchedColor`, `PushField::TessellationFactorAddress`,
+the indirect commands' `PushField::IndirectRange`, `IndirectSequence` and `IndirectBase`, and
+`ZeroAddress`, `BicubicTexels` and `PrivateArenaAddress`).
+
 ### The policy
 
 `DevicePolicy` holds your product choices; together with the description they decide everything a

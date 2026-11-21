@@ -10,7 +10,8 @@
 //! fixtures are committed as LLVM text, so the example assembles them with `llvm-as` (LLVM 21 or
 //! newer) from `PATH` first, as a consumer holding `.ll` would.
 //!
-//! It compiles a kernel for the committed `moltenvk-m3` profile (and the same kernel as a bare
+//! It compiles a kernel for the committed `moltenvk-m3` profile under the resident-table domains,
+//! the policy the translator's binder plans (and the same kernel as a bare
 //! module's entry, linked alone), prints its pipeline interface, layout, and binding plan,
 //! instantiates one dispatch, round-trips the pipeline through its cache encoding, answers a
 //! pipeline-input request, shows a typed refusal on `runtime-floor`, dispatches a kernel with
@@ -68,20 +69,34 @@ fn fixture_bitcode(stem: &str) -> Result<Vec<u8>> {
     Ok(out.stdout)
 }
 
-/// A device for committed profile `stem`
-/// (`crates/metal2vulkan-validation/profiles/<stem>.json`).
-fn committed_device(stem: &str) -> Result<Device> {
-    let json = std::fs::read_to_string(repo().join(format!(
+/// Committed profile `stem` (`crates/metal2vulkan-validation/profiles/<stem>.json`).
+fn profile_json(stem: &str) -> Result<String> {
+    Ok(std::fs::read_to_string(repo().join(format!(
         "crates/metal2vulkan-validation/profiles/{stem}.json"
-    )))?;
+    )))?)
+}
+
+/// The device a runtime compiles for on committed profile `stem`: the default policy, the
+/// identity domains. The runtime binds what such a device's pipelines push itself.
+fn runtime_device(stem: &str) -> Result<Device> {
+    let json = profile_json(stem)?;
     let description = DeviceDescription::from_khronos_json(&json, None)?;
     let device = Device::from_queries(description, DevicePolicy::default())?;
     Ok(device)
 }
 
+/// The tour's device for committed profile `stem`: the resident-table domains, the policy the
+/// translator's binder plans (step 5 and the stage-in, render and tessellation walks), which a
+/// runtime's device does not take ([`runtime_device`]).
+fn committed_device(stem: &str) -> Result<Device> {
+    let json = profile_json(stem)?;
+    let description = DeviceDescription::from_khronos_json(&json, None)?;
+    let device = Device::from_queries(description, DevicePolicy::RESIDENT_TABLES)?;
+    Ok(device)
+}
+
 /// A buffer bound at `offset` in a `length`-byte allocation whose Metal `gpuAddress` and Vulkan
-/// device address are both `0x1_0000`, as the runtime makes them: under the default policy, the
-/// identity domains, a buffer slot is reached at its device address.
+/// device address are both `0x1_0000`, as the runtime makes them.
 fn buffer(length: u64, offset: u64) -> BoundBuffer {
     BoundBuffer::Buffer {
         length,
@@ -98,7 +113,13 @@ fn hex(digest: &[u8]) -> String {
 }
 
 pub fn main() -> Result<()> {
-    // 1. A device: what the consumer enabled, and its policy.
+    // 1. A device: what the consumer enabled, and its policy. A runtime's device takes the
+    // default policy; the tour's takes the resident-table domains, which its binding plans need.
+    let runtime = runtime_device("moltenvk-m3")?;
+    println!(
+        "runtime's device: profile {}",
+        hex(&runtime.profile().fingerprint())
+    );
     let device = committed_device("moltenvk-m3")?;
     let enables = device.required_enables();
     println!(

@@ -455,6 +455,16 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
             | PushField::PrivateArenaAddress => {
                 return Err(not_implemented(Feature::IdentityDomains))
             }
+            // Under the identity domains a texture's or sampler's word is its resource ID and a
+            // constexpr sampler's the runtime's own sampler: fields the runtime pushes itself,
+            // which no binding state holds.
+            PushField::SlotGuestBase(SlotRef {
+                class: SlotClass::Texture | SlotClass::Sampler,
+                ..
+            })
+            | PushField::ConstexprSampler(_) => {
+                return Err(not_implemented(Feature::IdentityDomains))
+            }
             PushField::SlotBindOffset(SlotRef {
                 class: SlotClass::Texture,
                 ..
