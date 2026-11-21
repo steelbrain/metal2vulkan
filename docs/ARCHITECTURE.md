@@ -11,7 +11,8 @@ metallib | AIR bitcode
   ── decode ──────► a typed AIR module and its ABI                      air::{bitstream, bitcode, ir, intrinsics, abi}
   ── specialize ──► one inlined entry: function constants baked,        air::canon
                     constants propagated, loops of constant trip
-                    count unrolled where that decides a branch and
+                    count unrolled where that decides a texel offset
+                    in a nest of at most 25 runs, or a branch and
                     leaves the entry no larger, private arrays
                     allocated as far as bounded indices reach,
                     linked functions resolved, pointee types erased
