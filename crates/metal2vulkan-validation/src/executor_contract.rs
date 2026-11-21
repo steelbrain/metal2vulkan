@@ -16,14 +16,13 @@ pub mod tessellation;
 pub use depth_stencil::{depth_stencil_test, DepthStencilTest, DrawDepthStencil};
 
 use crate::air::reflect::{
-    ResourceKind, ShaderInterface, ShaderStage, TextureDimension,
-    TextureFormat as ReflectedTextureFormat,
+    ResourceKind, ShaderInterface, ShaderStage, TextureFormat as ReflectedTextureFormat,
 };
 use crate::case::indirect_commands::{CommandDescriptor, RenderDraws};
 use crate::case::out_of_bounds::OutOfBoundsResource;
 use crate::case::{
     AuthoredCase, DeviceBufferArrayResource, OutputSelection, Primitive, Stage, TextureFormat,
-    TextureType, ThreadgroupMemoryResource,
+    ThreadgroupMemoryResource,
 };
 use crate::requirement::{Executor, Limit, ToolingRequirement, UnobservedEffect};
 use std::borrow::Cow;
@@ -650,16 +649,6 @@ pub fn unsupported_reflection_requirements(
             requirements.insert(ToolingRequirement::KernelStageInputLiteral);
         }
         if let Some(shape) = binding.texture_shape {
-            // A texture buffer an argument buffer holds or a texture-handle array's element: a
-            // case expresses it and the Metal oracle runs it, the engine's candidate runs neither.
-            if shape.dimension == TextureDimension::Buffer
-                && !matches!(
-                    binding.kind,
-                    ResourceKind::Texture | ResourceKind::StorageImage
-                )
-            {
-                requirements.insert(ToolingRequirement::TextureBufferMember);
-            }
             if shape.storage_format.is_some_and(|format| {
                 !matches!(
                     format,
@@ -810,9 +799,8 @@ pub fn engine_source_requirements(reflection: &ShaderInterface) -> BTreeSet<Tool
 /// (its out-of-bounds target, [`ToolingRequirement::IndexBufferPastEnd`]) and a depth/stencil
 /// attachment of both aspects ([`ToolingRequirement::SeparateDepthStencil`]). So are the families
 /// the runtime builds no call for, or refuses at creation on every device: a kernel's function
-/// table, explicit imageblock, acceleration structure or stage inputs, a bound texture buffer or
-/// sparse texture, a fragment function's imageblock, a rasterization-rate map, a vertex
-/// buffer's dynamic stride, an indirect command buffer of any form but kernel-encoded indexed
+/// table, explicit imageblock, acceleration structure or stage inputs, a sparse texture, a
+/// fragment function's imageblock, a rasterization-rate map, a vertex buffer's dynamic stride, an indirect command buffer of any form but kernel-encoded indexed
 /// draws that inherit the pipeline state and bind their own buffers (its compute commands, its
 /// other draw types, its other inheritance, or a command the host encodes), and a pipeline state
 /// an argument buffer holds.
@@ -889,12 +877,6 @@ pub fn case_requirements(case: &AuthoredCase) -> BTreeSet<ToolingRequirement> {
         (
             kernel && case.imageblock.is_some(),
             ToolingRequirement::KernelImageblock,
-        ),
-        (
-            case.textures
-                .iter()
-                .any(|texture| texture.texture_type == TextureType::Buffer),
-            ToolingRequirement::TextureBuffer,
         ),
         (
             case.fragment_imageblock.is_some(),
@@ -3088,9 +3070,9 @@ entry:
             attachment.initial_stencil_b64 = Some("qw==".into());
         }
         only(&aspects, ToolingRequirement::SeparateDepthStencil);
-        // What the runtime builds no call for, or refuses at creation: a bound texture buffer or
-        // sparse texture, a kernel's stage inputs or stage-in region, a vertex buffer's dynamic
-        // stride, a fragment function's imageblock and a rasterization-rate map.
+        // What the runtime builds no call for, or refuses at creation: a sparse texture, a
+        // kernel's stage inputs or stage-in region, a vertex buffer's dynamic stride, a fragment
+        // function's imageblock and a rasterization-rate map. A bound texture buffer it makes.
         let texture = |texture_type| TextureResource {
             binding: 0,
             role: ResourceRole::Input,
@@ -3107,7 +3089,7 @@ entry:
         textured.textures = vec![texture(TextureType::D2)];
         assert!(case_requirements(&textured).is_empty());
         textured.textures = vec![texture(TextureType::Buffer)];
-        only(&textured, ToolingRequirement::TextureBuffer);
+        assert!(case_requirements(&textured).is_empty());
         textured.textures = vec![TextureResource {
             sparse: Some(crate::case::sparse::SparseTextureResource {
                 mappings: Vec::new(),
@@ -3352,16 +3334,6 @@ entry:
         assert_eq!(
             require_executor(&set(&[R::MeshRenderPipeline]), Executor::EngineCandidate),
             Err(set(&[R::MeshRenderPipeline]))
-        );
-        // So does a case of a texture buffer an argument buffer holds: the Metal oracle runs it.
-        assert_eq!(evidence_gap(&set(&[R::TextureBufferMember])), None);
-        assert_eq!(
-            require_executor(&set(&[R::TextureBufferMember]), Executor::MetalOracle),
-            Ok(())
-        );
-        assert_eq!(
-            require_executor(&set(&[R::TextureBufferMember]), Executor::EngineCandidate),
-            Err(set(&[R::TextureBufferMember]))
         );
 
         let requirements = set(&[R::RenderDeviceBufferArray]);

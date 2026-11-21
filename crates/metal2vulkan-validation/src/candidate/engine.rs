@@ -110,7 +110,7 @@ pub mod variants;
 /// how it decides a match. A change no recorded row can observe (a case kind no earlier executor
 /// ran, or one it refused) needs no bump; its commit says why. The commit that bumps it says what
 /// changed; this comment keeps no history.
-pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v207";
+pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v208";
 
 /// One kernel case in the terms the binder takes: what this executor supports of an
 /// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures,
@@ -715,10 +715,10 @@ pub fn runtime_fingerprint() -> String {
 /// (each device buffer array's elements among them), bound textures and samplers, made as the
 /// Metal oracle makes them (`platform::runtime_textures`: a 32-bit float depth, whose bytes the
 /// runtime takes no upload of, filled by a draw, `platform::runtime_depth`, and a multisampled
-/// texture by a draw per slice, `platform::runtime_multisample`; a texture buffer and a sparse
-/// texture are the runtime's limits, which stop the candidate first), argument buffers of buffers,
-/// textures and samplers, threadgroup memory lengths, function constants and linked functions,
-/// dispatched by
+/// texture by a draw per slice, `platform::runtime_multisample`, and a texture buffer over a
+/// buffer of its bytes; a sparse texture is the runtime's limit, which stops the candidate
+/// first), argument buffers of buffers, textures (texture buffers among them) and samplers,
+/// threadgroup memory lengths, function constants and linked functions, dispatched by
 /// `dispatchThreads` or `dispatchThreadgroups`, observing any output the mapping makes, its
 /// out-of-bounds targets among them (`platform::runtime_bounds`). Decided by the case's structure
 /// alone: every field the mapping fills is named here, so a new one is decided when it is added.

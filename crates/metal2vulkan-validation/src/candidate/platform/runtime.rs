@@ -215,54 +215,6 @@ fn opened<T>(
     Ok(value)
 }
 
-/// `body` on the runtime's device of `device_type` under the validation layer, as a run opens it
-/// ([`execute_runtime`]): what a device test needs of the runtime's answer to one call, beside a
-/// run. `Err` where no device of the kind opens, or where the layer reported a message.
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
-pub fn on_runtime_device<T>(
-    device_type: DeviceType,
-    body: impl FnOnce(&rt::Device) -> T,
-) -> Result<T, String> {
-    let log = std::env::temp_dir().join(format!(
-        "metal2vulkan-validation-runtime-{}.log",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_file(&log);
-    validate_process(&log);
-    let value = opened(device_type, EXECUTOR, |device, _, _| body(device));
-    let messages = std::fs::read_to_string(&log);
-    let _ = std::fs::remove_file(&log);
-    match messages {
-        Ok(messages) if !messages.trim().is_empty() => Err(format!(
-            "{VALIDATION_LAYER} reported messages: {}",
-            crate::engine::bounded_detail(&messages)
-        )),
-        _ => value,
-    }
-}
-
-/// The make of `entry`'s compute pipeline state from `bitcode` on `device`, with no constant, no
-/// linked function and no sampler it numbers: the runtime's own answer, a device test's to judge.
-#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
-pub fn make_kernel(
-    device: &rt::Device,
-    bitcode: &[u8],
-    entry: &str,
-) -> Result<rt::ComputePipelineState, rt::Error> {
-    let function = Library::from_air(bitcode)
-        .and_then(|library| library.function(entry))
-        .map_err(|error| rt::Error::Translation {
-            error,
-            functions: Box::default(),
-        })?;
-    let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
-        FunctionDescriptor::new(function).with_specialized(true),
-    ));
-    device.new_compute_pipeline_state(&descriptor, |samplers: &[NumberedSampler]| {
-        Ok(vec![0; samplers.len()])
-    })
-}
-
 /// What a row records of the device that ran it.
 pub(super) struct Identity {
     device: String,

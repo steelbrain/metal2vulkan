@@ -23,7 +23,7 @@
 
 use super::resources;
 use super::BufferAddress;
-use crate::case::{ArgumentBufferSamplerResource, TextureType};
+use crate::case::ArgumentBufferSamplerResource;
 use crate::literal::{LiteralArgumentBufferBuffer, LiteralArgumentBufferTexture, LiteralTexture};
 use metal2vulkan::bind::{ArgumentSampler, BoundTexture, ResourceClass, UsedResource};
 use metal2vulkan::metal::{RenderStages, ResourceUsage};
@@ -78,10 +78,9 @@ pub fn embed(
 /// The argument-buffer textures `literal` of a function whose bound buffers are `buffers`: each
 /// one as a texture of its authored type, format, extent, sample count, and contents, by its key
 /// (its `binding` is its owner's index, which only labels it), each owner grown with zeros to
-/// cover its 8-byte field. A texture buffer is refused, as its case's requirement refuses it first
-/// ([`TextureBufferMember`](crate::requirement::ToolingRequirement::TextureBufferMember)): the
-/// binder's planned heap makes no texture buffer a member, so a handle naming one misses. A key
-/// authored twice is refused.
+/// cover its 8-byte field; a texture buffer among them, which a run through the runtime makes over
+/// a buffer of its bytes (`platform::runtime_textures`), and the executor's own context refuses
+/// ([`used_texture`]). A key authored twice is refused.
 pub fn embed_textures(
     buffers: &mut BTreeMap<u32, Vec<u8>>,
     literal: &[LiteralArgumentBufferTexture],
@@ -89,12 +88,6 @@ pub fn embed_textures(
     let mut embedded = BTreeMap::new();
     for texture in literal {
         let key = (texture.buffer_binding, texture.field_offset);
-        if texture.texture_type == TextureType::Buffer {
-            return Err(format!(
-                "{} is a texture buffer, which no heap array holds",
-                texture.label()
-            ));
-        }
         cover(buffers, key, "argument-buffer texture")?;
         let bound = LiteralTexture {
             binding: texture.buffer_binding,
@@ -275,7 +268,9 @@ pub fn used_buffer(
 /// The used resource of the argument-buffer texture `texture` whose consumer token is `token`
 /// ([`texture_tokens`]): a `Texture` of the facts a bound texture of it has
 /// ([`resources::bound_texture`]), whose resource id is [`resource_id`] of its token, resident
-/// for reading and writing in `stages` as the Metal oracle's `useResource` makes it.
+/// for reading and writing in `stages` as the Metal oracle's `useResource` makes it. A texture
+/// buffer is refused: the binder's planned heap makes no texture buffer a member, so a handle
+/// naming one would miss.
 pub fn used_texture(
     token: u32,
     texture: &LiteralTexture,

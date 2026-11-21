@@ -7,7 +7,9 @@
 //! argument-buffer member (`RuntimeKernel::texture_usages`, `RuntimeKernel::member_usages`), at an
 //! index of the run's texture grant (the bound textures first, then the members), and every
 //! level's slices written from the case's bytes before the work (`replaceRegion:`, level 0
-//! first), but for a 32-bit float depth's, which the run renders (`runtime_depth`), with the
+//! first), but for a texture buffer, a texture over a Shared buffer of the case's bytes
+//! (`newTextureWithDescriptor:offset:bytesPerRow:` at offset 0, one row of every byte, as the
+//! oracle makes it), and a 32-bit float depth's, which the run renders (`runtime_depth`), with the
 //! texture made for rendering too, and a multisampled texture's, Private as Metal keeps one, which
 //! the run renders sample by sample (`runtime_multisample`), made for rendering and for views of
 //! another pixel format too. Each sampler is the oracle's descriptor of it (`engine::resources::sampler_descriptor`,
@@ -17,11 +19,12 @@
 //! program writes one into an argument buffer. A texture output is read back as the oracle reads
 //! it (`getBytes:`): the selected region of level 0, slice by slice.
 
+use super::runtime::Placed;
 use super::runtime_depth;
 use super::runtime_multisample;
 use crate::candidate::engine::argument_buffers::FieldKey;
 use crate::candidate::engine::{resources, ComputeCase, RuntimeKernel};
-use crate::case::{ArgumentBufferSamplerResource, SamplerResource, TextureFormat};
+use crate::case::{ArgumentBufferSamplerResource, SamplerResource, TextureFormat, TextureType};
 use crate::check::admission::ExecutorError;
 use crate::executor_contract::multisample::{sample_read, SampleRead};
 use crate::gpu::DeviceType;
@@ -230,9 +233,10 @@ fn next_index(at: &mut std::ops::Range<u32>) -> Result<u32, ExecutorError> {
         .ok_or_else(|| ExecutorError::Failed("the run's textures outnumber their indices".into()))
 }
 
-/// `texture` made with `usage` at `index`, every level's slices written from its bytes; a 32-bit
-/// float depth's and a multisampled texture's are pushed to `fills` instead, which the run renders,
-/// a multisampled color one through its view at the next of `views`.
+/// `texture` made with `usage` at `index`, every level's slices written from its bytes; a texture
+/// buffer over a buffer of its bytes, which the texture holds; a 32-bit float depth's and a
+/// multisampled texture's are pushed to `fills` instead, which the run renders, a multisampled
+/// color one through its view at the next of `views`.
 fn made_texture(
     device: &rt::Device,
     texture: &LiteralTexture,
@@ -270,6 +274,14 @@ fn made_texture(
         true => rt::StorageMode::Private,
         false => rt::StorageMode::Shared,
     };
+    if texture.texture_type == TextureType::Buffer {
+        let placed = Placed::new(device, &what, &texture.bytes)?;
+        let row = texture.bytes.len() as u64;
+        return placed
+            .buffer
+            .new_texture(&descriptor, Some(index), 0, row)
+            .map_err(|e| error(&what, e));
+    }
     let made = device
         .new_texture(&descriptor, Some(index))
         .map_err(|e| error(&what, e))?;

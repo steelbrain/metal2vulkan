@@ -85,20 +85,6 @@ pub enum ToolingRequirement {
     TessellationSystemInputLiteral,
     FragmentImageblockMemberLiteral,
     KernelStageInputLiteral,
-    /// A texture buffer that is no entry parameter of its own: one an argument buffer holds, or an
-    /// element of a texture-handle array (`executor_contract`). The engine's candidate runs
-    /// neither. The runtime makes no texture buffer (`metal2vulkan_runtime::Gap::TextureBuffer`
-    /// at `new_texture`), and its identity domains hold no texture buffer among an argument
-    /// buffer's textures, so it refuses such a function's pipeline at its make, typed
-    /// (`Unsupported{IdentityDomains}`, or, on a device whose answer lacks the features an
-    /// argument buffer's texel buffers are read through, `Feature::ArgumentBufferTextures` at
-    /// that query first): the limit is the runtime's ([`Limit::Runtime`]), held both ways by the
-    /// device tests
-    /// `candidate::tests::engine_compute::a_texture_buffer_is_refused_where_a_2d_texture_is_made`
-    /// and `..::a_texture_buffer_member_is_refused_at_the_make_where_a_2d_member_is_made`. The
-    /// Metal oracle makes and binds both, so a case of either stays Metal-qualified
-    /// ([`Self::qualifies_on_metal`]).
-    TextureBufferMember,
     StorageTextureFormatLiteral,
     ImplicitImageblockLiteral,
     IndirectCommandBuffer,
@@ -230,12 +216,6 @@ pub enum ToolingRequirement {
     /// `tests::kernel_input::an_explicit_imageblock_kernel_is_refused_as_its_named_runtime_fact`;
     /// it builds no tile function. Both are known gaps its README states.
     KernelImageblock,
-    /// A texture buffer a case binds to an entry parameter (`executor_contract::case_requirements`;
-    /// one an argument buffer holds is [`Self::TextureBufferMember`]). The runtime makes no texture
-    /// buffer (`metal2vulkan_runtime::Gap::TextureBuffer` at `new_texture`), a known gap its README
-    /// states, held both ways on lavapipe by the device test
-    /// `candidate::tests::engine_compute::a_texture_buffer_is_refused_where_a_2d_texture_is_made`.
-    TextureBuffer,
     /// A fragment function's imageblock, the case's cells of it
     /// (`executor_contract::case_requirements`). The runtime refuses a fragment function with an
     /// `[[imageblock_data]]` input or output at creation on every device (`Error::Translation`
@@ -306,14 +286,13 @@ const AUTHORING: &[Executor] = &Executor::ALL;
 const ENGINE: &[Executor] = &[Executor::EngineCandidate];
 
 impl ToolingRequirement {
-    pub const ALL: [Self; 43] = [
+    pub const ALL: [Self; 41] = [
         Self::FunctionConstantLiteral,
         Self::VertexAttributeLiteral,
         Self::TessellationAttributeLiteral,
         Self::TessellationSystemInputLiteral,
         Self::FragmentImageblockMemberLiteral,
         Self::KernelStageInputLiteral,
-        Self::TextureBufferMember,
         Self::StorageTextureFormatLiteral,
         Self::ImplicitImageblockLiteral,
         Self::IndirectCommandBuffer,
@@ -338,7 +317,6 @@ impl ToolingRequirement {
         Self::SeparateDepthStencil,
         Self::KernelFunctionTable,
         Self::KernelImageblock,
-        Self::TextureBuffer,
         Self::FragmentImageblock,
         Self::SparseTexture,
         Self::KernelAccelerationStructure,
@@ -360,7 +338,6 @@ impl ToolingRequirement {
             Self::TessellationSystemInputLiteral => "tessellation_system_input_literal",
             Self::FragmentImageblockMemberLiteral => "fragment_imageblock_member_literal",
             Self::KernelStageInputLiteral => "kernel_stage_input_literal",
-            Self::TextureBufferMember => "texture_buffer_member",
             Self::StorageTextureFormatLiteral => "storage_texture_format_literal",
             Self::ImplicitImageblockLiteral => "implicit_imageblock_literal",
             Self::IndirectCommandBuffer => "indirect_command_buffer",
@@ -387,7 +364,6 @@ impl ToolingRequirement {
             Self::SeparateDepthStencil => "separate_depth_stencil",
             Self::KernelFunctionTable => "kernel_function_table",
             Self::KernelImageblock => "kernel_imageblock",
-            Self::TextureBuffer => "texture_buffer",
             Self::FragmentImageblock => "fragment_imageblock",
             Self::SparseTexture => "sparse_texture",
             Self::KernelAccelerationStructure => "kernel_acceleration_structure",
@@ -417,13 +393,12 @@ impl ToolingRequirement {
     ///   implementation's private layout where the engine's module decodes this crate's, and a
     ///   depth outside `[0, 1]` a case gives a depth image, which the runtime puts nowhere
     ///   ([`ToolingRequirement::DepthOutsideUnitRange`]), and a mesh render pipeline it does not
-    ///   draw ([`ToolingRequirement::MeshRenderPipeline`]), and a texture buffer an argument
-    ///   buffer or a texture-handle array holds ([`ToolingRequirement::TextureBufferMember`]),
-    ///   and a sequentially consistent fence, a render function's function table, an indexed draw
-    ///   past its index buffer, a 64-bit texture atomic and separate depth and stencil attachments,
-    ///   which the runtime refuses ([`ToolingRequirement::SeqCstFence`],
-    ///   [`ToolingRequirement::RenderFunctionTable`], [`ToolingRequirement::IndexBufferPastEnd`],
-    ///   [`ToolingRequirement::UlongTextureAtomic`], [`ToolingRequirement::SeparateDepthStencil`]).
+    ///   draw ([`ToolingRequirement::MeshRenderPipeline`]), and a sequentially consistent fence, a
+    ///   render function's function table, an indexed draw past its index buffer, a 64-bit texture
+    ///   atomic and separate depth and stencil attachments, which the runtime refuses
+    ///   ([`ToolingRequirement::SeqCstFence`], [`ToolingRequirement::RenderFunctionTable`],
+    ///   [`ToolingRequirement::IndexBufferPastEnd`], [`ToolingRequirement::UlongTextureAtomic`],
+    ///   [`ToolingRequirement::SeparateDepthStencil`]).
     ///
     /// The requirements that stopped only the old engine's candidate were retired with it.
     pub const fn stops(self) -> &'static [Executor] {
@@ -451,7 +426,6 @@ impl ToolingRequirement {
             | Self::RasterizationRateMapPlacement
             | Self::DepthOutsideUnitRange
             | Self::MeshRenderPipeline
-            | Self::TextureBufferMember
             | Self::SeqCstFence
             | Self::RenderFunctionTable
             | Self::IndexBufferPastEnd
@@ -459,7 +433,6 @@ impl ToolingRequirement {
             | Self::SeparateDepthStencil
             | Self::KernelFunctionTable
             | Self::KernelImageblock
-            | Self::TextureBuffer
             | Self::FragmentImageblock
             | Self::SparseTexture
             | Self::KernelAccelerationStructure
@@ -485,12 +458,11 @@ impl ToolingRequirement {
 
     /// Whose limit this requirement records. Every requirement is this crate's tooling's except
     /// [`ToolingRequirement::KernelMinLodClamp`], which Apple's compiler cannot build a pipeline
-    /// for, and [`ToolingRequirement::SeqCstFence`], [`ToolingRequirement::TextureBufferMember`],
-    /// [`ToolingRequirement::DepthOutsideUnitRange`], [`ToolingRequirement::MeshRenderPipeline`],
-    /// [`ToolingRequirement::RenderFunctionTable`], [`ToolingRequirement::IndexBufferPastEnd`],
-    /// [`ToolingRequirement::UlongTextureAtomic`], [`ToolingRequirement::SeparateDepthStencil`],
-    /// [`ToolingRequirement::KernelFunctionTable`], [`ToolingRequirement::KernelImageblock`],
-    /// [`ToolingRequirement::TextureBuffer`], [`ToolingRequirement::FragmentImageblock`],
+    /// for, and [`ToolingRequirement::SeqCstFence`], [`ToolingRequirement::DepthOutsideUnitRange`],
+    /// [`ToolingRequirement::MeshRenderPipeline`], [`ToolingRequirement::RenderFunctionTable`],
+    /// [`ToolingRequirement::IndexBufferPastEnd`], [`ToolingRequirement::UlongTextureAtomic`],
+    /// [`ToolingRequirement::SeparateDepthStencil`], [`ToolingRequirement::KernelFunctionTable`],
+    /// [`ToolingRequirement::KernelImageblock`], [`ToolingRequirement::FragmentImageblock`],
     /// [`ToolingRequirement::SparseTexture`], [`ToolingRequirement::KernelAccelerationStructure`],
     /// [`ToolingRequirement::KernelStageInput`], [`ToolingRequirement::RasterizationRateMap`],
     /// [`ToolingRequirement::DynamicVertexStride`], [`ToolingRequirement::IndirectComputeCommands`],
@@ -502,7 +474,6 @@ impl ToolingRequirement {
         match self {
             Self::KernelMinLodClamp => Limit::Metal,
             Self::SeqCstFence
-            | Self::TextureBufferMember
             | Self::DepthOutsideUnitRange
             | Self::MeshRenderPipeline
             | Self::RenderFunctionTable
@@ -511,7 +482,6 @@ impl ToolingRequirement {
             | Self::SeparateDepthStencil
             | Self::KernelFunctionTable
             | Self::KernelImageblock
-            | Self::TextureBuffer
             | Self::FragmentImageblock
             | Self::SparseTexture
             | Self::KernelAccelerationStructure
@@ -667,21 +637,6 @@ mod tests {
         assert!(requirement.qualifies_on_metal(), "{requirement}");
     }
 
-    /// A texture buffer an argument buffer or a texture-handle array holds: a case expresses it
-    /// and the Metal oracle runs it, so its cases stay Metal-qualified; the runtime refuses it, so
-    /// the engine's candidate runs none, the runtime's limit, which closes its rows.
-    #[test]
-    fn a_texture_buffer_member_stops_only_the_candidate() {
-        let requirement = ToolingRequirement::TextureBufferMember;
-        assert_eq!(requirement.stops(), [Executor::EngineCandidate]);
-        assert_eq!(requirement.limit(), Limit::Runtime, "{requirement}");
-        assert!(!requirement.blocks_closure(), "{requirement}");
-        assert!(requirement.qualifies_on_metal(), "{requirement}");
-        assert!("texture_buffer_literal"
-            .parse::<ToolingRequirement>()
-            .is_err());
-    }
-
     /// A sequentially consistent fence: the Metal oracle runs it, so its cases stay
     /// Metal-qualified; the runtime refuses it, so the engine's candidate runs none, the runtime's
     /// limit, which closes its rows.
@@ -758,7 +713,6 @@ mod tests {
                 "kernel_function_table",
             ),
             (ToolingRequirement::KernelImageblock, "kernel_imageblock"),
-            (ToolingRequirement::TextureBuffer, "texture_buffer"),
             (
                 ToolingRequirement::FragmentImageblock,
                 "fragment_imageblock",
@@ -847,7 +801,6 @@ mod tests {
                 .filter(|requirement| requirement.limit() == Limit::Runtime)
                 .collect::<Vec<_>>(),
             [
-                ToolingRequirement::TextureBufferMember,
                 ToolingRequirement::DepthOutsideUnitRange,
                 ToolingRequirement::MeshRenderPipeline,
                 ToolingRequirement::SeqCstFence,
@@ -857,7 +810,6 @@ mod tests {
                 ToolingRequirement::SeparateDepthStencil,
                 ToolingRequirement::KernelFunctionTable,
                 ToolingRequirement::KernelImageblock,
-                ToolingRequirement::TextureBuffer,
                 ToolingRequirement::FragmentImageblock,
                 ToolingRequirement::SparseTexture,
                 ToolingRequirement::KernelAccelerationStructure,
@@ -880,7 +832,17 @@ mod tests {
         // The old engine's candidate and the requirements that stopped only it are retired: neither
         // name parses.
         assert!(serde_json::from_str::<Executor>("\"old_engine_candidate\"").is_err());
-        for retired in ["static_sampler_pixel_address", "tile_grid", "ulong_texture"] {
+        // So are the texture-buffer requirements: the runtime makes texture buffers, bound and in
+        // argument buffers, and the engine's candidate runs them.
+        let retired = [
+            "static_sampler_pixel_address",
+            "tile_grid",
+            "ulong_texture",
+            "texture_buffer",
+            "texture_buffer_member",
+            "texture_buffer_literal",
+        ];
+        for retired in retired {
             assert!(retired.parse::<ToolingRequirement>().is_err(), "{retired}");
         }
     }

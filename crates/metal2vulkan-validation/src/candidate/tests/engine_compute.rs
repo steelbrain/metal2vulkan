@@ -629,66 +629,98 @@ fn a_fence_of_another_order_is_made_through_the_runtime() {
     assert_eq!(output, expected);
 }
 
-/// `ToolingRequirement::TextureBuffer`'s limit, and `ToolingRequirement::TextureBufferMember`'s at
-/// the texture, both ways: the runtime makes no texture buffer, so `new_texture` refuses one, typed
-/// (`Gap::TextureBuffer`), where it makes a 2D texture of the same format and width. The day the
-/// runtime makes one, this fails.
+/// A texture buffer bound at a slot, through the runtime: the owned `ob1_texel_buffer` reads
+/// texels 0 to 3 of its four-texel `src` into `out` and writes `0xA0000000 | t` to texels 0 to 3 of
+/// its four-texel `dst`, and threads 4 to 7 read and write past both: a read past the end is zero
+/// and a write past it is dropped, as Metal defines. Each texture buffer is made over a buffer of
+/// its bytes (`platform::runtime_textures`), and `dst` is read back through its texture.
 #[cfg(target_os = "linux")]
 #[test]
-fn a_texture_buffer_is_refused_where_a_2d_texture_is_made() {
-    use metal2vulkan_runtime as rt;
-    platform::on_runtime_device(crate::gpu::TEST_DEVICE, |device| {
-        let index = rt::IndexClass::Texture.range().start;
-        let _grant = device
-            .grant_indices(rt::IndexClass::Texture, index, 1)
-            .unwrap();
-        let made = |texture_type| {
-            let descriptor =
-                rt::TextureDescriptor::new(texture_type, rt::PixelFormat::RGBA32Float, 16, 1);
-            device.new_texture(&descriptor, Some(index)).map(drop)
-        };
-        let refused = made(rt::TextureType::TextureBuffer);
-        assert!(
-            matches!(
-                refused,
-                Err(rt::Error::Refused(rt::Refusal::TextureBufferNotOverBuffer))
-            ),
-            "{refused:?}"
-        );
-        made(rt::TextureType::Type2D).unwrap();
-    })
-    .unwrap();
+fn a_bound_texture_buffer_reads_and_writes_its_texels_through_the_runtime() {
+    use crate::case::{ResourceRole, TextureFormat, TextureType};
+    let bitcode = llvm_assemble(&engine_dir().join("ob1_texel_buffer.ll")).unwrap();
+    let words =
+        |values: &[u32]| -> Vec<u8> { values.iter().copied().flat_map(u32::to_le_bytes).collect() };
+    let texels = |binding, role, values: &[u32]| crate::literal::LiteralTexture {
+        binding,
+        role,
+        texture_type: TextureType::Buffer,
+        format: TextureFormat::R32Uint,
+        dimensions: [4, 1, 1],
+        sample_count: 1,
+        bytes: words(values),
+        sparse: None,
+        mip_levels: 1,
+    };
+    let index = (0..8).chain(0..8).collect::<Vec<u32>>();
+    let threads = Dispatch::Threads {
+        threads: [8, 1, 1],
+        threads_per_group: [8, 1, 1],
+    };
+    let mut texel = case("ob1_texel_buffer", words(&index), threads);
+    texel.buffers.insert(1, vec![0xab; 32]);
+    texel.textures = BTreeMap::from([
+        (0, texels(0, ResourceRole::Input, &[11, 22, 33, 44])),
+        (1, texels(1, ResourceRole::InOut, &[0; 4])),
+    ]);
+    texel.output = ComputeOutput::Buffer {
+        binding: 1,
+        offset: 0,
+        length: 32,
+    };
+    let run = run_through_runtime(&texel, &bitcode).unwrap();
+    assert_eq!(run.output, words(&[11, 22, 33, 44, 0, 0, 0, 0]));
+    texel.output = ComputeOutput::Texture {
+        binding: 1,
+        origin: [0, 0, 0],
+        dimensions: [4, 1, 1],
+    };
+    let run = run_through_runtime(&texel, &bitcode).unwrap();
+    let written = [0xA000_0000, 0xA000_0001, 0xA000_0002, 0xA000_0003];
+    assert_eq!(run.output, words(&written));
 }
 
-/// `ToolingRequirement::TextureBufferMember`'s limit at the pipeline, both ways: the make of
-/// `rlm_runtime_limits`'s `rlm_member_texture_buffer`, which reads a texture buffer an argument
-/// buffer holds, is refused, typed, where the same read of a 2D texture the argument buffer holds,
-/// `rlm_member_texture`, is made. The refusal is the translator's: the runtime's identity domains
-/// hold no texture buffer among an argument buffer's textures (`Unsupported{IdentityDomains}`),
-/// and a device whose answer lacks the features an argument buffer's texel buffers are read
-/// through is refused at that query first (`Feature::ArgumentBufferTextures`), as lavapipe's is
-/// under the runtime. The day the runtime makes the first, this fails.
+/// A texture buffer an argument buffer holds reads as a 2D texture it holds does, through the
+/// runtime: `rlm_runtime_limits`'s `rlm_member_texture_buffer` reads texel `t` of the texture
+/// buffer at field 0 of buffer 0 into `out[t]`, and `rlm_member_texture` texel `(t, 0)` of the 2D
+/// texture there; each member is the texture whose `gpuResourceID` its owner holds at its field.
 #[cfg(target_os = "linux")]
 #[test]
-fn a_texture_buffer_member_is_refused_at_the_make_where_a_2d_member_is_made() {
-    use metal2vulkan::error::Feature;
+fn a_texture_buffer_member_reads_as_a_2d_member_does_through_the_runtime() {
+    use crate::case::{ResourceRole, TextureFormat, TextureType};
     let bitcode = llvm_assemble(&engine_dir().join("rlm_runtime_limits.ll")).unwrap();
-    platform::on_runtime_device(crate::gpu::TEST_DEVICE, |device| {
-        match platform::make_kernel(device, &bitcode, "rlm_member_texture_buffer") {
-            Err(metal2vulkan_runtime::Error::Translation {
-                error: metal2vulkan::error::Error::Unsupported(refused),
-                ..
-            }) => assert!(
-                matches!(
-                    refused.feature,
-                    Feature::IdentityDomains | Feature::ArgumentBufferTextures
-                ),
-                "{refused:?}"
-            ),
-            Err(error) => panic!("not the translator's typed refusal: {error}"),
-            Ok(_) => panic!("the runtime made a texture buffer member's pipeline"),
-        }
-        platform::make_kernel(device, &bitcode, "rlm_member_texture").unwrap();
-    })
-    .unwrap();
+    let texels = (0..16u16)
+        .flat_map(|value| (f32::from(value) * 0.5).to_le_bytes())
+        .collect::<Vec<u8>>();
+    for (entry, texture_type) in [
+        ("rlm_member_texture_buffer", TextureType::Buffer),
+        ("rlm_member_texture", TextureType::D2),
+    ] {
+        let threads = Dispatch::Threads {
+            threads: [4, 1, 1],
+            threads_per_group: [4, 1, 1],
+        };
+        let mut member = case(entry, vec![0; 8], threads);
+        member.buffers.insert(1, vec![0xab; texels.len()]);
+        let texture = crate::literal::LiteralTexture {
+            binding: 0,
+            role: ResourceRole::Input,
+            texture_type,
+            format: TextureFormat::Rgba32Float,
+            dimensions: [4, 1, 1],
+            sample_count: 1,
+            bytes: texels.clone(),
+            sparse: None,
+            mip_levels: 1,
+        };
+        member.argument_buffer_textures = BTreeMap::from([((0, 0), texture)]);
+        member.output = ComputeOutput::Buffer {
+            binding: 1,
+            offset: 0,
+            length: texels.len() as u64,
+        };
+        let run = run_through_runtime(&member, &bitcode)
+            .unwrap_or_else(|error| panic!("{entry}: {error}"));
+        assert_eq!(run.output, texels, "{entry}");
+    }
 }

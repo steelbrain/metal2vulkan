@@ -1500,10 +1500,9 @@ entry:
 
     /// The owned fixture `rlm_runtime_limits` holds each shape of a requirement the runtime refuses
     /// beside the same shape without it, as its device tests run them
-    /// (`candidate::tests::engine_compute`): the read of a texture buffer an argument buffer holds
-    /// carries `texture_buffer_member` and the same read of a 2D member does not, and the
-    /// `acq_rel` fence carries no `seq_cst_fence`, which `a4_device_fence`'s `seq_cst` fence
-    /// carries.
+    /// (`candidate::tests::engine_compute`): the `acq_rel` fence carries no `seq_cst_fence`, which
+    /// `a4_device_fence`'s `seq_cst` fence carries; and the read of a texture buffer an argument
+    /// buffer holds carries what the same read of a 2D member carries, as the runtime makes both.
     #[test]
     fn the_runtime_limit_fixture_holds_each_shape_beside_its_pair() {
         let engine = metal2vulkan_devtools::engine_dir();
@@ -1517,10 +1516,10 @@ entry:
             .tooling_requirements
         };
         let limits = "rlm_runtime_limits.ll";
-        assert!(requirements(limits, "rlm_member_texture_buffer")
-            .contains(&ToolingRequirement::TextureBufferMember));
-        assert!(!requirements(limits, "rlm_member_texture")
-            .contains(&ToolingRequirement::TextureBufferMember));
+        assert_eq!(
+            requirements(limits, "rlm_member_texture_buffer"),
+            requirements(limits, "rlm_member_texture")
+        );
         assert!(
             !requirements(limits, "rlm_fence_acq_rel").contains(&ToolingRequirement::SeqCstFence)
         );

@@ -67,8 +67,9 @@ fn gap(case: &AuthoredCase, expected: &str) {
 /// argument-buffer buffers', its resource id nonzero and its own), resident for reading and
 /// writing like the oracle's `useResource`; the owner is created holding the buffer's address and
 /// each texture's resource id at their fields; a texture's region is an output; and an owner that
-/// is not bound, a key authored twice, a texture buffer, a field named twice, and overlapping
-/// fields are refused.
+/// is not bound, a key authored twice, a field named twice, and overlapping fields are refused. A
+/// texture buffer maps, as a run through the runtime makes it, and the executor's own bind state
+/// refuses it.
 #[test]
 fn argument_buffer_members_are_written_into_their_owner() {
     let mut case = kernel_case();
@@ -212,7 +213,13 @@ fn argument_buffer_members_are_written_into_their_owner() {
     gap(&twice, "bound twice");
     let mut texel = case.clone();
     texel.argument_buffer_textures[0].texture_type = TextureType::Buffer;
-    gap(&texel, "texture buffer");
+    let texel = map_kernel(&texel).unwrap();
+    assert_eq!(
+        texel.argument_buffer_textures[&(0, 16)].texture_type,
+        TextureType::Buffer
+    );
+    let refused = bind_state(&texel, &addresses, &embedded, BufferRanges::default()).unwrap_err();
+    assert!(refused.contains("texture buffer"), "{refused}");
 }
 
 /// End to end without a device: `argument_buffer_read` of the owned `handles` fixture on
