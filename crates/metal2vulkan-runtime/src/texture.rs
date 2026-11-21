@@ -2532,7 +2532,7 @@ fn form(core: &Core, d: &TextureDescriptor, usage: TextureUsage) -> Result<Plan,
 /// a compressed format's block), a depth format's depth, a stencil format's byte. `None` for a
 /// format of depth and stencil both, a depth the device holds in other bits, and a multisample
 /// texture.
-fn copy_unit(
+pub(crate) fn copy_unit(
     pf: PixelFormat,
     format: vk::Format,
     metal_aspects: vk::ImageAspectFlags,

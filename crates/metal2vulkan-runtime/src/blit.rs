@@ -43,7 +43,8 @@ use crate::over::{self, Reached};
 use crate::record::{memory_barrier, Reach};
 use crate::surface::Surface;
 use crate::texture::{
-    place, BytesPlace, CopyUnit, Placed, Region, Texture, TextureDescriptor, TextureObject,
+    copy_unit, place, BytesPlace, CopyUnit, Placed, Region, Texture, TextureDescriptor,
+    TextureObject,
 };
 use ash::vk;
 use metal2vulkan::metal::format::{self as formats, FormatEmulation};
@@ -78,6 +79,31 @@ pub struct BufferLayout {
     /// From one image's first byte to the next's, for a region of a 3D texture more than one image
     /// deep; unused for any other.
     pub bytes_per_image: u64,
+}
+
+/// `MTLBlitOption`, the option of a copy between a buffer and a texture: which aspect of a depth
+/// and stencil format the copy moves. A copy of `None` moves the texture's one aspect. One option
+/// a copy, as Metal's validation takes them; Metal's `MTLBlitOptionRowLinearPVRTC` is not offered,
+/// the runtime making no PVRTC texture.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum BlitOption {
+    /// `MTLBlitOptionNone`.
+    #[default]
+    None,
+    /// `MTLBlitOptionDepthFromDepthStencil`: the depth aspect, its bytes those of the format's
+    /// depth alone (4 a texel of `Depth32Float_Stencil8`).
+    DepthFromDepthStencil,
+    /// `MTLBlitOptionStencilFromDepthStencil`: the stencil aspect, one byte a texel.
+    StencilFromDepthStencil,
+}
+
+/// The way a copy between a buffer and a texture goes, and the option it takes.
+#[derive(Clone, Copy)]
+enum Way {
+    /// From the buffer into the texture.
+    IntoImage(BlitOption),
+    /// From the texture into the buffer.
+    IntoBuffer(BlitOption),
 }
 
 /// `MTLBlitCommandEncoder`: records each copy into its command buffer at once.
@@ -263,7 +289,30 @@ impl BlitCommandEncoder {
         destination: &Texture,
         to: TexturePlace,
     ) -> Result<(), Error> {
-        self.buffer_copy(destination, to, size, source, layout, true)
+        let option = BlitOption::None;
+        self.copy_from_buffer_with_options(source, layout, size, destination, to, option)
+    }
+
+    /// `copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:sourceSize:`
+    /// `toTexture:destinationSlice:destinationLevel:destinationOrigin:options:`: as
+    /// [`copy_from_buffer`](Self::copy_from_buffer), into the aspect `option` names, one
+    /// `vkCmdCopyBufferToImage` region of that aspect alone. Metal takes a plane option of a
+    /// format of depth and stencil both, and of a format of the option's aspect alone.
+    ///
+    /// Err: as [`copy_from_buffer`](Self::copy_from_buffer)'s; [`Gap::TextureBytes`] for a plane
+    /// option of a format without its aspect, for `None` of a format of depth and stencil both,
+    /// and for a multisample texture; [`Gap::FloatDepthUpload`] for a 32-bit float depth.
+    pub fn copy_from_buffer_with_options(
+        &mut self,
+        source: &Buffer,
+        layout: BufferLayout,
+        size: [u32; 3],
+        destination: &Texture,
+        to: TexturePlace,
+        option: BlitOption,
+    ) -> Result<(), Error> {
+        let way = Way::IntoImage(option);
+        self.buffer_copy(destination, to, size, source, layout, way)
     }
 
     /// `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:`
@@ -283,7 +332,36 @@ impl BlitCommandEncoder {
         destination: &Buffer,
         layout: BufferLayout,
     ) -> Result<(), Error> {
-        self.buffer_copy(source, from, size, destination, layout, false)
+        let option = BlitOption::None;
+        self.copy_from_texture_to_buffer_with_options(
+            source,
+            from,
+            size,
+            destination,
+            layout,
+            option,
+        )
+    }
+
+    /// `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:sourceSize:toBuffer:`
+    /// `destinationOffset:destinationBytesPerRow:destinationBytesPerImage:options:`: as
+    /// [`copy_from_texture_to_buffer`](Self::copy_from_texture_to_buffer), out of the aspect
+    /// `option` names, one `vkCmdCopyImageToBuffer` region of that aspect alone, as
+    /// [`copy_from_buffer_with_options`](Self::copy_from_buffer_with_options) takes it.
+    ///
+    /// Err: as [`copy_from_buffer_with_options`](Self::copy_from_buffer_with_options)'s, but for
+    /// [`Gap::FloatDepthUpload`].
+    pub fn copy_from_texture_to_buffer_with_options(
+        &mut self,
+        source: &Texture,
+        from: TexturePlace,
+        size: [u32; 3],
+        destination: &Buffer,
+        layout: BufferLayout,
+        option: BlitOption,
+    ) -> Result<(), Error> {
+        let way = Way::IntoBuffer(option);
+        self.buffer_copy(source, from, size, destination, layout, way)
     }
 
     /// `copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:`: `size` bytes at
@@ -363,7 +441,7 @@ impl BlitCommandEncoder {
         Ok(())
     }
 
-    /// A copy of `size` texels at `at` in `texture` from or, not `into_image`, to `buffer`.
+    /// A copy of `size` texels at `at` in `texture` from or to `buffer`, the way `way` says.
     fn buffer_copy(
         &mut self,
         texture: &Texture,
@@ -371,8 +449,12 @@ impl BlitCommandEncoder {
         size: [u32; 3],
         buffer: &Buffer,
         layout: BufferLayout,
-        into_image: bool,
+        way: Way,
     ) -> Result<(), Error> {
+        let (into_image, option) = match way {
+            Way::IntoImage(option) => (true, option),
+            Way::IntoBuffer(option) => (false, option),
+        };
         if !texture.is_of(&self.core) || !buffer.is_of(&self.core) {
             return Err(Error::Refused(Refusal::OtherDevice));
         }
@@ -383,7 +465,8 @@ impl BlitCommandEncoder {
             len: buffer.length(),
             layout,
         };
-        let Some(copy) = buffer_copy(&Side::of(texture), at, size, lies, into_image)? else {
+        let side = Side::of(texture).with_option(option)?;
+        let Some(copy) = buffer_copy(&side, at, size, lies, into_image)? else {
             return Ok(());
         };
         self.record_buffer_copies(texture, buffer, &[copy], into_image)
@@ -1080,6 +1163,27 @@ impl<'a> Side<'a> {
             unit: texture.unit(),
             base: texture.base(),
         }
+    }
+
+    /// The side as a copy of `option` moves it: as it is for `None`, and for a plane option the
+    /// aspect it names, where the texture's pixel format has that aspect (Metal takes the option
+    /// of a format of that aspect alone too, as `Depth16Unorm` and `Stencil8`).
+    ///
+    /// Err: [`Gap::TextureBytes`] for a plane option of a format without its aspect.
+    pub(crate) fn with_option(self, option: BlitOption) -> Result<Self, Error> {
+        let aspect = match option {
+            BlitOption::None => return Ok(self),
+            BlitOption::DepthFromDepthStencil => vk::ImageAspectFlags::DEPTH,
+            BlitOption::StencilFromDepthStencil => vk::ImageAspectFlags::STENCIL,
+        };
+        let pixel_format = self.descriptor.pixel_format;
+        let aspects = formats::aspects(pixel_format).map(vk::ImageAspectFlags::from);
+        if !aspects.is_some_and(|aspects| aspects.contains(aspect)) {
+            return Err(Error::Unsupported(Gap::TextureBytes { pixel_format }));
+        }
+        let samples = self.descriptor.sample_count;
+        let unit = copy_unit(pixel_format, self.format, aspect, 0, samples);
+        Ok(Side { unit, ..self })
     }
 }
 

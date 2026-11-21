@@ -2113,28 +2113,33 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   `sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:` and
   `copy_from_texture_to_buffer` is `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:`
   `sourceSize:toBuffer:destinationOffset:destinationBytesPerRow:destinationBytesPerImage:`, a
-  `BufferLayout` holding the offset and the two strides; their options forms with no option are
-  the same calls. Each records `vkCmdCopyBufferToImage` or `vkCmdCopyImageToBuffer` against the
-  bytes shaders reach (a Managed buffer's device copy, where the device keeps one), one region an
-  image of the region, each at its own offset, so an image stride of no whole number of rows
-  copies too. The bytes between the region's rows and
-  images are kept. Every copy of a colour aspect from a texture to bytes (these, a synchronize,
-  `get_bytes` and a texture over a buffer's copy back) whose row stride in bytes is not a multiple
-  of M, the largest power of two up to 16 dividing its row's bytes, is two regions, every block
-  column but the last and then the last, on every device: the UHD 630's Windows driver (101.2145)
-  writes such a copy's rows floor(stride / M) × M bytes apart as one region where its offset is a
-  multiple of M. It records the same two barriers as a copy between textures, the second's
-  global memory barrier making a write into either visible to every later command, and a write
-  into a Shared buffer marks the segment, whose end barrier then reaches the host. A command
+  `BufferLayout` holding the offset and the two strides. `copy_from_buffer_with_options` and
+  `copy_from_texture_to_buffer_with_options` are their options forms, a `BlitOption` naming the
+  aspect a copy of a depth and stencil format moves (`MTLBlitOptionDepthFromDepthStencil` or
+  `MTLBlitOptionStencilFromDepthStencil`, which Metal takes of a format of that aspect alone too),
+  one region of that aspect; the forms without an option are those of `None`.
+  `MTLBlitOptionRowLinearPVRTC` is not offered, as no PVRTC texture is made. Each records
+  `vkCmdCopyBufferToImage` or `vkCmdCopyImageToBuffer` against the bytes shaders reach (a Managed
+  buffer's device copy, where the device keeps one), one region an image of the region, each at its
+  own offset, so an image stride of no whole number of rows copies too. The bytes between the
+  region's rows and images are kept. Every copy of a colour aspect from a texture to bytes (these, a
+  synchronize, `get_bytes` and a texture over a buffer's copy back) whose row stride in bytes is not
+  a multiple of M, the largest power of two up to 16 dividing its row's bytes, is two regions, every
+  block column but the last and then the last, on every device: the UHD 630's Windows driver
+  (101.2145) writes such a copy's rows floor(stride / M) × M bytes apart as one region where its
+  offset is a multiple of M. It records the same two barriers as a copy between textures, the
+  second's global memory barrier making a write into either visible to every later command, and a
+  write into a Shared buffer marks the segment, whose end barrier then reaches the host. A command
   buffer of one copy into a Shared buffer has three barriers.
-- Refused (`Refusal::BufferCopyLayout`), as Metal's validation stops them: an offset or row
-  stride of no whole number of a format's texels, rows or images closer than the region's, and a
-  region past the buffer's end. Metal reads no row stride of a region one row high and no image
-  stride of a region one image deep, and neither does the runtime. Not built
-  (`Gap::BufferCopyAlignment`), though Metal takes them: an image's offset in the `VkBuffer`
-  shaders reach that is no multiple of a texel block's bytes, or of 4 for a depth or stencil
-  aspect, and a row stride of no whole number of a compressed format's blocks; also what `replace_region` and
-  `get_bytes` refuse (`Gap::TextureBytes`, and `Gap::FloatDepthUpload` into a texture).
+- Refused (`Refusal::BufferCopyLayout`), as Metal's validation stops them: an offset or row stride
+  of no whole number of a format's texels, rows or images closer than the region's, and a region
+  past the buffer's end. Metal reads no row stride of a region one row high and no image stride of a
+  region one image deep, and neither does the runtime. Not built (`Gap::BufferCopyAlignment`),
+  though Metal takes them: an image's offset in the `VkBuffer` shaders reach that is no multiple of
+  a texel block's bytes, or of 4 for a depth or stencil aspect, and a row stride of no whole number
+  of a compressed format's blocks; also what `replace_region` and `get_bytes` refuse
+  (`Gap::TextureBytes`, and `Gap::FloatDepthUpload` into a texture), but for a plane option's copy
+  of a format of depth and stencil both.
 - `copy_from_buffer_to_buffer` is `copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:`:
   one `vkCmdCopyBuffer` region between the bytes shaders reach (a Managed buffer's device copy,
   where the device keeps one), between the same two barriers as a fill, a copy into a Shared

@@ -480,9 +480,20 @@ impl Run<'_> {
         })
     }
 
-    /// Run one step. A copy between a buffer and a texture with a blit option other than
-    /// `MTLBlitOptionNone` is the runtime's to build; the selector without options is the one
-    /// with `MTLBlitOptionNone`, as Apple's header says of it.
+    /// The runtime's option for a copy of `plane`; `None` for `MTLBlitOptionRowLinearPVRTC`, which
+    /// the runtime does not offer.
+    fn option(plane: Plane) -> Option<rt::BlitOption> {
+        match plane {
+            Plane::Whole => Some(rt::BlitOption::None),
+            Plane::Depth => Some(rt::BlitOption::DepthFromDepthStencil),
+            Plane::Stencil => Some(rt::BlitOption::StencilFromDepthStencil),
+            Plane::RowLinearPvrtc => None,
+        }
+    }
+
+    /// Run one step. A copy between a buffer and a texture of `MTLBlitOptionRowLinearPVRTC` is
+    /// the runtime's to build; the selector without options is the one with `MTLBlitOptionNone`,
+    /// as Apple's header says of it.
     fn step(&mut self, step: &Step) -> Answer<()> {
         match step {
             Step::FillTexture { .. } => Err(Failure::unavailable(
@@ -492,7 +503,7 @@ impl Run<'_> {
                 "fillTexture:level:slice:region:color:",
             )),
             Step::CopyBufferToTexture { plane, .. } | Step::CopyTextureToBuffer { plane, .. }
-                if *plane != Plane::Whole =>
+                if Self::option(*plane).is_none() =>
             {
                 Err(Failure::unavailable(plane.option_name()))
             }
@@ -506,9 +517,24 @@ impl Run<'_> {
                 slice,
                 level,
                 origin,
-                plane: _,
+                plane,
+            } => {
+                let (source, destination) = (self.buffer(*buffer)?, self.texture(*texture)?);
+                let layout = rt::BufferLayout {
+                    offset: *offset,
+                    bytes_per_row: *bytes_per_row,
+                    bytes_per_image: *bytes_per_image,
+                };
+                let (size, to) = (
+                    narrow3(size, "a size")?,
+                    Self::place(*slice, *level, origin)?,
+                );
+                let option = Self::option(*plane).unwrap_or_default();
+                (self.encoder()?)
+                    .copy_from_buffer_with_options(&source, layout, size, &destination, to, option)
+                    .map_err(of_rt)
             }
-            | Step::CopyBufferToTextureWithoutOptions {
+            Step::CopyBufferToTextureWithoutOptions {
                 buffer,
                 offset,
                 bytes_per_row,
@@ -544,9 +570,31 @@ impl Run<'_> {
                 offset,
                 bytes_per_row,
                 bytes_per_image,
-                plane: _,
+                plane,
+            } => {
+                let (source, destination) = (self.texture(*texture)?, self.buffer(*buffer)?);
+                let layout = rt::BufferLayout {
+                    offset: *offset,
+                    bytes_per_row: *bytes_per_row,
+                    bytes_per_image: *bytes_per_image,
+                };
+                let (from, size) = (
+                    Self::place(*slice, *level, origin)?,
+                    narrow3(size, "a size")?,
+                );
+                let option = Self::option(*plane).unwrap_or_default();
+                (self.encoder()?)
+                    .copy_from_texture_to_buffer_with_options(
+                        &source,
+                        from,
+                        size,
+                        &destination,
+                        layout,
+                        option,
+                    )
+                    .map_err(of_rt)
             }
-            | Step::CopyTextureToBufferWithoutOptions {
+            Step::CopyTextureToBufferWithoutOptions {
                 texture,
                 slice,
                 level,

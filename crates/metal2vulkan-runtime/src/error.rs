@@ -1059,7 +1059,9 @@ pub enum Gap {
     /// texture
     /// ([`BlitCommandEncoder::copy_from_buffer`](crate::BlitCommandEncoder::copy_from_buffer)) of a
     /// texture whose image is no plain copy of Metal's bytes in one aspect: a format of depth and
-    /// stencil both, or a multisample texture.
+    /// stencil both but in a copy of a plane option
+    /// ([`BlitOption`](crate::BlitOption)), or a multisample texture. Also a plane option of a
+    /// format without the aspect it names.
     ///
     /// Basis: ours (no copy between such an image and bytes is built).
     TextureBytes {

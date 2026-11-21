@@ -761,6 +761,7 @@ enum	metal2vulkan-air::tensor_ops::Mode	#[derive(Clone, Copy, Debug, PartialEq, 
 enum	metal2vulkan-air::tensor_ops::OperandForm	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum OperandForm
 enum	metal2vulkan-air::tensor_ops::OperandIndex	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum OperandIndex
 enum	metal2vulkan-air::tensor_ops::TensorSpace	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum TensorSpace
+enum	metal2vulkan-runtime::BlitOption	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub enum BlitOption
 enum	metal2vulkan-runtime::CommandBufferError	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum CommandBufferError
 enum	metal2vulkan-runtime::CommandBufferStatus	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum CommandBufferStatus
 enum	metal2vulkan-runtime::CompareFunction	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum CompareFunction
@@ -6484,8 +6485,10 @@ method	metal2vulkan-air::tensor_ops::RunForm::operand_args	pub fn operand_args(&
 method	metal2vulkan-runtime::AllocationId::get	pub fn get(self) -> u32
 method	metal2vulkan-runtime::BlitCommandEncoder::copy_from_buffer	pub fn copy_from_buffer(&mut self, source: &Buffer, layout: BufferLayout, size: [u32; 3], destination: &Texture, to: TexturePlace) -> Result<(), Error>
 method	metal2vulkan-runtime::BlitCommandEncoder::copy_from_buffer_to_buffer	pub fn copy_from_buffer_to_buffer(&mut self, source: &Buffer, source_offset: u64, destination: &Buffer, destination_offset: u64, size: u64) -> Result<(), Error>
+method	metal2vulkan-runtime::BlitCommandEncoder::copy_from_buffer_with_options	pub fn copy_from_buffer_with_options(&mut self, source: &Buffer, layout: BufferLayout, size: [u32; 3], destination: &Texture, to: TexturePlace, option: BlitOption) -> Result<(), Error>
 method	metal2vulkan-runtime::BlitCommandEncoder::copy_from_texture	pub fn copy_from_texture(&mut self, source: &Texture, from: TexturePlace, size: [u32; 3], destination: &Texture, to: TexturePlace) -> Result<(), Error>
 method	metal2vulkan-runtime::BlitCommandEncoder::copy_from_texture_to_buffer	pub fn copy_from_texture_to_buffer(&mut self, source: &Texture, from: TexturePlace, size: [u32; 3], destination: &Buffer, layout: BufferLayout) -> Result<(), Error>
+method	metal2vulkan-runtime::BlitCommandEncoder::copy_from_texture_to_buffer_with_options	pub fn copy_from_texture_to_buffer_with_options(&mut self, source: &Texture, from: TexturePlace, size: [u32; 3], destination: &Buffer, layout: BufferLayout, option: BlitOption) -> Result<(), Error>
 method	metal2vulkan-runtime::BlitCommandEncoder::end_encoding	pub fn end_encoding(mut self)
 method	metal2vulkan-runtime::BlitCommandEncoder::fill_buffer	pub fn fill_buffer(&mut self, buffer: &Buffer, range: Range<u64>, value: u8) -> Result<(), Error>
 method	metal2vulkan-runtime::BlitCommandEncoder::generate_mipmaps	pub fn generate_mipmaps(&mut self, texture: &Texture) -> Result<(), Error>
@@ -9157,6 +9160,9 @@ variant	metal2vulkan-air::tensor_ops::OperandIndex::Right	Right
 variant	metal2vulkan-air::tensor_ops::TensorSpace::Device	Device
 variant	metal2vulkan-air::tensor_ops::TensorSpace::Thread	Thread
 variant	metal2vulkan-air::tensor_ops::TensorSpace::Threadgroup	Threadgroup
+variant	metal2vulkan-runtime::BlitOption::DepthFromDepthStencil	DepthFromDepthStencil
+variant	metal2vulkan-runtime::BlitOption::None	None
+variant	metal2vulkan-runtime::BlitOption::StencilFromDepthStencil	StencilFromDepthStencil
 variant	metal2vulkan-runtime::CommandBufferError::DeviceLost	DeviceLost { in_flight: bool }
 variant	metal2vulkan-runtime::CommandBufferError::NotRun	NotRun
 variant	metal2vulkan-runtime::CommandBufferStatus::Committed	Committed

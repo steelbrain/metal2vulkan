@@ -61,7 +61,7 @@ mod texture;
 mod times;
 
 pub use arrays::{IndexClass, IndexGrant, ResourceId};
-pub use blit::{BlitCommandEncoder, BufferLayout, TexturePlace};
+pub use blit::{BlitCommandEncoder, BlitOption, BufferLayout, TexturePlace};
 pub use block::Block;
 pub use buffer::{Buffer, MAX_BUFFER_LENGTH};
 pub use command::{CommandBuffer, CommandBufferError, CommandBufferStatus, DeviceLoss};
