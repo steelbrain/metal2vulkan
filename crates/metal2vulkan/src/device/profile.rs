@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::air::container::Hash256;
 use crate::device::requirements::{ApiVersion, FormatUsage, VkExtension, VkFeature, VkProperty};
 use crate::device::subgroup::{SimdClass, SubgroupModel, Tier};
-use crate::error::{Capability, DriverDeviation, Unsupported};
+use crate::error::{Capability, Unsupported};
 use crate::memory::contain::Check;
 use crate::pipeline::sym::Stage;
 use crate::vk;
@@ -206,21 +206,6 @@ impl DeviceProfile {
     /// guards the write.
     pub fn device_drops_texel_writes(&self, texel_buffer: bool) -> bool {
         crate::memory::contain::device_drops_texel_writes(self, texel_buffer)
-    }
-
-    /// Whether the profile takes the driver deviation `deviation` (`device::driver_facts`): its
-    /// driver is measured with it on the device's GPU, so the translation relies on it. A
-    /// profile that does not take it compiles the route the deviation's documentation names for a
-    /// driver without it. A gate lane that checks a deviation on the device asks this before
-    /// expecting the deviation's answer.
-    pub fn takes_driver_deviation(&self, deviation: DriverDeviation) -> bool {
-        let f = &self.fields;
-        match deviation {
-            DriverDeviation::MetalFirstVertexIndices => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalFirstVertexIndices),
-        }
     }
 
     /// What this profile lacks of `GLSL.std.450`'s interpolation functions (the

@@ -948,10 +948,9 @@ impl Device {
             all.extend(stages);
             stages = all;
         }
-        // A fragment function that reads `[[barycentric_coord]]` as varyings, or a vertex function
-        // that selects its slice or viewport through them, or a fan-out variant: the geometry
-        // stages of the point, line and triangle classes, before the fragment stage, or last
-        // without one.
+        // A fragment function that reads `[[barycentric_coord]]` as varyings, or a fan-out variant:
+        // the geometry stages of the point, line and triangle classes, before the fragment stage,
+        // or last without one.
         if let Some(g) = &linked.geometry {
             let at = stages
                 .iter()
@@ -984,8 +983,6 @@ impl Device {
         if let Some(g) = linked.geometry.as_ref().filter(|g| g.fan_out.is_none()) {
             let fact = RuntimeFact::SynthesizedGeometry {
                 weights: !g.forms.is_empty(),
-                layer: g.layer,
-                viewport: g.viewport,
             };
             dependencies.push(RuntimeDependency {
                 fact,

@@ -239,11 +239,11 @@ fn a_tessellation_pipeline_census_is_its_functions() {
 }
 
 /// A render pipeline's census leaves out its geometry stages, which run no Metal function: a
-/// vertex function whose slice and viewport differ among a primitive's vertices
-/// (`engine/rt6_first_vertex`) stores them through the synthesized geometry stage of each topology
-/// class on a device whose driver does not take Metal's first-vertex indices (the Radeon 780M's
-/// committed capture), so the pipeline's modules are its vertex function's, three geometry stages
-/// and its fragment function's, and its census is the two functions'.
+/// fragment function that reads `[[barycentric_coord]]` (`engine/bary_weights`) reads the weights
+/// from the synthesized geometry stage of each topology class on a device without
+/// `fragmentShaderBarycentric` (the Radeon 780M's committed capture without it), so the
+/// pipeline's modules are its vertex function's, three geometry stages and its fragment
+/// function's, and its census is the two functions'.
 #[test]
 fn a_render_pipeline_census_leaves_out_its_geometry_stages() {
     use metal2vulkan::device::{Device, DevicePolicy};
@@ -254,28 +254,28 @@ fn a_render_pipeline_census_leaves_out_its_geometry_stages() {
     };
     use metal2vulkan::Budget;
     use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
-    let bitcode = match llvm_assemble(&engine_dir().join("rt6_first_vertex.ll")) {
+    let bitcode = match llvm_assemble(&engine_dir().join("bary_weights.ll")) {
         Ok(bytes) => bytes,
         Err(AssembleError::Missing(why)) => {
             eprintln!("SKIPPED: {why}");
             return;
         }
-        Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected rt6_first_vertex.ll: {why}"),
+        Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected bary_weights.ll: {why}"),
     };
     let path = crate::engine::profiles_dir().join("amd-780m-radv.json");
     let text = std::fs::read_to_string(&path).unwrap();
-    let device = Device::from_queries(
-        DeviceDescription::from_khronos_json(&text, None).unwrap(),
-        DevicePolicy::default(),
-    )
-    .unwrap();
+    let mut description = DeviceDescription::from_khronos_json(&text, None).unwrap();
+    assert!(description
+        .features
+        .remove(&VkFeature::FragmentShaderBarycentric));
+    let device = Device::from_queries(description, DevicePolicy::default()).unwrap();
     let library = Library::from_air(&bitcode).unwrap();
     let stage = |name: &str| {
         StageSource::Function(FunctionDescriptor::new(library.function(name).unwrap()))
     };
-    let mut d = RenderPipelineDescriptor::new(stage("rt6_first_vertex"));
-    d.fragment = Some(stage("rt6_first_vertex_read"));
-    d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::R32Uint));
+    let mut d = RenderPipelineDescriptor::new(stage("bw_vertex"));
+    d.fragment = Some(stage("bw_perspective"));
+    d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Float));
     let pipeline = device
         .compile_render_pipeline(&d, &Budget::standard())
         .unwrap();

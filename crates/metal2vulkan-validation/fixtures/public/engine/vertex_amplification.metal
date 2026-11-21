@@ -14,8 +14,10 @@ struct AmpOut {
 
 // Each amplification moves the position by its own offset. `uv` depends only on the vertex, so it
 // is shared by every amplification; the viewport, a built-in output, is shared by default (MSL
-// §5.2.3.3), so it must not depend on the amplification either.
+// §5.2.3.3), so it must not depend on the amplification either. It depends on the instance alone,
+// the same at every vertex of a primitive, as Metal asks of it.
 vertex AmpOut amp_vertex(uint vid [[vertex_id]],
+                         uint iid [[instance_id]],
                          ushort amp [[amplification_id]],
                          ushort count [[amplification_count]],
                          constant float4 *offsets [[buffer(0)]])
@@ -25,7 +27,7 @@ vertex AmpOut amp_vertex(uint vid [[vertex_id]],
     out.position = float4(corner * 2.0f - 1.0f, 0.0f, 1.0f) + offsets[amp];
     out.color = float4(float(amp), float(count), 0.25f, 1.0f);
     out.uv = corner;
-    out.viewport = vid & 1u;
+    out.viewport = iid & 1u;
     return out;
 }
 
@@ -45,14 +47,16 @@ struct AmpLayerOut {
     uint layer [[render_target_array_index]];
 };
 
-// Chooses its render target slice itself: the layer output a multiview pipeline cannot declare.
+// Chooses its render target slice itself, per instance: the layer output a multiview pipeline
+// cannot declare.
 vertex AmpLayerOut amp_vertex_layer(uint vid [[vertex_id]],
+                                    uint iid [[instance_id]],
                                     ushort amp [[amplification_id]],
                                     constant uint *slices [[buffer(0)]])
 {
     AmpLayerOut out;
     out.position = float4(float(vid), float(amp), 0.0f, 1.0f);
-    out.layer = slices[vid & 1u];
+    out.layer = slices[iid & 1u];
     return out;
 }
 

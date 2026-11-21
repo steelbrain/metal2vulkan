@@ -82,14 +82,13 @@
 //!   `uint` varying (`IoRole::ViewportIndex`), which a fragment function compiled under
 //!   `LoweringInputs::viewport_index_varying` reads as its `[[viewport_array_index]]`; any other
 //!   fragment function reads `ViewportIndex` (0 when no stage writes it).
-//! - Where the device cannot store `Layer` or `ViewportIndex` from a vertex function
-//!   (`shaderOutputLayer`, `shaderOutputViewportIndex`), the function stores the value it would
-//!   store there to a flat `uint` varying instead (`IoRole::SelectedLayer`,
-//!   `IoRole::SelectedViewport`), and the pipeline's synthesized geometry stages store the builtin
-//!   from the primitive's first vertex (`link::geometry`), Metal's rule; that needs
-//!   `geometryShader`, else the function is refused needing either feature. On a device without
-//!   `multiViewport` a draw has one viewport, so every index selects viewport 0 and no
-//!   `ViewportIndex` is stored at all: the raw varying alone. A fragment function that reads an
+//! - A vertex function stores `Layer` or `ViewportIndex` only where it writes the index the same at
+//!   every vertex of a primitive, as its structure shows (`StageIo::uniform_outputs`), and the
+//!   device stores the builtin from a vertex function (`shaderOutputLayer`,
+//!   `shaderOutputViewportIndex`). One written alike on a device without the output is refused
+//!   needing it; one not shown alike is refused as not implemented (`plan::index_store`). On a
+//!   device without `multiViewport` a draw has one viewport, so every index selects viewport 0 and
+//!   no `ViewportIndex` is stored at all: the raw varying alone. A fragment function that reads an
 //!   index no stage can have written (no varying input names it, and the device declares neither
 //!   builtin) reads 0, Metal's value with no vertex write (`StageIo::zero_indices`).
 //!
@@ -410,9 +409,6 @@ pub struct StageIoPlan {
     pub zeroed: Vec<Link>,
     /// The shape of the returned value.
     pub returned: Returned,
-    /// A vertex function stores every slice and viewport index it stores to its selected index
-    /// (`IoRole::SelectedLayer`, `IoRole::SelectedViewport`), as it stores one of them there.
-    pub indices_selected: bool,
     /// The `PointSize` object a vertex function without a point-size output writes 1.0 to.
     pub point_size_default: Option<usize>,
     /// The `Position` object of a vertex function, decorated `Invariant`.
@@ -463,10 +459,6 @@ pub struct StageIoPlan {
     /// (`ModuleBuilder::offsets_from_seven_sixteenths`) and requires that property in place of
     /// `VkProperty::InterpolateAtOffsetCentered`.
     pub offsets_from_seven_sixteenths: bool,
-    /// A vertex function stores an index that differs among a primitive's vertices to its
-    /// builtin, because its device takes the first vertex's as Metal does
-    /// (`VkProperty::MetalFirstVertexIndices`): the module requires that property.
-    pub first_vertex_indices_by_device: bool,
     /// A vertex function compiled in the de-indexed or private list form reads its vertex from
     /// the draw's indices ([`CapturedIndex`]): planned where the function reads it
     /// (`[[vertex_id]]`, a per-vertex attribute, `[[base_vertex]]` or the primitive ID).

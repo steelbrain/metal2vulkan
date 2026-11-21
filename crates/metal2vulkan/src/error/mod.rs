@@ -482,24 +482,6 @@ pub enum Needs {
     MetalRefuses(&'static [&'static str]),
 }
 
-/// A driver's measured answer where the specifications leave it to the device, per driver and
-/// GPU (`device::driver_facts`): the profile takes it on every release of a driver measured with
-/// it. Where the profile takes it a module relies on it (and requires its property) or records no
-/// note; elsewhere each variant names the route taken: the device's own answer, recorded as a
-/// precision note, or, where the answer decides a capability, its emulation or a refusal.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum DriverDeviation {
-    /// The device takes a primitive's `Layer` and `ViewportIndex` from its first vertex, whatever
-    /// its other vertices store, as Metal takes a primitive's slice and viewport
-    /// (`VkProperty::MetalFirstVertexIndices`). Vulkan takes them only where every vertex of a
-    /// primitive stores the same. Where the profile takes it, a vertex function whose index differs
-    /// among a primitive's vertices stores it to its builtin. Unmeasured, it stores it through the
-    /// pipeline's synthesized geometry stages, which store the first vertex's at every vertex,
-    /// and is refused on a device without `geometryShader`.
-    MetalFirstVertexIndices,
-}
-
 /// One device capability a refusal can name.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

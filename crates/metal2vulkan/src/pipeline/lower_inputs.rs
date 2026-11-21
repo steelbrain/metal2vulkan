@@ -372,15 +372,13 @@ pub struct LoweringInputs {
     /// 0 where it is not, only under [`AmplificationDraws::layered`]; it adds the viewport offset
     /// (`PushField::AmplificationViewportOffset`) to its viewport index and stores `ViewportIndex`
     /// as that sum below the draw's viewport count and 0 at or past it, where it writes an index of
-    /// its own or under [`AmplificationDraws::viewports`]. Where the device cannot store either
-    /// builtin from a vertex function, it stores the value to a flat varying the synthesized
-    /// geometry stages store the builtin from (`IoRole::SelectedLayer`,
-    /// `IoRole::SelectedViewport`), and on a device without `multiViewport` it stores no viewport
-    /// at all. The raw index varyings it writes hold the sums. A fragment function reads its `[[render_target_array_index]]` and
-    /// `[[viewport_array_index]]` from those varyings where its vertex function writes the index
-    /// (`render_target_array_index_varying`, `viewport_index_varying`), and otherwise as the
-    /// offsets themselves, from the push fields. The vertex function states
-    /// `RuntimeFact::AmplificationDraws`. Any other function compiles as without it.
+    /// its own or under [`AmplificationDraws::viewports`]. On a device without `multiViewport` it
+    /// stores no viewport at all. The raw index varyings it writes hold the sums. A fragment
+    /// function reads its `[[render_target_array_index]]` and `[[viewport_array_index]]` from those
+    /// varyings where its vertex function writes the index (`render_target_array_index_varying`,
+    /// `viewport_index_varying`), and otherwise as the offsets themselves, from the push fields.
+    /// The vertex function states `RuntimeFact::AmplificationDraws`. Any other function compiles as
+    /// without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub amplification_draws: Option<AmplificationDraws>,
     /// How each color attachment the fragment function writes takes each channel of its float

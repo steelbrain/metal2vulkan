@@ -10,7 +10,7 @@ use crate::air::abi::{
 use crate::air::intrinsics::{AirIntrinsic, Fragment as AirFragment, InterpolateAt};
 use crate::air::ir::{ArgIdx, Callee, InstKind, Type, TypeId as AirTypeId, Value};
 use crate::device::requirements::{VkExtension, VkFeature, VkLimit, VkProperty};
-use crate::error::{Attachment, Capability, DriverDeviation, Error, Feature, Unsupported};
+use crate::error::{Attachment, Capability, Error, Feature, Unsupported};
 use crate::lower::arith::legal::{form_on, refuse_bfloat_color, refuse_int64_interface};
 use crate::lower::arith::{Form, Held};
 use crate::lower::select::SelectCx;
@@ -1137,7 +1137,7 @@ fn zeroed_output(
 
 /// Plan output `index` of a vertex function compiled under `LoweringInputs::amplification_draws`
 /// that writes no such index: stored as the amplification's offset below its count push field
-/// ([`AmplifiedOutput`]) where [`index_store`] stores it, to its builtin or its selected index.
+/// ([`AmplifiedOutput`]) where [`index_store`] stores it, to its builtin.
 /// Metal renders the amplification through the slice or viewport its offset names, the first at or
 /// past the count (a Metal probe on the M3 Max and an M4).
 fn amplified_output(cx: &mut SelectCx<'_>, index: AmplifiedIndex) -> Result<(), Error> {
@@ -1167,10 +1167,7 @@ fn amplified_output(cx: &mut SelectCx<'_>, index: AmplifiedIndex) -> Result<(), 
     cx.push.insert(offset);
     cx.push.insert(below);
     let sp = &mut cx.families.stage_io;
-    let object = match store {
-        IndexStore::Selected => selected_index(sp, raw)?,
-        _ => builtin(sp, spirv, IoDir::Output, Shape::U32, contract),
-    };
+    let object = builtin(sp, spirv, IoDir::Output, Shape::U32, contract);
     sp.amplified.push(AmplifiedOutput {
         link: Link {
             object,
@@ -1439,10 +1436,6 @@ enum RawIndex {
 enum IndexStore {
     /// To its builtin, `Layer` or `ViewportIndex`.
     Builtin,
-    /// To its selected index (`IoRole::SelectedLayer`, `IoRole::SelectedViewport`), which the
-    /// pipeline's synthesized geometry stage stores to the builtin from the primitive's first
-    /// vertex (`pipeline::link::geometry`).
-    Selected,
     /// Nowhere: a viewport index on a device without `multiViewport`, whose draws have one
     /// viewport (the runtime refuses more), so Metal's index selects viewport 0 whatever it is,
     /// the viewport Vulkan uses where no stage writes `ViewportIndex`.
@@ -1450,32 +1443,24 @@ enum IndexStore {
 }
 
 /// Where a vertex function on `cx`'s profile stores index `index`, which it writes the same at
-/// every vertex of a primitive where `uniform` ([`uniform_index`]): to its selected index where
-/// the function stores another there ([`StageIoPlan::indices_selected`]), and otherwise where
-/// [`own_index_store`] puts it.
+/// every vertex of a primitive where `uniform` ([`uniform_index`]): to its builtin where the
+/// profile enables `shaderOutputLayer` (`shaderOutputViewportIndex` for a viewport index) and
+/// the function writes the index alike, and nowhere, a viewport index on a profile without
+/// `multiViewport`. Otherwise refused, as `VertexAmplification` for an index the function stores
+/// from the amplification's offset alone (`amplification`), else as `LayeredRendering`: one
+/// written alike needing the output feature, one not shown alike as not implemented on any
+/// device.
+///
+/// An index not shown alike is refused because Metal gives it no answer to match: "You must
+/// return the same value of [[render_target_array_index]] for every vertex in a primitive. If
+/// values differ, the behavior and value passed to the fragment function are undefined." (the
+/// Metal Shading Language specification, and the same of `[[viewport_array_index]]`). It is not
+/// stored to its builtin as written because Vulkan asks a stage that writes `Layer` to "write the
+/// same value to Layer for all vertices of a given primitive"
+/// (VUID-VkPipelineShaderStageCreateInfo-stage-02596), and the same of `ViewportIndex`
+/// (VUID-VkPipelineShaderStageCreateInfo-stage-02597), which the function's structure does not
+/// show of it.
 fn index_store(
-    cx: &SelectCx<'_>,
-    index: RawIndex,
-    uniform: bool,
-    amplification: bool,
-) -> Result<IndexStore, Error> {
-    match own_index_store(cx, index, uniform, amplification)? {
-        IndexStore::Builtin if cx.families.stage_io.indices_selected => Ok(IndexStore::Selected),
-        store => Ok(store),
-    }
-}
-
-/// Where a vertex function on `cx`'s profile stores index `index` taken alone. Vulkan takes a
-/// primitive's `Layer` and `ViewportIndex` only where every vertex of it stores the same, Metal
-/// the primitive's first vertex's whatever the others store. So: to its builtin where the profile
-/// enables `shaderOutputLayer` (`shaderOutputViewportIndex` for a viewport index) and the function
-/// writes the index the same at every vertex of a primitive (`uniform`), or the profile takes
-/// `DriverDeviation::MetalFirstVertexIndices`; nowhere, a viewport index on a profile without
-/// `multiViewport`; else to its selected index where the profile enables `geometryShader`.
-/// Otherwise refused, as `VertexAmplification` for an index the function stores from the
-/// amplification's offset alone (`amplification`), else as `LayeredRendering`: one written alike
-/// needing the output feature or `geometryShader`, one not needing `geometryShader`.
-fn own_index_store(
     cx: &SelectCx<'_>,
     index: RawIndex,
     uniform: bool,
@@ -1489,10 +1474,7 @@ fn own_index_store(
             VkFeature::ShaderOutputViewportIndex,
         ),
     };
-    let first_vertex = cx
-        .profile
-        .takes_driver_deviation(DriverDeviation::MetalFirstVertexIndices);
-    if native && (uniform || first_vertex) {
+    if native && uniform {
         return Ok(IndexStore::Builtin);
     }
     if matches!(index, RawIndex::Viewport)
@@ -1500,17 +1482,15 @@ fn own_index_store(
     {
         return Ok(IndexStore::Nowhere);
     }
-    if f.fragment.geometry_shader {
-        return Ok(IndexStore::Selected);
+    // An index stored from the amplification's offset alone is the same at every vertex.
+    if amplification {
+        return Err(
+            Unsupported::needs(Feature::VertexAmplification, Capability::Feature(output)).into(),
+        );
     }
-    let geometry = vec![Capability::Feature(VkFeature::GeometryShader)];
-    let needs = match uniform {
-        true => vec![vec![Capability::Feature(output)], geometry],
-        false => vec![geometry],
-    };
-    Err(match amplification {
-        true => Unsupported::needs_any_of(Feature::VertexAmplification, needs),
-        false => Unsupported::needs_any_of(Feature::LayeredRendering, needs),
+    Err(match uniform {
+        true => Unsupported::needs(Feature::LayeredRendering, Capability::Feature(output)),
+        false => Unsupported::not_implemented(Feature::LayeredRendering),
     }
     .into())
 }
@@ -1525,74 +1505,6 @@ fn uniform_index(cx: &SelectCx<'_>, index: RawIndex) -> bool {
     (cx.families.stage_io.interface.uniform_outputs)
         .binary_search(&key)
         .is_ok()
-}
-
-/// Whether vertex function `cx`, with outputs `outputs`, drawn under `amplified` (`None` where it
-/// returns nothing), stores one of the slice and viewport indices it stores to its selected index
-/// ([`own_index_store`]). The pipeline's geometry stage then stores both builtins, and a vertex
-/// function's own would not reach the rasterizer past it, so it stores every one there
-/// ([`StageIoPlan::indices_selected`]). An index it writes and stores is uniform as written; one
-/// it stores from the amplification's offset alone is uniform; a slice it writes in a pass of one
-/// layer is stored nowhere. A refusal is left to the output that stores the index.
-fn indices_selected(
-    cx: &SelectCx<'_>,
-    outputs: &[OutputBinding],
-    amplified: Option<crate::pipeline::lower_inputs::AmplificationDraws>,
-) -> bool {
-    let writes = |role: fn(&OutputRole) -> bool| outputs.iter().any(|o| role(&o.role));
-    let layer = writes(|r| matches!(r, OutputRole::RenderTargetArrayIndex));
-    let viewport = writes(|r| matches!(r, OutputRole::ViewportArrayIndex));
-    let dropped = cx.inputs.dropped_vertex_layer || amplified.is_some_and(|d| !d.layered);
-    let stored = [
-        (
-            RawIndex::Layer,
-            if layer {
-                !dropped
-            } else {
-                amplified.is_some_and(|d| d.layered)
-            },
-            !layer || uniform_index(cx, RawIndex::Layer),
-        ),
-        (
-            RawIndex::Viewport,
-            viewport || amplified.is_some_and(|d| d.viewports),
-            !viewport || uniform_index(cx, RawIndex::Viewport),
-        ),
-    ];
-    stored.into_iter().any(|(index, stored, uniform)| {
-        stored
-            && matches!(
-                own_index_store(cx, index, uniform, false),
-                Ok(IndexStore::Selected)
-            )
-    })
-}
-
-/// The selected index's flat `uint` vertex output (`IoRole::SelectedLayer`,
-/// `IoRole::SelectedViewport`), which the pipeline's synthesized geometry stage reads.
-fn selected_index(sp: &mut StageIoPlan, index: RawIndex) -> Result<usize, Error> {
-    let (key, role) = match index {
-        RawIndex::Viewport => (VaryingKey::selected_viewport(), IoRole::SelectedViewport),
-        RawIndex::Layer => (VaryingKey::selected_layer(), IoRole::SelectedLayer),
-    };
-    let ty = IoType {
-        numeric: IoNumeric::Uint,
-        components: 1,
-        source_bits: 32,
-    };
-    let deco = IoDecor {
-        packed: true,
-        ..IoDecor::default()
-    };
-    push_var(
-        &mut sp.interface.outputs,
-        IoVariable {
-            key: key.clone(),
-            role,
-            ty,
-        },
-    );
-    user(sp, key, IoDir::Output, ty, deco)
 }
 
 /// Whether the profile can declare fragment input builtin `b`: one of its enabling
@@ -2156,13 +2068,6 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         });
     }
     let offset = |field| amplified.map(|_| field);
-    if cx.stage == Stage::Vertex {
-        cx.families.stage_io.indices_selected = indices_selected(
-            cx,
-            &outputs,
-            amplified.filter(|_| returned != Returned::Void),
-        );
-    }
     // The pipeline's colors the pass lacks, whose writes plain Metal drops: stated whether or
     // not the function writes them, so the plan settles on the variant.
     let dropped = match cx.stage {
@@ -3084,17 +2989,7 @@ fn output(cx: &mut SelectCx<'_>, o: &OutputBinding, ty: AirTypeId) -> Result<Lin
             let f = io_form(cx, ty)?;
             int_scalar(f)?;
             match store {
-                IndexStore::Builtin => {
-                    // Differing among a primitive's vertices, stored to the builtin only on a
-                    // device that takes the first vertex's as Metal does.
-                    cx.families.stage_io.first_vertex_indices_by_device |= !uniform;
-                    out(cx, spirv, Shape::U32, Place::Whole, f, contract)
-                }
-                IndexStore::Selected => Link {
-                    object: selected_index(&mut cx.families.stage_io, index)?,
-                    place: Place::Whole,
-                    form: f,
-                },
+                IndexStore::Builtin => out(cx, spirv, Shape::U32, Place::Whole, f, contract),
                 IndexStore::Nowhere => {
                     return Err(cx.invariant("a viewport index stored nowhere as an output"))
                 }

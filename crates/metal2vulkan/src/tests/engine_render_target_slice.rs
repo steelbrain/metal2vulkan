@@ -15,10 +15,10 @@
 //!   the other variant is `BindError::NeedsVariant`.
 //! - Amplified draws are never views on either variant: they draw one amplification at a time.
 //!
-//! Every module that compiles passes L3 (`spirv-val` and requirements within the profile), and
-//! the dropped vertex module on MoltenVK, which has no geometry stage to write a slice, converts to
-//! MSL and compiles as MoltenVK's does (`spirv-cross` and `xcrun metal`, compile only). `llvm-as` assembles the fixtures; a missing tool skips visibly.
-//! No GPU is used.
+//! Every module that compiles passes L3 (`spirv-val` and requirements within the profile), and the
+//! dropped vertex module on MoltenVK without `shaderOutputLayer` converts to MSL and compiles as
+//! MoltenVK's does (`spirv-cross` and `xcrun metal`, compile only). `llvm-as` assembles the
+//! fixtures; a missing tool skips visibly. No GPU is used.
 
 use std::path::Path;
 
@@ -295,13 +295,10 @@ fn a_fragment_reading_its_slice_alone_asks_for_no_variant() {
 
 /// The dropped variant declares no `Layer` output, so a device that cannot write `Layer` from a
 /// vertex function runs a pass of one layer exactly, where the variant that writes `Layer` is
-/// refused typed when the device has no geometry stage to write it either (MoltenVK has none).
-/// The device keeps `VK_EXT_shader_viewport_index_layer`: without `shaderOutputLayer` it grants no
-/// `Layer` output (the capability a module declares at the 1.2 floor is the feature's), so the
-/// refusal names what would store the slice rather than failing as a requirement beyond the
-/// profile: `geometryShader`, as `amp_vertex_layer`'s slice (`slices[vid & 1]`) differs among a
-/// primitive's vertices, which only the synthesized geometry stage stores. The dropped variant's
-/// vertex module converts to MSL that Metal compiles.
+/// refused typed. The device keeps `VK_EXT_shader_viewport_index_layer`: without
+/// `shaderOutputLayer` it grants no `Layer` output (the capability a module declares at the 1.2
+/// floor is the feature's), so the refusal names the feature rather than failing as a requirement
+/// beyond the profile. The dropped variant's vertex module converts to MSL that Metal compiles.
 #[test]
 fn the_dropped_variant_needs_no_output_layer() {
     let Some(bc) = assemble(&engine_dir().join("vertex_amplification.ll")) else {
@@ -320,7 +317,7 @@ fn the_dropped_variant_needs_no_output_layer() {
             assert_eq!(u.feature, Feature::LayeredRendering);
             assert_eq!(
                 u.needs,
-                Needs::AnyOf(vec![vec![Capability::Feature(F::GeometryShader)]])
+                Needs::AnyOf(vec![vec![Capability::Feature(F::ShaderOutputLayer)]])
             );
         }
         other => panic!("{other:?}"),
@@ -348,9 +345,9 @@ fn the_dropped_variant_needs_no_output_layer() {
 
 /// A vertex function that writes `[[render_target_array_index]]` writes the index as written to a
 /// flat varying (`IoRole::RenderTargetArrayIndex`) in both variants, and in the one whose pipeline
-/// declares `Layer` (on RADV through the synthesized geometry stage, as the slice differs among a
-/// primitive's vertices) reads the pass's length from its push data. In its pipeline a fragment function that
-/// reads the slice compiles under `render_target_array_index_varying` and reads that varying, as
+/// declares `Layer` stores `Layer` and reads the pass's length from its push data. In its pipeline
+/// a fragment function that reads the slice compiles under `render_target_array_index_varying` and
+/// reads that varying, as
 /// `render_pipeline_key` names, behind either variant; a fragment function that does not read it
 /// keeps the key it has without the field. A reading fragment compiled for the other kind of vertex
 /// function is `NeedsInput(RenderTargetArrayIndex)` either way. Every module passes L3.
@@ -387,9 +384,13 @@ fn a_fragment_reads_the_slice_index_its_vertex_function_wrote() {
             VaryingKey::render_target_array_index(),
             "{what}"
         );
-        // Its slice differs among a primitive's vertices, so the synthesized geometry stage
-        // stores it: the vertex function declares no `Layer` in either variant.
-        assert!(!io.builtins.contains(&StageBuiltin::Layer), "{what}");
+        // Its slice is the same at every vertex of a primitive: the variant that writes `Layer`
+        // stores it, and the dropped one declares none.
+        assert_eq!(
+            io.builtins.contains(&StageBuiltin::Layer),
+            !key.dropped_vertex_layer,
+            "{what}"
+        );
 
         let keys = dev
             .render_variant_key(&d, &key, &budget, &crate::pipeline::StageEntries::new())

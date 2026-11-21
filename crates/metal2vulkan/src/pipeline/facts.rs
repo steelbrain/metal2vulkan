@@ -707,16 +707,10 @@ pub enum RuntimeFact {
     StorageTextureIntegerChannels { slot: SlotRef },
     /// The render pipeline draws through synthesized geometry stages, one per topology class, of
     /// which a draw runs its class's (`RenderPipeline::runs_stage`): its fragment function reads
-    /// `[[barycentric_coord]]` on a device without `fragmentShaderBarycentric` (`weights`), or its
-    /// vertex function selects its primitive's render target slice (`layer`) or viewport
-    /// (`viewport`) on a device that cannot store `Layer` or `ViewportIndex` from a vertex
-    /// function (`pipeline::link::geometry`). Each draw runs a stage Metal's draw does not, at the
-    /// stage's cost, with Metal's answer; the consumer announces it. Nothing binds it.
-    SynthesizedGeometry {
-        weights: bool,
-        layer: bool,
-        viewport: bool,
-    },
+    /// `[[barycentric_coord]]` on a device without `fragmentShaderBarycentric` (`weights`)
+    /// (`pipeline::link::geometry`). Each draw runs a stage Metal's draw does not, at the stage's
+    /// cost, with Metal's answer; the consumer announces it. Nothing binds it.
+    SynthesizedGeometry { weights: bool },
     /// An object function's `[[threadgroup(n)]]` arguments, whose lengths the render encoder sets
     /// (`setObjectThreadgroupMemoryLength:atIndex:`, the object stage's
     /// `StageTable::threadgroup_lengths`), each a `ThreadgroupMemoryLength`: the static part of

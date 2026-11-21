@@ -628,15 +628,6 @@ pub enum VkProperty {
     /// leaves a sample to the device's sampler requires it and records
     /// [`PrecisionNote::DeviceSampling`](crate::pipeline::PrecisionNote::DeviceSampling).
     DeviceSampling,
-    /// The device takes a primitive's `Layer` and `ViewportIndex` from its first vertex, whatever
-    /// its other vertices store, as Metal takes a primitive's slice and viewport (the driver's
-    /// measured deviation
-    /// [`DriverDeviation::MetalFirstVertexIndices`](crate::error::DriverDeviation::MetalFirstVertexIndices)).
-    /// No Vulkan query reports it: Vulkan takes them only where every vertex of a primitive
-    /// stores the same. A vertex module that stores an index differing among a primitive's
-    /// vertices to its builtin requires it; without it, the index goes through the pipeline's
-    /// synthesized geometry stages.
-    MetalFirstVertexIndices,
     /// `provokingVertexModePerPipeline` (`VkPhysicalDeviceProvokingVertexPropertiesEXT`, where
     /// `VK_EXT_provoking_vertex` is listed): the pipelines bound within one render pass instance
     /// may have different provoking vertex modes. Without it "all pipelines bound within a render

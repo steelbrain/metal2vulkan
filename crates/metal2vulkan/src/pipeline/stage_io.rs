@@ -22,12 +22,6 @@
 //!   `[[barycentric_coord]]` on a device without `fragmentShaderBarycentric`, which the pipeline's
 //!   synthesized geometry stage writes. A `float2` varying, perspective-correct or not, one key
 //!   per form ([`VaryingKey::barycentric`]).
-//! - [`IoRole::SelectedLayer`] and [`IoRole::SelectedViewport`]: the `Layer` and `ViewportIndex` a
-//!   vertex function selects its primitive's slice and viewport with on a device that cannot store
-//!   the builtin from a vertex function, which the pipeline's synthesized geometry stage stores
-//!   from the primitive's first vertex. A flat `uint` vertex output, one key each
-//!   ([`VaryingKey::selected_layer`], [`VaryingKey::selected_viewport`]), that no fragment
-//!   function reads.
 //! - [`IoRole::PrimitiveId`]: Metal's `[[primitive_id]]` on a device that cannot declare a
 //!   fragment `PrimitiveId`, which the pipeline's vertex function computes for the primitive each
 //!   vertex provokes. A flat `uint` varying for link, one key ([`VaryingKey::primitive_id`]) on
@@ -39,8 +33,7 @@
 //! The roles live in disjoint key namespaces ([`VaryingKey::user`], [`VaryingKey::attribute`],
 //! [`VaryingKey::color`], [`VaryingKey::viewport_index`],
 //! [`VaryingKey::render_target_array_index`],
-//! [`VaryingKey::barycentric`], [`VaryingKey::selected_layer`],
-//! [`VaryingKey::selected_viewport`], [`VaryingKey::primitive_id`],
+//! [`VaryingKey::barycentric`], [`VaryingKey::primitive_id`],
 //! [`VaryingKey::merged_command`]): the key bytes start with a
 //! namespace tag, so no AIR user key can collide with another role's key. Keys stay opaque to
 //! link; it reads the role here, never the bytes.
@@ -73,8 +66,6 @@ const COLOR: u8 = 2;
 const VIEWPORT_INDEX: u8 = 3;
 const RENDER_TARGET_ARRAY_INDEX: u8 = 4;
 const BARYCENTRIC: u8 = 6;
-const SELECTED_LAYER: u8 = 7;
-const SELECTED_VIEWPORT: u8 = 8;
 const PRIMITIVE_ID: u8 = 9;
 const MERGED_COMMAND: u8 = 10;
 
@@ -119,18 +110,6 @@ impl VaryingKey {
     /// `perspective` names.
     pub fn barycentric(perspective: bool) -> VaryingKey {
         VaryingKey(AirUserKey(vec![BARYCENTRIC, u8::from(perspective)].into()))
-    }
-
-    /// The key of the `Layer` a vertex function selects for the pipeline's synthesized geometry
-    /// stage to store (`IoRole::SelectedLayer`).
-    pub fn selected_layer() -> VaryingKey {
-        VaryingKey(AirUserKey(vec![SELECTED_LAYER].into()))
-    }
-
-    /// The key of the `ViewportIndex` a vertex function selects for the pipeline's synthesized
-    /// geometry stage to store (`IoRole::SelectedViewport`).
-    pub fn selected_viewport() -> VaryingKey {
-        VaryingKey(AirUserKey(vec![SELECTED_VIEWPORT].into()))
     }
 
     /// The key of the primitive ID a vertex function writes and a fragment function reads as
@@ -315,8 +294,8 @@ pub struct StageIo {
     /// slice and viewport indices it writes are among them so
     /// (`VaryingKey::render_target_array_index`, `VaryingKey::viewport_index`): Vulkan takes
     /// `Layer` and `ViewportIndex` from a vertex function only where every vertex of a primitive
-    /// stores the same, so it stores an index that is not to its selected index instead
-    /// (`IoRole::SelectedLayer`, `IoRole::SelectedViewport`). Empty for every other function.
+    /// stores the same, so an index that is not among them is refused. Empty for every other
+    /// function.
     #[cfg_attr(feature = "serde", serde(default))]
     pub uniform_outputs: Vec<VaryingKey>,
     /// The `float` and `half` varyings the fragment function reads flat although it states an
@@ -732,19 +711,6 @@ pub enum IoRole {
     /// a triangle's vertices in their order (`(1, 0)` and `(0, 1)` at a line's, `(1, 0)` at a
     /// point), and passes the fragment stage's other inputs through.
     Barycentric { perspective: bool },
-    /// The `Layer` a vertex function compiled for a device without `shaderOutputLayer` selects its
-    /// primitive's render target slice with: the value it would store to `Layer` (the index it
-    /// writes, plus the amplification's offset when drawn one amplification at a time, held below
-    /// the render pass's length and 0 at or past it), as a flat `uint` vertex output. No fragment
-    /// function reads it: the pipeline's synthesized geometry stage stores it to `Layer` at every
-    /// vertex it emits, from the primitive's first vertex, whose index Metal renders the primitive
-    /// with.
-    SelectedLayer,
-    /// The `ViewportIndex` a vertex function compiled for a device with `multiViewport` but
-    /// without `shaderOutputViewportIndex` selects its primitive's viewport with, as
-    /// [`IoRole::SelectedLayer`] is for its slice: held below the draw's viewport count and 0 at
-    /// or past it.
-    SelectedViewport,
     /// Metal's `[[primitive_id]]` carried from a vertex function to its fragment function: the
     /// flat `uint` output of a vertex function compiled under
     /// `LoweringInputs::primitive_id_varying`, and the input a fragment function reads as its
@@ -767,10 +733,10 @@ pub enum IoRole {
 }
 
 impl IoRole {
-    /// Whether the role is a varying: a user varying, a raw index a vertex function writes for
-    /// its fragment function, the barycentric weights a synthesized geometry
-    /// stage writes, a selected index the geometry stage reads, the primitive ID, or a merged
-    /// draw's command. Link numbers these, and packs those a vertex function writes.
+    /// Whether the role is a varying: a user varying, a raw index a vertex function writes for its
+    /// fragment function, the barycentric weights a synthesized geometry stage writes, the
+    /// primitive ID, or a merged draw's command. Link numbers these, and packs those a vertex
+    /// function writes.
     pub(crate) fn is_varying(&self) -> bool {
         matches!(
             self,
@@ -778,8 +744,6 @@ impl IoRole {
                 | IoRole::ViewportIndex
                 | IoRole::RenderTargetArrayIndex
                 | IoRole::Barycentric { .. }
-                | IoRole::SelectedLayer
-                | IoRole::SelectedViewport
                 | IoRole::PrimitiveId
                 | IoRole::MergedCommand
         )

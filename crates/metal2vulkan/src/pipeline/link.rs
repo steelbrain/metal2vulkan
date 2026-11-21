@@ -299,8 +299,7 @@ pub struct Linked {
     /// compile API builds its vertex and control stages from it.
     pub control: Option<tessellation::control::Control>,
     /// The synthesized geometry stages of a render pipeline whose fragment function reads
-    /// `[[barycentric_coord]]` as varyings, or whose vertex function selects its slice or
-    /// viewport through them ([`geometry`]): the compile API builds them.
+    /// `[[barycentric_coord]]` as varyings ([`geometry`]): the compile API builds them.
     pub geometry: Option<geometry::GeometryStages>,
     /// The synthesized control and evaluation stages of a render pipeline variant that draws its
     /// lines as bands ([`band`]), with their push range placed: the compile API builds them.
@@ -361,9 +360,8 @@ pub fn link(
         }
         _ => None,
     };
-    // A fragment function that reads `[[barycentric_coord]]` as varyings, or a vertex function
-    // that selects its slice or viewport through them, draws through synthesized geometry stages,
-    // which write them.
+    // A fragment function that reads `[[barycentric_coord]]` as varyings draws through
+    // synthesized geometry stages, which write them.
     let geometry = match inputs {
         LinkInputs::Render(r) => geometry::plan(
             &ifaces,

@@ -1,7 +1,5 @@
 //! The synthesized geometry stages of a render pipeline whose fragment function reads
-//! `[[barycentric_coord]]` on a device without `fragmentShaderBarycentric`, or whose vertex
-//! function selects its primitive's render target slice or viewport on a device that cannot store
-//! `Layer` or `ViewportIndex` from a vertex function.
+//! `[[barycentric_coord]]` on a device without `fragmentShaderBarycentric`.
 //!
 //! Such a fragment function reads the weights from a `float2` center varying of each form it reads
 //! (`IoRole::Barycentric`, perspective-correct or not), and a `float3` read computes the third as
@@ -11,14 +9,6 @@
 //! strip's even triangle `(i, i + 1, i + 2)` and odd one `(i, i + 2, i + 1)`, the parity restarting
 //! after a primitive restart; a line's `(1 - t, t)` from its first vertex; a point's `(1, 0)`
 //! (Metal probes on the Apple M3 Max, macOS 27.0.1).
-//!
-//! Such a vertex function stores the `Layer` or `ViewportIndex` it would store to a flat `uint`
-//! varying instead (`IoRole::SelectedLayer`, `IoRole::SelectedViewport`): on a device without
-//! `shaderOutputLayer`, or with `multiViewport` but without `shaderOutputViewportIndex`. Metal
-//! renders a primitive into the slice and through the viewport of its first vertex, in the same
-//! order, whatever its other vertices write, and holds that vertex's index below the pass's length
-//! or the draw's viewport count (Metal probes on the Apple M3 Max, macOS 27.0.1: triangle lists in
-//! each order of three different indices, strips, lines and points, indices in and past range).
 //!
 //! A geometry stage receives a primitive's vertices in that order (measured on RADV, NVIDIA, ANV
 //! and lavapipe, every topology), so link adds one between the vertex and fragment stages
@@ -35,13 +25,7 @@
 //! - each vertex output the fragment stage reads, at its location and component;
 //! - `PrimitiveId` from its input `PrimitiveId` where the fragment stage reads it: the count
 //!   Vulkan gives the fragment stage without the stage;
-//! - the weights, at the locations link gives them after the vertex outputs' (`link::varyings`);
-//! - `Layer` and `ViewportIndex`, each the selected index of the primitive's first vertex at every
-//!   vertex it emits: Metal's index, and the one value per primitive Vulkan requires of a stage
-//!   that writes either ("it must write the same value to Layer for all output vertices of a given
-//!   primitive", and to `ViewportIndex` alike: the Vulkan specification's built-in variables).
-//!   `ViewportIndex` there needs `MultiViewport`, which a device that selects through the stage
-//!   has.
+//! - the weights, at the locations link gives them after the vertex outputs' (`link::varyings`).
 //!
 //! The point class writes a point size exactly where the profile enables
 //! `shaderTessellationAndGeometryPointSize`, under which a geometry stage that writes none draws
@@ -53,12 +37,9 @@
 //! unspecified class draws every class, and a draw of another class draws as plain Metal does), so
 //! it carries the three stages, the point class's, the line class's and the triangle class's, in
 //! that order before its fragment stage (or last, without one): a `VkPipeline` runs the one of its
-//! draw's class (`RenderPipeline::runs_stage`). A vertex function's variant for a pass of one layer
-//! (`LoweringInputs::dropped_vertex_layer`) selects no slice, so a pipeline of it carries no stage
-//! for its slice.
+//! draw's class (`RenderPipeline::runs_stage`).
 //!
-//! Refused, as `Unsupported{Barycentrics}` where the fragment stage reads the weights and as
-//! `Unsupported{LayeredRendering}` otherwise:
+//! Refused, as `Unsupported{Barycentrics}`:
 //!
 //! - a post-tessellation vertex function, and a mesh render pipeline that reads the weights:
 //!   not implemented; and a vertex function that writes `[[render_target_array_index]]` or
@@ -73,9 +54,8 @@
 //!   `maxGeometryTotalOutputComponents`, counted in whole locations as link counts the vertex and
 //!   fragment limits.
 //!
-//! Each needs `fragmentShaderBarycentric` instead, or `shaderOutputLayer` and
-//! `shaderOutputViewportIndex` for the indices the stage selects. A device without
-//! `geometryShader` either is refused at the function (`lower::stage_io`).
+//! Each needs `fragmentShaderBarycentric` instead. A device without `geometryShader` either is
+//! refused at the function (`lower::stage_io`).
 //!
 //! A variant that draws a rate-mapped pass's triangles once (`VariantKey::region_fan_out`)
 //! carries the stages too, its triangle class's the fan-out stage ([`fan_out`]),
@@ -83,10 +63,9 @@
 //! function's within `maxClipDistances` and `maxCombinedClipAndCullDistances`, and room in
 //! `maxGeometryTotalOutputComponents` for one copy's vertices; and, for the probe,
 //! `vertexPipelineStoresAndAtomics`. Refused as `NotImplemented(RasterizationRateMap)` beside
-//! another reason for the stages, for a mesh or post-tessellation vertex function or one that
-//! selects its slice or viewport, and a pipeline that amplifies its vertices; as
-//! `Unsupported{RasterizationRateMap}` needing what the device
-//! lacks otherwise. The consumer draws
+//! the weights, for a mesh or post-tessellation vertex function or one that selects its slice or
+//! viewport, and a pipeline that amplifies its vertices; as `Unsupported{RasterizationRateMap}`
+//! needing what the device lacks otherwise, a limit of the stage included. The consumer draws
 //! such a pipeline region by region instead.
 
 use super::fan_out::{self, FanOutStage};
@@ -127,12 +106,6 @@ pub struct GeometryStages {
     pub varyings: Vec<(VaryingKey, IoType)>,
     /// The forms of the weights the fragment stage reads: `true` perspective-correct.
     pub forms: Vec<bool>,
-    /// The stages store `Layer` from the vertex function's selected slice
-    /// (`IoRole::SelectedLayer`).
-    pub layer: bool,
-    /// The stages store `ViewportIndex` from the vertex function's selected viewport
-    /// (`IoRole::SelectedViewport`).
-    pub viewport: bool,
     /// The elements of the vertex function's `ClipDistance`, 0 for none.
     pub clip_distances: u32,
     /// The vertex function declares `PointSize`.
@@ -148,53 +121,25 @@ pub struct GeometryStages {
     pub fan_out: Option<FanOutStage>,
 }
 
-/// Why the stages are made: the fragment stage reads the weights, or else the vertex function
-/// selects `Layer` or `ViewportIndex` through them.
-#[derive(Clone, Copy)]
-struct Reason {
-    weights: bool,
-    layer: bool,
-    viewport: bool,
+/// The weights' stages refused as not implemented on every device.
+fn not_implemented() -> Error {
+    Unsupported::not_implemented(Feature::Barycentrics).into()
 }
 
-impl Reason {
-    /// Refused as not implemented on every device. The refusal names `Barycentrics` where the
-    /// fragment stage reads the weights, else `LayeredRendering`.
-    fn not_implemented(self) -> Error {
-        if self.weights {
-            Unsupported::not_implemented(Feature::Barycentrics).into()
-        } else {
-            Unsupported::not_implemented(Feature::LayeredRendering).into()
-        }
-    }
-
-    /// The refusal as needing the features that make the stages needless, or `capability`.
-    fn refused(self, capability: Capability) -> Error {
-        let instead = if self.weights {
-            vec![Capability::Feature(VkFeature::FragmentShaderBarycentric)]
-        } else {
-            let mut instead = Vec::new();
-            if self.layer {
-                instead.push(Capability::Feature(VkFeature::ShaderOutputLayer));
-            }
-            if self.viewport {
-                instead.push(Capability::Feature(VkFeature::ShaderOutputViewportIndex));
-            }
-            instead
-        };
-        let needs = vec![instead, vec![capability]];
-        if self.weights {
-            Unsupported::needs_any_of(Feature::Barycentrics, needs).into()
-        } else {
-            Unsupported::needs_any_of(Feature::LayeredRendering, needs).into()
-        }
-    }
+/// The weights' stages refused as needing `fragmentShaderBarycentric`, which makes them needless,
+/// or `capability`.
+fn refused(capability: Capability) -> Error {
+    let needs = vec![
+        vec![Capability::Feature(VkFeature::FragmentShaderBarycentric)],
+        vec![capability],
+    ];
+    Unsupported::needs_any_of(Feature::Barycentrics, needs).into()
 }
 
 /// The geometry stages of the render pipeline of stages `ifaces` (vertex, then fragment when it
 /// has one), drawn as `class` with vertex amplification up to `amplification`, where its fragment
-/// stage reads the weights as varyings or its vertex function selects an index through them, or
-/// its variant fans a rate-mapped pass's triangles out (`fan_out`); `None` where none. Refused as
+/// stage reads the weights as varyings, or its variant fans a rate-mapped pass's triangles out
+/// (`fan_out`); `None` where neither. Refused as
 /// the module docs state. A mesh pipeline (`mesh`) whose fragment stage reads the weights is not
 /// implemented.
 pub fn plan(
@@ -217,24 +162,17 @@ pub fn plan(
         .collect();
     forms.sort_unstable();
     forms.dedup();
-    let selects =
-        |role: IoRole| !mesh && vertex.is_some_and(|v| v.io.outputs.iter().any(|o| o.role == role));
-    let why = Reason {
-        weights: !forms.is_empty(),
-        layer: selects(IoRole::SelectedLayer),
-        viewport: selects(IoRole::SelectedViewport),
-    };
     // A variant that draws its regions' copies from its vertex function synthesizes no stage
     // for them (`LoweringInputs::region_copies`).
     if let Some(mode) = fan_out.filter(|&mode| mode != RegionFanOut::RegionCopies) {
-        return fan_plan(ifaces, (why, mode), (amplification, mesh), p).map(Some);
+        return fan_plan(ifaces, (!forms.is_empty(), mode), (amplification, mesh), p).map(Some);
     }
-    if !why.weights && !why.layer && !why.viewport {
+    if forms.is_empty() {
         return Ok(None);
     }
     let vertex = match vertex {
         Some(v) if !mesh && v.tessellation.is_none() => v,
-        _ => return Err(why.not_implemented()),
+        _ => return Err(not_implemented()),
     };
     let builtins = &vertex.io.builtins;
     // A stage after the vertex function stores the indices Vulkan uses: a vertex function's own
@@ -243,21 +181,22 @@ pub fn plan(
         .iter()
         .any(|b| matches!(b, StageBuiltin::Layer | StageBuiltin::ViewportIndex))
     {
-        return Err(why.not_implemented());
+        return Err(not_implemented());
     }
     let f = p.fields();
     let enabled = &f.enabled.features;
     // Drawn as multiview where its views fit the device's, as `compile::api` requires them, unless
     // a stage declares `Layer`: the binder draws such a pipeline's amplifications one at a time.
-    let declares_layer = why.layer
-        || fragment.is_some_and(|f| {
-            f.io.builtins.contains(&StageBuiltin::Layer)
-                || f.io.zero_indices.contains(&StageBuiltin::Layer)
-        });
+    let declares_layer = fragment.is_some_and(|f| {
+        f.io.builtins.contains(&StageBuiltin::Layer)
+            || f.io.zero_indices.contains(&StageBuiltin::Layer)
+    });
     let multiview =
         !declares_layer && amplification.min(f.limits.max_multiview_view_count.max(1)) > 1;
     if multiview && !enabled.contains(&VkFeature::MultiviewGeometryShader) {
-        return Err(why.refused(Capability::Feature(VkFeature::MultiviewGeometryShader)));
+        return Err(refused(Capability::Feature(
+            VkFeature::MultiviewGeometryShader,
+        )));
     }
     let point_size = builtins
         .iter()
@@ -271,7 +210,7 @@ pub fn plan(
         PrimitiveTopologyClass::Point | PrimitiveTopologyClass::Unspecified
     );
     if draws_points && written_size && !writes_point_size {
-        return Err(why.refused(Capability::Feature(
+        return Err(refused(Capability::Feature(
             VkFeature::ShaderTessellationAndGeometryPointSize,
         )));
     }
@@ -292,8 +231,6 @@ pub fn plan(
     Ok(Some(GeometryStages {
         varyings,
         forms,
-        layer: why.layer,
-        viewport: why.viewport,
         clip_distances,
         point_size,
         writes_point_size,
@@ -303,11 +240,11 @@ pub fn plan(
     }))
 }
 
-/// The stages of a fan-out variant (the module docs): refused beside another reason for them
-/// (`why`), and where the pipeline or the device cannot carry the stage, `mode`'s.
+/// The stages of a fan-out variant (the module docs): refused beside the weights (`weights`), and
+/// where the pipeline or the device cannot carry the stage, `mode`'s.
 fn fan_plan(
     ifaces: &[&StageInterface],
-    (why, mode): (Reason, RegionFanOut),
+    (weights, mode): (bool, RegionFanOut),
     (amplification, mesh): (u32, bool),
     p: &DeviceProfile,
 ) -> Result<GeometryStages, Error> {
@@ -321,7 +258,7 @@ fn fan_plan(
     let selects = builtins
         .iter()
         .any(|b| matches!(b, StageBuiltin::Layer | StageBuiltin::ViewportIndex));
-    if why.weights || why.layer || why.viewport || selects || amplification > 1 {
+    if weights || selects || amplification > 1 {
         return Err(not_implemented());
     }
     let f = p.fields();
@@ -378,8 +315,6 @@ fn fan_plan(
     Ok(GeometryStages {
         varyings,
         forms: Vec::new(),
-        layer: false,
-        viewport: false,
         clip_distances,
         point_size,
         writes_point_size: enabled.contains(&VkFeature::ShaderTessellationAndGeometryPointSize),
@@ -390,24 +325,6 @@ fn fan_plan(
 }
 
 impl GeometryStages {
-    /// Why the stages are made ([`Reason`]).
-    fn reason(&self) -> Reason {
-        Reason {
-            weights: !self.forms.is_empty(),
-            layer: self.layer,
-            viewport: self.viewport,
-        }
-    }
-
-    /// The selected indices the stages read, each with its key and the builtin it stores.
-    fn selected(&self) -> impl Iterator<Item = (VaryingKey, crate::spv::BuiltIn)> {
-        let layer = self.layer.then(|| (VaryingKey::selected_layer(), B::Layer));
-        let viewport = self
-            .viewport
-            .then(|| (VaryingKey::selected_viewport(), B::ViewportIndex));
-        layer.into_iter().chain(viewport)
-    }
-
     /// Refuses stages whose inputs or outputs at `locations` pass the device's geometry limits
     /// (the module docs); for a fan-out variant, sets the copies its triangle stage emits.
     pub fn check_limits(&mut self, locations: &Locations, p: &DeviceProfile) -> Result<(), Error> {
@@ -430,8 +347,7 @@ impl GeometryStages {
             .iter()
             .map(|&p| VaryingKey::barycentric(p))
             .collect();
-        let selected: Vec<VaryingKey> = self.selected().map(|(k, _)| k).collect();
-        let inputs = end(&mut self.varyings.iter().map(|(k, _)| k).chain(&selected))?;
+        let inputs = end(&mut self.varyings.iter().map(|(k, _)| k))?;
         let outputs = end(&mut self.varyings.iter().map(|(k, _)| k).chain(&weights))?;
         // A copy's vertex: its varyings' locations, its position, its clip distances and its
         // primitive ID, in components.
@@ -486,11 +402,18 @@ impl GeometryStages {
             ),
         ] {
             if required > u64::from(available) {
-                return Err(self.reason().refused(Capability::Limit {
+                let limit = Capability::Limit {
                     limit,
                     required,
                     available: u64::from(available),
-                }));
+                };
+                return Err(match self.fan_out {
+                    Some(_) => {
+                        Unsupported::needs_any_of(Feature::RasterizationRateMap, vec![vec![limit]])
+                            .into()
+                    }
+                    None => refused(limit),
+                });
             }
         }
         Ok(())
@@ -611,15 +534,6 @@ impl GeometryStages {
             let key = VaryingKey::barycentric(perspective);
             weights.push(mb.io(key, IoDir::Output, vec2, IoDecor::default())?);
         }
-        // Each selected index: its flat per-vertex input, and the builtin it stores.
-        let mut selected = Vec::new();
-        for (key, builtin) in self.selected() {
-            let ty = per_vertex(&mut mb, u32_)?;
-            selected.push((
-                mb.io(key, IoDir::Input, ty, packed)?,
-                mb.builtin(builtin, IoDir::Output, u32_)?,
-            ));
-        }
         let primitive = match self.primitive_id {
             true => Some((
                 mb.builtin(B::PrimitiveId, IoDir::Input, u32_)?,
@@ -628,14 +542,6 @@ impl GeometryStages {
             false => None,
         };
         let mut fb = mb.function(void)?;
-        // The indices of the primitive's first vertex, which select its slice and viewport.
-        let mut first = Vec::with_capacity(selected.len());
-        for &(input, output) in &selected {
-            let at = ku(&mut fb, 0)?;
-            let base = fb.module().global_value(input)?;
-            let from = fb.access_chain(base, &[at])?;
-            first.push((fb.load(from, MemAccess::default())?, output));
-        }
         for k in 0..n {
             let at = ku(&mut fb, k)?;
             for &(input, output) in &carried {
@@ -668,10 +574,6 @@ impl GeometryStages {
             if let Some((input, output)) = primitive {
                 let from = fb.module().global_value(input)?;
                 let value = fb.load(from, MemAccess::default())?;
-                let to = fb.module().global_value(output)?;
-                fb.store(to, value, MemAccess::default())?;
-            }
-            for &(value, output) in &first {
                 let to = fb.module().global_value(output)?;
                 fb.store(to, value, MemAccess::default())?;
             }

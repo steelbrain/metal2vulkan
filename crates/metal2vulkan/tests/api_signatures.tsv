@@ -885,7 +885,6 @@ enum	metal2vulkan::error::ComputePipelineProblem	#[derive(Clone, Copy, Debug, Pa
 enum	metal2vulkan::error::ConstantRecord	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ConstantRecord
 enum	metal2vulkan::error::ContainerError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum ContainerError
 enum	metal2vulkan::error::DescriptorError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum DescriptorError
-enum	metal2vulkan::error::DriverDeviation	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum DriverDeviation
 enum	metal2vulkan::error::DynamicLibraryProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum DynamicLibraryProblem
 enum	metal2vulkan::error::Error	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Error
 enum	metal2vulkan::error::ErrorClass	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ErrorClass
@@ -7068,7 +7067,6 @@ method	metal2vulkan::device::DeviceProfile::specialized_entry	pub fn specialized
 method	metal2vulkan::device::DeviceProfile::spirv_validation	pub fn spirv_validation(&self) -> SpirvValidation
 method	metal2vulkan::device::DeviceProfile::subgroups	pub fn subgroups(&self) -> &SubgroupModel
 method	metal2vulkan::device::DeviceProfile::supports_format	pub fn supports_format(&self, format: vk::Format, usage: FormatUsage) -> bool
-method	metal2vulkan::device::DeviceProfile::takes_driver_deviation	pub fn takes_driver_deviation(&self, deviation: DriverDeviation) -> bool
 method	metal2vulkan::device::DeviceProfile::ulong_atomic_gaps	pub fn ulong_atomic_gaps(&self, buffer: bool) -> Vec<Capability>
 method	metal2vulkan::device::DeviceProfile::union_requirements	pub fn union_requirements(&self, a: &Requirements, b: &Requirements) -> Requirements
 method	metal2vulkan::device::DeviceProfile::vertex_entry_inputs	pub fn vertex_entry_inputs(&self, d: &EntryDescriptor<'_>, vertex: Option<&VertexDescriptor>, budget: &Budget) -> Result<LoweringInputs, Error>
@@ -7347,8 +7345,6 @@ method	metal2vulkan::pipeline::VaryingKey::color	pub fn color(attachment: u32, i
 method	metal2vulkan::pipeline::VaryingKey::merged_command	pub fn merged_command() -> VaryingKey
 method	metal2vulkan::pipeline::VaryingKey::primitive_id	pub fn primitive_id() -> VaryingKey
 method	metal2vulkan::pipeline::VaryingKey::render_target_array_index	pub fn render_target_array_index() -> VaryingKey
-method	metal2vulkan::pipeline::VaryingKey::selected_layer	pub fn selected_layer() -> VaryingKey
-method	metal2vulkan::pipeline::VaryingKey::selected_viewport	pub fn selected_viewport() -> VaryingKey
 method	metal2vulkan::pipeline::VaryingKey::user	pub fn user(k: &[u8]) -> VaryingKey
 method	metal2vulkan::pipeline::VaryingKey::viewport_index	pub fn viewport_index() -> VaryingKey
 method	metal2vulkan::pipeline::VertexAttributeDescriptor::new	pub fn new(format: metal::VertexFormat, offset: u32, buffer_index: u32) -> Self
@@ -10268,7 +10264,6 @@ variant	metal2vulkan::device::VkProperty::IndependentResolve	IndependentResolve
 variant	metal2vulkan::device::VkProperty::IndependentResolveNone	IndependentResolveNone
 variant	metal2vulkan::device::VkProperty::InterpolateAtOffsetCentered	InterpolateAtOffsetCentered
 variant	metal2vulkan::device::VkProperty::InterpolateAtOffsetFromSevenSixteenths	InterpolateAtOffsetFromSevenSixteenths
-variant	metal2vulkan::device::VkProperty::MetalFirstVertexIndices	MetalFirstVertexIndices
 variant	metal2vulkan::device::VkProperty::ProvokingVertexModePerPipeline	ProvokingVertexModePerPipeline
 variant	metal2vulkan::device::VkProperty::RequiredSubgroupSizeStage	RequiredSubgroupSizeStage(Stage)
 variant	metal2vulkan::device::VkProperty::Rgba4OpaqueBlackSwizzled	Rgba4OpaqueBlackSwizzled
@@ -10414,7 +10409,6 @@ variant	metal2vulkan::error::DescriptorError::VertexAmplificationCount	VertexAmp
 variant	metal2vulkan::error::DescriptorError::VertexAttribute	VertexAttribute { attribute: u32 }
 variant	metal2vulkan::error::DescriptorError::VertexLayout	VertexLayout { layout: u32 }
 variant	metal2vulkan::error::DescriptorError::VertexStepRate	VertexStepRate { step_rate: u32 }
-variant	metal2vulkan::error::DriverDeviation::MetalFirstVertexIndices	MetalFirstVertexIndices
 variant	metal2vulkan::error::DynamicLibraryProblem::FunctionConstants	FunctionConstants
 variant	metal2vulkan::error::DynamicLibraryProblem::NoInstallName	NoInstallName
 variant	metal2vulkan::error::DynamicLibraryProblem::NotDynamic	NotDynamic
@@ -11088,7 +11082,7 @@ variant	metal2vulkan::pipeline::RuntimeFact::StorageTextureLevelViews	StorageTex
 variant	metal2vulkan::pipeline::RuntimeFact::StorageTextureLevels	StorageTextureLevels { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::StorageTextureNumericType	StorageTextureNumericType { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::StorageTextureWriteRounding	StorageTextureWriteRounding { slot: SlotRef, halves: bool }
-variant	metal2vulkan::pipeline::RuntimeFact::SynthesizedGeometry	SynthesizedGeometry { weights: bool, layer: bool, viewport: bool }
+variant	metal2vulkan::pipeline::RuntimeFact::SynthesizedGeometry	SynthesizedGeometry { weights: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::TestedStorageWrites	TestedStorageWrites { early_tests: bool, early_variant: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::TexelBufferParts	TexelBufferParts { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::TexelBufferRange	TexelBufferRange { slot: SlotRef }

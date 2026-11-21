@@ -281,27 +281,13 @@ fn feature_dependent_entries_name_their_capability() {
         Feature::ClipDistance,
         F::ShaderClipDistance,
     );
-    // A vertex `Layer` takes the output feature or a geometry stage that writes it.
+    // A vertex `Layer` takes the output feature.
     compile(&bc, "stage_io_vertex_layer", &floor).expect("the floor's Layer output");
-    let below = profile_without(
-        "runtime-floor",
-        &[F::ShaderOutputLayer],
-        DevicePolicy::default(),
-    )
-    .expect("below the runtime's floor");
-    match compile(&bc, "stage_io_vertex_layer", &below) {
-        Err(Error::Unsupported(u)) => {
-            assert_eq!(u.feature, Feature::LayeredRendering);
-            assert_eq!(
-                u.needs,
-                Needs::AnyOf(vec![
-                    vec![Capability::Feature(F::ShaderOutputLayer)],
-                    vec![Capability::Feature(F::GeometryShader)],
-                ])
-            );
-        }
-        other => panic!("stage_io_vertex_layer: {other:?}"),
-    }
+    needs(
+        "stage_io_vertex_layer",
+        Feature::LayeredRendering,
+        F::ShaderOutputLayer,
+    );
     needs(
         "stage_io_fragment_point",
         Feature::SampleRateShading,

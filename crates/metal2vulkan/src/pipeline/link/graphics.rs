@@ -320,13 +320,11 @@ pub fn graphics_state(
         .into());
     }
     let max_vertex_amplification_count = vertex_amplification(r, vs.stage == Stage::Mesh, p)?;
-    // A vertex function that selects its slice through the synthesized geometry stage
-    // (`IoRole::SelectedLayer`) declares `Layer` there, and a fragment function that reads it as 0
-    // (`StageIo::zero_indices`) reads it as Metal does only where no amplification moves it.
+    // A fragment function that reads `Layer` as 0 (`StageIo::zero_indices`) reads it as Metal
+    // does only where no amplification moves it.
     let declares_layer = std::iter::once(vs).chain(fs).any(|s| {
         s.io.builtins.contains(&StageBuiltin::Layer)
             || s.io.zero_indices.contains(&StageBuiltin::Layer)
-            || s.io.outputs.iter().any(|o| o.role == IoRole::SelectedLayer)
     });
     let limits = &p.fields().limits;
     let used = r
@@ -756,14 +754,14 @@ pub fn graphics_state(
         storage_attachments: Vec::new(),
         shadow_stencil: None,
         vertex_writes_memory: vs.writes_memory,
-        // Stored as the builtin, through the synthesized geometry stages, or (on a device with
-        // one viewport) nowhere: the raw varying is written in every case.
+        // Stored as the builtin or (on a device with one viewport) nowhere: the raw varying is
+        // written in both.
         writes_viewport_index: vs.io.builtins.contains(&StageBuiltin::ViewportIndex)
             || vs
                 .io
                 .outputs
                 .iter()
-                .any(|o| matches!(o.role, IoRole::SelectedViewport | IoRole::ViewportIndex)),
+                .any(|o| o.role == IoRole::ViewportIndex),
         // A band variant's pipeline states its band (`link`).
         line_band: None,
         // A fan-out variant's pipeline states its fan-out (`link`).

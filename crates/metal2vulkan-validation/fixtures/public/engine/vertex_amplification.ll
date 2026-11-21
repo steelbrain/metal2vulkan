@@ -5,32 +5,32 @@ target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f3
 target triple = "air64_v28-apple-macosx26.0.0"
 
 ; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
-define <{ <4 x float>, <4 x float>, <2 x float>, i32 }> @amp_vertex(i32 noundef %0, i16 noundef %1, i16 noundef %2, ptr addrspace(2) noundef readonly captures(none) "air-buffer-no-alias" %3) local_unnamed_addr #0 {
-  %5 = shl i32 %0, 1
-  %6 = and i32 %5, 2
-  %7 = tail call fast float @air.convert.f.f32.u.i32(i32 %6) #4
-  %8 = insertelement <2 x float> undef, float %7, i64 0
-  %9 = and i32 %0, 2
-  %10 = tail call fast float @air.convert.f.f32.u.i32(i32 %9) #4
-  %11 = insertelement <2 x float> %8, float %10, i64 1
-  %12 = fmul fast <2 x float> %11, splat (float 2.000000e+00)
-  %13 = fadd fast <2 x float> %12, splat (float -1.000000e+00)
-  %14 = shufflevector <2 x float> %13, <2 x float> poison, <4 x i32> <i32 0, i32 1, i32 poison, i32 poison>
-  %15 = shufflevector <4 x float> %14, <4 x float> <float poison, float poison, float 0.000000e+00, float 1.000000e+00>, <4 x i32> <i32 0, i32 1, i32 6, i32 7>
-  %16 = zext i16 %1 to i64
-  %17 = getelementptr inbounds <4 x float>, ptr addrspace(2) %3, i64 %16
-  %18 = load <4 x float>, ptr addrspace(2) %17, align 16, !tbaa !55, !alias.scope !58
-  %19 = fadd fast <4 x float> %15, %18
-  %20 = tail call fast float @air.convert.f.f32.u.i16(i16 %1) #4
+define <{ <4 x float>, <4 x float>, <2 x float>, i32 }> @amp_vertex(i32 noundef %0, i32 noundef %1, i16 noundef %2, i16 noundef %3, ptr addrspace(2) noundef readonly captures(none) "air-buffer-no-alias" %4) local_unnamed_addr #0 {
+  %6 = shl i32 %0, 1
+  %7 = and i32 %6, 2
+  %8 = tail call fast float @air.convert.f.f32.u.i32(i32 %7) #4
+  %9 = insertelement <2 x float> undef, float %8, i64 0
+  %10 = and i32 %0, 2
+  %11 = tail call fast float @air.convert.f.f32.u.i32(i32 %10) #4
+  %12 = insertelement <2 x float> %9, float %11, i64 1
+  %13 = fmul fast <2 x float> %12, splat (float 2.000000e+00)
+  %14 = fadd fast <2 x float> %13, splat (float -1.000000e+00)
+  %15 = shufflevector <2 x float> %14, <2 x float> poison, <4 x i32> <i32 0, i32 1, i32 poison, i32 poison>
+  %16 = shufflevector <4 x float> %15, <4 x float> <float poison, float poison, float 0.000000e+00, float 1.000000e+00>, <4 x i32> <i32 0, i32 1, i32 6, i32 7>
+  %17 = zext i16 %2 to i64
+  %18 = getelementptr inbounds <4 x float>, ptr addrspace(2) %4, i64 %17
+  %19 = load <4 x float>, ptr addrspace(2) %18, align 16, !tbaa !56, !alias.scope !59
+  %20 = fadd fast <4 x float> %16, %19
   %21 = tail call fast float @air.convert.f.f32.u.i16(i16 %2) #4
-  %22 = insertelement <4 x float> <float poison, float poison, float 2.500000e-01, float 1.000000e+00>, float %20, i64 0
-  %23 = insertelement <4 x float> %22, float %21, i64 1
-  %24 = and i32 %0, 1
-  %25 = insertvalue <{ <4 x float>, <4 x float>, <2 x float>, i32 }> undef, <4 x float> %19, 0
-  %26 = insertvalue <{ <4 x float>, <4 x float>, <2 x float>, i32 }> %25, <4 x float> %23, 1
-  %27 = insertvalue <{ <4 x float>, <4 x float>, <2 x float>, i32 }> %26, <2 x float> %11, 2
-  %28 = insertvalue <{ <4 x float>, <4 x float>, <2 x float>, i32 }> %27, i32 %24, 3
-  ret <{ <4 x float>, <4 x float>, <2 x float>, i32 }> %28
+  %22 = tail call fast float @air.convert.f.f32.u.i16(i16 %3) #4
+  %23 = insertelement <4 x float> <float poison, float poison, float 2.500000e-01, float 1.000000e+00>, float %21, i64 0
+  %24 = insertelement <4 x float> %23, float %22, i64 1
+  %25 = and i32 %1, 1
+  %26 = insertvalue <{ <4 x float>, <4 x float>, <2 x float>, i32 }> undef, <4 x float> %20, 0
+  %27 = insertvalue <{ <4 x float>, <4 x float>, <2 x float>, i32 }> %26, <4 x float> %24, 1
+  %28 = insertvalue <{ <4 x float>, <4 x float>, <2 x float>, i32 }> %27, <2 x float> %12, 2
+  %29 = insertvalue <{ <4 x float>, <4 x float>, <2 x float>, i32 }> %28, i32 %25, 3
+  ret <{ <4 x float>, <4 x float>, <2 x float>, i32 }> %29
 }
 
 ; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
@@ -48,23 +48,23 @@ define <4 x float> @amp_vertex_store(i32 noundef %0, i32 noundef %1, i32 noundef
   %9 = add i32 %8, %1
   %10 = zext i32 %9 to i64
   %11 = getelementptr inbounds i32, ptr addrspace(1) %3, i64 %10
-  store i32 %7, ptr addrspace(1) %11, align 4, !tbaa !61, !alias.scope !63
+  store i32 %7, ptr addrspace(1) %11, align 4, !tbaa !62, !alias.scope !64
   ret <4 x float> <float 0.000000e+00, float 0.000000e+00, float 0.000000e+00, float 1.000000e+00>
 }
 
 ; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
-define <{ <4 x float>, i32 }> @amp_vertex_layer(i32 noundef %0, i16 noundef %1, ptr addrspace(2) noundef readonly captures(none) "air-buffer-no-alias" %2) local_unnamed_addr #0 {
-  %4 = tail call fast float @air.convert.f.f32.u.i32(i32 %0) #4
-  %5 = tail call fast float @air.convert.f.f32.u.i16(i16 %1) #4
-  %6 = insertelement <4 x float> <float poison, float poison, float 0.000000e+00, float 1.000000e+00>, float %4, i64 0
-  %7 = insertelement <4 x float> %6, float %5, i64 1
-  %8 = and i32 %0, 1
-  %9 = zext i32 %8 to i64
-  %10 = getelementptr inbounds i32, ptr addrspace(2) %2, i64 %9
-  %11 = load i32, ptr addrspace(2) %10, align 4, !tbaa !61, !alias.scope !66
-  %12 = insertvalue <{ <4 x float>, i32 }> undef, <4 x float> %7, 0
-  %13 = insertvalue <{ <4 x float>, i32 }> %12, i32 %11, 1
-  ret <{ <4 x float>, i32 }> %13
+define <{ <4 x float>, i32 }> @amp_vertex_layer(i32 noundef %0, i32 noundef %1, i16 noundef %2, ptr addrspace(2) noundef readonly captures(none) "air-buffer-no-alias" %3) local_unnamed_addr #0 {
+  %5 = tail call fast float @air.convert.f.f32.u.i32(i32 %0) #4
+  %6 = tail call fast float @air.convert.f.f32.u.i16(i16 %2) #4
+  %7 = insertelement <4 x float> <float poison, float poison, float 0.000000e+00, float 1.000000e+00>, float %5, i64 0
+  %8 = insertelement <4 x float> %7, float %6, i64 1
+  %9 = and i32 %1, 1
+  %10 = zext i32 %9 to i64
+  %11 = getelementptr inbounds i32, ptr addrspace(2) %3, i64 %10
+  %12 = load i32, ptr addrspace(2) %11, align 4, !tbaa !62, !alias.scope !67
+  %13 = insertvalue <{ <4 x float>, i32 }> undef, <4 x float> %8, 0
+  %14 = insertvalue <{ <4 x float>, i32 }> %13, i32 %12, 1
+  ret <{ <4 x float>, i32 }> %14
 }
 
 ; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
@@ -112,14 +112,14 @@ attributes #3 = { mustprogress nofree nosync nounwind willreturn memory(none) "a
 attributes #4 = { nounwind willreturn memory(none) }
 
 !llvm.module.flags = !{!0, !1, !2, !3, !4, !5, !6, !7, !8}
-!air.vertex = !{!9, !20, !27, !32}
-!air.fragment = !{!38, !46}
-!air.compile_options = !{!49, !50, !51}
-!llvm.ident = !{!52}
-!air.version = !{!53}
-!air.language_version = !{!54}
+!air.vertex = !{!9, !21, !28, !33}
+!air.fragment = !{!41, !47}
+!air.compile_options = !{!50, !51, !52}
+!llvm.ident = !{!53}
+!air.version = !{!54}
+!air.language_version = !{!55}
 
-!0 = !{i32 2, !"SDK Version", [2 x i32] [i32 26, i32 5]}
+!0 = !{i32 2, !"SDK Version", [2 x i32] [i32 27, i32 2]}
 !1 = !{i32 1, !"wchar_size", i32 4}
 !2 = !{i32 7, !"frame-pointer", i32 2}
 !3 = !{i32 7, !"air.max_device_buffers", i32 31}
@@ -134,57 +134,58 @@ attributes #4 = { nounwind willreturn memory(none) }
 !12 = !{!"air.vertex_output", !"user(locn0)", !"air.arg_type_name", !"float4", !"air.arg_name", !"color"}
 !13 = !{!"air.vertex_output", !"generated(2uvDv2_f)", !"air.shared", !"air.arg_type_name", !"float2", !"air.arg_name", !"uv"}
 !14 = !{!"air.viewport_array_index", !"air.shared", !"air.arg_type_name", !"uint", !"air.arg_name", !"viewport"}
-!15 = !{!16, !17, !18, !19}
+!15 = !{!16, !17, !18, !19, !20}
 !16 = !{i32 0, !"air.vertex_id", !"air.arg_type_name", !"uint", !"air.arg_name", !"vid"}
-!17 = !{i32 1, !"air.amplification_id", !"air.arg_type_name", !"ushort", !"air.arg_name", !"amp"}
-!18 = !{i32 2, !"air.amplification_count", !"air.arg_type_name", !"ushort", !"air.arg_name", !"count"}
-!19 = !{i32 3, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"float4", !"air.arg_name", !"offsets"}
-!20 = !{ptr @amp_vertex_store, !21, !23}
-!21 = !{!22}
-!22 = !{!"air.position", !"air.shared", !"air.arg_type_name", !"float4"}
-!23 = !{!16, !24, !25, !26}
-!24 = !{i32 1, !"air.amplification_id", !"air.arg_type_name", !"uint", !"air.arg_name", !"amp"}
-!25 = !{i32 2, !"air.amplification_count", !"air.arg_type_name", !"uint", !"air.arg_name", !"count"}
-!26 = !{i32 3, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}
-!27 = !{ptr @amp_vertex_layer, !28, !30}
-!28 = !{!11, !29}
-!29 = !{!"air.render_target_array_index", !"air.shared", !"air.arg_type_name", !"uint", !"air.arg_name", !"layer"}
-!30 = !{!16, !17, !31}
-!31 = !{i32 2, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"slices"}
-!32 = !{ptr @amp_post_tessellation, !33, !35, !37}
-!33 = !{!34}
-!34 = !{!"air.position", !"air.arg_type_name", !"float4"}
-!35 = !{!36, !17, !18}
-!36 = !{i32 0, !"air.position_in_patch", !"air.arg_type_name", !"float3", !"air.arg_name", !"bary"}
-!37 = !{!"air.patch", !"triangle", !"air.patch_control_point", i32 3}
-!38 = !{ptr @amp_fragment, !39, !41}
-!39 = !{!40}
-!40 = !{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"float4"}
-!41 = !{!42, !43, !44, !45}
-!42 = !{i32 0, !"air.fragment_input", !"user(locn0)", !"air.center", !"air.perspective", !"air.arg_type_name", !"float4", !"air.arg_name", !"color"}
-!43 = !{i32 1, !"air.viewport_array_index", !"air.arg_type_name", !"uint", !"air.arg_name", !"viewport"}
-!44 = !{i32 2, !"air.amplification_id", !"air.arg_type_name", !"ushort", !"air.arg_name", !"amp"}
-!45 = !{i32 3, !"air.amplification_count", !"air.arg_type_name", !"ushort", !"air.arg_name", !"count"}
-!46 = !{ptr @amp_fragment_layer, !39, !47}
-!47 = !{!48, !17}
-!48 = !{i32 0, !"air.render_target_array_index", !"air.arg_type_name", !"uint", !"air.arg_name", !"layer"}
-!49 = !{!"air.compile.denorms_disable"}
-!50 = !{!"air.compile.fast_math_enable"}
-!51 = !{!"air.compile.framebuffer_fetch_enable"}
-!52 = !{!"Apple metal version 32023.883 (metalfe-32023.883)"}
-!53 = !{i32 2, i32 8, i32 0}
-!54 = !{!"Metal", i32 4, i32 0, i32 0}
-!55 = !{!56, !56, i64 0}
-!56 = !{!"omnipotent char", !57, i64 0}
-!57 = !{!"Simple C++ TBAA"}
-!58 = !{!59}
-!59 = distinct !{!59, !60, !"air-alias-scope-arg(3)"}
-!60 = distinct !{!60, !"air-alias-scopes(amp_vertex)"}
-!61 = !{!62, !62, i64 0}
-!62 = !{!"int", !56, i64 0}
-!63 = !{!64}
-!64 = distinct !{!64, !65, !"air-alias-scope-arg(3)"}
-!65 = distinct !{!65, !"air-alias-scopes(amp_vertex_store)"}
-!66 = !{!67}
-!67 = distinct !{!67, !68, !"air-alias-scope-arg(2)"}
-!68 = distinct !{!68, !"air-alias-scopes(amp_vertex_layer)"}
+!17 = !{i32 1, !"air.instance_id", !"air.arg_type_name", !"uint", !"air.arg_name", !"iid"}
+!18 = !{i32 2, !"air.amplification_id", !"air.arg_type_name", !"ushort", !"air.arg_name", !"amp"}
+!19 = !{i32 3, !"air.amplification_count", !"air.arg_type_name", !"ushort", !"air.arg_name", !"count"}
+!20 = !{i32 4, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"float4", !"air.arg_name", !"offsets"}
+!21 = !{ptr @amp_vertex_store, !22, !24}
+!22 = !{!23}
+!23 = !{!"air.position", !"air.shared", !"air.arg_type_name", !"float4"}
+!24 = !{!16, !25, !26, !27}
+!25 = !{i32 1, !"air.amplification_id", !"air.arg_type_name", !"uint", !"air.arg_name", !"amp"}
+!26 = !{i32 2, !"air.amplification_count", !"air.arg_type_name", !"uint", !"air.arg_name", !"count"}
+!27 = !{i32 3, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}
+!28 = !{ptr @amp_vertex_layer, !29, !31}
+!29 = !{!11, !30}
+!30 = !{!"air.render_target_array_index", !"air.shared", !"air.arg_type_name", !"uint", !"air.arg_name", !"layer"}
+!31 = !{!16, !17, !18, !32}
+!32 = !{i32 3, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"slices"}
+!33 = !{ptr @amp_post_tessellation, !34, !36, !40}
+!34 = !{!35}
+!35 = !{!"air.position", !"air.arg_type_name", !"float4"}
+!36 = !{!37, !38, !39}
+!37 = !{i32 0, !"air.position_in_patch", !"air.arg_type_name", !"float3", !"air.arg_name", !"bary"}
+!38 = !{i32 1, !"air.amplification_id", !"air.arg_type_name", !"ushort", !"air.arg_name", !"amp"}
+!39 = !{i32 2, !"air.amplification_count", !"air.arg_type_name", !"ushort", !"air.arg_name", !"count"}
+!40 = !{!"air.patch", !"triangle", !"air.patch_control_point", i32 3}
+!41 = !{ptr @amp_fragment, !42, !44}
+!42 = !{!43}
+!43 = !{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"float4"}
+!44 = !{!45, !46, !18, !19}
+!45 = !{i32 0, !"air.fragment_input", !"user(locn0)", !"air.center", !"air.perspective", !"air.arg_type_name", !"float4", !"air.arg_name", !"color"}
+!46 = !{i32 1, !"air.viewport_array_index", !"air.arg_type_name", !"uint", !"air.arg_name", !"viewport"}
+!47 = !{ptr @amp_fragment_layer, !42, !48}
+!48 = !{!49, !38}
+!49 = !{i32 0, !"air.render_target_array_index", !"air.arg_type_name", !"uint", !"air.arg_name", !"layer"}
+!50 = !{!"air.compile.denorms_disable"}
+!51 = !{!"air.compile.fast_math_enable"}
+!52 = !{!"air.compile.framebuffer_fetch_enable"}
+!53 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
+!54 = !{i32 2, i32 8, i32 0}
+!55 = !{!"Metal", i32 4, i32 0, i32 0}
+!56 = !{!57, !57, i64 0}
+!57 = !{!"omnipotent char", !58, i64 0}
+!58 = !{!"Simple C++ TBAA"}
+!59 = !{!60}
+!60 = distinct !{!60, !61, !"air-alias-scope-arg(4)"}
+!61 = distinct !{!61, !"air-alias-scopes(amp_vertex)"}
+!62 = !{!63, !63, i64 0}
+!63 = !{!"int", !57, i64 0}
+!64 = !{!65}
+!65 = distinct !{!65, !66, !"air-alias-scope-arg(3)"}
+!66 = distinct !{!66, !"air-alias-scopes(amp_vertex_store)"}
+!67 = !{!68}
+!68 = distinct !{!68, !69, !"air-alias-scope-arg(3)"}
+!69 = distinct !{!69, !"air-alias-scopes(amp_vertex_layer)"}

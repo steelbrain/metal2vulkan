@@ -261,8 +261,7 @@ println!("  Metal properties: {:?}", device.metal_properties());
   fields, so two machines that differ only there share artifacts.
 - `profile().spirv_validation()`: the `spirv-val` environments and relaxations every module for
   the device is valid under. The command line runs exactly these.
-- The profile's facts: `enabled()`, `limits()`, `images()`, `fragment()`, `descriptors()`, the
-  measured deviations it takes (`driver_deviations()`),
+- The profile's facts: `enabled()`, `limits()`, `images()`, `fragment()`, `descriptors()`,
   its `subgroups()` model and `simd_tier(...)`, the buffer robustness that bounds a buffer-slot
   access (`robustness()`, `checks_buffers_in_shader()`), and the Function
   storage a thread holds (`function_storage()`: `FunctionStorage::Measured` bytes for a measured
@@ -744,8 +743,7 @@ A `RenderPipeline` holds:
 
 - `stages`: vertex, then fragment when rasterization is enabled, with three geometry stages
   before the fragment stage when the fragment function reads `[[barycentric_coord]]` on a device
-  without `fragmentShaderBarycentric`, or the vertex function selects its slice or viewport on a
-  device without the output (below). A `VkPipeline` takes the stages
+  without `fragmentShaderBarycentric` (below). A `VkPipeline` takes the stages
   `RenderPipeline::runs_stage(at, topology)` says its topology runs;
 - `layout`: one pipeline layout for every stage;
 - `vertex_input`: Vulkan bindings and attributes. An attribute Vulkan cannot fetch as described is
@@ -878,29 +876,23 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   without `shaderTessellationAndGeometryPointSize`, more varyings than the geometry limits), the
   pipeline is refused, naming what it needs. Measured on the Iris Xe (ANV), such a pipeline takes
   about 2.6 ms longer to create, and a geometry stage's presence costs about 15% of fill rate.
-- A primitive renders into the slice and through the viewport its first vertex selects, the range
-  check applying to that vertex's index, and its fragments read the first vertex's indices as
-  written, where Vulkan asks every vertex of a primitive to write the same `Layer` and
-  `ViewportIndex`. A vertex function stores an index to its builtin only where it writes
-  the same at every vertex of a primitive, decided from its structure (computed from constants,
-  `constant` memory, the instance, the amplification and per-instance attributes, as
-  `StageIo::uniform_outputs` lists), or on MoltenVK, which hands the builtins to Metal
-  (`DriverDeviation::MetalFirstVertexIndices`). Otherwise, and on a device without
-  `shaderOutputLayer` or `shaderOutputViewportIndex`, the vertex function stores the index it
-  selects to a flat varying and the same generated geometry stages (one set serving the weights, the
-  primitive ID and the indices) store `Layer` or `ViewportIndex` from the primitive's first vertex
-  at every vertex they emit; where it stores one index so, it stores the other so too. The variant
-  for a pass of one layer selects no slice and carries no stage. A device without `multiViewport`
-  draws through one viewport, so there the vertex function stores no viewport index at all; a draw
-  that selects among more than one viewport there is refused at the draw,
-  `Unsupported(LayeredRendering)` needing `multiViewport`. Without `geometryShader` either, a vertex
-  function that selects its slice is refused needing either feature (its pass of one layer still
-  runs), and so is one that selects its viewport on a device with `multiViewport`; one whose index
-  differs among a primitive's vertices is refused needing `geometryShader`. The stages cannot serve
-  a post-tessellation vertex function, nor sit beside a vertex function
-  that writes the builtins itself (a device with the outputs but without
-  `fragmentShaderBarycentric`): those are refused as not implemented. A fragment function that reads
-  an index no stage writes, on a device that can declare neither builtin, reads 0, Metal's value
+- A vertex function stores `Layer` or `ViewportIndex` only where it writes the index the same at
+  every vertex of a primitive, decided from its structure (computed from constants, `constant`
+  memory, the instance, the amplification and per-instance attributes, as
+  `StageIo::uniform_outputs` lists), on a device with `shaderOutputLayer` or
+  `shaderOutputViewportIndex`. Metal leaves a primitive whose vertices write different indices
+  undefined ("If values differ, the behavior and value passed to the fragment function are
+  undefined.", the Metal Shading Language specification), and Vulkan asks every vertex of a
+  primitive to write the same `Layer` and `ViewportIndex`
+  (VUID-VkPipelineShaderStageCreateInfo-stage-02596 and -02597), so a vertex function whose index
+  is not shown the same is refused, `NotImplemented(LayeredRendering)`. One shown the same on a
+  device without the output is refused needing it, as `Unsupported(LayeredRendering)`, or as
+  `Unsupported(VertexAmplification)` for an index the amplification's offset alone sets. The
+  variant for a pass of one layer selects no slice and runs everywhere. A device without
+  `multiViewport` draws through one viewport, so there the vertex function stores no viewport
+  index at all; a draw that selects among more than one viewport there is refused at the draw,
+  `Unsupported(LayeredRendering)` needing `multiViewport`. A fragment function that reads an
+  index no stage writes, on a device that can declare neither builtin, reads 0, Metal's value
   with no vertex write.
 - `[[primitive_id]]` counts the draw's primitives in each instance from 0; vertex start, base
   vertex and base instance do not move it. A fragment stage declares `PrimitiveId` through

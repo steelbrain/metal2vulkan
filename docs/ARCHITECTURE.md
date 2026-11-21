@@ -33,10 +33,8 @@ metallib | AIR bitcode
   ── link ────────► bindings, Locations, spec ids, the pipeline         pipeline::link
                     layout, pipeline-wide limits, the generated         pipeline::link::geometry
                     geometry stages (barycentric weights read as        pipeline::link::band
-                    varyings, a selected slice or viewport stored
-                    from the first vertex), the generated
-                    tessellation stages that draw a wide line as a
-                    band
+                    varyings), the generated tessellation stages
+                    that draw a wide line as a band
   ── relocate ────► the final words of each stage                       pipeline::relocate
   = ComputePipeline | RenderPipeline | tile and mesh pipelines
 

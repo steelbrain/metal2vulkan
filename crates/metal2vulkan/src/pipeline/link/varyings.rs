@@ -135,8 +135,6 @@ fn check_roles(stage: Stage, io: &StageIo) -> Result<(), Error> {
                             ..
                         } | IoRole::ViewportIndex
                             | IoRole::RenderTargetArrayIndex
-                            | IoRole::SelectedLayer
-                            | IoRole::SelectedViewport
                             | IoRole::PrimitiveId
                             | IoRole::MergedCommand
                     )
@@ -460,12 +458,9 @@ fn varyings<'a>(
 ) -> Result<Vec<Varying<'a>>, Error> {
     let interpolation = |x: &crate::pipeline::stage_io::IoVariable| match &x.role {
         IoRole::Varying { interpolation, .. } => *interpolation,
-        // A fragment input: a raw index is read flat. A selected index, which only the
-        // synthesized geometry stage reads, is a flat integer too.
+        // A fragment input: a raw index is read flat.
         IoRole::ViewportIndex
         | IoRole::RenderTargetArrayIndex
-        | IoRole::SelectedLayer
-        | IoRole::SelectedViewport
         | IoRole::PrimitiveId
         | IoRole::MergedCommand => Some(Interpolation::Flat),
         IoRole::Barycentric { perspective } => Some(Interpolation::Smooth {

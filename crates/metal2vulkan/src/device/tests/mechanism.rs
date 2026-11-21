@@ -265,16 +265,8 @@ fn every_fact() -> Vec<RuntimeFact> {
         RuntimeFact::MovableStorageWrites {
             early_variant: true,
         },
-        RuntimeFact::SynthesizedGeometry {
-            weights: true,
-            layer: false,
-            viewport: false,
-        },
-        RuntimeFact::SynthesizedGeometry {
-            weights: false,
-            layer: true,
-            viewport: true,
-        },
+        RuntimeFact::SynthesizedGeometry { weights: true },
+        RuntimeFact::SynthesizedGeometry { weights: false },
         RuntimeFact::ObjectThreadgroupArena {
             static_bytes: 16,
             payload: Some(64),

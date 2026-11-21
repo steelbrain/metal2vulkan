@@ -3358,13 +3358,6 @@ fn lower_bounded<K>(
             .properties
             .insert(crate::device::requirements::VkProperty::DeviceSampling);
     }
-    // An index stored to its builtin although it differs among a primitive's vertices, because
-    // the device takes the first vertex's as Metal does.
-    if plan.families.stage_io.first_vertex_indices_by_device {
-        requirements
-            .properties
-            .insert(crate::device::requirements::VkProperty::MetalFirstVertexIndices);
-    }
     // The set-1 heap's binding flags need their features beside the module's.
     requirements
         .features

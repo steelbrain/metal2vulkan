@@ -24,14 +24,13 @@ pub struct RenderPipeline {
     pub key: PipelineKey,
     /// The fingerprint of the profile it was compiled for: a cache load checks it.
     pub profile: Hash256,
-    /// Vertex, then fragment when rasterization is enabled. A post-tessellation vertex
-    /// function's pipeline has the synthesized vertex and tessellation control stages, then its
-    /// evaluation stage, then the fragment stage. A pipeline whose fragment function reads
-    /// `[[barycentric_coord]]` on a device without `fragmentShaderBarycentric`, or whose vertex
-    /// function selects its slice or viewport on a device without the output, has three
-    /// synthesized geometry stages (one set for every such need) before its fragment stage, or
-    /// last without one, for the point, line and triangle topology classes in that order: a
-    /// `VkPipeline` runs only the one of its draw's class ([`runs_stage`](Self::runs_stage)).
+    /// Vertex, then fragment when rasterization is enabled. A post-tessellation vertex function's
+    /// pipeline has the synthesized vertex and tessellation control stages, then its evaluation
+    /// stage, then the fragment stage. A pipeline whose fragment function reads
+    /// `[[barycentric_coord]]` on a device without `fragmentShaderBarycentric` has three
+    /// synthesized geometry stages before its fragment stage, or last without one, for the point,
+    /// line and triangle topology classes in that order: a `VkPipeline` runs only the one of its
+    /// draw's class ([`runs_stage`](Self::runs_stage)).
     pub stages: Vec<StageModule>,
     pub layout: PipelineLayout,
     pub vertex_input: VertexInputState,

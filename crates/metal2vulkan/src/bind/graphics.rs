@@ -579,9 +579,8 @@ impl RenderPipeline {
 /// vertex and control stages run none, and its post-tessellation vertex function is its
 /// evaluation stage; a mesh render pipeline's object and mesh functions are its task and mesh
 /// stages; the geometry stages link
-/// generates (`link::geometry`: barycentric weights read as varyings, a selected slice or
-/// viewport) run none and bind nothing, nor do a band variant's (`banded`) control and evaluation
-/// stages (`link::band`).
+/// generates (`link::geometry`: barycentric weights read as varyings) run none and bind nothing,
+/// nor do a band variant's (`banded`) control and evaluation stages (`link::band`).
 fn metal_stages(
     stages: impl ExactSizeIterator<Item = vk::ShaderStage>,
     (tessellated, banded): (bool, bool),

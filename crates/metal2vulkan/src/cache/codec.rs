@@ -1046,7 +1046,6 @@ codec_enum! {
         DepthResolveMode(f0), StencilResolveMode(f0), IndependentResolveNone, IndependentResolve,
         VariableSampleLocations, SampleLocationSampleCount(f0), ColorAttachmentSampleCount(f0, f1),
         DeviceSampling,
-        MetalFirstVertexIndices,
         ProvokingVertexModePerPipeline,
         InterpolateAtOffsetFromSevenSixteenths,
         SubgroupGeometryStage,
@@ -1184,7 +1183,7 @@ codec_enum! {
         Attribute { index }, Varying { user, interpolation },
         Color { attachment, index },
         ViewportIndex, RenderTargetArrayIndex, PrimitiveVarying { user },
-        Barycentric { perspective }, SelectedLayer, SelectedViewport, PrimitiveId, MergedCommand,
+        Barycentric { perspective }, PrimitiveId, MergedCommand,
     }
     IoInterpolation { Flat, Smooth { sampling, perspective } }
     IoSampling { Center, Centroid, Sample, Interpolant { center, centroid, sample } }
@@ -1284,7 +1283,7 @@ codec_enum! {
         AnisotropicSampler { slot },
         StorageTextureIntegerChannels { slot },
         MovableStorageWrites { early_variant },
-        SynthesizedGeometry { weights, layer, viewport },
+        SynthesizedGeometry { weights },
         ObjectThreadgroupArena { static_bytes, payload },
         MergedDraws,
         QuadPrimitiveIds,

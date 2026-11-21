@@ -3344,12 +3344,11 @@ or does not check is rebuilt from the generations' names, with young counted ful
   without the attachment feedback loop (`Gap::Draw`, `AttachmentRead`: an attachment's shadow
   holds one layer); and, at creation on every device, whatever pass it would draw in, a vertex
   function whose `[[render_target_array_index]]` the translator cannot show the same at every
-  vertex of a primitive, an `Error::Translation` naming `LayeredRendering` and `geometryShader`. Vulkan
-  requires one `Layer` at every vertex of a primitive
+  vertex of a primitive, an `Error::Translation` naming `LayeredRendering` as not implemented.
+  Vulkan requires one `Layer` at every vertex of a primitive
   (`VUID-VkPipelineShaderStageCreateInfo-stage-02596`), so such a function cannot store its index
-  as written; the translator's other form, a generated geometry stage that selects the layer,
-  needs `geometryShader`, which device creation does not enable; and Metal documents a differing
-  index as undefined (the Metal Shading Language specification). The translator shows an index
+  as written, and Metal documents a differing index as undefined (the Metal Shading Language
+  specification). The translator shows an index
   the same where it is computed from constants, `constant` memory, the draw's instance, base
   vertex and base instance, and attributes fetched per instance, never from `[[vertex_id]]` or
   another per-vertex input (`StageIo::uniform_outputs`): `constant uint *layers` read at
