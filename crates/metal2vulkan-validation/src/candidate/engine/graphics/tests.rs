@@ -2150,65 +2150,6 @@ fn the_cells_follow_the_reflected_master() {
     assert_eq!(two.cell_bytes, 16);
 }
 
-/// Every committed public fragment imageblock case maps onto a draw, its cells the initializer's,
-/// and the product refuses its pipeline typed on every device (`NotImplemented(Imageblocks)`): the
-/// product's refusal, not the executor's.
-#[test]
-fn public_fragment_imageblock_cases_are_refused_typed() {
-    use metal2vulkan::error::{Feature, Needs};
-    let root = metal2vulkan_devtools::validation_dir().join("corpus");
-    let sources = public_sources().unwrap();
-    let mut refused = 0;
-    for case in CorpusStore::new(&root).read_all_cases().unwrap() {
-        if case.fragment_imageblock.is_none() {
-            continue;
-        }
-        let Some(row) = sources
-            .iter()
-            .find(|row| row.air_sha256 == case.air_sha256 && row.entry == case.entry)
-        else {
-            continue;
-        };
-        let scratch = crate::ScratchDir::new("public-imageblock-case").unwrap();
-        let ll = scratch.path().join("case.ll");
-        std::fs::write(&ll, &row.air_ll).unwrap();
-        let Some(bitcode) = assembled(&ll) else {
-            return;
-        };
-        let name = &case.name;
-        let checked = crate::check::check_case_against_source(&root, case.clone(), row)
-            .unwrap_or_else(|errors| panic!("{name}: {errors:?}"));
-        let render = render_case(
-            &case,
-            &checked.primary.interface,
-            &row.air_ll,
-            checked.primary.companion.as_ref(),
-            checked.primary.reflection.fragment_imageblock.as_ref(),
-        )
-        .unwrap_or_else(|error| panic!("{name}: {error:?}"));
-        assert!(render.imageblock.is_some(), "{name}: no cells");
-        let companion = render.companion.as_ref().unwrap().opaque_bitcode().unwrap();
-        let libraries = RenderLibraries {
-            vertex: &companion,
-            fragment: Some(&bitcode),
-        };
-        for stem in ["lavapipe", "moltenvk-m3", "runtime-floor"] {
-            match plan_render(&device(stem), &render, libraries) {
-                Err(Error::Unsupported(refusal)) => assert_eq!(
-                    (refusal.feature, refusal.needs),
-                    (Feature::Imageblocks, Needs::NotImplemented),
-                    "{name} on {stem}"
-                ),
-                other => panic!("{name} on {stem}: {:?}", other.map(|_| ())),
-            }
-        }
-        refused += 1;
-    }
-    // fragment-custom-imageblock-depth, the ten cases, the imageblock_transition case, the two
-    // splat cases, and the six cases on `rfs_imageblock_cover`.
-    assert_eq!(refused, 20);
-}
-
 /// The graphics state of the public fixture `fragment_rate_map_position` drawn by its generated
 /// fullscreen vertex function, compiled for lavapipe; `None` without `llvm-as`.
 fn rate_map_position_graphics() -> Option<metal2vulkan::pipeline::GraphicsState> {

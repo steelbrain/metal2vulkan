@@ -478,8 +478,13 @@ cargo run -p metal2vulkan-validation --release --bin corpus-vulkan -- \
   filled by a draw per slice of the owned `sample_fill` pair, its fragment run once per sample
   writing that sample's texel from a buffer, a color one through an unsigned-integer view of its
   texel size so its bits cross unconverted, a depth one under an always-passing depth test that
-  writes. A sparse, texture-buffer or cube-array texture keeps the case on the executor's own
-  context. A pixel format the runtime makes no image of on the device records `not_enabled`, as
+  writes. A cube-array texture keeps the case on the executor's own context. A bound sparse
+  texture carries `sparse_texture` and a bound texture buffer `texture_buffer`, which the runtime
+  makes neither of; a kernel's function table carries `kernel_function_table`, its imageblock (a
+  tile function's included) `kernel_imageblock`, its acceleration structure or
+  intersection-function table `kernel_acceleration_structure`, its stage inputs or stage-in region
+  `kernel_stage_input`, and a rasterization-rate map, a render pass's or one whose data a buffer
+  holds, `rasterization_rate_map`: each the runtime's limit, run on Metal alone. A pixel format the runtime makes no image of on the device records `not_enabled`, as
   the executor's own context records a format its query lacks. A vertex or fragment case of any
   sample count draws through the runtime the same way (`engine::runs_render_through_runtime`): its own
   stage's buffers, bound textures and samplers, function constants and linked functions, its
@@ -500,10 +505,11 @@ cargo run -p metal2vulkan-validation --release --bin corpus-vulkan -- \
   runtime device's own translator: the runtime's floor enables no buffer robustness, so a
   fixed-function vertex fetch past its buffer is checked nowhere and the case is refused as
   `not_supported{uncontained:unchecked vertex_input}`. A rasterization-disabled vertex case renders
-  into the oracle's 1x1 `R8Unorm` attachment. Layered rendering, a dynamic vertex
-  stride, an argument-buffer member, a patch index buffer, an imageblock, a rasterization-rate map, an
-  out-of-bounds target other than an attribute buffer or a fragment pass with no attachment (the
-  runtime makes no pass without one) keeps the case on the executor's own context. An indexed
+  into the oracle's 1x1 `R8Unorm` attachment. Layered rendering, an argument-buffer member, a
+  patch index buffer, an out-of-bounds target other than an attribute buffer or a fragment pass
+  with no attachment (the runtime makes no pass without one) keeps the case on the executor's own
+  context. A vertex buffer's dynamic stride carries `dynamic_vertex_stride` and a fragment
+  function's imageblock `fragment_imageblock`, each the runtime's limit. An indexed
   draw past its index buffer, which the runtime refuses as Metal's validation does
   (`Refusal::IndexBufferOffset`), carries `index_buffer_past_end`, and a depth/stencil attachment
   of both aspects, the oracle's two textures, which the runtime renders into in no one pass yet

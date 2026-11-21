@@ -747,9 +747,10 @@ fn a_fence_of_another_order_is_made_through_the_runtime() {
     assert_eq!(output, expected);
 }
 
-/// `ToolingRequirement::TextureBufferMember`'s limit at the texture, both ways: the runtime makes
-/// no texture buffer, so `new_texture` refuses one, typed (`Gap::TextureBuffer`), where it makes a
-/// 2D texture of the same format and width. The day the runtime makes one, this fails.
+/// `ToolingRequirement::TextureBuffer`'s limit, and `ToolingRequirement::TextureBufferMember`'s at
+/// the texture, both ways: the runtime makes no texture buffer, so `new_texture` refuses one, typed
+/// (`Gap::TextureBuffer`), where it makes a 2D texture of the same format and width. The day the
+/// runtime makes one, this fails.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_texture_buffer_is_refused_where_a_2d_texture_is_made() {

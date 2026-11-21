@@ -22,7 +22,7 @@ use crate::air::reflect::{
 use crate::case::out_of_bounds::OutOfBoundsResource;
 use crate::case::{
     AuthoredCase, DeviceBufferArrayResource, OutputSelection, Primitive, Stage, TextureFormat,
-    ThreadgroupMemoryResource,
+    TextureType, ThreadgroupMemoryResource,
 };
 use crate::requirement::{Executor, Limit, ToolingRequirement, UnobservedEffect};
 use std::borrow::Cow;
@@ -745,16 +745,15 @@ pub fn unsupported_source_requirements(
 ///
 /// A post-tessellation vertex function is none of them: the candidate draws its patches as the
 /// oracle does (`tessellation`); nor is a fragment function's color input, whose render target the
-/// candidate attaches as the input attachment the plan reads, nor its explicit imageblock, whose
-/// cells the candidate holds as the oracle's initializer defines them and whose reads and writes
-/// the product refuses (`Feature::Imageblocks`), the case's answer; nor is an argument-buffer member holding a compute or render
-/// pipeline state, which the candidate writes into its owner as an opaque id that no translated
-/// pipeline reads; nor a kernel's implicit imageblock attachments, which the candidate runs as the
-/// oracle's tile pipeline over the render area's tiles. The engine's other gaps are a case's
-/// choice, not the source's ([`case_requirements`]): an argument-buffer intersection-function table
-/// (the checker does not require one), a linked intersection function (the case's acceleration
-/// structures are opaque triangles, which call none), and a vertex case's depth/stencil
-/// attachment or a rasterization-disabled vertex case's render targets.
+/// candidate attaches as the input attachment the plan reads; nor is an argument-buffer member
+/// holding a compute or render pipeline state, which the candidate writes into its owner as an
+/// opaque id that no translated pipeline reads. The engine's other gaps are a case's choice, not
+/// the source's ([`case_requirements`]): an argument-buffer intersection-function table (the
+/// checker does not require one), a linked intersection function (the case's acceleration
+/// structures are opaque triangles, which call none), a vertex case's depth/stencil attachment or
+/// a rasterization-disabled vertex case's render targets, and the families the runtime builds no
+/// call for: a kernel's function table, imageblock, acceleration structure or stage inputs, and a
+/// fragment function's imageblock among them.
 pub fn engine_source_requirements(reflection: &ShaderInterface) -> BTreeSet<ToolingRequirement> {
     let render = matches!(
         reflection.stage,
@@ -808,9 +807,14 @@ pub fn engine_source_requirements(reflection: &ShaderInterface) -> BTreeSet<Tool
 /// case gives a depth image is the runtime's limit on every device
 /// ([`depth_range::depth_range_requirement`]), and so are an indexed draw past its index buffer
 /// (its out-of-bounds target, [`ToolingRequirement::IndexBufferPastEnd`]) and a depth/stencil
-/// attachment of both aspects ([`ToolingRequirement::SeparateDepthStencil`]).
+/// attachment of both aspects ([`ToolingRequirement::SeparateDepthStencil`]). So are the families
+/// the runtime builds no call for, or refuses at creation on every device: a kernel's function
+/// table, explicit imageblock, acceleration structure or stage inputs, a bound texture buffer or
+/// sparse texture, a fragment function's imageblock, a rasterization-rate map, and a vertex
+/// buffer's dynamic stride.
 pub fn case_requirements(case: &AuthoredCase) -> BTreeSet<ToolingRequirement> {
     let render = matches!(case.stage, Stage::Vertex | Stage::Fragment);
+    let kernel = case.stage == Stage::Kernel;
     let drawn = render || case.stage.is_mesh_pipeline_stage();
     let linked = |entries: &[crate::case::IntersectionFunctionTableEntry]| {
         entries.iter().any(|entry| {
@@ -873,6 +877,59 @@ pub fn case_requirements(case: &AuthoredCase) -> BTreeSet<ToolingRequirement> {
                         && attachment.initial_stencil_b64.is_some()
                 }),
             ToolingRequirement::SeparateDepthStencil,
+        ),
+        (
+            kernel && !case.visible_function_tables.is_empty(),
+            ToolingRequirement::KernelFunctionTable,
+        ),
+        (
+            kernel && case.imageblock.is_some(),
+            ToolingRequirement::KernelImageblock,
+        ),
+        (
+            case.textures
+                .iter()
+                .any(|texture| texture.texture_type == TextureType::Buffer),
+            ToolingRequirement::TextureBuffer,
+        ),
+        (
+            case.fragment_imageblock.is_some(),
+            ToolingRequirement::FragmentImageblock,
+        ),
+        (
+            case.textures.iter().any(|texture| texture.sparse.is_some()),
+            ToolingRequirement::SparseTexture,
+        ),
+        (
+            kernel
+                && (!case.acceleration_structures.is_empty()
+                    || !case.intersection_function_tables.is_empty()),
+            ToolingRequirement::KernelAccelerationStructure,
+        ),
+        (
+            kernel
+                && (!case.kernel_stage_inputs.is_empty()
+                    || case
+                        .dispatch
+                        .as_ref()
+                        .is_some_and(|dispatch| dispatch.stage_in_region.is_some())),
+            ToolingRequirement::KernelStageInput,
+        ),
+        (
+            case.render_pass_rate_map.is_some()
+                || case
+                    .buffers
+                    .iter()
+                    .any(|buffer| buffer.rasterization_rate_map.is_some())
+                || case
+                    .argument_buffer_buffers
+                    .iter()
+                    .any(|buffer| buffer.rasterization_rate_map.is_some()),
+            ToolingRequirement::RasterizationRateMap,
+        ),
+        (
+            case.vertex_inputs.iter().any(|input| input.dynamic_stride),
+            ToolingRequirement::DynamicVertexStride,
         ),
     ]
     .into_iter()
@@ -2846,44 +2903,16 @@ entry:
         // A pipeline-state literal is an opaque id in its owner.
         assert!(case_requirements(&pipelines).is_empty());
 
+        // A kernel's imageblock, a tile function's implicit one or an explicit one, is the
+        // runtime's limit.
         let mut tile = kernel.clone();
         tile.imageblock = Some(ImageblockResource {
             dimensions: [1, 1],
             implicit_coverage: Some(ImplicitImageblockCoverage::FullSingleSample),
         });
-        // The candidate runs a tile function over any grid of tiles: one tile of one thread per
-        // cell, a render area of more than one tile, a threadgroup that is not the tile's, or a
-        // tile past 2x2.
-        for (dimensions, grid, threads) in [
-            ([1, 1], [1, 1, 1], [1, 1, 1]),
-            ([2, 2], [2, 2, 1], [2, 2, 1]),
-            ([1, 1], [2, 1, 1], [1, 1, 1]),
-            ([1, 1], [1, 1, 1], [2, 1, 1]),
-            ([1, 1], [1, 1, 2], [1, 1, 1]),
-            ([1, 2], [1, 2, 1], [1, 2, 1]),
-            ([4, 4], [4, 4, 1], [4, 4, 1]),
-            ([16, 16], [16, 16, 1], [16, 16, 1]),
-        ] {
-            let mut grid_case = tile.clone();
-            grid_case.imageblock.as_mut().unwrap().dimensions = dimensions;
-            grid_case.dispatch = Some(Dispatch {
-                grid,
-                threads_per_threadgroup: threads,
-                stage_in_region: None,
-            });
-            assert!(
-                case_requirements(&grid_case).is_empty(),
-                "{dimensions:?} {grid:?} {threads:?}"
-            );
-        }
-        // An explicit imageblock is no tile function.
+        only(&tile, ToolingRequirement::KernelImageblock);
         tile.imageblock.as_mut().unwrap().implicit_coverage = None;
-        tile.dispatch = Some(Dispatch {
-            grid: [2, 1, 1],
-            threads_per_threadgroup: [1, 1, 1],
-            stage_in_region: None,
-        });
-        assert!(case_requirements(&tile).is_empty());
+        only(&tile, ToolingRequirement::KernelImageblock);
 
         let opaque = IntersectionFunctionTableEntry::OpaqueTriangle {
             index: 0,
@@ -2919,23 +2948,29 @@ entry:
             primitive_triangles_b64: None,
             child_references: vec![0],
         }];
-        assert!(case_requirements(&traced).is_empty());
+        only(&traced, ToolingRequirement::KernelAccelerationStructure);
         let mut linking = traced.clone();
         linking.intersection_function_tables = vec![table(linked)];
-        only(&linking, ToolingRequirement::LinkedIntersectionFunction);
+        assert_eq!(
+            case_requirements(&linking),
+            BTreeSet::from([
+                ToolingRequirement::LinkedIntersectionFunction,
+                ToolingRequirement::KernelAccelerationStructure
+            ])
+        );
 
         let mut fragment = traced.clone();
         fragment.stage = Stage::Fragment;
         only(&fragment, ToolingRequirement::RenderAccelerationStructure);
-        // A function table: a kernel's runs; a vertex or fragment function's is the runtime's
-        // limit.
+        // A function table is the runtime's limit, a kernel's and a vertex or fragment
+        // function's each by its own name.
         let mut tabled = kernel.clone();
         tabled.visible_function_tables = vec![crate::case::FunctionTableResource {
             binding: 1,
             size: 1,
             entries: Vec::new(),
         }];
-        assert!(case_requirements(&tabled).is_empty());
+        only(&tabled, ToolingRequirement::KernelFunctionTable);
         for stage in [Stage::Vertex, Stage::Fragment] {
             let mut drawn = tabled.clone();
             drawn.stage = stage;
@@ -3008,6 +3043,87 @@ entry:
             attachment.initial_stencil_b64 = Some("qw==".into());
         }
         only(&aspects, ToolingRequirement::SeparateDepthStencil);
+        // What the runtime builds no call for, or refuses at creation: a bound texture buffer or
+        // sparse texture, a kernel's stage inputs or stage-in region, a vertex buffer's dynamic
+        // stride, a fragment function's imageblock and a rasterization-rate map.
+        let texture = |texture_type| TextureResource {
+            binding: 0,
+            role: ResourceRole::Input,
+            texture_type,
+            format: TextureFormat::Rgba32Float,
+            dimensions: [1, 1, 1],
+            sample_count: 1,
+            bytes_b64: Some("AAAAAAAAAAAAAAAAAAAAAA==".into()),
+            initial_bytes_b64: None,
+            sparse: None,
+            mip_levels: 1,
+        };
+        let mut textured = kernel.clone();
+        textured.textures = vec![texture(TextureType::D2)];
+        assert!(case_requirements(&textured).is_empty());
+        textured.textures = vec![texture(TextureType::Buffer)];
+        only(&textured, ToolingRequirement::TextureBuffer);
+        textured.textures = vec![TextureResource {
+            sparse: Some(crate::case::sparse::SparseTextureResource {
+                mappings: Vec::new(),
+            }),
+            ..texture(TextureType::D2)
+        }];
+        only(&textured, ToolingRequirement::SparseTexture);
+        let input = |dynamic_stride| crate::case::AttributeInput {
+            location: 0,
+            format: crate::case::AttributeFormat::Float,
+            stride: 4,
+            dynamic_stride,
+            bytes_b64: "AAAAAA==".into(),
+        };
+        let mut staged = kernel.clone();
+        staged.kernel_stage_inputs = vec![input(false)];
+        only(&staged, ToolingRequirement::KernelStageInput);
+        let mut region = kernel.clone();
+        region.dispatch = Some(Dispatch {
+            grid: [1, 1, 1],
+            threads_per_threadgroup: [1, 1, 1],
+            stage_in_region: Some(crate::case::indirect_commands::HostStageInRegion {
+                origin: [0, 0, 0],
+                size: [1, 1, 1],
+            }),
+        });
+        only(&region, ToolingRequirement::KernelStageInput);
+        let mut fetched = kernel.clone();
+        fetched.stage = Stage::Vertex;
+        fetched.vertex_observation = Some(VertexObservation::Position);
+        fetched.vertex_inputs = vec![input(false)];
+        assert!(case_requirements(&fetched).is_empty());
+        fetched.vertex_inputs = vec![input(true)];
+        only(&fetched, ToolingRequirement::DynamicVertexStride);
+        let mut blocked = kernel.clone();
+        blocked.stage = Stage::Fragment;
+        blocked.fragment_imageblock = Some(FragmentImageblockResource {
+            dimensions: [1, 1],
+            members: Vec::new(),
+        });
+        only(&blocked, ToolingRequirement::FragmentImageblock);
+        let map = crate::case::RateMapLiteral {
+            screen_size: [1, 1],
+            layers: vec![crate::case::RateMapLayerLiteral {
+                horizontal: vec![crate::case::RateSample(1.0)],
+                vertical: vec![crate::case::RateSample(1.0)],
+            }],
+        };
+        let mut mapped = kernel.clone();
+        mapped.stage = Stage::Fragment;
+        mapped.render_pass_rate_map = Some(map.clone());
+        only(&mapped, ToolingRequirement::RasterizationRateMap);
+        let mut mapped = kernel.clone();
+        mapped.buffers = vec![BufferResource {
+            binding: 0,
+            role: ResourceRole::Input,
+            bytes_b64: None,
+            initial_bytes_b64: None,
+            rasterization_rate_map: Some(map),
+        }];
+        only(&mapped, ToolingRequirement::RasterizationRateMap);
         let mut disabled = kernel.clone();
         disabled.stage = Stage::Vertex;
         disabled.render_targets.push(RenderTargetResource {

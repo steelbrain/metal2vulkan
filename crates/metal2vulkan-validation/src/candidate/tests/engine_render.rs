@@ -772,65 +772,6 @@ fn a_rasterization_disabled_vertex_draw_stores_through_its_buffer() {
     }
 }
 
-/// The narrow-attribute case with layouts of `MTLBufferLayoutStrideDynamic`, its buffers bound
-/// at strides 2 and 8, drawn: vertex 1 reads each attribute one stride on, as Metal's fetch does,
-/// where the pipeline's strides are dynamic state (`VERTEX_INPUT_BINDING_STRIDE`), which the
-/// executor records as it binds the vertex buffers.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-fn dynamic_stride_layouts_read_at_the_strides_the_buffers_are_bound_with() {
-    let mut authored =
-        crate::case::narrow_vertex_test_case(String::new(), "vertex_narrow_attributes".into());
-    authored.buffers[0].initial_bytes_b64 = Some(b64(&[0xab; 8]));
-    let inputs: [(u32, &[u8]); 2] = [
-        (2, &[2, 9, 5, 9]),
-        (8, &[3, 0, 4, 0, 99, 0, 99, 0, 6, 0, 7, 0]),
-    ];
-    for (input, (stride, bytes)) in authored.vertex_inputs.iter_mut().zip(inputs) {
-        input.stride = stride;
-        input.dynamic_stride = true;
-        input.bytes_b64 = b64(bytes);
-    }
-    authored.draw.as_mut().expect("a draw").vertex_count = 2;
-    authored.output = crate::case::OutputSelection::Buffer {
-        binding: 0,
-        offset: 0,
-        length: 8,
-    };
-    let case = render_case(
-        &authored,
-        &crate::check::interface::tests::vertex_buffers_at(&[0]),
-        WITHOUT_SLICE,
-        None,
-        None,
-    )
-    .unwrap();
-    assert!(case.vertex_buffers.iter().all(|buffer| buffer.dynamic));
-    let vertex = public("vertex_narrow_attributes.ll");
-    let ran = run(
-        &case,
-        RenderLibraries {
-            vertex: &vertex,
-            fragment: None,
-        },
-    );
-    let expected: Vec<u8> = [2u32 + 3 + 4, 5 + 6 + 7]
-        .iter()
-        .flat_map(|sum| sum.to_le_bytes())
-        .collect();
-    match ran {
-        Ok(run) => assert_eq!(run.output, expected),
-        // A profile without dynamic strides keeps a per-bind stride static, a pipeline per
-        // stride, which the executor does not create.
-        Err(ExecutorError::NotSupported(
-            crate::check::admission::NotSupported::NotImplemented(why),
-        )) if why.contains("a pipeline per stride") => {
-            eprintln!("dynamic stride layouts: {why}")
-        }
-        Err(other) => panic!("dynamic stride layouts: {other}"),
-    }
-}
-
 /// A fragment function that loops `n` times (`n` from its constant buffer) draws once, as
 /// compiled, with no execution bound and no headroom probe, on both lanes.
 #[cfg(any(target_os = "linux", target_os = "macos"))]

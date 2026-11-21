@@ -228,11 +228,15 @@ fn every_map_of_a_case_binds_the_products_compile() {
     assert_eq!(skewed.compiled().unwrap(), rule);
 }
 
-/// A rate-mapped pass is no executor's gap: both executors render it.
+/// A rate-mapped pass is the runtime's limit: the Metal oracle renders it, and the engine's
+/// candidate alone stops.
 #[test]
-fn a_rate_mapped_pass_stops_no_executor() {
+fn a_rate_mapped_pass_is_the_runtimes_limit() {
     let mut case = fragment_case([37, 23]);
     assert!(case_requirements(&case).is_empty());
     case.render_pass_rate_map = Some(map([37, 23], &[1.0], &[1.0]));
-    assert!(case_requirements(&case).is_empty());
+    assert_eq!(
+        case_requirements(&case),
+        [crate::requirement::ToolingRequirement::RasterizationRateMap].into()
+    );
 }

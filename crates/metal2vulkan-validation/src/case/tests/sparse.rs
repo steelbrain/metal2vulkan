@@ -36,10 +36,10 @@ fn errors(case: &AuthoredCase) -> String {
         .join("\n")
 }
 
-/// A sparse texture is part of the identity and no executor's gap; a texture without the field
-/// serializes as before it existed.
+/// A sparse texture is part of the identity and the runtime's limit, which stops the engine's
+/// candidate alone; a texture without the field serializes as before it existed.
 #[test]
-fn a_sparse_texture_is_identity_and_stops_no_executor() {
+fn a_sparse_texture_is_identity_and_the_runtimes_limit() {
     let case = sparse_case(vec![region(0, 0, [0, 0, 0], [128, 128, 1])]);
     assert_eq!(errors(&case), "");
     let mut ordinary = case.clone();
@@ -50,7 +50,11 @@ fn a_sparse_texture_is_identity_and_stops_no_executor() {
     unmapped.textures[0].sparse = Some(SparseTextureResource { mappings: vec![] });
     assert_eq!(errors(&unmapped), "", "every texel may be unmapped");
     assert_ne!(unmapped.computed_case_id().unwrap(), case.case_id);
-    assert!(crate::executor_contract::case_requirements(&case).is_empty());
+    assert_eq!(
+        crate::executor_contract::case_requirements(&case),
+        [crate::requirement::ToolingRequirement::SparseTexture].into()
+    );
+    assert!(crate::executor_contract::case_requirements(&ordinary).is_empty());
     // The schema's spelling.
     let json = serde_json::to_value(&case.textures[0]).unwrap();
     assert_eq!(

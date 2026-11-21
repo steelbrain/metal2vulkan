@@ -181,30 +181,18 @@ fn the_case_maps_onto_the_binder_or_names_the_gap() {
         }
     }
 
-    // An explicit imageblock runs, its dimensions the dispatch's imageblock size.
-    assert_eq!(mapped.imageblock, None);
-    assert_eq!(mapped.tile, None);
-    assert_eq!(state.imageblock_size, Default::default());
+    // An explicit imageblock is the runtime's limit.
     let mut imageblock = kernel_case();
     imageblock.imageblock = Some(crate::case::ImageblockResource {
         dimensions: [16, 8],
         implicit_coverage: None,
     });
-    let explicit = map_kernel(&imageblock).unwrap();
-    assert_eq!(explicit.imageblock, Some([16, 8]));
-    assert_eq!(explicit.tile, None);
-    let state = bind_state(
-        &explicit,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        BufferRanges::default(),
-    )
-    .unwrap();
     assert_eq!(
-        state.imageblock_size,
-        metal2vulkan::bind::ImageblockSize::new(16, 8)
+        map_kernel(&imageblock),
+        Err(NotSupported::Requirements(
+            [ToolingRequirement::KernelImageblock].into()
+        ))
     );
-    assert_eq!(state.shape().imageblock_size, state.imageblock_size);
     let mut vertex = kernel_case();
     vertex.stage = Stage::Vertex;
     assert!(matches!(
@@ -213,146 +201,14 @@ fn the_case_maps_onto_the_binder_or_names_the_gap() {
     ));
 }
 
-/// A kernel case's stage inputs run as the Metal oracle fetches them: each input's data is its own
-/// buffer at the shared slot rule's slot (the lowest one no AIR argument occupies), the kernel
-/// compiles under the descriptor `executor_contract::stage_inputs` derives, and the dispatch's
-/// stage-in region is the grid. A location the entry does not declare, or a slot the case binds
-/// itself, is a typed gap.
-#[test]
-fn stage_inputs_are_bound_where_the_oracle_binds_them() {
-    use crate::check::interface::tests::param;
-    use metal2vulkan_air::abi::{AbiInt, ParamRole, Slot};
-    let at = |index| Slot {
-        index: AbiInt::Const(index),
-        count: AbiInt::Const(1),
-    };
-    let buffer = param(
-        1,
-        ParamRole::Buffer(metal2vulkan_air::abi::BufferArg {
-            location: at(0),
-            access: metal2vulkan_air::abi::Access::ReadWrite,
-            space: metal2vulkan_air::ir::AddrSpace::Device,
-            buffer_size: None,
-            layout: None,
-            raster_order_group: None,
-        }),
-    );
-    let interface = kernel_interface(vec![
-        param(0, ParamRole::StageIn { location: at(4) }),
-        buffer,
-    ]);
-    let mut case = kernel_case();
-    case.kernel_stage_inputs
-        .push(crate::case::KernelStageInput {
-            location: 4,
-            format: crate::case::AttributeFormat::Float3,
-            stride: 16,
-            dynamic_stride: false,
-            bytes_b64: base64::engine::general_purpose::STANDARD.encode([7u8; 16]),
-        });
-    let mapped = compute_case(&case, &interface).unwrap();
-    assert_eq!(mapped.buffers.get(&1), Some(&vec![7u8; 16]));
-    let d = mapped
-        .stage_input
-        .clone()
-        .expect("a stage-input descriptor");
-    assert_eq!(
-        d.attributes[&4],
-        metal2vulkan::pipeline::StageInputAttributeDescriptor::new(
-            metal2vulkan::metal::AttributeFormat::Float3,
-            0,
-            1
-        )
-    );
-    assert_eq!(d.layouts[&1].stride, Some(16));
-    assert_eq!(
-        d.layouts[&1].step_function,
-        metal2vulkan::metal::StepFunction::ThreadPositionInGridX
-    );
-    let state = bind_state(
-        &mapped,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        BufferRanges::default(),
-    )
-    .unwrap();
-    let grid = case.dispatch.as_ref().unwrap().grid;
-    assert_eq!(
-        state.stage_in_region,
-        Some(metal2vulkan::bind::StageInRegion::new([0; 3], grid))
-    );
-    assert!(matches!(
-        state.stages[&ShaderStage::Kernel].buffers[&1],
-        BoundBuffer::Buffer {
-            length: 16,
-            attribute_stride: None,
-            ..
-        }
-    ));
-    assert!(mapped.attribute_strides.is_empty());
-    // A dynamic stride: the layout's is `MTLBufferLayoutStrideDynamic`, and the data's buffer is
-    // bound at the case's stride, as the oracle binds it.
-    let mut dynamic = case.clone();
-    dynamic.kernel_stage_inputs[0].dynamic_stride = true;
-    let mapped = compute_case(&dynamic, &interface).unwrap();
-    assert_eq!(
-        mapped.stage_input.as_ref().unwrap().layouts[&1].stride,
-        None
-    );
-    assert_eq!(mapped.attribute_strides, BTreeMap::from([(1, 16)]));
-    let state = bind_state(
-        &mapped,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        BufferRanges::default(),
-    )
-    .unwrap();
-    assert!(matches!(
-        state.stages[&ShaderStage::Kernel].buffers[&1],
-        BoundBuffer::Buffer {
-            attribute_stride: Some(16),
-            ..
-        }
-    ));
-    // Without stage inputs: no descriptor, and no region, as the oracle sets none.
-    let plain = map_kernel(&kernel_case()).unwrap();
-    assert_eq!(plain.stage_input, None);
-    let state = bind_state(
-        &plain,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        BufferRanges::default(),
-    )
-    .unwrap();
-    assert_eq!(state.stage_in_region, None);
-
-    let gap = |case: &AuthoredCase, interface: &AirInterface, what: &str| match compute_case(
-        case, interface,
-    ) {
-        Err(NotSupported::NotImplemented(detail)) => assert!(detail.contains(what), "{detail}"),
-        other => panic!("{what}: {other:?}"),
-    };
-    gap(&case, &kernel_interface(vec![]), "no AIR stage input");
-    let mut taken = case.clone();
-    taken.buffers.push(crate::case::BufferResource {
-        binding: 1,
-        role: crate::case::ResourceRole::Input,
-        bytes_b64: Some("AAAAAA==".into()),
-        initial_bytes_b64: None,
-        rasterization_rate_map: None,
-    });
-    gap(&taken, &interface, "bound twice");
-}
-
 /// A case's visible-function references are no resource gap: its function links them, each
 /// module once with the functions it supplies and its retained bitcode, as the Metal oracle links
-/// them. Its visible-function tables map to tables the executor binds; an intersection-function
-/// table of opaque triangle entries is a buffer of the product's table words, and a linked
-/// intersection function and an argument-buffer intersection-function table are requirements that
-/// stop this executor ([`require_case_families`]). The linking takes the tables' entries' functions
-/// as the oracle's does.
+/// them. A kernel's visible-function table and intersection-function table, a linked intersection
+/// function and an argument-buffer intersection-function table are requirements that stop this
+/// executor ([`require_case_families`]). The linking takes the tables' entries' functions as the
+/// oracle's does.
 #[test]
-fn references_link_visible_tables_map_and_intersection_tables_are_words_or_typed_gaps() {
+fn references_link_and_function_tables_are_typed_gaps() {
     use crate::case::{
         ArgumentBufferIntersectionFunctionTableResource, FunctionTableEntry, FunctionTableResource,
         IntersectionFunctionSignature, IntersectionFunctionTableEntry,
@@ -363,7 +219,6 @@ fn references_link_visible_tables_map_and_intersection_tables_are_words_or_typed
         ResolvedIntersectionFunctionEntry, ResolvedIntersectionFunctionTable,
         ResolvedIntersectionFunctionTableLocation,
     };
-    use metal2vulkan::pipeline::FunctionHandle;
     let module = LibraryModuleRow {
         module_sha256: "22".repeat(32),
         air_ll: "define i32 @a(i32 %v) { ret i32 %v }".into(),
@@ -429,6 +284,12 @@ fn references_link_visible_tables_map_and_intersection_tables_are_words_or_typed
         }]
     );
 
+    // A kernel's function table and intersection-function table are the runtime's limits.
+    let refused = |requirements: &[ToolingRequirement]| {
+        Err(NotSupported::Requirements(
+            requirements.iter().copied().collect(),
+        ))
+    };
     let mut visible = case.clone();
     visible.visible_function_tables = vec![FunctionTableResource {
         binding: 1,
@@ -439,34 +300,10 @@ fn references_link_visible_tables_map_and_intersection_tables_are_words_or_typed
             function: "c".into(),
         }],
     }];
-    assert_eq!(require_case_families(&visible), Ok(()));
-    let mapped = map_kernel(&visible).unwrap();
     assert_eq!(
-        mapped.function_tables,
-        BTreeMap::from([(
-            1,
-            FunctionTable {
-                size: 3,
-                entries: BTreeMap::from([(
-                    2,
-                    tables::TableFunction {
-                        module_sha256: module.module_sha256.clone(),
-                        function: "c".into(),
-                    }
-                )]),
-            }
-        )])
+        require_case_families(&visible),
+        refused(&[ToolingRequirement::KernelFunctionTable])
     );
-    // A table at a buffer's index is refused (the checker refuses it first).
-    let mut shared = visible.clone();
-    shared.visible_function_tables[0].binding = 0;
-    match map_kernel(&shared) {
-        Err(NotSupported::NotImplemented(detail)) => {
-            assert!(detail.contains("also a visible function table"), "{detail}")
-        }
-        other => panic!("{other:?}"),
-    }
-
     let mut opaque = case.clone();
     opaque.intersection_function_tables = vec![IntersectionFunctionTableResource {
         binding: 2,
@@ -476,30 +313,10 @@ fn references_link_visible_tables_map_and_intersection_tables_are_words_or_typed
             signature: vec![IntersectionFunctionSignature::TriangleData],
         }],
     }];
-    assert_eq!(require_case_families(&opaque), Ok(()));
-    let words: Vec<u8> = [1u32, 3, 0, FunctionHandle::RESERVED_WORD, 0]
-        .into_iter()
-        .flat_map(u32::to_le_bytes)
-        .collect();
-    assert_eq!(map_kernel(&opaque).unwrap().buffers.get(&2), Some(&words));
-    let mut past = opaque.clone();
-    past.intersection_function_tables[0].entries =
-        vec![IntersectionFunctionTableEntry::OpaqueTriangle {
-            index: 3,
-            signature: vec![],
-        }];
-    assert!(matches!(
-        map_kernel(&past),
-        Err(NotSupported::NotImplemented(detail)) if detail.contains("past its size")
-    ));
-    let mut shared = opaque.clone();
-    shared.intersection_function_tables[0].binding = 0;
-    assert!(matches!(
-        map_kernel(&shared),
-        Err(NotSupported::NotImplemented(detail))
-            if detail.contains("also an intersection function table")
-    ));
-
+    assert_eq!(
+        require_case_families(&opaque),
+        refused(&[ToolingRequirement::KernelAccelerationStructure])
+    );
     let mut intersection = case.clone();
     intersection.intersection_function_tables = vec![IntersectionFunctionTableResource {
         binding: 2,
@@ -510,9 +327,10 @@ fn references_link_visible_tables_map_and_intersection_tables_are_words_or_typed
             function: "a".into(),
         }],
     }];
-    let linked = Err(NotSupported::Requirements(
-        [ToolingRequirement::LinkedIntersectionFunction].into(),
-    ));
+    let linked = refused(&[
+        ToolingRequirement::LinkedIntersectionFunction,
+        ToolingRequirement::KernelAccelerationStructure,
+    ]);
     assert_eq!(require_case_families(&intersection), linked);
     assert_eq!(map_kernel(&intersection).map(|_| ()), linked);
 
@@ -529,67 +347,6 @@ fn references_link_visible_tables_map_and_intersection_tables_are_words_or_typed
     ));
     assert_eq!(require_case_families(&encoded), encoded_table);
     assert_eq!(map_kernel(&encoded).map(|_| ()), encoded_table);
-}
-
-/// A case's acceleration structures map to the structures the executor builds as the Metal
-/// oracle does: a primitive structure its authored vertices, an instance structure its instance
-/// count, each instance the oracle's (opaque, mask `0xFFFFFFFF`, which Vulkan's 8-bit instance mask
-/// cannot hold: the binder refuses it). A render case refuses them. The bind state states each
-/// instance structure's count, which `get_instance_count()` reads; a primitive structure is not
-/// listed.
-#[test]
-fn acceleration_structures_map_to_what_the_oracle_builds() {
-    use crate::case::{AccelerationStructureKind, AccelerationStructureResource};
-    let vertices: Vec<u8> = AccelerationStructureKind::INSTANCED_TRIANGLE
-        .iter()
-        .flat_map(|v| v.to_le_bytes())
-        .collect();
-    let mut case = kernel_case();
-    case.acceleration_structures = vec![
-        AccelerationStructureResource {
-            binding: 5,
-            kind: AccelerationStructureKind::Primitive,
-            primitive_triangles_b64: Some(b64(&vertices)),
-            child_references: vec![],
-        },
-        AccelerationStructureResource {
-            binding: 6,
-            kind: AccelerationStructureKind::Instance,
-            primitive_triangles_b64: None,
-            child_references: vec![0, 0],
-        },
-    ];
-    assert_eq!(require_case_families(&case), Ok(()));
-    assert_eq!(
-        map_kernel(&case).unwrap().acceleration_structures,
-        BTreeMap::from([
-            (5, CaseStructure::Primitive { vertices }),
-            (6, CaseStructure::Instances { instances: 2 }),
-        ])
-    );
-    let state = bind_state(
-        &map_kernel(&case).unwrap(),
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        BufferRanges::default(),
-    )
-    .unwrap();
-    assert_eq!(
-        state.stages[&ShaderStage::Kernel].acceleration_structures,
-        BTreeMap::from([(6, metal2vulkan::bind::BoundAccelerationStructure::new(2))])
-    );
-    assert_eq!(
-        metal2vulkan::bind::instance_record(&CaseStructure::instance(), 0, 0),
-        Err(metal2vulkan::error::Unsupported::not_representable(
-            metal2vulkan::error::Feature::RayTracing
-        ))
-    );
-    let mut shared = case.clone();
-    shared.acceleration_structures[0].binding = 0;
-    assert!(matches!(
-        map_kernel(&shared),
-        Err(NotSupported::NotImplemented(detail)) if detail.contains("bound twice")
-    ));
 }
 
 /// A table's buffer is the product's table words (`FunctionTableWords`): bound, its size, and each
@@ -1058,165 +815,6 @@ fn outputs_are_exact_ranges_of_the_bound_buffer() {
     );
     assert!(selected(target(1, [0, 0], [1, 1])).is_err());
     assert!(selected(target(2, [2, 0], [2, 1])).is_err());
-}
-
-/// A tile kernel over render targets runs in the Metal oracle's tile pass: its render area the
-/// dispatch grid's width and height, its tile size the imageblock's dimensions, one threadgroup of
-/// the case's threads per tile (a partial tile included), each render target a 2D attachment of its
-/// format and contents, which the executor binds over the whole tiles (past its texels the
-/// nearest), bound with the whole tiles as the render area, as the runtime's dispatch binds it, and
-/// compiled as a tile pipeline under the attachments' formats; a render-target output selects an
-/// attachment.
-#[test]
-fn a_tile_kernel_runs_in_its_tile_pass() {
-    use crate::case::{
-        Dispatch as CaseDispatch, ImageblockResource, ImplicitImageblockCoverage,
-        RenderTargetResource, TextureFormat,
-    };
-    let mut case = kernel_case();
-    case.imageblock = Some(ImageblockResource {
-        dimensions: [16, 16],
-        implicit_coverage: Some(ImplicitImageblockCoverage::FullSingleSample),
-    });
-    case.dispatch = Some(CaseDispatch {
-        grid: [40, 24, 1],
-        threads_per_threadgroup: [8, 8, 1],
-        stage_in_region: None,
-    });
-    let pixels: Vec<u8> = (0..40 * 24 * 4).map(|i| i as u8).collect();
-    case.render_targets = vec![RenderTargetResource {
-        index: 1,
-        format: TextureFormat::R32Uint,
-        dimensions: [40, 24],
-        initial_bytes_b64: b64(&pixels),
-    }];
-    case.output = OutputSelection::RenderTarget {
-        index: 1,
-        origin: [8, 2],
-        dimensions: [4, 3],
-    };
-    let mapped = map_kernel(&case).unwrap();
-    assert_eq!(
-        mapped.dispatch,
-        Dispatch::Threadgroups {
-            groups: [3, 2, 1],
-            threads_per_group: [8, 8, 1],
-        }
-    );
-    assert_eq!(mapped.imageblock, Some([16, 16]));
-    let pass = mapped.tile.as_ref().unwrap();
-    assert_eq!(pass.area, [40, 24]);
-    assert_eq!(pass.tiles, [48, 32]);
-    assert_eq!(
-        pass.formats(),
-        BTreeMap::from([(1, metal2vulkan::metal::PixelFormat::R32Uint)])
-    );
-    let attachment = &pass.attachments[&1];
-    assert_eq!(
-        (
-            attachment.texture_type,
-            attachment.dimensions,
-            attachment.sample_count
-        ),
-        (crate::case::TextureType::D2, [40, 24, 1], 1)
-    );
-    assert_eq!(attachment.bytes, pixels);
-    // The executor's attachment over the whole tiles: the authored texels, and past them the
-    // nearest, clamped to their edge.
-    let tiled = &pass.tiled[&1];
-    assert_eq!(
-        (tiled.format, tiled.dimensions, tiled.sample_count),
-        (attachment.format, [48, 32, 1], 1)
-    );
-    let padded: Vec<u8> = (0..32usize)
-        .flat_map(|y| (0..48usize).map(move |x| (x.min(39), y.min(23))))
-        .flat_map(|(x, y)| {
-            let at = (y * 40 + x) * 4;
-            pixels[at..at + 4].to_vec()
-        })
-        .collect();
-    assert_eq!(tiled.bytes, padded);
-    assert_eq!(
-        mapped.output,
-        ComputeOutput::RenderTarget {
-            index: 1,
-            origin: [8, 2],
-            dimensions: [4, 3],
-        }
-    );
-    let state = bind_state(
-        &mapped,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        BufferRanges::default(),
-    )
-    .unwrap();
-    assert_eq!(state.render_area, [48, 32]);
-    assert_eq!(
-        state.imageblock_size,
-        metal2vulkan::bind::ImageblockSize::new(16, 16)
-    );
-    let shape = state.shape();
-    assert_eq!(shape.render_area, [48, 32]);
-    let library = RowSource::Text(Cow::Borrowed(""));
-    let (request, _) = compute_request(&library, &[], &mapped, &shape);
-    match request {
-        PipelineRequest::BoundCompute {
-            tile, stage_input, ..
-        } => {
-            assert_eq!(tile, Some(pass.formats()));
-            assert_eq!(stage_input, None);
-        }
-        other => panic!("{other:?}"),
-    }
-    // The selected region, rows tightly packed (the oracle's `LiteralRenderTarget::select`).
-    let finals = BTreeMap::from([(1, attachment.clone())]);
-    let expected = crate::literal::LiteralRenderTarget {
-        index: 1,
-        format: TextureFormat::R32Uint,
-        dimensions: [40, 24],
-        samples: 1,
-        bytes: pixels.clone(),
-    }
-    .select([8, 2], [4, 3])
-    .unwrap();
-    assert_eq!(
-        select_output(
-            mapped.output,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            &finals
-        ),
-        Ok(expected)
-    );
-
-    // Render targets of a kernel with no implicit imageblock, and a tile grid of more than one
-    // plane, are not implemented.
-    let mut plain = case.clone();
-    plain.imageblock = None;
-    assert!(matches!(
-        map_kernel(&plain),
-        Err(NotSupported::NotImplemented(what)) if what.contains("no tile function")
-    ));
-    let mut planes = case.clone();
-    planes.dispatch = Some(CaseDispatch {
-        grid: [40, 24, 2],
-        threads_per_threadgroup: [8, 8, 1],
-        stage_in_region: None,
-    });
-    assert!(matches!(
-        map_kernel(&planes),
-        Err(NotSupported::NotImplemented(what)) if what.contains("more than one plane")
-    ));
-    // A render-target output of a kernel in no tile pass is not implemented.
-    let mut output = kernel_case();
-    output.output = case.output.clone();
-    assert!(matches!(
-        map_kernel(&output),
-        Err(NotSupported::NotImplemented(what)) if what.contains("no tile pass")
-    ));
 }
 
 /// `bytes` as the base64 an authored case spells.
@@ -1757,51 +1355,6 @@ fn a_restricted_row_has_its_own_engine_slot() {
     ] {
         assert!(!is_engine_slot(operator), "{operator}");
     }
-}
-
-/// The checker accepts a committed public fragment case over an explicit imageblock with no
-/// requirement that stops this executor, which prepares it device-free: the case's plane lands at
-/// its master member's offset in the pass's one cell (`fragment_custom_imageblock`'s master holds
-/// four halves, `user(depth)` the second), every other byte zero as the Metal oracle's initializer
-/// leaves an unauthored member, and the output is that member's plane.
-#[test]
-fn a_checked_fragment_imageblock_case_maps_its_plane_onto_the_cells() {
-    use super::graphics::RenderOutput;
-    use super::imageblock::Member;
-    let root = metal2vulkan_devtools::validation_dir().join("corpus");
-    let case = CorpusStore::new(&root)
-        .read_all_cases()
-        .unwrap()
-        .into_iter()
-        .find(|case| case.name == "fragment-custom-imageblock-depth")
-        .expect("the committed public case");
-    let device = DeviceType::Cpu;
-    let admitted = admit(&root, case, ExecutionRequest::EngineCandidate { device })
-        .unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(
-        crate::executor_contract::require_executor(
-            &admitted.checked().requirements(),
-            Executor::EngineCandidate
-        ),
-        Ok(())
-    );
-    let prepared = prepare_case(device, admitted).unwrap_or_else(|error| panic!("{error}"));
-    let Mapped::Render(render) = &prepared.mapped else {
-        panic!("a fragment case maps onto a draw");
-    };
-    let cells = render.imageblock.as_ref().expect("the case's imageblock");
-    assert_eq!(cells.dimensions, [1, 1]);
-    assert_eq!(cells.cell_bytes, 8);
-    // The authored depth, half 1.099609375 (0x3c66), little-endian at byte 2.
-    assert_eq!(cells.bytes, [0, 0, 0x66, 0x3c, 0, 0, 0, 0]);
-    assert_eq!(
-        render.output,
-        RenderOutput::Imageblock {
-            member: Member { offset: 2, size: 2 },
-            origin: [0, 0],
-            dimensions: [1, 1],
-        }
-    );
 }
 
 /// The checker accepts the committed public cases over pipeline-state members (a kernel's and a

@@ -12,7 +12,6 @@ use metal2vulkan::error::{BindError, Capability, Feature, Needs, Unsupported};
 use metal2vulkan::library::Library;
 use metal2vulkan::metal::format::vk_format;
 use metal2vulkan::pipeline::FunctionDescriptor;
-use metal2vulkan::pipeline::PushField;
 use metal2vulkan::Budget;
 use metal2vulkan_devtools::{llvm_assemble, AssembleError};
 use std::collections::{BTreeMap, BTreeSet};
@@ -202,14 +201,8 @@ fn plan_case(device: &Device, case: &AuthoredCase, row: &crate::source::SourceRo
         plan.diagnostics
     );
     // A plan that needed a variant counts as its own family, so the lowering-input path is
-    // known to run; so does a structure's instance count the binder pushes.
+    // known to run.
     let variant = (!plan.variant.is_empty()).then_some("pipeline variant");
-    let count = plan
-        .push
-        .fields
-        .iter()
-        .any(|placement| matches!(placement.field, PushField::InstanceCount(_)))
-        .then_some("instance count");
     Planned::Writes(
         plan.descriptors
             .iter()
@@ -221,24 +214,20 @@ fn plan_case(device: &Device, case: &AuthoredCase, row: &crate::source::SourceRo
                 }
                 WriteSource::Texture { .. } => "texture",
                 WriteSource::CombinedImageSampler { .. } => "combined image sampler",
-                WriteSource::TexelBuffer { .. } => "texel buffer",
                 WriteSource::Sampler { .. } => "sampler",
                 WriteSource::Neutral(_) => "neutral",
-                WriteSource::AccelerationStructure { .. } => "acceleration structure",
-                WriteSource::TileMap { .. } => "tile map",
                 _ => "buffer-like",
             })
             .chain(variant)
-            .chain(count)
             .collect(),
     )
 }
 
 /// Every public kernel case with textures or samplers that maps and compiles for its bind state
 /// plans the variant it was compiled for and no plan diagnostic (which the executor refuses), and
-/// together they write every texture descriptor family `plan_resources` creates. On a profile
-/// that needs storage formats as inputs, some of them plan a variant; on every profile a sparse
-/// case plans a tile map. At least one case plans on every profile; the test skips only when no
+/// together they write a sampled texture, a storage texture and a sampler. On a profile that needs
+/// storage formats as inputs, some of them plan a variant. At least one case plans on every
+/// profile; the test skips only when no
 /// `llvm-as` is installed, and a case whose fixture the installed `llvm-as` rejects is skipped
 /// alone, with a printed line.
 #[test]
@@ -270,7 +259,7 @@ fn public_texture_cases_plan_their_compiled_variant_without_diagnostics() {
         }
         // Refusing every case would pass the checks below vacuously.
         assert!(planned > 0, "{stem}: no public texture case planned");
-        for family in ["texture", "storage texture", "texel buffer"] {
+        for family in ["texture", "storage texture"] {
             assert!(families.contains(family), "{stem}: no {family} write");
         }
         assert!(
@@ -282,13 +271,6 @@ fn public_texture_cases_plan_their_compiled_variant_without_diagnostics() {
         if stem == "runtime-floor" {
             assert!(families.contains("pipeline variant"), "{stem}: no variant");
         }
-        // A sparse case whose observed accesses each name their texels answers residency from
-        // its tile map on every device, lavapipe's shader residency included (a 16-KiB tile inside
-        // a device's 64-KiB block).
-        assert!(
-            families.contains("tile map"),
-            "{stem}: tile maps {families:?}"
-        );
     }
 }
 
@@ -446,17 +428,21 @@ fn public_texture_array_cases_plan_their_elements_at_their_slots() {
 /// Each public kernel case whose root argument points to further nodes (argument-buffer buffers)
 /// maps, compiles for its bind state, and plans on devices with device addresses; its dispatch's
 /// root table holds each pointee's resident entry (host and guest address), which is what a loaded
-/// pointer is translated through. The cases are the one-member case and the rate-map case whose
-/// maps are members.
+/// pointer is translated through. The case is the one-member case: the rate-map case whose maps are
+/// members is the runtime's limit (`ToolingRequirement::RasterizationRateMap`).
 #[test]
 fn the_public_argument_buffer_cases_plan_their_pointees_resident() {
     let cases = public_cases();
     let selected = cases
         .iter()
-        .filter(|(case, _)| case.stage == Stage::Kernel && !case.argument_buffer_buffers.is_empty())
+        .filter(|(case, _)| {
+            case.stage == Stage::Kernel
+                && !case.argument_buffer_buffers.is_empty()
+                && crate::executor_contract::case_requirements(case).is_empty()
+        })
         .collect::<Vec<_>>();
     assert!(
-        selected.len() >= 2,
+        !selected.is_empty(),
         "the public kernel cases with argument-buffer buffers"
     );
     for (case, row) in selected {
@@ -545,283 +531,5 @@ fn the_public_argument_buffer_cases_plan_their_pointees_resident() {
                 );
             }
         }
-    }
-}
-
-/// The public kernel case with a stage input maps each input's data to its slot and compiles under
-/// the stage-input descriptor the Metal oracle's pipeline has; its plan binds the input's buffer,
-/// and the dispatch writes the stage-in region the oracle sets.
-#[test]
-fn the_public_stage_input_case_compiles_under_the_oracles_descriptor() {
-    let cases = public_cases();
-    let (case, row) = cases
-        .iter()
-        .find(|(case, _)| case.stage == Stage::Kernel && !case.kernel_stage_inputs.is_empty())
-        .expect("a public kernel case with a stage input");
-    let scratch = crate::ScratchDir::new("public-stage-input-case").unwrap();
-    let ll = scratch.path().join("case.ll");
-    std::fs::write(&ll, &row.air_ll).unwrap();
-    let bitcode = match llvm_assemble(&ll) {
-        Ok(bitcode) => bitcode,
-        Err(AssembleError::Missing(why)) => {
-            eprintln!("SKIPPED: {why}");
-            return;
-        }
-        Err(AssembleError::Rejected(why)) => panic!("{}: llvm-as rejected it: {why}", case.name),
-    };
-    let interface = interface(case, &bitcode);
-    let compute = compute_case(case, &interface).unwrap();
-    let fetches =
-        crate::executor_contract::stage_inputs::authored(&case.kernel_stage_inputs, &interface)
-            .unwrap();
-    let descriptor = compute
-        .stage_input
-        .clone()
-        .expect("a stage-input descriptor");
-    for fetch in &fetches {
-        assert!(compute.buffers.contains_key(&fetch.slot), "{fetch:?}");
-        assert_eq!(
-            descriptor.attributes[&fetch.location].buffer_index,
-            fetch.slot
-        );
-    }
-    let library = Library::from_air(&bitcode).unwrap();
-    let mut function = FunctionDescriptor::new(library.function(&compute.entry).unwrap());
-    function.constants = compute.constants.clone();
-    for stem in ["lavapipe", "moltenvk-m3", "runtime-floor"] {
-        let device = device(stem);
-        let shape = compute_shape(&compute, true, BufferRanges::default()).unwrap();
-        // Without the descriptor, the kernel asks for it.
-        assert!(matches!(
-            variants::compile_compute_for_shape(
-                &device,
-                &function,
-                &shape,
-                Some(&compute.dispatch),
-                None,
-                &Budget::standard(),
-            ),
-            Err(metal2vulkan::error::Error::NeedsInput(
-                metal2vulkan::error::RuntimeInput::StageInputDescriptor { .. }
-            ))
-        ));
-        let (pipeline, inputs) = variants::compile_compute_for_shape(
-            &device,
-            &function,
-            &shape,
-            Some(&compute.dispatch),
-            Some(&descriptor),
-            &Budget::standard(),
-        )
-        .unwrap_or_else(|error| panic!("{stem}: compile: {error:?}"));
-        let plan = pipeline.plan(&device, &shape).unwrap();
-        assert!(variants::compiled_for(&inputs, &plan.variant), "{stem}");
-        assert!(
-            plan.diagnostics.is_empty(),
-            "{stem}: {:?}",
-            plan.diagnostics
-        );
-        let addresses = compute
-            .buffers
-            .keys()
-            .map(|&index| {
-                let mut address = BufferAddress::synthetic(index);
-                address.host = Some(address.guest);
-                (index, address)
-            })
-            .collect();
-        let state = bind_state(
-            &compute,
-            &addresses,
-            &BTreeMap::new(),
-            BufferRanges::default(),
-        )
-        .unwrap();
-        assert_eq!(state.shape(), shape, "{stem}");
-        assert_eq!(
-            state.stage_in_region.map(|r| r.size),
-            Some(case.dispatch.as_ref().unwrap().grid)
-        );
-        plan.instantiate_dispatch(&state, &compute.dispatch)
-            .unwrap_or_else(|error| panic!("{stem}: {error}"));
-    }
-}
-
-/// The public kernel cases over acceleration structures map, compile for lavapipe, which traces
-/// rays, and plan with no diagnostic, those that intersect an acceleration-structure write (a
-/// kernel that never reads its structure declares none). MoltenVK has no ray queries: the product
-/// refuses every case that intersects its structure there. A case that only counts its structure's
-/// instances plans on both, with no structure write and the count a push field.
-#[test]
-fn public_ray_cases_plan_their_structures_where_the_device_traces_rays() {
-    let cases: Vec<_> = public_cases()
-        .into_iter()
-        .filter(|(case, _)| case.stage == Stage::Kernel && !case.acceleration_structures.is_empty())
-        .collect();
-    assert!(!cases.is_empty(), "no public ray case");
-    for (stem, traces) in [("lavapipe", true), ("moltenvk-m3", false)] {
-        let device = device(stem);
-        let mut structures = 0;
-        let mut counts = 0;
-        for (case, row) in &cases {
-            match plan_case(&device, case, row) {
-                Planned::Refused => assert!(!traces, "{stem}: {} refused", case.name),
-                Planned::NoAssembler(why) => {
-                    eprintln!("SKIPPED: {why}");
-                    return;
-                }
-                Planned::Unassembled(why) => {
-                    eprintln!("SKIPPED {}: llvm-as rejected its fixture: {why}", case.name);
-                }
-                Planned::Writes(writes) => {
-                    if writes.contains("acceleration structure") {
-                        assert!(traces, "{stem}: {} planned a structure", case.name);
-                        structures += 1;
-                    }
-                    counts += usize::from(writes.contains("instance count"));
-                }
-            }
-        }
-        assert_eq!(
-            structures > 0,
-            traces,
-            "{stem}: {structures} structure writes"
-        );
-        assert!(counts > 0, "{stem}: no case counted its instances");
-    }
-}
-
-/// Every public tile case (an implicit imageblock over render targets) maps to a tile pass whose
-/// dispatch is one threadgroup per tile of its render area, compiles as a tile pipeline under its
-/// render targets' formats with the inputs its bind state decides, and plans the variant it was
-/// compiled for with no diagnostic, a tile-attachment write of every attachment it stages, and the
-/// pass's whole tiles as its render area and its tile size specialized; or the profile refuses it
-/// typed (an attachment format it cannot store, such as `RG16Float` without extended storage
-/// formats). At least one case plans on every profile.
-#[test]
-fn public_tile_cases_plan_their_attachments() {
-    use metal2vulkan::pipeline::SpecKey;
-    let cases = public_cases();
-    let tiles = cases
-        .iter()
-        .filter(|(case, _)| {
-            case.imageblock
-                .as_ref()
-                .is_some_and(|imageblock| imageblock.implicit_coverage.is_some())
-        })
-        .collect::<Vec<_>>();
-    assert!(!tiles.is_empty(), "no public tile case");
-    for stem in ["lavapipe", "moltenvk-m3", "runtime-floor"] {
-        let device = device(stem);
-        let mut planned = 0;
-        for (case, row) in &tiles {
-            let scratch = crate::ScratchDir::new("public-tile-case").unwrap();
-            let ll = scratch.path().join("case.ll");
-            std::fs::write(&ll, &row.air_ll).unwrap();
-            let bitcode = match llvm_assemble(&ll) {
-                Ok(bitcode) => bitcode,
-                Err(AssembleError::Missing(why)) => {
-                    eprintln!("SKIPPED: {why}");
-                    return;
-                }
-                Err(AssembleError::Rejected(why)) => {
-                    eprintln!("SKIPPED {}: llvm-as rejected its fixture: {why}", case.name);
-                    continue;
-                }
-            };
-            let compute = compute_case(case, &interface(case, &bitcode))
-                .unwrap_or_else(|error| panic!("{}: {error:?}", case.name));
-            let pass = compute.tile.as_ref().expect("a tile pass");
-            let [tile_width, tile_height] = case.imageblock.as_ref().unwrap().dimensions;
-            let dispatch = case.dispatch.as_ref().unwrap();
-            assert_eq!(
-                compute.dispatch,
-                Dispatch::Threadgroups {
-                    groups: [
-                        pass.area[0].div_ceil(tile_width),
-                        pass.area[1].div_ceil(tile_height),
-                        1
-                    ],
-                    threads_per_group: dispatch.threads_per_threadgroup,
-                },
-                "{}",
-                case.name
-            );
-            let library = Library::from_air(&bitcode).unwrap();
-            let mut function = FunctionDescriptor::new(library.function(&compute.entry).unwrap());
-            function.constants = compute.constants.clone();
-            let shape = compute_shape(&compute, true, BufferRanges::default()).unwrap();
-            let (pipeline, inputs) = match variants::compile_tile_for_shape(
-                &device,
-                &function,
-                &shape,
-                Some(&compute.dispatch),
-                &pass.formats(),
-                &Budget::standard(),
-            ) {
-                Ok(compiled) => compiled,
-                Err(error) if !Outcome::from(&error).is_defect() => continue,
-                Err(error) => panic!("{} on {stem}: compile: {error:?}", case.name),
-            };
-            let plan = pipeline
-                .plan(&device, &shape)
-                .unwrap_or_else(|error| panic!("{} on {stem}: plan: {error}", case.name));
-            assert!(
-                variants::compiled_for(&inputs, &plan.variant),
-                "{}",
-                case.name
-            );
-            assert!(plan.diagnostics.is_empty(), "{}", case.name);
-            let attachments = plan
-                .descriptors
-                .iter()
-                .filter_map(|write| match write.source {
-                    WriteSource::TileAttachment { color_index, .. } => Some(color_index),
-                    _ => None,
-                })
-                .collect::<BTreeSet<_>>();
-            assert!(!attachments.is_empty(), "{} on {stem}", case.name);
-            assert!(
-                attachments.is_subset(&pass.attachments.keys().copied().collect()),
-                "{} on {stem}: {attachments:?}",
-                case.name
-            );
-            let specialized = |key: SpecKey| {
-                let id = pipeline
-                    .stage
-                    .specialization
-                    .constants
-                    .iter()
-                    .find(|constant| constant.key == key)?
-                    .id;
-                let entry = plan
-                    .specialization
-                    .entries
-                    .iter()
-                    .find(|entry| entry.constant_id == id)?;
-                let at = entry.offset as usize;
-                Some(u32::from_le_bytes(
-                    plan.specialization.data[at..at + 4].try_into().ok()?,
-                ))
-            };
-            assert_eq!(
-                (
-                    specialized(SpecKey::RenderAreaWidth),
-                    specialized(SpecKey::RenderAreaHeight),
-                    specialized(SpecKey::ImageblockWidth),
-                    specialized(SpecKey::ImageblockHeight),
-                ),
-                (
-                    Some(pass.tiles[0]),
-                    Some(pass.tiles[1]),
-                    Some(tile_width),
-                    Some(tile_height),
-                ),
-                "{} on {stem}",
-                case.name
-            );
-            planned += 1;
-        }
-        assert!(planned > 0, "{stem}: no public tile case planned");
     }
 }
