@@ -282,10 +282,14 @@ fn a_fragment_case_draws_through_its_generated_passthrough_vertex() {
     }
 }
 
-/// A fragment case with a depth/stencil attachment: `fragment_depth_stencil` writes depth 0.5 under
-/// `depth(any)` and stencil 7, and the oracle's depth-stencil state (always-pass depth test with
-/// writes, always-pass stencil test that replaces) stores both over the attachment's authored 1.0
-/// and 0xab, as the oracle does for case 685a8d84; through the runtime, each aspect alone.
+/// A fragment case with a depth/stencil attachment of one aspect draws it as the executor's own
+/// context does, through the runtime, which gives it no texture index (shaders neither read nor
+/// write it): depth under `sample_rate_depth` (0.125 at one sample, over the authored 1.0), stencil
+/// under `fragment_no_writes` (the oracle's always-pass stencil test replaces the authored 0xab with
+/// the state's reference). An attachment of both aspects is the oracle's two textures, which the
+/// runtime renders into in no one pass, so `render_case` refuses it as the runtime's limit
+/// (`SeparateDepthStencil`); and a fragment function's stencil output, `fragment_depth_stencil`'s,
+/// the runtime refuses at creation (its README's known gaps of render pipeline states).
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn a_fragment_case_writes_its_depth_and_stencil_attachment() {
@@ -296,71 +300,45 @@ fn a_fragment_case_writes_its_depth_and_stencil_attachment() {
         TextureFormat::Rgba32Float,
     );
     authored.render_targets.clear();
-    authored.depth_stencil = Some(crate::case::DepthStencilResource {
+    let depth_stencil = |depth: bool, stencil: bool| {
+        Some(crate::case::DepthStencilResource {
+            dimensions: [1, 1],
+            initial_depth_b64: depth.then(|| b64(&1.0f32.to_le_bytes())),
+            initial_stencil_b64: stencil.then(|| b64(&[0xab])),
+            state: None,
+        })
+    };
+    let stencil = OutputSelection::Stencil {
+        origin: [0, 0],
         dimensions: [1, 1],
-        initial_depth_b64: Some(b64(&1.0f32.to_le_bytes())),
-        initial_stencil_b64: Some(b64(&[0xab])),
-        state: None,
-    });
-    for (output, expected) in [
-        (
-            OutputSelection::Stencil {
-                origin: [0, 0],
-                dimensions: [1, 1],
-            },
-            vec![7],
+    };
+    authored.depth_stencil = depth_stencil(true, true);
+    authored.output = stencil.clone();
+    let (interface, companion) = checked_companion(&authored, &fragment);
+    match render_case(
+        &authored,
+        &interface,
+        WITHOUT_SLICE,
+        companion.as_ref(),
+        None,
+    ) {
+        Err(ExecutorError::NotSupported(crate::check::admission::NotSupported::Requirements(
+            requirements,
+        ))) => assert_eq!(
+            requirements,
+            [crate::requirement::ToolingRequirement::SeparateDepthStencil].into()
         ),
-        (
-            OutputSelection::Depth {
-                origin: [0, 0],
-                dimensions: [1, 1],
-            },
-            0.5f32.to_le_bytes().to_vec(),
-        ),
-    ] {
-        authored.output = output;
-        let (case, companion) = with_companion(&authored, &fragment);
-        let run = run(
-            &case,
-            RenderLibraries {
-                vertex: &companion,
-                fragment: Some(&fragment),
-            },
-        )
-        .unwrap();
-        assert_eq!(run.output, expected, "{:?}", authored.output);
-        assert_eq!(
-            run.status,
-            Some(metal2vulkan::bind::StatusReport::default())
-        );
+        other => panic!("both aspects: {:?}", other.map(|_| ())),
     }
-    // Through the runtime, each aspect alone, as the executor's own context draws it: depth under
-    // `sample_rate_depth` (an eighth at one sample), stencil under `fragment_no_writes` (the state's
-    // reference replaces it). Neither takes a texture index: shaders neither read nor
-    // write it. An attachment of both is the oracle's two textures, which the runtime renders
-    // into in no one pass; a fragment function's stencil output, `fragment_depth_stencil`'s, it
-    // refuses at creation (its README's known gaps of render pipeline states).
     #[cfg(target_os = "linux")]
     {
-        let depth_stencil = |of_depth: bool| {
-            Some(crate::case::DepthStencilResource {
-                dimensions: [1, 1],
-                initial_depth_b64: of_depth.then(|| b64(&1.0f32.to_le_bytes())),
-                initial_stencil_b64: (!of_depth).then(|| b64(&[0xab])),
-                state: None,
-            })
-        };
+        let attachmentless =
+            metal2vulkan_devtools::llvm_assemble_text(crate::case::ATTACHMENTLESS_FRAGMENT_AIR)
+                .expect("llvm-as on the device lane");
         let depth = OutputSelection::Depth {
             origin: [0, 0],
             dimensions: [1, 1],
         };
-        let stencil = OutputSelection::Stencil {
-            origin: [0, 0],
-            dimensions: [1, 1],
-        };
-        let attachmentless =
-            metal2vulkan_devtools::llvm_assemble_text(crate::case::ATTACHMENTLESS_FRAGMENT_AIR)
-                .expect("llvm-as on the device lane");
         for (own, entry, aspect, output) in [
             (
                 public("engine/sample_rate.ll"),
@@ -373,7 +351,7 @@ fn a_fragment_case_writes_its_depth_and_stencil_attachment() {
             let mut authored =
                 crate::companion::tests::case(Stage::Fragment, entry, TextureFormat::Rgba32Float);
             authored.render_targets.clear();
-            authored.depth_stencil = depth_stencil(aspect);
+            authored.depth_stencil = depth_stencil(aspect, !aspect);
             authored.output = output;
             let (case, companion) = with_companion(&authored, &own);
             assert!(crate::candidate::engine::runs_render_through_runtime(
@@ -393,8 +371,7 @@ fn a_fragment_case_writes_its_depth_and_stencil_attachment() {
                 assert_eq!(through.output, 0.125f32.to_le_bytes().to_vec());
             }
         }
-        authored.depth_stencil = depth_stencil(false);
-        authored.output = stencil;
+        authored.depth_stencil = depth_stencil(false, true);
         let (case, companion) = with_companion(&authored, &fragment);
         assert!(crate::candidate::engine::runs_render_through_runtime(
             &authored, &case

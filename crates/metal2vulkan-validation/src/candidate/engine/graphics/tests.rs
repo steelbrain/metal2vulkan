@@ -68,10 +68,11 @@ pub(crate) fn reflected_imageblock(
         .fragment_imageblock
 }
 
-/// A fragment case's authored depth and stencil aspects are its depth/stencil attachment (the
-/// oracle's `Depth32Float` and `Stencil8`), its depth-stencil state is the one its outputs imply,
-/// and each aspect is an observable output; a vertex case's attachment, which the oracle does not
-/// attach, is refused.
+/// A fragment case's authored aspect is its depth/stencil attachment (the oracle's `Stencil8` here,
+/// as its `Depth32Float` for a depth), its depth-stencil state is the one its outputs imply, and
+/// each aspect is an observable output; an attachment of both aspects, the oracle's two textures,
+/// is the runtime's limit (`SeparateDepthStencil`); a vertex case's attachment, which the oracle
+/// does not attach, is refused.
 #[test]
 fn a_fragment_cases_depth_stencil_attachment_and_state_are_the_oracles() {
     use crate::literal::LiteralDepthStencil;
@@ -95,6 +96,17 @@ fn a_fragment_cases_depth_stencil_attachment_and_state_are_the_oracles() {
         dimensions: [1, 1],
     };
     let (interface, companion) = checked_companion(&authored, &bitcode);
+    assert_eq!(
+        requirements(render_case(
+            &authored,
+            &interface,
+            WITHOUT_SLICE,
+            companion.as_ref(),
+            None
+        )),
+        [crate::requirement::ToolingRequirement::SeparateDepthStencil].into()
+    );
+    authored.depth_stencil.as_mut().unwrap().initial_depth_b64 = None;
     let render = render_case(
         &authored,
         &interface,
@@ -109,7 +121,7 @@ fn a_fragment_cases_depth_stencil_attachment_and_state_are_the_oracles() {
         Some(LiteralDepthStencil {
             dimensions: [1, 1],
             samples: 1,
-            depth: Some(1.0f32.to_le_bytes().to_vec()),
+            depth: None,
             stencil: Some(vec![0xab]),
         })
     );
@@ -128,10 +140,7 @@ fn a_fragment_cases_depth_stencil_attachment_and_state_are_the_oracles() {
     let template = render_template(&render);
     assert_eq!(
         (template.depth_format, template.stencil_format),
-        (
-            Some(metal::PixelFormat::Depth32Float),
-            Some(metal::PixelFormat::Stencil8)
-        )
+        (None, Some(metal::PixelFormat::Stencil8))
     );
 
     let finals = RenderFinals {
@@ -213,7 +222,7 @@ fn a_stencil_output_case_plans_its_shadow_where_the_device_lacks_export() {
     authored.render_targets.clear();
     authored.depth_stencil = Some(crate::case::DepthStencilResource {
         dimensions: [1, 1],
-        initial_depth_b64: Some("AACAPw==".into()),
+        initial_depth_b64: None,
         initial_stencil_b64: Some("qw==".into()),
         state: None,
     });
@@ -222,7 +231,7 @@ fn a_stencil_output_case_plans_its_shadow_where_the_device_lacks_export() {
         dimensions: [1, 1],
     };
     let (interface, companion) = checked_companion(&authored, &bitcode);
-    let render = render_case(
+    let mut render = render_case(
         &authored,
         &interface,
         WITHOUT_SLICE,
@@ -230,6 +239,10 @@ fn a_stencil_output_case_plans_its_shadow_where_the_device_lacks_export() {
         None,
     )
     .unwrap();
+    // Both aspects are the runtime's limit (`SeparateDepthStencil`), which stops such a case
+    // before the engine plans it; the plan below is the translator's for both, so the case maps
+    // with its stencil and takes its depth after.
+    render.depth_stencil.as_mut().unwrap().depth = Some(1.0f32.to_le_bytes().to_vec());
     let companion_bitcode = render.companion.as_ref().unwrap().opaque_bitcode().unwrap();
     let libraries = RenderLibraries {
         vertex: &companion_bitcode,
@@ -306,7 +319,7 @@ fn a_multisampled_stencil_output_case_plans_a_shadow_of_its_samples() {
     authored.raster_sample_count = Some(4);
     authored.depth_stencil = Some(crate::case::DepthStencilResource {
         dimensions: [1, 1],
-        initial_depth_b64: Some(b64(&[1.0f32.to_le_bytes(); 4].concat())),
+        initial_depth_b64: None,
         initial_stencil_b64: Some(b64(&[0xab; 4])),
         state: None,
     });
@@ -315,7 +328,7 @@ fn a_multisampled_stencil_output_case_plans_a_shadow_of_its_samples() {
         dimensions: [1, 1],
     };
     let (interface, companion) = checked_companion(&authored, &bitcode);
-    let render = render_case(
+    let mut render = render_case(
         &authored,
         &interface,
         WITHOUT_SLICE,
@@ -323,6 +336,10 @@ fn a_multisampled_stencil_output_case_plans_a_shadow_of_its_samples() {
         None,
     )
     .unwrap();
+    // Both aspects are the runtime's limit (`SeparateDepthStencil`), which stops such a case
+    // before the engine plans it; the plan below is the translator's for both, so the case maps
+    // with its stencil and takes its depth after.
+    render.depth_stencil.as_mut().unwrap().depth = Some([1.0f32.to_le_bytes(); 4].concat());
     assert_eq!(
         render.attachment_transfer(),
         AttachmentTransfer::PerSample { samples: 4 }

@@ -1228,14 +1228,18 @@ entry:
         );
         assert!(imageblock.sample_rate.is_empty() && rate_map.sample_rate.is_empty());
         assert!(sample_rate.tooling_requirements.is_empty());
-        // A row that operates on a `ulong` texture: described, and no executor's gap.
+        // A row that operates on a `ulong` texture: described, and the runtime's limit alone
+        // (`UlongTextureAtomic`), which the focused audit selects by the structure all the same.
         let mut ulong_row = source(include_str!(
             "../fixtures/public/engine/unk_ulong_atomics.ll"
         ));
         ulong_row.entry = "unk_ulong_atomic_rw".into();
         let ulong = classify(&ulong_row).unwrap();
         assert!(ulong.ulong_texture);
-        assert!(ulong.tooling_requirements.is_empty());
+        assert_eq!(
+            ulong.tooling_requirements,
+            [crate::requirement::ToolingRequirement::UlongTextureAtomic]
+        );
         assert!(!sample_rate.ulong_texture && !tile.ulong_texture);
         // A fragment function that reads a varying: described with the varying's declared type,
         // and no requirement selects it. The fragment functions above read none.
