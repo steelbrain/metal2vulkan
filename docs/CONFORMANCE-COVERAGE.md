@@ -508,7 +508,7 @@ An implemented container no case's Metal leg touches. These are the families of 
 | cases whose Metal answer is `never_returned` | 4 |
 | modules that loosen a measured value | 16 |
 | tolerances in all | 20 |
-| modules declaring a notice (loosening no value) | 43 |
+| modules declaring a notice (loosening no value) | 44 |
 | loosenings used | `Unchecked`, `AnyOf`, `Absolute`, `Nonzero` |
 | justifications named | `Degradation`, `AcceptedDifference`, `WithoutCompression` |
 | modules forbidding a re-record | 8 |
