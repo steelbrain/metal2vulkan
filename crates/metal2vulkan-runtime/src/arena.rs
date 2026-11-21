@@ -21,10 +21,11 @@
 //!   piece in a block the dispatch took new, which no command reached before.
 //!
 //! Counted in [`Metrics::private_arena_dispatches`](crate::Metrics::private_arena_dispatches),
-//! [`Metrics::private_arena_pieces`](crate::Metrics::private_arena_pieces) and, for the blocks'
-//! takes, [`Metrics::private_arena_allocations`](crate::Metrics::private_arena_allocations).
+//! [`Metrics::private_arena_pieces`](crate::Metrics::private_arena_pieces) and
+//! [`Metrics::private_arena_blocks`](crate::Metrics::private_arena_blocks), and the takes that
+//! allocated in [`Metrics::private_arena_allocations`](crate::Metrics::private_arena_allocations).
 
-use crate::counters::Site;
+use crate::counters::{Metric, Site};
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::memory::{self, MemoryClass};
@@ -86,6 +87,7 @@ pub(crate) fn take(
     let memory = core.take_memory(MemoryClass::Private, len, Site::PrivateArena)?;
     let block = Arc::new(memory::Block::new(memory, Arc::clone(core)));
     *last = Arc::downgrade(&block);
+    core.counters.count(Metric::PrivateArenaBlocks);
     Ok((block, true))
 }
 
