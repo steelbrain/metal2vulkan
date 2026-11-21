@@ -48,9 +48,10 @@ fn a_render_stage_is_made_at_the_subgroup_size_the_translator_pins() {
     // SAFETY: the fragment stage's chain is the one structure `stage_infos` pushed, which
     // `subgroups` holds alive and nothing writes.
     let chained = unsafe { &*chained };
-    assert_eq!(
-        chained.s_type,
-        vk::StructureType::PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO
+    assert!(
+        chained.s_type
+            == vk::StructureType::PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO,
+        "the chained structure is the required subgroup size's"
     );
     assert_eq!(chained.required_subgroup_size, 32);
     assert!(chained.p_next.is_null(), "one structure chained");
