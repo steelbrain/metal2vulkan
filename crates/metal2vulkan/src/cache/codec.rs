@@ -1132,7 +1132,7 @@ codec_struct! {
         output_winding_order, control_point_index_type, factor_scale_enabled,
     }
     BufferSlot { access, window, form, kind }
-    TextureSlot { texture_type, sampled_type, depth_compare, access, storage }
+    TextureSlot { texture_type, sampled_type, depth_compare, access, storage, declared_format }
     TextureAccess { sample, read, write }
     SamplerSlot { compare, coordinate_sensitive }
     AccessSet { read, write }

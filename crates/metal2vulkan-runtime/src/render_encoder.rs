@@ -335,10 +335,16 @@ impl Facts {
         for &(table, slot, access) in &draws.textures {
             let read = draws.storage_reads.contains(&(table, slot));
             let stored = access != Access::Read || read;
+            // Its format's own answers, for the writes and reads declared without a format.
+            let formatless = draws.formatless.contains(&(table, slot));
             let unstored = match tables[table].texture(slot) {
-                Some(texture) if stored => texture
-                    .unstored()
-                    .or_else(|| texture.unread().filter(|_| read)),
+                Some(texture) if stored => (texture.unstored())
+                    .or_else(|| {
+                        texture
+                            .unwritten()
+                            .filter(|_| formatless && access.writes())
+                    })
+                    .or_else(|| texture.unread().filter(|_| formatless && read)),
                 _ => None,
             };
             if let Some(pixel_format) = unstored {
@@ -1905,7 +1911,7 @@ impl RenderCommandEncoder {
                 (
                     id,
                     texture.host_reads(),
-                    texture.unstored(),
+                    texture.unstored().or_else(|| texture.unwritten()),
                     Some(lent),
                     None,
                 )

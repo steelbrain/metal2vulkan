@@ -1327,32 +1327,36 @@ pub enum Gap {
     },
     /// A draw or dispatch whose function writes a texture slot, or reads one through its storage
     /// image (`access::read_write`), bound to a texture made for shader writes with no storage
-    /// element, or, for a read, with one the device cannot read without a format. No storage
-    /// element: the device does not store the texture's format through a storage image without a
-    /// format (an 8-bit sRGB format, `RGB9E5Float` or `BGR10A2Unorm` where the device lacks its
-    /// storage), or holds it through a view of another (an `A8Unorm` held in red, an
-    /// extended-range format). Metal writes and reads such a texture; the runtime would drop the
-    /// writes and read zeros. Not read without a format: the storage element's format lacks
-    /// `VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT`, which a device without
-    /// `shaderStorageImageReadWithoutFormat` answers per format (`BGRA8Unorm`, `BGR10A2Unorm` and
-    /// `RG11B10Float` among others on ANV before Gfx12.5): such a read is outside Vulkan's valid
-    /// usage (`VUID-vkCmdDispatch-OpTypeImage-07028`), and those formats are outside Metal's
-    /// read-write tiers, whose reads Metal's documentation defines. A texture buffer's answers are
-    /// its format's buffer features, of which Vulkan requires neither bit, whatever the device's
-    /// features and the format: it has no storage element where they lack
+    /// element, or, at a slot declared without a format (`TextureSlot::declared_format`; a texture
+    /// atomic's is declared with one), with one the device cannot write, or for a read cannot
+    /// read, without a format. No storage element: the device does not store the texture's format
+    /// through a storage image without a format (an 8-bit sRGB format, `RGB9E5Float` or
+    /// `BGR10A2Unorm` where the device lacks its storage), or holds it through a view of another
+    /// (an `A8Unorm` held in red, an extended-range format). Metal writes and reads such a
+    /// texture; the runtime would drop the writes and read zeros. Not read without a format: the
+    /// storage element's format lacks `VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT`, which
+    /// a device without `shaderStorageImageReadWithoutFormat` answers per format (`BGRA8Unorm`,
+    /// `BGR10A2Unorm` and `RG11B10Float` among others on ANV before Gfx12.5): such a read is
+    /// outside Vulkan's valid usage (`VUID-vkCmdDispatch-OpTypeImage-07028`), and those formats
+    /// are outside Metal's read-write tiers, whose reads Metal's documentation defines. A texture
+    /// buffer has a storage element wherever shaders write it, and its answers are its format's
+    /// buffer features, of which Vulkan requires neither bit, whatever the device's features and
+    /// the format: not written without a format where they lack
     /// `VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT`
-    /// (`VUID-vkCmdDispatch-OpTypeImage-07029`), and is not read without a format where they lack
-    /// the read bit (`-07030`). The UHD Graphics 630's Windows driver (101.2145) answers neither
-    /// bit for any format, so there every texture buffer a function writes, or reads through
-    /// `access::read_write`, is refused, `R32Uint` included. With no slot: a dispatch whose
-    /// kernel, or a draw whose vertex or fragment function, may reach a texture through its
-    /// storage image beyond its slots (an argument buffer's `access::write` or
-    /// `access::read_write` texture, a resource ID), in an encoder where `use_resource` declared a
-    /// write of a texture with no storage element. A texture reached by its resource ID with no
-    /// such declaration is not found: Metal documents no write to it (`useHeap:` declares its
-    /// heap's resources read only), and its writes are dropped. A read there of a storage element
-    /// the device cannot read without a format is not found either (the crate's README, known
-    /// gaps).
+    /// (`VUID-vkCmdDispatch-OpTypeImage-07029`), not read without one where they lack the read bit
+    /// (`-07030`). The UHD Graphics 630's
+    /// Windows driver (101.2145) answers neither bit for any format, so there a texture buffer a
+    /// function writes, or reads through `access::read_write`, is refused, `R32Uint` included, but
+    /// at a slot a texture atomic updates. With no slot: a dispatch whose kernel, or a draw whose
+    /// vertex or fragment function, may reach a texture through its storage image beyond its
+    /// slots (an argument buffer's `access::write` or `access::read_write` texture, a resource
+    /// ID), in an encoder where `use_resource` declared a write of a texture with no storage
+    /// element, or with one the device cannot write without a format. A texture reached by its
+    /// resource ID with no such declaration is not found: Metal documents no write to it
+    /// (`useHeap:` declares its heap's resources read only); its writes are dropped, but a texture
+    /// buffer's that the device cannot write without a format, which are outside Vulkan's valid
+    /// usage. A read there of a storage element the device cannot read without a format is not
+    /// found either (the crate's README, known gaps).
     ///
     /// Basis: ours (the storage element through a view of the nearest format whose storage Vulkan
     /// requires of every device, with the translator's conversion, is the form to build).

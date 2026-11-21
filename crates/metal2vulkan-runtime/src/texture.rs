@@ -265,6 +265,9 @@ struct Texels {
     view: vk::BufferView,
     /// Whether the uniform element and the storage element hold the view.
     elements: [bool; 2],
+    /// The format's storage texel buffers are written through an image declared without a
+    /// format ([`TexelForm`]'s `writes`).
+    writes: bool,
 }
 
 /// A texture's view of its image's shadow (`TextureInner::shadow`).
@@ -4742,6 +4745,20 @@ pub(crate) trait TextureObject {
         (written && !self.object().stores()).then_some(d.pixel_format)
     }
 
+    /// Where it has a storage element the device cannot write without a format: a texture buffer
+    /// whose format's buffer features lack `VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT`
+    /// ([`Texels`]' `writes`). An image has a storage view only where its format has the bit
+    /// (`form`). Its pixel format, which [`Gap::StorageElement`] names.
+    fn unwritten(&self) -> Option<PixelFormat> {
+        let inner = self.object();
+        match &inner.body {
+            Body::Texels(texels) if texels.elements[1] && !texels.writes => {
+                Some(inner.descriptor.pixel_format)
+            }
+            _ => None,
+        }
+    }
+
     /// Where it has a storage element the device cannot read without a format, which shaders read
     /// it as storage through (`access::read_write`): its views' format lacks
     /// `VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT` ([`Plan`]'s `storage_reads`, taken at
@@ -5085,7 +5102,7 @@ struct TexelForm {
     /// The translator's `TextureWord` of the format, with each channel's own swizzle.
     word: u32,
     /// The format's storage texel buffers are written through an image declared without a
-    /// format: a texture buffer shaders write has a storage element.
+    /// format.
     writes: bool,
     /// The format's storage texel buffers are read through an image declared without a format
     /// ([`TextureInner`]'s `storage_reads`).
@@ -5250,10 +5267,12 @@ impl Device {
         let view = unsafe { core.device.create_buffer_view(&info, None) }
             .map_err(Error::vulkan("vkCreateBufferView"))?;
         core.counters.rise(Gauge::Textures);
-        // The uniform element where shaders read it, the storage one where they write it.
+        // The uniform element where shaders read it, the storage one where they write it: the
+        // format holds the storage texel buffer (`texel_form`), which a slot declared with a
+        // format, a texture atomic's, writes through whatever its formatless writes take.
         let elements = [
             usage.contains(TextureUsage::SHADER_READ),
-            usage.contains(TextureUsage::SHADER_WRITE) && form.writes,
+            usage.contains(TextureUsage::SHADER_WRITE),
         ];
         let index = match index {
             Some(index) => {
@@ -5290,7 +5309,11 @@ impl Device {
         let inner = TextureInner {
             core: Arc::clone(core),
             descriptor: d,
-            body: Body::Texels(Texels { view, elements }),
+            body: Body::Texels(Texels {
+                view,
+                elements,
+                writes: form.writes,
+            }),
             format: form.format,
             storage_reads: form.reads,
             views_usage: None,

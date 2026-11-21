@@ -136,6 +136,9 @@ pub(crate) struct Draws {
     /// `read_write` slot it reads), with its function, which takes no swizzle: a swizzled texture
     /// bound there is `Gap::SwizzledReadWrite`.
     pub(crate) storage_reads: Vec<(usize, u32)>,
+    /// Each texture slot whose storage image a function declares without a format, with its
+    /// function (`crate::pipeline::Interface`'s `formatless`).
+    pub(crate) formatless: Vec<(usize, u32)>,
     /// The fragment function's texture slots it reads only at the fragment's own pixel
     /// (`StageModule::own_pixel_textures`), sorted: what a draw copies of an attachment it reads
     /// through one on a device without the attachment feedback loop (`crate::shadow`).
@@ -558,6 +561,7 @@ fn draws(
     let mut buffers = Vec::new();
     let mut textures = Vec::new();
     let mut storage_reads = Vec::new();
+    let mut formatless = Vec::new();
     for (slot, used) in &translated.slots {
         let at = table(slot.stage)?;
         match (slot.class, used) {
@@ -570,6 +574,9 @@ fn draws(
                 textures.push((at, slot.index, texture_access(texture.access)));
                 if texture.storage && texture.access.read {
                     storage_reads.push((at, slot.index));
+                }
+                if texture.storage && !texture.declared_format {
+                    formatless.push((at, slot.index));
                 }
             }
             (SlotClass::Sampler, SlotInterface::Sampler(_)) => {}
@@ -742,6 +749,7 @@ fn draws(
         buffers,
         textures,
         storage_reads,
+        formatless,
         own_pixel,
         fetched,
         bicubic,

@@ -12,7 +12,11 @@
 //!   buffer has no storage element and the dispatch is `Gap::StorageElement` at its slot, exactly
 //!   there (`VUID-vkCmdDispatch-OpTypeImage-07029`);
 //! - an owned kernel adds to an `R32Uint` texture buffer's texels through an atomic and loads them
-//!   again (`access::read_write`), answering the texels the buffer held and leaving the sums there;
+//!   again (`access::read_write`), answering the texels the buffer held and leaving the sums there,
+//!   on the device's own answers and as a device that reads and writes no storage texel buffer
+//!   without a format answers them: the slot is declared `R32ui`, which takes neither;
+//! - the same kernel over a 1D `R32Uint` texture adds 3 to each texel, on the device's own answers
+//!   and as a device that reads no `R32_UINT` storage image without a format answers them;
 //! - what Metal refuses (an offset off the device's alignment, a `bytesPerRow` below the row,
 //!   texels past the buffer, a descriptor of more than one row, level, slice or sample, a swizzle
 //!   with writes) and what the runtime does not build (a texture buffer made other than over a
@@ -25,15 +29,16 @@
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
-    use crate::tests::command::on_device::{each_device, finished};
+    use crate::tests::command::on_device::{each_device, each_device_with, finished};
     use crate::{
         BlitOption, Buffer, BufferLayout, ComputePipelineDescriptor, ComputePipelineState, Device,
-        DispatchType, Error, FunctionDescriptor, Gap, IndexClass, Library, MemoryClass,
-        PixelFormat, Refusal, Region, StageSource, StorageMode, Texture, TextureDescriptor,
-        TexturePlace, TextureSwizzle, TextureSwizzleChannels, TextureType, TextureUsage,
-        TextureViewKind,
+        DeviceOptions, DispatchType, Error, FunctionDescriptor, Gap, IndexClass, Instance, Library,
+        MemoryClass, PixelFormat, Refusal, Region, StageSource, StorageMode, Texture,
+        TextureDescriptor, TexturePlace, TextureSwizzle, TextureSwizzleChannels, TextureType,
+        TextureUsage, TextureViewKind,
     };
     use ash::vk;
+    use metal2vulkan::device::{DeviceDescription, VkFeature};
     use metal2vulkan_devtools::{engine_dir, llvm_assemble, llvm_assemble_text, AssembleError};
 
     /// The bytes of the Shared block every buffer of a test lies in.
@@ -262,13 +267,48 @@ declare <4 x i32> @air.atomic_load_explicit_texture_buffer_1d.u.v4i32(ptr addrsp
 !7 = !{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}
 "#;
 
+    /// Device options whose translator reads the device's description as `edit` leaves it.
+    fn described(edit: fn(DeviceDescription) -> DeviceDescription) -> impl Fn() -> DeviceOptions {
+        move || DeviceOptions {
+            described: Some(edit),
+            ..DeviceOptions::default()
+        }
+    }
+
+    /// As a device that reads and writes no storage texel buffer without a format answers, as the
+    /// UHD Graphics 630's Windows driver does: no format's buffer features hold
+    /// `STORAGE_READ_WITHOUT_FORMAT` or `STORAGE_WRITE_WITHOUT_FORMAT`.
+    fn no_formatless_texel_buffers(mut d: DeviceDescription) -> DeviceDescription {
+        use metal2vulkan::vk::FormatFeatureFlags2 as F;
+        for properties in d.formats.formats.values_mut() {
+            properties.buffer = (properties.buffer)
+                .difference(F::STORAGE_READ_WITHOUT_FORMAT | F::STORAGE_WRITE_WITHOUT_FORMAT);
+        }
+        d
+    }
+
+    /// As a device that reads no `R32_UINT` storage image without a format answers: without
+    /// `shaderStorageImageReadWithoutFormat`, Vulkan leaves the format's optimal-tiling
+    /// `STORAGE_READ_WITHOUT_FORMAT` to the device, and this one lacks it.
+    fn no_formatless_r32_image_reads(mut d: DeviceDescription) -> DeviceDescription {
+        use metal2vulkan::vk::{Format, FormatFeatureFlags2 as F};
+        d.features
+            .remove(&VkFeature::ShaderStorageImageReadWithoutFormat);
+        if let Some(r32) = d.formats.formats.get_mut(&Format::R32_UINT) {
+            r32.optimal_tiling = r32
+                .optimal_tiling
+                .difference(F::STORAGE_READ_WITHOUT_FORMAT);
+        }
+        d
+    }
+
     #[test]
     fn every_device_updates_a_texture_buffer_s_texels_by_an_atomic() {
         let name = "tb_atomic";
         let Some(library) = library(name, llvm_assemble_text(ATOMIC_KERNEL)) else {
             return;
         };
-        each_device("texture buffer atomics", |name, _, device| {
+        let mut case = |name: &str, _: &Instance, device: Device| {
             let _grant = (device.grant_indices(IndexClass::Texture, 1, 1))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let block = (device.take_block(MemoryClass::Shared, BLOCK)).expect("a block");
@@ -297,7 +337,45 @@ declare <4 x i32> @air.atomic_load_explicit_texture_buffer_1d.u.v4i32(ptr addrsp
                 "{name}: the buffer's bytes"
             );
             println!("{name}: a texture buffer's atomics update its buffer's bytes");
-        });
+        };
+        each_device("texture buffer atomics", &mut case);
+        let edit = described(no_formatless_texel_buffers);
+        each_device_with("texture buffer atomics", edit, case);
+    }
+
+    #[test]
+    fn every_device_updates_a_texture_s_texels_by_an_atomic_declared_with_its_format() {
+        let kernel = (ATOMIC_KERNEL.replace("texture_buffer_1d", "texture_1d"))
+            .replace("texture_buffer<uint", "texture1d<uint");
+        let Some(library) = library("t1d_atomic", llvm_assemble_text(&kernel)) else {
+            return;
+        };
+        let mut case = |name: &str, _: &Instance, device: Device| {
+            let _grant = (device.grant_indices(IndexClass::Texture, 1, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let block = (device.take_block(MemoryClass::Shared, BLOCK)).expect("a block");
+            let out = (device.new_buffer(block.id, 0, 64, Some(0))).expect("a buffer");
+            let mut d = TextureDescriptor::new(TextureType::Type1D, PixelFormat::R32Uint, 4, 1);
+            d.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+            let texels =
+                (device.new_texture(&d, Some(1))).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let kernel = state(&device, &library, "tb_atomic");
+            (dispatch(&device, &kernel, &[&texels], &[&out], 4))
+                .unwrap_or_else(|error| panic!("{name}: the dispatch: {error:?}"));
+            let answers = words(&out);
+            let added: Vec<u32> = answers[..4].iter().map(|held| held + 3).collect();
+            assert_eq!(
+                answers[8..12],
+                added,
+                "{name}: each texel 3 past what it held"
+            );
+        };
+        each_device("texture atomics", &mut case);
+        each_device_with(
+            "texture atomics",
+            described(no_formatless_r32_image_reads),
+            case,
+        );
     }
 
     #[test]

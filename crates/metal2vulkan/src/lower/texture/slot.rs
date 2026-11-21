@@ -341,6 +341,9 @@ impl SlotPlan {
             depth_compare: self.uses.compare,
             access: TextureAccess::new(u.sample, u.read || u.atomic, u.write || u.atomic),
             storage: self.storage(),
+            declared_format: (self.decl.as_ref()).is_some_and(|d| {
+                d.usage == ImageUsage::Storage && d.format != crate::spv::ImageFormat::Unknown
+            }),
         })
     }
 }

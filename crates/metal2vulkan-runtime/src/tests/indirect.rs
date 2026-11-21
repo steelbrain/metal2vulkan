@@ -63,6 +63,7 @@ fn draws(fields: Vec<(DrawPlace, usize, FieldValue)>) -> Draws {
         buffers: Vec::new(),
         textures: Vec::new(),
         storage_reads: Vec::new(),
+        formatless: Vec::new(),
         own_pixel: Vec::new(),
         fetched: Vec::new(),
         bicubic: Vec::new(),

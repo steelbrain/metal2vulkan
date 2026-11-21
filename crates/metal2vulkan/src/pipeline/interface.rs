@@ -142,6 +142,14 @@ pub struct TextureSlot {
     /// mapping. `false` for a `sample` or `read` slot, which reaches a sampled image.
     #[cfg_attr(feature = "serde", serde(default))]
     pub storage: bool,
+    /// The slot's storage image is declared with a format: a slot a texture atomic updates
+    /// (`R32ui`, `R32i` or `R64ui`), or one declared in its bound texture's format. Its reads and
+    /// writes then take neither `VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT` nor
+    /// `…_WRITE_WITHOUT_FORMAT_BIT` of the bound view's format, which Vulkan asks only of an access
+    /// declared without one (`VUID-vkCmdDispatch-OpTypeImage-07027` to `-07030`). `false` for a
+    /// slot declared without a format, and for a `sample` or `read` slot.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub declared_format: bool,
 }
 
 /// How a texture is used (Metal `access::` qualifiers plus sampling).

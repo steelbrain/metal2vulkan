@@ -606,6 +606,7 @@ mod serde_round_trips {
                 depth_compare: false,
                 access: TextureAccess::new(false, true, true),
                 storage: true,
+                declared_format: false,
             }),
         );
         slots.insert(

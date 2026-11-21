@@ -761,7 +761,7 @@ impl ComputeCommandEncoder {
                 (
                     [texture.hazard_id(), texture.tracked_id()],
                     texture.host_reads(),
-                    texture.unstored(),
+                    texture.unstored().or_else(|| texture.unwritten()),
                     Some(lent),
                     None,
                 )
@@ -986,10 +986,16 @@ impl ComputeCommandEncoder {
             for &(slot, access) in &interface.textures {
                 let read = interface.storage_reads.contains(&slot);
                 let stored = access != Access::Read || read;
+                // Its format's own answers, for the writes and reads declared without a format.
+                let formatless = interface.formatless.contains(&slot);
                 let unstored = match self.textures.get(slot as usize) {
-                    Some(Some(texture)) if stored => texture
-                        .unstored()
-                        .or_else(|| texture.unread().filter(|_| read)),
+                    Some(Some(texture)) if stored => (texture.unstored())
+                        .or_else(|| {
+                            texture
+                                .unwritten()
+                                .filter(|_| formatless && access.writes())
+                        })
+                        .or_else(|| texture.unread().filter(|_| formatless && read)),
                     _ => None,
                 };
                 if let Some(pixel_format) = unstored {

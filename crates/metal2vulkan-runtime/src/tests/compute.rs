@@ -41,6 +41,7 @@ pub(crate) mod on_device {
             buffers,
             textures: Vec::new(),
             storage_reads: Vec::new(),
+            formatless: Vec::new(),
             numbered: Vec::new(),
             constexprs: Vec::new(),
             reads_unbound: false,

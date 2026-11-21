@@ -1322,9 +1322,8 @@ made, with no lock, and never rewritten for layouts.
   uniform and the storage texel buffer (`Gap::TextureFormat` otherwise): the view is of a buffer
   of both usages, so its format takes both. A width past `maxTexelBufferElements` is
   `Limit::TextureSize`. Its view is the element of the uniform texel-buffer array at its index
-  where shaders read it, and of the storage one where they write it and the format's storage
-  texel buffers write without a format (else it has no storage element, as a texture has none:
-  `Gap::StorageElement` at the draw or dispatch that writes it at a slot). Its texels are the
+  where shaders read it, and of the storage one where they write it (the known gaps say where a
+  write or a read through it without a format is refused). Its texels are the
   buffer's bytes: the host, a blit or a shader writing the buffer writes them, `replace_region`
   and `get_bytes` write and read them there, and its uses are uses of the buffer in the hazard
   sets. Its storage mode is the buffer's. The view goes once the texture buffer is gone and its
@@ -1503,16 +1502,19 @@ made, with no lock, and never rewritten for layouts.
   as no declaration tells it from a sample: it reads the texture's storage element without a
   format, outside Vulkan's valid usage (`VUID-vkCmdDispatch-OpTypeImage-07028`), and Vulkan does
   not define what that read returns.
-- A texture buffer's storage texel buffer is declared without a format too, and its answers are
-  its format's buffer features, of which Vulkan requires neither
-  `VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT` nor the read bit, whatever the device's
-  features and the format. Where they lack the write bit it has no storage element, and where
-  they lack the read bit it is not read without a format: a draw or dispatch whose function writes
-  it at a slot, or reads it there through `access::read_write`, is `Gap::StorageElement`
-  (`VUID-vkCmdDispatch-OpTypeImage-07029`, `-07030`), whatever its format. The UHD Graphics
-  630's Windows driver (101.2145) answers neither bit for any format: there every texture buffer
-  a function writes or reads through `access::read_write` is refused, and one it reads through
-  `access::read` runs.
+- A texture buffer's storage texel buffer is declared without a format too, but at a slot a
+  texture atomic updates (`R32ui` or `R32i`), and its answers are its format's buffer features,
+  of which Vulkan requires neither `VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT` nor the
+  read bit, whatever the device's features and the format. A draw or dispatch whose function
+  writes it at a slot declared without a format where they lack the write bit, or reads it there
+  through `access::read_write` where they lack the read bit, is `Gap::StorageElement`
+  (`VUID-vkCmdDispatch-OpTypeImage-07029`, `-07030`), whatever its format; so is, with no slot,
+  one that may reach it beyond its slots after `use_resource` declared a write of it where they
+  lack the write bit. A write through a resource ID with no such declaration is a write without
+  a format outside Vulkan's valid usage there, as a read is. The UHD Graphics 630's Windows
+  driver (101.2145) answers neither bit for any format: there a texture buffer a function writes
+  or reads through `access::read_write` is refused, but at a slot a texture atomic updates, and
+  one it reads through `access::read` runs.
 - `replace_region` takes no bytes into a 32-bit float depth (`Gap::FloatDepthUpload`): Metal
   keeps any `float` there, Vulkan copies no depth outside `[0, 1]` into a depth aspect without
   `VK_EXT_depth_range_unrestricted` (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), which the floor

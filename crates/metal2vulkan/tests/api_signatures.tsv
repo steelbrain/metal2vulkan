@@ -3266,6 +3266,7 @@ field	metal2vulkan::pipeline::TextureAccess.read	pub read: bool
 field	metal2vulkan::pipeline::TextureAccess.sample	pub sample: bool
 field	metal2vulkan::pipeline::TextureAccess.write	pub write: bool
 field	metal2vulkan::pipeline::TextureSlot.access	pub access: TextureAccess
+field	metal2vulkan::pipeline::TextureSlot.declared_format	pub declared_format: bool
 field	metal2vulkan::pipeline::TextureSlot.depth_compare	pub depth_compare: bool
 field	metal2vulkan::pipeline::TextureSlot.sampled_type	pub sampled_type: SampledType
 field	metal2vulkan::pipeline::TextureSlot.storage	pub storage: bool

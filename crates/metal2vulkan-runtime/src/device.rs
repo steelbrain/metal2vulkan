@@ -453,6 +453,11 @@ pub struct DeviceOptions {
     /// from its first work on.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) maker: memory::MakerTest,
+    /// For the device tests: the device's description as the translator is to read it, in place
+    /// of the device's own answers (a device that answers otherwise); the Vulkan device is the
+    /// same.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) described: Option<fn(DeviceDescription) -> DeviceDescription>,
 }
 
 /// Takes a lock. A panic while another thread held it leaves what it guards usable (a queue, the
@@ -498,7 +503,15 @@ impl Device {
         let raw = physical.raw();
         let capabilities = physical.check().map_err(Error::BelowFloor)?;
         // SAFETY: `raw` is the instance's, which was made at the floor's version.
-        let translator = unsafe { translator(vk_instance, raw, &capabilities) }?;
+        let description = unsafe { description(vk_instance, raw, &capabilities) }?;
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        let description = match options.described {
+            Some(described) => described(description),
+            None => description,
+        };
+        let translator =
+            (metal2vulkan::device::Device::from_queries(description, DevicePolicy::default()))
+                .map_err(Error::translation)?;
         let family = capabilities.queue_family;
         // SAFETY: as above.
         let families = unsafe { vk_instance.get_physical_device_queue_family_properties(raw) };
@@ -1336,26 +1349,25 @@ fn join(core: &Arc<Core>, threads: Threads) {
     }
 }
 
-/// The translator for `raw` with what device creation enables of `capabilities`, under the identity
-/// domains: a buffer argument is the guest's address of the buffer, a push field, and a texture or
-/// a sampler its resource ID. It is decided by the device's Vulkan queries alone
-/// (`Device::from_queries`): no driver or GPU identity, and no fact measured on one, applies.
+/// The description of `raw` the translator is made of, with what device creation enables of
+/// `capabilities`: its Vulkan queries alone, so no driver or GPU identity, and no fact measured on
+/// one, applies. `Device::from_queries` makes the translator of it under the identity domains: a
+/// buffer argument is the guest's address of the buffer, a push field, and a texture or a sampler
+/// its resource ID.
 ///
 /// # Safety
 ///
 /// `raw` is a physical device of `instance`, which was made at [`floor::VERSION`].
-unsafe fn translator(
+unsafe fn description(
     instance: &ash::Instance,
     raw: vk::PhysicalDevice,
     capabilities: &floor::Capabilities,
-) -> Result<metal2vulkan::device::Device, Error> {
+) -> Result<DeviceDescription, Error> {
     // SAFETY: the caller's contract.
     let described =
         unsafe { DeviceDescription::query(instance, raw, ApiVersion::from_packed(floor::VERSION)) };
-    let description = described
+    described
         .and_then(|description| description.with_enabled(&floor::shader_enables(capabilities)))
-        .map_err(Error::translation)?;
-    metal2vulkan::device::Device::from_queries(description, DevicePolicy::default())
         .map_err(Error::translation)
 }
 
