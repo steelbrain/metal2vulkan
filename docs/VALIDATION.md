@@ -494,15 +494,15 @@ cargo run -p metal2vulkan-validation --release --bin corpus-moltenvk -- \
   runtime device's own translator: the runtime's floor enables no buffer robustness, so a
   fixed-function vertex fetch past its buffer is checked nowhere and the case is refused as
   `not_supported{uncontained:unchecked vertex_input}`. A rasterization-disabled vertex case renders
-  into the oracle's 1x1 `R8Unorm` attachment. A depth/stencil attachment of both aspects (the
-  oracle's two textures, which the runtime renders into in no one pass: `Gap::RenderPass` of
-  `DepthStencilViews`), more samples, layered rendering, a dynamic vertex stride, an
-  argument-buffer member, tessellation, an imageblock, a rasterization-rate map, an out-of-bounds
-  target other than an attribute buffer or a fragment pass with no attachment (the runtime makes
-  no pass without one) keeps the case on the executor's own context. An
-  indexed draw past its index buffer, which the runtime refuses as Metal's validation does
-  (`Refusal::IndexBufferOffset`), carries `index_buffer_past_end`, the runtime's limit, and runs
-  on Metal alone. Its device worker enables the
+  into the oracle's 1x1 `R8Unorm` attachment. More samples, layered rendering, a dynamic vertex
+  stride, an argument-buffer member, tessellation, an imageblock, a rasterization-rate map, an
+  out-of-bounds target other than an attribute buffer or a fragment pass with no attachment (the
+  runtime makes no pass without one) keeps the case on the executor's own context. An indexed
+  draw past its index buffer, which the runtime refuses as Metal's validation does
+  (`Refusal::IndexBufferOffset`), carries `index_buffer_past_end`, and a depth/stencil attachment
+  of both aspects, the oracle's two textures, which the runtime renders into in no one pass yet
+  (`Gap::RenderPass` of `DepthStencilViews`), carries `separate_depth_stencil`: each the runtime's
+  limit, run on Metal alone. Its device worker enables the
   validation layer through the loader's and the layer's variables, and any message the layer logs
   fails the row. The pipeline state's make is held to 500 MiB of peak live allocations and 20 s.
   Its row records the state's precision notes, the runtime's fingerprint and an out-of-bounds

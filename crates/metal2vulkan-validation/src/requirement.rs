@@ -210,6 +210,17 @@ pub enum ToolingRequirement {
     /// is the runtime's ([`Limit::Runtime`]) and the engine's candidate does not run the case. The
     /// Metal oracle runs it, so a case of it stays Metal-qualified ([`Self::qualifies_on_metal`]).
     UlongTextureAtomic,
+    /// A depth/stencil attachment of both aspects (`executor_contract::case_requirements`), which
+    /// the Metal oracle makes as Metal's separate `Depth32Float` and `Stencil8` textures, both
+    /// attached to one pass: plain Metal on every Mac. The runtime does not build that form yet: it
+    /// renders into no separate depth and stencil textures in one pass
+    /// (`metal2vulkan_runtime::Gap::RenderPass` of `DepthStencilViews`, and its pipeline state
+    /// `Gap::RenderPipeline` of `DepthStencilFormats`, known gaps its README states, which are its
+    /// guard), so the limit is the runtime's ([`Limit::Runtime`]) and the engine's candidate does
+    /// not run the case. The case checker raises it from the case's literals, never a source's
+    /// structure, so no census row carries it. The Metal oracle draws it, so a case of it stays
+    /// Metal-qualified ([`Self::qualifies_on_metal`]).
+    SeparateDepthStencil,
 }
 
 /// Every executor (the requirement leaves no case to author, or none to observe).
@@ -217,7 +228,7 @@ const AUTHORING: &[Executor] = &Executor::ALL;
 const ENGINE: &[Executor] = &[Executor::EngineCandidate];
 
 impl ToolingRequirement {
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 30] = [
         Self::FunctionConstantLiteral,
         Self::VertexAttributeLiteral,
         Self::TessellationAttributeLiteral,
@@ -247,6 +258,7 @@ impl ToolingRequirement {
         Self::RenderFunctionTable,
         Self::IndexBufferPastEnd,
         Self::UlongTextureAtomic,
+        Self::SeparateDepthStencil,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -282,6 +294,7 @@ impl ToolingRequirement {
             Self::RenderFunctionTable => "render_function_table",
             Self::IndexBufferPastEnd => "index_buffer_past_end",
             Self::UlongTextureAtomic => "ulong_texture_atomic",
+            Self::SeparateDepthStencil => "separate_depth_stencil",
         }
     }
 
@@ -304,9 +317,10 @@ impl ToolingRequirement {
     ///   [`ToolingRequirement::ReplayedTemplateResources`]), and a texture buffer an argument
     ///   buffer or a texture-handle array holds ([`ToolingRequirement::TextureBufferMember`]),
     ///   and a sequentially consistent fence, a render function's function table, an indexed draw
-    ///   past its index buffer and a 64-bit texture atomic, which the runtime refuses
-    ///   ([`ToolingRequirement::SeqCstFence`], [`ToolingRequirement::RenderFunctionTable`],
-    ///   [`ToolingRequirement::IndexBufferPastEnd`], [`ToolingRequirement::UlongTextureAtomic`]).
+    ///   past its index buffer, a 64-bit texture atomic and separate depth and stencil attachments,
+    ///   which the runtime refuses ([`ToolingRequirement::SeqCstFence`],
+    ///   [`ToolingRequirement::RenderFunctionTable`], [`ToolingRequirement::IndexBufferPastEnd`],
+    ///   [`ToolingRequirement::UlongTextureAtomic`], [`ToolingRequirement::SeparateDepthStencil`]).
     ///
     /// The requirements that stopped only the old engine's candidate were retired with it.
     pub const fn stops(self) -> &'static [Executor] {
@@ -339,7 +353,8 @@ impl ToolingRequirement {
             | Self::SeqCstFence
             | Self::RenderFunctionTable
             | Self::IndexBufferPastEnd
-            | Self::UlongTextureAtomic => ENGINE,
+            | Self::UlongTextureAtomic
+            | Self::SeparateDepthStencil => ENGINE,
         }
     }
 
@@ -349,8 +364,8 @@ impl ToolingRequirement {
     /// refuses it, typed. Only [`ToolingRequirement::MeshRenderPipeline`],
     /// [`ToolingRequirement::TextureBufferMember`], [`ToolingRequirement::DepthOutsideUnitRange`],
     /// [`ToolingRequirement::SeqCstFence`], [`ToolingRequirement::RenderFunctionTable`] and
-    /// [`ToolingRequirement::IndexBufferPastEnd`] and [`ToolingRequirement::UlongTextureAtomic`]:
-    /// their cases are qualified on Metal.
+    /// [`ToolingRequirement::IndexBufferPastEnd`], [`ToolingRequirement::UlongTextureAtomic`] and
+    /// [`ToolingRequirement::SeparateDepthStencil`]: their cases are qualified on Metal.
     pub const fn qualifies_on_metal(self) -> bool {
         matches!(
             self,
@@ -361,6 +376,7 @@ impl ToolingRequirement {
                 | Self::RenderFunctionTable
                 | Self::IndexBufferPastEnd
                 | Self::UlongTextureAtomic
+                | Self::SeparateDepthStencil
         )
     }
 
@@ -368,8 +384,9 @@ impl ToolingRequirement {
     /// [`ToolingRequirement::KernelMinLodClamp`], which Apple's compiler cannot build a pipeline
     /// for, and [`ToolingRequirement::SeqCstFence`], [`ToolingRequirement::TextureBufferMember`],
     /// [`ToolingRequirement::DepthOutsideUnitRange`], [`ToolingRequirement::MeshRenderPipeline`],
-    /// [`ToolingRequirement::RenderFunctionTable`], [`ToolingRequirement::IndexBufferPastEnd`] and
-    /// [`ToolingRequirement::UlongTextureAtomic`], which the runtime refuses.
+    /// [`ToolingRequirement::RenderFunctionTable`], [`ToolingRequirement::IndexBufferPastEnd`],
+    /// [`ToolingRequirement::UlongTextureAtomic`] and [`ToolingRequirement::SeparateDepthStencil`],
+    /// which the runtime refuses.
     pub const fn limit(self) -> Limit {
         match self {
             Self::KernelMinLodClamp => Limit::Metal,
@@ -379,7 +396,8 @@ impl ToolingRequirement {
             | Self::MeshRenderPipeline
             | Self::RenderFunctionTable
             | Self::IndexBufferPastEnd
-            | Self::UlongTextureAtomic => Limit::Runtime,
+            | Self::UlongTextureAtomic
+            | Self::SeparateDepthStencil => Limit::Runtime,
             _ => Limit::Tooling,
         }
     }
@@ -534,7 +552,8 @@ mod tests {
                 ToolingRequirement::SeqCstFence,
                 ToolingRequirement::RenderFunctionTable,
                 ToolingRequirement::IndexBufferPastEnd,
-                ToolingRequirement::UlongTextureAtomic
+                ToolingRequirement::UlongTextureAtomic,
+                ToolingRequirement::SeparateDepthStencil
             ]
         );
     }
@@ -606,6 +625,19 @@ mod tests {
         assert_eq!("ulong_texture_atomic".parse(), Ok(requirement));
     }
 
+    /// Separate depth and stencil attachments: the Metal oracle draws them, so their cases stay
+    /// Metal-qualified; the runtime does not build that pass yet, so the engine's candidate runs
+    /// none, the runtime's limit, which closes its rows.
+    #[test]
+    fn a_separate_depth_stencil_attachment_stops_only_the_candidate() {
+        let requirement = ToolingRequirement::SeparateDepthStencil;
+        assert_eq!(requirement.stops(), [Executor::EngineCandidate]);
+        assert_eq!(requirement.limit(), Limit::Runtime, "{requirement}");
+        assert!(!requirement.blocks_closure(), "{requirement}");
+        assert!(requirement.qualifies_on_metal(), "{requirement}");
+        assert_eq!("separate_depth_stencil".parse(), Ok(requirement));
+    }
+
     /// Every requirement stops some executor, and an executor's name is as stable as a
     /// requirement's. A requirement that stops the Metal oracle stops every executor: when Metal
     /// cannot run a case, no candidate has an observation to be compared with. Only a tooling gap
@@ -656,7 +688,8 @@ mod tests {
                 ToolingRequirement::SeqCstFence,
                 ToolingRequirement::RenderFunctionTable,
                 ToolingRequirement::IndexBufferPastEnd,
-                ToolingRequirement::UlongTextureAtomic
+                ToolingRequirement::UlongTextureAtomic,
+                ToolingRequirement::SeparateDepthStencil
             ]
         );
         for executor in Executor::ALL {

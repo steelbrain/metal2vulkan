@@ -806,8 +806,9 @@ pub fn engine_source_requirements(reflection: &ShaderInterface) -> BTreeSet<Tool
 /// ([`mesh::mesh_requirements`]); each of them a case authors is also named here, so a case that
 /// was checked against an older reflection is refused all the same. A depth outside `[0, 1]` the
 /// case gives a depth image is the runtime's limit on every device
-/// ([`depth_range::depth_range_requirement`]), and so is an indexed draw past its index buffer
-/// (its out-of-bounds target, [`ToolingRequirement::IndexBufferPastEnd`]).
+/// ([`depth_range::depth_range_requirement`]), and so are an indexed draw past its index buffer
+/// (its out-of-bounds target, [`ToolingRequirement::IndexBufferPastEnd`]) and a depth/stencil
+/// attachment of both aspects ([`ToolingRequirement::SeparateDepthStencil`]).
 pub fn case_requirements(case: &AuthoredCase) -> BTreeSet<ToolingRequirement> {
     let render = matches!(case.stage, Stage::Vertex | Stage::Fragment);
     let drawn = render || case.stage.is_mesh_pipeline_stage();
@@ -864,6 +865,14 @@ pub fn case_requirements(case: &AuthoredCase) -> BTreeSet<ToolingRequirement> {
                     .any(|target| target.resource == OutOfBoundsResource::IndexBuffer)
             }),
             ToolingRequirement::IndexBufferPastEnd,
+        ),
+        (
+            render
+                && case.depth_stencil.as_ref().is_some_and(|attachment| {
+                    attachment.initial_depth_b64.is_some()
+                        && attachment.initial_stencil_b64.is_some()
+                }),
+            ToolingRequirement::SeparateDepthStencil,
         ),
     ]
     .into_iter()
@@ -2989,6 +2998,16 @@ entry:
             state: None,
         });
         only(&vertex, ToolingRequirement::VertexDepthStencilAttachment);
+        // A fragment case's attachment of one aspect runs; of both, the oracle's two textures in
+        // one pass, it is the runtime's limit.
+        let mut aspects = kernel.clone();
+        aspects.stage = Stage::Fragment;
+        aspects.depth_stencil = vertex.depth_stencil.clone();
+        assert!(case_requirements(&aspects).is_empty());
+        if let Some(attachment) = &mut aspects.depth_stencil {
+            attachment.initial_stencil_b64 = Some("qw==".into());
+        }
+        only(&aspects, ToolingRequirement::SeparateDepthStencil);
         let mut disabled = kernel.clone();
         disabled.stage = Stage::Vertex;
         disabled.render_targets.push(RenderTargetResource {
