@@ -158,6 +158,7 @@ fn the_runtime_sources_are_the_committed_ones() {
         ("metal2vulkan/src/lower/fragment/fetch.rs", compile),
         ("metal2vulkan/src/lower/fragment/mod.rs", "the fragment lowering's module root: the runtime reaches it only through its re-exports of the shader-side stencil's shadow format and state word, whose module is an input"),
         ("metal2vulkan/src/lower/mesh/mod.rs", "compile-time translation, reached only from the compile-time part of lower/dispatch.rs (plan_kernel's mesh wrapper builtins) and as the parent of its work-buffer layout (lower/mesh/work.rs, an input); what it produces is in the pipeline the artifact digests"),
+        ("metal2vulkan/src/lower/push.rs", "the push window's lowering, reached only from device/derive.rs, which reads `FLOOR_BYTES`, the window's 256 bytes every stage is lowered for, to refuse a description whose maxPushConstantsSize is below it before any pipeline exists; what the lowering makes of the window is in the pipeline the artifact digests"),
         ("metal2vulkan/src/lower/select.rs", compile),
         ("metal2vulkan/src/lower/simd/divergent.rs", "compile-time translation (the predicated walk); the runtime reads only VOTE_BYTES, the vote word's size, which the compile also adds to the static threadgroup length the artifact reports, so a change to it moves the artifact digest"),
         ("metal2vulkan/src/lower/simd/workgroup.rs","binding-plan construction; the artifact digests the plan it makes (the workgroup arena size)"),
