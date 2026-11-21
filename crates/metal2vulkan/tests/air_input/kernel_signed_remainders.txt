@@ -1,0 +1,208 @@
+target triple = "air64_v28-apple-macosx26.0.0"
+source_filename = "-"
+; datalayout DataLayout { endian: Little, pointers: {0: PointerSpec { size_bits: 64, abi_bits: 64, pref_bits: 64, index_bits: 64 }}, ints: {1: AlignSpec { abi_bits: 8, pref_bits: 8 }, 8: AlignSpec { abi_bits: 8, pref_bits: 8 }, 16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }}, floats: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }}, vectors: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 24: AlignSpec { abi_bits: 32, pref_bits: 32 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 48: AlignSpec { abi_bits: 64, pref_bits: 64 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 96: AlignSpec { abi_bits: 128, pref_bits: 128 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }, 192: AlignSpec { abi_bits: 256, pref_bits: 256 }, 256: AlignSpec { abi_bits: 256, pref_bits: 256 }, 512: AlignSpec { abi_bits: 512, pref_bits: 512 }, 1024: AlignSpec { abi_bits: 1024, pref_bits: 1024 }}, aggregate: AlignSpec { abi_bits: 0, pref_bits: 64 }, native_ints: [8, 16, 32], stack_align_bits: None, alloca_space: 0, program_space: 0, globals_space: 0, mangling: None, fn_ptr_align: None, non_integral: [] }
+%t4 = type void (ptr addrspace(1), ptr addrspace(1), i32)
+%t6 = type [2 x i32]
+c3 = %t6 [27, 2]
+c27 = <2 x i32> [3735928559, 0]
+
+define %t4 @f0 "signed_remainders" memory(ModRef, NoModRef, NoModRef) "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Ref nocapture "air-buffer-no-alias"="" ) %a1( Mod nocapture "air-buffer-no-alias"="" ) {
+bb0:
+  %i0 = shl i32 %a2, i32 2
+  %i1 = zext %i0 to i64
+  %i2 = getelementptr inbounds i32, %a0, %i1
+  %i3 = load i32, %i2, align 4
+  %i4 = or i32 %i0, i32 1
+  %i5 = zext %i4 to i64
+  %i6 = getelementptr inbounds i32, %a0, %i5
+  %i7 = load i32, %i6, align 4
+  %i8 = or i32 %i0, i32 2
+  %i9 = zext %i8 to i64
+  %i10 = getelementptr inbounds i32, %a0, %i9
+  %i11 = load i32, %i10, align 4
+  %i12 = or i32 %i0, i32 3
+  %i13 = zext %i12 to i64
+  %i14 = getelementptr inbounds i32, %a0, %i13
+  %i15 = load i32, %i14, align 4
+  %i16 = zext %i7 to i64
+  %i17 = shl nuw i64 %i16, i64 32
+  %i18 = zext %i3 to i64
+  %i19 = or i64 %i17, %i18
+  %i20 = zext %i15 to i64
+  %i21 = shl nuw i64 %i20, i64 32
+  %i22 = zext %i11 to i64
+  %i23 = or i64 %i21, %i22
+  %i24 = icmp ne %i11, i32 0
+  %i25 = icmp ne %i3, i32 2147483648
+  %i26 = icmp ne %i11, i32 4294967295
+  %i27 = select i1 %i25, i1 1, %i26
+  %i28 = select i1 %i24, %i27, i1 0
+  %i29 = icmp ne %i15, i32 0
+  %i30 = icmp ne %i7, i32 2147483648
+  %i31 = icmp ne %i15, i32 4294967295
+  %i32 = select i1 %i30, i1 1, %i31
+  %i33 = icmp ne %i23, i64 0
+  %i34 = icmp ne %i19, i64 9223372036854775808
+  %i35 = icmp ne %i23, i64 18446744073709551615
+  %i36 = select i1 %i34, i1 1, %i35
+  %i37 = select i1 %i33, %i36, i1 0
+  br %i28, bb1, bb2
+bb1:
+  %i39 = srem i32 %i3, %i11
+  br bb2
+bb2:
+  %i41 = phi i32 [%i39, bb1], [i32 3735928559, bb0]
+  %i42 = shl i32 %a2, i32 3
+  %i43 = zext %i42 to i64
+  %i44 = getelementptr inbounds i32, %a1, %i43
+  store %i41, %i44, align 4
+  %i46 = shl i32 %i11, i32 16
+  %i47 = icmp eq %i46, i32 0
+  br %i47, bb4, bb3
+bb3:
+  %i49 = shl i32 %i3, i32 16
+  %i50 = ashr exact i32 %i49, i32 16
+  %i51 = ashr exact i32 %i46, i32 16
+  %i52 = srem i32 %i50, %i51
+  %i53 = and i32 %i52, i32 65535
+  br bb4
+bb4:
+  %i55 = phi i32 [%i53, bb3], [i32 3735928559, bb2]
+  %i56 = or i32 %i42, i32 1
+  %i57 = zext %i56 to i64
+  %i58 = getelementptr inbounds i32, %a1, %i57
+  store %i55, %i58, align 4
+  %i60 = shl i32 %i11, i32 24
+  %i61 = icmp eq %i60, i32 0
+  br %i61, bb6, bb5
+bb5:
+  %i63 = shl i32 %i3, i32 24
+  %i64 = ashr exact i32 %i63, i32 24
+  %i65 = ashr exact i32 %i60, i32 24
+  %i66 = trunc %i64 to i16
+  %i67 = trunc %i65 to i16
+  %i68 = srem i16 %i66, %i67
+  %i69 = and i16 %i68, i16 255
+  %i70 = zext %i69 to i32
+  br bb6
+bb6:
+  %i72 = phi i32 [%i70, bb5], [i32 3735928559, bb4]
+  %i73 = or i32 %i42, i32 2
+  %i74 = zext %i73 to i64
+  %i75 = getelementptr inbounds i32, %a1, %i74
+  store %i72, %i75, align 4
+  br %i37, bb7, bb8
+bb7:
+  %i78 = srem i64 %i19, %i23
+  %i79 = trunc %i78 to i32
+  %i80 = lshr i64 %i78, i64 32
+  %i81 = trunc %i80 to i32
+  br bb8
+bb8:
+  %i83 = phi i32 [%i79, bb7], [i32 3735928559, bb6]
+  %i84 = phi i32 [%i81, bb7], [i32 0, bb6]
+  %i85 = or i32 %i42, i32 3
+  %i86 = zext %i85 to i64
+  %i87 = getelementptr inbounds i32, %a1, %i86
+  store %i83, %i87, align 4
+  %i89 = or i32 %i42, i32 4
+  %i90 = zext %i89 to i64
+  %i91 = getelementptr inbounds i32, %a1, %i90
+  store %i84, %i91, align 4
+  %i93 = select i1 %i28, %i29, i1 0
+  %i94 = select i1 %i93, %i32, i1 0
+  br %i94, bb9, bb10
+bb9:
+  %i96 = insertelement <2 x i32> undef, %i11, i64 0
+  %i97 = insertelement %i96, %i15, i64 1
+  %i98 = insertelement <2 x i32> undef, %i3, i64 0
+  %i99 = insertelement %i98, %i7, i64 1
+  %i100 = srem <2 x i32> %i99, %i97
+  br bb10
+bb10:
+  %i102 = phi <2 x i32> [%i100, bb9], [<2 x i32> c27, bb8]
+  %i103 = extractelement %i102, i64 0
+  %i104 = extractelement %i102, i64 1
+  %i105 = xor i32 %i103, %i104
+  %i106 = or i32 %i42, i32 5
+  %i107 = zext %i106 to i64
+  %i108 = getelementptr inbounds i32, %a1, %i107
+  store %i105, %i108, align 4
+  %i110 = srem i32 %i3, i32 3
+  %i111 = or i32 %i42, i32 6
+  %i112 = zext %i111 to i64
+  %i113 = getelementptr inbounds i32, %a1, %i112
+  store %i110, %i113, align 4
+  %i115 = srem i32 %i3, i32 8
+  %i116 = or i32 %i42, i32 7
+  %i117 = zext %i116 to i64
+  %i118 = getelementptr inbounds i32, %a1, %i117
+  store %i115, %i118, align 4
+  ret void
+}
+!md0 = !"SDK Version"
+!md1 = !"wchar_size"
+!md2 = !"frame-pointer"
+!md3 = !"air.max_device_buffers"
+!md4 = !"air.max_constant_buffers"
+!md5 = !"air.max_threadgroup_buffers"
+!md6 = !"air.max_textures"
+!md7 = !"air.max_read_write_textures"
+!md8 = !"air.max_samplers"
+!md9 = !"air.buffer"
+!md10 = !"air.location_index"
+!md11 = !"air.read"
+!md12 = !"air.address_space"
+!md13 = !"air.arg_type_size"
+!md14 = !"air.arg_type_align_size"
+!md15 = !"air.arg_type_name"
+!md16 = !"uint"
+!md17 = !"air.arg_name"
+!md18 = !"a"
+!md19 = !"air.read_write"
+!md20 = !"o"
+!md21 = !"air.thread_position_in_grid"
+!md22 = !"i"
+!md23 = !"air.compile.denorms_disable"
+!md24 = !"air.compile.fast_math_enable"
+!md25 = !"air.compile.framebuffer_fetch_enable"
+!md26 = !"Apple metal version 32023.922 (metalfe-32023.922.4)"
+!md27 = !"Metal"
+!md28 = i32 2
+!md29 = %t6 c3
+!md30 = i32 1
+!md31 = i32 4
+!md32 = i32 7
+!md33 = i32 31
+!md34 = i32 128
+!md35 = i32 8
+!md36 = i32 16
+!md37 = ptr addrspace(0) @f0
+!md38 = i32 0
+!md39 = !{!md28, !md0, !md29}
+!md40 = !{!md30, !md1, !md31}
+!md41 = !{!md32, !md2, !md28}
+!md42 = !{!md32, !md3, !md33}
+!md43 = !{!md32, !md4, !md33}
+!md44 = !{!md32, !md5, !md33}
+!md45 = !{!md32, !md6, !md34}
+!md46 = !{!md32, !md7, !md35}
+!md47 = !{!md32, !md8, !md36}
+!md48 = !{}
+!md49 = !{!md38, !md9, !md10, !md38, !md30, !md11, !md12, !md30, !md13, !md31, !md14, !md31, !md15, !md16, !md17, !md18}
+!md50 = !{!md30, !md9, !md10, !md30, !md30, !md19, !md12, !md30, !md13, !md31, !md14, !md31, !md15, !md16, !md17, !md20}
+!md51 = !{!md28, !md21, !md15, !md16, !md17, !md22}
+!md52 = !{!md49, !md50, !md51}
+!md53 = !{!md37, !md48, !md52}
+!md54 = !{!md23}
+!md55 = !{!md24}
+!md56 = !{!md25}
+!md57 = !{!md26}
+!md58 = !{!md28, !md35, !md38}
+!md59 = !{!md27, !md31, !md38, !md38}
+!"llvm.module.flags" = !{!md39, !md40, !md41, !md42, !md43, !md44, !md45, !md46, !md47}
+!"air.kernel" = !{!md53}
+!"air.compile_options" = !{!md54, !md55, !md56}
+!"llvm.ident" = !{!md57}
+!"air.version" = !{!md58}
+!"air.language_version" = !{!md59}

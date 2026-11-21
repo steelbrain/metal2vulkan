@@ -1718,6 +1718,8 @@ engine/kernel_read_through.ll	rt_heap_ow	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	
 engine/kernel_read_through.ll	rt_heap_arg	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/kernel_read_through_constant.air.ll	read_through_constant	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/kernel_read_through_constant.ll	read_through_constant	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/kernel_signed_remainders.air.ll	signed_remainders	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/kernel_signed_remainders.ll	signed_remainders	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/kernel_spin_on_an_unraised_word.air.ll	spin_on_an_unraised_word	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/kernel_spin_on_an_unraised_word.ll	spin_on_an_unraised_word	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/kernel_stage_in.air.ll	stage_in_fetch	NeedsInput{StageInputDescriptor { attribute: 0 }}	NeedsInput{StageInputDescriptor { attribute: 0 }}	NeedsInput{StageInputDescriptor { attribute: 0 }}	NeedsInput{StageInputDescriptor { attribute: 0 }}	NeedsInput{StageInputDescriptor { attribute: 0 }}	NeedsInput{StageInputDescriptor { attribute: 0 }}	NeedsInput{StageInputDescriptor { attribute: 0 }}	NeedsInput{StageInputDescriptor { attribute: 0 }}	NeedsInput{StageInputDescriptor { attribute: 0 }}	NeedsInput{StageInputDescriptor { attribute: 0 }}	NeedsInput{StageInputDescriptor { attribute: 0 }}	NeedsInput{StageInputDescriptor { attribute: 0 }}	NeedsInput{StageInputDescriptor { attribute: 0 }}	NeedsInput{StageInputDescriptor { attribute: 0 }}	NeedsInput{StageInputDescriptor { attribute: 0 }}	NeedsInput{StageInputDescriptor { attribute: 0 }}
