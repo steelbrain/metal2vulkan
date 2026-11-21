@@ -1142,7 +1142,11 @@ made, with no lock, and never rewritten for layouts.
   holds its index: a texture's index, elements, views and image, a texture view's views, and a
   sampler state's index and device samplers go once every command buffer committed before the release
   has retired, at once where none is in flight, so that work reads them as they were
-  (`Gauges::releases_waiting` counts what waits). Metal leaves that read undefined: a program that
+  (`Gauges::releases_waiting` counts what waits). Work committed after the release holds none of
+  them: the harness's own row `releases_under_work` holds what waits, the live textures and the
+  texture blocks' bytes flat from its 100th iteration to its 200th, each releasing 16 textures and
+  views while three command buffers that write 1 GiB each keep the GPU running, read with that
+  work in flight. Metal leaves that read undefined: a program that
   released textures a frame in flight still sampled finished every run with no command buffer
   error on two Macs, with the answer it gave with the textures held on a Radeon Pro 5300M, and one
   a few channel levels off it, differing from run to run, on an Apple M3 Max. The runtime gives

@@ -598,6 +598,70 @@ mod on_device {
         });
     }
 
+    /// A release waits for no command buffer committed after it (`crate::memory::Wait`): a
+    /// texture at an index is released under a command buffer that waits on an event, which is
+    /// then set, and that command buffer completes. A second command buffer, committed after,
+    /// is held between its close and its submission by its scheduled handler, so the last
+    /// submission made is the second's and cannot complete. The release's mark then answers a
+    /// submission already complete, the first's, and the texture goes while the second is held.
+    /// The order is forced: the first goes only once the event is set, the second is committed
+    /// only once the first completed, and both checks run while the second's handler waits.
+    #[test]
+    fn every_device_frees_a_release_whose_own_commits_completed_under_a_later_submission() {
+        use crate::tests::command::on_device::{shared_event, within, PATIENCE};
+        each_device("argument_tier_release_before_later", |name, _, device| {
+            let (counters, core) = (device.counters(), device.core());
+            let _grant = (device.grant_indices(IndexClass::Texture, 1, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let mut d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 2, 2);
+            d.usage = TextureUsage::SHADER_READ;
+            let texture =
+                (device.new_texture(&d, Some(1))).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let event = shared_event(&device);
+            let queue = device.new_command_queue(2).expect("a queue");
+            let first = queue.command_buffer().expect("a command buffer");
+            (first.encode_wait_for_event(event.as_event(), 1)).expect("a wait");
+            first.commit().expect("a commit");
+            let mark = core.pool.commits();
+            let live = counters.gauges().textures;
+            drop(texture);
+            let waiting = counters.gauges().releases_waiting;
+            assert!(waiting >= 1, "{name}: {waiting} releases waiting");
+            assert_eq!(
+                core.work.settled(mark),
+                None,
+                "{name}: the mark before its commit went"
+            );
+            event.set_signaled_value(1);
+            finished(name, &first);
+            // The second's scheduled handler holds the submit thread past its close until `go`
+            // drops.
+            let (entered, inside) = std::sync::mpsc::channel::<()>();
+            let (go, held) = std::sync::mpsc::channel::<()>();
+            let second = queue.command_buffer().expect("a command buffer");
+            (second.encode_wait_for_event(event.as_event(), 1)).expect("a wait");
+            (second.add_scheduled_handler(move |_| {
+                let _ = entered.send(());
+                let _ = held.recv();
+            }))
+            .expect("a scheduled handler");
+            second.commit().expect("a commit");
+            (inside.recv_timeout(PATIENCE)).expect("the second's scheduled handler");
+            let (answer, completed) = (core.work.settled(mark), core.done.completed());
+            assert!(
+                answer.is_some_and(|progress| progress <= completed),
+                "{name}: the mark answers {answer:?}, with {completed} completed"
+            );
+            within("the release under the later submission", || {
+                let gauges = counters.gauges();
+                gauges.releases_waiting == 0 && gauges.textures < live
+            });
+            drop(go);
+            finished(name, &second);
+            println!("{name}: {waiting} releases gone under a later submission");
+        });
+    }
+
     /// A slot pointer converted to an integer: thread `i` stores the address of element `i` of
     /// buffer 0, bound 16 bytes past its buffer's start, and increments the element through the
     /// same pointer (`ab_slot_address`). The address is the buffer's `gpuAddress` plus 16 plus

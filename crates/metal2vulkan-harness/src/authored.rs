@@ -259,10 +259,19 @@ pub enum OwnRow {
     /// surface caches), in rounds that take turns; the medians of each kind, in microseconds,
     /// are its times.
     ExportSubmitCost,
+    /// Textures released while the GPU runs throughout: 200 iterations, each making 8 `Private`
+    /// 64 by 64 textures at indices, with a view of each, committing a command buffer that writes
+    /// 1 GiB (four fills of a 256 MiB `Private` buffer), releasing the textures and views, then
+    /// waiting for the command buffer committed two before it, so that three are in flight. The
+    /// releases waiting, the live textures and the texture blocks' bytes, read after the 100th
+    /// and the 200th iteration with that work in flight, are each to grow by no more than eight
+    /// iterations' worth between the two reads: a release that waits for work committed after it
+    /// grows them, and fails the row.
+    ReleasesUnderWork,
 }
 
 /// The rows of one runtime's own.
-pub const OWN_ROWS: [Own; 3] = [
+pub const OWN_ROWS: [Own; 4] = [
     Own {
         name: "idle_frees",
         row: OwnRow::IdleFrees,
@@ -274,6 +283,10 @@ pub const OWN_ROWS: [Own; 3] = [
     Own {
         name: "export_submit_cost",
         row: OwnRow::ExportSubmitCost,
+    },
+    Own {
+        name: "releases_under_work",
+        row: OwnRow::ReleasesUnderWork,
     },
 ];
 

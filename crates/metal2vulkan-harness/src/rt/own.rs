@@ -17,6 +17,10 @@
 //! barrier, on the presenting queue, waited for by a fence before the next, in rounds that take
 //! turns with no export and with 64 live; its times are the medians of the rounds' medians, in
 //! microseconds. A device that exports no handle reports so and times nothing.
+//!
+//! The releases row reads the runtime's gauges with its work in flight, never at an idle device:
+//! a release that waits for more than the work committed before it is freed only as the GPU idles,
+//! so a read at idle would not see it wait.
 
 use super::error;
 use crate::authored::OwnRow;
@@ -24,6 +28,7 @@ use crate::run::OwnReport;
 use crate::Result;
 use ash::vk;
 use metal2vulkan_runtime as rt;
+use std::collections::VecDeque;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -62,6 +67,25 @@ const SUBMITS: usize = 200;
 /// The rounds of the export row.
 const ROUNDS: usize = 3;
 
+/// The iterations of the releases row, and those after which it reads the gauges.
+const ITERATIONS: u32 = 200;
+const READ_AFTER: [u32; 2] = [100, 200];
+
+/// The command buffers the releases row keeps in flight.
+const IN_FLIGHT: usize = 3;
+
+/// The textures each iteration of the releases row makes, each with a view, and their side.
+const TEXTURES: u32 = 8;
+const SIDE: u32 = 64;
+
+/// The bytes of the buffer the releases row's command buffers write, and the fills of it each
+/// makes: 1 GiB written a command buffer.
+const FILL_LEN: u64 = 256 << 20;
+const FILLS: u32 = 4;
+
+/// The iterations' worth a gauge of the releases row may grow from its first read to its second.
+const FLAT_ITERATIONS: u64 = 8;
+
 /// `row` on a device of its own on `physical`.
 pub(super) fn run(physical: &rt::PhysicalDevice, row: OwnRow) -> Result<OwnReport> {
     let device = rt::Device::new(physical, rt::DeviceOptions::default()).map_err(error)?;
@@ -69,7 +93,127 @@ pub(super) fn run(physical: &rt::PhysicalDevice, row: OwnRow) -> Result<OwnRepor
         OwnRow::IdleFrees => idle_frees(&device, false),
         OwnRow::IdleFreesUnderCommits => idle_frees(&device, true),
         OwnRow::ExportSubmitCost => export_submit_cost(&device),
+        OwnRow::ReleasesUnderWork => releases_under_work(&device),
     }
+}
+
+/// The releases row ([`OwnRow::ReleasesUnderWork`]).
+fn releases_under_work(device: &rt::Device) -> Result<OwnReport> {
+    let counters = device.counters();
+    let class = rt::IndexClass::Texture;
+    let range = class.range();
+    (device.grant_indices(class, range.start, range.end - range.start)).map_err(error)?;
+    let block = (device.take_block(rt::MemoryClass::Private, FILL_LEN)).map_err(error)?;
+    let buffer = (device.new_buffer(block.id, 0, FILL_LEN, None)).map_err(error)?;
+    let queue = device.new_command_queue(IN_FLIGHT as u32).map_err(error)?;
+    let mut descriptor = rt::TextureDescriptor::new(
+        rt::TextureType::Type2D,
+        rt::PixelFormat::RGBA8Unorm,
+        SIDE,
+        SIDE,
+    );
+    descriptor.usage = rt::TextureUsage::SHADER_READ;
+    descriptor.storage_mode = rt::StorageMode::Private;
+    let mut indices = range;
+    let mut index = || indices.next().ok_or("the texture indices ran out");
+    // The command buffer at the front, waited for, is to have completed.
+    let completed = |command_buffer: rt::CommandBuffer| -> Result<()> {
+        command_buffer.wait_until_completed().map_err(error)?;
+        match command_buffer.status() {
+            rt::CommandBufferStatus::Completed => Ok(()),
+            status => Err(format!("a command buffer ended {status:?}").into()),
+        }
+    };
+    let mut in_flight = VecDeque::with_capacity(IN_FLIGHT);
+    // The live textures and the texture blocks' bytes one iteration's textures and views add.
+    let mut each = None;
+    let mut reads = Vec::new();
+    for iteration in 1..=ITERATIONS {
+        let before = counters.gauges();
+        let mut made = Vec::with_capacity(2 * TEXTURES as usize);
+        for _ in 0..TEXTURES {
+            let texture = (device.new_texture(&descriptor, Some(index()?))).map_err(error)?;
+            let format = rt::PixelFormat::RGBA8Unorm;
+            let view = texture.new_texture_view(
+                format,
+                rt::TextureType::Type2D,
+                0..1,
+                0..1,
+                Some(index()?),
+            );
+            made.push(view.map_err(error)?);
+            made.push(texture);
+        }
+        // Read at the first iteration, before anything is released.
+        each.get_or_insert_with(|| {
+            let after = counters.gauges();
+            (
+                after.textures - before.textures,
+                after.texture_block_bytes - before.texture_block_bytes,
+            )
+        });
+        let command_buffer = queue.command_buffer().map_err(error)?;
+        let mut encoder = command_buffer.blit_command_encoder().map_err(error)?;
+        for _ in 0..FILLS {
+            (encoder.fill_buffer(&buffer, 0..FILL_LEN, iteration as u8)).map_err(error)?;
+        }
+        encoder.end_encoding();
+        command_buffer.commit().map_err(error)?;
+        in_flight.push_back(command_buffer);
+        // Released under the work in flight, the command buffer just committed among it.
+        drop(made);
+        if in_flight.len() == IN_FLIGHT {
+            completed(in_flight.pop_front().ok_or("a command buffer in flight")?)?;
+        }
+        if READ_AFTER.contains(&iteration) {
+            reads.push(counters.gauges());
+        }
+    }
+    for command_buffer in in_flight {
+        completed(command_buffer)?;
+    }
+    drop((buffer, block));
+    let (textures, bytes) = each.ok_or("no iteration ran")?;
+    let [first, second] = [&reads[0], &reads[1]];
+    // Each texture and view leaves its image or views and its index.
+    let gauges = [
+        (
+            "releases_waiting",
+            first.releases_waiting,
+            second.releases_waiting,
+            2 * textures,
+        ),
+        ("textures", first.textures, second.textures, textures),
+        (
+            "texture_block_bytes",
+            first.texture_block_bytes,
+            second.texture_block_bytes,
+            bytes,
+        ),
+    ];
+    let shown = (gauges.iter())
+        .map(|(gauge, first, second, _)| format!("{gauge} {first} -> {second}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let [at, then] = READ_AFTER;
+    let line = format!(
+        "{shown} from iteration {at} to {then}, {IN_FLIGHT} command buffers writing 1 GiB each in flight"
+    );
+    let grown: Vec<&str> = (gauges.iter())
+        .filter(|(_, first, second, each)| *second > first + each * FLAT_ITERATIONS)
+        .map(|(gauge, ..)| *gauge)
+        .collect();
+    if !grown.is_empty() {
+        return Err(format!(
+            "{} grew by more than {FLAT_ITERATIONS} iterations' worth under the work: {line}",
+            grown.join(", ")
+        )
+        .into());
+    }
+    Ok(OwnReport {
+        lines: vec![line],
+        times: Vec::new(),
+    })
 }
 
 /// The idle row (the module's docs): four Shared blocks, each taken in a unit made ahead of need,

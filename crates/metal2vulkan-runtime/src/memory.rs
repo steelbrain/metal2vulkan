@@ -85,19 +85,21 @@ pub(crate) const SPARSE: u64 = 16;
 /// committed before it, which may reach it with no handle of it, by address (a heap's buffers
 /// through an argument buffer) or through set 1 (a heap's textures and sampler states by their
 /// resource IDs). Such a reader may read another block's bytes by then, as on a Mac, but never
-/// memory or an object the device freed. Nothing is kept past the work in flight.
+/// memory or an object the device freed. Nothing is kept past the work in flight, and no command
+/// buffer committed after the release is waited for.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Wait {
     /// Every command buffer committed up to this place in the commit order is to be submitted.
     Commits(u64),
-    /// Then the submission of this progress value is to complete.
+    /// Then the submission of this progress value is to complete: the last that carried one of
+    /// them, or none (0).
     Progress(u64),
 }
 
 impl Wait {
     /// Whether the work it waits for completed, on the block-maker thread without the pool's
-    /// lock: a wait for commits moves on to the progress value of the last submission once each
-    /// of them is submitted (`Work::settled`).
+    /// lock: a wait for commits moves on, once each of them is submitted, to the progress value
+    /// of the last submission that carried one of them (`Work::settled`).
     fn over(&mut self, core: &Core) -> bool {
         if let Wait::Commits(commits) = *self {
             match core.work.settled(commits) {
@@ -950,8 +952,7 @@ impl Pool {
     /// on the reaper thread. Where none is in flight, it goes at once, an index on this thread,
     /// so it is vacated before the program's release returns. Releases keep their order.
     pub(crate) fn release(&self, core: &Core, object: Free) {
-        let wait = self.noted();
-        let now = matches!(wait, Wait::Progress(0));
+        let now = matches!(self.noted(), Wait::Progress(0));
         if now && matches!(object, Free::TextureIndex(..) | Free::SamplerIndex(..)) {
             return crate::reaper::free(core, object);
         }
@@ -960,6 +961,10 @@ impl Pool {
             drop(state);
             return core.reaper.give(Job::Free(object));
         }
+        // Noted under the lock, the marks rise along the queue, and a later mark waits for no
+        // less: the entries whose waits are over are its first, which the block-maker thread
+        // hands on in one round.
+        let wait = self.noted();
         state.held.push_back((object, wait));
         self.counters.rise(Gauge::ReleasesWaiting);
         self.changed.notify_all();
@@ -990,6 +995,13 @@ impl Pool {
             Ok((state, _)) => state,
             Err(poisoned) => poisoned.into_inner().0,
         }
+    }
+
+    /// For the device tests: the last commit's place in the commit order, which a release made
+    /// now notes while work is in flight.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn commits(&self) -> u64 {
+        self.commits.load(Ordering::SeqCst)
     }
 
     /// For the device tests: whether the class holds a wholly free unit ([`State::whole`]), so
@@ -1310,8 +1322,11 @@ impl Pool {
     /// Takes back an imported or exported block, for the block-maker thread to free, and then to
     /// run an import's release.
     pub(crate) fn give_back_own(&self, memory: Memory, release: Option<Release>) {
+        // Noted under the lock, as a release's ([`release`](Self::release)).
+        let mut state = self.lock();
         let wait = self.noted();
-        self.lock().owned.push_back(((memory, release), wait));
+        state.owned.push_back(((memory, release), wait));
+        drop(state);
         self.changed.notify_all();
     }
 
@@ -1764,7 +1779,9 @@ pub(crate) fn run(core: Arc<Core>) {
 }
 
 /// The oldest entry of a queue of memory given back, taken out where its [`Wait`] is over; where
-/// it is not, it stays first, and `held` is set. The pool's lock is dropped for the check.
+/// it is not, it stays first, and `held` is set. The pool's lock is dropped for the check. The
+/// waits are noted in order, and a later one waits for no less, so no entry behind one that holds
+/// is over: the thread, taking one after another, hands on each that is in one round.
 fn ripe<'a, T>(
     core: &'a Core,
     mut state: MutexGuard<'a, State>,

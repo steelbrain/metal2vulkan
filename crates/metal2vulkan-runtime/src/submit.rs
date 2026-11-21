@@ -198,6 +198,11 @@ pub(crate) struct WorkState {
     next_place: u64,
     /// The progress value of the last submission.
     progress: u64,
+    /// The command buffers whose last segment a submission not seen complete when the submit
+    /// thread last looked carried, in the order submitted: each one's place in the commit order
+    /// and that submission's progress value ([`Work::settled`]). At most the command buffers
+    /// the queues hold at once.
+    carried: VecDeque<(u64, u64)>,
     /// The progress value of the last submission that took an upload, 0 before the first.
     uploaded: u64,
     /// The upload recording: zero fills, copies and new textures' moves to a home layout, the
@@ -521,6 +526,7 @@ impl Work {
                 next_seq: 0,
                 next_place: 0,
                 progress: 0,
+                carried: VecDeque::new(),
                 uploaded: 0,
                 upload: None,
                 sealed: VecDeque::new(),
@@ -1181,9 +1187,11 @@ impl Work {
         self.lock().progress
     }
 
-    /// The progress value of the last submission once every command buffer committed up to place
-    /// `commits` in the commit order is submitted, or ended before it was; None while one waits
-    /// in its queue's FIFO or in a group not yet submitted (`crate::memory::Wait`).
+    /// Once every command buffer committed up to place `commits` in the commit order is
+    /// submitted, or ended before it was: the progress value of the last submission that carried
+    /// the last segment of one of them, which no later commit moves, or 0 where each was seen
+    /// complete. None while one waits in its queue's FIFO or in a group not yet submitted
+    /// (`crate::memory::Wait`).
     pub(crate) fn settled(&self, commits: u64) -> Option<u64> {
         let state = self.lock();
         let waits = |pending: &Pending| pending.seq <= commits;
@@ -1191,7 +1199,12 @@ impl Work {
         let staged = (state.fifos.iter()).filter_map(|fifo| fifo.group.as_ref());
         let held = queued.filter_map(|entry| entry.pending.as_ref()).any(waits)
             || (staged.flat_map(|group| &group.finished)).any(|(_, pending, _)| waits(pending));
-        (!held).then_some(state.progress)
+        // The values rise along the list: the last of them that carried one is the highest.
+        (!held).then(|| {
+            (state.carried.iter().rev())
+                .find(|&&(seq, _)| seq <= commits)
+                .map_or(0, |&(_, value)| value)
+        })
     }
 }
 
@@ -1473,6 +1486,9 @@ impl WorkState {
 
     /// Forgets the submissions seen complete by `completed`, and the FIFOs left with nothing.
     fn settle(&mut self, completed: u64) {
+        while (self.carried.front()).is_some_and(|&(_, value)| value <= completed) {
+            self.carried.pop_front();
+        }
         self.fifos.retain_mut(|fifo| {
             while (fifo.in_flight.front()).is_some_and(|&value| value <= completed) {
                 fifo.in_flight.pop_front();
@@ -1718,6 +1734,7 @@ impl WorkState {
                 pending.gpu.fences.submitted(value);
             }
         }
+        (self.carried).extend((batch.finished.iter()).map(|(_, pending, _)| (pending.seq, value)));
         let through = batch.leads.last().copied().unwrap_or(0);
         let uploads = self.take_uploads(core, released, value, through);
         Some((value, uploads, batch))

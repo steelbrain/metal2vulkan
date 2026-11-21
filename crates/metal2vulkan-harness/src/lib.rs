@@ -150,7 +150,10 @@
 //! began 25 ms or more past its allocation's idle age fails the row, and they record no time.
 //! `export_submit_cost` records a submission's median time with no export and with 64 live
 //! (`none` and `exports_64`), which the matrix judges as it judges a time of one runtime: as a
-//! cross-GPU outlier against the leg's base.
+//! cross-GPU outlier against the leg's base. `releases_under_work` holds its check alone, and
+//! records no time: what textures released while three command buffers keep the GPU running
+//! leave waiting, read with that work in flight, is to stay flat from its 100th iteration to its
+//! 200th.
 
 use std::ptr::NonNull;
 

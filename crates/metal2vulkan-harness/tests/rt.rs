@@ -1,8 +1,10 @@
-//! The runtime's buffers through the harness, on the device the cfg names
-//! (docs/VALIDATION.md): a range given back is the next one taken, buffers alive at once lie
-//! apart, and a buffer longer than a pooled block takes a block of its own.
+//! The runtime through the harness, on the device the cfg names (docs/VALIDATION.md): a range
+//! given back is the next one taken, buffers alive at once lie apart, and a buffer longer than a
+//! pooled block takes a block of its own; and what textures released under work in flight leave
+//! waiting stays flat (`releases_under_work`).
 #![cfg(any(m2v_gpu, m2v_cpu_icd))]
 
+use metal2vulkan_harness::authored::OwnRow;
 use metal2vulkan_harness::{rt, Buffer, Device, Storage};
 
 #[test]
@@ -26,4 +28,16 @@ fn a_range_given_back_is_the_next_taken_and_live_buffers_lie_apart() {
     metal2vulkan_harness::run::zeroed(&long, 256 << 20 | 4096, 4096).unwrap();
     drop(long);
     drop((second, third, private));
+}
+
+/// The runtime's row `releases_under_work` passes its check: textures released while three
+/// command buffers keep the GPU running leave no more waiting at the 200th iteration than at the
+/// 100th, give or take eight iterations' worth.
+#[test]
+fn releases_under_work_in_flight_stay_flat() {
+    let device = rt::system_default(None).unwrap();
+    let report = (device.own_row(OwnRow::ReleasesUnderWork))
+        .expect("a row of the runtime's own")
+        .unwrap_or_else(|why| panic!("{why}"));
+    println!("releases_under_work: {}", report.lines.join("; "));
 }
