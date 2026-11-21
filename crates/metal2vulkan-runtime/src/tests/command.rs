@@ -2152,13 +2152,15 @@ pub(crate) mod on_device {
         });
     }
 
-    /// A completed handler that runs long holds no later submission: while the completion
-    /// thread runs one command buffer's handler, here parked until the test releases it, the
-    /// queue's next command buffers are each submitted at their commit, past [`IN_FLIGHT`] of
-    /// them, as none is held in a group the busy completion thread could not send at a
-    /// completion. Their handlers and their completion still wait for the parked one, in order.
+    /// A completed handler that runs long holds no later submission its queue has room for:
+    /// while the completion thread runs one command buffer's handler, here parked until the test
+    /// releases it, the queue's next two command buffers, each committed once the one before it
+    /// went, are each submitted, as a queue with fewer than two in flight has room
+    /// (`submit::room`). Their handlers and their completion still wait for the parked one, in
+    /// order. What has no room waits for the handler to return
+    /// (`every_device_holds_work_for_room_while_a_completed_handler_runs`).
     #[test]
-    fn every_device_submits_while_a_completed_handler_runs() {
+    fn every_device_submits_what_has_room_while_a_completed_handler_runs() {
         each_device("command_handler_holds_no_submission", |name, _, device| {
             let mut arena = Arena::new(&device);
             let buffer = arena.buffer();
@@ -2178,18 +2180,17 @@ pub(crate) mod on_device {
             park.wait();
             let mut release = Release::of(&park);
             let before = counters.metrics().submissions;
-            let later: Vec<CommandBuffer> = (0..IN_FLIGHT + 2)
+            let later: Vec<CommandBuffer> = (0..2)
                 .map(|index| {
                     let command_buffer = queue.command_buffer().expect("a command buffer");
-                    fill(&command_buffer, &buffer, 2 + index as u32);
+                    fill(&command_buffer, &buffer, 2 + index);
                     command_buffer.commit().expect("a commit");
+                    within("the later command buffer's submission", || {
+                        counters.metrics().submissions > before + u64::from(index)
+                    });
                     command_buffer
                 })
                 .collect();
-            let wanted = before + later.len() as u64;
-            within("each later command buffer's submission", || {
-                counters.metrics().submissions >= wanted
-            });
             assert!(
                 later
                     .iter()
@@ -2202,11 +2203,7 @@ pub(crate) mod on_device {
                 assert_eq!(command_buffer.error(), None, "{name}");
             }
             finished(name, &first);
-            assert_eq!(
-                word(&buffer),
-                2 + IN_FLIGHT as u32 + 1,
-                "{name}: the last fill"
-            );
+            assert_eq!(word(&buffer), 3, "{name}: the last fill");
             drop((later, first, buffer, arena, queue, device));
         });
     }
