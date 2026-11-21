@@ -134,16 +134,19 @@ fn two_queues(device: &rt::Device) -> Result<OwnReport> {
     let long = (device.new_buffer(block.id, 0, FILL_LEN, None)).map_err(error)?;
     let small_block = (device.take_block(rt::MemoryClass::Shared, SMALL_LEN)).map_err(error)?;
     let small = (device.new_buffer(small_block.id, 0, SMALL_LEN, None)).map_err(error)?;
-    // One fill's GPU run, the least of three on a queue of its own, sizes A's command buffers.
+    // One fill's GPU run, the least of five on a queue of its own after a warm-up of
+    // [`MOST_FILLS`] fills that brings the GPU's clock up, sizes A's command buffers.
     let calibrate = device.new_command_queue(1).map_err(error)?;
     let mut fill_run = u64::MAX;
-    for _ in 0..3 {
+    for fills in [MOST_FILLS, 1, 1, 1, 1, 1] {
         let command_buffer = calibrate.command_buffer().map_err(error)?;
-        fill(&command_buffer, &long, FILL_LEN, 1)?;
+        fill(&command_buffer, &long, FILL_LEN, fills)?;
         command_buffer.commit().map_err(error)?;
         command_buffer.wait_until_completed().map_err(error)?;
         let run = (command_buffer.gpu_end_time()).saturating_sub(command_buffer.gpu_start_time());
-        fill_run = fill_run.min(run.max(1));
+        if fills == 1 {
+            fill_run = fill_run.min(run.max(1));
+        }
     }
     let fills = LONG_RUN.div_ceil(fill_run).clamp(1, MOST_FILLS);
     let unrelated = two_queue_part(device, &long, &small, fills, false)?;
@@ -157,35 +160,39 @@ fn two_queues(device: &rt::Device) -> Result<OwnReport> {
         ("a_run", at(&unrelated.a_run, 50)),
         ("a_gap_p50", at(&unrelated.a_gap, 50)),
         ("a_gap_p90", at(&unrelated.a_gap, 90)),
+        ("a_per_cb", unrelated.a_per_cb),
         ("wait_p50", at(&signalled.after, 50)),
         ("wait_p90", at(&signalled.after, 90)),
         ("wait_a_gap_p50", at(&signalled.a_gap, 50)),
         ("wait_a_gap_p90", at(&signalled.a_gap, 90)),
+        ("wait_a_per_cb", signalled.a_per_cb),
     ];
     let ms = |us: f64| us / 1000.0;
     let lines = vec![
         format!(
             "B every {FRAME:?} beside A's backlog of {BACKLOG}, {fills} fills each, {:.1} ms \
              on the GPU at p50: B committed to completed p50 {:.1} ms, p90 {:.1} ms, max \
-             {:.1} ms; A's GPU idle before each of its p50 {:.1} us, p90 {:.1} us; {} held \
-             for room",
+             {:.1} ms; A's GPU idle before each of its p50 {:.1} us, p90 {:.1} us, its GPU time \
+             a command buffer {:.1} us; {} held for room",
             ms(at(&unrelated.a_run, 50)),
             ms(at(&unrelated.b, 50)),
             ms(at(&unrelated.b, 90)),
             ms(at(&unrelated.b, 100)),
             at(&unrelated.a_gap, 50),
             at(&unrelated.a_gap, 90),
+            unrelated.a_per_cb,
             unrelated.held,
         ),
         format!(
             "each of A's signalling at its tail, a waiter on B committed right after it: B's \
              GPU start after the signaller's GPU end p50 {:.1} us, p90 {:.1} us; A's GPU idle \
-             before each of its p50 {:.1} us, p90 {:.1} us; B committed to completed p50 {:.1} \
-             ms; {} held for room",
+             before each of its p50 {:.1} us, p90 {:.1} us, its GPU time a command buffer {:.1} \
+             us; B committed to completed p50 {:.1} ms; {} held for room",
             at(&signalled.after, 50),
             at(&signalled.after, 90),
             at(&signalled.a_gap, 50),
             at(&signalled.a_gap, 90),
+            signalled.a_per_cb,
             ms(at(&signalled.b, 50)),
             signalled.held,
         ),
@@ -202,6 +209,7 @@ struct Part {
     after: Vec<f64>,
     a_run: Vec<f64>,
     a_gap: Vec<f64>,
+    a_per_cb: f64,
     held: u64,
 }
 
@@ -327,7 +335,15 @@ fn two_queue_part(
         }
         after.push(gap(signaller, command_buffer));
     }
+    // A's GPU time a command buffer, its first start to its last end over their count.
+    let a_per_cb = match (of_a.first(), of_a.last()) {
+        (Some(first), Some(last)) => {
+            us(last.gpu_end_time() as f64 - first.gpu_start_time() as f64) / of_a.len() as f64
+        }
+        _ => 0.0,
+    };
     Ok(Part {
+        a_per_cb,
         b: (done.iter())
             .map(|&(index, at)| us(at.duration_since(frames[index].2).as_nanos() as f64))
             .collect(),

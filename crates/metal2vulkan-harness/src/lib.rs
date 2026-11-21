@@ -155,10 +155,10 @@
 //! leave waiting, read with that work in flight, is to stay flat from its 100th iteration to its
 //! 200th. `two_queues` records one queue's commit-to-completed times beside another queue's
 //! backlog (`b_p50`, `b_p90`, `b_max`), that backlog's GPU run (`a_run`) and GPU idle before
-//! each of its command buffers (`a_gap_p50`, `a_gap_p90`), and, with each of the backlog's
+//! each of its command buffers (`a_gap_p50`, `a_gap_p90`) and a command buffer (`a_per_cb`), and, with each of the backlog's
 //! signalling at its tail and a waiter on the other queue committed right after it, how long after
 //! the signaller's GPU end the waiter starts (`wait_p50`, `wait_p90`) and the backlog's GPU idle
-//! then (`wait_a_gap_p50`, `wait_a_gap_p90`), judged as `export_submit_cost`'s are; its check is
+//! then (`wait_a_gap_p50`, `wait_a_gap_p90`, `wait_a_per_cb`), judged as `export_submit_cost`'s are; its check is
 //! that every command buffer completes, each waiter after its signaller.
 
 use std::ptr::NonNull;
