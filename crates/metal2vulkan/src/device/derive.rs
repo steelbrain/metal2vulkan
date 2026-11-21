@@ -203,28 +203,15 @@ fn derive_fields(desc: &DeviceDescription, policy: &DevicePolicy) -> ProfileFiel
         float16: has(VkFeature::ShaderFloat16),
         float64: has(VkFeature::ShaderFloat64),
         storage_buffer_8bit: has(VkFeature::StorageBuffer8BitAccess),
-        uniform_buffer_8bit: has(VkFeature::UniformAndStorageBuffer8BitAccess),
-        push_constant_8bit: has(VkFeature::StoragePushConstant8),
         storage_buffer_16bit: has(VkFeature::StorageBuffer16BitAccess),
-        uniform_buffer_16bit: has(VkFeature::UniformAndStorageBuffer16BitAccess),
-        push_constant_16bit: has(VkFeature::StoragePushConstant16),
-        workgroup_explicit_layout: has(VkFeature::WorkgroupMemoryExplicitLayout),
-        workgroup_explicit_layout_8bit: has(VkFeature::WorkgroupMemoryExplicitLayout8BitAccess),
-        workgroup_explicit_layout_16bit: has(VkFeature::WorkgroupMemoryExplicitLayout16BitAccess),
         buffer_int64_atomics: has(VkFeature::ShaderBufferInt64Atomics),
         shared_int64_atomics: has(VkFeature::ShaderSharedInt64Atomics),
         buffer_float32_atomic_add: has(VkFeature::ShaderBufferFloat32AtomicAdd),
-        buffer_float32_atomic_min_max: has(VkFeature::ShaderBufferFloat32AtomicMinMax),
-        shared_float32_atomic_add: has(VkFeature::ShaderSharedFloat32AtomicAdd),
-        shared_float32_atomic_min_max: has(VkFeature::ShaderSharedFloat32AtomicMinMax),
-        image_float32_atomic_add: has(VkFeature::ShaderImageFloat32AtomicAdd),
-        image_float32_atomic_min_max: has(VkFeature::ShaderImageFloat32AtomicMinMax),
         image_int64_atomics: has(VkFeature::ShaderImageInt64Atomics),
         vertex_stores_and_atomics: has(VkFeature::VertexPipelineStoresAndAtomics),
         fragment_stores_and_atomics: has(VkFeature::FragmentStoresAndAtomics),
         zero_initialize_workgroup_memory: has(VkFeature::ShaderZeroInitializeWorkgroupMemory),
         fma32: has(VkFeature::ShaderFmaFloat32),
-        fma16: has(VkFeature::ShaderFmaFloat16),
         float8: has(VkFeature::ShaderFloat8),
     };
     let images = ImageCaps {
@@ -240,9 +227,7 @@ fn derive_fields(desc: &DeviceDescription, policy: &DevicePolicy) -> ProfileFiel
             || has(VkFeature::RobustImageAccess2),
         robust_image_access2: has(VkFeature::RobustImageAccess2),
         sampler_anisotropy: has(VkFeature::SamplerAnisotropy),
-        sampler_filter_minmax: has(VkFeature::SamplerFilterMinmax),
         sampler_mirror_clamp_to_edge: has(VkFeature::SamplerMirrorClampToEdge),
-        compute_derivative_quads: has(VkFeature::ComputeDerivativeGroupQuads),
         compute_derivative_linear: has(VkFeature::ComputeDerivativeGroupLinear),
     };
     let descriptors = DescriptorCaps {
@@ -251,7 +236,6 @@ fn derive_fields(desc: &DeviceDescription, policy: &DevicePolicy) -> ProfileFiel
         uniform_buffer_standard_layout: has(VkFeature::UniformBufferStandardLayout),
         runtime_descriptor_array: has(VkFeature::RuntimeDescriptorArray),
         partially_bound: has(VkFeature::DescriptorBindingPartiallyBound),
-        variable_descriptor_count: has(VkFeature::DescriptorBindingVariableDescriptorCount),
         update_after_bind_sampled_image: has(
             VkFeature::DescriptorBindingSampledImageUpdateAfterBind,
         ),
@@ -291,7 +275,6 @@ fn derive_fields(desc: &DeviceDescription, policy: &DevicePolicy) -> ProfileFiel
         sample_rate_shading: has(VkFeature::SampleRateShading),
         dual_src_blend: has(VkFeature::DualSrcBlend),
         independent_blend: has(VkFeature::IndependentBlend),
-        geometry_shader: has(VkFeature::GeometryShader),
         tessellation_shader: has(VkFeature::TessellationShader),
         // The features alone: at the 1.2 floor they replace `VK_EXT_shader_viewport_index_layer`'s
         // one capability (`ShaderViewportIndexLayerEXT`) with the `ShaderLayer` and
@@ -301,9 +284,7 @@ fn derive_fields(desc: &DeviceDescription, policy: &DevicePolicy) -> ProfileFiel
         output_layer: has(VkFeature::ShaderOutputLayer),
         output_viewport_index: has(VkFeature::ShaderOutputViewportIndex),
         clip_distance: has(VkFeature::ShaderClipDistance),
-        cull_distance: has(VkFeature::ShaderCullDistance),
         rasterization_order_color_access: has(VkFeature::RasterizationOrderColorAttachmentAccess),
-        dynamic_rendering_local_read: has(VkFeature::DynamicRenderingLocalRead),
         vertex_attribute_divisor: has(VkFeature::VertexAttributeInstanceRateDivisor),
         vertex_attribute_zero_divisor: has(VkFeature::VertexAttributeInstanceRateZeroDivisor),
     };

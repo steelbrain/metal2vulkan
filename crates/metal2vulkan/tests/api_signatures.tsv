@@ -2526,7 +2526,6 @@ field	metal2vulkan::device::DescriptorCaps.update_after_bind_storage_image	pub u
 field	metal2vulkan::device::DescriptorCaps.update_after_bind_storage_texel_buffer	pub update_after_bind_storage_texel_buffer: bool
 field	metal2vulkan::device::DescriptorCaps.update_after_bind_uniform_texel_buffer	pub update_after_bind_uniform_texel_buffer: bool
 field	metal2vulkan::device::DescriptorCaps.update_unused_while_pending	pub update_unused_while_pending: bool
-field	metal2vulkan::device::DescriptorCaps.variable_descriptor_count	pub variable_descriptor_count: bool
 field	metal2vulkan::device::DeviceDescription.allocation	pub allocation: AllocationLimits
 field	metal2vulkan::device::DeviceDescription.api_version	pub api_version: ApiVersion
 field	metal2vulkan::device::DeviceDescription.device_id	pub device_id: u32
@@ -2570,11 +2569,8 @@ field	metal2vulkan::device::FormatProperties.optimal_tiling	pub optimal_tiling: 
 field	metal2vulkan::device::FormatSupport.formats	pub formats: BTreeMap<vk::Format, FormatProperties>
 field	metal2vulkan::device::FragmentCaps.barycentric	pub barycentric: bool
 field	metal2vulkan::device::FragmentCaps.clip_distance	pub clip_distance: bool
-field	metal2vulkan::device::FragmentCaps.cull_distance	pub cull_distance: bool
 field	metal2vulkan::device::FragmentCaps.demote_to_helper	pub demote_to_helper: bool
 field	metal2vulkan::device::FragmentCaps.dual_src_blend	pub dual_src_blend: bool
-field	metal2vulkan::device::FragmentCaps.dynamic_rendering_local_read	pub dynamic_rendering_local_read: bool
-field	metal2vulkan::device::FragmentCaps.geometry_shader	pub geometry_shader: bool
 field	metal2vulkan::device::FragmentCaps.independent_blend	pub independent_blend: bool
 field	metal2vulkan::device::FragmentCaps.output_layer	pub output_layer: bool
 field	metal2vulkan::device::FragmentCaps.output_viewport_index	pub output_viewport_index: bool
@@ -2595,7 +2591,6 @@ field	metal2vulkan::device::GeneratedCommandsProperties.max_indirect_sequence_co
 field	metal2vulkan::device::GeneratedCommandsProperties.pipeline_binding_stages	pub pipeline_binding_stages: vk::ShaderStageFlags
 field	metal2vulkan::device::GeneratedCommandsProperties.supported_stages	pub supported_stages: vk::ShaderStageFlags
 field	metal2vulkan::device::ImageCaps.compute_derivative_linear	pub compute_derivative_linear: bool
-field	metal2vulkan::device::ImageCaps.compute_derivative_quads	pub compute_derivative_quads: bool
 field	metal2vulkan::device::ImageCaps.cube_array	pub cube_array: bool
 field	metal2vulkan::device::ImageCaps.dynamic_sample_offset	pub dynamic_sample_offset: bool
 field	metal2vulkan::device::ImageCaps.gather_extended	pub gather_extended: bool
@@ -2603,7 +2598,6 @@ field	metal2vulkan::device::ImageCaps.min_lod	pub min_lod: bool
 field	metal2vulkan::device::ImageCaps.robust_image_access	pub robust_image_access: bool
 field	metal2vulkan::device::ImageCaps.robust_image_access2	pub robust_image_access2: bool
 field	metal2vulkan::device::ImageCaps.sampler_anisotropy	pub sampler_anisotropy: bool
-field	metal2vulkan::device::ImageCaps.sampler_filter_minmax	pub sampler_filter_minmax: bool
 field	metal2vulkan::device::ImageCaps.sampler_mirror_clamp_to_edge	pub sampler_mirror_clamp_to_edge: bool
 field	metal2vulkan::device::ImageCaps.storage_extended_formats	pub storage_extended_formats: bool
 field	metal2vulkan::device::ImageCaps.storage_multisample	pub storage_multisample: bool
