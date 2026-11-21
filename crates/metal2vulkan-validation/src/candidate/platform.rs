@@ -27,6 +27,8 @@ pub use device::{requested_leg, run_robustness_off};
 pub use profiles::{requested_restriction, restrict_devices_to};
 pub use render::execute_engine_render;
 pub use runtime::execute_runtime;
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
+pub use runtime::{make_kernel, on_runtime_device};
 pub use runtime_probe::probe_runtime;
 
 /// Whether the profiles layer can present committed profile `stem` ([`profiles::presentable`]).

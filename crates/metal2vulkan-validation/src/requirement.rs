@@ -40,6 +40,15 @@ pub enum Limit {
     /// every executor (no case can be qualified), and its rows are classified and closed without a
     /// reference: the census counts them apart and never as unresolved.
     Metal,
+    /// `metal2vulkan-runtime` answers the structure with a typed refusal, or offers no call for it
+    /// and the consumer refuses it itself (its README's known gaps): the Metal oracle runs it, the
+    /// engine's candidate refuses it, typed, and its rows are classified and closed without a
+    /// candidate run, counted apart and never as unresolved. A device test holds each such
+    /// requirement to the refusal both ways on lavapipe where the runtime has a call for it: the
+    /// shape the requirement's check accepts gets the named refusal, and the same shape without it
+    /// is made. The day the runtime builds the shape that test fails, and the limit goes back to
+    /// [`Limit::Tooling`] while the executor's support is built.
+    Runtime,
 }
 
 impl Limit {
@@ -47,6 +56,7 @@ impl Limit {
         match self {
             Self::Tooling => "tooling",
             Self::Metal => "metal",
+            Self::Runtime => "runtime",
         }
     }
 }
@@ -77,11 +87,15 @@ pub enum ToolingRequirement {
     KernelStageInputLiteral,
     /// A texture buffer that is no entry parameter of its own: one an argument buffer holds, or an
     /// element of a texture-handle array (`executor_contract`). The engine's candidate runs
-    /// neither. It reaches an argument buffer's textures through the binder's planned heap, which
-    /// makes no texture buffer a member, so a handle naming one misses. No case runs a
-    /// texture-buffer array on it, and the runtime makes no texture buffer
-    /// (`metal2vulkan_runtime::Gap::TextureBuffer`). The Metal oracle makes and binds both,
-    /// so a case of either stays Metal-qualified ([`Self::qualifies_on_metal`]).
+    /// neither. The runtime makes no texture buffer (`metal2vulkan_runtime::Gap::TextureBuffer`
+    /// at `new_texture`), and its identity domains hold no texture buffer among an argument
+    /// buffer's textures, so it refuses such a function's pipeline at its make
+    /// (`Unsupported{IdentityDomains}`): the limit is the runtime's ([`Limit::Runtime`]), held
+    /// both ways by the device tests
+    /// `candidate::tests::engine_compute::a_texture_buffer_is_refused_where_a_2d_texture_is_made`
+    /// and `..::a_texture_buffer_member_is_refused_at_the_make_where_a_2d_member_is_made`. The
+    /// Metal oracle makes and binds both, so a case of either stays Metal-qualified
+    /// ([`Self::qualifies_on_metal`]).
     TextureBufferMember,
     StorageTextureFormatLiteral,
     ImplicitImageblockLiteral,
@@ -131,7 +145,12 @@ pub enum ToolingRequirement {
     /// executing device raises it, never a source's structure, so no census row carries it.
     DepthOutsideUnitRange,
     /// An object or mesh function's row or case (`executor_contract::mesh`), or a case that runs a
-    /// pipeline template of one: the engine's candidate draws no mesh render pipeline. The Metal
+    /// pipeline template of one: the engine's candidate draws no mesh render pipeline. The runtime
+    /// has no mesh call: it makes no mesh render pipeline state and records no mesh draw, and the
+    /// consumer refuses mesh pipelines itself (`crates/metal2vulkan-runtime/README.md`, its known
+    /// gaps), so the limit is the runtime's ([`Limit::Runtime`]) with no call to hold a device
+    /// test to; that README sentence is its guard. When a guest uses a mesh pipeline it is built
+    /// natively with its call, and the limit goes back to [`Limit::Tooling`] then. The Metal
     /// oracle draws it, so a case of it stays Metal-qualified ([`Self::qualifies_on_metal`]), and
     /// the authored compile census still compiles an object or mesh case's pipeline
     /// (`engine::prepare_compile`).
@@ -148,9 +167,11 @@ pub enum ToolingRequirement {
     /// memory scope is the device. The translator orders such a fence with the command buffer's
     /// other ones through an atomic on its execution status word, which the runtime's identity
     /// domains do not reach: the runtime refuses the pipeline (`Unsupported{IdentityDomains}`,
-    /// naming the `ExecutionStatusAddress` encoder value), so the engine's candidate does not run
-    /// the case. The Metal oracle runs it, so a case of it stays Metal-qualified
-    /// ([`Self::qualifies_on_metal`]).
+    /// naming the `ExecutionStatusAddress` encoder value), so the limit is the runtime's
+    /// ([`Limit::Runtime`]) and the engine's candidate does not run the case. The device tests
+    /// `candidate::tests::engine_compute::a_seq_cst_fence_is_refused_through_the_runtime_as_its_requirement_says`
+    /// and `..::a_fence_of_another_order_is_made_through_the_runtime` hold it both ways. The Metal
+    /// oracle runs it, so a case of it stays Metal-qualified ([`Self::qualifies_on_metal`]).
     SeqCstFence,
 }
 
@@ -290,10 +311,14 @@ impl ToolingRequirement {
 
     /// Whose limit this requirement records. Every requirement is this crate's tooling's except
     /// [`ToolingRequirement::KernelMinLodClamp`], which Apple's compiler cannot build a pipeline
-    /// for.
+    /// for, and [`ToolingRequirement::SeqCstFence`], [`ToolingRequirement::TextureBufferMember`]
+    /// and [`ToolingRequirement::MeshRenderPipeline`], which the runtime refuses.
     pub const fn limit(self) -> Limit {
         match self {
             Self::KernelMinLodClamp => Limit::Metal,
+            Self::SeqCstFence | Self::TextureBufferMember | Self::MeshRenderPipeline => {
+                Limit::Runtime
+            }
             _ => Limit::Tooling,
         }
     }
@@ -306,7 +331,8 @@ impl ToolingRequirement {
     /// Whether a row carrying this requirement keeps the authoring-capability census open: it is
     /// a tooling gap ([`Limit::Tooling`]), and every requirement stops an executor the census
     /// closes on. A [`Limit::Metal`] requirement closes its row without a reference: no tooling
-    /// can give Metal an answer its compiler cannot build.
+    /// can give Metal an answer its compiler cannot build. A [`Limit::Runtime`] requirement closes
+    /// its row without a candidate run: the product refuses the structure, typed.
     pub fn blocks_closure(self) -> bool {
         self.limit() == Limit::Tooling
     }
@@ -420,9 +446,9 @@ mod tests {
     }
 
     /// The mesh render pipeline's requirements: a stage nothing generates stops both executors
-    /// (`mesh_companion`), and the engine's candidate draws none (`mesh_render_pipeline`), whose
-    /// cases stay Metal-qualified. Both are this crate's gaps, never Metal's, which keep the census
-    /// open.
+    /// (`mesh_companion`), this crate's gap, which keeps the census open; and the engine's
+    /// candidate draws none (`mesh_render_pipeline`), whose cases stay Metal-qualified, the
+    /// runtime's limit (it has no mesh call), which closes its rows.
     #[test]
     fn mesh_requirements_stop_the_executors_that_do_not_draw_them_yet() {
         let requirement = ToolingRequirement::MeshCompanion;
@@ -432,7 +458,8 @@ mod tests {
         assert!(!requirement.qualifies_on_metal(), "{requirement}");
         let requirement = ToolingRequirement::MeshRenderPipeline;
         assert_eq!(requirement.stops(), [Executor::EngineCandidate]);
-        assert!(requirement.blocks_closure(), "{requirement}");
+        assert_eq!(requirement.limit(), Limit::Runtime, "{requirement}");
+        assert!(!requirement.blocks_closure(), "{requirement}");
         assert!(requirement.qualifies_on_metal(), "{requirement}");
         assert_eq!(
             ToolingRequirement::ALL
@@ -448,14 +475,14 @@ mod tests {
     }
 
     /// A texture buffer an argument buffer or a texture-handle array holds: a case expresses it
-    /// and the Metal oracle runs it, so its cases stay Metal-qualified; the engine's candidate runs
-    /// none, a tooling gap that keeps the census open.
+    /// and the Metal oracle runs it, so its cases stay Metal-qualified; the runtime refuses it, so
+    /// the engine's candidate runs none, the runtime's limit, which closes its rows.
     #[test]
     fn a_texture_buffer_member_stops_only_the_candidate() {
         let requirement = ToolingRequirement::TextureBufferMember;
         assert_eq!(requirement.stops(), [Executor::EngineCandidate]);
-        assert_eq!(requirement.limit(), Limit::Tooling, "{requirement}");
-        assert!(requirement.blocks_closure(), "{requirement}");
+        assert_eq!(requirement.limit(), Limit::Runtime, "{requirement}");
+        assert!(!requirement.blocks_closure(), "{requirement}");
         assert!(requirement.qualifies_on_metal(), "{requirement}");
         assert!("texture_buffer_literal"
             .parse::<ToolingRequirement>()
@@ -463,14 +490,14 @@ mod tests {
     }
 
     /// A sequentially consistent fence: the Metal oracle runs it, so its cases stay
-    /// Metal-qualified; the runtime refuses it, so the engine's candidate runs none, a tooling gap
-    /// that keeps the census open.
+    /// Metal-qualified; the runtime refuses it, so the engine's candidate runs none, the runtime's
+    /// limit, which closes its rows.
     #[test]
     fn a_seq_cst_fence_stops_only_the_candidate() {
         let requirement = ToolingRequirement::SeqCstFence;
         assert_eq!(requirement.stops(), [Executor::EngineCandidate]);
-        assert_eq!(requirement.limit(), Limit::Tooling, "{requirement}");
-        assert!(requirement.blocks_closure(), "{requirement}");
+        assert_eq!(requirement.limit(), Limit::Runtime, "{requirement}");
+        assert!(!requirement.blocks_closure(), "{requirement}");
         assert!(requirement.qualifies_on_metal(), "{requirement}");
         assert_eq!("seq_cst_fence".parse(), Ok(requirement));
     }
@@ -478,7 +505,7 @@ mod tests {
     /// Every requirement stops some executor, and an executor's name is as stable as a
     /// requirement's. A requirement that stops the Metal oracle stops every executor: when Metal
     /// cannot run a case, no candidate has an observation to be compared with. Only a tooling gap
-    /// keeps the census open.
+    /// keeps the census open; the runtime's limit stops the candidate alone.
     #[test]
     fn every_requirement_stops_an_executor_and_a_metal_stop_is_an_authoring_stop() {
         for requirement in ToolingRequirement::ALL {
@@ -498,6 +525,11 @@ mod tests {
                     assert_eq!(stops, Executor::ALL, "{requirement}");
                     assert!(!requirement.blocks_closure(), "{requirement}");
                 }
+                Limit::Runtime => {
+                    assert_eq!(stops, [Executor::EngineCandidate], "{requirement}");
+                    assert!(requirement.qualifies_on_metal(), "{requirement}");
+                    assert!(!requirement.blocks_closure(), "{requirement}");
+                }
                 Limit::Tooling => assert!(requirement.blocks_closure(), "{requirement}"),
             }
         }
@@ -507,6 +539,17 @@ mod tests {
                 .filter(|requirement| requirement.limit() == Limit::Metal)
                 .collect::<Vec<_>>(),
             [ToolingRequirement::KernelMinLodClamp]
+        );
+        assert_eq!(
+            ToolingRequirement::ALL
+                .into_iter()
+                .filter(|requirement| requirement.limit() == Limit::Runtime)
+                .collect::<Vec<_>>(),
+            [
+                ToolingRequirement::TextureBufferMember,
+                ToolingRequirement::MeshRenderPipeline,
+                ToolingRequirement::SeqCstFence
+            ]
         );
         for executor in Executor::ALL {
             assert_eq!(

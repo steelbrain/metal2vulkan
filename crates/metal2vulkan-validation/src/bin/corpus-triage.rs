@@ -596,9 +596,10 @@ fn audit_authoring_capabilities(
     }
     println!("{}", cases.report_line());
     // The census covers indexed rows, one per entry of every module. Rows Metal itself cannot build
-    // are closed without a reference and counted apart.
+    // are closed without a reference, and rows the runtime refuses, typed, without a candidate
+    // run; each is counted apart.
     println!(
-        "authoring-capability-summary\tselected={}\ttotal={}\tclassified={}\tremaining={}\tunresolved={}\tindex_select_ms={}\tclassify_cache_ms={}\tsource_shards_opened={}\tsource_bytes_read={}\trepair_shards_scanned={}\trepair_bytes_scanned={}\tmetal_refused={}",
+        "authoring-capability-summary\tselected={}\ttotal={}\tclassified={}\tremaining={}\tunresolved={}\tindex_select_ms={}\tclassify_cache_ms={}\tsource_shards_opened={}\tsource_bytes_read={}\trepair_shards_scanned={}\trepair_bytes_scanned={}\tmetal_refused={}\truntime_refused={}",
         selected,
         summary.total_sources,
         summary.classified_sources,
@@ -611,6 +612,7 @@ fn audit_authoring_capabilities(
         read_stats.repair_shards_scanned,
         read_stats.repair_bytes_scanned,
         summary.metal_refused_sources,
+        summary.runtime_refused_sources,
     );
     // Each requirement with the executors it stops and whose limit it is; a tooling requirement
     // makes its rows unresolved.
@@ -626,11 +628,12 @@ fn audit_authoring_capabilities(
             requirement.limit()
         );
     }
-    // An executor's tooling gaps keep the census open; Metal's own refusals are closed.
+    // An executor's tooling gaps keep the census open; Metal's own refusals and the runtime's
+    // typed ones are closed.
     for (executor, stops) in &summary.executor_stops {
         println!(
-            "authoring-executor-stops\t{executor}\t{}\ttooling_gap={}\tmetal_refused={}",
-            stops.sources, stops.tooling_gap, stops.metal_refused,
+            "authoring-executor-stops\t{executor}\t{}\ttooling_gap={}\tmetal_refused={}\truntime_refused={}",
+            stops.sources, stops.tooling_gap, stops.metal_refused, stops.runtime_refused,
         );
     }
     // Authorable, not unresolved: these rows' cases do not evidence the named effect.

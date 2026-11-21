@@ -632,3 +632,87 @@ fn a_seq_cst_fence_is_refused_through_the_runtime_as_its_requirement_says() {
         "{error}"
     );
 }
+
+/// The other way of [`a_seq_cst_fence_is_refused_through_the_runtime_as_its_requirement_says`]:
+/// the owned fixture `rlm_runtime_limits`'s `rlm_fence_acq_rel` holds the same two stores around a
+/// device-scope fence of `acq_rel` order, which carries no `ToolingRequirement::SeqCstFence`, and
+/// the runtime makes and runs it: its words are the stores'.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_fence_of_another_order_is_made_through_the_runtime() {
+    let bitcode = llvm_assemble(&engine_dir().join("rlm_runtime_limits.ll")).unwrap();
+    let threads = Dispatch::Threads {
+        threads: [8, 1, 1],
+        threads_per_group: [8, 1, 1],
+    };
+    let input = (0..8u32).map(|t| t * 3 + 1).collect::<Vec<_>>();
+    let mut fence = case(
+        "rlm_fence_acq_rel",
+        input.iter().flat_map(|word| word.to_le_bytes()).collect(),
+        threads,
+    );
+    fence.buffers.insert(1, vec![0; 64]);
+    fence.output = ComputeOutput::Buffer {
+        binding: 1,
+        offset: 0,
+        length: 64,
+    };
+    let output = run_on_runtime(&fence, &bitcode, &[]).unwrap().output;
+    let expected = input
+        .iter()
+        .map(|word| word + 1)
+        .chain(input.iter().map(|word| word * 2))
+        .flat_map(u32::to_le_bytes)
+        .collect::<Vec<_>>();
+    assert_eq!(output, expected);
+}
+
+/// `ToolingRequirement::TextureBufferMember`'s limit at the texture, both ways: the runtime makes
+/// no texture buffer, so `new_texture` refuses one, typed (`Gap::TextureBuffer`), where it makes a
+/// 2D texture of the same format and width. The day the runtime makes one, this fails.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_texture_buffer_is_refused_where_a_2d_texture_is_made() {
+    use metal2vulkan_runtime as rt;
+    platform::on_runtime_device(crate::gpu::TEST_DEVICE, |device| {
+        let made = |texture_type| {
+            let descriptor =
+                rt::TextureDescriptor::new(texture_type, rt::PixelFormat::RGBA32Float, 16, 1);
+            device.new_texture(&descriptor, None).map(drop)
+        };
+        let refused = made(rt::TextureType::TextureBuffer);
+        assert!(
+            matches!(refused, Err(rt::Error::Unsupported(rt::Gap::TextureBuffer))),
+            "{refused:?}"
+        );
+        made(rt::TextureType::Type2D).unwrap();
+    })
+    .unwrap();
+}
+
+/// `ToolingRequirement::TextureBufferMember`'s limit at the pipeline, both ways: the runtime's
+/// identity domains hold no texture buffer among an argument buffer's textures, so the make of
+/// `rlm_runtime_limits`'s `rlm_member_texture_buffer`, which reads one, is refused, typed
+/// (`Unsupported{IdentityDomains}`), where the same read of a 2D texture the argument buffer holds,
+/// `rlm_member_texture`, is made. The day the runtime makes the first, this fails.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_texture_buffer_member_is_refused_at_the_make_where_a_2d_member_is_made() {
+    use crate::check::admission::NotSupported;
+    use metal2vulkan::error::{Feature, Unsupported};
+    let bitcode = llvm_assemble(&engine_dir().join("rlm_runtime_limits.ll")).unwrap();
+    let identity_domains = crate::engine::Outcome::from(&metal2vulkan::error::Error::from(
+        Unsupported::not_implemented(Feature::IdentityDomains),
+    ));
+    platform::on_runtime_device(crate::gpu::TEST_DEVICE, |device| {
+        match platform::make_kernel(device, &bitcode, "rlm_member_texture_buffer") {
+            Err(ExecutorError::NotSupported(NotSupported::Product { outcome, .. })) => {
+                assert_eq!(outcome, identity_domains)
+            }
+            Err(error) => panic!("not the identity domains' refusal: {error}"),
+            Ok(_) => panic!("the runtime made a texture buffer member's pipeline"),
+        }
+        platform::make_kernel(device, &bitcode, "rlm_member_texture").unwrap();
+    })
+    .unwrap();
+}

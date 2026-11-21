@@ -14,7 +14,7 @@ use std::path::Path;
 /// bumps it says what changed; this comment keeps no history.
 macro_rules! analyzer_version {
     () => {
-        "structural-triage-v84"
+        "structural-triage-v85"
     };
 }
 
@@ -168,6 +168,10 @@ pub struct AuthoringCapabilitySummary {
     /// [`Limit::Metal`]): closed without a Metal reference, and unresolved only when a tooling gap
     /// of their own keeps them open.
     pub metal_refused_sources: usize,
+    /// Classified sources the runtime refuses, typed (a requirement whose limit is
+    /// [`Limit::Runtime`]): closed without a candidate run, and unresolved only when a tooling gap
+    /// of their own keeps them open.
+    pub runtime_refused_sources: usize,
     pub requirements: BTreeMap<ToolingRequirement, usize>,
     /// The classified sources each executor cannot run, and whose limit stops it (an executor that
     /// no requirement stops is absent).
@@ -189,6 +193,9 @@ pub struct ExecutorStops {
     /// Those with a requirement whose limit is Metal's own ([`Limit::Metal`]): closed without a
     /// reference, unless a tooling gap of their own keeps them open.
     pub metal_refused: usize,
+    /// Those with a requirement whose limit is the runtime's typed refusal ([`Limit::Runtime`]):
+    /// closed without a candidate run, unless a tooling gap of their own keeps them open.
+    pub runtime_refused: usize,
 }
 
 impl AuthoringCapabilitySummary {
@@ -389,24 +396,29 @@ pub fn authoring_capability_summary(index: &Path) -> Result<AuthoringCapabilityS
             |row| row.get(0),
         )
         .map_err(|error| format!("count unresolved authoring-capability sources: {error}"))?;
-    let metal_limited = names(
-        &mut ToolingRequirement::ALL
-            .into_iter()
-            .filter(|requirement| requirement.limit() == Limit::Metal),
-    );
-    let metal_refused_sources = connection
-        .query_row(
-            &format!(
-                "SELECT count(*) FROM sources s JOIN triage_analysis t USING (air_sha256) \
-                 WHERE t.analyzer_abi=?1 \
-                   AND EXISTS (SELECT 1 FROM json_each(\
-                            t.result_json, '$.tooling_requirements') requirement \
-                        WHERE requirement.value IN ({metal_limited}))"
-            ),
-            [ANALYZER_ABI],
-            |row| row.get(0),
-        )
-        .map_err(|error| format!("count sources Metal cannot build: {error}"))?;
+    // The sources carrying a requirement whose limit is `limit`.
+    let limited = |limit: Limit, what: &str| {
+        let list = names(
+            &mut ToolingRequirement::ALL
+                .into_iter()
+                .filter(|requirement| requirement.limit() == limit),
+        );
+        connection
+            .query_row(
+                &format!(
+                    "SELECT count(*) FROM sources s JOIN triage_analysis t USING (air_sha256) \
+                     WHERE t.analyzer_abi=?1 \
+                       AND EXISTS (SELECT 1 FROM json_each(\
+                                t.result_json, '$.tooling_requirements') requirement \
+                            WHERE requirement.value IN ({list}))"
+                ),
+                [ANALYZER_ABI],
+                |row| row.get::<_, usize>(0),
+            )
+            .map_err(|error| format!("count sources {what}: {error}"))
+    };
+    let metal_refused_sources = limited(Limit::Metal, "Metal cannot build")?;
+    let runtime_refused_sources = limited(Limit::Runtime, "the runtime refuses")?;
     let mut executor_stops = BTreeMap::new();
     for executor in Executor::ALL {
         let stopping = |limit: Option<Limit>| {
@@ -426,11 +438,13 @@ pub fn authoring_capability_summary(index: &Path) -> Result<AuthoringCapabilityS
         let stops = connection
             .query_row(
                 &format!(
-                    "SELECT count(*), coalesce(sum({}), 0), coalesce(sum({}), 0) \
+                    "SELECT count(*), coalesce(sum({}), 0), coalesce(sum({}), 0), \
+                       coalesce(sum({}), 0) \
                      FROM sources s JOIN triage_analysis t USING (air_sha256) \
                      WHERE t.analyzer_abi=?1 AND {}",
                     with(stopping(Some(Limit::Tooling))),
                     with(stopping(Some(Limit::Metal))),
+                    with(stopping(Some(Limit::Runtime))),
                     with(stopping(None)),
                 ),
                 [ANALYZER_ABI],
@@ -439,6 +453,7 @@ pub fn authoring_capability_summary(index: &Path) -> Result<AuthoringCapabilityS
                         sources: row.get(0)?,
                         tooling_gap: row.get(1)?,
                         metal_refused: row.get(2)?,
+                        runtime_refused: row.get(3)?,
                     })
                 },
             )
@@ -506,6 +521,7 @@ pub fn authoring_capability_summary(index: &Path) -> Result<AuthoringCapabilityS
         classified_sources,
         unresolved_sources,
         metal_refused_sources,
+        runtime_refused_sources,
         requirements,
         executor_stops,
         unobserved_effects,
@@ -977,6 +993,7 @@ mod tests {
             classified_sources: classified,
             unresolved_sources: unresolved,
             metal_refused_sources: 0,
+            runtime_refused_sources: 0,
             requirements: BTreeMap::new(),
             executor_stops: BTreeMap::new(),
             unobserved_effects: BTreeMap::new(),
@@ -1394,6 +1411,7 @@ entry:
                         sources: 1,
                         tooling_gap: 1,
                         metal_refused: 0,
+                        runtime_refused: 0,
                     };
                     (executor, stops)
                 })
@@ -1404,7 +1422,9 @@ entry:
     /// A row is unresolved when a requirement stops an executor the census closes on (the Metal
     /// oracle or the engine's candidate), and each executor counts the rows it cannot run. A
     /// requirement whose limit is Metal's own stops every executor but closes its row, counted as
-    /// refused by Metal; a tooling gap beside it still keeps that row open.
+    /// refused by Metal; one whose limit is the runtime's typed refusal stops the candidate but
+    /// closes its row, counted as refused by the runtime; a tooling gap beside either still keeps
+    /// that row open.
     #[test]
     fn the_census_closes_on_the_metal_oracle_and_the_engine() {
         let scratch = ScratchDir::new("authoring-capability-executors").unwrap();
@@ -1415,7 +1435,8 @@ entry:
                 "CREATE TABLE sources (air_sha256 TEXT PRIMARY KEY, stage TEXT NOT NULL);\n\
                  INSERT INTO sources VALUES \
                     ('new-only', 'Fragment'), ('authoring', 'Vertex'), ('none', 'Kernel'), \
-                    ('metal-refused', 'Kernel'), ('metal-refused-and-gap', 'Kernel');",
+                    ('metal-refused', 'Kernel'), ('metal-refused-and-gap', 'Kernel'), \
+                    ('runtime-refused', 'Kernel'), ('runtime-refused-and-gap', 'Kernel');",
             )
             .unwrap();
         drop(connection);
@@ -1431,6 +1452,11 @@ entry:
             ToolingRequirement::KernelMinLodClamp,
             ToolingRequirement::RenderDeviceBufferArray,
         ]);
+        let runtime_refused = with(&[ToolingRequirement::SeqCstFence]);
+        let runtime_refused_and_gap = with(&[
+            ToolingRequirement::SeqCstFence,
+            ToolingRequirement::RenderDeviceBufferArray,
+        ]);
         write_cached(
             &index,
             [
@@ -1439,29 +1465,63 @@ entry:
                 ("none", &supported),
                 ("metal-refused", &metal_refused),
                 ("metal-refused-and-gap", &metal_refused_and_gap),
+                ("runtime-refused", &runtime_refused),
+                ("runtime-refused-and-gap", &runtime_refused_and_gap),
             ],
         )
         .unwrap();
         let summary = authoring_capability_summary(&index).unwrap();
-        assert_eq!(summary.classified_sources, 5);
-        assert_eq!(summary.unresolved_sources, 3);
+        assert_eq!(summary.classified_sources, 7);
+        assert_eq!(summary.unresolved_sources, 4);
         assert_eq!(summary.metal_refused_sources, 2);
-        let stops = |sources, tooling_gap, metal_refused| ExecutorStops {
+        assert_eq!(summary.runtime_refused_sources, 2);
+        let stops = |sources, tooling_gap, metal_refused, runtime_refused| ExecutorStops {
             sources,
             tooling_gap,
             metal_refused,
+            runtime_refused,
         };
         assert_eq!(
             summary.executor_stops,
             BTreeMap::from([
-                (Executor::MetalOracle, stops(3, 1, 2)),
-                (Executor::EngineCandidate, stops(4, 3, 2)),
+                (Executor::MetalOracle, stops(3, 1, 2, 0)),
+                (Executor::EngineCandidate, stops(6, 4, 2, 2)),
             ])
         );
         assert_eq!(
             summary.closure_gap().as_deref(),
-            Some("3 source(s) still have validation support gaps")
+            Some("4 source(s) still have validation support gaps")
         );
+    }
+
+    /// The owned fixture `rlm_runtime_limits` holds each shape of a requirement the runtime refuses
+    /// beside the same shape without it, as its device tests run them
+    /// (`candidate::tests::engine_compute`): the read of a texture buffer an argument buffer holds
+    /// carries `texture_buffer_member` and the same read of a 2D member does not, and the
+    /// `acq_rel` fence carries no `seq_cst_fence`, which `a4_device_fence`'s `seq_cst` fence
+    /// carries.
+    #[test]
+    fn the_runtime_limit_fixture_holds_each_shape_beside_its_pair() {
+        let engine = metal2vulkan_devtools::engine_dir();
+        let requirements = |name: &str, entry: &str| {
+            let air_ll = std::fs::read_to_string(engine.join(name)).unwrap();
+            classify(&SourceRow {
+                entry: entry.into(),
+                ..source(&air_ll)
+            })
+            .unwrap()
+            .tooling_requirements
+        };
+        let limits = "rlm_runtime_limits.ll";
+        assert!(requirements(limits, "rlm_member_texture_buffer")
+            .contains(&ToolingRequirement::TextureBufferMember));
+        assert!(!requirements(limits, "rlm_member_texture")
+            .contains(&ToolingRequirement::TextureBufferMember));
+        assert!(
+            !requirements(limits, "rlm_fence_acq_rel").contains(&ToolingRequirement::SeqCstFence)
+        );
+        assert!(requirements("a4_device_fence.ll", "a4_device_fence")
+            .contains(&ToolingRequirement::SeqCstFence));
     }
 
     #[test]

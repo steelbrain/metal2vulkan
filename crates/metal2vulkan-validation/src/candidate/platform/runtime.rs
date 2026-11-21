@@ -130,12 +130,38 @@ fn on_device(
     case: &ComputeCase,
     kernel: &RuntimeKernel<'_>,
 ) -> Result<RunAttempt, String> {
+    opened(device_type, |device, identity, environment| {
+        let result = run(
+            device,
+            device_type,
+            case_id,
+            case,
+            kernel,
+            identity,
+            environment,
+        );
+        let refused_on = matches!(result, Err(ExecutorError::NotSupported(_))).then(|| RefusedOn {
+            environment: environment.clone(),
+            translator_fingerprint: runtime_fingerprint(),
+            artifact: None,
+        });
+        RunAttempt { result, refused_on }
+    })
+}
+
+/// `body` on the runtime's device of `device_type`, with the identity and environment a row
+/// records of it, every object of it gone before this returns, and the device torn down. `Err`
+/// where no device of the kind opens under the layer.
+fn opened<T>(
+    device_type: DeviceType,
+    body: impl FnOnce(&rt::Device, &Identity, &serde_json::Value) -> T,
+) -> Result<T, String> {
     if device_type == DeviceType::Gpu {
         crate::gpu::tripwire::refuse_if_tripped()?;
     }
     let instance =
         rt::Instance::new(&[]).map_err(|error| format!("the runtime's instance: {error}"))?;
-    let attempt = {
+    let value = {
         let (physical, identity) = select(&instance, device_type)?;
         let (entry, vk_instance) = instance.raw();
         // SAFETY: `physical` is one of the instance's physical devices, and the instance is live.
@@ -150,21 +176,7 @@ fn on_device(
         let environment = environment(&identity, &tools);
         let device = metal2vulkan_runtime::Device::new(&physical, rt::DeviceOptions::default())
             .map_err(|error| format!("the runtime's device on {}: {error}", identity.device))?;
-        let result = run(
-            &device,
-            device_type,
-            case_id,
-            case,
-            kernel,
-            &identity,
-            &environment,
-        );
-        let refused_on = matches!(result, Err(ExecutorError::NotSupported(_))).then(|| RefusedOn {
-            environment: environment.clone(),
-            translator_fingerprint: runtime_fingerprint(),
-            artifact: None,
-        });
-        RunAttempt { result, refused_on }
+        body(&device, &identity, &environment)
     };
     if !instance.wait_until_devices_torn_down(TEARDOWN) {
         return Err(format!(
@@ -172,7 +184,51 @@ fn on_device(
             TEARDOWN.as_secs()
         ));
     }
-    Ok(attempt)
+    Ok(value)
+}
+
+/// `body` on the runtime's device of `device_type` under the validation layer, as a run opens it
+/// ([`execute_runtime`]): what a device test needs of the runtime's answer to one call, beside a
+/// run. `Err` where no device of the kind opens, or where the layer reported a message.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
+pub fn on_runtime_device<T>(
+    device_type: DeviceType,
+    body: impl FnOnce(&rt::Device) -> T,
+) -> Result<T, String> {
+    let log = std::env::temp_dir().join(format!(
+        "metal2vulkan-validation-runtime-{}.log",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&log);
+    validate_process(&log);
+    let value = opened(device_type, |device, _, _| body(device));
+    let messages = std::fs::read_to_string(&log);
+    let _ = std::fs::remove_file(&log);
+    match messages {
+        Ok(messages) if !messages.trim().is_empty() => Err(format!(
+            "{VALIDATION_LAYER} reported messages: {}",
+            crate::engine::bounded_detail(&messages)
+        )),
+        _ => value,
+    }
+}
+
+/// The make of `entry`'s compute pipeline state from `bitcode` on `device`, as a run makes it
+/// ([`make`]) with no constant and no linked function: the runtime's typed refusal as the
+/// product's ([`product_refusal`]).
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
+pub fn make_kernel(
+    device: &rt::Device,
+    bitcode: &[u8],
+    entry: &str,
+) -> Result<rt::ComputePipelineState, ExecutorError> {
+    let function = Library::from_air(bitcode)
+        .and_then(|library| library.function(entry))
+        .map_err(|error| product_refusal(&error))?;
+    let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+        FunctionDescriptor::new(function).with_specialized(true),
+    ));
+    make(device, &descriptor)
 }
 
 /// What a row records of the device that ran it.
