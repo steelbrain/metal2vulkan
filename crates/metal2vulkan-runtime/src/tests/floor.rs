@@ -1498,7 +1498,8 @@ fn barycentrics_are_enabled_where_listed_and_reported() {
 /// given the extension, `VK_EXT_custom_border_color` (which it requires: Vulkan's
 /// `VUID-vkCreateDevice-ppEnabledExtensionNames-01387`), and both its features; one that lists it
 /// with `borderColorSwizzle` alone (as Vulkan requires of every device that lists it), or reports
-/// the features without listing it, is given none. The translator is told of neither feature.
+/// the features without listing it, is given none. The translator's description states what is
+/// enabled, and nothing else.
 #[test]
 fn the_border_swizzle_is_enabled_where_the_device_reports_it_from_the_image() {
     use crate::floor::shader_enables;
@@ -1512,9 +1513,22 @@ fn the_border_swizzle_is_enabled_where_the_device_reports_it_from_the_image() {
             .filter(|feature| holds(&capabilities.features, feature))
             .count();
         let enables = shader_enables(&capabilities);
-        assert!(!enables.features.contains(&VkFeature::BorderColorSwizzle));
-        assert!(!(enables.features).contains(&VkFeature::BorderColorSwizzleFromImage));
-        assert!(!(enables.extensions).contains(&VkExtension::ExtBorderColorSwizzle));
+        let stated = [
+            VkFeature::BorderColorSwizzle,
+            VkFeature::BorderColorSwizzleFromImage,
+        ]
+        .iter()
+        .filter(|feature| enables.features.contains(feature))
+        .count();
+        assert_eq!(stated, features, "features stated");
+        let stated = [
+            VkExtension::ExtCustomBorderColor,
+            VkExtension::ExtBorderColorSwizzle,
+        ]
+        .iter()
+        .filter(|extension| enables.extensions.contains(extension))
+        .count();
+        assert_eq!(stated, enabled, "extensions stated");
         (enabled, features)
     };
     let listed = |device: &mut Queried| {
