@@ -212,6 +212,113 @@ mod on_device {
         });
     }
 
+    /// Each thread `i = 4c + s` of `engine/sampler_table`'s `sampler_table_held` samples row 0 of
+    /// the 4 by 1 texture its argument buffer holds (red, green, blue, white) at `x = xs[i]`
+    /// through `samplers[which[i]]`, a program-scope table of four constexpr nearest samplers
+    /// (repeat, clamp to edge, mirrored repeat, clamp to zero) read at the index `which[i] = s`
+    /// only the run knows, and writes the texel. Under the identity domains the four candidates
+    /// are a switch over them, each arm sampling through its constexpr sampler's index. The
+    /// answers are Metal's, measured on an Apple M3 Max under macOS 27.0.1
+    /// (`metal2vulkan-conformance/probes/sampler_table.m`): by coordinate (texel units -0.5, 4.5,
+    /// -1.5, 2.5 and 5.5), through the four samplers in order, white, red, red, zero; red, white,
+    /// white, zero; blue, red, green, zero; blue four times; green, white, blue, zero.
+    #[test]
+    fn every_device_samples_an_argument_buffers_texture_through_a_table_of_constexpr_samplers() {
+        const THREADS: usize = 20;
+        const XS: [f32; 5] = [-0.125, 1.125, -0.375, 0.625, 1.375];
+        let [red, green, blue, white, zero] = [
+            [1.0, 0.0, 0.0, 1.0],
+            [0.0, 1.0, 0.0, 1.0],
+            [0.0, 0.0, 1.0, 1.0],
+            [1.0, 1.0, 1.0, 1.0],
+            [0.0; 4],
+        ];
+        let metal: [[[f32; 4]; 4]; 5] = [
+            [white, red, red, zero],
+            [red, white, white, zero],
+            [blue, red, green, zero],
+            [blue, blue, blue, blue],
+            [green, white, blue, zero],
+        ];
+        let Some(library) = library("engine/sampler_table.ll") else {
+            return;
+        };
+        each_device("argument_sampling", |name, _, device| {
+            let grants = [(IndexClass::Texture, 1, 1), (IndexClass::Sampler, 1, 4)].map(
+                |(class, first, count)| {
+                    (device.grant_indices(class, first, count))
+                        .unwrap_or_else(|error| panic!("{name}: {error}"))
+                },
+            );
+            let function = library.function("sampler_table_held").expect("the kernel");
+            let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+                FunctionDescriptor::new(function),
+            ));
+            let state = (device.new_compute_pipeline_state(&descriptor, |samplers| {
+                assert_eq!(samplers.len(), 4, "{name}: {samplers:?}");
+                Ok((1..=4).collect())
+            }))
+            .unwrap_or_else(|error| panic!("{name}: sampler_table_held: {error}"));
+            let mut d = TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, 4, 1);
+            d.usage = TextureUsage::SHADER_READ;
+            let t =
+                (device.new_texture(&d, Some(1))).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let texels: [u8; 16] = [
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+            ];
+            let whole = Region {
+                origin: [0; 3],
+                size: [4, 1, 1],
+            };
+            (t.replace_region(whole, 0, 0, crate::HostBytes::from(&texels[..]), 16, 16))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let block = (device.take_block(MemoryClass::Shared, 65_536)).expect("a Shared block");
+            let which: Vec<u8> = (0..THREADS as u32)
+                .flat_map(|i| (i % 4).to_le_bytes())
+                .collect();
+            let xs: Vec<u8> = (0..THREADS).flat_map(|i| XS[i / 4].to_le_bytes()).collect();
+            let id = t.gpu_resource_id().to_bits().to_le_bytes();
+            let held = shared(&device, &block, 0, &id);
+            let which = shared(&device, &block, 256, &which);
+            let xs = shared(&device, &block, 512, &xs);
+            let out = shared(&device, &block, 1024, &[0; 16 * THREADS]);
+            let queue = device.new_command_queue(1).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder =
+                (command_buffer.compute_command_encoder(DispatchType::Serial)).expect("an encoder");
+            encoder.set_compute_pipeline_state(&state).expect("a state");
+            for (buffer, index) in [(&out, 0), (&which, 1), (&xs, 2), (&held, 3)] {
+                encoder
+                    .set_buffer(Some(buffer), 0, index)
+                    .expect("a buffer");
+            }
+            (encoder.use_resource(Resource::Texture(&t), ResourceUsage::READ)).expect("a texture");
+            (encoder.dispatch_threadgroups([1, 1, 1], [THREADS as u32, 1, 1]))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            let read = float4s(&out, THREADS);
+            for (i, texel) in read.iter().enumerate() {
+                assert_eq!(
+                    *texel,
+                    metal[i / 4][i % 4],
+                    "{name}: thread {i}, x {} through sampler {}",
+                    XS[i / 4],
+                    i % 4
+                );
+            }
+            drop((command_buffer, queue, state, t));
+            for grant in grants {
+                (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+            println!(
+                "{name}: an argument buffer's texture sampled through a table of constexpr samplers"
+            );
+        });
+    }
+
     /// Each thread `g` of `argument_sampler_edges` samples the 4 by 4 texture its argument buffer
     /// holds, whose texel `(x, y)` has red `x + 4y`, at normalized `(g / 4, g / 4)`, a texel edge,
     /// through the sampler the argument buffer holds beside it. Through a linear sampler state at
