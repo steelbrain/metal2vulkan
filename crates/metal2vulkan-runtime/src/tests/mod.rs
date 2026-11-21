@@ -61,6 +61,7 @@ mod over_causes;
 mod pass;
 mod patch;
 mod pixel_format_info;
+mod pixel_interlock;
 mod places;
 mod present;
 mod push_window;

@@ -95,8 +95,8 @@ pub use color::ColorInput;
 pub use coverage::CoveragePlan;
 pub use discard::DiscardForm;
 pub(crate) use fetch::{
-    compiled_write_mask, extended_range_blend, half_float_format, inputs_order, interlock_orders,
-    kept_channels, storage_form, ColorUse, StorageSamples,
+    compiled_write_mask, extended_range_blend, half_float_format, inputs_order, interlock_forms,
+    interlock_orders, kept_channels, storage_form, ColorUse, StorageSamples,
 };
 pub use fetch::{
     select_output as select_storage_output, select_second_output as select_storage_second_output,

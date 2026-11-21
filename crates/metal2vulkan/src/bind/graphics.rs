@@ -993,7 +993,7 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     // Every other slot the shape names is left out, and the consumer reads it as it would without
     // a snapshot.
     let enabled = &profile.fields().enabled.features;
-    let snapshot_able = profile.fields().fragment.pixel_interlock
+    let snapshot_able = crate::lower::fragment::interlock_forms(profile)
         && enabled.contains(&VkFeature::FragmentStoresAndAtomics)
         && enabled.contains(&VkFeature::AttachmentFeedbackLoopLayout)
         && enabled.contains(&VkFeature::ExtendedDynamicState3ColorWriteMask)

@@ -82,6 +82,7 @@ mod engine_helper_threads;
 mod engine_identity;
 mod engine_identity_contain;
 mod engine_identity_domain;
+mod engine_identity_interlock;
 mod engine_identity_pointers;
 mod engine_identity_render;
 mod engine_identity_spill;

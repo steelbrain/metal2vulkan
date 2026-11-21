@@ -2041,22 +2041,23 @@ bound.
 - `metal2vulkan-degrade-unordered-fetch-within-draw` (precision).
   `PrecisionNote::UnorderedFetchWithinDraw`: A fragment function reads a color attachment
   (framebuffer fetch) on a device with neither rasterization-order color attachment access nor
-  `fragmentShaderPixelInterlock` (Honeykrisp on Apple's M2 Pro; RADV on the RX 550). It reads the
-  attachment as an input attachment, and the runtime records a barrier of the draws' subpass's
-  dependency on itself, by region, before each draw that reads input attachments after an earlier
-  draw of its render pass instance, or its load operations, wrote a color, and before each draw
-  that writes a color after an earlier one read them: a fetch reads what every earlier
-  draw stored at its pixel, Metal's answer. Under the identity domains it reads the attachment's
-  texture at its own pixel instead (`PushField::FetchedColor`), and the consumer orders each
-  fetching draw after the earlier draws of its pass by a barrier between them (the runtime's
-  `Metrics::attachment_loop_reads`, or its copies into the attachment's shadow on a device
-  without the attachment feedback loop). Vulkan orders nothing between the overlapping
-  fragments of one draw there, where Metal orders them in primitive order: a fragment that covers
-  a pixel an earlier fragment of its own draw covered may read the texel from before that
-  fragment's write. Exact for a draw whose primitives do not overlap at a pixel; otherwise each
-  such pixel holds the result of some order of the draw's fragments there. A raster order group
-  on the color input, or on a color output of an attachment the function reads, takes the same
-  form.
+  `fragmentShaderPixelInterlock` (Honeykrisp on Apple's M2 Pro; RADV on the RX 550), or under the
+  identity domains on any device without rasterization-order access, the pixel interlock's included:
+  there the interlock chooses no fetch form, as its storage form is a descriptor the identity
+  domains do not hold. It reads the attachment as an input attachment, and the runtime records a
+  barrier of the draws' subpass's dependency on itself, by region, before each draw that reads input
+  attachments after an earlier draw of its render pass instance, or its load operations, wrote a
+  color, and before each draw that writes a color after an earlier one read them: a fetch reads what
+  every earlier draw stored at its pixel, Metal's answer. Under the identity domains it reads the
+  attachment's texture at its own pixel instead (`PushField::FetchedColor`), and the consumer orders
+  each fetching draw after the earlier draws of its pass by a barrier between them (the runtime's
+  `Metrics::attachment_loop_reads`, or its copies into the attachment's shadow on a device without
+  the attachment feedback loop). Vulkan orders nothing between the overlapping fragments of one draw
+  there, where Metal orders them in primitive order: a fragment that covers a pixel an earlier
+  fragment of its own draw covered may read the texel from before that fragment's write. Exact for a
+  draw whose primitives do not overlap at a pixel; otherwise each such pixel holds the result of
+  some order of the draw's fragments there. A raster order group on the color input, or on a color
+  output of an attachment the function reads, takes the same form.
 - `metal2vulkan-degrade-fp8-value` (precision). `PrecisionNote::Fp8Value`: An 8-bit float converts
   to an integer from the format's documented value with Metal's saturating float-to-integer rule,
   where Metal's device here answers otherwise: Metal on Apple M3 compiles these reads but extends

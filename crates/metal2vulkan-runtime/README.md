@@ -2855,9 +2855,11 @@ or does not check is rebuilt from the generations' names, with young counted ful
   26 streams' libraries calls a SIMD-group, quad or SIMD-group matrix function (each library whose
   bytes name one disassembled with `llvm-dis`, jobs m3-max-52530, 52531, 52532, 52557 and 52604).
   Their libraries that call quad functions, 2 to 5 a stream, call them from no fragment function.
-- A fragment function's raster order groups are refused at creation on every device, an
-  `Error::Translation` naming `RasterOrderGroups` and `fragmentShaderPixelInterlock`: device
-  creation does not enable `VK_EXT_fragment_shader_interlock`.
+- On a device without `fragmentShaderPixelInterlock` (Pixel interlock, under Floor), a fragment
+  function's raster order group on memory it reads and writes is refused at creation, an
+  `Error::Translation` naming `RasterOrderGroups` and `fragmentShaderPixelInterlock`. Of the venues
+  run, KosmicKrisp on the M3 Max and RADV on the RX 550 list neither the extension nor the feature
+  (vulkaninfo, jobs m3-max-61291 and m3-max-61296).
 - Metal's triangle fill mode and depth clip mode, which Vulkan 1.3 bakes into a `VkPipeline`, are
   their defaults.
 - On a driver that keeps the topology class in a pipeline (dynamicPrimitiveTopologyUnrestricted
@@ -3165,16 +3167,18 @@ or does not check is rebuilt from the generations' names, with young counted ful
   through the image's shadow, the counted copy a device without the feedback loop takes, first,
   and then, where the device has the feedback loop, unified image layouts and a `LINEAR` image
   with the feedback usage, the loop on the attachment in the general layout.
-- A fetch (`[[color(n)]]`) orders the fragments of earlier draws before it, not the fragments of
-  its own draw that cover the same pixel, which Metal orders in primitive order: a fragment may
-  read the texel from before an earlier fragment of its draw wrote it
-  (`PrecisionNote::UnorderedFetchWithinDraw`). Exact for a draw whose primitives do not overlap
-  at a pixel. A fetch of an attachment the draw cannot read through is `Gap::Draw` of
-  `FetchedAttachment`: a drawable's texture (its image has no feedback usage and no second
-  element; no boot or replay stream fetched one), a texture made with no index, one that is no 2D
-  texture at its first level and slice, a texture of an image another attachment of the pass
-  shares (two planes of one surface), and every attachment on a device without the attachment
-  reads.
+- A fetch (`[[color(n)]]`) orders the fragments of earlier draws before it, not the fragments of its
+  own draw that cover the same pixel, which Metal orders in primitive order: a fragment may read the
+  texel from before an earlier fragment of its draw wrote it
+  (`PrecisionNote::UnorderedFetchWithinDraw`). Exact for a draw whose primitives do not overlap at a
+  pixel. A raster order group on the colour it reads, or on a colour output of an attachment it
+  reads, takes the same form on every device, the pixel interlock's included: the interlock cannot
+  order the attachment's own write, which happens after the function. A fetch of an attachment the
+  draw cannot read through is `Gap::Draw` of `FetchedAttachment`: a drawable's texture (its image
+  has no feedback usage and no second element; no boot or replay stream fetched one), a texture made
+  with no index, one that is no 2D texture at its first level and slice, a texture of an image
+  another attachment of the pass shares (two planes of one surface), and every attachment on a
+  device without the attachment reads.
 - A pass over a surface plane that renders as a linear colour attachment alone (Exported
   surfaces: an opaque handle's plane in place through
   `VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV`, every plane format measured on the RTX 3090
@@ -3429,6 +3433,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_KHR_shader_maximal_reconvergence` | device, where listed | SIMD groups that reconverge as Metal's do |
 | `VK_KHR_shader_subgroup_uniform_control_flow` | device, where listed | SIMD groups' reconvergence where maximal reconvergence is not offered |
 | `VK_KHR_shader_quad_control` | device, where listed | a fragment function's group operations over other lanes, through the quad-control feature below |
+| `VK_EXT_fragment_shader_interlock` | device, where listed | a fragment function's raster order groups on memory it reads and writes, through the pixel-interlock feature below |
 | `VK_KHR_portability_enumeration` | instance, where offered | listing portability devices, each checked against the floor as any other |
 | `VK_KHR_portability_subset` | device, where listed | Vulkan requires it enabled where a device lists it; the device is asked for the portability features below |
 | `VK_EXT_attachment_feedback_loop_layout` | device, with the feedback loop | a draw's read of an attachment of its own pass through a texture, in the feedback layout (below) |
@@ -3540,6 +3545,23 @@ both, and the translator builds the function; elsewhere it refuses the function 
 | Quad-control feature | Structure | Used for |
 |---|---|---|
 | `shaderQuadControl` | `VkPhysicalDeviceShaderQuadControlFeaturesKHR` | a fragment function's quads run whole for its group operations over other lanes |
+
+### Pixel interlock
+
+A fragment function's raster order group on memory the function reads and writes (a buffer, a
+texture or an argument buffer's member) has one form: its body runs inside the ordered pixel
+interlock (`PixelInterlockOrderedEXT`), after every earlier fragment of its pixel, as Metal orders
+the group. Where the device lists `VK_EXT_fragment_shader_interlock` and reports the feature below,
+device creation enables both, and the translator builds the function; elsewhere it refuses the
+function at creation, an `Error::Translation` naming `RasterOrderGroups` (Known gaps of render
+pipeline states). The interlock chooses no other form: a framebuffer fetch, a stencil output, an
+imageblock and a blend the function computes take the forms, or the refusals, they take on a device
+without it, and a group on a colour attachment alone takes the fetch's own ordering (Known gaps of
+render encoders). No other feature of the extension is enabled.
+
+| Pixel-interlock feature | Structure | Used for |
+|---|---|---|
+| `fragmentShaderPixelInterlock` | `VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT` | a fragment function's raster order groups on memory it reads and writes |
 
 ### Limits
 

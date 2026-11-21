@@ -160,7 +160,7 @@ pub(super) fn finish(
             "a snapshot read in a function with another critical section or a sample loop",
         ));
     }
-    if !cx.profile.fields().fragment.pixel_interlock {
+    if !super::fetch::interlock_forms(cx.profile) {
         return Err(Unsupported::needs(
             Feature::RasterOrderGroups,
             Capability::Feature(VkFeature::FragmentShaderPixelInterlock),

@@ -4,9 +4,10 @@
 //! Vulkan orders an input-attachment read so only under rasterization-order attachment access
 //! (`color`; a device with neither form reads the input attachment ordered between draws alone,
 //! [`fetch_unordered`]). A device without that access but with `fragmentShaderPixelInterlock`
-//! ([`interlock_orders`]: RADV, ANV, and MoltenVK where measured) orders a fetch instead through
-//! the ordered pixel interlock, the mechanism of raster order groups and imageblocks: each color
-//! attachment the function reads becomes a storage image of the attachment
+//! outside the identity domains ([`interlock_orders`], [`interlock_forms`]: RADV, ANV, and
+//! MoltenVK where measured) orders a fetch instead through the ordered pixel interlock, the
+//! mechanism of raster order groups and imageblocks: each color attachment the function reads
+//! becomes a storage image of the attachment
 //! (`ResourceKind::TileAttachment(n)`), read once at the fragment's pixel (the integer part of
 //! `FragCoord.xy`) before the body, the texel every use takes, and, when the function writes that
 //! attachment through its first
@@ -333,11 +334,22 @@ use crate::vk;
 
 use super::{not_lowered, ColorInput};
 
+/// Whether the pixel interlock may choose a form on `p` beyond a raster order group's (`rog`):
+/// the storage forms of a framebuffer fetch and of a blend, merge or logic operation the function
+/// computes over it ([`interlock_orders`]), of a stencil output (`stencil`), of an imageblock
+/// (`imageblock`) and of a snapshot read (`snapshot`). Each is a storage image bound through a
+/// descriptor, which the identity domains hold none of, so under them the interlock chooses none
+/// of these: each takes the form, or the refusal, it takes on a device without the interlock, and
+/// the interlock orders a raster order group on the memory the function reads and writes alone.
+pub(crate) fn interlock_forms(p: &DeviceProfile) -> bool {
+    p.fields().fragment.pixel_interlock && !crate::lower::access::identity(p)
+}
+
 /// Whether `p` orders framebuffer fetch only through the ordered pixel interlock: no
-/// rasterization-order color attachment access, with `fragmentShaderPixelInterlock`.
+/// rasterization-order color attachment access, with `fragmentShaderPixelInterlock` choosing the
+/// storage form ([`interlock_forms`]).
 pub(crate) fn interlock_orders(p: &DeviceProfile) -> bool {
-    let f = p.fields().fragment;
-    !f.rasterization_order_color_access && f.pixel_interlock
+    !p.fields().fragment.rasterization_order_color_access && interlock_forms(p)
 }
 
 /// Whether `p` orders framebuffer fetch through rasterization-order input attachments (lavapipe):

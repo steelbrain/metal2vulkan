@@ -6,9 +6,9 @@ use crate::floor::{
     choose, decide, flag_names, limits, vulkan_name, BelowFloor, Features, MemoryTypes, Missing,
     Queried, ATTACHMENT_READS, ATTACHMENT_READ_EXTENSIONS, BORDER_SWIZZLE,
     BORDER_SWIZZLE_EXTENSIONS, DEVICE_EXTENSIONS, INSTANCE_EXTENSIONS, LINEAR_ATTACHMENTS,
-    MEMORY_FLAG_NAMES, OPTIONAL, OPTIONAL_EXTENSIONS, OPTIONAL_INSTANCE_EXTENSIONS, PORTABILITY,
-    PRIVATE_MEMORY, QUAD_CONTROL, REQUIRED, RING_MEMORY, SHARED_MEMORY, STEP_RATES, TIMESTAMP_BITS,
-    TIME_DOMAINS, VERSION,
+    MEMORY_FLAG_NAMES, OPTIONAL, OPTIONAL_EXTENSIONS, OPTIONAL_INSTANCE_EXTENSIONS,
+    PIXEL_INTERLOCK, PORTABILITY, PRIVATE_MEMORY, QUAD_CONTROL, REQUIRED, RING_MEMORY,
+    SHARED_MEMORY, STEP_RATES, TIMESTAMP_BITS, TIME_DOMAINS, VERSION,
 };
 use ash::vk;
 use std::collections::BTreeSet;
@@ -328,7 +328,10 @@ fn a_device_at_the_floor_is_above_it() {
             required.member
         );
     }
-    for optional in (OPTIONAL.iter().chain(STEP_RATES)).chain(QUAD_CONTROL) {
+    for optional in (OPTIONAL.iter().chain(STEP_RATES))
+        .chain(QUAD_CONTROL)
+        .chain(PIXEL_INTERLOCK)
+    {
         assert!(!holds(enabled, optional), "{} is enabled", optional.member);
     }
     assert_eq!(enabled.core.geometry_shader, vk::FALSE);
@@ -1135,6 +1138,47 @@ fn the_step_rate_feature_is_enabled_where_reported() {
         .contains(&VkExtension::ExtVertexAttributeDivisor));
 }
 
+/// A device that lists `VK_EXT_fragment_shader_interlock` and reports `fragmentShaderPixelInterlock`
+/// is given both, and the translator sees both; one that lists the extension without the feature
+/// is given the extension alone. The extension's other features stay off.
+#[test]
+fn the_pixel_interlock_is_enabled_where_reported() {
+    use crate::floor::shader_enables;
+    use metal2vulkan::device::{VkExtension, VkFeature};
+    let extension = ash::ext::fragment_shader_interlock::NAME;
+    let mut device = at_the_floor();
+    device.extensions.push(extension.to_owned());
+    let unreported = decide(&device).unwrap_or_else(|below| panic!("{below}"));
+    assert!(unreported.extensions.contains(&extension));
+    assert!(PIXEL_INTERLOCK
+        .iter()
+        .all(|feature| !holds(&unreported.features, feature)));
+    let enables = shader_enables(&unreported);
+    assert!(enables
+        .extensions
+        .contains(&VkExtension::ExtFragmentShaderInterlock));
+    assert!(!enables
+        .features
+        .contains(&VkFeature::FragmentShaderPixelInterlock));
+
+    device.features.interlock.fragment_shader_pixel_interlock = vk::TRUE;
+    device.features.interlock.fragment_shader_sample_interlock = vk::TRUE;
+    let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));
+    let interlock = &capabilities.features.interlock;
+    assert_eq!(interlock.fragment_shader_pixel_interlock, vk::TRUE);
+    assert_eq!(interlock.fragment_shader_sample_interlock, vk::FALSE);
+    let enables = shader_enables(&capabilities);
+    assert!(enables
+        .features
+        .contains(&VkFeature::FragmentShaderPixelInterlock));
+    assert!(!enables
+        .features
+        .contains(&VkFeature::FragmentShaderSampleInterlock));
+    assert!(enables
+        .extensions
+        .contains(&VkExtension::ExtFragmentShaderInterlock));
+}
+
 /// A device that lists `VK_KHR_shader_quad_control` and reports `shaderQuadControl` is given both,
 /// and the translator sees both; one that lists the extension without the feature is given the
 /// extension alone.
@@ -1490,6 +1534,10 @@ fn the_readme_states_the_floor() {
             QUAD_CONTROL,
         ),
         (
+            ["Pixel-interlock feature", "Structure", "Used for"],
+            PIXEL_INTERLOCK,
+        ),
+        (
             ["Border-swizzle feature", "Structure", "Used for"],
             BORDER_SWIZZLE,
         ),
@@ -1668,6 +1716,7 @@ fn every_device_the_loader_lists_is_above_the_floor() {
             mut maximal_reconvergence,
             mut subgroup_uniform_control_flow,
             mut quad_control,
+            mut interlock,
             mut robustness2,
             mut portability,
             mut feedback_loop,
@@ -1693,6 +1742,9 @@ fn every_device_the_loader_lists_is_above_the_floor() {
         }
         if enabled(ash::khr::shader_quad_control::NAME) {
             features = features.push_next(&mut quad_control);
+        }
+        if enabled(ash::ext::fragment_shader_interlock::NAME) {
+            features = features.push_next(&mut interlock);
         }
         if enabled(ash::khr::portability_subset::NAME) {
             features = features.push_next(&mut portability);

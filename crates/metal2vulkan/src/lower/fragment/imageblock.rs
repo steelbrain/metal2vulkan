@@ -91,7 +91,7 @@ fn not_implemented() -> Error {
 fn require(cx: &SelectCx<'_>, writes: bool) -> Result<(), Error> {
     let f = cx.profile.fields();
     let mut missing = Vec::new();
-    if !f.fragment.pixel_interlock {
+    if !super::fetch::interlock_forms(cx.profile) {
         missing.push(Capability::Feature(VkFeature::FragmentShaderPixelInterlock));
     }
     if writes && !f.leaf.fragment_stores_and_atomics {

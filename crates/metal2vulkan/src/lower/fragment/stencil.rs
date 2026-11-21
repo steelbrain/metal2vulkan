@@ -123,7 +123,7 @@ pub(crate) fn device_form(
 ) -> Result<crate::spv::ImageFormat, Unsupported> {
     let f = p.fields();
     let mut missing = Vec::new();
-    if !f.fragment.pixel_interlock {
+    if !super::fetch::interlock_forms(p) {
         missing.push(Capability::Feature(VkFeature::FragmentShaderPixelInterlock));
     }
     if !f.leaf.fragment_stores_and_atomics {

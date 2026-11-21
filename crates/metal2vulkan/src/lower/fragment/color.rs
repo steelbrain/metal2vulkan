@@ -342,7 +342,7 @@ fn unordered(cx: &SelectCx<'_>, color: u32) -> Error {
         )
     });
     let mut interlock = Vec::new();
-    if !f.fragment.pixel_interlock {
+    if !super::fetch::interlock_forms(cx.profile) {
         interlock.push(Capability::Feature(VkFeature::FragmentShaderPixelInterlock));
     }
     if writes && !f.leaf.fragment_stores_and_atomics {

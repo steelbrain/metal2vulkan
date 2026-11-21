@@ -40,8 +40,9 @@ pub const TIME_DOMAINS: [vk::TimeDomainKHR; 2] =
     [vk::TimeDomainKHR::DEVICE, crate::times::HOST_DOMAIN];
 
 /// The device extensions device creation enables where the device lists them: the SIMD groups'
-/// reconvergence modes, each for the optional features of its own, quad control, for
-/// `shaderQuadControl` where the device reports it, the portability subset, which
+/// reconvergence modes, each for the optional features of its own, quad control and the fragment
+/// shader interlock, for `shaderQuadControl` and `fragmentShaderPixelInterlock` where the device
+/// reports them, the portability subset, which
 /// Vulkan requires enabled where a device lists it, with the portability features the floor asks
 /// of such a device, the vertex attribute divisor's two extensions, for the step-rate feature
 /// of their own: the KHR, and the EXT it was promoted from, whose feature and pipeline structures
@@ -59,6 +60,7 @@ pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::khr::shader_maximal_reconvergence::NAME,
     ash::khr::shader_subgroup_uniform_control_flow::NAME,
     ash::khr::shader_quad_control::NAME,
+    ash::ext::fragment_shader_interlock::NAME,
     ash::khr::portability_subset::NAME,
     ash::khr::vertex_attribute_divisor::NAME,
     ash::ext::vertex_attribute_divisor::NAME,
@@ -109,6 +111,8 @@ fn shader_extension(name: &CStr) -> Option<VkExtension> {
         Some(VkExtension::KhrShaderSubgroupUniformControlFlow)
     } else if name == ash::khr::shader_quad_control::NAME {
         Some(VkExtension::KhrShaderQuadControl)
+    } else if name == ash::ext::fragment_shader_interlock::NAME {
+        Some(VkExtension::ExtFragmentShaderInterlock)
     } else if name == ash::ext::robustness2::NAME {
         Some(VkExtension::ExtRobustness2)
     } else if name == ash::khr::portability_subset::NAME {
@@ -228,6 +232,10 @@ pub struct Features {
     /// `VkPhysicalDeviceShaderQuadControlFeaturesKHR`, of `VK_KHR_shader_quad_control`: read and
     /// enabled only where the device lists it.
     pub quad_control: vk::PhysicalDeviceShaderQuadControlFeaturesKHR<'static>,
+    /// `VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT`, of
+    /// `VK_EXT_fragment_shader_interlock`: read only where the device lists it, and then only
+    /// `fragmentShaderPixelInterlock` enabled.
+    pub interlock: vk::PhysicalDeviceFragmentShaderInterlockFeaturesEXT<'static>,
     /// `VkPhysicalDeviceRobustness2FeaturesEXT`, of `VK_EXT_robustness2`: `nullDescriptor` and
     /// `robustImageAccess2` are enabled, never the robust buffer access beside them.
     pub robustness2: vk::PhysicalDeviceRobustness2FeaturesEXT<'static>,
@@ -289,6 +297,9 @@ macro_rules! feature {
     };
     (@structure quad_control) => {
         "VkPhysicalDeviceShaderQuadControlFeaturesKHR"
+    };
+    (@structure interlock) => {
+        "VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT"
     };
     (@structure robustness2) => {
         "VkPhysicalDeviceRobustness2FeaturesEXT"
@@ -502,6 +513,17 @@ pub(crate) const STEP_RATES: &[Feature] = &[feature!(
 pub(crate) const QUAD_CONTROL: &[Feature] =
     &[feature!(quad_control.shader_quad_control => ShaderQuadControl)];
 
+/// The feature of `VK_EXT_fragment_shader_interlock` (one of [`OPTIONAL_EXTENSIONS`]), which
+/// device creation enables where the device lists the extension and reports it: a fragment
+/// function's raster order group on memory the function reads and writes runs inside the ordered
+/// pixel interlock, the one form the translator builds; on a device without it the translator
+/// refuses the group (`RasterOrderGroups`). Under the identity domains the interlock chooses no
+/// other form: a framebuffer fetch, a stencil output and a blend the function computes take the
+/// forms they take without it. No answer chooses a second form, and no other feature of the
+/// extension is enabled.
+pub(crate) const PIXEL_INTERLOCK: &[Feature] =
+    &[feature!(interlock.fragment_shader_pixel_interlock => FragmentShaderPixelInterlock)];
+
 /// The features of `VK_EXT_border_color_swizzle` ([`BORDER_SWIZZLE_EXTENSIONS`]): enabled together
 /// where the device lists the extensions and reports `borderColorSwizzleFromImage` (Vulkan requires
 /// `borderColorSwizzle` of a device that lists it), and neither otherwise. No answer chooses a second form, and the
@@ -530,6 +552,7 @@ pub(crate) fn shader_enables(capabilities: &Capabilities) -> EnableSet {
         .chain(PORTABILITY)
         .chain(STEP_RATES)
         .chain(QUAD_CONTROL)
+        .chain(PIXEL_INTERLOCK)
     {
         if let Some(name) = feature.translator {
             if *(feature.field)(&mut features) == vk::TRUE {
@@ -706,9 +729,9 @@ pub struct Capabilities {
     /// loop.
     pub feedback_loop: bool,
     /// The features device creation enables: every one the floor requires, each of the optional,
-    /// step-rate, quad-control and linear-attachment ones the device reports, the attachment-read
-    /// ones where [`feedback_loop`](Self::feedback_loop) holds, and the border-swizzle ones where
-    /// the device reports both.
+    /// step-rate, quad-control, pixel-interlock and linear-attachment ones the device reports, the
+    /// attachment-read ones where [`feedback_loop`](Self::feedback_loop) holds, and the
+    /// border-swizzle ones where the device reports both.
     pub features: Features,
     /// The device extensions device creation enables: [`DEVICE_EXTENSIONS`], then each of
     /// [`OPTIONAL_EXTENSIONS`] the device lists, then [`ATTACHMENT_READ_EXTENSIONS`] where
@@ -812,6 +835,7 @@ unsafe fn query(
         let uniform_control_flow_listed =
             listed(ash::khr::shader_subgroup_uniform_control_flow::NAME);
         let quad_control_listed = listed(ash::khr::shader_quad_control::NAME);
+        let interlock_listed = listed(ash::ext::fragment_shader_interlock::NAME);
         let robustness2_listed = listed(ash::ext::robustness2::NAME);
         let portability_listed = listed(ash::khr::portability_subset::NAME);
         let feedback_loop_listed = listed(ash::ext::attachment_feedback_loop_layout::NAME);
@@ -831,6 +855,7 @@ unsafe fn query(
             maximal_reconvergence,
             subgroup_uniform_control_flow,
             quad_control,
+            interlock,
             robustness2,
             portability,
             feedback_loop,
@@ -852,6 +877,9 @@ unsafe fn query(
         }
         if quad_control_listed {
             features = features.push_next(&mut *quad_control);
+        }
+        if interlock_listed {
+            features = features.push_next(&mut *interlock);
         }
         if robustness2_listed {
             features = features.push_next(&mut *robustness2);
@@ -885,6 +913,7 @@ unsafe fn query(
         maximal_reconvergence.p_next = std::ptr::null_mut();
         subgroup_uniform_control_flow.p_next = std::ptr::null_mut();
         quad_control.p_next = std::ptr::null_mut();
+        interlock.p_next = std::ptr::null_mut();
         robustness2.p_next = std::ptr::null_mut();
         portability.p_next = std::ptr::null_mut();
         feedback_loop.p_next = std::ptr::null_mut();
@@ -977,7 +1006,10 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
     let Some((queue_family, _)) = family.filter(|_| missing.is_empty()) else {
         return Err(BelowFloor { missing });
     };
-    for feature in (OPTIONAL.iter().chain(STEP_RATES)).chain(QUAD_CONTROL) {
+    for feature in (OPTIONAL.iter().chain(STEP_RATES))
+        .chain(QUAD_CONTROL)
+        .chain(PIXEL_INTERLOCK)
+    {
         *(feature.field)(&mut features) = *(feature.field)(&mut reported);
     }
     let listed =
