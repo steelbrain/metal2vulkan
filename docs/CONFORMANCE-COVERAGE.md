@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1324 |
 | distinct SDK items the Metal leg reaches, of any status | 808 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 8039 |
+| ledger rows (a case whose gap is recorded) | 8040 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -9860,6 +9860,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `primitive-type-restart-indices` | An accepted difference (docs/API.md section 10, Draws: a line's tie-break is the device's own): the line of vertices 0 and 1 runs exactly through the boundary p… |
 | `primitive-type-restart-indices` | An accepted difference (docs/API.md section 10, Draws: a line's tie-break is the device's own): the line of vertices 0 and 1 runs exactly through the boundary p… |
 | `format-footprints-plain-stragglers` | refused: the consumer's contract (the runtime's README, Textures). Metal's `newTextureWithDescriptor:` of a texture buffer's descriptor, and a heap's size of on… |
+| `fractional-viewport-coverage` | OPEN (main's bug list, 11-21, A FILL REACHING PAST A FRACTIONAL VIEWPORT): Metal on the Apple M3 Max covers every pixel the viewport overlaps for a draw that re… |
 | `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's `OpFConvert` to 16 bits an… |
 | `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's `OpFConvert` to 16 bits an… |
 | `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's `OpFConvert` to 16 bits an… |
