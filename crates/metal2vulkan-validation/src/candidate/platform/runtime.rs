@@ -4,9 +4,14 @@
 //! it, on the runtime's public API alone: its instance, the loader's first physical device of the
 //! requested kind (as the executor's own context selects one), a device with the default
 //! options, a library and a function from the row's AIR with the case's constants and linked
-//! functions, one compute pipeline state, one Shared buffer per bound buffer, each bound texture
-//! and sampler as the Metal oracle makes it (`runtime_textures`), and one command buffer of one
-//! compute encoder and one dispatch, waited for under the hang protocol, then read back.
+//! functions, one compute pipeline state, one Shared buffer per bound buffer and per
+//! argument-buffer buffer, each bound and argument-buffer texture and sampler as the Metal oracle
+//! makes them (`runtime_textures`), and one command buffer of one compute encoder and one
+//! dispatch, waited for under the hang protocol, then read back. An argument buffer holds each
+//! member's `gpuAddress` or `gpuResourceID` at its field, written into the owner's bytes before
+//! the owner is made, as a program writes them (`engine::argument_buffers::owner_bytes`), and the
+//! encoder uses each member buffer and texture for reading and writing (`useResource:usage:`), as
+//! the oracle does.
 //!
 //! The process runs it under `VK_LAYER_KHRONOS_validation`, which the loader's and the layer's
 //! own variables enable before the instance is made: core and synchronization validation, every
@@ -28,6 +33,7 @@
 //! operations does.
 
 use crate::candidate::device_facts::{active_tools, ActiveTool, RECORDED_LAYERS};
+use crate::candidate::engine::argument_buffers::{self, FieldKey};
 use crate::candidate::engine::{
     product_refusal, runtime_fingerprint, select_output, ComputeCase, ComputeOutput, ComputeRun,
     RefusedOn, RunAttempt, RuntimeKernel,
@@ -401,12 +407,33 @@ fn run(
         case.creation_bound,
     )
     .map_err(ExecutorError::Failed)?;
+    let members = case
+        .argument_buffer_buffers
+        .iter()
+        .map(|(&(owner, field), bytes)| {
+            let what = format!("argument-buffer buffer {owner}+{field}");
+            Ok(((owner, field), Placed::new(device, &what, bytes)?))
+        })
+        .collect::<Result<BTreeMap<FieldKey, Placed>, ExecutorError>>()?;
+    let bound = super::runtime_textures::make(device, case, kernel, runtime_error)?;
+    let mut words = bound.words();
+    words.extend(
+        members
+            .iter()
+            .map(|(&key, placed)| (key, placed.buffer.gpu_address())),
+    );
     let buffers = kernel
         .buffers
-        .iter()
-        .map(|(&index, bytes)| Ok((index, Placed::new(device, index, bytes)?)))
+        .keys()
+        .map(|&index| {
+            let bytes = argument_buffers::owner_bytes(&kernel.buffers, index, &words)
+                .map_err(ExecutorError::Failed)?;
+            Ok((
+                index,
+                Placed::new(device, &format!("buffer {index}"), &bytes)?,
+            ))
+        })
         .collect::<Result<BTreeMap<u32, Placed>, ExecutorError>>()?;
-    let bound = super::runtime_textures::make(device, case, kernel, runtime_error)?;
     let label = SubmissionLabel {
         case_id: case_id.into(),
         module_sha256: sha256_bytes(kernel.bitcode),
@@ -416,14 +443,13 @@ fn run(
             device,
             device_type,
             &state,
-            &buffers,
-            &bound,
+            (&buffers, &members, &bound),
             case,
             (dispatch, threads_per_group),
         )
     })?;
     // A texture output is read back as the oracle reads one; a run through the runtime binds no
-    // argument buffer or attachment.
+    // attachment.
     let output = match case.output {
         ComputeOutput::Texture {
             binding,
@@ -439,15 +465,36 @@ fn run(
             };
             super::runtime_textures::read_back(made, texture, origin, dimensions, runtime_error)?
         }
+        ComputeOutput::ArgumentBufferTexture {
+            owner,
+            field_offset,
+            origin,
+            dimensions,
+        } => {
+            let key = (owner, field_offset);
+            let (Some(made), Some(texture)) = (
+                bound.members.get(&key),
+                case.argument_buffer_textures.get(&key),
+            ) else {
+                return Err(ExecutorError::Failed(format!(
+                    "output argument-buffer texture {owner}+{field_offset} is not made"
+                )));
+            };
+            super::runtime_textures::read_back(made, texture, origin, dimensions, runtime_error)?
+        }
         output => {
             let finals = buffers
                 .iter()
                 .map(|(&index, placed)| (index, placed.bytes()))
                 .collect::<BTreeMap<u32, Vec<u8>>>();
+            let embedded = members
+                .iter()
+                .map(|(&key, placed)| (key, placed.bytes()))
+                .collect::<BTreeMap<FieldKey, Vec<u8>>>();
             select_output(
                 output,
                 &finals,
-                &BTreeMap::new(),
+                &embedded,
                 &BTreeMap::new(),
                 &BTreeMap::new(),
                 &BTreeMap::new(),
@@ -586,17 +633,16 @@ struct Placed {
 }
 
 impl Placed {
-    /// A Shared buffer holding `bytes`, bound at Metal index `index`.
-    fn new(device: &rt::Device, index: u32, bytes: &[u8]) -> Result<Placed, ExecutorError> {
-        let what = format!("buffer {index}");
+    /// A Shared buffer holding `bytes`, `what` the case names it.
+    fn new(device: &rt::Device, what: &str, bytes: &[u8]) -> Result<Placed, ExecutorError> {
         let length = bytes.len() as u64;
         let block = device
             .take_block(rt::MemoryClass::Shared, length)
-            .map_err(|error| runtime_error(&what, error))?;
+            .map_err(|error| runtime_error(what, error))?;
         // Every byte is written below.
         let buffer = device
             .new_buffer(block.id, 0, length, None)
-            .map_err(|error| runtime_error(&what, error))?;
+            .map_err(|error| runtime_error(what, error))?;
         let contents = buffer
             .contents()
             .ok_or_else(|| ExecutorError::Failed(format!("{what} has no contents")))?;
@@ -631,8 +677,11 @@ fn dispatched(
     device: &rt::Device,
     device_type: DeviceType,
     state: &rt::ComputePipelineState,
-    buffers: &BTreeMap<u32, Placed>,
-    bound: &super::runtime_textures::Bound,
+    (buffers, members, bound): (
+        &BTreeMap<u32, Placed>,
+        &BTreeMap<FieldKey, Placed>,
+        &super::runtime_textures::Bound,
+    ),
     case: &ComputeCase,
     (dispatch, threads_per_group): (rt::Dispatch, [u32; 3]),
 ) -> Result<(), ExecutorError> {
@@ -660,6 +709,15 @@ fn dispatched(
         encoder
             .set_sampler_state(Some(sampler), index)
             .map_err(fail("a sampler"))?;
+    }
+    let used = members
+        .values()
+        .map(|placed| rt::Resource::Buffer(&placed.buffer))
+        .chain(bound.members.values().map(rt::Resource::Texture));
+    for resource in used {
+        encoder
+            .use_resource(resource, rt::ResourceUsage::READ | rt::ResourceUsage::WRITE)
+            .map_err(fail("an argument-buffer member's use"))?;
     }
     for (&index, &length) in &case.threadgroup_lengths {
         encoder

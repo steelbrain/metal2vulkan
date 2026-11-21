@@ -536,6 +536,14 @@ fn run_on_runtime(
                     (slot, usage)
                 })
                 .collect(),
+            member_usages: &case
+                .argument_buffer_textures
+                .iter()
+                .map(|(&key, texture)| {
+                    let usage = crate::check::interface::texture_shader_usage(texture.role, None);
+                    (key, usage)
+                })
+                .collect(),
             reductions: &std::collections::BTreeSet::new(),
         },
     )

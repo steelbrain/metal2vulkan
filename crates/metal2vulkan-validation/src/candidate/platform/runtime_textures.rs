@@ -1,32 +1,55 @@
-//! The textures and samplers a run through the runtime binds ([`super::runtime`]), made as the
-//! Metal oracle makes them (`metal::platform::textures`).
+//! The textures and samplers a run through the runtime binds or places in an argument buffer
+//! ([`super::runtime`]), made as the Metal oracle makes them (`metal::platform::textures`,
+//! `metal::platform::argument_buffers`).
 //!
-//! Each bound texture is a texture of its type, pixel format, extent, array length and levels
-//! (`engine::resources`), Shared, with the usage its function declares of its slot
-//! (`RuntimeKernel::texture_usages`), at an index of the run's texture grant, and every level's
-//! slices written from the case's bytes before the work (`replaceRegion:`, level 0 first). Each
-//! bound sampler is the oracle's descriptor of it (`engine::resources::sampler_descriptor`), at an
-//! index of the run's sampler grant counted down from its top, so it never meets the constexpr
-//! samplers the pipeline numbers up from the bottom. A texture output is read back as the oracle
-//! reads it (`getBytes:`): the selected region of level 0, slice by slice.
+//! Each texture is a texture of its type, pixel format, extent, array length and levels
+//! (`engine::resources`), Shared, with the usage its function declares of its slot or its
+//! argument-buffer member (`RuntimeKernel::texture_usages`, `RuntimeKernel::member_usages`), at an
+//! index of the run's texture grant (the bound textures first, then the members), and every
+//! level's slices written from the case's bytes before the work (`replaceRegion:`, level 0
+//! first). Each sampler is the oracle's descriptor of it (`engine::resources::sampler_descriptor`,
+//! `argument_sampler_descriptor`), at an index of the run's sampler grant counted down from its
+//! top, so it never meets the constexpr samplers the pipeline numbers up from the bottom. A
+//! member's `gpuResourceID` is the word its owner holds at its field ([`Bound::words`]), as a
+//! program writes one into an argument buffer. A texture output is read back as the oracle reads
+//! it (`getBytes:`): the selected region of level 0, slice by slice.
 
+use crate::candidate::engine::argument_buffers::FieldKey;
 use crate::candidate::engine::{resources, ComputeCase, RuntimeKernel};
 use crate::check::admission::ExecutorError;
 use crate::literal::LiteralTexture;
 use metal2vulkan_runtime as rt;
 use std::collections::BTreeMap;
 
-/// The textures and samplers of a run, by the Metal index each binds at, and the grant their
-/// texture indices are taken from.
+/// The textures and samplers of a run: the bound ones by the Metal index each binds at, the
+/// argument-buffer members by their owner's index and field offset, and the grant their texture
+/// indices are taken from.
 pub(super) struct Bound {
     pub(super) textures: BTreeMap<u32, rt::Texture>,
     pub(super) samplers: BTreeMap<u32, rt::SamplerState>,
+    pub(super) members: BTreeMap<FieldKey, rt::Texture>,
+    member_samplers: BTreeMap<FieldKey, rt::SamplerState>,
     _grant: Option<rt::IndexGrant>,
 }
 
-/// Make `case`'s bound textures and samplers on `device`, with the usages `kernel` declares, as
-/// the module documentation says. The run already holds its grant of the whole sampler range;
-/// `error` maps the runtime's errors as the run's.
+impl Bound {
+    /// The `gpuResourceID` of each argument-buffer texture and sampler, by its field.
+    pub(super) fn words(&self) -> BTreeMap<FieldKey, u64> {
+        let textures = self
+            .members
+            .iter()
+            .map(|(&key, texture)| (key, texture.gpu_resource_id().to_bits()));
+        let samplers = self
+            .member_samplers
+            .iter()
+            .map(|(&key, sampler)| (key, sampler.gpu_resource_id().to_bits()));
+        textures.chain(samplers).collect()
+    }
+}
+
+/// Make `case`'s bound and argument-buffer textures and samplers on `device`, with the usages
+/// `kernel` declares, as the module documentation says. The run already holds its grant of the
+/// whole sampler range; `error` maps the runtime's errors as the run's.
 pub(super) fn make(
     device: &rt::Device,
     case: &ComputeCase,
@@ -34,7 +57,8 @@ pub(super) fn make(
     error: impl Fn(&str, rt::Error) -> ExecutorError,
 ) -> Result<Bound, ExecutorError> {
     let first = rt::IndexClass::Texture.range().start;
-    let grant = match u32::try_from(case.textures.len()) {
+    let count = case.textures.len() + case.argument_buffer_textures.len();
+    let grant = match u32::try_from(count) {
         Ok(0) => None,
         Ok(count) => Some(
             device
@@ -47,8 +71,9 @@ pub(super) fn make(
             ))
         }
     };
+    let mut indices = first..;
     let mut textures = BTreeMap::new();
-    for (index, (&binding, texture)) in (first..).zip(&case.textures) {
+    for ((&binding, texture), index) in case.textures.iter().zip(&mut indices) {
         let usage = kernel
             .texture_usages
             .get(&binding)
@@ -61,16 +86,36 @@ pub(super) fn make(
             made_texture(device, texture, usage, index, &error)?,
         );
     }
+    let mut members = BTreeMap::new();
+    for ((&key, texture), index) in case.argument_buffer_textures.iter().zip(&mut indices) {
+        let usage = kernel.member_usages.get(&key).copied().ok_or_else(|| {
+            ExecutorError::Failed(format!(
+                "argument-buffer texture {}+{} has no declared usage",
+                key.0, key.1
+            ))
+        })?;
+        members.insert(key, made_texture(device, texture, usage, index, &error)?);
+    }
+    let mut indices = rt::IndexClass::Sampler.range().rev();
     let mut samplers = BTreeMap::new();
-    for (index, (&binding, sampler)) in rt::IndexClass::Sampler.range().rev().zip(&case.samplers) {
+    for ((&binding, sampler), index) in case.samplers.iter().zip(&mut indices) {
         let state = device
             .new_sampler_state(&resources::sampler_descriptor(sampler), index)
             .map_err(|e| error(&format!("sampler {binding}"), e))?;
         samplers.insert(binding, state);
     }
+    let mut member_samplers = BTreeMap::new();
+    for ((&key, sampler), index) in case.argument_buffer_samplers.iter().zip(&mut indices) {
+        let state = device
+            .new_sampler_state(&resources::argument_sampler_descriptor(sampler), index)
+            .map_err(|e| error(&format!("argument-buffer sampler {}+{}", key.0, key.1), e))?;
+        member_samplers.insert(key, state);
+    }
     Ok(Bound {
         textures,
         samplers,
+        members,
+        member_samplers,
         _grant: grant,
     })
 }

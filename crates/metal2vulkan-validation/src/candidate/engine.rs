@@ -124,7 +124,7 @@ use tables::{function_tables, table_buffers, FunctionTable, TableBuffers};
 /// how it decides a match. A change no recorded row can observe (a case kind no earlier executor
 /// ran, or one it refused) needs no bump; its commit says why. The commit that bumps it says what
 /// changed; this comment keeps no history.
-pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v188";
+pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v189";
 
 /// One kernel case in the terms the binder takes: what this executor supports of an
 /// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures, command
@@ -1173,9 +1173,10 @@ pub fn runtime_fingerprint() -> String {
 /// Whether `case`, mapped from `authored`, runs through the runtime (`metal2vulkan-runtime`'s
 /// public API, `platform::execute_runtime`) in place of the executor's own context: a kernel
 /// case of buffers (each device buffer array's elements among them), bound textures the runtime
-/// makes (`runtime_texture`) and bound samplers, threadgroup memory lengths, function
-/// constants and linked functions, dispatched by `dispatchThreads` or `dispatchThreadgroups`,
-/// and observing a buffer, a bound texture or nothing. Decided by the case's structure alone:
+/// makes (`runtime_texture`) and bound samplers, argument buffers of buffers, such textures and
+/// samplers, threadgroup memory lengths, function constants and linked functions, dispatched by
+/// `dispatchThreads` or `dispatchThreadgroups`, and observing a buffer, a texture, an
+/// argument-buffer buffer or texture, or nothing. Decided by the case's structure alone:
 /// every field the mapping fills is named here, so a new one is decided when it is added.
 pub fn runs_through_runtime(authored: &AuthoredCase, case: &ComputeCase) -> bool {
     let ComputeCase {
@@ -1183,10 +1184,10 @@ pub fn runs_through_runtime(authored: &AuthoredCase, case: &ComputeCase) -> bool
         constants: _,
         buffers: _,
         rate_maps,
-        argument_buffer_buffers,
+        argument_buffer_buffers: _,
         argument_buffer_rate_maps,
         argument_buffer_textures,
-        argument_buffer_samplers,
+        argument_buffer_samplers: _,
         objects,
         command_buffers,
         textures,
@@ -1205,10 +1206,8 @@ pub fn runs_through_runtime(authored: &AuthoredCase, case: &ComputeCase) -> bool
         creation_bound: _,
     } = case;
     rate_maps.is_empty()
-        && argument_buffer_buffers.is_empty()
         && argument_buffer_rate_maps.is_empty()
-        && argument_buffer_textures.is_empty()
-        && argument_buffer_samplers.is_empty()
+        && argument_buffer_textures.values().all(runtime_texture)
         && objects.is_empty()
         && command_buffers.is_empty()
         && textures.values().all(runtime_texture)
@@ -1226,7 +1225,11 @@ pub fn runs_through_runtime(authored: &AuthoredCase, case: &ComputeCase) -> bool
         )
         && matches!(
             output,
-            ComputeOutput::None | ComputeOutput::Buffer { .. } | ComputeOutput::Texture { .. }
+            ComputeOutput::None
+                | ComputeOutput::Buffer { .. }
+                | ComputeOutput::Texture { .. }
+                | ComputeOutput::ArgumentBufferBuffer { .. }
+                | ComputeOutput::ArgumentBufferTexture { .. }
         )
         && authored.intersection_function_tables.is_empty()
 }
@@ -1318,6 +1321,7 @@ fn run_on_runtime(prepared: &PreparedCase, compute: &ComputeCase) -> RunAttempt 
     };
     let buffers = runtime_buffers(&primary.case, &primary.reflection, compute);
     let texture_usages = runtime_texture_usages(&primary.case, &primary.interface);
+    let member_usages = runtime_member_usages(&primary.case, &primary.interface);
     super::platform::execute_runtime(
         prepared.device,
         &primary.case.case_id,
@@ -1327,9 +1331,34 @@ fn run_on_runtime(prepared: &PreparedCase, compute: &ComputeCase) -> RunAttempt 
             linked: &prepared.linked,
             buffers: &buffers,
             texture_usages: &texture_usages,
+            member_usages: &member_usages,
             reductions: &reductions,
         },
     )
+}
+
+/// The usage each argument-buffer texture of `case` is made with in a run through the runtime,
+/// by its field, as the Metal oracle makes it (`metal::platform::argument_buffers`): its role's,
+/// narrowed by the access its AIR member declares. A field with no texture member has none, and
+/// the run fails, as the oracle's does.
+fn runtime_member_usages(
+    case: &AuthoredCase,
+    interface: &AirInterface,
+) -> BTreeMap<argument_buffers::FieldKey, metal2vulkan::metal::TextureUsage> {
+    use crate::check::interface::{declared_writable, texture_shader_usage};
+    use metal2vulkan_air::abi::ParamRole;
+    case.argument_buffer_textures
+        .iter()
+        .filter_map(|texture| {
+            let (_, member) = interface.member_at(texture.buffer_binding, texture.field_offset)?;
+            let ParamRole::Texture(declared) = member.role else {
+                return None;
+            };
+            let usage =
+                texture_shader_usage(texture.role, Some(declared_writable(declared.access)));
+            Some(((texture.buffer_binding, texture.field_offset), usage))
+        })
+        .collect()
 }
 
 /// The usage each texture slot of `case` is made with in a run through the runtime, as the Metal
@@ -1375,13 +1404,15 @@ fn runtime_texture_usages(
 /// What a run through the runtime makes its kernel and binds from, beside its mapped case: the
 /// row's AIR, the modules it links, its buffers' bytes by Metal index (each bound buffer padded to
 /// its declared size, as the oracle makes it), the usage of each texture slot it binds
-/// (`runtime_texture_usages`), and the float reductions it executes
+/// (`runtime_texture_usages`) and of each argument-buffer texture by its field
+/// (`runtime_member_usages`), and the float reductions it executes
 /// (`check::interface::float_reductions`).
 pub struct RuntimeKernel<'a> {
     pub bitcode: &'a [u8],
     pub linked: &'a [LinkedModule],
     pub buffers: &'a BTreeMap<u32, Vec<u8>>,
     pub texture_usages: &'a BTreeMap<u32, metal2vulkan::metal::TextureUsage>,
+    pub member_usages: &'a BTreeMap<argument_buffers::FieldKey, metal2vulkan::metal::TextureUsage>,
     pub reductions: &'a std::collections::BTreeSet<&'static str>,
 }
 

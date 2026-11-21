@@ -2570,16 +2570,18 @@ fn plain_kernel() -> ComputeCase {
 }
 
 /// The runtime runs a kernel case of buffers, threadgroup memory and constants, bound textures it
-/// makes and bound samplers, dispatched by threads or threadgroups and observing a buffer, a bound
-/// texture or nothing; a case with anything else (a pipeline state in an argument buffer, an
+/// makes and bound samplers, argument buffers of buffers, such textures and samplers, dispatched
+/// by threads or threadgroups and observing a buffer, a texture, an argument-buffer member or
+/// nothing; a case with anything else (a pipeline state in an argument buffer, an
 /// explicit imageblock, an indirect dispatch, a texture the runtime does not make: multisampled,
 /// sparse, a texture buffer or a cube array, or one it takes no upload of: a 32-bit float depth)
 /// stays on the executor's own context.
 #[test]
 fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
     use crate::case::{
-        sparse::SparseTextureResource, ResourceRole, SamplerAddressMode, SamplerFilter,
-        SamplerMipFilter, SamplerResource, TextureFormat, TextureType,
+        sparse::SparseTextureResource, ArgumentBufferSamplerResource, ResourceRole,
+        SamplerAddressMode, SamplerFilter, SamplerMipFilter, SamplerResource, TextureFormat,
+        TextureType,
     };
     let authored = kernel_case();
     let plain = plain_kernel();
@@ -2627,6 +2629,48 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
         },
     );
     assert!(runs_through_runtime(&authored, &sampled));
+    let mut members = plain.clone();
+    members.argument_buffer_buffers.insert((0, 0), vec![0; 16]);
+    members
+        .argument_buffer_textures
+        .insert((0, 8), texture(TextureType::D2, 1));
+    members.argument_buffer_samplers.insert(
+        (0, 16),
+        ArgumentBufferSamplerResource {
+            buffer_binding: 0,
+            field_offset: 16,
+            address_mode: SamplerAddressMode::ClampToEdge,
+            min_filter: SamplerFilter::Nearest,
+            mag_filter: SamplerFilter::Nearest,
+            mip_filter: SamplerMipFilter::NotMipmapped,
+            normalized_coordinates: true,
+            compare_function: None,
+        },
+    );
+    for output in [
+        ComputeOutput::ArgumentBufferBuffer {
+            owner: 0,
+            field_offset: 0,
+            offset: 0,
+            length: 4,
+        },
+        ComputeOutput::ArgumentBufferTexture {
+            owner: 0,
+            field_offset: 8,
+            origin: [0; 3],
+            dimensions: [1; 3],
+        },
+    ] {
+        let case = ComputeCase {
+            output,
+            ..members.clone()
+        };
+        assert!(runs_through_runtime(&authored, &case));
+    }
+    let mut member_buffer = plain.clone();
+    member_buffer
+        .argument_buffer_textures
+        .insert((0, 8), texture(TextureType::Buffer, 1));
     let mut object = plain.clone();
     object.objects.insert((1, 0), 7);
     let sparse = LiteralTexture {
@@ -2655,6 +2699,7 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
         textured(texture(TextureType::Buffer, 1)),
         textured(texture(TextureType::CubeArray, 1)),
         textured(depth),
+        member_buffer,
     ];
     for other in &others {
         assert!(!runs_through_runtime(&authored, other), "{other:?}");

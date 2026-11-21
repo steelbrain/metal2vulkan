@@ -1,5 +1,7 @@
-//! The engine compute candidate with textures, texture buffers, texture arrays, and samplers
-//! on a device: the owned `texture_ops`, `sampling`, and `msf_mip_levels` kernels and the public
+//! The engine compute candidate with textures, texture buffers, texture arrays, and samplers,
+//! bound or in an argument buffer, and with buffers in an argument buffer, on a device: the owned
+//! `texture_ops`, `sampling`, `msf_mip_levels`, `selected_member_texture`,
+//! `argument_sampler_sample` and `ob2_loaded_pointer` kernels and the public
 //! `texture_array_width` kernel, planned by the binder and executed on the executor's own context
 //! under `VK_LAYER_KHRONOS_validation`, against expectations derived from their MSL; the cases
 //! the runtime makes run through it too on Linux ([`runs`]). `G-linux`'s `m2v_cpu_icd` step runs
@@ -9,8 +11,8 @@ use super::engine_compute::run;
 use crate::candidate::engine::{resources, ComputeCase, ComputeOutput, ComputeRun};
 use crate::case::mips::level_dimensions;
 use crate::case::{
-    ResourceRole, SamplerAddressMode, SamplerFilter, SamplerMipFilter, SamplerResource,
-    TextureFormat, TextureType,
+    ArgumentBufferSamplerResource, ResourceRole, SamplerAddressMode, SamplerFilter,
+    SamplerMipFilter, SamplerResource, TextureFormat, TextureType,
 };
 use crate::check::admission::ExecutorError;
 use crate::literal::{LiteralTexture, LiteralTextureArray};
@@ -618,5 +620,181 @@ fn a_runtime_sampler_samples_the_bound_texture() {
     for (name, run) in runs() {
         let run = run(&case, &bitcode).unwrap_or_else(|error| panic!("{name}: {error}"));
         assert_eq!(run.output, floats(&texels), "{name}");
+    }
+}
+
+/// Two textures of an argument buffer, one chosen per thread: the owned `selected_member_texture`
+/// kernel reads texel `t >> 1` of `second` for an odd `t` and of `first` for an even one, and
+/// writes its red channel times the owner's `scale` (2) plus the chosen texture's width (4 or 8).
+/// Each texture is the one whose `gpuResourceID` its owner holds at its field.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn an_argument_buffer_texture_is_the_texture_at_its_field() {
+    let halves = |reds: &[u16]| -> Vec<u8> {
+        reds.iter()
+            .flat_map(|&red| [red, 0, 0, 0x3c00])
+            .flat_map(u16::to_le_bytes)
+            .collect()
+    };
+    let member = |width: u32, reds: &[u16]| LiteralTexture {
+        role: ResourceRole::Input,
+        ..texture(
+            0,
+            TextureType::D2,
+            TextureFormat::Rgba16Float,
+            [width, 1, 1],
+            halves(reds),
+        )
+    };
+    let mut case = kernel(
+        "selected_member_texture",
+        Vec::new(),
+        Vec::new(),
+        [8, 1, 1],
+        ComputeOutput::Buffer {
+            binding: 1,
+            offset: 0,
+            length: 32,
+        },
+    );
+    let mut material = 2.0f32.to_le_bytes().to_vec();
+    material.resize(24, 0);
+    case.buffers = BTreeMap::from([(0, material), (1, vec![0xab; 32])]);
+    case.dispatch = Dispatch::Threads {
+        threads: [8, 1, 1],
+        threads_per_group: [8, 1, 1],
+    };
+    // first: red 1, 2, 3, 4; second: red 10 to 17.
+    case.argument_buffer_textures = BTreeMap::from([
+        ((0, 8), member(4, &[0x3c00, 0x4000, 0x4200, 0x4400])),
+        (
+            (0, 16),
+            member(
+                8,
+                &[
+                    0x4900, 0x4980, 0x4a00, 0x4a80, 0x4b00, 0x4b80, 0x4c00, 0x4c40,
+                ],
+            ),
+        ),
+    ]);
+    let bitcode = fixture("selected_member_texture.ll");
+    for (name, run) in runs() {
+        let run = run(&case, &bitcode).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let expected = [6.0, 28.0, 8.0, 30.0, 10.0, 32.0, 12.0, 34.0];
+        assert_eq!(run.output, floats(&expected), "{name}");
+    }
+}
+
+/// A sampler of an argument buffer beside the texture it samples: the owned
+/// `argument_sampler_sample` kernel samples the member texture at `(0.25g + 0.125, 0.25g +
+/// 0.125)` through the member sampler, nearest and normalized, so thread `g` reads texel
+/// `(g, g)` of the 4x4 texture, whose red is `x + 4y`.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn an_argument_buffer_sampler_samples_its_member_texture() {
+    let texels: Vec<f32> = (0..16)
+        .flat_map(|texel| [texel as f32, 0.0, 0.0, 1.0])
+        .collect();
+    let mut case = kernel(
+        "argument_sampler_sample",
+        Vec::new(),
+        Vec::new(),
+        [4, 1, 1],
+        ComputeOutput::Buffer {
+            binding: 1,
+            offset: 0,
+            length: 64,
+        },
+    );
+    case.buffers = BTreeMap::from([(0, vec![0; 16]), (1, vec![0xab; 64])]);
+    case.argument_buffer_textures = BTreeMap::from([(
+        (0, 0),
+        LiteralTexture {
+            role: ResourceRole::Input,
+            ..texture(
+                0,
+                TextureType::D2,
+                TextureFormat::Rgba32Float,
+                [4, 4, 1],
+                floats(&texels),
+            )
+        },
+    )]);
+    case.argument_buffer_samplers = BTreeMap::from([(
+        (0, 8),
+        ArgumentBufferSamplerResource {
+            buffer_binding: 0,
+            field_offset: 8,
+            address_mode: SamplerAddressMode::ClampToEdge,
+            min_filter: SamplerFilter::Nearest,
+            mag_filter: SamplerFilter::Nearest,
+            mip_filter: SamplerMipFilter::NotMipmapped,
+            normalized_coordinates: true,
+            compare_function: None,
+        },
+    )]);
+    let bitcode = fixture("tail_argument_samplers.ll");
+    let expected: Vec<f32> = (0..4)
+        .flat_map(|g| [5.0 * g as f32, 0.0, 0.0, 1.0])
+        .collect();
+    for (name, run) in runs() {
+        let run = run(&case, &bitcode).unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(run.output, floats(&expected), "{name}");
+    }
+}
+
+/// A buffer of an argument buffer, loaded and stored through: the owned `ob2_loaded_pointer`
+/// kernel loads word `idx[t]` of the buffer whose address its holder holds into `out[t]`, and
+/// stores `0xB0000000 | t` at word `idx[8 + t]` of it. Every index is inside the buffer's 16
+/// words: the loads read words 0 to 7, the stores write words 8 to 15. The loads are observed in
+/// `out`, the stores in the member buffer itself.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn an_argument_buffer_buffer_is_the_buffer_at_its_field() {
+    let indices: Vec<u32> = (0..16).collect();
+    let pointee: Vec<u32> = (100..116).collect();
+    let mut case = kernel(
+        "ob2_loaded_pointer",
+        Vec::new(),
+        Vec::new(),
+        [8, 1, 1],
+        ComputeOutput::None,
+    );
+    case.buffers = BTreeMap::from([(0, words(&indices)), (1, vec![0; 8]), (2, vec![0xab; 32])]);
+    case.dispatch = Dispatch::Threads {
+        threads: [8, 1, 1],
+        threads_per_group: [8, 1, 1],
+    };
+    case.argument_buffer_buffers = BTreeMap::from([((1, 0), words(&pointee))]);
+    let bitcode = fixture("ob2_loaded_pointer.ll");
+    let stored: Vec<u32> = (100..108).chain((0..8).map(|t| 0xB000_0000 | t)).collect();
+    let observations = [
+        (
+            ComputeOutput::Buffer {
+                binding: 2,
+                offset: 0,
+                length: 32,
+            },
+            words(&pointee[..8]),
+        ),
+        (
+            ComputeOutput::ArgumentBufferBuffer {
+                owner: 1,
+                field_offset: 0,
+                offset: 0,
+                length: 64,
+            },
+            words(&stored),
+        ),
+    ];
+    for (output, expected) in observations {
+        let case = ComputeCase {
+            output,
+            ..case.clone()
+        };
+        for (name, run) in runs() {
+            let run = run(&case, &bitcode).unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(run.output, expected, "{name}: {output:?}");
+        }
     }
 }
