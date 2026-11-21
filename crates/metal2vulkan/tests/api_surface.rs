@@ -408,6 +408,7 @@ surface! {
         enum VertexFetch N;
         struct VertexFetchProjection N;
         struct FunctionHandle O;
+        struct IndirectDrawLayout O;
         struct RenderPipelineKeys N;
         enum Mechanism N;
         enum RuntimeFact N;

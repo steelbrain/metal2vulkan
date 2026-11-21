@@ -164,7 +164,7 @@ use crate::lower::emit::EmitCx;
 use crate::lower::select::{Plan, SelectCx};
 use crate::pipeline::stage_io::{IoNumeric, StageIo};
 use crate::pipeline::sym::{PushField, SpecKey, Stage, VaryingKey};
-use crate::spirv::builder::constructs::KillForm;
+use crate::spirv::builder::constructs::{ArmEnd, ArmFn, KillForm};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{GlobalId, TypeId, Value as SValue};
@@ -379,6 +379,11 @@ pub struct StageIoPlan {
     /// A vertex function compiled under `LoweringInputs::region_viewports` that returns outputs:
     /// its `DrawIndex` input, which it stores to its `ViewportIndex` output at every return.
     pub region_viewport: Option<RegionViewport>,
+    /// A vertex function compiled under `LoweringInputs::indirect_range`: its test of its command
+    /// against the execution range in its first block ([`emit_draw_entry`]), and its `Position`
+    /// object, where it returns one, which an invocation outside the range stores outside every
+    /// clip volume before it returns.
+    pub indirect_range: Option<Option<usize>>,
     /// The color outputs a fragment function compiled under `LoweringInputs::zeroed_colors`
     /// stores zero to at every return, one per such color.
     pub zeroed: Vec<Link>,
@@ -1163,6 +1168,11 @@ fn metal_interpolated_constant(
 /// vertex's search is a loop: the hooks after it emit in its merge block, which dominates every
 /// block of the body.
 pub fn emit_draw_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
+    // An invocation of a command outside the execution range draws nothing, before anything
+    // else the function reads or writes.
+    if let Some(position) = cx.plan.families.stage_io.indirect_range {
+        indirect_range(cx, fb, position)?;
+    }
     // The de-indexed or private list form's raw index, read once in the first block, where it
     // dominates every use, and the private list form's base vertex.
     if let Some(c) = cx.plan.families.stage_io.captured_index {
@@ -1196,6 +1206,66 @@ pub fn emit_draw_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BRe
         let table = crate::bind::merged_fragment_table(fb, header, command)?;
         cx.merged_fragment_table = Some(table);
     }
+    Ok(())
+}
+
+/// The execution range test of a vertex function compiled under `LoweringInputs::indirect_range`:
+/// the range's location and length, two `u32`s at `PushField::IndirectRange`, and where the
+/// command (`PushField::IndirectSequence` plus `PushField::IndirectBase`) less the location is the
+/// length or more, in `u32`, the
+/// invocation stores `(2, 2, 2, 1)` as its `Position` object `position`, outside every clip volume
+/// (`x > w`), the same at every vertex of the command, and returns. A command outside the range
+/// draws no primitive and runs none of the body.
+fn indirect_range(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    position: Option<usize>,
+) -> BResult<()> {
+    let range = cx.push_field(fb, PushField::IndirectRange)?;
+    let sequence = cx.push_field(fb, PushField::IndirectSequence)?;
+    let base = cx.push_field(fb, PushField::IndirectBase)?;
+    let command = fb.binary(BinOp::IAdd, sequence, base)?;
+    let u32_ = fb.module().ty(SType::Int {
+        width: 32,
+        signed: false,
+    })?;
+    let read = MemAccess {
+        aligned: Some(4),
+        ..MemAccess::default()
+    };
+    let at = fb.device_place_read_only(range, u32_)?;
+    let location = fb.load(at, read)?;
+    let four = crate::memory::roots::k64(fb, 4)?;
+    let next = fb.binary(BinOp::IAdd, range, four)?;
+    let at = fb.device_place_read_only(next, u32_)?;
+    let length = fb.load(at, read)?;
+    let into = fb.binary(BinOp::ISub, command, location)?;
+    let outside = fb.binary(BinOp::UGreaterThanEqual, into, length)?;
+    let position = match position {
+        Some(object) => Some(global(cx, object)?),
+        None => None,
+    };
+    let leave: ArmFn<'_, ()> = Box::new(move |fb, _| {
+        if let Some(g) = position {
+            let f32_ = fb.module().ty(SType::Float { width: 32 })?;
+            let mut lanes = [None; 4];
+            for (lane, x) in lanes.iter_mut().zip([2.0f32, 2.0, 2.0, 1.0]) {
+                let c = fb.module().constant(Constant::Scalar {
+                    ty: f32_,
+                    bits: ConstBits(u64::from(x.to_bits())),
+                })?;
+                *lane = Some(fb.module().const_value(c)?);
+            }
+            let vec4 = fb.module().ty(SType::Vector { elem: f32_, len: 4 })?;
+            let lanes: Vec<SValue> = lanes.into_iter().flatten().collect();
+            let v = fb.composite_construct(vec4, &lanes)?;
+            let p = fb.module().global_value(g)?;
+            fb.store(p, v, MemAccess::default())?;
+        }
+        fb.ret(None)?;
+        Ok(ArmEnd::Exits)
+    });
+    fb.if_(&mut (), outside, leave, None)?;
     Ok(())
 }
 
@@ -1589,7 +1659,6 @@ pub fn read_at_every_sample(
     plan: &Plan,
     decls: &crate::lower::emit::FamilyDecls,
 ) -> Result<(), Error> {
-    use crate::spirv::builder::constructs::ArmEnd;
     use crate::spirv::ir::GlslOp;
     let Some(n) = plan
         .families

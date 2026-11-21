@@ -242,6 +242,18 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   An argument buffer's texture reads the element at its ID's index masked to its low 16 bits,
   so a bad ID reads an element of the arrays ([RESOURCE-ID.md](RESOURCE-ID.md)); the change that
   first lowers an argument buffer's sampler masks its index the same way.
+  A function writes an indirect command buffer's render commands, under the identity domains
+  alone, through the `gpuResourceID` an argument buffer's `command_buffer` member holds: the
+  device address of the buffer's records, laid out as `pipeline::IndirectDrawLayout` states. A
+  command's `set_vertex_buffer` and `set_fragment_buffer`, its `draw_indexed_primitives` of
+  triangles and its `reset` write them, each only where the command's index is below the
+  buffer's capacity; any other indirect-command operation is
+  `Unsupported{GpuEncodedIndirectCommands}`. A render pipeline state made with
+  `support_indirect_command_buffers` compiles its vertex function under
+  `LoweringInputs::indirect_range`: it reads the execution's range at `PushField::IndirectRange`
+  and its command, `PushField::IndirectSequence` (a part's sequence index) plus
+  `PushField::IndirectBase` (the part's first command), a command outside the range draws nothing,
+  and the function pulls every vertex attribute it reads.
 
 Loops run as written: no execution bound is translated in.
 

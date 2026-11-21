@@ -1935,11 +1935,13 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
 /// fetch on a device with neither ordered form); the render pass's length, at or past which a
 /// vertex function that writes `[[render_target_array_index]]` stores `Layer` 0
 /// (`PushField::RenderTargetArrayLength`); the address of the runtime's memory that holds a
-/// kernel's private arena past the floor (`PushField::PrivateArenaAddress`); and the draw's
-/// viewport count, at or past which a vertex function that writes `[[viewport_array_index]]` stores
-/// `ViewportIndex` 0 (`PushField::ViewportCount`). Its fields past the push window are a parameter
-/// block, whose address the window holds. Its refusal names the first form the plan holds that
-/// they do not lower ([`identity_refusal`]).
+/// kernel's private arena past the floor (`PushField::PrivateArenaAddress`); the draw's viewport
+/// count, at or past which a vertex function that writes `[[viewport_array_index]]` stores
+/// `ViewportIndex` 0 (`PushField::ViewportCount`); and a vertex function's indirect command buffer
+/// execution range and command (`PushField::IndirectRange`, `PushField::IndirectSequence`,
+/// `PushField::IndirectBase`). Its
+/// fields past the push window are a parameter block, whose address the window holds. Its refusal
+/// names the first form the plan holds that they do not lower ([`identity_refusal`]).
 fn identity_admits(plan: &Plan) -> Result<(), Error> {
     match identity_refusal(plan) {
         None => Ok(()),
@@ -1982,6 +1984,9 @@ fn identity_refusal(plan: &Plan) -> Option<String> {
                 | PushField::RenderTargetArrayLength
                 | PushField::PrivateArenaAddress
                 | PushField::ViewportCount
+                | PushField::IndirectRange
+                | PushField::IndirectSequence
+                | PushField::IndirectBase
         ),
     });
     if let Some(f) = field {

@@ -355,6 +355,18 @@ pub struct LoweringInputs {
     /// as without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub private_list: bool,
+    /// The function's render pipeline state is made for indirect command buffers
+    /// (`supportIndirectCommandBuffers`): a vertex function reads the execution range at
+    /// `PushField::IndirectRange` and its command, `PushField::IndirectSequence` plus
+    /// `PushField::IndirectBase`, in its first block, and an invocation of a command outside the range (`command - location >= length`,
+    /// in `u32`) stores its `[[position]]` as `(2, 2, 2, 1)`, outside every clip volume, and
+    /// returns before the body, so its command draws nothing and writes no memory. A direct draw
+    /// of the state is pushed a range of every command. Refused on a device without device
+    /// addresses (`Feature::GpuEncodedIndirectCommands`). `Device::compile_render_pipeline` sets
+    /// it for a `Function` vertex stage of a descriptor that sets the flag, whose vertex function
+    /// then pulls every attribute it reads. Any other function compiles as without it.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub indirect_range: bool,
     /// The function's render pipeline draws each vertex amplification as a draw of its own
     /// (`VariantKey::amplification_draws`), where Vulkan multiview cannot draw the encoder's
     /// mappings as Metal renders them. Under it a vertex or fragment function reads its

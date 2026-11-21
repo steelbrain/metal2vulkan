@@ -345,6 +345,10 @@ pub fn function_key(
         h.bytes(b"private-list");
     }
     // Appended only when set.
+    if inputs.indirect_range {
+        h.bytes(b"indirect-range");
+    }
+    // Appended only when set.
     if let Some(d) = inputs.amplification_draws {
         h.bytes(b"amplification-draws")
             .u64(u64::from(d.layered))

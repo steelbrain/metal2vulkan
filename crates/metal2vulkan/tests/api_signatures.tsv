@@ -214,6 +214,16 @@ assoc-const	metal2vulkan::pipeline::CommandWrites::STAGE_IN_REGION	pub const STA
 assoc-const	metal2vulkan::pipeline::CommandWrites::THREADGROUP_MEMORY	pub const THREADGROUP_MEMORY: u32
 assoc-const	metal2vulkan::pipeline::FunctionHandle::NULL_WORD	pub const NULL_WORD: u32
 assoc-const	metal2vulkan::pipeline::FunctionHandle::RESERVED_WORD	pub const RESERVED_WORD: u32
+assoc-const	metal2vulkan::pipeline::IndirectDrawLayout::CAPACITY_AT	pub const CAPACITY_AT: u32
+assoc-const	metal2vulkan::pipeline::IndirectDrawLayout::FRAGMENT_SLOTS_AT	pub const FRAGMENT_SLOTS_AT: u32
+assoc-const	metal2vulkan::pipeline::IndirectDrawLayout::HEADER_BYTES	pub const HEADER_BYTES: u32
+assoc-const	metal2vulkan::pipeline::IndirectDrawLayout::INDEX_UINT16	pub const INDEX_UINT16: u32
+assoc-const	metal2vulkan::pipeline::IndirectDrawLayout::INDEX_UINT32	pub const INDEX_UINT32: u32
+assoc-const	metal2vulkan::pipeline::IndirectDrawLayout::MAX_SLOTS	pub const MAX_SLOTS: u32
+assoc-const	metal2vulkan::pipeline::IndirectDrawLayout::RESET_INDEX_AT	pub const RESET_INDEX_AT: u32
+assoc-const	metal2vulkan::pipeline::IndirectDrawLayout::SLOT_BYTES	pub const SLOT_BYTES: u32
+assoc-const	metal2vulkan::pipeline::IndirectDrawLayout::STRIDE_AT	pub const STRIDE_AT: u32
+assoc-const	metal2vulkan::pipeline::IndirectDrawLayout::VERTEX_SLOTS_AT	pub const VERTEX_SLOTS_AT: u32
 assoc-const	metal2vulkan::pipeline::KernelVariant::ALL	pub const ALL: [KernelVariant; 3]
 assoc-const	metal2vulkan::pipeline::LineBandState::FRONT_FACE	pub const FRONT_FACE: vk::FrontFace
 assoc-const	metal2vulkan::pipeline::LineBandState::PUSH_BYTES	pub const PUSH_BYTES: u32
@@ -427,6 +437,16 @@ assoc-const-value	metal2vulkan::pipeline::CommandWrites::STAGE_IN_REGION	1 <<11
 assoc-const-value	metal2vulkan::pipeline::CommandWrites::THREADGROUP_MEMORY	1 <<10
 assoc-const-value	metal2vulkan::pipeline::FunctionHandle::NULL_WORD	0
 assoc-const-value	metal2vulkan::pipeline::FunctionHandle::RESERVED_WORD	1
+assoc-const-value	metal2vulkan::pipeline::IndirectDrawLayout::CAPACITY_AT	0
+assoc-const-value	metal2vulkan::pipeline::IndirectDrawLayout::FRAGMENT_SLOTS_AT	8
+assoc-const-value	metal2vulkan::pipeline::IndirectDrawLayout::HEADER_BYTES	24
+assoc-const-value	metal2vulkan::pipeline::IndirectDrawLayout::INDEX_UINT16	0
+assoc-const-value	metal2vulkan::pipeline::IndirectDrawLayout::INDEX_UINT32	1
+assoc-const-value	metal2vulkan::pipeline::IndirectDrawLayout::MAX_SLOTS	31
+assoc-const-value	metal2vulkan::pipeline::IndirectDrawLayout::RESET_INDEX_AT	16
+assoc-const-value	metal2vulkan::pipeline::IndirectDrawLayout::SLOT_BYTES	8
+assoc-const-value	metal2vulkan::pipeline::IndirectDrawLayout::STRIDE_AT	12
+assoc-const-value	metal2vulkan::pipeline::IndirectDrawLayout::VERTEX_SLOTS_AT	4
 assoc-const-value	metal2vulkan::pipeline::KernelVariant::ALL	[KernelVariant::Plain, KernelVariant::PartialThreadgroups, KernelVariant::EmulatedSimdgroups]
 assoc-const-value	metal2vulkan::pipeline::LineBandState::FRONT_FACE	crate::pipeline::link::band::LineBand::FRONT_FACE
 assoc-const-value	metal2vulkan::pipeline::LineBandState::PUSH_BYTES	crate::pipeline::link::band::LineBand::PUSH_BYTES
@@ -2965,6 +2985,7 @@ field	metal2vulkan::pipeline::LoweringInputs.extended_range_colors	pub extended_
 field	metal2vulkan::pipeline::LoweringInputs.flat_grid	pub flat_grid: bool
 field	metal2vulkan::pipeline::LoweringInputs.folded_groups	pub folded_groups: bool
 field	metal2vulkan::pipeline::LoweringInputs.framebuffer_fetch	pub framebuffer_fetch: Option<FramebufferFetchInputs>
+field	metal2vulkan::pipeline::LoweringInputs.indirect_range	pub indirect_range: bool
 field	metal2vulkan::pipeline::LoweringInputs.instanced_attributes	pub instanced_attributes: BTreeSet<u32>
 field	metal2vulkan::pipeline::LoweringInputs.kept_imageblock_bytes	pub kept_imageblock_bytes: Option<u32>
 field	metal2vulkan::pipeline::LoweringInputs.logic_operation	pub logic_operation: Option<vk::LogicOp>
@@ -7233,6 +7254,19 @@ method	metal2vulkan::pipeline::GraphicsState::color_blend_attachments	pub fn col
 method	metal2vulkan::pipeline::GraphicsState::new	pub fn new(topology: vk::PrimitiveTopology, rasterization_samples: vk::SampleCountFlags) -> GraphicsState
 method	metal2vulkan::pipeline::HandleClass::sampler	pub fn sampler(use_: crate::metal::sampler::SamplerUse) -> HandleClass
 method	metal2vulkan::pipeline::HandleClass::sampler_use	pub fn sampler_use(self) -> Option<crate::metal::sampler::SamplerUse>
+method	metal2vulkan::pipeline::IndirectDrawLayout::bytes	pub fn bytes(self, capacity: u32) -> u64
+method	metal2vulkan::pipeline::IndirectDrawLayout::command	pub fn command(self, command: u32) -> u64
+method	metal2vulkan::pipeline::IndirectDrawLayout::draw	pub fn draw(self) -> u32
+method	metal2vulkan::pipeline::IndirectDrawLayout::fragment_slot	pub fn fragment_slot(self, slot: u32) -> u32
+method	metal2vulkan::pipeline::IndirectDrawLayout::fragment_slots	pub fn fragment_slots(self) -> u32
+method	metal2vulkan::pipeline::IndirectDrawLayout::header	pub fn header(self, capacity: u32, reset_index_address: u64) -> [u8; Self::HEADER_BYTES as usize]
+method	metal2vulkan::pipeline::IndirectDrawLayout::index	pub fn index(self) -> u32
+method	metal2vulkan::pipeline::IndirectDrawLayout::new	pub fn new(vertex_slots: u32, fragment_slots: u32) -> Option<IndirectDrawLayout>
+method	metal2vulkan::pipeline::IndirectDrawLayout::reset_command	pub fn reset_command(self, slot_word: u64, reset_index_address: u64) -> Vec<u8>
+method	metal2vulkan::pipeline::IndirectDrawLayout::sequence	pub fn sequence(self) -> u32
+method	metal2vulkan::pipeline::IndirectDrawLayout::stride	pub fn stride(self) -> u32
+method	metal2vulkan::pipeline::IndirectDrawLayout::vertex_slot	pub fn vertex_slot(self, slot: u32) -> u32
+method	metal2vulkan::pipeline::IndirectDrawLayout::vertex_slots	pub fn vertex_slots(self) -> u32
 method	metal2vulkan::pipeline::InputAttachmentUse::new	pub fn new(color_index: u32, input_attachment_index: u32, format_class: SampledType) -> InputAttachmentUse
 method	metal2vulkan::pipeline::LinkedFunction::name	pub fn name(&self) -> &str
 method	metal2vulkan::pipeline::LinkedFunction::new	pub fn new(function: Function) -> LinkedFunction
@@ -7824,6 +7858,7 @@ struct	metal2vulkan::pipeline::FunctionDescriptor	#[derive(Clone, Debug, Partial
 struct	metal2vulkan::pipeline::FunctionHandle	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct FunctionHandle(u32)
 struct	metal2vulkan::pipeline::GraphicsState	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct GraphicsState
 struct	metal2vulkan::pipeline::ImageHandleClass	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct ImageHandleClass
+struct	metal2vulkan::pipeline::IndirectDrawLayout	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct IndirectDrawLayout
 struct	metal2vulkan::pipeline::InputAttachmentUse	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct InputAttachmentUse
 struct	metal2vulkan::pipeline::LevelReads	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct LevelReads
 struct	metal2vulkan::pipeline::LineBandState	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct LineBandState
@@ -10915,6 +10950,9 @@ variant	metal2vulkan::pipeline::PushField::ExecutionStatusAddress	ExecutionStatu
 variant	metal2vulkan::pipeline::PushField::FetchedColor	FetchedColor { color: u32, texels: SampledType }
 variant	metal2vulkan::pipeline::PushField::HalfBlendColor	HalfBlendColor
 variant	metal2vulkan::pipeline::PushField::IndexCapacity	IndexCapacity
+variant	metal2vulkan::pipeline::PushField::IndirectBase	IndirectBase
+variant	metal2vulkan::pipeline::PushField::IndirectRange	IndirectRange
+variant	metal2vulkan::pipeline::PushField::IndirectSequence	IndirectSequence
 variant	metal2vulkan::pipeline::PushField::InstanceCount	InstanceCount(SlotRef)
 variant	metal2vulkan::pipeline::PushField::LineBand	LineBand
 variant	metal2vulkan::pipeline::PushField::MergedDrawAddress	MergedDrawAddress

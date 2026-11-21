@@ -375,6 +375,7 @@ mod serde_round_trips {
             primitive_id_indices: Some(crate::metal::IndexType::UInt16),
             quad_primitive_ids: true,
             private_list: true,
+            indirect_range: true,
             color_writes: BTreeMap::from([
                 (
                     0,

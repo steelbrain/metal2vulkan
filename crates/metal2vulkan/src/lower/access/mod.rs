@@ -104,6 +104,7 @@ mod emit;
 pub mod encode;
 pub mod function_table;
 pub mod handle;
+pub mod icb;
 pub mod imageblock;
 pub mod index;
 pub mod local;
@@ -190,6 +191,9 @@ pub enum AccessStrategy {
     Imageblock(imageblock::ImageblockStrategy),
     /// An indirect-command object's word, or an encoder operation's record writes.
     Encode(encode::EncodeStrategy),
+    /// An indirect-command operation's writes into its command's records under the identity
+    /// domains.
+    Commands(icb::Command),
     /// A word of a visible-function table read by its resource id.
     FunctionTable(function_table::TableWord),
     /// A read of an argument the function constants removed.
@@ -537,6 +541,7 @@ impl FamilyStrategy for AccessStrategy {
             AccessStrategy::Cell(c) => c.name().into(),
             AccessStrategy::Imageblock(i) => i.name().into(),
             AccessStrategy::Encode(e) => e.name(slots),
+            AccessStrategy::Commands(c) => c.name(),
             AccessStrategy::FunctionTable(t) => t.name(),
             AccessStrategy::AbsentRead(a) => a.name().into(),
         }
@@ -561,6 +566,7 @@ impl FamilyStrategy for AccessStrategy {
             AccessStrategy::Cell(c) => c.words(),
             AccessStrategy::Imageblock(i) => i.words(),
             AccessStrategy::Encode(e) => e.words(),
+            AccessStrategy::Commands(c) => c.words(),
             AccessStrategy::FunctionTable(t) => t.words(),
             AccessStrategy::AbsentRead(a) => a.words(),
         }
@@ -2486,6 +2492,11 @@ pub fn select(
     }
     if let Some(s) = imageblock::select(cx, inst)? {
         return Ok(AccessStrategy::Imageblock(s));
+    }
+    // Under the identity domains an indirect-command operation is `icb`'s; its object word's
+    // handle load stays `encode`'s.
+    if let Some(c) = icb::select(cx, inst, m)? {
+        return Ok(AccessStrategy::Commands(c));
     }
     if let Some(s) = encode::select(cx, at, inst, m)? {
         return Ok(AccessStrategy::Encode(s));

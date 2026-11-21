@@ -2394,6 +2394,9 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     if cx.inputs.primitive_id_varying && cx.stage == Stage::Vertex {
         primitive_id_output(cx)?;
     }
+    if cx.inputs.indirect_range && cx.stage == Stage::Vertex {
+        indirect_range(cx)?;
+    }
     // The pass's colors the pipeline lacks, which plain Metal zeroes where a draw covers them.
     if cx.stage == Stage::Fragment {
         let zeroed = cx.inputs.zeroed_colors.clone();
@@ -2466,6 +2469,27 @@ fn indices_feature(cx: &SelectCx<'_>) -> Feature {
         true => Feature::PrivatePrimitives,
         false => Feature::PrimitiveId,
     }
+}
+
+/// Plan the execution range test of a vertex function compiled under
+/// `LoweringInputs::indirect_range` ([`super::StageIoPlan::indirect_range`]): its range's address
+/// and its command, pushed, and its `Position` output, where it has one. The range is read by
+/// address: a device without device addresses refuses it.
+fn indirect_range(cx: &mut SelectCx<'_>) -> Result<(), Error> {
+    let f = cx.profile.fields();
+    if f.buffer_access != crate::device::profile::BufferAccess::Addressed || !f.leaf.int64 {
+        return Err(Unsupported::needs_any_of(
+            Feature::GpuEncodedIndirectCommands,
+            vec![cx.profile.addressed_needs()],
+        )
+        .into());
+    }
+    cx.push.insert(PushField::IndirectRange);
+    cx.push.insert(PushField::IndirectSequence);
+    cx.push.insert(PushField::IndirectBase);
+    let sp = &mut cx.families.stage_io;
+    sp.indirect_range = Some(sp.invariant);
+    Ok(())
 }
 
 /// Refuse the de-indexed or private list form ([`indices_feature`]) on a device without device

@@ -699,6 +699,7 @@ pub fn emit(
         AccessStrategy::Cell(c) => super::cell::emit(cx, fb, vid, c),
         AccessStrategy::Imageblock(i) => super::imageblock::emit(cx, fb, vid, i),
         AccessStrategy::Encode(e) => super::encode::emit(cx, fb, vid, e),
+        AccessStrategy::Commands(c) => super::icb::emit(cx, fb, c),
         AccessStrategy::FunctionTable(t) => super::function_table::emit(cx, fb, vid, t),
         AccessStrategy::AbsentRead(a) => super::absent::emit(cx, fb, vid, a),
     }

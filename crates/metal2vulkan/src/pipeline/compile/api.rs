@@ -422,6 +422,7 @@ impl Device {
                     v,
                     d.max_vertex_call_stack_depth,
                     primitive_id,
+                    d.support_indirect_command_buffers,
                 )
             };
             let (vertex, vertex_inputs, written, varyings, uniform, push_end) = match &d.vertex {
@@ -862,6 +863,7 @@ impl Device {
                 v,
                 d.max_vertex_call_stack_depth,
                 primitive_id,
+                d.support_indirect_command_buffers,
             ),
             m,
         )?;

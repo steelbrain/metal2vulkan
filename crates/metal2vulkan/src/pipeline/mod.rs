@@ -85,6 +85,7 @@ pub(crate) mod compile;
 pub(crate) mod descriptor;
 pub(crate) mod facts;
 pub(crate) mod graphics;
+mod indirect_draws;
 pub(crate) mod interface;
 pub(crate) mod layout;
 pub(crate) mod link;
@@ -120,6 +121,7 @@ pub use graphics::{
     ImageblockMechanism, InputAttachmentUse, LineBandState, ShadowStencilUse, StorageAttachmentUse,
     StorageAttachmentView, TessellationState,
 };
+pub use indirect_draws::IndirectDrawLayout;
 pub use interface::{
     AccessSet, AttributeFetch, BufferForm, BufferKind, BufferSlot, CommandWrites, DescriptorView,
     LevelReads, NumberedSampler, PatchDomain, PipelineInterface, PlacedField, PushLoc,

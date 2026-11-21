@@ -927,6 +927,27 @@ pub enum PushField {
     /// `RootTableAddress`: a hole the consumer fills (`PushHole::MergedDrawAddress`), placed with
     /// the other addresses. The merge passes read the header there too.
     MergedDrawAddress,
+    /// Device address (`u64`) of the execution range (Metal's
+    /// `MTLIndirectCommandBufferExecutionRange`, a `u32` location then a `u32` length) a vertex
+    /// function compiled under `LoweringInputs::indirect_range` reads in its first block: an
+    /// invocation of a command outside it ([`PushField::IndirectSequence`]) returns before the
+    /// body, its `[[position]]` outside every clip volume, so the command draws nothing. The
+    /// binder points it at the range an execution reads from a buffer, and at a range of every
+    /// command (location 0, length `u32::MAX`) for a direct draw or an execution over a range
+    /// the CPU gives. Placed with the other addresses.
+    IndirectRange,
+    /// The command (`u32`) of an indirect command buffer's execution that the draw is, less its
+    /// part's first ([`PushField::IndirectBase`]), which a vertex function compiled under
+    /// `LoweringInputs::indirect_range` adds to it and tests against its
+    /// [`PushField::IndirectRange`]: the sequence index an execution's `SEQUENCE_INDEX` token
+    /// pushes there, 0 for a direct draw. Placed beside the addresses, so the vertex window always
+    /// holds it.
+    IndirectSequence,
+    /// The first command (`u32`) of the part of an indirect command buffer's execution that the
+    /// draw is: a consumer may run an execution's commands as several parts, each counting its
+    /// sequences ([`PushField::IndirectSequence`]) from 0, and pushes each part's first here. 0
+    /// for a direct draw. Placed beside the addresses, so the vertex window always holds it.
+    IndirectBase,
     /// Which draw of a fragment function compiled under `LoweringInputs::snapshot_textures` runs
     /// (`u32`): a hole the consumer fills (`PushHole::SnapshotPhase`), placed beside the addresses
     /// so the fragment window always holds it. 1 in the draw that takes the snapshot, whose

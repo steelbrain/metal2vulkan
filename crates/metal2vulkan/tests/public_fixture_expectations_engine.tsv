@@ -1424,6 +1424,16 @@ engine/icb_imageblock_encode.air.ll	icb_imageblock_encode	ok	ok	ok	ok	ok	ok	ok	o
 engine/icb_imageblock_encode.ll	icb_imageblock_encode	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/icb_imageblock_template.air.ll	icb_imageblock_template	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/icb_imageblock_template.ll	icb_imageblock_template	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/icb_indexed_extras.air.ll	icb_extras_reset	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/icb_indexed_extras.air.ll	icb_extras_back_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/icb_indexed_extras.air.ll	icb_extras_back_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/icb_indexed_extras.air.ll	icb_extras_wide_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{DescriptorCount; AnyOf[[Limit { limit: MaxPerStageDescriptorUniformBuffers, required: 13, available: 12 }]]}
+engine/icb_indexed_extras.air.ll	icb_extras_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/icb_indexed_extras.ll	icb_extras_reset	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/icb_indexed_extras.ll	icb_extras_back_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/icb_indexed_extras.ll	icb_extras_back_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/icb_indexed_extras.ll	icb_extras_wide_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{DescriptorCount; AnyOf[[Limit { limit: MaxPerStageDescriptorUniformBuffers, required: 13, available: 12 }]]}
+engine/icb_indexed_extras.ll	icb_extras_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/icb_inherited_dispatches.air.ll	cid_encode	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/icb_inherited_dispatches.air.ll	cid_count	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/icb_inherited_dispatches.ll	cid_encode	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok

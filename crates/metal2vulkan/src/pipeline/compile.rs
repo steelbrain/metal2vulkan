@@ -88,8 +88,17 @@ pub enum InputsFrom<'a> {
     /// `maxVertexCallStackDepth` (the `u32`), whether the pipeline's fragment function reads
     /// `[[primitive_id]]` where the device carries it through a varying
     /// ([`reads_primitive_id_varying`]). A vertex function writes the primitive ID's varying where
-    /// the device cannot declare a fragment `PrimitiveId` (`LoweringInputs::primitive_id_varying`).
-    Vertex(Option<&'a VertexDescriptor>, &'a VariantKey, u32, bool),
+    /// the device cannot declare a fragment `PrimitiveId` (`LoweringInputs::primitive_id_varying`),
+    /// and whether the pipeline state is made for indirect command buffers
+    /// (`supportIndirectCommandBuffers`): a vertex function then pulls every attribute it reads
+    /// and tests its command against the execution range (`LoweringInputs::indirect_range`).
+    Vertex(
+        Option<&'a VertexDescriptor>,
+        &'a VariantKey,
+        u32,
+        bool,
+        bool,
+    ),
     /// The fragment stage of this render pipeline under a variant key: the key's fragment-stage
     /// inputs, the attachments among the pipeline's color attachments that the specialized entry
     /// writes and whose pixel format is a signed integer
@@ -221,7 +230,7 @@ impl<'a> InputsFrom<'a> {
     fn call_stack_depth(&self) -> u32 {
         match self {
             InputsFrom::Given(i) => i.max_call_stack_depth.unwrap_or(1),
-            InputsFrom::Vertex(_, _, depth, _) => (*depth).max(1),
+            InputsFrom::Vertex(_, _, depth, ..) => (*depth).max(1),
             InputsFrom::Fragment(pass, ..) => pass.max_call_stack_depth.max(1),
         }
     }
@@ -2770,7 +2779,7 @@ fn lower_inputs(
     match inputs {
         InputsFrom::Given(i) => Ok(given_inputs(spec, i)),
         // A post-tessellation vertex function pulls every attribute it reads.
-        InputsFrom::Vertex(desc, variant, depth, primitive_id)
+        InputsFrom::Vertex(desc, variant, depth, primitive_id, _)
             if matches!(spec.ep.stage, AbiStage::Vertex { patch: Some(_) }) =>
         {
             let attributes = crate::lower::tessellation::attributes_read(spec);
@@ -2784,11 +2793,13 @@ fn lower_inputs(
             out.primitive_id_varying = primitive_id;
             Ok(key::canonical_inputs(&out))
         }
-        InputsFrom::Vertex(desc, variant, depth, primitive_id) => {
+        InputsFrom::Vertex(desc, variant, depth, primitive_id, indirect) => {
             let attributes = declared_attributes(spec);
-            // The primitive ID's de-indexed form and the private list form pull every attribute,
-            // whatever the caller's projection would fetch in fixed function.
-            let pull_every = variant.primitive_id_indices.is_some() || variant.private_list;
+            // The primitive ID's de-indexed form, the private list form and a state made for
+            // indirect command buffers pull every attribute, whatever the caller's projection
+            // would fetch in fixed function: a command binds its vertex buffers by address alone.
+            let pull_every =
+                variant.primitive_id_indices.is_some() || variant.private_list || indirect;
             let projection = crate::pipeline::link::vertex::vertex_fetch_projection_for(
                 desc,
                 &attributes,
@@ -2802,6 +2813,7 @@ fn lower_inputs(
             // Only on a device that cannot declare a fragment `PrimitiveId`: elsewhere a plain
             // vertex function's fragment function reads Vulkan's, Metal's there.
             out.primitive_id_varying = primitive_id && primitive_id_varying_on(p);
+            out.indirect_range = indirect;
             out.instanced_attributes = instanced_attributes(spec, &out, desc, m)?;
             Ok(key::canonical_inputs(&out))
         }
