@@ -901,10 +901,11 @@ fn the_identity_domains_leave_a_loaded_pointer_unchecked_and_mask_a_resource_id(
             .entries
             .insert(name.into(), StrategyUse::default());
     }
+    let attributes = BTreeMap::new();
     let module = |policy| ModuleFacts {
         stage: SymStage::Kernel,
         slots: &slots,
-        attributes: &BTreeMap::new(),
+        attributes: &attributes,
         resident_roots: false,
         handle_table: false,
         policy,
@@ -968,7 +969,12 @@ fn the_identity_domains_leave_a_loaded_pointer_unchecked_and_mask_a_resource_id(
             .contains("resolves no handle")
     );
     // The unchecked target refuses the run, naming its form; the masked one runs.
-    match out_of_bounds_run(None, profile, &module(identity), &[pointer, handles]) {
+    match out_of_bounds_run(
+        None,
+        profile,
+        &module(identity),
+        &[pointer, handles.clone()],
+    ) {
         Err(ExecutorError::NotSupported(refused @ NotSupported::Uncontained { .. })) => {
             assert_eq!(
                 refused.outcome(),
@@ -988,8 +994,8 @@ fn the_identity_domains_leave_a_loaded_pointer_unchecked_and_mask_a_resource_id(
 }
 
 /// A draw's targets: a fixed-function attribute is contained by the device's buffer robustness, and
-/// unchecked without it; a direct indexed draw's index buffer by the padded copy of its indices on every
-/// device; a top-level texture array by the clamped handle-array load. A pulled attribute is
+/// unchecked without it; a direct indexed draw's index buffer by the padded copy of its indices on
+/// every device; a top-level texture array by the clamped handle-array load. A pulled attribute is
 /// contained as the slot its fetch names, which a module that does not bind it does not access.
 #[test]
 fn a_draws_targets_are_contained_by_their_fetch() {
