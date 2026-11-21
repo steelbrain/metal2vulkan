@@ -56,9 +56,10 @@ pub const TIME_DOMAINS: [vk::TimeDomainKHR; 2] =
 /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)), and
 /// `VK_NV_linear_color_attachment`, with its `linearColorAttachment` feature where the device
 /// reports it, through which an opaque handle's surface plane whose `LINEAR` tiling renders only
-/// as a linear colour attachment lies in place, and `VK_EXT_device_fault`, with its `deviceFault`
+/// as a linear colour attachment lies in place, `VK_EXT_device_fault`, with its `deviceFault`
 /// feature, which Vulkan requires of a device that lists it, through which a lost device's fault
-/// report is read once, at its first loss ([`DeviceLoss::fault`](crate::DeviceLoss::fault)).
+/// report is read once, at its first loss ([`DeviceLoss::fault`](crate::DeviceLoss::fault)), and
+/// `VK_KHR_maintenance8` ([`MAINTENANCE8`]), for the optional feature of its own.
 pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::khr::shader_maximal_reconvergence::NAME,
     ash::khr::shader_subgroup_uniform_control_flow::NAME,
@@ -76,7 +77,58 @@ pub const OPTIONAL_EXTENSIONS: &[&CStr] = &[
     ash::ext::image_drm_format_modifier::NAME,
     ash::nv::linear_color_attachment::NAME,
     ash::ext::device_fault::NAME,
+    MAINTENANCE8,
 ];
+
+/// `VK_KHR_maintenance8`, which ash 0.38 does not bind: one of [`OPTIONAL_EXTENSIONS`], for its
+/// feature `maintenance8` ([`Maintenance8Features`]), through which a sample at a texel offset the
+/// shader computes takes the offset as its own `Offset` operand.
+pub const MAINTENANCE8: &CStr = c"VK_KHR_maintenance8";
+
+/// No Metal counterpart: `VkPhysicalDeviceMaintenance8FeaturesKHR`, of `VK_KHR_maintenance8`,
+/// which ash 0.38 does not declare, laid out as the registry defines it (`sType`, `pNext`,
+/// `maintenance8`), as the floor reads and enables it ([`Features`]).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Maintenance8Features {
+    s_type: vk::StructureType,
+    pub(crate) p_next: *mut std::ffi::c_void,
+    /// `maintenance8`.
+    pub maintenance8: vk::Bool32,
+}
+
+// SAFETY: plain data; the chain pointer is cleared once the structure is read, as ash's
+// structures' are.
+unsafe impl Send for Maintenance8Features {}
+// SAFETY: as above.
+unsafe impl Sync for Maintenance8Features {}
+// SAFETY: it starts with `sType` and `pNext`, as the chain requires, and the registry lists both
+// structures in its `structextends`.
+unsafe impl vk::ExtendsPhysicalDeviceFeatures2 for Maintenance8Features {}
+// SAFETY: as above.
+unsafe impl vk::ExtendsDeviceCreateInfo for Maintenance8Features {}
+
+impl Default for Maintenance8Features {
+    fn default() -> Maintenance8Features {
+        Maintenance8Features {
+            // `VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_8_FEATURES_KHR`: extension number
+            // 575, offset 0.
+            s_type: vk::StructureType::from_raw(1_000_574_000),
+            p_next: std::ptr::null_mut(),
+            maintenance8: vk::FALSE,
+        }
+    }
+}
+
+/// The structure's size and members' offsets, as the registry's C declaration lays them out on a
+/// 64-bit target: a wrong declaration fails the build, not a driver call.
+#[cfg(target_pointer_width = "64")]
+const _: () = {
+    use std::mem::{offset_of, size_of};
+    assert!(size_of::<Maintenance8Features>() == 24);
+    assert!(offset_of!(Maintenance8Features, p_next) == 8);
+    assert!(offset_of!(Maintenance8Features, maintenance8) == 16);
+};
 
 /// The device extensions of the attachment feedback loop (`VK_EXT_attachment_feedback_loop_layout`
 /// and its dynamic state), through which a draw reads, through a texture, an attachment its own
@@ -166,6 +218,8 @@ fn shader_extension(name: &CStr) -> Option<VkExtension> {
         Some(VkExtension::KhrVertexAttributeDivisor)
     } else if name == ash::ext::vertex_attribute_divisor::NAME {
         Some(VkExtension::ExtVertexAttributeDivisor)
+    } else if name == MAINTENANCE8 {
+        Some(VkExtension::KhrMaintenance8)
     } else {
         None
     }
@@ -326,6 +380,9 @@ pub struct Features {
     /// `VkPhysicalDeviceMaintenance5FeaturesKHR`, of `VK_KHR_maintenance5`: read where the device
     /// lists it, and `maintenance5` enabled with [`INDIRECT_COMMANDS`] alone.
     pub maintenance5: vk::PhysicalDeviceMaintenance5FeaturesKHR<'static>,
+    /// `VkPhysicalDeviceMaintenance8FeaturesKHR`, of `VK_KHR_maintenance8` ([`MAINTENANCE8`]):
+    /// read and enabled only where the device lists it, and then only `maintenance8`.
+    pub maintenance8: Maintenance8Features,
 }
 
 /// One feature: the Vulkan structure that reports it, its member as ash spells it, the member, and
@@ -391,6 +448,9 @@ macro_rules! feature {
     };
     (@structure line_rasterization) => {
         "VkPhysicalDeviceLineRasterizationFeaturesEXT"
+    };
+    (@structure maintenance8) => {
+        "VkPhysicalDeviceMaintenance8FeaturesKHR"
     };
     (@translator) => {
         None
@@ -594,6 +654,10 @@ pub(crate) const OPTIONAL: &[Feature] = &[
     // control flow where it offers that.
     feature!(maximal_reconvergence.shader_maximal_reconvergence => ShaderMaximalReconvergence),
     feature!(subgroup_uniform_control_flow.shader_subgroup_uniform_control_flow => ShaderSubgroupUniformControlFlow),
+    // A sample at a texel offset the shader computes: the instruction's own `Offset` operand where
+    // the device offers it, else a branch over the offset's values, each with its value as
+    // `ConstOffset` (Vulkan 1.0's).
+    feature!(maintenance8.maintenance8 => Maintenance8),
 ];
 
 /// The features of the attachment feedback loop ([`ATTACHMENT_READ_EXTENSIONS`]): enabled together
@@ -859,6 +923,10 @@ pub struct Capabilities {
     /// `shaderSubgroupUniformControlFlow`: SIMD groups reconverge where control flow is uniform,
     /// the mode where maximal reconvergence is not offered.
     pub subgroup_uniform_control_flow: bool,
+    /// `maintenance8` (`VK_KHR_maintenance8`): a sample at a texel offset the shader computes
+    /// takes the offset as its own `Offset` operand. Where it is false, the sample branches over
+    /// the offset's values, each branch with its value as `ConstOffset`.
+    pub texel_offset_operand: bool,
     /// The device's descriptor limits hold the sampled-texture array's second elements beside the
     /// floor's arrays: a draw may read, through a texture, an attachment its own pass renders, as
     /// Metal reads a render target. It reads through the attachment feedback loop where
@@ -1002,6 +1070,7 @@ unsafe fn query(
         let fault_listed = listed(ash::ext::device_fault::NAME);
         let line_rasterization_listed = listed(ash::ext::line_rasterization::NAME);
         let maintenance5_listed = listed(ash::khr::maintenance5::NAME);
+        let maintenance8_listed = listed(MAINTENANCE8);
 
         let Features {
             core,
@@ -1024,6 +1093,7 @@ unsafe fn query(
             line_rasterization,
             generated_commands,
             maintenance5,
+            maintenance8,
         } = &mut queried.features;
         let mut features = vk::PhysicalDeviceFeatures2::default()
             .push_next(&mut *vulkan11)
@@ -1077,6 +1147,9 @@ unsafe fn query(
         if maintenance5_listed {
             features = features.push_next(&mut *maintenance5);
         }
+        if maintenance8_listed {
+            features = features.push_next(&mut *maintenance8);
+        }
         instance.get_physical_device_features2(physical, &mut features);
         *core = features.features;
         vulkan11.p_next = std::ptr::null_mut();
@@ -1098,6 +1171,7 @@ unsafe fn query(
         line_rasterization.p_next = std::ptr::null_mut();
         generated_commands.p_next = std::ptr::null_mut();
         maintenance5.p_next = std::ptr::null_mut();
+        maintenance8.p_next = std::ptr::null_mut();
 
         queried.families = instance.get_physical_device_queue_family_properties(physical);
         queried.memory = instance.get_physical_device_memory_properties(physical);
@@ -1239,6 +1313,7 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
             .subgroup_uniform_control_flow
             .shader_subgroup_uniform_control_flow
             == vk::TRUE,
+        texel_offset_operand: features.maintenance8.maintenance8 == vk::TRUE,
         attachment_reads,
         feedback_loop,
         features,

@@ -3,20 +3,33 @@
 //! its 64 texel centres, in a 3x3 nest whose counters make the texel offset, summing the red
 //! channel. Where the constants decide the counters, the translator unrolls the nest and every
 //! offset is a constant; where the inner loop's end is loaded (2: the same runs), the offset stays
-//! dynamic, a switch over its values where the device takes no `Offset` operand on a sample. Both
-//! kernels write the same sums, the nearest filter's.
+//! dynamic: the sample's own `Offset` operand where device creation enabled `maintenance8`, and a
+//! switch over its values where it did not, which a translator told of no `maintenance8` (the
+//! tests' description of the device) shows on a device that has it. Every form writes the same
+//! sums, the nearest filter's, and the cache directory keeps the operand's and the switch's
+//! lowerings apart.
 //!
 //! `llvm-as` assembles the kernels; without it the test skips visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
-    use crate::tests::command::on_device::{each_device, finished, Arena};
-    use crate::{
-        ComputePipelineDescriptor, Device, DispatchType, FunctionDescriptor, IndexClass, Library,
-        NumberedSampler, PixelFormat, Region, StageSource, TextureDescriptor, TextureType,
-        TextureUsage,
+    use crate::floor::MAINTENANCE8;
+    use crate::tests::command::on_device::{
+        each_device, each_device_with, finished, within, Arena,
     };
+    use crate::tests::devices_of_the_cfgs_kind;
+    use crate::{
+        ComputePipelineDescriptor, Device, DeviceOptions, DispatchType, FunctionDescriptor, Gauges,
+        IndexClass, Library, NumberedSampler, PixelFormat, Region, StageSource, TextureDescriptor,
+        TextureType, TextureUsage,
+    };
+    use metal2vulkan::device::{DeviceDescription, VkFeature};
+    use metal2vulkan::Budget;
     use metal2vulkan_devtools::{llvm_assemble_text, AssembleError};
+    use std::collections::BTreeMap;
+
+    /// SPIR-V's `OpSwitch`.
+    const OP_SWITCH: u32 = 251;
 
     /// The texture's side.
     const SIDE: u32 = 8;
@@ -170,19 +183,61 @@ declare {{ <4 x float>, i8 }} @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr
         words.to_vec()
     }
 
+    /// As a device without `maintenance8` answers, on the same Vulkan device: its translator takes
+    /// no `Offset` operand on a sample, and branches over a run-time offset's values.
+    fn no_offset_operand(mut d: DeviceDescription) -> DeviceDescription {
+        d.features.remove(&VkFeature::Maintenance8);
+        d
+    }
+
+    /// The form `device`'s translator gives `library`'s kernel: whether its module needs
+    /// `maintenance8` (an `Offset` operand on a sample), and its `OpSwitch` count.
+    fn form(name: &str, device: &Device, library: &Library) -> (bool, usize) {
+        let function = library.function("filter_nest").expect("the kernel");
+        let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+            FunctionDescriptor::new(function),
+        ));
+        let pipeline = (device.translator())
+            .compile_compute_pipeline(&descriptor, &Budget::standard())
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let words = &pipeline.stage.spirv;
+        let (mut at, mut switches) = (5, 0);
+        while let Some(&word) = words.get(at) {
+            switches += usize::from(word & 0xffff == OP_SWITCH);
+            at += (word >> 16).max(1) as usize;
+        }
+        let operand = (pipeline.requirements.features).contains(&VkFeature::Maintenance8);
+        (operand, switches)
+    }
+
+    /// The unrolled kernel and the loaded one write the same sums, the nearest filter's, on every
+    /// device: the loaded one with the run-time offset as the sample's `Offset` operand where
+    /// device creation enabled `maintenance8` (no switch in its module), and as a switch over its
+    /// values otherwise. On the same device with a translator told of no `maintenance8`, the loaded
+    /// kernel takes the switch, and writes the same sums as the operand.
     #[test]
-    fn every_device_samples_a_filter_nest_alike_unrolled_and_switched() {
+    fn every_device_samples_a_filter_nest_alike_unrolled_by_operand_and_switched() {
         let (Some(decided), Some(loaded)) = (library("2"), library("%end")) else {
             return;
         };
+        let mut dynamic = BTreeMap::new();
         each_device("filter nest", |name, _, device| {
             let _textures = (device.grant_indices(IndexClass::Texture, 1, 2))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let _samplers = (device.grant_indices(IndexClass::Sampler, CONSTEXPR, 1))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let operand = device.translator().profile().images().dynamic_sample_offset;
+            let enabled = (device.extensions().iter()).any(|e| e.as_c_str() == MAINTENANCE8);
+            assert_eq!(
+                operand, enabled,
+                "{name}: the translator's answer is creation's"
+            );
+            let (needs, switches) = form(name, &device, &loaded);
+            assert_eq!(needs, operand, "{name}: the module's Offset operand");
+            assert_eq!(switches == 0, operand, "{name}: {switches} switches");
             let unrolled = sums(name, &device, &decided, 1);
-            let switched = sums(name, &device, &loaded, 2);
-            assert_eq!(unrolled, switched, "{name}: the two forms' sums");
+            let sampled = sums(name, &device, &loaded, 2);
+            assert_eq!(unrolled, sampled, "{name}: the two kernels' sums");
             // Both are the nearest filter's: the clamped texels' red channels, summed in order.
             for (tid, sum) in unrolled.iter().enumerate() {
                 let (tx, ty) = (tid as i32 % 8, tid as i32 / 8);
@@ -199,7 +254,95 @@ declare {{ <4 x float>, i8 }} @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr
                     "{name}: thread {tid}: {got} against {want}"
                 );
             }
-            println!("filter nest: {name}: the unrolled and switched forms write the same 64 sums");
+            let taken = if operand {
+                "the Offset operand (maintenance8)"
+            } else {
+                "a switch (no maintenance8)"
+            };
+            println!("filter nest: {name}: the unrolled kernel and {taken} write the same 64 sums");
+            dynamic.insert(name.to_owned(), sampled);
         });
+        let options = || DeviceOptions {
+            described: Some(no_offset_operand),
+            ..DeviceOptions::default()
+        };
+        each_device_with("filter nest switched", options, |name, _, device| {
+            let _textures = (device.grant_indices(IndexClass::Texture, 2, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let _samplers = (device.grant_indices(IndexClass::Sampler, CONSTEXPR, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert!(!device.translator().profile().images().dynamic_sample_offset);
+            let (needs, switches) = form(name, &device, &loaded);
+            assert!(!needs && switches > 0, "{name}: {needs} {switches}");
+            let switched = sums(name, &device, &loaded, 2);
+            assert_eq!(
+                Some(&switched),
+                dynamic.get(name),
+                "{name}: the switch's sums"
+            );
+            println!("filter nest: {name}: the switch writes the default form's 64 sums");
+        });
+    }
+
+    /// One cache directory, three devices of one physical device in turn: a translator told of no
+    /// `maintenance8` lowers the loaded kernel (the switch); a default one, which takes the `Offset`
+    /// operand where creation enabled `maintenance8`, lowers it again and loads nothing, as the
+    /// translator's profile fingerprint in the lowering's key moved; a third told of none again
+    /// loads the switch's lowering and lowers nothing. On a device without `maintenance8` the
+    /// default one loads the switch's.
+    #[test]
+    fn every_device_keeps_the_operand_s_and_the_switch_s_lowerings_apart() {
+        let Some(loaded) = library("%end") else {
+            return;
+        };
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let dir = std::env::temp_dir().join(format!("m2v-rt-texoff-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let mut lowered = 0;
+            for (round, described) in [
+                Some(no_offset_operand as fn(_) -> _),
+                None,
+                Some(no_offset_operand),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let options = DeviceOptions {
+                    pipeline_cache_dir: Some(dir.clone()),
+                    described,
+                    ..DeviceOptions::default()
+                };
+                let device = Device::new(physical, options)
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let operand = device.translator().profile().images().dynamic_sample_offset;
+                let counters = device.counters();
+                {
+                    let _textures = (device.grant_indices(IndexClass::Texture, 1, 1))
+                        .unwrap_or_else(|error| panic!("{name}: {error}"));
+                    let _samplers = (device.grant_indices(IndexClass::Sampler, CONSTEXPR, 1))
+                        .unwrap_or_else(|error| panic!("{name}: {error}"));
+                    sums(name, &device, &loaded, 1);
+                }
+                let metrics = counters.metrics();
+                let counted = (metrics.translations, metrics.translations_loaded);
+                if round == 0 {
+                    assert!(counted.0 > 0 && counted.1 == 0, "{name}: {counted:?}");
+                    lowered = counted.0;
+                }
+                let want = match (round, operand) {
+                    (1, true) => (lowered, 0),
+                    _ if round > 0 => (0, lowered),
+                    _ => counted,
+                };
+                assert_eq!(counted, want, "{name}: device {round} (operand {operand})");
+                drop(device);
+                within("the teardown", || counters.gauges() == Gauges::default());
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+            println!("filter nest: {name}: the operand's and the switch's lowerings kept apart");
+        }
     }
 }

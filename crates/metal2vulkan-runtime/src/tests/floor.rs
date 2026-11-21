@@ -416,6 +416,7 @@ fn a_device_at_the_floor_is_above_it() {
     assert!(!capabilities.float64);
     assert!(!capabilities.maximal_reconvergence);
     assert!(!capabilities.subgroup_uniform_control_flow);
+    assert!(!capabilities.texel_offset_operand);
     assert_eq!(capabilities.extensions, DEVICE_EXTENSIONS);
     assert_eq!(capabilities.queue_family, 0);
     assert_eq!(
@@ -1586,6 +1587,32 @@ fn the_fault_report_is_enabled_where_listed_and_reported() {
     assert_eq!(answer(&device), (true, true), "listed and reported");
 }
 
+/// A device that lists `VK_KHR_maintenance8` and reports `maintenance8` has both enabled, and the
+/// translator is told of both, so a sample at a texel offset the shader computes takes it as its
+/// own `Offset` operand; a device at the floor has neither, and the translator, told of neither,
+/// branches over the offset's values.
+#[test]
+fn a_run_time_texel_offset_is_the_sample_s_operand_where_maintenance8_is_reported() {
+    use crate::floor::{shader_enables, MAINTENANCE8};
+    use metal2vulkan::device::{VkExtension, VkFeature};
+    let answer = |device: &Queried| {
+        let capabilities = decide(device).unwrap_or_else(|below| panic!("{below}"));
+        let enables = shader_enables(&capabilities);
+        (
+            capabilities.texel_offset_operand,
+            capabilities.extensions.contains(&MAINTENANCE8),
+            capabilities.features.maintenance8.maintenance8 == vk::TRUE,
+            enables.features.contains(&VkFeature::Maintenance8),
+            enables.extensions.contains(&VkExtension::KhrMaintenance8),
+        )
+    };
+    let mut device = at_the_floor();
+    assert_eq!(answer(&device), (false, false, false, false, false));
+    device.extensions.push(MAINTENANCE8.to_owned());
+    device.features.maintenance8.maintenance8 = vk::TRUE;
+    assert_eq!(answer(&device), (true, true, true, true, true));
+}
+
 /// A device reads attachments where its descriptor limits hold the sampled-texture array's second
 /// elements: through the attachment feedback loop where it lists both extensions and reports both
 /// features, which device creation then enables, and through a copy of the image where it does
@@ -1667,7 +1694,7 @@ fn a_set_layout_the_device_does_not_support_is_named() {
 #[test]
 fn the_optional_features_decide_the_capabilities() {
     type Set = fn(&mut Features);
-    let cases: [(Set, &str); 7] = [
+    let cases: [(Set, &str); 8] = [
         (|f| f.vulkan12.shader_float16 = vk::TRUE, "float16"),
         (
             |f| f.core.shader_storage_image_read_without_format = vk::TRUE,
@@ -1693,6 +1720,10 @@ fn the_optional_features_decide_the_capabilities() {
             },
             "subgroup_uniform_control_flow",
         ),
+        (
+            |f| f.maintenance8.maintenance8 = vk::TRUE,
+            "texel_offset_operand",
+        ),
     ];
     assert_eq!(
         cases.len(),
@@ -1717,6 +1748,7 @@ fn the_optional_features_decide_the_capabilities() {
                 "subgroup_uniform_control_flow",
                 capabilities.subgroup_uniform_control_flow,
             ),
+            ("texel_offset_operand", capabilities.texel_offset_operand),
         ];
         for (name, value) in answers {
             assert_eq!(

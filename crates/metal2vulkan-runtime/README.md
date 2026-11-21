@@ -2781,6 +2781,15 @@ cache is answered compile-required on both.
 
 ### Known gaps of pipeline states
 
+- A sample at a texel offset the shader computes, on a device without `maintenance8` (Chosen by a
+  query): the sample branches over the offset's values, one branch per combination of the 16
+  values of each lane the shader computes (256 for a 2D offset), each with its value as
+  `ConstOffset`, where a
+  device with the feature takes the offset as the sample's own `Offset` operand. The branch costs
+  compile time: on NVIDIA's driver one fragment function's 255 branches took 193 s to create on an
+  RTX 3090, against 80 ms with the operand. Intel's Windows driver for the UHD 630 (101.2145)
+  does not list `VK_KHR_maintenance8`, so it takes the branch; its compile time there is not
+  measured. Test: `tests::filter_nest`.
 - A narrow integer's high bits (an 8- or 16-bit value held in a 32-bit word) are cleared by
   `OpBitwiseAnd` by the width's mask on every device. NVIDIA's driver 615.71.09 on Ampere GA10x
   dropped that mask after a signed clamp to exactly the narrow range, so such a kernel answered the
@@ -4181,6 +4190,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `VK_EXT_image_drm_format_modifier` | device, where listed | a dma-buf surface's planes in place, as `DRM_FORMAT_MOD_LINEAR` images (`Device::new_exported_surface`) |
 | `VK_NV_linear_color_attachment` | device, where listed | an opaque handle's surface planes in place whose `LINEAR` tiling renders as a linear colour attachment alone, through the linear-attachment feature below |
 | `VK_EXT_device_fault` | device, where listed | a lost device's fault report, read once at its first loss (`DeviceLoss::fault`), through the fault-report feature below |
+| `VK_KHR_maintenance8` | device, where listed | a sample at a texel offset the shader computes, with the offset as the sample's own `Offset` operand, through the optional feature `maintenance8` below |
 | `VK_EXT_custom_border_color` | device, where reported from the image | Vulkan requires it of a device that enables the border swizzle below; none of its features is enabled |
 | `VK_EXT_border_color_swizzle` | device, where reported from the image | an opaque-black border sampled through a view whose component mapping is not the identity, defined and read through that mapping (Border swizzle, below) |
 | `VK_EXT_device_generated_commands` | device, with indirect command buffers | an indirect command buffer's execution, through `deviceGeneratedCommands`, enabled where the device reports it with the limits an execution needs (Indirect command buffers, above) |
@@ -4446,8 +4456,9 @@ apart from 1.8 to 3% Private, so the host link's rate above is not on their path
 
 ### Chosen by a query
 
-Five features choose between two forms by the device's answer: 16-bit floats, storage-image reads
-without a format, 64-bit atomics, 64-bit floats and SIMD groups. Beside them, a device without the
+Six features choose between two forms by the device's answer: 16-bit floats, storage-image reads
+without a format, 64-bit atomics, 64-bit floats, SIMD groups and run-time texel offsets. Beside
+them, a device without the
 attachment feedback loop reads attachments through a copy, the one form left there, which is a
 known gap (Known gaps of render encoders). `floor::Capabilities` holds each answer the floor
 reads, and the features and extensions to enable: the floor's, and each optional one the device
@@ -4457,7 +4468,7 @@ has.
 |---|---|---|
 | SIMD groups | `minSubgroupSize`, `maxSubgroupSize` and `requiredSubgroupSizeStages` (`VkPhysicalDeviceVulkan13Properties`); `subgroupSupportedStages` and `subgroupSupportedOperations` (`VkPhysicalDeviceVulkan11Properties`); `shaderMaximalReconvergence` (`VK_KHR_shader_maximal_reconvergence`) and `shaderSubgroupUniformControlFlow` (`VK_KHR_shader_subgroup_uniform_control_flow`) | the translator's choice of how a kernel's SIMD groups run (its tier), and their reconvergence mode: maximal where offered, else subgroup-uniform control flow where offered |
 
-The other five are one feature each:
+The other six are one feature each:
 
 | Optional feature | Structure | Used for |
 |---|---|---|
@@ -4468,6 +4479,7 @@ The other five are one feature each:
 | `shaderFloat64` | `VkPhysicalDeviceFeatures` | 64-bit floats |
 | `shaderMaximalReconvergence` | `VkPhysicalDeviceShaderMaximalReconvergenceFeaturesKHR` | SIMD groups that reconverge as Metal's do |
 | `shaderSubgroupUniformControlFlow` | `VkPhysicalDeviceShaderSubgroupUniformControlFlowFeaturesKHR` | SIMD groups' reconvergence where maximal reconvergence is not offered |
+| `maintenance8` | `VkPhysicalDeviceMaintenance8FeaturesKHR` | a sample at a texel offset the shader computes, with the offset as the sample's own `Offset` operand; where it is false, the sample branches over the offset's values, each branch with its value as `ConstOffset`, which costs compile time (Known gaps of pipeline states) |
 
 `sparseBinding` (`VkPhysicalDeviceFeatures`) chooses no form: device creation enables it only
 where the device offers imports over several dma-bufs (`Device::import_dma_bufs`, Imported

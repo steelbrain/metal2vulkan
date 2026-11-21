@@ -548,6 +548,7 @@ impl Device {
             mut line_rasterization,
             mut generated_commands,
             mut maintenance5,
+            mut maintenance8,
         } = enabled_features;
         // `sparseBinding` for imports over several dma-bufs (`Device::import_dma_bufs`), only where
         // the device's queries offer that import: it changes no other path, as only that import
@@ -615,6 +616,9 @@ impl Device {
             features = features
                 .push_next(&mut generated_commands)
                 .push_next(&mut maintenance5);
+        }
+        if enabled(floor::MAINTENANCE8) {
+            features = features.push_next(&mut maintenance8);
         }
         // SAFETY: as for the floor check.
         let listed = unsafe { vk_instance.enumerate_device_extension_properties(raw) }
