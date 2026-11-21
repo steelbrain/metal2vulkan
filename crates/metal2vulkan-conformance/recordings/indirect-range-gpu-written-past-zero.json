@@ -357,5 +357,67 @@
       ],
       "validated": "ran"
     }
+  ],
+  "times": [
+    {
+      "venue": "native Metal",
+      "chip": "apple-m3-max",
+      "os_build": "26A434",
+      "rounds": 8,
+      "measured": "8 round(s) of the whole selection, in the case set's own order; a figure is the median of the rounds' own medians; Metal's leg ran at a one-minute load average of 6.96",
+      "instrument": 286,
+      "times": {
+        "case": "indirect-range-gpu-written-past-zero",
+        "calls": 10,
+        "in_calls": 42416000,
+        "on_cpu": 1954831,
+        "blocked": 40462750,
+        "elsewhere": 8454084,
+        "spend": 50870084,
+        "spend_least": 48715293,
+        "spend_most": 57928289,
+        "per_call": [
+          {
+            "call": "buffer",
+            "least_calls": 8,
+            "most_calls": 8,
+            "wall": 6458,
+            "on_cpu": 6625,
+            "blocked": 0,
+            "wall_least": 6125,
+            "wall_most": 6875,
+            "wall_total": 86874,
+            "on_cpu_total": 89499,
+            "blocked_total": 0
+          },
+          {
+            "call": "encoded_range",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 9711500,
+            "on_cpu": 962625,
+            "blocked": 8793667,
+            "wall_least": 9346834,
+            "wall_most": 9990083,
+            "wall_total": 9711500,
+            "on_cpu_total": 962625,
+            "blocked_total": 8793667
+          },
+          {
+            "call": "library",
+            "least_calls": 1,
+            "most_calls": 1,
+            "wall": 32610416,
+            "on_cpu": 907625,
+            "blocked": 31669083,
+            "wall_least": 30646542,
+            "wall_most": 39226541,
+            "wall_total": 32610416,
+            "on_cpu_total": 907625,
+            "blocked_total": 31669083
+          }
+        ]
+      }
+    }
   ]
 }
