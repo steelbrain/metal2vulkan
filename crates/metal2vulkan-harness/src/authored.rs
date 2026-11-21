@@ -276,10 +276,12 @@ pub enum OwnRow {
     /// sized by fills of a 256 MiB `Private` buffer to about 20 ms on the GPU, while queue B
     /// commits 60 command buffers, one every 16.7 ms, each one fill of 4 KiB. In a first part the
     /// two are unrelated, and B's commit-to-completed times at p50, p90 and the most, and A's
-    /// GPU run at p50, are its times, in microseconds. In a second, each of A's command buffers
-    /// signals a shared event with its count and each of B's waits first for the count of A's
-    /// last committed; the GPU start of each of B's after the GPU end of the signaller it waited
-    /// for, at p50 and p90, are its times. Both print the command buffers held for room
+    /// GPU run at p50, are its times, in microseconds. In a second, for as long, each of A's
+    /// command buffers signals a shared event with its count after its fills, and A's thread
+    /// commits on B right after it a command buffer that waits for that count, then fills 4 KiB
+    /// once; the GPU start of each of B's after the GPU end of its signaller, at p50 and p90, are
+    /// its times. Each part also times A's GPU idle before each of its command buffers, from the
+    /// GPU end of the one before, at p50 and p90, and prints the command buffers held for room
     /// (`Metrics::held_for_room`). Every command buffer is to complete, and each of B's to end
     /// after its signaller, or the row fails.
     TwoQueues,

@@ -126,8 +126,9 @@ pub(super) fn run(physical: &rt::PhysicalDevice, row: OwnRow) -> Result<OwnRepor
     }
 }
 
-/// The two-queue row ([`OwnRow::TwoQueues`]): its part with unrelated work, then its part with
-/// each of A's command buffers signalling and each of B's waiting.
+/// The two-queue row ([`OwnRow::TwoQueues`]): its part with unrelated work, then its part in
+/// the consumer's shape, each of A's command buffers signalling at its tail and a waiter on B
+/// committed right after it.
 fn two_queues(device: &rt::Device) -> Result<OwnReport> {
     let block = (device.take_block(rt::MemoryClass::Private, FILL_LEN)).map_err(error)?;
     let long = (device.new_buffer(block.id, 0, FILL_LEN, None)).map_err(error)?;
@@ -154,27 +155,37 @@ fn two_queues(device: &rt::Device) -> Result<OwnReport> {
         ("b_p90", at(&unrelated.b, 90)),
         ("b_max", at(&unrelated.b, 100)),
         ("a_run", at(&unrelated.a_run, 50)),
+        ("a_gap_p50", at(&unrelated.a_gap, 50)),
+        ("a_gap_p90", at(&unrelated.a_gap, 90)),
         ("wait_p50", at(&signalled.after, 50)),
         ("wait_p90", at(&signalled.after, 90)),
+        ("wait_a_gap_p50", at(&signalled.a_gap, 50)),
+        ("wait_a_gap_p90", at(&signalled.a_gap, 90)),
     ];
     let ms = |us: f64| us / 1000.0;
     let lines = vec![
         format!(
             "B every {FRAME:?} beside A's backlog of {BACKLOG}, {fills} fills each, {:.1} ms \
              on the GPU at p50: B committed to completed p50 {:.1} ms, p90 {:.1} ms, max \
-             {:.1} ms; {} held for room",
+             {:.1} ms; A's GPU idle before each of its p50 {:.1} us, p90 {:.1} us; {} held \
+             for room",
             ms(at(&unrelated.a_run, 50)),
             ms(at(&unrelated.b, 50)),
             ms(at(&unrelated.b, 90)),
             ms(at(&unrelated.b, 100)),
+            at(&unrelated.a_gap, 50),
+            at(&unrelated.a_gap, 90),
             unrelated.held,
         ),
         format!(
-            "each of A's signalling, each of B's waiting for A's last committed: B's GPU \
-             start after the signaller's GPU end p50 {:.1} us, p90 {:.1} us; B committed to \
-             completed p50 {:.1} ms; {} held for room",
+            "each of A's signalling at its tail, a waiter on B committed right after it: B's \
+             GPU start after the signaller's GPU end p50 {:.1} us, p90 {:.1} us; A's GPU idle \
+             before each of its p50 {:.1} us, p90 {:.1} us; B committed to completed p50 {:.1} \
+             ms; {} held for room",
             at(&signalled.after, 50),
             at(&signalled.after, 90),
+            at(&signalled.a_gap, 50),
+            at(&signalled.a_gap, 90),
             ms(at(&signalled.b, 50)),
             signalled.held,
         ),
@@ -184,19 +195,22 @@ fn two_queues(device: &rt::Device) -> Result<OwnReport> {
 
 /// What a part of the two-queue row measured, in microseconds: each of B's command buffers'
 /// commit to completed, each GPU start of B's after the GPU end of the signaller it waited for,
-/// each of A's GPU runs; and the command buffers held for room during it.
+/// each of A's GPU runs and each GPU start of A's after the GPU end of A's before it; and the
+/// command buffers held for room during it.
 struct Part {
     b: Vec<f64>,
     after: Vec<f64>,
     a_run: Vec<f64>,
+    a_gap: Vec<f64>,
     held: u64,
 }
 
 /// One part of the two-queue row: queue A keeps [`BACKLOG`] command buffers of `fills` fills of
-/// `long` uncompleted, from a thread of its own, each signalling a shared event with its count
-/// where `signal`; once it has, queue B commits [`FRAMES`] command buffers, one each [`FRAME`],
-/// each one fill of `small`, waiting where `signal` for the count of A's last committed. Every
-/// command buffer is to complete, and each of B's after the signaller it waited for.
+/// `long` uncompleted, from a thread of its own. Without `signal`, once it has, queue B commits
+/// [`FRAMES`] command buffers, one each [`FRAME`], each one fill of `small`. With it, each of
+/// A's signals a shared event with its count after its fills, and A's thread commits on B right
+/// after it a command buffer that waits for that count, then fills `small` once, for as long.
+/// Every command buffer is to complete, and each of B's after the signaller it waited for.
 fn two_queue_part(
     device: &rt::Device,
     long: &rt::Buffer,
@@ -211,9 +225,31 @@ fn two_queue_part(
     let before = held();
     let committed = Mutex::new(Vec::new());
     let lock = || committed.lock().unwrap_or_else(PoisonError::into_inner);
+    let frames = Mutex::new(Vec::new());
     let done: Arc<Mutex<Vec<(usize, Instant)>>> = Arc::default();
     let stop = AtomicBool::new(false);
-    let (frames, made) = thread::scope(|scope| {
+    // B's command buffer, waiting first for `value` where it is above 0, committed now, its
+    // completion timed by its completed handler.
+    let commit_b = |value: u64| {
+        let fail = |error: rt::Error| error.to_string();
+        let command_buffer = b.command_buffer().map_err(fail)?;
+        if value > 0 {
+            (command_buffer.encode_wait_for_event(event.as_event(), value)).map_err(fail)?;
+        }
+        fill(&command_buffer, small, SMALL_LEN, 1).map_err(|error| error.to_string())?;
+        let mut frames = frames.lock().unwrap_or_else(PoisonError::into_inner);
+        let (done, index) = (Arc::clone(&done), frames.len());
+        (command_buffer.add_completed_handler(move |_| {
+            let mut done = done.lock().unwrap_or_else(PoisonError::into_inner);
+            done.push((index, Instant::now()));
+        }))
+        .map_err(fail)?;
+        let at = Instant::now();
+        command_buffer.commit().map_err(fail)?;
+        frames.push((command_buffer, value, at));
+        Ok::<_, String>(())
+    };
+    let (ran, made) = thread::scope(|scope| {
         // A commits while it has room for a command buffer, as Metal's `commandBuffer` waits.
         let backlog = scope.spawn(|| {
             let fail = |error: rt::Error| error.to_string();
@@ -227,10 +263,14 @@ fn two_queue_part(
                 }
                 command_buffer.commit().map_err(fail)?;
                 committed.push(command_buffer);
+                drop(committed);
+                if signal {
+                    commit_b(value)?;
+                }
             }
             Ok::<_, String>(())
         });
-        let frames = (|| -> Result<Vec<(rt::CommandBuffer, u64, Instant)>> {
+        let ran = (|| -> Result<()> {
             let since = Instant::now();
             while lock().len() < BACKLOG as usize {
                 if since.elapsed() > WAIT || backlog.is_finished() {
@@ -239,37 +279,24 @@ fn two_queue_part(
                 thread::sleep(Duration::from_millis(1));
             }
             let started = Instant::now();
-            let mut frames = Vec::with_capacity(FRAMES as usize);
             for frame in 0..FRAMES {
                 thread::sleep((started + FRAME * frame).saturating_duration_since(Instant::now()));
-                let command_buffer = b.command_buffer().map_err(error)?;
-                let value = if signal { lock().len() as u64 } else { 0 };
-                if signal {
-                    (command_buffer.encode_wait_for_event(event.as_event(), value))
-                        .map_err(error)?;
+                if !signal {
+                    commit_b(0)?;
                 }
-                fill(&command_buffer, small, SMALL_LEN, 1)?;
-                let (done, index) = (Arc::clone(&done), frames.len());
-                (command_buffer.add_completed_handler(move |_| {
-                    let mut done = done.lock().unwrap_or_else(PoisonError::into_inner);
-                    done.push((index, Instant::now()));
-                }))
-                .map_err(error)?;
-                let at = Instant::now();
-                command_buffer.commit().map_err(error)?;
-                frames.push((command_buffer, value, at));
             }
-            Ok(frames)
+            Ok(())
         })();
         stop.store(true, Ordering::Relaxed);
         let made = (backlog.join()).unwrap_or_else(|_| Err("A's thread panicked".into()));
-        (frames, made)
+        (ran, made)
     });
     made?;
-    let frames = frames?;
+    ran?;
     let of_a = committed
         .into_inner()
         .unwrap_or_else(PoisonError::into_inner);
+    let frames = frames.into_inner().unwrap_or_else(PoisonError::into_inner);
     let all = (of_a.iter()).chain(frames.iter().map(|(command_buffer, ..)| command_buffer));
     for command_buffer in all {
         command_buffer.wait_until_completed().map_err(error)?;
@@ -288,14 +315,17 @@ fn two_queue_part(
     }
     let done = done.lock().unwrap_or_else(PoisonError::into_inner);
     let us = |nanos: f64| nanos / 1000.0;
+    // The GPU time from `earlier`'s end to `later`'s start, in microseconds.
+    let gap = |earlier: &rt::CommandBuffer, later: &rt::CommandBuffer| {
+        us(later.gpu_start_time() as f64 - earlier.gpu_end_time() as f64)
+    };
     let mut after = Vec::new();
     for (command_buffer, value, _) in frames.iter().filter(|(_, value, _)| *value > 0) {
         let signaller = &of_a[*value as usize - 1];
         if command_buffer.gpu_end_time() < signaller.gpu_end_time() {
             return Err(format!("B's command buffer ended before the signal of {value}").into());
         }
-        let gap = command_buffer.gpu_start_time() as f64 - signaller.gpu_end_time() as f64;
-        after.push(us(gap));
+        after.push(gap(signaller, command_buffer));
     }
     Ok(Part {
         b: (done.iter())
@@ -308,6 +338,9 @@ fn two_queue_part(
                     .gpu_end_time()
                     .saturating_sub(command_buffer.gpu_start_time()) as f64)
             })
+            .collect(),
+        a_gap: (of_a.windows(2))
+            .map(|pair| gap(&pair[0], &pair[1]))
             .collect(),
         held: held() - before,
     })
