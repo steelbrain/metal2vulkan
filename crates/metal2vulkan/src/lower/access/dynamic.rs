@@ -1572,7 +1572,7 @@ pub fn emit(
 /// Plan a load of the 8-byte word at buffer pointer `ptr` (of AIR type `ty`, aligned `align`) as
 /// data, a `u64`: through a static root (a descriptor view or a static device-address slot), or
 /// a wide pointer's root entry. An indirect-command object's handle load reads its field this
-/// way (`access::encode`).
+/// way (`access::object`).
 pub(super) fn plan_word(
     cx: &mut SelectCx<'_>,
     ptr: Value,
@@ -1596,21 +1596,6 @@ pub(super) fn plan_word(
     })
 }
 
-/// Plan a resident-set search outside a pointer value (an encoder's record buffer): the function
-/// reads the root table, searches it once more, and under isolation counts an access through
-/// root 0. The caller checked the profile's device addresses and the stage's store feature.
-pub(super) fn plan_search(cx: &mut SelectCx<'_>) -> Result<(), Error> {
-    require_addresses(cx)?;
-    plan_resolve(cx);
-    plan_misses(cx)
-}
-
-/// Plan the guest address of buffer pointer `v` written as data: the null constant, or a wide
-/// pointer (every root whose pointer escapes is wide on a profile with device addresses).
-pub(super) fn plan_address(cx: &mut SelectCx<'_>, v: Value) -> Result<Side, Error> {
-    stored(cx, v)
-}
-
 /// The 8-byte word `s` reads ([`plan_word`]), a `u64`.
 pub(super) fn emit_word(
     cx: &mut EmitCx<'_>,
@@ -1627,61 +1612,4 @@ pub(super) fn emit_word(
         Source::Arena(a) => local::emit_access(cx, fb, a, None)?,
     };
     word.ok_or_else(|| cx.fail("an object word without a value"))
-}
-
-/// The wide pointer of the resident allocation that starts at guest address `guest` (a `u64`):
-/// the resident-set search ([`resolve`]), its hit kept only at the allocation's start, any other
-/// address a miss, `(0, guest)`. Indirect command buffers' records are searched so: records longer
-/// than the distance between two IDs' starts run past the next IDs' starts
-/// (`indirect_commands::records_address`), and an ID whose own records are not resident then
-/// misses rather than reaching into another's.
-pub(super) fn search_start(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    guest: SValue,
-) -> BResult<SValue> {
-    let p = resolve(cx, fb, guest)?;
-    let [root, off, host, size] = fields(fb, p)?;
-    let zero = k64(fb, 0)?;
-    let at_start = fb.binary(BinOp::IEqual, off, zero)?;
-    let root = fb.select(at_start, root, zero)?;
-    let off = fb.select(at_start, off, guest)?;
-    let host = fb.select(at_start, host, zero)?;
-    let size = fb.select(at_start, size, zero)?;
-    fat(fb, [root, off, host, size])
-}
-
-/// The allocation of wide pointer `p` resolved for plain accesses in the function's coherence,
-/// an access through root 0 counted under isolation ([`wide_base`]).
-pub(super) fn plain_base(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    p: SValue,
-) -> BResult<WideBase> {
-    base_with(cx, fb, p, (None, false), None)
-}
-
-/// A `PhysicalStorageBuffer` pointer to the `u32` at `d` bytes (a `u64`, 4-aligned past a
-/// 4-aligned base) past `b`, contained: out of bounds, the sink's first word.
-pub(super) fn word_place(fb: &mut FunctionBuilder<'_>, b: WideBase, d: SValue) -> BResult<SValue> {
-    let at = fb.binary(BinOp::IAdd, b.at, d)?;
-    let mut addr = fb.binary(BinOp::IAdd, b.host, at)?;
-    if let Some((size, sink)) = b.bounds {
-        let inb = contain::in_bounds(fb, at, size, 4)?;
-        addr = fb.select(inb, addr, sink)?;
-    }
-    let u32_ = fb.module().ty(SType::Int {
-        width: 32,
-        signed: false,
-    })?;
-    fb.device_place(addr, u32_)
-}
-
-/// The Metal address of `side` ([`plan_address`]): a wide pointer's guest address, or 0.
-pub(super) fn address_of(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    side: Side,
-) -> BResult<SValue> {
-    metal_address(cx, fb, side)
 }

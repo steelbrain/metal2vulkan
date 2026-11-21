@@ -112,8 +112,7 @@ impl CommandEncoderOperation {
         // A draw needs a render descriptor whose records hold its kind: primitives every render
         // buffer's, indexed draws an indexed or a patch buffer's, patch and indexed patch draws a
         // patch buffer's, mesh draws a buffer of either mesh kind's. A draw of primitives on a
-        // buffer of mesh draws alone writes too: Metal draws nothing for it, and the product's
-        // lowering drops it (`dropped_on`).
+        // buffer of mesh draws alone writes too: Metal draws nothing for it.
         let patch_records = DRAW_PATCHES | DRAW_INDEXED_PATCHES;
         let mesh_records = DRAW_MESH_THREADGROUPS | DRAW_MESH_THREADS;
         let draw = |any| Policy {
@@ -267,15 +266,15 @@ fn header_field_of(body: &mut String, records: &str, name: &str, word: usize, ty
     .unwrap();
 }
 
-/// A copy's checks beyond the destination's policy, as the product's lowering makes them
-/// (`lower::access::encode`), into `%valid4` from `valid`: the source command (`%source_command`)
-/// is below the capacity of the source's header (`%source_records`), and either the two headers
+/// A copy's checks beyond the destination's policy, into `%valid4` from `valid`: the source
+/// command (`%source_command`) is below the capacity of the source's header (`%source_records`),
+/// and either the two headers
 /// are of equal descriptors (policy bits and binding counts), or the destination inherits its
 /// pipeline and buffers from a source that inherits neither, of the same descriptor otherwise,
 /// the destination binding no kernel buffer, onto a command other than 0. Metal's copy between
 /// any other descriptors depends on its private record layout, and its copy onto an inheriting
 /// buffer's command 0 runs that command with zero grid sizes (M3 Max and M4), so the guard faults
-/// them as the lowering does.
+/// them.
 fn emit_copy_checks(body: &mut String, typed: bool, valid: &str) {
     use std::fmt::Write;
     let pointer = if typed {

@@ -1116,9 +1116,9 @@ pub fn typed_module() -> BResult<TypedModule> {
     // fragment and object stages): one bound with a dynamic stride where the descriptor allows
     // none or the stage takes none (fragment, object) is a record the host's validation refuses;
     // one set while the commands inherit buffers refuses the command. A binding past its stage's
-    // count is not read. It is zero in every record: the storage is made zero, an encoder's write
-    // past the count faults and writes nothing (`lower::access::encode`), the CPU's setter refuses
-    // one, and a copy takes a source of the same descriptor. So the host's refusal of a binding set
+    // count is not read. It is zero in every record: the storage is made zero, the CPU's setter
+    // refuses one, and a copy takes a source of the same descriptor. So the host's refusal of a
+    // binding set
     // there never applies, and a command's reads of the record's 128 bindings, 2 KiB, shrink to
     // those its descriptor counts.
     let inherit_bit = k32(fb, INHERIT_BUFFERS)?;

@@ -3444,10 +3444,9 @@ declare void @air.concurrent_dispatch_threadgroups_compute_command(ptr addrspace
 
 /// `air.set_pipeline_state_compute_command`'s pipeline operand is a `compute_pipeline_state`
 /// handle, the class of the argument-buffer member it is loaded from, so a GPU-encoded compute
-/// command is no class conflict: with device addresses it translates (the member words are the
-/// record buffer's guest address and the template's token), and without them it is its family's
-/// refusal, `GpuEncodedIndirectCommands`, naming what the profile lacks. The same pipeline state
-/// also read as bytes still conflicts: `HandleAsPointer`, not representable.
+/// command is no class conflict: it is its family's refusal, `GpuEncodedIndirectCommands`, not
+/// implemented, on every committed profile. The same pipeline state also read as bytes still
+/// conflicts: `HandleAsPointer`, not representable.
 #[test]
 fn a_command_set_to_an_argument_buffer_pipeline_state_is_its_family_refusal() {
     let Some(bc) = assemble(
@@ -3457,31 +3456,12 @@ fn a_command_set_to_an_argument_buffer_pipeline_state_is_its_family_refusal() {
         return;
     };
     for (stem, p) in committed_profiles().expect("profiles") {
-        match compile(&bc, "set_pipeline", &p) {
-            Ok(a) => {
-                assert_eq!(
-                    p.fields().buffer_access,
-                    crate::device::profile::BufferAccess::Addressed,
-                    "{stem}"
-                );
-                link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
-            }
-            Err(e) => {
-                let u = unsupported(e);
-                assert_eq!(
-                    (u.feature, u.needs),
-                    (
-                        Feature::GpuEncodedIndirectCommands,
-                        Unsupported::needs_any_of(
-                            Feature::GpuEncodedIndirectCommands,
-                            vec![p.addressed_needs()]
-                        )
-                        .needs
-                    ),
-                    "{stem}"
-                );
-            }
-        }
+        let u = unsupported(compile(&bc, "set_pipeline", &p).expect_err(&stem));
+        assert_eq!(
+            (u.feature, u.needs),
+            (Feature::GpuEncodedIndirectCommands, Needs::NotImplemented),
+            "{stem}"
+        );
     }
     let Some(bc) = assemble(
         "icb_pipeline_bytes",

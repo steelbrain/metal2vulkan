@@ -1511,8 +1511,7 @@ pub fn typed_module(limits: [u32; 3]) -> BResult<TypedModule> {
     // A command that sets any buffer while inheriting buffers: a slot no setter set holds an
     // address and a stride of 0. Only its kernel buffers below the descriptor's count are read
     // (the header's byte 0, `layout::COUNTS`): every other binding of a compute record is zero,
-    // as the storage is made zero, an encoder's write past the count faults and writes nothing
-    // (`lower::access::encode`), the CPU's setter refuses one, a compute command has no other
+    // as the storage is made zero, the CPU's setter refuses one, a compute command has no other
     // stage's setter, and a copy takes a source of the same descriptor. So a command reads the
     // bindings its descriptor counts, not the record's 128, 2 KiB.
     let counts_at = at(fb, records, layout::COUNTS)?;

@@ -953,13 +953,12 @@ pub enum Feature {
     /// (`Capability::Limit` names `MaxFramebufferWidth`, `MaxFramebufferHeight` or
     /// `MaxFramebufferLayers`). Metal renders passes up to 16384 pixels a side and 2048 layers.
     RenderTargetSize,
-    /// A render state a function sets on an indirect render command
-    /// (`render_command::set_cull_mode`, `set_front_facing_winding`, `set_triangle_fill_mode`,
-    /// `set_depth_bias`, `set_depth_clip_mode`, `set_depth_stencil_state`), or a
-    /// `depth_stencil_state` it reads from an argument buffer: the record holds no render state.
-    /// Metal's Apple10 family alone lists the feature, and Metal's compiler refuses such a
-    /// function on an Apple9 GPU, so the runtime answers it as that compiler does on a device that
-    /// does not claim Apple10 ([`Needs::MetalGpuFamily`]).
+    /// A `depth_stencil_state` a function reads from an argument buffer or takes as a parameter,
+    /// the state of an indirect render command, which no record holds. (A render command's state
+    /// setters, `render_command::set_cull_mode` and the rest, are `GpuEncodedIndirectCommands`, as
+    /// every encoder operation is.) Metal's Apple10 family alone lists the feature, and Metal's
+    /// compiler refuses such a function on an Apple9 GPU, so the runtime answers it as that
+    /// compiler does on a device that does not claim Apple10 ([`Needs::MetalGpuFamily`]).
     IndirectRenderState,
     /// A fragment function's read of a Metal 3.1 program-scope built-in variable that Metal does
     /// not lower there: a global `thread_index_in_quadgroup` (`air.get_thread_index_in_quadgroup`),

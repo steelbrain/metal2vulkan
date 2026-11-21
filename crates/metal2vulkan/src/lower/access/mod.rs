@@ -101,13 +101,13 @@ pub mod cell;
 pub mod copy;
 pub mod dynamic;
 mod emit;
-pub mod encode;
 pub mod function_table;
 pub mod handle;
 pub mod icb;
 pub mod imageblock;
 pub mod index;
 pub mod local;
+pub mod object;
 pub(crate) mod phis;
 pub mod pointer;
 pub(crate) mod psb;
@@ -189,8 +189,8 @@ pub enum AccessStrategy {
     Cell(cell::CellStrategy),
     /// A kernel imageblock's cell pointer or extent.
     Imageblock(imageblock::ImageblockStrategy),
-    /// An indirect-command object's word, or an encoder operation's record writes.
-    Encode(encode::EncodeStrategy),
+    /// An indirect-command object's word.
+    Object(object::ObjectWord),
     /// An indirect-command operation's writes into its command's records under the identity
     /// domains.
     Commands(icb::Command),
@@ -540,7 +540,7 @@ impl FamilyStrategy for AccessStrategy {
             AccessStrategy::Value(p) => p.name(slots),
             AccessStrategy::Cell(c) => c.name().into(),
             AccessStrategy::Imageblock(i) => i.name().into(),
-            AccessStrategy::Encode(e) => e.name(slots),
+            AccessStrategy::Object(o) => o.name(slots),
             AccessStrategy::Commands(c) => c.name(),
             AccessStrategy::FunctionTable(t) => t.name(),
             AccessStrategy::AbsentRead(a) => a.name().into(),
@@ -565,7 +565,7 @@ impl FamilyStrategy for AccessStrategy {
             AccessStrategy::Value(p) => p.words(),
             AccessStrategy::Cell(c) => c.words(),
             AccessStrategy::Imageblock(i) => i.words(),
-            AccessStrategy::Encode(e) => e.words(),
+            AccessStrategy::Object(o) => o.words(),
             AccessStrategy::Commands(c) => c.words(),
             AccessStrategy::FunctionTable(t) => t.words(),
             AccessStrategy::AbsentRead(a) => a.words(),
@@ -634,7 +634,7 @@ fn held(s: &root_sets::Statics, m: &mut Meter) -> Result<Vec<Target>, Error> {
 /// materializes (`pointer::phi_incoming`); any other constant incoming pointer, and a blob offset
 /// (which would need a conversion on its edge), is refused.
 pub fn lowered_pointer(cx: &SelectCx<'_>, v: Value) -> Result<DemoteTy, Error> {
-    if let Some(d) = encode::lowered_pointer(cx, v) {
+    if let Some(d) = object::lowered_pointer(cx, v) {
         return Ok(d);
     }
     if let Some(d) = handle::lowered_pointer(cx, v)? {
@@ -789,7 +789,7 @@ pub struct AccessPlan {
     /// A tile function's attachments and the ones it stages ([`tile`]).
     pub tile: Option<tile::TilePlan>,
     /// The handle loads of indirect-command objects whose every use is an encoder operand
-    /// ([`encode::plan_objects`]): each is its field's word, a `u64`.
+    /// ([`object::plan_objects`]): each is its field's word, a `u64`.
     pub objects: BTreeSet<InstId>,
     /// The typed loads and stores whose access chain takes its defining `getelementptr`'s own
     /// index operands ([`local`]'s line-up rule), each with those operands: the access reads them
@@ -2494,12 +2494,12 @@ pub fn select(
         return Ok(AccessStrategy::Imageblock(s));
     }
     // Under the identity domains an indirect-command operation is `icb`'s; its object word's
-    // handle load stays `encode`'s.
+    // handle load stays `object`'s.
     if let Some(c) = icb::select(cx, inst, m)? {
         return Ok(AccessStrategy::Commands(c));
     }
-    if let Some(s) = encode::select(cx, at, inst, m)? {
-        return Ok(AccessStrategy::Encode(s));
+    if let Some(s) = object::select(cx, at, inst, m)? {
+        return Ok(AccessStrategy::Object(s));
     }
     if let Some(s) = cell::select(cx, at, inst)? {
         return Ok(AccessStrategy::Cell(s));

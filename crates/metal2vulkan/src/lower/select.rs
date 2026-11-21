@@ -872,7 +872,7 @@ fn route_air(cx: &SelectCx<'_>, op: &AirIntrinsic, decl: FuncId) -> Route {
                 .into(),
         ),
         A::Tensor(_) => Route::Refuse(Unsupported::not_implemented(Feature::Tensors).into()),
-        // An encoder operation writes its command's record through device addresses.
+        // An encoder operation is the access family's (`access::object`).
         A::IndirectCommand(_) => Route::Family(LowerFamily::Access),
         A::Mesh(_) => Route::Family(LowerFamily::Mesh),
         // Canonicalization makes every vector data call its element accesses.
@@ -1410,7 +1410,7 @@ fn select_body(
     // The spin reads, before any atomic is selected.
     access::atomic::spin::plan(cx, m)?;
     // The indirect-command object words, before any use of one is selected.
-    access::encode::plan_objects(cx, m)?;
+    access::object::plan_objects(cx, m)?;
     // The encodings each pointer-cell slot group's loads read, before any store.
     access::cell::plan_reads(cx, m)?;
     // The primitive-data stores nothing reads back, before any store.

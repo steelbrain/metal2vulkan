@@ -1484,7 +1484,11 @@ and the lowest constant level of detail). A sample's level is its sampler's to b
 ### Indirect command buffers
 
 An indirect command buffer's commands are records in ordinary buffer storage
-(`bind::indirect_commands`): one format whatever the descriptor, written by the CPU or by a kernel.
+(`bind::indirect_commands`): one format whatever the descriptor, written by the CPU. Under the
+resident-table domains a function's encoder operations are refused,
+`Unsupported{GpuEncodedIndirectCommands, NotImplemented}`; under the identity domains a function
+writes the render commands section 1 names, into the records `pipeline::IndirectDrawLayout`
+states, and is refused the same way for any other operation.
 The binder replays records into dispatches and draws: on the host, or on the device through a
 preprocessing kernel (`replay_preprocess`), and through `VK_EXT_device_generated_commands` where
 the device has it (`replay_preprocess_generated`). Draws of primitives under the encoder's
@@ -1501,14 +1505,12 @@ reads no buffer and no `[[primitive_id]]` may instead merge into one draw (`Draw
 two merge passes (`draw_merge_module`) write each command's first vertex in the merged draw, and
 the vertex function, compiled as its merged variant (`VariantKey::merged_draws`), finds its
 command by that prefix and runs the command's vertex, instance and buffers, in the commands'
-order. A kernel that encodes commands writes the records that start at
-`bind::indirect_commands::records_address` of the buffer's ID, outside every Metal address, and
-finds them only at their start: records may run past later IDs' starts, and a resident set
-(`bind::ResidentSet`) keeps each records range whole. Each of the kernel's writes of a command's
-record also stores 1 at the command's written flag, a `u32` a command past the records
-(`bind::indirect_commands::written_flag_offset`), where the storage holds them; storage that ends
-at its records takes none. A consumer whose own writes of the records set the flags too may reset
-only the flagged records of a run of commands, clearing each flag with its record.
+order. A buffer's records start at `bind::indirect_commands::records_address` of its ID, outside
+every Metal address; records may run past later IDs' starts, and a resident set
+(`bind::ResidentSet`) keeps each records range whole. Storage may hold a written flag per command,
+a `u32` a command past the records (`bind::indirect_commands::written_flag_offset`): a consumer
+whose own writes of the records set the flags may reset only the flagged records of a run of
+commands, clearing each flag with its record.
 
 ## 7. Caching
 

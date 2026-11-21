@@ -1,7 +1,7 @@
 //! GPU-encoded indexed draws under the identity domains: a function's `render_command` buffer
 //! setters, indexed draw and reset write the records of an indirect command buffer
 //! (`pipeline::IndirectDrawLayout`) through its `gpuResourceID`, the records' device address,
-//! which an argument buffer's `command_buffer` member holds (its handle load is `encode`'s object
+//! which an argument buffer's `command_buffer` member holds (its handle load is `object`'s
 //! word, a `u64`).
 //!
 //! Each operation reads the header's capacity, slot counts and stride, and writes only where the

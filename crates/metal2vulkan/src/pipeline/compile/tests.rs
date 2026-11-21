@@ -2873,9 +2873,9 @@ fn a_compute_pipeline_states_whether_its_kernel_writes_memory() {
 
 /// The interface states whether the function takes an indirect command buffer, from the AIR's
 /// metadata: an argument buffer's `command_buffer` member the kernel never encodes through
-/// (`kernel_icb_declared_handle_is_inert`), and one it encodes compute commands through
-/// (`icb_replay_encode`), count; a kernel that takes none (`icb_replay_template`, which a
-/// command runs) does not. A pipeline's interface states it where one of its stages does.
+/// (`kernel_icb_declared_handle_is_inert`) counts; a kernel that takes none
+/// (`icb_replay_template`, which a command runs) does not. A pipeline's interface states it where
+/// one of its stages does.
 #[test]
 fn the_interface_states_whether_the_function_takes_a_command_buffer() {
     let p = crate::pipeline::testing::profile("lavapipe", DevicePolicy::RESIDENT_TABLES)
@@ -2888,7 +2888,6 @@ fn the_interface_states_whether_the_function_takes_a_command_buffer() {
             "kernel_icb_declared_handle_is_inert",
             true,
         ),
-        (&dirs[1], "icb_replay_encode", "icb_replay_encode", true),
         (
             &dirs[1],
             "icb_replay_template",
@@ -2918,44 +2917,33 @@ fn the_interface_states_whether_the_function_takes_a_command_buffer() {
 }
 
 /// The interface states what the function may write into indirect command buffers, from its
-/// AIR: a kernel that encodes compute commands (`icb_replay_encode`) its operations' bits, no
-/// primitive type and the compute kind; kernels that draw (`icb_render_replay_encode_draw_only`,
-/// `icb_render_indexed_encode`) their draws' bits, the constant primitive type they pass
-/// (points) and the render kind; a kernel that takes no command buffer (`icb_replay_template`)
-/// nothing. A pipeline's interface holds its stages' together.
+/// AIR: a kernel that binds each command's buffers and draws indexed triangles into it
+/// (`icb_indexed_16`, under the identity domains, which lower such a kernel) its operations'
+/// bits, the constant primitive type it passes (triangles) and the render kind; a kernel that
+/// takes no command buffer (`icb_replay_template`) nothing. A pipeline's interface holds its
+/// stages' together.
 #[test]
 fn the_interface_states_what_the_function_may_write_into_command_buffers() {
     use crate::pipeline::interface::CommandWrites as W;
-    let p = crate::pipeline::testing::profile("lavapipe", DevicePolicy::RESIDENT_TABLES)
-        .expect("profile");
-    for (entry, operations, primitive_types, kinds) in [
+    let p =
+        crate::pipeline::testing::profile("lavapipe", DevicePolicy::default()).expect("profile");
+    for (fixture, entry, operations, primitive_types, kinds) in [
         (
-            "icb_replay_encode",
-            W::PIPELINE | W::BUFFER | W::THREADGROUP_MEMORY | W::DISPATCH | W::BARRIER,
-            0,
-            W::COMPUTE_COMMANDS,
-        ),
-        (
-            "icb_render_replay_encode_draw_only",
-            W::DRAW,
-            0b1,
+            "icb_merged_indexed",
+            "icb_indexed_16",
+            W::BUFFER | W::DRAW_INDEXED,
+            1 << 3,
             W::RENDER_COMMANDS,
         ),
-        (
-            "icb_render_indexed_encode",
-            W::DRAW_INDEXED,
-            0b1,
-            W::RENDER_COMMANDS,
-        ),
-        ("icb_replay_template", 0, 0, 0),
+        ("icb_replay_template", "icb_replay_template", 0, 0, 0),
     ] {
-        let bc = match llvm_assemble(&engine_dir().join(format!("{entry}.ll"))) {
+        let bc = match llvm_assemble(&engine_dir().join(format!("{fixture}.ll"))) {
             Ok(b) => b,
             Err(AssembleError::Missing(why)) => {
                 eprintln!("SKIPPED: {why}");
                 return;
             }
-            Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected {entry}.ll: {why}"),
+            Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected {fixture}.ll: {why}"),
         };
         let a = crate::pipeline::testing::compile(&bc, entry, &p)
             .unwrap_or_else(|e| panic!("{entry}: {e}"));

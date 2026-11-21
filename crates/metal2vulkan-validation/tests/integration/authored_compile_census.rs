@@ -262,11 +262,12 @@ fn corpus_with_templates(name: &str) -> (ScratchDir, metal2vulkan_validation::ca
 }
 
 /// The executor's requests for a case whose executed compute command buffer the device replay
-/// runs: on a profile with device addresses, the case's pipeline and each registered variant
-/// compile in the worker; on one without, the command buffer is host-replayed and only the case's
-/// own pipeline is compiled. A render command buffer is always host-replayed. Both devices take
-/// the resident-table domains, the executor's own context's, which run the command buffers the
-/// identity domains refuse.
+/// runs: on a profile with device addresses, the case's pipeline and each registered variant; on
+/// one without, the command buffer is host-replayed and only the case's own pipeline. A render
+/// command buffer is always host-replayed. Both devices take the resident-table domains, the
+/// executor's own context's, which runs the command buffers. The case's kernel encodes commands,
+/// which no device lowers (`GpuEncodedIndirectCommands`), so its cell is that refusal on both, with
+/// no digest.
 #[test]
 fn case_compiles_lists_the_replay_variants_where_the_device_replay_runs() {
     use metal2vulkan_validation::authored_compile::compile_prepared;
@@ -320,23 +321,17 @@ fn case_compiles_lists_the_replay_variants_where_the_device_replay_runs() {
     assert!(on_device.compiles[1..]
         .iter()
         .all(|compile| matches!(compile.subject, CompileSubject::ReplayVariant { .. })));
+    let refused = Ok(CellOutcome::Refused(
+        "not_supported{unsupported:not_implemented GpuEncodedIndirectCommands}".into(),
+    ));
     let cell = compile_prepared(&compute, &worker, &lavapipe);
-    assert_eq!(cell.outcome, Ok(CellOutcome::Compiled), "{cell:?}");
-    assert_eq!(cell.compiles, on_device.compiles.len());
-    // What a run executes there is digested: the case, each variant, and the preprocess module; the
-    // same compiles digest the same.
-    let digest = cell
-        .artifact
-        .clone()
-        .expect("a device-replayed case's digest");
-    let again = compile_prepared(&compute, &worker, &lavapipe);
-    assert_eq!(again.artifact, Some(digest));
+    assert_eq!(cell.outcome, refused, "{cell:?}");
+    assert_eq!(cell.artifact, None, "{cell:?}");
     let on_host = case_compiles(&compute, &floor).unwrap();
     assert_eq!(on_host.host_replayed, 1);
     assert_eq!(on_host.compiles.len(), 1);
-    // Where the host replay runs a command buffer, the census compiles less than the run does:
-    // no digest.
     let host = compile_prepared(&compute, &worker, &floor);
+    assert_eq!(host.outcome, refused, "{host:?}");
     assert_eq!(host.artifact, None, "{host:?}");
 
     let (scratch, case) =
