@@ -121,10 +121,6 @@ impl RotatedInputBlend {
     }
 }
 
-/// An upper estimate of the words one blended write adds beside its blend's arithmetic: the
-/// input attachment's read, its decode, the encode, and a merge of kept channels.
-const WRITE_WORDS: u64 = 120;
-
 /// Whether the device orders framebuffer fetch through rasterization-order input attachments,
 /// where this module computes an extended-range blend (on one that orders it through the pixel
 /// interlock, the storage form does, `fetch::interlock_orders`).
@@ -503,34 +499,4 @@ pub(crate) fn rotated_texel(
         false => None,
     };
     extended_range::blend::blend_unorm8(fb, &b, arith, (part, texel), constant)
-}
-
-/// The words the planned blends add at `rets` returns: one input attachment each beside the
-/// reads `color` counts, and at each return the read, decode, blend and encode.
-pub(super) fn words(cx: &SelectCx<'_>, rets: u64) -> u64 {
-    let fp = &cx.families.fragment;
-    let extended = fp.input_blends.values().filter(|ib| ib.reads()).map(|ib| {
-        let blend = ib.blend.as_ref().map_or(0, |b| b.words());
-        let each = WRITE_WORDS
-            .saturating_add(u64::from(blend))
-            .saturating_add(u64::from(
-                extended_range::DECODE_WORDS + extended_range::ENCODE_WORDS,
-            ));
-        each.saturating_mul(rets.max(1))
-    });
-    let math = fetch::blend_math(cx);
-    let rotated = fp
-        .rotated_blends
-        .values()
-        .filter(|rb| rb.reads())
-        .map(|rb| {
-            let half = extended_range::blend::BlendArith::Half;
-            let pf = PixelFormat::ARGB8Unorm;
-            let blend = extended_range::Blend::unorm8(&rb.equation, pf, rb.written, (math, half))
-                .map_or(0, |b| b.words());
-            WRITE_WORDS
-                .saturating_add(u64::from(blend))
-                .saturating_mul(rets.max(1))
-        });
-    extended.chain(rotated).fold(0u64, u64::saturating_add)
 }

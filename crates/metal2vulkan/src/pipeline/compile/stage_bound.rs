@@ -55,14 +55,14 @@ impl StageBounds {
     };
 }
 
-/// `r`'s function planned and emitted with its repeated regions rolled, under the plan's word
-/// estimate `word_cap` and under `bounds` (the module docs): planned again keeping the widest
-/// mode's pin where only that pin's emulation passed the bound, else refused, naming the module's
-/// entry weight and the bound ([`past_bound`]).
+/// `r`'s function planned and emitted with its repeated regions rolled, under `bounds` (the
+/// module docs): planned again keeping the widest mode's pin where only that pin's emulation
+/// passed the bound, else refused, naming the module's entry weight and the bound
+/// ([`past_bound`]).
 pub(super) fn emit(
     r: &Request<'_>,
     p: &DeviceProfile,
-    (word_cap, bounds): (u64, StageBounds),
+    bounds: StageBounds,
     m: &mut Meter,
 ) -> Result<(Planned, Emitted), Error> {
     let analyzed = analyze_one(r, p, m)?;
@@ -70,7 +70,6 @@ pub(super) fn emit(
     loop {
         let before = m.ledger();
         let (plan, kernel) = analyzed.select(p, widest, m)?;
-        plan.estimate.check(word_cap)?;
         let mut emitted = m.weighted(crate::pipeline::compile::weights::EMIT, |m| {
             crate::lower::emit::emit_module(&analyzed.spec, &plan, m)
         })?;

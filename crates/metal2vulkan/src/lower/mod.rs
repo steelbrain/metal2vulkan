@@ -4,12 +4,11 @@
 //! `strategy.rs`, `emit.rs`, `push.rs`, or this file:
 //!
 //! - [`select`]: the total routing of every instruction, intrinsic family, and parameter, and the
-//!   per-function [`select::Plan`] (push placement, size estimate).
+//!   per-function [`select::Plan`] (push placement).
 //! - [`strategy`]: [`strategy::Strategy`], one variant per family wrapping its own enum.
 //! - [`emit`]: [`emit::Emitter`], the `CodeEmitter` that routes each strategy to its family's
 //!   emit function, and the module driver.
-//! - [`push`]: the complete placement algorithm; [`estimate`]: `SizeEstimate`;
-//!   [`view`]: the structurizer's `CfgView`.
+//! - [`push`]: the complete placement algorithm; [`view`]: the structurizer's `CfgView`.
 //! - Families: [`arith`], [`access`], [`texture`], [`sampler`], [`simd`], [`sync`] (`memory_model`,
 //!   `barrier`), [`fragment`], [`stage_io`], [`dispatch`], [`raytracing`], [`mesh`]. A family
 //!   refuses what it does not lower as `Unsupported{Lowering(family), NotImplemented}`; the
@@ -28,7 +27,6 @@ pub mod access;
 pub mod arith;
 pub mod dispatch;
 pub mod emit;
-pub mod estimate;
 pub mod fragment;
 pub mod mesh;
 pub mod push;

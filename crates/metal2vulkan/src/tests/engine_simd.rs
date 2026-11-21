@@ -602,26 +602,6 @@ fn a_device_that_cannot_pin_the_stage_refuses_a_pinned_kernel() {
     assert_eq!(nvk.check(&a.requirements), Ok(()));
 }
 
-/// The plan's size estimate bounds the emitted words of every kernel in both tiers.
-#[test]
-fn the_estimate_bounds_every_simd_kernel() {
-    let Some(bc) = assemble("simd_ops") else {
-        return;
-    };
-    for p in [moltenvk(), wave64()] {
-        for kernel in KERNELS {
-            let (plan, _) = typed_module(&bc, kernel, &p).expect("plan");
-            let a = compile(&bc, kernel, &p).expect("compile");
-            let words = a.module.words.len() as u64;
-            assert!(
-                plan.estimate.words >= words,
-                "{kernel}: estimate {} < emitted {words}",
-                plan.estimate.words
-            );
-        }
-    }
-}
-
 /// A kernel with a tangled instruction declares `MaximallyReconvergesKHR` where the profile has
 /// maximal reconvergence (reconvergence guaranteed), and records `ImplementationDefined` where it
 /// has neither mode, beside `PrecisionNote::DeviceReconvergence`.
@@ -1056,7 +1036,7 @@ fn mask_expected(kernel: &str, n: u32, t: u32) -> u32 {
 /// `quad_ballot` and `simd_active_threads_mask` (Apple's `air.quad_ballot` and
 /// `air.simd_active_threads_mask.i64`) give Metal's masks in the `Direct` tier at 32 lanes
 /// (with and without `shaderInt64`) and the `Cluster32` tier at 64, uniform and divergent, in
-/// both scheduling orders; the estimate bounds their words.
+/// both scheduling orders.
 #[test]
 fn quad_ballots_and_simd_active_masks_run_in_every_subgroup_tier() {
     let Some(bc) = assemble("simd_masks") else {
@@ -1089,10 +1069,6 @@ fn quad_ballots_and_simd_active_masks_run_in_every_subgroup_tier() {
             assert_eq!(plan.simd.1, tier, "{kernel}");
             let a = compile(&bc, kernel, &p).unwrap_or_else(|e| panic!("{kernel}: {e}"));
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{kernel}: L3: {e}"));
-            assert!(
-                plan.estimate.words >= a.module.words.len() as u64,
-                "{kernel}: the estimate"
-            );
             for &local in locals {
                 let n: u32 = local.iter().product();
                 let out = run_all(&plan, &m, local, lanes);

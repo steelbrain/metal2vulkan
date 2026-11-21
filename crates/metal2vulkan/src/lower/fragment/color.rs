@@ -120,12 +120,6 @@ pub struct ColorInput {
     pub alpha_red: bool,
 }
 
-/// An upper estimate of the words one input attachment declares (type, variable, decorations).
-const OBJECT_WORDS: u64 = 32;
-/// An upper estimate of the words one read adds (load, the sample's load, image read, lane
-/// extraction, mask or rounding).
-const READ_WORDS: u64 = 32;
-
 /// The form of a color value of AIR type `ty`, read or written: a scalar or 2 to 4 lanes of
 /// 32-bit held integers or floats. A 64-bit one is not Metal's (`refuse_int64_interface`);
 /// `bool`, other widths, and aggregates are not lowered.
@@ -397,49 +391,6 @@ pub(crate) fn texture_decl(class: ImageHandleClass) -> ImageDecl {
         parts: None,
     }
 }
-
-/// How many uses the body makes of the planned color inputs.
-pub(super) fn uses(cx: &SelectCx<'_>, colors: &[ColorInput]) -> u64 {
-    let mut uses = 0u64;
-    for inst in cx.body.insts.values() {
-        inst.kind.for_each_value(|v| {
-            if let Value::Arg(a) = v {
-                if colors.iter().any(|c| c.param == a.raw()) {
-                    uses += 1;
-                }
-            }
-        });
-    }
-    uses
-}
-
-/// The words the planned input attachments add: one object per attachment and one read per use
-/// (the storage form's are `fetch::words`).
-pub(super) fn words(cx: &SelectCx<'_>, colors: &[ColorInput]) -> u64 {
-    let uses = uses(cx, colors);
-    // An extended-range attachment's read decodes its raw texel.
-    let extended: Vec<ColorInput> = colors
-        .iter()
-        .filter(|c| c.extended.is_some())
-        .copied()
-        .collect();
-    let decodes = self::uses(cx, &extended);
-    // An alpha-in-red attachment's read moves its red to alpha: a shuffle and its zero.
-    let red: Vec<ColorInput> = colors.iter().filter(|c| c.alpha_red).copied().collect();
-    let moves = self::uses(cx, &red);
-    let mut attachments: Vec<u32> = colors.iter().map(|c| c.color).collect();
-    attachments.sort_unstable();
-    attachments.dedup();
-    OBJECT_WORDS
-        .saturating_mul(attachments.len() as u64)
-        .saturating_add(READ_WORDS.saturating_mul(uses))
-        .saturating_add(u64::from(extended_range::DECODE_WORDS + 120).saturating_mul(decodes))
-        .saturating_add(ALPHA_IN_RED_WORDS.saturating_mul(moves))
-}
-
-/// An upper estimate of the words [`alpha_in_red`] adds: the shuffle, and the zero vector's
-/// constant and type.
-pub(super) const ALPHA_IN_RED_WORDS: u64 = 16;
 
 /// Declare one input attachment per color index the plan reads, multisampled for a per-sample
 /// function (`multisampled`), or its storage image in the interlocked storage form (`fetch`), which

@@ -202,8 +202,7 @@ const INTERSECT_FIELD_WORDS: u32 = 12;
 /// An upper estimate of reading a candidate's intersection function table entry: the bind
 /// residual, the bound range, three contained word reads, and the acceptance. Measured:
 /// `kernel_instance_as_intersect.ll` emits 188 words more than its null-table variant on
-/// `lavapipe`, the table's descriptor included, which the estimate prices at
-/// `estimate::SLOT_WORDS` (40) besides these words.
+/// `lavapipe`, the table's descriptor included.
 const INTERSECT_TABLE_WORDS: u32 = 170;
 /// An upper estimate of a multi-level intersector's id writes besides their two stores: the two
 /// committed gets, their merge with the miss, and the hit's branch.

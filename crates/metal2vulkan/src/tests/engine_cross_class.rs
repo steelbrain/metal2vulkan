@@ -31,7 +31,7 @@ use crate::library::{FunctionConstantValues, Library};
 use crate::lower::select::{LowerInputs, Plan};
 use crate::metal::{self, PixelFormat, TextureType};
 use crate::pipeline::artifact::PrecisionNote;
-use crate::pipeline::compile::{compile_bitcode, plan_bitcode, EntryRef};
+use crate::pipeline::compile::{compile_bitcode, EntryRef};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::sym::{
     Axis, ResourceKind, ResourceSlot, SampledType, SlotClass, SlotRef, SpecKey, Stage,
@@ -222,8 +222,7 @@ fn inputs(bound: Option<SampledType>) -> LowerInputs {
     i
 }
 
-/// Compile the kernel `bc` under `inputs` on `p`, check that the plan's word estimate bounds the
-/// emission, and validate the linked module.
+/// Compile the kernel `bc` under `inputs` on `p` and validate the linked module.
 fn validate(
     bc: &[u8],
     inputs: &LowerInputs,
@@ -232,16 +231,8 @@ fn validate(
 ) {
     let consts = FunctionConstantValues::defaults();
     let entry = EntryRef::Name("k");
-    let plan = plan_bitcode(bc, entry, &consts, p, inputs, &mut meter())
-        .unwrap_or_else(|e| panic!("{what}: {e}"));
     let a = compile_bitcode(bc, entry, &consts, p, inputs, &mut meter(), SPIRV_WORDS)
         .unwrap_or_else(|e| panic!("{what}: {e}"));
-    let words = a.module.words.len() as u64;
-    assert!(
-        plan.estimate.words >= words,
-        "{what}: estimate {} < emitted {words}",
-        plan.estimate.words
-    );
     link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: {e}"));
 }
 
@@ -772,8 +763,8 @@ fn held_classes(a: &crate::library::FunctionArtifact) -> Vec<SampledType> {
 
 /// A read and a query of a texture an argument buffer holds, through each declared type, read a
 /// member of another numeric class in its own class: on every committed profile with a sampled
-/// heap, the module declares the sampled class of every numeric type, stays inside the plan's word
-/// estimate, passes L3 and states `RuntimeFact::HeapCrossClassNeutral` for the formats it does not
+/// heap, the module declares the sampled class of every numeric type, passes L3 and states
+/// `RuntimeFact::HeapCrossClassNeutral` for the formats it does not
 /// take alone (not `every_member`). A sample through the argument buffer, and a `ushort` read
 /// (whose query still crosses), have no answer for any such member: they state the fact for every
 /// member of their class, which the planner reports and the runtime announces.
@@ -845,8 +836,8 @@ fn a_texture_an_argument_buffer_holds_is_read_in_its_own_class() {
 
 /// A `half` read of a texture an argument buffer holds merges its class arms as the texel's `half`
 /// bits (`emit::read_crossed`), widened once after the merge: on every committed profile with a
-/// sampled heap, the module merges a vector of four `u32`s and merges no texel struct, stays inside
-/// the plan's word estimate and passes L3. A member of another class then keeps its words' low 16
+/// sampled heap, the module merges a vector of four `u32`s and merges no texel struct, and passes
+/// L3. A member of another class then keeps its words' low 16
 /// bits wherever the value is stored unchanged, where a merge of each arm's widened `half` selected
 /// against a null handle's zero is a move Metal's compiler does not fold back to the bits (on the
 /// Apple M3 Max a NaN's bits became `0x7E00`). A `float` read, which widens nothing, still merges

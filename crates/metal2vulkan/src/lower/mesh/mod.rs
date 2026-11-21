@@ -305,18 +305,6 @@ impl FamilyStrategy for MeshStrategy {
     }
 }
 
-/// The words an entry wrapper adds to the size estimate: its loops, barriers and stores.
-pub const WRAPPER_WORDS: u64 = 400;
-
-/// The words the family adds beyond its operations.
-pub fn estimate_words(plan: &MeshPlan) -> u64 {
-    if plan.object || plan.mesh.is_some() {
-        WRAPPER_WORDS + 16 * plan.outputs.len() as u64
-    } else {
-        0
-    }
-}
-
 /// The mesh output type of the entry's `air.mesh` parameter.
 fn mesh_outputs<'e>(cx: &SelectCx<'e>) -> Option<&'e MeshOutputs> {
     cx.entry.ep.params.iter().find_map(|b| match &b.role {

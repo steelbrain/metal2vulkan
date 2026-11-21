@@ -5,7 +5,7 @@
 //!   but renders neither, a fragment function compiled for a pipeline with an `A1BGR5Unorm` or
 //!   `ABGR4Unorm` attachment (`rt6_fill_rgba32float`, `rt6_fill_rgba16float`) records the
 //!   attachment (`StageIo::word_colors`), keeps its interface variable's Metal type, declares the
-//!   output variable as one `uint`, bounds its emission by the plan's estimate, and links: the
+//!   output variable as one `uint`, and links: the
 //!   attachment takes `R16_UINT`, a write of its one component under a full mask and of none under
 //!   an empty one, no blend, and both modules pass L3.
 //! - Where the device renders the format (lavapipe), the attachment takes the format itself.
@@ -41,12 +41,11 @@ use std::path::Path;
 use crate::budget::Budget;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Error, Feature, Needs, RuntimeInput};
-use crate::library::{FunctionConstantValues, Library};
+use crate::library::Library;
 use crate::lower::select::LowerInputs;
 use crate::metal::format::WordAttachment;
 use crate::metal::{self, ColorWriteMask, PixelFormat};
 use crate::pipeline::artifact::PrecisionNote;
-use crate::pipeline::compile::{plan_bitcode, EntryRef};
 use crate::pipeline::descriptor::{
     ColorAttachmentDescriptor, FunctionDescriptor, RenderPipelineDescriptor, StageSource,
 };
@@ -54,8 +53,7 @@ use crate::pipeline::link::{link, LinkInputs, RenderLinkInputs};
 use crate::pipeline::relocate::relocate;
 use crate::pipeline::stage_io::{IoNumeric, IoRole};
 use crate::pipeline::testing::{
-    compile, compile_with, engine_dir, fragment_inputs, llvm_assemble, meter, profile,
-    AssembleError,
+    compile, compile_with, engine_dir, fragment_inputs, llvm_assemble, profile, AssembleError,
 };
 use crate::spirv::testing::{check_words_valid, spirv_dis};
 use crate::vk;
@@ -113,7 +111,6 @@ fn fragment_outputs_to_word_attachments_write_the_word() {
     let Some(bc) = fixture() else {
         return;
     };
-    let consts = FunctionConstantValues::defaults();
     let p = venue("nvidia-rtx5080-laptop");
     let v = compile(&bc, "rt6_fill_vertex", &p).expect("vertex");
     for pf in FORMATS.into_iter().chain(SRGB) {
@@ -175,21 +172,6 @@ fn fragment_outputs_to_word_attachments_write_the_word() {
                     (color.ty.numeric, color.ty.components),
                     (IoNumeric::Float, 4),
                     "{what}"
-                );
-                let plan = plan_bitcode(
-                    &bc,
-                    EntryRef::Name(entry),
-                    &consts,
-                    &p,
-                    &inputs,
-                    &mut meter(),
-                )
-                .unwrap_or_else(|e| panic!("{what}: {e}"));
-                assert!(
-                    plan.estimate.words >= f.module.words.len() as u64,
-                    "{what}: estimate {} < emitted {}",
-                    plan.estimate.words,
-                    f.module.words.len()
                 );
                 let g = l.graphics.as_ref().expect("graphics");
                 let a = g.color_attachments[0].expect("attachment");

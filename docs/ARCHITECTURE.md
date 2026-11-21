@@ -19,8 +19,7 @@ metallib | AIR bitcode
   ── analyze ─────► MemoryPlan: provenance, one representation          memory
                     per value, slot windows
   ── select ──────► Plan: a strategy per instruction and interface      lower::select, lower::strategy
-                    element, push-constant placement, requirements,
-                    the output-size estimate (checked here)
+                    element, push-constant placement, requirements
   ── structurize ─► a structured tree over the AIR CFG                  structurize
   ── emit ────────► a typed SPIR-V module through the builder           structurize::emit, lower::*, spirv::builder
   ── tidy ────────► single-store promotion, dead values removed,        structurize::promote, spirv::{dead, roll,
@@ -29,7 +28,8 @@ metallib | AIR bitcode
                     into loops, loop-invariant loads of uniform views
                     moved before their loops
   ── verify ──────► the full verifier; requirements within the profile  spirv::verify, spirv::requirements
-  ── serialize ───► SPIR-V 1.5 words with typed relocations             spirv::serialize
+  ── serialize ───► SPIR-V 1.5 words with typed relocations, held to    spirv::serialize
+                    the word cap
   = CompiledFunction, keyed by FunctionCompileKey (the caller may cache it)
   ── link ────────► bindings, Locations, spec ids, the pipeline         pipeline::link
                     layout, pipeline-wide limits, the generated         pipeline::link::band
@@ -73,7 +73,7 @@ rest is `crates/metal2vulkan/src/`.
 | `graph` | The shared RPO, dominator tree, loop forest and SCC |
 | `budget` | `Budget`, `CancelToken`, and the per-attempt `Meter`: deadline, cancellation, work units, the byte ledger and every structural cap |
 | `memory/` | Pointer provenance, the `MemoryPlan`, leaf access emitters, arenas, root and handle lookups, word composition, atomics; `memory::views`, a descriptor slot's views: a storage block or a uniform block |
-| `lower/` | `select` (routing every instruction, intrinsic and parameter into the `Plan`), `strategy`, `push` (push-constant placement), `estimate` (output size), `specialized` (bound-texture values read as push data), and one module per family: `arith` (each float operation in the AIR's order, decorated by its own fast-math flags, so the device's compiler groups and fuses only what they allow; `half_chain`, a fast-math `half` chain held at `float` precision between its roundings where the device has no 16-bit floats), `access`, `texture`, `sampler`, `simd`, `sync`, `fragment`, `stage_io`, `dispatch`, `tessellation`, `mesh`, `raytracing` |
+| `lower/` | `select` (routing every instruction, intrinsic and parameter into the `Plan`), `strategy`, `push` (push-constant placement), `specialized` (bound-texture values read as push data), and one module per family: `arith` (each float operation in the AIR's order, decorated by its own fast-math flags, so the device's compiler groups and fuses only what they allow; `half_chain`, a fast-math `half` chain held at `float` precision between its roundings where the device has no 16-bit floats), `access`, `texture`, `sampler`, `simd`, `sync`, `fragment`, `stage_io`, `dispatch`, `tessellation`, `mesh`, `raytracing` |
 | `structurize/` | The structurizer over the AIR CFG, the emit walk that drives the families, and single-store promotion |
 | `spirv/` | The typed SPIR-V IR and interners, the module and function builders, dead-value removal, the roll pass, the move of loop-invariant loads of uniform views out of their loops (`hoist`), the 16-bit holding of `half` values under the 16-bit float controls (`half_hold`), the verifier, requirement derivation and the serializer. `spirv::interp` is a CPU interpreter used only by tests |
 | `spv.rs` | The SPIR-V grammar's opcodes and enumerants the translator names, generated from Khronos's grammar (`scripts/regen-spirv-grammar/`) |

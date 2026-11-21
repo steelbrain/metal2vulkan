@@ -662,7 +662,5 @@ fn frame_next(frames: &[&[StmtId]]) -> Option<StmtId> {
 
 mod predicate;
 
-pub(crate) use predicate::construct_words;
-
 #[cfg(test)]
 mod tests;

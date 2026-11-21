@@ -128,14 +128,6 @@ use crate::spirv::ir::{
     ImageUsage, MemAccess, StorageClass, TexelMemory, Type as SType, UnOp,
 };
 
-/// An upper estimate of the words the entry's block adds: the helper's copy, the phase's test,
-/// the interlock, the two selections and the return.
-const BLOCK_WORDS: u64 = 80;
-/// An upper estimate of the words one slot adds: its snapshot's variable, type and decorations, the
-/// pixel, the copy's fetch, encode and write, and at a read the selection, the read and its decode
-/// (a signed normalized form's, the longest: the sign's extension, the product and the bound).
-const SLOT_WORDS: u64 = 400;
-
 /// The fragment texture slots function `cx` reads through a snapshot, from its lowering inputs:
 /// the stage interface's `FragCoord`, the phase's push field and each snapshot's storage image are
 /// planned for them. A function with another interlock or a loop over its covered samples has none
@@ -181,8 +173,6 @@ pub(super) fn finish(
     }
     let n = u32::try_from(slots.len()).unwrap_or(u32::MAX);
     cx.descriptors.storage_images = cx.descriptors.storage_images.saturating_add(n);
-    let words = BLOCK_WORDS.saturating_add(SLOT_WORDS.saturating_mul(u64::from(n)));
-    stage_io::add_interface_words(cx, words);
     Ok(slots)
 }
 

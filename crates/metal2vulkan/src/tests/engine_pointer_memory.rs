@@ -359,9 +359,8 @@ fn resources_bound(plan: &Plan, mem: &Memory, threads: u32, binds: &[Bind]) -> (
     )
 }
 
-/// Compile entry `entry` of `bc` for `p` under `inputs`, pass L3, check that the plan's size
-/// estimate bounds the emitted words, and return the plan and the typed module the interpreter
-/// runs.
+/// Compile entry `entry` of `bc` for `p` under `inputs`, pass L3, and return the plan and the
+/// typed module the interpreter runs.
 fn checked(
     bc: &[u8],
     entry: &str,
@@ -381,12 +380,6 @@ fn checked(
     .unwrap_or_else(|e| panic!("{what}: {e}"));
     link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
     let (plan, m) = typed_module_with(bc, entry, p, inputs).expect("module");
-    let words = a.module.words.len() as u64;
-    assert!(
-        plan.estimate.words >= words,
-        "{what}: estimate {} < emitted {words}",
-        plan.estimate.words
-    );
     (plan, m)
 }
 

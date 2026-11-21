@@ -347,26 +347,6 @@ impl TilePlan {
     pub fn pass_cells(&self) -> Option<PassCells> {
         self.pass_cells.filter(|c| c.staged)
     }
-
-    /// An upper estimate of the words the staging adds: two loops, two barriers, the call, and
-    /// per staged slot its image, a read, a guarded leaf store, and a leaf load and write; per
-    /// word of the pass's imageblock storage, a read, a word store, a word load and a write.
-    pub fn words_estimate(&self) -> u64 {
-        let pass = match self.pass_cells() {
-            Some(_) => 96 + 64 * u64::from(self.cell_bytes / 4),
-            None => 0,
-        };
-        let per: u64 = pass
-            + self
-                .staged()
-                .map(|s| 96 + 4 * u64::from(s.leaf.cost()))
-                .sum::<u64>();
-        if per == 0 {
-            0
-        } else {
-            256 + per
-        }
-    }
 }
 
 /// The alignment a constant byte offset guarantees (at most 16).

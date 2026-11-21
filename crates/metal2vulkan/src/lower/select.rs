@@ -32,8 +32,8 @@
 //! `finish`), the slots' forms, extra transport, and push-table support
 //! (`access::finish_slots`, `access::accept_placement`), and the accumulators of [`SelectCx`]:
 //! descriptor counts per kind ([`DescriptorCounts`]), the simd class, and tangled instructions.
-//! The generic checks over those accumulators (per-stage descriptor limits, the subgroup tier,
-//! the size estimate) stay here.
+//! The generic checks over those accumulators (per-stage descriptor limits and the subgroup
+//! tier) stay here.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -55,7 +55,6 @@ use crate::error::{
     Capability, DiagName, Error, Feature, InternalError, InternalKind, LowerFamily, Unsupported,
 };
 use crate::lower::dispatch::DispatchPlan;
-use crate::lower::estimate::{self, SizeEstimate};
 use crate::lower::push;
 use crate::lower::strategy::{FamilyStrategy, Strategy};
 use crate::lower::{
@@ -401,7 +400,6 @@ pub struct Plan {
     /// The notes of `precision` an access keeps only on the arms its specialization selects,
     /// with their conditions ([`resolve_notes`]).
     pub specialized: Vec<SpecializedNote>,
-    pub estimate: SizeEstimate,
     /// The private memory a thread keeps, in bytes, as selection holds it to the device's
     /// Function storage (`MemoryPlan::private_bytes`).
     pub private_bytes: u64,
@@ -1337,7 +1335,6 @@ struct BodySelection {
     selectors: BTreeMap<ValueId, SelectorForm>,
     cross: Vec<(ValueId, DemoteTy)>,
     phis: Vec<(ValueId, DemoteTy)>,
-    blocks: u64,
 }
 
 /// A texture or sampler family's refusal of an `air.*` call that names nothing names the
@@ -1427,9 +1424,7 @@ fn select_body(
     // The `half` chains' operations held at `float` precision, before any of them is selected.
     cx.families.arith.held_at_float = arith::half_chain::plan(cx, m)?;
 
-    let mut blocks = 0u64;
     for (b, block) in body.blocks.iter() {
-        blocks += 1;
         for id in block.inst_ids() {
             m.tick(1)?;
             let inst = body
@@ -1624,7 +1619,6 @@ fn select_body(
         selectors,
         cross: cross.into_iter().collect(),
         phis,
-        blocks,
     })
 }
 
@@ -1775,76 +1769,8 @@ fn finish(
     cx.families.texture.absent_arm =
         texture::absent_arm(cx.entry, cx.body, &sel.strategy, cx.values, m)?;
 
-    let mut estimate = SizeEstimate::default();
-    estimate.add(estimate::MODULE_WORDS);
-    estimate.add(estimate::SLOT_WORDS.saturating_mul(descriptors.descriptors()));
-    estimate.add(estimate::PUSH_FIELD_WORDS.saturating_mul(placement.fields.len() as u64));
-    estimate.add(estimate::BLOCK_WORDS.saturating_mul(sel.blocks));
-    estimate
-        .add(estimate::VARIABLE_WORDS.saturating_mul((sel.cross.len() + sel.phis.len()) as u64));
-    for s in sel.strategy.iter().flatten() {
-        estimate.add(u64::from(s.words()));
-        // The separate form's sampled images.
-        let separate = separate_samplings(&cx.families, s);
-        estimate.add(u64::from(separate) * u64::from(sampler::SEPARATE_WORDS));
-        if tier == Tier::Emulated {
-            estimate.add(u64::from(simd::workgroup::extra_words(s)));
-        }
-    }
-    for v in &cx.families.simd.partly_live {
-        if let Some(s) = sel.strategy.get(v.index()).and_then(Option::as_ref) {
-            estimate.add(u64::from(simd::partly_live_words(s, tier)));
-        }
-    }
-    if let Some(p) = &cx.families.simd.predication {
-        estimate.add(simd::divergent::extra_words(
-            cx.body,
-            cx.values,
-            &sel.strategy,
-            p,
-        ));
-    }
-    let access = access::routine_words(&cx.families.access);
-    let heap = texture::routine_words(&cx.families.texture, &cx.families.access);
-    let sampler = sampler::routine_words(&cx.families.sampler);
-    for (_, words) in arith::routine_words(&cx.families.arith)
-        .chain(access)
-        .chain(heap)
-        .chain(sampler)
-    {
-        estimate.add(words);
-    }
-    estimate.add(stage_io::estimate_words(&cx.families.stage_io));
-    estimate.add(mesh::estimate_words(&cx.families.mesh));
-    if let Some(blob) = &cx.families.access.blob {
-        estimate.add(crate::memory::blob::declared_words(blob));
-    }
-    if dispatch.as_ref().is_some_and(|d| d.flat_grid) {
-        estimate.add(dispatch::FLAT_GRID_WORDS);
-    }
-    if dispatch.as_ref().is_some_and(|d| d.folded_groups) {
-        estimate.add(dispatch::FOLDED_GROUPS_WORDS);
-    }
-    // A kernel's partial threadgroups: the test before the body, and each builtin parameter's.
-    if let Some(d) = dispatch
-        .as_ref()
-        .filter(|d| d.partial_groups && stage == Stage::Kernel)
-    {
-        let derivations = 1 + d.params.len() as u64;
-        estimate.add(dispatch::PARTIAL_THREADGROUPS_WORDS.saturating_mul(derivations));
-    }
-    estimate.add(tessellation::estimate_words(&cx.families.tessellation));
-    estimate.add(
-        cx.families
-            .access
-            .tile
-            .as_ref()
-            .map_or(0, access::tile::TilePlan::words_estimate),
-    );
-
-    let (entry, body) = (cx.entry, cx.body);
     let (precision, specialized) = resolve_notes(&cx.families, cx.precision, cx.specialized);
-    let mut plan = Plan {
+    let plan = Plan {
         stage,
         values: cx.values,
         strategy: sel.strategy,
@@ -1862,14 +1788,8 @@ fn finish(
         facts: cx.facts.into_iter().collect(),
         precision,
         specialized,
-        estimate,
         private_bytes: cx.memory.private_bytes,
     };
-    let walk = match &plan.families.simd.predication {
-        Some(p) => walk_construct_words(entry, body, &plan, p, m)?,
-        None => 0,
-    };
-    plan.estimate.add(walk);
     if access::identity(p) {
         identity_admits(&plan)?;
     }
@@ -2102,25 +2022,6 @@ fn identity_refusal(plan: &Plan) -> Option<String> {
         return Some("a resource bound through a descriptor".to_owned());
     }
     None
-}
-
-/// The words the predicated walk of `plan` adds for the constructs of its structured tree
-/// (`structurize::emit::construct_words`): the tree emission builds from the same view, here
-/// built, measured and released before emission.
-fn walk_construct_words(
-    entry: &Entry,
-    body: &Body,
-    plan: &Plan,
-    p: &simd::divergent::Predication,
-    m: &mut Meter,
-) -> Result<u64, Error> {
-    let view = crate::lower::view::EntryView::new(entry, body, plan);
-    let s = m.weighted(crate::pipeline::compile::weights::STRUCTURIZE, |m| {
-        crate::structurize::structurize(&view, m)
-    })?;
-    let words = crate::structurize::emit::construct_words(&s.tree, |b| p.syncs(b), m);
-    s.release(m);
-    words
 }
 
 /// The constant a [`NoteTest`] reads: a sampler slot's `SamplerState` word or its

@@ -9,7 +9,6 @@
 //!   kernel equals the lane of the one-texture kernel bound to its candidate (with that
 //!   candidate's size and format), and the null texture (the switch's null arm) reads zero.
 //!   Candidates differ in size and format, so the emulation's facts must be the named one's.
-//! - **The estimate bounds the emission** on every committed profile.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
@@ -443,54 +442,6 @@ fn the_shared_emulation_answers_each_candidates_own_lane() {
                     None => vec![0; size],
                 };
                 assert_eq!(got[at], want[..], "{what} lane {lane} (candidate {k})");
-            }
-        }
-    }
-}
-
-/// The plan's word estimate bounds the emitted module of each shared form over 2, 8 and 32
-/// candidates on every committed profile that admits it.
-#[test]
-fn the_shared_estimate_bounds_its_emission() {
-    use crate::budget::SPIRV_WORDS;
-    use crate::library::FunctionConstantValues;
-    use crate::lower::select::LowerInputs;
-    use crate::pipeline::compile::{compile_bitcode, plan_bitcode, EntryRef};
-    use crate::pipeline::testing::meter;
-    let profiles = crate::spirv::testing::committed_profiles().expect("profiles");
-    let nearest = Form {
-        name: "nearest repeat",
-        words: sampler(0, REPEAT, false),
-    };
-    let mut all = forms().to_vec();
-    all.push(nearest);
-    for form in all {
-        for n in [2u32, 8, 32] {
-            let name = format!("{} n={n}", form.name);
-            let Some(bc) = assemble(&name, &kernel(Some(n), form)) else {
-                return;
-            };
-            for (stem, p) in &profiles {
-                let what = format!("{name} on {stem}");
-                let (entry, consts) = (EntryRef::Name("k"), FunctionConstantValues::defaults());
-                let inputs = LowerInputs::new();
-                let plan = match plan_bitcode(&bc, entry, &consts, p, &inputs, &mut meter()) {
-                    Ok(plan) => plan,
-                    Err(e) => {
-                        assert!(stem != "lavapipe", "{what}: {e}");
-                        eprintln!("{what}: refused: {e}");
-                        continue;
-                    }
-                };
-                let a = compile_bitcode(&bc, entry, &consts, p, &inputs, &mut meter(), SPIRV_WORDS)
-                    .unwrap_or_else(|e| panic!("{what}: {e}"));
-                let emitted = a.module.words.len() as u64;
-                eprintln!("{what}: estimate {} emitted {emitted}", plan.estimate.words);
-                assert!(
-                    plan.estimate.words >= emitted,
-                    "{what}: estimate {} < emitted {emitted}",
-                    plan.estimate.words
-                );
             }
         }
     }

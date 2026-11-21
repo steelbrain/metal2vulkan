@@ -97,9 +97,6 @@ pub struct EntryPlan {
     pub stage: Stage,
     /// Each lowering strategy the plan selected: its uses, and the words it is estimated to emit.
     pub strategies: BTreeMap<String, StrategyUse>,
-    /// The size check's estimate of the module's words: a compile refuses above
-    /// `budget::SPIRV_WORDS` before it emits.
-    pub estimated_words: u64,
 }
 
 impl DeviceProfile {
@@ -184,7 +181,6 @@ impl DeviceProfile {
             plan_one(&r, self, widest, &mut m).map(|planned| EntryPlan {
                 stage: planned.plan.stage,
                 strategies: census(&planned.plan).entries,
-                estimated_words: planned.plan.estimate.words,
             })
         });
         (planned, CompileReport::of(&m))

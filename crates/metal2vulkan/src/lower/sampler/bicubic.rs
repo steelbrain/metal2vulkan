@@ -155,9 +155,7 @@ impl Bicubic {
     /// conversions; for a 2D texture the small level's test and linear sample ([`SMALL_WORDS`], its
     /// four taps' conversions on a raw sample) and each mirrored axis's pinned footprint
     /// ([`PINNED_WORDS`]), and Metal's offset rule on each axis a constant offset moves
-    /// (`position::OFFSET_RULE_WORDS`). The estimate bounds every public bicubic fixture
-    /// (`the_estimate_bounds_the_bicubic_fixtures`), every raw form
-    /// (`the_srgb_estimate_bounds_its_emission`), and the mirrored forms (`mirrored_axes`).
+    /// (`position::OFFSET_RULE_WORDS`).
     pub(super) fn words(&self) -> u32 {
         let (base, taps) = if self.linear_only() {
             (448, 2)

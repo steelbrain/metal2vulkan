@@ -731,8 +731,7 @@ fn matmads_record_their_precision() {
 
 /// Every AGX kernel compiles, links, relocates, and passes L3 on every committed profile; a
 /// multiply-add exactly where a cross-lane shuffle class has a compute tier (a subgroup tier, or
-/// emulated simdgroups), and elsewhere it is refused as that tier is. The plan's size estimate
-/// bounds the emitted words.
+/// emulated simdgroups), and elsewhere it is refused as that tier is.
 #[test]
 fn agx_kernels_compile_or_refuse_with_the_tier() {
     let mut kernels = vec![
@@ -769,13 +768,6 @@ fn agx_kernels_compile_or_refuse_with_the_tier() {
                     if *shuffles && tier == Ok(Tier::Emulated) {
                         emulated += 1;
                     }
-                    let (plan, _) = typed_module(bc, name, &p).expect("plan");
-                    let words = a.module.words.len() as u64;
-                    assert!(
-                        plan.estimate.words >= words,
-                        "{stem} {name}: estimate {} < emitted {words}",
-                        plan.estimate.words
-                    );
                     ok += 1;
                 }
                 Err(Error::Unsupported(u)) if *shuffles => {

@@ -28,29 +28,6 @@ use crate::spirv::error::{BResult, BuildError, OperandRule};
 use crate::spirv::ids::Value;
 use crate::spirv::ir::{BinOp, ConvOp, GlslOp, UnOp};
 
-/// An upper estimate of the SPIR-V words of one channel's rounding by `rule`.
-pub fn channel_words(rule: ChannelWrite) -> u64 {
-    match rule {
-        ChannelWrite::FloatTowardZero { .. } => 32 * 6,
-        // The rounding's bias and the denormal's shift clamped beside the toward-zero rule's.
-        ChannelWrite::FloatNearestEven { .. } => 36 * 6,
-        // Written as computed, or no rule [`round`] takes.
-        _ => 0,
-    }
-}
-
-/// An upper estimate of the SPIR-V words of rounding an output by `rules`, its extracts and
-/// construct included.
-pub fn words(rules: &[Option<ChannelWrite>; 4]) -> u64 {
-    let written = rules.iter().flatten().count() as u64;
-    rules
-        .iter()
-        .flatten()
-        .map(|&r| channel_words(r))
-        .sum::<u64>()
-        + written.saturating_add(1).saturating_mul(6)
-}
-
 fn malformed() -> BuildError {
     BuildError::Operand {
         op: crate::spv::Op::ExtInst,

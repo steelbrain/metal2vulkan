@@ -1776,9 +1776,8 @@ fn with_request_shared<'k, T>(
     g(&r)
 }
 
-/// Compile entry `entry` of one wrapped or raw bitcode module (`bitcode`), refusing an estimate
-/// above `word_cap` SPIR-V words before emission and a module above it after serialization
-/// (`budget::SPIRV_WORDS` in production).
+/// Compile entry `entry` of one wrapped or raw bitcode module (`bitcode`), refusing a module
+/// above `word_cap` SPIR-V words after serialization (`budget::SPIRV_WORDS` in production).
 #[cfg(test)]
 pub(crate) fn compile_bitcode(
     bitcode: &[u8],
@@ -1905,7 +1904,7 @@ pub(crate) fn compile_stage_kept(
 
 /// The [`Plan`] of entry `entry` of `bitcode`: everything [`compile_bitcode`] does before the
 /// size check (decode, specialize, analyze, select), under `catch_unwind`. For tests and
-/// measurement of the plan's own claims, such as `SizeEstimate` being an upper bound.
+/// measurement of the plan's own claims.
 #[cfg(test)]
 pub(crate) fn plan_bitcode(
     bitcode: &[u8],
@@ -3214,7 +3213,7 @@ fn lower_bounded<K>(
             merged,
             held,
         },
-    ) = stage_bound::emit(r, p, (word_cap, bounds), m)?;
+    ) = stage_bound::emit(r, p, bounds, m)?;
     let function_tables = spec.function_tables.clone();
     let reaches_command_buffers = spec.may_encode_indirect_commands();
     let command_writes = spec.command_writes();
@@ -3354,8 +3353,10 @@ fn lower_bounded<K>(
     m.release(ids.saturating_add(held));
     m.charge(module.footprint())?; // The retained words and relocations.
 
-    // The estimate refused early; the cap holds on what was emitted.
-    crate::lower::estimate::check_emitted(module.words.len(), word_cap)?;
+    // The cap holds on what was emitted.
+    if u64::try_from(module.words.len()).map_or(true, |w| w > word_cap) {
+        return Err(Error::LimitExceeded(crate::error::Limit::SpirvWords));
+    }
     let interface = stage_interface(
         &plan,
         symbols,

@@ -32,7 +32,7 @@ use crate::library::{FunctionConstantValues, Library};
 use crate::lower::select::{LowerInputs, Plan};
 use crate::metal::format::ExtendedRange;
 use crate::metal::{self, PixelFormat, TextureType};
-use crate::pipeline::compile::{compile_bitcode, plan_bitcode, EntryRef};
+use crate::pipeline::compile::{compile_bitcode, EntryRef};
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::lower_inputs::{StorageImageChoice, StorageImageClass};
 use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef};
@@ -190,8 +190,7 @@ fn profiles() -> Vec<(&'static str, crate::device::profile::DeviceProfile)> {
         .collect()
 }
 
-/// Compile the kernel `bc` under `inputs` on `p`, check that the plan's word estimate bounds the
-/// emission, and validate the linked module.
+/// Compile the kernel `bc` under `inputs` on `p` and validate the linked module.
 fn validate(
     bc: &[u8],
     inputs: &LowerInputs,
@@ -211,16 +210,8 @@ fn validate_entry(
 ) -> std::sync::Arc<crate::library::FunctionArtifact> {
     let consts = FunctionConstantValues::defaults();
     let entry = EntryRef::Name(entry);
-    let plan = plan_bitcode(bc, entry, &consts, p, inputs, &mut meter())
-        .unwrap_or_else(|e| panic!("{what}: {e}"));
     let a = compile_bitcode(bc, entry, &consts, p, inputs, &mut meter(), SPIRV_WORDS)
         .unwrap_or_else(|e| panic!("{what}: {e}"));
-    let words = a.module.words.len() as u64;
-    assert!(
-        plan.estimate.words >= words,
-        "{what}: estimate {} < emitted {words}",
-        plan.estimate.words
-    );
     link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: {e}"));
     a
 }

@@ -19,7 +19,7 @@ use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Error, InternalKind, Limit};
 use crate::library::{FunctionArtifact, FunctionConstantValues};
 use crate::lower::select::LowerInputs;
-use crate::pipeline::compile::{compile_bitcode, plan_bitcode, EntryRef};
+use crate::pipeline::compile::{compile_bitcode, EntryRef};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::{
     AccessSet, BufferForm, DescriptorView, PushLoc, SlotInterface, StageDescriptor, StageSpec,
@@ -276,9 +276,9 @@ fn typed_and_opaque_bitcode_give_identical_spirv() {
     }
 }
 
-/// An estimate above the word cap is refused before emission.
+/// A module above the word cap is refused.
 #[test]
-fn an_over_estimate_is_refused_before_emission() {
+fn a_module_above_the_word_cap_is_refused() {
     let Some(bitcode) = store_const() else { return };
     let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let a = compile(&bitcode, "store_const", &p).expect("compile");
@@ -305,43 +305,6 @@ fn an_over_estimate_is_refused_before_emission() {
     )
     .expect("compile");
     assert!(ok.module.words.len() as u64 == words);
-}
-
-/// The word cap relies on `SizeEstimate` being an upper bound of the emitted module: on every M1
-/// profile the plan's estimate is at least the artifact's word count, and a cap equal to the
-/// estimate admits the compile.
-#[test]
-fn the_estimate_bounds_the_emitted_words() {
-    let Some(bitcode) = store_const() else { return };
-    for stem in M1_PROFILES {
-        let what = stem;
-        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
-        let plan = plan_bitcode(
-            &bitcode,
-            EntryRef::Name("store_const"),
-            &FunctionConstantValues::defaults(),
-            &p,
-            &LowerInputs::new(),
-            &mut meter(),
-        )
-        .unwrap_or_else(|e| panic!("{what}: plan: {e}"));
-        let a = compile_bitcode(
-            &bitcode,
-            EntryRef::Name("store_const"),
-            &FunctionConstantValues::defaults(),
-            &p,
-            &LowerInputs::new(),
-            &mut meter(),
-            plan.estimate.words,
-        )
-        .unwrap_or_else(|e| panic!("{what}: compile at the estimate: {e}"));
-        let words = a.module.words.len() as u64;
-        assert!(
-            plan.estimate.words >= words,
-            "{what}: estimate {} < emitted {words}",
-            plan.estimate.words
-        );
-    }
 }
 
 /// A loop kernel from the public fixtures (a counted loop between a buffer load and a buffer store)

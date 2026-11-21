@@ -22,7 +22,7 @@
 //!   descriptor refusals are typed.
 //! - A `Compiled` kernel's fetches must be the pipeline descriptor's; keys take the descriptor
 //!   canonically.
-//! - Every committed profile validates the modules (L3), and the size estimate bounds them.
+//! - Every committed profile validates the modules (L3).
 //!
 //! `llvm-as` assembles the fixture; without it the tests skip visibly.
 
@@ -1660,7 +1660,7 @@ fn compiled_kernels_and_keys_follow_the_descriptor() {
     ));
 }
 
-/// The descriptors the validation and estimate checks compile under: every step.
+/// The descriptors the validation checks compile under: every step.
 fn every_step() -> Vec<StageInputDescriptor> {
     use StepFunction as S;
     vec![
@@ -1683,8 +1683,7 @@ fn every_step() -> Vec<StageInputDescriptor> {
     ]
 }
 
-/// L3 on every committed profile: each step's module links and validates wherever it compiles,
-/// and the plan's size estimate bounds its words.
+/// L3 on every committed profile: each step's module links and validates wherever it compiles.
 #[test]
 fn every_committed_profile_validates_the_fetch() {
     let Some(bc) = fixture() else { return };
@@ -1728,14 +1727,6 @@ fn every_committed_profile_validates_the_fetch() {
                 Err(e) => panic!("{stem} {entry} psb={psb} {d:?}: {e}"),
             };
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem} {entry}: {e}"));
-            let plan = plan_bitcode(&bc, EntryRef::Name(entry), &consts, &p, &i, &mut meter())
-                .expect("plan");
-            let words = a.module.words.len() as u64;
-            assert!(
-                plan.estimate.words >= words,
-                "{stem} {entry} {d:?}: estimate {} < emitted {words}",
-                plan.estimate.words
-            );
             // The artifact lists every fetched attribute with its descriptor entries.
             let listed = a
                 .interface

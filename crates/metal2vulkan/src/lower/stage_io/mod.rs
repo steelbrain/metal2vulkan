@@ -405,10 +405,6 @@ pub struct StageIoPlan {
     pub reads_grid_position: bool,
     /// Whether a kernel reads the stage-in region (`RuntimeFact::StageInRegion`).
     pub region: bool,
-    /// An upper estimate of the words the interface adds: declarations, one load per use of an
-    /// interface parameter, one fetch per pulled attribute, the output stores, and the roundings of
-    /// color outputs.
-    pub words: u64,
     /// The lanes of each color attachment's output a fragment function rounds itself
     /// (`color_write`), through an output variable or in the storage form: each by its rule, a
     /// half-float channel's under `TextureWriteRoundingMode::NearestEven`.
@@ -480,18 +476,6 @@ pub enum MergedValue {
     BaseInstance,
 }
 
-/// The words a merged draw's vertex function adds at entry: the two input builtins' variables,
-/// decorations and interface entries and their loads, the header's loads, the corner's 64-bit
-/// arithmetic, the search's loop (its variables, test, halving, load and selection), the
-/// command's draw's loads, the division and remainder, the slot table's address, the index
-/// entry's loads and the index read, and the command's output and its stores.
-pub(super) const MERGED_WORDS: u64 = 900;
-
-/// The words a merged draw's fragment function adds at entry: the command's input, its
-/// decorations and interface entry and its load, and the header's loads and the slot table's
-/// address arithmetic.
-pub(super) const MERGED_FRAGMENT_WORDS: u64 = 150;
-
 /// How a vertex function compiled under `LoweringInputs::primitive_id_varying` writes the
 /// primitive ID a fragment function reads from its varying on a device without a fragment
 /// `PrimitiveId`: at each return, `(VertexIndex - first) / n` (`vertex` is the input builtin's
@@ -520,11 +504,6 @@ pub enum FirstVertex {
     Zero,
 }
 
-/// The words a vertex function's primitive ID adds: its output variable, decorations and
-/// interface entry, the vertex index's and base vertex's inputs, their loads, the push loads and
-/// an extract, the subtraction, the division and the store.
-const PRIMITIVE_ID_WORDS: u64 = 56;
-
 /// How a vertex function compiled in the primitive ID's de-indexed form
 /// (`LoweringInputs::primitive_id_indices`) reads its vertex: its stream position
 /// `p = VertexIndex` (`vertex` is the input builtin's object; the draw starts at vertex 0) names
@@ -546,12 +525,6 @@ pub struct CapturedIndex {
     pub ty: crate::metal::IndexType,
     pub first: Option<FirstVertex>,
 }
-
-/// The words a vertex function's index read adds: its input builtin's variable, decorations and
-/// interface entry, its load, the layout's extract, the 64-bit address arithmetic, the device
-/// place (its block and pointer types, conversion and access chain), the load, a `u16`'s
-/// alignment and shift, and the base vertex's extract and add (at most 224, a `u16` read's).
-pub(super) const CAPTURED_INDEX_WORDS: u64 = 400;
 
 /// The second output (`[[color(n), index(1)]]`) a fragment function writes for an attachment held
 /// with its channels rotated (`LoweringInputs::rotated_factors`): beside its first output there,
@@ -867,22 +840,9 @@ pub(crate) fn uniform_varyings(
 }
 
 /// Complete the stage-IO plan once every instruction and parameter is selected: the per-stage
-/// interface limits and the size estimate.
+/// interface limits.
 pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     plan::finish(cx)
-}
-
-/// The words the stage interface adds to the size estimate.
-pub fn estimate_words(plan: &StageIoPlan) -> u64 {
-    plan.words
-}
-
-/// Count `words` of the fragment family's part of the stage interface (input attachments and
-/// the discard predicate's kill at each return) in the interface's size estimate. Called from
-/// `fragment::finish`, after [`finish`] computed this family's own words.
-pub fn add_interface_words(cx: &mut SelectCx<'_>, words: u64) {
-    let sp = &mut cx.families.stage_io;
-    sp.words = sp.words.saturating_add(words);
 }
 
 /// Plan the fragment's `FragCoord` input for a family that reads the invocation's pixel (the
@@ -2009,10 +1969,6 @@ pub(crate) fn metal_point_size(fb: &mut FunctionBuilder<'_>, size: SValue) -> BR
     let positive = fb.binary(BinOp::FOrdGreaterThan, size, zero)?;
     fb.select(positive, held, one)
 }
-
-/// The words [`metal_point_size`] adds to a store: the two comparisons, the two selects and the
-/// three constants.
-pub(crate) const POINT_SIZE_WORDS: u64 = 7;
 
 /// Store the primitive ID of the primitive the vertex provokes to its varying
 /// ([`PrimitiveIdStore`]): `(VertexIndex - first) / n`, `n` from

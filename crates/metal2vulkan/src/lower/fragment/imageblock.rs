@@ -151,29 +151,6 @@ pub struct ImageblockPlan {
     pub early_tests: bool,
 }
 
-/// An upper estimate of the words one view's members add (each leaf read or written, and a
-/// sub-word write's read).
-fn view_words(v: Option<&(u32, View)>) -> u64 {
-    v.map_or(0, |(_, v)| {
-        v.members.iter().map(|m| u64::from(m.leaf.cost()) * 2).sum()
-    })
-}
-
-impl ImageblockPlan {
-    /// An upper estimate of the words the imageblock adds to a function of `rets` returns: the
-    /// input view once, in the first block, and, when the function writes an output view, at
-    /// each return the pixel's load and conversion, the image load, the discard guard, and the
-    /// output view (a function without one emits nothing at its returns).
-    pub fn words_estimate(&self, rets: u64) -> u64 {
-        let at_return = if self.output.is_some() {
-            64 + view_words(self.output.as_ref())
-        } else {
-            0
-        };
-        (64 + view_words(self.input.as_ref())).saturating_add(rets.saturating_mul(at_return))
-    }
-}
-
 /// The alignment a constant byte offset guarantees (at most 16).
 fn offset_align(offset: u32) -> u64 {
     1u64 << offset.trailing_zeros().min(4)
@@ -870,9 +847,6 @@ mod tests {
     use super::*;
     use crate::air::abi::{MemberKind, UserKey};
     use crate::air::error::DiagName;
-    use crate::lower::arith::{Form, Held};
-    use crate::memory::leaf::Path;
-    use crate::spirv::ids::ScalarTy;
 
     fn member(offset: u32, key: &str, layout: Option<u32>) -> Member {
         Member {
@@ -936,55 +910,5 @@ mod tests {
             members: vec![member(0, "self", Some(0))],
         }];
         assert!(fingerprint(&cycle, StructRef(0), 16).is_none());
-    }
-
-    fn view(members: u32) -> View {
-        let leaf = Leaf {
-            form: Form {
-                held: Held::Int {
-                    bits: 32,
-                    container: 32,
-                },
-                lanes: 1,
-            },
-            bytes: 4,
-            path: Path::Aligned,
-        };
-        View {
-            members: (0..members)
-                .map(|i| ViewMember {
-                    field: i,
-                    leaf,
-                    offset: i * 4,
-                })
-                .collect(),
-            ty: DemoteTy::Scalar(ScalarTy::Int { bits: 32 }),
-        }
-    }
-
-    /// The estimate counts the input view once and the output view at every return; a function
-    /// without an output view emits nothing at its returns.
-    #[test]
-    fn the_estimate_scales_the_output_view_with_the_returns() {
-        let input = ImageblockPlan {
-            input: Some((0, view(2))),
-            ..ImageblockPlan::default()
-        };
-        assert_eq!(input.words_estimate(1), input.words_estimate(7));
-        let output = ImageblockPlan {
-            output: Some((0, view(2))),
-            ..ImageblockPlan::default()
-        };
-        let (one, three) = (output.words_estimate(1), output.words_estimate(3));
-        let per_return = one - output.words_estimate(0);
-        assert!(per_return > 64, "{per_return}");
-        assert_eq!(three, output.words_estimate(0) + 3 * per_return);
-        let wider = ImageblockPlan {
-            output: Some((0, view(4))),
-            ..ImageblockPlan::default()
-        };
-        assert!(
-            wider.words_estimate(3) - wider.words_estimate(0) > three - output.words_estimate(0)
-        );
     }
 }

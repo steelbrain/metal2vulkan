@@ -135,11 +135,6 @@ fn nan_kept(f: Form) -> bool {
     !matches!(f.float_fmt(), Some(FloatFmt::F32 | FloatFmt::Half))
 }
 
-/// The words of the planned roundings, each emitted once per return.
-pub(super) fn words(rounded: impl IntoIterator<Item = [Option<ChannelWrite>; 4]>) -> u64 {
-    rounded.into_iter().map(|r| color_write::words(&r)).sum()
-}
-
 /// Output `x` (form `f`) to color attachment `color`, each lane the plan rounds rounded to nearest
 /// even (`color_writes::HALF_NEAREST`), the others as computed.
 pub(crate) fn round(

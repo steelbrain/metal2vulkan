@@ -1,7 +1,7 @@
 //! The killable worker boundary of validation sweeps.
 //!
 //! The engine is in-process only: it enforces its budgets deterministically (work units, the
-//! byte ledger, the pre-emission size estimate, a transient wall deadline). The validation worker
+//! byte ledger, the emitted-words cap, a transient wall deadline). The validation worker
 //! is the backstop around it: one attempt per child process, supervised as a process group under
 //! the 20-second and 500-MiB ceilings ([`process`]), with a counting global allocator ([`alloc`])
 //! that both enforces the byte budget inside the child and measures the peak attributable bytes

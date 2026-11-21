@@ -15,8 +15,8 @@
 //! words: the partial threadgroup's `threads_per_threadgroup`, its threads' positions and indices
 //! over its own size, its simdgroups' indices, and, behind a threadgroup barrier, a neighbour's
 //! threadgroup word and its simdgroup's sum over the live lanes alone. The variant's module passes
-//! `spirv-val`, holds no workgroup barrier in a block its own uniformity does not prove uniform,
-//! and is within its estimate; where its simdgroups are emulated it is refused
+//! `spirv-val` and holds no workgroup barrier in a block its own uniformity does not prove
+//! uniform; where its simdgroups are emulated it is refused
 //! (`Unsupported{GpuEncodedIndirectCommands, NotImplemented}`), so the split stays. No GPU is used.
 //!
 //! `llvm-as` assembles the kernels; a missing tool skips visibly.
@@ -323,8 +323,7 @@ fn grid_of(d: &Dispatch) -> ([u32; 3], [u32; 3]) {
 /// every dispatch of `grids` (the dispatch, the split's regions, the variant's): both give
 /// Metal's words, on the region counts given, and every region of the variant's plan of a
 /// threadgroup size takes one specialization, whatever its grid. The variant's module is valid,
-/// walks no workgroup barrier in non-uniform control flow, is within its estimate and states its
-/// fact. `false` where the variant is refused or its key would emulate simdgroups (the split
+/// walks no workgroup barrier in non-uniform control flow and states its fact. `false` where the variant is refused or its key would emulate simdgroups (the split
 /// stays).
 fn check(
     stem: &str,
@@ -356,14 +355,8 @@ fn check(
                 "{stem} {entry}: the variant's fact"
             );
             link_and_validate(&a, dev.profile()).unwrap_or_else(|e| panic!("{stem} {entry}: {e}"));
-            let (plan, tm) =
+            let (_, tm) =
                 typed_module_with(bc, entry, dev.profile(), &inputs).expect("typed module");
-            assert!(
-                plan.estimate.words >= a.module.words.len() as u64,
-                "{stem} {entry}: estimate {} < emitted {}",
-                plan.estimate.words,
-                a.module.words.len()
-            );
             let report = workgroup_barriers(&tm).expect("barriers");
             assert!(
                 report.nonuniform.is_empty(),

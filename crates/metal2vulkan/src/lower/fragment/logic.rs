@@ -95,13 +95,6 @@ pub struct LogicChannels {
     pub bits: [Option<u32>; 4],
 }
 
-/// An upper estimate of the words one channel's operation adds: the two codes, the operation, the
-/// mask and the value written.
-const CHANNEL_WORDS: u64 = 64;
-
-/// An upper estimate of the words the operation of one write adds.
-pub(crate) const WRITE_WORDS: u64 = 4 * CHANNEL_WORDS + 24;
-
 /// The channels of a color attachment of `pf` whose logic operation the function computes (see
 /// the module docs): every channel an 8-, 10- or 16-bit unorm one (a 10-bit format's alpha 2-bit),
 /// an 8- or 16-bit snorm one, or an 8-, 16- or 32-bit integer one; `None` for another format.
@@ -536,13 +529,6 @@ pub(crate) fn input_operated(
     };
     let texel = super::color::input_texel(cx, fb, color)?;
     operated(fb, li.op, li.channels, (form, part), texel)
-}
-
-/// The words the planned operations add at `rets` returns: one input attachment each, and at
-/// each return the read and the operation.
-pub(super) fn words(cx: &SelectCx<'_>, rets: u64) -> u64 {
-    let planned = cx.families.fragment.logic_inputs.len() as u64;
-    planned.saturating_mul(32u64.saturating_add(WRITE_WORDS.saturating_mul(rets.max(1))))
 }
 
 #[cfg(test)]

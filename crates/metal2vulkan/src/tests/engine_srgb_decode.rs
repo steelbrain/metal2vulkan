@@ -10,7 +10,7 @@
 //!   outright. (The interpreter models no `Pow`, so no decoded value is run here.)
 //! - The binder joins a slot to the plan's variant exactly where the device holds the bound
 //!   format's twin, and its views then view the twin; elsewhere they view the sRGB format.
-//! - The plan's word estimate bounds the emission of every form on every committed profile.
+//! - Every form validates on every committed profile.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
@@ -27,7 +27,7 @@ use crate::lower::select::LowerInputs;
 use crate::metal::format::bound_texel_format;
 use crate::metal::texel_format::srgb_twin_on;
 use crate::metal::{self, PixelFormat, TextureType};
-use crate::pipeline::compile::{compile_bitcode, plan_bitcode, EntryRef};
+use crate::pipeline::compile::{compile_bitcode, EntryRef};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::sym::{SlotClass, SlotRef, SpecKey, Stage};
 use crate::pipeline::testing::{
@@ -515,11 +515,10 @@ declare {{ {vec4}, i8 }} @air.sample_texture_{name}.{suffix}({args})
     )
 }
 
-/// The plan's word estimate bounds the emitted module of every access, with the slot in the
-/// variant (decoding the twin's codes) and without (the device's decode), on every committed
-/// profile, and every form validates there.
+/// Every access compiles and validates, with the slot in the variant (decoding the twin's codes)
+/// and without (the device's decode), on every committed profile.
 #[test]
-fn the_srgb_estimate_bounds_its_emission() {
+fn every_srgb_form_validates() {
     let consts = FunctionConstantValues::defaults();
     let forms = [
         ("read half", Access::Read, true),
@@ -586,17 +585,8 @@ fn the_srgb_estimate_bounds_its_emission() {
         {
             let what = format!("{name}{twin} on {stem}");
             let entry = EntryRef::Name("k");
-            let plan = plan_bitcode(&bc, entry, &consts, &p, &under, &mut meter())
-                .unwrap_or_else(|e| panic!("{what}: {e}"));
             let a = compile_bitcode(&bc, entry, &consts, &p, &under, &mut meter(), SPIRV_WORDS)
                 .unwrap_or_else(|e| panic!("{what}: {e}"));
-            let words = a.module.words.len() as u64;
-            eprintln!("{what}: estimate {} emitted {words}", plan.estimate.words);
-            assert!(
-                plan.estimate.words >= words,
-                "{what}: estimate {} < emitted {words}",
-                plan.estimate.words
-            );
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
         }
     }

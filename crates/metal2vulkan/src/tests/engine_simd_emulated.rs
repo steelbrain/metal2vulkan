@@ -763,17 +763,10 @@ fn run_expected(stem: &str, kernel: &str, plan: &Plan, m: &TypedModule, locals: 
 }
 
 /// L3: the kernel links, relocates, and passes `spirv-val` under the profile, and uses no
-/// subgroup instruction or capability. The plan's size estimate bounds the emitted words.
+/// subgroup instruction or capability.
 fn validate(stem: &str, bc: &[u8], kernel: &str) {
     let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
     let a = compile(bc, kernel, &p).unwrap_or_else(|e| panic!("{stem} {kernel}: {e}"));
-    let (plan, _) = typed_module(bc, kernel, &p).expect("plan");
-    let emitted = a.module.words.len() as u64;
-    assert!(
-        plan.estimate.words >= emitted,
-        "{stem} {kernel}: estimate {} < emitted {emitted}",
-        plan.estimate.words
-    );
     let (_, words) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem} {kernel}: {e}"));
     let text = spirv_dis(&words);
     assert!(
@@ -1756,76 +1749,6 @@ fn one_row_key() -> VariantKey {
     key
 }
 
-/// `simd_divergent`'s `guard_k` (a simdgroup sum in divergent control flow) followed by `stages`
-/// diamonds of plain arithmetic, each a branch on a per-thread value and a phi: a large body whose
-/// predicated walk synchronizes in one block.
-fn large_body(stages: u32) -> Option<Vec<u8>> {
-    let text = std::fs::read_to_string(engine_dir().join("simd_divergent.ll")).expect("read");
-    let start = text.find("define void @guard_k(").expect("guard_k");
-    let merge = start + text[start..].find("\n16:").expect("guard_k's merge") + 1;
-    let end = merge + text[merge..].find("\n}\n").expect("guard_k's end") + 1;
-    let mut body = String::from("16:\n  br label %s0\n");
-    let mut prev = String::from("%2");
-    for i in 0..stages {
-        let next = i + 1;
-        body += &format!(
-            "s{i}:\n  %k{i} = and i32 {prev}, 7\n  %c{i} = icmp ult i32 %k{i}, 3\n  \
-             br i1 %c{i}, label %a{i}, label %b{i}\n\
-             a{i}:\n  %y{i} = mul i32 {prev}, 3\n  br label %m{i}\n\
-             b{i}:\n  %z{i} = add i32 {prev}, {next}\n  br label %m{i}\n\
-             m{i}:\n  %w{i} = phi i32 [ %y{i}, %a{i} ], [ %z{i}, %b{i} ]\n  br label %s{next}\n"
-        );
-        prev = format!("%w{i}");
-    }
-    body += &format!(
-        "s{stages}:\n  %at = zext i32 %2 to i64\n  \
-         %out = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %at\n  \
-         store i32 {prev}, ptr addrspace(1) %out, align 4\n  ret void\n"
-    );
-    let text = format!("{}{body}{}", &text[..merge], &text[end..]);
-    assemble_text(&format!("large-body-{stages}"), &text)
-}
-
-/// A large body under the emulated-simdgroups input ([`large_body`]): its estimate bounds the
-/// words it emits and stays within a small multiple of them (the walk is charged per construct it
-/// emits), so it compiles under a words cap of that multiple of its emitted size.
-#[test]
-fn a_large_predicated_body_compiles_under_a_cap_it_fits() {
-    let Some(bc) = large_body(256) else {
-        return;
-    };
-    let p = profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("profile");
-    let inputs = emulated_inputs();
-    let (plan, _) = typed_module_with(&bc, "guard_k", &p, &inputs).expect("plan");
-    assert!(
-        plan.families.simd.predication.is_some(),
-        "walked predicated"
-    );
-    let a = crate::pipeline::testing::compile_with(&bc, "guard_k", &p, &inputs).expect("compile");
-    let emitted = a.module.words.len() as u64;
-    assert!(
-        plan.estimate.words >= emitted,
-        "estimate {} < emitted {emitted}",
-        plan.estimate.words
-    );
-    let cap = 8 * emitted;
-    let capped = crate::pipeline::compile::compile_bitcode(
-        &bc,
-        crate::pipeline::compile::EntryRef::Name("guard_k"),
-        &crate::library::FunctionConstantValues::defaults(),
-        &p,
-        &inputs,
-        &mut crate::pipeline::testing::meter(),
-        cap,
-    );
-    assert!(
-        capped.is_ok(),
-        "estimate {} under cap {cap} (emitted {emitted}): {:?}",
-        plan.estimate.words,
-        capped.err()
-    );
-}
-
 /// `kernel` of `bc` on `DIRECT`: its own tier is `Direct` with a multiple-of-32 constraint, and
 /// under the emulated-simdgroups input the `Emulated` tier, which depends on the variant, passes
 /// L3 without a subgroup instruction, and gives the reading (a partial simdgroup's active lanes are
@@ -1866,10 +1789,6 @@ fn run_variant(bc: &[u8], kernel: &str, words: Option<u32>) {
         )
         .unwrap_or_else(|e| panic!("{kernel}: {e}"));
     let a = compiled.artifact();
-    assert!(
-        plan.estimate.words >= a.module.words.len() as u64,
-        "{kernel}"
-    );
     assert_eq!(a.subgroup, SubgroupRequirement::NONE, "{kernel}");
     let (_, words) = link_and_validate(a, p).unwrap_or_else(|e| panic!("{kernel}: {e}"));
     let text = spirv_dis(&words);

@@ -215,7 +215,7 @@ pub(super) struct Texels<'a> {
 
 /// The samples kernel `bc` takes on `p` of `tex` in `form` at `coords`, through a runtime
 /// sampler of word `word` where it has one: each result's lanes as bits (`half` lanes where
-/// `half`). The compile is validated, and the plan's estimate bounds it.
+/// `half`). The compile is validated.
 fn sample(
     bc: &[u8],
     p: &crate::device::profile::DeviceProfile,

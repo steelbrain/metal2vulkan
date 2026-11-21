@@ -541,19 +541,6 @@ pub struct DispatchPlan {
     pub private_arena: bool,
 }
 
-/// The words a flat grid adds: its thread's index, position, and early return, derived once for the
-/// return and once more for a `thread_position_in_grid` parameter.
-pub const FLAT_GRID_WORDS: u64 = 400;
-
-/// The words a folded variant adds: its threadgroup's index, position, and early return, derived
-/// once for the return and once more for each grid position parameter.
-pub const FOLDED_GROUPS_WORDS: u64 = 500;
-
-/// The words a kernel's partial threadgroups add per derivation of their threads (the region's
-/// flag, the threadgroup's position and threads, and the test or the position over them): once
-/// for the test before the body, and once more for each builtin parameter.
-pub const PARTIAL_THREADGROUPS_WORDS: u64 = 300;
-
 /// The dispatch family's module-scope objects: the kernel's, when the plan has one.
 #[derive(Clone, Debug, Default)]
 pub struct Declared {

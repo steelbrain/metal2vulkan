@@ -27,17 +27,14 @@ use crate::device::profile::DeviceProfile;
 use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Capability, Error, Feature, Unsupported};
-use crate::library::FunctionConstantValues;
-use crate::lower::select::{LowerInputs, Plan};
-use crate::pipeline::compile::{plan_bitcode, EntryRef};
+use crate::lower::select::Plan;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{
     Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage, SyntheticBinding,
 };
 use crate::pipeline::testing::{
-    compile, fixtures_dir, link_and_validate, llvm_assemble, meter, profile, typed_module,
-    AssembleError,
+    compile, fixtures_dir, link_and_validate, llvm_assemble, profile, typed_module, AssembleError,
 };
 use crate::spirv::interp::{run, Buffer, Config, InterpError, Order, Resources, TrapKind};
 use crate::spirv::ir::{GlobalKind, TypedModule};
@@ -122,26 +119,10 @@ fn fixture(name: &str) -> Option<Vec<u8>> {
     }
 }
 
-/// Compile entry `entry` of `bc` for `prof`, pass L3, and check that the plan's size estimate
-/// bounds the emitted words.
+/// Compile entry `entry` of `bc` for `prof` and pass L3.
 fn l3(bc: &[u8], entry: &str, prof: &DeviceProfile, what: &str) {
     let a = compile(bc, entry, prof).unwrap_or_else(|e| panic!("{what}: compile: {e}"));
     link_and_validate(&a, prof).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-    let plan = plan_bitcode(
-        bc,
-        EntryRef::Name(entry),
-        &FunctionConstantValues::defaults(),
-        prof,
-        &LowerInputs::new(),
-        &mut meter(),
-    )
-    .unwrap_or_else(|e| panic!("{what}: plan: {e}"));
-    let words = a.module.words.len() as u64;
-    assert!(
-        plan.estimate.words >= words,
-        "{what}: estimate {} < emitted {words}",
-        plan.estimate.words
-    );
 }
 
 fn to_bytes(words: &[u32]) -> Vec<u8> {

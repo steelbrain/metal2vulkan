@@ -4,7 +4,7 @@
 //! enum, defined in the family module. A family whose lowering has not landed has an empty
 //! (uninhabited) enum: its `select` refuses, so no plan ever holds one, and every match over it
 //! is total by construction. Each variant of a family enum has exactly one emit function (the
-//! family's `emit`), a word cost for `SizeEstimate`, and a stable name for the `StrategyCensus`.
+//! family's `emit`), and a stable name and a word cost for the `StrategyCensus`.
 //!
 //! Interface-level lowering (stage IO, dispatch builtins, push fields) is planned per entry, not
 //! per instruction, so it has no variant here.

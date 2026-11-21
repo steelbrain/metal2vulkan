@@ -4,8 +4,8 @@
 //! handle's class index names.
 //!
 //! - On every committed profile with a sampled heap, a `float` or `half` read declares the float
-//!   class and its unsigned integer twin, defines the decode routine once, stays inside the
-//!   plan's word estimate, and passes L3; a query alone declares the twin and no routine.
+//!   class and its unsigned integer twin, defines the decode routine once, and passes L3; a
+//!   query alone declares the twin and no routine.
 //! - A read of an unsigned integer heap group declares no twin and no routine, its query its own
 //!   class's; it declares the float class, which holds a member of a float format that it reads in
 //!   that member's own class.
@@ -124,7 +124,7 @@ fn sampled_2d(ty: SampledType) -> impl Fn(&ImageHandleClass) -> bool {
 }
 
 /// Each use on every committed profile with a sampled heap (the others refuse the argument
-/// buffer's texture): the classes it declares, the routine, the word estimate, and L3.
+/// buffer's texture): the classes it declares, the routine, and L3.
 #[test]
 fn heap_reads_reach_a_raw_member_through_the_unsigned_twin() {
     let consts = FunctionConstantValues::defaults();
@@ -153,14 +153,6 @@ fn heap_reads_reach_a_raw_member_through_the_unsigned_twin() {
                 })) => continue,
                 Err(e) => panic!("{what}: {e}"),
             };
-            let plan = plan_bitcode(&bc, entry, &consts, &p, &inputs, &mut meter())
-                .unwrap_or_else(|e| panic!("{what}: {e}"));
-            let words = a.module.words.len() as u64;
-            assert!(
-                plan.estimate.words >= words,
-                "{what}: estimate {} < emitted {words}",
-                plan.estimate.words
-            );
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
             let classes = heap_classes(&a);
             let float = classes
@@ -299,7 +291,7 @@ define void @k(ptr addrspace(1) %out, ptr addrspace(2) %m, {param}i32 %gid) {{
 /// group's unsigned integer class (`sampler::heap_raw`), on every committed profile with a
 /// sampled heap: a constexpr sampler's nearest or linear sample, `float` or `half`, and its
 /// `float` gather declare the twin, define the decode routine, state no
-/// `RuntimeFact::HeapRawSamples`, stay inside the plan's word estimate, and pass L3; a `half`
+/// `RuntimeFact::HeapRawSamples`, and pass L3; a `half`
 /// gather (its non-bfloat forms not measured) and a sample through a runtime sampler slot
 /// declare the twin too and state the fact (with no slot, and naming slot 0); a sample through a
 /// mip-filtered constexpr sampler declares no twin and states the fact with no slot.
@@ -341,14 +333,6 @@ fn heap_samples_reach_a_raw_member_through_the_unsigned_twin() {
                 })) => continue,
                 Err(e) => panic!("{what}: {e}"),
             };
-            let plan = plan_bitcode(&bc, entry, &consts, &p, &inputs, &mut meter())
-                .unwrap_or_else(|e| panic!("{what}: {e}"));
-            let words = a.module.words.len() as u64;
-            assert!(
-                plan.estimate.words >= words,
-                "{what}: estimate {} < emitted {words}",
-                plan.estimate.words
-            );
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
             let classes = heap_classes(&a);
             let uint = classes

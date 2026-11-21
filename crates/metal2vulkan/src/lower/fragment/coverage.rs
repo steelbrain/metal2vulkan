@@ -92,11 +92,6 @@ pub struct CoveragePlan {
     pub samples_before_loop: Option<u32>,
 }
 
-/// An upper estimate of the words the looping entry adds around the body function: its function
-/// type, the entry function, the loop's blocks and merges, the mask's load, the bit's extraction,
-/// the call, the `rest` variable's loads and stores, and the union of the kept samples.
-pub(super) const LOOP_WORDS: u64 = 144;
-
 fn invariant(msg: &'static str) -> Error {
     Error::Internal(InternalError::new(InternalKind::Invariant, msg))
 }

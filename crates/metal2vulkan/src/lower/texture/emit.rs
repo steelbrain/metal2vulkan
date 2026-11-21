@@ -1193,15 +1193,14 @@ pub(crate) fn srgb_raw_tap(fb: &mut FunctionBuilder<'_>, x: SValue) -> BResult<S
     crate::lower::arith::pack::srgb_decode_texel(fb, x, SRGB_TEXEL)
 }
 
-/// The words [`srgb_raw_tap`] emits, at most: the transfer's steps on the color lanes
-/// (`the_srgb_estimate_bounds_its_emission`).
+/// The words [`srgb_raw_tap`] emits, at most: the transfer's steps on the color lanes.
 pub(crate) const SRGB_TAP_WORDS: u32 = crate::lower::arith::pack::SRGB_DECODE_TEXEL_WORDS;
 
 /// The color lanes of an sRGB texel ([`srgb_texel`]): red, green, and blue.
 pub(crate) const SRGB_TEXEL: [bool; 4] = [true, true, true, false];
 
 /// The words [`srgb_texel`] emits, at most: the transfer's steps, a `half` result's rounding, and
-/// the lane's extraction (`the_srgb_estimate_bounds_its_emission`).
+/// the lane's extraction.
 pub(crate) const SRGB_DECODE_WORDS: u32 =
     crate::lower::arith::pack::SRGB_DECODE_TEXEL_WORDS + 64 + 4 * 4 + 8;
 
@@ -1613,9 +1612,6 @@ fn shared_exponent_word(
     let v4 = vec(fb, u, 4)?;
     fb.composite_construct(v4, &[word, zero, zero, zero])
 }
-
-/// An upper estimate of the SPIR-V words of one [`rgb9e5_word`].
-pub(crate) const RGB9E5_WORDS: u64 = 3 * 8 * 7 + 3 * 7 * 7 + 16 * 7;
 
 /// The `RGB9E5Float` word, a `u32`, Metal stores for the red, green and blue `f32` lanes of `x` (a
 /// vector of at least three; a kernel's write, a `float` output's store into a word attachment,

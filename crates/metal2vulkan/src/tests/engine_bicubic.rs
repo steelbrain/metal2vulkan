@@ -1379,48 +1379,6 @@ fn the_footprint_arithmetic_is_no_contraction() {
     }
 }
 
-/// The plan's word estimate bounds the emitted module of every public bicubic fixture (its samples'
-/// call sites, and the routines once) on every committed profile.
-#[test]
-fn the_estimate_bounds_the_bicubic_fixtures() {
-    use crate::budget::SPIRV_WORDS;
-    use crate::library::FunctionConstantValues;
-    use crate::lower::select::LowerInputs;
-    use crate::pipeline::compile::{compile_bitcode, plan_bitcode, EntryRef};
-    use crate::pipeline::testing::meter;
-    let fixtures = [
-        "bcu_address",
-        "bcu_edges",
-        "bcu_formats",
-        "bcu_forms",
-        "bcu_fragment",
-        "bcx_rules",
-        "bcx_table",
-    ];
-    for name in fixtures {
-        let Ok(bc) = llvm_assemble(&engine_dir().join(format!("{name}.ll"))) else {
-            eprintln!("SKIPPED: llvm-as");
-            return;
-        };
-        for (stem, p) in crate::spirv::testing::committed_profiles().expect("profiles") {
-            let what = format!("{name} on {stem}");
-            let (entry, consts) = (EntryRef::Name(name), FunctionConstantValues::defaults());
-            let inputs = LowerInputs::new();
-            let plan = plan_bitcode(&bc, entry, &consts, &p, &inputs, &mut meter())
-                .unwrap_or_else(|e| panic!("{what}: {e}"));
-            let a = compile_bitcode(&bc, entry, &consts, &p, &inputs, &mut meter(), SPIRV_WORDS)
-                .unwrap_or_else(|e| panic!("{what}: {e}"));
-            let words = a.module.words.len() as u64;
-            eprintln!("{what}: estimate {} emitted {words}", plan.estimate.words);
-            assert!(
-                plan.estimate.words >= words,
-                "{what}: estimate {} < emitted {words}",
-                plan.estimate.words
-            );
-        }
-    }
-}
-
 /// A 2D bicubic sample is one call of the plane's routine (its sixteen taps, four fractions, the
 /// bilinear test and the format's bits: 22 parameters), whose sum is the device's arithmetic: no
 /// other routine of the old fixed-point datapath (the small level's separate quad call, the weights'

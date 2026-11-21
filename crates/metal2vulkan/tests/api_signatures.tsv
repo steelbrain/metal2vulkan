@@ -2922,7 +2922,6 @@ field	metal2vulkan::pipeline::EntryDescriptor.bitcode	pub bitcode: &'a [u8]
 field	metal2vulkan::pipeline::EntryDescriptor.constants	pub constants: FunctionConstantValues
 field	metal2vulkan::pipeline::EntryDescriptor.entry	pub entry: EntryRef<'a>
 field	metal2vulkan::pipeline::EntryDescriptor.linked	pub linked: Vec<LinkedSource<'a>>
-field	metal2vulkan::pipeline::EntryPlan.estimated_words	pub estimated_words: u64
 field	metal2vulkan::pipeline::EntryPlan.stage	pub stage: Stage
 field	metal2vulkan::pipeline::EntryPlan.strategies	pub strategies: BTreeMap<String, StrategyUse>
 field	metal2vulkan::pipeline::ExtendedRangeColor.blended	pub blended: bool

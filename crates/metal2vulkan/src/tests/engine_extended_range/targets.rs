@@ -5,8 +5,8 @@
 //! - On every committed profile, a fragment function compiled for a pipeline with such an
 //!   attachment (`rt6_fill_rgba32float`, `rt6_fill_rgba16float`) records the attachment
 //!   (`StageIo::extended_range_colors`), keeps its interface variable's Metal type, declares the
-//!   output variable as the raw format's unsigned components, bounds its emission by the plan's
-//!   estimate, and links: the attachment takes the raw format, a write of every raw component
+//!   output variable as the raw format's unsigned components, and links: the attachment takes
+//!   the raw format, a write of every raw component
 //!   under a full mask and of none under an empty one, no blend, and both modules pass L3.
 //! - A blended attachment the function does not write (no fragment function) links with no blend
 //!   and an empty mask, as Metal leaves an unwritten attachment; one it writes is refused
@@ -145,7 +145,6 @@ fn fragment_outputs_to_extended_range_targets_write_raw_texels() {
     let Some(bc) = fixture() else {
         return;
     };
-    let consts = FunctionConstantValues::defaults();
     for stem in VENUES {
         let p = venue(stem);
         let v = compile(&bc, "rt6_fill_vertex", &p).expect("vertex");
@@ -203,21 +202,6 @@ fn fragment_outputs_to_extended_range_targets_write_raw_texels() {
                         (color.ty.numeric, color.ty.components),
                         (IoNumeric::Float, 4),
                         "{what}"
-                    );
-                    let plan = plan_bitcode(
-                        &bc,
-                        EntryRef::Name(entry),
-                        &consts,
-                        &p,
-                        &inputs,
-                        &mut meter(),
-                    )
-                    .unwrap_or_else(|e| panic!("{what}: {e}"));
-                    assert!(
-                        plan.estimate.words >= f.module.words.len() as u64,
-                        "{what}: estimate {} < emitted {}",
-                        plan.estimate.words,
-                        f.module.words.len()
                     );
                     let g = l.graphics.as_ref().expect("graphics");
                     let a = g.color_attachments[0].expect("attachment");

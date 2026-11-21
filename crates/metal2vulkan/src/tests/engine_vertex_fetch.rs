@@ -26,7 +26,7 @@ use crate::error::{Error, Feature, LowerFamily, Needs};
 use crate::library::{FunctionArtifact, FunctionConstantValues};
 use crate::lower::select::Plan;
 use crate::metal::{VertexFormat, VertexStepFunction};
-use crate::pipeline::compile::{compile_bitcode, plan_bitcode, EntryRef};
+use crate::pipeline::compile::{compile_bitcode, EntryRef};
 use crate::pipeline::descriptor::{
     VertexAttributeDescriptor, VertexBufferLayoutDescriptor, VertexDescriptor,
 };
@@ -143,22 +143,6 @@ fn shared_pulled(rate: u32) -> VertexFetchProjection {
         .insert(0, pulled(VertexFormat::Float3, 0, 1, S::PerVertex, 1));
     proj.attributes
         .insert(1, pulled(VertexFormat::Half2, 12, 1, S::PerVertex, 1));
-    proj
-}
-
-/// [`all_pulled`] with the position and uv in normalized formats (signed 10:10:10:2 and SNORM16),
-/// whose correctly rounded quotients are the dearest per-lane decode.
-fn normalized_pulled(rate: u32) -> VertexFetchProjection {
-    use VertexStepFunction as S;
-    let mut proj = all_pulled(rate);
-    proj.attributes.insert(
-        0,
-        pulled(VertexFormat::Int1010102Normalized, 0, 0, S::PerVertex, 1),
-    );
-    proj.attributes.insert(
-        1,
-        pulled(VertexFormat::Short2Normalized, 12, 0, S::PerVertex, 1),
-    );
     proj
 }
 
@@ -518,46 +502,6 @@ fn integer_formats_feed_float_attributes() {
     }
 }
 
-/// The plan's size estimate bounds the emitted words with every attribute pulled, through views, a
-/// shared slot, and (where the profile has them) device addresses, and with normalized formats'
-/// exact quotients.
-#[test]
-fn the_estimate_bounds_pulled_fetches() {
-    let Some(bc) = fixture() else { return };
-    for stem in PROFILES {
-        let p = prof(stem);
-        let mut variant = inputs(both_pulled(3));
-        variant.psb_slots = [0, 1, 2, 3].into_iter().map(slot).collect();
-        let mut cases = vec![
-            inputs(all_pulled(3)),
-            inputs(shared_pulled(3)),
-            inputs(normalized_pulled(3)),
-        ];
-        if p.fields().buffer_access == BufferAccess::Addressed {
-            cases.push(variant);
-        }
-        for i in cases {
-            let plan = plan_bitcode(
-                &bc,
-                EntryRef::Name(ENTRY),
-                &FunctionConstantValues::defaults(),
-                &p,
-                &i,
-                &mut meter(),
-            )
-            .expect("plan");
-            let a = compile_inputs(&bc, &p, &i).expect("compile");
-            let words = a.module.words.len() as u64;
-            assert!(
-                plan.estimate.words >= words,
-                "{stem} {:?}: estimate {} < emitted {words}",
-                i.psb_slots,
-                plan.estimate.words
-            );
-        }
-    }
-}
-
 /// A source buffer whose Metal index is also the function's `scale` argument reads through the
 /// argument's slot. The slot is bound once, as a `Whole` storage buffer (alone, `scale` is a
 /// `Bounded` window, a uniform view where the profile's containment allows one), read-only and
@@ -841,8 +785,7 @@ const ATOMIC_DECL: &str =
 /// runs once before the body, so the function's accesses never reach the attribute. The shared slot
 /// is one `Whole`, read-write storage binding (not `NonWritable`), or a `Psb` slot in the
 /// `BufferRangeLimit` variant, and passes L3, on every profile with
-/// `vertexPipelineStoresAndAtomics` (the others refuse the store by name, as alone); the size
-/// estimate bounds the emitted words.
+/// `vertexPipelineStoresAndAtomics` (the others refuse the store by name, as alone).
 #[test]
 fn a_written_or_atomic_argument_shares_its_slot() {
     let (Some(write), Some(atomic)) = (
@@ -871,21 +814,6 @@ fn a_written_or_atomic_argument_shares_its_slot() {
                 }
                 let a = r.unwrap_or_else(|e| panic!("{what}: {e}"));
                 validate(&a, &p);
-                let plan = plan_bitcode(
-                    bc,
-                    EntryRef::Name("probe"),
-                    &FunctionConstantValues::defaults(),
-                    &p,
-                    &i,
-                    &mut meter(),
-                )
-                .unwrap_or_else(|e| panic!("{what}: {e}"));
-                let words = a.module.words.len() as u64;
-                assert!(
-                    plan.estimate.words >= words,
-                    "{what}: estimate {} < emitted {words}",
-                    plan.estimate.words
-                );
                 let s = buffer_slot(&a, 1).expect("buf's slot");
                 assert!(s.access.write, "{what}: {s:?}");
                 if how == "alone" {

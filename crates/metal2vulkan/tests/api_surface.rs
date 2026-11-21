@@ -1452,10 +1452,6 @@ fn one_entry_of_a_bare_module_translates_through_the_public_api() {
         let (plan, _) = profile.plan_entry(&entry, &none, &budget);
         let plan = plan.expect("plan");
         assert_eq!(plan.stage, Stage::Kernel, "{stem}");
-        assert!(
-            plan.estimated_words >= alone.words.len() as u64,
-            "{stem}: the estimate bounds the module"
-        );
         let specialized = profile
             .specialized_entry(&entry, &none, &budget)
             .expect("entry");

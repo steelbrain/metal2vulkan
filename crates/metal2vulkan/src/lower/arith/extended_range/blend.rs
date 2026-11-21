@@ -148,21 +148,6 @@ impl NativeBlend {
     pub fn reads_second(&self) -> bool {
         self.factors().into_iter().any(second_factor)
     }
-
-    /// An upper estimate of the SPIR-V words of [`native`]: the clamps of the source, the second
-    /// source and the blend color, and per class two factors, two products and the operation.
-    pub fn words(&self) -> u32 {
-        const CLAMP: u32 = 8 * 6;
-        const CLASS: u32 = 12 * 6;
-        let mut words = CLAMP + 3 * 6;
-        if self.reads_second() {
-            words += CLAMP;
-        }
-        if self.reads_constant() {
-            words += CLAMP + 2 * 6;
-        }
-        words + CLASS * (u32::from(self.color) + u32::from(self.alpha))
-    }
 }
 
 /// The values a native blend's factors read, `vec4`s of `f32`.
@@ -1367,51 +1352,6 @@ impl Blend {
             .into_iter()
             .flatten()
             .any(|a| nodes(a).into_iter().any(second))
-    }
-
-    /// An upper estimate of the SPIR-V words of the blend: the source's clamp and the lanes'
-    /// combination, the blend color's clamp, and each class's node reads, roundings to `half`,
-    /// and exact sums.
-    pub fn words(&self) -> u32 {
-        const BASE: u32 = 60 * 6;
-        const NODE: u32 = 6 * 6;
-        const ROUND: u32 = 48 * 6;
-        const SUM: u32 = 36 * 6;
-        let mut words = BASE;
-        // The second source's clamp, as the source's.
-        if self.reads_second() {
-            words = words.saturating_add(BASE / 2);
-        }
-        const CONSTANT: u32 = 18 * 6;
-        if self.reads_constant() {
-            words = words.saturating_add(CONSTANT);
-        }
-        for a in [&self.color, &self.alpha].into_iter().flatten() {
-            let (rounds, sums) = match a {
-                Arith::MinMax { .. } | Arith::Zero => (1, 0),
-                Arith::Term { .. } | Arith::Common { .. } => (1, 0),
-                Arith::Fused { .. } | Arith::Lerp { .. } => (1, 1),
-                Arith::Contracted { .. } => (2, 1),
-                Arith::Rounded { .. } => (3, 1),
-            };
-            let inner = match a {
-                Arith::Lerp { inner, .. } | Arith::Common { inner, .. } => {
-                    inner.len().saturating_sub(1) as u32
-                }
-                _ => 0,
-            };
-            let ns = nodes(a);
-            // A one-minus or saturated node rounds once.
-            let node_rounds = ns
-                .iter()
-                .filter(|n| matches!(n, Node::OneMinus(_) | Node::Saturate))
-                .count() as u32;
-            words = words
-                .saturating_add(NODE.saturating_mul(ns.len() as u32))
-                .saturating_add(ROUND.saturating_mul(rounds + inner + node_rounds))
-                .saturating_add(SUM.saturating_mul(sums + inner));
-        }
-        words
     }
 }
 

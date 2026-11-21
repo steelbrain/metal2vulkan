@@ -438,12 +438,6 @@ fn check(stem: &str, bc: &[u8], kernel: &str, predicated: bool) {
         predicated,
         "{stem} {kernel}: predicated"
     );
-    assert!(
-        plan.estimate.words >= a.module.words.len() as u64,
-        "{stem} {kernel}: estimate {} < emitted {}",
-        plan.estimate.words,
-        a.module.words.len()
-    );
     let report = workgroup_barriers(&m).expect("check");
     assert!(report.barriers > 0, "{stem} {kernel}: no barrier");
     assert_eq!(report.in_callees, 0, "{stem} {kernel}");

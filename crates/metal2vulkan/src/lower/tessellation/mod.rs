@@ -219,8 +219,6 @@ pub struct EvalPlan {
     pub params: Vec<EvalParam>,
     /// The members each control-point call's result has read, by call.
     reads: BTreeMap<InstId, Reads>,
-    /// An upper estimate of the words the interface adds.
-    pub words: u64,
 }
 
 /// The tessellation part of the per-function plan (`select::FamilyPlans`).
@@ -456,7 +454,6 @@ pub fn plan_entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         elements: false,
         params: Vec::new(),
         reads,
-        words: 0,
     });
     Ok(())
 }
@@ -764,56 +761,12 @@ pub fn select(
     })
 }
 
-/// Words per interface object and per use of a loaded input.
-const OBJECT_WORDS: u64 = 32;
-const USE_WORDS: u64 = 24;
-
-/// Complete the plan: refuse what the evaluation stage does not model, and estimate the words
-/// of its interface.
+/// Complete the plan: refuse what the evaluation stage does not model.
 pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
-    let Some(e) = cx.families.tessellation.eval.as_ref() else {
-        return Ok(());
-    };
-    if cx.simd != SimdClass::None {
+    if cx.families.tessellation.eval.is_some() && cx.simd != SimdClass::None {
         return Err(not_implemented());
     }
-    let objects = u64::from(e.coord)
-        + u64::from(e.patch)
-        + u64::from(e.instance)
-        + u64::from(e.view)
-        + u64::from(e.elements);
-    let mut words = objects.saturating_mul(OBJECT_WORDS);
-    let mut loaded = Vec::new();
-    for p in &e.params {
-        match p.source {
-            Source::Pulled(r) => words = words.saturating_add(u64::from(r.words())),
-            Source::Coord { .. }
-            | Source::PatchIndex { .. }
-            | Source::Instance { .. }
-            | Source::BaseInstance { .. }
-            | Source::ViewIndex { .. }
-            | Source::AmplificationCount { .. } => loaded.push(p.param),
-            Source::ControlPoints => {}
-        }
-    }
-    for inst in cx.body.insts.values() {
-        inst.kind.for_each_value(|v| {
-            if let Value::Arg(a) = v {
-                if loaded.contains(&a.raw()) {
-                    words = words.saturating_add(USE_WORDS);
-                }
-            }
-        });
-    }
-    if let Some(e) = cx.families.tessellation.eval.as_mut() {
-        e.words = words;
-    }
     Ok(())
-}
-
-/// The words the evaluation interface adds to the size estimate.
-pub fn estimate_words(plan: &TessellationPlan) -> u64 {
-    plan.eval.as_ref().map_or(0, |e| e.words)
 }
 
 /// The module-scope objects of an evaluation entry.

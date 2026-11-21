@@ -1573,7 +1573,6 @@ fn primitive_id_output(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         first,
         object,
     });
-    sp.words = sp.words.saturating_add(super::PRIMITIVE_ID_WORDS);
     Ok(())
 }
 
@@ -2538,7 +2537,6 @@ pub(super) fn captured_index(
         StageBuiltin::VertexIndex,
     );
     sp.captured_index = Some(super::CapturedIndex { vertex, ty, first });
-    sp.words = sp.words.saturating_add(super::CAPTURED_INDEX_WORDS);
     Ok(())
 }
 
@@ -2620,7 +2618,6 @@ fn merged(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         instance,
         command,
     });
-    sp.words = sp.words.saturating_add(super::MERGED_WORDS);
     cx.push.insert(PushField::MergedDrawAddress);
     cx.facts.insert(RuntimeFact::MergedDraws);
     Ok(())
@@ -2668,7 +2665,6 @@ pub(crate) fn finish_merged(cx: &mut SelectCx<'_>) -> Result<(), Error> {
                 IoDir::Input,
             )?;
             sp.merged_fragment = Some(object);
-            sp.words = sp.words.saturating_add(super::MERGED_FRAGMENT_WORDS);
         }
         _ => {}
     }
@@ -2942,28 +2938,13 @@ fn output(cx: &mut SelectCx<'_>, o: &OutputBinding, ty: AirTypeId) -> Result<Lin
     })
 }
 
-/// Words per interface object, per parameter use, and per stored output element.
-const OBJECT_WORDS: u64 = 32;
-const USE_WORDS: u64 = 24;
-const STORE_WORDS: u64 = 16;
-/// The words a use of a [`Source::PixelCenter`] parameter adds to a load: `[[position]]`'s floor,
-/// add, shuffle, and their constants; a varying's `InterpolateAtOffset` and its offset.
-const PIXEL_WORDS: u64 = 24;
-/// The words a use of a [`Source::Uniform`] parameter adds to a load: Metal's reading of an
-/// interpolated constant, nine integer instructions on the bits and their constants.
-const UNIFORM_WORDS: u64 = 64;
-/// The words a use of a [`Source::QuadPrimitive`] parameter adds to a load: the shift and its
-/// constant.
-const QUAD_PRIMITIVE_WORDS: u64 = 8;
-
-/// The per-stage interface limits and the size estimate.
+/// The per-stage interface limits.
 pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     if cx.stage == Stage::Kernel {
         // A kernel's stage inputs: the region it depends on, and their size.
         if cx.families.stage_io.region {
             cx.facts.insert(RuntimeFact::StageInRegion);
         }
-        cx.families.stage_io.words = param_words(cx);
         return Ok(());
     }
     // Buffer writes and atomics in a vertex or fragment function need the stage's store feature
@@ -3086,70 +3067,6 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         });
         sp.interface.sample_mask = Some(masks);
     }
-    // Size: every object, the parameters' words, and a store per output element; a count's
-    // compare and select (and its constant 0) are a store's words more, and so is an
-    // amplification's offset added; an amplified output is a store, an add and a count's, and a
-    // region's viewport a load and a store.
-    let params = param_words(cx);
-    let sp = &mut cx.families.stage_io;
-    let stores: u64 = sp
-        .outputs
-        .iter()
-        .map(|o| {
-            let elements = match o.link.place {
-                Place::Spread(n) => u64::from(n),
-                _ => 1,
-            };
-            elements
-                + super::POINT_SIZE_WORDS * u64::from(super::point_size_object(&sp.objects, o.link.object))
-                + u64::from(o.below.is_some())
-                + u64::from(o.offset.is_some())
-                + u64::from(o.rotated)
-        })
-        .sum::<u64>()
-        // A rotation's second output: its field, two shuffles and a store.
-        + 4 * sp.rotated_seconds.len() as u64
-        + 3 * sp.amplified.len() as u64
-        // The region's draw index loaded and stored.
-        + 2 * u64::from(sp.region_viewport.is_some())
-        + u64::from(sp.point_size_default.is_some())
-        // The private sample mask's AND and store.
-        + 2 * u64::from(sp.private_mask.is_some())
-        // The alpha test: the alpha's extracts, its clamp and code, the reference, the
-        // comparison and the kill.
-        + 40 * u64::from(sp.alpha_test.is_some())
-        + sp.depth_clamp.map_or(0, |d| match (d.range, d.clamps) {
-            // The `[0, 1]` selects, the range's two clamps and the negative NaN's select.
-            (true, _) => 14,
-            (false, true) => 5,
-            (false, false) => 2,
-        });
-    // Each return stores every output.
-    let rets = cx
-        .body
-        .insts
-        .values()
-        .filter(|i| matches!(i.kind, crate::air::ir::InstKind::Ret(_)))
-        .count() as u64;
-    // Each return also rounds every color output that rounds, and encodes the extended-range
-    // colors' texels.
-    let rounding = super::color_write::words(sp.rounded.values().copied())
-        .saturating_add(super::extended_color::WORDS.saturating_mul(sp.extended.len() as u64))
-        .saturating_add(
-            (sp.words_written.values())
-                .map(|&w| super::word_color::encode_words(w))
-                .fold(0u64, u64::saturating_add),
-        );
-    sp.words = (sp.objects.len() as u64)
-        .saturating_mul(OBJECT_WORDS)
-        .saturating_add(params)
-        .saturating_add(
-            stores
-                .saturating_add(1)
-                .saturating_mul(rets)
-                .saturating_mul(STORE_WORDS),
-        )
-        .saturating_add(rounding.saturating_mul(rets));
     Ok(())
 }
 
@@ -3194,47 +3111,4 @@ fn clamps_fragment_depth(cx: &SelectCx<'_>) -> bool {
         .enabled
         .extensions
         .contains(&VkExtension::ExtDepthRangeUnrestricted)
-}
-
-/// The words of the used stage-IO parameters: a load per use of an interface parameter (or of a
-/// kernel's stage-in region), with its pixel-center form for a [`Source::PixelCenter`] one, and one
-/// fetch per pulled attribute at entry (`fetch::PulledRead::words`), whose uses read the held
-/// value.
-fn param_words(cx: &SelectCx<'_>) -> u64 {
-    let mut fetch_words = 0u64;
-    let mut loaded: Vec<(u32, u64)> = Vec::new();
-    for p in &cx.families.stage_io.params {
-        match &p.source {
-            Source::Io(_)
-            | Source::AmplificationCount(_)
-            | Source::Unamplified(_)
-            | Source::Absent(_)
-            | Source::Pushed { .. }
-            | Source::DrawBase { .. }
-            | Source::StageInRegion { .. }
-            | Source::CapturedVertex(_)
-            | Source::CapturedBaseVertex(_)
-            | Source::Merged { .. } => loaded.push((p.param, USE_WORDS)),
-            Source::QuadPrimitive(_) => loaded.push((p.param, USE_WORDS + QUAD_PRIMITIVE_WORDS)),
-            Source::PixelCenter(_) | Source::LoopSample(_) | Source::AtLoopSample(_) => {
-                loaded.push((p.param, USE_WORDS + PIXEL_WORDS))
-            }
-            Source::Uniform(_) => loaded.push((p.param, USE_WORDS + UNIFORM_WORDS)),
-            // A read through an interpolation function (the call's own arithmetic is its
-            // strategy's).
-            Source::Interpolant { .. } => loaded.push((p.param, USE_WORDS + PIXEL_WORDS)),
-            Source::Pulled(r) => fetch_words = fetch_words.saturating_add(u64::from(r.words())),
-        }
-    }
-    let mut use_words = 0u64;
-    for inst in cx.body.insts.values() {
-        inst.kind.for_each_value(|v| {
-            if let Value::Arg(a) = v {
-                if let Some(&(_, words)) = loaded.iter().find(|(p, _)| *p == a.raw()) {
-                    use_words = use_words.saturating_add(words);
-                }
-            }
-        });
-    }
-    fetch_words.saturating_add(use_words)
 }

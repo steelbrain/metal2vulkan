@@ -222,25 +222,6 @@ pub(super) fn finish(cx: &SelectCx<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// An upper estimate of the words the form adds: the shadow and its type, and at each of `rets`
-/// returns the guard, the state's fields, the comparison and operation selections, and the read
-/// and write (with the multisampled form's loop over the samples, its variables, and the mask's
-/// writes).
-pub(super) fn words(cx: &SelectCx<'_>, rets: u64) -> u64 {
-    const OBJECT: u64 = 40;
-    const RETURN: u64 = 480;
-    const SAMPLES: u64 = 160;
-    let Some(plan) = cx.families.fragment.stencil else {
-        return 0;
-    };
-    let per_return = if plan.samples.is_some() {
-        RETURN + SAMPLES
-    } else {
-        RETURN
-    };
-    OBJECT.saturating_add(rets.saturating_mul(per_return))
-}
-
 /// Declare the shadow: a 2D `uint` storage image of the planned declaration, multisampled for the
 /// multisampled form.
 pub(super) fn declare(

@@ -34,7 +34,7 @@ use crate::lower::emit::emit_module;
 use crate::lower::select::{select, LowerInputs, Plan};
 use crate::lower::simd::WidestPin;
 use crate::memory::static_root::analyze_memory;
-use crate::pipeline::compile::{compile_bitcode, plan_bitcode, EntryRef};
+use crate::pipeline::compile::{compile_bitcode, EntryRef};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{
@@ -114,26 +114,10 @@ fn assemble(name: &str, body: &str) -> Option<Vec<u8>> {
     }
 }
 
-/// Compile entry `entry` of `bc` for `prof`, pass L3, and check that the plan's size estimate
-/// bounds the emitted words.
+/// Compile entry `entry` of `bc` for `prof` and pass L3.
 fn l3(bc: &[u8], entry: &str, prof: &DeviceProfile, what: &str) {
     let a = compile(bc, entry, prof).unwrap_or_else(|e| panic!("{what}: compile: {e}"));
     link_and_validate(&a, prof).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-    let plan = plan_bitcode(
-        bc,
-        EntryRef::Name(entry),
-        &FunctionConstantValues::defaults(),
-        prof,
-        &LowerInputs::new(),
-        &mut meter(),
-    )
-    .unwrap_or_else(|e| panic!("{what}: plan: {e}"));
-    let words = a.module.words.len() as u64;
-    assert!(
-        plan.estimate.words >= words,
-        "{what}: estimate {} < emitted {words}",
-        plan.estimate.words
-    );
 }
 
 fn buffer_slot(index: u32) -> ResourceSlot {

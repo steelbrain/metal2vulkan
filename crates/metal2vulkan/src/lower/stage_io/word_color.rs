@@ -25,7 +25,7 @@
 //! or keeps some channels (`lower::fragment::fetch`), and a blend there reads the word read first
 //! as Metal's blend reads it ([`decode`]).
 
-use crate::air::intrinsics::{PackDir, PackFormat};
+use crate::air::intrinsics::PackFormat;
 use crate::error::{Error, Feature, Unsupported};
 use crate::lower::arith::color_write::half_rounded;
 use crate::lower::arith::ops::{fsplat, splat, ty};
@@ -39,26 +39,6 @@ use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::BResult;
 use crate::spirv::ids::Value;
 use crate::spirv::ir::{BinOp, ConvOp, GlslOp, UnOp};
-
-/// An upper estimate of the SPIR-V words of one output's [`encode`]: per channel the rounding to
-/// `half`, the clamp, the product's rounding, the conversion, shift and merge.
-pub(crate) const WORDS: u64 = 4 * (40 * 6 + 12 * 6);
-
-/// An upper estimate of the SPIR-V words of one output's [`encode`] into `word`: [`WORDS`], and
-/// for an 8-bit sRGB word `arith::pack::pack`'s encode.
-pub(crate) fn encode_words(word: WordAttachment) -> u64 {
-    match word {
-        WordAttachment::Packed16 { .. } => WORDS,
-        WordAttachment::Srgb8 { .. } => {
-            let f4 = Form {
-                held: Held::Float(FloatFmt::F32),
-                lanes: 4,
-            };
-            WORDS + u64::from(pack::words(PackFormat::Unorm4x8Srgb, PackDir::Pack, f4))
-        }
-        WordAttachment::Rgb9e5 => crate::lower::texture::RGB9E5_WORDS + 6 * 8,
-    }
-}
 
 /// Plan output `f` (dual-source `index`) of a fragment function to color attachment `color`:
 /// where `LoweringInputs::word_colors` lists the attachment and the output is `float` or `half` of
@@ -205,10 +185,6 @@ pub(crate) fn encode(
     }
     Ok(out)
 }
-
-/// An upper estimate of the SPIR-V words of one [`decode`]: per channel the shift, mask,
-/// conversion, product and rounding to `half`, and the vector's construction.
-pub(crate) const DECODE_WORDS: u64 = 4 * (12 * 6 + 40 * 6) + 12;
 
 /// The four channels Metal's blend reads from word `x` (a `u32`) of packed 16-bit word attachment
 /// `word` (`WordAttachment::Packed16`), as a

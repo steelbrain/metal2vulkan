@@ -36,10 +36,6 @@ use crate::spirv::ir::BinOp;
 
 use super::fetch;
 
-/// An upper estimate of the words one merge adds at a return: the input attachment's read, the
-/// word's extraction, and the masks and merge.
-const MERGE_WORDS: u64 = 48;
-
 /// The bits of `word`'s fields of the channels `kept`.
 fn kept_bits(word: WordAttachment, kept: ColorWriteMask) -> u32 {
     [
@@ -133,11 +129,4 @@ pub(crate) fn merge(
     let read = fb.binary(BinOp::BitwiseAnd, read, keep)?;
     let word = fb.binary(BinOp::BitwiseAnd, word, take)?;
     fb.binary(BinOp::BitwiseOr, read, word)
-}
-
-/// The words the planned merges add at `rets` returns: one input attachment each, and at each
-/// return the read and the merge.
-pub(super) fn words(cx: &SelectCx<'_>, rets: u64) -> u64 {
-    let merges = cx.families.fragment.word_merges.len() as u64;
-    merges.saturating_mul(32u64.saturating_add(MERGE_WORDS.saturating_mul(rets.max(1))))
 }

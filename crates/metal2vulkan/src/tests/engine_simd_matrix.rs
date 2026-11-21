@@ -939,8 +939,7 @@ fn products_record_their_precision() {
 /// Every matrix kernel compiles, links, relocates, and passes L3 on every committed profile
 /// exactly where its cross-lane class (a shuffle with a product, the lane alone for blocks) has
 /// a compute tier, and elsewhere is refused as that tier is (`matrix_mixed`'s five buffers fit
-/// the runtime floor's four storage buffers per stage through a uniform view). The plan's size estimate
-/// bounds the emitted words.
+/// the runtime floor's four storage buffers per stage through a uniform view).
 #[test]
 fn matrix_kernels_compile_or_refuse_with_the_tier() {
     // Each kernel with its operations' class: a product shuffles, the blocks alone read the lane.
@@ -984,13 +983,6 @@ fn matrix_kernels_compile_or_refuse_with_the_tier() {
                 Ok(a) => {
                     link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem} {name}: {e}"));
                     assert!(tier.is_ok(), "{stem} {name}");
-                    let (plan, _) = typed_module(bc, name, &p).expect("plan");
-                    let words = a.module.words.len() as u64;
-                    assert!(
-                        plan.estimate.words >= words,
-                        "{stem} {name}: estimate {} < emitted {words}",
-                        plan.estimate.words
-                    );
                     ok += 1;
                 }
                 // Threadgroup memory Metal zeroes, on a device that does not zero it.

@@ -61,19 +61,6 @@ pub fn module_bytes(len: u64) -> u64 {
     len.div_ceil(16).saturating_mul(16)
 }
 
-/// The words declaring `blob` adds to a module, at most: none for a bound blob (its view is a
-/// descriptor's); for the module's words, an `OpConstant` of 4 words a word, the composite of
-/// them, and the array, its length and the variable.
-pub fn declared_words(blob: &BlobUse) -> u64 {
-    match blob.home {
-        BlobHome::Bound => 0,
-        BlobHome::Module => {
-            let words = module_bytes(blob.bytes.len() as u64) / 4;
-            words.saturating_mul(5).saturating_add(16)
-        }
-    }
-}
-
 /// The binding symbol of `stage`'s constant blob.
 pub fn symbol(stage: Stage) -> ResourceSlot {
     ResourceSlot {

@@ -72,7 +72,7 @@
 //! depends on how subgroups reconverge: an entry whose only tangled instructions are emulated ones
 //! declares no reconvergence mode and records `Reconvergence::Guaranteed`.
 
-use crate::air::intrinsics::{GroupOp, GroupScope, MemFlags};
+use crate::air::intrinsics::{GroupOp, MemFlags};
 use crate::air::ir::ValueId;
 use crate::budget::Meter;
 use crate::error::{Error, Feature, LowerFamily, Unsupported};
@@ -179,117 +179,6 @@ fn emulated_site(s: &Strategy) -> bool {
         _ => exchange_words(s).is_some(),
     }
 }
-
-/// The SPIR-V words one scratch read of a value of `w` words emits: the source clamp, per word its
-/// address, access chain, and load, and the value's reassembly.
-fn read_words(w: u32) -> u32 {
-    48 + 40 * w
-}
-
-/// The SPIR-V words of one of [`tree_fold`]'s or [`tree_scan`]'s rounds on a value of `v` words:
-/// the published words, the two barriers, the source lane, its read, the lane-order selects of a
-/// float min or max, the combining step, and the select that keeps the partial where the partner
-/// holds no contribution.
-fn tree_round_words(v: u32, g: &GroupPlan) -> u32 {
-    48 * v + read_words(v) + 128 + narrow::round_words(g.form)
-}
-
-/// The SPIR-V words of [`Emu::gather_bits`] of `conds` words and the closing barrier: the clears,
-/// three barriers, the lane's bit, and per word its select, atomic `Or`, and load.
-fn gather_words(conds: u32) -> u32 {
-    96 + 96 * conds
-}
-
-/// The SPIR-V words the emulated tier adds to strategy `s`'s own estimate: the stores of the
-/// published words and the two barriers, and per read of another lane's value the scratch read with
-/// its combining step; a simdgroup reduction is five tree rounds, a prefix sum or product six (a
-/// float's exclusive sum and an exclusive product shift first), and a vote or ballot one
-/// `Emu::gather_bits`. The subgroup instructions the estimate counted are not emitted, so this
-/// over-counts.
-pub fn extra_words(s: &Strategy) -> u32 {
-    let Some(w) = exchange_words(s) else {
-        return 0;
-    };
-    let publish = 48 * w + 48;
-    let reads = match s {
-        Strategy::Simd(SimdStrategy::Group(g)) => {
-            use GroupOp as G;
-            let v = moved(g).map_or(0, form_words);
-            let step = read_words(v) + 64 + narrow::round_words(g.form);
-            let rounds = SIMD_WIDTH.trailing_zeros();
-            match (g.scope, g.op) {
-                (GroupScope::Quad, G::IsFirst | G::ActiveThreadsMask)
-                | (GroupScope::Simdgroup, G::IsFirst) => 64,
-                (GroupScope::Simdgroup, G::All | G::Any | G::Ballot | G::ActiveThreadsMask)
-                | (GroupScope::Quad, G::All | G::Any | G::Ballot) => gather_words(2),
-                (
-                    GroupScope::Simdgroup,
-                    G::PrefixInclusiveSum
-                    | G::PrefixExclusiveSum
-                    | G::PrefixInclusiveProduct
-                    | G::PrefixExclusiveProduct,
-                ) => (rounds + 1) * tree_round_words(v, g),
-                (
-                    GroupScope::Simdgroup,
-                    G::Sum | G::Product | G::Min | G::Max | G::And | G::Or | G::Xor,
-                ) => rounds * tree_round_words(v, g),
-                (
-                    GroupScope::Quad,
-                    G::Sum
-                    | G::Product
-                    | G::Min
-                    | G::Max
-                    | G::And
-                    | G::Or
-                    | G::Xor
-                    | G::PrefixInclusiveSum
-                    | G::PrefixExclusiveSum
-                    | G::PrefixInclusiveProduct
-                    | G::PrefixExclusiveProduct,
-                ) => 4 * step,
-                (_, G::ShuffleAndFillUp | G::ShuffleAndFillDown) => 2 * step,
-                _ => step,
-            }
-        }
-        _ => TILE_READS * (read_words(1) + CELL_SELECT_WORDS),
-    };
-    publish + reads
-}
-
-/// The SPIR-V words the emulated tier adds to strategy `s` in a divergent block of a predicated
-/// kernel: besides [`extra_words`], the published active flag and the active-lane select of each
-/// value, the active-lane word of `is_first` and `broadcast_first` and of the votes, and, for a
-/// quad's other operations, which read its lanes one by one, the read of each lane's flag; for a
-/// multiply-add, per cell read the source lane's flag.
-pub fn predicated_extra_words(s: &Strategy) -> u32 {
-    let base = extra_words(s);
-    match s {
-        Strategy::Simd(SimdStrategy::Group(g)) => {
-            let votes = matches!(g.op, GroupOp::All | GroupOp::Any);
-            let flags = if g.scope == GroupScope::Quad && !votes {
-                SIMD_WIDTH * (read_words(1) + 64)
-            } else {
-                gather_words(1)
-            };
-            base.saturating_mul(2)
-                .saturating_add(flags)
-                .saturating_add(96)
-        }
-        Strategy::Simd(
-            SimdStrategy::Matrix(MatrixStrategy::Mac(_))
-            | SimdStrategy::Agx(AgxStrategy::MatMad(_)),
-        ) => base.saturating_add(TILE_READS * read_words(1)),
-        _ => base,
-    }
-}
-
-/// The cell reads of a multiply-add ([`extra_words`]): per step `k` of the (at most) eight, the
-/// `a` cell and two `b` cells, each with the select of a zero cell (`CELL_SELECT_WORDS`).
-const TILE_READS: u32 = 8 * 3;
-
-/// The SPIR-V words of the select of a zero cell where a multiply-add's source lane does not
-/// take part, and its constant ([`Emu::read_cell`]).
-const CELL_SELECT_WORDS: u32 = 16;
 
 /// The scratch bytes one simdgroup of a function publishing `words` per lane takes
 /// (`4 · words · 32`).
@@ -1733,6 +1622,7 @@ pub(super) fn quad_op(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::air::intrinsics::GroupScope;
     use crate::lower::arith::legal::{FloatFmt, Held};
 
     /// A lane publishes one word per lane of each value it moves: the predicate of a vote or

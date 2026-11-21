@@ -698,26 +698,6 @@ pub(super) fn partly_live_at(cx: &EmitCx<'_>, at: InstId) -> bool {
         .is_some_and(|v| cx.plan.families.simd.partly_live.contains(&v))
 }
 
-/// An upper bound on the words operation `s` adds on subgroup tier `tier` when it is one of the
-/// [`SimdPlan::partly_live`]. A multiply-add: the ballot with its `uvec4` type and `true`, and per
-/// step its two owners' bit extracts and source selects and three zero selects, with the zero
-/// constant; on `PartialFragment` also the subgroup size's load, and per step each owner's bound
-/// test, index select, and conjunction. A group operation: the ballot, its source's bit extract and
-/// select, and a zero select for each of its two moved values (a fill's data and filling value),
-/// with the zero constant; on `PartialFragment` the size's load, bound test, index select, and
-/// conjunction.
-pub fn partly_live_words(s: &Strategy, tier: Tier) -> u32 {
-    let partial = tier == Tier::PartialFragment;
-    let dim = match s {
-        Strategy::Simd(SimdStrategy::Matrix(matrix::MatrixStrategy::Mac(_))) => 8,
-        Strategy::Simd(SimdStrategy::Agx(agx::AgxStrategy::MatMad(m))) => u32::from(m.dim),
-        Strategy::Simd(SimdStrategy::Group(_)) => return 48 + if partial { 24 } else { 0 },
-        _ => return 0,
-    };
-    let bound = if partial { 16 + dim * 32 } else { 0 };
-    48 + dim * 48 + bound
-}
-
 /// Plan a used parameter this family owns (`select::param_family`), each a fragment function's
 /// (every integer form of it is held in a `u32`):
 ///

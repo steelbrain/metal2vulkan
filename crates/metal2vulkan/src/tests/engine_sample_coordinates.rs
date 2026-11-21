@@ -8,7 +8,7 @@
 //! a cube reads it as a normalized sampler. A runtime sampler's gather reads only its word's
 //! coordinates bit, and its sample also its `NearestPixelSampler` specialization. Every module
 //! requires the device's sampler (`VkProperty::DeviceSampling`) and validates on every committed
-//! profile, and the plan's word estimate bounds what it emits.
+//! profile.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
@@ -868,46 +868,6 @@ fn a_subnormal_coordinate_reaches_the_device_unflushed() {
                     assert!(requires_the_sampler(&a), "{what}");
                 }
             }
-        }
-    }
-}
-
-/// The plan's word estimate bounds the emitted module of every kernel above on every committed
-/// profile.
-#[test]
-fn the_coordinate_estimate_bounds_its_emission() {
-    use crate::budget::SPIRV_WORDS;
-    use crate::library::FunctionConstantValues;
-    use crate::lower::select::LowerInputs;
-    use crate::pipeline::compile::{compile_bitcode, plan_bitcode, EntryRef};
-    use crate::pipeline::testing::meter;
-    let profiles = crate::spirv::testing::committed_profiles().expect("profiles");
-    let pixel = pixel_cases()
-        .into_iter()
-        .map(|(n, o, w, _)| (n, o, Some(w)));
-    for (name, op, words) in cases()
-        .into_iter()
-        .map(|(n, o, w, _)| (n, o, w))
-        .chain(pixel)
-    {
-        let Some(bc) = assemble(name, &kernel(op, words)) else {
-            return;
-        };
-        for (stem, p) in &profiles {
-            let what = format!("{name} on {stem}");
-            let (entry, consts) = (EntryRef::Name("k"), FunctionConstantValues::defaults());
-            let inputs = LowerInputs::new();
-            let plan = plan_bitcode(&bc, entry, &consts, p, &inputs, &mut meter())
-                .unwrap_or_else(|e| panic!("{what}: {e}"));
-            let a = compile_bitcode(&bc, entry, &consts, p, &inputs, &mut meter(), SPIRV_WORDS)
-                .unwrap_or_else(|e| panic!("{what}: {e}"));
-            let emitted = a.module.words.len() as u64;
-            eprintln!("{what}: estimate {} emitted {emitted}", plan.estimate.words);
-            assert!(
-                plan.estimate.words >= emitted,
-                "{what}: estimate {} < emitted {emitted}",
-                plan.estimate.words
-            );
         }
     }
 }

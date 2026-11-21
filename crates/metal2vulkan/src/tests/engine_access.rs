@@ -1749,41 +1749,6 @@ fn a_looping_kernel_reserves_no_status_binding_in_the_fallback() {
     }
 }
 
-/// The plan's size estimate bounds the emitted words of every leaf kernel, in both encodings and in
-/// the device-address form.
-#[test]
-fn the_estimate_bounds_every_leaf_kernel() {
-    let mut psb = LowerInputs::new();
-    psb.psb_slots.insert(sref(0));
-    for robust in [true, false] {
-        let p = profile_with("moltenvk-m3", robust, true);
-        for inputs in [LowerInputs::new(), psb.clone()] {
-            for k in leaf_kernels() {
-                let what = format!(
-                    "{} robust={robust} psb={}",
-                    k.name,
-                    inputs != LowerInputs::new()
-                );
-                let Some(bc) = assemble_text(k.name, &leaf_kernel(&k)) else {
-                    return;
-                };
-                let entry = EntryRef::Name(k.name);
-                let consts = FunctionConstantValues::defaults();
-                let plan = plan_bitcode(&bc, entry, &consts, &p, &inputs, &mut meter())
-                    .unwrap_or_else(|e| panic!("{what}: {e}"));
-                let a =
-                    compile_bitcode(&bc, entry, &consts, &p, &inputs, &mut meter(), SPIRV_WORDS)
-                        .unwrap_or_else(|e| panic!("{what}: {e}"));
-                let words = a.module.words.len() as u64;
-                assert!(
-                    plan.estimate.words >= words,
-                    "{what}: estimate {} < emitted {words}",
-                    plan.estimate.words
-                );
-            }
-        }
-    }
-}
 /// The opcodes of a SPIR-V module's instructions, in order.
 fn opcodes(words: &[u32]) -> Vec<u16> {
     let mut out = Vec::new();
@@ -1923,33 +1888,22 @@ fn a_push_field_the_entry_block_loaded_is_not_reloaded() {
     }
 }
 
-/// The word cap holds on the emitted words, not only on the estimate. A public fixture whose
-/// estimate is below its emitted words (a storage texture write) compiles at a cap equal to its
-/// emitted words and is refused with `SpirvWords` one word below, although its estimate passes both
-/// caps.
+/// The word cap holds on the emitted words: a public fixture (a storage texture write) compiles at
+/// a cap equal to its emitted words and is refused with `SpirvWords` one word below.
 #[test]
 fn the_word_cap_holds_on_the_emitted_words() {
     let Some(bc) = assemble_file("storage_texture_write") else {
         return;
     };
-    // The write's rounding routine, counted whole, lifts the estimate past the emitted words.
     let p = profile_with("moltenvk-m3", true, true);
     let entry = EntryRef::Name("storage_texture_write");
     let consts = FunctionConstantValues::defaults();
     let inputs = LowerInputs::new();
-    let estimate = plan_bitcode(&bc, entry, &consts, &p, &inputs, &mut meter())
-        .expect("plan")
-        .estimate
-        .words;
     let words = compile_bitcode(&bc, entry, &consts, &p, &inputs, &mut meter(), SPIRV_WORDS)
         .expect("compile")
         .module
         .words
         .len() as u64;
-    assert!(
-        estimate < words - 1,
-        "the fixture no longer emits more than its estimate ({estimate} >= {words} - 1)"
-    );
     compile_bitcode(&bc, entry, &consts, &p, &inputs, &mut meter(), words)
         .expect("compiles at a cap of its emitted words");
     assert_eq!(

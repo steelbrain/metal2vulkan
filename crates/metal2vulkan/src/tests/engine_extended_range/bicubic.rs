@@ -10,7 +10,7 @@
 //! level's linear filter and the format's clamp are Metal's; the sum is the device's `f32`
 //! multiply and add of the decoded taps under the weights computed from the fraction, where Metal
 //! sums fixed-point weights exactly onto the lane's grid, and a `half` result is the device's
-//! narrowing. Each compile is validated, and its plan's estimate bounds it. What no case measured
+//! narrowing. Each compile is validated. What no case measured
 //! is refused, `NotImplemented(SamplerBicubicFilter)`: a padded or bfloat form's bicubic sample, a
 //! swizzled texture's, and a gather through a bicubic sampler.
 

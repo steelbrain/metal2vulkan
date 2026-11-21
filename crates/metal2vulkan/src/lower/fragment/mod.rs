@@ -287,19 +287,6 @@ impl FragmentPlan {
     }
 }
 
-/// An upper estimate of the words `if discarded { kill }` adds at one return.
-const RETURN_KILL_WORDS: u64 = 16;
-/// An upper estimate of the words one whole-quad exit adds: two loads, an `or`, three quad swaps
-/// and their direction constants, three `and`s, and `if all { kill }`.
-const QUAD_EXIT_WORDS: u64 = 48;
-/// An upper estimate of the words the interlocked entry adds around the body function: its
-/// function type, the entry function, `Begin`, the call, `End`, the kill, and the return.
-const WRAPPER_WORDS: u64 = 48;
-/// An upper estimate of the words the guard of one side effect adds ([`not_discarded`]): the load of
-/// `discarded` and its negation, the selection's merge, branch, three labels and two branches,
-/// and for a result its phi and zero.
-const GUARD_WORDS: u64 = 40;
-
 /// Whether the function runs a quad or simdgroup operation whose answer depends on which of
 /// its group's lanes are active (`GroupOp::reads_active_lanes`).
 fn counts_active_lanes(cx: &SelectCx<'_>) -> bool {
@@ -315,19 +302,8 @@ fn counts_active_lanes(cx: &SelectCx<'_>) -> bool {
     })
 }
 
-/// How many returns the function's body has.
-fn returns(cx: &SelectCx<'_>) -> u64 {
-    cx.body
-        .insts
-        .values()
-        .filter(|i| matches!(i.kind, InstKind::Ret(_)))
-        .count() as u64
-}
-
 /// Complete the fragment family's plan once every instruction and parameter is selected: the
-/// interlock of a function in a raster order group, the form of each discard site, and the words
-/// the input attachments, the predicated returns, and the interlocked entry add to the stage
-/// interface's size estimate.
+/// interlock of a function in a raster order group and the form of each discard site.
 pub fn finish(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<(), Error> {
     // A device may shade a triangle it clips as several, and then a quad a seam crosses runs
     // once per piece: a fragment function's operation over the active lanes sees each piece's
@@ -368,45 +344,6 @@ pub fn finish(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<(), Error> {
         simd.cluster_ops = simd.cluster_ops.union(OpBits::QUAD);
         simd.groups = true;
     }
-    // Inside an interlocked body the returns do not kill: `main` kills once, after `End`.
-    let predicated = interlock.is_none() && forms.values().any(|f| *f == DiscardForm::Predicate);
-    // The returns, counted only where something is emitted at each of them.
-    let rets = if predicated || cx.families.fragment.imageblock.is_some() || storage {
-        returns(cx)
-    } else {
-        0
-    };
-    let killing_rets = if predicated { rets } else { 0 };
-    let wrapper = if interlock.is_some() {
-        WRAPPER_WORDS
-    } else if looped {
-        coverage::LOOP_WORDS
-    } else {
-        0
-    };
-    // The imageblock output is written at every return.
-    let imageblock = cx
-        .families
-        .fragment
-        .imageblock
-        .as_ref()
-        .map_or(0, |p| p.words_estimate(rets));
-    let words = color::words(cx, &cx.families.fragment.colors)
-        .saturating_add(fetch::words(
-            cx,
-            color::uses(cx, &cx.families.fragment.colors),
-            rets,
-        ))
-        .saturating_add(stencil::words(cx, rets))
-        .saturating_add(input_blend::words(cx, returns(cx)))
-        .saturating_add(word_input::words(cx, returns(cx)))
-        .saturating_add(logic::words(cx, returns(cx)))
-        .saturating_add(killing_rets.saturating_mul(RETURN_KILL_WORDS))
-        .saturating_add((quad_exits.len() as u64).saturating_mul(QUAD_EXIT_WORDS))
-        .saturating_add((guarded.len() as u64).saturating_mul(GUARD_WORDS))
-        .saturating_add(wrapper)
-        .saturating_add(imageblock);
-    stage_io::add_interface_words(cx, words);
     // The requirement is the feature alone: a Vulkan 1.3 device has it in core, and below 1.3
     // the description lists it only with its extension.
     let terminate = cx.profile.fields().fragment.terminate_invocation;

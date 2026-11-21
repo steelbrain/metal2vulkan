@@ -23,17 +23,14 @@ use crate::device::requirements::VkFeature as F;
 use crate::device::{DevicePolicy, DeviceProfile};
 use crate::error::{Capability, Error, Feature, Needs};
 use crate::library::FunctionArtifact;
-use crate::library::FunctionConstantValues;
 use crate::metal::PixelFormat;
-use crate::pipeline::compile::{plan_bitcode, EntryRef};
 use crate::pipeline::descriptor::ColorAttachmentDescriptor;
 use crate::pipeline::link::{link, LinkInputs, RenderLinkInputs};
-use crate::pipeline::lower_inputs::LoweringInputs;
 use crate::pipeline::relocate::relocate;
 use crate::pipeline::stage_io::{Interpolation, IoNumeric, IoRole, IoType, StageBuiltin};
 use crate::pipeline::testing::{
-    compile, compile_kept, compile_with, engine_dir, fragment_inputs, llvm_assemble, meter,
-    profile, profile_without, AssembleError,
+    compile, compile_kept, compile_with, engine_dir, fragment_inputs, llvm_assemble, profile,
+    profile_without, AssembleError,
 };
 use crate::spirv::ir::{BinOp, ConstKind, Constant, Contraction, Inst, TypedModule, ValueOrigin};
 use crate::spirv::testing::check_words_valid;
@@ -436,39 +433,5 @@ fn the_graphics_state_states_whether_the_fragment_function_reads_barycentric_coo
             .graphics
             .expect("graphics");
         assert_eq!(graphics.reads_barycentric_coord, want, "{entry}");
-    }
-}
-
-/// The plan's size estimate bounds the emitted words of every entry, the `bool` conversions and the
-/// barycentric lane reads included.
-#[test]
-fn the_estimate_bounds_every_tail_entry() {
-    let Some(bc) = fixture() else { return };
-    // A profile that compiles every tail entry (on MoltenVK, both barycentric forms are refused).
-    let p = prof("amd-780m-radv");
-    for entry in [
-        "tail_vertex_bool",
-        "tail_fragment_bool",
-        "tail_fragment_primitive",
-        "tail_fragment_layer",
-        "tail_fragment_barycentric",
-        "tail_fragment_barycentric_scalar",
-    ] {
-        let plan = plan_bitcode(
-            &bc,
-            EntryRef::Name(entry),
-            &FunctionConstantValues::defaults(),
-            &p,
-            &LoweringInputs::new(),
-            &mut meter(),
-        )
-        .expect("plan");
-        let a = compile(&bc, entry, &p).expect("compile");
-        let words = a.module.words.len() as u64;
-        assert!(
-            plan.estimate.words >= words,
-            "{entry}: estimate {} < emitted {words}",
-            plan.estimate.words
-        );
     }
 }

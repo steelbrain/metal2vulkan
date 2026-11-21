@@ -21,13 +21,11 @@ use crate::device::requirements::VkFeature;
 use crate::device::requirements::VkProperty;
 use crate::device::{Device, DevicePolicy};
 use crate::error::{Capability, Error, Feature, LowerFamily, Needs};
-use crate::library::FunctionConstantValues;
 use crate::lower::emit::emit_module;
 use crate::lower::select::{select, LowerInputs};
 use crate::lower::simd::WidestPin;
 use crate::memory::static_root::analyze_memory;
 use crate::pipeline::artifact::PrecisionNote;
-use crate::pipeline::compile::{plan_bitcode, EntryRef};
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
     compile, description, link_and_validate, llvm_assemble, meter, profile, AssembleError, Scratch,
@@ -1141,22 +1139,6 @@ fn arith_kernels_validate_and_compute_on_every_profile() {
             match (compile(&bitcode, kk.name, &p), missing) {
                 (Ok(a), None) => {
                     link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-                    // The plan's estimate bounds the emitted words.
-                    let plan = plan_bitcode(
-                        &bitcode,
-                        EntryRef::Name(kk.name),
-                        &FunctionConstantValues::defaults(),
-                        &p,
-                        &LowerInputs::new(),
-                        &mut meter(),
-                    )
-                    .unwrap_or_else(|e| panic!("{what}: plan: {e}"));
-                    let words = a.module.words.len() as u64;
-                    assert!(
-                        plan.estimate.words >= words,
-                        "{what}: estimate {} < emitted {words}",
-                        plan.estimate.words
-                    );
                     if let Some(n) = kk.note {
                         // A maths function records the device's precision.
                         let n = match n {

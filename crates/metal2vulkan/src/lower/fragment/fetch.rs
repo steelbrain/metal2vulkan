@@ -295,7 +295,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::air::abi::{AbiInt, OutputRole, ParamRole};
-use crate::air::intrinsics::{AirIntrinsic, Fragment, PackDir, PackFormat};
+use crate::air::intrinsics::{AirIntrinsic, Fragment, PackFormat};
 use crate::air::ir::{Callee, InstKind, Type as AirType, TypeId as AirTypeId, Value};
 use crate::device::requirements::{FormatUsage, VkFeature};
 use crate::device::DeviceProfile;
@@ -2191,150 +2191,6 @@ pub(super) fn finish(cx: &SelectCx<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// An upper estimate of the words the storage form adds: one object per attachment, the pixel's
-/// coordinate (and sample) and a read per use, and at each of `rets` returns the coordinate, the
-/// guard (with the returned mask's bit), and a write per written attachment (a read first where
-/// it merges kept channels, and a decode, blend, and encode where it blends an extended-range
-/// texel; an exchange of red and blue per read and write of an attachment viewed in its
-/// RGBA-order twin).
-pub(super) fn words(cx: &SelectCx<'_>, uses: u64, rets: u64) -> u64 {
-    const OBJECT: u64 = 40;
-    const READ: u64 = 56;
-    const WRITE: u64 = 56;
-    let fetch = &cx.families.fragment.fetch;
-    if fetch.is_empty() {
-        return 0;
-    }
-    let written = fetch.values().filter(|sc| sc.writes).count() as u64;
-    let merged = fetch.values().filter(|sc| sc.view.merges()).count() as u64;
-    // A merge of the draw's kept channels tests four bits and selects.
-    const KEPT_AT_DRAW: u64 = 40;
-    let at_draw = fetch.values().filter(|sc| sc.view.kept_at_draw).count() as u64;
-    // An extended-range attachment's blended write reads, decodes, blends, and encodes its
-    // texel, its blend's words by its arithmetic, the larger of a `half4` and a `float4` output's;
-    // an unblended one rounds and encodes the output.
-    let blend: u64 = fetch
-        .values()
-        .filter_map(|sc| {
-            [FloatFmt::Half, FloatFmt::F32]
-                .into_iter()
-                .filter_map(|o| match blend_of(&sc.view, Some(o)) {
-                    Ok(Some(b)) => Some(u64::from(b.words())),
-                    _ => None,
-                })
-                .max()
-        })
-        .map(|b| {
-            READ.saturating_add(b).saturating_add(u64::from(
-                extended_range::DECODE_WORDS + extended_range::ENCODE_WORDS,
-            ))
-        })
-        .fold(0u64, u64::saturating_add);
-    // A 16-bit float attachment's blended write (and a generic one, in `float`, its source and
-    // blend color clamped) reads its texel and blends in `half`, or in `float` with exact
-    // multiply-adds (twice the words) and Metal's conversion of the result; an
-    // 8-bit unorm one's clamps the output and decodes the codes (the storage image's store
-    // converts the result); a
-    // packed 16-bit one's clamps the output and rounds it to `half`, and decodes the word.
-    let sixteen: u64 = fetch
-        .values()
-        .filter(|sc| sc.view.extended.is_none())
-        .filter_map(|sc| {
-            let eq = sc.view.blend?;
-            let kept = self::written(sc.view.kept);
-            let pf = sc.view.pixel_format;
-            let half = extended_range::blend::BlendArith::Half;
-            let b = match sc.view.generic_blend {
-                true => generic(&eq, pf, kept).ok()?,
-                false => direct_blend(&eq, pf, kept, (blend_math(cx), half)).ok()?,
-            };
-            let unorm8 = match unorm8_format(pf) {
-                true => 48 * 6,
-                false => 0,
-            };
-            let packed = match sc.view.word {
-                Some(_) => 48 * 6 + stage_io::word_color::DECODE_WORDS,
-                None => 0,
-            };
-            Some(
-                READ.saturating_add(2 * u64::from(b.words()))
-                    .saturating_add(32 * 6)
-                    .saturating_add(unorm8)
-                    .saturating_add(packed),
-            )
-        })
-        .fold(0u64, u64::saturating_add);
-    let unblended = fetch
-        .values()
-        .filter(|sc| sc.writes && sc.view.extended.is_some() && sc.view.blend.is_none())
-        .count() as u64;
-    // An extended-range attachment's read decodes its texel, an sRGB one's reorders its bytes and
-    // decodes them (`arith::pack::unpack`).
-    // An RGBA-order view's read and write exchange red and blue: one shuffle each.
-    const EXCHANGE: u64 = 10;
-    let exchanged = fetch
-        .values()
-        .filter(|sc| sc.view.rgba_view.is_some())
-        .count() as u64;
-    // An alpha-in-red image's read moves its red to alpha, and its write alpha to red.
-    let moved = fetch.values().filter(|sc| sc.view.alpha_in_red).count() as u64;
-    let read = match (
-        fetch.values().any(|sc| sc.view.extended.is_some()),
-        fetch.values().any(|sc| sc.view.uint_view.is_some()),
-    ) {
-        (true, _) => READ.saturating_add(u64::from(extended_range::DECODE_WORDS) + 120),
-        (false, true) => READ.saturating_add(u64::from(srgb_words(PackDir::Unpack)) + 120),
-        (false, false) => READ,
-    }
-    // A packed 16-bit word attachment's read decodes the word's four fields. Added, not chosen:
-    // a function may read such an attachment beside one of another kind, and every use takes the
-    // larger shape.
-    .saturating_add(match fetch.values().any(|sc| sc.view.word.is_some()) {
-        true => stage_io::word_color::DECODE_WORDS,
-        false => 0,
-    })
-    .saturating_add(EXCHANGE.saturating_mul(exchanged))
-    .saturating_add(super::color::ALPHA_IN_RED_WORDS.saturating_mul(moved));
-    // An sRGB attachment's write encodes four channels (`arith::pack::pack`), reorders its bytes,
-    // and merges kept ones from the texel it reads first.
-    let srgb_writes = fetch
-        .values()
-        .filter(|sc| sc.writes && sc.view.uint_view.is_some())
-        .count() as u64;
-    let srgb_write = READ.saturating_add(u64::from(srgb_words(PackDir::Pack)) + 120);
-    // A word attachment's write encodes Metal's word and merges the kept fields: its kept mask
-    // from the draw's four bits (a test and a select per field).
-    let word_write: u64 = fetch
-        .values()
-        .filter(|sc| sc.writes)
-        .filter_map(|sc| sc.view.word)
-        .map(|w| stage_io::word_color::encode_words(w) + 4 * 24 + 40)
-        .fold(0u64, u64::saturating_add);
-    // A logic-operated write reads its texel and operates on each channel's codes.
-    let logic = fetch
-        .values()
-        .filter(|sc| sc.view.logic_op.is_some())
-        .count() as u64;
-    let logic_write = READ.saturating_add(super::logic::WRITE_WORDS);
-    let write = WRITE
-        .saturating_mul(written)
-        .saturating_add(READ.saturating_mul(merged))
-        .saturating_add(KEPT_AT_DRAW.saturating_mul(at_draw))
-        .saturating_add(blend)
-        .saturating_add(sixteen)
-        .saturating_add(stage_io::extended_color::WORDS.saturating_mul(unblended))
-        .saturating_add(srgb_write.saturating_mul(srgb_writes))
-        .saturating_add(word_write)
-        .saturating_add(logic_write.saturating_mul(logic))
-        .saturating_add((2 * EXCHANGE).saturating_mul(exchanged))
-        .saturating_add((EXCHANGE + super::color::ALPHA_IN_RED_WORDS).saturating_mul(moved))
-        .saturating_add(40);
-    OBJECT
-        .saturating_mul(fetch.len() as u64)
-        .saturating_add(read.saturating_mul(uses))
-        .saturating_add(rets.saturating_mul(write))
-}
-
 /// Declare storage-form attachment `color`'s storage image: a 2D storage image of its declared
 /// format and its numeric type, multisampled or arrayed as it holds the samples
 /// ([`StorageSamples`]).
@@ -3152,16 +3008,6 @@ fn blended(
     ]
     .map(|c| sc.view.kept.contains(c));
     extended_range::encode_keeping(fb, range, v, (texel, kept))
-}
-
-/// An upper estimate of the SPIR-V words of an sRGB texel's conversion in direction `dir`
-/// ([`srgb_decode`], [`srgb_texel`]'s encode).
-fn srgb_words(dir: PackDir) -> u32 {
-    let f4 = Form {
-        held: Held::Float(FloatFmt::F32),
-        lanes: 4,
-    };
-    pack::words(PackFormat::Unorm4x8Srgb, dir, f4)
 }
 
 /// The bytes of a texel of the sRGB format `format` held in one `u32` (`word`, the texel's bytes

@@ -16,7 +16,7 @@ use crate::device::DevicePolicy;
 use crate::error::{Capability, Error, Feature, Needs};
 use crate::library::{FunctionArtifact, FunctionConstantValues};
 use crate::metal::{VertexFormat, VertexStepFunction};
-use crate::pipeline::compile::{compile_bitcode, plan_bitcode, EntryRef};
+use crate::pipeline::compile::{compile_bitcode, EntryRef};
 use crate::pipeline::descriptor::{
     VertexAttributeDescriptor, VertexBufferLayoutDescriptor, VertexDescriptor,
 };
@@ -426,39 +426,6 @@ fn the_vertex_fetch_projection_selects_fixed_function_or_pulled() {
     validate(&a, &alone(&a, &p), &p);
     assert_eq!(a.interface.descriptors.len(), 1, "one binding for buffer 1");
     assert_eq!(a.interface.slots.len(), 1, "one slot for buffer 1");
-}
-
-/// The plan's size estimate bounds the emitted words of every stage entry.
-#[test]
-fn the_estimate_bounds_every_stage_entry() {
-    let Some(bc) = fixture() else { return };
-    let p = prof("moltenvk-m3");
-    for entry in [
-        "stage_io_vertex",
-        "stage_io_vertex_position",
-        "stage_io_vertex_clip",
-        "stage_io_vertex_layer",
-        "stage_io_fragment",
-        "stage_io_fragment_point",
-        "stage_io_fragment_dual_source",
-    ] {
-        let plan = plan_bitcode(
-            &bc,
-            EntryRef::Name(entry),
-            &FunctionConstantValues::defaults(),
-            &p,
-            &LoweringInputs::new(),
-            &mut meter(),
-        )
-        .expect("plan");
-        let a = compile(&bc, entry, &p).expect("compile");
-        let words = a.module.words.len() as u64;
-        assert!(
-            plan.estimate.words >= words,
-            "{entry}: estimate {} < emitted {words}",
-            plan.estimate.words
-        );
-    }
 }
 
 /// The variables `words` decorate `BuiltIn PointSize` (`OpDecorate <id> BuiltIn(11) PointSize(1)`)

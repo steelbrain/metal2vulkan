@@ -119,9 +119,6 @@ pub struct Predication {
     /// with `live` set only where the invocation is one of its threadgroup's threads
     /// (`dispatch::emit_entry`), rather than everywhere.
     pub partial_groups: bool,
-    /// The reads a guarded segment may reload from a variable rather than find bound (counted
-    /// with the demotions), which the walk's estimate charges ([`extra_words`]).
-    pub reloads: u64,
 }
 
 impl Predication {
@@ -191,7 +188,6 @@ pub fn plan(
             set,
             vote_word: false,
             partial_groups: false,
-            reloads: 0,
         };
         let mut home: Vec<(u32, u32)> = vec![(u32::MAX, 0); n];
         for (b, block) in body.blocks.iter() {
@@ -224,8 +220,7 @@ pub fn plan(
         }
         p.uniform_conds.sort_unstable();
         p.uniform_conds.dedup();
-        let (extra, reloads) = demotions(cx, strategy, set, &home, m)?;
-        p.reloads = reloads;
+        let extra = demotions(cx, strategy, set, &home, m)?;
         Ok((p, extra))
     })();
     m.release(bytes);
@@ -476,18 +471,13 @@ fn sync_in_loop(cx: &SelectCx<'_>, p: &Predication, m: &mut Meter) -> Result<boo
 /// may be one that no invocation executes. A use is what `FamilyPlans::reads` and
 /// `FamilyPlans::incoming_reads` say an instruction or a copy reads (the value a forwarding
 /// `extractvalue` forwards; a member-wise phi's members), the hooks the walk reloads through.
-///
-/// Also the number of uses a guarded segment may reload (`lower::emit`'s `segment` and
-/// `ensure_operands`, which forget what a segment bound once it ends): every use but one of a
-/// value its own segment defined (in the same block, not a phi, with no synchronization between
-/// them, and not the terminator's, which the walk reads after the block's guards).
 fn demotions(
     cx: &SelectCx<'_>,
     strategy: &[Option<Strategy>],
     set: SyncSet,
     home: &[(u32, u32)],
     m: &mut Meter,
-) -> Result<(BTreeMap<ValueId, DemoteTy>, u64), Error> {
+) -> Result<BTreeMap<ValueId, DemoteTy>, Error> {
     let body = cx.body;
     let values = cx.values;
     let families = &cx.families;
@@ -499,7 +489,6 @@ fn demotions(
             .is_some_and(|s| set.holds(s))
     };
     let mut out = BTreeMap::new();
-    let mut reloads = 0u64;
     for (b, block) in body.blocks.iter() {
         // The position of each synchronization of the block, in order.
         let syncs: Vec<u32> = block
@@ -550,9 +539,6 @@ fn demotions(
                 body.insts.get(d).map(|i| &i.kind),
                 Some(InstKind::Phi { .. })
             );
-            if home_block != b.raw() || phi || term || between(def, at) {
-                reloads = reloads.saturating_add(1);
-            }
             if home_block != b.raw() || sync_at(d) || (phi && !term) {
                 continue;
             }
@@ -581,79 +567,5 @@ fn demotions(
             out.insert(id, ty);
         }
     }
-    Ok((out, reloads))
+    Ok(out)
 }
-
-/// The SPIR-V words the predicated walk of plan `p` adds to a kernel's estimate for the AIR
-/// blocks it emits (each block is one `Code` statement of the structured tree, which never
-/// duplicates a block): a bound of what `structurize::emit::predicate` and `lower::emit` emit
-/// there beyond the plain walk, each charge the worst case of the code it names. The walk's
-/// constructs, which only the structured tree shows, are charged from the tree
-/// (`structurize::emit::predicate::construct_words`).
-///
-/// - `WALK_FRAME` once: `walk_root`'s `live` variable and its first store, and the `bool` and
-///   `u32` types and constants the walk and its votes name.
-/// - Per block, `GUARD` for the `live` load of `predicate::code` and, per guarded segment of
-///   `lower::emit`'s `block_live` (one more than the block's synchronizations), `SEGMENT`: its
-///   `if live` selection.
-/// - Per synchronization, its predicated form (`SYNC` and `workgroup::predicated_extra_words`)
-///   and `RESULT`: `sync_inst`'s guarded store of its demoted result.
-/// - Per use a guarded segment may reload ([`Predication::reloads`]), `RELOAD`: one `OpLoad`.
-pub fn extra_words(
-    body: &crate::air::ir::Body,
-    values: crate::air::ir::ValueIndex,
-    strategy: &[Option<Strategy>],
-    p: &Predication,
-) -> u64 {
-    let mut words = WALK_FRAME.saturating_add(RELOAD.saturating_mul(p.reloads));
-    for (_, block) in body.blocks.iter() {
-        let mut syncs = 0u64;
-        for id in block.inst_ids() {
-            let s = values
-                .inst(id)
-                .and_then(|v| strategy.get(v.index()))
-                .and_then(Option::as_ref);
-            if let Some(s) = s.filter(|s| p.set.holds(s)) {
-                syncs += 1;
-                words = words
-                    .saturating_add(SYNC + RESULT)
-                    .saturating_add(u64::from(super::workgroup::predicated_extra_words(s)));
-            }
-        }
-        words = words
-            .saturating_add(GUARD)
-            .saturating_add(SEGMENT.saturating_mul(syncs + 1));
-    }
-    words
-}
-
-/// `OpLoad` (4 words): a reload of a demoted value or phi, or a load of a walk flag.
-pub(crate) const LOAD: u64 = 4;
-
-/// `OpStore` (3 words) of a walk flag or a demoted value.
-pub(crate) const STORE: u64 = 3;
-
-/// An `if c { … }` with no else arm (`FunctionBuilder::if_`): `OpSelectionMerge` (3),
-/// `OpBranchConditional` (4), the arm's `OpLabel` (2) and its `OpBranch` to the merge (2), and the
-/// merge's `OpLabel` (2).
-pub(crate) const IF: u64 = 13;
-
-/// [`extra_words`]: the walk's frame, at most 16 words of variable and store and 48 of types and
-/// constants.
-const WALK_FRAME: u64 = 64;
-
-/// [`extra_words`]: the `live` load before a guarded block.
-const GUARD: u64 = LOAD;
-
-/// [`extra_words`]: one guarded segment.
-const SEGMENT: u64 = IF;
-
-/// [`extra_words`]: a synchronization's sanitized operands and the reads of the published active
-/// flags, beside `workgroup::predicated_extra_words`.
-const SYNC: u64 = 96;
-
-/// [`extra_words`]: a synchronization's demoted result stored where `live` holds.
-const RESULT: u64 = IF + STORE;
-
-/// [`extra_words`]: one reload.
-const RELOAD: u64 = LOAD;

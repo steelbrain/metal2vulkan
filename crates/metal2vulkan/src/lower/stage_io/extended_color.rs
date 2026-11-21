@@ -53,10 +53,6 @@ use crate::spirv::error::BResult;
 use crate::spirv::ids::Value;
 use crate::spirv::ir::{ConstBits, Constant, Type};
 
-/// An upper estimate of the SPIR-V words of one output's [`encode`]: the lanes completed to four,
-/// the rounding to `half`, the texel's encode, and the raw components' extract.
-pub(crate) const WORDS: u64 = 60 * 6 + extended_range::ENCODE_WORDS as u64;
-
 /// Plan output `f` (dual-source `index`) of a fragment function to color attachment `color`: where
 /// `LoweringInputs::extended_range_colors` lists the attachment and the output is `float` or
 /// `half`, record the attachment on the interface (`StageIo::extended_range_colors`) and the

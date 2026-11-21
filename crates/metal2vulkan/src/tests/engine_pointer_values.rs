@@ -280,8 +280,8 @@ fn resources(
     }
 }
 
-/// Compile entry `entry` of `bc` for `p`, pass L3, check that the plan's size estimate bounds
-/// the emitted words, and return the plan and the typed module the interpreter runs.
+/// Compile entry `entry` of `bc` for `p`, pass L3, and return the plan and the typed module the
+/// interpreter runs.
 fn checked(bc: &[u8], entry: &str, p: &DeviceProfile, what: &str) -> (Plan, TypedModule) {
     let inputs = LowerInputs::new();
     let a = compile_bitcode(
@@ -296,12 +296,6 @@ fn checked(bc: &[u8], entry: &str, p: &DeviceProfile, what: &str) -> (Plan, Type
     .unwrap_or_else(|e| panic!("{what}: {e}"));
     link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
     let (plan, m) = typed_module_with(bc, entry, p, &inputs).expect("module");
-    let words = a.module.words.len() as u64;
-    assert!(
-        plan.estimate.words >= words,
-        "{what}: estimate {} < emitted {words}",
-        plan.estimate.words
-    );
     (plan, m)
 }
 
