@@ -334,7 +334,7 @@ mod on_device {
                     blit.end_encoding();
                 }
             };
-            let log = two_queues(name, &device, encode, |_, _| {});
+            let log = two_queues(name, &device, (true, 2), encode, |_, _| {});
             assert_eq!(log, [0, 1, 2, 3, 6, 4], "{name}: the one run before each");
         });
     }

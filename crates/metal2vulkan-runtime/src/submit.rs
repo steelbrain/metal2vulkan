@@ -24,7 +24,9 @@
 //! `vkQueueSubmit2` each, only the last signalling. At most [`UNSEEN_JOINS`] command buffers join
 //! a group while none of the queue's retires, so command buffers that turn long all at once join
 //! no more than that many on the estimate of the short ones before them. A segment that
-//! signals an event ends its group, which goes at once; one that waits on a semaphore leads a new
+//! signals an event ends its group, which goes at once, so a command buffer that signals waits
+//! unstaged until its queue has room for it ([`WorkState::waits_for_room`]): a signal staged is
+//! one its waiters take as submitted. One that waits on a semaphore leads a new
 //! group, the one held going first. A group is one submission with one signal of the progress
 //! semaphore, which the completion thread follows in commit order. A command buffer that takes no
 //! submission of its own (one with nothing for the GPU that no copy-in waits for, or one ended
@@ -191,7 +193,8 @@ pub(crate) struct Work {
     /// lost: a staging call asleep for it looks again ([`Work::stage`]). Signalled only while one
     /// sleeps ([`WorkState::span_sleepers`]).
     spans: Condvar,
-    /// A queue holds a group: the completion thread wakes the thread as submissions complete.
+    /// A queue holds a group, or a command buffer for room: the completion thread wakes the
+    /// thread as submissions complete.
     keeping: AtomicBool,
     /// Bytes of textures and blocks released while an upload held them, since the last
     /// submission that left no upload unsent: they count against [`UPLOAD_BYTES`]. A texture's
@@ -594,7 +597,8 @@ impl Work {
         self.wake();
     }
 
-    /// Submissions completed: where a queue holds a group, it may go.
+    /// Submissions completed: where a queue holds a group or a command buffer for room, it may
+    /// go.
     pub(crate) fn completed(&self) {
         if self.keeping.load(Ordering::SeqCst) {
             self.poke();
@@ -1520,21 +1524,35 @@ impl WorkState {
 
     /// Whether the head of `fifo` waits in its list, not staged, for room: committed, with
     /// commands or a copy-in for the GPU, its first segment not yet staged, behind a group held
-    /// that neither takes it ([`Batch::takes`]), nor conflicts with it, nor goes
-    /// ([`Fifo::goes`]). The command buffers behind it wait with it.
+    /// that does not go ([`Fifo::goes`]) nor conflict with it, and that does not take it
+    /// ([`Batch::takes`]) or would go at its signal. With no group held, one that signals an event
+    /// in any segment, which would send its group at once, waits where its queue has no room for
+    /// it. The command buffers behind it wait with it.
     fn waits_for_room(&self, fifo: &Fifo, busy: bool) -> bool {
-        let (Some(head), Some(group)) = (fifo.entries.front(), &fifo.group) else {
+        let Some(head) = fifo.entries.front() else {
             return false;
         };
         let (Some(pending), None) = (&head.pending, head.error) else {
             return false;
         };
         let empty = pending.gpu.is_empty() && !self.changes.captured.waits_for(pending.seq);
-        pending.next == 0
-            && !empty
-            && !group.leans.conflicts(&pending.gpu.segments[0].overs)
-            && !group.takes(fifo.queue.expected_run(), fifo.queue.retired())
-            && !fifo.goes(self.stop, busy)
+        if pending.next != 0 || empty {
+            return false;
+        }
+        let segments = &pending.gpu.segments;
+        let signals = (segments.iter()).any(|segment| !segment.signals.is_empty());
+        let (segment, run) = (&segments[0], fifo.queue.expected_run());
+        match &fifo.group {
+            Some(group) => {
+                !group.leans.conflicts(&segment.overs)
+                    && (signals || !group.takes(run, fifo.queue.retired()))
+                    && !fifo.goes(self.stop, busy)
+            }
+            None => {
+                let room = room(&fifo.in_flight, run.unwrap_or(u64::MAX));
+                signals && !(self.stop || busy || fifo.send_through >= head.place || room)
+            }
+        }
     }
 
     /// The first command buffer not yet scheduled of the FIFO at `index`, whose head waits for
@@ -1578,16 +1596,18 @@ impl WorkState {
         }
         let before = head.held.unwrap_or(u64::MAX);
         let updates = |pending: &Pending| pending.gpu.fences.updates_for(waiter);
-        (self.fifos.iter().enumerate()).find_map(|(other, fifo)| {
-            let group = fifo.group.as_ref().filter(|_| other != index)?;
+        let mut others = (self.fifos.iter().enumerate()).filter(|&(other, _)| other != index);
+        others.find_map(|(other, fifo)| {
             let held = (fifo.entries.iter())
                 .map_while(|entry| entry.held.filter(|&at| at < before).map(|_| entry))
                 .filter(|entry| entry.pending.as_ref().is_some_and(updates))
                 .last()
                 .map(|entry| entry.place);
-            let grouped = (group.finished.iter()).any(|(_, pending, _)| updates(pending))
-                || (group.partial && fifo.head().is_some_and(updates));
-            held.or(grouped.then_some(group.first))
+            let grouped = (fifo.group.as_ref()).filter(|group| {
+                (group.finished.iter()).any(|(_, pending, _)| updates(pending))
+                    || (group.partial && fifo.head().is_some_and(updates))
+            });
+            held.or(grouped.map(|group| group.first))
                 .map(|place| (other, place))
         })
     }
@@ -1755,7 +1775,8 @@ impl WorkState {
         {
             counters.event_hold(now.saturating_sub(since));
         }
-        // An event's signal goes at once: nothing waits on it behind a held group. So does a
+        // An event's signal goes at once, staged only with room: nothing waits on it behind a held
+        // group, as a waiter takes a signal staged as submitted. So does a
         // presenting command buffer's signal of the consumer's semaphore, which its present waits on
         // once the command buffer is scheduled.
         let signals = !staged.signals.is_empty();
@@ -2114,7 +2135,12 @@ fn pass<'a>(core: &'a Core, mut state: MutexGuard<'a, WorkState>) -> MutexGuard<
             state = work.lock();
         }
     }
-    if state.fifos.iter().all(|fifo| fifo.group.is_none()) {
+    let holds = |fifo: &Fifo| {
+        fifo.entries
+            .front()
+            .is_some_and(|entry| entry.held.is_some())
+    };
+    if (state.fifos.iter()).all(|fifo| fifo.group.is_none() && !holds(fifo)) {
         work.keeping.store(false, Ordering::SeqCst);
     }
     if !joined.is_empty() || !ended.is_empty() {

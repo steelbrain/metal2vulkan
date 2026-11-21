@@ -1713,9 +1713,10 @@ made, with no lock, and never rewritten for layouts.
   is to wait for one of them (`wait_until_completed`, or
   `CommandQueue::send_now`, the hint for a wait the runtime does not see), or at teardown. Waiting
   for a place in the queue sends nothing. A segment that signals an event ends its group, which goes
-  at once as it is staged, and so does a presenting command buffer's last (see "Presenting"); one
-  held for room is staged once there is room, so a signal of its waits with it, while a presenting
-  one has its queue go at once, through to it. The
+  at once as it is staged, and so does a presenting command buffer's last (see "Presenting"); so a
+  command buffer that signals an event, in any segment, is staged only once its queue has room for
+  it, as one held for room behind it is, and a wait for its signal waits with it, while a
+  presenting one has its queue go at once, through to it. The
   driver runs a submission's command buffers as one kernel job, which a job timeout ends as a whole
   (Linux's amdgpu ends a job past its timeout and resets the ring), so a group is bounded by its
   expected GPU run: a queue's expected run follows its command buffers'

@@ -1835,13 +1835,15 @@ pub(crate) mod on_device {
     /// the cursor with its number, 1 to 5 for A's and 6 for B's, so the log names the command
     /// buffer that ran just before each (0 for none). `encode(number, command_buffer, after)`
     /// encodes before (`after` false) and after that copy and fill. A's held work is checked
-    /// before `body` runs and B commits: A1 and A2 submitted, A3 in a group held, A4 and A5 held
-    /// for room, not yet in a group, each scheduled with its scheduled handler run
-    /// (`Metrics::held_for_room`). B's is staged, or held for an event's value, before the gate
-    /// opens. Returns the log of A1 to B1 once each completed.
+    /// before `body` runs and B commits: A1 and A2 submitted, the rest each scheduled with its
+    /// scheduled handler run, `held` saying whether A holds a group and how many A holds for room,
+    /// not yet in a group (`Metrics::held_for_room`): A3 in a group and A4 and A5 for room, or,
+    /// where A3 signals an event, A3 to A5 for room. B's is staged, or held for an event's value,
+    /// before the gate opens. Returns the log of A1 to B1 once each completed.
     pub(crate) fn two_queues(
         name: &str,
         device: &Device,
+        held: (bool, u64),
         encode: impl Fn(u32, &CommandBuffer, bool),
         body: impl FnOnce(&CommandQueue, &[CommandBuffer]),
     ) -> Vec<u32> {
@@ -1875,17 +1877,18 @@ pub(crate) mod on_device {
             command_buffer.commit().expect("a commit");
             command_buffer
         };
+        let (group, held_for_room) = held;
         let held = device.counters().metrics().held_for_room;
         let a_work: Vec<CommandBuffer> = (1..=5).map(|number| logged(&a, number)).collect();
         within(name, || scheduled.load(Ordering::SeqCst) == 5);
         let statuses: Vec<_> = a_work.iter().map(CommandBuffer::status).collect();
         assert_eq!(
             (statuses, device.core().work.in_flight(a_work[0].queue())),
-            (vec![CommandBufferStatus::Scheduled; 5], (2, true)),
+            (vec![CommandBufferStatus::Scheduled; 5], (2, group)),
             "{name}: A's held work, each scheduled"
         );
         let counted = device.counters().metrics().held_for_room - held;
-        assert_eq!(counted, 2, "{name}: A4 and A5 held for room");
+        assert_eq!(counted, held_for_room, "{name}: A's held for room");
         body(&a, &a_work);
         let b_work = logged(&b, 6);
         within(name, || {
@@ -1907,7 +1910,7 @@ pub(crate) mod on_device {
     #[test]
     fn every_device_runs_a_queues_command_buffer_ahead_of_another_queues_backlog() {
         each_device("command_two_queues", |name, _, device| {
-            let log = two_queues(name, &device, |_, _, _| {}, |_, _| {});
+            let log = two_queues(name, &device, (true, 2), |_, _, _| {}, |_, _| {});
             assert_eq!(log, [0, 1, 6, 3, 4, 2], "{name}: the one run before each");
         });
     }
@@ -1922,7 +1925,7 @@ pub(crate) mod on_device {
                 let work = &device.core().work;
                 within(name, || work.in_flight(a_work[0].queue()) == (4, true));
             };
-            let log = two_queues(name, &device, |_, _, _| {}, body);
+            let log = two_queues(name, &device, (true, 2), |_, _, _| {}, body);
             assert_eq!(log, [0, 1, 2, 3, 6, 4], "{name}: the one run before each");
         });
     }
@@ -1946,8 +1949,48 @@ pub(crate) mod on_device {
                 }
                 .expect("an event's signal or wait")
             };
-            let log = two_queues(name, &device, encode, |_, _| {});
+            let log = two_queues(name, &device, (true, 2), encode, |_, _| {});
             assert_eq!(log, [0, 1, 2, 3, 4, 5], "{name}: the one run before each");
+        });
+    }
+
+    /// A queue whose every command buffer signals an event keeps on the `VkQueue` only what it
+    /// has room for too: A1 to A5 each signal a shared event's value, their number, and A3 to A5,
+    /// whose signals would each send a group at once, wait for room unstaged, so B1 runs after A1
+    /// and A2 as it does behind work that signals nothing.
+    #[test]
+    fn every_device_runs_a_queues_command_buffer_ahead_of_another_queues_signals() {
+        each_device("command_two_queues_signals", |name, _, device| {
+            let event = shared_event(&device);
+            let encode = |number: u32, command_buffer: &CommandBuffer, after: bool| {
+                if number <= 5 && after {
+                    let signal =
+                        command_buffer.encode_signal_event(event.as_event(), number.into());
+                    signal.expect("an event's signal");
+                }
+            };
+            let log = two_queues(name, &device, (false, 3), encode, |_, _| {});
+            assert_eq!(log, [0, 1, 6, 3, 4, 2], "{name}: the one run before each");
+        });
+    }
+
+    /// So does one whose signal is in a later segment: each of A1 to A5 waits after its work for
+    /// a value another event already holds, which ends its first segment (`encodeWaitForEvent`
+    /// splits a segment with commands), then signals; A3 to A5 wait for room whole.
+    #[test]
+    fn every_device_holds_for_room_a_command_buffer_whose_signal_follows_a_wait() {
+        each_device("command_two_queues_split_signals", |name, _, device| {
+            let (gate, event) = (shared_event(&device), shared_event(&device));
+            let encode = |number: u32, command_buffer: &CommandBuffer, after: bool| {
+                if number <= 5 && after {
+                    (command_buffer.encode_wait_for_event(gate.as_event(), 0)).expect("a wait");
+                    let signal =
+                        command_buffer.encode_signal_event(event.as_event(), number.into());
+                    signal.expect("an event's signal");
+                }
+            };
+            let log = two_queues(name, &device, (false, 3), encode, |_, _| {});
+            assert_eq!(log, [0, 1, 6, 3, 4, 2], "{name}: the one run before each");
         });
     }
 
