@@ -373,6 +373,8 @@ pub(crate) struct Core {
     /// The lowered kernels on disk, and the `VkPipelineCache` every pipeline is made through with
     /// its blob.
     pub(crate) caches: Caches,
+    /// [`DeviceOptions::stage_memory_ceiling`], kept with a memory breach and compared at a make.
+    pub(crate) stage_memory_ceiling: u64,
     /// The compiled kernels by content, which every compute pipeline state of a content shares.
     pub(crate) kernels: KernelMap,
     /// The runtime's own kernels made so far (`crate::own`).
@@ -449,6 +451,16 @@ pub struct DeviceOptions {
     /// share its files and one count of their bytes, and should pass one cap: each starts a new
     /// generation at half its own.
     pub pipeline_cache_cap: Option<u64>,
+    /// No Metal counterpart: the memory ceiling, in bytes, the consumer gives its helper process
+    /// for a kernel past the stage bound ([`serve_stage`](crate::serve_stage)). It is a fact about
+    /// the consumer's helper that the runtime only stores with a memory breach
+    /// ([`StageBreach::Memory`](crate::StageBreach::Memory)) and compares at a make; the runtime
+    /// takes no other path by it, on any device. At the make, a memory breach kept under a lower
+    /// ceiling is a miss ([`Error::StageUnfilled`](crate::Error::StageUnfilled)), so the helper is
+    /// asked again under this one; one kept under this ceiling or a higher one refuses. A memory
+    /// breach entry that holds no ceiling counts as kept under 0, the default, so on a device
+    /// given 0 every memory breach refuses.
+    pub stage_memory_ceiling: u64,
     /// For the device tests: what the block-maker thread does with the internals asked of it,
     /// from its first work on.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -844,6 +856,7 @@ impl Device {
             heap_ids: HeapIds::default(),
             translator,
             caches,
+            stage_memory_ceiling: options.stage_memory_ceiling,
             kernels: KernelMap::new(),
             own: crate::own::OwnKernels::default(),
             entries: metal2vulkan::pipeline::StageEntries::new(),

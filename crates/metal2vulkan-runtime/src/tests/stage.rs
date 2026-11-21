@@ -1,8 +1,10 @@
 //! Kernels past the stage bound: the `stages/` directory holds at most its bounds, the most
 //! recently used kept; an entry cut short, of another key or another driver's header is a miss and
-//! removed; the wire reads its own version alone; and on a device, a kernel past the bound is
-//! refused until its helper fills its entry, then made from that entry alone, leaving the device's
-//! own pipeline cache as it was, and a breach refuses it with no helper asked again.
+//! removed; a memory breach holds up to the memory ceiling it was kept under; the wire reads its
+//! own version alone; and on a device, a kernel past the bound is refused until its helper fills
+//! its entry, then made from that entry alone, leaving the device's own pipeline cache as it was,
+//! and a breach refuses it with no helper asked again, a memory breach on a device given its
+//! ceiling or a lower one.
 
 use crate::stage::{keep_entry, read_entry, read_frame, write_frame, Entry, Framing, StageBounds};
 use crate::StageBreach;
@@ -54,6 +56,13 @@ fn held(dir: &Path) -> Vec<u8> {
     held
 }
 
+/// Writes key `at`'s entry as the key, then `kept`, framed as the directory frames an entry.
+fn write_raw(dir: &Path, at: u8, kept: &[u8]) {
+    let body = [&key(at)[..], kept].concat();
+    let framed = [&crate::cache::frame(&body)[..], &body[..]].concat();
+    fs::write(dir.join(crate::cache::hex(&key(at))), framed).expect("an entry");
+}
+
 /// Marks key `at`'s entry as last used `seconds` after the epoch.
 fn used_at(dir: &Path, at: u8, seconds: u64) {
     let path = dir.join(crate::cache::hex(&key(at)));
@@ -80,7 +89,7 @@ fn the_stage_directory_keeps_its_bounds_oldest_use_out_first() {
     }
     // Key 1, the oldest, is used again: it is now the newest.
     assert_eq!(
-        read_entry(dir, &key(1), &HEADER),
+        read_entry(dir, &key(1), &HEADER, 0),
         Some(Entry::Data(data(100)))
     );
     assert!(keep_entry(dir, &key(4), &Entry::Data(data(100)), bounds));
@@ -105,10 +114,10 @@ fn the_stage_directory_keeps_its_bounds_oldest_use_out_first() {
         bytes: 1 << 20,
         entries: 2,
     };
-    let breach = Entry::Breach(StageBreach::Memory);
+    let breach = Entry::Breach(StageBreach::Memory, 0);
     assert!(keep_entry(dir, &key(6), &breach, bounds));
     assert_eq!(held(dir), [5, 6]);
-    assert_eq!(read_entry(dir, &key(6), &HEADER), Some(breach));
+    assert_eq!(read_entry(dir, &key(6), &HEADER, 0), Some(breach));
 }
 
 /// An entry cut short, one under another key's name, one whose data begins with another driver's
@@ -123,16 +132,16 @@ fn a_cut_or_foreign_entry_is_a_miss_and_is_removed() {
     assert!(keep_entry(dir, &key(1), &Entry::Data(data(64)), bounds));
     let whole = fs::read(path(1)).expect("the entry");
     fs::write(path(1), &whole[..whole.len() - 1]).expect("cut");
-    assert_eq!(read_entry(dir, &key(1), &HEADER), None);
+    assert_eq!(read_entry(dir, &key(1), &HEADER, 0), None);
     assert!(!path(1).exists(), "the cut entry is removed");
     // Another key's entry under this key's name.
     assert!(keep_entry(dir, &key(2), &Entry::Data(data(64)), bounds));
     fs::rename(path(2), path(3)).expect("renamed");
-    assert_eq!(read_entry(dir, &key(3), &HEADER), None);
+    assert_eq!(read_entry(dir, &key(3), &HEADER, 0), None);
     assert!(!path(3).exists(), "the foreign entry is removed");
     // Data of another driver's header.
     assert!(keep_entry(dir, &key(4), &Entry::Data(data(64)), bounds));
-    assert_eq!(read_entry(dir, &key(4), &[8; 32]), None);
+    assert_eq!(read_entry(dir, &key(4), &[8; 32], 0), None);
     assert!(!path(4).exists(), "another driver's data is removed");
     // Each breach reads back as itself, and an unknown one is a miss.
     let breaches = [
@@ -142,18 +151,82 @@ fn a_cut_or_foreign_entry_is_a_miss_and_is_removed() {
         StageBreach::CompileRequired,
     ];
     for (at, breach) in (10..).zip(breaches) {
-        assert!(keep_entry(dir, &key(at), &Entry::Breach(breach), bounds));
-        let read = read_entry(dir, &key(at), &HEADER);
-        assert_eq!(read, Some(Entry::Breach(breach)));
+        assert!(keep_entry(dir, &key(at), &Entry::Breach(breach, 0), bounds));
+        let read = read_entry(dir, &key(at), &HEADER, 0);
+        assert_eq!(read, Some(Entry::Breach(breach, 0)));
     }
-    let mut body = key(20).to_vec();
-    body.extend([1, 0xff]);
-    let framed = [&crate::cache::frame(&body)[..], &body[..]].concat();
-    fs::write(path(20), framed).expect("an unknown breach");
-    assert_eq!(read_entry(dir, &key(20), &HEADER), None);
-    assert!(!path(20).exists(), "the unknown breach is removed");
+    // An unknown breach, a time breach followed by a ceiling, and a memory breach followed by
+    // half of one.
+    for kept in [
+        &[1, 0xff][..],
+        &[1, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+        &[1, 0, 0, 0, 0, 0],
+    ] {
+        write_raw(dir, 20, kept);
+        assert_eq!(read_entry(dir, &key(20), &HEADER, 0), None, "{kept:?}");
+        assert!(!path(20).exists(), "{kept:?} is removed");
+    }
     // A key with no file is a miss.
-    assert_eq!(read_entry(dir, &key(21), &HEADER), None);
+    assert_eq!(read_entry(dir, &key(21), &HEADER, 0), None);
+}
+
+/// A memory breach kept under a ceiling holds at that ceiling and below; above it, the entry is a
+/// miss and removed, so the make asks for a fill, and a fill's entry replaces the breach. A memory
+/// breach of its byte alone holds at 0 alone. The other breaches keep their byte alone and hold,
+/// and data reads back, under every ceiling.
+#[test]
+fn a_memory_breach_holds_to_its_ceiling_and_is_a_miss_above_it() {
+    let scratch = Scratch::new("stage-ceiling");
+    let dir = &scratch.0;
+    let bounds = crate::stage::STAGE_BOUNDS;
+    let path = |at: u8| dir.join(crate::cache::hex(&key(at)));
+    let len = |at: u8| fs::metadata(path(at)).expect("the entry").len();
+    let memory = |ceiling| Entry::Breach(StageBreach::Memory, ceiling);
+    let a = 8 << 30;
+    assert!(keep_entry(dir, &key(1), &memory(a), bounds));
+    assert_eq!(len(1), 66, "the frame, the key, the breach and its ceiling");
+    for ceiling in [0, a - 1, a] {
+        let read = read_entry(dir, &key(1), &HEADER, ceiling);
+        assert_eq!(read, Some(memory(a)), "at {ceiling}");
+    }
+    assert_eq!(read_entry(dir, &key(1), &HEADER, a + 1), None);
+    assert!(
+        !path(1).exists(),
+        "the breach under a lower ceiling is removed"
+    );
+    assert!(keep_entry(dir, &key(2), &memory(a), bounds));
+    assert!(keep_entry(dir, &key(2), &Entry::Data(data(64)), bounds));
+    let read = read_entry(dir, &key(2), &HEADER, a);
+    assert_eq!(
+        read,
+        Some(Entry::Data(data(64))),
+        "the fill replaced the breach"
+    );
+    for ceiling in [0, 1, a] {
+        write_raw(dir, 3, &[1, 0]);
+        let read = read_entry(dir, &key(3), &HEADER, ceiling);
+        assert_eq!(read, (ceiling == 0).then_some(memory(0)), "at {ceiling}");
+    }
+    let others = [
+        StageBreach::Time,
+        StageBreach::Compile,
+        StageBreach::CompileRequired,
+    ];
+    for (at, breach) in (10..).zip(others) {
+        assert!(keep_entry(dir, &key(at), &Entry::Breach(breach, 0), bounds));
+        assert_eq!(len(at), 58, "{breach:?}: the frame, the key and the breach");
+        for ceiling in [0, a, u64::MAX] {
+            let read = read_entry(dir, &key(at), &HEADER, ceiling);
+            assert_eq!(
+                read,
+                Some(Entry::Breach(breach, 0)),
+                "{breach:?} at {ceiling}"
+            );
+        }
+    }
+    assert!(keep_entry(dir, &key(20), &Entry::Data(data(64)), bounds));
+    let read = read_entry(dir, &key(20), &HEADER, u64::MAX);
+    assert_eq!(read, Some(Entry::Data(data(64))));
 }
 
 /// A frame reads back whole; one of another wire version is refused as such; one cut short or
@@ -220,10 +293,16 @@ mod on_device {
         )))
     }
 
-    /// A device on `dir`, or with no cache directory.
-    fn on(name: &str, physical: &crate::PhysicalDevice, dir: Option<&Path>) -> Device {
+    /// A device on `dir`, or with no cache directory, given the stage memory ceiling `ceiling`.
+    fn on(
+        name: &str,
+        physical: &crate::PhysicalDevice,
+        dir: Option<&Path>,
+        ceiling: u64,
+    ) -> Device {
         let options = DeviceOptions {
             pipeline_cache_dir: dir.map(Path::to_owned),
+            stage_memory_ceiling: ceiling,
             ..DeviceOptions::default()
         };
         Device::new(physical, options).unwrap_or_else(|error| panic!("{name}: {error}"))
@@ -236,7 +315,8 @@ mod on_device {
     /// again creates the `VkPipeline` from that entry alone, with the fail-on-compile-required
     /// flag, counted, leaving the device's own pipeline cache's data as it was; the fill answers
     /// the helper's device creation and compile times. A breach recorded for the request refuses a
-    /// later device's make, with no helper asked.
+    /// later device's make, with no helper asked. A memory breach kept under ceiling 0 is a miss
+    /// on a device given ceiling 1, which asks for the same fill, and one kept there refuses there.
     #[test]
     fn a_kernel_past_the_stage_bound_is_made_only_from_its_helpers_fill() {
         let Some(descriptor) = tiled() else {
@@ -250,7 +330,7 @@ mod on_device {
             device.new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers)
         };
         for (name, physical) in &devices {
-            let refused = make(&on(name, physical, None)).err();
+            let refused = make(&on(name, physical, None, 0)).err();
             assert!(
                 matches!(
                     refused,
@@ -262,7 +342,7 @@ mod on_device {
                 "{name}: {refused:?}"
             );
             let scratch = Scratch::new("stage-fill");
-            let device = on(name, physical, Some(&scratch.0));
+            let device = on(name, physical, Some(&scratch.0), 0);
             if !crate::tests::keeps_a_blob(name, &device) {
                 let refused = make(&device).err();
                 assert!(
@@ -313,23 +393,36 @@ mod on_device {
             assert_eq!(after, shared, "{name}: the device's own pipeline cache");
             drop(state);
             drop(device);
+            let breached = |device: &Device| {
+                device.record_stage_breach(&request, StageBreach::Memory);
+                let refused = make(device).err();
+                assert!(
+                    matches!(
+                        refused,
+                        Some(Error::Unsupported(Gap::StageSize {
+                            cause: StageGap::Breach(StageBreach::Memory),
+                            ..
+                        }))
+                    ),
+                    "{name}: {refused:?}"
+                );
+            };
             // A breach refuses a later device's make, with no helper asked.
-            let device = on(name, physical, Some(&scratch.0));
-            device.record_stage_breach(&request, StageBreach::Memory);
-            let refused = make(&device).err();
-            assert!(
-                matches!(
-                    refused,
-                    Some(Error::Unsupported(Gap::StageSize {
-                        cause: StageGap::Breach(StageBreach::Memory),
-                        ..
-                    }))
-                ),
-                "{name}: {refused:?}"
-            );
+            let device = on(name, physical, Some(&scratch.0), 0);
+            breached(&device);
+            drop(device);
+            // That memory breach, kept under ceiling 0, is a miss on a device given ceiling 1,
+            // which asks for the same fill; one kept there refuses there.
+            let device = on(name, physical, Some(&scratch.0), 1);
+            match make(&device) {
+                Err(Error::StageUnfilled(again)) => assert_eq!(again, request, "{name}"),
+                other => panic!("{name}: {:?}", other.err()),
+            }
+            breached(&device);
             println!(
                 "{name}: refused unfilled, filled by its helper (device {} ms, compile {} ms), made \
-                 from the entry alone, then refused by its breach",
+                 from the entry alone, refused by its memory breach at ceiling 0, asked again at \
+                 ceiling 1, then refused by a breach kept there",
                 spans.device_nanos / 1_000_000,
                 spans.compile_nanos / 1_000_000
             );

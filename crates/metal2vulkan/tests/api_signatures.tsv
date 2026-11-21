@@ -1502,6 +1502,7 @@ field	metal2vulkan-runtime::DeviceOptions.extensions	pub extensions: Vec<DeviceE
 field	metal2vulkan-runtime::DeviceOptions.features	pub features: Vec<ConsumerFeature>
 field	metal2vulkan-runtime::DeviceOptions.pipeline_cache_cap	pub pipeline_cache_cap: Option<u64>
 field	metal2vulkan-runtime::DeviceOptions.pipeline_cache_dir	pub pipeline_cache_dir: Option<PathBuf>
+field	metal2vulkan-runtime::DeviceOptions.stage_memory_ceiling	pub stage_memory_ceiling: u64
 field	metal2vulkan-runtime::Export.handle	pub handle: std::os::fd::OwnedFd
 field	metal2vulkan-runtime::Export.handle	pub handle: std::os::windows::io::OwnedHandle
 field	metal2vulkan-runtime::Export.memory_type	pub memory_type: u32

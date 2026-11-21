@@ -1485,7 +1485,8 @@ pub enum StageGap {
     /// The kernel's entry holds a breach: what ended its helper's compile, or the driver's
     /// compile-required answer to the helper's cache data
     /// ([`Device::record_stage_breach`](crate::Device::record_stage_breach)). Kept until the
-    /// driver's version changes.
+    /// driver's version changes; a memory breach, until a device is given a higher
+    /// [`DeviceOptions::stage_memory_ceiling`](crate::DeviceOptions::stage_memory_ceiling).
     Breach(crate::StageBreach),
     /// The device has no cache directory
     /// ([`DeviceOptions::pipeline_cache_dir`](crate::DeviceOptions::pipeline_cache_dir)) to keep a

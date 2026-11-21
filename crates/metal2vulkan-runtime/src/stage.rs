@@ -28,7 +28,10 @@
 //! **A breach is final for its driver.** An entry that holds a breach refuses the pipeline
 //! ([`Gap::StageSize`]) with no helper asked again, and so does one whose cache data the driver
 //! answered compile-required for: that answer is kept as a breach. The key holds the driver's
-//! header, so a new driver version asks again.
+//! header, so a new driver version asks again. A [`StageBreach::Memory`] entry also holds the
+//! memory ceiling of the consumer's helper it was kept under
+//! ([`DeviceOptions::stage_memory_ceiling`]), 0 where it holds the breach's byte alone: on a
+//! device given a higher ceiling it is a miss, and removed.
 //!
 //! **The wire.** [`Device::fill_stage`] writes one request frame to the helper and reads one reply
 //! frame back: each the magic `m2vstage`, the wire version, the payload's length and its checksum,
@@ -88,7 +91,9 @@ const ENABLES: u32 = 3;
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StageBreach {
-    /// The helper passed the memory cap the consumer gave it.
+    /// The helper passed the memory cap the consumer gave it. Kept with the device's
+    /// [`DeviceOptions::stage_memory_ceiling`], and refuses only on a device given that ceiling
+    /// or a lower one: one given a higher ceiling asks the helper again.
     Memory,
     /// The helper passed the time the consumer gave it.
     Time,
@@ -339,7 +344,7 @@ pub(crate) fn made(
     let header = (core.caches.header()).ok_or_else(|| gap(weight, StageGap::NoPipelineCache))?;
     let enables = core.enables();
     let key = key(&header, &enables, heavy, create);
-    let data = match read_entry(&dir, &key, &header) {
+    let data = match read_entry(&dir, &key, &header, core.stage_memory_ceiling) {
         None => {
             let (instance, physical) = (core.instance.raw().1, core.physical);
             return Err(Error::StageUnfilled(StageRequest(Arc::new(Request {
@@ -356,7 +361,7 @@ pub(crate) fn made(
                 data: create.data.to_vec(),
             }))));
         }
-        Some(Entry::Breach(breach)) => return Err(gap(weight, StageGap::Breach(breach))),
+        Some(Entry::Breach(breach, _)) => return Err(gap(weight, StageGap::Breach(breach))),
         Some(Entry::Data(data)) => data,
     };
     let info = vk::PipelineCacheCreateInfo::default().initial_data(&data);
@@ -384,7 +389,7 @@ pub(crate) fn made(
         }
         Err((_, vk::Result::PIPELINE_COMPILE_REQUIRED)) => {
             let breach = StageBreach::CompileRequired;
-            keep_entry(&dir, &key, &Entry::Breach(breach), STAGE_BOUNDS);
+            keep_entry(&dir, &key, &Entry::Breach(breach, 0), STAGE_BOUNDS);
             Err(gap(weight, StageGap::Breach(breach)))
         }
         Err((_, result)) => Err(Error::Vulkan {
@@ -453,7 +458,7 @@ impl Device {
             }
             COMPILE => {
                 let raw = reply.u32().ok_or(StageFill::Ended)?;
-                keep(&Entry::Breach(StageBreach::Compile));
+                keep(&Entry::Breach(StageBreach::Compile, 0));
                 Err(StageFill::Compile(vk::Result::from_raw(raw as i32)))
             }
             NO_DEVICE => Err(StageFill::NoDevice),
@@ -465,10 +470,13 @@ impl Device {
     /// No Metal counterpart: keeps `breach` as the entry of `request`'s pipeline, so its makes are
     /// refused ([`Gap::StageSize`]) with no helper asked again, until the driver's version changes:
     /// what the consumer ended its helper for ([`StageBreach::Memory`], [`StageBreach::Time`]).
-    /// A directory that takes no entry keeps nothing.
+    /// A memory breach is kept with the device's [`DeviceOptions::stage_memory_ceiling`], and a
+    /// device given a higher ceiling asks the helper again. A directory that takes no entry keeps
+    /// nothing.
     pub fn record_stage_breach(&self, request: &StageRequest, breach: StageBreach) {
-        if let Some(dir) = self.core().caches.dir() {
-            let entry = Entry::Breach(breach);
+        let core = self.core();
+        if let Some(dir) = core.caches.dir() {
+            let entry = Entry::Breach(breach, core.stage_memory_ceiling);
             keep_entry(&dir.join(STAGES), &request.0.key, &entry, STAGE_BOUNDS);
         }
     }
@@ -627,12 +635,21 @@ unsafe fn compile(core: &Core, request: &Request) -> Result<(Vec<u8>, u64), vk::
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Entry {
     Data(Vec<u8>),
-    Breach(StageBreach),
+    /// A breach, with the memory ceiling ([`DeviceOptions::stage_memory_ceiling`]) a
+    /// [`StageBreach::Memory`] was kept under: written after the breach's byte for a memory breach
+    /// alone, and read as 0 where no ceiling follows the byte.
+    Breach(StageBreach, u64),
 }
 
-/// The entry of key `key` in `dir`, where it checks for a device of `header`, touched as used; a
-/// file that does not check is removed (the module docs).
-pub(crate) fn read_entry(dir: &Path, key: &[u8; 32], header: &[u8; 32]) -> Option<Entry> {
+/// The entry of key `key` in `dir`, where it checks for a device of `header` given the memory
+/// ceiling `ceiling`, touched as used; a file that does not check, or a memory breach kept under a
+/// ceiling below `ceiling`, is a miss and removed (the module docs).
+pub(crate) fn read_entry(
+    dir: &Path,
+    key: &[u8; 32],
+    header: &[u8; 32],
+    ceiling: u64,
+) -> Option<Entry> {
     let path = dir.join(hex(key));
     let file = read_whole(&path, None).ok().flatten()?;
     let entry = unframe(&file).and_then(|body| {
@@ -641,9 +658,17 @@ pub(crate) fn read_entry(dir: &Path, key: &[u8; 32], header: &[u8; 32]) -> Optio
         match (kind, payload) {
             _ if held != key => None,
             (DATA, data) if data.starts_with(header) => Some(Entry::Data(data.to_vec())),
-            (BREACH, &[byte]) => (StageBreach::ALL.into_iter())
-                .find(|breach| breach.byte() == byte)
-                .map(Entry::Breach),
+            (BREACH, [byte, kept @ ..]) => {
+                let breach =
+                    (StageBreach::ALL.into_iter()).find(|breach| breach.byte() == *byte)?;
+                let memory = breach == StageBreach::Memory;
+                let kept = match kept {
+                    [] => 0,
+                    kept if memory => u64::from_le_bytes(kept.try_into().ok()?),
+                    _ => return None,
+                };
+                (!memory || kept >= ceiling).then_some(Entry::Breach(breach, kept))
+            }
             _ => None,
         }
     });
@@ -668,7 +693,12 @@ pub(crate) fn keep_entry(dir: &Path, key: &[u8; 32], entry: &Entry, bounds: Stag
             body.push(DATA);
             body.extend_from_slice(data);
         }
-        Entry::Breach(breach) => body.extend([BREACH, breach.byte()]),
+        Entry::Breach(breach, ceiling) => {
+            body.extend([BREACH, breach.byte()]);
+            if *breach == StageBreach::Memory {
+                body.extend(ceiling.to_le_bytes());
+            }
+        }
     }
     let _ = fs::create_dir_all(dir);
     let written = write_whole(&dir.join(hex(key)), &[&frame(&body), &body]).is_ok();

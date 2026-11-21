@@ -88,7 +88,8 @@ them over this crate's items:
   directory the device keeps its lowered functions and its pipeline cache in,
   `pipeline_cache_dir`, and the most bytes the lowerings take, `pipeline_cache_cap` (see "The
   cache directory"). With `None`, every boot lowers every function and compiles every pipeline
-  cold, so a consumer should pass a directory.
+  cold, so a consumer should pass a directory. It states the memory ceiling it gives its helper
+  for a kernel past the stage bound, `stage_memory_ceiling` (see "Kernels past the stage bound").
 - `Device::raw` gives the instance, physical device, device and queue family handles, and
   `Device::with_present_queue` runs the consumer's presents on the presenting queue under its lock
   (see "Presenting"). The runtime keeps owning every handle.
@@ -2762,6 +2763,16 @@ created here from that compile's cache data alone.
   (`Gap::StageSize`, `StageGap::Breach`) with no helper asked again. So does cache data the driver
   answers compile-required for (`StageBreach::CompileRequired`): it is not filled a second time.
   The stage key holds the driver's pipeline cache header, so a new driver version asks again.
+- A memory breach also holds the memory ceiling the consumer gives its helper,
+  `DeviceOptions::stage_memory_ceiling` (bytes, 0 by default), as the device that kept it was
+  given. That ceiling is a fact about the consumer's helper: rt only stores it with a memory breach
+  and compares it at a make, and takes no other path by it, on any device. On a device given a
+  higher ceiling than the breach's, its entry is a miss and is removed, and the make is refused
+  with `Error::StageUnfilled` again: the consumer runs its helper under the higher ceiling, and the
+  fill, or a breach kept under that ceiling, takes the entry's place. At the breach's ceiling or
+  below, it refuses as before. A memory breach entry that holds the breach's byte alone, with no
+  ceiling after it, counts as kept under 0. Time, compile and compile-required breaches hold no
+  ceiling.
 - The entries are files of the cache directory only: nothing of an entry stays in memory past
   the call that reads or writes it. Each holds its key again under a magic, its length and its
   checksum; one that does not check, names another key or holds data that does not begin with the
