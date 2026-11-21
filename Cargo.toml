@@ -13,8 +13,8 @@ members = [
 default-members = ["crates/metal2vulkan"]
 resolver = "2"
 
-# What every crate here shares. The translator's source fingerprint hashes this manifest beside its
-# own, because the translator inherits from it (`build_support.rs`).
+# What every crate here shares. Validation's product fingerprint hashes this manifest beside the
+# translator's, because the translator inherits from it (`crates/metal2vulkan-validation/build_support.rs`).
 [workspace.package]
 edition = "2021"
 rust-version = "1.98"

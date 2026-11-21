@@ -11,8 +11,8 @@ repository.workspace = true
 documentation = "https://docs.rs/metal2vulkan-air"
 keywords = ["metal", "air", "llvm", "bitcode", "gpu"]
 categories = ["compilers", "graphics", "parser-implementations"]
-# No binaries and no build script unless declared here: the build scripts that fingerprint this
-# crate's sources (the translator's build_support.rs) watch only the files its module tree reaches
+# No binaries and no build script unless declared here: the build script that fingerprints this
+# crate's sources (validation's build_support.rs) watches only the files its module tree reaches
 # and this manifest.
 autobins = false
 build = false

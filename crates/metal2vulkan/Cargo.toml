@@ -12,9 +12,11 @@ repository.workspace = true
 documentation = "https://docs.rs/metal2vulkan"
 keywords = ["metal", "air", "spir-v", "vulkan", "gpu"]
 categories = ["compilers", "graphics", "encoding"]
-# Every binary has its own [[bin]] table: no crate root can appear unannounced, so the build
-# scripts watch only the files the product fingerprint hashes (build_support.rs).
+# Every binary has its own [[bin]] table and no build script runs: no crate root can appear
+# unannounced, so validation's build script watches only the files its product fingerprint hashes
+# (crates/metal2vulkan-validation/build_support.rs).
 autobins = false
+build = false
 # crates.io ships only this product crate's lib, bin, examples, and unit and integration tests
 # (src/, examples/, tests/). The other workspace crates live beside it under crates/ (the AIR front
 # end is published as its own crate, `metal2vulkan-air`); the private corpus, scripts and docs are
@@ -47,8 +49,8 @@ path = "src/lib.rs"
 [dependencies]
 # The AIR front end: the container, bitcode, typed IR, ABI, intrinsics,
 # canonicalization, CFG algorithms and the per-attempt budget. Pinned exactly: the two crates move
-# in lockstep, one version. Named here, not through the workspace: the build script's source
-# fingerprint reads this path to hash the front end's sources (`build_support.rs`).
+# in lockstep, one version. Named here, not through the workspace: validation's product
+# fingerprint reads this path to hash the front end's sources (its `build_support.rs`).
 metal2vulkan-air = { version = "=0.2.0", path = "../metal2vulkan-air" }
 # Optional: the new API's plain-data values.
 serde = { workspace = true, optional = true }
@@ -71,9 +73,6 @@ cli = ["serde"]
 # `From` conversions between the plain-data `vk` values and `ash::vk`, and
 # `DeviceDescription::query` (DESIGN §2.2 `ash_interop`).
 ash = ["dep:ash"]
-
-[build-dependencies]
-sha2.workspace = true
 
 [dev-dependencies]
 # The tests' fixture assemblers and fixture directories. Path-only, so `cargo

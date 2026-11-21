@@ -1,18 +1,13 @@
-//! Shared source-fingerprint inputs for the runtime's shader cache and validation caches.
+//! The product's source-fingerprint inputs, for validation's caches.
 //!
-//! [`product_hash`] is the product's source fingerprint: the runtime's source ID (the translator's
-//! `build.rs`) and the validation crate's product fingerprint (its `build.rs`, the dependency of its
-//! observations, census keys, and analyzer key) are this hash. It covers exactly the files that can be compiled
-//! into the product or read by it, found by following the crate roots' module tree the way rustc
-//! resolves it, so an edit to a test-only module, a test fixture, or a file no module declares
-//! leaves it unchanged. It covers the AIR front end's crate (`metal2vulkan-air`) the same way while
-//! the product names it as a path dependency (in a published build the hashed manifest's exact pin
-//! names its sources). [`product_inputs`] is what a build script that takes it watches.
-//!
-//! Two copies of this file build: the translator's (`crates/metal2vulkan/build_support.rs`) and the
-//! validation crate's (`crates/metal2vulkan-validation/build_support.rs`), because no crate includes
-//! a file outside its own directory. They are one file, byte for byte: validation's test
-//! `the_build_support_copy_is_the_translators` fails when they differ.
+//! [`product_hash`] is the product's source fingerprint: the validation crate's product fingerprint
+//! (its `build.rs`, the dependency of its observations, census keys, and analyzer key) is this
+//! hash. It covers exactly the files that can be compiled into the product or read by it, found by
+//! following the crate roots' module tree the way rustc resolves it, so an edit to a test-only
+//! module, a test fixture, or a file no module declares leaves it unchanged. It covers the AIR
+//! front end's crate (`metal2vulkan-air`) the same way while the product names it as a path
+//! dependency (in a published build the hashed manifest's exact pin names its sources).
+//! [`product_inputs`] is what the build script that takes it watches.
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs;
@@ -22,9 +17,10 @@ use std::path::{Component, Path, PathBuf};
 /// manifest, the build inputs, and every file under `src/`) never equals one taken under this one,
 /// even for a tree where the two file sets agree.
 const PRODUCT_DEFINITION: &[u8] =
-    b"metal2vulkan product sources: the crate roots' module trees, the AIR front end's included\0";
+    b"metal2vulkan product sources: the crate roots' module trees, the AIR front end's included, \
+      each crate's build script where one lies beside its manifest\0";
 
-/// The product crate's source fingerprint: its manifest, `build.rs`, this file, and
+/// The product crate's source fingerprint: its manifest, its `build.rs` (if any), and
 /// [`product_files`], the same of the AIR front end's crate where the manifest names it by path,
 /// and the workspace's manifest where the product's inherits from it, each by its path relative to
 /// `root`, length, and bytes, after a tag naming this definition. It asks Cargo to rerun the build
@@ -42,7 +38,7 @@ pub fn product_hash(root: &Path) -> Sha256 {
 
 /// What [`product_hash`] reads, and what its build script watches.
 pub struct ProductInputs {
-    /// The files it hashes, sorted: the manifest, `build.rs`, this file, and [`product_files`];
+    /// The files it hashes, sorted: the manifest, `build.rs` (if any), and [`product_files`];
     /// the AIR front end's manifest, `build.rs` (if any), and [`product_files`] where the
     /// product's manifest names that crate by path; and the workspace's manifest where the
     /// product's inherits from it ([`workspace_manifest`]).
@@ -64,11 +60,14 @@ pub struct ProductInputs {
 
 /// [`ProductInputs`] of the product below `root`.
 pub fn product_inputs(root: &Path) -> ProductInputs {
-    let mut files = vec![
-        root.join("Cargo.toml"),
-        root.join("build.rs"),
-        root.join("build_support.rs"),
-    ];
+    let mut files = vec![root.join("Cargo.toml")];
+    // The product's manifest turns Cargo's build-script discovery off (`build = false`), as the
+    // front end's does, so a build script it declares is a manifest edit; one beside it is
+    // hashed whether it runs or not.
+    let build = root.join("build.rs");
+    if build.is_file() {
+        files.push(build);
+    }
     files.extend(workspace_manifest(root));
     files.extend(product_files(root));
     let mut watched = if crate_roots(root).discoverable {
