@@ -183,7 +183,7 @@ fn interpolants_read_where_their_functions_say_or_are_refused() {
     without.features.remove(&VkFeature::SampleRateShading);
     descriptions.push((NO_SAMPLE_RATE.into(), without));
     for (stem, desc) in descriptions {
-        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
         let functions = interpolation_functions(&dev);
         let fields = dev.profile().fields();
         let origin = VkProperty::InterpolateAtOffsetCentered;
@@ -292,8 +292,8 @@ fn an_interpolant_chosen_at_run_time_is_not_lowered() {
     };
     let mut checked = 0;
     for stem in stems() {
-        let dev =
-            Device::from_queries(description(&stem), DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(description(&stem), DevicePolicy::RESIDENT_TABLES)
+            .expect("device");
         for samples in [1, 4] {
             let what = format!("{stem} pm_selected at {samples}");
             let d = render(&lib, "pm_selected", (PixelFormat::RGBA32Float, 1), samples);
@@ -327,8 +327,8 @@ fn an_offset_read_where_the_quad_may_have_left_is_not_lowered() {
     };
     let mut checked = 0;
     for stem in stems() {
-        let dev =
-            Device::from_queries(description(&stem), DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(description(&stem), DevicePolicy::RESIDENT_TABLES)
+            .expect("device");
         for samples in [1, 4] {
             let what = format!("{stem} pm_offset_after_discard at {samples}");
             let d = render(

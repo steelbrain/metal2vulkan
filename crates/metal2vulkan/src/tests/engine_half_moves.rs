@@ -15,10 +15,10 @@
 //!   recorded as `PrecisionNote::DeviceNanEncoding`), so the texel must be the exact widening of
 //!   each value that is not a NaN, and a NaN for each NaN.
 //!
-//! Each runs on every committed profile under the default policy. A module may leave a NaN's bits
-//! to the device, and then says so: a `half` read from its bits by the device's widening (every
-//! profile with `shaderFloat16`) or a NaN's bits left to the device's arithmetic and conversions,
-//! each `PrecisionNote::NativeNanEncoding`, or the native conversion's
+//! Each runs on every committed profile under the resident-table domains. A module may leave a
+//! NaN's bits to the device, and then says so: a `half` read from its bits by the device's widening
+//! (every profile with `shaderFloat16`) or a NaN's bits left to the device's arithmetic and
+//! conversions, each `PrecisionNote::NativeNanEncoding`, or the native conversion's
 //! `PrecisionNote::NativeHalfConversion`. There
 //! a NaN pattern need only come back a NaN (a move through the select or the threadgroup array; a
 //! move straight to a buffer reuses the loaded bits). No other pattern may change, nor any where
@@ -297,7 +297,7 @@ fn every_half_pattern_moves_as_its_bits() {
     let mut runs: Vec<(&str, String, Arc<[u32]>)> = Vec::new();
     let mut modules: BTreeMap<Arc<[u32]>, Compiled> = BTreeMap::new();
     {
-        let (policy_name, policy) = ("default", DevicePolicy::default());
+        let (policy_name, policy) = ("default", DevicePolicy::RESIDENT_TABLES);
         for (stem, p) in committed_profiles_with(policy).expect("profiles") {
             let Some((words, compiled)) = compile_once(&stem, &p, &bc, policy_name) else {
                 continue;

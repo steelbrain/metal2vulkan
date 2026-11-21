@@ -127,7 +127,7 @@ declare { <4 x float>, i8 } @air.sample_texture_2d_grad.v4f32(ptr addrspace(1), 
 fn p(stem: &str) -> DeviceProfile {
     let mut desc = crate::pipeline::testing::description(stem).expect(stem);
     desc.features.remove(&VkFeature::SamplerAnisotropy);
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect(stem)
         .profile()
         .clone()
@@ -136,7 +136,7 @@ fn p(stem: &str) -> DeviceProfile {
 /// Committed profile `stem` as described, `samplerAnisotropy` included: the device's own
 /// anisotropic filter.
 fn full(stem: &str) -> DeviceProfile {
-    profile(stem, DevicePolicy::default()).expect(stem)
+    profile(stem, DevicePolicy::RESIDENT_TABLES).expect(stem)
 }
 
 fn ok(bc: &[u8], entry: &str, p: &DeviceProfile) -> std::sync::Arc<FunctionArtifact> {
@@ -344,7 +344,7 @@ fn a_bound_anisotropic_sampler_asks_for_the_variant() {
     let text = std::fs::read_to_string(&path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     assert!(desc.features.remove(&VkFeature::SamplerAnisotropy));
-    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
     let pipeline = |inputs: &LoweringInputs| {
         let function = Library::from_air(&bc)
             .and_then(|lib| lib.function("k"))
@@ -617,7 +617,7 @@ fn without_sampler_anisotropy_metals_filter_is_emulated() {
     let fact = RuntimeFact::AnisotropicSampler { slot: SLOT };
     for withheld in [false, true] {
         let what = format!("samplerAnisotropy withheld {withheld}");
-        let p = anisotropy_of("lavapipe", DevicePolicy::default(), withheld);
+        let p = anisotropy_of("lavapipe", DevicePolicy::RESIDENT_TABLES, withheld);
         let device = !withheld;
         let a = ok(&constexpr, "k", &p);
         assert_eq!(

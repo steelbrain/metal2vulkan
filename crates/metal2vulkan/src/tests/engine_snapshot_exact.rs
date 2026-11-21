@@ -5,8 +5,8 @@
 //! whose bound view the binder names the snapshot's form by.
 //!
 //! - Every form the binder can name for a `texture2d<float, access::read>` slot — the bound
-//!   view's codes, or the fetched lanes' bits — translates and passes L3 under the default policy.
-//!   An 8-bit sRGB texture, whose view decodes its codes, keeps the
+//!   view's codes, or the fetched lanes' bits — translates and passes L3 under the resident-table
+//!   domains. An 8-bit sRGB texture, whose view decodes its codes, keeps the
 //!   fetched lanes' bits.
 //! - The copy pairs the form with its fetch's lanes where the invariant lives: a form whose codes
 //!   those lanes do not hold is named, not left to the builder to refuse (a float code form over
@@ -172,8 +172,8 @@ fn state(pixel_format: Option<PixelFormat>) -> BindState {
 }
 
 /// A `texture2d<float, access::read>` slot the draw reads through a snapshot translates under
-/// every form the binder names for it under the default policy. An 8-bit sRGB texture, whose view
-/// decodes its codes, keeps the fetched bits. Each variant passes
+/// every form the binder names for it under the resident-table domains. An 8-bit sRGB texture,
+/// whose view decodes its codes, keeps the fetched bits. Each variant passes
 /// L3 and binds the snapshot as a storage image.
 #[test]
 fn a_snapshot_slot_translates_under_every_form() {
@@ -196,7 +196,7 @@ fn a_snapshot_slot_translates_under_every_form() {
     ];
     for stem in PROFILES {
         {
-            let (label, policy) = ("the default", DevicePolicy::default());
+            let (label, policy) = ("the default", DevicePolicy::RESIDENT_TABLES);
             let desc = crate::pipeline::testing::description(stem).expect("description");
             let dev = Device::from_queries(desc, policy).expect("device");
             let base = dev
@@ -244,7 +244,7 @@ fn the_copy_of_a_snapshot_slot_refuses_a_form_its_fetch_s_lanes_do_not_hold() {
     };
     let stem = "intel-irisxe-anv";
     let desc = crate::pipeline::testing::description(stem).expect("description");
-    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
     // The float slot's fragment, and the unsigned integer slot's into an integer attachment.
     let legs = [
         ("uint", "sx_read_u", &uint, PixelFormat::RGBA8Uint, false),
@@ -284,7 +284,7 @@ fn the_copy_of_a_snapshot_slot_refuses_a_form_its_fetch_s_lanes_do_not_hold() {
 }
 
 /// The entry's size estimate bounds the words every snapshot copy emits (`lower::fragment`'s
-/// `snapshot::SLOT_WORDS`): every form under the default policy.
+/// `snapshot::SLOT_WORDS`): every form under the resident-table domains.
 #[test]
 fn the_snapshot_estimate_bounds_the_copy_it_emits() {
     use crate::library::function::FunctionConstantValues;
@@ -302,7 +302,7 @@ fn the_snapshot_estimate_bounds_the_copy_it_emits() {
     let mut checked = 0;
     for stem in PROFILES {
         {
-            let policy = DevicePolicy::default();
+            let policy = DevicePolicy::RESIDENT_TABLES;
             let p = profile(stem, policy).expect("profile");
             for form in FORMS {
                 let inputs = inputs(form);

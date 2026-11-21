@@ -81,8 +81,8 @@ fn library() -> Option<Library> {
 fn a_run_of_compiles_derives_no_profile_fingerprint() {
     let Some(library) = library() else { return };
     let start = fingerprints_derived();
-    let device =
-        Device::from_queries(description("moltenvk-m3"), DevicePolicy::default()).expect("device");
+    let device = Device::from_queries(description("moltenvk-m3"), DevicePolicy::RESIDENT_TABLES)
+        .expect("device");
     let made = fingerprints_derived() - start;
     // The fingerprint every compile takes, read as often as anything reads it.
     for _ in 0..RUN {
@@ -130,10 +130,10 @@ fn a_run_of_compiles_derives_no_profile_fingerprint() {
 /// fingerprints, and an edited profile carries the edit's.
 #[test]
 fn profiles_that_differ_carry_their_own_fingerprints() {
-    let m3 =
-        Device::from_queries(description("moltenvk-m3"), DevicePolicy::default()).expect("device");
-    let pipe =
-        Device::from_queries(description("lavapipe"), DevicePolicy::default()).expect("device");
+    let m3 = Device::from_queries(description("moltenvk-m3"), DevicePolicy::RESIDENT_TABLES)
+        .expect("device");
+    let pipe = Device::from_queries(description("lavapipe"), DevicePolicy::RESIDENT_TABLES)
+        .expect("device");
     assert_ne!(
         m3.profile_fingerprint(),
         pipe.profile_fingerprint(),

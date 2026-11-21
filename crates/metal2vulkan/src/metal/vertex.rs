@@ -530,7 +530,7 @@ mod tests {
         );
         desc.features
             .remove(&VkFeature::VertexAttributeInstanceRateDivisor);
-        let plain = Device::from_queries(desc.clone(), DevicePolicy::default()).unwrap();
+        let plain = Device::from_queries(desc.clone(), DevicePolicy::RESIDENT_TABLES).unwrap();
         desc.features
             .insert(VkFeature::VertexAttributeInstanceRateDivisor);
         // Listed with the extension that exposes it below Vulkan 1.4.
@@ -539,9 +539,9 @@ mod tests {
         desc.limits.max_vertex_attrib_divisor = 4;
         // No nonzero first instance with a divisor (VUID-vkCmdDraw-pNext-09461): pulled.
         desc.limits.supports_non_zero_first_instance = false;
-        let zero_first = Device::from_queries(desc.clone(), DevicePolicy::default()).unwrap();
+        let zero_first = Device::from_queries(desc.clone(), DevicePolicy::RESIDENT_TABLES).unwrap();
         desc.limits.supports_non_zero_first_instance = true;
-        let divisor = Device::from_queries(desc, DevicePolicy::default()).unwrap();
+        let divisor = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).unwrap();
         use VertexStepFunction as S;
         let fetch = |dev: &Device, f, s, r| attribute_fetch(f, s, r, dev.profile());
         let fixed = |rate, divisor| {
@@ -619,7 +619,7 @@ mod tests {
                 },
             );
         }
-        let dev = Device::from_queries(desc, DevicePolicy::default()).unwrap();
+        let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).unwrap();
         assert!(dev.profile().supports_format(
             vk::Format::E5B9G9R9_UFLOAT_PACK32,
             FormatUsage::VertexBuffer
@@ -654,8 +654,8 @@ mod tests {
         let mut bare = robust.clone();
         bare.features.remove(&VkFeature::RobustBufferAccess);
         bare.features.remove(&VkFeature::RobustBufferAccess2);
-        let checked = Device::from_queries(bare, DevicePolicy::default()).unwrap();
-        let robust = Device::from_queries(robust, DevicePolicy::default()).unwrap();
+        let checked = Device::from_queries(bare, DevicePolicy::RESIDENT_TABLES).unwrap();
+        let robust = Device::from_queries(robust, DevicePolicy::RESIDENT_TABLES).unwrap();
         assert_eq!(contain::encoding(checked.profile()), Check::InShader);
         assert_eq!(contain::encoding(robust.profile()), Check::None);
         let float4 = VertexFormat::Float4;
@@ -692,7 +692,7 @@ mod tests {
             {
                 continue;
             }
-            let dev = Device::from_queries(desc, DevicePolicy::default()).unwrap();
+            let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).unwrap();
             for v in [
                 VertexFormat::Float,
                 VertexFormat::Float2,

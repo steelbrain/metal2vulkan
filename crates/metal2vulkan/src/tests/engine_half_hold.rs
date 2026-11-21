@@ -392,7 +392,7 @@ fn half_values_are_held_at_16_bits_under_the_float_controls() {
         return;
     };
     for stem in ["intel-irisxe-rplp-anv", "amd-780m-radv"] {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         assert_eq!(quantize_form(&p), QuantizeForm::Controlled, "{stem}");
         let (m, push) = emitted(&bc, &p);
         let s = shape(&m);
@@ -413,7 +413,7 @@ fn half_values_are_held_at_16_bits_under_the_float_controls() {
             a.precision
         );
     }
-    let p = profile("lavapipe", DevicePolicy::default()).expect("profile");
+    let p = profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("profile");
     assert_eq!(quantize_form(&p), QuantizeForm::Converted);
     let (m, push) = emitted(&bc, &p);
     let s = shape(&m);
@@ -437,7 +437,7 @@ fn half_division_and_sqrt_are_16_bit_under_the_float_controls() {
         return;
     };
     for stem in ["intel-irisxe-rplp-anv", "amd-780m-radv"] {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         assert_eq!(quantize_form(&p), QuantizeForm::Controlled, "{stem}");
         let (m, push) = emitted_entry(&bc, "half_divide", &p);
         let s = shape(&m);
@@ -462,7 +462,7 @@ fn half_division_and_sqrt_are_16_bit_under_the_float_controls() {
             a.precision
         );
     }
-    let p = profile("lavapipe", DevicePolicy::default()).expect("profile");
+    let p = profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("profile");
     assert_eq!(quantize_form(&p), QuantizeForm::Converted);
     let (m, push) = emitted_entry(&bc, "half_divide", &p);
     let s = shape(&m);

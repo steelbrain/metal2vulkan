@@ -368,7 +368,7 @@ fn kernel(name: &str, n: u32, body: &str) -> String {
 fn no_int64_with(storage: u32) -> DeviceProfile {
     let mut desc = no_int64();
     desc.limits.max_per_stage_descriptor_storage_buffers = storage;
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()
@@ -411,7 +411,7 @@ fn a_profile_f_device_with_device_addresses_still_uses_descriptors_only() {
     let Some(bc) = assemble_text(name, &kernel(name, 1, body)) else {
         return;
     };
-    let p = Device::from_queries(no_int64(), DevicePolicy::default())
+    let p = Device::from_queries(no_int64(), DevicePolicy::RESIDENT_TABLES)
         .expect("profile")
         .profile()
         .clone();

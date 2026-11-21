@@ -24,7 +24,7 @@
 //! the same reading at 1 to 32 threads. Every run takes Vulkan's barrier rule
 //! (`BarrierRule::Vulkan`): an invocation that returned while others wait at a workgroup barrier
 //! traps. Under the identity domains every one of those kernels gives the same readings, with one
-//! scratch region and as many barriers as under the default domains. No GPU is used.
+//! scratch region and as many barriers as under the resident-table domains. No GPU is used.
 //!
 //! `llvm-as` assembles the fixtures; a missing tool skips visibly.
 
@@ -108,7 +108,7 @@ fn identity() -> DevicePolicy {
     DevicePolicy {
         pointer_domain: PointerDomain::Identity,
         handle_domain: HandleDomain::Identity,
-        ..DevicePolicy::default()
+        ..DevicePolicy::RESIDENT_TABLES
     }
 }
 
@@ -696,7 +696,7 @@ const SIMD_UNIFORM: [(&str, u32); 9] = [
 /// Plan `kernel` of `bc` on profile `stem`, check its emulated tier, and check the expectation
 /// at every width and local size.
 fn run_kernel(stem: &str, bc: &[u8], kernel: &str, words: Option<u32>) {
-    run_kernel_under(stem, DevicePolicy::default(), bc, kernel, words);
+    run_kernel_under(stem, DevicePolicy::RESIDENT_TABLES, bc, kernel, words);
 }
 
 /// [`run_kernel`] on profile `stem` under `policy`.
@@ -765,7 +765,7 @@ fn run_expected(stem: &str, kernel: &str, plan: &Plan, m: &TypedModule, locals: 
 /// L3: the kernel links, relocates, and passes `spirv-val` under the profile, and uses no
 /// subgroup instruction or capability. The plan's size estimate bounds the emitted words.
 fn validate(stem: &str, bc: &[u8], kernel: &str) {
-    let p = profile(stem, DevicePolicy::default()).expect("profile");
+    let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
     let a = compile(bc, kernel, &p).unwrap_or_else(|e| panic!("{stem} {kernel}: {e}"));
     let (plan, _) = typed_module(bc, kernel, &p).expect("plan");
     let emitted = a.module.words.len() as u64;
@@ -876,7 +876,7 @@ fn emulated_reductions_scans_and_votes_stay_compact() {
     ];
     let mut over = Vec::new();
     for stem in PROFILES {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         for (bc, kernel) in kernels {
             let emulated = compile(bc, kernel, &p).expect("compile").module.words.len();
             let whole = compile(bc, kernel, &direct)
@@ -911,7 +911,7 @@ fn whole_subgroups_without_the_nan_fact() -> DeviceProfile {
         .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
     let text = std::fs::read_to_string(&path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()
@@ -1103,7 +1103,7 @@ fn no_nan_reaches_an_emulated_float_min_or_max() {
             return;
         };
         for stem in PROFILES {
-            let p = profile(stem, DevicePolicy::default()).expect("profile");
+            let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
             for kernel in ["simd_minmax_k", "simd_float_prefix_k"] {
                 validate(stem, &bc, kernel);
                 let a = compile(&bc, kernel, &p).unwrap_or_else(|e| panic!("{stem} {kernel}: {e}"));
@@ -1142,7 +1142,7 @@ fn emulated_float_reductions_and_scans_take_exactly_the_active_lanes() {
             return;
         };
         for stem in PROFILES {
-            let p = profile(stem, DevicePolicy::default()).expect("profile");
+            let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
             for kernel in ["simd_minmax_k", "simd_float_prefix_k"] {
                 let divergent = kernel == "simd_float_prefix_k";
                 let (plan, m) = typed_module(&bc, kernel, &p)
@@ -1222,7 +1222,7 @@ fn an_emulated_float_exclusive_sum_keeps_the_sign_of_zero() {
     };
     let neg = (-0.0f32).to_bits();
     for stem in PROFILES {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         for (bc, kernel) in [
             (&uniform, "float_prefix_k"),
             (&divergent, "simd_float_prefix_k"),
@@ -1263,7 +1263,7 @@ fn emulated_barriers_are_workgroup_barriers() {
         return;
     };
     for stem in PROFILES {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         for kernel in ["barrier_k", "vote_k"] {
             let a = compile(&bc, kernel, &p).expect("compile");
             let (_, words) = link_and_validate(&a, &p).expect("valid");
@@ -1345,12 +1345,12 @@ fn barriers(stem: &str, policy: DevicePolicy, bc: &[u8], kernel: &str) -> usize 
 }
 
 /// Under the identity domains the emulated tier's exchanges and votes use one scratch region and
-/// each closes with a barrier, as under the default domains: every kernel of `simd_ops`,
+/// each closes with a barrier, as under the resident-table domains: every kernel of `simd_ops`,
 /// `simd_uniform` and `simd_divergent` (shuffles, reductions, prefix sums, votes, ballots, quad
 /// operations, vector and `half` values, exchanges in uniform and per-thread loops, after early
 /// returns and in branch arms) gives the same expectation at every subgroup width in both
 /// scheduling orders, in full and partial threadgroups, plans the scratch of one region, and has as
-/// many barriers as under the default domains.
+/// many barriers as under the resident-table domains.
 #[test]
 fn identity_exchanges_keep_one_scratch_region() {
     const STEM: &str = "lavapipe";
@@ -1372,7 +1372,7 @@ fn identity_exchanges_keep_one_scratch_region() {
         run_kernel_under(STEM, identity(), bc, kernel, words);
         assert_eq!(
             barriers(STEM, identity(), bc, kernel),
-            barriers(STEM, DevicePolicy::default(), bc, kernel),
+            barriers(STEM, DevicePolicy::RESIDENT_TABLES, bc, kernel),
             "{kernel}: barriers under the identity domains"
         );
     }
@@ -1414,7 +1414,7 @@ fn a_multi_level_break_tail_runs_once_per_outer_iteration_emulated() {
     let bytes = |w: &[u32]| -> Vec<u8> { w.iter().flat_map(|x| x.to_le_bytes()).collect() };
     for stem in PROFILES {
         validate(stem, &bc, kernel);
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         let (plan, m) = typed_module(&bc, kernel, &p).expect("plan");
         assert_eq!(plan.simd.1, Tier::Emulated, "{stem}");
         let slot = |kind, index| {
@@ -1472,7 +1472,7 @@ fn a_divergent_matrix_multiply_add_compiles_on_every_emulating_profile() {
         return;
     };
     for stem in PROFILES {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         let a =
             compile(&bc, "matrix_thread_elements", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
         link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
@@ -1529,7 +1529,7 @@ fn the_scratch_must_fit_beside_the_threadgroup_memory() {
     let Some(full) = arena_kernel(4096) else {
         return;
     };
-    let floor = profile("runtime-floor", DevicePolicy::default()).expect("profile");
+    let floor = profile("runtime-floor", DevicePolicy::RESIDENT_TABLES).expect("profile");
     match compile(&full, "barrier_k", &floor) {
         Err(Error::Unsupported(u)) => {
             assert_eq!(u.feature, Feature::ThreadgroupMemorySize);
@@ -1606,7 +1606,7 @@ fn emulated_operations_do_not_depend_on_reconvergence() {
         return;
     };
     for stem in PROFILES {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         for kernel in ["vote_k", "prefix_k", "quad_vote_k", "barrier_k"] {
             let a = compile(&bc, kernel, &p).unwrap_or_else(|e| panic!("{stem} {kernel}: {e}"));
             assert_eq!(
@@ -1616,7 +1616,7 @@ fn emulated_operations_do_not_depend_on_reconvergence() {
             );
         }
     }
-    let floor = profile("runtime-floor", DevicePolicy::default()).expect("profile");
+    let floor = profile("runtime-floor", DevicePolicy::RESIDENT_TABLES).expect("profile");
     assert!(!floor.fields().subgroup.maximal_reconvergence);
     let a = compile(&bc, "region_k", &floor).expect("region_k");
     assert_eq!(a.reconvergence, Reconvergence::ImplementationDefined);
@@ -1644,7 +1644,7 @@ fn emulated_shuffles_keep_metals_reconvergence_without_maximal_reconvergence() {
         "the description names shaderMaximalReconvergence"
     );
     let desc = DeviceDescription::from_khronos_json(&cleared, None).expect("description");
-    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
     let p = dev.profile();
     assert!(!p.fields().subgroup.maximal_reconvergence);
     let a = compile(&bc, "dsm2_shuffle_past_n", p).expect("compile");
@@ -1665,7 +1665,7 @@ fn lavapipe() -> Device {
     let text = std::fs::read_to_string(path).expect("profile");
     let desc =
         crate::device::DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
     assert_eq!(
         dev.profile().fields().limits.max_compute_shared_memory_size,
         32 * 1024
@@ -1794,7 +1794,7 @@ fn a_large_predicated_body_compiles_under_a_cap_it_fits() {
     let Some(bc) = large_body(256) else {
         return;
     };
-    let p = profile("lavapipe", DevicePolicy::default()).expect("profile");
+    let p = profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let inputs = emulated_inputs();
     let (plan, _) = typed_module_with(&bc, "guard_k", &p, &inputs).expect("plan");
     assert!(
@@ -2154,7 +2154,7 @@ fn device(name: &str) -> Device {
     let text = std::fs::read_to_string(path).expect("profile");
     let desc =
         crate::device::DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 /// `quad_ballot` and `simd_active_threads_mask` on emulated simdgroups, uniform and divergent (run
@@ -2199,7 +2199,7 @@ fn an_emulated_exchange_reaches_a_word_with_one_access_chain() {
         return;
     };
     for stem in PROFILES {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         let words = compile(&bc, "guard_shuffle_k", &p)
             .expect("compile")
             .module
@@ -2717,7 +2717,7 @@ fn wave64() -> Device {
     let narrowed = text.replace("\"minSubgroupSize\": 32", "\"minSubgroupSize\": 64");
     assert_ne!(narrowed, text, "the description names minSubgroupSize");
     let desc = DeviceDescription::from_khronos_json(&narrowed, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 /// `kernel void name(texture2d_ms<uint> t [[texture(0)]], device uint *out [[buffer(0)]], uint2
@@ -2990,8 +2990,8 @@ define void @{name}(ptr addrspace(1) %src, ptr addrspace(1) %dst, ptr addrspace(
 }
 
 /// On lavapipe's `Device::from_queries` profile the lockstep order gives the stores of every
-/// [`row_store_kernel`] barriers under the default domains, and none under the identity domains
-/// (the runtime's), whose kernels take no order: there each kernel's module has no lockstep
+/// [`row_store_kernel`] barriers under the resident-table domains, and none under the identity
+/// domains (the runtime's), whose kernels take no order: there each kernel's module has no lockstep
 /// barrier, states no `RowLockstep` and takes no simd class, it does not observe its threadgroup
 /// partition with partial threadgroups, and that variant's pipeline runs its grid in tiles
 /// (`GridTiles`). The identity domains' module records the pair it leaves unordered
@@ -2999,7 +2999,7 @@ define void @{name}(ptr addrspace(1) %src, ptr addrspace(1) %dst, ptr addrspace(
 #[test]
 fn the_identity_domains_order_no_lockstep_pair() {
     let desc = crate::pipeline::testing::description("lavapipe").unwrap_or_else(|e| panic!("{e}"));
-    let resident = Device::from_queries(desc.clone(), DevicePolicy::default())
+    let resident = Device::from_queries(desc.clone(), DevicePolicy::RESIDENT_TABLES)
         .unwrap_or_else(|e| panic!("{e}"));
     let dev = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
     let budget = Budget::standard();
@@ -3100,12 +3100,12 @@ define void @NAME(ptr addrspace(1) %dst, i32 %tid) {
 }
 
 /// A kernel without a pair only lockstep orders ([`own_word_kernel`]) takes no lockstep barrier
-/// under the default domains on lavapipe's profile, and records no
+/// under the resident-table domains on lavapipe's profile, and records no
 /// `PrecisionNote::SimdgroupAccessOrder` under either domains.
 #[test]
 fn a_kernel_without_a_lockstep_pair_records_no_access_order_note() {
     let desc = crate::pipeline::testing::description("lavapipe").unwrap_or_else(|e| panic!("{e}"));
-    let resident = Device::from_queries(desc.clone(), DevicePolicy::default())
+    let resident = Device::from_queries(desc.clone(), DevicePolicy::RESIDENT_TABLES)
         .unwrap_or_else(|e| panic!("{e}"));
     let dev = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
     let name = "own_word";

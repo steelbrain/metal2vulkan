@@ -703,7 +703,7 @@ fn without(stem: &str, drop: &[VkFeature]) -> DeviceProfile {
     for f in drop {
         desc.features.remove(f);
     }
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()
@@ -1136,7 +1136,7 @@ fn level_views_declare_every_level_of_the_largest_texture() {
     let uniform_only = crate::pipeline::testing::profile_without(
         "runtime-floor",
         &[VkFeature::ShaderStorageImageArrayNonUniformIndexing],
-        DevicePolicy::default(),
+        DevicePolicy::RESIDENT_TABLES,
     )
     .expect("profile");
     profiles.push((
@@ -1300,7 +1300,7 @@ fn an_atomic_slot_with_level_views_is_refused() {
     let Some(bc) = assemble("atomic_and_level", ATOMIC_AND_LEVEL) else {
         return;
     };
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let want = Unsupported::not_implemented(Feature::Lowering(LowerFamily::Texture));
     match compile(&bc, "k", &p) {
         Err(e) if is(&e, &want) => {}
@@ -1341,7 +1341,7 @@ fn a_constant_level_past_every_texture_is_indexed_as_a_dynamic_one() {
         crate::pipeline::testing::profile_without(
             "runtime-floor",
             &[crate::device::requirements::VkFeature::ShaderStorageImageArrayNonUniformIndexing],
-            DevicePolicy::default(),
+            DevicePolicy::RESIDENT_TABLES,
         )
         .expect("below the runtime's floor"),
     ));
@@ -1436,7 +1436,7 @@ fn device(stem: &str) -> Device {
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 fn pipeline(dev: &Device, bc: &[u8], entry: &str) -> ComputePipeline {
@@ -1487,7 +1487,7 @@ fn the_binder_binds_each_level_and_pushes_the_count() {
     };
     for stem in ["moltenvk-m3", "lavapipe"] {
         let dev = device(stem);
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         let pipe = pipeline(&dev, &bc, "txt_level_write");
         let (_, m) = typed_module(&bc, "txt_level_write", &p).expect("module");
         let n = max_levels(&p, ImageDim::D2);
@@ -1623,7 +1623,7 @@ fn the_binder_specializes_a_level_reads_alpha_from_the_bound_format() {
     let texel = [fl(1.0), fl(2.0), fl(3.0), fl(4.0)];
     for stem in ["moltenvk-m3", "lavapipe"] {
         let dev = device(stem);
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         assert!(p.fields().images.robust_image_access2, "{stem}");
         let pipe = pipeline(&dev, &bc, "read_level");
         let (_, m) = typed_module(&bc, "read_level", &p).expect("module");
@@ -1773,7 +1773,7 @@ fn level_slots_bind_textures_of_every_usage_the_device_can_hold() {
     };
     let stem = "moltenvk-m3";
     let dev = device(stem);
-    let p = profile(stem, DevicePolicy::default()).expect("profile");
+    let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
     let pipe = pipeline(&dev, &bc, "txt_level_write");
     let n = max_levels(&p, ImageDim::D2);
     let with_usage = |levels: Option<u32>, usage: TextureUsage| {

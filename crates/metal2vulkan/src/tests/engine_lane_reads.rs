@@ -98,7 +98,7 @@ fn profile(stem: &str, id: Option<u32>) -> DeviceProfile {
     if let Some(id) = id {
         desc.device_id = id;
     }
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()

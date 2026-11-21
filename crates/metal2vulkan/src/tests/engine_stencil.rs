@@ -59,7 +59,7 @@ fn device_without(stem: &str, features: &[VkFeature]) -> Device {
     for f in features {
         desc.features.remove(f);
     }
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 /// On every committed profile the output is the direct `FragStencilRefEXT` where the device has

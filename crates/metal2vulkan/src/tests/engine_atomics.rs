@@ -59,7 +59,7 @@ const PROFILES: [&str; 4] = [
 const DATALAYOUT: &str = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32";
 
 fn p(stem: &str) -> DeviceProfile {
-    profile(stem, DevicePolicy::default()).expect("profile")
+    profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile")
 }
 
 /// Committed profile `stem` without buffer robustness: containment is checked in the shader.
@@ -83,7 +83,7 @@ fn without(stem: &str, features: &[VkFeature]) -> DeviceProfile {
     for f in features {
         desc.features.remove(f);
     }
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()

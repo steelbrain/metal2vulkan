@@ -123,7 +123,7 @@ declare {{ <4 x float>, i8 }} @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr
 }
 
 fn p(stem: &str) -> DeviceProfile {
-    profile(stem, DevicePolicy::default()).expect(stem)
+    profile(stem, DevicePolicy::RESIDENT_TABLES).expect(stem)
 }
 
 fn max_bias(p: &DeviceProfile) -> f32 {
@@ -426,7 +426,7 @@ fn hoisted_derivatives_take_the_whole_bias() {
     let without = crate::pipeline::testing::profile_without(
         "runtime-floor",
         &[crate::device::requirements::VkFeature::SamplerAnisotropy],
-        crate::device::DevicePolicy::default(),
+        crate::device::DevicePolicy::RESIDENT_TABLES,
     )
     .expect("profile");
     for (stem, profile, emulations) in [
@@ -502,7 +502,7 @@ fn an_anisotropic_sampler_takes_the_axis_gradients() {
                         .features
                         .remove(&crate::device::requirements::VkFeature::SamplerAnisotropy));
                 }
-                crate::device::Device::from_queries(desc, DevicePolicy::default())
+                crate::device::Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
                     .expect(stem)
                     .profile()
                     .clone()

@@ -58,12 +58,15 @@ fn withholding(colors: u32, more: &[VkFeature]) -> Device {
     }
     desc.limits.max_color_attachments = colors;
     desc.limits.max_fragment_output_attachments = colors;
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 fn device(stem: &str) -> Device {
-    Device::from_queries(description(stem).expect("profile"), DevicePolicy::default())
-        .expect("device")
+    Device::from_queries(
+        description(stem).expect("profile"),
+        DevicePolicy::RESIDENT_TABLES,
+    )
+    .expect("device")
 }
 
 fn function(bc: &[u8], name: &str) -> FunctionDescriptor {
@@ -152,7 +155,7 @@ fn without_either_feature_the_id_is_a_flat_varying() {
     ] {
         floor.features.remove(&f);
     }
-    let floor = Device::from_queries(floor, DevicePolicy::default()).expect("device");
+    let floor = Device::from_queries(floor, DevicePolicy::RESIDENT_TABLES).expect("device");
     for dev in [withheld(8), floor] {
         let f = standalone(&dev, &bc, "pi_ids");
         let io = &f.artifact().interface.io;

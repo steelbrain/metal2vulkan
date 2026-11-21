@@ -56,7 +56,7 @@ const fn slot_guest(i: u64) -> u64 {
 /// Committed profile `stem`, or [`PROFILE_F`]'s (`runtime-floor` without `bufferDeviceAddress`).
 fn profile(stem: &str) -> DeviceProfile {
     if stem == PROFILE_F {
-        return device_f(DevicePolicy::default())
+        return device_f(DevicePolicy::RESIDENT_TABLES)
             .expect(PROFILE_F)
             .profile()
             .clone();
@@ -66,7 +66,7 @@ fn profile(stem: &str) -> DeviceProfile {
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()
@@ -85,7 +85,7 @@ fn profiles() -> Vec<(String, DeviceProfile)> {
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     desc.features.remove(&VkFeature::RobustBufferAccess);
     desc.features.remove(&VkFeature::RobustBufferAccess2);
-    let p = Device::from_queries(desc, DevicePolicy::default())
+    let p = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone();

@@ -56,7 +56,7 @@ fn without(stem: &str, drop: &[VkFeature]) -> DeviceProfile {
     for f in drop {
         desc.features.remove(f);
     }
-    Device::from_queries(desc, crate::device::DevicePolicy::default())
+    Device::from_queries(desc, crate::device::DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()
@@ -392,7 +392,7 @@ fn limited(stem: &str, limit: u32, drop: &[VkFeature]) -> DeviceProfile {
     for f in drop {
         desc.features.remove(f);
     }
-    Device::from_queries(desc, crate::device::DevicePolicy::default())
+    Device::from_queries(desc, crate::device::DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()

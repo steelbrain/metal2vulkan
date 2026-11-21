@@ -79,11 +79,12 @@ metal2vulkan kernel.ll kernel.spv --profile device.json --emit-meta kernel.json
 
 - `--profile` is required: the crate ships no device description. Any Khronos profiles JSON works;
   [`crates/metal2vulkan-validation/profiles/`](crates/metal2vulkan-validation/profiles) has
-  examples, from a bare Vulkan 1.2 device to desktop GPUs and MoltenVK. A profile compiles with the
-  default domains (`DevicePolicy::UNTRUSTED`). `--device FILE` takes its place with a device
-  description and policy as JSON (`{"description": ..., "policy": ...}`), which is how a runtime's
-  compile device is reproduced: metal2vulkan-runtime's is the description restricted to the
-  features it enables, with the identity pointer and handle domains.
+  examples, from a bare Vulkan 1.2 device to desktop GPUs and MoltenVK. A profile compiles under
+  the runtime's policy (`DevicePolicy::default()`, the identity pointer and handle domains), so a
+  profile without `bufferDeviceAddress` and `shaderInt64` is refused. `--device FILE` takes its
+  place with a device description and policy as JSON (`{"description": ..., "policy": ...}`),
+  which is how a runtime's compile device is reproduced: metal2vulkan-runtime's is the
+  description restricted to the features it enables, under that policy.
 - Without `--function` it compiles the library's only kernel or vertex function. A kernel with
   `--color-format` compiles as a tile pipeline. A post-tessellation vertex function adds
   `.tesc.spv` and `.tese.spv` modules; on a device without `tessellationShader` it answers

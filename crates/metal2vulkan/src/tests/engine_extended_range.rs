@@ -184,7 +184,7 @@ fn profiles() -> Vec<(&'static str, crate::device::profile::DeviceProfile)> {
         .map(|stem| {
             (
                 stem,
-                profile(stem, DevicePolicy::default()).expect("profile"),
+                profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile"),
             )
         })
         .collect()
@@ -692,7 +692,10 @@ fn half_float_storage_slots_leave_their_writes_to_the_device() {
         let mut i = LowerInputs::new();
         i.storage_images.insert(TARGET, choice);
         let anv = "intel-irisxe-rplp-anv";
-        let anv = (anv, profile(anv, DevicePolicy::default()).expect("profile"));
+        let anv = (
+            anv,
+            profile(anv, DevicePolicy::RESIDENT_TABLES).expect("profile"),
+        );
         for (stem, p) in profiles().into_iter().chain([anv]) {
             // The kernel reads both textures: without formatless reads, the target's choice
             // declares its format and the source's `RGBA32Float`'s.
@@ -769,7 +772,7 @@ fn devices() -> Vec<(String, Device)> {
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
         out.push((
             stem,
-            Device::from_queries(desc, DevicePolicy::default()).expect("device"),
+            Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device"),
         ));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1028,7 +1031,7 @@ fn decoded_half_texels_round_by_the_device_s_conversion() {
         .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
     let text = std::fs::read_to_string(&path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let p = Device::from_queries(desc, DevicePolicy::default())
+    let p = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone();

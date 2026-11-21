@@ -175,11 +175,11 @@ pub(super) struct CpuInterp {
 
 impl CpuInterp {
     /// The executor for committed profile `stem` (`validation/profiles/<stem>.json`, derived
-    /// under the default policy), dispatching [`THREADS`] threads. `Ok(None)` when `llvm-as` is
-    /// not installed: the caller skips visibly, because there is no way to turn generated text
-    /// into bitcode.
+    /// under the resident-table domains), dispatching [`THREADS`] threads. `Ok(None)` when
+    /// `llvm-as` is not installed: the caller skips visibly, because there is no way to turn
+    /// generated text into bitcode.
     pub(super) fn new(stem: &str) -> Result<Option<CpuInterp>, String> {
-        let profile = profile(stem, DevicePolicy::default())?;
+        let profile = profile(stem, DevicePolicy::RESIDENT_TABLES)?;
         match llvm_assemble_text("define void @probe() {\n  ret void\n}\n") {
             Ok(_) => Ok(Some(CpuInterp {
                 profile,
@@ -531,7 +531,7 @@ fn the_interpreter_runs_every_modelled_width_the_stage_may_run_with() {
 #[test]
 fn the_soak_profiles_run_at_their_devices_widths() {
     let lanes = |stem: &str| {
-        let profile = profile(stem, DevicePolicy::default()).unwrap();
+        let profile = profile(stem, DevicePolicy::RESIDENT_TABLES).unwrap();
         widths(profile.subgroups().kernel.sizes, None)
             .unwrap()
             .iter()

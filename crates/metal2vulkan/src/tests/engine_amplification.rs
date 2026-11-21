@@ -76,7 +76,7 @@ fn fixture() -> Option<Vec<u8>> {
 }
 
 fn prof(stem: &str) -> DeviceProfile {
-    profile(stem, DevicePolicy::default()).expect("committed profile")
+    profile(stem, DevicePolicy::RESIDENT_TABLES).expect("committed profile")
 }
 
 fn description(stem: &str) -> DeviceDescription {
@@ -88,7 +88,7 @@ fn description(stem: &str) -> DeviceDescription {
 }
 
 fn device(stem: &str) -> Device {
-    Device::from_queries(description(stem), DevicePolicy::default()).expect("device")
+    Device::from_queries(description(stem), DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 /// `nvidia-rtx50-linux` with `features` removed from its description (with `Multiview`, the
@@ -98,7 +98,7 @@ fn nvidia_without(features: &[F]) -> Device {
     for f in features {
         assert!(desc.features.remove(f), "nvidia-rtx50-linux has {f:?}");
     }
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 /// Link `a` alone, relocate it, and run L3; the specialization constants link declared.
@@ -848,7 +848,7 @@ fn below_the_floor() -> Device {
     let mut desc = description("runtime-floor");
     assert!(desc.features.remove(&F::ShaderOutputLayer));
     assert!(!desc.features.contains(&F::GeometryShader));
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 /// What a variant that stores a layered amplification's slice needs on a device without
@@ -872,7 +872,7 @@ fn a_profile_without_shader_output_layer_draws_or_refuses_every_amplification() 
     let mut lavapipe = description("lavapipe");
     assert!(lavapipe.features.remove(&F::ShaderOutputLayer));
     assert!(lavapipe.features.contains(&F::GeometryShader));
-    let lavapipe = Device::from_queries(lavapipe, DevicePolicy::default()).expect("device");
+    let lavapipe = Device::from_queries(lavapipe, DevicePolicy::RESIDENT_TABLES).expect("device");
     for (stem, dev) in [
         ("runtime-floor without shaderOutputLayer", below_the_floor()),
         ("lavapipe without shaderOutputLayer", lavapipe),

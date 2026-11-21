@@ -567,8 +567,8 @@ fn a_float_attachment_is_bound_through_its_bits() {
 #[test]
 fn a_tile_functions_threadgroup_memory_is_its_tiles() {
     use crate::pipeline::testing::fixtures_dir;
-    let p =
-        crate::pipeline::testing::profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = crate::pipeline::testing::profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES)
+        .expect("profile");
     let dev = device("moltenvk-m3");
     let mut assembled = Vec::new();
     for (path, entry) in [
@@ -891,7 +891,7 @@ fn a_tile_pipeline_places_its_threadgroup_arguments() {
     let text = std::fs::read_to_string(path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     desc.limits.max_storage_buffer_range = 256;
-    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
     let pipe = dev
         .compile_tile_pipeline(&d, &Budget::standard())
         .expect("a tile pipeline");
@@ -910,7 +910,7 @@ fn device(stem: &str) -> Device {
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 fn descriptor(

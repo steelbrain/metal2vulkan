@@ -218,7 +218,7 @@ fn device() -> Device {
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let description =
         DeviceDescription::from_khronos_json(&text, None).expect("nvidia-rtx5080-laptop");
-    Device::from_queries(description, DevicePolicy::default()).expect("nvidia-rtx5080-laptop")
+    Device::from_queries(description, DevicePolicy::RESIDENT_TABLES).expect("nvidia-rtx5080-laptop")
 }
 
 /// Load `bitcode` as a library and compile its one function: the first refusal on the way, from

@@ -217,7 +217,7 @@ fn native_half_rounding_records_its_kind() {
         ("amd-780m-radv", [None, Some(natives[0])]),
     ];
     for (stem, notes) in cases {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         for ((name, _), note) in KERNELS.iter().zip(notes) {
             let what = format!("{name} on {stem}");
             let a = compile(&bc, name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -230,7 +230,7 @@ fn native_half_rounding_records_its_kind() {
     // even, the largest half below 65520 and infinity from it; a half denormal the conversion's,
     // and the quantize's zero (the device's, `NativeHalfQuantize`).
     for (stem, keeps) in [("lavapipe", true), ("runtime-floor", false)] {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         let run = |name: &str, x: [f32; 2]| interpret(&bc, name, &p, x);
         let tie = 1.0 + 2f32.powi(-11);
         assert_eq!(run("half_narrow", [tie, 0.0]), 1.0, "{stem}: a tie to even");
@@ -415,7 +415,7 @@ fn a_half_decode_is_the_devices_widening_inside_loops_and_out() {
         ("runtime-floor", true, true),
     ];
     for (stem, native, unpacks) in cases {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         for (entry, both) in [("both", true), ("inside", false)] {
             let what = format!("{entry} on {stem}");
             let (a, plan, kept) =
@@ -536,7 +536,7 @@ fn a_native_conversion_converts_the_value_itself() {
         return;
     };
     for stem in ["lavapipe", "moltenvk-m3"] {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         for (name, _) in &KERNELS {
             let what = format!("{name} on {stem}");
             let (a, _, kept) =
@@ -877,7 +877,7 @@ fn nvidia_computes_half_on_16_bit_floats_under_the_float_controls() {
         return;
     };
     let of = |desc: DeviceDescription| {
-        Device::from_queries(desc, DevicePolicy::default())
+        Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
             .expect("device")
             .profile()
             .clone()
@@ -886,7 +886,7 @@ fn nvidia_computes_half_on_16_bit_floats_under_the_float_controls() {
     let nvidia = [
         (
             "nvidia-rtx50-linux",
-            profile("nvidia-rtx50-linux", DevicePolicy::default()).expect("profile"),
+            profile("nvidia-rtx50-linux", DevicePolicy::RESIDENT_TABLES).expect("profile"),
         ),
         ("nvidia-rtx5080-laptop", of(laptop.clone())),
     ];
@@ -946,7 +946,7 @@ fn nvidia_computes_half_on_16_bit_floats_under_the_float_controls() {
     // The negative control.
     let mut uncontrolled = laptop;
     uncontrolled.float_controls.f16.rounding_rte = false;
-    let pascal = profile("nvidia-pascal-linux", DevicePolicy::default()).expect("profile");
+    let pascal = profile("nvidia-pascal-linux", DevicePolicy::RESIDENT_TABLES).expect("profile");
     for (stem, p) in [
         (
             "RTX 5080 Laptop GPU without RTE for 16 bits",

@@ -1414,9 +1414,7 @@ fn the_copy_moves_every_byte_in_whole_threadgroups() {
 /// it, plain or with partial threadgroups.
 #[test]
 fn the_int_cells_kernel_is_apart_in_rows_and_its_uint_control_is_not() {
-    use metal2vulkan::device::{
-        Device, DeviceDescription, DevicePolicy, HandleDomain, PointerDomain,
-    };
+    use metal2vulkan::device::{Device, DeviceDescription, DevicePolicy};
     use metal2vulkan::library::Library;
     use metal2vulkan::pipeline::{FunctionDescriptor, LoweringInputs, StageEntries};
     let air = match crate::authored::library_air() {
@@ -1428,11 +1426,9 @@ fn the_int_cells_kernel_is_apart_in_rows_and_its_uint_control_is_not() {
     };
     let json = include_str!("../../metal2vulkan-validation/profiles/lavapipe.json");
     let description = DeviceDescription::from_khronos_json(json, None).unwrap();
-    let resident = Device::from_queries(description.clone(), DevicePolicy::default()).unwrap();
-    let mut policy = DevicePolicy::default();
-    policy.pointer_domain = PointerDomain::Identity;
-    policy.handle_domain = HandleDomain::Identity;
-    let identity = Device::from_queries(description, policy).unwrap();
+    let resident =
+        Device::from_queries(description.clone(), DevicePolicy::RESIDENT_TABLES).unwrap();
+    let identity = Device::from_queries(description, DevicePolicy::default()).unwrap();
     let library = Library::from_air(&air).unwrap();
     let budget = metal2vulkan::Budget::standard();
     let mut partial = LoweringInputs::new();

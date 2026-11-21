@@ -48,7 +48,7 @@ fn fixture() -> Option<Vec<u8>> {
 }
 
 fn prof(stem: &str) -> crate::device::DeviceProfile {
-    profile(stem, DevicePolicy::default()).expect("committed profile")
+    profile(stem, DevicePolicy::RESIDENT_TABLES).expect("committed profile")
 }
 
 /// Whether `words` hold an `OpDecorate <id> Invariant` (opcode 71, decoration 18).
@@ -262,7 +262,7 @@ fn feature_dependent_entries_name_their_capability() {
     let Some(bc) = fixture() else { return };
     let floor = prof("runtime-floor");
     let needs = |entry: &str, feature: Feature, without: F| {
-        let p = profile_without("runtime-floor", &[without], DevicePolicy::default())
+        let p = profile_without("runtime-floor", &[without], DevicePolicy::RESIDENT_TABLES)
             .expect("below the runtime's floor");
         match compile(&bc, entry, &p) {
             Err(Error::Unsupported(u)) => {
@@ -303,7 +303,7 @@ fn feature_dependent_entries_name_their_capability() {
             F::ShaderTessellationAndGeometryPointSize,
             F::MultiviewTessellationShader,
         ],
-        DevicePolicy::default(),
+        DevicePolicy::RESIDENT_TABLES,
     )
     .expect("below the runtime's floor");
     let a = compile(&bc, "stage_io_fragment_primitive", &untessellated).expect("primitive");

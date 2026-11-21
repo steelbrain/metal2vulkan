@@ -150,7 +150,7 @@ fn run_word0(plan: &Plan, m: &TypedModule, d: &Dispatch) -> u32 {
 fn dispatch_kernels_compile_link_and_validate() {
     let Some(bc) = fixture() else { return };
     for stem in PROFILES {
-        let p = profile(stem, DevicePolicy::default()).expect(stem);
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect(stem);
         for entry in MARKERS
             .iter()
             .chain(&["threadgroup_barrier_store", "device_fence_store"])
@@ -256,7 +256,7 @@ fn a_simdgroup_barrier_flattens_or_is_emulated_with_the_tier() {
 #[test]
 fn single_region_builtins_run_on_the_interpreter() {
     let Some(bc) = fixture() else { return };
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let cases: [(&str, Dispatch, u32); 12] = [
         ("thread_index_marker", single([8, 1, 1], [1, 1, 1]), 105),
         ("thread_index_marker", single([4, 1, 1], [2, 1, 1]), 0),
@@ -287,7 +287,7 @@ fn single_region_builtins_run_on_the_interpreter() {
 #[test]
 fn edge_region_builtins_run_on_the_interpreter() {
     let Some(bc) = fixture() else { return };
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let (t, l) = ([40, 1, 1], [16, 1, 1]);
     let interior = || Dispatch {
         local: [16, 1, 1],
@@ -320,7 +320,7 @@ fn edge_region_builtins_run_on_the_interpreter() {
 #[test]
 fn barrier_kernels_run_on_the_interpreter() {
     let Some(bc) = fixture() else { return };
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     for (entry, local, want, form) in [
         (
             "threadgroup_barrier_store",
@@ -358,7 +358,7 @@ fn barrier_kernels_run_on_the_interpreter() {
     }
     // The `seq_cst` fence orders through the kernel's binding of the status word where the device
     // does not address buffers (below the runtime's floor).
-    let floor = device_f(DevicePolicy::default()).expect(PROFILE_F);
+    let floor = device_f(DevicePolicy::RESIDENT_TABLES).expect(PROFILE_F);
     let (plan, m) =
         typed_module(&bc, "device_fence_store", floor.profile()).expect("device_fence_store");
     assert_eq!(
@@ -746,7 +746,7 @@ fn a_position_first_used_in_sibling_arms_is_derived_once() {
             assert!(loads.values().all(|&n| n == 1), "{stem} {what}: {loads:?}");
         }
     }
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let (plan, m) = typed_module(&arms, "k", &p).expect("compile");
     let mut spec = BTreeMap::new();
     for a in [Axis::X, Axis::Y, Axis::Z] {
@@ -850,7 +850,7 @@ done:
         assert!(loads.values().all(|&n| n == 1), "{stem}: {loads:?}");
     }
     assert!(read > 0, "no profile reads a push field");
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let (plan, m) = typed_module(&bc, "k", &p).expect("compile");
     let mut spec = BTreeMap::new();
     for a in [Axis::X, Axis::Y, Axis::Z] {

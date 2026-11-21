@@ -342,7 +342,7 @@ fn the_default_forms_note_what_they_leave_to_the_device() {
     let Some(bc) = assemble() else {
         return;
     };
-    let wrong = run_policy(&bc, DevicePolicy::default(), "default", &FUNS);
+    let wrong = run_policy(&bc, DevicePolicy::RESIDENT_TABLES, "default", &FUNS);
     assert!(
         wrong.is_empty(),
         "{} answers off Metal's, the first: {:#?}",

@@ -181,7 +181,7 @@ fn needs(required: u64, available: u64) -> Result<(), Error> {
 /// Function `entry` of [`module`]`(n)` on `stem`: its precision notes, or what refused it.
 fn notes(stem: &str, n: u32, entry: &str) -> Option<Result<Vec<PrecisionNote>, Error>> {
     notes_on(
-        &profile(stem, Default::default()).expect("profile"),
+        &profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile"),
         stem,
         n,
         entry,
@@ -253,14 +253,14 @@ fn render_stages_past_the_floor_of_a_device_not_measured_run_noted_up_to_metal_s
 /// `words` kernel of 7176 words (28,704 bytes), 9216 (36 KiB) and 51,200 (200 KiB) compiles on the
 /// 780M's, the Iris Xe's and an RTX 50's profiles with no note, pushes
 /// `PushField::PrivateArenaAddress`, states `RuntimeFact::PrivateArena` of its arena's bytes, a
-/// multiple of 16, holds no private bytes, and passes L3. Under the default domains, whose binder supplies no such memory, it is
-/// refused as before, needing its bytes of the floor.
+/// multiple of 16, holds no private bytes, and passes L3. Under the resident-table domains, whose
+/// binder supplies no such memory, it is refused as before, needing its bytes of the floor.
 #[test]
 fn a_kernel_past_the_floor_keeps_its_private_memory_in_the_runtimes_memory_under_identity() {
     let identity = DevicePolicy {
         pointer_domain: PointerDomain::Identity,
         handle_domain: HandleDomain::Identity,
-        ..DevicePolicy::default()
+        ..DevicePolicy::RESIDENT_TABLES
     };
     for stem in ["amd-780m-radv", "intel-irisxe-anv", "nvidia-rtx50-linux"] {
         let p = profile(stem, identity).expect("profile");
@@ -392,7 +392,7 @@ fn an_array_its_bounded_indices_reach_in_part_keeps_only_that_part() {
     };
     let unbounded = reached("add i32 %gid, 0").expect("assembled");
     for stem in ["nvidia-rtx5080-laptop", "amd-rdna3-radv"] {
-        let p = profile(stem, Default::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         let a = compile(&bounded, "reached", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
         link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
         assert_eq!(a.interface.private_bytes, 2 * 4 * 4 * 4, "{stem}");
@@ -435,7 +435,11 @@ fn a_tile_kernel_holds_only_the_corner_its_tile_sizes_reach() {
         .with_index(1, uint(4));
     let none = FunctionConstantValues::defaults();
     let linked = [LinkedSource::new("postfix", &functions, &none)];
-    let p = profile("amd-rdna3-radv", Default::default()).expect("profile");
+    let p = profile(
+        "amd-rdna3-radv",
+        crate::device::DevicePolicy::RESIDENT_TABLES,
+    )
+    .expect("profile");
     let kernel = |name| {
         compile_bitcode_linked(
             &tiles,

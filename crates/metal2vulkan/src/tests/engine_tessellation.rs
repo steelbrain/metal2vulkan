@@ -84,7 +84,7 @@ fn assemble_text(name: &str, text: &str) -> Option<Vec<u8>> {
 }
 
 fn prof(stem: &str) -> DeviceProfile {
-    profile(stem, DevicePolicy::default()).expect("committed profile")
+    profile(stem, DevicePolicy::RESIDENT_TABLES).expect("committed profile")
 }
 
 fn compile(
@@ -753,7 +753,7 @@ fn device(stem: &str) -> Device {
             desc.features.remove(&f);
         }
     }
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 /// A render pipeline of post-tessellation function `vertex` of the fixture, with fragment
@@ -1373,7 +1373,7 @@ fn under_the_identity_domains_the_control_stage_reads_the_factors_by_address() {
     let policy = DevicePolicy {
         pointer_domain: PointerDomain::Identity,
         handle_domain: HandleDomain::Identity,
-        ..DevicePolicy::default()
+        ..DevicePolicy::RESIDENT_TABLES
     };
     let streamed = TessellationDescriptor {
         partition_mode: TessellationPartitionMode::FractionalOdd,

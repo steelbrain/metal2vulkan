@@ -135,7 +135,7 @@ fn what_a_translation_holds_stays_within_its_ledger() {
     let Some(bc) = assembled() else {
         return;
     };
-    let p = profile("runtime-floor", DevicePolicy::default()).expect("profile");
+    let p = profile("runtime-floor", DevicePolicy::RESIDENT_TABLES).expect("profile");
     // The shape: the applications are rolled into a loop (the body holds none).
     let (_, _, kept) = compile_kept(&bc, "chain", &p).expect("chain");
     assert_eq!(kept.loops().len(), 1, "the applications roll into one loop");

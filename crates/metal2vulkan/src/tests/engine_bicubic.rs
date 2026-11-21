@@ -70,7 +70,7 @@ fn assemble_module(name: &str, text: &str) -> Option<Vec<u8>> {
 }
 
 fn m3() -> DeviceProfile {
-    profile("moltenvk-m3", DevicePolicy::default()).expect("profile")
+    profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile")
 }
 
 /// The words of `constexpr sampler(filter::bicubic, ...)` with every axis addressed by `address`
@@ -1436,7 +1436,7 @@ fn a_bicubic_sample_is_one_call_of_the_planes_sum() {
         }
         Err(AssembleError::Rejected(e)) => panic!("llvm-as rejected bcx_rules: {e}"),
     };
-    let p = profile("intel-irisxe-rplp-anv", DevicePolicy::default()).expect("profile");
+    let p = profile("intel-irisxe-rplp-anv", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let (_, m) = typed_module(&bc, "bcx_rules", &p).expect("typed module");
     let functions = m.functions();
     let entry = functions.get(m.entry().func.index()).expect("entry");

@@ -83,7 +83,7 @@ fn profiles() -> Vec<(String, DeviceProfile)> {
         for robust in [true, false] {
             out.push((
                 format!("{stem} robust={robust}"),
-                profile(stem, robust, DevicePolicy::default()),
+                profile(stem, robust, DevicePolicy::RESIDENT_TABLES),
             ));
         }
     }
@@ -440,7 +440,7 @@ fn inttoptr_resolves_every_resident_address() {
     let Some(bc) = assemble_text("from_int", &kernel("from_int", body)) else {
         return;
     };
-    let p = profile("moltenvk-m3", true, DevicePolicy::default());
+    let p = profile("moltenvk-m3", true, DevicePolicy::RESIDENT_TABLES);
     let a = compile(&bc, "from_int", &p).expect("compile");
     link_and_validate(&a, &p).expect("L3");
     let (plan, m) = typed_module(&bc, "from_int", &p).expect("module");
@@ -501,7 +501,7 @@ fn inttoptr_resolves_addresses_of_large_sets() {
     let Some(bc) = assemble_text("from_int", &kernel("from_int", body)) else {
         return;
     };
-    let p = profile("moltenvk-m3", true, DevicePolicy::default());
+    let p = profile("moltenvk-m3", true, DevicePolicy::RESIDENT_TABLES);
     let a = compile(&bc, "from_int", &p).expect("compile");
     link_and_validate(&a, &p).expect("L3");
     let (plan, m) = typed_module(&bc, "from_int", &p).expect("module");
@@ -679,7 +679,7 @@ fn profile_f_refuses_a_loaded_pointer_dereference() {
     ) else {
         return;
     };
-    let f = device_f(DevicePolicy::default()).expect(PROFILE_F);
+    let f = device_f(DevicePolicy::RESIDENT_TABLES).expect(PROFILE_F);
     match compile(&bc, leaf.name, f.profile()) {
         Err(Error::Unsupported(u)) => {
             assert_eq!(u.feature, Feature::DereferenceLoadedPointer);

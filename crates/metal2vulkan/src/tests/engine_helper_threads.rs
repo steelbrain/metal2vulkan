@@ -107,12 +107,12 @@ fn fragment_helper_queries_take_the_form_of_their_discards() {
         return;
     };
     let stem = "intel-arl-anv";
-    let with = profile(stem, DevicePolicy::default()).expect("profile");
+    let with = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
     let without = {
         let mut desc = crate::pipeline::testing::description(stem).expect("description");
         let demote = VkFeature::ShaderDemoteToHelperInvocation;
         assert!(desc.features.remove(&demote), "{stem} has {demote:?}");
-        crate::device::Device::from_queries(desc, DevicePolicy::default())
+        crate::device::Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
             .expect("device")
             .profile()
             .clone()
@@ -234,7 +234,7 @@ fn a_vertex_function_s_helper_query_is_false() {
     };
     let entry = "helper_threads_in_a_vertex_function";
     for stem in ["moltenvk-m3", "lavapipe"] {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{entry} on {stem}: {e}"));
         let (_, words) =
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{entry} on {stem}: L3: {e}"));
@@ -303,7 +303,7 @@ fn kernel_threads_are_no_helpers(p: &DeviceProfile, tier: Tier, widths: &[Subgro
 
 #[test]
 fn kernel_threads_are_no_helpers_direct() {
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     kernel_threads_are_no_helpers(&p, Tier::Direct, &[SubgroupSize::W32]);
 }
 
@@ -318,7 +318,7 @@ fn kernel_threads_are_no_helpers_cluster32() {
 
 #[test]
 fn kernel_threads_are_no_helpers_emulated() {
-    let p = profile("lavapipe", DevicePolicy::default()).expect("profile");
+    let p = profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("profile");
     kernel_threads_are_no_helpers(
         &p,
         Tier::Emulated,

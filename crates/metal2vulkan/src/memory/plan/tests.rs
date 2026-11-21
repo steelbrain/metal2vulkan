@@ -21,12 +21,12 @@ use crate::pipeline::testing::{meter, profile};
 const AIR_DL: &str = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32";
 
 fn addressed() -> DeviceProfile {
-    profile("moltenvk-m3", DevicePolicy::default()).expect("moltenvk-m3")
+    profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("moltenvk-m3")
 }
 
 /// Profile F: a device without device addresses, below the runtime's floor.
 fn floor() -> DeviceProfile {
-    let dev = crate::pipeline::testing::device_f(DevicePolicy::default()).expect("Profile F");
+    let dev = crate::pipeline::testing::device_f(DevicePolicy::RESIDENT_TABLES).expect("Profile F");
     dev.profile().clone()
 }
 

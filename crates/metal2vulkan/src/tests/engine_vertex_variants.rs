@@ -75,7 +75,7 @@ fn fixture() -> Option<Vec<u8>> {
 }
 
 fn prof() -> DeviceProfile {
-    profile(PROFILE, DevicePolicy::default()).expect("committed profile")
+    profile(PROFILE, DevicePolicy::RESIDENT_TABLES).expect("committed profile")
 }
 
 /// Every format of the SDK table a float-class attribute can read, as `cases::vertex_formats`
@@ -254,7 +254,7 @@ fn a_pipeline_notes_what_the_device_converts_from_one_translation() {
     for stem in [PROFILE, "lavapipe", "amd-780m-radv"] {
         let dev = Device::from_queries(
             description(stem).expect("committed description"),
-            DevicePolicy::default(),
+            DevicePolicy::RESIDENT_TABLES,
         )
         .expect("device");
         for entry in [TO_FLOAT4, TO_HALF4] {
@@ -471,7 +471,7 @@ fn a_pulled_normalized_decode_notes_the_device_s_product() {
 fn a_constant_step_binding_compiles_one_module_for_the_whole_sweep() {
     let Some(bc) = fixture() else { return };
     for stem in NATIVE {
-        let p = profile(stem, DevicePolicy::default()).expect("committed profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("committed profile");
         let got = count(&bc, &p, TO_FLOAT4, VertexStepFunction::Constant);
         let per_vertex = count(&bc, &p, TO_FLOAT4, VertexStepFunction::PerVertex);
         assert_eq!(got.creations, 45, "{stem}: the swept formats");
@@ -531,7 +531,7 @@ fn the_integer_attribute_sweep_compiles_two_modules_where_the_constant_step_is_f
     ];
     let stride = SLOT * FORMATS.len() as u32;
     for stem in NATIVE {
-        let p = profile(stem, DevicePolicy::default()).expect("committed profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("committed profile");
         let mut projections = BTreeSet::new();
         let mut modules = BTreeSet::new();
         let mut creations = 0;
@@ -580,7 +580,7 @@ fn a_constant_step_is_a_zero_divisor_only_where_a_zero_stride_is_legal() {
         divisor: 0,
     };
     let derive = |desc: crate::device::DeviceDescription| {
-        crate::device::Device::from_queries(desc, DevicePolicy::default())
+        crate::device::Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
             .expect("the description derives")
             .profile()
             .clone()

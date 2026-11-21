@@ -284,7 +284,7 @@ fn pointers_chosen_at_run_time_call_the_functions_they_hold() {
     let Some(fx) = fixtures() else {
         return;
     };
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     for (kernel, want) in SHAPES {
         let out = dispatch(&fx, kernel, 1, &p, &[(0, zeros()), (1, zeros())]);
         let all: Vec<u32> = (0..N).map(want).collect();
@@ -307,7 +307,7 @@ fn a_pointer_through_an_integer_is_its_word() {
     let Some(fx) = fixtures() else {
         return;
     };
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let out = dispatch(&fx, "fpc_int_back", 1, &p, &[(0, zeros()), (1, zeros())]);
     let all: Vec<u32> = (0..N)
         .map(|t| if t & 1 != 0 { dbl(t) } else { inc(t) })
@@ -331,7 +331,7 @@ fn table_entries_and_addresses_call_and_compare_alike() {
     let Some(fx) = fixtures() else {
         return;
     };
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let mut table = FunctionTableWords::new(3);
     let lib = crate::library::Library::from_air(&fx.1).expect("library");
     let linked = LINKED
@@ -372,7 +372,7 @@ fn recursion_through_chosen_pointers_reaches_metal_s_depth() {
     let Some(fx) = fixtures() else {
         return;
     };
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     for k in [1, 2, 4, 8] {
         let (calls, reach) = (2 * k, 2 * k - 1);
         let depths: Vec<u8> = (0..N).flat_map(|t| (t / 2).to_le_bytes()).collect();
@@ -398,7 +398,7 @@ fn an_unlinked_function_s_address_needs_it() {
     let Some(fx) = fixtures() else {
         return;
     };
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let needs = |symbol: &str| {
         Err(Error::NeedsInput(RuntimeInput::LinkedFunction {
             symbol: DiagName::new(symbol),
@@ -422,7 +422,7 @@ fn the_recursion_s_stack_is_refused_where_metal_s_is() {
     let Some(fx) = fixtures() else {
         return;
     };
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let refused = Err(Error::LimitExceeded(Limit::CallStackBytes));
     let names = &LINKED[3..];
     assert_eq!(

@@ -87,7 +87,7 @@ fn device(stem: &str) -> Device {
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 fn needs(symbol: &str) -> Error {
@@ -115,7 +115,7 @@ fn compile_linked(
     linked: &[LinkedSource<'_>],
     stem: &str,
 ) -> Result<std::sync::Arc<crate::library::FunctionArtifact>, Error> {
-    let p = profile(stem, DevicePolicy::default()).expect("profile");
+    let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
     compile_bitcode_linked(
         caller,
         EntryRef::Name(CALLER),
@@ -218,7 +218,7 @@ fn a_linked_kernel_computes_its_linked_functions() {
     };
     let none = FunctionConstantValues::defaults();
     let linked = complete(&caller, &functions, &none);
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let (_, m) = typed_module_linked(&caller, CALLER, &p, &linked).expect("module");
     const N: u32 = 32;
     let buffer = |index| Buffer {
@@ -257,7 +257,7 @@ fn a_linked_kernel_computes_its_linked_functions() {
 
 /// The words `words[i]` the caller computes over 32 threads with `linked`.
 fn caller_words(caller: &[u8], linked: &[LinkedSource<'_>]) -> Vec<u32> {
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let (_, m) = typed_module_linked(caller, CALLER, &p, linked).expect("module");
     const N: u32 = 32;
     let buffer = |index| Buffer {
@@ -549,7 +549,7 @@ fn a_linked_module_that_does_not_decode_is_refused_only_at_its_calls() {
         LinkedSource::new("linked_scale", &garbage, &none),
         LinkedSource::new("linked_sample", &functions, &none),
     ];
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let compile = |entry| {
         compile_bitcode_linked(
             &caller,
@@ -593,7 +593,7 @@ fn a_linked_refusal_locates_an_instruction_of_the_specialized_entry() {
     };
     let none = FunctionConstantValues::defaults();
     let linked = complete(&caller, &functions, &none);
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let refusal = match compile_linked(&caller, &linked, "moltenvk-m3") {
         Err(Error::Unsupported(u)) => u,
         other => panic!("not refused: {:?}", other.map(|_| ())),
@@ -639,7 +639,7 @@ fn a_linked_function_s_constexpr_sampler_is_numbered() {
         return;
     };
     let none = FunctionConstantValues::defaults();
-    let p = profile("lavapipe", DevicePolicy::default()).expect("profile");
+    let p = profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let compile = |entry: &str, linked: &[LinkedSource<'_>]| {
         compile_bitcode_linked(
             &caller,

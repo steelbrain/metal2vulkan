@@ -8,7 +8,7 @@
 //! Each fixture of `validation/fixtures/public/` and its `engine/` directory whose text reaches
 //! threadgroup memory, a SIMD-group or quad function, or a mesh or object stage (`addrspace(3)`,
 //! `@air.simd_`, `@air.quad_`, `air.mesh`, `air.object`) is compiled, every entry its ABI declares,
-//! on every committed profile under the default policy and under the identity domains (the
+//! on every committed profile under the resident-table domains and under the identity domains (the
 //! runtime's), each from `Device::from_queries`, and each module compiled
 //! is read: it declares none of the three capabilities, its requirements name neither the
 //! extension (Vulkan's or SPIR-V's) nor its features, and each part compiles modules that

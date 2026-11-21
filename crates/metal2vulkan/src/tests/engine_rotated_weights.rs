@@ -116,7 +116,7 @@ fn rotated_weights_take_metal_s_weights_from_the_drawn_triangle_s() {
     let mut rotated = LoweringInputs::new();
     rotated.rotated_weights = true;
     for stem in PROFILES {
-        let p = crate::pipeline::testing::profile(stem, DevicePolicy::default()).expect(stem);
+        let p = crate::pipeline::testing::profile(stem, DevicePolicy::RESIDENT_TABLES).expect(stem);
         let compile = |bc: &[u8], entry: &str, inputs: &LoweringInputs| {
             compile_with(bc, entry, &p, inputs).unwrap_or_else(|e| panic!("{stem} {entry}: {e}"))
         };
@@ -207,7 +207,7 @@ fn a_rotated_draw_runs_the_rotated_weights_variant() {
             .join(format!("{stem}.json"));
         let text = std::fs::read_to_string(path).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
         for (fragment, reads) in [("pv_both", true), ("pv_flat", false)] {
             let what = format!("{stem} {fragment}");
             let mut d = RenderPipelineDescriptor::new(function("pv_vertex"));

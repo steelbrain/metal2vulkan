@@ -61,9 +61,9 @@ fn fixture(stem: &str) -> Option<Vec<u8>> {
     }
 }
 
-/// Committed profile `stem` as a device with the default policy.
+/// Committed profile `stem` as a device with the resident-table domains.
 fn device(stem: &str) -> Device {
-    Device::from_queries(description(stem), DevicePolicy::default()).expect("device")
+    Device::from_queries(description(stem), DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 /// Committed profile `stem` as the Khronos reader describes it.
@@ -1616,7 +1616,8 @@ fn a_render_pipeline_requires_extended_dynamic_state_exactly_when_it_makes_one_d
     )));
     d.rasterization_enabled = false;
     let compile = |desc: &DeviceDescription| {
-        let dev = Device::from_queries(desc.clone(), DevicePolicy::default()).expect("device");
+        let dev =
+            Device::from_queries(desc.clone(), DevicePolicy::RESIDENT_TABLES).expect("device");
         let pipe = dev
             .compile_render_pipeline(&d, &Budget::standard())
             .expect("render pipeline");
@@ -1714,7 +1715,8 @@ fn a_vertex_pipeline_makes_its_input_assembly_dynamic_exactly_with_both_extended
     )));
     d.rasterization_enabled = false;
     let compile = |desc: &DeviceDescription| {
-        let dev = Device::from_queries(desc.clone(), DevicePolicy::default()).expect("device");
+        let dev =
+            Device::from_queries(desc.clone(), DevicePolicy::RESIDENT_TABLES).expect("device");
         dev.compile_render_pipeline(&d, &Budget::standard())
             .expect("render pipeline")
     };
@@ -1849,7 +1851,7 @@ fn a_framebuffer_fetch_pipeline_is_ordered_exactly_where_the_device_orders_it() 
     let lavapipe = description("lavapipe");
     assert!(lavapipe.has(ORDERED));
     {
-        let pipe = compile(&lavapipe, DevicePolicy::default(), &d).expect("lavapipe");
+        let pipe = compile(&lavapipe, DevicePolicy::RESIDENT_TABLES, &d).expect("lavapipe");
         assert!(!unordered(&pipe));
         assert_eq!(pipe.graphics.input_attachments.len(), 1);
         assert!(pipe.graphics.storage_attachments.is_empty());
@@ -1868,7 +1870,7 @@ fn a_framebuffer_fetch_pipeline_is_ordered_exactly_where_the_device_orders_it() 
     interlocked.features.remove(&ORDERED);
     assert!(interlocked.has(INTERLOCK));
     {
-        let pipe = compile(&interlocked, DevicePolicy::default(), &d).expect("interlocked");
+        let pipe = compile(&interlocked, DevicePolicy::RESIDENT_TABLES, &d).expect("interlocked");
         assert!(!unordered(&pipe));
         assert!(pipe.graphics.input_attachments.is_empty());
         assert!(pipe.graphics.color_attachments.iter().all(Option::is_none));
@@ -1902,7 +1904,7 @@ fn a_framebuffer_fetch_pipeline_is_ordered_exactly_where_the_device_orders_it() 
     }
     // The blend, which the shader computes: the generic one of `R32Float`, noted.
     {
-        let pipe = compile(&interlocked, DevicePolicy::default(), &blended).expect("blended");
+        let pipe = compile(&interlocked, DevicePolicy::RESIDENT_TABLES, &blended).expect("blended");
         let [s] = pipe.graphics.storage_attachments.as_slice() else {
             panic!("{:?}", pipe.graphics.storage_attachments);
         };
@@ -1917,7 +1919,7 @@ fn a_framebuffer_fetch_pipeline_is_ordered_exactly_where_the_device_orders_it() 
     // Alpha to coverage, which can drop the fragment's samples, blocks the form.
     let mut covered = d.clone();
     covered.alpha_to_coverage = true;
-    match compile(&interlocked, DevicePolicy::default(), &covered) {
+    match compile(&interlocked, DevicePolicy::RESIDENT_TABLES, &covered) {
         Err(Error::Unsupported(u)) => assert_eq!(
             (u.feature, u.needs),
             (Feature::FramebufferFetch, Needs::NotImplemented)
@@ -1927,7 +1929,7 @@ fn a_framebuffer_fetch_pipeline_is_ordered_exactly_where_the_device_orders_it() 
 
     let mut without = interlocked.clone();
     without.features.remove(&INTERLOCK);
-    let pipe = compile(&without, DevicePolicy::default(), &d).expect("neither");
+    let pipe = compile(&without, DevicePolicy::RESIDENT_TABLES, &d).expect("neither");
     assert!(unordered(&pipe));
     assert_eq!(pipe.graphics.input_attachments.len(), 1);
     assert!(pipe.graphics.storage_attachments.is_empty());
@@ -1942,10 +1944,11 @@ fn a_framebuffer_fetch_pipeline_is_ordered_exactly_where_the_device_orders_it() 
             .function("fetch_ordered")
             .expect("fragment"),
     )));
-    let pipe = compile(&interlocked, DevicePolicy::default(), &grouped).expect("grouped");
+    let pipe = compile(&interlocked, DevicePolicy::RESIDENT_TABLES, &grouped).expect("grouped");
     assert!(!unordered(&pipe));
     assert!(pipe.requirements.features.contains(&INTERLOCK));
-    let pipe = compile(&without, DevicePolicy::default(), &grouped).expect("grouped, neither");
+    let pipe =
+        compile(&without, DevicePolicy::RESIDENT_TABLES, &grouped).expect("grouped, neither");
     assert!(unordered(&pipe));
     assert_eq!(pipe.graphics.input_attachments.len(), 1);
     for f in [ORDERED, INTERLOCK] {
@@ -1994,7 +1997,7 @@ fn an_identity_fetch_reads_its_attachments_pushed_texture_in_the_attachments_cla
     let policy = DevicePolicy {
         pointer_domain: PointerDomain::Identity,
         handle_domain: HandleDomain::Identity,
-        ..DevicePolicy::default()
+        ..DevicePolicy::RESIDENT_TABLES
     };
     let dev = Device::from_queries(without, policy).expect("device");
     let compile =
@@ -2200,7 +2203,8 @@ fn a_multisampled_framebuffer_fetch_reads_each_samples_own_color() {
         d
     };
     let compile = |desc: &DeviceDescription, d: &RenderPipelineDescriptor| {
-        let dev = Device::from_queries(desc.clone(), DevicePolicy::default()).expect("device");
+        let dev =
+            Device::from_queries(desc.clone(), DevicePolicy::RESIDENT_TABLES).expect("device");
         let pipe = dev.compile_render_pipeline(d, &Budget::standard())?;
         for s in &pipe.stages {
             l3(&s.spirv, &pipe.requirements, &dev);
@@ -2429,7 +2433,8 @@ fn a_render_pipeline_requires_the_blend_features_its_attachments_need() {
         d
     };
     let compile = |desc: &DeviceDescription, d: &RenderPipelineDescriptor| {
-        let dev = Device::from_queries(desc.clone(), DevicePolicy::default()).expect("device");
+        let dev =
+            Device::from_queries(desc.clone(), DevicePolicy::RESIDENT_TABLES).expect("device");
         let pipe = dev.compile_render_pipeline(d, &Budget::standard())?;
         let enables = desc
             .required_enables(&pipe.requirements)
@@ -2851,7 +2856,8 @@ fn a_render_pipeline_requires_the_portability_features_it_uses() {
     };
     // Every pipeline that compiles requires only what its device enabled.
     let compile = |desc: &DeviceDescription, d: &RenderPipelineDescriptor| {
-        let dev = Device::from_queries(desc.clone(), DevicePolicy::default()).expect("device");
+        let dev =
+            Device::from_queries(desc.clone(), DevicePolicy::RESIDENT_TABLES).expect("device");
         dev.compile_render_pipeline(d, &Budget::standard())
             .map(|p| {
                 assert_eq!(dev.profile().check(&p.requirements), Ok(()));
@@ -2939,8 +2945,8 @@ fn a_render_pipeline_requires_its_framebuffer_sample_counts() {
         ),
     ] {
         d.raster_sample_count = count;
-        let dev =
-            Device::from_queries(description("lavapipe"), DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(description("lavapipe"), DevicePolicy::RESIDENT_TABLES)
+            .expect("device");
         let pipe = dev
             .compile_render_pipeline(&d, &Budget::standard())
             .expect("lavapipe");
@@ -2985,14 +2991,15 @@ fn the_interface_states_the_textures_read_at_the_fragments_own_pixel() {
         "runtime-floor",
     ]
     .map(|stem| {
-        let p = crate::pipeline::testing::profile(stem, DevicePolicy::default()).expect("profile");
+        let p = crate::pipeline::testing::profile(stem, DevicePolicy::RESIDENT_TABLES)
+            .expect("profile");
         (stem, p)
     })
     .into();
     let clamped = crate::pipeline::testing::profile_without(
         "runtime-floor",
         &[VkFeature::RobustImageAccess2],
-        DevicePolicy::default(),
+        DevicePolicy::RESIDENT_TABLES,
     )
     .expect("profile");
     profiles.push(("runtime-floor without robustImageAccess2", clamped));
@@ -3033,7 +3040,7 @@ fn the_interface_states_why_a_slot_takes_no_snapshot() {
         (d.features).remove(&VkFeature::ShaderDemoteToHelperInvocation),
         "the 780M's profile demotes"
     );
-    let ends = Device::from_queries(d, DevicePolicy::default()).expect("device");
+    let ends = Device::from_queries(d, DevicePolicy::RESIDENT_TABLES).expect("device");
     for (name, dev, refusals) in [
         ("demote", &demotes, Vec::new()),
         ("no demote", &ends, vec![(0, SnapshotRefusal::Branch)]),
@@ -3086,7 +3093,8 @@ fn a_selection_on_the_texel_keeps_the_slot_where_a_helper_may_take_either_arm() 
         return;
     };
     for stem in ["amd-780m-radv", "lavapipe"] {
-        let p = crate::pipeline::testing::profile(stem, DevicePolicy::default()).expect("profile");
+        let p = crate::pipeline::testing::profile(stem, DevicePolicy::RESIDENT_TABLES)
+            .expect("profile");
         for (bc, entry, refusals) in [
             (&selecting, "ss_read_selecting", Vec::new()),
             (
@@ -3146,7 +3154,8 @@ fn a_snapshot_variant_reads_its_texture_in_the_copy_alone() {
         "moltenvk-m3",
         "runtime-floor",
     ] {
-        let p = crate::pipeline::testing::profile(stem, DevicePolicy::default()).expect("profile");
+        let p = crate::pipeline::testing::profile(stem, DevicePolicy::RESIDENT_TABLES)
+            .expect("profile");
         let base = crate::pipeline::testing::compile(&bc, "tob_read", &p)
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
         assert_eq!(base.interface.snapshot_textures, [0u32], "{stem}");
@@ -3233,8 +3242,8 @@ fn a_snapshot_variant_reads_its_texture_in_the_copy_alone() {
 /// `the_status_words_are_not_the_functions_writes`).
 #[test]
 fn the_interface_states_whether_the_function_writes_memory() {
-    let p =
-        crate::pipeline::testing::profile("lavapipe", DevicePolicy::default()).expect("profile");
+    let p = crate::pipeline::testing::profile("lavapipe", DevicePolicy::RESIDENT_TABLES)
+        .expect("profile");
     for (stem, entry, writes) in [
         ("a3_rog_buffer_rmw", "a3_rog_buffer_rmw", true),
         ("fragment_rog", "rog_loop", true),
@@ -3290,8 +3299,8 @@ fn effects_kernel(name: &str, body: &str, extra: &str) -> String {
 /// through the pointer it is passed, write memory.
 #[test]
 fn a_compute_pipeline_states_whether_its_kernel_writes_memory() {
-    let p =
-        crate::pipeline::testing::profile("lavapipe", DevicePolicy::default()).expect("profile");
+    let p = crate::pipeline::testing::profile("lavapipe", DevicePolicy::RESIDENT_TABLES)
+        .expect("profile");
     let callee = "define void @put(ptr addrspace(1) noundef %p, i32 noundef %v) #0 {\nentry:\n  store i32 %v, ptr addrspace(1) %p, align 4\n  ret void\n}\n\nattributes #0 = { noinline }\n\n";
     for (name, body, extra, writes) in [
         ("bare_return", "  ret void\n", "", false),
@@ -3344,8 +3353,8 @@ fn a_compute_pipeline_states_whether_its_kernel_writes_memory() {
 /// command runs) does not. A pipeline's interface states it where one of its stages does.
 #[test]
 fn the_interface_states_whether_the_function_takes_a_command_buffer() {
-    let p =
-        crate::pipeline::testing::profile("lavapipe", DevicePolicy::default()).expect("profile");
+    let p = crate::pipeline::testing::profile("lavapipe", DevicePolicy::RESIDENT_TABLES)
+        .expect("profile");
     let dirs = [crate::pipeline::testing::fixtures_dir(), engine_dir()];
     for (dir, stem, entry, reaches) in [
         (
@@ -3392,8 +3401,8 @@ fn the_interface_states_whether_the_function_takes_a_command_buffer() {
 #[test]
 fn the_interface_states_what_the_function_may_write_into_command_buffers() {
     use crate::pipeline::interface::CommandWrites as W;
-    let p =
-        crate::pipeline::testing::profile("lavapipe", DevicePolicy::default()).expect("profile");
+    let p = crate::pipeline::testing::profile("lavapipe", DevicePolicy::RESIDENT_TABLES)
+        .expect("profile");
     for (entry, operations, primitive_types, kinds) in [
         (
             "icb_replay_encode",
@@ -3450,8 +3459,8 @@ fn the_interface_states_what_the_function_may_write_into_command_buffers() {
 /// stage where the function writes.
 #[test]
 fn the_interface_states_whether_the_function_writes_textures() {
-    let p =
-        crate::pipeline::testing::profile("lavapipe", DevicePolicy::default()).expect("profile");
+    let p = crate::pipeline::testing::profile("lavapipe", DevicePolicy::RESIDENT_TABLES)
+        .expect("profile");
     for (stem, entry, writes) in [
         ("fragment_rog", "rog_texture", true),
         ("handles", "argument_buffer_array_write", true),
@@ -3498,8 +3507,8 @@ fn the_interface_states_whether_the_function_writes_textures() {
 /// (`abt_frag_sample`). A standalone kernel's pipeline states its function's.
 #[test]
 fn the_interface_states_what_the_function_reaches_beyond_its_bound_slots() {
-    let p =
-        crate::pipeline::testing::profile("lavapipe", DevicePolicy::default()).expect("profile");
+    let p = crate::pipeline::testing::profile("lavapipe", DevicePolicy::RESIDENT_TABLES)
+        .expect("profile");
     for (stem, entry, reads, writes, storage) in [
         ("handles", "select_read", false, false, false),
         ("handles", "select_null_write", false, false, false),
@@ -3599,7 +3608,7 @@ fn a_sample_rate_point_coordinate_is_noted_under_multisampling() {
 /// A vertex function over a two-triangle strip with a center varying `uv`, and a fragment
 /// function that loads `root->next` (a `device uint *` member of its `device Node *` buffer)
 /// and reads through it beside `uv`, writing nothing. Every access through the loaded pointer
-/// counts a resident miss in the `ExecutionStatus` buffer under the default policy.
+/// counts a resident miss in the `ExecutionStatus` buffer under the resident-table domains.
 const WIDE_READ: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
 target triple = "air64_v28-apple-macosx26.0.0"
 

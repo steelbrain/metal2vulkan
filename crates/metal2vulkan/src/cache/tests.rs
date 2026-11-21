@@ -37,14 +37,14 @@ fn fixture(stem: &str) -> Option<Vec<u8>> {
     }
 }
 
-/// Committed profile `stem` as a device with the default policy.
+/// Committed profile `stem` as a device with the resident-table domains.
 fn device(stem: &str) -> Device {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles")
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(&path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 /// `store_const` compiled on `dev`, with its compute pipeline.
@@ -1374,7 +1374,7 @@ fn the_storage_view_variant_round_trips() {
     use crate::cache::VariantKey;
     use crate::pipeline::facts::{RuntimeFact, UniformViewChoice};
     // Profile F's descriptor buffers: four storage buffers a stage, below the runtime's floor.
-    let dev = crate::pipeline::testing::device_f(DevicePolicy::default()).expect("device");
+    let dev = crate::pipeline::testing::device_f(DevicePolicy::RESIDENT_TABLES).expect("device");
     let Some(bc) = fixture("descriptor_limit_uniform_views") else {
         return;
     };

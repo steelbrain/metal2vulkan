@@ -79,14 +79,15 @@ fn committed_device(stem: &str) -> Result<Device> {
     Ok(device)
 }
 
-/// A buffer bound at `offset` in a `length`-byte allocation whose Metal `gpuAddress` is
-/// `0x1_0000`, without a Vulkan device address.
+/// A buffer bound at `offset` in a `length`-byte allocation whose Metal `gpuAddress` and Vulkan
+/// device address are both `0x1_0000`, as the runtime makes them: under the default policy, the
+/// identity domains, a buffer slot is reached at its device address.
 fn buffer(length: u64, offset: u64) -> BoundBuffer {
     BoundBuffer::Buffer {
         length,
         offset,
         gpu_address: 0x1_0000,
-        device_address: None,
+        device_address: Some(0x1_0000),
         attribute_stride: None,
     }
 }

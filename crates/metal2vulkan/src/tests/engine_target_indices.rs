@@ -59,7 +59,7 @@ fn device(stem: &str, withheld: &[F]) -> Device {
     for f in withheld {
         desc.features.remove(f);
     }
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 /// A render pipeline of `vertex` and `fragment` from `bc`, drawing into one color of `format`.

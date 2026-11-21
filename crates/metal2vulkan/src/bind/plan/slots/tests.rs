@@ -82,7 +82,8 @@ fn a_large_buffer_needs_the_device_address_variant_on_profile_a_only() {
     let storage = BufferForm::Descriptor(DescriptorView::Storage);
     let mut seen = [false; 2];
     let mut profiles = committed_profiles().expect("profiles");
-    let f = crate::pipeline::testing::device_f(Default::default()).expect("Profile F");
+    let f = crate::pipeline::testing::device_f(crate::device::DevicePolicy::RESIDENT_TABLES)
+        .expect("Profile F");
     profiles.push((
         crate::pipeline::testing::PROFILE_F.to_string(),
         f.profile().clone(),
@@ -147,8 +148,11 @@ fn a_large_buffer_needs_the_device_address_variant_on_profile_a_only() {
 /// and the slots the pipeline was compiled keeping, so the variant's plan restates it.
 #[test]
 fn a_large_viewed_slot_asks_for_every_large_candidate_to_stay_storage() {
-    let p =
-        crate::pipeline::testing::profile("runtime-floor", Default::default()).expect("profile");
+    let p = crate::pipeline::testing::profile(
+        "runtime-floor",
+        crate::device::DevicePolicy::RESIDENT_TABLES,
+    )
+    .expect("profile");
     let max = u64::from(p.fields().limits.max_uniform_buffer_range);
     let big = BoundKind::Buffer {
         device_address: false,

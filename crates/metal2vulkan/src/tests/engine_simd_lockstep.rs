@@ -1500,7 +1500,7 @@ fn check(
     expect: impl Fn(u32) -> u32,
 ) -> Option<Plan> {
     let bc = assemble(name, body)?;
-    let p = profile(profile_name, DevicePolicy::default()).expect("profile");
+    let p = profile(profile_name, DevicePolicy::RESIDENT_TABLES).expect("profile");
     let (plan, m) = typed_module(&bc, name, &p).unwrap_or_else(|e| panic!("{name}: {e}"));
     let want: Vec<u32> = (0..threads).map(&expect).collect();
     for &w in lanes {
@@ -2006,7 +2006,7 @@ fn the_lockstep_gate_fixture_takes_emulated_simdgroups() {
     ] {
         for profile_name in ["lavapipe", "runtime-floor"] {
             let lanes = &CHUNKED[..];
-            let p = profile(profile_name, DevicePolicy::default()).expect("profile");
+            let p = profile(profile_name, DevicePolicy::RESIDENT_TABLES).expect("profile");
             let (plan, m) = typed_module(&bc, kernel, &p)
                 .unwrap_or_else(|e| panic!("{kernel} on {profile_name}: {e}"));
             let at = format!("{kernel} on {profile_name}");
@@ -2131,7 +2131,7 @@ fn a_branchs_two_arms_take_no_device_barrier() {
         let Some(bc) = assemble("device_arms", DEVICE_ARMS) else {
             return;
         };
-        let p = profile(profile_name, DevicePolicy::default()).expect("profile");
+        let p = profile(profile_name, DevicePolicy::RESIDENT_TABLES).expect("profile");
         let (plan, _) = typed_module(&bc, "device_arms", &p)
             .unwrap_or_else(|e| panic!("device_arms on {profile_name}: {e}"));
         for name in [
@@ -2348,7 +2348,7 @@ fn every_stage_from_queries_keeps_the_widest_pin_or_is_refused() {
     let weight = |module: &TypedModule| entry_weight(module, &mut meter()).expect("weight");
     let want: Vec<u32> = (0..64).map(half).collect();
     let desc = crate::pipeline::testing::description("intel-irisxe-rplp-anv").unwrap();
-    let queries = Device::from_queries(desc, DevicePolicy::default()).unwrap();
+    let queries = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).unwrap();
     let queries = queries.profile();
     let compile = |p, bounds| compile_bitcode_bounded(&bc, entry, p, &mut meter(), bounds);
     let compiled = |cap| StageBounds { compiled: cap };
@@ -2402,7 +2402,7 @@ fn a_kernel_past_the_stage_bound_gets_one_answer_through_either_path() {
         return;
     };
     let iris_desc = crate::pipeline::testing::description("intel-irisxe-rplp-anv").unwrap();
-    let iris = Device::from_queries(iris_desc, DevicePolicy::default()).unwrap();
+    let iris = Device::from_queries(iris_desc, DevicePolicy::RESIDENT_TABLES).unwrap();
     let iris = iris.profile();
     let library = Library::from_air(&bc).expect("library");
     let fd = FunctionDescriptor::new(library.function("device_half").expect("the kernel"));
@@ -2518,7 +2518,7 @@ fn the_stage_bound_fixture_keeps_the_pin_or_is_refused() {
         .join("../metal2vulkan-validation/profiles/intel-irisxe-rplp-anv.json");
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let queries = Device::from_queries(desc, DevicePolicy::default()).unwrap();
+    let queries = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).unwrap();
     {
         let p = queries.profile();
         assert!(p.fields().subgroup.maximal_reconvergence);
@@ -2546,10 +2546,10 @@ fn the_stage_bound_fixture_keeps_the_pin_or_is_refused() {
         "the description names shaderMaximalReconvergence"
     );
     let desc = DeviceDescription::from_khronos_json(&cleared, None).expect("description");
-    let queries = Device::from_queries(desc.clone(), DevicePolicy::default()).unwrap();
+    let queries = Device::from_queries(desc.clone(), DevicePolicy::RESIDENT_TABLES).unwrap();
     let mut windows = desc;
     windows.driver_id = Some(crate::vk::DriverId::INTEL_PROPRIETARY_WINDOWS);
-    let windows = Device::from_queries(windows, DevicePolicy::default()).unwrap();
+    let windows = Device::from_queries(windows, DevicePolicy::RESIDENT_TABLES).unwrap();
     for p in [queries.profile(), windows.profile()] {
         assert!(!p.fields().subgroup.maximal_reconvergence);
         let compiled = compile_bitcode_bounded(&bc, entry, p, &mut meter(), unbounded);
@@ -2576,7 +2576,7 @@ fn texture_calls_take_no_device_barrier() {
         return;
     };
     for profile_name in ["lavapipe", "moltenvk-m3", "nvidia-rtx5080-laptop"] {
-        let p = profile(profile_name, DevicePolicy::default()).expect("profile");
+        let p = profile(profile_name, DevicePolicy::RESIDENT_TABLES).expect("profile");
         let (plan, _) = typed_module(&bc, "device_texture", &p)
             .unwrap_or_else(|e| panic!("device_texture on {profile_name}: {e}"));
         for name in LOCKSTEP_NAMES {
@@ -2668,7 +2668,7 @@ fn the_busy_kernel_takes_no_lockstep_barrier() {
         Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected rfs_agx_yield: {why}"),
     };
     for profile_name in LONE_PROFILES {
-        let p = profile(profile_name, DevicePolicy::default()).expect("profile");
+        let p = profile(profile_name, DevicePolicy::RESIDENT_TABLES).expect("profile");
         let (plan, _) = typed_module(&bc, "agx_yield_lookback", &p)
             .unwrap_or_else(|e| panic!("agx_yield_lookback on {profile_name}: {e}"));
         for name in LOCKSTEP_NAMES {
@@ -2715,7 +2715,7 @@ fn a_store_loop_another_thread_reads_moves_or_leaves_early_keeps_its_barrier() {
             return;
         };
         for profile_name in LONE_PROFILES {
-            let p = profile(profile_name, DevicePolicy::default()).expect("profile");
+            let p = profile(profile_name, DevicePolicy::RESIDENT_TABLES).expect("profile");
             let (plan, _) = typed_module(&bc, name, &p)
                 .unwrap_or_else(|e| panic!("{name} on {profile_name}: {e}"));
             let barriers: u32 = LOCKSTEP_NAMES.iter().map(|n| uses(&plan, n)).sum();
@@ -2737,7 +2737,7 @@ fn grid_barriers(name: &str, body: &str) -> Option<Vec<(&'static str, u32)>> {
     let bc = assemble_text(name, &text)?;
     let mut out = Vec::new();
     for profile_name in LONE_PROFILES {
-        let p = profile(profile_name, DevicePolicy::default()).expect("profile");
+        let p = profile(profile_name, DevicePolicy::RESIDENT_TABLES).expect("profile");
         let (plan, _) =
             typed_module(&bc, name, &p).unwrap_or_else(|e| panic!("{name} on {profile_name}: {e}"));
         out.push((
@@ -2880,7 +2880,7 @@ target triple = "air64_v28-apple-macosx26.0.0"
 /// beside other jobs says nothing of the first (a loaded debug run took more than 20 s).
 fn steps_cost(steps: usize, accs: usize, pointers: bool) -> Option<(u64, u64, Result<(), Error>)> {
     let bc = assemble_text("grow", &barrier_free_steps(steps, accs, pointers))?;
-    let p = profile("nvidia-rtx5080-laptop", DevicePolicy::default()).expect("profile");
+    let p = profile("nvidia-rtx5080-laptop", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let mut m = Meter::new(&Budget::default());
     let compiled = compile_bitcode(
         &bc,
@@ -2997,7 +2997,7 @@ fn check_shapes(
     expect: impl Fn(u32, u32) -> u32,
 ) -> Option<Plan> {
     let bc = assemble_text(name, &format!("{HEADER}\n{body}\n{}", footer_pos(name)))?;
-    let p = profile(profile_name, DevicePolicy::default()).expect("profile");
+    let p = profile(profile_name, DevicePolicy::RESIDENT_TABLES).expect("profile");
     let (plan, m) = typed_module(&bc, name, &p).unwrap_or_else(|e| panic!("{name}: {e}"));
     for &local in shapes {
         let threads = local.iter().product::<u32>();
@@ -3347,7 +3347,7 @@ done:
 /// nothing: its one-row variant keeps the barrier and the pin.
 #[test]
 fn a_guard_on_its_index_widened_once_clears_a_tree_reduction_in_one_row() {
-    let p = profile("amd-780m-radv", DevicePolicy::default()).expect("profile");
+    let p = profile("amd-780m-radv", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let mut one_row = LowerInputs::new();
     one_row.one_row = true;
     let sum: u32 = (0..16).sum();

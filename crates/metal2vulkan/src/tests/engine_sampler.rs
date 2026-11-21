@@ -91,7 +91,7 @@ fn assemble(name: &str, body: &str) -> Option<Vec<u8>> {
 }
 
 fn m3() -> DeviceProfile {
-    profile("moltenvk-m3", DevicePolicy::default()).expect("profile")
+    profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile")
 }
 
 fn ok(bc: &[u8], entry: &str, p: &DeviceProfile) -> std::sync::Arc<FunctionArtifact> {
@@ -496,7 +496,7 @@ fn normalized_and_cubic_stages_record_no_note_their_states_cannot_run() {
     use crate::pipeline::testing::compile_with;
     use std::collections::BTreeSet;
     use PrecisionNote as N;
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let assembled = |name: &str| match llvm_assemble(&engine_dir().join(format!("{name}.ll"))) {
         Ok(b) => Some(b),
         Err(AssembleError::Missing(why)) => {
@@ -1278,7 +1278,7 @@ fn dynamic_offsets_are_offset_operands_of_their_low_four_bits() {
     let Some(bc) = assemble("gather_dynamic_offset", &dynamic_offset_kernel(true)) else {
         return;
     };
-    let lavapipe = profile("lavapipe", DevicePolicy::default()).expect("profile");
+    let lavapipe = profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let a = ok(&bc, "k", &lavapipe);
     assert_eq!(operand_masks(&a, OP_IMAGE_GATHER, 6), [MASK_OFFSET]);
     assert_eq!(sign_extracts(&a), 1);
@@ -1295,7 +1295,7 @@ fn dynamic_offsets_are_offset_operands_of_their_low_four_bits() {
     let floor = profile_without(
         "runtime-floor",
         &[VkFeature::ShaderImageGatherExtended],
-        DevicePolicy::default(),
+        DevicePolicy::RESIDENT_TABLES,
     )
     .expect("below the runtime's floor");
     let a = ok(&bc, "k", &floor);
@@ -1331,7 +1331,7 @@ fn m3_with(edit: impl FnOnce(&mut crate::device::profile::Limits)) -> DeviceProf
     let text = std::fs::read_to_string(path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     edit(&mut desc.limits);
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()

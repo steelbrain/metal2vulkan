@@ -149,7 +149,7 @@ fn the_atomic_fixture_compiles_as_moltenvk_msl() {
     let Some(bc) = fixture() else {
         return;
     };
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let words = final_words(
         &bc,
         "kernel_atomic_xor_and_subtract",
@@ -190,7 +190,7 @@ fn a_psb_leaf_compiles_as_moltenvk_msl() {
     let Some(bc) = assemble("psb_leaf", &format!("{HEADER}{PSB_LEAF}")) else {
         return;
     };
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let mut inputs = LowerInputs::new();
     inputs.psb_slots.insert(SlotRef {
         stage: Stage::Kernel,
@@ -230,7 +230,7 @@ fn a_dynamic_root_compiles_as_moltenvk_msl() {
     let Some(bc) = assemble("dynamic_store", &format!("{HEADER}{DYNAMIC_STORE}")) else {
         return;
     };
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let words = final_words(&bc, "dynamic_store", &p, &LowerInputs::new());
     // The miss count and bit, and the halfword store's clear and set (of one or two words).
     compiles_as_moltenvk_msl(&words, "dynamic_store", 4);

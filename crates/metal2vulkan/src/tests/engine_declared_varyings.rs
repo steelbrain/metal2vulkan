@@ -106,7 +106,7 @@ fn device(stem: &str) -> Device {
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let description = DeviceDescription::from_khronos_json(&text, None).expect(stem);
-    Device::from_queries(description, DevicePolicy::default()).expect(stem)
+    Device::from_queries(description, DevicePolicy::RESIDENT_TABLES).expect(stem)
 }
 
 /// The `Location` of every user variable of storage class `class` in `words` (built-ins carry no

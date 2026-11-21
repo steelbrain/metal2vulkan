@@ -243,9 +243,11 @@ fn a_numeric_slot_binds_either_integer_type() {
         class: SlotClass::Texture,
         index: 1,
     };
-    let p =
-        crate::pipeline::testing::profile("moltenvk-m3", crate::device::DevicePolicy::default())
-            .expect("profile");
+    let p = crate::pipeline::testing::profile(
+        "moltenvk-m3",
+        crate::device::DevicePolicy::RESIDENT_TABLES,
+    )
+    .expect("profile");
     let slot = TextureSlot {
         access: TextureAccess::new(false, false, true),
         ..slot_iface(TextureType::Type2D, SampledType::Uint)
@@ -321,9 +323,11 @@ fn a_texture_held_for_copies_alone_is_refused_at_a_float_slot() {
         class: SlotClass::Texture,
         index: 0,
     };
-    let p =
-        crate::pipeline::testing::profile("moltenvk-m3", crate::device::DevicePolicy::default())
-            .expect("profile");
+    let p = crate::pipeline::testing::profile(
+        "moltenvk-m3",
+        crate::device::DevicePolicy::RESIDENT_TABLES,
+    )
+    .expect("profile");
     let plan = |pixel_format, access: TextureAccess, sampled_type, ty| {
         let slot = TextureSlot {
             access,
@@ -630,7 +634,7 @@ fn runtime_sampler_values_are_checked_at_plan_time() {
         crate::pipeline::testing::profile_without(
             "runtime-floor",
             &[crate::device::requirements::VkFeature::SamplerMirrorClampToEdge],
-            crate::device::DevicePolicy::default(),
+            crate::device::DevicePolicy::RESIDENT_TABLES,
         )
         .expect("profile"),
     ));
@@ -939,9 +943,11 @@ fn bicubic_texels_follow_the_bound_format() {
         class: SlotClass::Texture,
         index: 0,
     };
-    let p =
-        crate::pipeline::testing::profile("moltenvk-m3", crate::device::DevicePolicy::default())
-            .expect("profile");
+    let p = crate::pipeline::testing::profile(
+        "moltenvk-m3",
+        crate::device::DevicePolicy::RESIDENT_TABLES,
+    )
+    .expect("profile");
     let t = slot_iface(TextureType::Type2D, SampledType::Float);
     let slots = BTreeMap::from([(texture, SlotInterface::Texture(t))]);
     let plan = |pf: Option<PixelFormat>| {
@@ -1014,9 +1020,11 @@ fn sampler_state_follows_the_bound_sampler() {
         class: SlotClass::Sampler,
         index: 1,
     };
-    let p =
-        crate::pipeline::testing::profile("moltenvk-m3", crate::device::DevicePolicy::default())
-            .expect("profile");
+    let p = crate::pipeline::testing::profile(
+        "moltenvk-m3",
+        crate::device::DevicePolicy::RESIDENT_TABLES,
+    )
+    .expect("profile");
     let slots = BTreeMap::from([(
         slot,
         SlotInterface::Sampler(SamplerSlot {
@@ -1296,8 +1304,11 @@ fn an_a8_texture_buffer_without_a8_unorm_views_its_bytes_in_red() {
     let uniform_ty = vk::DescriptorType::UNIFORM_TEXEL_BUFFER;
     let storage_ty = vk::DescriptorType::STORAGE_TEXEL_BUFFER;
     for (profile, held) in [("lavapipe", true), ("moltenvk-m3", false)] {
-        let p = crate::pipeline::testing::profile(profile, crate::device::DevicePolicy::default())
-            .expect("profile");
+        let p = crate::pipeline::testing::profile(
+            profile,
+            crate::device::DevicePolicy::RESIDENT_TABLES,
+        )
+        .expect("profile");
         let a8 = PixelFormat::A8Unorm;
         assert_eq!(
             crate::metal::format::alpha_in_red(a8, &p),

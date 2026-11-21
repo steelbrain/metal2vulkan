@@ -28,9 +28,7 @@ use crate::submit::{self, Work};
 use crate::submit_calls::SubmitCalls;
 use crate::times::{StampPools, Ticks};
 use ash::vk;
-use metal2vulkan::device::{
-    ApiVersion, DeviceDescription, DevicePolicy, HandleDomain, PointerDomain,
-};
+use metal2vulkan::device::{ApiVersion, DeviceDescription, DevicePolicy};
 use metal2vulkan::metal::{ArgumentBuffersTier, ReadWriteTextureTier};
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -1330,10 +1328,8 @@ unsafe fn translator(
     let description = described
         .and_then(|description| description.with_enabled(&floor::shader_enables(capabilities)))
         .map_err(Error::translation)?;
-    let mut policy = DevicePolicy::default();
-    policy.pointer_domain = PointerDomain::Identity;
-    policy.handle_domain = HandleDomain::Identity;
-    metal2vulkan::device::Device::from_queries(description, policy).map_err(Error::translation)
+    metal2vulkan::device::Device::from_queries(description, DevicePolicy::default())
+        .map_err(Error::translation)
 }
 
 /// The features device creation enables: the floor's of `capabilities`, and each of `asked` the

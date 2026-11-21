@@ -948,9 +948,9 @@ fn fixture(stem: &str) -> Option<Vec<u8>> {
     common::llvm_as(&text, &format!("{stem}.ll"))
 }
 
-/// Committed profile `stem` as a device with the default policy.
+/// Committed profile `stem` as a device with the resident-table domains.
 fn device(stem: &str) -> Device {
-    device_under(stem, DevicePolicy::default())
+    device_under(stem, DevicePolicy::RESIDENT_TABLES)
 }
 
 /// [`device`] under `policy`.
@@ -1202,7 +1202,7 @@ fn the_precision_contract_names_each_float_operations_notes() {
             .expect("a float operator")
             .contains(&PrecisionNote::DeviceArithmetic)
     );
-    let native = device_under("lavapipe", DevicePolicy::default());
+    let native = device_under("lavapipe", DevicePolicy::RESIDENT_TABLES);
     assert_eq!(
         PrecisionNote::of_float_operator(
             BinOp::FDiv,

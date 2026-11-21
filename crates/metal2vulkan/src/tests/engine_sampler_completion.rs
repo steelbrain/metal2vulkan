@@ -62,7 +62,7 @@ fn fixture() -> Option<Vec<u8>> {
 }
 
 fn m3() -> DeviceProfile {
-    profile("moltenvk-m3", DevicePolicy::default()).expect("profile")
+    profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile")
 }
 
 fn ok(bc: &[u8], entry: &str, p: &DeviceProfile) -> std::sync::Arc<FunctionArtifact> {

@@ -1030,7 +1030,7 @@ fn lavapipe() -> crate::device::Device {
             None,
         )
         .expect("description"),
-        crate::device::DevicePolicy::default(),
+        crate::device::DevicePolicy::RESIDENT_TABLES,
     )
     .expect("device")
 }

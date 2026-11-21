@@ -288,7 +288,7 @@ fn words(b: &[u8]) -> Vec<u32> {
 }
 
 fn emulating(stem: &str) -> DeviceProfile {
-    profile(stem, DevicePolicy::default()).expect("profile")
+    profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile")
 }
 
 /// `runtime-floor` with 4-lane subgroups in the vertex, fragment and compute stages and the basic,
@@ -302,7 +302,7 @@ fn narrow_graphics() -> DeviceProfile {
     desc.subgroup.supported_stages = S::VERTEX | S::FRAGMENT | S::COMPUTE;
     desc.subgroup.supported_operations =
         O::BASIC | O::VOTE | O::ARITHMETIC | O::BALLOT | O::SHUFFLE | O::SHUFFLE_RELATIVE | O::QUAD;
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()
@@ -436,7 +436,7 @@ fn wave64() -> DeviceProfile {
     let narrowed = text.replace("\"minSubgroupSize\": 32", "\"minSubgroupSize\": 64");
     assert_ne!(narrowed, text, "the description names minSubgroupSize");
     let desc = DeviceDescription::from_khronos_json(&narrowed, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()

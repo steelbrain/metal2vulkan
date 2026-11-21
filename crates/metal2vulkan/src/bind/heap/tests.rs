@@ -48,7 +48,7 @@ fn shape(ty: TextureType, pf: PixelFormat, samples: u32, usage: TextureUsage) ->
 
 /// The committed `moltenvk-m3` profile.
 fn m3() -> DeviceProfile {
-    crate::pipeline::testing::profile("moltenvk-m3", crate::device::DevicePolicy::default())
+    crate::pipeline::testing::profile("moltenvk-m3", crate::device::DevicePolicy::RESIDENT_TABLES)
         .expect("profile")
 }
 
@@ -1179,7 +1179,7 @@ fn sampler_tables_admit_the_shapes_the_plan_s_checks_pass() {
     let floor = crate::pipeline::testing::profile_without(
         "runtime-floor",
         &[crate::device::requirements::VkFeature::SamplerAnisotropy],
-        crate::device::DevicePolicy::default(),
+        crate::device::DevicePolicy::RESIDENT_TABLES,
     )
     .expect("profile");
     let placement = HeapPlacement::ResourceId;

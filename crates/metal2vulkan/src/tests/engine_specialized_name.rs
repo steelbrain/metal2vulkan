@@ -56,7 +56,7 @@ fn device() -> Device {
         .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 /// `scale` set to `v`.
@@ -195,7 +195,7 @@ fn the_specialized_name_and_the_specialization_are_part_of_the_key() {
 /// resolved by one of them), on the CPU interpreter.
 fn words(caller: &[u8], linked: &[LinkedSource<'_>]) -> Vec<f32> {
     const N: u32 = 8;
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let (_, m) = typed_module_linked(caller, CALLER, &p, linked).unwrap_or_else(|e| panic!("{e}"));
     let res = Resources {
         buffers: vec![Buffer {

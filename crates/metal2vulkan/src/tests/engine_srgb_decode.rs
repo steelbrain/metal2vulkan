@@ -221,11 +221,11 @@ fn inputs(variant: bool) -> LowerInputs {
 }
 
 fn lavapipe() -> crate::device::profile::DeviceProfile {
-    profile("lavapipe", DevicePolicy::default()).expect("profile")
+    profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("profile")
 }
 
 fn m3() -> crate::device::profile::DeviceProfile {
-    profile("moltenvk-m3", DevicePolicy::default()).expect("profile")
+    profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile")
 }
 
 /// The plan of a slot bound with a swizzle in an 8-bit sRGB format the device holds as its UNORM
@@ -621,7 +621,7 @@ fn devices() -> Vec<(String, Device)> {
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
         out.push((
             stem,
-            Device::from_queries(desc, DevicePolicy::default()).expect("device"),
+            Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device"),
         ));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));

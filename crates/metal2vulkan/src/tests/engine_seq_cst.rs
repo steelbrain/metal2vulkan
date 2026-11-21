@@ -91,7 +91,7 @@ fn a_seq_cst_fence_is_ordered_with_the_command_buffers_others() {
     }
     let (mut addressed, mut floor) = (0, 0);
     let mut profiles = committed_profiles().expect("committed profiles");
-    let f = device_f(crate::device::DevicePolicy::default()).expect(PROFILE_F);
+    let f = device_f(crate::device::DevicePolicy::RESIDENT_TABLES).expect(PROFILE_F);
     profiles.push((PROFILE_F.into(), f.profile().clone()));
     for (stem, p) in profiles {
         for (fence, scope, bc) in &kernels {

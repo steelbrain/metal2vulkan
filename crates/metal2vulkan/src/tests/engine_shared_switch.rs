@@ -58,7 +58,7 @@ fn assemble(name: &str, body: &str) -> Option<Vec<u8>> {
 }
 
 fn lavapipe() -> DeviceProfile {
-    profile("lavapipe", DevicePolicy::default()).expect("profile")
+    profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("profile")
 }
 
 const EDGE: u64 = 1;

@@ -140,7 +140,7 @@ fn interpret(bc: &[u8], entry: &str, p: &DeviceProfile, threads: &[Thread]) -> V
 /// the interpreter does.
 fn keeping() -> Vec<(String, DeviceProfile)> {
     let mut seen = BTreeSet::new();
-    committed_profiles_with(DevicePolicy::default())
+    committed_profiles_with(DevicePolicy::RESIDENT_TABLES)
         .expect("profiles")
         .into_iter()
         .filter(|(_, p)| seen.insert(fma::float_route(p)))
@@ -164,7 +164,7 @@ fn a_tiny_product_is_the_device_s() {
         let Some(bc) = assemble(entry) else {
             return;
         };
-        for (stem, p) in committed_profiles_with(DevicePolicy::default()).expect("profiles") {
+        for (stem, p) in committed_profiles_with(DevicePolicy::RESIDENT_TABLES).expect("profiles") {
             let what = format!("{entry} on {stem}");
             let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
@@ -213,7 +213,7 @@ fn the_fast_entry_keeps_no_zero_signs() {
     let Some(bc) = assemble(entry) else {
         return;
     };
-    for (stem, p) in committed_profiles_with(DevicePolicy::default()).expect("profiles") {
+    for (stem, p) in committed_profiles_with(DevicePolicy::RESIDENT_TABLES).expect("profiles") {
         let what = format!("{entry} on {stem}");
         let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
         let (_, words) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));

@@ -195,7 +195,11 @@ fn vulkan_model_profile() -> (String, DeviceProfile) {
 #[test]
 fn emitted_barriers_order_memory_and_validate() {
     let (stem, vk) = vulkan_model_profile();
-    let glsl = crate::pipeline::testing::profile("moltenvk-m3", Default::default()).expect("m3");
+    let glsl = crate::pipeline::testing::profile(
+        "moltenvk-m3",
+        crate::device::DevicePolicy::RESIDENT_TABLES,
+    )
+    .expect("m3");
     for model in [BarrierModel::Glsl450, BarrierModel::Vulkan] {
         for (scope, fence) in [
             (Scope::Workgroup, None),

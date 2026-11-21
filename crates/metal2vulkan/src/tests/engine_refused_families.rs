@@ -473,7 +473,7 @@ fn an_assumed_uniformity_result_is_true() {
                         call i1 @air.is_uniform.i32(i32 0)\n  br label %j\nj:\n  %u = phi i1 [ \
                         %ua, %a ], [ %ub, %b ]\n  br label %k\nk:\n  %w = phi i1 [ %u, %j ]\n  \
                         tail call void @llvm.assume(i1 %w)\n  %s = add i32 %1, 7\n";
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     for (tag, body, calls) in [("assumed", direct, 1u32), ("assumed-phi", through_phis, 2)] {
         let Some(bc) = assemble(tag, &uniform_kernel(body)) else {
             return;

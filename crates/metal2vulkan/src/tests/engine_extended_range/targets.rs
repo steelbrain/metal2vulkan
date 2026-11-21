@@ -80,7 +80,7 @@ fn fixture() -> Option<Vec<u8>> {
 }
 
 fn venue(stem: &str) -> crate::device::profile::DeviceProfile {
-    profile(stem, DevicePolicy::default()).expect("committed profile")
+    profile(stem, DevicePolicy::RESIDENT_TABLES).expect("committed profile")
 }
 
 /// A render pipeline of one color attachment, `pf`, written under `mask` and blended where

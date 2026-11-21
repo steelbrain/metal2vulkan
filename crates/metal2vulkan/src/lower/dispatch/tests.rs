@@ -778,7 +778,7 @@ fn builtin_facts_and_projections() {
 #[test]
 fn derivation_modules_are_valid() {
     for stem in ["moltenvk-m3", "runtime-floor"] {
-        let p = crate::pipeline::testing::profile(stem, DevicePolicy::default()).expect(stem);
+        let p = crate::pipeline::testing::profile(stem, DevicePolicy::RESIDENT_TABLES).expect(stem);
         for form in [LocalSizeForm::Spec, LocalSizeForm::Flat] {
             for mr in [false, true] {
                 assert_valid(module(&plan(form, mr)), &p);
@@ -899,7 +899,7 @@ fn the_flat_variant_s_64_bit_division_is_exact() {
     )
     .expect("entry");
     let m = mb.finalize().expect("finalize");
-    let p = crate::pipeline::testing::profile("intel-arl-anv", DevicePolicy::default())
+    let p = crate::pipeline::testing::profile("intel-arl-anv", DevicePolicy::RESIDENT_TABLES)
         .expect("profile");
     assert_valid(m.clone(), &p);
     let bytes: Vec<u8> = cases

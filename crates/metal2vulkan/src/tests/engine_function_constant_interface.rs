@@ -79,7 +79,7 @@ fn fixture() -> Option<Vec<u8>> {
 }
 
 fn prof(stem: &str) -> DeviceProfile {
-    profile(stem, DevicePolicy::default()).expect("committed profile")
+    profile(stem, DevicePolicy::RESIDENT_TABLES).expect("committed profile")
 }
 
 /// `entry` compiled with the boolean constants `on` true and every other constant undefined.

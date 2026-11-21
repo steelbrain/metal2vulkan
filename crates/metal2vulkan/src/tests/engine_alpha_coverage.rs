@@ -50,7 +50,7 @@ fn a_pipeline_covering_by_alpha_notes_the_device_s_coverage() {
     ] {
         let dev = Device::from_queries(
             description(stem).expect("committed description"),
-            DevicePolicy::default(),
+            DevicePolicy::RESIDENT_TABLES,
         )
         .expect("device");
         for samples in [1, 4] {

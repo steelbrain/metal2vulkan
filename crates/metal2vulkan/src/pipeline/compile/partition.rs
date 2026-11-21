@@ -302,7 +302,7 @@ entry:
     }
 
     fn lavapipe() -> crate::device::DeviceProfile {
-        profile("lavapipe", DevicePolicy::default()).expect("profile")
+        profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("profile")
     }
 
     /// **Making a kernel's bitcode leaves nothing under the OS temp directory.** The helper used

@@ -102,7 +102,7 @@ fn an_attribute_read_only_into_a_gated_off_varying_needs_no_descriptor_entry() {
     ] {
         let dev = Device::from_queries(
             description(stem).expect("committed description"),
-            DevicePolicy::default(),
+            DevicePolicy::RESIDENT_TABLES,
         )
         .expect("device");
         let off = compile(&dev, &library, false, 1)

@@ -11,7 +11,7 @@
 //! - under the identity domains, in both forms, a run-time -4 at bind offset 16 reads word 3 (byte
 //!   12), and at bind offset 0, before the buffer's start, reads zero; a constant -4 at bind
 //!   offset 16 reads word 3;
-//! - on the default domains the same kernels at bind offset 16 read word 3, as `docs/API.md`
+//! - on the resident-table domains the same kernels at bind offset 16 read word 3, as `docs/API.md`
 //!   says a storage view of a whole window does (from the buffer's start).
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
@@ -148,10 +148,10 @@ fn identity_run(bc: &[u8], entry: &str, bind: u64, k: i32) -> u32 {
     u32::from_le_bytes(got.buffers[1][..4].try_into().expect("a word"))
 }
 
-/// What kernel `entry` stores on the default domains on lavapipe, `data` bound at `bind` through a
-/// descriptor of the whole buffer, `k` the `int` it reads.
+/// What kernel `entry` stores on the resident-table domains on lavapipe, `data` bound at `bind`
+/// through a descriptor of the whole buffer, `k` the `int` it reads.
 fn default_run(bc: &[u8], entry: &str, bind: u64, k: i32) -> u32 {
-    let p = profile("lavapipe", DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+    let p = profile("lavapipe", DevicePolicy::RESIDENT_TABLES).unwrap_or_else(|e| panic!("{e}"));
     let (_, plan, module) = compile_kept(bc, entry, &p).unwrap_or_else(|e| panic!("{entry}: {e}"));
     let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {

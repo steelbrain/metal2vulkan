@@ -46,7 +46,7 @@ const PROFILES: [&str; 3] = ["moltenvk-m3", "lavapipe", "runtime-floor"];
 const THREADS: u32 = 32;
 
 fn p(stem: &str) -> DeviceProfile {
-    profile(stem, DevicePolicy::default()).expect("profile")
+    profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile")
 }
 
 fn assemble(name: &str, text: &str) -> Option<Vec<u8>> {

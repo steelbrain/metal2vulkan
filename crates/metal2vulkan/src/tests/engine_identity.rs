@@ -68,11 +68,11 @@
 //! - A storage slot read without a format (`engine/rrp_swizzled_storage`'s `rrp_sw_rwread_f`) on
 //!   the Iris Xe, which reads storage so by the formats' own bits alone, is declared without a
 //!   format where every read-write tier format has the read bit, and refused where one lacks it;
-//!   the default domains' answer there is unchanged.
+//!   the resident-table domains' answer there is unchanged.
 //! - A kernel that samples 2D textures through a bicubic constexpr sampler at normalized
 //!   coordinates (`engine/bcu_formats`, `float` and `half` results) reads how the filter treats
 //!   each slot's bound format from the slot's pushed field (`PushField::BicubicTexels`): no
-//!   specialization constant and no fact, where the default domains specialize
+//!   specialization constant and no fact, where the resident-table domains specialize
 //!   `SpecKey::BicubicTexels` and state `RuntimeFact::BicubicTexels` as before. It passes L3. A
 //!   bicubic sample of a 1D texture (`engine/bcu_forms`) or at pixel coordinates
 //!   (`engine/bcu_address`) is still refused as `Unsupported{IdentityDomains}`, not implemented.
@@ -101,15 +101,15 @@
 //!   reads it from its pushed field (`PushField::StageInRegion`), with no descriptor; it passes
 //!   L3 and, on the CPU interpreter, every thread stores the region's origin and size.
 //! - A kernel's emulated-simdgroup variant (`engine/gsm2_simd_products`'s `simd_float_products`)
-//!   opens every barrier of its exchanges under a branch on `1 < N`, which the default domains do
-//!   not; on the CPU interpreter a threadgroup of one thread passes no barrier, and threadgroups of
-//!   one and of 80 threads (a partial simdgroup of 16) answer Metal's products.
+//!   opens every barrier of its exchanges under a branch on `1 < N`, which the resident-table
+//!   domains do not; on the CPU interpreter a threadgroup of one thread passes no barrier, and
+//!   threadgroups of one and of 80 threads (a partial simdgroup of 16) answer Metal's products.
 //! - A kernel that reads program-scope constants through memory (`blob_words`, generated: a
 //!   `ushort3` constant read as `half3`, as `as_type` folds into the load, and a word table read
 //!   as 2-byte units at offsets only the run knows) holds the constant blob as the module's own
 //!   `Private` words: no descriptor, no blob in the artifact, the words counted in its private
 //!   bytes, and on the CPU interpreter each value read, and zero for a read past the words. The
-//!   default domains bind the same blob as before. A blob past `memory::blob::MODULE_BYTES`
+//!   resident-table domains bind the same blob as before. A blob past `memory::blob::MODULE_BYTES`
 //!   (`blob_past`, generated) is refused as `Unsupported{IdentityDomains}` naming its size.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
@@ -158,7 +158,7 @@ fn identity() -> DevicePolicy {
     DevicePolicy {
         pointer_domain: PointerDomain::Identity,
         handle_domain: HandleDomain::Identity,
-        ..DevicePolicy::default()
+        ..DevicePolicy::RESIDENT_TABLES
     }
 }
 
@@ -522,15 +522,15 @@ fn a_runtime_sampler_is_the_set_1_element_its_resource_id_names() {
 const SAMPLE_UP_WORDS: [u64; 2] = [34_901_797_601_020_489, 0];
 
 /// A kernel sampling a texture slot through a constexpr sampler (`sample_up`, a 2D `float` sample
-/// of normalized coordinates, and the same kernel through a pixel sampler that the default domains
-/// hand the device's unnormalized sampler) takes the texture from set 1's sampled-image array at
-/// the index its pushed resource ID holds and the sampler from the plain sampler array at the
-/// index the consumer pushes for it (`PushField::ConstexprSampler`, a `u32`), with no descriptor
-/// and no specialization constant but the dispatch's ([`dispatch_key`]). The field's sampler is the constexpr one in normalized
-/// coordinates, whose device sampler (`CombinedSampler::constexpr_sampler`) is normalized: the
-/// shader scales the linear pixel sampler's coordinate and records
-/// `PrecisionNote::PixelSamplerScaling`, which the default domains do not. It passes L3 on each
-/// profile.
+/// of normalized coordinates, and the same kernel through a pixel sampler that the resident-table
+/// domains hand the device's unnormalized sampler) takes the texture from set 1's sampled-image
+/// array at the index its pushed resource ID holds and the sampler from the plain sampler array at
+/// the index the consumer pushes for it (`PushField::ConstexprSampler`, a `u32`), with no
+/// descriptor and no specialization constant but the dispatch's ([`dispatch_key`]). The field's
+/// sampler is the constexpr one in normalized coordinates, whose device sampler
+/// (`CombinedSampler::constexpr_sampler`) is normalized: the shader scales the linear pixel
+/// sampler's coordinate and records `PrecisionNote::PixelSamplerScaling`, which the resident-table
+/// domains do not. It passes L3 on each profile.
 #[test]
 fn a_constexpr_sampler_is_the_set_1_element_its_pushed_index_names() {
     use crate::air::abi::{AddressMode, Coordinates, Filter, MipFilter, SamplerState};
@@ -572,19 +572,24 @@ fn a_constexpr_sampler_is_the_set_1_element_its_pushed_index_names() {
     ));
     for (bc, words) in [(&normalized, SAMPLE_UP_WORDS), (&pixel_bc, pixel)] {
         for stem in PROFILES {
-            // The default domains read the linear pixel sampler's coordinate through the
+            // The resident-table domains read the linear pixel sampler's coordinate through the
             // device's unnormalized sampler, with no note, so the identity form below scales it
             // in its place.
-            let default = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+            let default =
+                profile(stem, DevicePolicy::RESIDENT_TABLES).unwrap_or_else(|e| panic!("{e}"));
             let (a, plan, _) = compile_kept(bc, "sample_up", &default)
-                .unwrap_or_else(|e| panic!("{stem}: default domains: {e}"));
+                .unwrap_or_else(|e| panic!("{stem}: resident-table domains: {e}"));
             let unnormalized: Vec<bool> = (plan.families.sampler.decls.values())
                 .map(|d| d.sampler.unnormalized)
                 .collect();
-            assert_eq!(unnormalized, [words == pixel], "{stem}: default domains");
+            assert_eq!(
+                unnormalized,
+                [words == pixel],
+                "{stem}: resident-table domains"
+            );
             assert!(
                 !a.precision.contains(&PrecisionNote::PixelSamplerScaling),
-                "{stem}: default domains"
+                "{stem}: resident-table domains"
             );
         }
         for (stem, p) in &profiles {
@@ -759,7 +764,7 @@ fn bicubic_slots() -> BTreeSet<SlotRef> {
 
 /// A kernel that samples 2D textures through a bicubic constexpr sampler at normalized
 /// coordinates reads how the filter treats each slot's bound format from the slot's push field
-/// under the identity domains, where the default domains specialize it and state its fact; a
+/// under the identity domains, where the resident-table domains specialize it and state its fact; a
 /// bicubic sample of a 1D texture ([`BICUBIC_LINE_FORM`]) and one at pixel coordinates
 /// ([`BICUBIC_PIXEL_FORM`]) are still refused there, each naming its own form.
 #[test]
@@ -774,9 +779,10 @@ fn a_bicubic_kernel_reads_each_slots_format_treatment_from_its_pushed_field() {
     };
     let slots = bicubic_slots();
     for stem in PROFILES {
-        let default = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+        let default =
+            profile(stem, DevicePolicy::RESIDENT_TABLES).unwrap_or_else(|e| panic!("{e}"));
         let (a, plan, _) = compile_kept(&formats, "bcu_formats", &default)
-            .unwrap_or_else(|e| panic!("{stem}: default domains: {e}"));
+            .unwrap_or_else(|e| panic!("{stem}: resident-table domains: {e}"));
         let facts: BTreeSet<SlotRef> = (plan.facts.iter())
             .filter_map(|f| match f {
                 RuntimeFact::BicubicTexels { slot } => Some(*slot),
@@ -792,11 +798,11 @@ fn a_bicubic_kernel_reads_each_slots_format_treatment_from_its_pushed_field() {
         assert_eq!(
             (&facts, &specialized),
             (&slots, &slots),
-            "{stem}: default domains"
+            "{stem}: resident-table domains"
         );
         assert!(
             !(plan.push.fields.iter()).any(|f| matches!(f.field, PushField::BicubicTexels(_))),
-            "{stem}: default domains"
+            "{stem}: resident-table domains"
         );
         let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
         let (a, plan, _) =
@@ -831,7 +837,7 @@ fn a_bicubic_kernel_reads_each_slots_format_treatment_from_its_pushed_field() {
             (&address, "bcu_address", BICUBIC_PIXEL_FORM),
         ] {
             compile(bc, entry, &default)
-                .unwrap_or_else(|e| panic!("{stem}: {entry}: default domains: {e}"));
+                .unwrap_or_else(|e| panic!("{stem}: {entry}: resident-table domains: {e}"));
             match compile(bc, entry, &p) {
                 Err(Error::Unsupported(u)) => {
                     assert_eq!(
@@ -917,7 +923,7 @@ declare {{ float, i8 }} @air.sample_compare_depth_2d.f32(ptr addrspace(1), ptr a
 /// array that the member's resource ID names and the sampler as the element of the set-1 sampler
 /// array of its use that the slot's pushed resource ID or the constexpr sampler's pushed index
 /// (`PushField::ConstexprSampler`) names: no heap sampler binding and nothing in set 0. Each passes
-/// L3 on every profile; the default domains compile each as before.
+/// L3 on every profile; the resident-table domains compile each as before.
 ///
 /// The depth texture's sample without comparison reads the same element of its depth-comparison
 /// class (`Depth` 1) as its comparison, through the plain sampler array (binding 2). SPIR-V 1.6
@@ -980,11 +986,13 @@ fn an_argument_buffer_textures_sample_takes_its_sampler_from_the_identity_arrays
         (&both, "k", &[0, 2, 3], 0, &[(false, false), (true, false)]),
     ];
     for stem in PROFILES {
-        let default = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+        let default =
+            profile(stem, DevicePolicy::RESIDENT_TABLES).unwrap_or_else(|e| panic!("{e}"));
         let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
         for (bc, entry, bindings, slots, constexpr) in cases {
             let what = format!("{stem}: {entry}");
-            compile(bc, entry, &default).unwrap_or_else(|e| panic!("{what}: default domains: {e}"));
+            compile(bc, entry, &default)
+                .unwrap_or_else(|e| panic!("{what}: resident-table domains: {e}"));
             let (a, plan, _) =
                 compile_kept(bc, entry, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
@@ -1027,7 +1035,7 @@ fn an_argument_buffer_textures_sample_takes_its_sampler_from_the_identity_arrays
 /// texture (`engine_handles::chosen_sampler_kernel`) are a switch over the candidates on every
 /// profile, each arm sampling as through that sampler alone at its pushed index
 /// (`PushField::ConstexprSampler`, one for each candidate), never an array of their samplers: each
-/// compiles and passes L3, and the default domains compile them as before.
+/// compiles and passes L3, and the resident-table domains compile them as before.
 #[test]
 fn an_argument_buffer_texture_through_chosen_constexpr_samplers_is_a_switch_over_them() {
     use super::engine_handles::{chosen_sampler_kernel, CHOSEN_SAMPLERS};
@@ -1040,11 +1048,12 @@ target triple = \"air64_v28-apple-macosx26.0.0\"\n\n{}",
         return;
     };
     for stem in PROFILES {
-        let default = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+        let default =
+            profile(stem, DevicePolicy::RESIDENT_TABLES).unwrap_or_else(|e| panic!("{e}"));
         let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
         let what = format!("{stem}: chosen");
         compile(&chosen, "chosen", &default)
-            .unwrap_or_else(|e| panic!("{what}: default domains: {e}"));
+            .unwrap_or_else(|e| panic!("{what}: resident-table domains: {e}"));
         let (a, plan, _) =
             compile_kept(&chosen, "chosen", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
         link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
@@ -1063,7 +1072,7 @@ target triple = \"air64_v28-apple-macosx26.0.0\"\n\n{}",
 /// fields are the ID's high word. No sampler table, nothing in set 0, no sampler slot's ID, constexpr
 /// sampler index or execution status address pushed, and no cubic test
 /// (`RuntimeFact::CubicArgumentSampler`). Each passes L3 on every
-/// profile; the default domains compile each as before.
+/// profile; the resident-table domains compile each as before.
 #[test]
 fn an_argument_buffers_sampler_samples_through_the_identity_arrays_by_its_resource_id() {
     let (Some(samplers), Some(cube)) = (
@@ -1081,11 +1090,13 @@ fn an_argument_buffers_sampler_samples_through_the_identity_arrays_by_its_resour
         (&cube, "argument_sampler_cube_gradient", &[0, 2]),
     ];
     for stem in PROFILES {
-        let default = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+        let default =
+            profile(stem, DevicePolicy::RESIDENT_TABLES).unwrap_or_else(|e| panic!("{e}"));
         let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
         for (bc, entry, bindings) in cases {
             let what = format!("{stem}: {entry}");
-            compile(bc, entry, &default).unwrap_or_else(|e| panic!("{what}: default domains: {e}"));
+            compile(bc, entry, &default)
+                .unwrap_or_else(|e| panic!("{what}: resident-table domains: {e}"));
             let (a, plan, _) =
                 compile_kept(bc, entry, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
@@ -3153,7 +3164,7 @@ fn simd_input(t: u32) -> f32 {
 /// Under the identity domains the emulated tier's barriers run only in a threadgroup of more
 /// than one thread: each opens a block a branch on `1 < N` enters, a threadgroup of one passes
 /// none, and threadgroups of one and of 80 threads answer Metal's products, the last simdgroup of
-/// 80 holding 16 threads. The default domains keep every barrier unconditional.
+/// 80 holding 16 threads. The resident-table domains keep every barrier unconditional.
 #[test]
 fn the_emulated_tiers_barriers_run_only_in_a_threadgroup_of_several_threads() {
     let Some(bc) = assemble("gsm2_simd_products") else {
@@ -3164,13 +3175,13 @@ fn the_emulated_tiers_barriers_run_only_in_a_threadgroup_of_several_threads() {
     let mut inputs = LowerInputs::new();
     inputs.emulated_simdgroups = true;
     for stem in PROFILES {
-        let plain = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+        let plain = profile(stem, DevicePolicy::RESIDENT_TABLES).unwrap_or_else(|e| panic!("{e}"));
         let a = compile_with(&bc, ENTRY, &plain, &inputs).unwrap_or_else(|e| panic!("{stem}: {e}"));
         let (_, words) = link_and_validate(&a, &plain).unwrap_or_else(|e| panic!("{stem}: {e}"));
         let (inside, outside) = barrier_guards(&spirv_dis(&words));
         assert!(
             inside == 0 && outside > 0,
-            "{stem}: the default domains guard {inside} barriers and leave {outside}"
+            "{stem}: the resident-table domains guard {inside} barriers and leave {outside}"
         );
         let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
         let a = compile_with(&bc, ENTRY, &p, &inputs).unwrap_or_else(|e| panic!("{stem}: {e}"));
@@ -3448,8 +3459,8 @@ fn unwritten_slots_are_loaded_through_non_writable_places() {
 /// `shaderStorageImageReadWithoutFormat` and sets the read bit on every read-write tier format), is
 /// declared without a format, as a heap storage class's read is: the pipeline requires the SPIR-V
 /// capability and not the feature. With one tier format's bit cleared (`RGBA16Float`) the read is
-/// still refused as `Unsupported{IdentityDomains}`. The default domains' answer on the Iris Xe,
-/// the format as the binder's input (`NeedsInput{StorageTextureFormat}`), does not change.
+/// still refused as `Unsupported{IdentityDomains}`. The resident-table domains' answer on the Iris
+/// Xe, the format as the binder's input (`NeedsInput{StorageTextureFormat}`), does not change.
 #[test]
 fn a_storage_read_the_formats_bits_grant_is_formatless_under_the_identity_domains() {
     use crate::device::requirements::SpirvCapability;
@@ -3494,12 +3505,12 @@ fn a_storage_read_the_formats_bits_grant_is_formatless_under_the_identity_domain
     }
 
     let default =
-        Device::from_queries(desc, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+        Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).unwrap_or_else(|e| panic!("{e}"));
     match compiled(&default) {
         Err(Error::NeedsInput(RuntimeInput::StorageTextureFormat { slot })) => {
             assert_eq!((slot.class, slot.index), (SlotClass::Texture, 0));
         }
-        other => panic!("the default domains: {:?}", other.map(|_| ())),
+        other => panic!("the resident-table domains: {:?}", other.map(|_| ())),
     }
 }
 
@@ -3511,8 +3522,8 @@ const BLOB_LANES: [f32; 3] = [1.0, 2.5, -0.75];
 /// table as 2-byte units at offsets only the run knows, one past the table's words: it binds no
 /// descriptor and its artifact carries no blob, its private bytes count the blob's 32 padded bytes,
 /// and on the CPU interpreter each thread stores its lane's float and its unit, and zero for the
-/// read past the words. The default domains compile the same kernel with the blob bound, its 24
-/// bytes in the artifact.
+/// read past the words. The resident-table domains compile the same kernel with the blob bound, its
+/// 24 bytes in the artifact.
 #[test]
 fn the_constant_blob_is_the_modules_words_under_the_identity_domains() {
     use super::engine_pointer_memory::{assemble, kernel};
@@ -3552,7 +3563,8 @@ fn the_constant_blob_is_the_modules_words_under_the_identity_domains() {
         want.extend_from_slice(&unit.to_le_bytes());
     }
     for stem in PROFILES {
-        let default = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+        let default =
+            profile(stem, DevicePolicy::RESIDENT_TABLES).unwrap_or_else(|e| panic!("{e}"));
         let (bound, bound_plan, _) =
             compile_kept(&bc, name, &default).unwrap_or_else(|e| panic!("{stem}: default: {e}"));
         assert_eq!(bound.blob.as_deref().map(<[u8]>::len), Some(24), "{stem}");
@@ -3600,7 +3612,7 @@ fn the_constant_blob_is_the_modules_words_under_the_identity_domains() {
 
 /// Under the identity domains a constant blob past `memory::blob::MODULE_BYTES` is refused as
 /// `Unsupported{IdentityDomains}`, not implemented, naming the constant data's size, where the
-/// default domains bind it.
+/// resident-table domains bind it.
 #[test]
 fn a_constant_blob_past_the_modules_bound_is_refused_naming_its_size() {
     use super::engine_pointer_memory::{assemble, kernel};
@@ -3617,7 +3629,8 @@ fn a_constant_blob_past_the_modules_bound_is_refused_naming_its_size() {
     let bytes = 16400 * 4;
     assert!(bytes > crate::memory::blob::MODULE_BYTES);
     for stem in PROFILES {
-        let default = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+        let default =
+            profile(stem, DevicePolicy::RESIDENT_TABLES).unwrap_or_else(|e| panic!("{e}"));
         let (bound, _, _) =
             compile_kept(&bc, name, &default).unwrap_or_else(|e| panic!("{stem}: default: {e}"));
         assert_eq!(
@@ -3645,18 +3658,19 @@ fn a_constant_blob_past_the_modules_bound_is_refused_naming_its_size() {
 }
 
 /// A kernel whose device-scope `seq_cst` fence orders its two stores (`a4_device_fence`) compiles
-/// under the default domains, its fence ordered through the command buffer's `ExecutionStatus`
-/// word, and is refused under the identity domains, which reach no such word, naming the fence
-/// ([`SEQ_CST_FORM`](crate::lower::sync::barrier::SEQ_CST_FORM)).
+/// under the resident-table domains, its fence ordered through the command buffer's
+/// `ExecutionStatus` word, and is refused under the identity domains, which reach no such word,
+/// naming the fence ([`SEQ_CST_FORM`](crate::lower::sync::barrier::SEQ_CST_FORM)).
 #[test]
 fn a_seq_cst_fence_is_refused_naming_its_form_under_the_identity_domains() {
     let Some(bc) = assemble("a4_device_fence") else {
         return;
     };
     for stem in PROFILES {
-        let default = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+        let default =
+            profile(stem, DevicePolicy::RESIDENT_TABLES).unwrap_or_else(|e| panic!("{e}"));
         let a = compile(&bc, "a4_device_fence", &default)
-            .unwrap_or_else(|e| panic!("{stem}: default domains: {e}"));
+            .unwrap_or_else(|e| panic!("{stem}: resident-table domains: {e}"));
         assert!(a.facts.contains(&RuntimeFact::ExecutionStatus), "{stem}");
         let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
         match compile(&bc, "a4_device_fence", &p) {

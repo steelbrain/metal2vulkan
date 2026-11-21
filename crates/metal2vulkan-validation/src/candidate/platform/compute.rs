@@ -151,7 +151,7 @@ pub(crate) fn native_refused_on(
 ) -> Result<crate::candidate::engine::RefusedOn, String> {
     let device = WorkerDevice::new(
         native.clone(),
-        metal2vulkan::device::DevicePolicy::default(),
+        metal2vulkan::device::DevicePolicy::RESIDENT_TABLES,
     )
     .map_err(|error| format!("its own description derives no profile: {error}"))?;
     let profile = device.device().profile();
@@ -204,8 +204,8 @@ pub(super) fn attempt(
 }
 
 /// The `Device` the context `device_type` opens: its queried description restricted to what it
-/// enabled, under the default policy ([`opened_device`]). What a device test compiles for, so its
-/// profile is the opened device's, never a committed one.
+/// enabled, under the resident-table domains ([`opened_device`]). What a device test compiles for,
+/// so its profile is the opened device's, never a committed one.
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
 pub fn opened_worker_device(device_type: DeviceType) -> Result<WorkerDevice, ExecutorError> {
     with_validated_context(device_type, |context| Ok(opened_device(context)))
@@ -213,14 +213,19 @@ pub fn opened_worker_device(device_type: DeviceType) -> Result<WorkerDevice, Exe
 }
 
 /// The `Device` of the opened context: its queried description restricted to what the context
-/// enabled (`DeviceDescription::with_enabled`), under the default policy.
+/// enabled (`DeviceDescription::with_enabled`), under the resident-table domains
+/// (`DevicePolicy::RESIDENT_TABLES`): this executor builds the resident root and the handle table
+/// itself.
 pub(super) fn opened_device(context: &VulkanContext) -> Result<WorkerDevice, ExecutorError> {
     let description = context
         .opened_description
         .clone()
         .map_err(ExecutorError::Failed)?;
-    WorkerDevice::new(description, metal2vulkan::device::DevicePolicy::default())
-        .map_err(|e| product_refusal(&e))
+    WorkerDevice::new(
+        description,
+        metal2vulkan::device::DevicePolicy::RESIDENT_TABLES,
+    )
+    .map_err(|e| product_refusal(&e))
 }
 
 fn run(

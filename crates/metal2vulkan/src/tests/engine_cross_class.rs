@@ -366,7 +366,7 @@ fn accesses_through_another_class_are_the_native_words() {
         .map(|stem| {
             (
                 stem,
-                profile(stem, DevicePolicy::default()).expect("profile"),
+                profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile"),
             )
         })
         .collect();
@@ -449,7 +449,7 @@ fn devices() -> Vec<(String, Device)> {
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
         out.push((
             stem,
-            Device::from_queries(desc, DevicePolicy::default()).expect("device"),
+            Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device"),
         ));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
@@ -1039,7 +1039,7 @@ fn integer_writes_saturate_to_the_bound_formats_channels() {
         .map(|stem| {
             (
                 stem,
-                profile(stem, DevicePolicy::default()).expect("profile"),
+                profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile"),
             )
         })
         .collect();
@@ -1161,7 +1161,7 @@ fn integer_writes_into_narrow_floats_take_the_devices_conversion() {
     ];
     let mut checked = 0;
     for stem in ["lavapipe", "moltenvk-m3"] {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         for (ty, format, narrow) in cases {
             let what = format!("write {ty:?} over {format:?} on {stem}");
             let Some(bc) = assemble(&what, &write_kernel(ty)) else {

@@ -202,8 +202,8 @@ fn rgba4_opaque_black_swizzled_follows_exposure() {
     assert!(d.rgba4_opaque_black_swizzled);
     // The push window the floor needs, which a Vulkan 1.2 document leaves at 128.
     d.limits.max_push_constants_size = 256;
-    let dev =
-        crate::device::Device::from_queries(d, crate::device::DevicePolicy::default()).unwrap();
+    let dev = crate::device::Device::from_queries(d, crate::device::DevicePolicy::RESIDENT_TABLES)
+        .unwrap();
     assert!(dev
         .profile()
         .fields()
@@ -242,8 +242,8 @@ fn the_arm_spelling_of_rasterization_order_access_is_the_ext_one() {
     assert!(d.has(VkFeature::RasterizationOrderColorAttachmentAccess));
     // The push window the floor needs, which a Vulkan 1.2 document leaves at 128.
     d.limits.max_push_constants_size = 256;
-    let dev =
-        crate::device::Device::from_queries(d, crate::device::DevicePolicy::default()).unwrap();
+    let dev = crate::device::Device::from_queries(d, crate::device::DevicePolicy::RESIDENT_TABLES)
+        .unwrap();
     assert!(
         dev.profile()
             .fields()
@@ -812,7 +812,7 @@ fn descriptions_and_policies_round_trip_through_serde() {
         pointer_domain: crate::device::PointerDomain::Identity,
         handle_domain: crate::device::HandleDomain::Identity,
     };
-    let policies = [DevicePolicy::default(), identity];
+    let policies = [DevicePolicy::RESIDENT_TABLES, identity];
     for (stem, text) in committed_profiles() {
         let description = DeviceDescription::from_khronos_json(&text, None).unwrap();
         let json = serde_json::to_string(&description).unwrap();

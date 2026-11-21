@@ -1345,7 +1345,7 @@ mod tests {
             desc.features.remove(f);
         }
         desc.limits.max_sampler_anisotropy_bits = 16f32.to_bits();
-        Device::from_queries(desc, DevicePolicy::default()).unwrap()
+        Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).unwrap()
     }
 
     /// What a plan reads of a bound sampler's shape to check its separate textures' views
@@ -1439,7 +1439,7 @@ mod tests {
         ];
         let (mut checked, mut past_limit, mut withheld) = (0, 0, 0);
         for (stem, description) in committed_descriptions() {
-            let dev = Device::from_queries(description, DevicePolicy::default()).unwrap();
+            let dev = Device::from_queries(description, DevicePolicy::RESIDENT_TABLES).unwrap();
             let p = dev.profile();
             let limit = f32::from_bits(p.fields().limits.max_sampler_lod_bias_bits);
             if p.fields()
@@ -1519,7 +1519,7 @@ mod tests {
             .unwrap()
             .1;
         floor.limits.max_sampler_lod_bias_bits = 15.5f32.to_bits();
-        let floor = Device::from_queries(floor, DevicePolicy::default()).unwrap();
+        let floor = Device::from_queries(floor, DevicePolicy::RESIDENT_TABLES).unwrap();
         let p = floor.profile();
         assert!(!(p.fields().enabled).portability_withholds(VkFeature::SamplerMipLodBias));
         let exact = |b: f32| match device_lod_bias(b, p) {
@@ -1547,7 +1547,7 @@ mod tests {
             .map(|(stem, d)| {
                 (
                     stem,
-                    Device::from_queries(d, DevicePolicy::default()).unwrap(),
+                    Device::from_queries(d, DevicePolicy::RESIDENT_TABLES).unwrap(),
                 )
             })
             .find(|(_, dev)| {
@@ -1575,7 +1575,7 @@ mod tests {
     fn the_device_lod_bias_carries_its_note_where_it_is_not_the_bias() {
         let note = Some(PrecisionNote::CappedLodBias);
         for (stem, d) in committed_descriptions() {
-            let dev = Device::from_queries(d, DevicePolicy::default()).unwrap();
+            let dev = Device::from_queries(d, DevicePolicy::RESIDENT_TABLES).unwrap();
             let p = dev.profile();
             let withheld = (p.fields().enabled).portability_withholds(VkFeature::SamplerMipLodBias);
             let limit = f32::from_bits(p.fields().limits.max_sampler_lod_bias_bits).max(0.0);
@@ -1714,11 +1714,11 @@ mod tests {
         let mvk = committed("moltenvk-m3");
         assert!(mvk.extensions.contains(&VkExtension::KhrPortabilitySubset));
         assert!(mvk.features.contains(&mutable));
-        let dev = Device::from_queries(mvk.clone(), DevicePolicy::default()).unwrap();
+        let dev = Device::from_queries(mvk.clone(), DevicePolicy::RESIDENT_TABLES).unwrap();
         assert!(vk_sampler(&d, compare, dev.profile()).is_ok());
         let mut withheld = mvk;
         withheld.features.remove(&mutable);
-        let dev = Device::from_queries(withheld, DevicePolicy::default()).unwrap();
+        let dev = Device::from_queries(withheld, DevicePolicy::RESIDENT_TABLES).unwrap();
         assert_eq!(
             vk_sampler(&d, compare, dev.profile()),
             Err(Unsupported::needs(Feature::SamplerCompare, Capability::Feature(mutable)).into())
@@ -1726,7 +1726,7 @@ mod tests {
         assert!(vk_sampler(&d, SamplerUse::default(), dev.profile()).is_ok());
         let lavapipe = committed("lavapipe");
         assert!(!lavapipe.features.contains(&mutable));
-        let dev = Device::from_queries(lavapipe, DevicePolicy::default()).unwrap();
+        let dev = Device::from_queries(lavapipe, DevicePolicy::RESIDENT_TABLES).unwrap();
         assert!(vk_sampler(&d, compare, dev.profile()).is_ok());
     }
 
@@ -1768,7 +1768,7 @@ mod tests {
             .unwrap();
         desc.features.insert(VkFeature::SamplerAnisotropy);
         desc.limits.max_sampler_anisotropy_bits = 16f32.to_bits();
-        let dev = Device::from_queries(desc, DevicePolicy::default()).unwrap();
+        let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).unwrap();
         {
             for (min, mag) in [
                 (Linear, Linear),
@@ -1974,7 +1974,7 @@ mod tests {
                 VkFeature::BorderColorSwizzle,
                 VkFeature::BorderColorSwizzleFromImage,
             ]);
-            Device::from_queries(desc, DevicePolicy::default()).unwrap()
+            Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).unwrap()
         };
         let mapping = |format, components, emulation| FormatMapping {
             format,
@@ -2144,7 +2144,7 @@ mod tests {
                 ]);
             }
             desc.rgba4_opaque_black_swizzled = rgba4;
-            Device::from_queries(desc, DevicePolicy::default()).unwrap()
+            Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).unwrap()
         };
         let direct = FormatMapping {
             format: vk::Format::R4G4B4A4_UNORM_PACK16,
@@ -2232,7 +2232,7 @@ mod tests {
                 ]);
                 desc.features.extend(features.iter().copied());
             }
-            Device::from_queries(desc, DevicePolicy::default()).unwrap()
+            Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).unwrap()
         };
         let plain = with(&[]);
         let swizzle_only = with(&[VkFeature::BorderColorSwizzle]);
@@ -2654,7 +2654,7 @@ mod tests {
             let mut desc = desc;
             desc.features.insert(VkFeature::SamplerAnisotropy);
             desc.limits.max_sampler_anisotropy_bits = 16f32.to_bits();
-            let dev = Device::from_queries(desc, DevicePolicy::default()).unwrap();
+            let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).unwrap();
             {
                 let use_ = SamplerUse::new(false, false);
                 let (linear, nearest) = device_anisotropy_by_filters(use_, dev.profile());

@@ -59,7 +59,7 @@ fn moltenvk_msl_evaluates_subgroup_operations_eagerly() {
     ) else {
         return;
     };
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let a = compile(&bc, "kernel_simd_variant_leftovers", &p).expect("compile");
     let (_, words) = link_and_validate(&a, &p).expect("L3");
     let Some(msl) = skip_missing(moltenvk_msl(&words), "spirv-cross") else {

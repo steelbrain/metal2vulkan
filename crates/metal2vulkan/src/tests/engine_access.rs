@@ -62,7 +62,7 @@ use crate::spirv::verify::verify;
 const PROFILES: [&str; 3] = ["moltenvk-m3", "runtime-floor", "lavapipe"];
 
 fn policy() -> DevicePolicy {
-    DevicePolicy::default()
+    DevicePolicy::RESIDENT_TABLES
 }
 
 /// Committed profile `stem`, optionally with buffer robustness disabled (the in-shader encoding)

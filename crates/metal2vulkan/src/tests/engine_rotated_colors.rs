@@ -36,7 +36,7 @@ use crate::pipeline::{
 };
 use crate::vk;
 
-/// Every committed profile as a device under the default policy, by stem.
+/// Every committed profile as a device under the resident-table domains, by stem.
 fn devices() -> Vec<(String, Device)> {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles");
@@ -52,7 +52,8 @@ fn devices() -> Vec<(String, Device)> {
             .unwrap_or_default();
         let text = std::fs::read_to_string(&path).expect("read profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("profile parses");
-        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device derives");
+        let dev =
+            Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device derives");
         out.push((stem, dev));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));

@@ -106,7 +106,7 @@ fn unrobust(stem: &str) -> DeviceProfile {
     ] {
         desc.features.remove(&f);
     }
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()
@@ -426,7 +426,7 @@ fn a_cube_gradient_route_takes_the_devices_reading() {
     )
     .expect("profile");
     let desc = DeviceDescription::from_khronos_json(&profile_text, None).expect("description");
-    let unmeasured = Device::from_queries(desc, DevicePolicy::default())
+    let unmeasured = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone();

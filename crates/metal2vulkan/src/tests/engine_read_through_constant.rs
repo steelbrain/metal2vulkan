@@ -90,7 +90,7 @@ fn a_read_only_device_buffer_read_through_a_constant_pointer_compiles() {
     };
     let mut compiled = 0;
     for stem in ["lavapipe", "moltenvk-m3", "amd-780m-radv", "runtime-floor"] {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         for (form, bc) in [("constant", &constant), ("device char", &device)] {
             let what = format!("{form} on {stem}");
             let a = compile(bc, "k", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
@@ -125,7 +125,7 @@ fn the_typed_fixture_compiles_as_its_opaque_form_does() {
     let opaque = llvm_assemble(&dir.join("kernel_read_through_constant.ll"))
         .unwrap_or_else(|e| panic!("llvm-as: {e:?}"));
     for stem in ["lavapipe", "moltenvk-m3", "amd-780m-radv", "runtime-floor"] {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         let [typed, opaque] = [&typed, &opaque].map(|bc| {
             compile(bc, "read_through_constant", &p).unwrap_or_else(|e| panic!("{stem}: {e}"))
         });

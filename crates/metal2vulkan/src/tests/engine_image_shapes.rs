@@ -165,7 +165,7 @@ fn device(stem: &str) -> Device {
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let description =
         DeviceDescription::from_khronos_json(&text, None).unwrap_or_else(|e| panic!("{stem}: {e}"));
-    Device::from_queries(description, DevicePolicy::default())
+    Device::from_queries(description, DevicePolicy::RESIDENT_TABLES)
         .unwrap_or_else(|e| panic!("{stem}: {e}"))
 }
 

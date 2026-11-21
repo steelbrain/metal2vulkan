@@ -11,7 +11,7 @@
 //! an integer where it needs one. `llvm-as` assembles the generated module; without it the test
 //! skips visibly.
 //!
-//! Every profile here takes Metal's `half` rounding and NaN (the default policy), whose answers these
+//! Every profile here takes Metal's `half` rounding and NaN, whose answers these
 //! tests check; the maths functions are the device's on every device but MoltenVK
 //! (`engine_native_maths`).
 
@@ -1056,7 +1056,7 @@ fn fp8_widenings_are_the_devices_own_where_it_has_8_bit_floats() {
     let float8 =
         crate::device::requirements::SpirvCapability::of(crate::spv::Capability::Float8EXT);
     for (stem, native) in [("nvidia-rtx50-linux", true), ("lavapipe", false)] {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         assert_eq!(p.fields().leaf.float8, native, "{stem}");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
@@ -1134,7 +1134,7 @@ fn arith_kernels_validate_and_compute_on_every_profile() {
     let (mut met, mut refused) = (Vec::new(), Vec::new());
     let mut computed = 0;
     for stem in PROFILES {
-        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let missing = kk.needs.iter().copied().find(|n| !has(&p, *n));
@@ -1258,7 +1258,7 @@ fn wide_divisions_share_one_routine_per_form() {
             crate::pipeline::testing::profile_without(
                 "runtime-floor",
                 &[crate::device::requirements::VkFeature::ShaderInt64],
-                crate::device::DevicePolicy::default(),
+                crate::device::DevicePolicy::RESIDENT_TABLES,
             )
             .expect("profile"),
             3,
@@ -1267,7 +1267,11 @@ fn wide_divisions_share_one_routine_per_form() {
         ),
         (
             "amd-rdna3-radv",
-            profile("amd-rdna3-radv", crate::device::DevicePolicy::default()).expect("profile"),
+            profile(
+                "amd-rdna3-radv",
+                crate::device::DevicePolicy::RESIDENT_TABLES,
+            )
+            .expect("profile"),
             1,
             0,
             0,
@@ -1333,7 +1337,7 @@ fn fused_multiply_adds_take_the_profiles_route() {
     // (profile, OpFmaKHR of the float kernel); its route is the device's `Fma` without them, the
     // `half` kernel's on every profile.
     for (stem, khr) in [("moltenvk-m3", 3), ("lavapipe", 0), ("runtime-floor", 0)] {
-        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         for kk in &ks {
             let float = kk.name == "fma_float_rounds_once";
             let native = !float || khr == 0;
@@ -1454,7 +1458,7 @@ fn a_half_fused_multiply_add_is_the_devices_16_bit_fma_on_from_queries() {
     ] {
         let what = format!("fma_half_rounds_once on {stem} (from_queries)");
         let desc = description(stem).expect("description");
-        let device = Device::from_queries(desc, crate::device::DevicePolicy::default())
+        let device = Device::from_queries(desc, crate::device::DevicePolicy::RESIDENT_TABLES)
             .unwrap_or_else(|e| panic!("{what}: {e}"));
         let p = device.profile();
         let controls = half_controls(p);
@@ -1620,7 +1624,7 @@ fn dot_is_the_devices_op_dot_on_every_profile() {
     };
     for stem in ["moltenvk-m3", "amd-rdna3-radv", "lavapipe", "runtime-floor"] {
         {
-            let policy = DevicePolicy::default();
+            let policy = DevicePolicy::RESIDENT_TABLES;
             let p = profile(stem, policy).expect("profile");
             for kk in &ks {
                 let what = format!("{} on {stem}", kk.name);
@@ -1681,7 +1685,7 @@ fn fast_fmod_is_metals_composition() {
         ("lavapipe", 0, 1),
         ("runtime-floor", 0, 1),
     ] {
-        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         let kk = &ks[0];
         let what = format!("{} on {stem}", kk.name);
         let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -1735,7 +1739,7 @@ fn an_ordered_not_equal_is_the_negated_unordered_equal() {
         return;
     };
     for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
-        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         let kk = &ks[0];
         let what = format!("{} on {stem}", kk.name);
         let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -1801,7 +1805,7 @@ fn an_arcp_division_is_the_devices_quotient() {
         return;
     };
     for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
-        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -1887,7 +1891,7 @@ fn a_fast_division_leaves_its_nans_to_the_device() {
     };
     nans_are_the_device_s(&bitcode, &ks, false, &[], &|_| true);
     for stem in every_profile() {
-        let p = profile(&stem, crate::device::DevicePolicy::default()).expect("profile");
+        let p = profile(&stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -1984,7 +1988,7 @@ fn a_division_without_arcp_is_the_devices_quotient() {
         return;
     };
     for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
-        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -2062,7 +2066,7 @@ fn fast_sincos_is_the_devices_sine_and_cosine() {
         return;
     };
     for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
-        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -2118,7 +2122,7 @@ fn device_float_environment_notes_follow_the_operations() {
         return;
     };
     for stem in ["moltenvk-m3", "lavapipe"] {
-        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         for (kk, want) in ks.iter().zip(notes) {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -2172,7 +2176,7 @@ fn a_float_remainder_is_the_devices_without_every_flag() {
         return;
     };
     for stem in PROFILES {
-        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -2225,7 +2229,7 @@ fn unlowered_arithmetic_refuses_as_not_implemented() {
     let Some(bitcode) = assemble("refusals", &text) else {
         return;
     };
-    let p = profile("moltenvk-m3", crate::device::DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
     for kk in &cases {
         match compile(&bitcode, kk.name, &p) {
             Err(Error::Unsupported(u)) => {
@@ -2332,7 +2336,7 @@ fn float_ops_without_contract_and_reassoc_are_no_contraction() {
         return;
     };
     for stem in PROFILES {
-        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -2429,7 +2433,7 @@ fn arithmetic_the_air_lets_a_compiler_rewrite_notes_fast_math_rewrites() {
         return;
     };
     for stem in PROFILES {
-        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         for (i, kk) in ks.iter().enumerate() {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -2495,7 +2499,7 @@ fn narrow_float_module_growth_is_bounded() {
         };
         let words = ks
             .each_ref()
-            .map(|kk| words_on(crate::device::DevicePolicy::default(), kk));
+            .map(|kk| words_on(crate::device::DevicePolicy::RESIDENT_TABLES, kk));
         eprintln!(
             "half and bfloat growth on {stem}: float {} words, half {} ({:+}), bfloat {} ({:+})",
             words[0],
@@ -2569,7 +2573,7 @@ fn half_rounding_follows_the_operation() {
         return;
     };
     for stem in PROFILES {
-        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -2725,7 +2729,7 @@ fn a_half_rounding_without_float16_is_the_quantize_alone() {
         return;
     };
     for stem in PROFILES {
-        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         for (kk, &(_, _, quantizes)) in ks.iter().zip(&cases) {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -2904,7 +2908,7 @@ fn float_ops_without_fast_flags_preserve_signed_zero_inf_nan() {
     };
     let (mut declared, mut noted) = (0, 0);
     for stem in PROFILES {
-        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         let supported = p.fields().float_controls.f32.signed_zero_inf_nan_preserve;
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
@@ -2975,7 +2979,7 @@ fn fused_multiply_adds_keep_no_zero_signs() {
     let Some(bitcode) = assemble("fma-zero-signs", &text) else {
         return;
     };
-    for (stem, p) in committed_profiles_with(DevicePolicy::default()).expect("profiles") {
+    for (stem, p) in committed_profiles_with(DevicePolicy::RESIDENT_TABLES).expect("profiles") {
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -3017,7 +3021,7 @@ fn a_convert_tells_a_nan_by_its_bits_where_the_entry_may_assume_none() {
     };
     let mut bits = 0;
     for stem in PROFILES {
-        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -3077,7 +3081,7 @@ fn a_fast_division_is_the_device_s_quotient() {
     let Some(bitcode) = assemble("fast-quotient", &module(&ks)) else {
         return;
     };
-    let p = profile("moltenvk-m3", crate::device::DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
     for (kk, fast_math) in ks.iter().zip(fast_math) {
         {
             let what = kk.name.to_string();
@@ -3190,7 +3194,7 @@ fn nans_are_the_device_s(
     noted: &dyn Fn(&str) -> bool,
 ) {
     for stem in ["lavapipe", "moltenvk-m3"] {
-        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         for kk in ks {
             {
                 let what = format!("{} on {stem}", kk.name);
@@ -3386,7 +3390,7 @@ fn float_denormals_are_the_devices_and_noted() {
         return;
     };
     for stem in ["moltenvk-m3", "lavapipe"] {
-        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         for (kk, device) in ks.iter().zip(&devices) {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -3496,7 +3500,7 @@ fn a_nan_test_no_float_mode_folds() {
     };
     let (mut bits_tested, mut is_nan_tested) = (0, 0);
     for stem in PROFILES.into_iter().chain(["lavapipe"]) {
-        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -3547,7 +3551,7 @@ fn a_nan_test_no_float_mode_folds() {
             Err(AssembleError::Rejected(e)) => panic!("llvm-as rejected {entry}: {e}"),
         };
         for stem in PROFILES.into_iter().chain(["lavapipe"]) {
-            let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+            let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
             let what = format!("{entry} on {stem}");
             let a = compile(&bitcode, entry, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             let (_, words) =
@@ -3798,7 +3802,7 @@ fn half_moves_are_the_devices_bits() {
         return;
     };
     for stem in ["lavapipe", "moltenvk-m3"] {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -3958,7 +3962,7 @@ fn pack_conversions_are_the_devices() {
         return;
     };
     for stem in ["lavapipe", "moltenvk-m3"] {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -4057,7 +4061,7 @@ fn float_sign_operations_are_the_devices_on_every_profile() {
         })
     };
     for stem in PROFILES.iter().copied().chain(["lavapipe"]) {
-        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -4236,7 +4240,7 @@ fn float_min_max_are_the_device_s_on_every_profile() {
         })
     };
     for stem in PROFILES.iter().copied().chain(["lavapipe"]) {
-        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -4328,7 +4332,7 @@ fn half_fmod_is_its_float_remainder_on_every_profile() {
         return;
     };
     for stem in PROFILES.iter().copied().chain(["lavapipe"]) {
-        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
@@ -4423,7 +4427,7 @@ fn mix_is_the_devices_fmix_on_every_profile() {
         .copied()
         .chain(["lavapipe", "amd-rdna3-radv"])
     {
-        let p = profile(stem, crate::device::DevicePolicy::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));

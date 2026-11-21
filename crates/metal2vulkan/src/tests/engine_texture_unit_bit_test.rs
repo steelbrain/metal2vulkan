@@ -29,7 +29,7 @@ fn fixture() -> Option<Vec<u8>> {
 
 /// The fixture's kernel as the compile specializes it for profile `stem`, printed.
 fn specialized(bc: &[u8], stem: &str) -> String {
-    let p = profile(stem, DevicePolicy::default()).expect("profile");
+    let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
     let none = FunctionConstantValues::defaults();
     match specialized_entry(bc, ENTRY, &p, &none, &[], &mut meter()) {
         Ok(e) => print(&e.module),
@@ -47,7 +47,7 @@ fn a_cube_sample_no_picked_unit_reaches_is_deleted() {
         let text = specialized(&bc, stem);
         let dev = Device::from_queries(
             description(stem).expect("committed description"),
-            DevicePolicy::default(),
+            DevicePolicy::RESIDENT_TABLES,
         )
         .expect("device");
         let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(

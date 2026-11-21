@@ -112,7 +112,7 @@ fn description(stem: &str) -> DeviceDescription {
 }
 
 fn device(stem: &str) -> Device {
-    Device::from_queries(description(stem), DevicePolicy::default()).expect("device")
+    Device::from_queries(description(stem), DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 /// Every committed profile's stem, sorted.

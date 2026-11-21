@@ -216,8 +216,8 @@ fn an_argument_table_call_without_a_function_of_its_type_compiles() {
     let Some((caller, functions)) = fixtures() else {
         return;
     };
-    let p =
-        crate::pipeline::testing::profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = crate::pipeline::testing::profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES)
+        .expect("profile");
     let none = FunctionConstantValues::defaults();
     let half = [LinkedSource::new("table_half", &functions, &none)];
     let empty: &[LinkedSource<'_>] = &[];
@@ -235,7 +235,7 @@ pub(super) fn device(stem: &str) -> Device {
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 /// The pipeline of kernel `entry` with the four functions linked, through the public API.
@@ -718,8 +718,8 @@ fn without_listed_tables_every_id_reads_the_null_table() {
     assert_eq!(entries(&directory), vec![(0, 0, 0); 16]);
     let none = FunctionConstantValues::defaults();
     let linked = sources(&functions, &none);
-    let p =
-        crate::pipeline::testing::profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = crate::pipeline::testing::profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES)
+        .expect("profile");
     let (_, one) = typed_module_linked(&caller, ONE, &p, &linked).expect("module");
     for id in [T, 0] {
         assert_eq!(

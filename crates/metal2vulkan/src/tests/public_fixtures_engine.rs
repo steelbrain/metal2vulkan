@@ -3,8 +3,8 @@
 //! Every `.ll` fixture at the top level of `validation/fixtures/public/` and in its `engine/`
 //! directory is assembled to bitcode (`llvm-as`; a typed-pointer `.air.ll` through `xcrun
 //! metal-as`), every entry point its ABI declares is compiled by the engine for every committed
-//! profile under the default policy with no function constants and default lowering inputs, and
-//! the outcome is recorded:
+//! profile under the resident-table domains with no function constants and default lowering inputs,
+//! and the outcome is recorded:
 //!
 //! - `ok`: compiled, linked, relocated, and passed L3 (requirements within the profile and
 //!   `spirv-val` under the profile's environment; `G-val`);

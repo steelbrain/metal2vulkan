@@ -130,7 +130,7 @@ fn no_demote() -> DeviceProfile {
     crate::pipeline::testing::profile_without(
         "runtime-floor",
         &[VkFeature::ShaderDemoteToHelperInvocation],
-        DevicePolicy::default(),
+        DevicePolicy::RESIDENT_TABLES,
     )
     .expect(NO_DEMOTE)
 }
@@ -318,7 +318,7 @@ fn a_predicated_discard_guards_each_later_store_atomic_and_image_write() {
         ("rch_guarded_copy", 1),
         ("rch_guarded_simd", 1),
     ];
-    let committed = |stem: &str| profile(stem, DevicePolicy::default()).expect("profile");
+    let committed = |stem: &str| profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
     for (stem, p) in [
         ("moltenvk-m3", committed("moltenvk-m3")),
         (NO_DEMOTE, no_demote()),
@@ -679,7 +679,7 @@ fn an_srgb_input_attachment_reads_the_devices_decode() {
         .join("../metal2vulkan-validation/profiles/lavapipe.json");
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
     let function = |bc: &[u8], name: &str| {
         FunctionDescriptor::new(
             Library::from_air(bc)
@@ -748,7 +748,7 @@ fn the_binder_writes_storage_attachments_and_refuses_layered_passes() {
         .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
     let function = |bc: &[u8], name: &str| {
         StageSource::Function(FunctionDescriptor::new(
             Library::from_air(bc)
@@ -842,7 +842,7 @@ fn a_draw_writes_an_interlocked_color_through_the_storage_form() {
             .join(format!("../metal2vulkan-validation/profiles/{stem}.json"));
         let text = std::fs::read_to_string(path).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
         let d = descriptor(false);
         let base = dev
             .compile_render_pipeline(&d, &Budget::standard())
@@ -966,7 +966,7 @@ fn the_storage_form_declares_early_tests_only_where_they_keep_metals_writes() {
     let (Some(plain), Some(discarding)) = (fixture("fragment_fetch"), fetch_with_discard()) else {
         return;
     };
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let state = |depth: bool| {
         let mut inputs = LoweringInputs::new();
         inputs.framebuffer_fetch = Some(FramebufferFetchInputs::of(
@@ -1027,7 +1027,7 @@ fn the_storage_form_declares_early_tests_only_where_they_keep_metals_writes() {
         .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
     let function = |bc: &[u8], name: &str| {
         FunctionDescriptor::new(
             Library::from_air(bc)
@@ -1115,7 +1115,7 @@ fn a_fetch_that_writes_memory_beside_depth_runs_only_draws_whose_tests_drop_noth
         .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
     let function = |bc: &[u8], name: &str| {
         StageSource::Function(FunctionDescriptor::new(
             Library::from_air(bc)
@@ -1293,7 +1293,7 @@ fn a_masked_fetched_write_keeps_the_channels_its_mask_leaves_out() {
         .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
     let function = |bc: &[u8], name: &str| {
         FunctionDescriptor::new(
             Library::from_air(bc)
@@ -1359,7 +1359,7 @@ fn the_partial_write_masks_of_a_fetched_attachment_share_one_module() {
             .join(format!("{stem}.json"));
         let text = std::fs::read_to_string(path).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        Device::from_queries(desc, DevicePolicy::default()).expect("device")
+        Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
     };
     let function = |bc: &[u8], name: &str| {
         FunctionDescriptor::new(
@@ -1538,7 +1538,7 @@ fn a_fetched_attachment_s_module_is_the_same_for_each_format_it_reads_alike() {
             .join(format!("{stem}.json"));
         let text = std::fs::read_to_string(path).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
         let mut modules = Vec::new();
         for (pf, _) in formats {
             let mut d = RenderPipelineDescriptor::new(StageSource::Function(function(
@@ -1589,7 +1589,7 @@ fn a_fetched_bgra_attachment_is_viewed_in_its_rgba_twin_where_no_declaration_rea
             .join(format!("{stem}.json"));
         let text = std::fs::read_to_string(path).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        Device::from_queries(desc, DevicePolicy::default()).expect("device")
+        Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
     };
     let function = |bc: &[u8], name: &str| {
         StageSource::Function(FunctionDescriptor::new(
@@ -1852,7 +1852,7 @@ fn a_replacing_blend_or_a_write_that_stores_nothing_takes_the_storage_form() {
         .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
     let function = |bc: &[u8], name: &str| {
         FunctionDescriptor::new(
             Library::from_air(bc)
@@ -2098,7 +2098,7 @@ fn a_premultiplied_blend_into_a_padded_attachment_is_computed_in_the_shader() {
             .join(format!("{stem}.json"));
         let text = std::fs::read_to_string(path).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
         let pipeline = |fragment: StageSource, colors: Vec<Option<ColorAttachmentDescriptor>>| {
             let mut d = RenderPipelineDescriptor::new(StageSource::Function(function(
                 &io,
@@ -2228,7 +2228,7 @@ fn a_second_source_blend_without_fast_math_reads_the_second_output() {
             .join(format!("{stem}.json"));
         let text = std::fs::read_to_string(path).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
         let pipeline = |bc: &[u8], fragment: &str| {
             let mut d = RenderPipelineDescriptor::new(StageSource::Function(function(
                 bc,
@@ -2455,7 +2455,7 @@ fn a_fetched_extended_range_attachment_is_refused() {
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
     let mut d = RenderPipelineDescriptor::new(StageSource::Function(function(
         &io,
         "stage_io_vertex_position",
@@ -2596,7 +2596,7 @@ fn a_discarding_fetch_beside_depth_stores_before_the_tests_its_draws_check() {
         .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
     let function = |bc: &[u8], name: &str| {
         StageSource::Function(FunctionDescriptor::new(
             Library::from_air(bc)
@@ -2732,7 +2732,7 @@ fn a_per_sample_depth_test_is_refused_at_the_depth_attachment() {
             .join(format!("../metal2vulkan-validation/profiles/{stem}.json"));
         let text = std::fs::read_to_string(path).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        Device::from_queries(desc, DevicePolicy::default()).expect("device")
+        Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
     };
     let mut d = RenderPipelineDescriptor::new(function(&io, "stage_io_vertex_position"));
     d.fragment = Some(function(&tested, "tsw_fetch_discard"));
@@ -2793,7 +2793,7 @@ fn a_fetch_that_returns_its_depth_refuses_a_draw_whose_depth_test_writes() {
             .join(format!("../metal2vulkan-validation/profiles/{stem}.json"));
         let text = std::fs::read_to_string(path).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        Device::from_queries(desc, DevicePolicy::default()).expect("device")
+        Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
     };
     let shape = |fragment_tests: FragmentTests| {
         BindState {
@@ -2868,7 +2868,7 @@ fn a_returned_stencil_or_sample_mask_refuses_a_draw_whose_tests_act() {
             .join(format!("../metal2vulkan-validation/profiles/{stem}.json"));
         let text = std::fs::read_to_string(path).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        Device::from_queries(desc, DevicePolicy::default()).expect("device")
+        Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
     };
     let shape = |fragment_tests: FragmentTests| {
         BindState {
@@ -2990,7 +2990,7 @@ pub(super) fn moltenvk_without(features: &[VkFeature]) -> DeviceProfile {
     for f in features {
         assert!(desc.features.remove(f), "moltenvk-m3 has {f:?}");
     }
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()
@@ -3172,7 +3172,7 @@ fn a_sum_before_a_discard_takes_metals_placement() {
     ) else {
         return;
     };
-    let p = profile("amd-780m-radv", DevicePolicy::default()).expect("profile");
+    let p = profile("amd-780m-radv", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let noted = |bc: &[u8], entry: &str| {
         compile(bc, entry, &p)
             .unwrap_or_else(|e| panic!("{entry}: {e}"))
@@ -4121,7 +4121,7 @@ fn a_snapshot_read_plans_its_variant_where_the_pipeline_can() {
         "runtime-floor",
     ] {
         let desc = crate::pipeline::testing::description(stem).expect("description");
-        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
         let base = dev
             .compile_render_pipeline(&descriptor(false, 1), &Budget::standard())
             .unwrap_or_else(|e| panic!("{stem}: {e}"));

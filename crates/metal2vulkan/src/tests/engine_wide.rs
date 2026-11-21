@@ -59,7 +59,7 @@ fn moltenvk(int64: bool) -> DeviceProfile {
     if !int64 {
         assert!(desc.features.remove(&VkFeature::ShaderInt64));
     }
-    let p = Device::from_queries(desc, DevicePolicy::default())
+    let p = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone();

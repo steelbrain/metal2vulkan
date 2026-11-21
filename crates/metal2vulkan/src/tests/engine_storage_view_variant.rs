@@ -30,7 +30,7 @@ use crate::pipeline::{
 
 /// Profile F: `runtime-floor` without device addresses, below the runtime's floor.
 fn profile_f() -> Device {
-    crate::pipeline::testing::device_f(DevicePolicy::default()).expect("Profile F")
+    crate::pipeline::testing::device_f(DevicePolicy::RESIDENT_TABLES).expect("Profile F")
 }
 
 fn assembled(result: Result<Vec<u8>, AssembleError>, name: &str) -> Option<Vec<u8>> {

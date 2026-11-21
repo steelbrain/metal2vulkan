@@ -427,7 +427,7 @@ fn frexp_and_ilogb_answer_as_metals_routines() {
         return;
     };
     for stem in PROFILES {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         for k in &KERNELS {
             let what = format!("{} on {stem}", k.name);
             let a = compile(&bc, k.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));

@@ -6,19 +6,20 @@ use crate::device::requirements::{Requirements, StageCreateFlag, VkLimit, VkProp
 use crate::error::{Capability, Feature, Needs};
 
 pub(crate) fn device(stem: &str) -> Device {
-    Device::from_queries(profile(stem), DevicePolicy::default()).expect("committed profile derives")
+    Device::from_queries(profile(stem), DevicePolicy::RESIDENT_TABLES)
+        .expect("committed profile derives")
 }
 
 #[test]
 fn every_committed_profile_derives() {
     for (stem, text) in committed_profiles() {
         let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
-        let dev = Device::from_queries(desc.clone(), DevicePolicy::default())
+        let dev = Device::from_queries(desc.clone(), DevicePolicy::RESIDENT_TABLES)
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
         let f = dev.profile().fields();
         assert_eq!(f.api_version, desc.api_version, "{stem}");
         // Deterministic.
-        let again = Device::from_queries(desc, DevicePolicy::default()).unwrap();
+        let again = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).unwrap();
         assert_eq!(dev.profile(), again.profile(), "{stem}");
         assert_eq!(dev.profile().fingerprint(), again.profile().fingerprint());
         // A profile satisfies the requirements of everything it enabled.
@@ -56,7 +57,7 @@ fn occlusion_query_precise_follows_each_source() {
             stated,
             "{stem}"
         );
-        let dev = Device::from_queries(desc, DevicePolicy::default()).unwrap();
+        let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).unwrap();
         let enabled = &dev.profile().fields().enabled.features;
         assert_eq!(
             enabled.contains(&VkFeature::OcclusionQueryPrecise),
@@ -89,7 +90,7 @@ fn depth_bias_control_follows_each_source() {
         let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
         let has_extension = desc.extensions.contains(&VkExtension::ExtDepthBiasControl);
         assert_eq!(has_extension, stated.is_some(), "{stem}");
-        let dev = Device::from_queries(desc.clone(), DevicePolicy::default()).unwrap();
+        let dev = Device::from_queries(desc.clone(), DevicePolicy::RESIDENT_TABLES).unwrap();
         let enabled = &dev.profile().fields().enabled;
         for (member, feature) in features {
             let want = stated
@@ -146,7 +147,8 @@ fn memory_profiles_follow_bda_and_int64() {
         &[VkFeature::BufferDeviceAddress, VkFeature::ShaderInt64][..],
         &[VkFeature::ShaderInt64],
     ] {
-        let dev = Device::from_queries(floor_without(without), DevicePolicy::default()).unwrap();
+        let dev =
+            Device::from_queries(floor_without(without), DevicePolicy::RESIDENT_TABLES).unwrap();
         assert_eq!(
             dev.profile().fields().buffer_access,
             BufferAccess::Floor,
@@ -177,7 +179,7 @@ fn addressed_needs_name_only_the_missing_features() {
     let bda = Capability::Feature(VkFeature::BufferDeviceAddress);
     let int64 = Capability::Feature(VkFeature::ShaderInt64);
     let needs = |without: &[VkFeature]| {
-        Device::from_queries(floor_without(without), DevicePolicy::default())
+        Device::from_queries(floor_without(without), DevicePolicy::RESIDENT_TABLES)
             .unwrap()
             .profile()
             .addressed_needs()
@@ -243,12 +245,12 @@ fn vertex_layer_and_viewport_outputs_follow_the_features_not_the_extension() {
     assert!(desc
         .extensions
         .contains(&VkExtension::ExtShaderViewportIndexLayer));
-    let full = Device::from_queries(desc.clone(), DevicePolicy::default()).unwrap();
+    let full = Device::from_queries(desc.clone(), DevicePolicy::RESIDENT_TABLES).unwrap();
     let f = full.profile().fields();
     assert!(f.fragment.output_layer && f.fragment.output_viewport_index);
     assert!(desc.features.remove(&VkFeature::ShaderOutputLayer));
     assert!(desc.features.remove(&VkFeature::ShaderOutputViewportIndex));
-    let lacking = Device::from_queries(desc, DevicePolicy::default()).unwrap();
+    let lacking = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).unwrap();
     let f = lacking.profile().fields();
     assert!(!f.fragment.output_layer);
     assert!(!f.fragment.output_viewport_index);
@@ -281,7 +283,7 @@ fn robustness2_selects_the_rba2_encoding() {
 fn below_1_2_is_refused() {
     let mut desc = profile("runtime-floor");
     desc.api_version = ApiVersion { major: 1, minor: 1 };
-    match Device::from_queries(desc, DevicePolicy::default()) {
+    match Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES) {
         Err(Error::Unsupported(u)) => {
             assert_eq!(u.feature, Feature::VulkanVersion);
             assert_eq!(
@@ -301,16 +303,16 @@ fn the_identity_domains_come_as_a_pair_on_a_device_with_addresses() {
     let identity = DevicePolicy {
         pointer_domain: PointerDomain::Identity,
         handle_domain: HandleDomain::Identity,
-        ..DevicePolicy::default()
+        ..DevicePolicy::RESIDENT_TABLES
     };
     for half in [
         DevicePolicy {
             pointer_domain: PointerDomain::Identity,
-            ..DevicePolicy::default()
+            ..DevicePolicy::RESIDENT_TABLES
         },
         DevicePolicy {
             handle_domain: HandleDomain::Identity,
-            ..DevicePolicy::default()
+            ..DevicePolicy::RESIDENT_TABLES
         },
     ] {
         assert!(
@@ -338,7 +340,7 @@ fn the_identity_domains_come_as_a_pair_on_a_device_with_addresses() {
 #[test]
 fn fingerprint_covers_every_policy_field() {
     let desc = profile("lavapipe");
-    let base = DevicePolicy::default();
+    let base = DevicePolicy::RESIDENT_TABLES;
     let fp = |p: DevicePolicy| {
         Device::from_queries(desc.clone(), p)
             .unwrap()
@@ -455,7 +457,7 @@ fn allocation_sizes_are_no_profile_field() {
         ] {
             let mut other = desc.clone();
             other.allocation = AllocationLimits::new(memory, buffer);
-            let dev = Device::from_queries(other, DevicePolicy::default()).unwrap();
+            let dev = Device::from_queries(other, DevicePolicy::RESIDENT_TABLES).unwrap();
             assert_eq!(dev.profile(), base.profile(), "{stem}");
             assert_eq!(
                 dev.profile().fingerprint(),
@@ -563,7 +565,7 @@ fn check_reports_the_first_missing_capability() {
     // `computeFullSubgroups`, a device below it, names it.
     let without = Device::from_queries(
         floor_without(&[VkFeature::ComputeFullSubgroups]),
-        DevicePolicy::default(),
+        DevicePolicy::RESIDENT_TABLES,
     )
     .unwrap();
     assert_eq!(
@@ -647,14 +649,14 @@ fn storage_without_format_follows_each_format() {
         U::StorageTexelBufferReadWithoutFormat,
         U::StorageTexelBufferWriteWithoutFormat,
     ];
-    let dev = Device::from_queries(desc.clone(), DevicePolicy::default()).unwrap();
+    let dev = Device::from_queries(desc.clone(), DevicePolicy::RESIDENT_TABLES).unwrap();
     assert_eq!(usages(&dev, vk::Format::R32_UINT), all);
     assert_eq!(usages(&dev, vk::Format::B8G8R8A8_UNORM), []);
     let mut write_only = desc.clone();
     write_only
         .features
         .remove(&VkFeature::ShaderStorageImageReadWithoutFormat);
-    let dev = Device::from_queries(write_only, DevicePolicy::default()).unwrap();
+    let dev = Device::from_queries(write_only, DevicePolicy::RESIDENT_TABLES).unwrap();
     assert_eq!(
         usages(&dev, vk::Format::R32_UINT),
         [
@@ -667,7 +669,7 @@ fn storage_without_format_follows_each_format() {
     // extension at 1.2 reports them as Vulkan 1.3 does.
     desc.khr_format_feature_flags2 = true;
     assert!(desc.has_format_feature_flags2());
-    let dev = Device::from_queries(desc.clone(), DevicePolicy::default()).unwrap();
+    let dev = Device::from_queries(desc.clone(), DevicePolicy::RESIDENT_TABLES).unwrap();
     assert_eq!(
         usages(&dev, vk::Format::R32_UINT),
         [
@@ -683,7 +685,7 @@ fn storage_without_format_follows_each_format() {
             F::STORAGE_READ_WITHOUT_FORMAT,
         ),
     );
-    let dev = Device::from_queries(desc.clone(), DevicePolicy::default()).unwrap();
+    let dev = Device::from_queries(desc.clone(), DevicePolicy::RESIDENT_TABLES).unwrap();
     assert_eq!(
         usages(&dev, vk::Format::B8G8R8A8_UNORM),
         [
@@ -694,7 +696,7 @@ fn storage_without_format_follows_each_format() {
     // The implication needs the feature.
     desc.features
         .remove(&VkFeature::ShaderStorageImageReadWithoutFormat);
-    let dev = Device::from_queries(desc, DevicePolicy::default()).unwrap();
+    let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).unwrap();
     assert_eq!(
         usages(&dev, vk::Format::R32_UINT),
         [U::StorageImageWriteWithoutFormat]
@@ -751,7 +753,7 @@ fn from_queries_half_rounding_follows_the_queries_alone() {
     let mut controlled = Vec::new();
     for (stem, text) in committed_profiles() {
         let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
-        let device = Device::from_queries(desc, DevicePolicy::default()).unwrap();
+        let device = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).unwrap();
         let p = device.profile();
         if half_controls(p) {
             assert_eq!(quantize_form(p), QuantizeForm::Controlled, "{stem}");

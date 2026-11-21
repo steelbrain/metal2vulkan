@@ -13,7 +13,7 @@
 //!
 //! [`Device::from_queries`] derives an opaque [`DeviceProfile`] from the description's Vulkan
 //! queries and a [`DevicePolicy`], the consumer's product choices (the pointer and handle
-//! domains; the default is [`DevicePolicy::UNTRUSTED`]); no
+//! domains; the default is the runtime's, the identity domains); no
 //! driver or GPU identity decides anything, and no `VkDevice` is needed. It refuses a device below Vulkan
 //! 1.2 and an inconsistent description or policy. A [`Device`] is cheap to clone, and every
 //! compile and plan takes one:

@@ -27,8 +27,9 @@ use crate::device::{DeviceDescription, DevicePolicy};
 /// The device a command compiles for, as `device.json` holds it and the command line's `--device`
 /// reads it: a description and a policy, which build the same `Device` (`Device::from_queries`).
 /// A runtime's compile device is one: metal2vulkan-runtime's is the device's description
-/// restricted to the features it enables, with the identity pointer and handle domains, which a
-/// Khronos profile read by `--profile` (the default domains) does not reproduce.
+/// restricted to the features it enables, under the default policy (the identity pointer and
+/// handle domains), which a Khronos profile read by `--profile` takes too but whose description
+/// is the profile's, not restricted to what the runtime enables.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ReproDevice {

@@ -53,11 +53,11 @@ fn p(stem: &str) -> DeviceProfile {
                 VkFeature::VulkanMemoryModel,
                 VkFeature::VulkanMemoryModelDeviceScope,
             ],
-            DevicePolicy::default(),
+            DevicePolicy::RESIDENT_TABLES,
         )
         .expect("below the runtime's floor");
     }
-    profile(stem, DevicePolicy::default()).expect("profile")
+    profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile")
 }
 
 fn assemble(name: &str, text: &str) -> Option<Vec<u8>> {

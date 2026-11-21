@@ -74,7 +74,7 @@ fn words(
     case: &metal2vulkan_devtools::linked_signatures::Case,
 ) -> Result<[u32; 2], Error> {
     let none = FunctionConstantValues::defaults();
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let kernel = format!("k_{}", case.name);
     let (_, m) = typed_module_linked(&modules[0], &kernel, &p, &[linked(modules, case, &none)])?;
     let slot = |index| {

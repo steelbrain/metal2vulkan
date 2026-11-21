@@ -411,7 +411,7 @@ fn status_words_with_another_bit_observed_are_refused() {
         .chain([stored])
         .collect();
     for stem in ["moltenvk-m3", "lavapipe"] {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         for (name, merge) in &observing {
             let Some(bc) = assemble(name, &merged_reads(merge, "")) else {
                 return;
@@ -691,7 +691,7 @@ fn without_robust_images(stem: &str) -> DeviceProfile {
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     desc.features.remove(&VkFeature::RobustImageAccess);
     desc.features.remove(&VkFeature::RobustImageAccess2);
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()
@@ -971,7 +971,7 @@ fn texture_atomic_max_is_an_image_atomic() {
                 crate::device::requirements::VkFeature::RobustImageAccess,
                 crate::device::requirements::VkFeature::RobustImageAccess2,
             ],
-            crate::device::DevicePolicy::default(),
+            crate::device::DevicePolicy::RESIDENT_TABLES,
         )
         .expect("below the runtime's floor"),
     ));
@@ -1059,7 +1059,7 @@ fn texture_atomic_max_is_an_image_atomic() {
 /// refusal; a storage choice other than the `R32` format of the texel's type is not representable.
 #[test]
 fn texture_atomic_lanes_lower_and_unestablished_operands_are_refused() {
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let wide =
         "%o = extractelement <4 x i32> %old, i64 1\n  store i32 %o, ptr addrspace(1) %out, align 4";
     let whole = "%o = bitcast <4 x i32> %old to <2 x i64>\n  %w = extractelement <2 x i64> %o, i64 0\n  %n = trunc i64 %w to i32\n  store i32 %n, ptr addrspace(1) %out, align 4";

@@ -378,10 +378,10 @@ mod tests {
         use crate::pipeline::testing::profile;
         let nvidia = profile(
             "nvidia-rtx5080-laptop",
-            crate::device::DevicePolicy::default(),
+            crate::device::DevicePolicy::RESIDENT_TABLES,
         )
         .unwrap();
-        let lavapipe = profile("lavapipe", crate::device::DevicePolicy::default()).unwrap();
+        let lavapipe = profile("lavapipe", crate::device::DevicePolicy::RESIDENT_TABLES).unwrap();
         for pf in [
             PixelFormat::A1BGR5Unorm,
             PixelFormat::ABGR4Unorm,
@@ -407,7 +407,11 @@ mod tests {
             WordAttachment::of(PixelFormat::RGB9E5Float, &nvidia),
             Some(WordAttachment::Rgb9e5)
         );
-        let radv = profile("amd-rdna3-radv", crate::device::DevicePolicy::default()).unwrap();
+        let radv = profile(
+            "amd-rdna3-radv",
+            crate::device::DevicePolicy::RESIDENT_TABLES,
+        )
+        .unwrap();
         assert_eq!(WordAttachment::of(PixelFormat::RGB9E5Float, &radv), None);
         // Vulkan makes `R5G6B5` and `A1R5G5B5` attachments mandatory.
         for pf in [PixelFormat::B5G6R5Unorm, PixelFormat::BGR5A1Unorm] {

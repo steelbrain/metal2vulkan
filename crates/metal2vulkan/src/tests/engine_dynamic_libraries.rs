@@ -218,7 +218,7 @@ fn device() -> Device {
         .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 fn stage(lib: &Library, libraries: DynamicLibraries) -> FunctionDescriptor {
@@ -234,7 +234,7 @@ fn compile(fd: FunctionDescriptor) -> Result<(), Error> {
 
 /// `out` after the stage `fd` runs over 16 threads on the CPU interpreter.
 fn computed(fd: &FunctionDescriptor) -> Vec<u32> {
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let m = compile_stage_kept(fd, &p, &mut meter()).unwrap_or_else(|e| panic!("{e}"));
     const N: u32 = 16;
     let res = Resources {

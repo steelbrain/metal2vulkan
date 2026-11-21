@@ -48,8 +48,8 @@ fn each_module_needs_what_its_docs_say() {
     assert!(r.features.is_empty(), "{r:?}");
 }
 
-/// Every committed device (`validation/profiles/*.json`), derived with the default policy, by
-/// file stem.
+/// Every committed device (`validation/profiles/*.json`), derived with the resident-table domains,
+/// by file stem.
 fn committed_devices() -> Vec<(String, Device)> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-validation/profiles");
     let mut out = Vec::new();
@@ -64,7 +64,7 @@ fn committed_devices() -> Vec<(String, Device)> {
             .unwrap_or_default();
         let text = std::fs::read_to_string(&path).expect("read");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        let device = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+        let device = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
         out.push((stem, device));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));

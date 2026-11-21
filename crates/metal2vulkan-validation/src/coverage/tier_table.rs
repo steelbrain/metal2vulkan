@@ -51,7 +51,7 @@ impl TierProfile {
 }
 
 /// A tier-table entry: a committed profile in one leg, and the profile lowering compiles for (the
-/// default untrusted policy, as every engine census row).
+/// default policy, the runtime's, as every engine census row).
 pub struct CommittedProfile {
     pub tier: TierProfile,
     pub profile: DeviceProfile,
@@ -262,7 +262,7 @@ pub fn compile_module(
         attributes: &attributes,
         resident_roots: function.reads_resident_roots(),
         handle_table: function.resolves_handles(),
-        // Every committed profile's device takes the default domains (`committed_profiles`).
+        // Every committed profile's device takes the default policy (`committed_profiles`).
         policy: DevicePolicy::default(),
         strategies: function.strategies(),
     };

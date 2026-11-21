@@ -278,7 +278,11 @@ fn global_builtins_compile_to_their_parameter_forms_words() {
 /// Every word of buffer 0 (`words` of them) after one workgroup of local size `local` ran the
 /// kernel `bc` on `moltenvk-m3` with 32-wide subgroups, identical in both scheduling orders.
 fn run_kernel(bc: &[u8], local: [u32; 3], words: usize) -> Vec<u32> {
-    let p = crate::pipeline::testing::profile("moltenvk-m3", Default::default()).expect("profile");
+    let p = crate::pipeline::testing::profile(
+        "moltenvk-m3",
+        crate::device::DevicePolicy::RESIDENT_TABLES,
+    )
+    .expect("profile");
     let (plan, m) = typed_module(bc, "k", &p).expect("plan");
     let mut spec = BTreeMap::new();
     for (a, v) in [Axis::X, Axis::Y, Axis::Z].into_iter().zip(local) {
@@ -389,7 +393,11 @@ fn a_global_builtin_read_at_an_unknown_lane_is_refused() {
     let Some(bc) = assemble("dynamic", &text) else {
         return;
     };
-    let p = crate::pipeline::testing::profile("moltenvk-m3", Default::default()).expect("profile");
+    let p = crate::pipeline::testing::profile(
+        "moltenvk-m3",
+        crate::device::DevicePolicy::RESIDENT_TABLES,
+    )
+    .expect("profile");
     match compile(&bc, "k", &p) {
         Err(Error::Unsupported(u)) => {
             assert_eq!(u.feature, Feature::Lowering(LowerFamily::Dispatch), "{u:?}")

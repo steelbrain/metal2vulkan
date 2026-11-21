@@ -226,7 +226,7 @@ fn bitcode() -> Option<Vec<u8>> {
 /// `Device::from_queries`' profile of committed description `stem`.
 fn queried(stem: &str) -> DeviceProfile {
     let desc = description(stem).expect("description");
-    let device = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    let device = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
     device.profile().clone()
 }
 

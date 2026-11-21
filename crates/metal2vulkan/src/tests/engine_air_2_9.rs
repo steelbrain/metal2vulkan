@@ -474,7 +474,7 @@ fn msl_4_1_orders_reach_spirv() {
         }
         Err(AssembleError::Rejected(why)) => panic!("llvm-as: {why}"),
     };
-    let p = profile("nvidia-rtx50-linux", DevicePolicy::default()).expect("profile");
+    let p = profile("nvidia-rtx50-linux", DevicePolicy::RESIDENT_TABLES).expect("profile");
     // Scopes: Device 1, Workgroup 2, Subgroup 3. Semantics: Acquire 0x2, Release 0x4,
     // AcquireRelease 0x8, UniformMemory 0x40, WorkgroupMemory 0x100, ImageMemory 0x800.
     let every = 0x40 | 0x100 | 0x800;
@@ -585,7 +585,7 @@ fn a_fragment_ordered_tile_atomic_keeps_its_order() {
         }
         Err(AssembleError::Rejected(why)) => panic!("llvm-as: {why}"),
     };
-    let p = profile("nvidia-rtx50-linux", DevicePolicy::default()).expect("profile");
+    let p = profile("nvidia-rtx50-linux", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let a = compile(&bc, "f", &p).unwrap_or_else(|e| panic!("f: {e}"));
     let (_, words) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("f: {e}"));
     let text = spirv_dis(&words);
@@ -630,7 +630,7 @@ fn a_compare_exchange_failing_acquiring_keeps_its_acquire() {
         }
         Err(AssembleError::Rejected(why)) => panic!("llvm-as: {why}"),
     };
-    let p = profile("nvidia-rtx50-linux", DevicePolicy::default()).expect("profile");
+    let p = profile("nvidia-rtx50-linux", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let a = compile(&bc, "k", &p).unwrap_or_else(|e| panic!("k: {e}"));
     let (_, words) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("k: {e}"));
     let text = spirv_dis(&words);
@@ -739,7 +739,7 @@ fn thread_atomics_compute_their_documented_words() {
     let threads = 8;
     let want: Vec<u32> = (0..threads).flat_map(thread_atomic_words).collect();
     for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
         let (_, words) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
         let text = spirv_dis(&words);

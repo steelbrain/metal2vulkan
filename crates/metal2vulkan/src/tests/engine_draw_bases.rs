@@ -85,7 +85,7 @@ fn vertex_entries_read_the_builtins_or_the_push_lanes() {
         profile_without(
             "runtime-floor",
             &[VkFeature::ShaderDrawParameters],
-            DevicePolicy::default(),
+            DevicePolicy::RESIDENT_TABLES,
         )
         .expect("below the runtime's floor"),
     ));
@@ -256,7 +256,7 @@ fn device(stem: &str) -> Device {
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 /// A draw of patches from base instance 7 writes `[patch_start, 7]` into the evaluation stage's

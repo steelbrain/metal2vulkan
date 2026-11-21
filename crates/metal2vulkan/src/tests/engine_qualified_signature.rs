@@ -94,7 +94,7 @@ fn declares(text: &str, list: &str) -> bool {
 
 #[test]
 fn a_renamed_function_compiles_as_its_signature_s_module() {
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let (mut signed_fixtures, mut compared, mut compiled, mut refused_alike) = (0, 0, 0, 0);
     let mut plain = 0usize;
     for path in fixtures() {

@@ -440,7 +440,7 @@ fn the_binder_writes_the_structure_and_the_table_the_consumer_binds() {
         .join("../metal2vulkan-validation/profiles");
     let text = std::fs::read_to_string(path.join("lavapipe.json")).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
     let lib = Library::from_air(&bc).expect("library");
     let f = lib.function("k").expect("entry");
     let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
@@ -1996,8 +1996,8 @@ fn an_intersected_structure_keeps_its_descriptor_beside_its_count() {
     };
     let translated = per_profile(&bc, "k", 1);
     assert!(translated.iter().any(|s| s == "lavapipe"), "{translated:?}");
-    let p =
-        crate::pipeline::testing::profile("lavapipe", DevicePolicy::default()).expect("lavapipe");
+    let p = crate::pipeline::testing::profile("lavapipe", DevicePolicy::RESIDENT_TABLES)
+        .expect("lavapipe");
     let a = compile(&bc, "k", &p).expect("lavapipe");
     assert!(a
         .facts
@@ -2077,14 +2077,15 @@ fn run_counts(
         .join("../metal2vulkan-validation/profiles");
     let text = std::fs::read_to_string(path.join(format!("{stem}.json"))).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
     let lib = Library::from_air(bc).expect("library");
     let f = lib.function(entry).expect("entry");
     let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
     let pipe = dev
         .compile_compute_pipeline(&d, &Budget::standard())
         .unwrap_or_else(|e| panic!("{what}: {e}"));
-    let p = crate::pipeline::testing::profile(stem, DevicePolicy::default()).expect("profile");
+    let p =
+        crate::pipeline::testing::profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
     let (_, m) = crate::pipeline::testing::typed_module(bc, entry, &p)
         .unwrap_or_else(|e| panic!("{what}: {e}"));
     let mut table = StageTable::default();

@@ -429,7 +429,7 @@ fn run_case(plan: &Plan, m: &TypedModule, c: Case, lanes: SubgroupSize) -> Vec<u
 /// Compile `kernel` on `stem`, validate it, check its barriers against the module's own
 /// uniformity, and run every case at every width its tier allows.
 fn check(stem: &str, bc: &[u8], kernel: &str, predicated: bool) {
-    let p = profile(stem, DevicePolicy::default()).expect("profile");
+    let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
     let a = compile(bc, kernel, &p).unwrap_or_else(|e| panic!("{stem} {kernel}: {e}"));
     link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem} {kernel}: {e}"));
     let (plan, m) = typed_module(bc, kernel, &p).unwrap_or_else(|e| panic!("{stem} {kernel}: {e}"));
@@ -512,7 +512,7 @@ fn uniform_barriers_are_not_predicated() {
     };
     for stem in PROFILES {
         check(stem, &bc, "uniform_barriers_k", false);
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         let (plan, _) = typed_module(&bc, "uniform_barriers_k", &p).expect("plan");
         assert!(
             !plan.facts.contains(&RuntimeFact::PredicationVote),
@@ -533,7 +533,7 @@ fn only_a_barrier_in_a_loop_takes_the_vote_word() {
     ] {
         let Some(bc) = kernel(name, body) else { return };
         for stem in PROFILES {
-            let p = profile(stem, DevicePolicy::default()).expect("profile");
+            let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
             let (plan, _) = typed_module(&bc, name, &p).expect("plan");
             let vote = plan.facts.contains(&RuntimeFact::PredicationVote);
             let emulated = plan.simd.1 == Tier::Emulated;

@@ -220,7 +220,7 @@ fn run_kernels(p: &DeviceProfile, tier: Tier, widths: &[SubgroupSize]) {
 
 #[test]
 fn simd_products_and_rotate_up_run_direct_at_32_lanes() {
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     run_kernels(&p, Tier::Direct, &[SubgroupSize::W32]);
 }
 
@@ -239,7 +239,7 @@ fn simd_products_and_rotate_up_run_cluster32_at_64_lanes() {
 /// fold and scan with 1 as the identity.
 #[test]
 fn simd_products_and_rotate_up_run_emulated_at_every_width() {
-    let p = profile("lavapipe", DevicePolicy::default()).expect("profile");
+    let p = profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("profile");
     run_kernels(
         &p,
         Tier::Emulated,

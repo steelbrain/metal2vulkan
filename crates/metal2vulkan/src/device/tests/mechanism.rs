@@ -553,7 +553,8 @@ fn profile_dependent_rows_differ_where_the_design_says() {
         below.features.remove(&f);
     }
     let floor =
-        crate::device::Device::from_queries(below, crate::device::DevicePolicy::default()).unwrap();
+        crate::device::Device::from_queries(below, crate::device::DevicePolicy::RESIDENT_TABLES)
+            .unwrap();
     let addressed = device("nvidia-rtx50-linux");
     assert_eq!(mechanism(&range, floor.profile()), Mechanism::PlanTimeCheck);
     assert_eq!(mechanism(&range, addressed.profile()), Mechanism::Variant);

@@ -148,7 +148,7 @@ fn check_artifact(a: &FunctionArtifact, what: &str) {
 fn store_const_passes_the_pipeline_on_every_m1_profile() {
     let Some(bitcode) = store_const() else { return };
     for stem in M1_PROFILES {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         let a =
             compile(&bitcode, "store_const", &p).unwrap_or_else(|e| panic!("{stem}: compile: {e}"));
         check_artifact(&a, stem);
@@ -177,7 +177,7 @@ fn containment_without_robustness_guards_the_store() {
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     desc.features.remove(&VkFeature::RobustBufferAccess);
     desc.features.remove(&VkFeature::RobustBufferAccess2);
-    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
     let p = dev.profile();
     let a = compile(&bitcode, "store_const", p).expect("compile");
     assert!(a.strategies.entries.contains_key("access.store.checked"));
@@ -185,7 +185,7 @@ fn containment_without_robustness_guards_the_store() {
     let ops = opcodes(&words);
     assert!(ops.contains(&(crate::spv::Op::ArrayLength as u32)));
     assert!(ops.contains(&(crate::spv::Op::SelectionMerge as u32)));
-    let robust = profile("runtime-floor", DevicePolicy::default()).expect("profile");
+    let robust = profile("runtime-floor", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let bare = compile(&bitcode, "store_const", &robust).expect("compile");
     let (_, words) = link_and_validate(&bare, &robust).unwrap_or_else(|e| panic!("{e}"));
     assert!(
@@ -200,7 +200,7 @@ fn containment_without_robustness_guards_the_store() {
 fn compilation_and_link_are_deterministic() {
     let Some(bitcode) = store_const() else { return };
     for stem in M1_PROFILES {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         let a = compile(&bitcode, "store_const", &p).expect("compile");
         let b = compile(&bitcode, "store_const", &p).expect("compile");
         assert_eq!(a, b, "{stem}");
@@ -215,7 +215,7 @@ fn compilation_and_link_are_deterministic() {
 #[test]
 fn zeroed_relocation_slots_are_link_independent() {
     let Some(bitcode) = store_const() else { return };
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let a = compile(&bitcode, "store_const", &p).expect("compile");
     let slots: BTreeSet<usize> = a.module.relocs.iter().map(|(_, at)| *at as usize).collect();
     assert!(!slots.is_empty());
@@ -268,7 +268,7 @@ fn typed_and_opaque_bitcode_give_identical_spirv() {
         Err(AssembleError::Rejected(why)) => panic!("metal-as rejected store_const.air.ll: {why}"),
     };
     for stem in M1_PROFILES {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         let a = compile(&opaque, "store_const", &p).expect("opaque");
         let b = compile(&typed, "store_const", &p).expect("typed");
         assert_eq!(a.module, b.module, "{stem}");
@@ -280,7 +280,7 @@ fn typed_and_opaque_bitcode_give_identical_spirv() {
 #[test]
 fn an_over_estimate_is_refused_before_emission() {
     let Some(bitcode) = store_const() else { return };
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let a = compile(&bitcode, "store_const", &p).expect("compile");
     let words = a.module.words.len() as u64;
     let r = compile_bitcode(
@@ -315,7 +315,7 @@ fn the_estimate_bounds_the_emitted_words() {
     let Some(bitcode) = store_const() else { return };
     for stem in M1_PROFILES {
         let what = stem;
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         let plan = plan_bitcode(
             &bitcode,
             EntryRef::Name("store_const"),
@@ -357,7 +357,7 @@ fn a_loop_kernel_compiles() {
             return;
         }
     };
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let a = compile(&bitcode, "bounded_loop_word", &p).unwrap_or_else(|e| panic!("{e}"));
     assert!(!a.facts.contains(&RuntimeFact::ExecutionStatus));
     let (_, words) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{e}"));
@@ -414,7 +414,7 @@ fn a_switch_on_a_dispatch_builtin_is_the_dispatch_familys() {
         }
         Err(e) => panic!("llvm-as rejected the inline kernel: {e:?}"),
     };
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     // The dispatch family lowers the builtin: the selector is the dispatch family's value (a grid
     // builtin, so the kernel depends on the dispatch grid), and the module passes L3.
     let a = compile(&bitcode, "switch_on_gid", &p).expect("the dispatch family lowers it");
@@ -426,7 +426,7 @@ fn a_switch_on_a_dispatch_builtin_is_the_dispatch_familys() {
 /// is refused with a typed error that is never internal (honest intermediate commits).
 #[test]
 fn every_public_fixture_compiles_or_refuses_without_an_internal_error() {
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let mut files: Vec<_> = [fixtures_dir(), engine_dir()]
         .iter()
         .flat_map(|d| std::fs::read_dir(d).expect("fixtures"))

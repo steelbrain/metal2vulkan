@@ -92,7 +92,7 @@ fn kernel(name: &str, buffers: u32, globals: &str, body: &str, decls: &str) -> S
 }
 
 fn moltenvk() -> DeviceProfile {
-    profile("moltenvk-m3", DevicePolicy::default()).expect("profile")
+    profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile")
 }
 
 /// A wave64-only compute device: the committed RDNA3 description with its subgroup size range
@@ -104,7 +104,7 @@ fn wave64() -> DeviceProfile {
     let narrowed = text.replace("\"minSubgroupSize\": 32", "\"minSubgroupSize\": 64");
     assert_ne!(narrowed, text, "the description names minSubgroupSize");
     let desc = DeviceDescription::from_khronos_json(&narrowed, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()
@@ -697,8 +697,8 @@ fn matmads_run_cluster32_at_64_lanes() {
 /// tile's cells are exchanged through workgroup memory.
 #[test]
 fn matmads_run_emulated_at_8_and_16_lanes() {
-    let p =
-        crate::pipeline::testing::profile("lavapipe", DevicePolicy::default()).expect("profile");
+    let p = crate::pipeline::testing::profile("lavapipe", DevicePolicy::RESIDENT_TABLES)
+        .expect("profile");
     for lanes in [SubgroupSize::W8, SubgroupSize::W16] {
         run_matmads(&p, Tier::Emulated, lanes, &[32, 64, 96]);
     }

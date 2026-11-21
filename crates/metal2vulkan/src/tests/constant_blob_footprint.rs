@@ -229,7 +229,7 @@ fn assemble(depth: u32, escaping: Escaping) -> Option<Vec<u8>> {
 /// Compile `bc` for `lavapipe` with the default caps: the result, the ledger peak, and the most
 /// bytes the compile held at once.
 fn compile(bc: &[u8]) -> (Result<(), Error>, Option<u64>, u64, u64) {
-    let p = profile("lavapipe", DevicePolicy::default()).expect("profile");
+    let p = profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let mut m = Meter::with_caps(&Budget::default(), WORK_UNITS, LEDGER_BYTES);
     let (compiled, held) = held_during(|| {
         compile_bitcode(
@@ -271,7 +271,7 @@ fn written(bc: &[u8]) -> (u64, u64, u64) {
         .join("../metal2vulkan-validation/profiles/lavapipe.json");
     let text = std::fs::read_to_string(&path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let device = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    let device = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
     let f = Library::from_air(bc)
         .expect("library")
         .function("blob")

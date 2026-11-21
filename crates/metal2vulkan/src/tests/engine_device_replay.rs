@@ -145,7 +145,7 @@ fn devices_and_unaddressed() -> Vec<(String, Device)> {
     let text = std::fs::read_to_string(path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     desc.features.remove(&VkFeature::BufferDeviceAddress);
-    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
     assert_ne!(
         dev.profile().fields().buffer_access,
         BufferAccess::Addressed
@@ -172,7 +172,7 @@ fn devices_with(tweak: impl Fn(&mut DeviceDescription)) -> Vec<(String, Device)>
             tweak(&mut desc);
             (
                 stem,
-                Device::from_queries(desc, DevicePolicy::default()).expect("device"),
+                Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device"),
             )
         })
         .collect();
@@ -1404,7 +1404,7 @@ fn gate_lavapipe(tweak: impl Fn(&mut Option<GeneratedCommandsProperties>)) -> De
     let text = std::fs::read_to_string(path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     tweak(&mut desc.generated_commands);
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 /// The limit `set` changes on a description that states the facts.

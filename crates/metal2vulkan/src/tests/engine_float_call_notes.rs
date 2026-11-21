@@ -294,7 +294,7 @@ fn note_class(p: &DeviceProfile) -> NoteClass {
 fn one_profile_per_class() -> BTreeMap<NoteClass, (String, DeviceProfile)> {
     let mut out = BTreeMap::new();
     for (stem, p) in
-        committed_profiles_with(crate::device::DevicePolicy::default()).expect("profiles")
+        committed_profiles_with(crate::device::DevicePolicy::RESIDENT_TABLES).expect("profiles")
     {
         out.entry(note_class(&p)).or_insert((stem, p));
     }

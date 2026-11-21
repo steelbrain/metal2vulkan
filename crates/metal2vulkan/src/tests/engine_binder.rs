@@ -100,7 +100,7 @@ pub(super) fn device(stem: &str, tweak: impl FnOnce(&mut DeviceDescription)) -> 
     let text = std::fs::read_to_string(path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     tweak(&mut desc);
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 /// Profile F: `runtime-floor` without device addresses, below the runtime's floor, whose buffers

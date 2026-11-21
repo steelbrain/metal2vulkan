@@ -306,7 +306,7 @@ declare i32 @air.get_width_texture_2d(ptr addrspace(1), i32)
             0,
             FunctionConstantValue::new(DataType::Bool, [u8::from(on)]),
         );
-        let p = profile("lavapipe", DevicePolicy::default()).expect("profile");
+        let p = profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("profile");
         let a = compile_bitcode(
             &bc,
             EntryRef::Name("k"),

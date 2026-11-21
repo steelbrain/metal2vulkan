@@ -61,11 +61,11 @@ fn assemble(name: &str, body: &str) -> Option<Vec<u8>> {
 }
 
 fn lavapipe() -> DeviceProfile {
-    profile("lavapipe", DevicePolicy::default()).expect("profile")
+    profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("profile")
 }
 
 fn m3() -> DeviceProfile {
-    profile("moltenvk-m3", DevicePolicy::default()).expect("profile")
+    profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile")
 }
 
 /// The words of `constexpr sampler(filter::linear, ...)`: minification and magnification
@@ -698,7 +698,7 @@ fn in_place_samples_are_metals() {
                 return;
             };
             for stem in ["lavapipe", "moltenvk-m3"] {
-                let p = profile(stem, DevicePolicy::default()).expect("profile");
+                let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
                 let what = format!("{name} half={half} on {stem}");
                 let a = compile_with(&bc, "k", &p, &inputs(true))
                     .unwrap_or_else(|e| panic!("{what}: {e}"));
@@ -1313,7 +1313,7 @@ fn a_slot_states_the_in_place_form_where_it_reads_only_it() {
             return;
         };
         for stem in ["lavapipe", "moltenvk-m3", "nvidia-rtx5080-laptop"] {
-            let p = profile(stem, DevicePolicy::default()).expect("profile");
+            let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
             assert!(p.fields().ycbcr_in_place, "{stem}");
             let what = format!("{name} on {stem}");
             let (plan, _) = typed_module_with(&bc, "k", &p, &inputs(false))
@@ -1467,7 +1467,7 @@ fn an_in_place_linear_sample_is_refused_as_its_slot_s_encoder_value_under_the_id
     let identity = DevicePolicy {
         pointer_domain: PointerDomain::Identity,
         handle_domain: HandleDomain::Identity,
-        ..DevicePolicy::default()
+        ..DevicePolicy::RESIDENT_TABLES
     };
     let p = profile("lavapipe", identity).expect("profile");
     match compile_with(&bc, "k", &p, &inputs(true)) {

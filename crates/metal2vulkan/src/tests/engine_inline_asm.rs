@@ -81,7 +81,7 @@ fn the_loop_that_held_the_empty_asm_runs_every_iteration() {
         want[(2 * t) as usize] = acc;
         want[(2 * t + 1) as usize] = N;
     }
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     for (what, bc) in spellings() {
         let (plan, m) = typed_module(&bc, "asm_in_loop", &p).unwrap_or_else(|e| panic!("{e:?}"));
         let mut spec = BTreeMap::new();
@@ -167,7 +167,7 @@ entry:
 /// The empty one translates.
 #[test]
 fn any_other_inline_asm_is_refused_by_name() {
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     for (ret, asm) in [
         ("void", r#"asm sideeffect "nop", """#),
         ("void", r#"asm sideeffect "", "~{memory}""#),

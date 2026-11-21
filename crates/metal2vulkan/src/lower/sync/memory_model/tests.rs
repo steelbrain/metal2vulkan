@@ -14,9 +14,12 @@ fn profiles() -> Vec<(String, crate::device::profile::DeviceProfile)> {
     let mut out = committed_profiles().expect("profiles");
     let scope = VkFeature::VulkanMemoryModelDeviceScope;
     for without in [&[scope][..], &[VkFeature::VulkanMemoryModel, scope]] {
-        let p =
-            crate::pipeline::testing::profile_without("runtime-floor", without, Default::default())
-                .expect("below the floor");
+        let p = crate::pipeline::testing::profile_without(
+            "runtime-floor",
+            without,
+            crate::device::DevicePolicy::RESIDENT_TABLES,
+        )
+        .expect("below the floor");
         out.push((format!("runtime-floor without {without:?}"), p));
     }
     out

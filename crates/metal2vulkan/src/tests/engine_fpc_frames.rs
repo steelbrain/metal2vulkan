@@ -84,7 +84,7 @@ fn fpc_frames_compile_to_their_bounds_and_are_refused_past_them() {
     let Some(bitcode) = fixture() else {
         return;
     };
-    let p = profile("moltenvk-m3", Default::default()).expect("profile");
+    let p = profile("moltenvk-m3", crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
     let refused = Err(Error::LimitExceeded(Limit::CallStackBytes));
     for (entry, linked, ours, metal) in BOUNDS {
         let r = compile_linked(&bitcode, entry, linked, ours, &p).map(|_| ());
@@ -103,7 +103,11 @@ fn a_pair_s_uniform_frames_pass_16_kib_at_depth_4() {
     let Some(bitcode) = fixture() else {
         return;
     };
-    let p = profile("nvidia-rtx5080-laptop", Default::default()).expect("profile");
+    let p = profile(
+        "nvidia-rtx5080-laptop",
+        crate::device::DevicePolicy::RESIDENT_TABLES,
+    )
+    .expect("profile");
     let refused = Err(Error::Unsupported(Unsupported::needs_any_of(
         Feature::Recursion,
         vec![vec![Capability::Limit {
@@ -288,7 +292,8 @@ fn activations(k: u32, (l, s): (u64, u64)) -> u32 {
 /// 192 KiB of Function storage, as the M3 Max holds: past the 16 KiB every device holds, so the
 /// deep stacks compile for the interpreter.
 fn typed(bitcode: &[u8], entry: &str, linked: &[&str], k: u32) -> TypedModule {
-    let mut p = profile("moltenvk-m3", Default::default()).expect("profile");
+    let mut p =
+        profile("moltenvk-m3", crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
     p.edit(|f| f.function_storage = crate::device::profile::FunctionStorage::Assumed(192 * 1024));
     let none = FunctionConstantValues::defaults();
     let sources: Vec<LinkedSource<'_>> = linked

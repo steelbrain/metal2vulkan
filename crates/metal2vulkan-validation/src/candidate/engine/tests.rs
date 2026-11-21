@@ -1598,7 +1598,7 @@ fn a_device_buffer_array_plans_as_the_functions_buffer_table() {
         ("moltenvk-m3", true),
         ("runtime-floor", false),
     ] {
-        let device = device(stem, DevicePolicy::default());
+        let device = device(stem, DevicePolicy::RESIDENT_TABLES);
         let shape = compute_shape(&compute, addressed, BufferRanges::default()).unwrap();
         let (pipeline, inputs) = variants::compile_compute_for_shape(
             &device,
@@ -1682,7 +1682,7 @@ fn the_binder_plans_the_executors_state() {
         },
     };
     for stem in ["lavapipe", "moltenvk-m3", "runtime-floor"] {
-        let device = device(stem, DevicePolicy::default());
+        let device = device(stem, DevicePolicy::RESIDENT_TABLES);
         let pipeline = compile(&device, &bitcode, "count");
         for address in [
             BufferAddress::synthetic(0),
@@ -1721,8 +1721,8 @@ fn the_binder_plans_the_executors_state() {
 
 #[test]
 fn identity_is_per_profile_and_per_engine_slot() {
-    let a = engine_fingerprint(device("lavapipe", DevicePolicy::default()).profile());
-    let b = engine_fingerprint(device("moltenvk-m3", DevicePolicy::default()).profile());
+    let a = engine_fingerprint(device("lavapipe", DevicePolicy::RESIDENT_TABLES).profile());
+    let b = engine_fingerprint(device("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).profile());
     assert_ne!(a, b);
     assert_eq!(a.len(), 64);
     assert_eq!(
@@ -2112,7 +2112,7 @@ fn a_long_replay_records_the_regions_its_dispatch_bound_holds() {
     let path = crate::engine::profiles_dir().join("gate-lavapipe.json");
     let text = std::fs::read_to_string(path).unwrap();
     let description = DeviceDescription::from_khronos_json(&text, None).unwrap();
-    let device = Device::from_queries(description, DevicePolicy::default()).unwrap();
+    let device = Device::from_queries(description, DevicePolicy::RESIDENT_TABLES).unwrap();
     let variants = |n: u32| -> Vec<ReplayVariant> {
         (1..=n)
             .map(|x| ReplayVariant::new(NonZeroU64::new(7).unwrap(), [x, 1, 1], [0; 31]))

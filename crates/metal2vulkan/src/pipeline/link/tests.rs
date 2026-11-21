@@ -30,7 +30,7 @@ use crate::spirv::serialize::serialize;
 // ---- Fixtures ----
 
 pub(super) fn profile(stem: &str) -> DeviceProfile {
-    crate::pipeline::testing::profile(stem, DevicePolicy::default()).expect("profile")
+    crate::pipeline::testing::profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile")
 }
 
 /// The key of user varying `name`.

@@ -19,7 +19,7 @@ fn device(stem: &str) -> Device {
     let path = crate::engine::profiles_dir().join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).unwrap();
     let description = DeviceDescription::from_khronos_json(&text, None).unwrap();
-    Device::from_queries(description, DevicePolicy::default()).unwrap()
+    Device::from_queries(description, DevicePolicy::RESIDENT_TABLES).unwrap()
 }
 
 /// The module text a case maps with when its module's stage metadata declares no render target
@@ -453,7 +453,7 @@ fn a_framebuffer_fetch_case_plans_its_ordered_input_attachment() {
     description
         .features
         .remove(&VkFeature::FragmentShaderPixelInterlock);
-    let unordered = Device::from_queries(description, DevicePolicy::default()).unwrap();
+    let unordered = Device::from_queries(description, DevicePolicy::RESIDENT_TABLES).unwrap();
     let (pipeline, plan, _) = planned_draw(&unordered, &render, libraries).unwrap();
     let read: Vec<u32> = (pipeline.graphics.input_attachments.iter())
         .map(|input| input.color_index)
@@ -2116,7 +2116,7 @@ fn public_framebuffer_fetch_cases_plan_their_ordered_input_attachments() {
             // color the case reads as a storage image of its own attachment inside the interlock,
             // where the case's state lets that be exact: no input attachment, no color attachment
             // state for it, and a storage write of it in the plan. Where the state blocks that
-            // form, the default policy refuses the fetch, typed.
+            // form, the resident-table domains refuse the fetch, typed.
             for stem in interlocked.iter().map(String::as_str) {
                 match planned_draw(&device(stem), &render, libraries) {
                     Ok((pipeline, plan, _)) => {

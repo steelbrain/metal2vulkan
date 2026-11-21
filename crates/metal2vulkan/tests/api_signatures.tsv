@@ -150,7 +150,7 @@ assoc-const	metal2vulkan::bind::indirect_commands::BufferBinding::MIN_BUFFER_ADD
 assoc-const	metal2vulkan::bind::indirect_commands::RenderDraws::PRIMITIVES	pub const PRIMITIVES: RenderDraws
 assoc-const	metal2vulkan::device::ApiVersion::V1_2	pub const V1_2: ApiVersion
 assoc-const	metal2vulkan::device::ApiVersion::V1_3	pub const V1_3: ApiVersion
-assoc-const	metal2vulkan::device::DevicePolicy::UNTRUSTED	pub const UNTRUSTED: DevicePolicy
+assoc-const	metal2vulkan::device::DevicePolicy::RESIDENT_TABLES	pub const RESIDENT_TABLES: DevicePolicy
 assoc-const	metal2vulkan::device::OpBits::ARITHMETIC	pub const ARITHMETIC: OpBits
 assoc-const	metal2vulkan::device::OpBits::BALLOT	pub const BALLOT: OpBits
 assoc-const	metal2vulkan::device::OpBits::BASIC	pub const BASIC: OpBits
@@ -381,7 +381,7 @@ assoc-const-value	metal2vulkan::bind::indirect_commands::BufferBinding::MIN_BUFF
 assoc-const-value	metal2vulkan::bind::indirect_commands::RenderDraws::PRIMITIVES	RenderDraws
 assoc-const-value	metal2vulkan::device::ApiVersion::V1_2	ApiVersion
 assoc-const-value	metal2vulkan::device::ApiVersion::V1_3	ApiVersion
-assoc-const-value	metal2vulkan::device::DevicePolicy::UNTRUSTED	DevicePolicy
+assoc-const-value	metal2vulkan::device::DevicePolicy::RESIDENT_TABLES	DevicePolicy
 assoc-const-value	metal2vulkan::device::OpBits::ARITHMETIC	OpBits(1 <<2)
 assoc-const-value	metal2vulkan::device::OpBits::BALLOT	OpBits(1 <<3)
 assoc-const-value	metal2vulkan::device::OpBits::BASIC	OpBits(1 <<0)

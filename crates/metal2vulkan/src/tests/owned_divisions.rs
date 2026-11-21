@@ -70,7 +70,8 @@ fn no_crate_owned_compute_module_divides_the_all_ones_integer() {
         .expect("profiles")
         .iter()
         .map(|(stem, desc)| {
-            let device = Device::from_queries(desc.clone(), DevicePolicy::default()).expect(stem);
+            let device =
+                Device::from_queries(desc.clone(), DevicePolicy::RESIDENT_TABLES).expect(stem);
             (stem.clone(), device)
         })
         .collect();

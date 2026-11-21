@@ -48,7 +48,7 @@ fn assemble(stem: &str) -> Option<Vec<u8>> {
 }
 
 fn prof(stem: &str) -> DeviceProfile {
-    profile(stem, DevicePolicy::default()).expect("committed profile")
+    profile(stem, DevicePolicy::RESIDENT_TABLES).expect("committed profile")
 }
 
 /// The boolean constants `on` true, every other constant undefined (so its gate is off).

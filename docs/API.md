@@ -82,7 +82,8 @@ or policy. A
 ### The policy
 
 `DevicePolicy` holds your product choices; together with the description they decide everything a
-compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
+compile does. `DevicePolicy::default()` is the one constructor: the runtime compiles under it,
+and so do the command line, the compile worker and every validation tool. It holds:
 
 - **Bounds on a buffer-slot access at a run-time offset.** Such an access stays inside the range
   the binder supplied: where the device enables `robustBufferAccess`, buffer accesses and vertex
@@ -99,11 +100,11 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   with no switch: the device's answer is the contract, recorded as `PrecisionNote::DeviceSampling`
   with its measured bound. The device's own `half` rounding and its blend of a `half` color have
   no switch either: each records its note.
-- **The resident-table and handle-table domains** (`PointerDomain::ResidentTable`,
-  `HandleDomain::Table`, the default). The identity domains (`PointerDomain::Identity` with
-  `HandleDomain::Identity`, taken together) are the runtime's form: pointers are device
-  addresses used directly and a texture's or sampler's handle is its `gpuResourceID`
-  ([RESOURCE-ID.md](RESOURCE-ID.md)). They need `bufferDeviceAddress` and `shaderInt64`. Under
+- **The identity domains** (`PointerDomain::Identity` with `HandleDomain::Identity`, taken
+  together; the default, the runtime's form): pointers are device addresses used directly and a
+  texture's or sampler's handle is its `gpuResourceID` ([RESOURCE-ID.md](RESOURCE-ID.md)). They
+  need `bufferDeviceAddress` and `shaderInt64`; `Device::from_queries` refuses a device without
+  them (`Unsupported{IdentityDomains}`). Under
   them a buffer slot is reached at its own device address (`gpuAddress` plus the bind offset),
   pushed less 2^31 as `PushField::SlotGuestBase` (section 5), with no root table and no
   descriptor. The constant blob (the program-scope constants whose address merges, escapes or is
@@ -116,8 +117,8 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   offset reads and writes the buffer's bytes there. Outside the buffer, a load reads zero and a
   store or atomic does nothing (section 5). An access at a constant offset is not checked. A
   pointer loaded from memory or made from an integer, null included, is used as given: no binding
-  bounds its accesses, so the bounds the default domains place on an access do not hold for
-  it. A slot
+  bounds its accesses, so the bounds the resident-table domains place on an access do not hold
+  for it. A slot
   whose argument states an alignment of at least 4 (`air.arg_type_align_size`) is reached from
   that address as it is: each access is at the pushed word plus its 32-bit byte offset plus 2^31,
   modulo 2^32, zero-extended, which is the address plus the offset read as signed, exact as the
@@ -189,11 +190,11 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   filter treats the bound texture's texels (its inner taps, its clamp and its border texels) from
   the word the consumer pushes for that slot (`PushField::BicubicTexels`:
   `metal::format::bicubic_texels_word` of the bound texture's format and swizzle,
-  `metal::format::BICUBIC_TEXELS_UNBOUND` for a slot bound to nothing), the bits the default
+  `metal::format::BICUBIC_TEXELS_UNBOUND` for a slot bound to nothing), the bits the resident-table
   domains specialize `SpecKey::BicubicTexels` to. `bicubic_texels_word` has no word for a
   compressed, YUV, stencil, integer, extended-range or 8-bit sRGB format, so such a texture has
   no bicubic sample there (the runtime refuses the dispatch, `Gap::BicubicTexels`). Its
-  arithmetic is noted `PrecisionNote::BicubicFilterArithmetic`, as on the default domains. A
+  arithmetic is noted `PrecisionNote::BicubicFilterArithmetic`, as on the resident-table domains. A
   fragment function under the pipeline's private alpha test
   (`PrivateRenderState::alpha_test_enabled`, a compare function other
   than `Never` or `Always`) compares its color 0's alpha with the code the consumer pushes
@@ -254,6 +255,10 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   and its command, `PushField::IndirectSequence` (a part's sequence index) plus
   `PushField::IndirectBase` (the part's first command), a command outside the range draws nothing,
   and the function pulls every vertex attribute it reads.
+- **The resident-table domains** (`DevicePolicy::RESIDENT_TABLES`: `PointerDomain::ResidentTable`
+  with `HandleDomain::Table`) exist for the validation executor alone, which builds the resident
+  root and the handle table itself. Besides it, only the translator's own tests of that lowering
+  compile under them.
 
 Loops run as written: no execution bound is translated in.
 

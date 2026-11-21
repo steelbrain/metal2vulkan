@@ -97,7 +97,7 @@ fn without(stem: &str, drop: &[VkFeature]) -> DeviceProfile {
     for f in drop {
         desc.features.remove(f);
     }
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()
@@ -661,7 +661,7 @@ fn a_device_lacking_only_the_r64_atomic_format_bit_refuses_typed() {
             vk::FormatFeatureFlags2::STORAGE_IMAGE_ATOMIC
         };
         *flags = vk::FormatFeatureFlags2::from_raw(flags.as_raw() & !bit.as_raw());
-        let p = Device::from_queries(desc, DevicePolicy::default())
+        let p = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
             .expect("device")
             .profile()
             .clone();
@@ -755,7 +755,7 @@ fn device(stem: &str) -> Device {
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 fn pipeline(dev: &Device, bc: &[u8], entry: &str) -> ComputePipeline {

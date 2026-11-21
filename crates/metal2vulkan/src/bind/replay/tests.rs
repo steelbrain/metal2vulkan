@@ -57,13 +57,13 @@ fn devices() -> Vec<(String, Device)> {
                 .into_owned();
             let text = std::fs::read_to_string(&path).expect("profile");
             let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-            let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+            let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
             (stem, dev)
         })
         .collect();
     out.sort_by(|a, b| a.0.cmp(&b.0));
     // Profile F, below the runtime's floor: the form of a device without device addresses.
-    let f = crate::pipeline::testing::device_f(DevicePolicy::default()).expect("Profile F");
+    let f = crate::pipeline::testing::device_f(DevicePolicy::RESIDENT_TABLES).expect("Profile F");
     out.push((crate::pipeline::testing::PROFILE_F.to_string(), f));
     out
 }

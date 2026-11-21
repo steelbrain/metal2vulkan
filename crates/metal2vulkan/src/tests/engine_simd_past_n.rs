@@ -311,7 +311,7 @@ const SIZES: [u32; 6] = [6, 8, 16, 32, 42, 48];
 #[test]
 fn the_emulated_tier_reads_a_lane_past_the_thread_count_as_zero() {
     for stem in PROFILES {
-        let p: DeviceProfile = profile(stem, DevicePolicy::default()).expect("profile");
+        let p: DeviceProfile = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         check_on(stem, &SIZES, &WIDTHS, &|bc, entry| {
             let (a, plan, m) =
                 compile_kept(bc, entry, &p).unwrap_or_else(|e| panic!("{entry}: {e}"));
@@ -324,7 +324,7 @@ fn the_emulated_tier_reads_a_lane_past_the_thread_count_as_zero() {
 
 #[test]
 fn the_emulated_variant_reads_a_lane_past_the_thread_count_as_zero() {
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let mut inputs = LoweringInputs::new();
     inputs.emulated_simdgroups = true;
     check_on("moltenvk-m3 variant", &SIZES, &WIDTHS, &|bc, entry| {
@@ -341,7 +341,7 @@ fn the_emulated_variant_reads_a_lane_past_the_thread_count_as_zero() {
 
 #[test]
 fn the_direct_tier_gives_the_whole_simdgroup_control() {
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     check_on("moltenvk-m3", &[32], &[SubgroupSize::W32], &|bc, entry| {
         let (a, plan, m) = compile_kept(bc, entry, &p).unwrap_or_else(|e| panic!("{entry}: {e}"));
         link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{entry}: {e}"));

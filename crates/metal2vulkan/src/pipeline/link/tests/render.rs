@@ -1120,7 +1120,7 @@ fn alpha_to_one_is_refused_only_without_the_feature() {
     let p = crate::pipeline::testing::profile_without(
         "runtime-floor",
         &[VkFeature::AlphaToOne],
-        DevicePolicy::default(),
+        DevicePolicy::RESIDENT_TABLES,
     )
     .expect("profile");
     assert!(!p.fields().enabled.features.contains(&VkFeature::AlphaToOne));
@@ -1575,7 +1575,7 @@ fn attachment_states_are_identical_or_need_independent_blend() {
     let floor = crate::pipeline::testing::profile_without(
         "runtime-floor",
         &[VkFeature::IndependentBlend],
-        DevicePolicy::default(),
+        DevicePolicy::RESIDENT_TABLES,
     )
     .expect("profile");
     let lavapipe = profile("lavapipe");
@@ -1809,7 +1809,7 @@ fn a_dual_source_blend_needs_dual_src_blend() {
     let floor = crate::pipeline::testing::profile_without(
         "runtime-floor",
         &[VkFeature::DualSrcBlend],
-        DevicePolicy::default(),
+        DevicePolicy::RESIDENT_TABLES,
     )
     .expect("profile");
     assert!(!floor.fields().fragment.dual_src_blend);
@@ -1891,7 +1891,7 @@ fn color_outputs_follow_metals_measured_rules() {
     let floor = crate::pipeline::testing::profile_without(
         "runtime-floor",
         &[VkFeature::IndependentBlend],
-        DevicePolicy::default(),
+        DevicePolicy::RESIDENT_TABLES,
     )
     .expect("profile");
     for p in [&lavapipe, &profile("moltenvk-m3")] {
@@ -2501,7 +2501,7 @@ fn multisampled_fragment_invocations_follow_metals_measured_rules() {
     let p = crate::pipeline::testing::profile_without(
         "runtime-floor",
         &[VkFeature::SampleRateShading],
-        DevicePolicy::default(),
+        DevicePolicy::RESIDENT_TABLES,
     )
     .expect("profile");
     assert!(!p.fields().fragment.sample_rate_shading);

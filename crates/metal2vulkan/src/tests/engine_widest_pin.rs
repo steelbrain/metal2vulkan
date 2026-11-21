@@ -66,7 +66,7 @@ fn the_widest_pin_rule_picks_each_shuffle_kernel_s_tier_per_profile() {
     ] {
         let dev = Device::from_queries(
             description(stem).expect("committed description"),
-            DevicePolicy::default(),
+            DevicePolicy::RESIDENT_TABLES,
         )
         .expect("device");
         for form in ["float", "uint"] {

@@ -67,15 +67,14 @@ use crate::pipeline::{
 };
 use crate::Budget;
 
-/// One golden table: where it is committed, the policy its devices compile under, and the
-/// fixtures it takes.
+/// One golden table: where it is committed and the fixtures it takes. Its devices compile under
+/// the default policy, the runtime's.
 #[derive(Clone, Copy)]
 struct Golden {
     /// The committed table, relative to the crate root.
     table: &'static str,
     /// The first lines of its header, before the bless command.
     title: &'static str,
-    policy: DevicePolicy,
     /// Whether it takes a fixture, by its source text.
     takes: fn(&str) -> bool,
 }
@@ -85,7 +84,6 @@ const DEFAULT: Golden = Golden {
     table: "tests/golden_hashes.tsv",
     title: "# Golden output hashes of the engine over the public fixtures x the committed\n\
             # profiles (src/tests/golden_hashes.rs). Written by the bless; do not edit:\n",
-    policy: DevicePolicy::UNTRUSTED,
     takes: every,
 };
 
@@ -369,8 +367,8 @@ fn multisampled_descriptor(
 
 // ---- Inputs ----
 
-/// Every committed profile as a device under `policy`, by stem.
-fn devices(policy: DevicePolicy) -> Vec<(String, Device)> {
+/// Every committed profile as a device under the default policy, by stem.
+fn devices() -> Vec<(String, Device)> {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../metal2vulkan-validation/profiles");
     let mut out = Vec::new();
     for entry in std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("{}: {e}", dir.display())) {
@@ -385,7 +383,8 @@ fn devices(policy: DevicePolicy) -> Vec<(String, Device)> {
         let text = std::fs::read_to_string(&path).expect("read profile");
         let desc = DeviceDescription::from_khronos_json(&text, None)
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let dev = Device::from_queries(desc, policy).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let dev = Device::from_queries(desc, DevicePolicy::default())
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
         out.push((stem, dev));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
@@ -995,7 +994,7 @@ fn check_storage_pair(observed: &Table, devices: &[(String, Device)]) -> usize {
 
 #[test]
 fn golden_hashes_match_the_table() {
-    let devices = devices(DEFAULT.policy);
+    let devices = devices();
     let observed = observe(DEFAULT, &devices);
     if !observed.skipped.contains(STORAGE_FIXTURE) {
         let swizzled = check_storage_pair(&observed.table, &devices);
@@ -1068,7 +1067,7 @@ fn bless_golden_hashes() {
     {
         let golden = DEFAULT;
         let table = golden.table;
-        let devices = devices(golden.policy);
+        let devices = devices();
         let observed = observe(golden, &devices);
         assert!(
             observed.skipped.is_empty(),

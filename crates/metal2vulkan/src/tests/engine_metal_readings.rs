@@ -65,7 +65,7 @@ fn assemble(name: &str, body: &str) -> Option<Vec<u8>> {
 }
 
 fn m3() -> DeviceProfile {
-    profile("moltenvk-m3", DevicePolicy::default()).expect("profile")
+    profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile")
 }
 
 /// The offset Metal applies for component `x`: its low four bits as a two's-complement value.

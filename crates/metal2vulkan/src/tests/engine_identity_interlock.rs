@@ -35,7 +35,7 @@ fn identity() -> DevicePolicy {
     DevicePolicy {
         pointer_domain: PointerDomain::Identity,
         handle_domain: HandleDomain::Identity,
-        ..DevicePolicy::default()
+        ..DevicePolicy::RESIDENT_TABLES
     }
 }
 

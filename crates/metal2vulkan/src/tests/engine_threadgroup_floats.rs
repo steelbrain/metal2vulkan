@@ -48,7 +48,7 @@ const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16
 /// `stem` through `Device::from_queries`.
 fn queried_device(stem: &str) -> Device {
     let desc = description(stem).expect("description");
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 fn queried(stem: &str) -> DeviceProfile {

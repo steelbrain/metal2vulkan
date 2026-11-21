@@ -226,9 +226,9 @@ pub fn assert_valid(m: TypedModule, profile: &DeviceProfile) -> Vec<u32> {
 }
 
 /// Every committed device profile (`validation/profiles/*.json`, read-only), derived through
-/// `Device::from_queries` with the default policy, sorted by file stem.
+/// `Device::from_queries` with the resident-table domains, sorted by file stem.
 pub fn committed_profiles() -> Result<Vec<(String, DeviceProfile)>, String> {
-    committed_profiles_under(DevicePolicy::default())
+    committed_profiles_under(DevicePolicy::RESIDENT_TABLES)
 }
 
 /// [`committed_profiles`] that take threadgroup memory: those with

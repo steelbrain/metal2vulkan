@@ -733,7 +733,7 @@ fn direct_recursion_makes_one_call_fewer_than_its_depth() {
     let Some(bitcode) = module() else {
         return;
     };
-    let p = profile("moltenvk-m3", Default::default()).expect("profile");
+    let p = profile("moltenvk-m3", crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
     for k in [1, 2, 8, 256] {
         let m = typed(&bitcode, DIRECT, k, &p);
         let ds = depths(k);
@@ -749,7 +749,7 @@ fn table_recursion_reaches_the_frames_metal_reaches() {
     let Some(bitcode) = module() else {
         return;
     };
-    let p = profile("moltenvk-m3", Default::default()).expect("profile");
+    let p = profile("moltenvk-m3", crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
     for (k, frames) in TABLE_FRAMES {
         let (pipe, handles) = pipeline(&bitcode, TABLE, k);
         let tables = table_inputs(&pipe, &handles);
@@ -775,7 +775,7 @@ fn a_recursive_frame_keeps_its_private_array() {
     let Some(bitcode) = module() else {
         return;
     };
-    let p = profile("moltenvk-m3", Default::default()).expect("profile");
+    let p = profile("moltenvk-m3", crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
     let (pipe, handles) = pipeline(&bitcode, BIG, 8);
     let tables = table_inputs(&pipe, &handles);
     let m = typed(&bitcode, BIG, 8, &p);
@@ -841,7 +841,7 @@ fn a_stack_past_metals_is_refused() {
     let Some(bitcode) = module() else {
         return;
     };
-    let p = profile("moltenvk-m3", Default::default()).expect("profile");
+    let p = profile("moltenvk-m3", crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
     let refused = Err(Error::LimitExceeded(Limit::CallStackBytes));
     let cases: [(&str, &[&str], u32); 7] = [
         (DIRECT, &["drec"], 16359),
@@ -881,7 +881,7 @@ fn stacks_past_the_device_s_function_storage_are_refused() {
     ];
     let mut wrong = Vec::new();
     for (stem, entry, fits, required, available) in cases {
-        let p = profile(stem, Default::default()).expect("profile");
+        let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         if let Err(e) = compile(&bitcode, entry, fits, &p) {
             wrong.push(format!("{stem} {entry} at {fits}: {e}"));
         }
@@ -900,7 +900,7 @@ fn depth_zero_is_depth_one() {
     let Some(bitcode) = module() else {
         return;
     };
-    let p = profile("moltenvk-m3", Default::default()).expect("profile");
+    let p = profile("moltenvk-m3", crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
     let ds = depths(3);
     let one = typed(&bitcode, DIRECT, 1, &p);
     let zero = typed(&bitcode, DIRECT, 0, &p);
@@ -1087,7 +1087,7 @@ fn recursion_through_a_pointer_passed_as_a_value_makes_one_call_fewer_than_its_d
     let Some(bitcode) = module() else {
         return;
     };
-    let p = profile("moltenvk-m3", Default::default()).expect("profile");
+    let p = profile("moltenvk-m3", crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
     let none = FunctionConstantValues::defaults();
     for list in [LinkedList::Functions, LinkedList::PrivateFunctions] {
         let mut linked = LinkedSource::new("prec", &bitcode, &none);

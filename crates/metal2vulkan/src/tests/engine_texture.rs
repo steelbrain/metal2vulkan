@@ -292,7 +292,7 @@ fn texel_buffers_are_buffer_images() {
     let Some(bc) = fixture("texture_ops") else {
         return;
     };
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let a = ok(compile(&bc, "texel_buffers", &p), &p, "texel_buffers");
     for i in [0, 1] {
         assert!(a.facts.contains(&RuntimeFact::TexelBufferRange {
@@ -532,7 +532,7 @@ fn a_half_texel_write_s_nan_into_wide_and_small_float_images_is_the_device_s() {
             .join(format!("{stem}.json"));
         let text = std::fs::read_to_string(&path).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        Device::from_queries(desc, DevicePolicy::default())
+        Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
             .expect("device")
             .profile()
             .clone()
@@ -719,7 +719,7 @@ fn without(stem: &str, drop: &[VkFeature]) -> DeviceProfile {
     for f in drop {
         desc.features.remove(f);
     }
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()
@@ -828,7 +828,7 @@ fn unmodelled_texture_forms_are_refused() {
             other => panic!("{stem}: write_lod {:?}", other.map(|_| ())),
         }
     }
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     // A read whose status word is read.
     let status = "%st = extractvalue { <4 x float>, i8 } %r, 1\n  %w = zext i8 %st to i32\n  store i32 %w, ptr addrspace(1) %out, align 4";
     let Some(bc) = assemble("status", &read_kernel(status)) else {
@@ -1232,7 +1232,7 @@ fn a_nil_textures_arm_is_counted_apart() {
         return;
     };
     for (stem, p) in
-        committed_profiles_with(crate::device::DevicePolicy::default()).expect("profiles")
+        committed_profiles_with(crate::device::DevicePolicy::RESIDENT_TABLES).expect("profiles")
     {
         let census = |name: &str| nil_census(&bc, name, &p, &stem);
         let direct = census("direct");

@@ -58,7 +58,7 @@ fn fixture() -> Option<Vec<u8>> {
 }
 
 fn prof(stem: &str) -> DeviceProfile {
-    profile(stem, DevicePolicy::default()).expect("committed profile")
+    profile(stem, DevicePolicy::RESIDENT_TABLES).expect("committed profile")
 }
 
 /// Link `a` alone, relocate it, and run L3; the relocated words.
@@ -202,7 +202,7 @@ fn a_fragment_primitive_id_takes_the_enabled_alternative() {
             F::ShaderTessellationAndGeometryPointSize,
             F::MultiviewTessellationShader,
         ],
-        DevicePolicy::default(),
+        DevicePolicy::RESIDENT_TABLES,
     )
     .expect("below the runtime's floor");
     let a = compile(&bc, "tail_fragment_primitive", &floor).expect("floor");
@@ -241,7 +241,7 @@ fn fragment_layer_and_viewport_inputs_take_the_enabled_alternatives() {
         validate(&a, &p);
     }
     let viewport = [F::ShaderOutputViewportIndex, F::MultiViewport];
-    let floor = profile_without("runtime-floor", &viewport, DevicePolicy::default())
+    let floor = profile_without("runtime-floor", &viewport, DevicePolicy::RESIDENT_TABLES)
         .expect("below the runtime's floor");
     let a = compile(&bc, "tail_fragment_layer", &floor).expect("floor");
     let io = &a.interface.io;
@@ -260,7 +260,7 @@ fn fragment_layer_and_viewport_inputs_take_the_enabled_alternatives() {
     let below = profile_without(
         "runtime-floor",
         &[viewport.as_slice(), &[F::ShaderOutputLayer]].concat(),
-        DevicePolicy::default(),
+        DevicePolicy::RESIDENT_TABLES,
     )
     .expect("below the runtime's floor");
     let a = compile(&bc, "tail_fragment_layer", &below).expect("below the floor");

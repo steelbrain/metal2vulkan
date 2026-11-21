@@ -158,7 +158,7 @@ fn asks(entry: &str, control: &[u32]) {
         return;
     };
     for stem in PROFILES {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         let what = format!("{entry} on {stem}");
         let a = compile(&bitcode, entry, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
         link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));

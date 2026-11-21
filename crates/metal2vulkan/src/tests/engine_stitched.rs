@@ -65,7 +65,7 @@ fn device() -> Device {
         .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 /// The stitched library holds `fused` and `fused4` as visible functions, each in its own module,
@@ -108,7 +108,7 @@ fn a_stitched_function_links_privately_or_not() {
 /// on the CPU interpreter.
 fn word(caller: &[u8], kernel: &str, (name, module): (&str, &[u8]), input: [f32; 4]) -> f32 {
     let none = FunctionConstantValues::defaults();
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let linked = [LinkedSource::new(name, module, &none)];
     let (_, m) = typed_module_linked(caller, kernel, &p, &linked).unwrap_or_else(|e| panic!("{e}"));
     let slot = |index| {

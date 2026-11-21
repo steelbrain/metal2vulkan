@@ -84,7 +84,7 @@ fn profile_without(stem: &str, robust: bool, features: &[VkFeature]) -> DevicePr
         desc.features.remove(&VkFeature::RobustBufferAccess);
         desc.features.remove(&VkFeature::RobustBufferAccess2);
     }
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()
@@ -862,7 +862,7 @@ fn narrow_stores_through_a_loaded_pointer_are_native_where_the_profile_has_the_a
             for f in removed {
                 desc.features.remove(f);
             }
-            let p = Device::from_queries(desc, DevicePolicy::default())
+            let p = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
                 .expect("device")
                 .profile()
                 .clone();

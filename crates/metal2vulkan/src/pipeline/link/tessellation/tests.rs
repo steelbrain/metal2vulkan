@@ -9,7 +9,7 @@ use crate::error::Needs;
 use crate::pipeline::interface::PatchDomain;
 
 fn profile(stem: &str) -> DeviceProfile {
-    crate::pipeline::testing::profile(stem, DevicePolicy::default()).expect("profile")
+    crate::pipeline::testing::profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile")
 }
 
 /// Committed profile `stem` with `maxTessellationGenerationLevel` edited to `level`.
@@ -24,7 +24,7 @@ fn profile_with_level(stem: &str, level: u32) -> DeviceProfile {
     );
     assert_ne!(edited, text, "{stem} states the level");
     let desc = DeviceDescription::from_khronos_json(&edited, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()

@@ -228,7 +228,7 @@ impl Rng {
 /// Kernel `entry` of `bc` specialized to variant `v` for profile `stem`, checked through L3: its
 /// plan and typed module.
 fn kernel(bc: &[u8], entry: &str, v: u32, stem: &str) -> Kernel {
-    let p = profile(stem, DevicePolicy::default()).expect("profile");
+    let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
     let consts = variant(v);
     let what = format!("{entry} variant {v} on {stem}");
     let a = compile_bitcode(
@@ -792,7 +792,7 @@ fn fp8_fused_sums((stem, widths): (&str, &[SubgroupSize])) {
     let Some(bc) = bitcode("tns_mm_fp8") else {
         return;
     };
-    let native = profile(stem, DevicePolicy::default())
+    let native = profile(stem, DevicePolicy::RESIDENT_TABLES)
         .expect("profile")
         .fields()
         .leaf
@@ -912,7 +912,7 @@ fn unmeasured_forms_are_refused_naming_them() {
         "i32 16, i32 64, i32 32",
         "16x64x32",
     )];
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     for (from, to, why) in cases {
         let Some(bc) = respelled("tns_mm_float", &[(from, to)]) else {
             return;

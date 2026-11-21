@@ -16,7 +16,7 @@ fn profile(stem: &str, features: &[VkFeature]) -> DeviceProfile {
     for f in features {
         desc.features.remove(f);
     }
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()
@@ -31,7 +31,7 @@ fn profile_with(stem: &str, features: &[VkFeature], flags2: bool) -> DeviceProfi
     for f in features {
         desc.features.remove(f);
     }
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()

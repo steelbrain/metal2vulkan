@@ -52,7 +52,7 @@ fn from_queries_derives_one_profile_whatever_the_identity() {
                 other.vendor_id = vendor;
                 other.device_id = device;
                 other.device_type = Some(kind);
-                Device::from_queries(other, DevicePolicy::default())
+                Device::from_queries(other, DevicePolicy::RESIDENT_TABLES)
                     .ok()
                     .map(|d| d.profile().clone())
             })
@@ -154,7 +154,7 @@ fn a_push_window_below_256_bytes_is_below_the_floor() {
     for stem in &below {
         let text = std::fs::read_to_string(dir.join(format!("{stem}.json"))).expect("readable");
         let description = DeviceDescription::from_khronos_json(&text, None).expect("parses");
-        match Device::from_queries(description, DevicePolicy::default()) {
+        match Device::from_queries(description, DevicePolicy::RESIDENT_TABLES) {
             Err(Error::Unsupported(u)) => {
                 assert_eq!(u.feature, Feature::PushWindow, "{stem}");
                 let limit = Capability::Limit {
@@ -168,7 +168,7 @@ fn a_push_window_below_256_bytes_is_below_the_floor() {
         }
     }
     for (stem, _) in committed_profiles() {
-        if let Err(e) = Device::from_queries(profile(&stem), DevicePolicy::default()) {
+        if let Err(e) = Device::from_queries(profile(&stem), DevicePolicy::RESIDENT_TABLES) {
             panic!("{stem} is committed but below the floor: {e}");
         }
     }
@@ -193,7 +193,7 @@ fn from_queries_records_the_device_denormals_of_a_float_product() {
     };
     let mut compiled = 0;
     for (stem, _) in committed_profiles() {
-        let Ok(device) = Device::from_queries(profile(&stem), DevicePolicy::default()) else {
+        let Ok(device) = Device::from_queries(profile(&stem), DevicePolicy::RESIDENT_TABLES) else {
             continue;
         };
         let a = compile(&bc, "mixed_products", device.profile())
@@ -253,7 +253,7 @@ fn from_queries_clears_a_narrow_value_by_an_and_on_ga10x() {
             .count();
         (ands, extracts)
     };
-    let queried = Device::from_queries(desc, DevicePolicy::default()).unwrap();
+    let queried = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).unwrap();
     let (ands, extracts) = counts(queried.profile());
     assert!(ands > 0, "from_queries: no AND");
     assert_eq!(extracts, 0, "from_queries: an extract");

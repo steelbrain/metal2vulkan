@@ -379,7 +379,7 @@ fn an_argument_buffer_texture_is_the_heap_member_its_owner_names() {
         }
         Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected handles.ll: {why}"),
     };
-    let device = device("moltenvk-m3", DevicePolicy::default());
+    let device = device("moltenvk-m3", DevicePolicy::RESIDENT_TABLES);
     let library = Library::from_air(&bitcode).unwrap();
     let function = FunctionDescriptor::new(library.function(&mapped.entry).unwrap());
     let shape = compute_shape(&mapped, true, BufferRanges::default()).unwrap();
@@ -559,7 +559,7 @@ fn a_pipeline_state_whose_bytes_a_kernel_reads_never_reaches_a_comparison() {
         let library = Library::from_air(&bitcode).unwrap();
         let function = FunctionDescriptor::new(library.function(entry).unwrap());
         for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
-            let device = device(stem, DevicePolicy::default());
+            let device = device(stem, DevicePolicy::RESIDENT_TABLES);
             for addressed in [false, true] {
                 let shape = compute_shape(&mapped, addressed, BufferRanges::default()).unwrap();
                 let compiled = variants::compile_compute_for_shape(
@@ -694,7 +694,7 @@ fn an_argument_buffer_sampler_is_the_sampler_table_entry_its_owner_names() {
             panic!("llvm-as rejected tail_argument_samplers.ll: {why}")
         }
     };
-    let device = device("moltenvk-m3", DevicePolicy::default());
+    let device = device("moltenvk-m3", DevicePolicy::RESIDENT_TABLES);
     let library = Library::from_air(&bitcode).unwrap();
     let function = FunctionDescriptor::new(library.function(&mapped.entry).unwrap());
     let shape = compute_shape(&mapped, true, BufferRanges::default()).unwrap();

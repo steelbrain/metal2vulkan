@@ -181,8 +181,8 @@ fn a_function_applied_twice_is_compiled_once_on_every_profile() {
     let Some(bitcode) = assembled() else {
         return;
     };
-    let floor = profile("runtime-floor", DevicePolicy::default()).expect("profile");
-    let mvk = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let floor = profile("runtime-floor", DevicePolicy::RESIDENT_TABLES).expect("profile");
+    let mvk = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     // Both compile the AIR inliner's two copies, and both roll them.
     let want = [body(1.0).to_bits(), body(2.0).to_bits()];
     for (p, stem) in [(&floor, "runtime-floor"), (&mvk, "moltenvk-m3")] {
@@ -225,8 +225,8 @@ fn a_chain_of_applications_and_one_by_lane_are_compiled_once_on_every_profile() 
     let Some(bitcode) = assembled() else {
         return;
     };
-    let floor = profile("runtime-floor", DevicePolicy::default()).expect("profile");
-    let mvk = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let floor = profile("runtime-floor", DevicePolicy::RESIDENT_TABLES).expect("profile");
+    let mvk = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let chained = (1..=CHAIN).fold(X, |v, j| apply(v, j as f32));
     let lanes = [0.25f32, 1.0, 2.75, 3.5];
     let cases: [(&str, Vec<u32>, Vec<u32>); 2] = [

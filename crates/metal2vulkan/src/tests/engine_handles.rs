@@ -112,7 +112,7 @@ fn assemble(name: &str, body: &str) -> Option<Vec<u8>> {
 }
 
 fn m3() -> DeviceProfile {
-    profile("moltenvk-m3", DevicePolicy::default()).expect("profile")
+    profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile")
 }
 
 fn ok(bc: &[u8], entry: &str, p: &DeviceProfile) -> std::sync::Arc<FunctionArtifact> {
@@ -681,7 +681,7 @@ fn without_robust_images(stem: &str) -> DeviceProfile {
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     desc.features.remove(&VkFeature::RobustImageAccess);
     desc.features.remove(&VkFeature::RobustImageAccess2);
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()
@@ -850,7 +850,7 @@ fn a_heap_storage_access_converts_the_members_its_heap_views_through_an_alias() 
         return;
     };
     for (stem, red_blue) in [("lavapipe", true), ("moltenvk-m3", false)] {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         let (plan, _) = typed_module(&bc, "heap_rw", &p).expect("heap_rw");
         assert_eq!(plan.families.access.heap_red_blue, red_blue, "{stem}");
         let a = ok(&bc, "heap_rw", &p);
@@ -1504,7 +1504,7 @@ fn m3_device() -> Device {
         .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 /// A render pipeline whose vertex and fragment functions both read a texture from an argument
@@ -4533,7 +4533,7 @@ fn an_argument_sampler_array_has_the_heap_sampler_capacity() {
     // The answer on `desc`, and the element count of the kernel's set-1 sampler array or the
     // kernel's refusal.
     let array = |desc: DeviceDescription| -> (u32, Result<u32, Error>) {
-        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
         let f = library.function("argument_sampler_sample").expect("entry");
         let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
         let count = dev
@@ -4606,7 +4606,7 @@ fn only_non_fragment_stages_test_argument_samplers_for_a_cubic_filter() {
     };
     let (mut compiled, mut bound) = (0, 0);
     let mut profiles = committed_profiles().expect("profiles");
-    let f = crate::pipeline::testing::device_f(DevicePolicy::default()).expect("Profile F");
+    let f = crate::pipeline::testing::device_f(DevicePolicy::RESIDENT_TABLES).expect("Profile F");
     profiles.push((PROFILE_F.to_string(), f.profile().clone()));
     for (stem, p) in profiles {
         let (Ok(kernel), Ok(fragment)) = (
@@ -4653,7 +4653,7 @@ fn the_cubic_tests_binding_gives_way_to_the_storage_buffer_limit() {
         if limit < u32::MAX {
             desc.limits.max_per_stage_descriptor_storage_buffers = limit;
         }
-        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("profile");
+        let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("profile");
         dev.profile().clone()
     };
     let full = with_storage(u32::MAX);

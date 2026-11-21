@@ -61,7 +61,7 @@ fn bitcode() -> Option<Vec<u8>> {
 }
 
 fn lavapipe() -> DeviceProfile {
-    profile("lavapipe", DevicePolicy::default()).expect("profile")
+    profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("profile")
 }
 
 /// The rows variant's inputs: slot 0's rows.

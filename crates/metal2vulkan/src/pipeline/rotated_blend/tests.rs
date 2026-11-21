@@ -189,7 +189,7 @@ fn attachment(
 }
 
 fn moltenvk() -> DeviceProfile {
-    profile("moltenvk-m3", DevicePolicy::default()).expect("profile")
+    profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile")
 }
 
 /// Every pair of Metal's color factors, under alpha factors that read nothing, the source's or
@@ -391,7 +391,7 @@ fn a_second_output_needs_dual_source_blending() {
     let text = std::fs::read_to_string(path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     assert!(desc.features.remove(&VkFeature::DualSrcBlend));
-    let p = Device::from_queries(desc, DevicePolicy::default())
+    let p = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone();
@@ -495,7 +495,7 @@ const LANE: [([BlendFactor; 4], BlendOperation); 11] = {
 #[test]
 fn the_lane_s_blends_store_metal_s_rotated() {
     let mvk = moltenvk();
-    let lvp = profile("lavapipe", DevicePolicy::default()).expect("profile");
+    let lvp = profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("profile");
     for (i, &([sr, dr, sa, da], op)) in LANE.iter().enumerate() {
         let a = attachment((sr, dr, op), (sa, da, op));
         let on_mvk = rotated_blend(&a, &mvk).expect("admitted").expect("blended");
@@ -516,7 +516,7 @@ fn inexact_blends_are_announced() {
     use BlendFactor as F;
     use BlendOperation as O;
     let mvk = moltenvk();
-    let lvp = profile("lavapipe", DevicePolicy::default()).expect("profile");
+    let lvp = profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("profile");
     // Metal's color kept and its alpha replaced: in the 440-state sweep, 902 of 65,536 texels
     // apart on the M4.
     let kept = attachment((F::Zero, F::One, O::Add), (F::One, F::Zero, O::Add));

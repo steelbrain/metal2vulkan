@@ -93,7 +93,7 @@ fn device_of(mut desc: DeviceDescription, bare: bool) -> Device {
         desc.features.remove(&VkFeature::RobustBufferAccess);
         desc.features.remove(&VkFeature::RobustBufferAccess2);
     }
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 /// Each profile of [`PROFILES`] and Profile F (`runtime-floor` without device addresses, below

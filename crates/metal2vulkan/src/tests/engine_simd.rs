@@ -53,7 +53,7 @@ pub(super) fn wave64() -> DeviceProfile {
     let narrowed = text.replace("\"minSubgroupSize\": 32", "\"minSubgroupSize\": 64");
     assert_ne!(narrowed, text, "the description names minSubgroupSize");
     let desc = DeviceDescription::from_khronos_json(&narrowed, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()
@@ -68,7 +68,7 @@ fn moltenvk_without_int64() -> DeviceProfile {
     let cleared = text.replace("\"shaderInt64\": true", "\"shaderInt64\": false");
     assert_ne!(cleared, text, "the description names shaderInt64");
     let desc = DeviceDescription::from_khronos_json(&cleared, None).expect("description");
-    let p = Device::from_queries(desc, DevicePolicy::default())
+    let p = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone();
@@ -77,7 +77,7 @@ fn moltenvk_without_int64() -> DeviceProfile {
 }
 
 fn moltenvk() -> DeviceProfile {
-    profile("moltenvk-m3", DevicePolicy::default()).expect("profile")
+    profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile")
 }
 
 /// Every word of buffer 0 after one workgroup of local size `local` ran `m` (planned as `plan`)
@@ -356,7 +356,7 @@ fn moltenvk_without_quads() -> DeviceProfile {
     let cleared = text.replace("\"VK_SUBGROUP_FEATURE_QUAD_BIT\",", "");
     assert_ne!(cleared, text, "the description lists the quad class");
     let desc = DeviceDescription::from_khronos_json(&cleared, None).expect("description");
-    let p = Device::from_queries(desc, DevicePolicy::default())
+    let p = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone();
@@ -580,7 +580,7 @@ fn a_device_that_cannot_pin_the_stage_refuses_a_pinned_kernel() {
     );
     let nvk = |text: &str| {
         let desc = DeviceDescription::from_khronos_json(text, None).expect("description");
-        Device::from_queries(desc, DevicePolicy::default())
+        Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
             .expect("device")
             .profile()
             .clone()
@@ -638,7 +638,7 @@ fn reconvergence_follows_the_profile() {
     assert_eq!(a.reconvergence, Reconvergence::Guaranteed);
     assert!(!a.precision.contains(&PrecisionNote::DeviceReconvergence));
 
-    let pascal = profile("nvidia-pascal-linux", DevicePolicy::default()).expect("profile");
+    let pascal = profile("nvidia-pascal-linux", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let sg = pascal.fields().subgroup;
     assert!(!sg.maximal_reconvergence && !sg.uniform_control_flow);
     let a = compile(&bc, "simd_vote_k", &pascal).expect("compile");
@@ -906,7 +906,7 @@ fn uniform_control_flow_mode_without_maximal_reconvergence() {
         "the description names shaderMaximalReconvergence"
     );
     let desc = DeviceDescription::from_khronos_json(&cleared, None).expect("description");
-    let p = Device::from_queries(desc, DevicePolicy::default())
+    let p = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone();
@@ -1321,12 +1321,12 @@ fn float_group_arithmetic_without_fast_flags_keeps_signed_zeros() {
         ("wave64", wave64(), Tier::Cluster32),
         (
             "lavapipe",
-            profile("lavapipe", DevicePolicy::default()).expect("profile"),
+            profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("profile"),
             Tier::Emulated,
         ),
         (
             "runtime-floor",
-            profile("runtime-floor", DevicePolicy::default()).expect("profile"),
+            profile("runtime-floor", DevicePolicy::RESIDENT_TABLES).expect("profile"),
             Tier::Emulated,
         ),
     ];
@@ -1406,7 +1406,7 @@ fn vertex_lane_reads_take_lanes_past_the_draw_as_zero() {
         ("amd-780m-radv", Tier::Cluster32, SubgroupSize::W64),
         ("nvidia-rtx5080-laptop", Tier::Direct, SubgroupSize::W32),
     ] {
-        let p = profile(stem, DevicePolicy::default()).expect("profile");
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         let (a, plan, m) = compile_kept(&bc, entry, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
         link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
         assert_eq!(plan.simd.1, tier, "{stem}");
@@ -1552,7 +1552,7 @@ fn a_device_without_quad_control_refuses_full_quads() {
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     assert!(!desc.features.contains(&VkFeature::ShaderQuadControl));
     assert!(!desc.extensions.contains(&VkExtension::KhrShaderQuadControl));
-    let without = Device::from_queries(desc, DevicePolicy::default())
+    let without = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone();

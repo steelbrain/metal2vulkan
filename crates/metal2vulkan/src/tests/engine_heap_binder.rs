@@ -117,7 +117,7 @@ fn m3() -> Device {
         .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 fn compute(dev: &Device, bc: &[u8], entry: &str) -> ComputePipeline {
@@ -630,7 +630,7 @@ fn heap_plans_are_total_on_the_committed_profiles() {
             .join(format!("{stem}.json"));
         let text = std::fs::read_to_string(path).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
         let lib = Library::from_air(&bc).expect("library");
         let f = lib.function("argument_buffer_read").expect("entry");
         let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
@@ -1464,7 +1464,7 @@ fn heap_samplers_need_the_filter_features_of_every_held_member() {
             .join(format!("{stem}.json"));
         let text = std::fs::read_to_string(path).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
         let lib = Library::from_air(&bc).expect("library");
         let filters = p.supports_format(
             vk::Format::R32_SFLOAT,
@@ -1968,7 +1968,7 @@ fn a_member_read_anywhere_types_its_queries() {
     let Some(bc) = assemble("heap_query", QUERY_KERNELS) else {
         return;
     };
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let a = compile(&bc, "heap_query", &p).expect("heap_query");
     link_and_validate(&a, &p).expect("L3");
     let classes = heap_classes_of(&a);
@@ -2303,8 +2303,8 @@ fn a_cube_gradient_use_takes_an_anisotropic_argument_sampler_by_its_word() {
         .expect("profiles")
         .into_iter()
         .map(|(stem, _)| {
-            let dev =
-                Device::from_queries(description(&stem), DevicePolicy::default()).expect("device");
+            let dev = Device::from_queries(description(&stem), DevicePolicy::RESIDENT_TABLES)
+                .expect("device");
             (stem, dev)
         })
         .collect();

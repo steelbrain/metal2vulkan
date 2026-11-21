@@ -83,7 +83,7 @@ fn without_offset_operand(stem: &str) -> DeviceProfile {
     let mut desc = description(stem).expect("description");
     desc.features.remove(&VkFeature::Maintenance8);
     desc.features.remove(&VkFeature::ShaderImageGatherExtended);
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()
@@ -170,7 +170,7 @@ fn the_fixture_takes_arms_without_the_offset_operand() {
         );
     }
     // With the features, the `Offset` operand as before.
-    let p = profile("amd-780m-radv", DevicePolicy::default()).expect("profile");
+    let p = profile("amd-780m-radv", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let a = compile(&bc, "a2_dynamic_texel_offset", &p).expect("compile");
     let (_, words) = link_and_validate(&a, &p).expect("L3");
     assert!(has_offset_operand(&words));
@@ -286,7 +286,8 @@ fn a_constant_lane_is_not_switched_on() {
     let Some(bc) = assemble("constant", &samples_kernel(1, OffsetShape::Constant)) else {
         return;
     };
-    let with_operand_features = profile("amd-780m-radv", DevicePolicy::default()).expect("radv");
+    let with_operand_features =
+        profile("amd-780m-radv", DevicePolicy::RESIDENT_TABLES).expect("radv");
     let profiles = armed_profiles()
         .into_iter()
         .chain([("amd-780m-radv", with_operand_features)]);
@@ -369,7 +370,8 @@ declare {{ <4 x float>, i8 }} @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr
 /// is missing.
 #[test]
 fn a_filter_nest_of_decided_counters_has_constant_offsets() {
-    let with_operand_features = profile("amd-780m-radv", DevicePolicy::default()).expect("radv");
+    let with_operand_features =
+        profile("amd-780m-radv", DevicePolicy::RESIDENT_TABLES).expect("radv");
     let profiles = || {
         armed_profiles()
             .into_iter()
@@ -508,7 +510,7 @@ fn a_fragment_takes_its_derivatives_before_the_arms() {
         ("runtime_sampler", "0.000000e+00", true),
         ("runtime_dynamic_bias", "%bias", true),
     ];
-    let full = profile("amd-780m-radv", DevicePolicy::default()).expect("profile");
+    let full = profile("amd-780m-radv", DevicePolicy::RESIDENT_TABLES).expect("profile");
     for (shape, bias, runtime) in shapes {
         let Some(bc) = assemble(shape, &offset_fragment(bias, runtime)) else {
             return;

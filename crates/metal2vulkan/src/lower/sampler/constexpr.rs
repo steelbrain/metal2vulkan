@@ -314,7 +314,7 @@ mod tests {
     use crate::error::Needs;
 
     fn profile(stem: &str) -> DeviceProfile {
-        crate::pipeline::testing::profile(stem, DevicePolicy::default()).expect("profile")
+        crate::pipeline::testing::profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile")
     }
 
     /// The words of the public fixtures' constexpr samplers (bit 63 clear).

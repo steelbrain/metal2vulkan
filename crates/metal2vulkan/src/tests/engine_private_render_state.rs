@@ -58,7 +58,7 @@ fn fixture(stem: &str) -> Option<Library> {
 }
 
 fn device(stem: &str) -> Device {
-    device_with(stem, DevicePolicy::default())
+    device_with(stem, DevicePolicy::RESIDENT_TABLES)
 }
 
 fn device_with(stem: &str, policy: DevicePolicy) -> Device {
@@ -872,7 +872,7 @@ fn device_without(stem: &str, features: &[&str]) -> Device {
         text = text.replace(&on, &format!("\"{f}\": false"));
     }
     let description = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::from_queries(description, DevicePolicy::default()).expect("device")
+    Device::from_queries(description, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 /// Assert that pipeline `p` draws its logic operation in its fragment function: no Vulkan

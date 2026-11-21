@@ -154,7 +154,7 @@ attributes #0 = { convergent mustprogress nounwind willreturn }
 /// `stem` through `Device::from_queries`.
 fn queried(stem: &str) -> DeviceProfile {
     let desc = description(stem).expect("description");
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()
@@ -330,7 +330,7 @@ fn a_profile_without_zeroed_workgroup_memory_refuses_threadgroup_memory_through_
     let mut desc = description("runtime-floor").expect("description");
     desc.features
         .remove(&VkFeature::ShaderZeroInitializeWorkgroupMemory);
-    let prof = Device::from_queries(desc, DevicePolicy::default())
+    let prof = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone();

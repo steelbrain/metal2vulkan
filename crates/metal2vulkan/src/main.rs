@@ -55,7 +55,8 @@ options:
   --device FILE            the target device as a description and a policy: the JSON form of
                            metal2vulkan::device::DeviceDescription and DevicePolicy,
                            {"description": ..., "policy": ...}, in place of --profile (a
-                           runtime's compile device; --profile takes the default domains)
+                           runtime's compile device; --profile takes the runtime's policy,
+                           the identity domains)
   --function NAME          the kernel or vertex function (default: the library's only one)
   --fragment NAME          the fragment function of a render pipeline
   --constant ID:TYPE:VALUE function-constant value (repeatable): ID is an index or a name, TYPE a

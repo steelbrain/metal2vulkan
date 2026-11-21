@@ -208,7 +208,8 @@ fn compile_cost_grows_linearly_with_the_block_count() {
         .join("../metal2vulkan-validation/profiles/runtime-floor.json");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let description = DeviceDescription::from_khronos_json(&text, None).expect("runtime-floor");
-    let device = Device::from_queries(description, DevicePolicy::default()).expect("runtime-floor");
+    let device =
+        Device::from_queries(description, DevicePolicy::RESIDENT_TABLES).expect("runtime-floor");
     let Some(small) = assemble(&irreducible_chain(SMALL)) else {
         return;
     };

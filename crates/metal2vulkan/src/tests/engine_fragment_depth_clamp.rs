@@ -56,7 +56,7 @@ fn profile(stem: &str, unrestricted: bool) -> DeviceProfile {
         desc.extensions
             .remove(&VkExtension::ExtDepthRangeUnrestricted);
     }
-    let p = Device::from_queries(desc, DevicePolicy::default())
+    let p = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone();
@@ -169,7 +169,7 @@ fn a_positive_nan_depth_kills_on_every_profile() {
         "moltenvk-m3",
         "intel-irisxe-rplp-anv",
     ] {
-        let p = crate::pipeline::testing::profile(stem, DevicePolicy::default()).expect(stem);
+        let p = crate::pipeline::testing::profile(stem, DevicePolicy::RESIDENT_TABLES).expect(stem);
         for (entry, expected) in [("rfb_depth", 1), ("rfb_full", 0), ("rfb_position", 0)] {
             let a = compile_with(&bc, entry, &p, &inputs)
                 .unwrap_or_else(|e| panic!("{stem} {entry}: {e}"));
@@ -206,7 +206,7 @@ fn a_depth_clamp_range_variant_clamps_the_depth_to_the_draws_range() {
         "moltenvk-m3",
         "intel-irisxe-rplp-anv",
     ] {
-        let p = crate::pipeline::testing::profile(stem, DevicePolicy::default()).expect(stem);
+        let p = crate::pipeline::testing::profile(stem, DevicePolicy::RESIDENT_TABLES).expect(stem);
         for entry in ["rfb_full", "rfb_position"] {
             let with = compile_with(&bc, entry, &p, &ranged)
                 .unwrap_or_else(|e| panic!("{stem} {entry}: {e}"));
@@ -294,7 +294,7 @@ fn a_depth_clamp_range_draw_runs_the_variant_with_the_states_range() {
             .join(format!("{stem}.json"));
         let text = std::fs::read_to_string(path).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+        let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
         for (fragment, writes) in [("rfb_depth", true), ("rfb_position", false)] {
             let what = format!("{stem} {fragment}");
             let mut d = RenderPipelineDescriptor::new(function("rfb_full"));

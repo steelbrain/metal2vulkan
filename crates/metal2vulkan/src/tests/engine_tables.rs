@@ -64,7 +64,7 @@ fn device(stem: &str) -> Device {
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::default()).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 /// The four functions of the functions module, in `functions` in [`LINKED`] order.
@@ -81,7 +81,7 @@ fn compile(
     linked: &[LinkedSource<'_>],
     stem: &str,
 ) -> Result<std::sync::Arc<crate::library::FunctionArtifact>, Error> {
-    let p = profile(stem, DevicePolicy::default()).expect("profile");
+    let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
     compile_bitcode_linked(
         caller,
         EntryRef::Name(entry),
@@ -148,7 +148,7 @@ fn a_table_call_without_a_function_of_its_type_reads_null_entries() {
     };
     let none = FunctionConstantValues::defaults();
     let half = [LinkedSource::new("table_half", &functions, &none)];
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let two = FunctionTableWords::new(2).to_bytes();
     let empty: &[LinkedSource<'_>] = &[];
     for linked in [empty, &half] {
@@ -225,7 +225,7 @@ fn a_table_call_calls_the_entry_the_table_holds() {
     };
     let none = FunctionConstantValues::defaults();
     let linked = sources(&functions, &none);
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let (_, m) = typed_module_linked(&caller, TABLE, &p, &linked).expect("module");
     const N: u32 = 40;
     let mut table = FunctionTableWords::new(5);
@@ -280,7 +280,7 @@ fn a_table_holds_a_binary_function_of_another_s_name() {
     let lib = Library::from_air(&functions).expect("library");
     let other_lib = Library::from_air(&other).expect("library");
     let none = FunctionConstantValues::defaults();
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let own = LinkedFunction::new(lib.function("table_add").expect("function"));
     let others = LinkedFunction::new(other_lib.function("table_add").expect("function"));
     const N: u32 = 8;
@@ -332,7 +332,7 @@ fn null_and_empty_tables_are_observed() {
     };
     let none = FunctionConstantValues::defaults();
     let linked = sources(&functions, &none);
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let (_, m) = typed_module_linked(&caller, TABLE, &p, &linked).expect("module");
     assert_eq!(dispatch(&m, 4, None), [0xffff_ffff; 4]);
     let empty = FunctionTableWords::new(0).to_bytes();
@@ -348,7 +348,7 @@ fn a_function_pointer_argument_calls_its_function() {
     };
     let none = FunctionConstantValues::defaults();
     let linked = sources(&functions, &none);
-    let p = profile("moltenvk-m3", DevicePolicy::default()).expect("profile");
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let (_, m) = typed_module_linked(&caller, POINTER, &p, &linked).expect("module");
     const N: u32 = 32;
     let res = Resources {

@@ -74,7 +74,7 @@ fn owned() -> Option<Vec<u8>> {
 }
 
 fn moltenvk() -> DeviceProfile {
-    profile("moltenvk-m3", DevicePolicy::default()).expect("profile")
+    profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile")
 }
 
 /// A wave64-only compute device: the committed RDNA3 description with its subgroup size range
@@ -86,7 +86,7 @@ fn wave64() -> DeviceProfile {
     let narrowed = text.replace("\"minSubgroupSize\": 32", "\"minSubgroupSize\": 64");
     assert_ne!(narrowed, text, "the description names minSubgroupSize");
     let desc = DeviceDescription::from_khronos_json(&narrowed, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()
@@ -97,7 +97,7 @@ fn wave64() -> DeviceProfile {
 /// them), which cannot pin 32 lanes, emulate their simdgroups through workgroup memory, here on 8-
 /// and 16-lane subgroups.
 fn tiers() -> [(DeviceProfile, Tier, SubgroupSize, &'static [u32]); 4] {
-    let committed = |stem| profile(stem, DevicePolicy::default()).expect("profile");
+    let committed = |stem| profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
     [
         (moltenvk(), Tier::Direct, SubgroupSize::W32, &[32, 64]),
         (wave64(), Tier::Cluster32, SubgroupSize::W64, &[64]),
@@ -117,7 +117,7 @@ fn floor_words() -> DeviceProfile {
     crate::pipeline::testing::profile_without(
         "runtime-floor",
         &[VkFeature::ShaderInt64],
-        DevicePolicy::default(),
+        DevicePolicy::RESIDENT_TABLES,
     )
     .expect("below the runtime's floor")
 }
@@ -130,7 +130,7 @@ fn moltenvk_words() -> DeviceProfile {
     let text = std::fs::read_to_string(&path).expect("read the MoltenVK description");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     assert!(desc.features.remove(&VkFeature::ShaderInt64));
-    let p = Device::from_queries(desc, DevicePolicy::default())
+    let p = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone();
@@ -657,7 +657,7 @@ fn fp8_factors_multiply_exactly() {
         let want = mad(&a, &b, &[[0.0; 8]; 8]);
         let mut input = ab.clone();
         input.extend(&bb);
-        let rtx50 = profile("nvidia-rtx50-linux", DevicePolicy::default()).expect("profile");
+        let rtx50 = profile("nvidia-rtx50-linux", DevicePolicy::RESIDENT_TABLES).expect("profile");
         let one: &'static [u32] = &[32];
         let runs = tiers()
             .into_iter()
@@ -1426,7 +1426,7 @@ fn a_shuffle_into_a_fragment_moves_only_its_two_elements() {
 /// fragments (2 KiB); held whole it is 64 KiB, refused.
 #[test]
 fn matrices_held_as_fragments_count_their_two_elements() {
-    let p = profile("nvidia-rtx5080-laptop", DevicePolicy::default()).expect("profile");
+    let p = profile("nvidia-rtx5080-laptop", DevicePolicy::RESIDENT_TABLES).expect("profile");
     for spoil in [false, true] {
         let name = if spoil {
             "matrices_whole"

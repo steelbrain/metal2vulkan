@@ -742,7 +742,7 @@ fn thread_memory_is_contained_by_the_typed_arrays_check_only() {
             attributes: &BTreeMap::new(),
             resident_roots: true,
             handle_table: true,
-            policy: DevicePolicy::default(),
+            policy: DevicePolicy::RESIDENT_TABLES,
             strategies: &strategies,
         };
         let target = OutOfBoundsTarget {
@@ -903,12 +903,12 @@ fn the_identity_domains_leave_a_loaded_pointer_unchecked_and_mask_a_resource_id(
         ReadRule::ResidentTexels
     );
     assert!(
-        containment(&pointer, &module(DevicePolicy::default()), profile)
+        containment(&pointer, &module(DevicePolicy::RESIDENT_TABLES), profile)
             .unwrap_err()
             .contains("no memory through a pointer loaded")
     );
     assert!(
-        containment(&handles, &module(DevicePolicy::default()), profile)
+        containment(&handles, &module(DevicePolicy::RESIDENT_TABLES), profile)
             .unwrap_err()
             .contains("resolves no handle")
     );
@@ -954,7 +954,7 @@ fn a_draws_targets_are_contained_by_their_fetch() {
             attributes,
             resident_roots: false,
             handle_table: false,
-            policy: DevicePolicy::default(),
+            policy: DevicePolicy::RESIDENT_TABLES,
             strategies,
         };
         let target = OutOfBoundsTarget {

@@ -59,7 +59,7 @@ fn profiles() -> Vec<(String, DeviceProfile)> {
     for stem in PROFILES {
         out.push((
             stem.to_owned(),
-            profile(stem, DevicePolicy::default()).expect("profile"),
+            profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile"),
         ));
         out.push((format!("{stem} unrobust"), variant(stem, true, false)));
     }
@@ -80,7 +80,7 @@ fn variant(stem: &str, unrobust: bool, no_int64: bool) -> DeviceProfile {
     if no_int64 {
         desc.features.remove(&VkFeature::ShaderInt64);
     }
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()

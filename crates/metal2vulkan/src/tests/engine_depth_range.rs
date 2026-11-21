@@ -177,7 +177,7 @@ fn the_extension_is_read_from_the_device_description() {
         ("intel-irisxe-anv", false),
         ("runtime-floor", false),
     ] {
-        let p = profile(stem, DevicePolicy::default()).expect(stem);
+        let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect(stem);
         assert_eq!(unrestricted(&p), listed, "{stem}");
     }
 }
@@ -192,15 +192,15 @@ fn depth_comparisons_record_the_restricted_range_without_the_extension() {
     let profiles = [
         (
             "radv",
-            profile("amd-rdna3-radv", DevicePolicy::default()).expect("radv"),
+            profile("amd-rdna3-radv", DevicePolicy::RESIDENT_TABLES).expect("radv"),
         ),
         (
             "anv",
-            profile("intel-irisxe-anv", DevicePolicy::default()).expect("anv"),
+            profile("intel-irisxe-anv", DevicePolicy::RESIDENT_TABLES).expect("anv"),
         ),
         (
             "m3",
-            profile("moltenvk-m3", DevicePolicy::default()).expect("m3"),
+            profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("m3"),
         ),
     ];
     let [(_, radv), (_, anv), (_, m3)] = &profiles;

@@ -445,11 +445,14 @@ pub enum BufferAccess {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PointerDomain {
-    /// The sorted resident set of bound arguments and used resources.
+    /// The sorted resident set of bound arguments and used resources. It exists for the
+    /// validation executor only
+    /// ([`DevicePolicy::RESIDENT_TABLES`](crate::device::DevicePolicy::RESIDENT_TABLES)), which
+    /// builds the resident root itself.
     ResidentTable,
     /// Pointers are device addresses used directly: a `device` or `constant` pointer is the
     /// 64-bit Vulkan device address of the byte it names, as Metal's `gpuAddress` is, and a
-    /// buffer slot is reached at its own address, pushed, uncontained, and a pointer loaded from
+    /// buffer slot is reached at its own address, pushed, and a pointer loaded from
     /// memory or made from an integer is the address it holds, used directly. Needs
     /// `bufferDeviceAddress` and `shaderInt64`. So far it lowers a kernel that reaches memory
     /// only through its buffer slots and such addresses, and, on `Device::from_queries`' profile,
@@ -464,12 +467,14 @@ pub enum PointerDomain {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum HandleDomain {
-    /// The handle table plus the set-1 heap.
+    /// The handle table plus the set-1 heap. It exists for the validation executor only
+    /// ([`DevicePolicy::RESIDENT_TABLES`](crate::device::DevicePolicy::RESIDENT_TABLES)), which
+    /// builds the handle table itself.
     Table,
     /// A texture's or sampler's handle is its `gpuResourceID`: the low 32 bits index the
     /// pipeline's descriptor arrays and the high 32 bits are the word of its Metal descriptor
-    /// (`docs/RESOURCE-ID.md`). No function that reads a texture or a sampler compiles under it
-    /// yet: it is refused as [`Feature::IdentityDomains`](crate::error::Feature::IdentityDomains).
+    /// (`docs/RESOURCE-ID.md`). A texture or sampler use with no form under it is refused as
+    /// [`Feature::IdentityDomains`](crate::error::Feature::IdentityDomains).
     Identity,
 }
 

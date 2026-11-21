@@ -80,7 +80,7 @@ type Spoil = (&'static str, fn(&mut Params));
 /// The committed profiles with device addresses, and those without.
 fn profiles() -> (Profiles, Profiles) {
     let mut all = committed_profiles().expect("profiles");
-    let f = device_f(crate::device::DevicePolicy::default()).expect(PROFILE_F);
+    let f = device_f(crate::device::DevicePolicy::RESIDENT_TABLES).expect(PROFILE_F);
     all.push((PROFILE_F.into(), f.profile().clone()));
     all.into_iter()
         .partition(|(_, p)| p.fields().buffer_access == BufferAccess::Addressed)

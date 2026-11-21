@@ -74,7 +74,7 @@ struct Kernel {
 
 /// Kernel `entry` of `bc` for profile `stem`, checked through L3: its plan and typed module.
 fn kernel(bc: &[u8], entry: &str, stem: &str) -> Kernel {
-    let p = profile(stem, DevicePolicy::default()).expect("profile");
+    let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
     let consts = FunctionConstantValues::defaults();
     let what = format!("{entry} on {stem}");
     let a = compile_bitcode(

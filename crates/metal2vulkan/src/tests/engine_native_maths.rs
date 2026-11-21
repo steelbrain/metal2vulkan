@@ -216,7 +216,7 @@ fn each_kernel_records_its_kind() {
     let Some(bc) = bitcode() else {
         return;
     };
-    let p = profile("lavapipe", DevicePolicy::default()).expect("profile");
+    let p = profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("profile");
     for k in &KERNELS {
         let a = compile(&bc, k.name, &p).unwrap_or_else(|e| panic!("{}: {e:?}", k.name));
         link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{}: L3: {e}", k.name));
@@ -238,7 +238,7 @@ fn the_maths_functions_are_within_their_bounds() {
     let Some(bc) = bitcode() else {
         return;
     };
-    let p = profile("lavapipe", DevicePolicy::default()).expect("lavapipe");
+    let p = profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("lavapipe");
     for (a, b) in [(1.0f32, 3.0f32), (-3.0, 0.7), (0.75, -4.1), (1e-30, 3e7)] {
         for div in ["native_fdiv", "native_fdiv_arcp"] {
             let q = interpret(&bc, div, &p, [a, b, 0.0]);
@@ -266,7 +266,7 @@ fn the_nan_and_min_max_are_the_device_s() {
     let Some(bc) = bitcode() else {
         return;
     };
-    let p = profile("lavapipe", DevicePolicy::default()).expect("lavapipe");
+    let p = profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("lavapipe");
     let nan = f32::from_bits(0x7fc0_1234);
     for name in ["native_fadd", "native_fdiv", "native_fdiv_arcp"] {
         assert!(interpret(&bc, name, &p, [nan, 1.0, 0.0]).is_nan(), "{name}");
@@ -317,8 +317,8 @@ fn dot_mix_and_fast_sqrt_are_the_device_s_on_every_profile() {
     let Some(bc) = bitcode() else {
         return;
     };
-    let on = profile("lavapipe", DevicePolicy::default()).expect("lavapipe");
-    let metal = profile("moltenvk-m3", DevicePolicy::default()).expect("moltenvk-m3");
+    let on = profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("lavapipe");
+    let metal = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("moltenvk-m3");
     let (fma, fmix, sqrt) = (
         crate::spv::GlslStd450Op::Fma as u32,
         crate::spv::GlslStd450Op::FMix as u32,

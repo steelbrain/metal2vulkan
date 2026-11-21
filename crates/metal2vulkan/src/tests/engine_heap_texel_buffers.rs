@@ -86,7 +86,7 @@ fn a_texture_buffer_argument_is_a_texel_buffer_heap_class() {
     let mut desc = description("nvidia-rtx50-linux").expect("description");
     desc.features
         .remove(&VkFeature::DescriptorBindingUniformTexelBufferUpdateAfterBind);
-    let device = Device::from_queries(desc, DevicePolicy::default()).expect("device");
+    let device = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
     match compile(&bc, entry, device.profile()) {
         Err(Error::Unsupported(u)) => {
             assert_eq!(u.feature, Feature::ArgumentBufferTextures);

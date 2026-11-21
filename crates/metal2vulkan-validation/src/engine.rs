@@ -985,13 +985,13 @@ pub fn committed_profiles() -> Result<Vec<String>, String> {
     Ok(stems)
 }
 
-/// The committed profile `stem` derived under the default (untrusted) policy, the policy every
+/// The committed profile `stem` derived under the default policy (the runtime's), the policy every
 /// engine census row is recorded under.
 pub fn load_profile(stem: &str) -> Result<DeviceProfile, String> {
     Ok(load_device(stem)?.profile().clone())
 }
 
-/// The engine's `Device` for committed profile `stem` under the default untrusted policy:
+/// The engine's `Device` for committed profile `stem` under the default policy (the runtime's):
 /// what the public compile API compiles against (its profile is [`load_profile`]'s).
 pub fn load_device(stem: &str) -> Result<metal2vulkan::device::Device, String> {
     metal2vulkan::device::Device::from_queries(load_description(stem)?, DevicePolicy::default())

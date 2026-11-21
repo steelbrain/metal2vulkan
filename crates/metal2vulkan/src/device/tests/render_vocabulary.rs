@@ -145,7 +145,7 @@ fn render_features_follow_each_source() {
     for (stem, text) in committed_profiles() {
         let json: Value = serde_json::from_str(&text).unwrap();
         let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
-        let dev = Device::from_queries(desc.clone(), DevicePolicy::default()).unwrap();
+        let dev = Device::from_queries(desc.clone(), DevicePolicy::RESIDENT_TABLES).unwrap();
         let enabled = &dev.profile().fields().enabled;
         for (structure, member, feature, extension) in FEATURES {
             let exposed = extension.is_none_or(|e| desc.extensions.contains(&e));
@@ -216,7 +216,7 @@ fn render_properties_and_limits_follow_each_source() {
     for (stem, text) in committed_profiles() {
         let json: Value = serde_json::from_str(&text).unwrap();
         let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
-        let dev = Device::from_queries(desc.clone(), DevicePolicy::default()).unwrap();
+        let dev = Device::from_queries(desc.clone(), DevicePolicy::RESIDENT_TABLES).unwrap();
         let properties = &dev.profile().fields().enabled.properties;
         let depth = stated_flags(&json, "supportedDepthResolveModes");
         let stencil = stated_flags(&json, "supportedStencilResolveModes");
@@ -299,7 +299,7 @@ fn each_stated_color_attachment_sample_count_derives_its_property() {
     for (stem, text) in committed_profiles() {
         let json: Value = serde_json::from_str(&text).unwrap();
         let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
-        let dev = Device::from_queries(desc.clone(), DevicePolicy::default()).unwrap();
+        let dev = Device::from_queries(desc.clone(), DevicePolicy::RESIDENT_TABLES).unwrap();
         let derived: BTreeSet<(vk::Format, u32)> = dev
             .profile()
             .fields()
@@ -379,7 +379,7 @@ fn the_provoking_vertex_mode_per_pipeline_follows_each_source() {
     for (stem, text) in committed_profiles() {
         let json: Value = serde_json::from_str(&text).unwrap();
         let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
-        let dev = Device::from_queries(desc.clone(), DevicePolicy::default()).unwrap();
+        let dev = Device::from_queries(desc.clone(), DevicePolicy::RESIDENT_TABLES).unwrap();
         let properties = &dev.profile().fields().enabled.properties;
         let exposed = desc.extensions.contains(&VkExtension::ExtProvokingVertex);
         let stated = stated_true(

@@ -94,7 +94,7 @@ fn an_aggregate_buffer_access_moves_every_member() {
     let mut want = vec![105.0f32, 206.0, 307.0, 408.0];
     want.extend(&m);
     for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
-        let profile = profile(stem, DevicePolicy::default()).expect("profile");
+        let profile = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         let (_, _, module) =
             compile_kept(&bitcode, "k", &profile).unwrap_or_else(|e| panic!("{stem}: {e}"));
         let res = Resources {

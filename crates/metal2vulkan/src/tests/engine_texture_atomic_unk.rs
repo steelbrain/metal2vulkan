@@ -112,7 +112,7 @@ fn unrobust(stem: &str) -> DeviceProfile {
     ] {
         desc.features.remove(&f);
     }
-    Device::from_queries(desc, DevicePolicy::default())
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()
