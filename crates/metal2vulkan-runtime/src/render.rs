@@ -15,15 +15,19 @@
 //! the content. The cost of keying on the descriptor: two descriptors that differ only in a field
 //! their compile does not read are two contents, each compiled.
 //!
-//! What a `VkPipeline` bakes is what Vulkan 1.3 cannot leave dynamic: the content, and the
-//! topology class (point, line or triangle) of the draws it serves. Everything Metal sets on the
+//! What a `VkPipeline` bakes is what Vulkan 1.3 cannot leave dynamic: the content, the topology
+//! class (point, line or triangle) of the draws it serves, and the encoder's depth clip mode and
+//! triangle fill mode ([`Raster`]). Everything Metal sets on the
 //! encoder that Vulkan 1.3 makes dynamic without a feature is dynamic state: viewport, scissor,
 //! cull mode, front face, the primitive topology within its class and primitive restart, the
 //! depth test, write and compare, the stencil test, operations, masks and reference, depth bias
 //! and blend constants. Vertex buffer strides are the descriptor's, so the content's: they are
 //! baked, and a layout whose stride is set per bind (`MTLBufferLayoutStrideDynamic`), which the
-//! replay streams' never are, is refused. Metal's triangle fill mode and depth clip mode, which
-//! Vulkan 1.3 bakes, are their defaults: the render encoder does not set them yet.
+//! replay streams' never are, is refused. A draw under the depth clip mode `Clamp` or the triangle
+//! fill mode `Lines` takes a `VkPipeline` of its class made for that raster state, by the first
+//! such draw of the content, which waits for it, as a draw of a class not made with the content
+//! does: Metal sets both per encoder and compiles nothing for them. The fill mode is a triangle's
+//! alone, in Metal and in Vulkan, so the line and point classes take the clip mode alone.
 //!
 //! What a draw supplies is the content's [`Draws`]: each function's slots with their accesses,
 //! its push fields (addresses, resource IDs and indices of the slots, in the floor's one push
@@ -201,14 +205,13 @@ pub(crate) struct RenderCompiled {
     /// The fixed-function state every `VkPipeline` of the content takes.
     fixed: Fixed,
     /// The `VkPipeline` made with the content: the triangle class's, or a post-tessellation vertex
-    /// function's patch class's, its only one.
+    /// function's patch class's, its only class, at the default [`Raster`].
     primary: vk::Pipeline,
-    /// The line class's: made with the content where its descriptor names that class, else by the
-    /// first draw of lines; null until then.
-    lines: Mutex<vk::Pipeline>,
-    /// The point class's, as the line class's: made with the content where its descriptor names
-    /// that class, else by the first draw of points; null until then.
-    points: Mutex<vk::Pipeline>,
+    /// The content's other `VkPipeline`s, each by its class's list topology and its raster state:
+    /// the line or the point class's at the default raster state, made with the content where its
+    /// descriptor names that class, and every other, made by the first draw that takes it. At most
+    /// 7: the triangle or patch class's three other raster states, and two of each other class.
+    later: Mutex<Vec<(vk::PrimitiveTopology, Raster, vk::Pipeline)>>,
     /// Whether a draw of points rasterizes them: the vertex function writes `[[point_size]]`, or
     /// the descriptor names the point class, under which Metal draws a point of a function that
     /// writes no size 1 pixel wide (the module writes `PointSize` 1.0). Under any other class
@@ -232,6 +235,18 @@ pub(crate) struct RenderCompiled {
     imageblock_sample: Option<u32>,
     /// The descriptor's `rasterSampleCount`.
     samples: u32,
+}
+
+/// What the render encoder sets that a `VkPipeline` bakes: `setDepthClipMode:` and
+/// `setTriangleFillMode:`, in `VkPipelineRasterizationStateCreateInfo`, which only
+/// `VK_EXT_extended_dynamic_state3` makes dynamic, and the floor does not require it. The default
+/// is Metal's, `Clip` and `Fill`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Raster {
+    /// `MTLDepthClipModeClamp`: `depthClampEnable`.
+    pub(crate) clamp: bool,
+    /// `MTLTriangleFillModeLines`: `polygonMode` `LINE`.
+    pub(crate) lines: bool,
 }
 
 /// One stage's shader module and what a `VkPipeline` of it takes.
@@ -1047,8 +1062,7 @@ impl RenderCompiled {
             stages,
             fixed,
             primary: vk::Pipeline::null(),
-            lines: Mutex::new(vk::Pipeline::null()),
-            points: Mutex::new(vk::Pipeline::null()),
+            later: Mutex::new(Vec::new()),
             rasterizes_points: pipeline.graphics.writes_point_size
                 || lowered.input_primitive_topology == PrimitiveTopologyClass::Point,
             notes,
@@ -1063,34 +1077,30 @@ impl RenderCompiled {
             true => vk::PrimitiveTopology::PATCH_LIST,
             false => vk::PrimitiveTopology::TRIANGLE_LIST,
         };
-        compiled.primary = compiled.make(class)?;
+        compiled.primary = compiled.make(class, Raster::default())?;
         // A descriptor that names the line or the point class (`inputPrimitiveTopology`) gives
         // that class's key: its `VkPipeline` is made here too, and its draws wait for none.
         let named = match lowered.input_primitive_topology {
-            PrimitiveTopologyClass::Line => compiled.later(vk::PrimitiveTopology::LINE_LIST),
-            PrimitiveTopologyClass::Point => compiled.later(vk::PrimitiveTopology::POINT_LIST),
+            PrimitiveTopologyClass::Line => Some(vk::PrimitiveTopology::LINE_LIST),
+            PrimitiveTopologyClass::Point => Some(vk::PrimitiveTopology::POINT_LIST),
             _ => None,
         };
-        if let (false, Some((later, list, _))) = (compiled.draws.patches, named) {
-            let made = compiled.make(list)?;
-            *lock(later) = made;
+        if let (false, Some(list)) = (compiled.draws.patches, named) {
+            let made = compiled.make(list, Raster::default())?;
+            lock(&compiled.later).push((list, Raster::default(), made));
         }
         Ok(compiled)
     }
 
-    /// Where the content keeps the `VkPipeline` of `topology`'s class when that is the line or
-    /// the point class, which it makes after its triangle class's: the pipeline's place, the
-    /// class's list topology it is made with, and the first-use site that counts its make at a
-    /// draw. `None` for a triangle or patch topology.
-    fn later(
-        &self,
-        topology: vk::PrimitiveTopology,
-    ) -> Option<(&Mutex<vk::Pipeline>, vk::PrimitiveTopology, FirstUse)> {
+    /// The list topology of `topology`'s class, which its `VkPipeline` is made with: a
+    /// post-tessellation vertex function's content draws the patch class alone.
+    fn class(&self, topology: vk::PrimitiveTopology) -> vk::PrimitiveTopology {
         use vk::PrimitiveTopology as T;
-        match topology {
-            T::LINE_LIST | T::LINE_STRIP => Some((&self.lines, T::LINE_LIST, FirstUse::Lines)),
-            T::POINT_LIST => Some((&self.points, T::POINT_LIST, FirstUse::Points)),
-            _ => None,
+        match (self.draws.patches, topology) {
+            (true, _) => T::PATCH_LIST,
+            (false, T::LINE_LIST | T::LINE_STRIP) => T::LINE_LIST,
+            (false, T::POINT_LIST) => T::POINT_LIST,
+            (false, _) => T::TRIANGLE_LIST,
         }
     }
 
@@ -1108,26 +1118,41 @@ impl RenderCompiled {
 
     /// The `VkPipeline` of the content for draws of `topology`'s class, a point, line or triangle
     /// one, or for a post-tessellation vertex function's content the patch one, which the encoder
-    /// draws alone with it: the point or line class's, where the content was not made with it,
-    /// made by its first draw, which waits for it, a first-use wait
-    /// ([`Metrics::first_use_waits`](crate::Metrics::first_use_waits)).
+    /// draws alone with it, under `raster`, whose fill mode a line or point class does not take:
+    /// one the content was not made with is made by its first draw, which waits for it, a
+    /// first-use wait ([`Metrics::first_use_waits`](crate::Metrics::first_use_waits)), counted as
+    /// the line or point class's at the default raster state and as a raster state's otherwise.
     ///
     /// Err: [`Error::Vulkan`] where the pipeline cannot be made.
-    pub(crate) fn pipeline(&self, topology: vk::PrimitiveTopology) -> Result<vk::Pipeline, Error> {
-        let later = match self.draws.patches {
-            true => None,
-            false => self.later(topology),
+    pub(crate) fn pipeline(
+        &self,
+        topology: vk::PrimitiveTopology,
+        raster: Raster,
+    ) -> Result<vk::Pipeline, Error> {
+        use vk::PrimitiveTopology as T;
+        let class = self.class(topology);
+        let polygons = matches!(class, T::TRIANGLE_LIST | T::PATCH_LIST);
+        let raster = Raster {
+            clamp: raster.clamp,
+            lines: raster.lines && polygons,
         };
-        let Some((later, list, site)) = later else {
+        if polygons && raster == Raster::default() {
             return Ok(self.primary);
-        };
-        let mut made = lock(later);
-        if *made == vk::Pipeline::null() {
-            let began = host_time();
-            *made = self.make(list)?;
-            (self.core.counters).first_use_wait(site, host_time().saturating_sub(began));
         }
-        Ok(*made)
+        let mut later = lock(&self.later);
+        if let Some(&(.., made)) = (later.iter()).find(|&&(c, r, _)| (c, r) == (class, raster)) {
+            return Ok(made);
+        }
+        let began = host_time();
+        let made = self.make(class, raster)?;
+        later.push((class, raster, made));
+        let site = match (class, raster == Raster::default()) {
+            (T::LINE_LIST, true) => FirstUse::Lines,
+            (T::POINT_LIST, true) => FirstUse::Points,
+            _ => FirstUse::Raster,
+        };
+        (self.core.counters).first_use_wait(site, host_time().saturating_sub(began));
+        Ok(made)
     }
 
     /// Whether the content's `VkPipeline`s render into `pass`'s attachments: its colour formats are
@@ -1146,11 +1171,11 @@ impl RenderCompiled {
             && fixed.samples == pass.samples
     }
 
-    /// A `VkPipeline` of the content for draws of the class of `topology`, a list topology, made
-    /// through the device's pipeline data, rendering dynamically into the descriptor's attachment
-    /// formats. A draw sets its own topology within the class as dynamic state. A patch list takes
-    /// the translator's control points per patch.
-    fn make(&self, topology: vk::PrimitiveTopology) -> Result<vk::Pipeline, Error> {
+    /// A `VkPipeline` of the content for draws of the class of `topology`, a list topology, under
+    /// `raster`, made through the device's pipeline data, rendering dynamically into the
+    /// descriptor's attachment formats. A draw sets its own topology within the class as dynamic
+    /// state. A patch list takes the translator's control points per patch.
+    fn make(&self, topology: vk::PrimitiveTopology, raster: Raster) -> Result<vk::Pipeline, Error> {
         let core = &self.core;
         let fixed = &self.fixed;
         let specializations: Vec<vk::SpecializationInfo<'_>> = (self.stages.iter())
@@ -1179,18 +1204,29 @@ impl RenderCompiled {
         let viewport = vk::PipelineViewportStateCreateInfo::default()
             .viewport_count(1)
             .scissor_count(1);
+        // `Clamp` keeps what lies past the near and far planes and clamps its depth to the
+        // viewport's range, as Vulkan's depth clamp does (`depthClamp`, Floor); `Lines` draws each
+        // triangle's edges as lines 1 pixel wide (`fillModeNonSolid`, which the encoder asks of
+        // the device before it sets the mode).
+        let polygon_mode = match raster.lines {
+            true => vk::PolygonMode::LINE,
+            false => vk::PolygonMode::FILL,
+        };
         let mut rasterization = vk::PipelineRasterizationStateCreateInfo::default()
-            .polygon_mode(vk::PolygonMode::FILL)
+            .depth_clamp_enable(raster.clamp)
+            .polygon_mode(polygon_mode)
             .rasterizer_discard_enable(fixed.discard)
             .line_width(1.0);
-        // The line class draws by Bresenham's rule, Metal's (`bresenhamLines`, Floor), except
-        // under alpha to coverage or alpha to one, which Vulkan's Bresenham mode does not take
+        // Lines, of the line class or a triangle's edges under `Lines`, draw by Bresenham's rule,
+        // Metal's (`bresenhamLines`, Floor), except under alpha to coverage or alpha to one, which
+        // Vulkan's Bresenham mode does not take
         // (`VUID-VkGraphicsPipelineCreateInfo-lineRasterizationMode-02766`; the runtime enables no
         // sample shading, the third it names): such a state draws its lines by the device's
         // default rule (`PrecisionNote::DeviceLineRasterization`, of `lines_by_device_rule`).
         let mut line = vk::PipelineRasterizationLineStateCreateInfoEXT::default()
             .line_rasterization_mode(vk::LineRasterizationModeEXT::BRESENHAM);
-        if topology == vk::PrimitiveTopology::LINE_LIST && !lines_by_device_rule(fixed) {
+        let draws_lines = topology == vk::PrimitiveTopology::LINE_LIST || raster.lines;
+        if draws_lines && !lines_by_device_rule(fixed) {
             rasterization = rasterization.push_next(&mut line);
         }
         // The private sample mask, which the translator states (`GraphicsState::sample_mask`)
@@ -1360,9 +1396,9 @@ impl Drop for RenderCompiled {
         // No state holds it, so no command buffer that used it is left: each kept its state until
         // it retired.
         self.core.counters.fall(Gauge::RenderContents);
-        let lines = *self.lines.get_mut().unwrap_or_else(|e| e.into_inner());
-        let points = *self.points.get_mut().unwrap_or_else(|e| e.into_inner());
-        for pipeline in [self.primary, lines, points] {
+        let later = self.later.get_mut().unwrap_or_else(|e| e.into_inner());
+        let later = later.iter().map(|&(.., pipeline)| pipeline);
+        for pipeline in std::iter::once(self.primary).chain(later) {
             if pipeline != vk::Pipeline::null() {
                 (self.core.reaper).give(Job::Free(Free::Pipeline(pipeline)));
             }

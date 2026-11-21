@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1319 |
 | distinct SDK items the Metal leg reaches, of any status | 804 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7689 |
+| ledger rows (a case whose gap is recorded) | 7687 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -8077,8 +8077,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatRGBA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatRGBA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatRGBA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
-| `render-state-depth-clip` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every depth clip mode Clip). rt refuses it (a dr… |
-| `render-state-facing` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every setTriangleFillMode: Fill). rt refuses it … |
 | `render-state-heap-residency` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no sparse texture, heap or tile call). The rt si… |
 | `render-state-render-barriers` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no useResource:usage:stages: or useHeap:stages:)… |
 | `render-state-texture-accesses` | refused: the consumer's own (MTLComputePipelineReflection, MTLRenderPipelineReflection, MTLPipelineOptionFailOnBinaryArchiveMiss, MTLPipelineOptionArgumentInfo,… |

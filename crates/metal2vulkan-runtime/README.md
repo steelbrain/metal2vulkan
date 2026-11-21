@@ -2341,7 +2341,9 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   `first_use_wait_nanos` and the longest in `first_use_wait_max_nanos`, and again by where it
   waited, each with its count, time and longest: `first_use_variant_waits` (a kernel's pipeline
   for a new workgroup size, threadgroup memory lengths or tiles), `first_use_line_waits` (a
-  render content's line-class pipeline) and `first_use_point_waits` (its point-class pipeline).
+  render content's line-class pipeline), `first_use_point_waits` (its point-class pipeline) and
+  `first_use_raster_waits` (its pipeline under the depth clip mode `Clamp` or the triangle fill
+  mode `Lines`).
   No dispatch lowers a function. `Counters::variant_makes(from)` answers the kept makes of
   kernels' `VkPipeline`s numbered `from` or later, the last 256 to end on the device, each a
   `VariantMake`: its key (the `DispatchVariant` its dispatches answer), who started it
@@ -2820,9 +2822,13 @@ or does not check is rebuilt from the generations' names, with young counted ful
   cache, and so is the line or the point class's where the descriptor's `inputPrimitiveTopology`
   names `MTLPrimitiveTopologyClassLine` or `MTLPrimitiveTopologyClassPoint`; otherwise each is
   made by the content's first draw of lines or of points, which waits for it
-  (`Metrics::first_use_waits`, `first_use_line_waits`, `first_use_point_waits`). Of the two replay streams' 537 render contents
-  drawn, 527 draw only triangles and 2 lines and triangles; a content drawn only as lines (8 of
-  them) makes a triangle `VkPipeline` it never uses.
+  (`Metrics::first_use_waits`, `first_use_line_waits`, `first_use_point_waits`). Of the two replay
+  streams' 537 render contents drawn, 527 draw only triangles and 2 lines and triangles; a content
+  drawn only as lines (8 of them) makes a triangle `VkPipeline` it never uses. A draw under the
+  depth clip mode `Clamp` or the triangle fill mode `Lines` takes its class's `VkPipeline` for that
+  state, which the content's first such draw makes and waits for (`first_use_raster_waits`). The
+  fill mode is a triangle's alone, in Metal and in Vulkan, so a draw of lines or points takes the
+  clip mode alone, and a triangle's edges under `Lines` are drawn by Bresenham's rule as lines are.
 - A point is as wide as the `PointSize` the vertex module writes: the function's `[[point_size]]`,
   stored as Metal's largest point, 511 pixels, where it is past it, which the device draws through
   `largePoints` (Floor) and clamps to its `pointSizeRange` (`PrecisionNote::DevicePointSize` where
@@ -2919,8 +2925,13 @@ or does not check is rebuilt from the generations' names, with young counted ful
   `Error::Translation` naming `RasterOrderGroups` and `fragmentShaderPixelInterlock`. Of the venues
   run, KosmicKrisp on the M3 Max and RADV on the RX 550 list neither the extension nor the feature
   (vulkaninfo, jobs m3-max-61291 and m3-max-61296).
-- Metal's triangle fill mode and depth clip mode, which Vulkan 1.3 bakes into a `VkPipeline`, are
-  their defaults.
+- The depth clip mode `Clamp` and the triangle fill mode `Lines`, which Vulkan 1.3 bakes into a
+  `VkPipeline`, are each a `VkPipeline` of the draw's class that a content's first draw under them
+  makes, which Metal does not: that draw waits for it (`Metrics::first_use_raster_waits`).
+- Under the depth clip mode `Clamp`, the depth a fragment function writes is the device's depth
+  clamp's, clamped to the viewport's range. Metal stores a negative NaN there as 0, below a range
+  above 0; the translator's `LoweringInputs::depth_clamp_range` variant, which stores it as Metal
+  does, is not drawn.
 - On a driver that keeps the topology class in a pipeline (dynamicPrimitiveTopologyUnrestricted
   false; RADV), a render pipeline state's first draw in a second topology class compiles a second
   pipeline in full when the driver's cache is cold: 225 ms for the heaviest pipeline measured on a
@@ -3234,9 +3245,10 @@ or does not check is rebuilt from the generations' names, with young counted ful
   `VkBuffer`, so such a draw reads the block's later bytes as indices, and a count past the block's
   end is outside Vulkan's valid usage without `robustBufferAccess2`, which the floor does not
   require (`VUID-vkCmdDrawIndexedIndirect-robustBufferAccess2-08798`).
-- Refused by `Gap::Draw`, naming its `DrawKind`: a triangle fill mode but `Fill`
-  (`FillMode`, `set_triangle_fill_mode`), the depth clip mode `Clamp` (`DepthClamp`,
-  `set_depth_clip_mode`), a count of viewports or scissor rectangles other than 1 (`Viewports`,
+- Refused by `Gap::Draw`, naming its `DrawKind`: the triangle fill mode `Lines` on a device
+  without `fillModeNonSolid` (KosmicKrisp on the M3 Max, of the venues dumped, m3-max-48737) and
+  the fill mode of raw value 2, which no SDK header declares (`FillMode`,
+  `set_triangle_fill_mode`), a count of viewports or scissor rectangles other than 1 (`Viewports`,
   `set_viewports`, `set_scissor_rects`), a visibility result mode but `Disabled`
   (`VisibilityResults`, `set_visibility_result_mode`), each refused where it is set, the
   encoder's state unchanged; the replay streams set Metal's defaults alone, which those setters
@@ -3622,6 +3634,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `fullDrawIndexUint32` | `VkPhysicalDeviceFeatures` | an indexed draw's 32-bit indices past `2^24 - 1`; Vulkan 1.4 and Roadmap 2022 require it |
 | `depthBiasClamp` | `VkPhysicalDeviceFeatures` | a depth bias's clamp (`set_depth_bias`), the device's own; Vulkan 1.4 and Roadmap 2022 require it |
 | `drawIndirectFirstInstance` | `VkPhysicalDeviceFeatures` | an indirect draw's base instance, which the GPU reads from Metal's arguments; Vulkan 1.4 requires it |
+| `depthClamp` | `VkPhysicalDeviceFeatures` | the depth clip mode `Clamp` (`set_depth_clip_mode`), a pipeline's depth clamp, the device's own; Vulkan 1.4 and Roadmap 2022 require it |
 | `shaderClipDistance` | `VkPhysicalDeviceFeatures` | a vertex or post-tessellation vertex function's `[[clip_distance]]` |
 | `tessellationShader` | `VkPhysicalDeviceFeatures` | a post-tessellation vertex function's patches, drawn through the device's tessellator |
 | `shaderTessellationAndGeometryPointSize` | `VkPhysicalDeviceFeatures` | a post-tessellation vertex function's `[[point_size]]`; without it the device draws every such point at size 1 |
@@ -3678,6 +3691,17 @@ sample; elsewhere it refuses the function at creation, an `Error::Translation` n
 | Min-LOD feature | Structure | Used for |
 |---|---|---|
 | `shaderResourceMinLod` | `VkPhysicalDeviceFeatures` | a sample's `min_lod_clamp`, the device's own level-of-detail clamp |
+
+### Fill modes
+
+The triangle fill mode `Lines` has one form, a pipeline's `polygonMode` `LINE`. Where the device
+reports the feature below, device creation enables it, and the render encoder sets the mode;
+elsewhere `set_triangle_fill_mode` refuses it, `Gap::Draw` of `DrawKind::FillMode` (Known gaps of
+render encoders).
+
+| Fill-mode feature | Structure | Used for |
+|---|---|---|
+| `fillModeNonSolid` | `VkPhysicalDeviceFeatures` | the triangle fill mode `Lines`, each triangle's edges drawn as lines |
 
 ### Quad control
 

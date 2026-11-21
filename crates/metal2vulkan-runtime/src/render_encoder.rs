@@ -92,7 +92,7 @@ use crate::pass::{
 };
 use crate::pipeline::{address_word, FieldValue, PUSH_STAGES};
 use crate::record::{memory_barrier, Reach};
-use crate::render::{DrawPlace, Draws, RenderPipelineState, FRAGMENT, VERTEX};
+use crate::render::{DrawPlace, Draws, Raster, RenderPipelineState, FRAGMENT, VERTEX};
 use crate::ring::{Placed, CHUNK};
 use crate::sampler::SamplerState;
 use crate::shadow::{self, Area, Held};
@@ -100,7 +100,7 @@ use crate::texture::{Texture, TextureInner, TextureObject};
 use ash::vk;
 use metal2vulkan::bind::alpha_test_code;
 use metal2vulkan::metal::format::{integer_channels_word, BICUBIC_TEXELS_UNBOUND};
-use metal2vulkan::metal::state::{input_assembly, DepthStencilDescriptor};
+use metal2vulkan::metal::state::{self, input_assembly, DepthStencilDescriptor};
 use metal2vulkan::metal::{
     CullMode, DepthClipMode, IndexType, PixelFormat, PrimitiveType, TriangleFillMode, Winding,
 };
@@ -549,15 +549,15 @@ struct Declarations {
 ///
 /// Built: a render pipeline state, the vertex and fragment functions' buffers, bytes, textures
 /// and sampler states, one viewport and scissor rectangle, the cull mode, the front-facing
-/// winding, a depth-stencil state's depth and stencil tests, the depth bias without a clamp, the
-/// stencil references, the blend color, the line width (lines drawn at 1 alone: a draw of lines
-/// at another width is [`DrawKind::LineWidth`]), the store actions an encoder sets for an
-/// attachment whose pass left them unknown, memory barriers, fences, draws of points, lines and
-/// triangles, indexed or not, draws of patches with a tessellation factor buffer, each direct or
-/// indirect, and the `Disabled` visibility result mode (`Boolean` and `Counting` are
-/// [`DrawKind::VisibilityResults`]). Not built, and so not methods: several viewports or scissor
-/// rectangles, the triangle fill mode, the depth clip mode, the store action options setters,
-/// tile functions, the `setVertexBuffer:offset:attributeStride:atIndex:` family,
+/// winding, the depth clip mode, the triangle fill modes `Fill` and `Lines`, a depth-stencil
+/// state's depth and stencil tests, the depth bias and its clamp, the stencil references, the
+/// blend color, the line width (lines drawn at 1 alone: a draw of lines at another width is
+/// [`DrawKind::LineWidth`]), the store actions an encoder sets for an attachment whose pass left
+/// them unknown, memory barriers, fences, draws of points, lines and triangles, indexed or not,
+/// draws of patches with a tessellation factor buffer, each direct or indirect, and the `Disabled`
+/// visibility result mode (`Boolean` and `Counting` are [`DrawKind::VisibilityResults`]). Not
+/// built, and so not methods: several viewports or scissor rectangles, the store action options
+/// setters, tile functions, the `setVertexBuffer:offset:attributeStride:atIndex:` family,
 /// `setTessellationFactorScale:` (read by a pipeline that enables the scale, which is refused),
 /// and indexed patch draws (`drawIndexedPatches:`, read by a pipeline of a control-point index
 /// type, which is refused). A draw of what the runtime does not build is [`Gap::Draw`], naming
@@ -602,6 +602,9 @@ pub struct RenderCommandEncoder {
     alpha_test: u32,
     /// The line width `set_line_width` set last, Metal's 1 until set.
     line_width: f32,
+    /// The depth clip mode and triangle fill mode set last, Metal's `Clip` and `Fill` until set,
+    /// which each draw's `VkPipeline` takes.
+    raster: Raster,
     /// The depth bias's constant, slope scale and clamp, Metal's `depthBias`, `slopeScale` and
     /// `clamp`.
     depth_bias: [f32; 3],
@@ -695,6 +698,7 @@ impl CommandBuffer {
                     blend_color: [0.0; 4],
                     alpha_test: alpha_test_code(1.0),
                     line_width: 1.0,
+                    raster: Raster::default(),
                     depth_bias: [0.0; 3],
                     biased: false,
                     hidden: false,
@@ -1288,17 +1292,26 @@ impl RenderCommandEncoder {
         }
     }
 
-    /// `setTriangleFillMode:`: `Fill`, Metal's default, is every draw's; another mode is not
-    /// built.
+    /// `setTriangleFillMode:` for the encoder's later draws: `Fill`, Metal's default, or `Lines`,
+    /// each triangle's edges drawn as lines 1 pixel wide by Bresenham's rule, as the encoder's
+    /// lines are, through a `VkPipeline` of the draw's class made for it by the content's first
+    /// draw under it. Draws of lines and points take no fill mode, as in Metal.
     ///
-    /// Err: [`Gap::Draw`] of [`DrawKind::FillMode`] for another mode.
+    /// Err: [`Gap::Draw`] of [`DrawKind::FillMode`] for `Lines` on a device without
+    /// `fillModeNonSolid` (`floor`'s fill modes) and for the mode of raw value 2, which no SDK
+    /// header declares; the encoder's mode is unchanged.
     pub fn set_triangle_fill_mode(&mut self, mode: TriangleFillMode) -> Result<(), Error> {
-        match mode {
-            TriangleFillMode::Fill => Ok(()),
-            _ => Err(Error::Unsupported(Gap::Draw {
-                kind: DrawKind::FillMode,
-            })),
-        }
+        let profile = self.core.translator.profile();
+        self.raster.lines = match (mode, state::polygon_mode(mode, profile)) {
+            (TriangleFillMode::Fill, _) => false,
+            (TriangleFillMode::Lines, Ok(_)) => true,
+            _ => {
+                return Err(Error::Unsupported(Gap::Draw {
+                    kind: DrawKind::FillMode,
+                }))
+            }
+        };
+        Ok(())
     }
 
     /// `setVisibilityResultMode:offset:`: `Disabled`, Metal's default, is every draw's, at any
@@ -1322,16 +1335,17 @@ impl RenderCommandEncoder {
         }
     }
 
-    /// `setDepthClipMode:`: `Clip`, Metal's default, is every draw's; `Clamp` is not built.
+    /// `setDepthClipMode:` for the encoder's later draws: `Clip`, Metal's default, or `Clamp`,
+    /// which keeps what lies past the near and far planes and clamps its depth to the viewport's
+    /// range, the device's own depth clamp (`depthClamp`, Floor), through a `VkPipeline` of the
+    /// draw's class made for it by the content's first draw under it.
     ///
-    /// Err: [`Gap::Draw`] of [`DrawKind::DepthClamp`] for `Clamp`.
+    /// Err: [`Error::Translation`] where the translator maps no depth clamp for the device, which
+    /// the floor's `depthClamp` leaves to no device.
     pub fn set_depth_clip_mode(&mut self, mode: DepthClipMode) -> Result<(), Error> {
-        match mode {
-            DepthClipMode::Clip => Ok(()),
-            _ => Err(Error::Unsupported(Gap::Draw {
-                kind: DrawKind::DepthClamp,
-            })),
-        }
+        let profile = self.core.translator.profile();
+        self.raster.clamp = state::depth_clamp_enable(mode, profile).map_err(Error::translation)?;
+        Ok(())
     }
 
     /// `setViewports:count:`: one viewport is [`set_viewport`](Self::set_viewport)'s; several are
@@ -2125,7 +2139,7 @@ impl RenderCommandEncoder {
         }
         // Points Metal does not rasterize: the vertex function runs, behind an empty scissor.
         let hidden = topology == vk::PrimitiveTopology::POINT_LIST && !compiled.rasterizes_points();
-        let pipeline = compiled.pipeline(topology)?;
+        let pipeline = compiled.pipeline(topology, self.raster)?;
         let discards = compiled.discards();
         let writes_memory = draws.writes_memory;
         let building = (self.building.as_ref())

@@ -1289,8 +1289,10 @@ pub(crate) mod on_device {
     /// `Less` with writes, biased by a constant of 2^23 (which Vulkan's unit for a `float` depth of
     /// exponent -2 makes 0.25, or 0.125 where the device counts 24 mantissa bits) clamped to
     /// 0.0625, passes and writes 0.3125 on every device; one at 0.375 with no bias then fails; one
-    /// at 0.25 under `Greater`, without writes, passes only by its unclamped bias of 2^23. The
-    /// setters that take Metal's defaults as nothing refuse every other value.
+    /// at 0.25 under `Greater`, without writes, passes only by its unclamped bias of 2^23. Setting
+    /// the depth clip mode `Clamp` and the triangle fill mode `Lines` (refused without
+    /// `fillModeNonSolid`) makes no pipeline when no draw follows; the viewport and scissor setters
+    /// refuse a count but 1.
     #[test]
     fn every_device_tests_writes_and_biases_a_depth_attachment() {
         let Some(library) = examples() else {
@@ -1375,18 +1377,21 @@ pub(crate) mod on_device {
             draw(encoder.set_viewport(at(0.25)));
             encoder.set_depth_bias(8_388_608.0, 0.0, 0.0);
             draw(encoder.draw_primitives(PrimitiveType::Triangle, 6, 3, 1, 0));
-            draw(encoder.set_triangle_fill_mode(crate::TriangleFillMode::Fill));
+            // The modes a later draw's pipeline takes: setting them makes none.
+            let non_solid = (device.core().translator.profile().enabled().features)
+                .contains(&metal2vulkan::device::VkFeature::FillModeNonSolid);
             same(
                 encoder.set_triangle_fill_mode(crate::TriangleFillMode::Lines),
-                gap(DrawKind::FillMode),
+                if non_solid {
+                    Ok(())
+                } else {
+                    gap(DrawKind::FillMode)
+                },
                 "a fill mode of lines",
             );
+            draw(encoder.set_triangle_fill_mode(crate::TriangleFillMode::Fill));
+            draw(encoder.set_depth_clip_mode(crate::DepthClipMode::Clamp));
             draw(encoder.set_depth_clip_mode(crate::DepthClipMode::Clip));
-            same(
-                encoder.set_depth_clip_mode(crate::DepthClipMode::Clamp),
-                gap(DrawKind::DepthClamp),
-                "the depth clip mode Clamp",
-            );
             draw(encoder.set_viewports(&[at(0.25)]));
             same(
                 encoder.set_viewports(&[at(0.25), at(0.5)]),

@@ -71,6 +71,7 @@ mod present;
 mod private_arena;
 mod push_window;
 mod quad_control;
+mod raster;
 mod read_write_tier;
 mod readback;
 mod render;

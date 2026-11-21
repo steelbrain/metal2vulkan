@@ -1574,6 +1574,9 @@ field	metal2vulkan-runtime::Metrics.first_use_line_waits	pub first_use_line_wait
 field	metal2vulkan-runtime::Metrics.first_use_point_wait_max_nanos	pub first_use_point_wait_max_nanos: u64
 field	metal2vulkan-runtime::Metrics.first_use_point_wait_nanos	pub first_use_point_wait_nanos: u64
 field	metal2vulkan-runtime::Metrics.first_use_point_waits	pub first_use_point_waits: u64
+field	metal2vulkan-runtime::Metrics.first_use_raster_wait_max_nanos	pub first_use_raster_wait_max_nanos: u64
+field	metal2vulkan-runtime::Metrics.first_use_raster_wait_nanos	pub first_use_raster_wait_nanos: u64
+field	metal2vulkan-runtime::Metrics.first_use_raster_waits	pub first_use_raster_waits: u64
 field	metal2vulkan-runtime::Metrics.first_use_variant_wait_max_nanos	pub first_use_variant_wait_max_nanos: u64
 field	metal2vulkan-runtime::Metrics.first_use_variant_wait_nanos	pub first_use_variant_wait_nanos: u64
 field	metal2vulkan-runtime::Metrics.first_use_variant_waits	pub first_use_variant_waits: u64
@@ -9142,7 +9145,6 @@ variant	metal2vulkan-runtime::DispatchType::Concurrent	Concurrent
 variant	metal2vulkan-runtime::DispatchType::Serial	Serial
 variant	metal2vulkan-runtime::DrawKind::AttachmentFormats	AttachmentFormats
 variant	metal2vulkan-runtime::DrawKind::AttachmentRead	AttachmentRead
-variant	metal2vulkan-runtime::DrawKind::DepthClamp	DepthClamp
 variant	metal2vulkan-runtime::DrawKind::DividedBaseInstance	DividedBaseInstance
 variant	metal2vulkan-runtime::DrawKind::FetchedAttachment	FetchedAttachment
 variant	metal2vulkan-runtime::DrawKind::FillMode	FillMode

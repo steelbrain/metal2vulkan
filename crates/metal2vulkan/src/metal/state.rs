@@ -640,7 +640,8 @@ mod tests {
 
     /// The encoder's fill mode, depth clip mode, and depth bias clamp map where the device has
     /// their features and are refused, naming the feature, where it does not. The floor states
-    /// `depthBiasClamp`, so its refusal is on `runtime-floor` without it (below the floor).
+    /// `depthBiasClamp` and `depthClamp`, so their refusals are on `runtime-floor` without them
+    /// (below the floor).
     #[test]
     fn encoder_raster_state_needs_its_features() {
         let (floor, lavapipe) = (committed("runtime-floor"), committed("lavapipe"));
@@ -689,6 +690,11 @@ mod tests {
         );
         assert_eq!(
             depth_clamp_enable(DepthClipMode::Clamp, floor.profile()),
+            Ok(true)
+        );
+        let unclamped = committed_without("runtime-floor", &[VkFeature::DepthClamp]);
+        assert_eq!(
+            depth_clamp_enable(DepthClipMode::Clamp, unclamped.profile()),
             Err(needs(Feature::DepthClipClamp, VkFeature::DepthClamp))
         );
         assert_eq!(

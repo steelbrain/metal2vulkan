@@ -443,6 +443,9 @@ pub(crate) const REQUIRED: &[Feature] = &[
     // `firstInstance`; without it Vulkan takes 0 alone there. Vulkan 1.4 requires it of every
     // device.
     feature!(core.draw_indirect_first_instance),
+    // The depth clip mode `Clamp` (`setDepthClipMode:`), a pipeline's depth clamp, the device's
+    // own. Vulkan 1.4 and Roadmap 2022 require it of every device.
+    feature!(core.depth_clamp => DepthClamp),
     // A vertex or post-tessellation vertex function's `[[clip_distance]]`, the device's own
     // clipping. Every floor driver reports it.
     feature!(core.shader_clip_distance => ShaderClipDistance),
@@ -541,6 +544,11 @@ pub(crate) const STEP_RATES: &[Feature] = &[feature!(
 pub(crate) const MIN_LOD_CLAMPS: &[Feature] =
     &[feature!(core.shader_resource_min_lod => ShaderResourceMinLod)];
 
+/// The feature device creation enables where the device reports it, for the triangle fill mode
+/// `Lines` (`setTriangleFillMode:`), a pipeline's `polygonMode` `LINE`, which the render encoder
+/// refuses on a device without it (`DrawKind::FillMode`). No answer chooses a second form.
+pub(crate) const FILL_MODES: &[Feature] = &[feature!(core.fill_mode_non_solid => FillModeNonSolid)];
+
 /// The feature of `VK_KHR_shader_quad_control` (one of [`OPTIONAL_EXTENSIONS`]), which device
 /// creation enables where the device lists the extension and reports it: a fragment function whose
 /// group operations read, combine or count other lanes runs its quads whole
@@ -598,6 +606,7 @@ pub(crate) fn shader_enables(capabilities: &Capabilities) -> EnableSet {
         .chain(PORTABILITY)
         .chain(STEP_RATES)
         .chain(MIN_LOD_CLAMPS)
+        .chain(FILL_MODES)
         .chain(QUAD_CONTROL)
         .chain(PIXEL_INTERLOCK)
         .chain(BARYCENTRICS)
@@ -1064,6 +1073,7 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
     };
     for feature in (OPTIONAL.iter().chain(STEP_RATES))
         .chain(MIN_LOD_CLAMPS)
+        .chain(FILL_MODES)
         .chain(QUAD_CONTROL)
         .chain(PIXEL_INTERLOCK)
     {

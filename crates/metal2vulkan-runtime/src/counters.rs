@@ -111,6 +111,9 @@ pub(crate) enum FirstUse {
     /// A render content's point-class pipeline, at its first draw of points
     /// ([`Metrics::first_use_point_waits`]).
     Points,
+    /// A render content's pipeline for the depth clip mode `Clamp` or the triangle fill mode
+    /// `Lines`, at its first draw under them ([`Metrics::first_use_raster_waits`]).
+    Raster,
 }
 
 /// The variant makes [`Counters::variant_makes`] keeps: the last this many to end.
@@ -561,7 +564,7 @@ struct Atomics {
     first_use_wait_nanos: AtomicU64,
     first_use_wait_max_nanos: AtomicU64,
     /// Each [`FirstUse`] site's waits, at its index: their count, total and longest nanoseconds.
-    first_use_sites: [[AtomicU64; 3]; 3],
+    first_use_sites: [[AtomicU64; 3]; 4],
     /// The makes ahead of a dispatch: their count and total nanoseconds.
     made_ahead: [AtomicU64; 2],
     /// [`Counters::variant_makes`].
@@ -1411,8 +1414,13 @@ impl Counters {
         };
         let first_use =
             |site: FirstUse| (a.first_use_sites[site as usize].each_ref()).map(|n| n.load(Relaxed));
-        let [variant, lines, points] =
-            [FirstUse::Variant, FirstUse::Lines, FirstUse::Points].map(first_use);
+        let [variant, lines, points, raster] = [
+            FirstUse::Variant,
+            FirstUse::Lines,
+            FirstUse::Points,
+            FirstUse::Raster,
+        ]
+        .map(first_use);
         let made_ahead = (a.made_ahead.each_ref()).map(|n| n.load(Relaxed));
         let part = |part: Part| {
             let [count, bytes, total, _, over_1, over_5, over_20] = &a.parts[part as usize];
@@ -1487,6 +1495,9 @@ impl Counters {
             first_use_point_waits: points[0],
             first_use_point_wait_nanos: points[1],
             first_use_point_wait_max_nanos: points[2],
+            first_use_raster_waits: raster[0],
+            first_use_raster_wait_nanos: raster[1],
+            first_use_raster_wait_max_nanos: raster[2],
             made_ahead_variants: made_ahead[0],
             made_ahead_variant_nanos: made_ahead[1],
             blocks_made: a.blocks_made.load(Relaxed),
@@ -1883,7 +1894,8 @@ pub struct Metrics {
     /// First-use waits: encoding calls that waited while the `VkPipeline` they needed was made,
     /// for a workgroup size (a threadgroup size, or the tile of an image-only kernel's grid more
     /// than one deep) or threadgroup memory lengths no state of the kernel's content had run with
-    /// before, or for a render content's first draw of lines or of points.
+    /// before, or for a render content's first draw of lines or of points, or under the depth
+    /// clip mode `Clamp` or the triangle fill mode `Lines`.
     pub first_use_waits: u64,
     /// The nanoseconds of [`host_time`](crate::host_time) the first-use waits took, in total.
     pub first_use_wait_nanos: u64,
@@ -1916,6 +1928,15 @@ pub struct Metrics {
     /// The longest of the [`first_use_point_waits`](Self::first_use_point_waits), in
     /// nanoseconds; a maximum since the device was made.
     pub first_use_point_wait_max_nanos: u64,
+    /// Of the [`first_use_waits`](Self::first_use_waits), those for a render content's pipeline
+    /// under the depth clip mode `Clamp` or the triangle fill mode `Lines`, made by its first draw
+    /// under them.
+    pub first_use_raster_waits: u64,
+    /// The nanoseconds of the [`first_use_raster_waits`](Self::first_use_raster_waits), in total.
+    pub first_use_raster_wait_nanos: u64,
+    /// The longest of the [`first_use_raster_waits`](Self::first_use_raster_waits), in
+    /// nanoseconds; a maximum since the device was made.
+    pub first_use_raster_wait_max_nanos: u64,
     /// The compute kernels' pipelines that
     /// [`prepare_dispatch`](crate::ComputePipelineState::prepare_dispatch) made on its caller's
     /// thread, ahead of the dispatches that run them (`vkCreateComputePipelines`).

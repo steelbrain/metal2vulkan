@@ -1141,6 +1141,7 @@
           "fullDrawIndexUint32": true,
           "depthBiasClamp": true,
           "drawIndirectFirstInstance": true,
+          "depthClamp": true,
           "shaderClipDistance": true,
           "tessellationShader": true,
           "shaderTessellationAndGeometryPointSize": true,

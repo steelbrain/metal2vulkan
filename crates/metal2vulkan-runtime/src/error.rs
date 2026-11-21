@@ -1458,10 +1458,10 @@ pub enum KernelInputKind {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum DrawKind {
-    /// A triangle fill mode but `Fill` (`setTriangleFillMode:`), which no replay stream sets.
+    /// The triangle fill mode `Lines` (`setTriangleFillMode:`) on a device without
+    /// `fillModeNonSolid`, which a pipeline's `polygonMode` `LINE` needs, and the mode of raw value
+    /// 2, which no SDK header declares and no replay stream sets.
     FillMode,
-    /// The depth clip mode `Clamp` (`setDepthClipMode:`), which no replay stream sets.
-    DepthClamp,
     /// A draw of lines or a line strip while the encoder's line width (Apple's `setLineWidth:`
     /// SPI, [`RenderCommandEncoder::set_line_width`](crate::RenderCommandEncoder::set_line_width))
     /// is not 1: Metal draws such a line as a parallelogram that width wide; the runtime draws
