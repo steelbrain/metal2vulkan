@@ -560,6 +560,11 @@ impl<S: Side, W: Watcher> Side for Watching<S, W> {
         self.inner.fragment_fill(fill)
     }
 
+    fn encoded_range(&mut self, run: &crate::case::EncodedRange<'_>) -> Answer<FragmentFilled> {
+        let _span = self.watch("encoded_range");
+        self.inner.encoded_range(run)
+    }
+
     fn mesh_pipeline(&mut self, library: Handle, functions: &MeshFunctions<'_>) -> Answer<Handle> {
         let _span = self.watch("mesh_pipeline");
         self.inner.mesh_pipeline(library, functions)
