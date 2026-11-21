@@ -43,7 +43,8 @@ fn run(case: &RenderCase, libraries: RenderLibraries<'_>) -> Result<ComputeRun, 
 
 /// [`run`] through the runtime (`platform::execute_runtime_render`): the case's own function's
 /// AIR and its companion's as the engine hands them over, its own stage's buffers as the case
-/// holds them, each texture made with its role's usage, and no float reduction.
+/// holds them, each texture, bound or in an argument buffer, made with its role's usage, and no
+/// float reduction.
 #[cfg(target_os = "linux")]
 fn run_on_runtime(
     case: &RenderCase,
@@ -70,6 +71,15 @@ fn run_on_runtime(
                 .map(|(&slot, texture)| {
                     let usage = crate::check::interface::texture_shader_usage(texture.role, None);
                     (slot, usage)
+                })
+                .collect(),
+            member_usages: &function
+                .resources
+                .argument_buffer_textures
+                .iter()
+                .map(|(&key, texture)| {
+                    let usage = crate::check::interface::texture_shader_usage(texture.role, None);
+                    (key, usage)
                 })
                 .collect(),
             reductions: &std::collections::BTreeSet::new(),
@@ -320,6 +330,85 @@ fn a_fragment_case_draws_through_its_generated_passthrough_vertex() {
         assert_eq!(through.output, floats(&expected));
         assert_eq!(through.status, None);
         assert_eq!(through.spv_sha256, None);
+    }
+}
+
+/// A fragment function samples the texture an argument buffer holds through the sampler beside it
+/// (`tail_argument_samplers`' `argument_sampler_fragment`, `m.t.sample(m.s, in.uv)`): at each of
+/// the 2x2 target's pixel centers the passthrough companion's `uv` is `(0.25 or 0.75, 0.75)` on
+/// row 0 and `(0.25 or 0.75, 0.25)` on row 1, so the nearest sampler reads the texture's row 1 into
+/// the target's row 0 and its row 0 into row 1, on the executor's own context and through the
+/// runtime, whose owner holds the member texture's and sampler's `gpuResourceID`s.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn a_fragment_samples_the_texture_an_argument_buffer_holds_through_its_sampler() {
+    use crate::case::{
+        ArgumentBufferSamplerResource, ArgumentBufferTextureResource, BufferResource, ResourceRole,
+        SamplerAddressMode, SamplerFilter, SamplerMipFilter, TextureType,
+    };
+    let fragment = public("engine/tail_argument_samplers.ll");
+    let mut authored = crate::companion::tests::case(
+        Stage::Fragment,
+        "argument_sampler_fragment",
+        TextureFormat::Rgba32Float,
+    );
+    authored.render_targets[0].dimensions = [2, 2];
+    authored.render_targets[0].initial_bytes_b64 = b64(&floats(&[-1.0; 16]));
+    authored.output = OutputSelection::RenderTarget {
+        index: 0,
+        origin: [0, 0],
+        dimensions: [2, 2],
+    };
+    authored.buffers = vec![BufferResource {
+        binding: 0,
+        role: ResourceRole::Input,
+        bytes_b64: Some(b64(&[0; 16])),
+        initial_bytes_b64: None,
+        rasterization_rate_map: None,
+    }];
+    let texels = [
+        [1.0f32, 0.0, 0.0, 1.0],
+        [2.0, 10.0, 0.0, 1.0],
+        [3.0, 0.0, 100.0, 1.0],
+        [4.0, 10.0, 100.0, 1.0],
+    ];
+    authored.argument_buffer_textures = vec![ArgumentBufferTextureResource {
+        buffer_binding: 0,
+        field_offset: 0,
+        role: ResourceRole::Input,
+        texture_type: TextureType::D2,
+        format: TextureFormat::Rgba32Float,
+        dimensions: [2, 2, 1],
+        sample_count: 1,
+        bytes_b64: Some(b64(&floats(&texels.concat()))),
+        initial_bytes_b64: None,
+    }];
+    authored.argument_buffer_samplers = vec![ArgumentBufferSamplerResource {
+        buffer_binding: 0,
+        field_offset: 8,
+        address_mode: SamplerAddressMode::ClampToEdge,
+        min_filter: SamplerFilter::Nearest,
+        mag_filter: SamplerFilter::Nearest,
+        mip_filter: SamplerMipFilter::NotMipmapped,
+        normalized_coordinates: true,
+        compare_function: None,
+    }];
+    let (case, companion) = with_companion(&authored, &fragment);
+    let expected = floats(&[texels[2], texels[3], texels[0], texels[1]].concat());
+    let run = run(
+        &case,
+        RenderLibraries {
+            vertex: &companion,
+            fragment: Some(&fragment),
+        },
+    )
+    .unwrap();
+    assert_eq!(run.output, expected);
+    #[cfg(target_os = "linux")]
+    {
+        assert!(crate::candidate::engine::runs_render_through_runtime(&case));
+        let through = run_on_runtime(&case, &fragment, Some(&companion)).unwrap();
+        assert_eq!(through.output, expected);
     }
 }
 

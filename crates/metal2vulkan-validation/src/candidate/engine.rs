@@ -111,7 +111,7 @@ pub mod variants;
 /// how it decides a match. A change no recorded row can observe (a case kind no earlier executor
 /// ran, or one it refused) needs no bump; its commit says why. The commit that bumps it says what
 /// changed; this comment keeps no history.
-pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v204";
+pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v205";
 
 /// One kernel case in the terms the binder takes: what this executor supports of an
 /// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures, command
@@ -943,14 +943,16 @@ pub struct RuntimeKernel<'a> {
 /// (`platform::execute_runtime_render`) in place of the executor's own context: a vertex or
 /// fragment case of any sample count (`raster_sample_count`; each attachment of more samples
 /// filled and read back sample by sample, `platform::runtime_multisample`), its own stage's
-/// buffers, bound textures (as [`runs_through_runtime`] makes them) and bound samplers, function
+/// buffers, bound textures (as [`runs_through_runtime`] makes them) and bound samplers, argument
+/// buffers of buffers, textures and samplers (as [`runs_through_runtime`] makes them), function
 /// constants and linked functions, its vertex buffers, its color targets and a depth/stencil
 /// attachment of one aspect, or none (a fragment case's pass of no attachment is the oracle's 1x1
 /// at its samples), the encoder's depth-stencil state, cull mode and winding, and
 /// one direct or indexed draw of primitives or one patch draw with no patch or control-point index
 /// buffer (a post-tessellation vertex function's, its factors bound as the tessellation factor
-/// buffer), observing a buffer, a texture, a color target, the depth/stencil attachment's aspect
-/// or nothing, whose out-of-bounds targets, if any, are attribute buffers
+/// buffer), observing a buffer, a texture, an argument-buffer member, a color target, the
+/// depth/stencil attachment's aspect or nothing, whose out-of-bounds targets, if any, are attribute
+/// buffers
 /// (`runtime_bounds::drawn` reads their facts). Decided by the case's structure alone:
 /// every field the mapping fills is named here, so a new one is decided when it is added.
 pub fn runs_render_through_runtime(case: &graphics::RenderCase) -> bool {
@@ -974,19 +976,15 @@ pub fn runs_render_through_runtime(case: &graphics::RenderCase) -> bool {
     let bound = |function: &graphics::RenderFunction| {
         let graphics::StageResources {
             buffers: _,
-            argument_buffer_buffers,
-            argument_buffer_textures,
-            argument_buffer_samplers,
+            argument_buffer_buffers: _,
+            argument_buffer_textures: _,
+            argument_buffer_samplers: _,
             objects,
             command_buffers,
             textures: _,
             samplers: _,
         } = &function.resources;
-        argument_buffer_buffers.is_empty()
-            && argument_buffer_textures.is_empty()
-            && argument_buffer_samplers.is_empty()
-            && objects.is_empty()
-            && command_buffers.is_empty()
+        objects.is_empty() && command_buffers.is_empty()
     };
     // The runtime renders into no separate depth and stencil textures in one pass
     // (`Gap::RenderPass` of `DepthStencilViews`), which the oracle makes of an attachment of both.
@@ -1019,6 +1017,8 @@ pub fn runs_render_through_runtime(case: &graphics::RenderCase) -> bool {
             graphics::RenderOutput::None
                 | graphics::RenderOutput::Buffer { .. }
                 | graphics::RenderOutput::Texture { .. }
+                | graphics::RenderOutput::ArgumentBufferTexture { .. }
+                | graphics::RenderOutput::ArgumentBufferBuffer { .. }
                 | graphics::RenderOutput::RenderTarget { .. }
                 | graphics::RenderOutput::Depth { .. }
                 | graphics::RenderOutput::Stencil { .. }
@@ -1054,6 +1054,7 @@ fn run_render_on_runtime(prepared: &PreparedCase, render: &graphics::RenderCase)
         &function.resources.buffers,
     );
     let texture_usages = runtime_texture_usages(&primary.case, &primary.interface);
+    let member_usages = runtime_member_usages(&primary.case, &primary.interface);
     super::platform::execute_runtime_render(
         prepared.device,
         &primary.case.case_id,
@@ -1064,6 +1065,7 @@ fn run_render_on_runtime(prepared: &PreparedCase, render: &graphics::RenderCase)
             linked: &prepared.linked,
             buffers: &buffers,
             texture_usages: &texture_usages,
+            member_usages: &member_usages,
             reductions: &reductions,
         },
     )
@@ -1073,7 +1075,8 @@ fn run_render_on_runtime(prepared: &PreparedCase, render: &graphics::RenderCase)
 /// case: the row's AIR, its generated companion's (`None` for a rasterization-disabled vertex
 /// case), the modules its own function links, its own stage's buffers' bytes by Metal index (each
 /// bound buffer padded to its declared size, as the oracle makes it), the usage of each texture
-/// slot its own stage binds (`runtime_texture_usages`), and the float reductions it executes
+/// slot its own stage binds (`runtime_texture_usages`) and of each argument-buffer texture by its
+/// field (`runtime_member_usages`), and the float reductions it executes
 /// (`check::interface::float_reductions`).
 pub struct RuntimeDraw<'a> {
     pub bitcode: &'a [u8],
@@ -1081,6 +1084,7 @@ pub struct RuntimeDraw<'a> {
     pub linked: &'a [LinkedModule],
     pub buffers: &'a BTreeMap<u32, Vec<u8>>,
     pub texture_usages: &'a BTreeMap<u32, metal2vulkan::metal::TextureUsage>,
+    pub member_usages: &'a BTreeMap<argument_buffers::FieldKey, metal2vulkan::metal::TextureUsage>,
     pub reductions: &'a std::collections::BTreeSet<&'static str>,
 }
 

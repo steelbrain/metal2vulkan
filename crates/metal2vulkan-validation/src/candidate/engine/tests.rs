@@ -2004,13 +2004,13 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
 }
 
 /// The runtime draws a vertex or fragment case of any sample count, its own stage's buffers,
-/// textures and samplers, vertex buffers, color targets, and one direct or indexed draw
-/// of primitives or one patch draw with no index buffer, observing a buffer, a texture, a color
-/// target or nothing; and a rasterization-disabled vertex case, which renders into the oracle's
-/// sink; a depth/stencil attachment of one aspect, of one sample or more, observed or not; a
-/// fragment pass with no attachment, of one sample or more; and an attribute buffer's
-/// out-of-bounds target. A case with anything else (a depth/stencil attachment of both aspects,
-/// layered rendering, an argument-buffer member, a patch draw through a patch index buffer, or an
+/// textures and samplers, argument-buffer members, vertex buffers, color targets, and one direct
+/// or indexed draw of primitives or one patch draw with no index buffer, observing a buffer, a
+/// texture, an argument-buffer member, a color target or nothing; and a rasterization-disabled
+/// vertex case, which renders into the oracle's sink; a depth/stencil attachment of one aspect, of
+/// one sample or more, observed or not; a fragment pass with no attachment, of one sample or more;
+/// and an attribute buffer's out-of-bounds target. A case with anything else (a depth/stencil
+/// attachment of both aspects, layered rendering, a patch draw through a patch index buffer, or an
 /// index buffer's out-of-bounds target) stays on the executor's own context.
 #[test]
 fn a_plain_draw_and_only_one_runs_through_the_runtime() {
@@ -2093,12 +2093,51 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
         OutOfBoundsResource::AttributeBuffer { location: 0 },
         ContainmentForm::VertexInput
     )));
+    // An argument buffer's buffer, texture and sampler, observed through the buffer member or the
+    // texture member.
     let mut member = plain.clone();
     if let Some(fragment) = &mut member.fragment {
-        fragment
-            .resources
+        let resources = &mut fragment.resources;
+        resources
             .argument_buffer_buffers
             .insert((0, 0), vec![0; 16]);
+        resources.argument_buffer_textures.insert(
+            (0, 8),
+            crate::literal::LiteralTexture {
+                binding: 0,
+                role: crate::case::ResourceRole::Input,
+                texture_type: crate::case::TextureType::D2,
+                format: TextureFormat::Rgba8Unorm,
+                dimensions: [1, 1, 1],
+                sample_count: 1,
+                bytes: vec![0; 4],
+                sparse: None,
+                mip_levels: 1,
+            },
+        );
+    }
+    assert!(runs_render_through_runtime(&member));
+    for output in [
+        RenderOutput::ArgumentBufferBuffer {
+            stage: metal2vulkan::pipeline::Stage::Fragment,
+            owner: 0,
+            field_offset: 0,
+            offset: 0,
+            length: 16,
+        },
+        RenderOutput::ArgumentBufferTexture {
+            stage: metal2vulkan::pipeline::Stage::Fragment,
+            owner: 0,
+            field_offset: 8,
+            origin: [0, 0, 0],
+            dimensions: [1, 1, 1],
+        },
+    ] {
+        let observed = RenderCase {
+            output,
+            ..member.clone()
+        };
+        assert!(runs_render_through_runtime(&observed));
     }
     // A depth/stencil attachment of one aspect, of one sample or more, observed or not, with or
     // without a color target; one of both aspects stays on the executor's own context.
@@ -2181,7 +2220,6 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
             render_target_array_length: 1,
             ..plain.clone()
         },
-        member,
         bounded(
             OutOfBoundsResource::IndexBuffer,
             ContainmentForm::IndexBuffer,

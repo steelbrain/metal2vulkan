@@ -487,7 +487,8 @@ cargo run -p metal2vulkan-validation --release --bin corpus-vulkan -- \
   holds, `rasterization_rate_map`: each the runtime's limit, run on Metal alone. A pixel format the runtime makes no image of on the device records `not_enabled`, as
   the executor's own context records a format its query lacks. A vertex or fragment case of any
   sample count draws through the runtime the same way (`engine::runs_render_through_runtime`): its own
-  stage's buffers, bound textures and samplers, function constants and linked functions, its
+  stage's buffers, bound textures and samplers, argument buffers of buffers, textures and samplers
+  (made, written and used as a kernel's), function constants and linked functions, its
   generated companion, its vertex buffers, its color targets (Shared 2D
   textures, loaded and stored by the pass), a depth/stencil attachment of one aspect as the oracle
   makes it (a Shared `Depth32Float` filled by a draw of its depths, as a 32-bit float depth texture
@@ -499,17 +500,17 @@ cargo run -p metal2vulkan-validation --release --bin corpus-vulkan -- \
   depth-stencil state, cull mode and winding, and one direct or indexed draw of primitives or one
   patch draw of a post-tessellation vertex function with no patch index buffer (its factors a
   Shared buffer bound as the tessellation factor buffer at the oracle's offset and instance
-  stride), observing a buffer, a texture, a color target, the attachment's aspect or nothing, its
-  out-of-bounds targets, if any, attribute buffers. Their facts are read
+  stride), observing a buffer, a texture, an argument-buffer member, a color target, the
+  attachment's aspect or nothing, its out-of-bounds targets, if any, attribute buffers. Their facts are read
   before the state is made, from the translator's compile of the state's descriptor on the
   runtime device's own translator: the runtime's floor enables no buffer robustness, so a
   fixed-function vertex fetch past its buffer is checked nowhere and the case is refused as
   `not_supported{uncontained:unchecked vertex_input}`. A rasterization-disabled vertex case renders
   into the oracle's 1x1 `R8Unorm` attachment, and a fragment case of no attachment into the
   oracle's pass of none: `renderTargetWidth` and `renderTargetHeight` 1, `defaultRasterSampleCount`
-  the case's samples. Layered rendering, an argument-buffer member, a patch index buffer or an
-  out-of-bounds target other than an attribute buffer keeps the case on the executor's own
-  context. A vertex buffer's dynamic stride carries `dynamic_vertex_stride` and a fragment
+  the case's samples. Layered rendering, an argument buffer's pipeline state or indirect command
+  buffer, a patch index buffer or an out-of-bounds target other than an attribute buffer keeps the
+  case on the executor's own context. A vertex buffer's dynamic stride carries `dynamic_vertex_stride` and a fragment
   function's imageblock `fragment_imageblock`, each the runtime's limit. An indexed
   draw past its index buffer, which the runtime refuses as Metal's validation does
   (`Refusal::IndexBufferOffset`), carries `index_buffer_past_end`, and a depth/stencil attachment

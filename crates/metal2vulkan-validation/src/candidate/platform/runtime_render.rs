@@ -5,8 +5,11 @@
 //! under the same validation layer and per-attempt ceilings ([`super::runtime`]): one render
 //! pipeline state of the oracle's descriptor (`graphics::pipeline_descriptor`), the case's own
 //! function from the row's AIR with its constants and linked functions and its generated
-//! companion from the companion's AIR; one Shared buffer per bound buffer, vertex buffer and index
-//! buffer; each bound texture and sampler as the Metal oracle makes them (`runtime_textures`); each
+//! companion from the companion's AIR; one Shared buffer per bound buffer, argument-buffer buffer,
+//! vertex buffer and index buffer; each bound and argument-buffer texture and sampler as the Metal
+//! oracle makes them (`runtime_textures`), each argument buffer holding each member's `gpuAddress`
+//! or `gpuResourceID` at its field and each member buffer and texture used for reading and
+//! writing, as a kernel's run makes and uses them (`runtime`); each
 //! color attachment a Shared 2D texture of its format and extent, written from the case's bytes
 //! and loaded and stored by the pass, and the oracle's 1x1 `R8Unorm` attachment where
 //! rasterization is disabled, which no draw writes; the depth/stencil attachment's one aspect as
@@ -30,6 +33,7 @@ use super::runtime_bounds;
 use super::runtime_depth;
 use super::runtime_multisample;
 use super::runtime_textures::{self, Bound, Indices, Wanted};
+use crate::candidate::engine::argument_buffers::{self, FieldKey};
 use crate::candidate::engine::graphics::{
     self, Assembly, ColorTarget, RenderCase, RenderFinals, RenderOutput,
 };
@@ -199,9 +203,29 @@ fn run(
             };
             runtime_textures::read_back(made, texture, origin, dimensions, runtime_error)?
         }
+        RenderOutput::ArgumentBufferTexture {
+            stage,
+            owner,
+            field_offset,
+            origin,
+            dimensions,
+        } => {
+            let key = (owner, field_offset);
+            let (Some(made), Some(texture)) = (
+                stages.of(stage).and_then(|bound| bound.members.get(&key)),
+                case.function(stage)
+                    .and_then(|function| function.resources.argument_buffer_textures.get(&key)),
+            ) else {
+                return Err(ExecutorError::Failed(format!(
+                    "output argument-buffer texture {owner}+{field_offset} of {stage:?} is not made"
+                )));
+            };
+            runtime_textures::read_back(made, texture, origin, dimensions, runtime_error)?
+        }
         output => {
             let finals = RenderFinals {
                 buffers: stages.finals(),
+                argument_buffer_buffers: stages.member_finals(),
                 targets: targets.finals(device, device_type, case)?,
                 depth_stencil: targets.depth_stencil_finals(device, device_type)?,
                 ..RenderFinals::default()
@@ -291,14 +315,25 @@ fn descriptor(
     Ok(descriptor)
 }
 
-/// What each stage of a draw binds: its buffers, by Metal index, and its textures and samplers.
+/// What one stage of a draw binds: its buffers, by Metal index, its argument-buffer buffers, by
+/// owner and field offset, and its textures and samplers, bound and in argument buffers.
+struct StageBinds {
+    stage: ShaderStage,
+    buffers: BTreeMap<u32, Placed>,
+    members: BTreeMap<FieldKey, Placed>,
+    bound: Bound,
+}
+
+/// What each stage of a draw binds.
 struct Stages {
-    stages: Vec<(ShaderStage, BTreeMap<u32, Placed>, Bound)>,
+    stages: Vec<StageBinds>,
 }
 
 impl Stages {
     /// Each stage's buffers (the case's own stage's as `draw` pads them, a companion's as the case
-    /// holds them) and its textures and samplers, made at the run's next indices.
+    /// holds them), its argument-buffer buffers, and its textures and samplers, made at the run's
+    /// next indices, as a kernel's run makes them (`runtime`): each owner holding each member's
+    /// `gpuAddress` or `gpuResourceID` at its field (`argument_buffers::owner_bytes`).
     fn make(
         device: &rt::Device,
         device_type: DeviceType,
@@ -307,8 +342,6 @@ impl Stages {
     ) -> Result<Stages, ExecutorError> {
         let no_usages = BTreeMap::new();
         let no_member_usages = BTreeMap::new();
-        let no_members = BTreeMap::new();
-        let no_member_samplers = BTreeMap::new();
         let mut stages = Vec::new();
         for (stage, function) in case.stages() {
             let own = case.companion_stage() != Some(stage);
@@ -317,27 +350,51 @@ impl Stages {
                 true => draw.buffers,
                 false => &resources.buffers,
             };
-            let placed = buffers
+            let members = resources
+                .argument_buffer_buffers
                 .iter()
-                .map(|(&index, bytes)| {
-                    let what = format!("{stage:?} buffer {index}");
-                    Ok((index, Placed::new(device, &what, bytes)?))
+                .map(|(&(owner, field), bytes)| {
+                    let what = format!("{stage:?} argument-buffer buffer {owner}+{field}");
+                    Ok(((owner, field), Placed::new(device, &what, bytes)?))
                 })
-                .collect::<Result<BTreeMap<u32, Placed>, ExecutorError>>()?;
+                .collect::<Result<BTreeMap<FieldKey, Placed>, ExecutorError>>()?;
             let wanted = Wanted {
                 textures: &resources.textures,
                 samplers: &resources.samplers,
-                members: &no_members,
-                member_samplers: &no_member_samplers,
+                members: &resources.argument_buffer_textures,
+                member_samplers: &resources.argument_buffer_samplers,
                 texture_usages: match own {
                     true => draw.texture_usages,
                     false => &no_usages,
                 },
-                member_usages: &no_member_usages,
+                member_usages: match own {
+                    true => draw.member_usages,
+                    false => &no_member_usages,
+                },
             };
             let bound =
                 runtime_textures::make(device, device_type, &wanted, indices, runtime_error)?;
-            stages.push((stage, placed, bound));
+            let mut words = bound.words();
+            words.extend(
+                members
+                    .iter()
+                    .map(|(&key, placed)| (key, placed.buffer.gpu_address())),
+            );
+            let buffers = buffers
+                .keys()
+                .map(|&index| {
+                    let bytes = argument_buffers::owner_bytes(buffers, index, &words)
+                        .map_err(ExecutorError::Failed)?;
+                    let what = format!("{stage:?} buffer {index}");
+                    Ok((index, Placed::new(device, &what, &bytes)?))
+                })
+                .collect::<Result<BTreeMap<u32, Placed>, ExecutorError>>()?;
+            stages.push(StageBinds {
+                stage,
+                buffers,
+                members,
+                bound,
+            });
         }
         Ok(Stages { stages })
     }
@@ -346,13 +403,20 @@ impl Stages {
     fn of(&self, stage: ShaderStage) -> Option<&Bound> {
         self.stages
             .iter()
-            .find_map(|(at, _, bound)| (*at == stage).then_some(bound))
+            .find_map(|binds| (binds.stage == stage).then_some(&binds.bound))
     }
 
-    /// Bind every stage's buffers, textures and samplers on `encoder`.
+    /// Bind every stage's buffers, textures and samplers on `encoder`, and use each
+    /// argument-buffer buffer and texture for reading and writing, as a kernel's run uses them.
     fn bind(&self, encoder: &mut rt::RenderCommandEncoder) -> Result<(), ExecutorError> {
         let fail = |what: &'static str| move |error: rt::Error| runtime_error(what, error);
-        for (stage, buffers, bound) in &self.stages {
+        for StageBinds {
+            stage,
+            buffers,
+            members,
+            bound,
+        } in &self.stages
+        {
             let vertex = *stage == ShaderStage::Vertex;
             for (&index, placed) in buffers {
                 match vertex {
@@ -375,6 +439,15 @@ impl Stages {
                 }
                 .map_err(fail("a sampler"))?;
             }
+            let used = members
+                .values()
+                .map(|placed| rt::Resource::Buffer(&placed.buffer))
+                .chain(bound.members.values().map(rt::Resource::Texture));
+            for resource in used {
+                encoder
+                    .use_resource(resource, rt::ResourceUsage::READ | rt::ResourceUsage::WRITE)
+                    .map_err(fail("an argument-buffer member's use"))?;
+            }
         }
         Ok(())
     }
@@ -383,10 +456,23 @@ impl Stages {
     fn finals(&self) -> BTreeMap<(ShaderStage, u32), Vec<u8>> {
         self.stages
             .iter()
-            .flat_map(|(stage, buffers, _)| {
-                buffers
+            .flat_map(|binds| {
+                binds
+                    .buffers
                     .iter()
-                    .map(move |(&index, placed)| ((*stage, index), placed.bytes()))
+                    .map(move |(&index, placed)| ((binds.stage, index), placed.bytes()))
+            })
+            .collect()
+    }
+
+    /// Every stage's argument-buffer buffers' bytes now, by stage, owner and field offset.
+    fn member_finals(&self) -> BTreeMap<(ShaderStage, u32, u32), Vec<u8>> {
+        self.stages
+            .iter()
+            .flat_map(|binds| {
+                binds.members.iter().map(move |(&(owner, field), placed)| {
+                    ((binds.stage, owner, field), placed.bytes())
+                })
             })
             .collect()
     }
