@@ -2627,10 +2627,16 @@ named states the rule in full.
 - **A filled primitive reaching past a viewport whose edge crosses a pixel is covered at that edge by
   the device's own rule.** Metal states only that "fragments that lie outside of the viewport are
   clipped" (`MTLRenderCommandEncoder.h`, `setViewport:`), not which a pixel the viewport's edge
-  crosses is. Measured, Metal on an Apple M3 Max covers every pixel the viewport overlaps, a pixel it
-  holds only part of included; a Vulkan device clips the primitive to the viewport and covers a pixel
-  where its sample lies in the clipped primitive (the conformance case `fractional-viewport-coverage`,
-  lavapipe: 344 elements).
+  crosses is. Measured (the conformance case `fractional-viewport-coverage`), Metal on an Apple M3
+  Max covers every pixel the viewport overlaps, a pixel it holds only part of included, and so do
+  RADV on an RX 7900 XTX, two Radeon 780Ms (1002:15bf, 1002:1900) and an RX 550, and NVIDIA's driver
+  on an RTX 3090, an RTX 2080 and an RTX 5080 (m3-max-64279, 64288, 64280, 64323, 64286, 64287,
+  64282). Two devices differ. lavapipe covers such a pixel only where its sample lies in the
+  primitive clipped to the viewport (344 elements). The Iris Xe (ANV) covers every pixel the
+  viewport's near edges cross, as Metal does, and no pixel its far edges cross (m3-max-64281): where
+  that pixel's sample lies outside the viewport or on its edge, this is the difference (240
+  elements); where the sample lies inside, it is a driver bug, a known gap of the runtime (its
+  README, Known gaps of render encoders).
 - **A line's tie-break is the device's own.** Lines draw by Bresenham's rule, which is Metal's
   (`bresenhamLines`, the runtime's floor): the pixels whose diamond the line exits, each within
   the one pixel Vulkan allows an implementation (`PrecisionNote::DeviceLineRasterization`). Vulkan's
