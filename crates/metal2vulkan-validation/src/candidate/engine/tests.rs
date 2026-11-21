@@ -2099,10 +2099,10 @@ fn plain_kernel() -> ComputeCase {
 /// makes and bound samplers, argument buffers of buffers, such textures and samplers, dispatched
 /// by threads or threadgroups and observing a buffer, a texture, an argument-buffer member or
 /// nothing, a 32-bit float depth or a multisampled texture among its textures (which the run
-/// fills by a draw) and its out-of-bounds targets among them (`platform::runtime_bounds`); a case
-/// with anything else (a pipeline state in an argument buffer, an explicit imageblock, an indirect
-/// dispatch, a texture the runtime does not make: sparse, a texture buffer or a cube array) stays
-/// on the executor's own context.
+/// fills by a draw), a cube array among them, and its out-of-bounds targets among them
+/// (`platform::runtime_bounds`); a case with anything else (a pipeline state in an argument
+/// buffer, an explicit imageblock, an indirect dispatch, a texture the runtime does not make:
+/// sparse or a texture buffer) stays on the executor's own context.
 #[test]
 fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
     use crate::case::{
@@ -2216,6 +2216,12 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
         &authored,
         &textured(texture(TextureType::D2Multisample, 4))
     ));
+    let cube_array = LiteralTexture {
+        dimensions: [4, 4, 12],
+        bytes: vec![0; 768],
+        ..texture(TextureType::CubeArray, 1)
+    };
+    assert!(runs_through_runtime(&authored, &textured(cube_array)));
     let bounded = ComputeCase {
         out_of_bounds: vec![OutOfBoundsTarget {
             resource: OutOfBoundsResource::Buffer { binding: 0 },
@@ -2238,7 +2244,6 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
         },
         textured(sparse),
         textured(texture(TextureType::Buffer, 1)),
-        textured(texture(TextureType::CubeArray, 1)),
         member_buffer,
     ];
     for other in &others {

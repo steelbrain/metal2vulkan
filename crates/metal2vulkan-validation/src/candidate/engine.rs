@@ -123,7 +123,7 @@ use tables::{function_tables, table_buffers, FunctionTable, TableBuffers};
 /// how it decides a match. A change no recorded row can observe (a case kind no earlier executor
 /// ran, or one it refused) needs no bump; its commit says why. The commit that bumps it says what
 /// changed; this comment keeps no history.
-pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v201";
+pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v202";
 
 /// One kernel case in the terms the binder takes: what this executor supports of an
 /// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures, command
@@ -1211,18 +1211,14 @@ pub fn runs_through_runtime(authored: &AuthoredCase, case: &ComputeCase) -> bool
 }
 
 /// Whether the runtime makes `texture` as the Metal oracle makes it: no sparse mapping (a sparse
-/// texture stays on the executor's own context), and neither a texture buffer, which the runtime
-/// does not build (`Gap::TextureBuffer`), nor a cube array, which stays on the executor's own
-/// context too. A 32-bit float depth, whose bytes the runtime takes no upload of
+/// texture stays on the executor's own context), and no texture buffer, which the runtime does not
+/// build (`Gap::TextureBuffer`). A cube array is a cube-compatible image of its cubes' faces, as
+/// any cube. A 32-bit float depth, whose bytes the runtime takes no upload of
 /// (`Gap::FloatDepthUpload`), is filled by a draw, as a guest fills one
 /// (`platform::runtime_depth`), and a multisampled texture, which neither Metal nor the runtime
 /// uploads, by a draw per slice that writes it sample by sample (`platform::runtime_multisample`).
 fn runtime_texture(texture: &LiteralTexture) -> bool {
-    texture.sparse.is_none()
-        && !matches!(
-            texture.texture_type,
-            TextureType::Buffer | TextureType::CubeArray
-        )
+    texture.sparse.is_none() && texture.texture_type != TextureType::Buffer
 }
 
 /// The bytes of each buffer a run through the runtime binds, by Metal index, as the Metal oracle
