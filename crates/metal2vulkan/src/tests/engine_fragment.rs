@@ -2186,10 +2186,10 @@ fn a_premultiplied_blend_into_a_padded_attachment_is_computed_in_the_shader() {
 /// it is made too, the second output stored nowhere. Under fast math the same pipeline is made too;
 /// the blend of a function that writes no second output is refused as Metal refuses its pipeline,
 /// `InvalidDescriptor(ColorAttachment)`.
-/// Into each of the six extended-range formats, unblended (the raw texel through the interface) or
-/// blended premultiplied over (the storage form's blend, which reads no second source), with and
-/// without fast math, the function's two outputs make the pipeline, the second stored nowhere: no
-/// dual-source output.
+/// Into each of the six extended-range formats unblended (the raw texel through the interface), with
+/// and without fast math, the function's two outputs make the pipeline, the second stored nowhere:
+/// no dual-source output. Blended premultiplied over, which reads no second source, each is refused
+/// `NotImplemented(Format)`, as every blend into one of Apple's extended-range forms is.
 #[test]
 fn a_second_source_blend_without_fast_math_reads_the_second_output() {
     use crate::metal::format::ExtendedRange;
@@ -2325,7 +2325,8 @@ fn a_second_source_blend_without_fast_math_reads_the_second_output() {
             })) => {}
             r => panic!("{stem}: no second output: {:?}", r.map(|_| ())),
         }
-        // A second output no blend reads, into each extended-range format: stored nowhere.
+        // A second output no blend reads, into each extended-range format: stored nowhere where
+        // the attachment is unblended; a blend into one is refused (`blended_pipelines`).
         for raw in 550..=555u32 {
             let pf = PixelFormat::try_from(raw).expect("format");
             for (bc, math) in [(&safe, "safe"), (&fast, "fast")] {
@@ -2344,9 +2345,18 @@ fn a_second_source_blend_without_fast_math_reads_the_second_output() {
                     )));
                     d.color_attachments[0] = Some(color);
                     let what = format!("{stem}: {pf:?} {math} blended {blending}");
-                    let pipe = dev
-                        .compile_render_pipeline(&d, &Budget::standard())
-                        .unwrap_or_else(|e| panic!("{what}: {e}"));
+                    let made = dev.compile_render_pipeline(&d, &Budget::standard());
+                    if blending {
+                        match made {
+                            Err(Error::Unsupported(u)) => {
+                                assert_eq!(u.feature, Feature::Format, "{what}: {u:?}");
+                                assert_eq!(u.needs, Needs::NotImplemented, "{what}: {u:?}");
+                            }
+                            r => panic!("{what}: {:?}", r.map(|_| ())),
+                        }
+                        continue;
+                    }
+                    let pipe = made.unwrap_or_else(|e| panic!("{what}: {e}"));
                     assert!(
                         !pipe
                             .requirements
