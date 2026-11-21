@@ -187,3 +187,54 @@ fn a_record_without_the_tessellation_key_is_unrecorded() {
          program's tessellation state is unknown, and the player drew them with Metal's defaults"
     );
 }
+
+/// A fault's access is placed among the stream's buffers and heaps: in a live buffer and the live
+/// heap it lies in, by address, with its offset in each; in a released buffer, with the frame and
+/// call of its release, newest first; outside all of them where none meets its range, which is
+/// the address rounded down to its precision. The released ones kept are the last `FREED_KEPT`.
+#[test]
+fn a_fault_s_access_is_placed_among_the_stream_s_buffers_and_heaps() {
+    use super::faulted::{place, Freed, Span, FREED_KEPT};
+    let at = |address, precision| rt::FaultAddress {
+        kind: ash::vk::DeviceFaultAddressTypeEXT::READ_INVALID,
+        address,
+        precision,
+    };
+    let span = |object, heap, start, len| Span {
+        object,
+        heap,
+        start,
+        len,
+    };
+    let live = [
+        span(7, false, 0x1_2000, 0x1000),
+        span(3, true, 0x1_0000, 0x1_0000),
+        span(9, false, 0x3_0080, 0x100),
+    ];
+    let mut freed = Freed::default();
+    freed.released(span(11, false, 0x5_0000, 0x2000), (4, 120));
+    freed.released(span(12, false, 0x5_1000, 0x40), (6, 33));
+    assert_eq!(
+        place(&at(0x1_2345, 0x10), &live, &freed),
+        " in #3 heap +0x2345 live, #7 buffer +0x345 live"
+    );
+    // A page's precision meets a buffer that starts inside the page, past the address.
+    assert_eq!(
+        place(&at(0x3_0010, 0x1000), &live, &freed),
+        " in #9 buffer -0x70 live"
+    );
+    assert_eq!(
+        place(&at(0x5_1008, 0x4), &live, &freed),
+        " in #12 buffer +0x8 released at frame 6 call 33, #11 buffer +0x1008 released at frame 4 call 120"
+    );
+    assert_eq!(
+        place(&at(0x9_0000, 0x1000), &live, &freed),
+        " outside every buffer and heap of the stream"
+    );
+    // Filled past what it keeps, the oldest released buffer goes.
+    for object in 0..FREED_KEPT as u64 {
+        freed.released(span(100 + object, false, 0x100_0000, 0x10), (7, object));
+    }
+    let placed = place(&at(0x5_0000, 0x4), &[], &freed);
+    assert_eq!(placed, " outside every buffer and heap of the stream");
+}

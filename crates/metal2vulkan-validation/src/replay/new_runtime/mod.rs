@@ -11,6 +11,7 @@
 
 mod aside;
 mod encoders;
+mod faulted;
 mod guest_ram;
 mod imports;
 pub(super) mod indices;
@@ -433,18 +434,43 @@ fn stages_line(at: &str, stages: &Stages) -> String {
 
 /// A `loss CALL RESULT` line of the report for the device's first loss (`Device::loss`), with the
 /// driver's fault report as given where the runtime read one: its description, then each access,
-/// instruction pointer and vendor record.
-fn loss_line(loss: &rt::DeviceLoss) -> String {
+/// placed among the stream's buffers and heaps, `live` and `freed` (`faulted`), each instruction
+/// pointer and each vendor record.
+fn loss_line(loss: &rt::DeviceLoss, live: &[faulted::Span], freed: &faulted::Freed) -> String {
     let mut line = format!("loss {} {:?}", loss.call, loss.result);
     if let Some(fault) = &loss.fault {
         line.push_str(&format!("; fault {:?}", fault.description));
-        line.extend(fault.accesses.iter().map(|a| format!("; access {a:?}")));
+        line.extend((fault.accesses.iter()).map(|a| {
+            let placed = faulted::place(a, live, freed);
+            format!("; access {a:?}{placed}")
+        }));
         line.extend((fault.instructions.iter()).map(|a| format!("; instruction {a:?}")));
         line.extend((fault.vendor.iter()).map(|(description, code, data)| {
             format!("; vendor {description:?} code {code:#x} data {data:#x}")
         }));
     }
     line
+}
+
+/// Buffer `object`'s memory in the play, for placing a fault's addresses.
+fn span(object: u64, buffer: &rt::Buffer) -> faulted::Span {
+    let (start, len) = (buffer.gpu_address(), buffer.length());
+    faulted::Span {
+        object,
+        heap: false,
+        start,
+        len,
+    }
+}
+
+/// Block or heap `object`'s memory in the play, for placing a fault's addresses.
+fn block_span(object: u64, range: &rt::HeapRange, block: &rt::Block) -> faulted::Span {
+    faulted::Span {
+        object,
+        heap: true,
+        start: block.gpu_address + range.offset,
+        len: range.len,
+    }
 }
 
 /// A compute pipeline state's making: its wall time, and whether its kernel was new to the play
@@ -537,6 +563,8 @@ pub struct NewRuntime {
     skips: Skips,
     /// The frame and the stream position of the call being played (`Backend::locate`).
     at: (u64, u64),
+    /// The stream's buffers and heaps released, for placing a fault's addresses (`faulted`).
+    freed: faulted::Freed,
     substitutes: Substitutes,
     unrecorded_tessellation: render::UnrecordedTessellation,
     /// Each open encoder's command buffer.
@@ -975,6 +1003,7 @@ impl NewRuntime {
             completed: 0,
             skips: Skips::default(),
             at: (0, 0),
+            freed: faulted::Freed::default(),
             substitutes: Substitutes::default(),
             unrecorded_tessellation: render::UnrecordedTessellation::default(),
             owners: HashMap::new(),
@@ -2488,7 +2517,8 @@ impl Backend for NewRuntime {
             match self.objects.remove(&call.receiver) {
                 // Its place and its device copy's, where it has them: a no-copy buffer's memory
                 // is an import, and one in a block or heap the stream's.
-                Some(Object::Buffer(_, place)) => {
+                Some(Object::Buffer(buffer, place)) => {
+                    self.freed.released(span(call.receiver, &buffer), self.at);
                     let copy = self.device_copies.remove(&call.receiver);
                     let held: Vec<Place> = copy.into_iter().chain(place).collect();
                     if !held.is_empty() {
@@ -2501,6 +2531,8 @@ impl Backend for NewRuntime {
                 // The runtime keeps the block while a buffer of it lives or work uses it, as a
                 // heap's resources keep the heap.
                 Some(Object::Block(range, class, block)) => {
+                    let heap = block_span(call.receiver, &range, &block);
+                    self.freed.released(heap, self.at);
                     self.no_copies.block_released(call.receiver);
                     self.device.release_block(block).map_err(failed(call))?;
                     self.block_bytes[class_index(class)] -= range.len;
@@ -3186,7 +3218,16 @@ impl Backend for NewRuntime {
         let metrics = self.device.counters().metrics();
         let longest = metrics.commit_lock_wait_max_nanos;
         lines.push(format!("commit lock wait longest {longest} ns"));
-        lines.extend(self.device.loss().as_ref().map(loss_line));
+        if let Some(loss) = self.device.loss() {
+            let live: Vec<faulted::Span> = (self.objects.iter())
+                .filter_map(|(&object, held)| match held {
+                    Object::Buffer(buffer, _) => Some(span(object, buffer)),
+                    Object::Block(range, _, block) => Some(block_span(object, range, block)),
+                    _ => None,
+                })
+                .collect();
+            lines.push(loss_line(&loss, &live, &self.freed));
+        }
         let ended = self.frame_stages.iter().enumerate();
         lines.extend(ended.map(|(frame, stages)| stages_line(&frame.to_string(), stages)));
         lines.push(stages_line("end", &stages(&metrics)));
