@@ -7570,7 +7570,7 @@ struct	metal2vulkan-runtime::DeviceOptions	#[derive(Clone, Default)] #[non_exhau
 struct	metal2vulkan-runtime::DispatchVariant	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct DispatchVariant
 struct	metal2vulkan-runtime::Event	#[derive(Clone)] pub struct Event
 struct	metal2vulkan-runtime::Export	#[derive(Debug)] #[non_exhaustive] pub struct Export
-struct	metal2vulkan-runtime::FaultAddress	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct FaultAddress
+struct	metal2vulkan-runtime::FaultAddress	#[derive(Clone, Copy, PartialEq, Eq)] pub struct FaultAddress
 struct	metal2vulkan-runtime::Fence	#[derive(Clone)] pub struct Fence
 struct	metal2vulkan-runtime::FunctionDescriptor	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct FunctionDescriptor
 struct	metal2vulkan-runtime::Gauges	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct Gauges
@@ -7947,6 +7947,7 @@ trait-impl	metal2vulkan-runtime::DepthStencilDescriptor impl Default	impl Defaul
 trait-impl	metal2vulkan-runtime::Error impl From<Unmade>	impl From<Unmade> for Error
 trait-impl	metal2vulkan-runtime::Error impl fmt::Display	impl fmt::Display for Error
 trait-impl	metal2vulkan-runtime::Error impl std::error::Error	impl std::error::Error for Error
+trait-impl	metal2vulkan-runtime::FaultAddress impl fmt::Debug	impl fmt::Debug for FaultAddress
 trait-impl	metal2vulkan-runtime::Gap impl fmt::Display	impl fmt::Display for Gap
 trait-impl	metal2vulkan-runtime::HostBytes impl From<&'a [u8]>	impl<'a> From<&'a [u8]> for HostBytes<'a>
 trait-impl	metal2vulkan-runtime::Limit impl fmt::Display	impl fmt::Display for Limit
