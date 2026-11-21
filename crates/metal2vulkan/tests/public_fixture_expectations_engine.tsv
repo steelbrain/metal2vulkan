@@ -2436,6 +2436,12 @@ engine/rfs_kernel_lod.ll	lod_depth	Unsupported{ImplicitLodOutsideFragment; NotIm
 engine/rfs_kernel_lod.ll	lod_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rgbx_sample_half.air.ll	rgbx_sample_half	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rgbx_sample_half.ll	rgbx_sample_half	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/rlm_runtime_limits.air.ll	rlm_fence_acq_rel	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/rlm_runtime_limits.air.ll	rlm_member_texture_buffer	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{ArgumentBufferTextures; AnyOf[[Feature(ShaderUniformTexelBufferArrayNonUniformIndexing), Feature(DescriptorBindingUniformTexelBufferUpdateAfterBind)]]}
+engine/rlm_runtime_limits.air.ll	rlm_member_texture	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/rlm_runtime_limits.ll	rlm_fence_acq_rel	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/rlm_runtime_limits.ll	rlm_member_texture_buffer	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	Unsupported{ArgumentBufferTextures; AnyOf[[Feature(ShaderUniformTexelBufferArrayNonUniformIndexing), Feature(DescriptorBindingUniformTexelBufferUpdateAfterBind)]]}
+engine/rlm_runtime_limits.ll	rlm_member_texture	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/row_lockstep_tree.air.ll	row_lockstep_tree	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/row_lockstep_tree.ll	row_lockstep_tree	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/rrp_mirror_clamp.air.ll	rrp_mc_sample	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
