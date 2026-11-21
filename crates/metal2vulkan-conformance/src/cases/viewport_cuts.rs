@@ -652,13 +652,15 @@ mod tests {
             panic!("drawn/texels holds no bytes");
         };
         assert_eq!(bytes.len(), plane(size) as usize);
+        let (texels, _) = bytes.as_chunks::<{ TEXEL as usize }>();
         Some(
-            bytes
-                .chunks_exact(TEXEL as usize)
+            texels
+                .iter()
                 .map(|texel| {
+                    let (words, _) = texel.as_chunks::<4>();
                     let mut channels = [0f32; 4];
-                    for (channel, word) in channels.iter_mut().zip(texel.chunks_exact(4)) {
-                        *channel = f32::from_le_bytes([word[0], word[1], word[2], word[3]]);
+                    for (channel, word) in channels.iter_mut().zip(words) {
+                        *channel = f32::from_le_bytes(*word);
                     }
                     channels
                 })
@@ -799,7 +801,8 @@ mod tests {
             let reach = f64::from(corner.abs());
             assert!(reach > 1.0 && reach < KEPT_BAND, "{corner}");
         }
-        assert!(COVER[0] < COVER[2] && COVER[1] < COVER[3]);
+        // The first corner below and left of the square, the second above and right of it.
+        assert_eq!(COVER.map(f32::signum), [-1.0, -1.0, 1.0, 1.0]);
         // The triangle's legs lie along x = -2 and y = -2 and its third edge along x + y = 4, so
         // the clip square lies inside it: a unit from each leg, and its corner (1, 1), where
         // x + y = 2, is the square's nearest point to the third edge.
