@@ -12,6 +12,12 @@
 //! - `setLineWidth:` plays: at width 1 a draw of lines after it plays; at width 2 a draw of
 //!   triangles plays and one of lines is the runtime's gap, skipped and counted, and the report
 //!   says the play is no verdict past it: its gap, frame and call.
+//! - A pass's visibility results play as the runtime's: in a `Reset` pass, `Counting` and
+//!   `Boolean` modes before draws of the whole target write its 16 samples into their words, and
+//!   a word no mode took keeps its bytes, nothing skipped. A mode at an offset the encoder took
+//!   before is the runtime's refusal, Metal's own, skipped and counted by its kind; in an
+//!   `Accumulate` pass both modes are the runtime's gap, skipped and counted, and the buffer keeps
+//!   its bytes.
 //! - A compute pipeline state the runtime answers with a typed gap is skipped and counted by the
 //!   gap, and a dispatch of it is skipped, and the play goes on.
 //! - Each pipeline state's making is split by the runtime's counters into the translator's time,
@@ -638,6 +644,160 @@ fn a_line_width_plays_and_a_line_drawn_at_another_width_is_skipped() {
     let note = report.verdict_note();
     assert_eq!(note.as_deref(), Some("not a verdict past frame 0, call 21"));
     let line = "skipped render commands Draw { kind: LineWidth } 1, the first at frame 0, call 21";
+    assert!(lines.iter().any(|l| l == line), "{lines:?}");
+}
+
+/// A word of a visibility result buffer that no mode wrote: its bytes as made.
+const UNWRITTEN: u64 = 0xaaaa_aaaa_aaaa_aaaa;
+
+/// A stream of a pass over a 4 by 4 target whose visibility result buffer (#10, a Shared one of
+/// three words, made as `0xaa` bytes) is of `visibilityResultType` `kind` (0 `Reset`, 1
+/// `Accumulate`): `Counting` at offset 0 (call 18) and a draw of the whole target (call 19), then
+/// `Boolean` at offset 8 (call 20) and the draw again (call 21), and, with `revisit`, `Counting` at
+/// offset 0 again (call 22), which Metal's validation stops; no mode takes offset 16. Once the
+/// command buffer completes, the stream checks the buffer as `words`.
+fn visibility_results(dir: &ScratchDir, kind: u64, revisit: bool, words: [u64; 3]) -> PathBuf {
+    written(dir, |w| {
+        let library = w.blob(&render_library(dir))?;
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        let library = [Value::Blob(library)];
+        w.call("newLibraryWithData:error:", 1, 3, &library, &[])?;
+        let vertex = [Value::Str("colored_vertex".into())];
+        w.call("newFunctionWithName:", 3, 4, &vertex, &[])?;
+        let fragment = [Value::Str("colored_fragment".into())];
+        w.call("newFunctionWithName:", 3, 5, &fragment, &[])?;
+        let pipeline = Value::Map(vec![
+            ("vertex".into(), Value::Object(4)),
+            ("fragment".into(), Value::Object(5)),
+            ("color0PixelFormat".into(), Value::Uint(70)),
+        ]);
+        let made = "newRenderPipelineStateWithDescriptor:error:";
+        w.call(made, 1, 6, &[pipeline], &[])?;
+        // RGBA8Unorm, 4 by 4, render-target, Private.
+        let target = uints(&[
+            ("textureType", 2),
+            ("pixelFormat", 70),
+            ("width", 4),
+            ("height", 4),
+            ("usage", 4),
+            ("storageMode", 2),
+        ]);
+        w.call("newTextureWithDescriptor:", 1, 7, &[target], &[])?;
+        // One triangle over the whole target, and the visibility result buffer.
+        let positions = floats(&[-1.0, -1.0, 3.0, -1.0, -1.0, 3.0]);
+        let colors = floats(&[0.0, 1.0, 0.0, 1.0].repeat(3));
+        let unwritten = Value::Bytes(vec![0xaa; 24]);
+        for (id, bytes) in [(8, positions), (9, colors), (10, unwritten)] {
+            let Value::Bytes(data) = &bytes else {
+                unreachable!("bytes");
+            };
+            let args = [
+                bytes.clone(),
+                Value::Uint(data.len() as u64),
+                Value::Uint(0),
+            ];
+            w.call("newBufferWithBytes:length:options:", 1, id, &args, &[])?;
+        }
+        w.call("MTLRenderPassDescriptor.new", 0, 11, &[], &[])?;
+        let Value::Map(mut pass) = uints(&[
+            ("renderTargetWidth", 4),
+            ("renderTargetHeight", 4),
+            ("visibilityResultType", kind),
+        ]) else {
+            unreachable!("a map");
+        };
+        pass.push(("visibilityResultBuffer".into(), Value::Object(10)));
+        w.call("m2v.setPass", 11, 0, &[Value::Map(pass)], &[])?;
+        let Value::Map(mut color) = uints(&[("level", 0), ("loadAction", 0), ("storeAction", 1)])
+        else {
+            unreachable!("a map");
+        };
+        color.push(("texture".into(), Value::Object(7)));
+        let args = [Value::Uint(0), Value::Map(color)];
+        w.call("m2v.setColorAttachment", 11, 0, &args, &[])?;
+        w.call("commandBuffer", 2, 12, &[], &[])?;
+        let pass = [Value::Object(11)];
+        w.call("renderCommandEncoderWithDescriptor:", 12, 13, &pass, &[])?;
+        w.call("setRenderPipelineState:", 13, 0, &[Value::Object(6)], &[])?;
+        for (buffer, index) in [(8, 0), (9, 1)] {
+            let args = [Value::Object(buffer), Value::Uint(0), Value::Uint(index)];
+            w.call("setVertexBuffer:offset:atIndex:", 13, 0, &args, &[])?;
+        }
+        // MTLVisibilityResultModeCounting at 0, then MTLVisibilityResultModeBoolean at 8, each
+        // before a draw of the triangle (MTLPrimitiveTypeTriangle, from vertex 0, three).
+        let mode = "setVisibilityResultMode:offset:";
+        let draw = [Value::Uint(3), Value::Uint(0), Value::Uint(3)];
+        for (raw, offset) in [(2, 0), (1, 8)] {
+            w.call(mode, 13, 0, &[Value::Uint(raw), Value::Uint(offset)], &[])?;
+            w.call("drawPrimitives:vertexStart:vertexCount:", 13, 0, &draw, &[])?;
+        }
+        if revisit {
+            w.call(mode, 13, 0, &[Value::Uint(2), Value::Uint(0)], &[])?;
+        }
+        w.call("endEncoding", 13, 0, &[], &[])?;
+        w.call("commit", 12, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 12, 0, &[], &[])?;
+        let bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+        let sum = Value::List(vec![Value::Bytes(Sha256::digest(&bytes).to_vec())]);
+        w.call("m2v.check", 0, 0, &[Value::Object(10)], &[("sha256", sum)])
+    })
+}
+
+/// A `Reset` pass's visibility results play as the runtime's: `Counting` at offset 0 writes the
+/// 16 samples of the target that the draw covers, `Boolean` at offset 8 the same count (the
+/// runtime's `Boolean` word is the count, nonzero exactly where a sample passed), and offset 16,
+/// which no mode took, keeps its bytes. The check reads those words, and nothing is skipped.
+#[test]
+fn a_pass_s_visibility_results_play_on_the_new_runtime() {
+    let dir = ScratchDir::new("rt-replay-visibility").unwrap();
+    let path = visibility_results(&dir, 0, false, [16, 16, UNWRITTEN]);
+    let (report, _) = play("visibility", &path);
+    assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+    let executed = &report.total.executed;
+    for skipped in [
+        "skipped_encoders",
+        "skipped_render_commands",
+        "skipped_draws",
+        "skipped_calls",
+    ] {
+        assert_eq!(executed[skipped], 0, "{skipped}: {executed:?}");
+    }
+    assert_eq!(report.first_skip, None);
+}
+
+/// A mode at an offset the encoder took before (call 22) is the runtime's refusal, Metal's own:
+/// skipped and counted by its kind, with its frame and call, and the play goes on, the words those
+/// of the modes before it.
+#[test]
+fn a_visibility_result_mode_the_runtime_refuses_is_counted_by_its_kind() {
+    let dir = ScratchDir::new("rt-replay-visibility-revisit").unwrap();
+    let path = visibility_results(&dir, 0, true, [16, 16, UNWRITTEN]);
+    let (report, lines) = play("visibility-revisit", &path);
+    assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+    assert_eq!(report.total.executed["skipped_render_commands"], 1);
+    assert_eq!(report.first_skip, Some((0, 22)));
+    let line =
+        "skipped render commands Refused(VisibilityResultOffsetTaken) 1, the first at frame 0, \
+                call 22";
+    assert!(lines.iter().any(|l| l == line), "{lines:?}");
+}
+
+/// In an `Accumulate` pass, `Counting` (call 18) and `Boolean` (call 20) are the runtime's gap,
+/// skipped and counted, the draws drawn and the buffer's bytes as they were.
+#[test]
+fn an_accumulated_visibility_result_mode_is_counted_by_its_gap() {
+    let dir = ScratchDir::new("rt-replay-visibility-accumulate").unwrap();
+    let path = visibility_results(&dir, 1, false, [UNWRITTEN; 3]);
+    let (report, lines) = play("visibility-accumulate", &path);
+    assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+    let executed = &report.total.executed;
+    assert_eq!(executed["skipped_render_commands"], 2, "{executed:?}");
+    assert_eq!(executed["skipped_draws"], 0, "{executed:?}");
+    assert_eq!(report.first_skip, Some((0, 18)));
+    let line =
+        "skipped render commands Draw { kind: AccumulatedVisibilityResults } 2, the first at \
+                frame 0, call 18";
     assert!(lines.iter().any(|l| l == line), "{lines:?}");
 }
 

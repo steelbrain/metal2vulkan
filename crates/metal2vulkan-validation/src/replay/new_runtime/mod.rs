@@ -75,8 +75,10 @@ struct Skips {
     /// Draws whose pipeline state, or a buffer or texture bound to either stage, is a skipped
     /// object.
     draws: u64,
-    /// Render commands the runtime answers with a typed gap (a draw it does not build), by the
-    /// gap: how many, and the frame and call of the first.
+    /// Render commands the runtime answers with a typed gap (a draw it does not build, a
+    /// visibility result mode in an `Accumulate` pass), by the gap, and visibility result modes
+    /// it refuses as Metal's validation does, by `Refused(KIND)`: how many, and the frame and
+    /// call of the first.
     render_commands: BTreeMap<String, (u64, u64, u64)>,
     /// Blit commands that name a skipped object.
     blits: u64,
@@ -957,6 +959,7 @@ fn named(gauges: rt::Gauges) -> Vec<(&'static str, u64)> {
         ("shadow_bytes", gauges.shadow_bytes),
         ("textures_copied_over", gauges.textures_copied_over),
         ("timestamp_pools", gauges.timestamp_pools),
+        ("occlusion_pools", gauges.occlusion_pools),
     ]
 }
 
@@ -3189,6 +3192,7 @@ impl Backend for NewRuntime {
             ("command_buffers", gauges.command_buffers),
             ("events", gauges.events),
             ("timestamp_pools", gauges.timestamp_pools),
+            ("occlusion_pools", gauges.occlusion_pools),
             ("spilled_bytes", gauges.spilled_bytes),
             ("managed_spilled_bytes", gauges.managed_spilled_bytes),
             ("shared_allocation_bytes", gauges.shared_allocation_bytes),

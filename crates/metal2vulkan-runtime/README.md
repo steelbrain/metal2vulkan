@@ -3546,7 +3546,11 @@ cache is answered compile-required on both.
   mode of the encoder took before (`Refusal::VisibilityResultOffsetTaken`: Apple documents each
   offset as set once per pass). A command buffer takes its queries from pools of its own, 256
   queries each, which the device lends it and takes back as it retires, each query reset on the
-  host (`hostQueryReset`); the device keeps at most 16 free (`Gauges::occlusion_pools`).
+  host (`hostQueryReset`); the device keeps at most 16 free and destroys the rest.
+  `Gauges::occlusion_pools` counts the pools alive, the free ones and those command buffers hold,
+  and reads 0 once the device drops. A command buffer gives its pools back before its
+  `wait_until_completed` returns, so passes that set a mode, each waited for before the next,
+  hold one pool between them however many run.
 - While a `Boolean` or `Counting` mode's query counts the draws (from the mode's first draw to the
   next mode set or the encoder's end), a command that would end the pass's rendering is refused,
   `Gap::Draw` of `VisibilityResultInterrupt`, the encoder as it was, and counted in

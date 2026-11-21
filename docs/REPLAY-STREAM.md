@@ -690,6 +690,9 @@ records as text, and
 - A selector, argument or descriptor key the backend does not implement is a typed refusal naming
   it; the run stops there and the report keeps what ran.
 - The backend plays compute, render, blits, `synchronizeResource:`, fences, events and queues.
+  Visibility results play as the runtime's: a pass's `visibilityResultBuffer` and
+  `visibilityResultType`, and each `setVisibilityResultMode:offset:` (`[mode, offset]`), whose
+  counts the runtime writes into the buffer at the pass's end.
   What the runtime does not build yet it skips and counts, and never fakes:
   - objects: libraries from source, and whatever a call makes of a skipped object
     (`skipped_objects`). A call that makes an object on a skipped receiver or naming a skipped
@@ -704,15 +707,20 @@ records as text, and
   - parallel render encoders, and render encoders of a pass the runtime does not build
     (`skipped_encoders`): a pass whose setter records leave in it what the runtime's render pass
     descriptor does not hold (a resolve texture, a depth plane other than 0, store action
-    options, a visibility result buffer, a render target array length above 1, tile or
-    imageblock sizes, or a skipped texture), or one the runtime answers with a typed gap; and
+    options, a render target array length above 1, tile or imageblock sizes, or a skipped
+    texture or visibility result buffer), or one the runtime answers with a typed gap; and
     every call of a skipped object (`skipped_calls`, with `useResource:usage:` and `useHeap:` of
     one);
   - dispatches whose pipeline state or bound buffer or texture is a skipped object
     (`skipped_dispatches`), and draws whose pipeline state, or a buffer or texture bound to
     either stage, or whose index buffer is one (`skipped_draws`);
-  - render commands the runtime answers with a typed gap, a draw it does not build among them
-    (`skipped_render_commands`, and a line for each gap with its first frame and call);
+  - render commands the runtime answers with a typed gap, a draw it does not build and a
+    `Boolean` or `Counting` visibility result mode in an `Accumulate` pass among them, and
+    visibility result modes the runtime refuses as Metal's validation does (no visibility result
+    buffer, an offset off a multiple of 8 or past the buffer, at a byte of the buffer's allocation
+    off a multiple of 8, or one the encoder took before), whose mode stays as it was
+    (`skipped_render_commands`, and a line for each gap, or `Refused(KIND)` for each kind of
+    refusal, with its first frame and call);
   - render encoders' sampler binds of LOD clamps the runtime answers with its typed gap (clamps
     whose samples read otherwise than the sampler's own: `skipped_clamped_samplers`), the draws
     while the slot holds one skipped with them; a bind it takes plays with its clamps;
@@ -943,7 +951,8 @@ union of the GPU intervals of the command buffers the frame waited for, where th
 them, which runs beside the rest, then `gpu_longest` and `gpu_longest_cb`, the longest of those
 intervals, one command buffer's, and that command buffer's stream id (the first of equal ones; 0
 and 0 where the runtime gives none); and the backend's gauges then, as they stand, never as growth:
-the runtime's live blocks, buffers, textures, pipelines, kernels, command buffers, spilled bytes, Managed buffers'
+the runtime's live blocks, buffers, textures, pipelines, kernels, command buffers, timestamp and
+occlusion query pools, spilled bytes, Managed buffers'
 spilled bytes (`managed_spilled_bytes`: the bytes of those whose GPU copy the player placed in a
 spilled Private block) and idle Shared and
 Private bytes the pool keeps, and the bytes

@@ -11,6 +11,9 @@
 //!   it retires, or as it drops uncommitted: 17 held at once are 17 pools, of which the device
 //!   keeps 16 free and destroys the rest; a later command buffer of 300 modes takes two of them
 //!   again, and makes none.
+//! - 200 command buffers, one after another, each a pass that sets a `Counting` mode and draws,
+//!   take one pool again and again: the pools read 1 after the 100th and the 200th, and 0 once
+//!   the device drops.
 //! - What Metal refuses is refused, the encoder's mode unchanged: a mode with no visibility result
 //!   buffer, at an offset off a multiple of 8 or past the buffer, at an offset the encoder took
 //!   before, and at a byte of the buffer's allocation off a multiple of 8.
@@ -210,6 +213,64 @@ mod on_device {
             want.push(UNWRITTEN);
             assert_eq!(words(&visibility, 301), want, "{name}: the 300 words");
             println!("{name}: 17 pools held, 16 kept free, 300 queries from two of them");
+        });
+    }
+
+    /// 200 command buffers, each a pass that sets a `Counting` mode and draws the whole target,
+    /// run one after another: each takes the pool the last gave back as it retired, so the
+    /// device's pools read 1 after the 100th and after the 200th, the word 64; and 0 once the
+    /// device drops.
+    #[test]
+    fn every_device_s_occlusion_pools_stay_flat_over_200_passes_and_end_with_it() {
+        let Some(library) = examples() else {
+            return;
+        };
+        let d = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        each_device("visibility_pools_flat", |name, _, device| {
+            let state = state(name, &device, &d);
+            let mut buffers = Buffers::new(&device);
+            let (positions, colors) = triangles(&device, &mut buffers);
+            let visibility = buffers.of(&device, &[0xaa; 8]);
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let counters = device.counters();
+            let ok = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            let mut at = Vec::new();
+            for iteration in 1..=200 {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut d = pass(&color, None);
+                d.visibility_result_buffer = Some(visibility.clone());
+                let mut e = (command_buffer.render_command_encoder(&d))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                ok(e.set_render_pipeline_state(&state));
+                ok(e.set_vertex_buffer(Some(&positions), 0, 0));
+                ok(e.set_vertex_buffer(Some(&colors), 0, 1));
+                ok(e.set_visibility_result_mode(VisibilityResultMode::Counting, 0));
+                ok(e.draw_primitives(PrimitiveType::Triangle, WHOLE, 3, 1, 0));
+                e.end_encoding();
+                run(name, &command_buffer);
+                if iteration == 100 || iteration == 200 {
+                    at.push(counters.gauges().occlusion_pools);
+                }
+            }
+            assert_eq!(
+                at,
+                [1, 1],
+                "{name}: the pools after the 100th and the 200th"
+            );
+            assert_eq!(words(&visibility, 1), [64], "{name}: the word");
+            drop((state, buffers, positions, colors, visibility, color, queue));
+            drop(device);
+            assert_eq!(
+                counters.gauges().occlusion_pools,
+                0,
+                "{name}: the pools at the device's drop"
+            );
+            println!("{name}: 200 passes flat at 1 pool after the 100th and the 200th; 0 at drop");
         });
     }
 

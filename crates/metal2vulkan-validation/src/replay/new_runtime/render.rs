@@ -3,12 +3,17 @@
 //! What the runtime does not build yet is skipped and counted: a render pipeline state it answers
 //! with a typed gap or the translator refuses (`render_states`, by the gap, with the first state
 //! and the runtime's answer of each); a render encoder whose pass the
-//! runtime's descriptor cannot hold (a depth plane, store action options, a visibility result
-//! buffer, layered or tile rendering, a skipped texture or resolve texture) or that it answers with
-//! a typed gap (`encoders`); a draw whose pipeline state, or a buffer or texture bound to either
-//! stage, is a skipped object (`draws`); and a render command the runtime answers with a typed
-//! gap, a draw it does not build among them (`render_commands`, by the gap, with the first frame
-//! and call of each).
+//! runtime's descriptor cannot hold (a depth plane, store action options, layered or tile
+//! rendering, a skipped texture, resolve texture or visibility result buffer) or that it answers
+//! with a typed gap (`encoders`); a draw whose pipeline state, or a buffer or texture bound to
+//! either stage, is a skipped object (`draws`); and a render command the runtime answers with a
+//! typed gap, a draw it does not build and a visibility result mode in an `Accumulate` pass among
+//! them, or a visibility result mode it refuses as Metal's validation does (`render_commands`, by
+//! the gap, or `Refused(KIND)` by the refusal's kind, with the first frame and call of each).
+//!
+//! Visibility results play as the runtime's: the pass's `visibilityResultBuffer` and
+//! `visibilityResultType`, and each `setVisibilityResultMode:offset:`, whose counts the runtime
+//! writes into the buffer at the pass's end.
 
 use super::super::args::{arg, data, index, list, metal, refuse, uint, Fields};
 use super::super::translator::{self, attachment_keys, LINKED_KEYS, PASS_KEYS};
@@ -113,6 +118,25 @@ fn load_action(call: &Call, raw: u64) -> Result<rt::LoadAction, PlayError> {
         1 => rt::LoadAction::Load,
         2 => rt::LoadAction::Clear,
         other => return Err(refuse(call, format!("load action {other}"))),
+    })
+}
+
+/// `MTLVisibilityResultType`.
+fn visibility_result_type(call: &Call, raw: u64) -> Result<rt::VisibilityResultType, PlayError> {
+    Ok(match raw {
+        0 => rt::VisibilityResultType::Reset,
+        1 => rt::VisibilityResultType::Accumulate,
+        other => return Err(refuse(call, format!("visibility result type {other}"))),
+    })
+}
+
+/// `MTLVisibilityResultMode`.
+fn visibility_result_mode(call: &Call, raw: u64) -> Result<rt::VisibilityResultMode, PlayError> {
+    Ok(match raw {
+        0 => rt::VisibilityResultMode::Disabled,
+        1 => rt::VisibilityResultMode::Boolean,
+        2 => rt::VisibilityResultMode::Counting,
+        other => return Err(refuse(call, format!("visibility result mode {other}"))),
     })
 }
 
@@ -413,8 +437,8 @@ impl NewRuntime {
 
     /// A setter record of the render pass descriptor `call` is sent to: each property its map
     /// sets. `defaultColorSampleCount` and `defaultRasterSampleCount`, which change nothing a pass
-    /// with an attachment shows (the runtime refuses one without), are not played; a rate map and
-    /// accumulated visibility results are refused.
+    /// with an attachment shows (the runtime refuses one without), are not played; a rate map is
+    /// refused.
     pub(super) fn pass_call(&mut self, call: &Call) -> Result<(), PlayError> {
         match &*call.selector {
             "m2v.setPass" => {
@@ -422,7 +446,9 @@ impl NewRuntime {
                 if let Some(Some(_)) = f.set_object("rasterizationRateMap")? {
                     return Err(refuse(call, "a rasterization rate map"));
                 }
-                f.only("visibilityResultType", Fields::uint, 0)?;
+                let kind = (f.uint("visibilityResultType")?)
+                    .map(|raw| visibility_result_type(call, raw))
+                    .transpose()?;
                 // A skipped buffer is held as none, and the pass marked as one the runtime does
                 // not build while the descriptor names it.
                 let (visibility, skipped) = match f.set_object("visibilityResultBuffer")? {
@@ -445,6 +471,9 @@ impl NewRuntime {
                 if let Some(visibility) = visibility {
                     pass.hold(OWN, "visibilityResultBuffer", !skipped);
                     pass.descriptor.visibility_result_buffer = visibility;
+                }
+                if let Some(kind) = kind {
+                    pass.descriptor.visibility_result_type = kind;
                 }
                 if let Some(layers) = layers {
                     pass.hold(OWN, "renderTargetArrayLength", layers <= 1);
@@ -910,6 +939,26 @@ impl NewRuntime {
             "memoryBarrierWithScope:afterStages:beforeStages:" => {
                 self.render(id).encoder.memory_barrier()
             }
+            "setVisibilityResultMode:offset:" => {
+                let mode = visibility_result_mode(call, uint(call, 0)?)?;
+                let offset = uint(call, 1)?;
+                let encoder = &mut self.render(id).encoder;
+                match encoder.set_visibility_result_mode(mode, offset) {
+                    // Metal's own refusal (no buffer, an offset off 8 or past the buffer, at an
+                    // allocation byte off 8, or taken before in the encoder), which Metal's
+                    // validation stops: the encoder's mode unchanged, skipped and counted as a
+                    // gap is, by the refusal's kind alone.
+                    Err(rt::Error::Refused(refusal)) => {
+                        let debug = format!("{refusal:?}");
+                        let kind = debug
+                            .split_once([' ', '('])
+                            .map_or(&*debug, |(kind, _)| kind);
+                        self.render_command_skipped(format!("Refused({kind})"));
+                        Ok(())
+                    }
+                    result => result,
+                }
+            }
             "setDepthBias:slopeScale:clamp:" => {
                 let float = |at: usize| match arg(call, at)?.as_f64() {
                     Some(value) => Ok(value as f32),
@@ -967,13 +1016,18 @@ impl NewRuntime {
             // A command the runtime does not build: skipped and counted, as a render state it
             // does not build is.
             Err(rt::Error::Unsupported(gap)) => {
-                let (frame, at) = self.at;
-                let kind = self.skips.render_commands.entry(format!("{gap:?}"));
-                kind.or_insert((0, frame, at)).0 += 1;
+                self.render_command_skipped(format!("{gap:?}"));
                 Ok(())
             }
             result => result.map_err(failed(call)),
         }
+    }
+
+    /// A render command skipped, counted by `kind` with the frame and call of the first.
+    fn render_command_skipped(&mut self, kind: String) {
+        let (frame, at) = self.at;
+        let kind = self.skips.render_commands.entry(kind);
+        kind.or_insert((0, frame, at)).0 += 1;
     }
 
     /// Whether the render encoder `id`'s draw is skipped, counted: its pipeline state or a bound
