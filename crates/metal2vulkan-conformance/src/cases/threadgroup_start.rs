@@ -14,6 +14,7 @@
 //! compares exactly. Nothing here can fault a GPU: one pass of six dispatches, every access inside
 //! the threadgroup's own memory or the output's 16 bytes, loops bounded by the array's words.
 
+use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
 use crate::compute_pass::{ComputePass, ComputeStep, Dispatching};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
@@ -96,6 +97,13 @@ impl Case for ThreadgroupStart {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
+    }
+
+    fn allowances(&self) -> Vec<Allowance> {
+        // One declaration, which loosens no value: a kernel the case runs holds SIMD-group access
+        // pairs, which the runtime's pipelines note on every device
+        // (`crate::replay::simdgroup_access_order_notice`).
+        vec![crate::replay::simdgroup_access_order_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

@@ -16,6 +16,7 @@
 //! device, and every byte compares exactly. Nothing here can fault a GPU: one pass of two
 //! dispatches of 64 threads, each access inside its buffer, no loop.
 
+use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Failure, Input, MetalSource, Side};
 use crate::compute_pass::{ComputePass, ComputeStep, Dispatching};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
@@ -118,6 +119,13 @@ impl Case for VectorWordPhases {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
+    }
+
+    fn allowances(&self) -> Vec<Allowance> {
+        // One declaration, which loosens no value: a kernel the case runs holds SIMD-group access
+        // pairs, which the runtime's pipelines note on every device
+        // (`crate::replay::simdgroup_access_order_notice`).
+        vec![crate::replay::simdgroup_access_order_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

@@ -303,7 +303,13 @@ impl Case for BorderSwizzles {
         //
         // Every row sweeps samplers that read an opaque-black border, which the runtime's
         // sampler states note on every device (`crate::replay::swizzled_border_notice`).
-        let mut named = vec![crate::replay::pixel_sampler_scaling_notice()];
+        //
+        // And the kernel's SIMD-group access pairs, which the runtime's pipelines note on every
+        // device (`crate::replay::simdgroup_access_order_notice`).
+        let mut named = vec![
+            crate::replay::pixel_sampler_scaling_notice(),
+            crate::replay::simdgroup_access_order_notice(),
+        ];
         let black = (SAMPLERS.iter()).any(|&(_, modes, border)| {
             crate::replay::reads_opaque_black_border(&sampler_spec(modes, border))
         });

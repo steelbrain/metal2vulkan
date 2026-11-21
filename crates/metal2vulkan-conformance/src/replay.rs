@@ -354,6 +354,22 @@ pub fn pixel_sampler_scaling_notice() -> crate::allowance::Allowance {
     notice_allowance(crate::degradation::Degradation::PixelSamplerScaling.code())
 }
 
+/// The declaration a case needs where a kernel it runs holds a SIMD-group access pair:
+/// `simdgroup-access-order` ([`crate::degradation::Degradation::SimdgroupAccessOrder`]), the
+/// static note of a kernel holding two accesses of threadgroup or device memory, at least one a
+/// write, that the translator does not find disjoint between two threads of one SIMD-group, with
+/// no barrier or atomic between them. Under the identity domains of `metal2vulkan-runtime` no
+/// such pair is ordered, as documented Metal orders none (docs/API.md, accepted differences, "The
+/// threads of a SIMD-group run in no order between barriers"), so the runtime records the note for
+/// every such kernel, on every device.
+///
+/// A declaration, like every [`notice_allowance`]: it loosens the notices site alone, and every
+/// value still compares exactly. A case whose words are lockstep's alone loosens them by the note
+/// too (`simdgroup_lockstep`).
+pub fn simdgroup_access_order_notice() -> crate::allowance::Allowance {
+    notice_allowance(crate::degradation::Degradation::SimdgroupAccessOrder.code())
+}
+
 /// The slug of `docs/API.md`'s accepted difference that says what the runtime, which presents a
 /// Mac that keeps no texture compressed, answers, as a Mac with an Intel or AMD GPU does
 /// ([`without_compression`]): "The runtime answers as a Mac that keeps no texture compressed".

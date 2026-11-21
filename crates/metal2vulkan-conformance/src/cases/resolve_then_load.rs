@@ -64,6 +64,7 @@
 //! samples of the format refuses the target and the suite counts the case
 //! [`LacksFeature`](crate::verdict::Verdict::LacksFeature).
 
+use crate::allowance::Allowance;
 use crate::case::{call, made, Abort, Case, Failure, Handle, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -336,6 +337,13 @@ impl Case for ResolveThenLoad {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
+    }
+
+    fn allowances(&self) -> Vec<Allowance> {
+        // One declaration, which loosens no value: a kernel the case runs holds SIMD-group access
+        // pairs, which the runtime's pipelines note on every device
+        // (`crate::replay::simdgroup_access_order_notice`).
+        vec![crate::replay::simdgroup_access_order_notice()]
     }
 
     fn record_runs(&self) -> u32 {

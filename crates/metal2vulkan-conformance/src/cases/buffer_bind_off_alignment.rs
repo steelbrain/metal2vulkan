@@ -14,6 +14,7 @@
 //! one dispatch of 64 threads, every access within 8 KiB buffers, which an Apple M3 Max runs at
 //! addresses rounded down to a multiple of 4.
 
+use crate::allowance::Allowance;
 use crate::case::{made, Abort, Case, Handle, Input, MetalSource, Side};
 use crate::compute_pass::{ComputePass, ComputeStep, Dispatching};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
@@ -68,6 +69,13 @@ impl Case for BufferBindOffAlignment {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
+    }
+
+    fn allowances(&self) -> Vec<Allowance> {
+        // One declaration, which loosens no value: a kernel the case runs holds SIMD-group access
+        // pairs, which the runtime's pipelines note on every device
+        // (`crate::replay::simdgroup_access_order_notice`).
+        vec![crate::replay::simdgroup_access_order_notice()]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

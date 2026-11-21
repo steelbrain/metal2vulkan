@@ -244,10 +244,13 @@ impl Case for BicubicTexelClasses {
 
     fn allowances(&self) -> Vec<Allowance> {
         // The runtime emulates Metal's bicubic footprint and announces that its arithmetic is its
-        // own (`bicubic-filter-arithmetic`): a declaration, which loosens no value.
-        vec![notice_allowance(
-            Degradation::BicubicFilterArithmetic.code(),
-        )]
+        // own (`bicubic-filter-arithmetic`): a declaration, which loosens no value. And the
+        // kernel's SIMD-group access pairs (`crate::replay::simdgroup_access_order_notice`): a
+        // declaration too.
+        vec![
+            notice_allowance(Degradation::BicubicFilterArithmetic.code()),
+            crate::replay::simdgroup_access_order_notice(),
+        ]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {

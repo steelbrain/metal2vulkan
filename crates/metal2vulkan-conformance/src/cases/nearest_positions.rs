@@ -289,11 +289,15 @@ impl Case for NearestPositions {
     }
 
     fn allowances(&self) -> Vec<Allowance> {
-        // One declaration and no tolerance: its samples are through a runtime sampler slot, which
+        // Two declarations and no tolerance: its samples are through a runtime sampler slot, which
         // the runtime's pipelines note as scaled (`crate::replay::pixel_sampler_scaling_notice`
-        // holds why, and the run it rests on). It loosens the notices site alone, so every value
-        // this case reads still compares exactly.
-        vec![crate::replay::pixel_sampler_scaling_notice()]
+        // holds why, and the run it rests on), and its kernel holds SIMD-group access pairs
+        // (`crate::replay::simdgroup_access_order_notice`). They loosen the notices site alone,
+        // so every value this case reads still compares exactly.
+        vec![
+            crate::replay::pixel_sampler_scaling_notice(),
+            crate::replay::simdgroup_access_order_notice(),
+        ]
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
