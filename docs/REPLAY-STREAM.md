@@ -574,7 +574,9 @@ records as text, and
   A texture over an imported buffer is the runtime's counted copy. Each frame's `over_copies` and
   `over_copy_bytes` count every copy of a texture over a buffer, and its `over_copies_imported` and
   `over_copy_bytes_imported` those over an imported one alone; the rest are over the runtime's own
-  blocks, where the device's linear image does not take the texture. The report's `no-copy
+  blocks, where the device's linear image does not take the texture. `over_copies_host_memory`,
+  `over_copies_pitch` and the ten like them, each beside its `over_copy_bytes_` sum, split them by
+  the runtime's cause (`Metrics::over_copies_host_memory` and the rest). The report's `no-copy
   buffers` line counts the descriptor-form ones in a block, those outside every block and their
   bytes, and the bytes-form ones and their bytes imported, apart; its `textures over buffers` line
   counts the textures over buffers it made (not substituted), in place and in an image of their

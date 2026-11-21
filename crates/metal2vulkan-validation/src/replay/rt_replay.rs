@@ -488,6 +488,8 @@ fn a_play_reports_the_runtime_s_command_buffer_stages() {
         "gpu_end_to_handler_tail",
         "calibrations",
         "calibration_nanos",
+        "over_copies_pitch",
+        "over_copy_bytes_image_memory",
     ];
     for key in sums {
         assert!(executed.contains_key(key), "{key}: {executed:?}");
