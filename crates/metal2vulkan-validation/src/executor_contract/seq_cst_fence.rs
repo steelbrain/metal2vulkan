@@ -4,7 +4,7 @@
 //! the device, with every other such fence of the command buffer through an acquire-release
 //! increment of one word of its execution status buffer (`lower::sync::barrier`). The runtime's
 //! identity domains reach no such word: its pipeline is refused as `Unsupported{IdentityDomains}`,
-//! naming the `ExecutionStatusAddress` encoder value, so the engine's candidate does not run the
+//! naming the fence ("a sequentially consistent fence"), so the engine's candidate does not run the
 //! case ([`ToolingRequirement::SeqCstFence`]). The Metal oracle runs it.
 //!
 //! The scan reads the entry's function and the functions it reaches by direct calls, which its

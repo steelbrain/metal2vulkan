@@ -653,7 +653,9 @@ fn a_seq_cst_fence_is_refused_through_the_runtime_as_its_requirement_says() {
     let error = run_on_runtime(&fence, &bitcode, &[]).unwrap_err();
     assert!(matches!(error, ExecutorError::NotSupported(_)), "{error}");
     assert!(
-        error.to_string().contains("ExecutionStatusAddress"),
+        error
+            .to_string()
+            .contains("a sequentially consistent fence"),
         "{error}"
     );
 }

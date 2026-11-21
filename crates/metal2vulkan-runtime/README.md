@@ -2510,7 +2510,12 @@ or does not check is rebuilt from the generations' names, with young counted ful
     buffer, a cube read as an array, level views, a two-plane, extended-range, RGBX or `ulong`
     form, or a storage texture with a format), one read through another numeric type than its
     own or as the raw texels of an extended-range member, and a handle that reads its table
-    entry beyond its element: no test yet.
+    entry beyond its element: no test yet;
+  - a sequentially consistent fence (`atomic_thread_fence` of `memory_order_seq_cst` beyond the
+    thread, or a `seq_cst` barrier whose memory scope is the device), which the translator
+    orders through a word the identity domains do not reach ("a sequentially consistent
+    fence"): the translator test
+    `a_seq_cst_fence_is_refused_naming_its_form_under_the_identity_domains` asserts the text.
 
   The plays' counts of the pipeline states they skipped read 0, a refusal under the identity
   domains among them, on five recorded streams: three played to their end (1,047, 1,100 and

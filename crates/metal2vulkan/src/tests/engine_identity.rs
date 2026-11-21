@@ -3075,3 +3075,36 @@ fn a_constant_blob_past_the_modules_bound_is_refused_naming_its_size() {
         );
     }
 }
+
+/// A kernel whose device-scope `seq_cst` fence orders its two stores (`a4_device_fence`) compiles
+/// under the default domains, its fence ordered through the command buffer's `ExecutionStatus`
+/// word, and is refused under the identity domains, which reach no such word, naming the fence
+/// ([`SEQ_CST_FORM`](crate::lower::sync::barrier::SEQ_CST_FORM)).
+#[test]
+fn a_seq_cst_fence_is_refused_naming_its_form_under_the_identity_domains() {
+    let Some(bc) = assemble("a4_device_fence") else {
+        return;
+    };
+    for stem in PROFILES {
+        let default = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+        let a = compile(&bc, "a4_device_fence", &default)
+            .unwrap_or_else(|e| panic!("{stem}: default domains: {e}"));
+        assert!(a.facts.contains(&RuntimeFact::ExecutionStatus), "{stem}");
+        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+        match compile(&bc, "a4_device_fence", &p) {
+            Err(Error::Unsupported(u)) => {
+                assert_eq!(
+                    (u.feature, u.needs),
+                    (Feature::IdentityDomains, Needs::NotImplemented),
+                    "{stem}"
+                );
+                assert_eq!(
+                    u.symbol.map(|f| f.to_string()).as_deref(),
+                    Some(crate::lower::sync::barrier::SEQ_CST_FORM),
+                    "{stem}"
+                );
+            }
+            other => panic!("{stem}: {:?}", other.map(|_| ())),
+        }
+    }
+}

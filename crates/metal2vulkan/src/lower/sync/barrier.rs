@@ -57,7 +57,7 @@ use crate::air::intrinsics::{
 use crate::air::ir::{Callee, Inst, InstId, InstKind, Value, ValueId};
 use crate::device::requirements::VkFeature;
 use crate::device::subgroup::{OpBits, SimdClass, Tier};
-use crate::error::{Capability, Error, Feature, LowerFamily, Unsupported};
+use crate::error::{Capability, DiagName, Error, Feature, LowerFamily, Unsupported};
 use crate::lower::emit::EmitCx;
 use crate::lower::select::{FamilyPlans, Plan, SelectCx};
 use crate::lower::strategy::{FamilyStrategy, Strategy};
@@ -482,11 +482,22 @@ pub const SEQ_CST_WORDS: u32 = 48;
 /// (`dispatch::KernelDecl::rows_may_split`), its constants, and the selection around the barrier.
 pub const ROWS_GUARD_WORDS: u32 = 40;
 
+/// The form a sequentially consistent fence is refused as under the identity domains
+/// ([`require_seq_cst`]).
+pub(crate) const SEQ_CST_FORM: &str = "a sequentially consistent fence";
+
 /// What a sequentially consistent fence needs ([`seq_cst_order`]): the command buffer's
 /// `ExecutionStatus` word (`absent::state_status`), and the stage's atomics; a device without them
-/// refuses the fence as `SeqCstFence`, naming what it needs.
+/// refuses the fence as `SeqCstFence`, naming what it needs. The identity domains reach no such
+/// word: under them the fence is refused as `IdentityDomains`, not implemented, naming
+/// [`SEQ_CST_FORM`].
 pub fn require_seq_cst(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     use crate::lower::access::absent::{state_status, status_short, StatusBinding, StatusShort};
+    if crate::lower::access::identity(cx.profile) {
+        return Err(Unsupported::not_implemented(Feature::IdentityDomains)
+            .naming(DiagName::new(SEQ_CST_FORM))
+            .into());
+    }
     if let Some(StatusShort::Stores(f)) = status_short(cx) {
         return Err(Unsupported::needs(Feature::SeqCstFence, Capability::Feature(f)).into());
     }

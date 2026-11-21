@@ -169,7 +169,7 @@ pub enum ToolingRequirement {
     /// memory scope is the device. The translator orders such a fence with the command buffer's
     /// other ones through an atomic on its execution status word, which the runtime's identity
     /// domains do not reach: the runtime refuses the pipeline (`Unsupported{IdentityDomains}`,
-    /// naming the `ExecutionStatusAddress` encoder value), so the limit is the runtime's
+    /// naming the fence, "a sequentially consistent fence"), so the limit is the runtime's
     /// ([`Limit::Runtime`]) and the engine's candidate does not run the case. The device tests
     /// `candidate::tests::engine_compute::a_seq_cst_fence_is_refused_through_the_runtime_as_its_requirement_says`
     /// and `..::a_fence_of_another_order_is_made_through_the_runtime` hold it both ways. The Metal
