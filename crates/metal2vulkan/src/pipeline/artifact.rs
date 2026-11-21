@@ -2357,8 +2357,10 @@ pub enum PrecisionNote {
     /// without sample shading at least once per pixel, and more where the device chooses ("Multiple
     /// fragment shader invocations may be executed for the same fragment for any number of
     /// implementation-dependent reasons", vkspec 35.5). So its writes repeat as often as the
-    /// device's runs. Static, decided by the pipeline's sample count and the function's writes:
-    /// the pipeline's compile records it on its fragment stage.
+    /// device's runs, and whatever the function derives from its own writes across runs follows
+    /// the device's count too: its stored colours and its `[[sample_mask]]` output included, not
+    /// only memory. Static, decided by the pipeline's sample count and the function's writes: the
+    /// pipeline's compile records it on its fragment stage.
     ///
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.

@@ -2676,17 +2676,20 @@ bound.
   more than one sample, which the pipeline's compile records on its fragment stage, decided by the
   sample count and the function's writes alone. It runs as many times per pixel as the device runs
   it, each run reading the pixel's whole coverage as `[[sample_mask]]`, so its writes repeat as
-  often as the device's runs. Apple's GPUs were measured to run it once per covered sample;
+  often as the device's runs, and whatever it derives from its own writes across runs follows the
+  device's count too, its stored colours and `[[sample_mask]]` output included, not only memory.
+  Apple's GPUs were measured to run it once per covered sample;
   documented Metal names no count (MSL section 5.5 makes a function run per sample only for a
   sample-qualified input, `[[sample_id]]` or `[[color(m)]]`). Vulkan runs a fragment shader
   without sample shading at least once per pixel and more where the device chooses (vkspec 35.5).
 
 ## 10. Accepted differences
 
-Where the runtime answers otherwise than Metal on purpose, and nothing is slower or approximate
-for it (so no degrade notice says so), the difference is listed here. Most are answers Metal leaves
-undefined or ends the process for, and answers the runtime adds beyond Metal's API. The rustdoc of
-each item named states the rule in full.
+Where the runtime answers otherwise than Metal on purpose, the difference is listed here. Most
+carry no degrade notice, since nothing is slower or approximate for them; an entry whose answer is
+the device's own names the static note its stage records. Most are answers Metal leaves undefined
+or ends the process for, and answers the runtime adds beyond Metal's API. The rustdoc of each item
+named states the rule in full.
 
 **Draws**
 
@@ -2706,10 +2709,11 @@ each item named states the rule in full.
   Max covers the lower pixel and NVIDIA's driver on an RTX 5080 the upper.
 - **A memory-writing fragment function runs as many times as the device runs it.** Metal's GPUs
   were measured to run a memory-writing fragment once per covered sample; documented Metal names
-  no count; here the count is the device's. The pipeline's fragment stage records
-  `PrecisionNote::DeviceFragmentRuns` (section 9). The conformance case `a2c-off-4-alpha-50`
-  records four runs of a fully covered pixel at four samples on an Apple M3 Max, and compares the
-  runs word as nonzero alone.
+  no count; here the count is the device's, for its memory writes and for anything it derives from
+  them across runs, stored colours and sample mask included. The pipeline's fragment stage records
+  `PrecisionNote::DeviceFragmentRuns` (section 9). The conformance case `a2c-off-4-alpha-50` records
+  four runs of a fully covered pixel at four samples on an Apple M3 Max, and compares the runs word
+  as nonzero alone.
 
 **Resource IDs and identifiers**
 
