@@ -1349,7 +1349,7 @@ pub(crate) struct ImageCopy {
 impl ImageCopy {
     /// Its copy commands' regions, in the order they run: one a slab.
     pub(crate) fn regions(&self) -> impl Iterator<Item = vk::ImageCopy> + '_ {
-        self.slabs.into_iter().flat_map(|slabs| {
+        self.slabs.into_iter().flat_map(move |slabs| {
             slabs.of(self.from).map(move |(start, from)| {
                 let mut to = self.to;
                 to.origin[slabs.axis] += start;
