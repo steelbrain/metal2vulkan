@@ -8,8 +8,7 @@
 use crate::spirv::error::{BResult, BuildError, Dangling, OperandRule};
 use crate::spirv::ids::{BlockId, ConstId, FuncId, TypeId, Value, VarId};
 use crate::spirv::ir::{
-    ConstKind, Decl, ExecMode, Inst, InstNode, Merge, Shape, Type, TypedModule, UnOp, ValueDef,
-    ValueOrigin,
+    Decl, ExecMode, Inst, InstNode, Merge, Shape, Type, TypedModule, UnOp, ValueDef, ValueOrigin,
 };
 use crate::spirv::requirements::{interface, recorded, ModuleView};
 
@@ -479,139 +478,6 @@ impl TypedModule {
             v.func = func(v.func);
         }
         self.entry.func = func(self.entry.func);
-    }
-
-    /// Read specialization constants as data in function `func`: every operand of `func`'s phis,
-    /// instructions, and terminators that reads the value of a constant of `local` reads the value
-    /// it maps to instead, a value of the constant's type that an instruction of `func` defines
-    /// where it dominates every such read (the caller's guarantee; the verifier checks the result).
-    /// Then the declarations of `local`'s constants that nothing in the module reads any more leave
-    /// it, an operation over others before its operands, so a binder no longer specializes them; a
-    /// constant another function or a module-scope part still reads stays, and reads the value the
-    /// data carries. Each constant of `local` must be a specialization constant or a
-    /// specialization-constant operation, named once. Nothing changes when a check fails. The entry
-    /// interface and requirements are recorded again once, as after
-    /// [`TypedModule::apply_promotions`].
-    pub fn localize_specs(&mut self, func: FuncId, local: &[(ConstId, Value)]) -> BResult<()> {
-        if local.is_empty() {
-            return Ok(());
-        }
-        let mut map: std::collections::HashMap<Value, Value> =
-            std::collections::HashMap::with_capacity(local.len());
-        for &(c, to) in local {
-            let def = self.consts.get(c)?;
-            if !matches!(def.kind, ConstKind::Spec { .. } | ConstKind::SpecOp { .. }) {
-                return Err(operand(crate::spv::Op::SpecConstantOperation));
-            }
-            let at = self.value(to)?;
-            let ValueOrigin::Inst(b) = at.origin else {
-                return Err(BuildError::Dangling(Dangling::Value(to)));
-            };
-            if at.ty != def.ty || self.blocks.get(b.index()).map(|blk| blk.func) != Some(func) {
-                return Err(BuildError::Dangling(Dangling::Value(to)));
-            }
-            if map.insert(self.const_value(c)?, to).is_some() {
-                return Err(operand(crate::spv::Op::SpecConstantOperation));
-            }
-        }
-        let swap = |v: &mut Value| {
-            if let Some(t) = map.get(v) {
-                *v = *t;
-            }
-        };
-        for b in self.blocks.iter_mut().filter(|b| b.func == func) {
-            for phi in &mut b.phis {
-                for (v, _) in &mut phi.incoming {
-                    swap(v);
-                }
-            }
-            for node in &mut b.insts {
-                node.inst.for_each_value_mut(swap);
-            }
-            b.term.for_each_value_mut(swap);
-        }
-        // What still reads each constant of `local`: an instruction anywhere (an SSA operand or a
-        // constant operand), a module-scope part, an initializer, or an array length.
-        let mut uses: std::collections::HashMap<Value, usize> =
-            map.keys().map(|v| (*v, 0)).collect();
-        let mut count = |v: Value| {
-            if let Some(u) = uses.get_mut(&v) {
-                *u = u.saturating_add(1);
-            }
-        };
-        let const_values = &self.const_values;
-        let of = |c: ConstId| const_values.get(c.index()).copied();
-        for b in &self.blocks {
-            for phi in &b.phis {
-                for (v, _) in &phi.incoming {
-                    count(*v);
-                }
-            }
-            for node in &b.insts {
-                node.inst.for_each_value(&mut count);
-                node.inst.for_each_const(|c| {
-                    if let Some(v) = of(c) {
-                        count(v);
-                    }
-                });
-            }
-            b.term.for_each_value(&mut count);
-        }
-        for d in &self.decls {
-            let Decl::Const(c) = d else { continue };
-            match &self.consts.get(*c)?.kind {
-                ConstKind::Plain(crate::spirv::ir::Constant::Composite { parts, .. }) => {
-                    parts.iter().filter_map(|p| of(*p)).for_each(&mut count);
-                }
-                ConstKind::WorkgroupSize { parts } => {
-                    parts.iter().filter_map(|p| of(*p)).for_each(&mut count);
-                }
-                ConstKind::SpecOp { operands, .. } => {
-                    operands.iter().filter_map(|p| of(*p)).for_each(&mut count);
-                }
-                ConstKind::Plain(_) | ConstKind::Spec { .. } => {}
-            }
-        }
-        let inits = self.globals.iter().filter_map(|g| g.init);
-        for c in inits.chain(self.vars.iter().filter_map(|v| v.init)) {
-            if let Some(v) = of(c) {
-                count(v);
-            }
-        }
-        for (_, t) in self.types.iter() {
-            if let Type::Array { len, .. } = t {
-                if let Some(v) = of(*len) {
-                    count(v);
-                }
-            }
-        }
-        // An operation is declared after its operands, so the latest first releases them.
-        let mut order: Vec<ConstId> = local.iter().map(|(c, _)| *c).collect();
-        order.sort_unstable();
-        let mut gone = Vec::new();
-        for &c in order.iter().rev() {
-            let v = self.const_value(c)?;
-            if uses.get(&v).copied().unwrap_or(0) != 0 {
-                continue;
-            }
-            gone.push(c);
-            if let ConstKind::SpecOp { operands, .. } = &self.consts.get(c)?.kind {
-                for o in operands.iter() {
-                    if let Some(u) = of(*o).and_then(|ov| uses.get_mut(&ov)) {
-                        *u = u.saturating_sub(1);
-                    }
-                }
-            }
-        }
-        if !gone.is_empty() {
-            gone.sort_unstable();
-            self.decls
-                .retain(|d| !matches!(d, Decl::Const(c) if gone.binary_search(c).is_ok()));
-            for c in &gone {
-                self.consts.forget(*c);
-            }
-        }
-        self.rederive()
     }
 
     /// Declare execution modes `modes` on the entry, each one it does not declare yet, in order;

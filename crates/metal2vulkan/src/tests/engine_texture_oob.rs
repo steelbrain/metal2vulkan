@@ -1218,8 +1218,6 @@ fn resources(plan: &Plan, p: &[[u32; 4]], out: usize, levels: u32) -> Resources 
                 push[offset as usize..offset as usize + 4].copy_from_slice(&levels.to_le_bytes());
             }
             (PushField::SlotBindOffset(_) | PushField::DispatchRegion, PushLoc::Push { .. }) => {}
-            // A bound value read as data, which the interpreter writes from `spec`.
-            (PushField::Specialized(_), PushLoc::Push { .. }) => {}
             // 0: no channel narrower than the written word, every integer lane as written (the
             // interpreter's images hold words; the kernels write in-range values).
             (PushField::TextureIntegerChannels(_), PushLoc::Push { .. }) => {}

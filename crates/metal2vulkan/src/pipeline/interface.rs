@@ -785,21 +785,10 @@ impl StageInterface {
         self.spec.iter().any(|s| s.key == key)
     }
 
-    /// The keys the function reads: its specialization constants' keys, then the keys it reads
-    /// as data from its `PushField::Specialized` fields.
+    /// The keys the function reads: its specialization constants' keys.
     #[cfg(test)]
     pub fn read_keys(&self) -> Vec<SpecKey> {
-        let pushed = self.push.fields.iter().filter_map(|f| match f.field {
-            crate::pipeline::sym::PushField::Specialized(key) => Some(key),
-            _ => None,
-        });
-        self.spec.iter().map(|s| s.key).chain(pushed).collect()
-    }
-
-    /// Whether the function reads key `key`, specialized or as data.
-    #[cfg(test)]
-    pub fn reads_key(&self, key: SpecKey) -> bool {
-        self.read_keys().contains(&key)
+        self.spec.iter().map(|s| s.key).collect()
     }
 
     /// The function is a vertex function with a `[[point_size]]` output that the module writes
@@ -887,31 +876,6 @@ pub struct PushPlacement {
     /// `None` for any other stage, and on any other profile.
     #[cfg_attr(feature = "serde", serde(default))]
     pub tail_word: Option<u32>,
-}
-
-impl PushPlacement {
-    /// The value each `PushField::Specialized` field placed in the push-constant block holds in
-    /// push-constant bytes `push` (the block's bytes from offset 0), by its key. A field in the
-    /// `ArgumentTable` is the caller's to read.
-    #[cfg(test)]
-    pub fn pushed_values(&self, push: &[u8]) -> Vec<(SpecKey, u64)> {
-        self.fields
-            .iter()
-            .filter_map(|f| match (f.field, f.loc) {
-                (PushField::Specialized(key), PushLoc::Push { offset }) => {
-                    let at = offset as usize;
-                    let word = push
-                        .get(at..at + 4)
-                        .unwrap_or_else(|| panic!("no push bytes for {key:?} at {at}"));
-                    Some((
-                        key,
-                        u64::from(u32::from_le_bytes([word[0], word[1], word[2], word[3]])),
-                    ))
-                }
-                _ => None,
-            })
-            .collect()
-    }
 }
 
 /// One placed push field.

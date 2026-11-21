@@ -53,9 +53,7 @@ use crate::spirv::builder::constructs::{ArmEnd, ArmFn};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::dead::{remove_dead_keeping, Offer};
 use crate::spirv::error::{BResult, BuildError, Dangling};
-use crate::spirv::ids::{
-    BlockId as SBlockId, ConstId, DemoteTy, FuncId, GlobalId, TypeId, Value as SValue, VarId,
-};
+use crate::spirv::ids::{BlockId as SBlockId, DemoteTy, GlobalId, TypeId, Value as SValue, VarId};
 use crate::spirv::ir::{
     BinOp, ConstBits, Constant, ConvOp, ExecMode, ExecModel, MemAccess, PushMember, Type,
     TypedModule, ValueOrigin,
@@ -207,10 +205,6 @@ pub struct EmitCx<'a> {
     /// profile, so emission records it as it emits the store (`memory::leaf::store`), and the
     /// artifact reports a read of each such slot ([`Emitted::merged`]).
     pub(crate) merged: BTreeSet<usize>,
-    /// The function whose first block computed the constants it reads as data, with each
-    /// constant's local value there (`specialized::emit_entry`), for
-    /// `TypedModule::localize_specs` once the module is finalized.
-    pub(crate) localized: Option<(FuncId, Vec<(ConstId, SValue)>)>,
     fault: Option<Error>,
     /// The sampling routines the function's samples call, each defined at its first call
     /// (`sampler::routine`).
@@ -284,7 +278,6 @@ impl<'a> EmitCx<'a> {
             active: None,
             entry_live: None,
             merged: BTreeSet::new(),
-            localized: None,
             fault: None,
             sampling: Default::default(),
             merged_draw: None,
@@ -837,7 +830,6 @@ impl<'a> Emitter<'a> {
                 active: None,
                 entry_live: None,
                 merged: BTreeSet::new(),
-                localized: None,
                 fault: None,
                 sampling: Default::default(),
                 merged_draw: None,
@@ -1499,8 +1491,6 @@ pub fn emit_module(e: &Entry, plan: &Plan, m: &mut Meter) -> Result<Emitted, Err
                 .and_then(|()| em.cx.load_push_fields(&mut fb))
                 // The floor's tail, read in the first block (`lower::push::emit_tail_guard`).
                 .and_then(|()| em.cx.emit_tail_guard(&mut fb))
-                // The bound values the function reads as data, right after their fields.
-                .and_then(|()| crate::lower::specialized::emit_entry(&mut em.cx, &mut fb))
                 .and_then(|()| dispatch::emit_entry(&mut em.cx, &mut fb))
                 // What the invocation draws (a merged draw's command and its slot tables) before
                 // any hook reads a slot table.
@@ -1574,12 +1564,7 @@ pub fn emit_module(e: &Entry, plan: &Plan, m: &mut Meter) -> Result<Emitted, Err
         mb.subgroup(plan.subgroup);
         // The lowering's offers outlive the builder; charged until weighed.
         let offers = mb.offers().to_vec();
-        let mut module = mb.finalize()?;
-        // Every read of a constant the function reads as data takes its local value, and the
-        // constants nothing else reads leave.
-        if let Some((body, local)) = &em.cx.localized {
-            module.localize_specs(*body, local)?;
-        }
+        let module = mb.finalize()?;
         m.charge(std::mem::size_of_val(offers.as_slice()))?;
         Ok((module, offers, merged))
     })();

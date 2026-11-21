@@ -299,8 +299,8 @@ fn an_srgb_swizzle_across_alpha_swizzles_in_the_function_on_a_twin() {
 /// class (an `RGBA8Unorm_sRGB` or ASTC sRGB texture's, not an `RGBA8Unorm` one's). Under the
 /// variant every access decodes what the twin's view reads by the MSL transfer through the
 /// device's `Pow`, declaring no table, and notes `SrgbTexelDecode` outright, on both devices. No
-/// access records `PrecisionNote::HalfSampleFilter` or `PrecisionNote::FloatSampleFilter` or
-/// states `RuntimeFact::TexelFormat`. Every form validates on both devices.
+/// access records `PrecisionNote::HalfSampleFilter` or `PrecisionNote::FloatSampleFilter`. Every
+/// form validates on both devices.
 #[test]
 fn the_device_decodes_every_access_and_a_twin_takes_its_pow() {
     let nearest = sampler_words(0, 0, false);
@@ -359,12 +359,6 @@ fn the_device_decodes_every_access_and_a_twin_takes_its_pow() {
                     assert_eq!(noted(pf), !variant, "{what} {pf:?}");
                 }
                 assert!(!noted(PixelFormat::RGBA8Unorm), "{what}");
-                assert!(
-                    !plan
-                        .facts
-                        .contains(&RuntimeFact::TexelFormat { slot: TEXTURE }),
-                    "{what}"
-                );
                 for note in [
                     PrecisionNote::FloatSampleFilter,
                     PrecisionNote::HalfSampleFilter,

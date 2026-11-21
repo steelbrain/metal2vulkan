@@ -456,16 +456,11 @@ pub fn link_standalone(
 }
 
 /// Link `a` alone, relocate it, and run L3 (requirements ⊆ profile, `spirv-val` under the
-/// profile's environments and relaxations). Returns the table and the final words. A key the
-/// function reads as data left a specialization constant fails it: a read of the key's constant the
-/// entry hook did not reach, which would make a pipeline per bound value.
+/// profile's environments and relaxations). Returns the table and the final words.
 pub fn link_and_validate(
     a: &FunctionArtifact,
     p: &DeviceProfile,
 ) -> Result<(LinkTable, Vec<u32>), String> {
-    if let Some(c) = a.interface.spec.iter().find(|c| c.key.read_as_data()) {
-        return Err(format!("{:?} is still a specialization constant", c.key));
-    }
     let (table, words) = link_standalone(a, p).map_err(|e| format!("link: {e}"))?;
     check_words_valid(&words, &a.requirements, p)?;
     Ok((table, words))

@@ -3,8 +3,8 @@
 //!
 //! A `half` texture (`texture2d<half>` and the like) reads or samples whatever format is bound
 //! to it, and Metal's conversion of the texel to `half` depends on the format, which only the
-//! binder knows. The translation reads the bound format's treatment from the texture slot's
-//! `SpecKey::TexelFormat` specialization, which [`texel_format`] computes: the bits of
+//! binder knows. The bound format's treatment is its class, which [`texel_format`] computes, and
+//! which a specialized note's test reads (`SpecKey::BoundTexelFormat`): the bits of
 //! [`BicubicTexels`] (its family flags and channels) for a format whose conversion is measured,
 //! an 8-bit sRGB format's own bits (below), a cube gather's corner alone for some other formats
 //! (below), else [`TexelFormat::OTHER`].
@@ -72,8 +72,6 @@
 //!   emulation, an inference from its parts, each measured on the small floats: the face
 //!   position (format-independent), the 2D sum above, and the corner tap, the `x` face's texel
 //!   (its gathers', below).
-//! - **A swizzled texture's class** drops the field, and a packed normalized format's family with
-//!   it ([`TexelFormat::swizzled`]).
 //!
 //! `ARGB8Unorm` takes a field too ([`PackedTexels::Argb8`]): Metal reads its one texel as `c / 255`
 //! correctly rounded, its bytes rotated in the view; its cube gathers and its linear filter are not
@@ -154,9 +152,8 @@
 use crate::metal::bicubic::{texels, BicubicTexels};
 use crate::metal::{PixelFormat, TextureSwizzleChannels};
 
-/// The treatment of a bound format's texels with a `half` result: the value of the
-/// `SpecKey::TexelFormat` specialization constant, the bits of [`BicubicTexels`] for a measured
-/// format.
+/// The treatment of a bound format's texels with a `half` result: the value a specialized note's
+/// test of `SpecKey::BoundTexelFormat` reads, the bits of [`BicubicTexels`] for a measured format.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TexelFormat(pub u32);
 
@@ -171,13 +168,10 @@ impl TexelFormat {
     /// 0. No other access reads them: such a format's class is otherwise [`OTHER`](Self::OTHER)'s.
     pub const CORNER: u32 = 24;
 
-    /// The [`CORNER`](Self::CORNER) field's mask, in place.
-    pub const CORNER_MASK: u32 = 0xF << TexelFormat::CORNER;
-
     /// Bits `PACKED` to `PACKED + 3`: the [`PackedTexels`] of a packed format, whose one texel a
-    /// read, a 2D gather, or a sample reading one texel converts from its codes, else 0. The binder
-    /// clears it for a swizzled texture, but at a slot whose function applies the swizzle after
-    /// converting.
+    /// read, a 2D gather, or a sample reading one texel converts from its codes, else 0. A heap
+    /// texture whose swizzle does not read as none takes [`OTHER`](Self::OTHER) instead
+    /// ([`heap_class`]).
     pub const PACKED: u32 = 28;
 
     /// The [`PACKED`](Self::PACKED) field's mask, in place.
@@ -206,19 +200,6 @@ impl TexelFormat {
     /// class (module docs).
     pub fn packed_exact(self) -> bool {
         self.0 & BicubicTexels::EXACT != 0 && self.0 & TexelFormat::PACKED_MASK != 0
-    }
-
-    /// The class of a texture of this class's format made with a swizzle, which permutes the
-    /// channels before the function converts or filters them: without the
-    /// [`PACKED`](Self::PACKED) field, whose code scales are per channel, and for a
-    /// [`packed_exact`](Self::packed_exact) class without the family, whose grids are the
-    /// field's, its channels, and its border texels too, leaving the [`CORNER`](Self::CORNER)
-    /// field alone (its class before Metal's filter of it was measured).
-    pub fn swizzled(self) -> TexelFormat {
-        match self.packed_exact() {
-            true => TexelFormat(self.0 & TexelFormat::CORNER_MASK),
-            false => TexelFormat(self.0 & !TexelFormat::PACKED_MASK),
-        }
     }
 }
 
@@ -599,9 +580,7 @@ fn two_plane_family(pf: PixelFormat, field: Option<PackedTexels>) -> u32 {
 
 /// The class of a texture of pixel format `pf` made with `swizzle`, with the border texels of
 /// that swizzle where the class states its channels (a cube gather's corner alone states none):
-/// [`texel_format`]'s bits, which a function whose slot does not apply the swizzle itself reads as
-/// [`TexelFormat::swizzled`] where the swizzle is not the identity (the binder's `TexelFormat`
-/// specialization).
+/// [`texel_format`]'s bits.
 pub fn with_border(pf: PixelFormat, swizzle: TextureSwizzleChannels) -> TexelFormat {
     match texel_format(pf) {
         class if !class.has_channels() => class,
@@ -851,6 +830,9 @@ mod tests {
     use super::*;
     use BicubicTexels as T;
 
+    /// The [`CORNER`](TexelFormat::CORNER) field's mask, in place.
+    const CORNER_MASK: u32 = 0xF << TexelFormat::CORNER;
+
     /// An sRGB-coded format's twin (`metal::format::srgb_raw_twin`) is a format whose direct image
     /// format is the UNORM format of the sRGB format's own class: the same channels and bits, read
     /// as their codes; nothing else has one, nor an ASTC sRGB format, whose unorm form decodes the
@@ -991,24 +973,16 @@ mod tests {
         let mut seen = std::collections::BTreeSet::new();
         for &pf in PixelFormat::ALL {
             let Some(corner) = CubeCorner::of(pf) else {
-                assert_eq!(texel_format(pf).0 & TexelFormat::CORNER_MASK, 0, "{pf:?}");
+                assert_eq!(texel_format(pf).0 & CORNER_MASK, 0, "{pf:?}");
                 continue;
             };
-            // A packed format's class holds its family beside its corner; a swizzled texture's
-            // of a packed normalized one keeps the corner alone.
+            // A packed format's class holds its family and field beside its corner.
             let class = texel_format(pf);
-            assert_eq!(
-                class.0 & TexelFormat::CORNER_MASK,
-                corner.class().0,
-                "{pf:?}"
-            );
+            assert_eq!(class.0 & CORNER_MASK, corner.class().0, "{pf:?}");
             let alone = match PackedTexels::of(pf) {
-                Some(_) => TexelFormat(class.0 & TexelFormat::CORNER_MASK),
+                Some(_) => TexelFormat(class.0 & CORNER_MASK),
                 None => class,
             };
-            if class.packed_exact() {
-                assert_eq!(class.swizzled(), alone, "{pf:?}");
-            }
             assert_eq!(alone, corner.class(), "{pf:?}");
             assert!(!alone.has_channels(), "{pf:?}");
             seen.insert(corner as u32);
@@ -1026,7 +1000,7 @@ mod tests {
         for (k, corner) in every.into_iter().enumerate() {
             assert_eq!(corner as u32, k as u32 + 1);
             assert_eq!(corner.class().0 >> TexelFormat::CORNER, corner as u32);
-            assert!(corner.class().0 & TexelFormat::CORNER_MASK == corner.class().0);
+            assert!(corner.class().0 & CORNER_MASK == corner.class().0);
             assert!(seen.contains(&(corner as u32)), "{corner:?} has no format");
         }
         // The measured families keep no corner field.
@@ -1035,7 +1009,7 @@ mod tests {
             PixelFormat::Depth32Float,
             PixelFormat::R16Float,
         ] {
-            assert_eq!(texel_format(pf).0 & TexelFormat::CORNER_MASK, 0, "{pf:?}");
+            assert_eq!(texel_format(pf).0 & CORNER_MASK, 0, "{pf:?}");
             assert!(texel_format(pf).has_channels(), "{pf:?}");
         }
     }
@@ -1075,7 +1049,7 @@ mod tests {
                         "{pf:?}"
                     );
                     assert_eq!(p.ycbcr(), two_plane && p != PackedTexels::Rgb10A2, "{pf:?}");
-                    let family = class.0 & !(TexelFormat::PACKED_MASK | TexelFormat::CORNER_MASK);
+                    let family = class.0 & !(TexelFormat::PACKED_MASK | CORNER_MASK);
                     let want = match p {
                         PackedTexels::SmallFloat => T::HALF,
                         PackedTexels::Argb8 => 0,
@@ -1192,24 +1166,7 @@ mod tests {
                 "{p:?} has no format"
             );
         }
-        // A swizzle drops the field, and a packed normalized format's family with it.
-        for (pf, alone) in [
-            (PixelFormat::B5G6R5Unorm, true),
-            (PixelFormat::RGB10A2Unorm, true),
-            (PixelFormat::RG11B10Float, false),
-            (PixelFormat::ARGB8Unorm, false),
-            (PixelFormat::RGBA8Unorm, false),
-        ] {
-            let class = texel_format(pf);
-            let swizzled = class.swizzled();
-            assert_eq!(swizzled.0 & TexelFormat::PACKED_MASK, 0, "{pf:?}");
-            let want = match alone {
-                true => class.0 & TexelFormat::CORNER_MASK,
-                false => class.0 & !TexelFormat::PACKED_MASK,
-            };
-            assert_eq!(swizzled.0, want, "{pf:?}");
-        }
-        assert_eq!(TexelFormat::PACKED_MASK & TexelFormat::CORNER_MASK, 0);
+        assert_eq!(TexelFormat::PACKED_MASK & CORNER_MASK, 0);
         assert_eq!(TexelFormat::PACKED_MASK & 0xff_ffff, 0);
     }
 

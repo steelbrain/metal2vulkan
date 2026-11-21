@@ -1,7 +1,7 @@
 //! The bits of each specialization constant a module can read.
 //!
 //! A binder sets some constants from words of which a module reads only part: a texture slot's
-//! `SpecKey::TexelFormat` class holds its format's family, channels and border texels, of which a
+//! `SpecKey::BicubicTexels` word holds its format's family, channels and border texels, of which a
 //! module may test only some. Two values that agree on
 //! every bit the module can read give the same program, so a binder that clears the other bits
 //! makes one pipeline of them, and the driver (and Metal's own caches under MoltenVK) sees one

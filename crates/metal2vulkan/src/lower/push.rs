@@ -184,8 +184,6 @@ pub const fn shape(f: PushField) -> FieldShape {
         PushField::CaptureLayout => FieldShape::UVec4Array(1),
         // Four bits of kept channels per color attachment.
         PushField::StorageKeptChannels => FieldShape::U32,
-        // A specialization key's value carried as data: every such key is a `u32` or a boolean.
-        PushField::Specialized(_) => FieldShape::U32,
         // A constexpr sampler's index in its use's sampler array, and the sampled-texture array's
         // element a fetched color attachment is read through.
         PushField::ConstexprSampler(_) | PushField::FetchedColor { .. } => FieldShape::U32,
@@ -818,11 +816,6 @@ mod tests {
                 PushField::SlotBindOffset(slot(stage, i)),
                 PushField::SlotGuestBase(slot(stage, i)),
                 PushField::VertexBufferStride(i),
-                PushField::Specialized(crate::pipeline::sym::SpecKey::TexelFormat(SlotRef {
-                    stage,
-                    class: SlotClass::Texture,
-                    index: i,
-                })),
                 PushField::ZeroAddress,
                 PushField::SlotBounds(slot(stage, i)),
             ]
@@ -836,8 +829,9 @@ mod tests {
                 state ^= state << 17;
                 let n = (state % 40) as u32;
                 for i in 0..n {
-                    let pick = ((state >> (i % 50)) % 10) as usize;
-                    fields.insert(kinds(stage, i % 31)[pick]);
+                    let kinds = kinds(stage, i % 31);
+                    let pick = ((state >> (i % 50)) % kinds.len() as u64) as usize;
+                    fields.insert(kinds[pick]);
                 }
                 check(stage, &fields);
             }

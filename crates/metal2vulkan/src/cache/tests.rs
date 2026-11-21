@@ -756,34 +756,6 @@ fn the_version_374_member_round_trips() {
     assert_ne!(encode(&key), encode(&SpecKey::BoundTexelFormat(slot)));
 }
 
-/// The member format version 377 appends encodes and decodes as itself, with the key it carries: a
-/// sampler slot's word, carried as data, and a texture slot's format class.
-#[test]
-fn the_version_377_member_round_trips() {
-    use crate::pipeline::sym::{PushField, SpecKey};
-    let sampler = SlotRef {
-        stage: Stage::Fragment,
-        class: SlotClass::Sampler,
-        index: 3,
-    };
-    let texture = SlotRef {
-        stage: Stage::Fragment,
-        class: SlotClass::Texture,
-        index: 3,
-    };
-    for key in [
-        SpecKey::SamplerState {
-            slot: sampler,
-            fields: 0x0003_00ff,
-        },
-        SpecKey::TexelFormat(texture),
-    ] {
-        let field = PushField::Specialized(key);
-        assert_eq!(decode::<PushField>(&encode(&field)), Ok(field));
-        assert_ne!(encode(&field), encode(&key));
-    }
-}
-
 /// The member format version 485 appends encodes and decodes as itself: the word of the sampler
 /// bound at a slot, which a specialized note's test alone reads.
 #[test]
@@ -815,7 +787,7 @@ fn the_version_535_member_round_trips() {
 /// The members format versions 153, 154, 155, 157 and 161 joined from every side encode and
 /// decode together in one render pipeline: `PrecisionNote::CubeGradientFootprint` and
 /// `CombinedSampler`, `RuntimeFact::InterlockedFramebufferFetch` and
-/// `GraphicsState::storage_attachments`, `SpecKey::TexelFormat`, `RuntimeFact::TexelFormat` and
+/// `GraphicsState::storage_attachments`, `RuntimeFact::SrgbTexture` and
 /// `SrgbTexture`, and `PrecisionNote::HalfTexelConversion`,
 /// `HalfSampleFilter`, `SrgbTexelDecode`, and `FloatSampleFilter`,
 /// `HandleClass::Sampler { compare, integer }` and
@@ -863,7 +835,7 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
     let id = p.stages[0].specialization.constants.len() as u32;
     p.stages[0].specialization.constants.push(SpecConstant {
         id,
-        key: SpecKey::TexelFormat(texture),
+        key: SpecKey::BicubicTexels(texture),
         size: 4,
         default: 0,
         unread_bits: 0,
@@ -961,10 +933,6 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
         mechanism: Mechanism::RenderPassContract,
     });
     p.dependencies.push(RuntimeDependency {
-        fact: RuntimeFact::TexelFormat { slot: texture },
-        mechanism: Mechanism::Specialization,
-    });
-    p.dependencies.push(RuntimeDependency {
         fact: RuntimeFact::SrgbTexture { slot: texture },
         mechanism: Mechanism::Variant,
     });
@@ -986,7 +954,7 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
         .specialization
         .constants
         .iter()
-        .any(|c| c.key == SpecKey::TexelFormat(texture)));
+        .any(|c| c.key == SpecKey::BicubicTexels(texture)));
     let bindings = sealed.layout.sets.last().map(|s| &s.bindings[..]);
     assert!(matches!(
         bindings.map(|b| &b[0].source),
@@ -1011,15 +979,11 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
             ..
         })
     ));
-    for fact in [
-        RuntimeFact::TexelFormat { slot: texture },
-        RuntimeFact::SrgbTexture { slot: texture },
-    ] {
-        assert!(
-            sealed.dependencies.iter().any(|d| d.fact == fact),
-            "{fact:?}"
-        );
-    }
+    let fact = RuntimeFact::SrgbTexture { slot: texture };
+    assert!(
+        sealed.dependencies.iter().any(|d| d.fact == fact),
+        "{fact:?}"
+    );
     assert_eq!(sealed.graphics.storage_attachments.len(), 1);
     assert!(sealed.dependencies.iter().any(|d| matches!(
         d.fact,

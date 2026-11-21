@@ -1180,7 +1180,7 @@ pub(super) fn run(
         bufs,
         push: Region::new(
             MemoryKind::PushConstant,
-            super::specialized_push(m, &res.spec, res.push),
+            super::tail_push(m, res.push),
             false,
         ),
         images,

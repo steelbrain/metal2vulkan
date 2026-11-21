@@ -1002,24 +1002,16 @@ fn gathers_gradients_and_pixel_constexpr_samplers() {
 }
 
 /// A `half` sample of a texture slot is the device's texel rounded to nearest even, which records
-/// the `HalfTexelConversion` note outright: no `TexelFormat` fact or specialization of the slot.
-/// A `float` sample takes none of them.
+/// the `HalfTexelConversion` note outright. A `float` sample takes none.
 #[test]
 fn half_samples_take_the_device_s_texel_noted() {
     let Some(bc) = fixture() else {
         return;
     };
     let p = m3();
-    let t = slot(Stage::Kernel, SlotClass::Texture, 0);
     let h = ok(&bc, "sample_grad", &p);
-    assert!(!h.facts.contains(&RuntimeFact::TexelFormat { slot: t }));
-    assert!(!h.interface.reads_key(SpecKey::TexelFormat(t)));
     assert!(h.precision.contains(&PrecisionNote::HalfTexelConversion));
     let f = ok(&bc, "sample_level", &p);
-    assert!(f
-        .facts
-        .iter()
-        .all(|x| !matches!(x, RuntimeFact::TexelFormat { .. })));
     assert!(!f.precision.contains(&PrecisionNote::HalfTexelConversion));
 }
 

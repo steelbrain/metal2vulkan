@@ -876,10 +876,6 @@ fn run_regions(pipe: &ComputePipeline, m: &TypedModule, world: &mut World, c: &D
                 p
             })
             .unwrap_or_default();
-        // The values the binder pushes for the keys the function reads as data.
-        for placement in &pipe.interface.push {
-            spec.extend(placement.pushed_values(&push));
-        }
         let cfg = Config {
             workgroups: region.group_count,
             ..Config::default()

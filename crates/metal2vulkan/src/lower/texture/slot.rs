@@ -238,9 +238,6 @@ pub struct SlotPlan {
     /// function's writes to a sparse texture (`RuntimeFact::SparseTextureWrites`), set by
     /// [`finish`].
     pub sparse_writes: bool,
-    /// The slot declares its `TexelFormat` specialization: a raw linear sample reads the bound
-    /// format's channels from it (`RuntimeFact::TexelFormat`).
-    pub texel_format: bool,
     /// A read of the slot, a texture buffer, applies the bound texture buffer's swizzle, which
     /// the slot's `TextureSwizzle` specialization gives (`RuntimeFact::TextureSwizzle`); or the
     /// slot, a storage slot of `LoweringInputs::swizzled_storage`, applies the bound texture's to
@@ -288,7 +285,6 @@ impl SlotPlan {
             sparse_arm: false,
             tile_map: false,
             sparse_writes: false,
-            texel_format: false,
             swizzle: false,
             constant_lanes: false,
             offset_base: false,
@@ -1754,7 +1750,6 @@ impl SlotPlan {
         let state = self.sparse_arm
             || self.tile_map
             || self.sparse_writes
-            || self.texel_format
             || self.swizzle
             || self.constant_lanes
             || self.offset_base;

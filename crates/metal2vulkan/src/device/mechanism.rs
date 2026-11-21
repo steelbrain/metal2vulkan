@@ -126,7 +126,6 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         // The vote word is fixed in the module; the planner counts it against the limit.
         RuntimeFact::PredicationVote => Mechanism::PlanTimeCheck,
         // The binder pushes the bound format's class, which selects its conversion.
-        RuntimeFact::TexelFormat { .. } => Mechanism::PushConstant,
         // The binder writes the encoder's viewport count per draw.
         RuntimeFact::ViewportCount => Mechanism::PushConstant,
         // A Metal query's answer: nothing on the device reads it.

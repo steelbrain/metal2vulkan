@@ -704,7 +704,7 @@ fn queries_and_null_checks() {
         let a = ok(compile(&bc, "queries", &p), &p, &stem);
         let w = texture_slot(3);
         assert!(a.facts.contains(&RuntimeFact::ResourcePresence { slot: w }));
-        assert!(a.interface.reads_key(SpecKey::Presence(w)));
+        assert!(a.interface.declares_spec(SpecKey::Presence(w)));
         // The two queries at level 1 answer from the first level.
         assert_eq!(uses(&a, "texture.query_level"), 2, "{stem}");
         assert_eq!(uses(&a, "texture.query"), 6, "{stem}");

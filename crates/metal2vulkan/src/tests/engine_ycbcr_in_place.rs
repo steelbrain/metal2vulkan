@@ -566,7 +566,6 @@ fn resources(plan: &Plan, init: &[Vec<u8>], words: &YCbCrInPlace) -> Resources {
                 written = true;
             }
             (PushField::SlotBindOffset(_) | PushField::DispatchRegion, PushLoc::Push { .. }) => {}
-            (PushField::Specialized(_), _) => {}
             other => panic!("unexpected push field {other:?}"),
         }
     }

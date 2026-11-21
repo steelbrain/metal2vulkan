@@ -123,8 +123,6 @@ fn resources(plan: &Plan, init: &[Vec<u8>]) -> Resources {
     for f in &plan.push.fields {
         match (f.field, f.loc) {
             (PushField::SlotBindOffset(_) | PushField::DispatchRegion, PushLoc::Push { .. }) => {}
-            // A bound value read as data, which the interpreter writes from `spec`.
-            (PushField::Specialized(_), PushLoc::Push { .. }) => {}
             // 0: no channel narrower than the written word, every integer lane as written (the
             // interpreter's images hold words; the kernels write in-range values).
             (PushField::TextureIntegerChannels(_), PushLoc::Push { .. }) => {}
@@ -692,15 +690,8 @@ fn short_texels_sign_extend_and_half_reads_round() {
 #[test]
 fn half_reads_round_their_texel_to_nearest_even() {
     use crate::pipeline::artifact::PrecisionNote;
-    use crate::pipeline::facts::RuntimeFact;
-    use crate::pipeline::sym::{SlotClass, SlotRef};
     let Some(bc) = fixture() else {
         return;
-    };
-    let slot = SlotRef {
-        stage: Stage::Kernel,
-        class: SlotClass::Texture,
-        index: 2,
     };
     let texel = [2f32.powi(-20), 65520.0, 1.0 + 1.0 / 4096.0, 3.0];
     let want: [u16; 4] = [0x0010, 0x7C00, 0x3C00, 0x4200];
@@ -709,10 +700,6 @@ fn half_reads_round_their_texel_to_nearest_even() {
         let Some((plan, m)) = module(&bc, "short_texels", &stem, &p) else {
             continue;
         };
-        assert!(
-            !plan.facts.contains(&RuntimeFact::TexelFormat { slot }),
-            "{stem}"
-        );
         assert!(
             plan.precision.contains(&PrecisionNote::HalfTexelConversion),
             "{stem}"
@@ -819,7 +806,6 @@ fn half_reads_keep_subnormals_zeros_infinities_and_nans() {
 /// format; a multisampled read reads its sample.
 #[test]
 fn depth_and_multisample_reads_read_their_texel() {
-    use crate::pipeline::facts::RuntimeFact;
     let Some(bc) = fixture() else {
         return;
     };
@@ -828,13 +814,6 @@ fn depth_and_multisample_reads_read_their_texel() {
         let Some((plan, m)) = module(&bc, "depth_ms", &stem, &p) else {
             continue;
         };
-        assert!(
-            !plan
-                .facts
-                .iter()
-                .any(|f| matches!(f, RuntimeFact::TexelFormat { .. })),
-            "{stem}"
-        );
         let mut dp = Image::new(texture(0), [2, 2, 1], 1, 1, 1);
         dp.texels[0] = [fl(0.75), fl(9.0), fl(9.0), fl(9.0)];
         let mut ms = Image::new(texture(1), [2, 2, 1], 1, 1, 4);

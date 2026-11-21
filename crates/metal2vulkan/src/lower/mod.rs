@@ -36,7 +36,6 @@ pub mod raytracing;
 pub mod sampler;
 pub mod select;
 pub mod simd;
-pub mod specialized;
 pub mod stage_io;
 pub mod strategy;
 pub mod sync;

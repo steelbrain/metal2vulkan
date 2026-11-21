@@ -45,11 +45,10 @@
 //! - **Specialization.** One key over both stages' constants (link numbers `SpecId`s over the
 //!   pipeline, so a key's entries are disjoint per id): `Presence`, `SamplerState` (the bound
 //!   sampler's word masked by the fields the function reads), `BicubicTexels` (the bound format's
-//!   treatment under Metal's bicubic filter), `TexelFormat` (the bound format's conversion to
-//!   `half`), `SampleCount` (the pipeline's rasterization samples), `AmplificationCount` (the
-//!   shape's vertex amplification count), and a fragment function's tile threadgroup memory's
-//!   (`TgOffset`, `TileThreadgroupLength`, `TileGridWidth`, and the pass's tile as
-//!   `ImageblockWidth` and `ImageblockHeight`).
+//!   treatment under Metal's bicubic filter), `SampleCount` (the pipeline's rasterization samples),
+//!   `AmplificationCount` (the shape's vertex amplification count), and a fragment function's tile
+//!   threadgroup memory's (`TgOffset`, `TileThreadgroupLength`, `TileGridWidth`, and the pass's
+//!   tile as `ImageblockWidth` and `ImageblockHeight`).
 //! - **Views**. A count of 0, above 1 for a pipeline whose `maxVertexAmplificationCount` is 1, or
 //!   with fewer view mappings than the count is `InvalidVertexAmplification`. A count above a
 //!   larger maximum draws that many amplifications, as plain Metal draws them where its validation
@@ -282,8 +281,8 @@ use crate::bind::plan::resources::{separate_samplers, ResourcePlanner};
 use crate::bind::plan::slots::{
     address_map_variant, anisotropic_variant, bindings, bound_value, buffer_use, check_slots,
     check_sparse_textures, cross_variant, cubic_variant, heap_raw, large_view_candidates,
-    mark_disjoint, plan_buffer, psb_variant, range_variant, record_noted, record_specialized,
-    snapshot_forms, srgb_variant, storage_view_variant, texel_buffer_parts_variant, used_uses,
+    mark_disjoint, plan_buffer, psb_variant, range_variant, record_noted, snapshot_forms,
+    srgb_variant, storage_view_variant, texel_buffer_parts_variant, used_uses,
     ycbcr_in_place_variant, ycbcr_planes_sampled_variant,
 };
 use crate::bind::plan::{
@@ -1285,11 +1284,8 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                     ..
                 }) => return Err(not_implemented(Feature::TexelBuffer)),
                 // A storage texture's level count and integer channel widths, which the resource
-                // plan records; and a value the bound resources decide, which the plan records too
-                // (`slots::record_specialized`).
-                PushField::TextureLevels(_)
-                | PushField::TextureIntegerChannels(_)
-                | PushField::Specialized(_) => {}
+                // plan records.
+                PushField::TextureLevels(_) | PushField::TextureIntegerChannels(_) => {}
                 // A structure's instance count, which instantiation reads from the state.
                 PushField::InstanceCount(_) => {}
                 // An in-place YCbCr texture's words, and a texture's rows in its texel buffer
@@ -1858,7 +1854,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 other => internal(format!("an object function's threadgroup memory: {other}")),
             })?;
     }
-    record_specialized(&push, shape, &mut resources)?;
     record_noted(&p.stages, shape, &mut resources, &heap_reach)?;
     let specialization = spec_key(&layout, |k| {
         fixed.iter().find(|(key, _)| *key == k).map(|(_, v)| *v)

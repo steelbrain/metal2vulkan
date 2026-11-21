@@ -296,8 +296,6 @@ fn resources(plan: &Plan, init: &[Vec<u8>], class: BicubicTexels) -> Resources {
     for f in &plan.push.fields {
         match (f.field, f.loc) {
             (PushField::SlotBindOffset(_) | PushField::DispatchRegion, PushLoc::Push { .. }) => {}
-            // A bound value read as data, which the interpreter writes from `spec`.
-            (PushField::Specialized(_), PushLoc::Push { .. }) => {}
             other => panic!("unexpected push field {other:?}"),
         }
     }

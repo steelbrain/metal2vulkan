@@ -1365,9 +1365,6 @@ fn the_binder_saturates_each_bound_formats_channels() {
                     .copy_from_slice(&region.specialization.data[at..at + e.size as usize]);
                 spec.insert(ids[&e.constant_id], u64::from_le_bytes(v));
             }
-            for placement in &pipe.interface.push {
-                spec.extend(placement.pushed_values(&push));
-            }
             let (_, m) = typed_module_with(&bc, "k", dev.profile(), &key)
                 .unwrap_or_else(|e| panic!("{what}: {e}"));
             let res = Resources {

@@ -288,9 +288,6 @@ pub(super) fn run_samples(
     for f in &plan.push.fields {
         match (f.field, f.loc) {
             (PushField::SlotBindOffset(_) | PushField::DispatchRegion, PushLoc::Push { .. }) => {}
-            // A bound value the function reads as data, which the interpreter writes from the
-            // specialization it is given.
-            (PushField::Specialized(_), PushLoc::Push { .. }) => {}
             other => panic!("{what}: unexpected push field {other:?}"),
         }
     }

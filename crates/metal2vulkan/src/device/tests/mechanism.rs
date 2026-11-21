@@ -123,7 +123,6 @@ fn every_fact() -> Vec<RuntimeFact> {
             multisampled: false,
         },
         RuntimeFact::PredicationVote,
-        RuntimeFact::TexelFormat { slot },
         RuntimeFact::SrgbTexture { slot },
         RuntimeFact::UlongAtomicView { slot },
         RuntimeFact::ViewportCount,
@@ -334,7 +333,7 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::InterlockedFramebufferFetch { .. } => 40,
         RuntimeFact::ShadowStencil { .. } => 41,
         RuntimeFact::PredicationVote => 42,
-        RuntimeFact::TexelFormat { .. } => 43,
+        RuntimeFact::HeapStorageReads { .. } => 43,
         RuntimeFact::SrgbTexture { .. } => 44,
         RuntimeFact::UlongAtomicView { .. } => 45,
         RuntimeFact::ViewportCount => 46,
@@ -386,7 +385,6 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::CallThreadgroups => 97,
         RuntimeFact::PartialThreadgroups => 98,
         RuntimeFact::TexelRows { .. } => 99,
-        RuntimeFact::HeapStorageReads { .. } => 100,
         RuntimeFact::UnitAxes { .. } => 57,
         RuntimeFact::TexelBufferParts { .. } => 70,
         RuntimeFact::OpenClLineTexture { .. } => 74,
@@ -399,7 +397,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..101).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..100).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -533,9 +531,7 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::StorageTextureLevels { .. }
                 | RuntimeFact::StorageTextureIntegerChannels { .. }
                 | RuntimeFact::AccelerationStructureInstanceCount { .. }
-                | RuntimeFact::ViewportCount
-                // The bound texture's format class, which the binder pushes.
-                | RuntimeFact::TexelFormat { .. } => Mechanism::PushConstant,
+                | RuntimeFact::ViewportCount => Mechanism::PushConstant,
                 RuntimeFact::AliasedImageblock { .. } => Mechanism::None,
                 RuntimeFact::CallStackDepth { .. }
                 | RuntimeFact::OpenClMode

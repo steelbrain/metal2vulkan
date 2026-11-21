@@ -368,41 +368,17 @@ pub struct Resources {
     pub spec: BTreeMap<SpecKey, u64>,
 }
 
-/// The push bytes `push`, with each push member that carries a specialization key's value as
-/// data (`PushField::Specialized`) holding the value `spec` gives the key, else the default the
-/// lowering declares for the key's constant, as a binder writes the value it would have
-/// specialized the constant to: a test that specializes a key in [`Resources::spec`] reads the same
-/// value in either form. A field placed in the stage's `ArgumentTable` is the test's to bind.
-fn specialized_push(m: &TypedModule, spec: &BTreeMap<SpecKey, u64>, mut push: Vec<u8>) -> Vec<u8> {
+/// The push bytes `push` with the floor's tail word, which a runtime pushes zero, zeroed.
+fn tail_push(m: &TypedModule, mut push: Vec<u8>) -> Vec<u8> {
     use crate::pipeline::sym::PushField;
     for member in m.push_members() {
-        // The floor's tail word, which a runtime pushes zero.
         if member.field == PushField::TailWord {
             let end = member.offset as usize + 4;
             if push.len() < end {
                 push.resize(end, 0);
             }
             push[end - 4..end].fill(0);
-            continue;
         }
-        let PushField::Specialized(key) = member.field else {
-            continue;
-        };
-        let value = spec.get(&key).copied().unwrap_or(match key {
-            SpecKey::Presence(_) => 1,
-            SpecKey::TexelFormat(_) => u64::from(crate::metal::texel_format::TexelFormat::OTHER.0),
-            SpecKey::TextureSwizzle(_) => {
-                u64::from(crate::metal::TextureSwizzleChannels::DEFAULT_WORD)
-            }
-            SpecKey::BicubicTexels(_) => u64::from(crate::metal::bicubic::BicubicTexels::NEUTRAL.0),
-            SpecKey::BorderTexels(_) => u64::from(crate::metal::sampler::NEUTRAL_BORDER_TEXELS),
-            _ => 0,
-        });
-        let at = member.offset as usize;
-        if push.len() < at + 4 {
-            push.resize(at + 4, 0);
-        }
-        push[at..at + 4].copy_from_slice(&(value as u32).to_le_bytes());
     }
     push
 }

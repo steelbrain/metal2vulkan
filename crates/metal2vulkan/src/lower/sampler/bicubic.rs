@@ -405,7 +405,8 @@ fn i32_value(fb: &mut FunctionBuilder<'_>, t: &Tys, x: i32) -> BResult<SValue> {
 }
 
 /// Whether bit `bit` of the specialization `spec` is set: `0 < (spec & bit)`, computed in the
-/// function, since a function reads a texel format key's value as data.
+/// function, since a function reads the bound treatment's word as data
+/// (`PushField::BicubicTexels`).
 pub(super) fn flag(
     fb: &mut FunctionBuilder<'_>,
     t: &Tys,

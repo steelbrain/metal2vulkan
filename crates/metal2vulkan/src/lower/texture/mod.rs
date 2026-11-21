@@ -38,8 +38,8 @@
 //! **Operations.** `read` is `OpImageFetch` on a sampled image and `OpImageRead` on a storage
 //! image; `write` is `OpImageWrite`; `get_*` are `OpImageQuery*`; `fence` is an image memory
 //! barrier; `is_null` reads the slot's `ResourcePresence` specialization constant. Texels move
-//! between the image's 32-bit `vec4` and AIR's held forms: a slot's `half` texels convert by the
-//! bound format's class, which its `TexelFormat` specialization gives ([`half`]; a texture buffer's
+//! between the image's 32-bit `vec4` and AIR's held forms: a slot's `half` texels are the device's
+//! texels rounded to nearest even (`PrecisionNote::HalfTexelConversion`; a texture buffer's
 //! included), and a heap element's `half` texels are rounded exactly, half subnormals and the
 //! decoded NaN kept (`narrow::round_texel`; the NaN is the device's decode,
 //! `PrecisionNote::DeviceNanEncoding`), 16-bit integers are held zero-extended and written
@@ -1315,17 +1315,6 @@ pub fn declare(
             let view =
                 crate::memory::views::declare_at(mb, sym, crate::memory::views::ViewKind::Storage)?;
             d.tile_maps.insert(*index, view);
-        }
-        if s.texel_format {
-            let u32_ = mb.ty(SType::Int {
-                width: 32,
-                signed: false,
-            })?;
-            mb.spec(
-                crate::pipeline::sym::SpecKey::TexelFormat(s.slot),
-                u32_,
-                ConstBits(u64::from(crate::metal::texel_format::TexelFormat::OTHER.0)),
-            )?;
         }
         if s.swizzle {
             let u32_ = mb.ty(SType::Int {

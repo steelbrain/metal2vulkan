@@ -16,8 +16,8 @@ use crate::spirv::ir::{
 };
 use crate::spirv::spec_bits::mark_unread;
 
-/// The constant the tests read: a texture slot's format class.
-const KEY: SpecKey = SpecKey::TexelFormat(SlotRef {
+/// The constant the tests read: a texture slot's bicubic texel class.
+const KEY: SpecKey = SpecKey::BicubicTexels(SlotRef {
     stage: Stage::Kernel,
     class: SlotClass::Texture,
     index: 0,

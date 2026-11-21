@@ -39,9 +39,6 @@
 //! - **Bicubic texels**: a texture slot sampled through Metal's bicubic filter specializes
 //!   `BicubicTexels` from the bound format's family (`metal::bicubic::texels`), and refuses a
 //!   format of no measured family.
-//! - **Half texels**: a texture or texture buffer slot read or sampled with a `half` result, or
-//!   sampled through Metal's emulated linear filter, specializes `TexelFormat` from the bound
-//!   format's class (`metal::texel_format::texel_format`).
 //! - **Separate bindings**: a separate texture's write is the image its combined binding's would
 //!   be, with the same checks, and a separate sampler's is a constexpr sampler's layout immutable
 //!   sampler (no write) or the runtime sampler for its use. A runtime sampler meets its textures in
@@ -71,7 +68,7 @@ use crate::metal::sampler::{
     check_border_view, check_sampler, opaque_black_reads_transparent, vk_filtering,
     OpaqueBlackBorder, SamplerUse, SamplerWord,
 };
-use crate::metal::texel_format::{reads_unswizzled, srgb_twin_on, texel_format, TexelFormat};
+use crate::metal::texel_format::{reads_unswizzled, srgb_twin_on, texel_format};
 use crate::metal::{PixelFormat, SamplerMipFilter, TextureSwizzleChannels, TextureType};
 use crate::pipeline::artifact::RuntimeDependency;
 use crate::pipeline::facts::RuntimeFact;
@@ -2034,46 +2031,6 @@ impl ResourcePlanner<'_> {
             true => TextureSwizzleChannels::default(),
             false => shape.swizzle(),
         }
-    }
-
-    /// The `TexelFormat(slot)` specialization: the class of the texture or texture buffer bound at
-    /// `slot` (`metal::texel_format::texel_format`), by which the function converts its texels to a
-    /// `half` result and emulates its linear samples, with the border texels of the bound texture's
-    /// swizzle, where the class states its channels (a cube gather's corner alone states none). A
-    /// packed format's field ([`TexelFormat::PACKED`]) is kept only for a texture without a
-    /// swizzle, or with one that reads every texel as none does
-    /// (`metal::texel_format::reads_unswizzled`: a texture whose alpha reads 1): a swizzle permutes
-    /// its channels before the function converts them by their code scales or sums them on their
-    /// grids, so a swizzled texture's class is [`TexelFormat::swizzled`], but at a slot whose
-    /// function swizzles the converted texel (`VariantKey::swizzled_storage`: a storage slot's; an
-    /// extended-range sampled one's; a packed normalized sampled one's on a device without Metal's
-    /// own sampler, whose border texels are then the unswizzled texture's). A slot bound to nothing
-    /// takes [`TexelFormat::OTHER`]: a neutral reads zero, which every class converts alike.
-    pub fn texel_format(&self, slot: SlotRef) -> u64 {
-        let class = match self.texture_shape(slot) {
-            Some(shape) => {
-                let class = match texel_format(shape.pixel_format()) {
-                    class if !class.has_channels() => class.0,
-                    class => {
-                        BicubicTexels(class.0)
-                            .with_border(shape.pixel_format(), self.border_swizzle(slot, shape))
-                            .0
-                    }
-                };
-                // A slot whose function applies the swizzle (a storage slot's; an extended-range
-                // one's; a packed normalized one's) converts the texel before it swizzles it, by
-                // its own channels' class; a swizzle that reads every texel as none does keeps the
-                // class (an alpha the format lacks read as 1).
-                match reads_unswizzled(shape.pixel_format(), shape.swizzle())
-                    || self.variant.swizzled_storage.contains(&slot)
-                {
-                    true => class,
-                    false => TexelFormat(class).swizzled().0,
-                }
-            }
-            None => TexelFormat::OTHER.0,
-        };
-        u64::from(class)
     }
 
     /// The `TextureSwizzle(slot)` specialization: the swizzle of the texture buffer bound at

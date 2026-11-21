@@ -220,8 +220,6 @@ fn push_bytes(plan: &Plan, levels: &[(u32, u32)]) -> Vec<u8> {
                 push[offset as usize..offset as usize + 4].copy_from_slice(&n.to_le_bytes());
             }
             (PushField::SlotBindOffset(_) | PushField::DispatchRegion, PushLoc::Push { .. }) => {}
-            // A bound value read as data, which the interpreter writes from `spec`.
-            (PushField::Specialized(_), PushLoc::Push { .. }) => {}
             other => panic!("unexpected push field {other:?}"),
         }
     }
@@ -1600,10 +1598,6 @@ fn bound_inputs(
         let mut v = [0u8; 8];
         v[..e.size as usize].copy_from_slice(&region.specialization.data[at..at + e.size as usize]);
         spec.insert(ids[&e.constant_id], u64::from_le_bytes(v));
-    }
-    // The values the binder pushes for the keys the function reads as data.
-    for placement in &pipe.interface.push {
-        spec.extend(placement.pushed_values(&push));
     }
     (push, spec)
 }

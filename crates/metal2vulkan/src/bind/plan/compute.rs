@@ -63,7 +63,7 @@ use super::resources::{separate_samplers, ResourcePlanner};
 use super::slots::{
     address_map_variant, anisotropic_variant, bindings, bound_value, buffer_use, check_slots,
     check_sparse_textures, cross_variant, cubic_variant, heap_raw, mark_disjoint,
-    open_cl_line_variant, plan_buffer, psb_variant, record_noted, record_specialized, srgb_variant,
+    open_cl_line_variant, plan_buffer, psb_variant, record_noted, srgb_variant,
     storage_view_variant, texel_buffer_parts_variant, used_uses, ycbcr_in_place_variant,
     ycbcr_planes_sampled_variant,
 };
@@ -458,11 +458,8 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
                 ..
             }) => return Err(not_implemented(Feature::TexelBuffer)),
             // A storage texture's level count and integer channel widths, which the resource plan
-            // records; and a value the bound resources decide, which the plan records too
-            // (`slots::record_specialized`).
-            PushField::TextureLevels(_)
-            | PushField::TextureIntegerChannels(_)
-            | PushField::Specialized(_) => {}
+            // records.
+            PushField::TextureLevels(_) | PushField::TextureIntegerChannels(_) => {}
             // A structure's instance count, which instantiation reads from the state.
             PushField::InstanceCount(_) => {}
             // An in-place YCbCr texture's words, and a texture's rows in its texel buffer view,
@@ -744,7 +741,6 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
         };
         fixed.push((c.key, v));
     }
-    record_specialized(&push, shape, &mut resources)?;
     record_noted([&p.stage], shape, &mut resources, &|_| vec![Stage::Kernel])?;
     // Emulated simdgroups: the arena's own static part comes from the fact (the reported static
     // length is Metal's layout's, without the arena's minimum).

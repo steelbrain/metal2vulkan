@@ -7313,7 +7313,6 @@ method	metal2vulkan::pipeline::SamplerLevels::of	pub fn of(desc: &vk::SamplerDes
 method	metal2vulkan::pipeline::SamplerRef::constexpr_address_modes	pub fn constexpr_address_modes(self) -> Option<[crate::metal::SamplerAddressMode; 3]>
 method	metal2vulkan::pipeline::SnapshotForm::format	pub fn format(self) -> vk::Format
 method	metal2vulkan::pipeline::SnapshotForm::of	pub fn of(format: vk::Format, ty: SampledType) -> SnapshotForm
-method	metal2vulkan::pipeline::SpecKey::read_as_data	pub fn read_as_data(self) -> bool
 method	metal2vulkan::pipeline::SpecTest::differ	pub fn differ(key: SpecKey, mask: u32, bits: u32) -> SpecTest
 method	metal2vulkan::pipeline::SpecTest::equal	pub fn equal(key: SpecKey, mask: u32, bits: u32) -> SpecTest
 method	metal2vulkan::pipeline::StageEntries::counts	pub fn counts(&self) -> (u64, u64)
@@ -10989,7 +10988,6 @@ variant	metal2vulkan::pipeline::PushField::SlotBindOffset	SlotBindOffset(SlotRef
 variant	metal2vulkan::pipeline::PushField::SlotBounds	SlotBounds(SlotRef)
 variant	metal2vulkan::pipeline::PushField::SlotGuestBase	SlotGuestBase(SlotRef)
 variant	metal2vulkan::pipeline::PushField::SnapshotPhase	SnapshotPhase
-variant	metal2vulkan::pipeline::PushField::Specialized	Specialized(SpecKey)
 variant	metal2vulkan::pipeline::PushField::StageInRegion	StageInRegion
 variant	metal2vulkan::pipeline::PushField::StageInStride	StageInStride(u32)
 variant	metal2vulkan::pipeline::PushField::StorageKeptChannels	StorageKeptChannels
@@ -11111,7 +11109,6 @@ variant	metal2vulkan::pipeline::RuntimeFact::SynthesizedGeometry	SynthesizedGeom
 variant	metal2vulkan::pipeline::RuntimeFact::TestedStorageWrites	TestedStorageWrites { early_tests: bool, early_variant: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::TexelBufferParts	TexelBufferParts { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::TexelBufferRange	TexelBufferRange { slot: SlotRef }
-variant	metal2vulkan::pipeline::RuntimeFact::TexelFormat	TexelFormat { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::TexelRows	TexelRows { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::TextureSwizzle	TextureSwizzle { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::ThreadgroupMemoryLength	ThreadgroupMemoryLength { index: u32 }
@@ -11195,7 +11192,6 @@ variant	metal2vulkan::pipeline::SpecKey::SamplerMinLevel	SamplerMinLevel(SlotRef
 variant	metal2vulkan::pipeline::SpecKey::SamplerState	SamplerState { slot: SlotRef, fields: u32 }
 variant	metal2vulkan::pipeline::SpecKey::SparseTexture	SparseTexture(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::StageInReach	StageInReach
-variant	metal2vulkan::pipeline::SpecKey::TexelFormat	TexelFormat(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::TextureSwizzle	TextureSwizzle(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::TgLength	TgLength(u32)
 variant	metal2vulkan::pipeline::SpecKey::TgOffset	TgOffset(u32)

@@ -18,9 +18,7 @@ use crate::pipeline::facts::{Mechanism, RuntimeFact, UniformViewChoice};
 use crate::pipeline::interface::SlotInterface;
 use crate::pipeline::interface::{AccessSet, BufferForm, BufferSlot, Window};
 use crate::pipeline::layout::{BindingSource, PipelineLayout};
-use crate::pipeline::sym::{
-    PushField, SampledType, SlotClass, SlotRef, SnapshotForm, SpecKey, Stage,
-};
+use crate::pipeline::sym::{SampledType, SlotClass, SlotRef, SnapshotForm, SpecKey, Stage};
 use crate::vk;
 
 use super::compute::internal;
@@ -220,7 +218,6 @@ pub(crate) fn bound_value(
             .and_then(TextureShape::border_texels)
             .unwrap_or(u64::from(metal::sampler::NEUTRAL_BORDER_TEXELS)),
         SpecKey::BicubicTexels(slot) => resources.bicubic_texels(slot)?,
-        SpecKey::TexelFormat(slot) => resources.texel_format(slot),
         SpecKey::TextureSwizzle(slot) => resources.texture_swizzle(slot),
         SpecKey::SparseTexture(slot) => sparse_texture(shape, slot),
         SpecKey::ConstantLanes(slot) => constant_lanes(shape, slot),
@@ -235,32 +232,6 @@ pub(crate) fn bound_value(
         },
         _ => return Ok(None),
     }))
-}
-
-/// Record in `resources`' template the value of each key `push` places as a push field
-/// (`PushField::Specialized`), the value its specialization constant would take
-/// ([`bound_value`]), which instantiation writes there (`instantiate::slot_field`). A key the
-/// bound resources do not decide is not one a function pushes: an internal error.
-pub(crate) fn record_specialized(
-    push: &super::PushTemplate,
-    shape: &BindShape,
-    resources: &mut ResourcePlanner<'_>,
-) -> Result<(), BindError> {
-    for placed in &push.fields {
-        let PushField::Specialized(key) = placed.field else {
-            continue;
-        };
-        let value = bound_value(key, shape, resources)?.ok_or_else(|| {
-            internal(format!("a pushed {key:?}, which no bound resource decides"))
-        })?;
-        let value = u32::try_from(value)
-            .map_err(|_| internal(format!("a pushed {key:?} of {value}, past a push word")))?;
-        let recorded = &mut resources.template.specialized;
-        if !recorded.iter().any(|(k, _)| *k == key) {
-            recorded.push((key, value));
-        }
-    }
-    Ok(())
 }
 
 /// Record in `resources`' template the value of each key a specialized note of `stages` tests that

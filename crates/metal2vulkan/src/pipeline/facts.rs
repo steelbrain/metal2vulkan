@@ -284,11 +284,6 @@ pub enum RuntimeFact {
     /// kernel in the emulated tier votes in its scratch instead
     /// (`RuntimeFact::SimdgroupEmulation`).
     PredicationVote,
-    /// The function reads the class of the texture (or texture buffer) bound to the slot, which
-    /// the binder sets from the bound format: the slot's `SpecKey::TexelFormat` specialization
-    /// (`metal::texel_format::texel_format`): an 8-bit sRGB slot's raw read, a fetched gather and
-    /// a NaN texel's rule (the NaN switch) read it.
-    TexelFormat { slot: SlotRef },
     /// The function reads, samples, or gathers the texture bound to the slot with a `half` or
     /// `float` result, which an 8-bit sRGB format bound there would decode. Bound in such a
     /// format that the device cannot sample, which the runtime holds as the format's UNORM twin
@@ -889,7 +884,6 @@ impl RuntimeFact {
             RuntimeFact::InterlockedFramebufferFetch { .. } => "InterlockedFramebufferFetch",
             RuntimeFact::ShadowStencil { .. } => "ShadowStencil",
             RuntimeFact::PredicationVote => "PredicationVote",
-            RuntimeFact::TexelFormat { .. } => "TexelFormat",
             RuntimeFact::SrgbTexture { .. } => "SrgbTexture",
             RuntimeFact::UlongAtomicView { .. } => "UlongAtomicView",
             RuntimeFact::ViewportCount => "ViewportCount",

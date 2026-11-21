@@ -834,10 +834,9 @@ impl FromIterator<u8> for FieldBytes {
 
 /// The bytes of a slot push field (`SlotBindOffset`: the residual, 0 unbound; `SlotGuestBase`: the
 /// slot's word of its `gpu_address + offset`, of 0 (Metal's `nil`) unbound ([`guest_word`]);
-/// `TextureLevels`: the level count the plan
-/// bound; `InstanceCount`: the bound structure's instance count; `Specialized`: the value the plan
-/// recorded for its key), or `None` for another field. Planning refuses a `SlotGuestBase` of a
-/// `set*Bytes` slot (`MissingGuestAddress`), so no inline-bytes slot is written as null here.
+/// `TextureLevels`: the level count the plan bound; `InstanceCount`: the bound structure's instance
+/// count), or `None` for another field. Planning refuses a `SlotGuestBase` of a `set*Bytes` slot
+/// (`MissingGuestAddress`), so no inline-bytes slot is written as null here.
 pub(crate) fn slot_field(
     field: PushField,
     residuals: &Residuals,
@@ -898,12 +897,6 @@ pub(crate) fn slot_field(
             .iter()
             .find(|(s, _)| *s == slot)
             .map(|(_, levels)| FieldBytes::of(&levels.to_le_bytes())),
-        // The value the bound resources decide, as the plan recorded it.
-        PushField::Specialized(key) => resources
-            .specialized
-            .iter()
-            .find(|(k, _)| *k == key)
-            .map(|(_, value)| FieldBytes::of(&value.to_le_bytes())),
         // The integer channel widths of the texture the plan bound.
         PushField::TextureIntegerChannels(slot) => resources
             .texture_integer_channels

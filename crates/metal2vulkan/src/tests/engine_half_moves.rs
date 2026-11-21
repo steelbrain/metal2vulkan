@@ -145,12 +145,7 @@ fn resources(plan: &Plan) -> Resources {
     let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {
         match (f.field, f.loc) {
-            (
-                PushField::SlotBindOffset(_)
-                | PushField::DispatchRegion
-                | PushField::Specialized(_),
-                PushLoc::Push { .. },
-            ) => {}
+            (PushField::SlotBindOffset(_) | PushField::DispatchRegion, PushLoc::Push { .. }) => {}
             other => panic!("unexpected push field {other:?}"),
         }
     }

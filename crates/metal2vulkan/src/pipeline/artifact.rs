@@ -207,8 +207,8 @@ pub struct StageModule {
     pub rounded_colors: Vec<u32>,
     /// The notes of `precision_notes` that hold only under some specializations: a note whose
     /// every access keeps its near-equivalent only on the arms the module selects by its
-    /// specialization constants (the bound format's class, `SpecKey::TexelFormat`; the bound
-    /// sampler's word, `SpecKey::SamplerState`, and whether it is a nearest pixel sampler,
+    /// specialization constants (the bound sampler's word, `SpecKey::SamplerState`, and whether
+    /// it is a nearest pixel sampler,
     /// `SpecKey::NearestPixelSampler`), with the condition under which a specialized
     /// module runs such an arm. Sorted by note, each note at most once. Empty for a module whose
     /// every note holds under every specialization. [`StageModule::precision_notes_bound`]
@@ -247,8 +247,8 @@ impl StageModule {
 
     /// The stage's precision notes where a pipeline creates it under `specialization` and a draw
     /// or dispatch binds the values `bound` gives, where a test of a key no pipeline's
-    /// key carries (one the stage reads as data, `PushField::Specialized`, the value the binder
-    /// pushes; or a bound sampler's word, `SpecKey::BoundSamplerWord`) reads the value `bound`
+    /// key carries (the bound format's class, `SpecKey::BoundTexelFormat`; a bound sampler's word,
+    /// `SpecKey::BoundSamplerWord`; what the command's handles can name) reads the value `bound`
     /// gives for it (`BindingPlan::specialized_value`); a test of a key neither gives holds.
     pub fn precision_notes_bound(
         &self,
@@ -271,8 +271,8 @@ impl StageModule {
     }
 
     /// Whether every test of `clause` holds under `specialization`, a constant the key does not
-    /// give reading its default, and a key no pipeline's key carries (one the stage reads as data,
-    /// a bound sampler's word) reading the value `bound` gives.
+    /// give reading its default, and a key no pipeline's key carries (the bound format's class, a
+    /// bound sampler's word) reading the value `bound` gives.
     fn clause_holds(
         &self,
         clause: &SpecClause,
@@ -299,8 +299,7 @@ impl StageModule {
         clause.all.iter().all(|t| match value(t.key) {
             // A test of a constant the stage does not declare and `bound` does not give holds:
             // the conservative answer (a runtime gives the bound format's class,
-            // `SpecKey::BoundTexelFormat`, through `bound` too, and the keys the stage
-            // reads as data and the bound samplers' words through `bound`).
+            // `SpecKey::BoundTexelFormat`, and the bound samplers' words through `bound`).
             None => true,
             Some(v) => (v & u64::from(t.mask) == u64::from(t.bits)) == t.equal,
         })
@@ -402,9 +401,9 @@ pub struct SpecClause {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SpecTest {
-    /// The constant: a texture slot's `SpecKey::TexelFormat` or a sampler slot's
-    /// `SpecKey::SamplerState` or `SpecKey::NearestPixelSampler`, as the stage's
-    /// [`SpecializationLayout`] declares it.
+    /// The key: a sampler slot's `SpecKey::SamplerState` or `SpecKey::NearestPixelSampler`, as the
+    /// stage's [`SpecializationLayout`] declares it, or a bound value no pipeline's key carries
+    /// (`SpecKey::BoundTexelFormat`, `BoundSamplerWord`, `HeapRawTextures`, `HeapNanFamilies`).
     pub key: SpecKey,
     pub mask: u32,
     pub bits: u32,

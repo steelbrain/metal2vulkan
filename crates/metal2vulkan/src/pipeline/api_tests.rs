@@ -66,7 +66,7 @@ fn a_stage_s_notes_under_a_specialization_are_its_held_clauses() {
     use crate::cache::SpecializationKey;
     let texture = slot(Stage::Kernel, SlotClass::Texture, 0);
     let sampler = slot(Stage::Kernel, SlotClass::Sampler, 0);
-    let texel = SpecKey::TexelFormat(texture);
+    let texel = SpecKey::BicubicTexels(texture);
     let word = SpecKey::SamplerState {
         slot: sampler,
         fields: 3,

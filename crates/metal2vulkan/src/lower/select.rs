@@ -1648,8 +1648,6 @@ fn finish(
     access::tile::finish(&mut cx)?;
     texture::finish(&mut cx)?;
     sampler::finish(&mut cx)?;
-    // The bound texture and sampler values the function reads as data.
-    crate::lower::specialized::request(&mut cx);
     // The lane reads where some lane may not take part (a kernel's outside workgroup-uniform
     // control flow, every one of another stage), whose subgroup-tier form needs `Ballot`, before
     // the simd class selects the tier; the emulated tier reads a kernel's same analysis below.
@@ -1894,7 +1892,6 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
             | RuntimeFact::StorageTextureLevels { .. }
             | RuntimeFact::StorageTextureLevelViews { .. }
             | RuntimeFact::SparseTexture { .. }
-            | RuntimeFact::TexelFormat { .. }
             | RuntimeFact::SrgbTexture { .. }
             | RuntimeFact::UlongAtomicView { .. }
             | RuntimeFact::OpenClLineTexture { .. }

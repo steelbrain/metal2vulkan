@@ -2996,8 +2996,8 @@ define void @k(ptr addrspace(2) %m, ptr addrspace(1) %out{param}, i32 %gid) {{
 
 /// A heap texture's linear sample, through a constexpr sampler of linear filters (2D and 3D), a
 /// runtime sampler slot, or the sampler its argument buffer holds, is the device's sample; the
-/// census names the sample by its source, and the module states no `TexelFormat` specialization and
-/// records no `FloatSampleFilter`, outright or specialized. A 2D sample through a constexpr or
+/// census names the sample by its source, and the module records no `FloatSampleFilter`, outright
+/// or specialized. A 2D sample through a constexpr or
 /// runtime sampler also emulates a raw-held texture's, in a branch on the class the handle carries
 /// (the search's flagged form, whose masks and table the census counts under `HEAP_CLASS_CENSUS`).
 /// Each validates; a profile without the sampled heap refuses each. (The interpreter models no
@@ -3006,7 +3006,6 @@ define void @k(ptr addrspace(2) %m, ptr addrspace(1) %out{param}, i32 %gid) {{
 fn heap_linear_samples_are_the_device_s() {
     use crate::lower::texture::HEAP_CLASS_CENSUS;
     use crate::memory::handles::HANDLE_TEXEL_CLASS;
-    use crate::pipeline::sym::SpecKey;
     let cases = [
         (CompareThrough::Constexpr(LINEAR_EDGE), false),
         (CompareThrough::Constexpr(LINEAR_EDGE), true),
@@ -3058,13 +3057,6 @@ fn heap_linear_samples_are_the_device_s() {
             let filter = PrecisionNote::FloatSampleFilter;
             assert!(!a.precision.contains(&filter), "{what}");
             assert!(!a.specialized.iter().any(|s| s.note == filter), "{what}");
-            assert!(
-                !a.interface
-                    .read_keys()
-                    .into_iter()
-                    .any(|k| matches!(k, SpecKey::TexelFormat(_))),
-                "{what}"
-            );
             compiled += 1;
         }
         assert!(
@@ -3179,13 +3171,11 @@ fn heap_half_texels_round_the_device_s_texel() {
 /// sampler or an argument buffer's sampler, are the device's access, made once, with no fetch of
 /// their own (an argument buffer's sampler's sample reads its texel's centre where its word states
 /// a nearest pixel sampler). Through a constexpr or runtime sampler the raw-held
-/// emulation fetches from the twin in a branch on the class the handle carries. The module states
-/// no `TexelFormat` specialization.
+/// emulation fetches from the twin in a branch on the class the handle carries.
 #[test]
 fn heap_gathers_and_nearest_samples_are_the_device_s() {
     use crate::lower::texture::HEAP_CLASS_CENSUS;
     use crate::memory::handles::HANDLE_TEXEL_CLASS;
-    use crate::pipeline::sym::SpecKey;
     let cases = [
         (CompareThrough::Constexpr(NEAREST_EDGE), false),
         (CompareThrough::Constexpr(NEAREST_EDGE), true),
@@ -3240,13 +3230,6 @@ fn heap_gathers_and_nearest_samples_are_the_device_s() {
             assert_eq!(
                 mask_constants(&a).contains(&!HANDLE_TEXEL_CLASS),
                 raw,
-                "{what}"
-            );
-            assert!(
-                !a.interface
-                    .read_keys()
-                    .into_iter()
-                    .any(|k| matches!(k, SpecKey::TexelFormat(_))),
                 "{what}"
             );
             compiled += 1;

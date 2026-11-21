@@ -172,7 +172,6 @@ mod engine_skeleton;
 mod engine_snapshot_exact;
 mod engine_sparse_unmapped;
 mod engine_spec_bits;
-mod engine_specialized;
 mod engine_specialized_folds;
 mod engine_specialized_name;
 mod engine_spirv_cross_forms;

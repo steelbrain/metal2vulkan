@@ -717,9 +717,6 @@ pub enum SpecKey {
     /// Boolean: the texture bound to the slot is sparse (`MTLTexture.isSparse`, default false),
     /// so its accesses that observe residency take the sparse form (`RuntimeFact::SparseTexture`).
     SparseTexture(SlotRef),
-    /// How Metal converts the texels of the format bound at the texture slot to `half` (`u32`,
-    /// the class of `metal::texel_format::TexelFormat`).
-    TexelFormat(SlotRef),
     /// The state of the runtime sampler bound to the slot (`u32`, default 0): its
     /// [`SamplerWord`](crate::metal::sampler::SamplerWord) masked by `fields`, the word's bits
     /// the function reads, so samplers that differ only in other fields share a pipeline. A slot
@@ -887,15 +884,6 @@ impl SpecKey {
                 multi_region: SpecKey::MultiRegion,
             },
         }
-    }
-
-    /// Whether a function reads this key's value from its push field (`PushField::Specialized`)
-    /// rather than from a specialization constant: the format class of the texture bound at a
-    /// slot (`TexelFormat`), which a guest's draws vary most and whose data form costs a making
-    /// least. Every other key stays a specialization; read as data, the bound sampler's word, say,
-    /// made one NVIDIA making cost about four times a specialized one.
-    pub fn read_as_data(self) -> bool {
-        matches!(self, SpecKey::TexelFormat(_))
     }
 }
 
@@ -1148,15 +1136,6 @@ pub enum PushField {
     /// a device sampler of its own. The use's coordinates are normalized: the function scales a
     /// pixel sampler's coordinates itself.
     ConstexprSampler(CombinedSampler),
-    /// The value a draw or dispatch binds for specialization key `key`, carried as data rather
-    /// than specialized: one `u32` holding exactly the value the binder computes for the key's
-    /// specialization constant from the bound textures and samplers (a boolean key as 1 or 0; a
-    /// `SamplerState` word masked by its `fields`). A function that reads a key this way declares
-    /// no specialization constant for it, so its pipelines' keys do not carry the value and one
-    /// `VkPipeline` serves every value. Last in the order of the fields a function places, so
-    /// these fields follow every other kind into the window and from there into the
-    /// `ArgumentTable`; only the check's fields (`ZeroAddress`, `SlotBounds`) follow them.
-    Specialized(SpecKey),
     /// Under the identity domains, the device address of the factors a tessellation pipeline's
     /// synthesized control stage reads (`u64`): the factor buffer's address plus the encoder's
     /// offset (`setTessellationFactorBuffer:offset:instanceStride:`). No function places it: the
