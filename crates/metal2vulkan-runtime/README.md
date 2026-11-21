@@ -3610,6 +3610,19 @@ cache is answered compile-required on both.
   robustness, so there is no bounds guarantee beyond the device's. A post-tessellation function's
   control points and a kernel's stage-in are fetched in the shader instead, checked as a buffer
   argument's access is (see "Known gaps").
+- On the Iris Xe (ANV, Mesa 26.2.6) a viewport whose far edge lies inside a pixel loses that
+  pixel's row or column even where its pixel centre is inside the viewport, which Metal draws (the
+  conformance case `fractional-viewport-coverage`, recorded on an Apple M3 Max). ANV clamps the
+  hardware scissor to the viewport and keeps the far edge as an integer: the last row is
+  `MAX2(vp->y, vp->y + vp->height) - 1` and the last column `vp->x + vp->width - 1`, each
+  truncated (`update_scissors` in Mesa's `src/intel/vulkan/genX_gfx_state.c`, lines 2164 to 2169),
+  though the device reports 13 bits of viewport sub-pixel precision (`viewportSubPixelBits`). So a
+  viewport ending at 7.7 draws through row 6, and row 7, whose centre 7.5 is inside it, is not
+  drawn: a filled draw through a viewport from y -0.3 to 7.7 left row 7 undrawn on the Iris
+  (m3-max-63429). Vulkan gives no allowance for it: a pixel is covered where its sample point lies
+  inside the clipped primitive ("Basic Polygon Rasterization"), and the scissor test holds the
+  application's rectangle ("Scissor Test"). No Vulkan control or query reaches that scissor; it is
+  a driver bug, and the row stays undrawn on that driver.
 - Visibility results (`set_visibility_result_mode`, Metal's `setVisibilityResultMode:offset:`):
   each `Boolean` or `Counting` mode set counts the samples its later draws pass, up to the next
   mode set or the encoder's end, in one precise occlusion query (`occlusionQueryPrecise`, the
