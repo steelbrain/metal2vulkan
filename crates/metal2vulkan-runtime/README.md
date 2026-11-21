@@ -3262,9 +3262,12 @@ or does not check is rebuilt from the generations' names, with young counted ful
 - `use_resource` is `useResource:usage:stages:`, its plural and their deprecated forms without
   stages: the command buffer keeps the buffer or the texture until it retires, and nothing is
   recorded. The stages are not read: every resource is resident to every function, and the pass's
-  barriers order its draws after every earlier command and before every later one. A declared
-  write of a texture with no storage element refuses the encoder's later draws that may reach one
-  beyond their slots (the known gaps of textures).
+  barriers order its draws after every earlier command and before every later one. Every later
+  draw of the encoder reaches a declared resource with its declared access, as it reaches a bound
+  one: a declared texture over a buffer in an image of its own takes its copies at the draw, and
+  a declared write of a Shared buffer, or of a texture over one, reaches the host once the command
+  buffer completes. A declared write of a texture with no storage element refuses the encoder's
+  later draws that may reach one beyond their slots (the known gaps of textures).
 - Not built, and so not methods: indirect draws (of patches too), `useHeap:stages:`, the store
   action options setters, tile functions, `setVertexBuffer:offset:attributeStride:atIndex:`,
   `setTessellationFactorScale:` (read only by a state that enables the scale, which is refused) and

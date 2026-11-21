@@ -1495,7 +1495,7 @@ impl Drop for ComputeCommandEncoder {
 }
 
 /// The union of two declared accesses.
-fn merge(a: Access, b: Access) -> Access {
+pub(crate) fn merge(a: Access, b: Access) -> Access {
     match (a.reads() || b.reads(), a.writes() || b.writes()) {
         (true, true) => Access::ReadWrite,
         (false, true) => Access::Write,
@@ -1506,7 +1506,7 @@ fn merge(a: Access, b: Access) -> Access {
 /// A `use_resource` declaration, by resource id: its own and its id in the hazard sets; its
 /// access; the texture, where the resource is one; and the memory of the buffer, where it is one,
 /// as the copies over buffers track it (`crate::over`).
-type Declared = ([u32; 2], Access, Option<Lent<Texture>>, Option<Span>);
+pub(crate) type Declared = ([u32; 2], Access, Option<Lent<Texture>>, Option<Span>);
 
 /// What a dispatch touches besides its pipeline's own facts.
 pub(crate) struct Accesses<'a> {

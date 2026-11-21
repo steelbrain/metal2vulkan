@@ -43,6 +43,7 @@ mod on_device {
     use crate::tests::command::on_device::{each_device, finished, Arena};
     use crate::tests::compute::on_device::{add, step, WORDS};
     use crate::tests::draw::on_device as draw;
+    use crate::tests::storage_element::on_device::{place_id, ARGUMENT_FRAGMENT};
     use crate::texture::TextureObject;
     use crate::{
         Block, Buffer, BufferLayout, ColorAttachmentDescriptor, CommandBuffer, CommandQueue,
@@ -687,6 +688,109 @@ entry:
                 texture, buffer, words, arena, kernel, positions, colors, buffers,
             ));
             drop((color, state, queue));
+            (device.release_block(cpu)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        });
+    }
+
+    /// A draw that reaches a texture over a Shared buffer in an image of its own only through the
+    /// render encoder's `use_resource` takes the texture's copies as a bound one does. Declared
+    /// read after a fill of the buffer, it is copied in at the encoder's next draw, which does not
+    /// bind it, and not again at the draw after; a draw before the declaration copies nothing.
+    /// Declared written, the texel a draw's fragment function writes through its resource ID (an
+    /// argument buffer's `texture2d<float, write>`) is in the buffer for the host once the
+    /// command buffer completes, over the bytes a fill in the command buffer left.
+    #[test]
+    fn every_device_copies_a_texture_over_a_buffer_a_draw_declares() {
+        let Some(library) = draw::examples() else {
+            return;
+        };
+        let fragment = match llvm_assemble_text(ARGUMENT_FRAGMENT) {
+            Ok(bitcode) => Library::from_air(&bitcode).expect("the library"),
+            Err(AssembleError::Missing(why)) => {
+                eprintln!("SKIPPED: {why}");
+                return;
+            }
+            Err(error) => panic!("the argument fragment: {error:?}"),
+        };
+        let plain = draw::descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        let mut writing = RenderPipelineDescriptor::new(StageSource::Function(
+            FunctionDescriptor::new(library.function("colored_vertex").expect("the function")),
+        ));
+        writing.fragment = Some(StageSource::Function(FunctionDescriptor::new(
+            (fragment.function("argument_write_fragment")).expect("the function"),
+        )));
+        writing.color_attachments[0] =
+            Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+        each_device("over declared", |name, _, device| {
+            let ok = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            let plain = draw::state(name, &device, &plain);
+            let writing = draw::state(name, &device, &writing);
+            let usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+            let (cpu, buffer, texture) = copied(name, &device, usage);
+            let mut buffers = draw::Buffers::new(&device);
+            let (positions, colors) = draw::vertices(&device, &mut buffers);
+            let argument = buffers.of(&device, &[0; 8]);
+            place_id(&argument, &texture);
+            let color = draw::target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            fill_with(&command_buffer, &buffer, 0xC3);
+            let mut encoder = (command_buffer.render_command_encoder(&draw::pass(&color, None)))
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            ok(encoder.set_render_pipeline_state(&plain));
+            ok(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            ok(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            let before = copies(&device);
+            ok(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+            assert_eq!(
+                copies(&device) - before,
+                0,
+                "{name}: nothing at a draw before the declaration"
+            );
+            ok(encoder.use_resource(Resource::Texture(&texture), ResourceUsage::READ));
+            ok(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+            assert_eq!(
+                copies(&device) - before,
+                1,
+                "{name}: in at the draw after the declaration"
+            );
+            ok(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+            assert_eq!(
+                copies(&device) - before,
+                1,
+                "{name}: nothing at the next draw"
+            );
+            encoder.end_encoding();
+            draw::run(name, &command_buffer);
+
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            fill_with(&command_buffer, &buffer, 0x11);
+            let mut encoder = (command_buffer.render_command_encoder(&draw::pass(&color, None)))
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            ok(encoder.use_resource(Resource::Texture(&texture), ResourceUsage::WRITE));
+            ok(encoder.set_render_pipeline_state(&writing));
+            ok(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+            ok(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+            ok(encoder.set_fragment_buffer(Some(&argument), 0, 0));
+            ok(encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0));
+            encoder.end_encoding();
+            draw::run(name, &command_buffer);
+            let bytes = held(&buffer);
+            let mut want = vec![0x11; ROW as usize];
+            want[..4].copy_from_slice(&[255, 0, 255, 255]);
+            assert_eq!(
+                bytes[..ROW as usize],
+                want[..],
+                "{name}: the written texel over the filled row, in the buffer"
+            );
+            println!("{name}: a declared texture copied in at its draw and back after its write");
+            drop((texture, buffer, argument, positions, colors, buffers));
+            drop((color, plain, writing, queue));
             (device.release_block(cpu)).unwrap_or_else(|e| panic!("{name}: {e}"));
         });
     }

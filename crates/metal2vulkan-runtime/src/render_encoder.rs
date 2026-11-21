@@ -79,7 +79,8 @@ use crate::counters::Metric;
 use crate::depth_stencil::{DepthStencilState, Face, Tests};
 use crate::device::Core;
 use crate::encoder::{
-    check_alignment, Resource, ResourceUsage, BUFFER_SLOTS, SAMPLER_SLOTS, TEXTURE_SLOTS,
+    check_alignment, merge, Declared, Resource, ResourceUsage, BUFFER_SLOTS, SAMPLER_SLOTS,
+    TEXTURE_SLOTS,
 };
 use crate::error::{DrawKind, Error, Gap, Limit, Refusal, RenderPassKind};
 use crate::fence::Fence;
@@ -255,8 +256,8 @@ struct Facts {
 
 impl Facts {
     /// The facts of a draw of `draws` with `tables` bound in `pass`, but the alignments, which the
-    /// draw checks after its attachment reads. `declared` is the pixel format of a texture with
-    /// no storage element that `use_resource` declared written.
+    /// draw checks after its attachment reads, and the encoder's `use_resource` declarations
+    /// `declared`.
     ///
     /// Err: [`Refusal::VertexBufferOffset`]; [`Refusal::NoBufferAtIndex`] for a vertex buffer the
     /// vertex descriptor reads that is not bound; [`Gap::SwizzledReadWrite`];
@@ -266,7 +267,7 @@ impl Facts {
         draws: &Draws,
         tables: &[Tables; 2],
         pass: &Pass,
-        declared: Option<PixelFormat>,
+        declared: &Declarations,
     ) -> Result<(), Error> {
         self.vertex.clear();
         for &(binding, index) in &draws.bindings {
@@ -324,7 +325,7 @@ impl Facts {
         }
         // A texture declared written with no storage element, which a function may reach through
         // its storage image beyond its slots.
-        if let (true, Some(pixel_format)) = (draws.unbound_storage, declared) {
+        if let (true, Some(pixel_format)) = (draws.unbound_storage, declared.unstored_write) {
             return Err(Error::Unsupported(Gap::StorageElement {
                 slot: None,
                 pixel_format,
@@ -347,6 +348,7 @@ impl Facts {
                     && (tables[table].texture(slot)).is_some_and(|t| t.managed_over().is_some())
             });
         self.host = draws.writes_unbound
+            || declared.host_write
             || (draws.buffers.iter()).any(|&(table, slot, access)| {
                 access.writes() && tables[table].buffer(slot).is_some_and(|b| b.is_shared())
             })
@@ -449,21 +451,31 @@ impl Tables {
     }
 }
 
-/// What a draw of `draws` reaches through its slots with `tables` bound, as the copies over
-/// buffers read it (`crate::over`), in order: its buffers where `buffers`, then its textures;
-/// with `written`, those it writes alone.
+/// What a draw of `draws` reaches through its slots with `tables` bound and through the
+/// `use_resource` declarations `declared`, as the copies over buffers read it (`crate::over`), in
+/// order: its buffers where `buffers`, then its textures, then the declared textures and, where
+/// `buffers`, buffers; with `written`, those it writes alone.
 fn slots<'a>(
     draws: &'a Draws,
     tables: &'a [Tables; 2],
+    declared: &'a [Declared],
     buffers: bool,
     written: bool,
 ) -> impl Iterator<Item = (Reached<'a>, Access)> + 'a {
     let kept = move |&&(_, _, access): &&(usize, u32, Access)| !written || access.writes();
-    let buffers: &[(usize, u32, Access)] = match buffers {
+    let bound: &[(usize, u32, Access)] = match buffers {
         true => &draws.buffers,
         false => &[],
     };
-    (buffers.iter().filter(kept))
+    let declared = (declared.iter())
+        .filter(move |(_, access, texture, _)| {
+            (buffers || texture.is_some()) && (!written || access.writes())
+        })
+        .filter_map(|(_, access, texture, span)| match (texture, span) {
+            (Some(texture), _) => Some((Reached::Texture(texture), *access)),
+            (None, span) => span.map(|span| (Reached::Buffer(span), *access)),
+        });
+    (bound.iter().filter(kept))
         .filter_map(move |&(table, slot, access)| {
             Some((Reached::Buffer(tables[table].buffer(slot)?.span()), access))
         })
@@ -472,6 +484,7 @@ fn slots<'a>(
                 Some((Reached::Texture(tables[table].texture(slot)?), access))
             }),
         )
+        .chain(declared)
 }
 
 /// What a draw draws.
@@ -488,6 +501,21 @@ enum Call<'a> {
     },
     /// A draw of patches: each patch one vertex of a patch list, at its position.
     Patches { patch_start: u32, patch_count: u32 },
+}
+
+/// A render encoder's `use_resource` declarations.
+#[derive(Default)]
+struct Declarations {
+    /// Each resource declared, once, with the union of its declared accesses.
+    each: Vec<Declared>,
+    /// The textures declared that are over a buffer in an image of their own (`crate::over`).
+    copied: u32,
+    /// A declaration writes a Shared buffer or a texture the host reads through a copy of its own
+    /// making (`Texture::host_reads`).
+    host_write: bool,
+    /// The pixel format of the first texture a declaration writes that has no storage element
+    /// ([`TextureObject::unstored`]).
+    unstored_write: Option<PixelFormat>,
 }
 
 /// `MTLRenderCommandEncoder`: one dynamic rendering into its pass's attachments, begun as the
@@ -586,9 +614,8 @@ pub struct RenderCommandEncoder {
     shadow_slots: Vec<(usize, u32)>,
     /// What a draw of the pipeline state reaches of the bound resources.
     facts: Facts,
-    /// The pixel format of the first texture a `use_resource` declaration writes that has no
-    /// storage element ([`TextureObject::unstored`]).
-    declared_unstored_write: Option<PixelFormat>,
+    /// The `use_resource` declarations.
+    declared: Declarations,
     /// The push bytes of the last draw.
     push: Vec<u8>,
     /// The parameter blocks of the last draw's functions, where their fields spill.
@@ -664,7 +691,7 @@ impl CommandBuffer {
                     shadowed: Vec::new(),
                     shadow_slots: Vec::new(),
                     facts: Facts::default(),
-                    declared_unstored_write: None,
+                    declared: Declarations::default(),
                     push: Vec::new(),
                     blocks: [Vec::new(), Vec::new()],
                     push_filled: false,
@@ -1588,7 +1615,9 @@ impl RenderCommandEncoder {
     /// deprecated forms without stages): the command buffer keeps the buffer or the texture until
     /// it retires. It records nothing, and the stages are not read: every resource is resident to
     /// every function, and the pass's barriers order its draws after every earlier command and
-    /// before every later one.
+    /// before every later one. Every later draw of the encoder reaches the resource with the
+    /// declared access, as it reaches its bound ones, for the copies a texture over a buffer in an
+    /// image of its own takes, and for what the host reads once the command buffer completes.
     ///
     /// A usage that writes a texture, or a view of one, made for shader writes with no storage
     /// element (not a multisampled one, which Metal's shaders only read) makes every later draw of
@@ -1605,27 +1634,48 @@ impl RenderCommandEncoder {
         usage: ResourceUsage,
     ) -> Result<(), Error> {
         let building = self.building();
-        let unstored = match resource {
+        let (id, host, unstored, texture, span) = match resource {
             Resource::Buffer(buffer) => {
                 if !buffer.is_of(building.device.core()) {
                     return Err(Error::Refused(Refusal::OtherDevice));
                 }
                 building.keep(buffer);
-                None
+                let id = [buffer.id(), buffer.tracked_id()];
+                (id, buffer.is_shared(), None, None, Some(buffer.span()))
             }
             Resource::Texture(texture) => {
                 if !texture.is_of(building.device.core()) {
                     return Err(Error::Refused(Refusal::OtherDevice));
                 }
-                building.keep_texture(texture);
-                texture.unstored()
+                // SAFETY: the encoder's declarations hold the borrow, and they end before its
+                // command buffer commits.
+                let lent = unsafe { building.lend_texture(texture) };
+                let id = [texture.hazard_id(), texture.tracked_id()];
+                (
+                    id,
+                    texture.host_reads(),
+                    texture.unstored(),
+                    Some(lent),
+                    None,
+                )
             }
         };
-        let writes = usage.access().is_some_and(|access| access.writes());
-        if writes && unstored.is_some() && self.declared_unstored_write.is_none() {
-            self.declared_unstored_write = unstored;
-            self.changed();
+        let Some(access) = usage.access() else {
+            return Ok(());
+        };
+        let declared = &mut self.declared;
+        declared.host_write |= access.writes() && host;
+        if access.writes() && declared.unstored_write.is_none() {
+            declared.unstored_write = unstored;
         }
+        match (declared.each.iter_mut()).find(|(each, ..)| *each == id) {
+            Some((_, each, ..)) => *each = merge(*each, access),
+            None => {
+                declared.copied += over::copied(texture.as_deref());
+                declared.each.push((id, access, texture, span));
+            }
+        }
+        self.changed();
         Ok(())
     }
 
@@ -1873,8 +1923,8 @@ impl RenderCommandEncoder {
             }
         };
         if !self.facts.held {
-            let declared = self.declared_unstored_write;
-            self.facts.find(draws, &self.tables, &self.pass, declared)?;
+            self.facts
+                .find(draws, &self.tables, &self.pass, &self.declared)?;
         }
         // Metal orders a colour attachment's read (`[[color(n)]]`) after every earlier fragment of
         // the pass, with no barrier from the program: after a draw of the pass, a draw that reads
@@ -1953,6 +2003,7 @@ impl RenderCommandEncoder {
             && (draws.reads_unbound
                 || draws.writes_unbound
                 || self.tables.iter().any(|tables| tables.copied > 0)
+                || self.declared.copied > 0
                 || building.overs_ahead());
         let each = reads.is_some()
             || self.facts.managed
@@ -2307,7 +2358,8 @@ impl RenderCommandEncoder {
                 let vertex = (vertex_reads.clone())
                     .filter(|_| buffers)
                     .map(|buffer| (Reached::Buffer(buffer.span()), Access::Read));
-                building.overs_owed(slots(draws, tables, buffers, false).chain(vertex), unbound)
+                let reached = slots(draws, tables, &self.declared.each, buffers, false);
+                building.overs_owed(reached.chain(vertex), unbound)
             }
         };
         let mut backs = Vec::new();
@@ -2350,7 +2402,10 @@ impl RenderCommandEncoder {
         let draws = &state.inner.compiled.draws;
         (self.building.as_mut())
             .expect("an encoder holds its command buffer's recording until it ends")
-            .overs_after(slots(draws, &self.tables, true, true), draws.writes_unbound);
+            .overs_after(
+                slots(draws, &self.tables, &self.declared.each, true, true),
+                draws.writes_unbound,
+            );
     }
 
     /// Sets the feedback loop's aspects for a draw that reads an attachment (`reads`) or none,

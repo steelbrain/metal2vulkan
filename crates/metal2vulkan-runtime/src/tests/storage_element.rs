@@ -30,7 +30,7 @@
 //! `llvm-as` assembles the functions; without it the tests skip visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
-mod on_device {
+pub(crate) mod on_device {
     use crate::tests::command::on_device::{each_device, finished, Arena};
     use crate::tests::draw::on_device::{
         descriptor as render_descriptor, examples, pass, run, state as render_state, target,
@@ -219,7 +219,7 @@ declare { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1), ptr add
     }
 
     /// Writes `texture`'s resource ID over the start of the Shared buffer `argument`.
-    fn place_id(argument: &Buffer, texture: &Texture) {
+    pub(crate) fn place_id(argument: &Buffer, texture: &Texture) {
         let id = texture.gpu_resource_id();
         let bytes = (u64::from(id.index) | u64::from(id.word) << 32).to_le_bytes();
         let contents = argument.contents().expect("a Shared buffer");
@@ -349,7 +349,7 @@ declare { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1), ptr add
     /// A fragment function over the argument buffer at fragment buffer 0, whose one member is a
     /// texture's 8-byte resource ID: it writes `(1, 0, 1, 1)` to texel `(0, 0)` of the member's
     /// `texture2d<float, write>` and returns opaque green.
-    const ARGUMENT_FRAGMENT: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
+    pub(crate) const ARGUMENT_FRAGMENT: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
 target triple = "air64_v28-apple-macosx26.0.0"
 
 %struct.T = type { ptr addrspace(1) }
