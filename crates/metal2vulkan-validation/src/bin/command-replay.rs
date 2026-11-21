@@ -4,10 +4,11 @@
 //! `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
 //! [--blobs DIR] [--managed one-copy|two-copy]
 //! [--until-frame F] [--past-range yes|no] [--gpu-wait-timeout SECONDS]
-//! [--video-handle dma-buf|opaque-fd] [--check-presents F,...]` plays the stream whose
-//! first segment is `FILE` through the runtime, with
-//! `--video-handle dma-buf|opaque-fd` telling the runtime the consumer's decoder route, the
-//! handle its video surfaces are made with (a dma-buf unless it says otherwise), and
+//! [--video-handle dma-buf|opaque-fd|opaque-win32] [--check-presents F,...]` plays the stream
+//! whose first segment is `FILE` through the runtime, with
+//! `--video-handle dma-buf|opaque-fd|opaque-win32` telling the runtime the consumer's decoder
+//! route, the handle its video surfaces are made with (a dma-buf unless it says otherwise; an NT
+//! handle, `opaque-win32`, on a Windows host), and
 //! `--gpu-wait-timeout` bounding each device wait (10 s unless it says otherwise; a CPU device's
 //! work can take longer than a GPU's), `--managed`
 //! telling the runtime how the recording device kept Managed buffers where the stream has no
@@ -92,7 +93,7 @@ use std::path::{Path, PathBuf};
 const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device-type cpu|gpu \
                      --shader-cache DIR [--blobs DIR] \
                      [--managed one-copy|two-copy] [--until-frame F] [--past-range yes|no] \
-                     [--gpu-wait-timeout SECONDS] [--video-handle dma-buf|opaque-fd] \
+                     [--gpu-wait-timeout SECONDS] [--video-handle dma-buf|opaque-fd|opaque-win32] \
                      [--check-presents F,...] [--read-device-copies yes|no] [--prepass-width N] \
                      [--dump-command-buffers FIRST..LAST --dump-dir DIR]\n       \
                      command-replay compare-dumps --a DIR --b DIR\n       \
@@ -486,7 +487,7 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
         Some(Some(handle)) => handle,
         Some(None) => {
             report.line(&format!(
-                "error video-handle: {} is neither dma-buf nor opaque-fd",
+                "error video-handle: {} is none of dma-buf, opaque-fd and opaque-win32",
                 options["video-handle"]
             ));
             return 2;

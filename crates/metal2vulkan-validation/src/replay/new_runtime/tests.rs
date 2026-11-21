@@ -96,6 +96,36 @@ fn creations_not_attempted_are_counted_by_kind_and_root() {
     );
 }
 
+/// Each decoder route by its name: the handle its video surfaces are exported with, and their
+/// layout. The NT handle, a Windows host's opaque handle, takes the opaque fd's layout.
+#[test]
+fn each_video_handle_names_its_export_and_layout() {
+    use super::VideoHandle;
+    let routes = [
+        ("dma-buf", VideoHandle::DmaBuf, rt::ExportHandle::DmaBuf),
+        (
+            "opaque-fd",
+            VideoHandle::OpaqueFd,
+            rt::ExportHandle::OpaqueFd,
+        ),
+        (
+            "opaque-win32",
+            VideoHandle::OpaqueWin32,
+            rt::ExportHandle::OpaqueWin32,
+        ),
+    ];
+    for (name, handle, export) in routes {
+        assert_eq!(VideoHandle::parse(name), Some(handle), "{name}");
+        assert_eq!(handle.name(), name);
+        assert_eq!(handle.export(), export, "{name}");
+    }
+    assert_eq!(VideoHandle::parse("win32"), None);
+    // A 1080p picture: a dma-buf's planes hold the coded rows below them, an opaque handle's none.
+    assert_eq!(VideoHandle::DmaBuf.layout(1080, 540), (256, 256, [8, 4]));
+    assert_eq!(VideoHandle::OpaqueFd.layout(1080, 540), (4, 1, [0, 0]));
+    assert_eq!(VideoHandle::OpaqueWin32.layout(1080, 540), (4, 1, [0, 0]));
+}
+
 /// Each substitute is counted by the runtime's gap it stands in for, with the first one's object,
 /// in one line per gap.
 #[test]

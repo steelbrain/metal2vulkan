@@ -478,7 +478,7 @@ and the (name id, value) answer pairs.
 `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
 [--blobs DIR] [--managed one-copy|two-copy]
 [--until-frame F] [--past-range yes|no] [--gpu-wait-timeout SECONDS]
-[--video-handle dma-buf|opaque-fd] [--check-presents F,...] [--read-device-copies yes|no]` plays a stream (its first segment) on one device through the
+[--video-handle dma-buf|opaque-fd|opaque-win32] [--check-presents F,...] [--read-device-copies yes|no]` plays a stream (its first segment) on one device through the
 runtime, and writes `DIR/report.txt`. `--video-handle`
 names the consumer's decoder route, the handle its video surfaces are made
 with (a dma-buf where it is not given; below). Each wait on the device's work is bounded by `--gpu-wait-timeout` (10 seconds
@@ -831,7 +831,10 @@ records as text, and
   the surface's handle and layout: `dma-buf` (the default, the stream's own) with the layout the
   product passes for a VA-API import (pitch and plane starts multiples of 256, each plane holding
   the coded picture's rows: the luma's height rounded up to 16, the chroma half that), or
-  `opaque-fd` with the layout it passes for NVIDIA's route (pitch a multiple of 4, no rows below).
+  `opaque-fd` with the layout it passes for NVIDIA's route (pitch a multiple of 4, no rows below),
+  or `opaque-win32`, an NT handle, the opaque handle of a Windows host, at the opaque fd's layout:
+  the runtime lays both opaque handles alike, at the driver's own pitch for each plane's `LINEAR`
+  image.
   The planes ask shader read and write; where the device's image in place lacks storage
   (`Gap::SurfaceUsage`) they take shader read alone, counted. The formats played so are the
   two-plane 4:2:0 ones, 8-bit (`420v`, `420f`: R8 and RG8 planes) and 10-bit in 16 (`x420`,

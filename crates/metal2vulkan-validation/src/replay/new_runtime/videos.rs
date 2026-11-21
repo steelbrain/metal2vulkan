@@ -15,8 +15,11 @@
 //! The surface's handle is the play's choice of the consumer's decoder route (`--video-handle`):
 //! a dma-buf, the stream's own, with the layout the product passes for a VA-API import (pitch and
 //! start multiples of 256, each plane holding the coded picture's rows: the luma's height rounded
-//! up to 16, the chroma half that), or an opaque fd with the layout it passes for NVIDIA's (pitch
-//! multiple 4, start multiple 1, no rows below).
+//! up to 16, the chroma half that), an opaque fd with the layout it passes for NVIDIA's (pitch
+//! multiple 4, start multiple 1, no rows below), or, on a Windows host, an NT handle with the
+//! opaque fd's layout: the runtime lays both opaque handles alike, each plane's `LINEAR` image at
+//! the driver's own pitch (the runtime's guide, the surfaces' handles), and its tests make the
+//! Windows surface at those multiples.
 //! The planes ask shader read and write, the usage the stream's textures over them ask; a device
 //! whose image in place lacks storage (`rt::Gap::SurfaceUsage`) gets planes of shader read alone,
 //! counted.
@@ -58,41 +61,46 @@ pub enum VideoHandle {
     DmaBuf,
     /// An opaque fd, as NVIDIA's route takes it.
     OpaqueFd,
+    /// An NT handle, the opaque handle of a Windows host.
+    OpaqueWin32,
 }
 
 impl VideoHandle {
-    /// `dma-buf` or `opaque-fd`.
+    /// `dma-buf`, `opaque-fd` or `opaque-win32`.
     pub fn parse(name: &str) -> Option<VideoHandle> {
         match name {
             "dma-buf" => Some(VideoHandle::DmaBuf),
             "opaque-fd" => Some(VideoHandle::OpaqueFd),
+            "opaque-win32" => Some(VideoHandle::OpaqueWin32),
             _ => None,
         }
     }
 
-    fn name(self) -> &'static str {
+    pub(super) fn name(self) -> &'static str {
         match self {
             VideoHandle::DmaBuf => "dma-buf",
             VideoHandle::OpaqueFd => "opaque-fd",
+            VideoHandle::OpaqueWin32 => "opaque-win32",
         }
     }
 
-    fn export(self) -> rt::ExportHandle {
+    pub(super) fn export(self) -> rt::ExportHandle {
         match self {
             VideoHandle::DmaBuf => rt::ExportHandle::DmaBuf,
             VideoHandle::OpaqueFd => rt::ExportHandle::OpaqueFd,
+            VideoHandle::OpaqueWin32 => rt::ExportHandle::OpaqueWin32,
         }
     }
 
     /// The pitch multiple, the start multiple, and each plane's rows below it for a luma of
     /// `height` rows and a chroma of `chroma` rows.
-    fn layout(self, height: u32, chroma: u32) -> (u64, u64, [u32; 2]) {
+    pub(super) fn layout(self, height: u32, chroma: u32) -> (u64, u64, [u32; 2]) {
         match self {
             VideoHandle::DmaBuf => {
                 let rows = height.next_multiple_of(16);
                 (256, 256, [rows - height, (rows / 2).saturating_sub(chroma)])
             }
-            VideoHandle::OpaqueFd => (4, 1, [0, 0]),
+            VideoHandle::OpaqueFd | VideoHandle::OpaqueWin32 => (4, 1, [0, 0]),
         }
     }
 }
