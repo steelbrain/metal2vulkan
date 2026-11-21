@@ -1206,9 +1206,9 @@ pub struct Function {
     /// `Function`-storage variables, declared at the top of the entry block.
     pub vars: Vec<VarId>,
     /// Whether the function is a kept routine (`ModuleBuilder::kept_routine`): a linear filter
-    /// emulation's sum, one combined binding's sample emulation, or a region the function held
-    /// more than once (`spirv::outline`), which `serialize` declares `DontInline`, so a driver that
-    /// honours the control compiles it once and calls it from each site.
+    /// emulation's sum or one combined binding's sample emulation, which `serialize` declares
+    /// `DontInline`, so a driver that honours the control compiles it once and calls it from each
+    /// site.
     pub kept: bool,
 }
 

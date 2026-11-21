@@ -8,8 +8,7 @@
 //!
 //! Every module's entry is weighed (`spirv::roll::entry_weight`: the entry's instructions with each
 //! call counted as its callee's body, as the driver inlines every call) after the repeated regions
-//! are rolled and written as kept routines (`spirv::outline`), and the weight is the module's
-//! ([`ModuleStats::entry_weight`]). A kernel past the
+//! are rolled, and the weight is the module's ([`ModuleStats::entry_weight`]). A kernel past the
 //! bound that took the `Emulated` simdgroup tier only in place of the `Direct` tier's pin to the
 //! device's widest mode (`lower::simd::widest_pin`) is planned again keeping the pin
 //! (`lower::simd::WidestPin::Kept`), its emulated module dropped and what its plan and emission
@@ -85,11 +84,6 @@ pub(super) fn emit(
         // A load of a uniform view that every trip of its loop reads alike leaves the loop.
         m.weighted(crate::pipeline::compile::weights::HOIST, |m| {
             crate::spirv::hoist::hoist_uniform_loads(&mut emitted.module, p.robustness(), m)
-        })?;
-        // A driver that keeps a routine compiles it once: repeated regions are written once, as
-        // kept routines.
-        m.weighted(crate::pipeline::compile::weights::ROLL, |m| {
-            crate::spirv::outline::outline_entry(&mut emitted.module, m)
         })?;
         let weight = crate::spirv::roll::entry_weight(&emitted.module, m)?;
         if weight <= bounds.compiled || widest == WidestPin::Kept || !plan.families.simd.widest_pin

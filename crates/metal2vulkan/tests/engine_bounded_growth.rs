@@ -111,8 +111,7 @@ fn cost_of<T>(work: impl FnOnce() -> T) -> (T, Cost) {
 /// Irreducible on purpose: it is the shape that reaches the structurizer's irreducible-region
 /// handling, where a per-block table of blocks would be quadratic, and it keeps every block alive
 /// through the planner. Each group loads a distinct buffer word, so the conditions cannot be folded
-/// away, and each group's two operations are drawn from four by a hash of its index, so no run of
-/// groups long enough to be written once as a routine repeats: the graph survives intact.
+/// away and the graph survives intact.
 fn irreducible_chain(groups: usize) -> String {
     let mut out = String::from(
         r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
@@ -123,15 +122,8 @@ entry:
   br label %g0
 "#,
     );
-    const OPS: [&str; 4] = ["add", "sub", "xor", "or"];
     for group in 0..groups {
         let word = group % 1024;
-        // splitmix64's finalizer of the group's index: two operations from its low four bits.
-        let mut z = (group as u64).wrapping_add(0x9E37_79B9_7F4A_7C15);
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^= z >> 31;
-        let (op_a, op_b) = (OPS[(z & 3) as usize], OPS[((z >> 2) & 3) as usize]);
         out.push_str(&format!(
             "g{group}:
   %p{group} = getelementptr inbounds i32, ptr addrspace(1) %out, i64 {word}
@@ -139,11 +131,11 @@ entry:
   %c{group} = icmp sgt i32 %v{group}, 0
   br i1 %c{group}, label %a{group}, label %b{group}
 a{group}:
-  %av{group} = {op_a} i32 %v{group}, 1
+  %av{group} = add i32 %v{group}, 1
   %ac{group} = icmp sgt i32 %av{group}, 3
   br i1 %ac{group}, label %b{group}, label %g{next}
 b{group}:
-  %bv{group} = {op_b} i32 %v{group}, 2
+  %bv{group} = add i32 %v{group}, 2
   %bc{group} = icmp sgt i32 %bv{group}, 5
   br i1 %bc{group}, label %a{group}, label %g{next}
 ",

@@ -39,9 +39,7 @@ pub(crate) const SELECT: u32 = 6;
 pub(crate) const STRUCTURIZE: u32 = 5;
 /// Emission ([`emit_module`](crate::lower::emit::emit_module)), the structurizer inside it aside.
 pub(crate) const EMIT: u32 = 9;
-/// Rolling repeated regions ([`roll_entry`](crate::spirv::roll::roll_entry)), and writing them as
-/// kept routines ([`outline_entry`](crate::spirv::outline::outline_entry)): the same spine, keys
-/// and exact comparisons, so rolling's weight (the routines' work is not measured apart).
+/// Rolling repeated regions ([`roll_entry`](crate::spirv::roll::roll_entry)).
 pub(crate) const ROLL: u32 = 1;
 /// Hoisting uniform loads ([`hoist_uniform_loads`](crate::spirv::hoist::hoist_uniform_loads)).
 pub(crate) const HOIST: u32 = 2;

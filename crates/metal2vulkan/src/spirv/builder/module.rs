@@ -993,8 +993,7 @@ impl ModuleBuilder {
     /// every site that needs it, declared `DontInline` (`OpFunction`'s function control) on every
     /// serialization (`crate::spirv::serialize::serialize`), the standard SPIR-V statement that its
     /// calls stay calls. A linear filter emulation's sum (a texel routine) and one combined
-    /// binding's sample emulation (a sampling routine) are kept routines, as is a region a function
-    /// holds more than once, which `spirv::outline` writes in this form. A driver that honours the
+    /// binding's sample emulation (a sampling routine) are kept routines. A driver that honours the
     /// control (NVIDIA's) compiles it once where it would otherwise compile it again inside every
     /// sample that calls it, which made a fragment of a few hundred emulated samples take tens of
     /// seconds to create on an RTX 3090; one that inlines every function (Mesa's) ignores it. Its

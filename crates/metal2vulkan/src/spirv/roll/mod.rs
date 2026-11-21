@@ -115,7 +115,7 @@ const MAX_PAIRS: usize = 8;
 /// The exact comparisons per search.
 const MAX_VERIFIES: usize = 32;
 /// [`Item::inst`] of a construct (or the spine's end).
-pub(in crate::spirv) const TAIL: u32 = u32::MAX;
+const TAIL: u32 = u32::MAX;
 /// The most functions searched per run: the heaviest the entry reaches.
 const MAX_FUNCS: usize = 8;
 /// The deepest arm searched: a sequence inside this many selections and switches.
@@ -124,8 +124,8 @@ const MAX_DEPTH: u32 = 8;
 /// The pass's maps and sets of ids, hashed by [`Fnv`]'s word mix rather than SipHash: their keys
 /// are the module's own dense ids, and no output depends on their order (each one the pass walks
 /// is sorted first, or only read by key).
-pub(in crate::spirv) type HashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<Fnv>>;
-pub(in crate::spirv) type HashSet<K> = std::collections::HashSet<K, BuildHasherDefault<Fnv>>;
+type HashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<Fnv>>;
+type HashSet<K> = std::collections::HashSet<K, BuildHasherDefault<Fnv>>;
 
 fn invariant(detail: impl Into<String>) -> Error {
     Error::Internal(InternalError::new(InternalKind::Invariant, detail))
@@ -188,21 +188,16 @@ const UNKEYED: u64 = u64::MAX;
 /// first region's read turns into a copy of the trip's lane, and a copy's key is never read
 /// (every reader skips copies). Everything else the roll writes takes a new result.
 #[derive(Default)]
-pub(in crate::spirv) struct KeyCache {
+struct KeyCache {
     /// By value: its instruction's key, or [`UNKEYED`].
     keys: Vec<u64>,
     /// The bytes charged for `keys`.
-    pub(in crate::spirv) charged: usize,
+    charged: usize,
 }
 
 impl KeyCache {
     /// The key of `node`, kept or taken now.
-    pub(in crate::spirv) fn key(
-        &mut self,
-        m: &TypedModule,
-        node: &InstNode,
-        meter: &mut Meter,
-    ) -> Result<u64, Error> {
+    fn key(&mut self, m: &TypedModule, node: &InstNode, meter: &mut Meter) -> Result<u64, Error> {
         let Some(r) = node.result else {
             return inst_key(m, node);
         };
@@ -238,7 +233,7 @@ pub fn entry_weight(m: &TypedModule, meter: &mut Meter) -> Result<u64, Error> {
 }
 
 /// [`entry_weight`] of every function.
-pub(in crate::spirv) fn weights(m: &TypedModule, meter: &mut Meter) -> Result<Vec<u64>, Error> {
+fn weights(m: &TypedModule, meter: &mut Meter) -> Result<Vec<u64>, Error> {
     let n = m.functions.len();
     let mut w = vec![0u64; n];
     // 0: not reached, 1: callees pending, 2: weighed.
@@ -323,7 +318,7 @@ fn inst_weight(node: &InstNode, w: &[u64]) -> u64 {
 /// of is mixed in whole (a multiply and a shift, each a bijection of the state), where a byte-wise
 /// FNV-1a took a multiply per byte. Keys are only compared for equality, never ordered, so the
 /// hash function decides nothing but which keys collide.
-pub(in crate::spirv) struct Fnv(u64);
+struct Fnv(u64);
 
 impl Default for Fnv {
     fn default() -> Fnv {
@@ -405,22 +400,22 @@ impl Hasher for Fnv {
 /// An item of the spine: instruction `inst` of spine block `spine`, or ([`TAIL`]) the construct
 /// that block heads, its merge's phis included, or the spine's end.
 #[derive(Clone, Copy, Debug)]
-pub(in crate::spirv) struct Item {
-    pub(in crate::spirv) spine: u32,
-    pub(in crate::spirv) inst: u32,
-    pub(in crate::spirv) key: u64,
-    pub(in crate::spirv) weight: u64,
+struct Item {
+    spine: u32,
+    inst: u32,
+    key: u64,
+    weight: u64,
 }
 
 /// The entry's top-level code (see the module docs).
-pub(in crate::spirv) struct Spine {
+struct Spine {
     /// The layout position of each module block in the entry (`u32::MAX`: another function's).
-    pub(in crate::spirv) pos: Vec<u32>,
+    pos: Vec<u32>,
     /// The entry's blocks in layout order.
-    pub(in crate::spirv) layout: Vec<BlockId>,
+    layout: Vec<BlockId>,
     /// The spine's blocks, in order.
-    pub(in crate::spirv) blocks: Vec<BlockId>,
-    pub(in crate::spirv) items: Vec<Item>,
+    blocks: Vec<BlockId>,
+    items: Vec<Item>,
     /// By layout position, each instruction's [`inst_key`] (0 for a copy, which no key reads),
     /// taken once: an item's key, a construct's (which combines its instructions'), and the
     /// alignment of two regions read it.
@@ -428,7 +423,7 @@ pub(in crate::spirv) struct Spine {
 }
 
 impl Spine {
-    pub(in crate::spirv) fn pos(&self, b: BlockId) -> Option<usize> {
+    fn pos(&self, b: BlockId) -> Option<usize> {
         self.pos
             .get(b.index())
             .copied()
@@ -444,21 +439,17 @@ impl Spine {
     }
 }
 
-pub(in crate::spirv) fn block(m: &TypedModule, b: BlockId) -> Result<&Block, Error> {
+fn block(m: &TypedModule, b: BlockId) -> Result<&Block, Error> {
     m.blocks.get(b.index()).ok_or_else(|| invariant("block"))
 }
 
-pub(in crate::spirv) fn block_mut(m: &mut TypedModule, b: BlockId) -> Result<&mut Block, Error> {
+fn block_mut(m: &mut TypedModule, b: BlockId) -> Result<&mut Block, Error> {
     m.blocks
         .get_mut(b.index())
         .ok_or_else(|| invariant("block"))
 }
 
-pub(in crate::spirv) fn charge<T>(
-    meter: &mut Meter,
-    ledger: &mut usize,
-    n: usize,
-) -> Result<(), Error> {
+fn charge<T>(meter: &mut Meter, ledger: &mut usize, n: usize) -> Result<(), Error> {
     let bytes = n.saturating_mul(std::mem::size_of::<T>());
     meter.charge(bytes)?;
     *ledger = ledger.saturating_add(bytes);
@@ -548,12 +539,11 @@ fn fixed(m: &TypedModule, sp: &Spine, lo: usize, inv: &HashSet<Value>, v: Value)
 }
 
 /// The entry's spine: its top-level sequence, then the arms of its selections and switches,
-/// each a sequence of its own, to [`MAX_DEPTH`] constructs deep, and with `loops` the body of
-/// each loop too (from its header's branch to its continue block). Each sequence ends in an item
+/// each a sequence of its own, to [`MAX_DEPTH`] constructs deep. Each sequence ends in an item
 /// whose key no other item has, so no run crosses from one into another.
-pub(in crate::spirv) fn spine(
+fn spine(
     m: &TypedModule,
-    (func, w, loops): (FuncId, &[u64], bool),
+    (func, w): (FuncId, &[u64]),
     cache: &mut KeyCache,
     meter: &mut Meter,
     ledger: &mut usize,
@@ -707,24 +697,6 @@ pub(in crate::spirv) fn spine(
                 key: h.finish(),
                 weight,
             });
-            // A loop's body is a sequence of its own, where asked: from its header's branch to
-            // its continue block.
-            if loops && depth < MAX_DEPTH {
-                if let (None, Terminator::Branch(h)) = (&b.merge, &b.term) {
-                    let hb = block(m, *h)?;
-                    if let (Some(Merge::Loop { cont, .. }), Terminator::Branch(first)) =
-                        (hb.merge, &hb.term)
-                    {
-                        let hi = sp.pos(cont).unwrap_or(0);
-                        if let Some(fp) = sp.pos(*first).filter(|p| *p > lp + 1 && *p < hi) {
-                            if let Some(x) = begun.get_mut(fp).filter(|x| !**x) {
-                                *x = true;
-                                seqs.push((*first, hi, depth + 1));
-                            }
-                        }
-                    }
-                }
-            }
             // The arms of a selection or switch are sequences of their own.
             if depth < MAX_DEPTH && matches!(b.merge, Some(Merge::Selection { .. })) {
                 let mut arms = Vec::new();
@@ -835,7 +807,7 @@ fn find_in(
     ledger: &mut usize,
     verifies: &mut usize,
 ) -> Result<Option<Plan>, Error> {
-    let sp = spine(m, (func, w, false), cache, meter, ledger)?;
+    let sp = spine(m, (func, w), cache, meter, ledger)?;
     let n = sp.items.len();
     // What each value of the function is through its copies.
     charge::<u32>(meter, ledger, m.values.len())?;
@@ -1171,7 +1143,7 @@ fn region_insts(b: &Block, range: Range<usize>) -> Vec<(usize, &InstNode)> {
 
 /// Whether a value may differ by trip in operand `operand` of `inst`: an operand any value of
 /// its type may stand in.
-pub(in crate::spirv) fn varying_ok(inst: &Inst, operand: usize) -> bool {
+fn varying_ok(inst: &Inst, operand: usize) -> bool {
     match inst {
         Inst::Store { .. } => operand == 1,
         Inst::Unary { .. }
@@ -1197,7 +1169,7 @@ pub(in crate::spirv) fn varying_ok(inst: &Inst, operand: usize) -> bool {
 
 /// Whether a region may hold `inst`: an instruction the stage executes at most once (interlock,
 /// mesh output counts) may not be repeated by a loop.
-pub(in crate::spirv) fn rollable(inst: &Inst) -> bool {
+fn rollable(inst: &Inst) -> bool {
     !matches!(
         inst,
         Inst::BeginInterlock | Inst::EndInterlock | Inst::SetMeshOutputs { .. }
@@ -1218,7 +1190,7 @@ fn image_use(inst: &Inst) -> bool {
 /// The operand of `inst` (in [`Inst::for_each_value`] order) that must be a constant but may
 /// differ by trip through an `OpSwitch` on the trip index ([`split_by_trip`]): an image
 /// instruction's `ConstOffset`.
-pub(in crate::spirv) fn switched_operand(inst: &Inst) -> Option<usize> {
+fn switched_operand(inst: &Inst) -> Option<usize> {
     let (lead, ops) = match inst {
         Inst::ImageSample { dref, ops, .. } => (2 + usize::from(dref.is_some()), ops),
         Inst::ImageFetch { ops, .. } | Inst::ImageGather { ops, .. } => (2, ops),
@@ -2201,7 +2173,7 @@ fn verify(
 }
 
 /// Intern type `t`, declaring it when new.
-pub(in crate::spirv) fn ty(m: &mut TypedModule, t: Type) -> Result<TypeId, Error> {
+fn ty(m: &mut TypedModule, t: Type) -> Result<TypeId, Error> {
     let (id, fresh) = m.types.intern(t, &m.consts)?;
     if fresh {
         m.decls.push(Decl::Type(id));
@@ -2209,11 +2181,7 @@ pub(in crate::spirv) fn ty(m: &mut TypedModule, t: Type) -> Result<TypeId, Error
     Ok(id)
 }
 
-pub(in crate::spirv) fn new_value(
-    m: &mut TypedModule,
-    ty: TypeId,
-    origin: ValueOrigin,
-) -> Result<Value, Error> {
+fn new_value(m: &mut TypedModule, ty: TypeId, origin: ValueOrigin) -> Result<Value, Error> {
     let v = Value::new(u32::try_from(m.values.len()).map_err(|_| invariant("value ids"))?);
     m.values.push(ValueDef { ty, origin });
     Ok(v)
@@ -2266,7 +2234,7 @@ fn local(m: &mut TypedModule, entry: FuncId, pointee: TypeId) -> Result<Value, E
     Ok(value)
 }
 
-pub(in crate::spirv) fn new_block(m: &mut TypedModule, func: FuncId) -> Result<BlockId, Error> {
+fn new_block(m: &mut TypedModule, func: FuncId) -> Result<BlockId, Error> {
     let id = BlockId::new(u32::try_from(m.blocks.len()).map_err(|_| invariant("block ids"))?);
     m.blocks.push(Block {
         func,
@@ -2294,7 +2262,7 @@ fn push_void(m: &mut TypedModule, b: BlockId, inst: Inst) -> Result<(), Error> {
 }
 
 /// Mark `results` (of instructions and phis that left their block) removed.
-pub(in crate::spirv) fn removed(m: &mut TypedModule, results: impl Iterator<Item = Value>) {
+fn removed(m: &mut TypedModule, results: impl Iterator<Item = Value>) {
     for r in results {
         if let Some(d) = m.values.get_mut(r.index()) {
             d.origin = ValueOrigin::Removed;
@@ -2304,11 +2272,7 @@ pub(in crate::spirv) fn removed(m: &mut TypedModule, results: impl Iterator<Item
 
 /// Move the merge and terminator of `from` to `to` (a new block that takes over `from`'s
 /// edges): the successors' phis, a loop's preheader, and a switch-at-use header follow.
-pub(in crate::spirv) fn move_tail(
-    m: &mut TypedModule,
-    from: BlockId,
-    to: BlockId,
-) -> Result<(), Error> {
+fn move_tail(m: &mut TypedModule, from: BlockId, to: BlockId) -> Result<(), Error> {
     let (merge, term) = {
         let b = block(m, from)?;
         (b.merge, b.term.clone())
