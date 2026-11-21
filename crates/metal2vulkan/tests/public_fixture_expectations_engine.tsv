@@ -630,6 +630,12 @@ engine/dcs_dont_care_split.ll	dcs_read	NeedsInput{FramebufferFetch}	NeedsInput{F
 engine/dcs_dont_care_split.ll	dcs_flag	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/denormal_texels.air.ll	denormal_texels	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/denormal_texels.ll	denormal_texels	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/depth_fill.air.ll	depth_fill_read	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/depth_fill.air.ll	depth_fill_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/depth_fill.air.ll	depth_fill_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/depth_fill.ll	depth_fill_read	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/depth_fill.ll	depth_fill_vertex	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
+engine/depth_fill.ll	depth_fill_fragment	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/descriptor_limit_uniform_views.air.ll	descriptor_limit_uniform_views	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/descriptor_limit_uniform_views.air.ll	descriptor_limit_atomic_load	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
 engine/descriptor_limit_uniform_views.ll	descriptor_limit_uniform_views	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok	ok
