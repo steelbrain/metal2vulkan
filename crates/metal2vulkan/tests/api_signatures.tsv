@@ -1499,7 +1499,7 @@ field	metal2vulkan-runtime::DeviceFault.instructions	pub instructions: Vec<Fault
 field	metal2vulkan-runtime::DeviceFault.places	pub places: Vec<FaultPlace>
 field	metal2vulkan-runtime::DeviceFault.vendor	pub vendor: Vec<(String, u64, u64)>
 field	metal2vulkan-runtime::DeviceLoss.call	pub call: &'static str
-field	metal2vulkan-runtime::DeviceLoss.fault	pub fault: Option<DeviceFault>
+field	metal2vulkan-runtime::DeviceLoss.fault	pub fault: Option<Box<DeviceFault>>
 field	metal2vulkan-runtime::DeviceLoss.result	pub result: vk::Result
 field	metal2vulkan-runtime::DeviceOptions.block_mappings	pub block_mappings: Option<Arc<dyn BlockMappings>>
 field	metal2vulkan-runtime::DeviceOptions.extensions	pub extensions: Vec<DeviceExtension>

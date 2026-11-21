@@ -323,7 +323,8 @@ pub(crate) fn report(core: &Core, mut loss: DeviceLoss) -> DeviceLoss {
     let first = !core.work.lock().lost();
     loss.fault = (first && loss.result == vk::Result::ERROR_DEVICE_LOST)
         .then(|| read(core))
-        .flatten();
+        .flatten()
+        .map(Box::new);
     loss
 }
 

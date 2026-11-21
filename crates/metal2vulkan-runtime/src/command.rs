@@ -127,8 +127,9 @@ pub struct DeviceLoss {
     /// the device's first loss, where that loss's result is `ERROR_DEVICE_LOST` and device
     /// creation enabled `VK_EXT_device_fault` (where the device lists it), a loss of the runtime's
     /// own: None otherwise, or where the read failed. A loss the consumer reports
-    /// ([`Device::report_loss`]) carries the fault the consumer gives.
-    pub fault: Option<DeviceFault>,
+    /// ([`Device::report_loss`]) carries the fault the consumer gives. Boxed, as a loss is the
+    /// `Err` of many calls.
+    pub fault: Option<Box<DeviceFault>>,
 }
 
 impl DeviceLoss {
