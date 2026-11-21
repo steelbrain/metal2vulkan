@@ -600,7 +600,6 @@ fn a_sampled_heap_writes_each_member_and_its_table() {
         alpha: true,
         class: false,
         red_blue: false,
-        ycbcr: false,
         unreadable: false,
     };
     assert_eq!(emitted_lookup_in(bytes, &keys, flagged), alpha);
@@ -1158,7 +1157,6 @@ fn table_entries_state_each_members_texel_class() {
         alpha: true,
         class: false,
         red_blue: false,
-        ycbcr: false,
         unreadable: false,
     };
     let one = HANDLE_ALPHA_ONE;
@@ -1170,7 +1168,6 @@ fn table_entries_state_each_members_texel_class() {
         alpha: false,
         class: true,
         red_blue: false,
-        ycbcr: false,
         unreadable: false,
     };
     assert_eq!(
@@ -1181,7 +1178,6 @@ fn table_entries_state_each_members_texel_class() {
         alpha: true,
         class: true,
         red_blue: false,
-        ycbcr: false,
         unreadable: false,
     };
     let entry = |k: u32| k << HANDLE_ENTRY.trailing_zeros();

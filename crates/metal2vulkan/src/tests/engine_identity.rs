@@ -1199,7 +1199,6 @@ fn textures_at_their_resource_ids(ab: bool) {
                 alpha: true,
                 class: false,
                 red_blue: false,
-                ycbcr: false,
                 unreadable: false,
             }),
         };

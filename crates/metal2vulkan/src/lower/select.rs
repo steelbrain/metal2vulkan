@@ -2028,7 +2028,6 @@ fn identity_refusal(plan: &Plan) -> Option<String> {
             | crate::memory::handles::Lookup::Flagged {
                 class: false,
                 red_blue: false,
-                ycbcr: false,
                 unreadable: false,
                 ..
             }
