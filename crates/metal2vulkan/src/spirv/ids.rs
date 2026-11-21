@@ -74,6 +74,9 @@ pub enum DemoteTy {
     Composite(Box<[DemoteTy]>),
     /// A fat buffer pointer `(root u32, offset u32 | u64)`.
     FatPtr { wide: bool },
+    /// A device address `u64`: a wide buffer pointer under the identity domains, where a pointer
+    /// is the address it holds.
+    Address,
     /// A workgroup or private arena offset `u32`.
     ArenaOffset,
     /// A handle-table index `u32`.

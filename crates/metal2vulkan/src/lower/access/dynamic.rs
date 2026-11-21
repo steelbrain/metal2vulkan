@@ -48,9 +48,10 @@
 //!
 //! **Under the identity domains** there is no root table: a pointer is the device address of the
 //! byte it names, so a loaded word or an `inttoptr` operand is the pointer itself, with no search.
-//! A wide pointer there is `(0, a, 0, 0)` for address `a`: the form of a miss, whose Metal address
-//! is `at` and whose accesses are at `host + at`. A wide buffer parameter is its slot's address
-//! (`SlotGuestBase`, the bias added back) in `at`. No access through a wide pointer is contained
+//! A wide pointer there is its address `a` alone, a `u64` (`DemoteTy::Address`): the `at` of a
+//! miss's fields `(0, a, 0, 0)`, whose Metal address is `at` and whose accesses are at `host + at`,
+//! with no field but `at` held, extracted or rebuilt (a GEP is the address's own arithmetic). A
+//! wide buffer parameter is its slot's address (`SlotGuestBase`, the bias added back). No access through a wide pointer is contained
 //! or counted: a stored address is used as it is, unchecked, and no resident set exists to miss.
 //! No root table is read and no `RootTableAddress` pushed. An escaping slot root stays static
 //! there (`memory::plan`), so a converted or stored slot pointer is `access::pointer`'s.
@@ -473,10 +474,14 @@ pub fn lowered_pointer(cx: &SelectCx<'_>, v: Value) -> Result<Option<DemoteTy>, 
     if super::phis::incoming(cx, v)?.is_some_and(|i| i.not_wide) {
         return Err(refuse());
     }
-    Ok(Some(DemoteTy::FatPtr { wide: true }))
+    Ok(Some(match super::identity(cx.profile) {
+        true => DemoteTy::Address,
+        false => DemoteTy::FatPtr { wide: true },
+    }))
 }
 
-/// The SPIR-V type of a wide pointer: `u64vec4(root, at, host, size)`.
+/// The SPIR-V type of a wide pointer off the identity domains: `u64vec4(root, at, host, size)`.
+/// Under them a wide pointer is its device address, a `u64` ([`DemoteTy::Address`]).
 pub fn wide_type(mb: &mut crate::spirv::builder::ModuleBuilder) -> BResult<TypeId> {
     let u = mb.ty(SType::Int {
         width: 64,
@@ -520,8 +525,8 @@ fn param_slot(entry: &crate::air::Entry, b: &ParamBinding) -> Option<SlotRef> {
 
 /// The value of a wide buffer parameter, `[2 + n, bind_offset, host, size]` of its root entry
 /// (read where the value is first needed: [`emit_entry`] holds it from the function's first
-/// block), or `None` when `b` is not one. Under the identity domains it is `[0, a, 0, 0]` for its
-/// slot's address `a`, read where it is needed.
+/// block), or `None` when `b` is not one. Under the identity domains it is its slot's address,
+/// read where it is needed.
 pub fn param_value(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -534,8 +539,7 @@ pub fn param_value(
         return Err(cx.fail(format!("parameter {} is no buffer slot", b.param)));
     };
     if cx.plan.families.access.identity {
-        let address = super::pointer::slot_address(cx, fb, slot)?;
-        return Ok(Some(at_address(fb, address)?));
+        return super::pointer::slot_address(cx, fb, slot).map(Some);
     }
     let root = k64(fb, u64::from(slot_root(slot.index)))?;
     let table = cx.push_field(fb, PushField::RootTableAddress)?;
@@ -1050,20 +1054,40 @@ fn fat(fb: &mut FunctionBuilder<'_>, parts: [SValue; 4]) -> BResult<SValue> {
     fb.composite_construct(ty, &parts)
 }
 
-/// The identity domains' wide pointer of device address `a` (a `u64`): `[0, a, 0, 0]`.
-fn at_address(fb: &mut FunctionBuilder<'_>, a: SValue) -> BResult<SValue> {
-    let zero = k64(fb, 0)?;
-    fat(fb, [zero, a, zero, zero])
+/// The wide pointer of fields `parts` (`[root, at, host, size]`): under the identity domains, whose
+/// pointers have no root entry (every field but `at` is 0), the address `at` alone.
+fn wide_of(cx: &EmitCx<'_>, fb: &mut FunctionBuilder<'_>, parts: [SValue; 4]) -> BResult<SValue> {
+    match cx.plan.families.access.identity {
+        true => Ok(parts[1]),
+        false => fat(fb, parts),
+    }
 }
 
-/// The fields of wide pointer value `p`: `[root, at, host, size]`.
-fn fields(fb: &mut FunctionBuilder<'_>, p: SValue) -> BResult<[SValue; 4]> {
+/// The fields of wide pointer value `p`: `[root, at, host, size]`; under the identity domains
+/// `[0, p, 0, 0]`, the constant zeros folding where they are used ([`add64`]).
+fn fields(cx: &EmitCx<'_>, fb: &mut FunctionBuilder<'_>, p: SValue) -> BResult<[SValue; 4]> {
+    if cx.plan.families.access.identity {
+        let zero = k64(fb, 0)?;
+        return Ok([zero, p, zero, zero]);
+    }
     Ok([
         fb.composite_extract(p, &[0])?,
         fb.composite_extract(p, &[1])?,
         fb.composite_extract(p, &[2])?,
         fb.composite_extract(p, &[3])?,
     ])
+}
+
+/// `a + b` in `u64`: the other operand where one is the constant 0 (the `host` of an identity
+/// wide pointer, [`fields`]).
+fn add64(fb: &mut FunctionBuilder<'_>, a: SValue, b: SValue) -> BResult<SValue> {
+    if fb.const_scalar(a)? == Some(0) {
+        return Ok(b);
+    }
+    if fb.const_scalar(b)? == Some(0) {
+        return Ok(a);
+    }
+    fb.binary(BinOp::IAdd, a, b)
 }
 
 /// Count an access through root 0 when `live` holds (always without it): `ResidentMisses += 1`,
@@ -1137,7 +1161,7 @@ pub struct WideBase {
     units: Units,
 }
 
-/// Resolve wide pointer value `p` (a `u64vec4`) for the accesses of `a`: with its coherence (a
+/// Resolve wide pointer value `p` (a `u64vec4`, or an identity `u64`) for the accesses of `a`: with its coherence (a
 /// `*_coherent` access's, or the function's own) and volatility. Under isolation an access
 /// through root 0 is counted here, once, when `live` holds (always without it).
 pub(super) fn wide_base(
@@ -1158,7 +1182,7 @@ fn base_with(
     ops: (Option<Coherence>, bool),
     live: Option<SValue>,
 ) -> BResult<WideBase> {
-    let [root, at, host, size] = fields(fb, p)?;
+    let [root, at, host, size] = fields(cx, fb, p)?;
     if cx.plan.families.access.dynamic.misses {
         count_miss(cx, fb, root, live)?;
     }
@@ -1197,7 +1221,7 @@ pub(super) fn wide_at(
         None => b.at,
     };
     let (aligned, low) = super::psb::split_word(fb, at)?;
-    let base = fb.binary(BinOp::IAdd, b.host, aligned)?;
+    let base = add64(fb, b.host, aligned)?;
     let (base, low, inb) = match b.bounds {
         Some((size, sink)) => {
             let inb = contain::in_bounds(fb, at, size, u64::from(leaf.bytes))?;
@@ -1252,14 +1276,14 @@ pub(super) fn atomic_address(
     n: u32,
 ) -> BResult<AtomicAddress> {
     let p = cx.operand(fb, ptr)?;
-    let [root, at, host, size] = fields(fb, p)?;
+    let [root, at, host, size] = fields(cx, fb, p)?;
     if cx.plan.families.access.dynamic.misses {
         count_miss(cx, fb, root, None)?;
     }
     let word = u64::from(n.max(4));
     let mask = k64(fb, !(word - 1))?;
     let aligned = fb.binary(BinOp::BitwiseAnd, at, mask)?;
-    let addr = fb.binary(BinOp::IAdd, host, aligned)?;
+    let addr = add64(fb, host, aligned)?;
     let byte = if n < 4 {
         let three = k64(fb, 3)?;
         let low = fb.binary(BinOp::BitwiseAnd, at, three)?;
@@ -1325,7 +1349,7 @@ fn wide_side(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, side: Side) -> B
         Side::Ptr(p) => cx.operand(fb, p),
         Side::Null => {
             let zero = k64(fb, 0)?;
-            fat(fb, [zero; 4])
+            wide_of(cx, fb, [zero; 4])
         }
     }
 }
@@ -1341,14 +1365,14 @@ fn metal_address(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, side: Side) 
 
 /// The Metal (guest) address of wide pointer value `p` (a `u64vec4`): `guest + at` of its root
 /// entry (the null root's fields are 0, so a miss `[0, i, 0, 0]` is `i`). Under the identity
-/// domains, which have no root table, it is `at`.
+/// domains, which have no root table, it is the pointer itself.
 pub(super) fn guest_address(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     p: SValue,
 ) -> BResult<SValue> {
     if cx.plan.families.access.identity {
-        return fb.composite_extract(p, &[1]);
+        return Ok(p);
     }
     let root = fb.composite_extract(p, &[0])?;
     let at = fb.composite_extract(p, &[1])?;
@@ -1418,10 +1442,10 @@ pub(super) fn plan_static_guest(
 
 /// The wide pointer of guest address `guest` (a `u64`): a call of the module's resident-set
 /// search ([`roots::define_resolve`]), or the search in place when it is the module's only one.
-/// Under the identity domains the address is the pointer: `[0, guest, 0, 0]`, with no search.
+/// Under the identity domains the address is the pointer, with no search.
 fn resolve(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, guest: SValue) -> BResult<SValue> {
     if cx.plan.families.access.identity {
-        return at_address(fb, guest);
+        return Ok(guest);
     }
     let table = cx.push_field(fb, PushField::RootTableAddress)?;
     match cx.decl.families.access.resolve {
@@ -1460,7 +1484,7 @@ pub fn emit(
     let r = match s {
         DynStrategy::Gep { base, konst, terms } => {
             let p = cx.operand(fb, *base)?;
-            let [root, mut off, host, size] = fields(fb, p)?;
+            let [root, mut off, host, size] = fields(cx, fb, p)?;
             if *konst != 0 {
                 let c = k64(fb, *konst)?;
                 off = fb.binary(BinOp::IAdd, off, c)?;
@@ -1474,7 +1498,7 @@ pub fn emit(
                 }
                 off = fb.binary(BinOp::IAdd, off, x)?;
             }
-            fat(fb, [root, off, host, size])?
+            wide_of(cx, fb, [root, off, host, size])?
         }
         DynStrategy::Copy { of } => cx.operand(fb, *of)?,
         DynStrategy::Select { c, t, f } => {

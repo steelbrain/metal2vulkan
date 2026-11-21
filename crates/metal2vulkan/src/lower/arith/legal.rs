@@ -880,9 +880,10 @@ pub fn spirv_type(mb: &mut ModuleBuilder, d: &DemoteTy) -> BResult<Option<TypeId
             })?
         }
         // A pointer member of a member-wise phi's composite is the access family's.
-        DemoteTy::FatPtr { .. } | DemoteTy::ArenaOffset | DemoteTy::HandleIndex => {
-            return crate::lower::access::spirv_type(mb, d)
-        }
+        DemoteTy::FatPtr { .. }
+        | DemoteTy::Address
+        | DemoteTy::ArenaOffset
+        | DemoteTy::HandleIndex => return crate::lower::access::spirv_type(mb, d),
     }))
 }
 

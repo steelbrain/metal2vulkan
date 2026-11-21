@@ -615,9 +615,10 @@ fn member_constant(cx: &SelectCx<'_>, c: ConstId, want: &DemoteTy) -> Option<Low
 /// representation, which must be a pointer's.
 fn null_member(cx: &SelectCx<'_>, at: InstId, ty: TypeId) -> Result<ArithStrategy, Error> {
     match cx.lowered_repr(Value::Inst(at), ty)? {
-        d @ (DemoteTy::FatPtr { .. } | DemoteTy::HandleIndex | DemoteTy::ArenaOffset) => {
-            Ok(ArithStrategy::Null(d))
-        }
+        d @ (DemoteTy::FatPtr { .. }
+        | DemoteTy::Address
+        | DemoteTy::HandleIndex
+        | DemoteTy::ArenaOffset) => Ok(ArithStrategy::Null(d)),
         _ => Err(not_lowered()),
     }
 }
@@ -765,9 +766,10 @@ pub fn null_value(
     d: &DemoteTy,
 ) -> BResult<SValue> {
     match d {
-        DemoteTy::FatPtr { .. } | DemoteTy::HandleIndex | DemoteTy::ArenaOffset => {
-            zero_value(cx, fb, d)
-        }
+        DemoteTy::FatPtr { .. }
+        | DemoteTy::Address
+        | DemoteTy::HandleIndex
+        | DemoteTy::ArenaOffset => zero_value(cx, fb, d),
         _ => Err(cx.fail("a null pointer in a representation of no pointer")),
     }
 }
@@ -776,10 +778,12 @@ pub fn null_value(
 /// arith zero, or a composite of its members' zeros.
 fn zero_value(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, d: &DemoteTy) -> BResult<SValue> {
     match d {
-        DemoteTy::FatPtr { .. } => match crate::lower::access::pointer::null_value(fb, d)? {
-            Some(x) => Ok(x),
-            None => Err(cx.fail("a null fat pointer without a value")),
-        },
+        DemoteTy::FatPtr { .. } | DemoteTy::Address => {
+            match crate::lower::access::pointer::null_value(fb, d)? {
+                Some(x) => Ok(x),
+                None => Err(cx.fail("a null fat pointer without a value")),
+            }
+        }
         DemoteTy::HandleIndex => k32(fb, handles::NULL_HANDLE),
         DemoteTy::ArenaOffset => k32(fb, 0),
         DemoteTy::Composite(parts)
@@ -787,6 +791,7 @@ fn zero_value(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, d: &DemoteTy) -
                 matches!(
                     p,
                     DemoteTy::FatPtr { .. }
+                        | DemoteTy::Address
                         | DemoteTy::HandleIndex
                         | DemoteTy::ArenaOffset
                         | DemoteTy::Composite(_)

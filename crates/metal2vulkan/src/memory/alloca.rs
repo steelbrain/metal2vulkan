@@ -160,6 +160,7 @@ impl TypedTy {
                     round_to(sum, size.next_power_of_two().min(16)).saturating_add(size)
                 }),
                 DemoteTy::FatPtr { .. } => 16,
+                DemoteTy::Address => 8,
                 DemoteTy::ArenaOffset | DemoteTy::HandleIndex => 4,
             }
         }

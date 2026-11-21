@@ -563,9 +563,12 @@ pub fn select(
 
 // ---- Emission ----
 
-/// The null pointer in representation `ty` (a narrow or wide fat pointer), or `None` for
-/// another representation.
+/// The null pointer in representation `ty` (a narrow or wide fat pointer, or a device address),
+/// or `None` for another representation.
 pub fn null_value(fb: &mut FunctionBuilder<'_>, ty: &DemoteTy) -> BResult<Option<SValue>> {
+    if *ty == DemoteTy::Address {
+        return super::psb::k64(fb, 0).map(Some);
+    }
     // A narrow fat pointer `(root, offset)`; a wide one `(root, at, host, size)`.
     let (width, len) = match ty {
         DemoteTy::FatPtr { wide: false } => (32, 2),

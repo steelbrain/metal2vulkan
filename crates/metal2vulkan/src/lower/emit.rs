@@ -1231,9 +1231,10 @@ impl<'a> Emitter<'a> {
 impl CodeEmitter for Emitter<'_> {
     fn var_type(&mut self, ty: &DemoteTy, m: &mut ModuleBuilder) -> BResult<TypeId> {
         let found = match ty {
-            DemoteTy::FatPtr { .. } | DemoteTy::ArenaOffset | DemoteTy::HandleIndex => {
-                access::spirv_type(m, ty)?
-            }
+            DemoteTy::FatPtr { .. }
+            | DemoteTy::Address
+            | DemoteTy::ArenaOffset
+            | DemoteTy::HandleIndex => access::spirv_type(m, ty)?,
             _ => arith::spirv_type(m, ty)?,
         };
         match found {

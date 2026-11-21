@@ -662,10 +662,15 @@ pub fn lowered_pointer(cx: &SelectCx<'_>, v: Value) -> Result<DemoteTy, Error> {
 }
 
 /// The SPIR-V type of a pointer representation `ty`: `uvec2` for a narrow fat pointer, `u32`
-/// for an arena offset or a handle index, `u64vec2` for a wide fat pointer, `None` for the others.
+/// for an arena offset or a handle index, `u64vec4` for a wide fat pointer, `u64` for a device
+/// address, `None` for the others.
 pub fn spirv_type(mb: &mut ModuleBuilder, ty: &DemoteTy) -> BResult<Option<TypeId>> {
     match ty {
         DemoteTy::FatPtr { wide: true } => Ok(Some(dynamic::wide_type(mb)?)),
+        DemoteTy::Address => Ok(Some(mb.ty(SType::Int {
+            width: 64,
+            signed: false,
+        })?)),
         DemoteTy::ArenaOffset | DemoteTy::HandleIndex => Ok(Some(mb.ty(SType::Int {
             width: 32,
             signed: false,
