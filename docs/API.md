@@ -743,10 +743,7 @@ let pipeline = device.compile_render_pipeline(&descriptor, &Budget::standard())?
 
 A `RenderPipeline` holds:
 
-- `stages`: vertex, then fragment when rasterization is enabled, with three geometry stages
-  before the fragment stage when the fragment function reads `[[barycentric_coord]]` on a device
-  without `fragmentShaderBarycentric` (below). A `VkPipeline` takes the stages
-  `RenderPipeline::runs_stage(at, topology)` says its topology runs;
+- `stages`: vertex, then fragment when rasterization is enabled;
 - `layout`: one pipeline layout for every stage;
 - `vertex_input`: Vulkan bindings and attributes. An attribute Vulkan cannot fetch as described is
   pulled in the shader instead, and so is every attribute on a device without
@@ -866,18 +863,8 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
 - `[[barycentric_coord]]` reads `BaryCoordKHR` or `BaryCoordNoPerspKHR`, whose vertex order is
   Vulkan's first-vertex order and Metal's for every primitive type. A `float3` read takes the
   first two weights and computes the third as `1 - (x + y)` in `float`, as Metal does, not the
-  device's own third lane.
-  On a device without `fragmentShaderBarycentric` the weights are a varying instead: the pipeline
-  carries a generated geometry stage for each topology class (points, lines, triangles, in that
-  order), which writes `(1, 0)`, `(0, 1)` and `(0, 0)` at the primitive's vertices in their order
-  and passes the vertex function's outputs, clip distances, point size and the primitive ID
-  through, and a draw runs its class's. A `centroid` or `sample` qualifier reads the pixel
-  center's weights, as Metal does. That needs `geometryShader`; without it, or for what a geometry
-  stage cannot carry (tessellation, mesh pipelines, a vertex function's own layer or viewport
-  index, amplification without `multiviewGeometryShader`, a written point size in a point draw
-  without `shaderTessellationAndGeometryPointSize`, more varyings than the geometry limits), the
-  pipeline is refused, naming what it needs. Measured on the Iris Xe (ANV), such a pipeline takes
-  about 2.6 ms longer to create, and a geometry stage's presence costs about 15% of fill rate.
+  device's own third lane. On a device without `fragmentShaderBarycentric` the function is
+  refused, `Unsupported{Barycentrics}` needing the feature.
 - A vertex function stores `Layer` or `ViewportIndex` only where it writes the index the same at
   every vertex of a primitive, decided from its structure (computed from constants, `constant`
   memory, the instance, the amplification and per-instance attributes, as
@@ -938,8 +925,8 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   counter-clockwise one). A smooth varying and the clip distances are each endpoint's, a flat or
   integer varying the first vertex's. It needs `tessellationShader` (`Unsupported{WideLines}`
   needing it); a post-tessellation vertex function, a vertex function that writes a layer or
-  viewport index, synthesized geometry stages, a fragment function that reads barycentric weights
-  and multiview are not implemented.
+  viewport index, a fragment function that reads barycentric weights and multiview are not
+  implemented.
 - `graphics` also states what the runtime needs to record draws correctly: whether the fragment
   function reads flat inputs, barycentrics or its position's depth, whether the vertex function
   writes memory or a layer or viewport index, and which colors the function may write.

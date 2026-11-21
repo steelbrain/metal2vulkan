@@ -26,11 +26,7 @@ pub struct RenderPipeline {
     pub profile: Hash256,
     /// Vertex, then fragment when rasterization is enabled. A post-tessellation vertex function's
     /// pipeline has the synthesized vertex and tessellation control stages, then its evaluation
-    /// stage, then the fragment stage. A pipeline whose fragment function reads
-    /// `[[barycentric_coord]]` on a device without `fragmentShaderBarycentric` has three
-    /// synthesized geometry stages before its fragment stage, or last without one, for the point,
-    /// line and triangle topology classes in that order: a `VkPipeline` runs only the one of its
-    /// draw's class ([`runs_stage`](Self::runs_stage)).
+    /// stage, then the fragment stage.
     pub stages: Vec<StageModule>,
     pub layout: PipelineLayout,
     pub vertex_input: VertexInputState,
@@ -44,31 +40,6 @@ pub struct RenderPipeline {
 }
 
 impl RenderPipeline {
-    /// Whether a `VkPipeline` drawing `topology` runs stage `at` of
-    /// [`stages`](Self::stages): every stage but a geometry stage of another topology class (a
-    /// pipeline's geometry stages are the point, line and triangle classes' in that order). A
-    /// stage past the list runs nothing.
-    pub fn runs_stage(&self, at: usize, topology: vk::PrimitiveTopology) -> bool {
-        use vk::PrimitiveTopology as T;
-        let Some(stage) = self.stages.get(at) else {
-            return false;
-        };
-        if stage.stage != vk::ShaderStage::GEOMETRY {
-            return true;
-        }
-        let class = match topology {
-            T::POINT_LIST => 0,
-            T::LINE_LIST | T::LINE_STRIP => 1,
-            T::TRIANGLE_LIST | T::TRIANGLE_STRIP | T::TRIANGLE_FAN => 2,
-            _ => return false,
-        };
-        let nth = self.stages[..at]
-            .iter()
-            .filter(|s| s.stage == vk::ShaderStage::GEOMETRY)
-            .count();
-        nth == class
-    }
-
     /// The bytes this pipeline keeps live: its own storage, its stages' and its dependencies',
     /// and each stage's SPIR-V words, constant blob, entry point, specialization constants,
     /// notes and attachment lists.

@@ -796,13 +796,12 @@ impl ModuleBuilder {
 
     /// Decorate builtin output `g` `Invariant`: SPIR-V's "expressions computing its value be
     /// computed invariantly with respect to other shaders computing the same expressions". Only
-    /// the `Position` output (Metal's `[[invariant]]` position) and the `ClipDistance` output (a
-    /// rate-mapped pass's copies of its triangles, `pipeline::link::fan_out`) can be invariant.
+    /// the `Position` output (Metal's `[[invariant]]` position) can be invariant.
     pub fn invariant(&mut self, g: GlobalId) -> BResult<()> {
         use crate::spv::BuiltIn as B;
         match self.global(g)?.kind {
             GlobalKind::BuiltIn {
-                builtin: B::Position | B::ClipDistance,
+                builtin: B::Position,
                 dir: IoDir::Output,
             } => {
                 self.invariant.insert(g);
@@ -1134,11 +1133,6 @@ impl ModuleBuilder {
                 {
                     return err(EntryRule::TessellationModes);
                 }
-                ExecMode::OutputVertices { n: 0 } | ExecMode::Invocations { n: 0 }
-                    if model == ExecModel::Geometry =>
-                {
-                    return err(EntryRule::GeometryModes);
-                }
                 ExecMode::OutputVertices { n: 0 } | ExecMode::OutputPrimitives { n: 0 } => {
                     return err(EntryRule::MeshModes);
                 }
@@ -1175,26 +1169,6 @@ impl ModuleBuilder {
                 }));
         if !mesh_ok {
             return err(EntryRule::MeshModes);
-        }
-        // A geometry entry states its input and output primitives and the most vertices it emits.
-        let geometry_ok = model != ExecModel::Geometry
-            || (patch_size
-                && modes.iter().any(|m| {
-                    matches!(
-                        m,
-                        ExecMode::InputPoints | ExecMode::InputLines | ExecMode::Triangles
-                    )
-                })
-                && modes.iter().any(|m| {
-                    matches!(
-                        m,
-                        ExecMode::OutputPoints
-                            | ExecMode::OutputLineStrip
-                            | ExecMode::OutputTriangleStrip
-                    )
-                }));
-        if !geometry_ok {
-            return err(EntryRule::GeometryModes);
         }
         let has_local_size = has_local_size || self.consts.workgroup_size_const().is_some();
         let workgroups = matches!(
@@ -1457,8 +1431,6 @@ fn mode_contract(m: ExecMode) -> (u8, Option<u8>, &'static [ExecModel]) {
     const WORKGROUPS: &[ExecModel] =
         &[ExecModel::GLCompute, ExecModel::TaskEXT, ExecModel::MeshEXT];
     const MESH: &[ExecModel] = &[ExecModel::MeshEXT];
-    const GEOMETRY: &[ExecModel] = &[ExecModel::Geometry];
-    const MESH_OR_GEOMETRY: &[ExecModel] = &[ExecModel::MeshEXT, ExecModel::Geometry];
     const ALL: &[ExecModel] = &[
         ExecModel::Vertex,
         ExecModel::Fragment,
@@ -1467,7 +1439,6 @@ fn mode_contract(m: ExecMode) -> (u8, Option<u8>, &'static [ExecModel]) {
         ExecModel::TessellationControl,
         ExecModel::TaskEXT,
         ExecModel::MeshEXT,
-        ExecModel::Geometry,
     ];
     // Vulkan lets either tessellation stage declare the domain, spacing, and vertex order; the
     // output patch size is the control stage's.
@@ -1475,18 +1446,8 @@ fn mode_contract(m: ExecMode) -> (u8, Option<u8>, &'static [ExecModel]) {
         ExecModel::TessellationEvaluation,
         ExecModel::TessellationControl,
     ];
-    // The triangle domain, or a geometry entry's triangle input.
-    const TRIANGLES: &[ExecModel] = &[
-        ExecModel::TessellationEvaluation,
-        ExecModel::TessellationControl,
-        ExecModel::Geometry,
-    ];
-    // The output patch size, or a mesh or geometry entry's most vertices.
-    const OUTPUT_VERTICES: &[ExecModel] = &[
-        ExecModel::TessellationControl,
-        ExecModel::MeshEXT,
-        ExecModel::Geometry,
-    ];
+    // The output patch size, or a mesh entry's most vertices.
+    const OUTPUT_VERTICES: &[ExecModel] = &[ExecModel::TessellationControl, ExecModel::MeshEXT];
     match m {
         ExecMode::OriginUpperLeft => (0, None, FRAG),
         ExecMode::EarlyFragmentTests => (1, None, FRAG),
@@ -1501,21 +1462,18 @@ fn mode_contract(m: ExecMode) -> (u8, Option<u8>, &'static [ExecModel]) {
         ExecMode::RoundingModeRte { width } => (10, Some(width), ALL),
         ExecMode::SubgroupUniformControlFlow => (11, None, ALL),
         ExecMode::MaximallyReconverges => (12, None, ALL),
-        ExecMode::Triangles => (13, None, TRIANGLES),
-        ExecMode::Quads => (13, None, TESS),
-        ExecMode::InputPoints | ExecMode::InputLines => (13, None, GEOMETRY),
+        ExecMode::Triangles | ExecMode::Quads => (13, None, TESS),
         ExecMode::SpacingEqual
         | ExecMode::SpacingFractionalEven
         | ExecMode::SpacingFractionalOdd => (14, None, TESS),
         ExecMode::VertexOrderCw | ExecMode::VertexOrderCcw => (15, None, TESS),
         ExecMode::OutputVertices { .. } => (16, None, OUTPUT_VERTICES),
         ExecMode::OutputPrimitives { .. } => (17, None, MESH),
-        ExecMode::OutputPoints => (18, None, MESH_OR_GEOMETRY),
-        ExecMode::OutputLines | ExecMode::OutputTriangles => (18, None, MESH),
-        ExecMode::OutputLineStrip | ExecMode::OutputTriangleStrip => (18, None, GEOMETRY),
+        ExecMode::OutputPoints | ExecMode::OutputLines | ExecMode::OutputTriangles => {
+            (18, None, MESH)
+        }
         ExecMode::RequireFullQuads => (19, None, FRAG),
         ExecMode::PostDepthCoverage => (21, None, FRAG),
-        ExecMode::Invocations { .. } => (20, None, GEOMETRY),
     }
 }
 

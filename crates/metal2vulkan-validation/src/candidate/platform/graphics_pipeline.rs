@@ -516,18 +516,13 @@ pub(super) fn create_graphics_pipeline(
         .collect();
     let mut stages = Vec::with_capacity(pipeline.stages.len());
     let topology = metal2vulkan::vk::PrimitiveTopology::from_raw(consumer.topology.as_raw());
-    // Of a pipeline's barycentric geometry stages, only the draw's class's runs.
-    for (at, (((stage, module), (entry, spec)), subgroup)) in pipeline
+    for (((stage, module), (entry, spec)), subgroup) in pipeline
         .stages
         .iter()
         .zip(consumer.modules)
         .zip(entries.iter().zip(&spec_infos))
         .zip(subgroups.iter_mut())
-        .enumerate()
     {
-        if !pipeline.runs_stage(at, topology) {
-            continue;
-        }
         let mut info = vk::PipelineShaderStageCreateInfo::default()
             .stage(stage.stage.into())
             .module(*module)

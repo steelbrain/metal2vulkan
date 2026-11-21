@@ -404,10 +404,6 @@ pub enum Inst {
     IsHelperInvocation,
     /// `OpSetMeshOutputsEXT`: the vertices and primitives a mesh workgroup outputs.
     SetMeshOutputs { vertices: Value, primitives: Value },
-    /// `OpEmitVertex`: a geometry entry emits a vertex of its output values.
-    EmitVertex,
-    /// `OpEndPrimitive`: a geometry entry ends its output primitive.
-    EndPrimitive,
     // ---- Ray queries (builder/ops/ray.rs) ----
     /// A `SPV_KHR_ray_query` instruction.
     RayQuery(RayQueryInst),
@@ -583,9 +579,7 @@ impl Inst {
             | Inst::DemoteToHelperInvocation
             | Inst::IsHelperInvocation
             | Inst::ControlBarrier { .. }
-            | Inst::MemoryBarrier { .. }
-            | Inst::EmitVertex
-            | Inst::EndPrimitive => {}
+            | Inst::MemoryBarrier { .. } => {}
             Inst::SetMeshOutputs {
                 vertices,
                 primitives,
@@ -812,9 +806,7 @@ impl Inst {
             | Inst::DemoteToHelperInvocation
             | Inst::IsHelperInvocation
             | Inst::ControlBarrier { .. }
-            | Inst::MemoryBarrier { .. }
-            | Inst::EmitVertex
-            | Inst::EndPrimitive => {}
+            | Inst::MemoryBarrier { .. } => {}
             Inst::SetMeshOutputs {
                 vertices,
                 primitives,
@@ -1018,9 +1010,7 @@ impl Inst {
             | Inst::EndInterlock
             | Inst::DemoteToHelperInvocation
             | Inst::IsHelperInvocation
-            | Inst::SetMeshOutputs { .. }
-            | Inst::EmitVertex
-            | Inst::EndPrimitive => {}
+            | Inst::SetMeshOutputs { .. } => {}
         }
     }
 
@@ -1041,7 +1031,6 @@ impl Inst {
             } => Some(ModelNeed::Fragment),
             Inst::BeginInterlock | Inst::EndInterlock => Some(ModelNeed::Interlock),
             Inst::SetMeshOutputs { .. } => Some(ModelNeed::Mesh),
-            Inst::EmitVertex | Inst::EndPrimitive => Some(ModelNeed::Geometry),
             Inst::AtomicLoad { scope, .. }
             | Inst::AtomicStore { scope, .. }
             | Inst::Atomic { scope, .. }
@@ -1291,9 +1280,6 @@ pub enum ExecModel {
     TaskEXT,
     /// A mesh function (`SPV_EXT_mesh_shader`).
     MeshEXT,
-    /// The pass-through geometry stage link synthesizes for a fragment function that reads
-    /// `[[barycentric_coord]]` on a device without `fragmentShaderBarycentric`.
-    Geometry,
 }
 
 impl ExecModel {
@@ -1372,20 +1358,6 @@ pub enum ExecMode {
     OutputLines,
     /// Triangles (`OutputTrianglesEXT`).
     OutputTriangles,
-    // ---- Geometry ----
-    /// A geometry entry's input primitive: points (`InputPoints`). Its triangles are
-    /// [`ExecMode::Triangles`] and its output points [`ExecMode::OutputPoints`].
-    InputPoints,
-    /// Lines (`InputLines`).
-    InputLines,
-    /// A geometry entry's output primitive: line strips (`OutputLineStrip`).
-    OutputLineStrip,
-    /// Triangle strips (`OutputTriangleStrip`).
-    OutputTriangleStrip,
-    /// A geometry entry's invocations per input primitive (`Invocations`).
-    Invocations {
-        n: u32,
-    },
 }
 
 impl ExecMode {

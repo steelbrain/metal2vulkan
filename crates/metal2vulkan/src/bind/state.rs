@@ -147,24 +147,6 @@ pub struct BindState {
     /// docs). Part of the shape (`BindShape::region_viewports`); `false` for every other draw.
     #[cfg_attr(feature = "serde", serde(default))]
     pub region_viewports: bool,
-    /// The draw records a rasterization-rate-mapped pass's triangles once, through one viewport
-    /// over the whole target, the variant's triangle stage fanning each out to the regions it
-    /// touches (`VariantKey::region_fan_out`, `GraphicsState::region_fan_out`), or probing which
-    /// of the draw's triangles it cannot ([`RegionFanOut::Probe`](crate::pipeline::RegionFanOut)),
-    /// and the index of the pair of words a probe writes (`PushField::RegionProbe`,
-    /// `WriteSource::RateMapFlags`; 0 for a draw); or records them region by region through that
-    /// viewport, its vertex function putting each vertex in its region as the triangle stage
-    /// puts a copy's ([`RegionFanOut::RegionCopies`](crate::pipeline::RegionFanOut)), and the
-    /// segment of x of its recording's first region in the region table's first row
-    /// (`PushField::RegionBox`, `[x0, 0]`), which the consumer pushes again, with its row's
-    /// segments, for each of its recordings. The consumer sets it only for a draw of triangles.
-    /// The plan's variant fans out only a vertex pipeline without tessellation drawn in one pass
-    /// of no views, whose stages synthesize no geometry stage of their own and draw no band
-    /// (`bind::graphics`'s module docs). Its variant
-    /// is part of the shape (`BindShape::region_fan_out`), its index only of the draw's bytes;
-    /// `None` for every other draw.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub region_fan_out: Option<(crate::pipeline::RegionFanOut, u32)>,
     /// Where the heap arrays (set 1) hold the command's heap members and argument samplers
     /// ([`HeapPlacement`]). Only the instantiated tables and the elements the consumer writes
     /// ([`BindingPlan::heap_elements`]) depend on it, so it is not part of the shape.
@@ -614,7 +596,6 @@ impl BindState {
             private_list: self.private_list,
             far_vertex_buffers: self.far_vertex_buffers.clone(),
             region_viewports: self.region_viewports,
-            region_fan_out: self.region_fan_out.map(|(mode, _)| mode),
         }
     }
 
@@ -700,7 +681,6 @@ impl BindState {
             private_list,
             far_vertex_buffers,
             region_viewports,
-            region_fan_out,
         } = shape;
         let tables = self.stages.iter().filter(|(_, t)| !t.has_empty_shape());
         tables.clone().count() == stages.len()
@@ -729,7 +709,6 @@ impl BindState {
             && self.private_list == *private_list
             && self.far_vertex_buffers == *far_vertex_buffers
             && self.region_viewports == *region_viewports
-            && self.region_fan_out.map(|(mode, _)| mode) == *region_fan_out
     }
 
     /// `used_resources` by token ([`BindShape::used`]): one token names one resource, and listing
@@ -1724,11 +1703,6 @@ pub struct BindShape {
     /// (`VariantKey::region_viewports`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub region_viewports: bool,
-    /// `BindState.region_fan_out`'s variant: a draw of a rate-mapped pass's triangles once, its
-    /// variant's triangle stage fanning them out to their regions, or probing which it cannot, or
-    /// region by region through its vertex function's copies (`VariantKey::region_fan_out`).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub region_fan_out: Option<crate::pipeline::RegionFanOut>,
 }
 
 impl BindShape {}

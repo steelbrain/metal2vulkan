@@ -233,14 +233,13 @@ pub fn interface(m: &ModuleView<'_>) -> BResult<Vec<GlobalId>> {
     Ok(interface)
 }
 
-/// The Metal stage of an execution model: both tessellation stages and the synthesized geometry
-/// stage belong to Metal's vertex stage.
+/// The Metal stage of an execution model: both tessellation stages belong to Metal's vertex
+/// stage.
 pub(crate) fn metal_stage(model: ExecModel) -> Stage {
     match model {
-        ExecModel::Vertex
-        | ExecModel::TessellationEvaluation
-        | ExecModel::TessellationControl
-        | ExecModel::Geometry => Stage::Vertex,
+        ExecModel::Vertex | ExecModel::TessellationEvaluation | ExecModel::TessellationControl => {
+            Stage::Vertex
+        }
         ExecModel::Fragment => Stage::Fragment,
         ExecModel::GLCompute => Stage::Kernel,
         ExecModel::TaskEXT => Stage::Object,
@@ -273,10 +272,6 @@ pub fn derive(m: &ModuleView<'_>) -> BResult<Requirements> {
     if m.entry.model.is_tessellation() {
         d.cap(Cap::Tessellation);
         d.feat(VkFeature::TessellationShader);
-    }
-    if m.entry.model == ExecModel::Geometry {
-        d.cap(Cap::Geometry);
-        d.feat(VkFeature::GeometryShader);
     }
     // A task or mesh entry, and a fragment entry reading a mesh entry's primitive outputs
     // (`PerPrimitiveEXT`), declare mesh shading.
@@ -468,8 +463,9 @@ impl Deriver<'_> {
         match self.model {
             ExecModel::Vertex
             | ExecModel::TessellationEvaluation
-            | ExecModel::TessellationControl
-            | ExecModel::Geometry => self.feat(VkFeature::VertexPipelineStoresAndAtomics),
+            | ExecModel::TessellationControl => {
+                self.feat(VkFeature::VertexPipelineStoresAndAtomics)
+            }
             ExecModel::Fragment => self.feat(VkFeature::FragmentStoresAndAtomics),
             // Vulkan's stage store features name no task or mesh stage.
             ExecModel::GLCompute | ExecModel::TaskEXT | ExecModel::MeshEXT => {}
@@ -699,16 +695,13 @@ impl Deriver<'_> {
         ty: TypeId,
     ) -> BResult<()> {
         use crate::spv::BuiltIn as B;
-        // A mesh entry's outputs are arrayed per vertex or per primitive, and a geometry or
-        // evaluation entry's per-vertex inputs and a control entry's per-vertex inputs and
-        // outputs per vertex: a builtin's own array, a clip or cull distance's, is that array's
+        // A mesh entry's outputs are arrayed per vertex or per primitive, and an evaluation
+        // entry's per-vertex inputs and a control entry's per-vertex inputs and outputs per
+        // vertex: a builtin's own array, a clip or cull distance's, is that array's
         // element.
         let arrays_vertices = matches!(
             (self.model, dir),
-            (
-                ExecModel::Geometry | ExecModel::TessellationEvaluation,
-                IoDir::Input
-            ) | (ExecModel::TessellationControl, _)
+            (ExecModel::TessellationEvaluation, IoDir::Input) | (ExecModel::TessellationControl, _)
         );
         let arrayed = (self.model == ExecModel::MeshEXT && dir == IoDir::Output)
             || (arrays_vertices && crate::spirv::builder::geometry_per_vertex(b));
@@ -723,35 +716,18 @@ impl Deriver<'_> {
                 _ => Ok(None),
             }
         };
-        // A tessellation stage's `PrimitiveId` is enabled by `Tessellation`, and a geometry stage's
-        // by `Geometry`, which the entry declared.
-        if b == B::PrimitiveId
-            && (self.model.is_tessellation() || self.model == ExecModel::Geometry)
-        {
+        // A tessellation stage's `PrimitiveId` is enabled by `Tessellation`, which the entry
+        // declared.
+        if b == B::PrimitiveId && self.model.is_tessellation() {
             return Ok(());
-        }
-        // A geometry stage's `Layer` output is enabled by `Geometry`, which the entry declared, and
-        // its `ViewportIndex` output by `MultiViewport` (`multiViewport`).
-        if self.model == ExecModel::Geometry && dir == IoDir::Output {
-            match b {
-                B::Layer => return Ok(()),
-                B::ViewportIndex => {
-                    self.cap(Cap::MultiViewport);
-                    self.feat(VkFeature::MultiViewport);
-                    return Ok(());
-                }
-                _ => {}
-            }
         }
         // A task or mesh entry's `DrawIndex` is enabled by `MeshShadingEXT` (as the grammar lists
         // it), which the entry declared: it needs no `DrawParameters`.
         if b == B::DrawIndex && matches!(self.model, ExecModel::TaskEXT | ExecModel::MeshEXT) {
             return Ok(());
         }
-        // A geometry stage's point size, input or output, is `GeometryPointSize`'s, and a
-        // tessellation stage's `TessellationPointSize`'s.
+        // A tessellation stage's point size, input or output, is `TessellationPointSize`'s.
         let point_size = match self.model {
-            ExecModel::Geometry => Some(Cap::GeometryPointSize),
             ExecModel::TessellationControl | ExecModel::TessellationEvaluation => {
                 Some(Cap::TessellationPointSize)
             }
@@ -943,15 +919,6 @@ impl Deriver<'_> {
                 | ExecMode::OutputPoints
                 | ExecMode::OutputLines
                 | ExecMode::OutputTriangles => {}
-                // The entry's `Geometry` covers a geometry entry's modes. The synthesized stage
-                // emits at most 3 vertices in one invocation, within every device's
-                // `maxGeometryOutputVertices` (at least 256) and `maxGeometryShaderInvocations`
-                // (at least 32) where `geometryShader` is.
-                ExecMode::InputPoints
-                | ExecMode::InputLines
-                | ExecMode::OutputLineStrip
-                | ExecMode::OutputTriangleStrip
-                | ExecMode::Invocations { .. } => {}
             }
         }
         // The widths the denormal and rounding modes name: a width without one keeps the
@@ -983,12 +950,7 @@ impl Deriver<'_> {
     // ---- Instructions ----
 
     fn subgroup(&mut self, op: SubgroupOp) {
-        // A geometry module's are the geometry stage's, though its Metal stage is the vertex
-        // function's (`metal_stage`).
-        self.prop(match self.model {
-            ExecModel::Geometry => VkProperty::SubgroupGeometryStage,
-            _ => VkProperty::SubgroupStage(self.stage),
-        });
+        self.prop(VkProperty::SubgroupStage(self.stage));
         self.prop(VkProperty::SubgroupOperation(SubgroupOp::Basic));
         self.prop(VkProperty::SubgroupOperation(op));
     }

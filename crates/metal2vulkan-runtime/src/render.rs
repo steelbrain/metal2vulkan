@@ -760,7 +760,6 @@ fn unbuilt(pipeline: &RenderPipeline, enabled: &EnabledCaps) -> Option<RenderPip
         None => &[ShaderStage::VERTEX, ShaderStage::FRAGMENT],
     };
     let synthesized = g.line_band.is_some()
-        || g.region_fan_out.is_some()
         || (pipeline.stages.iter()).any(|stage| !stages.contains(&stage.stage));
     let unenabled = !(requirements.features).is_subset(&enabled.features)
         || !(requirements.extensions).is_subset(&enabled.extensions);

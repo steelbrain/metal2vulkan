@@ -201,7 +201,7 @@ fn a_rotated_draw_runs_the_rotated_weights_variant() {
         rotated_weights: true,
         ..Default::default()
     };
-    for stem in ["moltenvk-m3", "lavapipe"] {
+    for stem in ["moltenvk-m3", "amd-rdna3-radv"] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../metal2vulkan-validation/profiles")
             .join(format!("{stem}.json"));

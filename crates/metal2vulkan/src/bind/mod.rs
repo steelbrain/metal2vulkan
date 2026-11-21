@@ -85,7 +85,6 @@ pub(crate) mod depth_clamp;
 pub(crate) mod depth_stencil_copy;
 pub(crate) mod dispatch;
 pub(crate) mod etc_decode;
-pub mod fan_out;
 pub(crate) mod graphics;
 pub(crate) mod heap;
 pub mod indirect_commands;

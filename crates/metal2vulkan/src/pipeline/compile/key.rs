@@ -501,10 +501,6 @@ pub fn function_key(
         h.bytes(b"region-viewports");
     }
     // Appended only when set.
-    if inputs.region_copies {
-        h.bytes(b"region-copies");
-    }
-    // Appended only when set.
     if inputs.unit_axes != 0 {
         h.bytes(b"unit-axes").u64(u64::from(inputs.unit_axes));
     }

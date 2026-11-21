@@ -285,17 +285,6 @@ pub enum SyntheticBinding {
     HandleTable,
     /// The pipeline constant blob, a read-only storage buffer.
     ConstantBlob,
-    /// A rate-mapped pass's region table (`bind::fan_out`), a read-only storage buffer of a
-    /// fan-out variant's geometry stage (`GraphicsState::region_fan_out`), declared with the
-    /// vertex stage's symbols.
-    RateMapRegions,
-    /// A fan-out probe's flags (`GraphicsState::region_fan_out`), a storage buffer of `u32`s its
-    /// geometry stage writes into at the pushed index (`PushField::RegionProbe`,
-    /// `bind::fan_out::PROBE_DRAW_WORDS` a draw): a flag, the copies its draw emits, the marks
-    /// of its triangles too wide for few copies, its first and last flagged triangle, the
-    /// count of its flagged triangles, and the bits of its blocks that hold one. Declared with
-    /// the vertex stage's symbols.
-    RateMapFlags,
     /// The render encoder's tessellation factor buffer (`setTessellationFactorBuffer:offset:
     /// instanceStride:`), a read-only storage buffer of a tessellation pipeline's synthesized
     /// control stage, declared with the vertex stage's symbols.
@@ -958,13 +947,6 @@ pub enum PushField {
     /// That amplification's `viewportArrayIndexOffset` (`u32`), added to the viewport index and
     /// read as `AmplificationLayerOffset` is.
     AmplificationViewportOffset,
-    /// The row of regions a recording of a rate-mapped pass's regions draws (`uvec2`;
-    /// `RegionFanOut::RegionCopies`, `LoweringInputs::region_copies`): its first region's
-    /// segments of x and y in the region table, `x0` and `y0`. Its vertex function draws the
-    /// region of segments `(x0 + DrawIndex, y0)`: the row's regions in order. Placed with the
-    /// amplification fields, so the vertex window holds it, as a recording writes it before its
-    /// draws.
-    RegionBox,
     /// Region base and grid of a multi-region dispatch (`lower::dispatch`'s module docs). Under
     /// the identity domains every dispatch the host knows is a region: its first threadgroup in
     /// Metal's grid (0 unless the consumer splits the dispatch), Metal's threadgroup size, and
@@ -1066,9 +1048,6 @@ pub enum PushField {
     /// height negative, as the runtime's viewports are) and half the band's width in pixels
     /// (`BindState::line_band`).
     LineBand,
-    /// The index a fan-out probe writes its flag at (`u32`; `GraphicsState::region_fan_out`,
-    /// `link::fan_out`): one field of the synthesized geometry stage's own push range.
-    RegionProbe,
     /// The stride (`u32`) the compute encoder binds the kernel buffer at this Metal index with
     /// (`setBuffer:offset:attributeStride:atIndex:` and its forms, its low 32 bits,
     /// `MTLAttributeStrideStatic`'s `2^32 - 1` included), 0 where it binds none, which a

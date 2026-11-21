@@ -1158,6 +1158,4 @@ pub enum ModelNeed {
     WorkgroupScope,
     /// The mesh execution model (`OpSetMeshOutputsEXT`).
     Mesh,
-    /// The geometry execution model (`OpEmitVertex`, `OpEndPrimitive`).
-    Geometry,
 }

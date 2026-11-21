@@ -22,10 +22,8 @@
 //!   enabling capabilities the profile enables (`requirements::builtin_enablers`);
 //!   `[[barycentric_coord]]` reads `BaryCoordKHR` or `BaryCoordNoPerspKHR`, a `float` or `float2`
 //!   its leading lanes, a `float3` its first two lanes and `1 - (x + y)` of them as the third,
-//!   Metal's third weight. On a device without `fragmentShaderBarycentric` it reads the first two
-//!   lanes from a `float2` center varying of its perspective (`IoRole::Barycentric`) that the
-//!   pipeline's synthesized geometry stage writes (`link::geometry`), read at the pixel center
-//!   as a center varying is, the same way.
+//!   Metal's third weight. On a device without `fragmentShaderBarycentric` it is refused needing
+//!   the feature.
 //! - On a device that enables neither of `PrimitiveId`'s capabilities (`geometryShader`,
 //!   `tessellationShader`), `[[primitive_id]]` reads a flat `uint` varying (`IoRole::PrimitiveId`)
 //!   that the pipeline's vertex function, compiled under `LoweringInputs::primitive_id_varying`,
@@ -106,13 +104,6 @@
 //! pipeline that draws a vertex function computes its position the same way, so a draw run
 //! through more than one variant of its pipeline (each color group's) rasterizes the same
 //! positions in each.
-//!
-//! A vertex function compiled under `LoweringInputs::region_copies` stores its region's copy at
-//! every return ([`RegionCopy`]): the region of segments `(x0 + DrawIndex, y0)` of the region
-//! table, `[x0, y0]` its `PushField::RegionBox`, its position through the region's line and four
-//! clip distances after its own, by the emitter a fan-out stage's copies share
-//! (`pipeline::link::fan_out::region_copy`), and 0 as `ViewportIndex`, the recording's one
-//! viewport; those clip distances are `Invariant` too.
 //!
 //! A fragment function compiled for a render pipeline that rasterizes more than one sample
 //! (`LoweringInputs::multisampled`) reads what Metal reads at the pixel center in every invocation
@@ -359,18 +350,6 @@ pub struct RegionViewport {
     pub viewport: usize,
 }
 
-/// The region's copy a vertex function compiled under `LoweringInputs::region_copies` stores
-/// (`plan::region_copy`): interface objects `position`, its `Position` output, `draw_index`, the
-/// `DrawIndex` input, `viewport`, the `ViewportIndex` output it stores 0 to, and `clip`, its
-/// `ClipDistance` object and the first of the four elements it writes after its own.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct RegionCopy {
-    pub position: usize,
-    pub draw_index: usize,
-    pub viewport: usize,
-    pub clip: (usize, u32),
-}
-
 /// The private alpha test a fragment function compiled under `LoweringInputs::alpha_test` runs
 /// at each return ([`alpha_test`]): the returned field of its color 0, four `float` lanes (a
 /// `half` output held widened), and the comparison.
@@ -400,10 +379,6 @@ pub struct StageIoPlan {
     /// A vertex function compiled under `LoweringInputs::region_viewports` that returns outputs:
     /// its `DrawIndex` input, which it stores to its `ViewportIndex` output at every return.
     pub region_viewport: Option<RegionViewport>,
-    /// A vertex function compiled under `LoweringInputs::region_copies` that returns outputs: the
-    /// region's copy it stores at every return, its position through the region's line and four
-    /// clip distances keeping the region's pixels.
-    pub region_copy: Option<RegionCopy>,
     /// The color outputs a fragment function compiled under `LoweringInputs::zeroed_colors`
     /// stores zero to at every return, one per such color.
     pub zeroed: Vec<Link>,
@@ -617,9 +592,6 @@ pub struct Declared {
     /// covered samples is read into at every sample before the loop, where the driver's
     /// interpolation needs the whole quad ([`read_at_every_sample`]).
     pub at_samples: BTreeMap<usize, GlobalId>,
-    /// The region table a vertex function that stores its region's copy reads
-    /// ([`StageIoPlan::region_copy`]).
-    pub region_table: Option<GlobalId>,
 }
 
 /// Plan the entry's stage interface: its outputs and execution modes. A kernel has none (and a
@@ -1111,8 +1083,8 @@ fn one_less_sum(fb: &mut FunctionBuilder<'_>, x: SValue, y: SValue) -> BResult<S
 }
 
 /// The three barycentric weights of `x`, a `float3` (`BaryCoordKHR`) or `float2`
-/// (`IoRole::Barycentric`, or [`rotated_weights`]') whose first two lanes are the first two
-/// weights: those, and `1 - (x + y)` as the third, Metal's (`plan::input_builtin`).
+/// ([`rotated_weights`]') whose first two lanes are the first two weights: those, and
+/// `1 - (x + y)` as the third, Metal's (`plan::input_builtin`).
 fn weights(fb: &mut FunctionBuilder<'_>, x: SValue) -> BResult<SValue> {
     let f32_ty = fb.module().ty(SType::Float { width: 32 })?;
     let ty = fb.module().ty(SType::Vector {
@@ -1786,7 +1758,6 @@ pub fn emit_return(
     let plan = &cx.plan.families.stage_io;
     let (outputs, returned, point) = (plan.outputs.clone(), plan.returned, plan.point_size_default);
     let seconds = plan.rotated_seconds.clone();
-    let region_copy = plan.region_copy;
     let depth_clamp = plan.depth_clamp;
     let primitive_id = plan.primitive_id;
     // The private masks: the pixel's ANDed into the function's own `[[sample_mask]]` output
@@ -1815,10 +1786,6 @@ pub fn emit_return(
                         true => metal_point_size(fb, part)?,
                         false => part,
                     };
-                let part = match region_copy.filter(|r| r.position == o.link.object) {
-                    Some(r) => store_region_copy(cx, fb, r, part)?,
-                    None => part,
-                };
                 let part = match depth_clamp.filter(|d| d.object == o.link.object) {
                     Some(d) => {
                         let kill = nan_drop(cx)?;
@@ -2322,61 +2289,6 @@ fn rotated_second(
     fb.vector_shuffle(first, constants, &lanes)
 }
 
-/// `position`, a vertex function's `float4` position, as its region's copy (`r`,
-/// `LoweringInputs::region_copies`): the region of segments `(x0 + DrawIndex, y0)` of the region
-/// table, `[x0, y0]` its `PushField::RegionBox` (a draw of a row's regions in order), its position
-/// through the region's line and its four clip distances stored after the function's own, by the
-/// emitter a fan-out stage's copies share (`pipeline::link::fan_out::region_copy`), and 0 stored
-/// as `ViewportIndex`, the recording's one viewport (the routes' agreement is checked with these
-/// outputs, `ViewportIndex` among them: `bind::fan_out`, **One route per pass**). The clip
-/// distances alone keep the copy to its region's pixels, as a fan-out stage's copies' do: the
-/// recording's scissor is its row's.
-fn store_region_copy(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    r: RegionCopy,
-    position: SValue,
-) -> BResult<SValue> {
-    use crate::pipeline::link::fan_out;
-    let Some(table) = cx.decl.families.stage_io.region_table else {
-        return Err(cx.fail("a region's copy without its region table"));
-    };
-    let row = cx.push_field(fb, PushField::RegionBox)?;
-    let x0 = fb.composite_extract(row, &[0])?;
-    let y0 = fb.composite_extract(row, &[1])?;
-    let draw = fetch::load_builtin(cx, fb, r.draw_index)?;
-    let segments = fan_out::row_segments(fb, [x0, y0], draw)?;
-    // Viewport 0, the recording's one.
-    let link = Link {
-        object: r.viewport,
-        place: Place::Whole,
-        form: Form {
-            held: Held::Int {
-                bits: 32,
-                container: 32,
-            },
-            lanes: 1,
-        },
-    };
-    let zero = fb.u32_const(0)?;
-    let zero = fb.module().const_value(zero)?;
-    store(cx, fb, &link, zero)?;
-    let f32_ = fb.module().ty(SType::Float { width: 32 })?;
-    let vec4 = fb.module().ty(SType::Vector { elem: f32_, len: 4 })?;
-    let terms = fan_out::region_terms(fb, (table, f32_), segments)?;
-    let (moved, distances) = fan_out::region_copy(fb, &terms, position, vec4)?;
-    let (object, first) = r.clip;
-    let g = global(cx, object)?;
-    let base = fb.module().global_value(g)?;
-    for (k, d) in (first..).zip(distances) {
-        let kc = fb.u32_const(k)?;
-        let kc = fb.module().const_value(kc)?;
-        let p = fb.access_chain(base, &[kc])?;
-        fb.store(p, d, MemAccess::default())?;
-    }
-    Ok(moved)
-}
-
 /// How a return drops a positive NaN depth, which fails Metal's depth test (`clamp_depth`).
 #[derive(Clone, Copy, Debug)]
 enum NanDrop {
@@ -2739,14 +2651,6 @@ pub fn declare(
     }
     if let Some(g) = sp.invariant.and_then(|i| d.globals.get(i)) {
         mb.invariant(*g)?;
-    }
-    // A region's copy: its clip distances computed alike in every pipeline that draws the
-    // function's region copies, as a fan-out stage's are, and the table it reads.
-    if let Some(r) = sp.region_copy {
-        if let Some(g) = d.globals.get(r.clip.0) {
-            mb.invariant(*g)?;
-        }
-        d.region_table = Some(crate::pipeline::link::fan_out::declare_table(mb)?);
     }
     modes.extend(sp.modes.iter().copied());
     Ok(d)

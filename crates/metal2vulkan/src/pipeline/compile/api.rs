@@ -52,7 +52,6 @@ use crate::pipeline::descriptor::{
 };
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::graphics::{GraphicsState, StorageAttachmentView};
-use crate::pipeline::link::geometry;
 use crate::pipeline::link::tessellation::{note_evaluation_stage, synthesized_stages};
 use crate::pipeline::link::{link, LinkInputs, Linked, RenderLinkInputs};
 use crate::pipeline::lower_inputs::LoweringInputs;
@@ -948,21 +947,6 @@ impl Device {
             all.extend(stages);
             stages = all;
         }
-        // A fragment function that reads `[[barycentric_coord]]` as varyings, or a fan-out variant:
-        // the geometry stages of the point, line and triangle classes, before the fragment stage,
-        // or last without one.
-        if let Some(g) = &linked.geometry {
-            let at = stages
-                .iter()
-                .position(|s| s.stage == vk::ShaderStage::FRAGMENT)
-                .unwrap_or(stages.len());
-            let mut added = Vec::with_capacity(geometry::CLASSES.len());
-            for (module, r) in g.stages(&linked, p, m)? {
-                requirements = p.union_requirements(&requirements, &r);
-                added.push(module);
-            }
-            stages.splice(at..at, added);
-        }
         // A variant that draws its lines as bands: the band's control and evaluation stages,
         // right after the vertex stage.
         if let Some(band) = &linked.band {
@@ -977,18 +961,7 @@ impl Device {
             }
             stages.splice(at..at, added);
         }
-        let mut dependencies = dependencies(&artifacts, self);
-        // A fan-out variant's stages are the consumer's choice of how to draw its rate-mapped
-        // pass, which its graphics state states (`GraphicsState::region_fan_out`).
-        if let Some(g) = linked.geometry.as_ref().filter(|g| g.fan_out.is_none()) {
-            let fact = RuntimeFact::SynthesizedGeometry {
-                weights: !g.forms.is_empty(),
-            };
-            dependencies.push(RuntimeDependency {
-                fact,
-                mechanism: mechanism(&fact, self.profile()),
-            });
-        }
+        let dependencies = dependencies(&artifacts, self);
         let (mut graphics, requirements) =
             graphics_requirements(requirements, &linked, &artifacts, p)?;
         graphics.sample_mask = crate::pipeline::private_state::sample_mask(
@@ -1636,16 +1609,6 @@ fn variant_fields(v: &VariantKey) -> String {
         Some(crate::pipeline::BandPrimitive::Lines) => fields.push_str(" line_band"),
         Some(crate::pipeline::BandPrimitive::Triangles) => fields.push_str(" line_band triangles"),
     }
-    // The fan-out's synthesized geometry stages, in no stage's key.
-    match v.region_fan_out {
-        None => {}
-        Some(crate::pipeline::RegionFanOut::Draw) => fields.push_str(" region_fan_out"),
-        Some(crate::pipeline::RegionFanOut::Probe) => fields.push_str(" region_fan_out probe"),
-        Some(crate::pipeline::RegionFanOut::DrawFew) => fields.push_str(" region_fan_out few"),
-        Some(crate::pipeline::RegionFanOut::RegionCopies) => {
-            fields.push_str(" region_fan_out copies")
-        }
-    }
     fields
 }
 
@@ -1658,9 +1621,7 @@ fn render_fields(d: &RenderPipelineDescriptor) -> String {
             RenderLinkInputs::from(d),
             d.support_indirect_command_buffers
         )
-    )
-    // A descriptor's inputs never fan out (`variant_fields` keys a variant that does).
-    .replace(", region_fan_out: None", "");
+    );
     // Appended only past Metal's defaults, so a default descriptor keeps its key.
     let fields = match (
         d.max_vertex_call_stack_depth,

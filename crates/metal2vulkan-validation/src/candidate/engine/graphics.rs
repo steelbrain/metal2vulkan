@@ -1558,8 +1558,7 @@ pub fn select_target(
 /// The Metal stage whose function `module` runs in a render pipeline that is `tessellated` or
 /// not, `None` for a stage the link synthesized: a tessellation pipeline's Metal stages are its
 /// evaluation stage (the vertex function) and its fragment stage, and its vertex and control
-/// stages run no Metal function, nor do the geometry stages of barycentric weights read as
-/// varyings.
+/// stages run no Metal function.
 pub fn stage_of(
     module: &StageModule,
     tessellated: bool,
@@ -1571,7 +1570,6 @@ pub fn stage_of(
             Ok(Some(ShaderStage::Vertex))
         }
         s if tessellated && (s == S::VERTEX || s == S::TESSELLATION_CONTROL) => Ok(None),
-        s if s == S::GEOMETRY => Ok(None),
         other => Err(format!("a render pipeline stage {other:?}").into()),
     }
 }

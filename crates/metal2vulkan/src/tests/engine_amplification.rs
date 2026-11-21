@@ -901,14 +901,8 @@ fn a_profile_without_shader_output_layer_draws_or_refuses_every_amplification() 
                 assert_eq!(draws.layered, length > 1, "{what}");
                 match dev.compile_render_variant(&d, &plan.variant, &budget) {
                     Ok(variant) => {
-                        let stages = variant
-                            .stages
-                            .iter()
-                            .filter(|m| m.stage == crate::vk::ShaderStage::GEOMETRY)
-                            .count();
                         assert!(!draws.layered, "{what}: compiled");
                         assert!(!variant.graphics.declares_layer, "{what}");
-                        assert_eq!(stages, 0, "{what}");
                         drawn += 1;
                         for m in &variant.stages {
                             check_words_valid(&m.spirv, &variant.requirements, dev.profile())

@@ -26,11 +26,6 @@
 //!   `PrimitiveId` behind a vertex function that writes the varying). A mesh function writes none,
 //!   so a mesh render pipeline whose fragment function reads it is refused as needing
 //!   `geometryShader` or `tessellationShader`.
-//! - **Barycentric weights** (`IoRole::Barycentric`), which a fragment function compiled for a
-//!   device without `fragmentShaderBarycentric` reads and the pipeline's synthesized geometry
-//!   stage writes (`link::geometry`), no vertex function: each takes one whole location after
-//!   every vertex output's, below `maxFragmentInputComponents / 4`, and is never packed. A
-//!   fragment function alone numbers them with its other inputs.
 //! - **Mesh outputs**, per vertex and per primitive alike, are numbered densely in output order,
 //!   one location each at component 0, within `maxMeshOutputComponents / 4` locations. In a mesh render pipeline each fragment input takes the
 //!   number of the mesh output of its key and type (`UnmatchedVarying` without one), below
@@ -150,7 +145,6 @@ fn check_roles(stage: Stage, io: &StageIo) -> Result<(), Error> {
                             ..
                         } | IoRole::ViewportIndex
                             | IoRole::RenderTargetArrayIndex
-                            | IoRole::Barycentric { .. }
                             | IoRole::PrimitiveId
                             | IoRole::MergedCommand
                     )
@@ -422,29 +416,8 @@ pub fn assign(stages: &[&FunctionArtifact], p: &DeviceProfile) -> Result<Locatio
             }
         }
     };
-    let mut next = placed.iter().map(|at| at.0 + 1).max().unwrap_or(0);
     for (v, at) in varyings.iter().zip(placed) {
         table.insert(v.key.clone(), at);
-    }
-    // The barycentric weights a synthesized geometry stage writes: whole locations after the
-    // vertex outputs', which a fragment function alone numbered with its other inputs.
-    if vertex.is_some() {
-        let mut weights = false;
-        for x in fragment.into_iter().flat_map(|f| &f.inputs) {
-            if matches!(x.role, IoRole::Barycentric { .. }) {
-                table.insert(x.key.clone(), (next, 0));
-                next += 1;
-                weights = true;
-            }
-        }
-        if weights && u64::from(next).saturating_mul(4) > u64::from(l.max_fragment_input_components)
-        {
-            return Err(limit_error(
-                VkLimit::MaxFragmentInputComponents,
-                u64::from(next),
-                l.max_fragment_input_components,
-            ));
-        }
     }
     Ok(table)
 }
@@ -463,18 +436,12 @@ fn varyings<'a>(
         | IoRole::RenderTargetArrayIndex
         | IoRole::PrimitiveId
         | IoRole::MergedCommand => Some(Interpolation::Flat),
-        IoRole::Barycentric { perspective } => Some(Interpolation::Smooth {
-            sampling: crate::pipeline::stage_io::Sampling::Center,
-            perspective: *perspective,
-        }),
         IoRole::Attribute { .. } | IoRole::Color { .. } | IoRole::PrimitiveVarying { .. } => None,
     };
-    // The barycentric weights are the synthesized geometry stage's, no vertex output's.
     let reads: BTreeMap<&VaryingKey, (IoType, Option<Interpolation>)> = fragment
         .map(|f| {
             f.inputs
                 .iter()
-                .filter(|x| !matches!(x.role, IoRole::Barycentric { .. }))
                 .map(|x| (&x.key, (x.ty, interpolation(x))))
                 .collect()
         })

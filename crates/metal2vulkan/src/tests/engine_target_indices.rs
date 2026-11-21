@@ -16,8 +16,6 @@
 //!   same.
 //! - A fragment function that reads an index no stage writes, on a device that cannot declare its
 //!   builtin, reads 0 (`StageIo::zero_indices`).
-//! - The weights' geometry stage cannot sit beside a vertex function's own `Layer`: refused as not
-//!   implemented.
 //!
 //! Every module that compiles passes L3 (`spirv-val` and requirements within the profile).
 //! `llvm-as` assembles the fixtures; a missing tool skips visibly. No GPU is used.
@@ -40,7 +38,6 @@ use crate::pipeline::testing::{compile, engine_dir, llvm_assemble, AssembleError
 use crate::pipeline::RenderPipeline;
 use crate::spirv::testing::check_words_valid;
 use crate::spv::Capability as Cap;
-use crate::vk;
 
 fn assemble(name: &str) -> Option<Vec<u8>> {
     let path = engine_dir().join(name);
@@ -86,16 +83,12 @@ fn render(
     d
 }
 
-/// The geometry stages of `p`, each valid on `dev`, every other stage too.
-fn geometry_stages(p: &RenderPipeline, dev: &Device, what: &str) -> usize {
+/// Every stage of `p` valid on `dev`.
+fn validate(p: &RenderPipeline, dev: &Device, what: &str) {
     for m in &p.stages {
         check_words_valid(&m.spirv, &p.requirements, dev.profile())
             .unwrap_or_else(|e| panic!("{what} {:?}: L3: {e}", m.stage));
     }
-    p.stages
-        .iter()
-        .filter(|m| m.stage == vk::ShaderStage::GEOMETRY)
-        .count()
 }
 
 /// The roles of the vertex outputs `entry` of `bc` declares on `dev`, and its builtins.
@@ -148,7 +141,7 @@ fn a_uniform_slice_takes_the_output_and_nothing_else() {
     let p = native
         .compile_render_pipeline(&d, &budget)
         .expect("pipeline");
-    assert_eq!(geometry_stages(&p, &native, "native"), 0);
+    validate(&p, &native, "native");
     assert!(p.graphics.declares_layer);
     assert!(p.requirements.features.contains(&F::ShaderOutputLayer));
     for (stem, without) in [
@@ -168,7 +161,7 @@ fn a_uniform_slice_takes_the_output_and_nothing_else() {
         let one = without
             .compile_render_variant(&d, &key, &budget)
             .unwrap_or_else(|e| panic!("{stem}, one layer: {e}"));
-        assert_eq!(geometry_stages(&one, &without, stem), 0);
+        validate(&one, &without, stem);
         assert!(!one.requirements.features.contains(&F::ShaderOutputLayer));
     }
 }
@@ -200,7 +193,7 @@ fn a_uniform_viewport_takes_the_output_or_goes_nowhere() {
     let p = native
         .compile_render_pipeline(&d, &budget)
         .expect("pipeline");
-    assert_eq!(geometry_stages(&p, &native, "native"), 0);
+    validate(&p, &native, "native");
     assert!(p.graphics.writes_viewport_index);
     let index = crate::device::SpirvCapability::from_raw(Cap::ShaderViewportIndex as u32);
     assert!(p.requirements.spirv_capabilities.contains(&index));
@@ -221,7 +214,7 @@ fn a_uniform_viewport_takes_the_output_or_goes_nowhere() {
         assert_eq!(outputs, [IoRole::ViewportIndex], "{builtins:?}");
         assert!(!builtins.contains(&StageBuiltin::ViewportIndex));
         let p = dev.compile_render_pipeline(&d, &budget).expect("pipeline");
-        assert_eq!(geometry_stages(&p, &dev, "one viewport"), 0);
+        validate(&p, &dev, "one viewport");
         // The function still writes the index: the runtime refuses its draw while the encoder
         // holds more than one viewport.
         assert!(p.graphics.writes_viewport_index);
@@ -311,36 +304,4 @@ fn on_the_floor_a_read_of_an_index_no_stage_writes_is_zero() {
             .iter()
             .any(|b| matches!(b, StageBuiltin::Layer | StageBuiltin::ViewportIndex)));
     }
-}
-
-/// The weights' synthesized geometry stages cannot read a vertex function's own `Layer`: a
-/// pipeline whose vertex function stores its slice beside a fragment function that reads the
-/// weights, on a device without `fragmentShaderBarycentric`, is refused as not implemented, and
-/// compiles with no geometry stage where the device reads the weights itself (the 780M's profile,
-/// with and without the feature).
-#[test]
-fn the_weights_stage_beside_a_vertex_layer_is_not_implemented() {
-    let Some(bc) = assemble("rt6_layered.ll") else {
-        return;
-    };
-    let d = render(
-        &bc,
-        "rt6_layered_vertex",
-        "rt6_layered_weights",
-        PixelFormat::R32Uint,
-    );
-    let mixed = device("amd-780m-radv", &[F::FragmentShaderBarycentric]);
-    match mixed.compile_render_pipeline(&d, &Budget::standard()) {
-        Err(Error::Unsupported(u)) => {
-            assert_eq!(u.feature, Feature::Barycentrics);
-            assert_eq!(u.needs, Needs::NotImplemented);
-        }
-        other => panic!("{:?}", other.map(|_| ())),
-    }
-    let native = device("amd-780m-radv", &[]);
-    let p = native
-        .compile_render_pipeline(&d, &Budget::standard())
-        .expect("pipeline");
-    assert_eq!(geometry_stages(&p, &native, "native weights"), 0);
-    assert!(p.graphics.declares_layer);
 }

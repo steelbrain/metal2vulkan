@@ -643,10 +643,6 @@ pub enum VkProperty {
     /// that hands Metal's `interpolate_at_offset` to the instruction moved by 7/16 requires it in
     /// place of [`VkProperty::InterpolateAtOffsetCentered`].
     InterpolateAtOffsetFromSevenSixteenths,
-    /// `subgroupSupportedStages` contains the geometry stage, which runs only the translator's
-    /// own geometry stages (`pipeline::link::geometry`): a geometry module's subgroup operations
-    /// require it, where a Metal stage's require [`VkProperty::SubgroupStage`].
-    SubgroupGeometryStage,
 }
 
 /// One depth or stencil resolve mode (`VkResolveModeFlagBits`), named by

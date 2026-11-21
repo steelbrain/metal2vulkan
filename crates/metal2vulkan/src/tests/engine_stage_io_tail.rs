@@ -11,8 +11,9 @@
 //!   their features on a profile with none.
 //! - `[[barycentric_coord]]` reads `BaryCoordKHR` or `BaryCoordNoPerspKHR`, its leading lanes for a
 //!   `float` or `float2`, and for a `float3` its first two lanes and `1 - (x + y)` of them as the
-//!   third, Metal's, on a profile with `fragmentShaderBarycentric`; the linked graphics state states
-//!   whether the fragment function reads it.
+//!   third, Metal's, on a profile with `fragmentShaderBarycentric`, and is refused needing the
+//!   feature on a profile without it; the linked graphics state states whether the fragment
+//!   function reads it.
 //!
 //! Every module that compiles passes L3 (`spirv-val` and requirements within the profile) under
 //! the stage-only numbering. `llvm-as` assembles the fixture; a missing tool skips visibly. No
@@ -310,83 +311,33 @@ fn barycentric_coordinates_read_the_khr_builtins() {
     }
 }
 
-/// Without `fragmentShaderBarycentric`, `[[barycentric_coord]]` reads the `float2` center varying
-/// of each form it reads (`IoRole::Barycentric`), which the pipeline's synthesized geometry stage
-/// writes: no barycentric builtin, no barycentric feature, and a `float3` read's third weight
-/// `1 - (x + y)` of it, as with the builtin. Behind a vertex function the pipeline links with the
-/// stages. Without `geometryShader` either it needs one of the two.
+/// Without `fragmentShaderBarycentric`, `[[barycentric_coord]]` is refused needing the feature,
+/// with `geometryShader` (`lavapipe`, `intel-irisxe-rplp-anv`, `nvidia-pascal-linux`) or without
+/// it (`runtime-floor`).
 #[test]
-fn without_the_feature_the_weights_are_varyings() {
+fn without_the_feature_the_weights_are_refused() {
     let Some(bc) = fixture() else { return };
-    let float2 = IoType {
-        numeric: IoNumeric::Float,
-        components: 2,
-        source_bits: 32,
-    };
-    for stem in ["lavapipe", "intel-irisxe-rplp-anv", "nvidia-pascal-linux"] {
+    for stem in [
+        "lavapipe",
+        "intel-irisxe-rplp-anv",
+        "nvidia-pascal-linux",
+        "runtime-floor",
+    ] {
         let p = prof(stem);
         assert!(!p.fields().fragment.barycentric, "{stem}");
-        for (entry, forms, weights) in [
-            ("tail_fragment_barycentric", &[true, false][..], 3),
-            ("tail_fragment_barycentric_scalar", &[true][..], 0),
+        for entry in [
+            "tail_fragment_barycentric",
+            "tail_fragment_barycentric_scalar",
         ] {
-            let (a, _, kept) =
-                compile_kept(&bc, entry, &p).unwrap_or_else(|e| panic!("{entry} on {stem}: {e:?}"));
-            assert!(
-                !a.interface
-                    .io
-                    .builtins
-                    .iter()
-                    .any(|b| matches!(b, StageBuiltin::BaryCoord { .. })),
+            assert_eq!(
+                refused(compile(&bc, entry, &p), entry),
+                (
+                    Feature::Barycentrics,
+                    any_of(&[F::FragmentShaderBarycentric])
+                ),
                 "{entry} on {stem}"
             );
-            let read: Vec<(IoRole, IoType)> = a
-                .interface
-                .io
-                .inputs
-                .iter()
-                .map(|v| (v.role.clone(), v.ty))
-                .collect();
-            let want: Vec<(IoRole, IoType)> = forms
-                .iter()
-                .map(|&perspective| (IoRole::Barycentric { perspective }, float2))
-                .collect();
-            assert_eq!(read, want, "{entry} on {stem}");
-            assert!(!a
-                .requirements
-                .features
-                .contains(&F::FragmentShaderBarycentric));
-            assert_eq!(third_weights(&kept), weights, "{entry} on {stem}");
-            validate(&a, &p);
         }
-        let mut r = RenderLinkInputs::new();
-        r.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
-        let v = compile(&bc, "tail_vertex_bool", &p).expect("vertex");
-        let f = compile_with(
-            &bc,
-            "tail_fragment_barycentric",
-            &p,
-            &fragment_inputs(&r, &p),
-        )
-        .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let linked = link(&[&v, &f], &LinkInputs::Render(Box::new(r)), &p)
-            .unwrap_or_else(|e| panic!("{stem}: link: {e}"));
-        let stages = linked.geometry.as_ref().expect("geometry stages");
-        assert_eq!(stages.forms, [false, true], "{stem}");
-        assert!(stages.varyings.is_empty(), "{stem}");
-    }
-    let floor = prof("runtime-floor");
-    for entry in [
-        "tail_fragment_barycentric",
-        "tail_fragment_barycentric_scalar",
-    ] {
-        assert_eq!(
-            refused(compile(&bc, entry, &floor), entry),
-            (
-                Feature::Barycentrics,
-                any_of(&[F::FragmentShaderBarycentric, F::GeometryShader])
-            )
-        );
     }
 }
 

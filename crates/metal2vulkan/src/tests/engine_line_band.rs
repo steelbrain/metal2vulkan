@@ -256,7 +256,7 @@ fn the_band_takes_flat_varyings_from_the_first_control_point() {
     for primitive in PRIMITIVES {
         let plan = band::plan(
             &[&vertex.interface, &fragment.interface],
-            (primitive, false),
+            primitive,
             1,
             &profile,
         )

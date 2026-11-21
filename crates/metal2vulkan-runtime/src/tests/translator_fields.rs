@@ -78,7 +78,6 @@ const GRAPHICS_STATE: &[(&str, Verdict)] = &[
     ("storage_attachments", Refused(SET_0)),
     ("shadow_stencil", Applied),
     ("line_band", Applied),
-    ("region_fan_out", Applied),
     ("writes_point_size", Applied),
     (
         "writes_depth",

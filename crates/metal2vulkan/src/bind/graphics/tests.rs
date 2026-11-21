@@ -111,8 +111,7 @@ fn draws_map_to_the_vulkan_draw_of_the_same_arguments() {
 
 /// A render plan names only vertex and fragment stages; a tessellation pipeline's vertex
 /// function is its evaluation stage, and its synthesized vertex and control stages are none, as
-/// are the geometry stages of barycentric weights read as varyings and a band's control and
-/// evaluation stages.
+/// are a band's control and evaluation stages; a geometry stage is no render stage.
 #[test]
 fn only_vertex_and_fragment_stages_are_render_stages() {
     use vk::ShaderStage as S;
@@ -153,24 +152,9 @@ fn only_vertex_and_fragment_stages_are_render_stages() {
             (Stage::Fragment, S::FRAGMENT)
         ])
     );
-    assert_eq!(
-        stages(
-            &[
-                S::VERTEX,
-                S::GEOMETRY,
-                S::GEOMETRY,
-                S::GEOMETRY,
-                S::FRAGMENT
-            ],
-            false
-        ),
-        Ok(vec![
-            (Stage::Vertex, S::VERTEX),
-            (Stage::Fragment, S::FRAGMENT)
-        ])
-    );
     for (modules, tessellated) in [
         (&[S::COMPUTE][..], false),
+        (&[S::VERTEX, S::GEOMETRY, S::FRAGMENT][..], false),
         (&[S::TESSELLATION_EVALUATION][..], false),
         (&[S::TESSELLATION_CONTROL][..], false),
         (&[S::COMPUTE][..], true),
@@ -621,7 +605,6 @@ fn instantiation_bounds_a_draw_by_its_index_buffer() {
         private_list: false,
         storage_kept: 0,
         line_band: None,
-        region_probe: None,
     };
     let state = BindState::default();
     let past = indexed_in(vk::IndexType::UINT32, 40, 8, 10);
@@ -670,7 +653,6 @@ fn a_draw_of_no_index_binds_inside_the_buffer() {
         private_list: false,
         storage_kept: 0,
         line_band: None,
-        region_probe: None,
     };
     let state = BindState::default();
     let bound = |cmds: &DrawCommands| match cmds.draw {
@@ -754,7 +736,6 @@ fn an_unbounded_indexed_indirect_draw_reads_its_arguments() {
         private_list: false,
         storage_kept: 0,
         line_band: None,
-        region_probe: None,
     };
     let state = BindState::default();
     for robust in [false, true] {
@@ -810,7 +791,6 @@ fn draws_bind_vertex_buffers_at_aligned_offsets_with_their_windows() {
         private_list: false,
         storage_kept: 0,
         line_band: None,
-        region_probe: None,
     };
     let state = |offsets: (u64, u64), stride| {
         let buffer = |offset, attribute_stride| BoundBuffer::Buffer {
@@ -901,7 +881,6 @@ fn inline_vertex_bytes_bind_the_strides_a_dynamic_layout_reads() {
         private_list: false,
         storage_kept: 0,
         line_band: None,
-        region_probe: None,
     };
     let state = |attribute_stride| {
         let mut t = StageTable::default();
@@ -1504,7 +1483,6 @@ fn mesh_template(flat: bool, multiples: Vec<u32>) -> GraphicsTemplate {
         private_list: false,
         storage_kept: 0,
         line_band: None,
-        region_probe: None,
     }
 }
 

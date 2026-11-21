@@ -55,8 +55,8 @@ pub struct DescriptorBinding {
     /// The most variables one stage's entry point uses at the binding (those its `OpEntryPoint`
     /// lists): a function that reaches a buffer through several types uses a variable of each
     /// type at the buffer's binding (each `Aliased` where it is writable). 0 where only a stage
-    /// the pipeline adds at its creation uses it (a tessellation pipeline's control stage, a
-    /// synthesized geometry stage), whose module the layout does not see, or no stage uses it. A
+    /// the pipeline adds at its creation uses it (a tessellation pipeline's control stage), whose
+    /// module the layout does not see, or no stage uses it. A
     /// translator from SPIR-V to another language may handle a binding of several variables
     /// apart: MoltenVK 1.4.1's SPIRV-Cross writes Metal that does not compile for a dynamic buffer
     /// binding of more than one.

@@ -85,9 +85,8 @@
 //!
 //! Refused (`Unsupported{WideLines}`): a device without `tessellationShader` (needing it), and as
 //! not implemented a post-tessellation vertex function, a vertex function that writes
-//! `[[render_target_array_index]]` or `[[viewport_array_index]]`, a pipeline with synthesized
-//! geometry stages (`link::geometry`), a fragment function that reads `[[barycentric_coord]]`, a
-//! pipeline drawn as multiview, and stages past `maxTessellationEvaluationOutputComponents`.
+//! `[[render_target_array_index]]` or `[[viewport_array_index]]`, a fragment function that reads
+//! `[[barycentric_coord]]`, a pipeline drawn as multiview, and stages past `maxTessellationEvaluationOutputComponents`.
 
 use crate::budget::Meter;
 use crate::device::requirements::{Requirements, VkFeature, VkLimit};
@@ -96,14 +95,14 @@ use crate::error::{Capability, Error, Feature, Unsupported};
 use crate::pipeline::artifact::{Reconvergence, SpecializationLayout, StageModule, StrategyCensus};
 use crate::pipeline::graphics::BandPrimitive;
 use crate::pipeline::interface::StageInterface;
-use crate::pipeline::link::geometry::{array, kf, ku, scalar};
 use crate::pipeline::stage_io::{Interpolation, IoNumeric, IoRole, IoType, StageBuiltin};
 use crate::pipeline::sym::{PushField, Stage, VaryingKey};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{GlobalId, TypeId, Value};
 use crate::spirv::ir::{
-    BinOp, ConvOp, ExecMode, ExecModel, GlslOp, IoDecor, IoDir, MemAccess, Type, TypedModule, UnOp,
+    BinOp, ConstBits, Constant, ConvOp, ExecMode, ExecModel, GlslOp, IoDecor, IoDir, MemAccess,
+    Type, TypedModule, UnOp,
 };
 use crate::spirv::serialize::{SymbolTable, ENTRY_NAME};
 use crate::spv::BuiltIn as B;
@@ -226,12 +225,11 @@ impl LineBand {
 }
 
 /// The band stages of the render pipeline of stages `ifaces` (vertex, then fragment when it has
-/// one), drawing each `primitive` as a patch, whose synthesized geometry stages are `geometry`
-/// (`link::geometry`), drawn with vertex amplification up to `amplification`; its push offset left
-/// 0 for link to place. Refused as the module docs state.
+/// one), drawing each `primitive` as a patch, drawn with vertex amplification up to
+/// `amplification`; its push offset left 0 for link to place. Refused as the module docs state.
 pub fn plan(
     ifaces: &[&StageInterface],
-    (primitive, geometry): (BandPrimitive, bool),
+    primitive: BandPrimitive,
     amplification: u32,
     p: &DeviceProfile,
 ) -> Result<LineBand, Error> {
@@ -259,13 +257,9 @@ pub fn plan(
         f.io.builtins
             .iter()
             .any(|b| matches!(b, StageBuiltin::BaryCoord { .. }))
-            || f.io
-                .inputs
-                .iter()
-                .any(|i| matches!(i.role, IoRole::Barycentric { .. }))
     });
     let multiview = amplification.min(f.limits.max_multiview_view_count.max(1)) > 1;
-    if selects || weights || geometry || multiview {
+    if selects || weights || multiview {
         return Err(not_implemented());
     }
     let clip_distances = vertex
@@ -970,4 +964,49 @@ fn mix(
         out.push(fb.glsl(GlslOp::FMix, &[x, y, t])?);
     }
     fb.composite_construct(ty, &out)
+}
+
+/// An array of `n` elements of `elem`.
+fn array(mb: &mut ModuleBuilder, elem: TypeId, n: u32) -> BResult<TypeId> {
+    let u32_ = scalar(mb, IoNumeric::Uint)?;
+    let len = mb.constant(Constant::Scalar {
+        ty: u32_,
+        bits: ConstBits(u64::from(n)),
+    })?;
+    mb.ty(Type::Array {
+        elem,
+        len,
+        stride: None,
+    })
+}
+
+/// The `uint` constant `v`.
+fn ku(fb: &mut FunctionBuilder<'_>, v: u32) -> BResult<Value> {
+    let c = fb.u32_const(v)?;
+    fb.module().const_value(c)
+}
+
+/// The `float` constant `v`.
+fn kf(fb: &mut FunctionBuilder<'_>, v: f32) -> BResult<Value> {
+    let ty = fb.module().ty(Type::Float { width: 32 })?;
+    let c = fb.module().constant(Constant::Scalar {
+        ty,
+        bits: ConstBits(u64::from(v.to_bits())),
+    })?;
+    fb.module().const_value(c)
+}
+
+/// The scalar type of `numeric`.
+fn scalar(mb: &mut ModuleBuilder, numeric: IoNumeric) -> BResult<TypeId> {
+    match numeric {
+        IoNumeric::Float => mb.ty(Type::Float { width: 32 }),
+        IoNumeric::Sint => mb.ty(Type::Int {
+            width: 32,
+            signed: true,
+        }),
+        IoNumeric::Uint => mb.ty(Type::Int {
+            width: 32,
+            signed: false,
+        }),
+    }
 }

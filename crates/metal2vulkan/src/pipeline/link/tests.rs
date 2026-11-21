@@ -2,8 +2,6 @@
 //! limits (the sweep over every committed profile), stage-interface locations and packing, vertex
 //! input, graphics state, and the property over random pipelines.
 
-mod fan_out;
-mod geometry;
 mod property;
 mod render;
 mod sweep;

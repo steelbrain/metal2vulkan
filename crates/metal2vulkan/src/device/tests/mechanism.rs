@@ -265,8 +265,6 @@ fn every_fact() -> Vec<RuntimeFact> {
         RuntimeFact::MovableStorageWrites {
             early_variant: true,
         },
-        RuntimeFact::SynthesizedGeometry { weights: true },
-        RuntimeFact::SynthesizedGeometry { weights: false },
         RuntimeFact::ObjectThreadgroupArena {
             static_bytes: 16,
             payload: Some(64),
@@ -358,7 +356,6 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::AnisotropicSampler { .. } => 80,
         RuntimeFact::StorageTextureIntegerChannels { .. } => 81,
         RuntimeFact::MovableStorageWrites { .. } => 83,
-        RuntimeFact::SynthesizedGeometry { .. } => 84,
         RuntimeFact::ObjectThreadgroupArena { .. } => 85,
         RuntimeFact::WordInputMerge { .. } => 87,
         RuntimeFact::ReplayBindings => 88,
@@ -377,13 +374,13 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::RegionViewports => 96,
         RuntimeFact::CallThreadgroups => 97,
         RuntimeFact::PartialThreadgroups => 98,
-        RuntimeFact::TexelRows { .. } => 99,
+        RuntimeFact::TexelRows { .. } => 84,
         RuntimeFact::UnitAxes { .. } => 57,
         RuntimeFact::TexelBufferParts { .. } => 70,
         RuntimeFact::OpenClLineTexture { .. } => 74,
         RuntimeFact::AddressAlignment { .. } => 71,
         RuntimeFact::GridTiles => 55,
-        RuntimeFact::PrivateArena { .. } => 100,
+        RuntimeFact::PrivateArena { .. } => 99,
     }
 }
 
@@ -391,7 +388,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..101).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..100).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -528,9 +525,7 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::ViewportCount
                 | RuntimeFact::PrivateArena { .. } => Mechanism::PushConstant,
                 RuntimeFact::AliasedImageblock { .. } => Mechanism::None,
-                RuntimeFact::CallStackDepth { .. }
-                | RuntimeFact::OpenClMode
-                | RuntimeFact::SynthesizedGeometry { .. } => Mechanism::None,
+                RuntimeFact::CallStackDepth { .. } | RuntimeFact::OpenClMode => Mechanism::None,
             };
             assert_eq!(m, expected, "{stem}: {fact:?}");
         }

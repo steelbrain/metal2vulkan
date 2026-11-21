@@ -764,8 +764,6 @@ pub fn graphics_state(
                 .any(|o| o.role == IoRole::ViewportIndex),
         // A band variant's pipeline states its band (`link`).
         line_band: None,
-        // A fan-out variant's pipeline states its fan-out (`link`).
-        region_fan_out: None,
         writes_point_size: vs.writes_point_size(),
         writes_depth: fs.is_some_and(|fs| {
             fs.io
@@ -790,16 +788,11 @@ pub fn graphics_state(
 }
 
 /// Whether a fragment stage of interface `io` reads `[[barycentric_coord]]`
-/// (`GraphicsState::reads_barycentric_coord`): either `BaryCoord` builtin, or either form's
-/// varying (`IoRole::Barycentric`), perspective-correct or not.
+/// (`GraphicsState::reads_barycentric_coord`): either `BaryCoord` builtin.
 fn reads_barycentric_coord(io: &StageIo) -> bool {
     io.builtins
         .iter()
         .any(|b| matches!(b, StageBuiltin::BaryCoord { .. }))
-        || io
-            .inputs
-            .iter()
-            .any(|v| matches!(v.role, IoRole::Barycentric { .. }))
 }
 
 /// Whether a fragment stage of interface `io` reads `[[primitive_id]]`
@@ -832,15 +825,13 @@ fn sample_invocations(
         return Ok(());
     }
     let io = &fs.io;
-    // The barycentric weights' varyings are center varyings, and an interpolant read at the
-    // center is read as one.
+    // An interpolant read at the center is read as a center varying.
     let interpolated = |reads: fn(Sampling) -> bool| {
         io.inputs.iter().any(|v| match v.role {
             IoRole::Varying {
                 interpolation: Some(Interpolation::Smooth { sampling, .. }),
                 ..
             } => reads(sampling),
-            IoRole::Barycentric { .. } => reads(Sampling::Center),
             _ => false,
         })
     };

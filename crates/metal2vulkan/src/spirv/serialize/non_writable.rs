@@ -208,9 +208,7 @@ fn memory_write(inst: &Inst) -> Option<Write> {
         | Inst::EndInterlock
         | Inst::DemoteToHelperInvocation
         | Inst::IsHelperInvocation
-        | Inst::SetMeshOutputs { .. }
-        | Inst::EmitVertex
-        | Inst::EndPrimitive => None,
+        | Inst::SetMeshOutputs { .. } => None,
     }
 }
 

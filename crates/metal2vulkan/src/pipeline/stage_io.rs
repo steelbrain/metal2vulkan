@@ -18,10 +18,6 @@
 //! - [`IoRole::RenderTargetArrayIndex`]: the `[[render_target_array_index]]` a vertex function
 //!   writes, as written, carried to a fragment function that reads it. A flat `uint` varying for
 //!   link, one key ([`VaryingKey::render_target_array_index`]) on both sides.
-//! - [`IoRole::Barycentric`]: the first two barycentric weights a fragment function reads as
-//!   `[[barycentric_coord]]` on a device without `fragmentShaderBarycentric`, which the pipeline's
-//!   synthesized geometry stage writes. A `float2` varying, perspective-correct or not, one key
-//!   per form ([`VaryingKey::barycentric`]).
 //! - [`IoRole::PrimitiveId`]: Metal's `[[primitive_id]]` on a device that cannot declare a
 //!   fragment `PrimitiveId`, which the pipeline's vertex function computes for the primitive each
 //!   vertex provokes. A flat `uint` varying for link, one key ([`VaryingKey::primitive_id`]) on
@@ -33,7 +29,7 @@
 //! The roles live in disjoint key namespaces ([`VaryingKey::user`], [`VaryingKey::attribute`],
 //! [`VaryingKey::color`], [`VaryingKey::viewport_index`],
 //! [`VaryingKey::render_target_array_index`],
-//! [`VaryingKey::barycentric`], [`VaryingKey::primitive_id`],
+//! [`VaryingKey::primitive_id`],
 //! [`VaryingKey::merged_command`]): the key bytes start with a
 //! namespace tag, so no AIR user key can collide with another role's key. Keys stay opaque to
 //! link; it reads the role here, never the bytes.
@@ -65,7 +61,6 @@ const ATTRIBUTE: u8 = 1;
 const COLOR: u8 = 2;
 const VIEWPORT_INDEX: u8 = 3;
 const RENDER_TARGET_ARRAY_INDEX: u8 = 4;
-const BARYCENTRIC: u8 = 6;
 const PRIMITIVE_ID: u8 = 9;
 const MERGED_COMMAND: u8 = 10;
 
@@ -103,13 +98,6 @@ impl VaryingKey {
     /// function reads (`IoRole::RenderTargetArrayIndex`).
     pub fn render_target_array_index() -> VaryingKey {
         VaryingKey(AirUserKey(vec![RENDER_TARGET_ARRAY_INDEX].into()))
-    }
-
-    /// The key of the barycentric weights a pipeline's synthesized geometry stage writes and a
-    /// fragment function reads as `[[barycentric_coord]]` (`IoRole::Barycentric`), in the form
-    /// `perspective` names.
-    pub fn barycentric(perspective: bool) -> VaryingKey {
-        VaryingKey(AirUserKey(vec![BARYCENTRIC, u8::from(perspective)].into()))
     }
 
     /// The key of the primitive ID a vertex function writes and a fragment function reads as
@@ -704,13 +692,6 @@ pub enum IoRole {
     /// flat [`IoRole::Varying`] its function reads per primitive
     /// ([`StageIo::primitive_inputs`]).
     PrimitiveVarying { user: AirUserKey },
-    /// The first two barycentric weights a fragment function compiled for a device without
-    /// `fragmentShaderBarycentric` reads as its `[[barycentric_coord]]`: a center-sampled `float2`
-    /// input, perspective-correct when `perspective`, which no Metal function writes. Link
-    /// synthesizes the pipeline's geometry stage, which writes `(1, 0)`, `(0, 1)` and `(0, 0)` at
-    /// a triangle's vertices in their order (`(1, 0)` and `(0, 1)` at a line's, `(1, 0)` at a
-    /// point), and passes the fragment stage's other inputs through.
-    Barycentric { perspective: bool },
     /// Metal's `[[primitive_id]]` carried from a vertex function to its fragment function: the
     /// flat `uint` output of a vertex function compiled under
     /// `LoweringInputs::primitive_id_varying`, and the input a fragment function reads as its
@@ -734,8 +715,7 @@ pub enum IoRole {
 
 impl IoRole {
     /// Whether the role is a varying: a user varying, a raw index a vertex function writes for its
-    /// fragment function, the barycentric weights a synthesized geometry stage writes, the
-    /// primitive ID, or a merged draw's command. Link numbers these, and packs those a vertex
+    /// fragment function, the primitive ID, or a merged draw's command. Link numbers these, and packs those a vertex
     /// function writes.
     pub(crate) fn is_varying(&self) -> bool {
         matches!(
@@ -743,7 +723,6 @@ impl IoRole {
             IoRole::Varying { .. }
                 | IoRole::ViewportIndex
                 | IoRole::RenderTargetArrayIndex
-                | IoRole::Barycentric { .. }
                 | IoRole::PrimitiveId
                 | IoRole::MergedCommand
         )
@@ -909,9 +888,7 @@ mod tests {
         let color = VaryingKey::color(3, 0);
         let viewport = VaryingKey::viewport_index();
         let layer = VaryingKey::render_target_array_index();
-        let perspective = VaryingKey::barycentric(true);
-        let linear = VaryingKey::barycentric(false);
-        let tagged = [&attr, &color, &viewport, &layer, &perspective, &linear];
+        let tagged = [&attr, &color, &viewport, &layer];
         for (i, a) in tagged.iter().enumerate() {
             for b in &tagged[i + 1..] {
                 assert_ne!(a, b);

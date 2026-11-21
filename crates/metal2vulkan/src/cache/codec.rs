@@ -40,9 +40,9 @@ use crate::pipeline::artifact::{
 use crate::pipeline::descriptor::TessellationDescriptor;
 use crate::pipeline::facts::{Mechanism, RuntimeFact, UniformViewChoice};
 use crate::pipeline::graphics::{
-    BandPrimitive, BlendState, ColorAttachmentState, FanOutState, FragmentImageblock,
-    GraphicsState, ImageblockMechanism, InputAttachmentUse, LineBandState, RegionFanOut,
-    ShadowStencilUse, StorageAttachmentUse, StorageAttachmentView, TessellationState,
+    BandPrimitive, BlendState, ColorAttachmentState, FragmentImageblock, GraphicsState,
+    ImageblockMechanism, InputAttachmentUse, LineBandState, ShadowStencilUse, StorageAttachmentUse,
+    StorageAttachmentView, TessellationState,
 };
 use crate::pipeline::interface::{
     AccessSet, BufferForm, BufferKind, BufferSlot, CommandWrites, DescriptorView, LevelReads,
@@ -848,7 +848,6 @@ codec_enum! {
     HandleClass { Image(f0), Sampler { compare, integer }, FunctionTable }
     SyntheticBinding {
         ArgumentTable, ExecutionStatus, RootTable, HandleTable, ConstantBlob, TessellationFactors, Imageblock,
-        RateMapRegions, RateMapFlags,
         SamplerTable,
         ShadowStencil,
         FunctionTableDirectory,
@@ -899,8 +898,6 @@ codec_enum! {
         AlphaTestReference,
         YCbCrInPlace(f0),
         LineBand,
-        RegionProbe,
-        RegionBox,
         TexelRows(f0),
         ArgumentTableAddress,
         ConstexprSampler(f0),
@@ -1048,7 +1045,6 @@ codec_enum! {
         DeviceSampling,
         ProvokingVertexModePerPipeline,
         InterpolateAtOffsetFromSevenSixteenths,
-        SubgroupGeometryStage,
     }
     VkLimit {
         MaxComputeWorkGroupSize(f0), MaxComputeWorkGroupCount(f0), MaxComputeWorkGroupInvocations,
@@ -1183,7 +1179,7 @@ codec_enum! {
         Attribute { index }, Varying { user, interpolation },
         Color { attachment, index },
         ViewportIndex, RenderTargetArrayIndex, PrimitiveVarying { user },
-        Barycentric { perspective }, PrimitiveId, MergedCommand,
+        PrimitiveId, MergedCommand,
     }
     IoInterpolation { Flat, Smooth { sampling, perspective } }
     IoSampling { Center, Centroid, Sample, Interpolant { center, centroid, sample } }
@@ -1283,7 +1279,6 @@ codec_enum! {
         AnisotropicSampler { slot },
         StorageTextureIntegerChannels { slot },
         MovableStorageWrites { early_variant },
-        SynthesizedGeometry { weights },
         ObjectThreadgroupArena { static_bytes, payload },
         MergedDraws,
         QuadPrimitiveIds,
@@ -1391,14 +1386,13 @@ codec_struct! {
         tessellation, fragment_imageblock, vertex_writes_memory, writes_viewport_index,
         storage_attachments, shadow_stencil, writes_point_size, writes_depth,
         reads_barycentric_coord, reads_primitive_id, fragment_writes_memory, color_outputs,
-        sample_mask, snapshot_reads, logic_op, line_band, region_fan_out,
+        sample_mask, snapshot_reads, logic_op, line_band,
     }
     TessellationState {
         patch_control_points, domain, control_points, factor_step_function, push_offset,
         control_point_index_type,
     }
     LineBandState { push_offset, primitive }
-    FanOutState { mode, copies, push_offset }
     FragmentImageblock { mechanism, words, master, data_size, alignment }
     ColorAttachmentState { format, write_mask, blend }
     BlendState { src_color, dst_color, color_op, src_alpha, dst_alpha, alpha_op }
@@ -1415,7 +1409,6 @@ codec_enum! {
     ImageblockMechanism { StorageImageInterlock }
     StorageAttachmentView { Attachment, SamplePlanes { layers } }
     BandPrimitive { Lines, Triangles }
-    RegionFanOut { Draw, Probe, DrawFew, RegionCopies }
     PrecisionNote {
         F16FmaDoubleRounding, F16IntConvDoubleRounding, GradFromBias,
         DeviceTranscendentals, ReductionOrder, DeviceDenormals,

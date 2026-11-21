@@ -258,8 +258,5 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         // Keyed by the slots bound to a sampler whose word states anisotropy, where the
         // function's samples take Metal's anisotropic filter, emulated.
         RuntimeFact::AnisotropicSampler { .. } => Mechanism::Variant,
-        // The pipeline's own stages, which every draw of its class runs; the consumer announces
-        // them.
-        RuntimeFact::SynthesizedGeometry { .. } => Mechanism::None,
     }
 }

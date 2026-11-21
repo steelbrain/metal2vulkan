@@ -202,10 +202,8 @@ pub(super) fn check_stage(m: &TypedModule) -> Result<(), VerifyError> {
             let per_element = m.entry.model == ExecModel::MeshEXT && dir == IoDir::Output;
             let arrays_vertices = matches!(
                 (m.entry.model, dir),
-                (
-                    ExecModel::Geometry | ExecModel::TessellationEvaluation,
-                    IoDir::Input
-                ) | (ExecModel::TessellationControl, _)
+                (ExecModel::TessellationEvaluation, IoDir::Input)
+                    | (ExecModel::TessellationControl, _)
             );
             let per_vertex = arrays_vertices && geometry_per_vertex(builtin);
             let vertex_form = arrays_vertices && element_array(m, builtin, g.pointee)?;
@@ -373,26 +371,6 @@ fn builtin_in_model(b: crate::spv::BuiltIn, dir: IoDir, model: ExecModel) -> boo
                 | B::ViewIndex
         ),
         (ExecModel::TaskEXT, IoDir::Output) => false,
-        (ExecModel::Geometry, IoDir::Input) => matches!(
-            b,
-            B::Position
-                | B::PointSize
-                | B::ClipDistance
-                | B::CullDistance
-                | B::PrimitiveId
-                | B::InvocationId
-                | B::ViewIndex
-        ),
-        (ExecModel::Geometry, IoDir::Output) => matches!(
-            b,
-            B::Position
-                | B::PointSize
-                | B::ClipDistance
-                | B::CullDistance
-                | B::PrimitiveId
-                | B::Layer
-                | B::ViewportIndex
-        ),
         (ExecModel::MeshEXT, IoDir::Output) => matches!(
             b,
             B::Position

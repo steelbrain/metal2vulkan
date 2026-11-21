@@ -1089,8 +1089,7 @@ fn only_the_position_and_clip_distances_are_invariant() {
         t.b.io(key("color"), IoDir::Output, v4, IoDecor::default())
             .expect("varying");
     assert_eq!(t.b.invariant(pos), Ok(()));
-    assert_eq!(t.b.invariant(clips), Ok(()));
-    for g in [depth, size, color] {
+    for g in [clips, depth, size, color] {
         assert_eq!(
             t.b.invariant(g),
             Err(BuildError::Global(GlobalRule::InvariantTarget))

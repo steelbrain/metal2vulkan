@@ -50,9 +50,7 @@
 
 pub mod band;
 pub mod contract;
-pub mod fan_out;
 pub mod fetch;
-pub mod geometry;
 pub mod graphics;
 pub mod imageblock;
 pub mod mesh;
@@ -154,7 +152,6 @@ impl LinkInputs {
         r.pulled_vertex_buffers = variant.pulled_vertex_buffers.clone();
         r.pull_every = variant.primitive_id_indices.is_some() || variant.private_list;
         r.line_band = variant.line_band;
-        r.region_fan_out = variant.region_fan_out;
         LinkInputs::Render(Box::new(r))
     }
 
@@ -196,10 +193,6 @@ pub struct RenderLinkInputs {
     /// tessellation stages (`VariantKey::line_band`, [`band`]), each patch one primitive of this
     /// kind; `None` for every other variant.
     pub line_band: Option<crate::pipeline::BandPrimitive>,
-    /// The variant draws a rate-mapped pass's triangles once, its triangle class's geometry stage
-    /// fanning each out to its regions (`VariantKey::region_fan_out`, [`fan_out`]); `None` for
-    /// every other variant.
-    pub region_fan_out: Option<crate::pipeline::RegionFanOut>,
 }
 
 impl RenderLinkInputs {
@@ -221,7 +214,6 @@ impl RenderLinkInputs {
             tessellation: None,
             texture_write_rounding_mode: metal::TextureWriteRoundingMode::TowardZero,
             line_band: None,
-            region_fan_out: None,
         }
     }
 }
@@ -250,7 +242,6 @@ impl From<&RenderPipelineDescriptor> for RenderLinkInputs {
             tessellation: d.tessellation,
             texture_write_rounding_mode: d.texture_write_rounding_mode,
             line_band: None,
-            region_fan_out: None,
         }
     }
 }
@@ -298,9 +289,6 @@ pub struct Linked {
     /// The synthesized control stage of a tessellation pipeline, with its push fields placed: the
     /// compile API builds its vertex and control stages from it.
     pub control: Option<tessellation::control::Control>,
-    /// The synthesized geometry stages of a render pipeline whose fragment function reads
-    /// `[[barycentric_coord]]` as varyings ([`geometry`]): the compile API builds them.
-    pub geometry: Option<geometry::GeometryStages>,
     /// The synthesized control and evaluation stages of a render pipeline variant that draws its
     /// lines as bands ([`band`]), with their push range placed: the compile API builds them.
     pub band: Option<band::LineBand>,
@@ -360,34 +348,13 @@ pub fn link(
         }
         _ => None,
     };
-    // A fragment function that reads `[[barycentric_coord]]` as varyings draws through
-    // synthesized geometry stages, which write them.
-    let geometry = match inputs {
-        LinkInputs::Render(r) => geometry::plan(
-            &ifaces,
-            r.input_primitive_topology,
-            r.max_vertex_amplification_count,
-            false,
-            r.region_fan_out,
-            p,
-        )?,
-        LinkInputs::Mesh(r) => geometry::plan(
-            &ifaces,
-            r.input_primitive_topology,
-            r.max_vertex_amplification_count,
-            true,
-            r.region_fan_out,
-            p,
-        )?,
-        LinkInputs::Standalone | LinkInputs::Compute => None,
-    };
     // A variant that draws its lines, or its triangles' edges, as bands draws them through
     // synthesized tessellation stages.
     let band = match inputs {
         LinkInputs::Render(r) => match r.line_band {
             Some(primitive) => Some(band::plan(
                 &ifaces,
-                (primitive, geometry.is_some()),
+                primitive,
                 r.max_vertex_amplification_count,
                 p,
             )?),
@@ -400,21 +367,13 @@ pub fn link(
         mesh::payload(&ifaces)?;
     }
     let mut table = LinkTable::default();
-    let mut synthesized: Vec<(ResourceSlot, vk::ShaderStageFlags)> = plan
+    let synthesized: Vec<(ResourceSlot, vk::ShaderStageFlags)> = plan
         .as_ref()
         .map(tessellation::ControlPlan::slots)
         .unwrap_or_default()
         .into_iter()
         .map(|slot| (slot, vk::ShaderStageFlags::TESSELLATION_CONTROL))
         .collect();
-    // A fan-out variant's triangle stage reads the region table, and a probe's writes its flags.
-    if let Some(fan) = geometry.as_ref().and_then(|g| g.fan_out) {
-        let stage = vk::ShaderStageFlags::GEOMETRY;
-        synthesized.push((fan_out::REGIONS_SLOT, stage));
-        if fan.mode == crate::pipeline::RegionFanOut::Probe {
-            synthesized.push((fan_out::FLAGS_SLOT, stage));
-        }
-    }
     let mut layout = layout(&ifaces, &synthesized, &mut table, p)?;
     count_variables(&mut layout, stages, &table);
     let control = match plan {
@@ -452,29 +411,8 @@ pub fn link(
         }
         None => None,
     };
-    // A fan-out probe's stage pushes the index of its flag.
-    let mut geometry = geometry;
-    if let Some(fan) = geometry.as_mut().and_then(|g| g.fan_out.as_mut()) {
-        if fan.mode == crate::pipeline::RegionFanOut::Probe {
-            let offset = tessellation::push_offset(
-                &layout.push_constants,
-                (fan_out::PUSH_BYTES, 4),
-                Feature::RasterizationRateMap,
-                p,
-            )?;
-            layout.push_constants.push(PushConstantRange {
-                stages: vk::ShaderStageFlags::GEOMETRY,
-                offset,
-                size: fan_out::PUSH_BYTES,
-            });
-            fan.push_offset = offset;
-        }
-    }
     let specialization = specialize(&ifaces, &mut table)?;
     table.locations = varyings::assign(stages, p)?;
-    if let Some(g) = &mut geometry {
-        g.check_limits(&table.locations, p)?;
-    }
     let mut interface = pipeline_interface(&ifaces);
     // The address form's control stage states its push fields as the vertex stage's.
     if let Some(placement) = control.and_then(|(plan, offset)| plan.placement(offset)) {
@@ -514,22 +452,6 @@ pub fn link(
                 gs.line_band = Some(crate::pipeline::graphics::LineBandState {
                     push_offset: b.push_offset,
                     primitive: b.primitive,
-                });
-            }
-            if let Some(fan) = geometry.as_ref().and_then(|g| g.fan_out) {
-                gs.region_fan_out = Some(crate::pipeline::graphics::FanOutState {
-                    mode: fan.mode,
-                    copies: fan.copies,
-                    push_offset: fan.push_offset,
-                });
-            }
-            // A region-copy variant draws no geometry stage: its vertex function draws its region's
-            // copy, the row of regions of a recording pushed at its `RegionBox` field.
-            if r.region_fan_out == Some(crate::pipeline::RegionFanOut::RegionCopies) {
-                gs.region_fan_out = Some(crate::pipeline::graphics::FanOutState {
-                    mode: crate::pipeline::RegionFanOut::RegionCopies,
-                    copies: 0,
-                    push_offset: region_box(vs)?,
                 });
             }
             (vi, Some(gs))
@@ -575,29 +497,12 @@ pub fn link(
         graphics,
         specialization,
         control: control.map(|(plan, offset)| plan.control(offset)),
-        geometry,
         band,
     })
 }
 
 /// The graphics state of a render or mesh render pipeline whose geometry stage (its vertex or
 /// mesh stage) is `geometry`, with its fragment stage's.
-/// The byte offset of the push-constant block a region-copy variant's vertex function `vs` reads
-/// its recording's row of regions at (`PushField::RegionBox`): each recording pushes its own, so
-/// a function that holds it in its `ArgumentTable`, or reads none, is
-/// `NotImplemented(RasterizationRateMap)`.
-fn region_box(vs: &StageInterface) -> Result<u32, Error> {
-    let at = vs
-        .push
-        .fields
-        .iter()
-        .find(|f| f.field == crate::pipeline::sym::PushField::RegionBox);
-    match at.map(|f| f.loc) {
-        Some(crate::pipeline::interface::PushLoc::Push { offset }) => Ok(offset),
-        _ => Err(Unsupported::not_implemented(Feature::RasterizationRateMap).into()),
-    }
-}
-
 fn render_state(
     r: &RenderLinkInputs,
     geometry: &StageInterface,

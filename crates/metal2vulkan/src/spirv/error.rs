@@ -248,9 +248,6 @@ pub enum EntryRule {
     TessellationModes,
     /// A mesh entry without a nonzero vertex and primitive count and its primitive kind.
     MeshModes,
-    /// A geometry entry without its input primitive, its output primitive, and a nonzero count of
-    /// output vertices and invocations.
-    GeometryModes,
     /// An instruction the entry's execution model (and modes) cannot run: implicit derivatives
     /// outside fragment (or derivative-group compute), fragment-only operations elsewhere, or
     /// interlock without an interlock mode.

@@ -61,7 +61,7 @@ mod tests;
 /// unchanged version, and its bless records the version. Independent of the crate's version and of
 /// [`ARTIFACT_FORMAT_VERSION`]. The commit that bumps it says what changed; this comment keeps no
 /// history.
-pub const SEMANTICS_VERSION: u32 = 2247;
+pub const SEMANTICS_VERSION: u32 = 2248;
 
 /// The byte-layout version of encoded artifacts (`CompiledFunction::to_bytes` and the
 /// [`PipelineArtifact`] encodings). Every encoded artifact carries it, and a decode under another
@@ -71,7 +71,7 @@ pub const SEMANTICS_VERSION: u32 = 2247;
 /// re-typed in an encoded type, its `codec` body or its `envelope`. A variant removed while its tag
 /// stays unused needs no bump: an entry holding it fails to decode, which is a miss. The commit that
 /// bumps it says what changed; this comment keeps no history.
-pub const ARTIFACT_FORMAT_VERSION: u32 = 583;
+pub const ARTIFACT_FORMAT_VERSION: u32 = 584;
 
 /// The version of what this crate's runtime does with a compiled pipeline: instantiating a binding
 /// plan (`BindingPlan::instantiate_*`: descriptor ranges, push bytes, root, argument, and handle
@@ -466,12 +466,6 @@ pub struct VariantKey {
     /// (`RuntimeFact::RegionViewports`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub region_viewports: bool,
-    /// The render pipeline draws a rasterization-rate-mapped pass's triangles once, its
-    /// triangle class's synthesized geometry stage emitting a copy of each per region it touches,
-    /// or probing which draws it cannot (`BindShape::region_fan_out`, `pipeline::link::fan_out`).
-    /// Its graphics state states it (`GraphicsState::region_fan_out`).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub region_fan_out: Option<crate::pipeline::RegionFanOut>,
 }
 
 impl VariantKey {
@@ -581,7 +575,6 @@ impl VariantKey {
             && self.anisotropic_samplers.is_empty()
             && self.open_cl_lines.is_empty()
             && !self.region_viewports
-            && self.region_fan_out.is_none()
     }
 
     /// The lowering inputs of the function of `stage` under this key: its storage-image choices,
@@ -648,9 +641,6 @@ impl VariantKey {
             .filter(|_| stage != crate::pipeline::sym::Stage::Kernel);
         out.region_viewports =
             self.region_viewports && stage == crate::pipeline::sym::Stage::Vertex;
-        out.region_copies = self.region_fan_out
-            == Some(crate::pipeline::RegionFanOut::RegionCopies)
-            && stage == crate::pipeline::sym::Stage::Vertex;
         out.storage_view_slots = self
             .storage_view_slots
             .iter()

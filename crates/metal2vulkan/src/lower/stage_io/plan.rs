@@ -91,7 +91,7 @@ pub enum Place {
     Spread(u32),
     /// A read of this many (1 to 3) leading lanes of Metal's three barycentric weights, of a
     /// variable whose first two lanes are the first two weights of the primitive as drawn
-    /// (`BaryCoordKHR`, or the `float2` of `IoRole::Barycentric`): `1 - (x + y)` of the first
+    /// (`BaryCoordKHR`): `1 - (x + y)` of the first
     /// two is Metal's third weight (see `input_builtin`). Where `rotated`
     /// (`LoweringInputs::rotated_weights`), the primitive is a triangle drawn with Metal's last
     /// vertex first, `(c, a, b)` for Metal's `(a, b, c)`, so Metal's first two weights are the
@@ -909,43 +909,16 @@ pub fn param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
         {
             return draw_base(cx, b, ty, DrawBase::Instance);
         }
-        // Without `fragmentShaderBarycentric`, the weights are the `float2` varying of their form
-        // that the pipeline's synthesized geometry stage writes (`IoRole::Barycentric`,
-        // `link::geometry`): `(1, 0)`, `(0, 1)` and `(0, 0)` at the primitive's vertices in its
-        // order, whose interpolation is Metal's first two weights, read at the pixel center as a
-        // center varying is.
-        (ParamRole::Builtin(Builtin::BarycentricCoord(i)), Stage::Fragment)
+        // Without `fragmentShaderBarycentric` the weights have no form: the device's builtin is
+        // the one way to read them.
+        (ParamRole::Builtin(Builtin::BarycentricCoord(_)), Stage::Fragment)
             if !frag.barycentric =>
         {
-            refuse_int64_interface(cx.entry, ty)?;
-            let f = form_on(cx.entry, cx.profile, ty)?;
-            let (perspective, place) = barycentric_read(*i, f, cx.inputs.rotated_weights)?;
-            if !frag.geometry_shader {
-                return Err(Unsupported::needs_any_of(
-                    Feature::Barycentrics,
-                    vec![
-                        vec![Capability::Feature(VkFeature::FragmentShaderBarycentric)],
-                        vec![Capability::Feature(VkFeature::GeometryShader)],
-                    ],
-                )
-                .into());
-            }
-            let interp = Interpolation::Smooth {
-                sampling: Sampling::Center,
-                perspective,
-            };
-            note_device_interpolation(cx, interp);
-            let center = cx.inputs.multisampled;
-            at_pixel = center && interpolation_functions(cx);
-            let sp = &mut cx.families.stage_io;
-            sp.interface.varyings_at_pixel |= at_pixel;
-            let object = barycentric_weights(sp, perspective)?;
-            note_rotated_weights(cx, place);
-            Link {
-                object,
-                place,
-                form: f,
-            }
+            return Err(Unsupported::needs(
+                Feature::Barycentrics,
+                Capability::Feature(VkFeature::FragmentShaderBarycentric),
+            )
+            .into());
         }
         (ParamRole::Builtin(bi), _) => {
             refuse_int64_interface(cx.entry, ty)?;
@@ -1604,35 +1577,6 @@ fn primitive_id_output(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// The barycentric weights' `float2` input of form `perspective` (`IoRole::Barycentric`): a
-/// center-sampled varying, perspective-correct or not, which the pipeline's synthesized geometry
-/// stage writes.
-fn barycentric_weights(sp: &mut StageIoPlan, perspective: bool) -> Result<usize, Error> {
-    let key = VaryingKey::barycentric(perspective);
-    let ty = IoType {
-        numeric: IoNumeric::Float,
-        components: 2,
-        source_bits: 32,
-    };
-    let deco = IoDecor {
-        interpolation: if perspective {
-            SInterp::Smooth
-        } else {
-            SInterp::NoPerspective
-        },
-        ..IoDecor::default()
-    };
-    push_var(
-        &mut sp.interface.inputs,
-        IoVariable {
-            key: key.clone(),
-            role: IoRole::Barycentric { perspective },
-            ty,
-        },
-    );
-    user(sp, key, IoDir::Input, ty, deco)
-}
-
 /// The perspective and place of a `[[barycentric_coord]]` read of interpolation `i` into form
 /// `f`, of a triangle drawn with Metal's last vertex first where `rotated`
 /// (`LoweringInputs::rotated_weights`). Metal declares the weights at the pixel center (MSL
@@ -1984,7 +1928,7 @@ fn input_builtin(
             // triangle drawn with Metal's last vertex first takes them rotated back
             // (`LoweringInputs::rotated_weights`).
             let (perspective, place) = barycentric_read(i, f, cx.inputs.rotated_weights)?;
-            // `param` reads the weights from a varying without `fragmentShaderBarycentric`.
+            // `param` refuses the weights without `fragmentShaderBarycentric`.
             if !frag.barycentric {
                 return Err(cx.invariant("a barycentric builtin without the feature"));
             }
@@ -2447,9 +2391,6 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     if cx.inputs.region_viewports && cx.stage == Stage::Vertex {
         region_viewport(cx, &outputs, returned)?;
     }
-    if cx.inputs.region_copies && cx.stage == Stage::Vertex {
-        region_copy(cx, &outputs, returned)?;
-    }
     // The primitive ID a fragment function reads from its varying.
     if cx.inputs.primitive_id_varying && cx.stage == Stage::Vertex {
         primitive_id_output(cx)?;
@@ -2708,154 +2649,6 @@ pub(crate) fn finish_merged(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         }
         _ => {}
     }
-    Ok(())
-}
-
-/// Add `added` clip distances past a vertex function's own, for `feature`: its `ClipDistance`
-/// object, `added` elements longer, or a new one, and the first of the added elements. Refused as
-/// `feature` where the device writes no clip distances or the count passes its limits.
-fn added_clip_distances(
-    cx: &mut SelectCx<'_>,
-    added: u32,
-    feature: Feature,
-) -> Result<(usize, u32), Error> {
-    if !cx.profile.fields().fragment.clip_distance {
-        return Err(needs(feature, VkFeature::ShaderClipDistance));
-    }
-    let is = |o: &IoObject| {
-        matches!(
-            o,
-            IoObject::Builtin {
-                builtin: B::ClipDistance,
-                dir: IoDir::Output,
-                ..
-            }
-        )
-    };
-    let limits = cx.profile.fields().limits;
-    let sp = &mut cx.families.stage_io;
-    let own = sp.objects.iter().position(is);
-    let first = match own.and_then(|i| sp.objects.get(i)) {
-        Some(IoObject::Builtin {
-            shape: Shape::F32Array(n),
-            ..
-        }) => *n,
-        Some(_) => return Err(not_lowered()),
-        None => 0,
-    };
-    let count = first + added;
-    for (lim, max) in [
-        (VkLimit::MaxClipDistances, limits.max_clip_distances),
-        (
-            VkLimit::MaxCombinedClipAndCullDistances,
-            limits.max_combined_clip_and_cull_distances,
-        ),
-    ] {
-        if count > max {
-            return Err(limit(feature, lim, u64::from(count), max));
-        }
-    }
-    let object = match own {
-        // The function's own clip distances, `added` elements longer.
-        Some(i) => {
-            if let Some(IoObject::Builtin { shape, .. }) = sp.objects.get_mut(i) {
-                *shape = Shape::F32Array(count);
-            }
-            let builtins = &mut sp.interface.builtins;
-            builtins.retain(|b| !matches!(b, StageBuiltin::ClipDistance { .. }));
-            builtins.push(StageBuiltin::ClipDistance { count });
-            builtins.sort();
-            i
-        }
-        None => builtin(
-            sp,
-            B::ClipDistance,
-            IoDir::Output,
-            Shape::F32Array(count),
-            StageBuiltin::ClipDistance { count },
-        ),
-    };
-    Ok((object, first))
-}
-
-/// Plan the region's copy a vertex function with outputs `outputs`, returning `returned`,
-/// compiled under `LoweringInputs::region_copies`, stores at every return: the region of segments
-/// `(x0 + DrawIndex, y0)` of the region table (`PushField::RegionBox`'s `[x0, y0]`, the
-/// specification's `DrawIndex`, 0 for a draw that is no multi-draw's), its position moved
-/// by the region's line and four clip distances past its own keeping the region's pixels
-/// ([`super::RegionCopy`], `pipeline::link::fan_out::region_copy`), and 0 as `ViewportIndex`,
-/// the recording's one viewport. A merged draw's vertex function (`merged_draws`) takes it too:
-/// its corner is its `VertexIndex` and `InstanceIndex`'s, which a multi-draw's draws each give
-/// from their own first vertex, and its region its `DrawIndex`'s; so does a draw replay's of one
-/// draw per command (`replay_bindings`), whose buffers are in the slot table at its push. A
-/// function that writes its own viewport or slice index, one under another field that moves its
-/// indices or position (`amplification_draws`), runs behind the
-/// tessellator or returns no outputs is `NotImplemented(RasterizationRateMap)`: the runtime draws those through each
-/// region's viewport. A device that cannot store `ViewportIndex` from a vertex function, read
-/// `DrawIndex` or write four more clip distances refuses it.
-fn region_copy(
-    cx: &mut SelectCx<'_>,
-    outputs: &[OutputBinding],
-    returned: Returned,
-) -> Result<(), Error> {
-    let i = &cx.inputs;
-    let indexed = outputs.iter().any(|o| {
-        matches!(
-            o.role,
-            OutputRole::ViewportArrayIndex | OutputRole::RenderTargetArrayIndex
-        )
-    });
-    let tessellated = matches!(cx.entry.ep.stage, AirStage::Vertex { patch: Some(_) });
-    let sp = &cx.families.stage_io;
-    let position = sp.objects.iter().position(|o| {
-        matches!(
-            o,
-            IoObject::Builtin {
-                builtin: B::Position,
-                dir: IoDir::Output,
-                ..
-            }
-        )
-    });
-    let position = match position {
-        Some(p) if returned != Returned::Void => p,
-        _ => return Err(Unsupported::not_implemented(Feature::RasterizationRateMap).into()),
-    };
-    if indexed || tessellated || i.amplification_draws.is_some() || i.region_viewports {
-        return Err(Unsupported::not_implemented(Feature::RasterizationRateMap).into());
-    }
-    let f = cx.profile.fields();
-    if !(f.fragment.output_viewport_index && f.draw_parameters) {
-        return Err(Unsupported::needs_any_of(
-            Feature::RasterizationRateMap,
-            vec![vec![
-                Capability::Feature(VkFeature::ShaderOutputViewportIndex),
-                Capability::Feature(VkFeature::ShaderDrawParameters),
-            ]],
-        )
-        .into());
-    }
-    let clip = added_clip_distances(cx, 4, Feature::RasterizationRateMap)?;
-    cx.push.insert(PushField::RegionBox);
-    // The region table, one more storage buffer of the stage.
-    let d = &mut cx.descriptors;
-    d.storage_buffers = d.storage_buffers.saturating_add(1);
-    let sp = &mut cx.families.stage_io;
-    let draw_index = builtin(
-        sp,
-        B::DrawIndex,
-        IoDir::Input,
-        Shape::U32,
-        StageBuiltin::DrawIndex,
-    );
-    // Not the contract's `ViewportIndex`, as a region viewport's is not (`region_viewport`).
-    let viewport = builtin_object(sp, B::ViewportIndex, IoDir::Output, Shape::U32);
-    sp.region_copy = Some(super::RegionCopy {
-        position,
-        draw_index,
-        viewport,
-        clip,
-    });
     Ok(())
 }
 

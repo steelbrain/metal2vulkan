@@ -31,10 +31,9 @@ metallib | AIR bitcode
   ── serialize ───► SPIR-V 1.5 words with typed relocations             spirv::serialize
   = CompiledFunction, keyed by FunctionCompileKey (the caller may cache it)
   ── link ────────► bindings, Locations, spec ids, the pipeline         pipeline::link
-                    layout, pipeline-wide limits, the generated         pipeline::link::geometry
-                    geometry stages (barycentric weights read as        pipeline::link::band
-                    varyings), the generated tessellation stages
-                    that draw a wide line as a band
+                    layout, pipeline-wide limits, the generated         pipeline::link::band
+                    tessellation stages that draw a wide line as a
+                    band
   ── relocate ────► the final words of each stage                       pipeline::relocate
   = ComputePipeline | RenderPipeline | tile and mesh pipelines
 

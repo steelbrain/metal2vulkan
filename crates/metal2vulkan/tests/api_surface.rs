@@ -355,13 +355,11 @@ surface! {
         enum BandPrimitive E;
         struct BlendState N;
         struct ColorAttachmentState N;
-        struct FanOutState N;
         struct FragmentImageblock N;
         struct GraphicsState N;
         enum ImageblockMechanism N;
         struct InputAttachmentUse N;
         struct LineBandState N;
-        enum RegionFanOut E;
         struct ShadowStencilUse N;
         struct StorageAttachmentUse N;
         enum StorageAttachmentView E;
@@ -652,29 +650,7 @@ surface! {
         struct DepthStencilCopyModules N;
         struct StencilBit O;
         struct StencilSplitModule N;
-        mod fan_out;
         mod indirect_commands;
-    }
-    "bind::fan_out" => metal2vulkan::bind::fan_out {
-        const BLOCK_SET;
-        const BLOCK_TRIANGLES;
-        const BOUND_BUCKETS;
-        const FEW_COPIES;
-        const HEADER_ENTRIES;
-        const MAX_SEGMENTS;
-        const PROBE_BLOCKS;
-        const PROBE_BOUNDS_AT;
-        const PROBE_COUNT_WORDS;
-        const PROBE_DRAW_WORDS;
-        const PROBE_SETS;
-        const STRADDLE_SET;
-        const TABLE_BYTES;
-        const WIDEN_PIXELS;
-        fn bucket;
-        fn clip_entry;
-        fn line_entry;
-        fn scissors;
-        fn table;
     }
     "bind::indirect_commands" => metal2vulkan::bind::indirect_commands {
         enum Action E;
@@ -2107,7 +2083,6 @@ fn scanned_modules() -> Vec<&'static str> {
         "reflection",
         "pipeline",
         "bind",
-        "bind::fan_out",
         "bind::indirect_commands",
         "cache",
         "metal",

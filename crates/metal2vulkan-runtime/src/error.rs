@@ -1354,8 +1354,8 @@ pub enum RenderPipelineKind {
     /// (`tessellationControlPointIndexType`) itself. A descriptor's tessellation state with a vertex
     /// function that is not post-tessellation is ignored, as Metal ignores it.
     Tessellation,
-    /// Stages the translator synthesizes beside the functions' but a tessellation's: geometry
-    /// stages, lines drawn as bands of triangles, or a rate map's fan-out.
+    /// Stages the translator synthesizes beside the functions' but a tessellation's: lines drawn as
+    /// bands of triangles.
     SynthesizedStages,
     /// A fragment function that reaches the render pass's imageblock.
     Imageblock,

@@ -221,13 +221,8 @@ pub const fn shape(f: PushField) -> FieldShape {
         | PushField::PatchIndexOffset
         | PushField::PatchIndexBound
         | PushField::ControlPointIndexOffset => FieldShape::U32,
-        // The row of regions a recording of a rate-mapped pass's regions draws: its first region's
-        // segments of x and y.
-        PushField::RegionBox => FieldShape::UVec2,
         // A band's viewport half extent and half width, four `f32`s.
         PushField::LineBand => FieldShape::UVec4Array(1),
-        // A fan-out probe's flag index.
-        PushField::RegionProbe => FieldShape::U32,
         // The whole indices from the bound index offset to the buffer's end, unsaturated:
         // `firstIndex + indexCount` reaches `2^33`.
         PushField::IndexCapacity => FieldShape::U64,

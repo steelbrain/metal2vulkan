@@ -705,12 +705,6 @@ pub enum RuntimeFact {
     /// where a Vulkan write of a value the channel cannot represent is undefined. The binder
     /// writes `metal::format::integer_channels_word` of the bound format, and 0 for a neutral.
     StorageTextureIntegerChannels { slot: SlotRef },
-    /// The render pipeline draws through synthesized geometry stages, one per topology class, of
-    /// which a draw runs its class's (`RenderPipeline::runs_stage`): its fragment function reads
-    /// `[[barycentric_coord]]` on a device without `fragmentShaderBarycentric` (`weights`)
-    /// (`pipeline::link::geometry`). Each draw runs a stage Metal's draw does not, at the stage's
-    /// cost, with Metal's answer; the consumer announces it. Nothing binds it.
-    SynthesizedGeometry { weights: bool },
     /// An object function's `[[threadgroup(n)]]` arguments, whose lengths the render encoder sets
     /// (`setObjectThreadgroupMemoryLength:atIndex:`, the object stage's
     /// `StageTable::threadgroup_lengths`), each a `ThreadgroupMemoryLength`: the static part of
@@ -930,7 +924,6 @@ impl RuntimeFact {
             RuntimeFact::HeapStorageReads { .. } => "HeapStorageReads",
             RuntimeFact::AnisotropicSampler { .. } => "AnisotropicSampler",
             RuntimeFact::StorageTextureIntegerChannels { .. } => "StorageTextureIntegerChannels",
-            RuntimeFact::SynthesizedGeometry { .. } => "SynthesizedGeometry",
             RuntimeFact::ObjectThreadgroupArena { .. } => "ObjectThreadgroupArena",
             RuntimeFact::QuadPrimitiveIds => "QuadPrimitiveIds",
             RuntimeFact::PrivateList => "PrivateList",

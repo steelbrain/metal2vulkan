@@ -2907,8 +2907,7 @@ or does not check is rebuilt from the generations' names, with young counted ful
   Xe, lavapipe and KosmicKrisp on the M3 Max report it (m3-max-48727 to 48731, 48737 and 61508).
 - On a device without `fragmentShaderBarycentric` (Barycentrics, under Floor), a fragment function
   that reads `[[barycentric_coord]]` is refused at creation, an `Error::Translation` naming
-  `Barycentrics`: the translator's other form, weights a generated geometry stage writes, needs
-  `geometryShader`, which device creation does not enable. Of the venues run, lavapipe, ANV on the
+  `Barycentrics` and `fragmentShaderBarycentric`. Of the venues run, lavapipe, ANV on the
   Iris Xe, RADV on the RX 550, the UHD 630's Windows driver and KosmicKrisp on the M3 Max list no
   `VK_KHR_fragment_shader_barycentric` (`vulkaninfo`, jobs m3-max-61287, 61291, 61292 and 61296);
   NVIDIA's driver on the RTX 3090, RTX 2080 and RTX 5080 Laptop, and RADV on the RX 7900 XTX and

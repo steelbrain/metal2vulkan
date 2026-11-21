@@ -303,7 +303,9 @@ pub enum Op {
     DPdyCoarse = 214,
     #[cfg(test)]
     FwidthCoarse = 215,
+    #[cfg(test)]
     EmitVertex = 218,
+    #[cfg(test)]
     EndPrimitive = 219,
     #[cfg(test)]
     EmitStreamVertex = 220,
@@ -1793,7 +1795,9 @@ impl std::fmt::Debug for Op {
             Self::DPdyCoarse => "DPdyCoarse",
             #[cfg(test)]
             Self::FwidthCoarse => "FwidthCoarse",
+            #[cfg(test)]
             Self::EmitVertex => "EmitVertex",
+            #[cfg(test)]
             Self::EndPrimitive => "EndPrimitive",
             #[cfg(test)]
             Self::EmitStreamVertex => "EmitStreamVertex",
@@ -3489,7 +3493,9 @@ impl Op {
             214 => Self::DPdyCoarse,
             #[cfg(test)]
             215 => Self::FwidthCoarse,
+            #[cfg(test)]
             218 => Self::EmitVertex,
+            #[cfg(test)]
             219 => Self::EndPrimitive,
             #[cfg(test)]
             220 => Self::EmitStreamVertex,
@@ -5625,6 +5631,7 @@ pub enum ExecutionModel {
     Vertex = 0,
     TessellationControl = 1,
     TessellationEvaluation = 2,
+    #[cfg(test)]
     Geometry = 3,
     Fragment = 4,
     GLCompute = 5,
@@ -5658,6 +5665,7 @@ impl ExecutionModel {
             0 => Self::Vertex,
             1 => Self::TessellationControl,
             2 => Self::TessellationEvaluation,
+            #[cfg(test)]
             3 => Self::Geometry,
             4 => Self::Fragment,
             5 => Self::GLCompute,
@@ -5706,7 +5714,6 @@ pub enum MemoryModel {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum ExecutionMode {
-    Invocations = 0,
     SpacingEqual = 1,
     SpacingFractionalEven = 2,
     SpacingFractionalOdd = 3,
@@ -5718,14 +5725,10 @@ pub enum ExecutionMode {
     DepthGreater = 14,
     DepthLess = 15,
     LocalSize = 17,
-    InputPoints = 19,
-    InputLines = 20,
     Triangles = 22,
     Quads = 24,
     OutputVertices = 26,
     OutputPoints = 27,
-    OutputLineStrip = 28,
-    OutputTriangleStrip = 29,
     #[cfg(test)]
     ContractionOff = 31,
     SubgroupUniformControlFlowKHR = 4421,

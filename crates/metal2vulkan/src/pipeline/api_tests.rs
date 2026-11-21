@@ -272,7 +272,6 @@ mod serde_round_trips {
             anisotropic_samplers: BTreeSet::from([slot(Stage::Fragment, SlotClass::Sampler, 1)]),
             open_cl_lines: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 1)]),
             region_viewports: true,
-            region_fan_out: Some(crate::pipeline::RegionFanOut::Probe),
         });
         round_trip(&SpecializationKey {
             data: vec![1, 0, 0, 0],
@@ -477,7 +476,6 @@ mod serde_round_trips {
             instanced_attributes: BTreeSet::from([1]),
             object_payload: Some(64),
             region_viewports: true,
-            region_copies: true,
             unit_axes: 2,
             push_base: 24,
         });
@@ -629,11 +627,6 @@ mod serde_round_trips {
             line_band: Some(crate::pipeline::LineBandState {
                 push_offset: 112,
                 primitive: crate::pipeline::BandPrimitive::Triangles,
-            }),
-            region_fan_out: Some(crate::pipeline::FanOutState {
-                mode: crate::pipeline::RegionFanOut::Probe,
-                copies: 7,
-                push_offset: 116,
             }),
         });
         let mut slots = BTreeMap::new();
@@ -989,7 +982,6 @@ mod bind_serde_round_trips {
             private_list: true,
             far_vertex_buffers: BTreeSet::from([2]),
             region_viewports: true,
-            region_fan_out: Some((crate::pipeline::RegionFanOut::Probe, 9)),
         });
         let mut shape = StageShape::default();
         shape.buffers.insert(
@@ -1051,7 +1043,6 @@ mod bind_serde_round_trips {
             private_list: true,
             far_vertex_buffers: BTreeSet::from([1, 30]),
             region_viewports: true,
-            region_fan_out: Some(crate::pipeline::RegionFanOut::Draw),
         });
     }
 
