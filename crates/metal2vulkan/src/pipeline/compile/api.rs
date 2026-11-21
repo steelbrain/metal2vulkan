@@ -34,8 +34,8 @@ use crate::library::{CompiledFunction, FunctionArtifact, FunctionCompileKey};
 use crate::lower::select::LowerInputs;
 use crate::lower::simd::workgroup::arena_bytes;
 use crate::pipeline::artifact::{
-    ComputePipeline, ComputePipelineMetalInfo, MeshPipelineMetalInfo, PrecisionNote,
-    RenderPipeline, RuntimeDependency, StageModule,
+    ComputePipeline, ComputePipelineMetalInfo, PrecisionNote, RenderPipeline, RuntimeDependency,
+    StageModule,
 };
 use crate::pipeline::compile::key::{
     function_key, mesh_descriptor_key, pipeline_key, queried_render_descriptor_key,
@@ -673,7 +673,6 @@ impl Device {
         let dependencies = dependencies(&artifacts, self);
         let (graphics, requirements) = graphics_requirements(requirements, &linked, &artifacts, p)?;
         let profile = self.profile_fingerprint();
-        let mesh_info = self.mesh_info(d, object.as_ref(), &mesh);
         Ok(RenderPipeline {
             key: pipeline_key(
                 b"mesh",
@@ -690,67 +689,7 @@ impl Device {
             interface: linked.interface,
             requirements,
             variant_bits: artifacts.iter().fold(0, |bits, a| bits | a.variant_bits),
-            mesh_info: Some(mesh_info),
         })
-    }
-
-    /// Answers to Metal's queries of the mesh render pipeline of descriptor `d`, of object function
-    /// `object` (where it has one) and mesh function `mesh` ([`MeshPipelineMetalInfo`]).
-    fn mesh_info(
-        &self,
-        d: &MeshPipelineDescriptor,
-        object: Option<&CompiledFunction>,
-        mesh: &CompiledFunction,
-    ) -> MeshPipelineMetalInfo {
-        let p = self.profile();
-        let limits = &p.fields().limits;
-        // Each stage's threadgroups run in the task and mesh stages.
-        let (object_limit, mesh_limit) = (
-            limits.mesh.max_task_work_group_invocations,
-            limits.mesh.max_mesh_work_group_invocations,
-        );
-        // Metal's on a first compile: the least of 1024, the function's own maximum, the
-        // descriptor's (Metal's 0 is none) and the threads of the stage's required size (Metal's
-        // all-zero size is none), within the device's.
-        let threads =
-            |f: &CompiledFunction, given: Option<u32>, required: Option<[u32; 3]>, device: u32| {
-                let required = required_size(required).map(|axes| {
-                    let threads: u64 = axes.iter().map(|&axis| u64::from(axis)).product();
-                    u32::try_from(threads).unwrap_or(u32::MAX)
-                });
-                [f.artifact().kernel.max_total_threads, given, required]
-                    .into_iter()
-                    .flatten()
-                    .filter(|&n| n > 0)
-                    .fold(METAL_MAX_THREADS.min(device), u32::min)
-            };
-        let width = self.metal_properties().thread_execution_width;
-        // The descriptor's, else Metal's: an object function's
-        // `[[max_total_threadgroups_per_mesh_grid(n)]]` changes nothing Metal answers.
-        let grid = d
-            .max_total_threadgroups_per_mesh_grid
-            .filter(|&n| n > 0)
-            .unwrap_or(METAL_MESH_GRID_THREADGROUPS);
-        let grid = grid.min(limits.mesh.max_mesh_work_group_total_count);
-        MeshPipelineMetalInfo {
-            max_total_threads_per_object_threadgroup: object.map_or(0, |o| {
-                threads(
-                    o,
-                    d.max_total_threads_per_object_threadgroup,
-                    d.required_threads_per_object_threadgroup,
-                    object_limit,
-                )
-            }),
-            max_total_threads_per_mesh_threadgroup: threads(
-                mesh,
-                d.max_total_threads_per_mesh_threadgroup,
-                d.required_threads_per_mesh_threadgroup,
-                mesh_limit,
-            ),
-            object_thread_execution_width: object.map_or(0, |_| width),
-            mesh_thread_execution_width: width,
-            max_total_threadgroups_per_mesh_grid: grid,
-        }
     }
 
     /// A stage from its source: compiled now under `inputs`, or taken as compiled (link and
@@ -1109,7 +1048,6 @@ impl Device {
             interface: linked.interface,
             requirements,
             variant_bits: artifacts.iter().fold(0, |bits, a| bits | a.variant_bits),
-            mesh_info: None,
         })
     }
 
@@ -1462,11 +1400,6 @@ fn check_tile_formats(a: &FunctionArtifact, d: &TileRenderPipelineDescriptor) ->
 const TILE_MAX_THREADS: u32 = TILE_MAX_SIDE * TILE_MAX_SIDE;
 /// Apple's GPUs' threads a threadgroup (a threadgroup of 2048 ran nothing on an M4).
 const METAL_MAX_THREADS: u32 = 1024;
-
-/// `maxTotalThreadgroupsPerMeshGrid` of a mesh render pipeline whose descriptor sets none, as an
-/// M3 Max under macOS 27.0.1 answers it, whatever its object function's
-/// `[[max_total_threadgroups_per_mesh_grid(n)]]`.
-const METAL_MESH_GRID_THREADGROUPS: u32 = 1 << 20;
 
 /// The most bytes of a mesh render pipeline's `payloadMemoryLength` Metal makes a pipeline of (an
 /// M3 Max under macOS 27.0.1).
@@ -1917,8 +1850,8 @@ fn primitive_varyings_written(a: &FunctionArtifact) -> std::collections::BTreeSe
         .collect()
 }
 
-/// The mesh descriptor fields the artifact depends on: its fixed-function state, as a render
-/// pipeline's ([`render_fields`]), and the limits its `mesh_info` answers within.
+/// The mesh descriptor fields the artifact's key holds: its fixed-function state, as a render
+/// pipeline's ([`render_fields`]), and its thread and grid maxima.
 fn mesh_fields(d: &MeshPipelineDescriptor) -> String {
     format!(
         "{:?} {:?} {:?} {:?}",

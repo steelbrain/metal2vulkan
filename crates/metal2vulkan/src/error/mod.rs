@@ -1831,9 +1831,7 @@ pub enum ComputePipelineProblem {
 /// refuses, measured on an M3 Max under macOS 27.0.1 (`mesh_pipeline_limits.m`, plain and with
 /// `MTL_DEBUG_LAYER=1`, which agree). Metal's creation fails over some, an error, and its
 /// descriptor validation ends the process at the rest, with or without API validation; each
-/// variant says which. The thread limit is Metal's 1024, not a lower one of this device's (the
-/// compiled pipeline's [`MeshPipelineMetalInfo`](crate::pipeline::MeshPipelineMetalInfo)
-/// answers that one).
+/// variant says which. The thread limit is Metal's 1024, not a lower one of this device's.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MeshPipelineProblem {

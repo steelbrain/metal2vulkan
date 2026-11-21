@@ -3177,11 +3177,6 @@ field	metal2vulkan::pipeline::MeshPipelineDescriptor.required_threads_per_object
 field	metal2vulkan::pipeline::MeshPipelineDescriptor.stencil_format	pub stencil_format: Option<metal::PixelFormat>
 field	metal2vulkan::pipeline::MeshPipelineDescriptor.support_indirect_command_buffers	pub support_indirect_command_buffers: bool
 field	metal2vulkan::pipeline::MeshPipelineDescriptor.texture_write_rounding_mode	pub texture_write_rounding_mode: metal::TextureWriteRoundingMode
-field	metal2vulkan::pipeline::MeshPipelineMetalInfo.max_total_threadgroups_per_mesh_grid	pub max_total_threadgroups_per_mesh_grid: u32
-field	metal2vulkan::pipeline::MeshPipelineMetalInfo.max_total_threads_per_mesh_threadgroup	pub max_total_threads_per_mesh_threadgroup: u32
-field	metal2vulkan::pipeline::MeshPipelineMetalInfo.max_total_threads_per_object_threadgroup	pub max_total_threads_per_object_threadgroup: u32
-field	metal2vulkan::pipeline::MeshPipelineMetalInfo.mesh_thread_execution_width	pub mesh_thread_execution_width: u32
-field	metal2vulkan::pipeline::MeshPipelineMetalInfo.object_thread_execution_width	pub object_thread_execution_width: u32
 field	metal2vulkan::pipeline::ModuleStats.blocks	pub blocks: u32
 field	metal2vulkan::pipeline::ModuleStats.constructs	pub constructs: u32
 field	metal2vulkan::pipeline::ModuleStats.functions	pub functions: u32
@@ -3248,7 +3243,6 @@ field	metal2vulkan::pipeline::RenderPipeline.graphics	pub graphics: GraphicsStat
 field	metal2vulkan::pipeline::RenderPipeline.interface	pub interface: PipelineInterface
 field	metal2vulkan::pipeline::RenderPipeline.key	pub key: PipelineKey
 field	metal2vulkan::pipeline::RenderPipeline.layout	pub layout: PipelineLayout
-field	metal2vulkan::pipeline::RenderPipeline.mesh_info	pub mesh_info: Option<MeshPipelineMetalInfo>
 field	metal2vulkan::pipeline::RenderPipeline.profile	pub profile: Hash256
 field	metal2vulkan::pipeline::RenderPipeline.requirements	pub requirements: Requirements
 field	metal2vulkan::pipeline::RenderPipeline.stages	pub stages: Vec<StageModule>
@@ -8041,7 +8035,6 @@ struct	metal2vulkan::pipeline::LinkedFunctions	#[derive(Clone, Debug, Default, P
 struct	metal2vulkan::pipeline::LinkedSource	#[derive(Clone, Copy, Debug)] pub struct LinkedSource<'a>
 struct	metal2vulkan::pipeline::LoweringInputs	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct LoweringInputs
 struct	metal2vulkan::pipeline::MeshPipelineDescriptor	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct MeshPipelineDescriptor
-struct	metal2vulkan::pipeline::MeshPipelineMetalInfo	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct MeshPipelineMetalInfo
 struct	metal2vulkan::pipeline::ModuleStats	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ModuleStats
 struct	metal2vulkan::pipeline::PipelineInterface	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct PipelineInterface
 struct	metal2vulkan::pipeline::PipelineLayout	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct PipelineLayout

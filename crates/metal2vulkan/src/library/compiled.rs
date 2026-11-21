@@ -343,9 +343,9 @@ pub struct FunctionArtifact {
     pub specialized: Vec<crate::pipeline::artifact::SpecializedNote>,
 }
 
-/// What a kernel's `ComputePipelineMetalInfo`, and an object or mesh function's
-/// `MeshPipelineMetalInfo`, need from its compile. A vertex or fragment function has the default:
-/// no attribute, not flattened, no threadgroup memory.
+/// What a kernel's `ComputePipelineMetalInfo`, and an object or mesh function's checks against its
+/// mesh descriptor, need from its compile. A vertex or fragment function has the default: no
+/// attribute, not flattened, no threadgroup memory.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct KernelFacts {

@@ -320,7 +320,6 @@ surface! {
         struct EntryPlan N;
         enum EntryRef E;
         struct LinkedSource O;
-        struct MeshPipelineMetalInfo N;
         struct StageEntries O;
         struct StandaloneModule N;
         struct ModuleStats N;

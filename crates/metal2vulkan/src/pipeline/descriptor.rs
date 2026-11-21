@@ -740,29 +740,17 @@ pub struct MeshPipelineDescriptor {
     /// `float` outputs to half-float color attachments round by it.
     pub texture_write_rounding_mode: metal::TextureWriteRoundingMode,
     /// `maxTotalThreadsPerObjectThreadgroup`: `None` for Metal's 0, the object function's
-    /// `[[max_total_threads_per_threadgroup(n)]]` or else Metal's 1024. The compiled pipeline's
-    /// [`MeshPipelineMetalInfo::max_total_threads_per_object_threadgroup`] answers it within the
-    /// device's limit. Refused as Metal refuses it
-    /// ([`MeshPipelineProblem`](crate::error::MeshPipelineProblem)): above 1024, or beside a
+    /// `[[max_total_threads_per_threadgroup(n)]]` or else Metal's 1024. Refused as Metal refuses
+    /// it ([`MeshPipelineProblem`](crate::error::MeshPipelineProblem)): above 1024, or beside a
     /// function's maximum of other threads. A draw is not held to it.
-    ///
-    /// [`MeshPipelineMetalInfo::max_total_threads_per_object_threadgroup`]: crate::pipeline::MeshPipelineMetalInfo::max_total_threads_per_object_threadgroup
     pub max_total_threads_per_object_threadgroup: Option<u32>,
     /// `maxTotalThreadsPerMeshThreadgroup`: as
     /// [`max_total_threads_per_object_threadgroup`](Self::max_total_threads_per_object_threadgroup),
-    /// of the mesh stage, answered as
-    /// [`MeshPipelineMetalInfo::max_total_threads_per_mesh_threadgroup`]; also refused beside a
-    /// required mesh threadgroup size of other threads.
-    ///
-    /// [`MeshPipelineMetalInfo::max_total_threads_per_mesh_threadgroup`]: crate::pipeline::MeshPipelineMetalInfo::max_total_threads_per_mesh_threadgroup
+    /// of the mesh stage; also refused beside a required mesh threadgroup size of other threads.
     pub max_total_threads_per_mesh_threadgroup: Option<u32>,
-    /// `maxTotalThreadgroupsPerMeshGrid`: `None` for Metal's 0, which answers 2^20 whatever the
-    /// object function's `[[max_total_threadgroups_per_mesh_grid(n)]]`. The compiled pipeline's
-    /// [`MeshPipelineMetalInfo::max_total_threadgroups_per_mesh_grid`] answers it, within the
-    /// device's limit where it runs mesh functions natively; Metal takes any count, above the
-    /// object function's attribute too. An object function's grid is not held to it.
-    ///
-    /// [`MeshPipelineMetalInfo::max_total_threadgroups_per_mesh_grid`]: crate::pipeline::MeshPipelineMetalInfo::max_total_threadgroups_per_mesh_grid
+    /// `maxTotalThreadgroupsPerMeshGrid`: `None` for Metal's 0. Metal takes any count, above the
+    /// object function's `[[max_total_threadgroups_per_mesh_grid(n)]]` too. An object function's
+    /// grid is not held to it.
     pub max_total_threadgroups_per_mesh_grid: Option<u32>,
     /// `objectThreadgroupSizeIsMultipleOfThreadExecutionWidth`: a promise to Metal's optimizer
     /// that each draw's object threadgroup is a multiple of 32 threads. No compiled module
