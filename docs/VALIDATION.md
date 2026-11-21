@@ -493,8 +493,11 @@ cargo run -p metal2vulkan-validation --release --bin corpus-moltenvk -- \
   `not_supported{uncontained:unchecked vertex_input}`. A rasterization-disabled vertex case renders
   into the oracle's 1x1 `R8Unorm` attachment. A depth/stencil attachment, more samples, layered rendering, a dynamic vertex
   stride, an argument-buffer member, tessellation, an imageblock, a rasterization-rate map, an
-  index buffer's out-of-bounds target or a fragment pass with no color target (the runtime makes
-  no pass without an attachment) keeps the case on the executor's own context. Its device worker enables the
+  out-of-bounds target other than an attribute buffer or a fragment pass with no color target (the
+  runtime makes no pass without an attachment) keeps the case on the executor's own context. An
+  indexed draw past its index buffer, which the runtime refuses as Metal's validation does
+  (`Refusal::IndexBufferOffset`), carries `index_buffer_past_end`, the runtime's limit, and runs
+  on Metal alone. Its device worker enables the
   validation layer through the loader's and the layer's variables, and any message the layer logs
   fails the row. The pipeline state's make is held to 500 MiB of peak live allocations and 20 s.
   Its row records the state's precision notes, the runtime's fingerprint and an out-of-bounds

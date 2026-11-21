@@ -19,6 +19,7 @@ use crate::air::reflect::{
     ResourceKind, ShaderInterface, ShaderStage, TextureDimension,
     TextureFormat as ReflectedTextureFormat,
 };
+use crate::case::out_of_bounds::OutOfBoundsResource;
 use crate::case::{
     AuthoredCase, DeviceBufferArrayResource, OutputSelection, Primitive, Stage, TextureFormat,
     ThreadgroupMemoryResource,
@@ -787,7 +788,8 @@ pub fn engine_source_requirements(reflection: &ShaderInterface) -> BTreeSet<Tool
 /// ([`mesh::mesh_requirements`]); each of them a case authors is also named here, so a case that
 /// was checked against an older reflection is refused all the same. A depth outside `[0, 1]` the
 /// case gives a depth image is the runtime's limit on every device
-/// ([`depth_range::depth_range_requirement`]).
+/// ([`depth_range::depth_range_requirement`]), and so is an indexed draw past its index buffer
+/// (its out-of-bounds target, [`ToolingRequirement::IndexBufferPastEnd`]).
 pub fn case_requirements(case: &AuthoredCase) -> BTreeSet<ToolingRequirement> {
     let render = matches!(case.stage, Stage::Vertex | Stage::Fragment);
     let drawn = render || case.stage.is_mesh_pipeline_stage();
@@ -835,6 +837,15 @@ pub fn case_requirements(case: &AuthoredCase) -> BTreeSet<ToolingRequirement> {
         (
             case.is_rasterization_disabled_vertex() && !case.render_targets.is_empty(),
             ToolingRequirement::RasterizationDisabledRenderTarget,
+        ),
+        (
+            case.out_of_bounds.iter().any(|declaration| {
+                declaration
+                    .targets
+                    .iter()
+                    .any(|target| target.resource == OutOfBoundsResource::IndexBuffer)
+            }),
+            ToolingRequirement::IndexBufferPastEnd,
         ),
     ]
     .into_iter()
@@ -2918,6 +2929,34 @@ entry:
         vertex.stage = Stage::Vertex;
         vertex.vertex_observation = Some(VertexObservation::Position);
         assert!(case_requirements(&vertex).is_empty());
+        // An indexed draw past its index buffer is the runtime's limit; a vertex fetch past its
+        // vertex buffer is no requirement.
+        let past = |resource, form| {
+            let mut past = vertex.clone();
+            past.out_of_bounds = Some(crate::case::out_of_bounds::OutOfBounds {
+                targets: vec![crate::case::out_of_bounds::OutOfBoundsTarget {
+                    resource,
+                    form,
+                    reach_before: 0,
+                    reach_after: 8,
+                }],
+                reads: Vec::new(),
+            });
+            past
+        };
+        use crate::case::out_of_bounds::ContainmentForm;
+        only(
+            &past(
+                OutOfBoundsResource::IndexBuffer,
+                ContainmentForm::IndexBuffer,
+            ),
+            ToolingRequirement::IndexBufferPastEnd,
+        );
+        assert!(case_requirements(&past(
+            OutOfBoundsResource::AttributeBuffer { location: 0 },
+            ContainmentForm::VertexInput
+        ))
+        .is_empty());
         vertex.depth_stencil = Some(DepthStencilResource {
             dimensions: [1, 1],
             initial_depth_b64: Some("AAAAAA==".into()),

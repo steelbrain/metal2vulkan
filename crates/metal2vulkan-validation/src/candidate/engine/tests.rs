@@ -2758,7 +2758,8 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
     };
     assert!(runs_render_through_runtime(&authored, &unrasterized));
     // An attribute buffer's out-of-bounds target draws through the runtime, whose facts refuse or
-    // run it (`runtime_bounds::drawn`); an index buffer's stays on the executor's own context.
+    // run it (`runtime_bounds::drawn`); no other target does (an index buffer's case carries the
+    // runtime's limit, `index_buffer_past_end`, which stops it before either context).
     use crate::case::out_of_bounds::ContainmentForm;
     let bounded = |resource, form| RenderCase {
         out_of_bounds: vec![OutOfBoundsTarget {

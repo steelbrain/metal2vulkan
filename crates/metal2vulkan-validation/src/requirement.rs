@@ -190,6 +190,15 @@ pub enum ToolingRequirement {
     /// candidate does not run the case. The Metal oracle draws it, so a case of it stays
     /// Metal-qualified ([`Self::qualifies_on_metal`]).
     RenderFunctionTable,
+    /// An indexed draw that reads past its index buffer: a case's out-of-bounds target of a draw's
+    /// index buffer (`executor_contract::case_requirements`). The runtime refuses a draw whose
+    /// indices run past the buffer, as Metal's validation stops it
+    /// (`metal2vulkan_runtime::Refusal::IndexBufferOffset`, a refusal its README states, which is
+    /// its guard), so the limit is the runtime's ([`Limit::Runtime`]) and the engine's candidate
+    /// does not run the case. The case checker raises it from the case's literals, never a
+    /// source's structure, so no census row carries it. The Metal oracle draws it, so a case of it
+    /// stays Metal-qualified ([`Self::qualifies_on_metal`]).
+    IndexBufferPastEnd,
 }
 
 /// Every executor (the requirement leaves no case to author, or none to observe).
@@ -197,7 +206,7 @@ const AUTHORING: &[Executor] = &Executor::ALL;
 const ENGINE: &[Executor] = &[Executor::EngineCandidate];
 
 impl ToolingRequirement {
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 28] = [
         Self::FunctionConstantLiteral,
         Self::VertexAttributeLiteral,
         Self::TessellationAttributeLiteral,
@@ -225,6 +234,7 @@ impl ToolingRequirement {
         Self::ReplayedTemplateResources,
         Self::SeqCstFence,
         Self::RenderFunctionTable,
+        Self::IndexBufferPastEnd,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -258,6 +268,7 @@ impl ToolingRequirement {
             Self::ReplayedTemplateResources => "replayed_template_resources",
             Self::SeqCstFence => "seq_cst_fence",
             Self::RenderFunctionTable => "render_function_table",
+            Self::IndexBufferPastEnd => "index_buffer_past_end",
         }
     }
 
@@ -279,9 +290,9 @@ impl ToolingRequirement {
     ///   template it does not draw or replay ([`ToolingRequirement::MeshRenderPipeline`],
     ///   [`ToolingRequirement::ReplayedTemplateResources`]), and a texture buffer an argument
     ///   buffer or a texture-handle array holds ([`ToolingRequirement::TextureBufferMember`]),
-    ///   and a sequentially consistent fence and a render function's function table, which the
-    ///   runtime refuses ([`ToolingRequirement::SeqCstFence`],
-    ///   [`ToolingRequirement::RenderFunctionTable`]).
+    ///   and a sequentially consistent fence, a render function's function table and an indexed
+    ///   draw past its index buffer, which the runtime refuses ([`ToolingRequirement::SeqCstFence`],
+    ///   [`ToolingRequirement::RenderFunctionTable`], [`ToolingRequirement::IndexBufferPastEnd`]).
     ///
     /// The requirements that stopped only the old engine's candidate were retired with it.
     pub const fn stops(self) -> &'static [Executor] {
@@ -312,7 +323,8 @@ impl ToolingRequirement {
             | Self::TextureBufferMember
             | Self::ReplayedTemplateResources
             | Self::SeqCstFence
-            | Self::RenderFunctionTable => ENGINE,
+            | Self::RenderFunctionTable
+            | Self::IndexBufferPastEnd => ENGINE,
         }
     }
 
@@ -321,8 +333,8 @@ impl ToolingRequirement {
     /// accepts it with no candidate (`executor_contract::evidence_gap`), and the engine's candidate
     /// refuses it, typed. Only [`ToolingRequirement::MeshRenderPipeline`],
     /// [`ToolingRequirement::TextureBufferMember`], [`ToolingRequirement::DepthOutsideUnitRange`],
-    /// [`ToolingRequirement::SeqCstFence`] and [`ToolingRequirement::RenderFunctionTable`]: their
-    /// cases are qualified on Metal.
+    /// [`ToolingRequirement::SeqCstFence`], [`ToolingRequirement::RenderFunctionTable`] and
+    /// [`ToolingRequirement::IndexBufferPastEnd`]: their cases are qualified on Metal.
     pub const fn qualifies_on_metal(self) -> bool {
         matches!(
             self,
@@ -331,14 +343,16 @@ impl ToolingRequirement {
                 | Self::DepthOutsideUnitRange
                 | Self::SeqCstFence
                 | Self::RenderFunctionTable
+                | Self::IndexBufferPastEnd
         )
     }
 
     /// Whose limit this requirement records. Every requirement is this crate's tooling's except
     /// [`ToolingRequirement::KernelMinLodClamp`], which Apple's compiler cannot build a pipeline
     /// for, and [`ToolingRequirement::SeqCstFence`], [`ToolingRequirement::TextureBufferMember`],
-    /// [`ToolingRequirement::DepthOutsideUnitRange`], [`ToolingRequirement::MeshRenderPipeline`]
-    /// and [`ToolingRequirement::RenderFunctionTable`], which the runtime refuses.
+    /// [`ToolingRequirement::DepthOutsideUnitRange`], [`ToolingRequirement::MeshRenderPipeline`],
+    /// [`ToolingRequirement::RenderFunctionTable`] and [`ToolingRequirement::IndexBufferPastEnd`],
+    /// which the runtime refuses.
     pub const fn limit(self) -> Limit {
         match self {
             Self::KernelMinLodClamp => Limit::Metal,
@@ -346,7 +360,8 @@ impl ToolingRequirement {
             | Self::TextureBufferMember
             | Self::DepthOutsideUnitRange
             | Self::MeshRenderPipeline
-            | Self::RenderFunctionTable => Limit::Runtime,
+            | Self::RenderFunctionTable
+            | Self::IndexBufferPastEnd => Limit::Runtime,
             _ => Limit::Tooling,
         }
     }
@@ -499,7 +514,8 @@ mod tests {
                 ToolingRequirement::DepthOutsideUnitRange,
                 ToolingRequirement::MeshRenderPipeline,
                 ToolingRequirement::SeqCstFence,
-                ToolingRequirement::RenderFunctionTable
+                ToolingRequirement::RenderFunctionTable,
+                ToolingRequirement::IndexBufferPastEnd
             ]
         );
     }
@@ -543,6 +559,19 @@ mod tests {
         assert!(!requirement.blocks_closure(), "{requirement}");
         assert!(requirement.qualifies_on_metal(), "{requirement}");
         assert_eq!("render_function_table".parse(), Ok(requirement));
+    }
+
+    /// An indexed draw past its index buffer: the Metal oracle draws it, so its cases stay
+    /// Metal-qualified; the runtime refuses the draw as Metal's validation does, so the engine's
+    /// candidate runs none, the runtime's limit, which closes its rows.
+    #[test]
+    fn an_index_buffer_past_its_end_stops_only_the_candidate() {
+        let requirement = ToolingRequirement::IndexBufferPastEnd;
+        assert_eq!(requirement.stops(), [Executor::EngineCandidate]);
+        assert_eq!(requirement.limit(), Limit::Runtime, "{requirement}");
+        assert!(!requirement.blocks_closure(), "{requirement}");
+        assert!(requirement.qualifies_on_metal(), "{requirement}");
+        assert_eq!("index_buffer_past_end".parse(), Ok(requirement));
     }
 
     /// Every requirement stops some executor, and an executor's name is as stable as a
@@ -593,7 +622,8 @@ mod tests {
                 ToolingRequirement::DepthOutsideUnitRange,
                 ToolingRequirement::MeshRenderPipeline,
                 ToolingRequirement::SeqCstFence,
-                ToolingRequirement::RenderFunctionTable
+                ToolingRequirement::RenderFunctionTable,
+                ToolingRequirement::IndexBufferPastEnd
             ]
         );
         for executor in Executor::ALL {
