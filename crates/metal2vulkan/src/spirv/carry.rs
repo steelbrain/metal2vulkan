@@ -154,7 +154,8 @@ fn hold(meter: &mut Meter, held: &mut usize, bytes: usize) -> Result<(), Error> 
 }
 
 fn tick(meter: &mut Meter, units: usize) -> Result<(), Error> {
-    meter.tick(u32::try_from(units).unwrap_or(u32::MAX))
+    meter.tick(u32::try_from(units).unwrap_or(u32::MAX))?;
+    Ok(())
 }
 
 /// What one marked variable does in one block: its first access there is a read (else a whole
@@ -273,7 +274,7 @@ fn select(
             }
         });
     }
-    let preds_of = |i: usize| preds.get(i).map_or(&[][..], Vec::as_slice);
+    let preds_of = |i: usize| preds.get(i).map(Vec::as_slice).unwrap_or_default();
 
     // The loops, by header in layout order: each one's first block and the loops each block is in.
     let mut firsts: Vec<usize> = Vec::new();
@@ -440,7 +441,11 @@ fn select(
                 stack.push(p);
             }
         }
-        for &l in loops_of.get(s0 as usize).map_or(&[][..], Vec::as_slice) {
+        for &l in loops_of
+            .get(s0 as usize)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+        {
             let Some(&first) = firsts.get(l as usize) else {
                 continue;
             };
