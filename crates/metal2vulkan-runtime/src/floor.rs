@@ -103,8 +103,8 @@ pub const BORDER_SWIZZLE_EXTENSIONS: &[&CStr] = &[
 
 /// The device extension of a fragment function's `[[barycentric_coord]]`
 /// (`VK_KHR_fragment_shader_barycentric`): device creation enables it, with its feature
-/// ([`BARYCENTRICS`]), where the device lists it and reports the feature, and neither otherwise,
-/// so [`Device::extensions`](crate::Device::extensions) names it only with its feature.
+/// `fragmentShaderBarycentric`, where the device lists it and reports the feature, and neither
+/// otherwise, so [`Device::extensions`](crate::Device::extensions) names it only with its feature.
 pub const BARYCENTRIC_EXTENSIONS: &[&CStr] = &[ash::khr::fragment_shader_barycentric::NAME];
 
 /// The translator's name for an extension device creation enables that its shaders may use, or
