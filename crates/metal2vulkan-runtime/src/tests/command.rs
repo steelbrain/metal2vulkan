@@ -1110,8 +1110,11 @@ pub(crate) mod on_device {
     /// submitted for a link: once the busy work ends, the links complete in order, and each holds
     /// the words of every link before it and its own, as the barrier ending each link's commands
     /// orders the next link's after them on the device's one queue. A link waiting for a value no
-    /// submitted signal promises is held, at `Committed`, until the host sets it, and counted in
-    /// `Metrics::event_holds` as it goes.
+    /// submitted signal promises, committed while the submit thread is parked in a scheduled
+    /// handler, stays `Committed` while the links complete; once released, the thread holds it,
+    /// and the host sets the value only then: the hold is counted in `Metrics::event_holds` as it
+    /// goes. A value set before the thread first looks would meet the wait there, with nothing
+    /// held.
     #[test]
     fn every_device_submits_a_shared_event_chain_across_two_queues_before_its_first_link_runs() {
         const LINKS: u32 = 5;
@@ -1187,6 +1190,20 @@ pub(crate) mod on_device {
                 "{name}: no link has run, the busy work holding the device"
             );
             assert_eq!(holds(), before, "{name}: no link held for a value");
+            // The submit thread parked in a scheduled handler: it first looks at the link committed
+            // next only once the test releases it, after the links have completed, as a loaded
+            // host may run it late.
+            let park = Arc::new(std::sync::Barrier::new(2));
+            let parker = queues[1].command_buffer().expect("a command buffer");
+            let parked = Arc::clone(&park);
+            (parker.add_scheduled_handler(move |_| {
+                parked.wait();
+                parked.wait();
+            }))
+            .expect("a handler");
+            parker.commit().expect("a commit");
+            park.wait();
+            let mut release = Release::of(&park);
             // A link waiting for a value no submitted signal promises: held until the host sets
             // it.
             let last = queues[0].command_buffer().expect("a command buffer");
@@ -1207,10 +1224,18 @@ pub(crate) mod on_device {
             assert_eq!(
                 last.status(),
                 CommandBufferStatus::Committed,
-                "{name}: the link held for a value nothing promises"
+                "{name}: the link waiting for a value nothing promises, not yet looked at"
             );
+            // The host sets the value only once the submit thread, released, holds the link for
+            // it: set before the thread has looked, it meets the wait at that first look, and
+            // nothing is held.
+            release.now();
+            within(&format!("{name}: the link held for its value"), || {
+                device.core().work.holding() == 1
+            });
             chain.set_signaled_value(value);
             finished(name, &last);
+            finished(name, &parker);
             let held: Vec<u64> = (holds().iter().zip(&before))
                 .map(|(now, was)| now - was)
                 .collect();
@@ -1233,7 +1258,9 @@ pub(crate) mod on_device {
                     "{name}: link {at}'s words: every link's before it, then its own"
                 );
             }
-            drop((last, links, busy, buffers, arena, chain, queues, device));
+            drop((
+                last, parker, links, busy, buffers, arena, chain, queues, device,
+            ));
         });
     }
 

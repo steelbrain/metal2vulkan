@@ -1020,6 +1020,21 @@ impl Work {
         (state.region.as_ref()).map_or_else(Vec::new, |region| region.ring.live())
     }
 
+    /// For the device tests: the queues whose head's next segment the submit thread holds for an
+    /// event's value ([`WorkState::mark_holds`]).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn holding(&self) -> usize {
+        let state = self.lock();
+        (state.fifos.iter())
+            .filter(|fifo| {
+                (fifo.head()).is_some_and(|pending| {
+                    (fifo.held_since)
+                        .is_some_and(|(seq, next, _)| (seq, next) == (pending.seq, pending.next))
+                })
+            })
+            .count()
+    }
+
     /// Records the zero fill of `offset..end` of `block` into the upload ([`fill`](Self::fill)).
     ///
     /// Err: as [`fill`](Self::fill).
