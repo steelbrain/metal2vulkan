@@ -1492,7 +1492,8 @@ impl RenderCommandEncoder {
         };
         let written = [(Reached::Buffer(buffer.span()), Access::Write)];
         let copies = building.overs_owed(written, false);
-        let backs = over::backs(&**buffer, None, true);
+        let mut backs = Vec::new();
+        building.managed_reach(&**buffer, &mut backs);
         if copies.is_empty() && backs.is_empty() {
             return Ok(());
         }
@@ -3082,7 +3083,7 @@ impl RenderCommandEncoder {
         for &(table, slot, access) in &draws.buffers {
             if let Some(buffer) = tables[table].buffer(slot) {
                 if buffer.managed_overs().is_some() {
-                    backs.extend(over::backs(buffer, None, true));
+                    building.managed_reach(buffer, &mut backs);
                     if access.writes() {
                         building.wrote_managed(buffer);
                     }
@@ -3090,9 +3091,7 @@ impl RenderCommandEncoder {
             }
         }
         for buffer in vertex_reads {
-            if buffer.managed_overs().is_some() {
-                backs.extend(over::backs(buffer, None, true));
-            }
+            building.managed_reach(buffer, &mut backs);
         }
         for &(table, slot, access) in &draws.textures {
             if let (true, Some(texture)) = (access.writes(), tables[table].texture(slot)) {

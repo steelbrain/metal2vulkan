@@ -45,7 +45,7 @@ use crate::fence::Fence;
 use crate::hazard::Access;
 use crate::indirect::{reset_regions, IndirectCommandBuffer};
 use crate::memory::Own;
-use crate::over::{self, Reached};
+use crate::over::Reached;
 use crate::record::{memory_barrier, Reach};
 use crate::surface::Surface;
 use crate::texture::{
@@ -441,8 +441,10 @@ impl BlitCommandEncoder {
         building.keep(destination);
         // The textures over either device copy go back to it first; the destination's owe their
         // copies in (`crate::over::ManagedOvers`).
-        building.managed_backs(over::backs(source, None, true))?;
-        building.managed_backs(over::backs(destination, None, true))?;
+        let mut backs = Vec::new();
+        building.managed_reach(source, &mut backs);
+        building.managed_reach(destination, &mut backs);
+        building.managed_backs(backs)?;
         building.wrote_managed(destination);
         let overs = [
             (Reached::Buffer(source.span()), Access::Read),
@@ -536,7 +538,9 @@ impl BlitCommandEncoder {
         building.keep(buffer);
         // The device copy's textures' copies back go first; a copy into the buffer owes them
         // their copies in, and one into the texture its copy back (`crate::over::ManagedOvers`).
-        building.managed_backs(over::backs(buffer, None, true))?;
+        let mut backs = Vec::new();
+        building.managed_reach(buffer, &mut backs);
+        building.managed_backs(backs)?;
         match into_image {
             true => building.wrote_texture_managed(texture),
             false => building.wrote_managed(buffer),
@@ -663,7 +667,9 @@ impl BlitCommandEncoder {
         let (vk_buffer, base) = buffer.device_range();
         let (offset, length) = fill_range(base, buffer.length(), range)?;
         building.keep(buffer);
-        building.managed_backs(over::backs(buffer, None, true))?;
+        let mut backs = Vec::new();
+        building.managed_reach(buffer, &mut backs);
+        building.managed_backs(backs)?;
         building.wrote_managed(buffer);
         let overs = [(Reached::Buffer(buffer.span()), Access::Write)];
         building.overs_before(overs, false)?;
@@ -1028,7 +1034,9 @@ impl BlitCommandEncoder {
             };
             building.keep(buffer);
             // The textures over the device copy go back to it first (`crate::over`).
-            building.managed_backs(over::backs(buffer, None, true))?;
+            let mut backs = Vec::new();
+            building.managed_reach(buffer, &mut backs);
+            building.managed_backs(backs)?;
             let command = building.ordered_command()?;
             // Marked after `ordered_command`, as a copy into a Shared buffer is.
             building.wrote_host();

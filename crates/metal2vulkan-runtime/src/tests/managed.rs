@@ -34,7 +34,8 @@
 //! committed before a capture of a range over it, in a group held or held for room, reads the
 //! buffer's bytes outside that range, and the one that takes the capture the new bytes. A reader
 //! of the buffer and a write of the texture on one queue run in the order they are committed,
-//! whichever was encoded first.
+//! whichever was encoded first, and a reader of another queue encoded before the write and
+//! committed once it completed reads what it wrote.
 
 use crate::capture::{merge, taker, Captured};
 use crate::submit::put_ahead;
@@ -1798,17 +1799,19 @@ pub(crate) mod on_device {
     }
 
     /// A reader of a Managed buffer and a write of a texture over it in an image of its own
-    /// ([`over_texture`]), on one queue, run in the order they are committed, whichever was
-    /// encoded first: a queue is "a serial queue of command buffers" (`MTLCommandQueue.h`), and a
-    /// commit appends a command buffer not yet enqueued to its end, as `enqueue` does
-    /// (`MTLCommandBuffer.h`). P reads the texture and completes, so its image holds the buffer's
-    /// bytes. W copies a pattern into the whole texture and R copies the whole buffer into a
-    /// Shared buffer, W encoded first where `writer_first`, else R; the one encoded later is
-    /// committed first. Once both completed, L copies the whole buffer again. R reads the buffer's
-    /// bytes where it was committed first, else W's pattern in the texture's rows; L reads W's
-    /// pattern there; both read the buffer's bytes outside them. The form, the copies R recorded
-    /// as it was encoded, and what R and L read are printed.
-    fn over_read_in_commit_order(test: &str, writer_first: bool) {
+    /// ([`over_texture`]) run in the order Metal gives them, whichever was encoded first: on one
+    /// queue, the order they are committed, a queue being "a serial queue of command buffers"
+    /// (`MTLCommandQueue.h`) to whose end a commit appends a command buffer not yet enqueued, as
+    /// `enqueue` does (`MTLCommandBuffer.h`); on two, a reader committed once the write completed
+    /// runs after it. P reads the texture and completes, so its image holds the buffer's bytes. W
+    /// copies a pattern into the whole texture and R copies the whole buffer into a Shared buffer,
+    /// W encoded first where `writer_first`, else R; the one encoded later is committed first.
+    /// With `other_queue`, R is of another queue, committed once W completed. Once both completed,
+    /// L copies the whole buffer again. R reads the buffer's bytes where it was committed first,
+    /// else W's pattern in the texture's rows; L reads W's pattern there; both read the buffer's
+    /// bytes outside them. The form, the copies R recorded as it was encoded, those made as R and
+    /// W went, and what R and L read are printed.
+    fn over_read_in_commit_order(test: &str, writer_first: bool, other_queue: bool) {
         each_device(test, |name, _, device| {
             let counters = device.counters();
             let cpu = (device.take_block(MemoryClass::Shared, 1))
@@ -1823,12 +1826,14 @@ pub(crate) mod on_device {
             };
             let (r_read, l_read) = (whole(1), whole(2));
             let queue = device.new_command_queue(16).expect("a queue");
+            let other = device.new_command_queue(16).expect("a queue");
             let filler = queue.command_buffer().expect("a command buffer");
             read_over(&filler, &texture, &p_read);
             filler.commit().expect("a commit");
             finished(name, &filler);
             let writer = queue.command_buffer().expect("a command buffer");
-            let reader = queue.command_buffer().expect("a command buffer");
+            let reads_on = if other_queue { &other } else { &queue };
+            let reader = reads_on.command_buffer().expect("a command buffer");
             if writer_first {
                 write_over(&writer, &texture, &pattern);
             }
@@ -1848,12 +1853,17 @@ pub(crate) mod on_device {
                 ),
                 false => (&writer, &reader, &written, "W first, R read W's pattern"),
             };
+            let copies = counters.metrics().over_copies;
             first.commit().expect("a commit");
+            if other_queue {
+                finished(name, first);
+            }
             second.commit().expect("a commit");
             for command_buffer in [&writer, &reader] {
                 finished(name, command_buffer);
                 assert_eq!(command_buffer.error(), None, "{name}");
             }
+            let went = counters.metrics().over_copies - copies;
             let later = queue.command_buffer().expect("a command buffer");
             read_whole(&later, &managed, &l_read);
             later.commit().expect("a commit");
@@ -1861,9 +1871,10 @@ pub(crate) mod on_device {
             let len = OVER_LEN as usize;
             let (r_bytes, l_bytes) = (read(&r_read, len), read(&l_read, len));
             println!(
-                "{test}: {name}: {form}; W encoded first {writer_first}; copies R recorded as it \
-                 was encoded {recorded}; committed {owed} {} (its first texels {:?}); L read W's \
-                 pattern {} (its first texels {:?})",
+                "{test}: {name}: {form}; W encoded first {writer_first}, R of another queue \
+                 {other_queue}; copies R recorded as it was encoded {recorded}, made as R and W \
+                 went {went}; committed {owed} {} (its first texels {:?}); L read W's pattern {} \
+                 (its first texels {:?})",
                 r_bytes == *r_owed,
                 &r_bytes[..8],
                 l_bytes == written,
@@ -1871,14 +1882,14 @@ pub(crate) mod on_device {
             );
             assert!(
                 r_bytes == *r_owed,
-                "{name}: R reads what Metal's commit order leaves"
+                "{name}: R reads what Metal's order leaves"
             );
             assert!(
                 l_bytes == written,
                 "{name}: L reads W's pattern in the texture's rows"
             );
             drop((texture, managed, pattern, p_read, r_read, l_read, arena));
-            drop((filler, writer, reader, later, queue));
+            drop((filler, writer, reader, later, queue, other));
             (device.release_block(cpu)).unwrap_or_else(|error| panic!("{name}: {error}"));
         });
     }
@@ -1886,12 +1897,27 @@ pub(crate) mod on_device {
     /// [`over_read_in_commit_order`] with W encoded first and R committed first.
     #[test]
     fn every_device_reads_a_managed_buffer_ahead_of_a_write_over_it_encoded_before_it() {
-        over_read_in_commit_order("managed read ahead of a write encoded before it", true);
+        over_read_in_commit_order(
+            "managed read ahead of a write encoded before it",
+            true,
+            false,
+        );
     }
 
     /// [`over_read_in_commit_order`] with R encoded first and W committed first.
     #[test]
     fn every_device_reads_a_managed_buffer_after_a_write_over_it_encoded_after_it() {
-        over_read_in_commit_order("managed read after a write encoded after it", false);
+        over_read_in_commit_order("managed read after a write encoded after it", false, false);
+    }
+
+    /// [`over_read_in_commit_order`] with R encoded first on another queue and committed once W
+    /// completed.
+    #[test]
+    fn every_device_reads_a_managed_buffer_on_another_queue_after_a_completed_write_over_it() {
+        over_read_in_commit_order(
+            "managed read on another queue after a completed write",
+            false,
+            true,
+        );
     }
 }

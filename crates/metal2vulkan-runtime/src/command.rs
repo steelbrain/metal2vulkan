@@ -329,8 +329,13 @@ pub(crate) struct Segment {
     /// such texture owes its copy in from the next submission (`crate::over::ManagedOvers`).
     pub(crate) managed_written: Vec<Arc<BufferInner>>,
     /// The textures over a Managed buffer's device copy in an image of their own that its
-    /// commands wrote: its submission settles their copies back (`crate::over::ManagedOvers`).
-    pub(crate) managed_wrote: Vec<Arc<TextureInner>>,
+    /// commands wrote, each with whether its copy back is owed, no later command of the command
+    /// buffer having taken it: its submission settles them (`crate::over::ManagedOvers`).
+    pub(crate) managed_wrote: Vec<(Arc<TextureInner>, bool)>,
+    /// The Managed buffers with textures over their device copies that its commands reach: the
+    /// upload that leads its submission takes the copies back owed to them by writes submitted
+    /// before it (`crate::over::ManagedOvers`).
+    pub(crate) managed_reached: Vec<Arc<BufferInner>>,
 }
 
 pub(crate) struct Handlers {
@@ -1427,8 +1432,8 @@ impl Building {
     }
 
     /// Before a command that reads or writes a Managed buffer's device copy: records the copies
-    /// back `backs` owed by textures over it (`crate::over::ManagedOvers`), ordered as a blit's
-    /// copy is, and keeps their images until the command buffer retires.
+    /// back `backs` owed by textures over it ([`managed_reach`](Self::managed_reach)), ordered as
+    /// a blit's copy is, and keeps their images until the command buffer retires.
     ///
     /// Err: [`Error::Vulkan`] where the command buffer cannot record.
     pub(crate) fn managed_backs(&mut self, backs: Vec<over::Back>) -> Result<(), Error> {
@@ -1448,19 +1453,54 @@ impl Building {
         Ok(())
     }
 
+    /// A command reaches `buffer`'s device copy: where it is a Managed buffer with textures over
+    /// it in images of their own, the copies back owed by this command buffer's writes of them
+    /// before the command, taken, into `backs`, for the command's own commands to make first; the
+    /// upload that leads the segment's submission takes those owed by other command buffers'
+    /// writes submitted before it (`crate::over::ManagedOvers`).
+    pub(crate) fn managed_reach(
+        &mut self,
+        buffer: &impl BufferObject,
+        backs: &mut Vec<over::Back>,
+    ) {
+        let Some(overs) = buffer.managed_overs() else {
+            return;
+        };
+        let mut own = Vec::new();
+        for segment in &mut self.gpu.segments {
+            for (texture, owes) in &mut segment.managed_wrote {
+                let over = texture
+                    .managed_over()
+                    .is_some_and(|over| over.id() == buffer.id());
+                if *owes && over {
+                    *owes = false;
+                    own.push(texture.id());
+                }
+            }
+        }
+        overs.own_backs(&own, backs);
+        let reached = &mut self.last().managed_reached;
+        if !reached.iter().any(|kept| kept.id() == buffer.id()) {
+            reached.push(Arc::clone(buffer.object()));
+        }
+    }
+
     /// A command writes `texture`: where it is over a Managed buffer's device copy in an image of
-    /// its own, it owes its copy back to the readers recorded after the command, and from the
-    /// segment's submission to every later reader (`crate::over::ManagedOvers`).
+    /// its own, it owes its copy back to the later commands of the command buffer that reach the
+    /// buffer, and from the segment's submission, where none of them took it, to the readers
+    /// submitted after (`crate::over::ManagedOvers`).
     pub(crate) fn wrote_texture_managed(&mut self, texture: &impl TextureObject) {
         let Some(buffer) = texture.managed_over() else {
             return;
         };
         let wrote = &mut self.last().managed_wrote;
-        let first = !wrote.iter().any(|kept| kept.id() == texture.id());
-        if first {
-            wrote.push(Arc::clone(texture.object()));
+        match wrote.iter_mut().find(|(kept, _)| kept.id() == texture.id()) {
+            Some((_, owes)) => *owes = true,
+            None => {
+                wrote.push((Arc::clone(texture.object()), true));
+                buffer.over_entries().pend(texture.id());
+            }
         }
-        buffer.over_entries().pend(texture.id(), first);
     }
 
     /// A command writes `buffer`: where it is a Managed buffer with textures over its device copy,

@@ -192,13 +192,13 @@ impl Captured {
         &self,
         after: u64,
         number: u64,
-        wrote: &[Arc<TextureInner>],
+        wrote: &[(Arc<TextureInner>, bool)],
     ) -> bool {
         (self.0.iter())
             .filter(|&&(captured, _)| after < captured && captured <= number)
             .flat_map(|(_, copy_in)| &copy_in.modified)
             .any(|modified| {
-                (wrote.iter()).any(|texture| {
+                (wrote.iter()).any(|(texture, _)| {
                     (texture.managed_over())
                         .is_some_and(|buffer| Weak::as_ptr(&modified.buffer) == Arc::as_ptr(buffer))
                 })

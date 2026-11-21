@@ -44,7 +44,6 @@
 //! segment wrote is kept in sets by block ([`Written`]), so a write costs one lookup however many
 //! the segment made.
 
-use crate::buffer::BufferObject;
 use crate::copy_out;
 use crate::counters::{Counters, Metric};
 use crate::device::lock;
@@ -110,7 +109,8 @@ impl Written {
 pub(crate) enum Reached<'a> {
     /// A texture: one in place over a buffer reaches the buffer.
     Texture(&'a Arc<TextureInner>),
-    /// A buffer, by the bytes of memory it lies in ([`BufferObject::span`]).
+    /// A buffer, by the bytes of memory it lies in
+    /// ([`BufferObject::span`](crate::buffer::BufferObject::span)).
     Buffer(Span),
 }
 
@@ -532,16 +532,13 @@ struct Entry {
     /// runs ahead of every command buffer numbered at or after it (`crate::capture`), which then
     /// takes none, while one numbered before it may run first and still takes its own.
     captured: Option<u64>,
-    /// Submitted device work wrote it since its last copy back: the upload that leads a
-    /// submission may take the copy.
+    /// Submitted device work wrote it since its last copy back: the upload that leads a later
+    /// submission takes the copy.
     back: bool,
-    /// Device work wrote it since a reader last took its copy back, submitted or not: a reader
-    /// recorded after the write takes the copy in its own commands.
-    fresh: bool,
     /// The segments that wrote it and are not yet submitted. The upload that leads a submission
     /// runs before them, so it takes no copy back for their writes; each one's submission makes
-    /// the copy back owed to it, unless a reader recorded after the write took it. One whose
-    /// command buffer is never committed leaves the entry until the buffer is released.
+    /// the copy back owed to it, unless a later command of its own command buffer took it. One
+    /// whose command buffer is never committed leaves the entry until the buffer is released.
     pending: u32,
     /// The texture is released: the entry lives for its copy back alone, and its id may name a
     /// texture made since, which a lookup by id finds instead.
@@ -573,9 +570,13 @@ impl Entry {
 /// - **Back** where device work wrote the texture since the last copy back: before the next
 ///   reader of the device copy (a binding whose interface reads the buffer, a blit from it, a copy
 ///   into another texture over a range that meets its, a synchronize, a capture of a range over
-///   it), not after each write. A reader recorded after the write takes it in its own commands; the
-///   upload that leads a submission takes it only once the write's segment was submitted, as the
-///   upload runs before the submission's commands. A capture's is taken by the upload that leads
+///   it), not after each write. A reader in the write's own command buffer, recorded after it,
+///   takes it in its own commands. Any other reader runs after the write only where the write was
+///   submitted first, Metal running a queue's command buffers in the order they are committed,
+///   whichever was encoded first: the upload that leads the reader's submission takes it once the
+///   write's segment was submitted, as the upload runs before the submission's commands, and a
+///   reader whose group held holds the write ahead of it leads its own group, the write submitted
+///   first (`crate::submit`). A capture's is taken by the upload that leads
 ///   the submission that takes its copy-in, a write in the same group held going first in a
 ///   submission of its own (`crate::capture`). A texture released while its copy back is owed
 ///   leaves its image with the buffer until a reader takes it or the buffer is released, which
@@ -615,7 +616,6 @@ impl ManagedOvers {
             into: true,
             captured: None,
             back: false,
-            fresh: false,
             pending: 0,
             released: false,
         });
@@ -634,25 +634,24 @@ impl ManagedOvers {
         self.count.store(entries.len(), Relaxed);
     }
 
-    /// A segment not yet submitted wrote texture `texture`; `first` where it had not written it
-    /// before, which its submission settles ([`ManagedOvers::settle`]).
-    pub(crate) fn pend(&self, texture: u32, first: bool) {
+    /// A segment not yet submitted wrote texture `texture` for the first time, which its
+    /// submission settles ([`ManagedOvers::settle`]).
+    pub(crate) fn pend(&self, texture: u32) {
         if let Some(entry) = lock(&self.entries).iter_mut().find(|e| e.of(texture)) {
-            entry.pending += u32::from(first);
-            entry.fresh = true;
+            entry.pending += 1;
         }
     }
 
     /// A segment that wrote texture `texture` was submitted: the texture owes its copy back where
-    /// no reader recorded after the write took it, and each other texture whose range meets its
-    /// owes its copy in, which takes that copy back first.
-    pub(crate) fn settle(&self, texture: u32) {
+    /// `owes`, no later command of its command buffer having taken it, and each other texture
+    /// whose range meets its owes its copy in, which takes that copy back first.
+    pub(crate) fn settle(&self, texture: u32, owes: bool) {
         let mut entries = lock(&self.entries);
         let Some(range) = (entries.iter_mut())
             .find(|entry| entry.of(texture))
             .map(|entry| {
                 entry.pending = entry.pending.saturating_sub(1);
-                entry.back |= entry.fresh;
+                entry.back |= owes;
                 entry.range
             })
         else {
@@ -674,24 +673,33 @@ impl ManagedOvers {
         }
     }
 
-    /// A reader of the device copy comes, over `range` of the buffer (all of it where `None`):
-    /// each copy back owed by a texture whose range meets it, taken, into `backs`; with `pending`,
-    /// a reader recorded after the writes, also those of writes not yet submitted. A released
-    /// texture's entry goes once nothing is owed.
-    pub(crate) fn backs(&self, range: Option<(u64, u64)>, pending: bool, backs: &mut Vec<Back>) {
+    /// The upload that leads a submission that reads the device copy over `range` of the buffer
+    /// (all of it where `None`): each copy back owed by a submitted write of a texture whose range
+    /// meets it, taken, into `backs`. A released texture's entry goes once nothing is owed.
+    pub(crate) fn backs(&self, range: Option<(u64, u64)>, backs: &mut Vec<Back>) {
         let mut entries = lock(&self.entries);
         for entry in entries.iter_mut() {
-            let owed = entry.back || (pending && entry.fresh);
-            if owed && range.is_none_or(|range| meets(entry.range, range)) {
+            if entry.back && range.is_none_or(|range| meets(entry.range, range)) {
                 backs.push((entry.texture, entry.copy, Arc::clone(&entry.image)));
                 entry.back = false;
-                // A write not yet submitted stays fresh for the readers recorded after it, where
-                // the upload took the copy before it runs.
-                entry.fresh &= !pending && entry.pending > 0;
             }
         }
         entries.retain(|entry| !entry.released || entry.back || entry.pending > 0);
         self.count.store(entries.len(), Relaxed);
+    }
+
+    /// A command of the command buffer that wrote `textures` and reads the device copy after
+    /// those writes: their copies back, into `backs`, for its own commands to make first. The
+    /// copies back owed by other command buffers' writes wait for its submission
+    /// ([`backs`](Self::backs)), where the order of the two is known.
+    pub(crate) fn own_backs(&self, textures: &[u32], backs: &mut Vec<Back>) {
+        let entries = lock(&self.entries);
+        for entry in entries
+            .iter()
+            .filter(|entry| textures.iter().any(|&t| entry.of(t)))
+        {
+            backs.push((entry.texture, entry.copy, Arc::clone(&entry.image)));
+        }
     }
 
     /// A submission takes the copy-in of a capture of `ranges` of the consumer's bytes into the
@@ -712,8 +720,6 @@ impl ManagedOvers {
             if entry.back && (meets_any(ranges, entry.range) || meets_any(&targets, entry.range)) {
                 backs.push((entry.texture, entry.copy, Arc::clone(&entry.image)));
                 entry.back = false;
-                // A write not yet submitted stays fresh for the readers recorded after it.
-                entry.fresh &= entry.pending > 0;
             }
         }
         entries.retain(|entry| !entry.released || entry.back || entry.pending > 0);
@@ -769,22 +775,7 @@ impl ManagedOvers {
             }
             (entry.range, entry.copy)
         };
-        self.backs(Some(range), false, backs);
+        self.backs(Some(range), backs);
         Some(copy)
     }
-}
-
-/// The copies back owed to readers of `buffer`'s device copy over `range` (all of it where
-/// `None`), where it has textures over it in images of their own; with `pending`, a reader
-/// recorded after the writes, also those of writes not yet submitted.
-pub(crate) fn backs(
-    buffer: &impl BufferObject,
-    range: Option<(u64, u64)>,
-    pending: bool,
-) -> Vec<Back> {
-    let mut backs = Vec::new();
-    if let Some(overs) = buffer.managed_overs() {
-        overs.backs(range, pending, &mut backs);
-    }
-    backs
 }

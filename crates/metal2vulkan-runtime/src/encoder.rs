@@ -1105,7 +1105,7 @@ impl ComputeCommandEncoder {
                 for &(slot, access) in &interface.buffers {
                     if let Some(Slot::Buffer { buffer, .. }) = self.slots.get(slot as usize) {
                         if buffer.managed_overs().is_some() {
-                            backs.extend(over::backs(&**buffer, None, true));
+                            building.managed_reach(&**buffer, &mut backs);
                             if access.writes() {
                                 building.wrote_managed(&**buffer);
                             }

@@ -480,8 +480,12 @@ struct Batch {
     /// copies in once it is submitted.
     written: Vec<Arc<BufferInner>>,
     /// The textures over a Managed buffer's device copy its segments wrote, one for each segment
-    /// that wrote one, whose copies back its submission settles.
-    wrote: Vec<Arc<TextureInner>>,
+    /// that wrote one, whose copies back its submission settles, each with whether its copy back
+    /// is owed (`crate::command::Segment::managed_wrote`).
+    wrote: Vec<(Arc<TextureInner>, bool)>,
+    /// The Managed buffers with textures over their device copies its segments reach, to which
+    /// its upload takes the copies back owed by writes submitted before (`crate::over`).
+    reached: Vec<Arc<BufferInner>>,
 }
 
 /// One part of a submit info: a segment's or an upload's commands and its signals, and for a
@@ -1693,8 +1697,12 @@ impl WorkState {
         }
         let segment = &pending.gpu.segments[pending.next];
         // A segment that leans on the leading copy for a buffer an earlier segment of the group
-        // wrote leads its group, so its copy follows the write (`crate::over`).
-        if (fifo.group.as_ref()).is_some_and(|group| group.leans.conflicts(&segment.overs)) {
+        // wrote leads its group, so its copy follows the write (`crate::over`); so does one that
+        // reaches a Managed buffer a texture over which an earlier segment of the group wrote, so
+        // its upload takes the copy back the write owes (`Batch::owes_over`).
+        if (fifo.group.as_ref()).is_some_and(|group| {
+            group.leans.conflicts(&segment.overs) || group.owes_over(&segment.managed_reached)
+        }) {
             return Step::Goes(index);
         }
         // A command buffer joins the group held only while the group's expected GPU runs, summed,
@@ -1736,6 +1744,7 @@ impl WorkState {
             backs: Vec::new(),
             written: Vec::new(),
             wrote: Vec::new(),
+            reached: Vec::new(),
         });
         if leads {
             group.run = group.run.saturating_add(run.unwrap_or(u64::MAX));
@@ -1754,6 +1763,11 @@ impl WorkState {
             }
         }
         group.wrote.extend(segment.managed_wrote.iter().cloned());
+        for buffer in &segment.managed_reached {
+            if !group.reached.iter().any(|kept| kept.id() == buffer.id()) {
+                group.reached.push(buffer.clone());
+            }
+        }
         for copy in segment.overs.leaning() {
             if !group.overs.iter().any(|kept| kept.image == copy.image) {
                 group.overs.push(copy);
@@ -1859,6 +1873,12 @@ impl WorkState {
         for (_, copy_in) in &taken {
             copy_in.backs(&mut batch.backs);
         }
+        // The copies back owed by writes submitted before it to the Managed buffers its segments
+        // reach, which its upload makes first: as it goes, the order of each write and its
+        // readers on the device's one `VkQueue` is known (`crate::over::ManagedOvers`).
+        for buffer in &batch.reached {
+            buffer.over_entries().backs(None, &mut batch.backs);
+        }
         batch.take(taken);
         self.progress += 1;
         let value = self.progress;
@@ -1898,6 +1918,18 @@ impl Batch {
     fn takes(&self, run: Option<u64>, retired: u64) -> bool {
         let unseen = if self.seen == retired { self.unseen } else { 0 };
         self.count < GROUP && joins(self.run, unseen, run)
+    }
+
+    /// Whether a texture over one of `reached`, Managed buffers, owes its copy back for a write of
+    /// one of its segments: a segment that reaches one of them after these leads its own group,
+    /// so the write is submitted, and owes its copy back, before the upload that leads that
+    /// segment's submission takes it (`crate::over::ManagedOvers`).
+    fn owes_over(&self, reached: &[Arc<BufferInner>]) -> bool {
+        (self.wrote.iter()).any(|(texture, owes)| {
+            *owes
+                && (texture.managed_over())
+                    .is_some_and(|over| reached.iter().any(|buffer| buffer.id() == over.id()))
+        })
     }
 }
 
@@ -2205,6 +2237,7 @@ impl Batch {
             backs: Vec::new(),
             written: Vec::new(),
             wrote: Vec::new(),
+            reached: Vec::new(),
         }
     }
 }
@@ -2486,9 +2519,9 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
     }
     // Its writes of textures over a Managed buffer's device copy are submitted: the upload that
     // leads a later submission may take their copies back.
-    for texture in wrote {
+    for (texture, owes) in wrote {
         if let Some(buffer) = texture.managed_over() {
-            buffer.over_entries().settle(texture.id());
+            buffer.over_entries().settle(texture.id(), owes);
         }
     }
 }

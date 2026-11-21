@@ -1372,10 +1372,13 @@ made, with no lock, and never rewritten for layouts.
     from the device copy. Back, where device work
     wrote the texture, before the next reader of the device copy (a binding that reaches the
     buffer, a blit from or into it, a copy into another texture over a range that meets its, a
-    `synchronize_resource`, a capture of a range over it, ahead of its copies): a
-    reader recorded after the write makes it in its own commands, and the upload that leads a
-    submission, which runs before the submission's commands, only once the write's segment was
-    submitted; that submission also owes each other texture over a range that meets its a copy
+    `synchronize_resource`, a capture of a range over it, ahead of its copies): a reader in the
+    write's own command buffer, recorded after the write, makes it in its own commands; any other
+    reader, whichever was encoded first, takes it in the upload that leads its submission, which
+    runs before the submission's commands, only once the write's segment was submitted, so a
+    reader committed before the write on its queue runs ahead of it and leaves it owed, and a
+    reader whose group held holds the write ahead of it leads its own group, the write submitted
+    first. The write's submission also owes each other texture over a range that meets its a copy
     in. A texture released while its copy back is owed leaves its image with the buffer until a reader takes it
     or the buffer is released, which drops it uncopied; `Gauges::textures` counts it meanwhile.
     A host write the program does not tell with `did_modify_range` reaches such a texture only
