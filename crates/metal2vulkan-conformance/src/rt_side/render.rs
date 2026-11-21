@@ -18,6 +18,7 @@ use crate::values::{
     StoreActionOptions, VisibilityResultMode, VisibilityResultType,
 };
 use crate::work::Plane;
+use metal2vulkan::metal::{PrimitiveType, TriangleFillMode};
 use metal2vulkan_runtime as rt;
 
 /// A typed error of the runtime as the failure it records.
@@ -335,6 +336,24 @@ impl RtSide<'_> {
                                 mode: VisibilityResultMode::Boolean | VisibilityResultMode::Counting,
                                 ..
                             } => Some(rt::RenderCommandEncoder::VISIBILITY_NOTE),
+                            RenderStep::FillMode(TriangleFillMode::Lines) => {
+                                Some(rt::RenderCommandEncoder::LINE_NOTE)
+                            }
+                            RenderStep::Draw { primitive, .. }
+                            | RenderStep::DrawInstanced { primitive, .. }
+                            | RenderStep::DrawPlain { primitive, .. }
+                            | RenderStep::DrawIndexed { primitive, .. }
+                            | RenderStep::DrawIndexedPlain { primitive, .. }
+                            | RenderStep::DrawIndexedInstanced { primitive, .. }
+                            | RenderStep::DrawIndirect { primitive, .. }
+                            | RenderStep::DrawIndexedIndirect { primitive, .. }
+                                if matches!(
+                                    primitive,
+                                    PrimitiveType::Line | PrimitiveType::LineStrip
+                                ) =>
+                            {
+                                Some(rt::RenderCommandEncoder::LINE_NOTE)
+                            }
                             _ => None,
                         });
                         let notes: Vec<rt::PrecisionNote> = notes.collect();

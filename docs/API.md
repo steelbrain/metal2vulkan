@@ -1676,9 +1676,7 @@ the translated module, the pixel format, the descriptor or the state, on every d
 
 - `ComputePipelineState::precision_notes` and `RenderPipelineState::precision_notes`: the
   translator's notes of the state's modules, with `SwizzledOpaqueBlackBorder` where a function
-  samples through a constexpr sampler whose address mode reads an opaque-black border, and
-  `DeviceLineRasterization` where a render pipeline's descriptor enables alpha to coverage or
-  alpha to one;
+  samples through a constexpr sampler whose address mode reads an opaque-black border;
 - `Texture::precision_note`: `CompressedTexelDecode` where the texture's own pixel format is
   block-compressed;
 - `SamplerState::precision_note`: `SwizzledOpaqueBlackBorder` where an address mode reads an
@@ -1688,8 +1686,10 @@ the translated module, the pixel format, the descriptor or the state, on every d
   resolves;
 - `BlitCommandEncoder::GENERATE_MIPMAPS_NOTE` (`DeviceFilteredMipmaps`, of `generate_mipmaps`),
   `RenderCommandEncoder::DEPTH_BIAS_NOTE` (`DeviceDepthBias`, of a draw of triangles under a depth
-  bias) and `RenderCommandEncoder::VISIBILITY_NOTE` (`DeviceOcclusionCount`, of a `Boolean` or
-  `Counting` visibility result).
+  bias), `RenderCommandEncoder::LINE_NOTE` (`DeviceLineRasterization`, of a draw of lines or a line
+  strip, and of a draw of triangles under the `Lines` fill mode) and
+  `RenderCommandEncoder::VISIBILITY_NOTE` (`DeviceOcclusionCount`, of a `Boolean` or `Counting`
+  visibility result).
 
 A note is never fatal: the work runs on every device. The runtime prints and sends no note; a
 consumer reads them through these items. The translator's own API gives a stage's notes
@@ -2526,14 +2526,22 @@ bound.
   NVIDIA driver reads `(0, 0, 0, 1)`, where Metal reads the border colour in the format's channels
   through the swizzle. A device with the feature reads Metal's texel.
 - `metal2vulkan-degrade-device-line-rasterization` (precision).
-  `PrecisionNote::DeviceLineRasterization`: A render pipeline state that enables alpha to coverage
-  or alpha to one, which carries it among its notes (`precision_notes`), decided by its descriptor
-  alone. Its lines are drawn by the device's default rule, not Bresenham's, which Vulkan takes with
-  neither (`VUID-VkGraphicsPipelineCreateInfo-lineRasterizationMode-02766`). Metal covers the
-  pixels whose diamond a line exits; a device whose `strictLines` is set (lavapipe, NVIDIA's
-  driver) covers the rectangle of the line's width instead, so the pixels at a line's two ends,
-  and on either side of a pixel boundary the line runs along, may differ from Metal's. Every other
-  state draws its lines by Bresenham's rule (`bresenhamLines`, the runtime's floor).
+  `PrecisionNote::DeviceLineRasterization`: A draw of lines (a line or a line strip, or a
+  triangle's edges under the `Lines` fill mode), on every device, which carries it
+  (`RenderCommandEncoder::LINE_NOTE`). Metal covers the pixels whose diamond a line exits. Lines
+  draw by Vulkan's Bresenham mode (`bresenhamLines`, the runtime's floor), which lets an
+  implementation's fragment lie up to one pixel in x or y from the diamond-exit rule's, and its
+  fragment count differ by one (the Vulkan specification, "Bresenham Line Segment
+  Rasterization"), and whose diamond is open, so no Vulkan control decides the pixel of a line that
+  only touches a diamond's vertex: where a line of the conformance case
+  `primitive-type-restart-indices` runs through the boundary point (3.5, 1.0), Metal on an Apple M3
+  Max covers the lower pixel and NVIDIA's driver the upper (the accepted difference "A line's
+  tie-break is the device's own", section 10). A state that enables alpha to coverage or alpha to one draws its lines by the device's default
+  rule instead, as Vulkan's Bresenham mode takes neither
+  (`VUID-VkGraphicsPipelineCreateInfo-lineRasterizationMode-02766`): a device whose `strictLines`
+  is set (lavapipe, NVIDIA's driver) covers the rectangle of the line's width, so the pixels at a
+  line's two ends, and on either side of a pixel boundary the line runs along, may differ from
+  Metal's.
 - `metal2vulkan-degrade-device-pack-conversion` (precision). `PrecisionNote::DevicePackConversion`:
   Native device maths (a conversion): `air.pack` or `air.unpack` of a normalized format is the
   device's: `GLSL.std.450`'s `Pack`/`Unpack` `Unorm4x8`, `Snorm4x8`, `Unorm2x16` and `Snorm2x16`,
@@ -2611,7 +2619,8 @@ named states the rule in full.
   no pixel whose centre lies on or past that edge and culls no point at the clip volume (the
   conformance case `point-viewport-coverage`).
 - **A line's tie-break is the device's own.** Lines draw by Bresenham's rule, which is Metal's
-  (`bresenhamLines`, the runtime's floor): the pixels whose diamond the line exits. Vulkan's
+  (`bresenhamLines`, the runtime's floor): the pixels whose diamond the line exits, each within
+  the one pixel Vulkan allows an implementation (`PrecisionNote::DeviceLineRasterization`). Vulkan's
   diamond is open (`|p - x| + |q - y| < 0.5`), so a line that only touches a diamond's vertex
   exits neither diamond the vertex joins, and no Vulkan control decides which pixel a conforming
   driver covers there. Measured, where a line of the conformance case

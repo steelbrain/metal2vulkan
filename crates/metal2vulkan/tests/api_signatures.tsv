@@ -53,6 +53,7 @@ assoc-const	metal2vulkan-runtime::IndirectCommandType::DRAW_MESH_THREADS	pub con
 assoc-const	metal2vulkan-runtime::IndirectCommandType::DRAW_PATCHES	pub const DRAW_PATCHES: IndirectCommandType
 assoc-const	metal2vulkan-runtime::PixelFormatInfo::INVALID	pub const INVALID: PixelFormatInfo
 assoc-const	metal2vulkan-runtime::RenderCommandEncoder::DEPTH_BIAS_NOTE	pub const DEPTH_BIAS_NOTE: PrecisionNote
+assoc-const	metal2vulkan-runtime::RenderCommandEncoder::LINE_NOTE	pub const LINE_NOTE: PrecisionNote
 assoc-const	metal2vulkan-runtime::RenderCommandEncoder::VISIBILITY_NOTE	pub const VISIBILITY_NOTE: PrecisionNote
 assoc-const	metal2vulkan-runtime::ResourceUsage::READ	pub const READ: ResourceUsage
 assoc-const	metal2vulkan-runtime::ResourceUsage::SAMPLE	pub const SAMPLE: ResourceUsage
@@ -279,6 +280,7 @@ assoc-const-value	metal2vulkan-runtime::IndirectCommandType::DRAW_MESH_THREADS	I
 assoc-const-value	metal2vulkan-runtime::IndirectCommandType::DRAW_PATCHES	IndirectCommandType(1 <<2)
 assoc-const-value	metal2vulkan-runtime::PixelFormatInfo::INVALID	PixelFormatInfo
 assoc-const-value	metal2vulkan-runtime::RenderCommandEncoder::DEPTH_BIAS_NOTE	PrecisionNote::DeviceDepthBias
+assoc-const-value	metal2vulkan-runtime::RenderCommandEncoder::LINE_NOTE	PrecisionNote::DeviceLineRasterization
 assoc-const-value	metal2vulkan-runtime::RenderCommandEncoder::VISIBILITY_NOTE	PrecisionNote::DeviceOcclusionCount
 assoc-const-value	metal2vulkan-runtime::ResourceUsage::READ	ResourceUsage(1)
 assoc-const-value	metal2vulkan-runtime::ResourceUsage::SAMPLE	ResourceUsage(4)

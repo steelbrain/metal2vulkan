@@ -368,8 +368,10 @@ pub struct RtSide<'a> {
     /// [`Side::announced`] answers too.
     drawn: BTreeSet<usize>,
     /// The static notes of what a pass the case encoded set beside its pipeline states: a depth
-    /// bias other than 0 (`RenderCommandEncoder::DEPTH_BIAS_NOTE`) and each depth-stencil state's
-    /// (`DepthStencilState::precision_note`); and of each texture and sampler state the case made
+    /// bias other than 0 (`RenderCommandEncoder::DEPTH_BIAS_NOTE`), a draw of lines or a line
+    /// strip and the `Lines` fill mode (`RenderCommandEncoder::LINE_NOTE`), and each
+    /// depth-stencil state's (`DepthStencilState::precision_note`); and of each texture and
+    /// sampler state the case made
     /// (`Texture::precision_note`, `SamplerState::precision_note`), which [`Side::announced`]
     /// answers too.
     encoder_notes: BTreeSet<rt::PrecisionNote>,

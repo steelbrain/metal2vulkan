@@ -55,7 +55,8 @@
 //! A line is drawn by Bresenham's rule, which is Metal's (`bresenhamLines`, Floor): the line
 //! class's `VkPipeline` chains `VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT`, except under alpha to
 //! coverage or alpha to one, which the mode does not take, where the device's default rule draws
-//! it (`PrecisionNote::DeviceLineRasterization`).
+//! it. Either way its pixels are the device's, within Vulkan's allowance of the diamond-exit rule,
+//! which a draw of lines records (`RenderCommandEncoder::LINE_NOTE`).
 //!
 //! A content whose vertex function is post-tessellation draws patches alone, so its one
 //! `VkPipeline` is the patch class's, made with the state: the translator's synthesized vertex and
@@ -223,9 +224,8 @@ pub(crate) struct RenderCompiled {
     /// Metal rasterizes no point of such a function and runs its vertex function all the same
     /// (`metal2vulkan::pipeline::GraphicsState::writes_point_size`).
     rasterizes_points: bool,
-    /// The translator's notes of where the pipeline's answers may differ from Metal's, its
-    /// functions' constexpr samplers' (`constexpr_notes`), and `DeviceLineRasterization` where its
-    /// lines are drawn by the device's default rule (`lines_by_device_rule`).
+    /// The translator's notes of where the pipeline's answers may differ from Metal's, and its
+    /// functions' constexpr samplers' (`constexpr_notes`).
     notes: Vec<PrecisionNote>,
     /// What a draw supplies.
     pub(crate) draws: Draws,
@@ -464,9 +464,7 @@ impl crate::Device {
 
 /// Whether a content's lines are drawn by the device's default rule rather than Bresenham's:
 /// its state enables alpha to coverage or alpha to one, which Vulkan's Bresenham mode does not
-/// take (`VUID-VkGraphicsPipelineCreateInfo-lineRasterizationMode-02766`). Decided by the
-/// descriptor alone, so a state of it carries `PrecisionNote::DeviceLineRasterization` whether or
-/// not it draws lines.
+/// take (`VUID-VkGraphicsPipelineCreateInfo-lineRasterizationMode-02766`).
 fn lines_by_device_rule(fixed: &Fixed) -> bool {
     fixed.alpha_to_coverage || fixed.alpha_to_one
 }
@@ -1084,10 +1082,6 @@ impl RenderCompiled {
             });
             notes.extend(stage.precision_notes.iter().copied());
         }
-        let fixed = Fixed::of(&pipeline);
-        if lines_by_device_rule(&fixed) {
-            notes.push(PrecisionNote::DeviceLineRasterization);
-        }
         notes.sort_unstable();
         notes.dedup();
         core.counters.rise(Gauge::RenderContents);
@@ -1098,7 +1092,7 @@ impl RenderCompiled {
         let mut compiled = RenderCompiled {
             core: Arc::clone(core),
             stages,
-            fixed,
+            fixed: Fixed::of(&pipeline),
             primary: vk::Pipeline::null(),
             later: Mutex::new(Vec::new()),
             rasterizes_points: pipeline.graphics.writes_point_size
@@ -1261,7 +1255,8 @@ impl RenderCompiled {
         // Vulkan's Bresenham mode does not take
         // (`VUID-VkGraphicsPipelineCreateInfo-lineRasterizationMode-02766`; the runtime enables no
         // sample shading, the third it names): such a state draws its lines by the device's
-        // default rule (`PrecisionNote::DeviceLineRasterization`, of `lines_by_device_rule`).
+        // default rule (`lines_by_device_rule`). Either way a draw of lines records
+        // `RenderCommandEncoder::LINE_NOTE`.
         let mut line = vk::PipelineRasterizationLineStateCreateInfoEXT::default()
             .line_rasterization_mode(vk::LineRasterizationModeEXT::BRESENHAM);
         let draws_lines = topology == vk::PrimitiveTopology::LINE_LIST || raster.lines;
@@ -1346,9 +1341,8 @@ impl RenderPipelineState {
     /// [`PrecisionNote::SwizzledOpaqueBlackBorder`] where a function samples through a constexpr
     /// sampler whose address mode reads an opaque-black border (decided by the sampler's own
     /// constants, as [`SamplerState::precision_note`](crate::SamplerState::precision_note) is by
-    /// its descriptor), and [`PrecisionNote::DeviceLineRasterization`] where the descriptor
-    /// enables alpha to coverage or alpha to one, under which the state's lines are drawn by the
-    /// device's default rule, not Bresenham's; empty where they match.
+    /// its descriptor); empty where they match. A draw's lines carry their own note
+    /// ([`RenderCommandEncoder::LINE_NOTE`](crate::RenderCommandEncoder::LINE_NOTE)).
     pub fn precision_notes(&self) -> Vec<PrecisionNote> {
         self.inner.compiled.notes.clone()
     }

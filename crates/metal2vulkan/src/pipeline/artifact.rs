@@ -2086,16 +2086,21 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
     SwizzledOpaqueBlackBorder,
-    /// A render pipeline state that enables alpha to coverage or alpha to one draws its lines by
-    /// the device's default rule, not Bresenham's: Vulkan's Bresenham mode takes neither
-    /// (`VUID-VkGraphicsPipelineCreateInfo-lineRasterizationMode-02766`). Metal covers the pixels
-    /// whose diamond a line exits, which Bresenham's mode is; a device whose `strictLines` is set
-    /// (lavapipe, NVIDIA's driver) covers the rectangle of the line's width instead, so the pixels
-    /// at a line's two ends, and on either side of a pixel boundary the line runs along, may
-    /// differ from Metal's. Every other state draws its lines by Bresenham's rule and records no
-    /// note. Static, decided by the descriptor alone: no translated stage records it; on
-    /// `metal2vulkan-runtime` such a state carries it among its notes (`precision_notes`),
-    /// whether or not it draws lines.
+    /// A draw of lines (a line or a line strip, or a triangle's edges under the `Lines` fill mode)
+    /// covers the pixels the device's line rule gives, on every device. Metal covers the pixels
+    /// whose diamond a line exits. Vulkan's Bresenham mode, which draws lines elsewhere, lets an
+    /// implementation's fragment lie up to one pixel in x or y from the diamond-exit rule's, and
+    /// its fragment count differ by one (the Vulkan specification, "Bresenham Line Segment
+    /// Rasterization"), and its diamond is open, so no Vulkan control decides the pixel of a line
+    /// that only touches a diamond's vertex: where a line of the conformance case
+    /// `primitive-type-restart-indices` runs through the boundary point (3.5, 1.0), Metal on an
+    /// Apple M3 Max covers the lower pixel and NVIDIA's driver the upper. A state that enables alpha to coverage or alpha to one draws its lines by the device's
+    /// default rule instead, as Vulkan's Bresenham mode takes neither
+    /// (`VUID-VkGraphicsPipelineCreateInfo-lineRasterizationMode-02766`): a device whose
+    /// `strictLines` is set (lavapipe, NVIDIA's driver) covers the rectangle of the line's width,
+    /// so the pixels at a line's two ends, and on either side of a pixel boundary the line runs
+    /// along, may differ from Metal's. Static, of the draw: no translated stage records it; on
+    /// `metal2vulkan-runtime` a draw of lines carries it (`RenderCommandEncoder::LINE_NOTE`).
     ///
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.

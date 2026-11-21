@@ -616,12 +616,12 @@ pub(crate) mod on_device {
         });
     }
 
-    /// A state that enables alpha to coverage or alpha to one carries
-    /// `PrecisionNote::DeviceLineRasterization`, its lines drawn by the device's default rule,
-    /// which Vulkan's Bresenham mode leaves for such a state; a plain state carries none, its lines
-    /// drawn by Bresenham's rule. Each draws its line across row 2.
+    /// A plain state draws its lines by Bresenham's rule, and one that enables alpha to coverage or
+    /// alpha to one by the device's default rule, which Vulkan's Bresenham mode leaves for such a
+    /// state. Neither state carries `PrecisionNote::DeviceLineRasterization`: the draw of lines
+    /// does, on every device (`RenderCommandEncoder::LINE_NOTE`). Each draws its line across row 2.
     #[test]
-    fn every_device_notes_the_device_line_rule_under_alpha_to_coverage_or_one() {
+    fn every_device_draws_lines_under_alpha_to_coverage_or_one() {
         let Some(library) = examples() else {
             return;
         };
@@ -631,6 +631,7 @@ pub(crate) mod on_device {
         let mut one = plain.clone();
         one.alpha_to_one = true;
         let note = crate::PrecisionNote::DeviceLineRasterization;
+        assert_eq!(crate::RenderCommandEncoder::LINE_NOTE, note);
         each_device("draw_line_rule", |name, _, device| {
             let y = 1.0 - 2.5 / 4.0;
             let mut buffers = Buffers::new(&device);
@@ -638,16 +639,15 @@ pub(crate) mod on_device {
             let colors = buffers.of(&device, &floats(&[GREEN, GREEN].concat()));
             let queue = device.new_command_queue(4).expect("a queue");
             let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
-            for (what, d, noted) in [
-                ("plain", &plain, false),
-                ("alpha to coverage", &coverage, true),
-                ("alpha to one", &one, true),
+            for (what, d) in [
+                ("plain", &plain),
+                ("alpha to coverage", &coverage),
+                ("alpha to one", &one),
             ] {
                 let state = state(name, &device, d);
-                assert_eq!(
-                    state.precision_notes().contains(&note),
-                    noted,
-                    "{name}: {what}: the device line rule's note"
+                assert!(
+                    !state.precision_notes().contains(&note),
+                    "{name}: {what}: the line note on the state"
                 );
                 let color = target(
                     &device,
@@ -669,7 +669,7 @@ pub(crate) mod on_device {
                     assert_eq!(texels[i..i + 4], rgba8(GREEN), "{name}: {what}: ({x}, 2)");
                 }
             }
-            println!("{name}: the device line rule noted under alpha to coverage and alpha to one");
+            println!("{name}: lines drawn plain, under alpha to coverage and under alpha to one");
         });
     }
 

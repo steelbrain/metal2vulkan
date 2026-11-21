@@ -1365,10 +1365,17 @@ impl RenderCommandEncoder {
         }
     }
 
+    /// The static precision note of a draw of lines or a line strip, and of a draw of triangles
+    /// under the `Lines` fill mode ([`set_triangle_fill_mode`](Self::set_triangle_fill_mode)), on
+    /// every device: the line's pixels are the device's line rule's
+    /// ([`PrecisionNote::DeviceLineRasterization`]).
+    pub const LINE_NOTE: PrecisionNote = PrecisionNote::DeviceLineRasterization;
+
     /// `setTriangleFillMode:` for the encoder's later draws: `Fill`, Metal's default, or `Lines`,
     /// each triangle's edges drawn as lines 1 pixel wide by Bresenham's rule, as the encoder's
-    /// lines are, through a `VkPipeline` of the draw's class made for it by the content's first
-    /// draw under it. Draws of lines and points take no fill mode, as in Metal.
+    /// lines are ([`LINE_NOTE`](Self::LINE_NOTE)), through a `VkPipeline` of the draw's class made
+    /// for it by the content's first draw under it. Draws of lines and points take no fill mode,
+    /// as in Metal.
     ///
     /// Err: [`Gap::Draw`] of [`DrawKind::FillMode`] for `Lines` on a device without
     /// `fillModeNonSolid` (`floor`'s fill modes) and for the mode of raw value 2, which no SDK

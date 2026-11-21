@@ -6,13 +6,15 @@
 //! - A triangle over the whole target in front of the near plane (z -0.5) draws nothing under
 //!   `Clip` and every texel under `Clamp`, which keeps it at the near plane (the conformance case
 //!   `render-state-depth-clip`).
-//! - Under `Lines`, where the device has `fillModeNonSolid`, the triangle at z 0.5 through a
-//!   viewport 0.4 pixels right of and 0.3 above the target's corner draws the two edges that lie
-//!   inside the target, column 0 and row 7, and nothing inside them; without the feature the mode
-//!   is `DrawKind::FillMode` and the encoder's mode stays `Fill`. Each edge crosses its pixels'
-//!   diamonds off their centers and corners, and both start strictly inside the corner pixel's, so
-//!   Bresenham's diamond-exit rule draws them on every device: a line through texel centers ties
-//!   at each diamond's corners, where lavapipe drew row 7 not at all (m3-max-62049).
+//! - Under `Lines`, where the device has `fillModeNonSolid`, a triangle at z 0.5 whose left and
+//!   bottom edges lie inside the target, at x 1.4 and y 6.7, and strictly inside the clip volume
+//!   and the viewport, draws those two edges and nothing inside them; without the feature the mode
+//!   is `DrawKind::FillMode`, the encoder's mode stays `Fill`, and the triangle over the whole
+//!   target fills it. Each edge crosses its pixels' diamonds off their centers and corners (a line
+//!   through texel centers ties at each diamond's corners, where lavapipe drew such a row not at
+//!   all, m3-max-62049), so the diamond-exit rule, Metal's, draws column 1 and row 6, and the test
+//!   holds exactly those, printing the target where a device draws otherwise. The corner where the
+//!   edges meet is not read: there the two lines' ends are each the device's.
 //! - The first draw under each raster state makes one pipeline, a first-use wait of the raster
 //!   site; a later encoder's draw under the same state makes none.
 
@@ -26,17 +28,61 @@ mod on_device {
     use crate::{
         Buffer, ColorAttachmentDescriptor, DepthClipMode, DrawKind, Error, FunctionDescriptor, Gap,
         PixelFormat, PrimitiveType, RenderPipelineDescriptor, StageSource, TextureUsage,
-        TriangleFillMode, Viewport,
+        TriangleFillMode,
     };
     use metal2vulkan::device::VkFeature;
     use metal2vulkan_devtools::engine_dir;
 
     const WHITE: [f32; 4] = [1.0; 4];
 
+    /// Holds that the Lines pass's two edges in `texels` (the target's RGBA8 bytes) are the
+    /// diamond-exit rule's, Metal's: column 1 white in every row above row 5, row 6 white in every
+    /// column from 3, and nothing else white outside the corner where they meet. Panics naming
+    /// `name`, with the target drawn, otherwise.
+    fn lines_at(name: &str, texels: &[u8]) {
+        let white = |x: u32, y: u32| {
+            let i = ((y * SIDE + x) * 4) as usize;
+            match texels[i..i + 4] {
+                [255, 255, 255, 255] => true,
+                [0, 0, 0, 255] => false,
+                ref other => panic!("{name}: ({x}, {y}) reads {other:?}"),
+            }
+        };
+        // The target's rows top first, `#` drawn, for a failure's message.
+        let drawn: Vec<String> = (0..SIDE)
+            .map(|y| {
+                (0..SIDE)
+                    .map(|x| if white(x, y) { '#' } else { '.' })
+                    .collect()
+            })
+            .collect();
+        for y in 0..SIDE {
+            for x in 0..SIDE {
+                let corner = x < 3 && y >= 5;
+                let edge = (x == 1 && y < 5) || (y == 6 && x >= 3);
+                assert!(
+                    corner || edge == white(x, y),
+                    "{name}: ({x}, {y}) {}; the diamond-exit rule draws column 1 above row 5 and \
+                     row 6 from column 3: {drawn:?}",
+                    if edge { "not drawn" } else { "drawn" }
+                );
+            }
+        }
+    }
+
     /// The triangle `(-1, -1)`, `(3, -1)`, `(-1, 3)` of clip space, which covers the clip square,
     /// at depth `z`: `cfb_depth_vertex`'s positions.
     fn triangle(z: f32) -> Vec<u8> {
         floats(&[-1.0, -1.0, z, 1.0, 3.0, -1.0, z, 1.0, -1.0, 3.0, z, 1.0])
+    }
+
+    /// The triangle `(-0.65, -0.675)`, `(3, -0.675)`, `(-0.65, 3)` of clip space at depth `z`:
+    /// through the target's viewport, its left edge at x 1.4 and its bottom edge at y 6.7, each
+    /// inside the clip volume, and its third edge past the target's top left.
+    fn edge_triangle(z: f32) -> Vec<u8> {
+        floats(&[
+            -0.65, -0.675, z, 1.0, 3.0, -0.675, z, 1.0, -0.65, 3.0, z, 1.0,
+        ])
     }
 
     #[test]
@@ -56,9 +102,13 @@ mod on_device {
             let state = state(name, &device, &d);
             let mut buffers = Buffers::new(&device);
             let near = buffers.of(&device, &triangle(-0.5));
-            let inside = buffers.of(&device, &triangle(0.5));
             let non_solid = (device.core().translator.profile().enabled().features)
                 .contains(&VkFeature::FillModeNonSolid);
+            // The edges where the device draws them; the whole target where it fills instead.
+            let inside = match non_solid {
+                true => buffers.of(&device, &edge_triangle(0.5)),
+                false => buffers.of(&device, &triangle(0.5)),
+            };
             let queue = device.new_command_queue(4).expect("a queue");
             let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
             // Each pass in an encoder of its own, so each sets its modes from Metal's defaults.
@@ -99,18 +149,6 @@ mod on_device {
                     }
                     (other, _) => panic!("{name}: {fill:?}: {other:?}"),
                 }
-                if lines && non_solid {
-                    // Clip space's left and bottom edges at x 0.4 and y 7.7, inside column 0's
-                    // and row 7's diamonds.
-                    draw(encoder.set_viewport(Viewport {
-                        origin_x: 0.4,
-                        origin_y: -0.3,
-                        width: f64::from(SIDE),
-                        height: f64::from(SIDE),
-                        znear: 0.0,
-                        zfar: 1.0,
-                    }));
-                }
                 draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
                 encoder.end_encoding();
             }
@@ -130,22 +168,23 @@ mod on_device {
             assert_eq!(read(&colors[0], 4), all(BLACK), "{name}: clipped");
             assert_eq!(read(&colors[1], 4), all(WHITE), "{name}: clamped");
             assert_eq!(read(&colors[2], 4), all(WHITE), "{name}: clamped again");
-            let edges = match non_solid {
-                true => texels(|x, y| match x == 0 || y == SIDE - 1 {
-                    true => WHITE,
-                    false => BLACK,
-                }),
-                // The mode refused, the triangle fills the target through the whole viewport.
-                false => all(WHITE),
+            let edges = read(&colors[3], 4);
+            let drawn = match non_solid {
+                true => {
+                    lines_at(name, &edges);
+                    "its two edges drawn, column 1 and row 6 (the diamond-exit rule's), 1 pipeline \
+                     more"
+                        .to_owned()
+                }
+                false => {
+                    // The mode refused, the triangle fills the target through the whole viewport.
+                    assert_eq!(edges, all(WHITE), "{name}: filled");
+                    "refused (FillMode), filled".to_owned()
+                }
             };
-            assert_eq!(read(&colors[3], 4), edges, "{name}: the edges");
             println!(
                 "{name}: a near triangle clipped, then clamped through 1 pipeline made at first \
-                 use; fillModeNonSolid {non_solid}: {} under Lines",
-                match non_solid {
-                    true => "its two edges inside the target drawn, 1 pipeline more",
-                    false => "refused (FillMode), filled",
-                }
+                 use; fillModeNonSolid {non_solid}: {drawn} under Lines"
             );
         });
     }

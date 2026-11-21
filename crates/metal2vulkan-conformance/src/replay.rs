@@ -476,9 +476,9 @@ pub fn reads_opaque_black_border(spec: &crate::case::SamplerSpec) -> bool {
 /// - **resolves**: `device-rounded-resolve`;
 /// - **coverage**: the device's own conversion of a fragment's alpha to its coverage under
 ///   alpha-to-coverage (`device-alpha-coverage`);
-/// - **lines**: the device's own line rule, the one form a state that enables alpha to coverage or
-///   alpha to one draws its lines in, Vulkan's Bresenham mode taking neither
-///   (`device-line-rasterization`), announced by every such state whether or not it draws lines;
+/// - **lines**: the device's own line rule, within Vulkan's allowance of one pixel from the
+///   diamond-exit rule (`device-line-rasterization`), announced by every draw of lines or a line
+///   strip and every `Lines` fill mode set;
 /// - **depth bias**: the device's own slope measure and unit of a draw of triangles under a depth
 ///   bias (`device-depth-bias`), announced by every such draw;
 /// - **visibility results**: the device's own precise occlusion count of a `Boolean` or `Counting`

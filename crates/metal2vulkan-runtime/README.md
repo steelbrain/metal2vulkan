@@ -3082,9 +3082,12 @@ cache is answered compile-required on both.
   (`bresenhamLines`, Floor). The line class's `VkPipeline` chains
   `VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT`, except for a state that enables alpha to coverage or
   alpha to one, which Vulkan's Bresenham mode does not take: its lines are drawn by the device's
-  default rule, the rectangle of the line's width on a device whose `strictLines` is set, and the
-  state carries `PrecisionNote::DeviceLineRasterization`. Where a line only touches a pixel's
-  diamond at its vertex, which pixel it covers is the device's own (docs/API.md, section 10).
+  default rule, the rectangle of the line's width on a device whose `strictLines` is set. Either
+  way a line's pixels are the device's: Vulkan's Bresenham mode lets a fragment lie up to one
+  pixel in x or y from the diamond-exit rule's, and a draw of lines, or of triangles under the
+  `Lines` fill mode, carries `PrecisionNote::DeviceLineRasterization`
+  (`RenderCommandEncoder::LINE_NOTE`). Where a line only touches a pixel's diamond at its vertex,
+  which pixel it covers is the device's own (docs/API.md, section 10).
 - A post-tessellation vertex function's state draws its patches through the device's tessellator
   (`tessellationShader`, Floor). Its one `VkPipeline` is the patch class's, made with the state:
   the translator's synthesized vertex stage (each patch one vertex of a `PATCH_LIST` of one control
