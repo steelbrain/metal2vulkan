@@ -2416,7 +2416,7 @@ fn a_fetched_extended_range_attachment_is_refused() {
                 "{what}: {u:?}"
             );
         }
-        other => panic!("{what}: {:?}", other.map(|a| a.facts)),
+        other => panic!("{what}: {:?}", other.as_ref().map(|a| &a.facts)),
     };
     let xr = [
         PixelFormat::BGR10XR,
