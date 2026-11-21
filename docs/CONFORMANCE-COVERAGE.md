@@ -19,7 +19,7 @@ Its limits, measured rather than asserted:
 - **4 call sites send a selector by hand that `objc2-metal` binds no name for**, which is why they are sent with `msg_send!` rather than called. The crate names no container for such a selector, so no receiver typing can reach one and no item here is credited: `detachBacking`, `fillTexture:level:slice:region:bytes:length:`, `setFramebufferOnly:`, `setRotation:`. None of them is an implemented row of the coverage map — the generator fails rather than writing this document if one is, because that would be an item the suite exercises and nothing counts.
 - **9 call sites resolve to no item although some Metal type binds the selector**: an instance send whose receiver this could not type, a message to a class that does not bind the name sent to it, or a selector sent by hand to a receiver whose Rust type is a **supertype** of the one that binds it — which is often why it is sent by hand, since `objc2` casts between two protocol objects nowhere. Each sent its selector to exactly one receiver, so each exercised one item; which one is what the typing could not say. **Every one of their selectors is bound by at least one item some other call site credits**, so none of these sites proves an item is missing from the count. That is not a proof that the count is complete: such a site may have sent its selector to a type other than the credited one, and this cannot tell. To rule it out, spell the receiver's type at the call site — a `let` with a type, rather than a `let` with none — and this re-derives with the item credited to the case that calls it. A pattern binding is not one of the shapes that costs a site: a tuple, a `for`, a `match` arm and a closure parameter are each typed from what made them.
 - **0 call sites typed to a receiver that does not bind the selector sent to it.** The generator fails rather than writing this document if any does, which is what keeps the typing from quietly counting the wrong item.
-- **77 of the map's implemented rows are a container's own**: the `class`, `protocol` and `category` rows, whose name is the container's and not a selector's. No call site can resolve to one, because `objc2-metal` binds no selector by that name, so these are credited by the suite **messaging** the type instead — a call whose receiver is the container or a subtype of it — under the same gate and the same family attribution as the selector it sends.
+- **79 of the map's implemented rows are a container's own**: the `class`, `protocol` and `category` rows, whose name is the container's and not a selector's. No call site can resolve to one, because `objc2-metal` binds no selector by that name, so these are credited by the suite **messaging** the type instead — a call whose receiver is the container or a subtype of it — under the same gate and the same family attribution as the selector it sends.
 - **4 are the header's free functions**, which no container declares. `objc2-metal` binds these as Rust functions, so the receiver typing never sees one; the leg calls such a function by its own C name and the walk reads it as an edge of the call graph.
 - **1 implemented items `objc2-metal` binds no name for at all**, so no case can call them whatever it is authored to do. They are counted apart from the gap below rather than folded into it, because a gap is work and these are not:
   - `MTLFunctionReflection`'s `userAnnotation`
@@ -30,17 +30,17 @@ Its limits, measured rather than asserted:
 
 | | |
 |---|---|
-| implemented Metal items | 600 |
+| implemented Metal items | 619 |
 | of those, unreachable: `objc2-metal` binds no name for them | 1 |
-| so reachable by some case | 599 |
-| of the reachable, exercised by the suite's Metal leg | 525 |
-| of the reachable, not exercised | 74 |
+| so reachable by some case | 618 |
+| of the reachable, exercised by the suite's Metal leg | 542 |
+| of the reachable, not exercised | 76 |
 | share of the reachable exercised | 88% |
-| of those exercised, no case reaching it loosens anything | 308 |
+| of those exercised, no case reaching it loosens anything | 325 |
 | of those exercised, a case reaching it loosens some site | 217 |
 | case modules | 179 |
 | committed recordings | 1319 |
-| distinct SDK items the Metal leg reaches, of any status | 804 |
+| distinct SDK items the Metal leg reaches, of any status | 806 |
 | of those, reached only where this cannot name the family | 5 |
 | ledger rows (a case whose gap is recorded) | 7346 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
@@ -363,7 +363,7 @@ Every container with an implemented item, by how much of it the suite reaches. *
 |---|---|---|---|---|---|
 | `MTLArgument` | 17 | 0 | 0 | 17 |  |
 | `MTLRasterizationRateLayerDescriptor` | 9 | 0 | 2 | 7 | `rate_map_degenerate_forms`, `rate_map_sweeps`, `rate_maps` |
-| `MTLRenderCommandEncoder` | 58 | 0 | 52 | 6 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
+| `MTLRenderCommandEncoder` | 64 | 0 | 57 | 7 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
 | the header's free functions | 4 | 0 | 0 | 4 |  |
 | `MTLFunctionConstantValues` | 5 | 0 | 2 | 3 | `function_constants_half3`, `function_facts`, `library_facts` |
 | `MTLLibrary` | 10 | 0 | 7 | 3 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
@@ -371,7 +371,7 @@ Every container with an implemented item, by how much of it the suite reaches. *
 | `MTLRenderPipelineReflection` | 9 | 0 | 6 | 3 | `fragment_imageblock_reflection`, `mesh_pipeline_reflection`, `pipeline_options`, `texture_accesses`… |
 | `MTLBuffer` | 6 | 0 | 4 | 2 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
 | `MTLComputeCommandEncoder` | 25 | 0 | 23 | 2 | `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`… |
-| `MTLDevice` | 23 | 0 | 21 | 2 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
+| `MTLDevice` | 24 | 0 | 22 | 2 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
 | `MTLFunctionReflection` | 3 | 1 | 0 | 2 |  |
 | `MTLRasterizationRateMapDescriptor` | 10 | 0 | 8 | 2 | `rate_map_degenerate_forms`, `rate_map_sweeps`, `rate_maps` |
 | `MTLAttributeDescriptorArray` | 3 | 0 | 2 | 1 | `attribute_formats`, `attribute_strides`, `blit_indirect_commands`, `indirect_command_depth`… |
@@ -382,6 +382,7 @@ Every container with an implemented item, by how much of it the suite reaches. *
 | `MTLComputePipelineState` | 7 | 0 | 6 | 1 | `compute_threadgroups`, `pipeline_facts`, `pipeline_handlers`, `pipeline_limits`… |
 | `MTLDepthStencilState` | 1 | 0 | 0 | 1 |  |
 | `MTLFence` | 1 | 0 | 0 | 1 |  |
+| `MTLIndirectCommandBuffer` | 3 | 0 | 2 | 1 | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
 | `MTLPipelineBufferDescriptorArray` | 3 | 0 | 2 | 1 | `compute_pipeline_descriptors`, `pipeline_descriptors`, `tile_pipeline_descriptors` |
 | `MTLRasterizationRateLayerArray` | 3 | 0 | 2 | 1 | `rate_map_degenerate_forms`, `rate_map_sweeps` |
 | `MTLRenderPipelineColorAttachmentDescriptorArray` | 3 | 0 | 2 | 1 | `alpha_coverage_pairs`, `binary_archives`, `blend_interactions`, `blend_sweeps`… |
@@ -398,7 +399,7 @@ Every container with an implemented item, by how much of it the suite reaches. *
 | `MTLAttribute` | 7 | 0 | 7 | 0 | `function_facts`, `library_facts` |
 | `MTLAttributeDescriptor` | 4 | 0 | 4 | 0 | `attribute_formats`, `attribute_strides`, `blit_indirect_commands`, `indirect_command_depth`… |
 | `MTLBinding` | 7 | 0 | 7 | 0 | `fragment_imageblock_reflection`, `function_bindings`, `mesh_pipeline_reflection`, `pipeline_option_reflection`… |
-| `MTLBlitCommandEncoder` | 12 | 0 | 12 | 0 | `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`… |
+| `MTLBlitCommandEncoder` | 14 | 0 | 14 | 0 | `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`… |
 | `MTLBufferBinding` | 6 | 0 | 6 | 0 | `fragment_imageblock_reflection`, `function_bindings`, `mesh_pipeline_reflection`, `pipeline_option_reflection`… |
 | `MTLBufferLayoutDescriptor` | 4 | 0 | 4 | 0 | `attribute_formats`, `attribute_strides`, `blit_indirect_commands`, `indirect_command_depth`… |
 | `MTLCommandEncoder` | 2 | 0 | 2 | 0 | `alpha_coverage_pairs`, `argument_encoders`, `astc_textures`, `attribute_formats`… |
@@ -409,6 +410,7 @@ Every container with an implemented item, by how much of it the suite reaches. *
 | `MTLFunctionConstant` | 5 | 0 | 5 | 0 | `function_facts`, `library_facts` |
 | `MTLFunctionDescriptor` | 4 | 0 | 4 | 0 | `library_facts` |
 | `MTLHeap` | 2 | 0 | 2 | 0 | `compressed_moves`, `compute_heap_residency`, `heap_facts`, `resource_facts`… |
+| `MTLIndirectCommandBufferDescriptor` | 7 | 0 | 7 | 0 | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
 | `MTLLinkedFunctions` | 6 | 0 | 6 | 0 | `mesh_pipeline_descriptors`, `pipeline_descriptors`, `tile_pipeline_descriptors`, `visible_tables` |
 | `MTLMeshRenderPipelineDescriptor` | 25 | 0 | 25 | 0 | `binary_archives`, `indirect_commands`, `mesh_barriers`, `mesh_commands`… |
 | `MTLObjectPayloadBinding` | 3 | 0 | 3 | 0 | `fragment_imageblock_reflection`, `function_bindings`, `mesh_pipeline_reflection`, `pipeline_option_reflection`… |
@@ -449,10 +451,10 @@ A container is one Objective-C type; the SDK header it sits in is the family of 
 |---|---|---|---|
 | `MTLArgument.h` | 77 | 59 | 18 |
 | `MTLRasterizationRate.h` | 25 | 12 | 13 |
-| `MTLRenderCommandEncoder.h` | 58 | 52 | 6 |
+| `MTLRenderCommandEncoder.h` | 64 | 57 | 7 |
 | `MTLLibrary.h` | 40 | 35 | 5 |
 | `MTLRenderPipeline.h` | 102 | 97 | 5 |
-| `MTLDevice.h` | 33 | 29 | 4 |
+| `MTLDevice.h` | 34 | 30 | 4 |
 | `MTLFunctionConstantValues.h` | 5 | 2 | 3 |
 | `MTLStageInputOutputDescriptor.h` | 21 | 18 | 3 |
 | `MTLVertexDescriptor.h` | 19 | 16 | 3 |
@@ -464,11 +466,12 @@ A container is one Objective-C type; the SDK header it sits in is the family of 
 | `MTLDepthStencil.h` | 13 | 12 | 1 |
 | `MTLEvent.h` | 6 | 5 | 1 |
 | `MTLFence.h` | 1 | 0 | 1 |
+| `MTLIndirectCommandBuffer.h` | 10 | 9 | 1 |
 | `MTLPipeline.h` | 5 | 4 | 1 |
 | `MTLRenderPass.h` | 31 | 30 | 1 |
 | `MTLTexture.h` | 39 | 38 | 1 |
 | `MTLAllocation.h` | 1 | 1 | 0 |
-| `MTLBlitCommandEncoder.h` | 12 | 12 | 0 |
+| `MTLBlitCommandEncoder.h` | 14 | 14 | 0 |
 | `MTLCommandEncoder.h` | 2 | 2 | 0 |
 | `MTLFunctionDescriptor.h` | 4 | 4 | 0 |
 | `MTLHeap.h` | 2 | 2 | 0 |
@@ -476,7 +479,7 @@ A container is one Objective-C type; the SDK header it sits in is the family of 
 | `MTLResource.h` | 2 | 2 | 0 |
 | `MTLSampler.h` | 18 | 18 | 0 |
 
-1 of 28 headers have no exercised item at all, 1 implemented items between them: `MTLFence.h`.
+1 of 29 headers have no exercised item at all, 1 implemented items between them: `MTLFence.h`.
 
 ## Containers with no case at all
 
@@ -515,7 +518,7 @@ An implemented container no case's Metal leg touches. These are the families of 
 | `Side` methods (the suite's whole device vocabulary) | 133 |
 | `Side` methods the Metal leg reaches an SDK item through | 127 |
 | SDK items a case's Metal leg reaches, median | 53 |
-| the same, least and most | 0 and 212 |
+| the same, least and most | 0 and 214 |
 | Metal call sites in the leg | 1758 |
 | distinct selectors the leg sends | 662 |
 | of those, resolved to an item of the coverage map | 655 |
@@ -538,7 +541,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `blend_interactions` | 4 | 4 | every field | 118 |
 | `blend_sweeps` | 12 | 12 | every field | 118 |
 | `blit_encoder_commands` | 11 | 11 | every field | 48 |
-| `blit_indirect_commands` | 3 | 3 | every field | 84 |
+| `blit_indirect_commands` | 3 | 3 | every field | 96 |
 | `border_swizzles` | 8 | 8 | every field | 58 |
 | `buffer_bind_off_alignment` | 1 | 1 | every field | 22 |
 | `buffer_blits` | 4 | 4 | every field | 21 |
@@ -599,8 +602,8 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `heap_metal_sizes` | 7 | 7 | 1 tolerance(s): `AcceptedDifference` | 14 |
 | `host_detach` | 1 | 1 | every field | 18 |
 | `host_page_writes` | 4 | 4 | every field | 124 |
-| `indirect_command_depth` | 6 | 6 | every field | 149 |
-| `indirect_commands` | 9 | 9 | every field | 151 |
+| `indirect_command_depth` | 6 | 6 | every field | 162 |
+| `indirect_commands` | 9 | 9 | every field | 164 |
 | `indirect_private_types` | 1 | 0 | every field | 0 |
 | `int_attributes` | 1 | 1 | every field | 103 |
 | `layered_targets` | 5 | 5 | every field | 132 |
@@ -608,7 +611,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `library_facts` | 9 | 9 | every field | 38 |
 | `math_routines` | 2 | 2 | every field | 25 |
 | `mesh_barriers` | 2 | 2 | every field | 50 |
-| `mesh_commands` | 2 | 2 | every field | 48 |
+| `mesh_commands` | 2 | 2 | every field | 56 |
 | `mesh_draws` | 6 | 6 | every field | 46 |
 | `mesh_partial_barriers` | 4 | 4 | every field | 45 |
 | `mesh_pipeline_descriptors` | 3 | 3 | every field | 47 |
@@ -644,7 +647,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `render_depth_stencil_state` | 3 | 3 | every field | 136 |
 | `render_draw_forms` | 4 | 4 | every field | 123 |
 | `render_pass_descriptors` | 12 | 12 | every field | 30 |
-| `render_residency` | 2 | 2 | every field | 126 |
+| `render_residency` | 2 | 2 | every field | 130 |
 | `render_state` | 3 | 3 | every field | 156 |
 | `resolve_then_load` | 1 | 1 | every field | 124 |
 | `resource_facts` | 4 | 4 | every field | 23 |
@@ -832,6 +835,8 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:` | yes | `blit_encoder_commands`, `blit_indirect_commands`, `buffer_blits`, `fence_orders`, `fresh_contents`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `texture_fills`, `two_plane_heap_blits` | 133 |
 | `updateFence:` | yes | `blit_encoder_commands`, `fence_orders` | 17 |
 | `waitForFence:` | yes | `blit_encoder_commands`, `fence_orders` | 17 |
+| `resetCommandsInBuffer:withRange:` | yes | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` | 18 |
+| `optimizeIndirectCommandBuffer:withRange:` | yes | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` | 18 |
 
 ### `MTLBuffer`
 
@@ -1022,6 +1027,7 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `newFence` | yes | `blit_encoder_commands`, `fence_orders`, `sparse_mappings` | 31 |
 | `supportsTextureSampleCount:` | no | — | — |
 | `minimumLinearTextureAlignmentForPixelFormat:` | yes | `device_queries` | 5 |
+| `newIndirectCommandBufferWithDescriptor:maxCommandCount:options:` | yes | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` | 20 |
 | `newEvent` | yes | `event_orders` | 5 |
 | `newSharedEvent` | yes | `event_orders`, `fence_orders`, `shared_events` | 13 |
 
@@ -1094,6 +1100,26 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 |---|---|---|---|
 | `newBufferWithLength:options:offset:` | yes | `compute_heap_residency`, `heap_facts`, `resource_facts`, `texture_fills`, `two_plane_heap_blits` | 13 |
 | `newTextureWithDescriptor:offset:` | yes | `compressed_moves`, `texture_fills`, `two_plane_copies`, `two_plane_heap_blits` | 18 |
+
+### `MTLIndirectCommandBuffer`
+
+| item | exercised | families | cases Metal ran |
+|---|---|---|---|
+| `MTLIndirectCommandBuffer` | yes | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` | 20 |
+| `size` | yes | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` | 20 |
+| `gpuResourceID` | no | — | — |
+
+### `MTLIndirectCommandBufferDescriptor`
+
+| item | exercised | families | cases Metal ran |
+|---|---|---|---|
+| `MTLIndirectCommandBufferDescriptor` | yes | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` | 20 |
+| `commandTypes` | yes | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` | 20 |
+| `inheritPipelineState` | yes | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` | 20 |
+| `inheritBuffers` | yes | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` | 20 |
+| `maxVertexBufferBindCount` | yes | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` | 18 |
+| `maxFragmentBufferBindCount` | yes | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` | 18 |
+| `maxKernelBufferBindCount` | yes | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` | 18 |
 
 ### `MTLLibrary`
 
@@ -1292,6 +1318,12 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `useResources:count:usage:` | yes | `render_residency` | 2 |
 | `useResource:usage:stages:` | yes | `indirect_command_depth`, `indirect_commands`, `mesh_commands`, `render_residency` | 19 |
 | `useResources:count:usage:stages:` | yes | `render_residency` | 2 |
+| `useHeap:` | yes | `render_residency` | 2 |
+| `useHeaps:count:` | yes | `render_residency` | 2 |
+| `useHeap:stages:` | yes | `render_residency` | 2 |
+| `useHeaps:count:stages:` | yes | `render_residency` | 2 |
+| `executeCommandsInBuffer:withRange:` | yes | `indirect_command_depth`, `indirect_commands`, `mesh_commands` | 17 |
+| `executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:` | no | — | — |
 | `memoryBarrierWithScope:afterStages:beforeStages:` | yes | `mesh_barriers`, `pass_start_reads`, `render_residency` | 18 |
 | `memoryBarrierWithResources:count:afterStages:beforeStages:` | yes | `mesh_barriers`, `render_residency` | 4 |
 
@@ -1726,8 +1758,8 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 | `MTLArgumentEncoder` `setBuffers:offsets:withRange:` | missing | argument encoders | `argument_encoders` |
 | `MTLArgumentEncoder` `setComputePipelineState:atIndex:` | missing | argument encoders | `argument_encoders` |
 | `MTLArgumentEncoder` `setComputePipelineStates:withRange:` | missing | argument encoders | `argument_encoders` |
-| `MTLArgumentEncoder` `setIndirectCommandBuffer:atIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `argument_encoders` |
-| `MTLArgumentEncoder` `setIndirectCommandBuffers:withRange:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `argument_encoders` |
+| `MTLArgumentEncoder` `setIndirectCommandBuffer:atIndex:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `argument_encoders` |
+| `MTLArgumentEncoder` `setIndirectCommandBuffers:withRange:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `argument_encoders` |
 | `MTLArgumentEncoder` `setRenderPipelineState:atIndex:` | missing | argument encoders | `argument_encoders` |
 | `MTLArgumentEncoder` `setRenderPipelineStates:withRange:` | missing | argument encoders | `argument_encoders` |
 | `MTLArgumentEncoder` `setSamplerState:atIndex:` | missing | argument encoders | `argument_encoder_crossings`, `argument_encoders` |
@@ -1746,20 +1778,18 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 | `MTLBinaryArchiveDescriptor` `url` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `binary_archives` |
 | `MTLBlitCommandEncoder` `copyFromTexture:sourceSlice:sourceLevel:toTexture:destinationSlice:destinationLevel:sliceCount:levelCount:` | missing | whole slices and levels, as copies `BlitCommandEncoder::copy_from_texture` makes | `blit_encoder_commands` |
 | `MTLBlitCommandEncoder` `copyFromTexture:toTexture:` | missing | every slice and level, as copies `BlitCommandEncoder::copy_from_texture` makes | `blit_encoder_commands` |
-| `MTLBlitCommandEncoder` `copyIndirectCommandBuffer:sourceRange:destination:destinationIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLBlitCommandEncoder` `copyIndirectCommandBuffer:sourceRange:destination:destinationIndex:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
 | `MTLBlitCommandEncoder` `optimizeContentsForCPUAccess:` | missing | an encoder call metal2vulkan-runtime does not build | `blit_encoder_commands` |
 | `MTLBlitCommandEncoder` `optimizeContentsForCPUAccess:slice:level:` | missing | an encoder call metal2vulkan-runtime does not build | `blit_encoder_commands` |
 | `MTLBlitCommandEncoder` `optimizeContentsForGPUAccess:` | missing | an encoder call metal2vulkan-runtime does not build | `blit_encoder_commands` |
 | `MTLBlitCommandEncoder` `optimizeContentsForGPUAccess:slice:level:` | missing | an encoder call metal2vulkan-runtime does not build | `blit_encoder_commands` |
-| `MTLBlitCommandEncoder` `optimizeIndirectCommandBuffer:withRange:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLBlitCommandEncoder` `resetCommandsInBuffer:withRange:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
 | `MTLBlitCommandEncoder` `synchronizeTexture:slice:level:` | missing | one slice and level of `BlitCommandEncoder::synchronize_resource` | `blit_encoder_commands` |
 | `MTLCommandBuffer` `commandQueue` | missing | a query metal2vulkan-runtime does not answer | `command_buffer_facts` |
 | `MTLCommandBuffer` `device` | missing | a query metal2vulkan-runtime does not answer | `command_buffer_facts` |
 | `MTLCommandBuffer` `resourceStateCommandEncoder` | missing | the resource state encoder (sparse textures' mappings) | `command_buffer_facts`, `sparse_mappings` |
 | `MTLCommandQueue` `label` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `command_buffer_facts` |
 | `MTLComputeCommandEncoder` `dispatchType` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `attribute_strides`, `buffer_bind_off_alignment`, `compute_encoder_commands`, `compute_heap_residency`, `threadgroup_start`, `vector_word_phases` |
-| `MTLComputeCommandEncoder` `executeCommandsInBuffer:withRange:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLComputeCommandEncoder` `executeCommandsInBuffer:withRange:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
 | `MTLComputeCommandEncoder` `setBuffer:offset:attributeStride:atIndex:` | missing | a bind with a per-bind stride, which stage-in and vertex fetch read | `attribute_strides`, `compute_heap_residency` |
 | `MTLComputeCommandEncoder` `setBufferOffset:attributeStride:atIndex:` | missing | a bind with a per-bind stride, which stage-in and vertex fetch read | `attribute_strides`, `compute_heap_residency` |
 | `MTLComputeCommandEncoder` `setBuffers:offsets:attributeStrides:withRange:` | missing | a bind with a per-bind stride, which stage-in and vertex fetch read | `attribute_strides`, `compute_heap_residency` |
@@ -1785,7 +1815,6 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 | `MTLDevice` `newDynamicLibrary:error:` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `dynamic_libraries` |
 | `MTLDevice` `newDynamicLibraryWithURL:error:` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `dynamic_libraries` |
 | `MTLDevice` `newHeapWithDescriptor:` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `blit_encoder_commands`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `compressed_blits`, `compressed_moves`, `compressed_views`, `compute_heap_residency`, `copy_out_strides`, `format_copies`, `fresh_contents`, `heap_facts`, `pvrtc_cpu_order`, `pvrtc_rows`, `render_residency`, `resource_facts`, `sparse_heaps`, `sparse_mappings`, `texture_buffer_tails`, `texture_descriptor_pairs`, `texture_fills`, `two_plane_copies`, `two_plane_heap_blits` |
-| `MTLDevice` `newIndirectCommandBufferWithDescriptor:maxCommandCount:options:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
 | `MTLDevice` `newLibraryWithURL:error:` | missing | a metallib read from a file URL | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`, `bicubic_texel_classes`, `binary_archives`, `blend_interactions`, `blend_sweeps`, `blit_encoder_commands`, `blit_indirect_commands`, `border_swizzles`, `buffer_bind_off_alignment`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `color_write_masks`, `compressed_blits`, `compressed_decode`, `compressed_moves`, `compressed_views`, `compute_encoder_commands`, `compute_heap_residency`, `compute_pipeline_descriptors`, `compute_render_chains`, `compute_threadgroups`, `copy_out_strides`, `denormal_word_fetches`, `depth_resolve_pairs`, `depth_stencil_space`, `depth_texel_reads`, `discard_hoist`, `draw_state_changes`, `dynamic_libraries`, `etc_textures`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `fetch_ordered`, `format_copies`, `fragment_imageblock_reflection`, `frame_chains`, `fresh_contents`, `function_bindings`, `function_constants_half3`, `function_facts`, `half_output_blends`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `level_sizes`, `library_facts`, `math_routines`, `mesh_barriers`, `mesh_commands`, `mesh_draws`, `mesh_partial_barriers`, `mesh_pipeline_descriptors`, `mesh_pipeline_reflection`, `nan_integer_conversions`, `nearest_positions`, `norm_storage_writes`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_bytes`, `pass_sequence_actions`, `pass_start_reads`, `pipeline_descriptors`, `pipeline_facts`, `pipeline_functions`, `pipeline_handlers`, `pipeline_limits`, `pipeline_option_reflection`, `pipeline_options`, `pixel_downscales`, `pixel_samplers`, `pvrtc_cpu_order`, `pvrtc_rows`, `read_through`, `read_write_tiers`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resolve_then_load`, `rgb10a2_srgb`, `rotated_planes`, `rotated_targets`, `sample_positions`, `sampler_crossings`, `sampler_filtering`, `shader_stencil`, `shared_exponent_storage`, `simdgroup_lockstep`, `snorm_tile_store`, `srgb_fetch`, `stage_in_regions`, `stage_in_unread`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `swizzled_storage`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texel_swizzles`, `texture_accesses`, `texture_buffer_tails`, `texture_fills`, `texture_view_casts`, `threadgroup_start`, `tile_pipeline_descriptors`, `tile_pipeline_reflection`, `tile_threadgroups`, `topology_classes`, `two_plane_copies`, `two_plane_heap_blits`, `two_plane_samples`, `vector_word_phases`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `visible_tables`, `wide_int_attributes`, `wide_points`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` |
 | `MTLDevice` `newRasterizationRateMapWithDescriptor:` | missing | rasterization rate maps; the render pass descriptor has no field for one | `rate_map_degenerate_forms`, `rate_map_sweeps`, `rate_maps` |
 | `MTLDevice` `newRenderPipelineStateWithDescriptor:options:completionHandler:` | missing | a pipeline creation form metal2vulkan-runtime does not take | `pipeline_handlers` |
@@ -1836,55 +1865,48 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 | `MTLHeapDescriptor` `sparsePageSize` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `render_residency`, `sparse_heaps`, `sparse_mappings` |
 | `MTLHeapDescriptor` `storageMode` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `compute_heap_residency`, `heap_facts`, `render_residency`, `resource_facts`, `sparse_heaps`, `sparse_mappings`, `texture_descriptor_pairs` |
 | `MTLHeapDescriptor` `type` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `blit_encoder_commands`, `buffer_blits`, `buffer_depth_samples`, `buffer_tails`, `buffer_texture_blits`, `buffer_textures`, `chroma_pairs`, `compressed_blits`, `compressed_moves`, `compressed_views`, `compute_heap_residency`, `copy_out_strides`, `format_copies`, `fresh_contents`, `heap_facts`, `pvrtc_cpu_order`, `pvrtc_rows`, `render_residency`, `resource_facts`, `sparse_heaps`, `sparse_mappings`, `texture_buffer_tails`, `texture_descriptor_pairs`, `texture_fills`, `two_plane_copies`, `two_plane_heap_blits` |
-| `MTLIndirectCommandBuffer` `indirectComputeCommandAtIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBuffer` `indirectRenderCommandAtIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
-| `MTLIndirectCommandBuffer` `resetWithRange:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBuffer` `size` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
-| `MTLIndirectCommandBufferDescriptor` `commandTypes` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
-| `MTLIndirectCommandBufferDescriptor` `inheritBuffers` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
-| `MTLIndirectCommandBufferDescriptor` `inheritCullMode` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `inheritDepthBias` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `inheritDepthClipMode` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `inheritDepthStencilState` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `inheritFrontFacingWinding` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `inheritPipelineState` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
-| `MTLIndirectCommandBufferDescriptor` `inheritTriangleFillMode` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `maxFragmentBufferBindCount` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `maxKernelBufferBindCount` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `maxKernelThreadgroupMemoryBindCount` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `maxMeshBufferBindCount` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
-| `MTLIndirectCommandBufferDescriptor` `maxObjectBufferBindCount` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
-| `MTLIndirectCommandBufferDescriptor` `maxObjectThreadgroupMemoryBindCount` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `maxVertexBufferBindCount` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `supportColorAttachmentMapping` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectCommandBufferDescriptor` `supportDynamicAttributeStride` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectComputeCommand` `clearBarrier` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
-| `MTLIndirectComputeCommand` `concurrentDispatchThreadgroups:threadsPerThreadgroup:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectComputeCommand` `concurrentDispatchThreads:threadsPerThreadgroup:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
-| `MTLIndirectComputeCommand` `reset` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectComputeCommand` `setBarrier` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
-| `MTLIndirectComputeCommand` `setComputePipelineState:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectComputeCommand` `setImageblockWidth:height:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
-| `MTLIndirectComputeCommand` `setKernelBuffer:offset:atIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectComputeCommand` `setKernelBuffer:offset:attributeStride:atIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
-| `MTLIndirectComputeCommand` `setStageInRegion:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
-| `MTLIndirectComputeCommand` `setThreadgroupMemoryLength:atIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectRenderCommand` `clearBarrier` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
-| `MTLIndirectRenderCommand` `drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:tessellationFactorBuffer:tessellationFactorBufferOffset:tessellationFactorBufferInstanceStride:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_command_depth` |
-| `MTLIndirectRenderCommand` `drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
-| `MTLIndirectRenderCommand` `drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands`, `mesh_commands` |
-| `MTLIndirectRenderCommand` `drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `mesh_commands` |
-| `MTLIndirectRenderCommand` `drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:tessellationFactorBuffer:tessellationFactorBufferOffset:tessellationFactorBufferInstanceStride:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_command_depth` |
-| `MTLIndirectRenderCommand` `drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectRenderCommand` `reset` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
-| `MTLIndirectRenderCommand` `setBarrier` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
-| `MTLIndirectRenderCommand` `setFragmentBuffer:offset:atIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectRenderCommand` `setMeshBuffer:offset:atIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `mesh_commands` |
-| `MTLIndirectRenderCommand` `setObjectBuffer:offset:atIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands`, `mesh_commands` |
-| `MTLIndirectRenderCommand` `setObjectThreadgroupMemoryLength:atIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
-| `MTLIndirectRenderCommand` `setRenderPipelineState:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
-| `MTLIndirectRenderCommand` `setVertexBuffer:offset:atIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands` |
-| `MTLIndirectRenderCommand` `setVertexBuffer:offset:attributeStride:atIndex:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
+| `MTLIndirectCommandBuffer` `indirectComputeCommandAtIndex:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBuffer` `indirectRenderCommandAtIndex:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
+| `MTLIndirectCommandBuffer` `resetWithRange:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBufferDescriptor` `inheritCullMode` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBufferDescriptor` `inheritDepthBias` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBufferDescriptor` `inheritDepthClipMode` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBufferDescriptor` `inheritDepthStencilState` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBufferDescriptor` `inheritFrontFacingWinding` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBufferDescriptor` `inheritTriangleFillMode` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBufferDescriptor` `maxKernelThreadgroupMemoryBindCount` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBufferDescriptor` `maxMeshBufferBindCount` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
+| `MTLIndirectCommandBufferDescriptor` `maxObjectBufferBindCount` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
+| `MTLIndirectCommandBufferDescriptor` `maxObjectThreadgroupMemoryBindCount` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBufferDescriptor` `supportColorAttachmentMapping` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectCommandBufferDescriptor` `supportDynamicAttributeStride` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectComputeCommand` `clearBarrier` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
+| `MTLIndirectComputeCommand` `concurrentDispatchThreadgroups:threadsPerThreadgroup:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectComputeCommand` `concurrentDispatchThreads:threadsPerThreadgroup:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
+| `MTLIndirectComputeCommand` `reset` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectComputeCommand` `setBarrier` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
+| `MTLIndirectComputeCommand` `setComputePipelineState:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectComputeCommand` `setImageblockWidth:height:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
+| `MTLIndirectComputeCommand` `setKernelBuffer:offset:atIndex:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectComputeCommand` `setKernelBuffer:offset:attributeStride:atIndex:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
+| `MTLIndirectComputeCommand` `setStageInRegion:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
+| `MTLIndirectComputeCommand` `setThreadgroupMemoryLength:atIndex:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectRenderCommand` `clearBarrier` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
+| `MTLIndirectRenderCommand` `drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:tessellationFactorBuffer:tessellationFactorBufferOffset:tessellationFactorBufferInstanceStride:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `indirect_command_depth` |
+| `MTLIndirectRenderCommand` `drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
+| `MTLIndirectRenderCommand` `drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `indirect_commands`, `mesh_commands` |
+| `MTLIndirectRenderCommand` `drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `mesh_commands` |
+| `MTLIndirectRenderCommand` `drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:tessellationFactorBuffer:tessellationFactorBufferOffset:tessellationFactorBufferInstanceStride:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `indirect_command_depth` |
+| `MTLIndirectRenderCommand` `drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectRenderCommand` `reset` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
+| `MTLIndirectRenderCommand` `setBarrier` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
+| `MTLIndirectRenderCommand` `setFragmentBuffer:offset:atIndex:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectRenderCommand` `setMeshBuffer:offset:atIndex:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `mesh_commands` |
+| `MTLIndirectRenderCommand` `setObjectBuffer:offset:atIndex:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `indirect_commands`, `mesh_commands` |
+| `MTLIndirectRenderCommand` `setObjectThreadgroupMemoryLength:atIndex:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
+| `MTLIndirectRenderCommand` `setRenderPipelineState:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
+| `MTLIndirectRenderCommand` `setVertexBuffer:offset:atIndex:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands` |
+| `MTLIndirectRenderCommand` `setVertexBuffer:offset:attributeStride:atIndex:` | missing | indirect command buffers past GPU-encoded indexed triangle draws with an inherited pipeline state (`Gap::IndirectCommandBuffers`) | `indirect_commands` |
 | `MTLLibrary` `device` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `dynamic_libraries`, `library_facts` |
 | `MTLMeshRenderPipelineDescriptor` `binaryArchives` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `mesh_pipeline_descriptors` |
 | `MTLMeshRenderPipelineDescriptor` `label` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `mesh_pipeline_descriptors` |
@@ -1903,7 +1925,6 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 | `MTLRenderCommandEncoder` `drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | missing | mesh render pipelines; metal2vulkan-runtime makes none | `mesh_barriers`, `mesh_draws`, `mesh_partial_barriers` |
 | `MTLRenderCommandEncoder` `drawMeshThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | missing | mesh render pipelines; metal2vulkan-runtime makes none | `mesh_barriers`, `mesh_draws` |
 | `MTLRenderCommandEncoder` `drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | missing | mesh render pipelines; metal2vulkan-runtime makes none | `mesh_draws`, `mesh_partial_barriers` |
-| `MTLRenderCommandEncoder` `executeCommandsInBuffer:withRange:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
 | `MTLRenderCommandEncoder` `setMeshBuffer:offset:atIndex:` | missing | mesh render pipelines; metal2vulkan-runtime makes none | `mesh_barriers`, `mesh_partial_barriers` |
 | `MTLRenderCommandEncoder` `setObjectBuffer:offset:atIndex:` | missing | mesh render pipelines; metal2vulkan-runtime makes none | `mesh_barriers`, `mesh_draws`, `mesh_partial_barriers` |
 | `MTLRenderCommandEncoder` `setObjectBytes:length:atIndex:` | missing | mesh render pipelines; metal2vulkan-runtime makes none | `mesh_draws`, `mesh_partial_barriers` |
@@ -1913,10 +1934,6 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 | `MTLRenderCommandEncoder` `setTileTexture:atIndex:` | missing | tile render pipelines; metal2vulkan-runtime makes none | `tile_threadgroups` |
 | `MTLRenderCommandEncoder` `setVertexBuffer:offset:attributeStride:atIndex:` | missing | a bind with a per-bind stride, which stage-in and vertex fetch read | `vertex_attribute_strides` |
 | `MTLRenderCommandEncoder` `setVertexBytes:length:attributeStride:atIndex:` | missing | a bind with a per-bind stride, which stage-in and vertex fetch read | `vertex_attribute_strides` |
-| `MTLRenderCommandEncoder` `useHeap:` | missing | as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` | `render_residency` |
-| `MTLRenderCommandEncoder` `useHeap:stages:` | missing | as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` | `render_residency` |
-| `MTLRenderCommandEncoder` `useHeaps:count:` | missing | as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` | `render_residency` |
-| `MTLRenderCommandEncoder` `useHeaps:count:stages:` | missing | as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` | `render_residency` |
 | `MTLRenderPassAttachmentDescriptor` `depthPlane` | missing | a 3D texture's depth plane as an attachment; such an attachment is refused (`RenderPassKind::TextureType`) | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` |
 | `MTLRenderPassAttachmentDescriptor` `storeActionOptions` | missing | store action options, whose one option needs more than one sample | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` |
 | `MTLRenderPassDescriptor` `defaultRasterSampleCount` | missing | a pass with no attachment, which is refused (`RenderPassKind::NoAttachment`) | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` |
