@@ -234,15 +234,14 @@ fn a_half_read_compiles_two_modules_for_the_whole_sweep() {
 /// format's pipeline records `PrecisionNote::DeviceVertexConversion` whatever width the function
 /// reads it at, on `moltenvk-m3`, lavapipe and RADV alike. A narrow float's records
 /// `PrecisionNote::DeviceNanEncoding` where the function reads it as a 32-bit `float` (a `half`
-/// read keeps the code's own bits), and every other fixed-function format's records neither. No
-/// pipeline requires `VkProperty::MetalNormalizedVertexFetch`. Every such creation of one entry
+/// read keeps the code's own bits), and every other fixed-function format's records neither.
+/// Every such creation of one entry
 /// keys its vertex function alike (`RenderPipelineKeys::vertex`), so a runtime translates it once,
 /// and its vertex stage is one module. The function compiled alone records neither note: its
 /// module is every format's.
 #[test]
 fn a_pipeline_notes_what_the_device_converts_from_one_translation() {
     use crate::budget::Budget;
-    use crate::device::requirements::VkProperty;
     use crate::device::Device;
     use crate::library::Library;
     use crate::lower::stage_io::fetch::encoding;
@@ -252,7 +251,6 @@ fn a_pipeline_notes_what_the_device_converts_from_one_translation() {
     let library = Library::from_air(&bc).expect("library");
     let formats = float_readable();
     let stride = SLOT * formats.len() as u32;
-    let fetch = VkProperty::MetalNormalizedVertexFetch;
     for stem in [PROFILE, "lavapipe", "amd-780m-radv"] {
         let dev = Device::from_queries(
             description(stem).expect("committed description"),
@@ -273,11 +271,10 @@ fn a_pipeline_notes_what_the_device_converts_from_one_translation() {
                     .compile_render_pipeline(&d, &Budget::standard())
                     .unwrap_or_else(|e| panic!("{what}: {e}"));
                 let notes = &pipeline.stages[0].precision_notes;
-                let requires = pipeline.requirements.properties.contains(&fetch);
                 if !pipeline.vertex_input.pulled.is_empty() {
                     // A format the device cannot fetch: the module's decode is its own.
                     assert!(
-                        !notes.contains(&PrecisionNote::DeviceVertexConversion) && !requires,
+                        !notes.contains(&PrecisionNote::DeviceVertexConversion),
                         "{what}: a pulled attribute's decode is not the device's: {notes:?}"
                     );
                     continue;
@@ -294,7 +291,6 @@ fn a_pipeline_notes_what_the_device_converts_from_one_translation() {
                     (conversion, nan),
                     "{what}: {notes:?}"
                 );
-                assert!(!requires, "{what}: {:?}", pipeline.requirements.properties);
                 converted += usize::from(conversion);
                 nans += usize::from(nan);
                 keys.insert(
@@ -328,8 +324,7 @@ fn a_pipeline_notes_what_the_device_converts_from_one_translation() {
             let a = artifact(&bc, p, entry, &proj);
             assert!(
                 !a.precision.contains(&PrecisionNote::DeviceVertexConversion)
-                    && !a.precision.contains(&PrecisionNote::DeviceNanEncoding)
-                    && !a.requirements.properties.contains(&fetch),
+                    && !a.precision.contains(&PrecisionNote::DeviceNanEncoding),
                 "{stem} {entry}: {:?}",
                 a.precision
             );

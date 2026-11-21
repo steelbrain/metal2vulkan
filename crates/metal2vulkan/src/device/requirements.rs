@@ -623,29 +623,11 @@ pub enum VkProperty {
     /// `framebuffer*ColorSampleCounts` are the counts every format of a kind takes; one format
     /// may take more.
     ColorAttachmentSampleCount(vk::Format, u32),
-    /// The device reads a center-sampled varying of a multisampled pipeline at the pixel center
-    /// in every fragment invocation, a sample-rate one's included, as Metal does (the driver's
-    /// measured deviation
-    /// [`DriverDeviation::MetalCenterVaryings`](crate::error::DriverDeviation::MetalCenterVaryings)).
-    /// No Vulkan query reports it: Vulkan evaluates an undecorated input at an
-    /// implementation-defined position in the area the invocation shades. A fragment module
-    /// compiled for a multisampled pipeline whose center varyings are read as they are, as their
-    /// pixel form, requires it; without it, their pixel form is `InterpolateAtOffset` at offset
-    /// 0, which requires [`VkProperty::InterpolateAtOffsetCentered`].
-    MetalCenterVaryings,
     /// Native device sampling: the module hands its samples, gathers and comparisons to the
     /// device's own sampler. No Vulkan query reports it: every profile takes it. A module that
     /// leaves a sample to the device's sampler requires it and records
     /// [`PrecisionNote::DeviceSampling`](crate::pipeline::PrecisionNote::DeviceSampling).
     DeviceSampling,
-    /// The device interpolates a varying as Metal does, bit for bit (the driver's measured
-    /// deviation
-    /// [`DriverDeviation::MetalInterpolation`](crate::error::DriverDeviation::MetalInterpolation)).
-    /// No Vulkan query reports it: Vulkan states no precision for interpolation. A fragment module
-    /// that reads a varying the device interpolates and records no
-    /// [`PrecisionNote::DeviceInterpolation`](crate::pipeline::PrecisionNote::DeviceInterpolation)
-    /// requires it; without it, the module records that note.
-    MetalInterpolation,
     /// The device takes a primitive's `Layer` and `ViewportIndex` from its first vertex, whatever
     /// its other vertices store, as Metal takes a primitive's slice and viewport (the driver's
     /// measured deviation
@@ -662,25 +644,6 @@ pub enum VkProperty {
     /// shading), including "any pipeline already bound when beginning the render pass instance"
     /// (`VUID-vkCmdBindPipeline-pipelineBindPoint-04881`).
     ProvokingVertexModePerPipeline,
-    /// The device's fixed-function vertex input converts a normalized format's codes to Metal's
-    /// `float` at every code (the driver's measured deviation
-    /// [`DriverDeviation::MetalNormalizedVertexFetch`](crate::error::DriverDeviation::MetalNormalizedVertexFetch)).
-    /// No Vulkan query reports it: Vulkan states the correctly rounded quotient and lets a driver
-    /// compute it otherwise. A render pipeline whose fixed-function vertex input converts such a
-    /// format for an attribute that records no
-    /// [`PrecisionNote::DeviceVertexConversion`](crate::pipeline::PrecisionNote::DeviceVertexConversion)
-    /// requires it, where no module does (the format is the pipeline's vertex input state);
-    /// without it, the pipeline's vertex stage records that note.
-    MetalNormalizedVertexFetch,
-    /// The device's alpha to coverage covers the samples Metal's does at every pixel (the
-    /// driver's measured deviation
-    /// [`DriverDeviation::MetalAlphaCoverage`](crate::error::DriverDeviation::MetalAlphaCoverage)).
-    /// No Vulkan query reports it: Vulkan specifies no algorithm for converting the alpha to a
-    /// coverage mask. A render pipeline that covers by alpha and records no
-    /// [`PrecisionNote::DeviceAlphaCoverage`](crate::pipeline::PrecisionNote::DeviceAlphaCoverage)
-    /// requires it, where no module does (the coverage is the pipeline's multisample state);
-    /// without it, the pipeline's fragment stage records that note.
-    MetalAlphaCoverage,
     /// `GLSL.std.450 InterpolateAtOffset` at offset `v` reads Metal's `interpolate_at_offset` at
     /// `v + 7/16`, measured from the pixel's upper-left corner: a device whose description reports
     /// a MoltenVK driver, whose SPIRV-Cross hands the instruction to Metal so at any release

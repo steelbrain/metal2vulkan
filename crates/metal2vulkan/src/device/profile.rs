@@ -216,26 +216,10 @@ impl DeviceProfile {
     pub fn takes_driver_deviation(&self, deviation: DriverDeviation) -> bool {
         let f = &self.fields;
         match deviation {
-            DriverDeviation::MetalCenterVaryings => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalCenterVaryings),
-            DriverDeviation::MetalInterpolation => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalInterpolation),
             DriverDeviation::MetalFirstVertexIndices => f
                 .enabled
                 .properties
                 .contains(&VkProperty::MetalFirstVertexIndices),
-            DriverDeviation::MetalNormalizedVertexFetch => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalNormalizedVertexFetch),
-            DriverDeviation::MetalAlphaCoverage => f
-                .enabled
-                .properties
-                .contains(&VkProperty::MetalAlphaCoverage),
         }
     }
 

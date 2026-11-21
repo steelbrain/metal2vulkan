@@ -436,11 +436,9 @@ fn interpolant(cx: &mut SelectCx<'_>, b: &ParamBinding, v: &Varying) -> Result<(
     }
     // The center read's pixel form, as a center varying's.
     let at_center = center && cx.inputs.multisampled;
-    let by_device = at_center && device_reads_center_varyings_at_pixel(cx);
-    let at_pixel = at_center && !by_device && interpolation_functions(cx);
+    let at_pixel = at_center && interpolation_functions(cx);
     let sp = &mut cx.families.stage_io;
-    sp.interface.varyings_at_pixel |= at_pixel || by_device;
-    sp.center_varyings_by_device |= by_device;
+    sp.interface.varyings_at_pixel |= at_pixel;
     let object = user(sp, key.clone(), IoDir::Input, io_type(f), deco)?;
     push_var(
         &mut sp.interface.inputs,
@@ -531,18 +529,6 @@ pub(super) fn interpolant_reads(
     }
 }
 
-/// Whether the device reads a center-sampled varying of a multisampled pipeline at the pixel
-/// center in every fragment invocation, a sample-rate one's included, as Metal does
-/// (`VkProperty::MetalCenterVaryings`, the measured `DriverDeviation::MetalCenterVaryings`): the
-/// varying's read as it is is then its pixel form.
-fn device_reads_center_varyings_at_pixel(cx: &SelectCx<'_>) -> bool {
-    cx.profile
-        .fields()
-        .enabled
-        .properties
-        .contains(&VkProperty::MetalCenterVaryings)
-}
-
 /// Whether the entry may read lane 2 or 3 (z or w) of vector parameter `param`: anything but an
 /// extract of a constant lane 0 or 1, or a shuffle that takes only those lanes of it.
 fn reads_depth_lanes(cx: &SelectCx<'_>, param: u32) -> bool {
@@ -585,8 +571,7 @@ fn reads_depth_lanes(cx: &SelectCx<'_>, param: u32) -> bool {
 /// y, and a center-sampled float varying where the profile has interpolation functions whose
 /// `InterpolateAtOffset` reads from the center ([`Source::PixelCenter`]). That holds for a
 /// pixel-rate function too: Vulkan evaluates its undecorated input at an implementation-defined
-/// position in the pixel. A device that reads such a varying at the pixel center itself, as Metal
-/// does (`VkProperty::MetalCenterVaryings`), reads it as it is, and that read is its pixel form.
+/// position in the pixel.
 pub fn param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
     let ty = param_ty(cx, b)?;
     let frag = cx.profile.fields().fragment;
@@ -733,14 +718,11 @@ pub fn param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
                         ..
                     }
                 );
-            // Where the device reads a center varying at the pixel center in every invocation,
-            // as Metal does, the read as it is is the pixel form; elsewhere it is
-            // `InterpolateAtOffset` at offset 0 where that reads from the center.
-            let by_device = center && device_reads_center_varyings_at_pixel(cx);
-            at_pixel = center && !by_device && interpolation_functions(cx);
+            // A center varying's pixel form is `InterpolateAtOffset` at offset 0 where that reads
+            // from the center.
+            at_pixel = center && interpolation_functions(cx);
             let sp = &mut cx.families.stage_io;
-            sp.interface.varyings_at_pixel |= at_pixel || by_device;
-            sp.center_varyings_by_device |= by_device;
+            sp.interface.varyings_at_pixel |= at_pixel;
             let object = user(sp, key.clone(), IoDir::Input, io_type(f), deco)?;
             push_var(
                 &mut sp.interface.inputs,
@@ -954,11 +936,9 @@ pub fn param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error> {
             };
             note_device_interpolation(cx, interp);
             let center = cx.inputs.multisampled;
-            let by_device = center && device_reads_center_varyings_at_pixel(cx);
-            at_pixel = center && !by_device && interpolation_functions(cx);
+            at_pixel = center && interpolation_functions(cx);
             let sp = &mut cx.families.stage_io;
-            sp.interface.varyings_at_pixel |= at_pixel || by_device;
-            sp.center_varyings_by_device |= by_device;
+            sp.interface.varyings_at_pixel |= at_pixel;
             let object = barycentric_weights(sp, perspective)?;
             note_rotated_weights(cx, place);
             Link {
@@ -1771,18 +1751,10 @@ fn note_rotated_weights(cx: &mut SelectCx<'_>, place: Place) {
 }
 
 /// Records that the device interpolates a fragment input of interpolation `interp`: a smooth one
-/// takes Metal's answer only where the device is measured to interpolate as Metal does (the module
-/// then requires that), elsewhere the device's, which the module records.
+/// takes the device's answer, which the module records.
 fn note_device_interpolation(cx: &mut SelectCx<'_>, interp: Interpolation) {
     if matches!(interp, Interpolation::Smooth { .. }) {
-        if cx
-            .profile
-            .takes_driver_deviation(DriverDeviation::MetalInterpolation)
-        {
-            cx.families.stage_io.interpolation_by_metal = true;
-        } else {
-            cx.precision.insert(PrecisionNote::DeviceInterpolation);
-        }
+        cx.precision.insert(PrecisionNote::DeviceInterpolation);
     }
 }
 

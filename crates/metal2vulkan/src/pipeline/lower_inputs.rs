@@ -90,23 +90,21 @@ pub struct LoweringInputs {
     /// the implicit imageblock then is `NeedsInput(TileAttachments)`.
     #[cfg_attr(feature = "serde", serde(default))]
     pub tile_attachments: Option<BTreeMap<u32, metal::PixelFormat>>,
-    /// The fragment function's render pipeline rasterizes more than one sample
-    /// (`rasterSampleCount` above 1 with rasterization on). Metal reads `[[position]]` and
-    /// center-sampled varyings at the pixel center in every invocation, so under it a fragment
-    /// function reads `[[position]]`'s x and y as `floor(FragCoord.xy) + 0.5`, and each
-    /// center-sampled varying through `InterpolateAtOffset` at offset 0 on a device with
-    /// interpolation functions whose offset reads from the center
-    /// (`VkProperty::InterpolateAtOffsetCentered`), or as it is on a device that reads it at the
-    /// pixel center itself, as Metal does (`VkProperty::MetalCenterVaryings`): the pixel center
-    /// whatever samples its invocation shades (`StageIo::{multisampled, varyings_at_pixel}`). A
-    /// function that reads its color attachments (`framebuffer_fetch`) reads, and in the storage
-    /// form writes, each one's multisampled image at its `SampleId`, running once per covered
-    /// sample, as Metal does. `Device::compile_render_pipeline` sets it for a `Function` fragment
-    /// stage, and a fragment compiled on its own for such a pipeline compiles under it: link
-    /// refuses one compiled without it whose sample-rate invocations would read either elsewhere,
-    /// or that reads its color attachments, as `NeedsInput(Multisampled)`, and one compiled under
-    /// it that reads its color attachments into a pipeline of one sample likewise. Any other
-    /// function compiles as without it.
+    /// The fragment function's render pipeline rasterizes more than one sample (`rasterSampleCount`
+    /// above 1 with rasterization on). Metal reads `[[position]]` and center-sampled varyings at
+    /// the pixel center in every invocation, so under it a fragment function reads `[[position]]`'s
+    /// x and y as `floor(FragCoord.xy) + 0.5`, and each center-sampled varying through
+    /// `InterpolateAtOffset` at offset 0 on a device with interpolation functions whose offset
+    /// reads from the center (`VkProperty::InterpolateAtOffsetCentered`): the pixel center whatever
+    /// samples its invocation shades (`StageIo::{multisampled, varyings_at_pixel}`). A function
+    /// that reads its color attachments (`framebuffer_fetch`) reads, and in the storage form
+    /// writes, each one's multisampled image at its `SampleId`, running once per covered sample, as
+    /// Metal does. `Device::compile_render_pipeline` sets it for a `Function` fragment stage, and a
+    /// fragment compiled on its own for such a pipeline compiles under it: link refuses one
+    /// compiled without it whose sample-rate invocations would read either elsewhere, or that reads
+    /// its color attachments, as `NeedsInput(Multisampled)`, and one compiled under it that reads
+    /// its color attachments into a pipeline of one sample likewise. Any other function compiles as
+    /// without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub multisampled: bool,
     /// A kernel compiles as a device-replay variant of an indirect-command template: every buffer

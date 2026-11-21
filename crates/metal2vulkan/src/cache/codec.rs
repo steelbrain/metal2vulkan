@@ -1044,10 +1044,10 @@ codec_enum! {
         InterpolateAtOffsetCentered, StorageImageSampleCount(f0),
         DepthResolveMode(f0), StencilResolveMode(f0), IndependentResolveNone, IndependentResolve,
         VariableSampleLocations, SampleLocationSampleCount(f0), ColorAttachmentSampleCount(f0, f1),
-        MetalCenterVaryings, DeviceSampling,
-        MetalInterpolation, MetalFirstVertexIndices,
+        DeviceSampling,
+        MetalFirstVertexIndices,
         ProvokingVertexModePerPipeline,
-        MetalNormalizedVertexFetch, MetalAlphaCoverage, InterpolateAtOffsetFromSevenSixteenths,
+        InterpolateAtOffsetFromSevenSixteenths,
         SubgroupGeometryStage,
     }
     VkLimit {

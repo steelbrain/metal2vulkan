@@ -69,7 +69,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::cache::VariantKey;
 use crate::device::requirements::VkFeature;
 use crate::device::requirements::VkLimit;
-use crate::device::requirements::VkProperty;
 use crate::device::DeviceProfile;
 use crate::error::{
     Capability, DescriptorError, Error, Feature, InternalError, InternalKind, Unsupported,
@@ -286,22 +285,11 @@ pub struct Linked {
     /// vertex stage's notes. Empty but for a render pipeline whose vertex input converts a
     /// format otherwise than Metal's fetch may.
     pub vertex_notes: Vec<PrecisionNote>,
-    /// The measured properties the vertex stage's fixed-function attributes rely on in place of a
-    /// note under this pipeline's vertex descriptor (`vertex::fixed_function_notes`): the compile
-    /// API adds them to the pipeline's requirements. Empty but for a render pipeline whose vertex
-    /// input converts a normalized format on a profile measured to convert it as Metal does
-    /// (`VkProperty::MetalNormalizedVertexFetch`).
-    pub vertex_properties: BTreeSet<VkProperty>,
     /// The precision notes of the pipeline's fixed-function fragment operations under its graphics
     /// state (`graphics::coverage_notes`), sorted: the compile API adds them to the fragment
-    /// stage's notes. Empty but for a render pipeline that covers by alpha on a profile not
-    /// measured to cover as Metal does (`PrecisionNote::DeviceAlphaCoverage`).
+    /// stage's notes. Empty but for a render pipeline that covers by alpha
+    /// (`PrecisionNote::DeviceAlphaCoverage`).
     pub fragment_notes: Vec<PrecisionNote>,
-    /// The measured properties the pipeline's fixed-function fragment operations rely on in place
-    /// of a note (`graphics::coverage_notes`): the compile API adds them to the pipeline's
-    /// requirements. Empty but for a render pipeline that covers by alpha on a profile measured to
-    /// cover as Metal does (`VkProperty::MetalAlphaCoverage`).
-    pub fragment_properties: BTreeSet<VkProperty>,
     pub interface: PipelineInterface,
     /// `Some` exactly for a render pipeline.
     pub graphics: Option<GraphicsState>,
@@ -494,7 +482,7 @@ pub fn link(
     if let Some(placement) = control.and_then(|(plan, offset)| plan.placement(offset)) {
         interface.push.push(placement);
     }
-    let mut vertex_notes = vertex::FixedFunctionNotes::default();
+    let mut vertex_notes = Vec::new();
     let (vertex_input, graphics) = match inputs {
         LinkInputs::Render(r) => {
             let vs = ifaces.first().ok_or_else(|| missing_stage(Stage::Vertex))?;
@@ -508,8 +496,7 @@ pub fn link(
                         &table.locations,
                         p,
                     )?;
-                    vertex_notes =
-                        vertex::fixed_function_notes(vs, r.vertex_descriptor.as_ref(), p)?;
+                    vertex_notes = vertex::fixed_function_notes(vs, r.vertex_descriptor.as_ref())?;
                     vi
                 }
             };
@@ -564,7 +551,7 @@ pub fn link(
     };
     let fragment_notes = graphics
         .as_ref()
-        .map(|g| graphics::coverage_notes(g, p))
+        .map(graphics::coverage_notes)
         .unwrap_or_default();
     // Totality: every relocation of every stage resolves. A miss is a link bug.
     for a in stages {
@@ -584,10 +571,8 @@ pub fn link(
         table,
         layout,
         vertex_input,
-        vertex_notes: vertex_notes.notes,
-        vertex_properties: vertex_notes.properties,
-        fragment_notes: fragment_notes.notes,
-        fragment_properties: fragment_notes.properties,
+        vertex_notes,
+        fragment_notes,
         interface,
         graphics,
         specialization,

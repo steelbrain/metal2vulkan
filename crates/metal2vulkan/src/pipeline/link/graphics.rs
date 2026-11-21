@@ -74,54 +74,51 @@
 //!   under 4x multisampling with or without one.
 //! - **Fragment invocations under multisampling**. With `rasterSampleCount` above 1 and
 //!   rasterization on, Metal runs a fragment function that reads `[[sample_id]]` or a
-//!   sample-qualified varying per sample (MSL 5.5: the function "may execute per-sample"), and every
-//!   invocation reads `[[position]]` (x, y, z, and w), its center and centroid varyings,
+//!   sample-qualified varying per sample (MSL 5.5: the function "may execute per-sample"), and
+//!   every invocation reads `[[position]]` (x, y, z, and w), its center and centroid varyings,
 //!   `[[point_coord]]`, and `[[barycentric_coord]]` as the pixel's, and `[[sample_mask]]` as the
-//!   pixel's coverage; only `[[sample_id]]` and sample-qualified varyings are the sample's (Apple M3
-//!   Max, 4x, measured). Documented Metal names no run count for any other function: one that
+//!   pixel's coverage; only `[[sample_id]]` and sample-qualified varyings are the sample's (Apple
+//!   M3 Max, 4x, measured). Documented Metal names no run count for any other function: one that
 //!   writes memory runs as any other, as many times as the device runs it (Apple's GPUs were
 //!   measured to run it once per covered sample; Vulkan runs a fragment shader at least once per
-//!   pixel, `PrecisionNote::DeviceFragmentRuns`). Vulkan runs a fragment shader
-//!   once per covered sample only under sample shading, which a `SampleId` input turns on and a
-//!   `Sample` input may, and sample shading moves `FragCoord` to the sample, lets an undecorated or
-//!   `Centroid` input interpolate anywhere in the sample's area, may move `PointCoord` there, and
-//!   leaves in `SampleMask` only the invocation's samples. A fragment compiled for the pipeline
+//!   pixel, `PrecisionNote::DeviceFragmentRuns`). Vulkan runs a fragment shader once per covered
+//!   sample only under sample shading, which a `SampleId` input turns on and a `Sample` input may,
+//!   and sample shading moves `FragCoord` to the sample, lets an undecorated or `Centroid` input
+//!   interpolate anywhere in the sample's area, may move `PointCoord` there, and leaves in
+//!   `SampleMask` only the invocation's samples. A fragment compiled for the pipeline
 //!   (`LoweringInputs::multisampled`) reads `[[position]]`'s x and y as `floor(FragCoord.xy) + 0.5`
 //!   and, where the device has interpolation functions whose `InterpolateAtOffset` reads from the
-//!   pixel center, its center varyings through that instruction at offset 0, or, where the device
-//!   reads them at the pixel center itself as Metal does (`VkProperty::MetalCenterVaryings`,
-//!   MoltenVK), as they are: both the pixel center whatever the invocation shades
-//!   (`StageIo::{multisampled, varyings_at_pixel, position_depth}`). A function that runs per
-//!   sample (one that reads `[[sample_id]]` or a sample-qualified varying) beside `[[sample_mask]]`
-//!   cannot run under sample shading:
-//!   Vulkan gives an invocation under sample shading only the bits of the samples it shades, a quad
-//!   holds one sample index, and no subgroup is promised to hold a pixel's other sample
-//!   invocations, so no form gathers the pixel's coverage. Compiled for the pipeline, such a
-//!   function runs once per pixel instead, without sample shading, and its body once per covered
-//!   sample from a loop over the coverage (`StageIo::coverage_loop`), its outputs the last pass's
+//!   pixel center, its center varyings through that instruction at offset 0: both the pixel center
+//!   whatever the invocation shades (`StageIo::{multisampled, varyings_at_pixel, position_depth}`).
+//!   A function that runs per sample (one that reads `[[sample_id]]` or a sample-qualified varying)
+//!   beside `[[sample_mask]]` cannot run under sample shading: Vulkan gives an invocation under
+//!   sample shading only the bits of the samples it shades, a quad holds one sample index, and no
+//!   subgroup is promised to hold a pixel's other sample invocations, so no form gathers the
+//!   pixel's coverage. Compiled for the pipeline, such a function runs once per pixel instead,
+//!   without sample shading, and its body once per covered sample from a loop over the coverage
+//!   (`StageIo::coverage_loop`), its outputs the last pass's
 //!   (`PrecisionNote::LoopedSampleOutputs`); compiled without `multisampled` it is
 //!   `NeedsInput(Multisampled)`, and one the loop does not fit is refused for the reason its
-//!   interface records (`CoverageLoopRefusal`). A per-sample function reads the pixel values Vulkan has no pixel
-//!   form for where Vulkan evaluates them, as a pixel-rate function does: `[[position]]`'s z and w
-//!   (the interpolated depth and `1/w`, at a position Vulkan does not state), `[[point_coord]]`
-//!   ("the fragment center, or the location of a sample"), `[[barycentric_coord]]`, and a centroid
-//!   varying (at the invocation's sample under sample shading), each within half a pixel of the
-//!   pixel center Metal reads it at; the compile layer notes `PrecisionNote::MultisamplePosition`
-//!   for them, as for a pixel-rate function's. Link refuses a per-sample function's center varying
-//!   on a device without the varyings' pixel form, naming what the device lacks:
-//!   `VkProperty::InterpolateAtOffsetCentered` (a device whose `InterpolateAtOffset` does not read
-//!   from the pixel center, as MoltenVK's does not, has no such form, and has a pixel form only
-//!   where it reads the varying at the pixel center itself) and
+//!   interface records (`CoverageLoopRefusal`). A per-sample function reads the pixel values Vulkan
+//!   has no pixel form for where Vulkan evaluates them, as a pixel-rate function does:
+//!   `[[position]]`'s z and w (the interpolated depth and `1/w`, at a position Vulkan does not
+//!   state), `[[point_coord]]` ("the fragment center, or the location of a sample"),
+//!   `[[barycentric_coord]]`, and a centroid varying (at the invocation's sample under sample
+//!   shading), each within half a pixel of the pixel center Metal reads it at; the compile layer
+//!   notes `PrecisionNote::MultisamplePosition` for them, as for a pixel-rate function's. Link
+//!   refuses a per-sample function's center varying on a device without the varyings' pixel form,
+//!   naming what the device lacks: `VkProperty::InterpolateAtOffsetCentered` (a device whose
+//!   `InterpolateAtOffset` does not read from the pixel center, as MoltenVK's does not, has no such
+//!   form, and has a pixel form only where it reads the varying at the pixel center itself) and
 //!   `shaderSampleRateInterpolationFunctions`; and a function that needs sample shading, or reads
 //!   `[[position]]` or a center varying per sample, on a device without `sampleRateShading`. Such a
 //!   function whose pixel reads all have forms on the device, but which was compiled without
 //!   `multisampled`, is `NeedsInput(Multisampled)`: compiled for the pipeline it links. A function
 //!   compiled for another device's forms is `Unsupported{SampleRateShading, NotImplemented}`. A
-//!   function that runs per
-//!   pixel, or a pipeline of one sample, has no sample shading: `FragCoord`'s x and y are the
-//!   pixel's center and `SampleMask` the fragment's coverage. The sample mask a function returns
-//!   keeps, under either API, the samples of the invocation whose bits it sets (measured with
-//!   `[[sample_id]]` and with a device atomic).
+//!   function that runs per pixel, or a pipeline of one sample, has no sample shading:
+//!   `FragCoord`'s x and y are the pixel's center and `SampleMask` the fragment's coverage. The
+//!   sample mask a function returns keeps, under either API, the samples of the invocation whose
+//!   bits it sets (measured with `[[sample_id]]` and with a device atomic).
 //! - **Fragment outputs**: a color output to an attachment the descriptor sets must have the
 //!   attachment's numeric class (`float` to a float, normalized, or sRGB format, `uint` to an
 //!   unsigned-integer one, `int` to a signed-integer one); an output of another class is Metal's
@@ -155,9 +152,7 @@
 //!   coverage of an alpha depends on the pixel's place in a 2x2 ordered dither at two and four
 //!   samples (`PrecisionNote::DeviceAlphaCoverage` states it), and Vulkan specifies no algorithm
 //!   for converting the alpha to a coverage mask, so a pipeline that keeps alpha to coverage records
-//!   `PrecisionNote::DeviceAlphaCoverage` on its fragment stage, or, on a profile measured to cover
-//!   as Metal does (`DriverDeviation::MetalAlphaCoverage`), requires
-//!   `VkProperty::MetalAlphaCoverage` in its place ([`coverage_notes`]).
+//!   `PrecisionNote::DeviceAlphaCoverage` on its fragment stage ([`coverage_notes`]).
 //! - **Alpha to one** is `VkPipelineMultisampleStateCreateInfo::alphaToOneEnable`
 //!   (`GraphicsState::alpha_to_one`), the exact counterpart of Metal's `alphaToOneEnabled`: both
 //!   replace the fragment's alpha with one before the blend reads it and before the write mask
@@ -184,8 +179,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::device::requirements::{FormatUsage, VkFeature, VkLimit, VkProperty};
 use crate::device::DeviceProfile;
 use crate::error::{
-    Attachment, Capability, DescriptorError, DriverDeviation, Error, Feature, MetalAnswer,
-    RuntimeInput, Unsupported,
+    Attachment, Capability, DescriptorError, Error, Feature, MetalAnswer, RuntimeInput, Unsupported,
 };
 use crate::metal;
 use crate::metal::format::{
@@ -201,7 +195,6 @@ use crate::pipeline::graphics::{
     ColorAttachmentState, GraphicsState, InputAttachmentUse, TessellationState,
 };
 use crate::pipeline::interface::StageInterface;
-use crate::pipeline::link::vertex::FixedFunctionNotes;
 use crate::pipeline::link::RenderLinkInputs;
 use crate::pipeline::rotated_blend::{alpha_in_red_blend, rotated_blend, RotatedBlend};
 use crate::pipeline::stage_io::{
@@ -903,14 +896,7 @@ fn sample_invocations(
         return Err(refused());
     }
     let enabled = &p.fields().enabled;
-    // A device that reads center varyings at the pixel center itself, as Metal does, has their
-    // pixel form: their read as it is.
-    if center
-        && !io.varyings_at_pixel
-        && !enabled
-            .properties
-            .contains(&VkProperty::MetalCenterVaryings)
-    {
+    if center && !io.varyings_at_pixel {
         // Beside `sampleRateShading`, the varyings' pixel form needs an `InterpolateAtOffset` that
         // reads from the pixel center and the interpolation functions a portability-subset device
         // withholds.
@@ -946,20 +932,13 @@ fn sample_invocations(
 /// What the device's alpha to coverage gives a render pipeline whose graphics state is `g` on `p`
 /// (see the module docs): where it covers by alpha (`GraphicsState::alpha_to_coverage`), the
 /// device converts the alpha to a coverage mask by its own algorithm, which Vulkan does not
-/// specify, so the fragment stage records `PrecisionNote::DeviceAlphaCoverage`; but where `p`
-/// takes `DriverDeviation::MetalAlphaCoverage`, the device covers Metal's samples, and the
-/// pipeline requires `VkProperty::MetalAlphaCoverage` in place of the note. Nothing where the
+/// specify, so the fragment stage records `PrecisionNote::DeviceAlphaCoverage`. Nothing where the
 /// pipeline does not cover by alpha.
-pub(crate) fn coverage_notes(g: &GraphicsState, p: &DeviceProfile) -> FixedFunctionNotes {
-    let mut out = FixedFunctionNotes::default();
-    if g.alpha_to_coverage {
-        if p.takes_driver_deviation(DriverDeviation::MetalAlphaCoverage) {
-            out.properties.insert(VkProperty::MetalAlphaCoverage);
-        } else {
-            out.notes.push(PrecisionNote::DeviceAlphaCoverage);
-        }
+pub(crate) fn coverage_notes(g: &GraphicsState) -> Vec<PrecisionNote> {
+    match g.alpha_to_coverage {
+        true => vec![PrecisionNote::DeviceAlphaCoverage],
+        false => Vec::new(),
     }
-    out
 }
 
 /// Whether the pipeline's alpha to coverage stays enabled (see the module docs): only over a

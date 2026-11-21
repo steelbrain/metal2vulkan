@@ -1099,16 +1099,14 @@ pub enum PrecisionNote {
     /// mismatch for review.
     DeviceColorConversion,
     /// A fragment function reads a varying the device interpolates (`center_perspective`,
-    /// `centroid`, `sample` or `no_perspective`, not `flat`) on a device not measured to
-    /// interpolate as Metal does (without
-    /// [`DriverDeviation::MetalInterpolation`](crate::error::DriverDeviation::MetalInterpolation),
-    /// which only MoltenVK takes: there Metal interpolates). Vulkan states no precision for
-    /// interpolation, and every other device measured rounds otherwise than Metal: on a perspective
-    /// triangle list, texcoords over a full-screen quad and a colour whose `w` varies, 31% to 45%
-    /// of the lanes RADV, ANV, lavapipe and NVIDIA's driver interpolated were Metal's bit for bit,
-    /// the rest up to about `3e-4` apart (lavapipe, which snaps vertices otherwise) and `1.5e-4`
-    /// elsewhere. The exact path, interpolating each varying in the shader by Metal's formula,
-    /// is not built: Metal's formula is not known.
+    /// `centroid`, `sample` or `no_perspective`, not `flat`), on every device. Vulkan states no
+    /// precision for interpolation, and every device measured but MoltenVK (where Metal
+    /// interpolates) rounds otherwise than Metal: on a perspective triangle list, texcoords over a
+    /// full-screen quad and a colour whose `w` varies, 31% to 45% of the lanes RADV, ANV, lavapipe
+    /// and NVIDIA's driver interpolated were Metal's bit for bit, the rest up to about `3e-4` apart
+    /// (lavapipe, which snaps vertices otherwise) and `1.5e-4` elsewhere. The exact path,
+    /// interpolating each varying in the shader by Metal's formula, is not built: Metal's formula
+    /// is not known.
     ///
     /// Validation derives no tolerance and no explanation from it: a difference stays a
     /// mismatch for review.
@@ -1588,12 +1586,8 @@ pub enum PrecisionNote {
     /// otherwise (by the reciprocal). Recorded on a render pipeline's vertex stage where its vertex
     /// descriptor gives such a format to an attribute fixed-function input fetches
     /// (`pipeline::link::vertex`), whatever width the function declares the attribute with (a
-    /// `half` attribute reads the device's `float` value rounded to `half`), on every profile but
-    /// one that takes `DriverDeviation::MetalNormalizedVertexFetch` (MoltenVK on Apple's GPUs of
-    /// the Apple M3 Max's macOS 27 identity), whose `float` is measured to be Metal's at every
-    /// code: there such an attribute records nothing and the pipeline requires
-    /// `VkProperty::MetalNormalizedVertexFetch`, but for a 16-bit format read as `half`, which
-    /// rounds twice. A function compiled alone records nothing for them: its module is the same
+    /// `half` attribute reads the device's `float` value rounded to `half`), on every profile. A
+    /// function compiled alone records nothing for them: its module is the same
     /// for every format the device fetches. A **pulled** attribute (one the shader fetches from
     /// its buffer, a kernel's `[[stage_in]]` attribute and a post-tessellation function's
     /// included) is the module's own product of the code and its maximum's reciprocal,
@@ -1878,23 +1872,18 @@ pub enum PrecisionNote {
     CoverageReadsRoundedAlpha,
     /// Native device coverage: a render pipeline covers by alpha (`alphaToCoverageEnabled`, kept
     /// where its fragment function writes a four-component float to attachment 0,
-    /// `GraphicsState::alpha_to_coverage`) on a device not measured to cover as Metal does
-    /// (without
-    /// [`DriverDeviation::MetalAlphaCoverage`](crate::error::DriverDeviation::MetalAlphaCoverage),
-    /// which only MoltenVK on Apple's GPUs of the Apple M3 Max's macOS 27 identity takes: there
-    /// Metal covers). The device converts the
-    /// alpha to its coverage mask by its own algorithm. Metal's, measured over 639 alphas a sample
-    /// count on an Apple M3 Max under macOS 27.0.1, covers a pixel
-    /// at one sample where its alpha is above 1/2, and at two and four samples
-    /// `ceil(alpha * n - t)` of its `n` samples, `t` a 2x2 ordered dither of the pixel's window
-    /// coordinates (1/8 and 5/8 at even and odd `x` of an even row, 7/8 and 3/8 of an odd one),
-    /// either count within an `f32` ulp of a threshold. Vulkan fixes no algorithm ("No specific
-    /// algorithm is specified for converting the alpha value to a temporary coverage mask. It is
-    /// intended that the number of 1's in this value be proportional to the alpha value (clamped
-    /// to \[0,1\]), with all 1's corresponding to a value of 1.0 and all 0's corresponding to 0.0.
-    /// The algorithm may be different at different framebuffer coordinates."), so a pixel may
-    /// cover other samples than Metal's: at one sample, a whole fragment stored or dropped.
-    /// Recorded on the fragment stage.
+    /// `GraphicsState::alpha_to_coverage`), on every device. The device converts the alpha to its
+    /// coverage mask by its own algorithm. Metal's, measured over 639 alphas a sample count on an
+    /// Apple M3 Max under macOS 27.0.1, covers a pixel at one sample where its alpha is above 1/2,
+    /// and at two and four samples `ceil(alpha * n - t)` of its `n` samples, `t` a 2x2 ordered
+    /// dither of the pixel's window coordinates (1/8 and 5/8 at even and odd `x` of an even row,
+    /// 7/8 and 3/8 of an odd one), either count within an `f32` ulp of a threshold. Vulkan fixes no
+    /// algorithm ("No specific algorithm is specified for converting the alpha value to a temporary
+    /// coverage mask. It is intended that the number of 1's in this value be proportional to the
+    /// alpha value (clamped to \[0,1\]), with all 1's corresponding to a value of 1.0 and all 0's
+    /// corresponding to 0.0. The algorithm may be different at different framebuffer
+    /// coordinates."), so a pixel may cover other samples than Metal's: at one sample, a whole
+    /// fragment stored or dropped. Recorded on the fragment stage.
     ///
     /// **Recorded bound,** over that sweep against Metal's reading, pixel by pixel: on lavapipe
     /// (Mesa 26.0.8 on LLVM 21.1.8, arm64), which takes the same dither at one sample as at four,

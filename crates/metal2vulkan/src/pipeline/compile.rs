@@ -3358,19 +3358,6 @@ fn lower_bounded<K>(
             .properties
             .insert(crate::device::requirements::VkProperty::DeviceSampling);
     }
-    // Center varyings read as they are as their pixel form, because the device reads them at
-    // the pixel center as Metal does.
-    if plan.families.stage_io.center_varyings_by_device {
-        requirements
-            .properties
-            .insert(crate::device::requirements::VkProperty::MetalCenterVaryings);
-    }
-    // Varyings the device interpolates, with no note, because it interpolates as Metal does.
-    if plan.families.stage_io.interpolation_by_metal {
-        requirements
-            .properties
-            .insert(crate::device::requirements::VkProperty::MetalInterpolation);
-    }
     // An index stored to its builtin although it differs among a primitive's vertices, because
     // the device takes the first vertex's as Metal does.
     if plan.families.stage_io.first_vertex_indices_by_device {

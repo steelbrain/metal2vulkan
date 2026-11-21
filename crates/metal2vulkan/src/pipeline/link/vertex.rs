@@ -76,9 +76,8 @@
 //! `VertexAttribute` state this module emits, and what the device's conversion of it may answer
 //! otherwise than Metal's fetch is noted where the pipeline links, on its vertex stage
 //! ([`fixed_function_notes`]): a normalized format's quotient
-//! (`PrecisionNote::DeviceVertexConversion`; on a profile whose conversion is measured to be
-//! Metal's, `VkProperty::MetalNormalizedVertexFetch` among the pipeline's requirements in its
-//! place) and a narrow float's NaN read as `float` (`PrecisionNote::DeviceNanEncoding`).
+//! (`PrecisionNote::DeviceVertexConversion`) and a narrow float's NaN read as `float`
+//! (`PrecisionNote::DeviceNanEncoding`).
 //!
 //! The projection is part of the vertex function's compile key; link recomputes it from the
 //! function's stage-IO contract and refuses a stage compiled under another one
@@ -87,11 +86,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::device::requirements::{VkFeature, VkLimit, VkProperty};
+use crate::device::requirements::{VkFeature, VkLimit};
 use crate::device::DeviceProfile;
 use crate::error::{
-    Capability, DescriptorError, DriverDeviation, Error, Feature, InternalError, InternalKind,
-    Unsupported,
+    Capability, DescriptorError, Error, Feature, InternalError, InternalKind, Unsupported,
 };
 use crate::lower::stage_io::fetch::{class_match, encoding, ClassMatch, Encoding};
 use crate::metal::vertex::{
@@ -413,34 +411,16 @@ fn fetch_of(r: &Resolved<'_>) -> VertexFetch {
     }
 }
 
-/// What the device's fixed-function operations give a render pipeline: the precision notes one of
-/// its stages records and the measured properties it relies on in their place. The conversions of
-/// its vertex stage's fixed-function attributes ([`fixed_function_notes`]) and its alpha to
-/// coverage (`graphics::coverage_notes`).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct FixedFunctionNotes {
-    /// The notes, sorted, each once.
-    pub(crate) notes: Vec<PrecisionNote>,
-    /// The measured properties an attribute that records no note relies on.
-    pub(crate) properties: BTreeSet<VkProperty>,
-}
-
 /// The precision notes of vertex stage `vs`'s attributes that fixed-function vertex input fetches
 /// for descriptor `desc` on `p` (its `IoRole::Attribute` inputs, which [`vertex_input_state`]
-/// holds to the descriptor's projection), sorted, each once, and the measured properties the
-/// pipeline requires in place of a note: the device converts each attribute's format, and the
-/// module, which every such format shares, cannot say what it was.
+/// holds to the descriptor's projection), sorted, each once: the device converts each attribute's
+/// format, and the module, which every such format shares, cannot say what it was.
 ///
 /// - `PrecisionNote::DeviceVertexConversion` for a normalized format (the 8- and 16-bit
 ///   `Normalized` formats of either sign, `UChar4Normalized_BGRA`, `Int1010102Normalized`,
 ///   `UInt1010102Normalized`), whatever width the function reads it at: the device's `UNORM` or
 ///   `SNORM` conversion of the codes, where Metal's quotient is correctly rounded (but an
-///   `Int1010102Normalized` 10-bit field's, the code times `float(1 / 511)`). Where `p` takes
-///   `DriverDeviation::MetalNormalizedVertexFetch`, the device's `float` is Metal's at every code:
-///   an attribute the function reads as a 32-bit `float` records no note and the pipeline requires
-///   `VkProperty::MetalNormalizedVertexFetch`, and so does one read as `half` of an 8- or 10-bit
-///   format, whose `float` rounds to Metal's `half` at every code. A 16-bit format read as `half`
-///   ([`rounds_twice_to_half`]) records the note there too;
+///   `Int1010102Normalized` 10-bit field's, the code times `float(1 / 511)`);
 /// - `PrecisionNote::DeviceNanEncoding` for a float format narrower than 32 bits
 ///   (`Encoding::widens_narrow_float`) that the function reads as a 32-bit `float`
 ///   (`StageIo::f32_attributes`): Metal widens its NaN to `0x7fc00000`, the device's widening
@@ -451,12 +431,9 @@ pub(crate) struct FixedFunctionNotes {
 pub(crate) fn fixed_function_notes(
     vs: &StageInterface,
     desc: Option<&VertexDescriptor>,
-    p: &DeviceProfile,
-) -> Result<FixedFunctionNotes, Error> {
+) -> Result<Vec<PrecisionNote>, Error> {
     let f32_reads = vs.io.f32_attributes();
-    let metal = p.takes_driver_deviation(DriverDeviation::MetalNormalizedVertexFetch);
     let mut notes = BTreeSet::new();
-    let mut properties = BTreeSet::new();
     for (a, (_, fetch)) in vs.io.attributes() {
         if !matches!(
             fetch,
@@ -472,36 +449,13 @@ pub(crate) fn fixed_function_notes(
         let e = encoding(attr.format)?;
         let f32_read = f32_reads.contains(&a);
         if e.is_normalized() {
-            if metal && (f32_read || !rounds_twice_to_half(e)) {
-                properties.insert(VkProperty::MetalNormalizedVertexFetch);
-            } else {
-                notes.insert(PrecisionNote::DeviceVertexConversion);
-            }
+            notes.insert(PrecisionNote::DeviceVertexConversion);
         }
         if e.widens_narrow_float() && f32_read {
             notes.insert(PrecisionNote::DeviceNanEncoding);
         }
     }
-    Ok(FixedFunctionNotes {
-        notes: notes.into_iter().collect(),
-        properties,
-    })
-}
-
-/// Whether normalized encoding `e`'s `float` quotient, rounded to `half` as the module rounds an
-/// attribute the function reads as `half`, can differ from Metal's `half`, which rounds the
-/// quotient once: a 16-bit field's can land on a `half` midpoint (codes 65455 and 65519 unsigned,
-/// and 32759 and -32759 signed, each one `half` ulp from Metal's), an 8-, 10- or 2-bit field's
-/// at no code (`Int1010102Normalized`'s 10-bit fields through Metal's reciprocal product too).
-fn rounds_twice_to_half(e: Encoding) -> bool {
-    matches!(
-        e,
-        Encoding::Int {
-            bits: 16,
-            normalized: true,
-            ..
-        }
-    )
+    Ok(notes.into_iter().collect())
 }
 
 /// The vertex input state of vertex stage `vs` for descriptor `desc` under the

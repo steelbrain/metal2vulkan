@@ -490,23 +490,6 @@ pub enum Needs {
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DriverDeviation {
-    /// The device reads a center-sampled varying (a smooth input decorated neither `Centroid`
-    /// nor `Sample`) of a multisampled pipeline at the pixel center in every fragment
-    /// invocation, a sample-rate one's included, as Metal reads it
-    /// (`VkProperty::MetalCenterVaryings`). Vulkan evaluates such an input at an
-    /// implementation-defined position in the area the invocation shades. Where the profile takes
-    /// it, the input's plain read is its pixel form (`StageIo::varyings_at_pixel`), with no
-    /// `InterpolateAtOffset`. Unmeasured, the pixel form is `InterpolateAtOffset` at offset 0 where
-    /// that reads from the center (`VkProperty::InterpolateAtOffsetCentered`), and a function that
-    /// runs per sample is refused elsewhere.
-    MetalCenterVaryings,
-    /// The device interpolates a varying as Metal does, bit for bit
-    /// (`VkProperty::MetalInterpolation`): the driver hands the varying and its qualifiers to
-    /// Metal, whose rasterizer interpolates it. Vulkan states no precision for interpolation, and
-    /// every other device measured rounds otherwise. Where the profile takes it, a fragment
-    /// function reading a varying the device interpolates records no note. Unmeasured, such a
-    /// function records `PrecisionNote::DeviceInterpolation`.
-    MetalInterpolation,
     /// The device takes a primitive's `Layer` and `ViewportIndex` from its first vertex, whatever
     /// its other vertices store, as Metal takes a primitive's slice and viewport
     /// (`VkProperty::MetalFirstVertexIndices`). Vulkan takes them only where every vertex of a
@@ -515,29 +498,6 @@ pub enum DriverDeviation {
     /// pipeline's synthesized geometry stages, which store the first vertex's at every vertex,
     /// and is refused on a device without `geometryShader`.
     MetalFirstVertexIndices,
-    /// The device's fixed-function vertex input converts the codes of a normalized format (the
-    /// 8- and 16-bit `Normalized` formats of either sign, `UChar4Normalized_BGRA`,
-    /// `Int1010102Normalized`, `UInt1010102Normalized`, through their `UNORM` and `SNORM` vertex
-    /// formats) to Metal's `float`, at every code (`VkProperty::MetalNormalizedVertexFetch`): the
-    /// code over its maximum correctly rounded, `c / (2^b - 1)` unsigned and
-    /// `max(c / (2^(b-1) - 1), -1)` signed, but an `Int1010102Normalized` 10-bit field's, which
-    /// Metal reads as the code times `float(1 / 511)` rounded to `float` (one `f32` ulp toward
-    /// zero at 96 of the 1,024 codes). Vulkan states the correctly rounded quotient and lets a
-    /// driver compute it otherwise. Where the profile takes it, a render pipeline whose vertex
-    /// descriptor gives such a format to an attribute fixed-function input fetches records no
-    /// `PrecisionNote::DeviceVertexConversion` for it and requires the property, but for a
-    /// 16-bit format the function reads as `half`: Metal rounds the code's quotient to `half`
-    /// once, where the module rounds the device's `float` to `half`, so that attribute records
-    /// the note on every profile. Unmeasured, every such attribute records the note.
-    MetalNormalizedVertexFetch,
-    /// The device's alpha to coverage covers Metal's samples at every pixel
-    /// (`VkProperty::MetalAlphaCoverage`): the driver hands `alphaToCoverageEnable` to Metal's own
-    /// `alphaToCoverageEnabled`, whose coverage of an alpha depends on the pixel's place in a 2x2
-    /// ordered dither at two and four samples. Vulkan specifies no algorithm for converting the
-    /// alpha to a coverage mask. Where the profile takes it, a render pipeline that covers by
-    /// alpha records no `PrecisionNote::DeviceAlphaCoverage` and requires the property.
-    /// Unmeasured, such a pipeline's fragment stage records the note.
-    MetalAlphaCoverage,
 }
 
 /// One device capability a refusal can name.

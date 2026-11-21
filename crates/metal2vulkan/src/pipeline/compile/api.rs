@@ -1140,14 +1140,6 @@ fn graphics_requirements(
     requirements
         .properties
         .extend(graphics.sample_count_properties(&p.fields().enabled.properties)?);
-    // The measured conversions its fixed-function vertex input relies on in place of a note.
-    requirements
-        .properties
-        .extend(linked.vertex_properties.iter().copied());
-    // The measured coverage its fixed-function alpha to coverage relies on in place of a note.
-    requirements
-        .properties
-        .extend(linked.fragment_properties.iter().copied());
     // The portability subset's features it relies on, named only where the device has them: where
     // the subset withholds one, link refused or pulled what it would allow (and the binder pulls a
     // per-bind stride that does not cover its attributes), and a device without the subset

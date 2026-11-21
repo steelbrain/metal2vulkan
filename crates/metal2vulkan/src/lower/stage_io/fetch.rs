@@ -855,8 +855,7 @@ fn components(fb: &mut FunctionBuilder<'_>, e: Encoding, raw: SValue) -> BResult
 ///   stored unchanged keeps the field's own bits, as Metal's does.
 /// - `PrecisionNote::DeviceVertexConversion` where the decode's normalized product
 ///   ([`normalized`]) differs from Metal's fetch at some code ([`product_differs`]): the product
-///   is the module's arithmetic, not the fixed-function conversion
-///   `DriverDeviation::MetalNormalizedVertexFetch` measures.
+///   is the module's arithmetic, not the fixed-function conversion.
 pub(crate) fn decode_notes(cx: &mut SelectCx<'_>, encoding: Encoding, form: Form) {
     use crate::pipeline::artifact::PrecisionNote;
     if encoding.widens_narrow_float() && form.float_fmt() == Some(FloatFmt::F32) {

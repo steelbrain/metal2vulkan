@@ -3758,11 +3758,9 @@ fn notes_on(bc: &[u8], what: &str, note: PrecisionNote, noted: &[&str]) {
 
 /// A fragment function that reads a varying the device interpolates records
 /// `PrecisionNote::DeviceInterpolation`, whatever its sampling and perspective, on every committed
-/// profile, and requires no `VkProperty::MetalInterpolation`. One whose varying is flat, which no
-/// interpolation touches, records none anywhere.
+/// profile. One whose varying is flat, which no interpolation touches, records none anywhere.
 #[test]
 fn a_varying_the_device_interpolates_records_the_device_interpolation_note() {
-    use crate::device::requirements::VkProperty;
     let note = PrecisionNote::DeviceInterpolation;
     let profiles = committed_profiles().expect("profiles");
     let devices: Vec<&str> = profiles.iter().map(|(stem, _)| stem.as_str()).collect();
@@ -3780,16 +3778,6 @@ fn a_varying_the_device_interpolates_records_the_device_interpolation_note() {
         };
         let noted = if interpolated { &devices[..] } else { &[][..] };
         notes_on(&bc, what, note, noted);
-        for (stem, p) in &profiles {
-            let Ok(a) = compile(&bc, "f", p) else {
-                continue;
-            };
-            let requires = a
-                .requirements
-                .properties
-                .contains(&VkProperty::MetalInterpolation);
-            assert!(!requires, "{what} on {stem}");
-        }
     }
 }
 

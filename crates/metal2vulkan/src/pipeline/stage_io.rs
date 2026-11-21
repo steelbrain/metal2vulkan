@@ -176,8 +176,7 @@ pub struct StageIo {
     pub multisampled: bool,
     /// Under `multisampled`, the function reads its center-sampled varyings at the pixel center,
     /// as Metal does in every invocation: through `InterpolateAtOffset` at offset 0, the pixel
-    /// center (GLSL.std.450), or as they are on a device that reads them there itself
-    /// (`VkProperty::MetalCenterVaryings`). Without it they read wherever the device evaluates an
+    /// center (GLSL.std.450). Without it they read wherever the device evaluates an
     /// undecorated input.
     #[cfg_attr(feature = "serde", serde(default))]
     pub varyings_at_pixel: bool,

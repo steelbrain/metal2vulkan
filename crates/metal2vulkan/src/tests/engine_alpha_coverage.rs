@@ -6,11 +6,10 @@
 //! coverage is its own (a 2x2 ordered dither at two and four samples, measured on an Apple M3
 //! Max), so a pipeline that covers by alpha
 //! (`GraphicsState::alpha_to_coverage`) records `PrecisionNote::DeviceAlphaCoverage` on its
-//! fragment stage on every profile, and the vertex stage records none. No pipeline requires
-//! `VkProperty::MetalAlphaCoverage`. A pipeline without alpha to coverage records no note.
+//! fragment stage on every profile, and the vertex stage records none. A pipeline without alpha
+//! to coverage records no note.
 
 use crate::budget::Budget;
-use crate::device::requirements::VkProperty;
 use crate::device::{Device, DevicePolicy};
 use crate::library::Library;
 use crate::metal::PixelFormat;
@@ -32,8 +31,7 @@ fn fixture() -> Option<Vec<u8>> {
 }
 
 /// On each profile a pipeline that covers by alpha records `DeviceAlphaCoverage` on its fragment
-/// stage alone, and requires no `MetalAlphaCoverage`; without alpha to coverage it records no note
-/// (the module docs).
+/// stage alone; without alpha to coverage it records no note (the module docs).
 #[test]
 fn a_pipeline_covering_by_alpha_notes_the_device_s_coverage() {
     let Some(bc) = fixture() else { return };
@@ -80,14 +78,6 @@ fn a_pipeline_covering_by_alpha_notes_the_device_s_coverage() {
                         stage.precision_notes
                     );
                 }
-                assert!(
-                    !pipeline
-                        .requirements
-                        .properties
-                        .contains(&VkProperty::MetalAlphaCoverage),
-                    "{what}: {:?}",
-                    pipeline.requirements.properties
-                );
             }
         }
     }

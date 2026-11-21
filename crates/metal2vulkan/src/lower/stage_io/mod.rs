@@ -121,13 +121,11 @@
 //! where the profile has interpolation functions (`sampleRateShading`, and on a portability-subset
 //! device `shaderSampleRateInterpolationFunctions`) whose offset reads from the pixel center
 //! (`VkProperty::InterpolateAtOffsetCentered`), each center-sampled float varying through
-//! `InterpolateAtOffset` at offset 0; where the device reads such a varying at the pixel center
-//! itself, as Metal does (`VkProperty::MetalCenterVaryings`), as it is, and the module requires
-//! that property. Its interface records both, and whether it may read `[[position]]`'s z or w,
-//! which have no such form (`StageIo::{multisampled, varyings_at_pixel, position_depth}`): those
-//! read where Vulkan evaluates them, a sample's under sample shading, and the compile layer notes
-//! `PrecisionNote::MultisamplePosition`; link refuses a center varying a sample-rate invocation
-//! would read elsewhere.
+//! `InterpolateAtOffset` at offset 0. Its interface records both, and whether it may read
+//! `[[position]]`'s z or w, which have no such form (`StageIo::{multisampled, varyings_at_pixel,
+//! position_depth}`): those read where Vulkan evaluates them, a sample's under sample shading, and
+//! the compile layer notes `PrecisionNote::MultisamplePosition`; link refuses a center varying a
+//! sample-rate invocation would read elsewhere.
 //!
 //! A pulled vertex attribute (`VertexFetch::Pulled`) has no interface variable: its value is
 //! fetched from its source buffer once, in the function's first block before any instruction of the
@@ -459,21 +457,12 @@ pub struct StageIoPlan {
     /// The second outputs a fragment function writes for attachments held with their channels
     /// rotated (`LoweringInputs::rotated_factors`), each beside its first output there.
     pub rotated_seconds: Vec<RotatedSecond>,
-    /// A fragment function compiled under `LoweringInputs::multisampled` reads its center
-    /// varyings as they are, as their pixel form, because its device reads them at the pixel
-    /// center as Metal does (`VkProperty::MetalCenterVaryings`): the module requires that
-    /// property.
-    pub center_varyings_by_device: bool,
     /// A fragment function reads an interpolant at an offset moved by 7/16, because its device's
     /// `InterpolateAtOffset` reads Metal's offset plus 7/16
     /// (`VkProperty::InterpolateAtOffsetFromSevenSixteenths`): the module is marked so
     /// (`ModuleBuilder::offsets_from_seven_sixteenths`) and requires that property in place of
     /// `VkProperty::InterpolateAtOffsetCentered`.
     pub offsets_from_seven_sixteenths: bool,
-    /// A fragment function reads a varying the device interpolates and records no
-    /// `PrecisionNote::DeviceInterpolation`, because its device interpolates as Metal does
-    /// (`VkProperty::MetalInterpolation`): the module requires that property.
-    pub interpolation_by_metal: bool,
     /// A vertex function stores an index that differs among a primitive's vertices to its
     /// builtin, because its device takes the first vertex's as Metal does
     /// (`VkProperty::MetalFirstVertexIndices`): the module requires that property.
