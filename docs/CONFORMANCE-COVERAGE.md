@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1319 |
 | distinct SDK items the Metal leg reaches, of any status | 804 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7390 |
+| ledger rows (a case whose gap is recorded) | 7347 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -508,7 +508,7 @@ An implemented container no case's Metal leg touches. These are the families of 
 | cases whose Metal answer is `never_returned` | 4 |
 | modules that loosen a measured value | 16 |
 | tolerances in all | 20 |
-| modules declaring a notice (loosening no value) | 43 |
+| modules declaring a notice (loosening no value) | 44 |
 | loosenings used | `Unchecked`, `AnyOf`, `Absolute`, `Nonzero` |
 | justifications named | `Degradation`, `AcceptedDifference`, `WithoutCompression` |
 | modules forbidding a re-record | 8 |
@@ -3804,76 +3804,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `command-buffer-facts` | The consumer's, not a gap: a queue's label and a command buffer's `device` and `commandQueue` are the consumer's own objects and never reach the GPU, so metal2v… |
 | `command-buffer-facts` | The consumer's, not a gap: a queue's label and a command buffer's `device` and `commandQueue` are the consumer's own objects and never reach the GPU, so metal2v… |
 | `command-buffer-facts` | A typed refusal, as the sparse family's: metal2vulkan-runtime has no resource-state command encoder (`resourceStateCommandEncoder`), which maps sparse textures … |
-| `format-footprints-plain-stragglers` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
 | `handler-waits-completed-until-completed` | An accepted difference: Apple documents waitUntilCompleted as "Blocks the current thread until the GPU finishes executing the command buffer and all of its comp… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-two-plane-cubes` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-two-plane-cubes` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-two-plane-cubes` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-two-plane-cubes` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `heap-sizes-unspecialized` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
 | `indirect-private-type-getters` | The rt side does not port `indirect_draw_read_back` yet: it waits on the side's indirect command buffers (`newIndirectCommandBufferWithDescriptor:`), which it a… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `read-write-tier-descriptors` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
 | `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
 | `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
 | `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
@@ -3905,6 +3837,11 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
 | `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
 | `read-write-tier-descriptors` | refused: no stream uses it yet (texture-buffer census 11-19, m3-max-52875/52876/52897/52898/52953: 26 streams, no texture-buffer or cube array descriptor, textu… |
+| `read-write-tier-descriptors` | The device's own answer (rule 2): its format query offers no ASTC 4x4 sRGB image for the usage, so rt makes no texture of the format (`Gap::TextureFormat`). |
+| `read-write-tier-descriptors` | The device's own answer (rule 2): its format query offers no ASTC 4x4 sRGB image for the usage, so rt makes no texture of the format (`Gap::TextureFormat`). |
+| `read-write-tier-descriptors` | The device's own answer (rule 2): its format query offers no ASTC 4x4 sRGB image for the usage, so rt makes no texture of the format (`Gap::TextureFormat`). |
+| `read-write-tier-descriptors` | The device's own answer (rule 2): its format query offers no ASTC 4x4 sRGB image for the usage, so rt makes no texture of the format (`Gap::TextureFormat`). |
+| `read-write-tier-descriptors` | The device's own answer (rule 2): its format query offers no ASTC 4x4 sRGB image for the usage, so rt makes no texture of the format (`Gap::TextureFormat`). |
 | `read-write-tier-descriptors` | The device's own answer (rule 2): its format query offers no ASTC 4x4 sRGB image for the usage, so rt makes no texture of the format (`Gap::TextureFormat`). |
 | `read-write-tier-descriptors` | The device's own answer (rule 2): its format query offers no ASTC 4x4 sRGB image for the usage, so rt makes no texture of the format (`Gap::TextureFormat`). |
 | `read-write-tier-descriptors` | The device's own answer (rule 2): its format query offers no ASTC 4x4 sRGB image for the usage, so rt makes no texture of the format (`Gap::TextureFormat`). |
@@ -4017,25 +3954,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `texture-fills-198` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x10_sRGB with the usage the case asks, so rt makes no such… |
 | `texture-fills-212` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x8_LDR with the usage the case asks, so rt makes no such te… |
 | `texture-fills-252` | Known gap (rt README, Known gaps of textures): no bytes are uploaded into a 32-bit float depth (Gap::FloatDepthUpload). Metal keeps any float there; Vulkan copi… |
-| `texture-pairs-plain-contents` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `texture-pairs-plain-contents` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `texture-pairs-plain-contents` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `texture-pairs-plain-contents` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
-| `texture-pairs-type-levels-slices` | refused: no stream uses it yet (cube census m3-max-48683/48687/48688/48720: ten streams, no cube array texture or view). A cube array texture, which no replay s… |
 | `argb8-targets-additive-alpha` | Metal's stored 8-bit blend code and ours differ at this site, and the row's count and bound are this venue's. The case's two formats move by the same count on e… |
 | `argb8-targets-additive-alpha` | Metal's stored 8-bit blend code and ours differ at this site, and the row's count and bound are this venue's. The case's two formats move by the same count on e… |
 | `argb8-targets-additive-alpha` | Metal's stored 8-bit blend code and ours differ at this site, and the row's count and bound are this venue's. The case's two formats move by the same count on e… |
@@ -7209,6 +7127,26 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatYCBCR8_420_2… |
 | `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatYCBCR8_420_2… |
 | `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatYCBCR8_420_2… |
+| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatAnyDepth). r… |
+| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatAnyDepth). r… |
+| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatAnyDepth). r… |
+| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatAnyDepth). r… |
+| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatAnyStencil).… |
+| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatAnyStencil).… |
+| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatAnyStencil).… |
+| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatAnyStencil).… |
+| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGBA16Float_… |
+| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGBA16Float_… |
+| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGBA16Float_… |
+| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGBA16Float_… |
+| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatYCBCR8_420_2… |
+| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatYCBCR8_420_2… |
+| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatYCBCR8_420_2… |
+| `heap-sizes-formats-without-textures` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatYCBCR8_420_2… |
+| `heap-sizes-two-plane-cubes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGB10A8_2P_X… |
+| `heap-sizes-two-plane-cubes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGB10A8_2P_X… |
+| `heap-sizes-two-plane-cubes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGB10A8_2P_X… |
+| `heap-sizes-two-plane-cubes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGB10A8_2P_X… |
 | `heap-sizes-two-plane-cubes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGB10A8_2P_X… |
 | `heap-sizes-two-plane-cubes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGB10A8_2P_X… |
 | `heap-sizes-two-plane-cubes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatRGB10A8_2P_X… |
@@ -7317,6 +7255,18 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
 | `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
 | `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
+| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatUnspecialize… |
+| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatUnspecialize… |
+| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatUnspecialize… |
+| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatUnspecialize… |
+| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatUnspecialize… |
+| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatUnspecialize… |
+| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatUnspecialize… |
+| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatUnspecialize… |
+| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatUnspecialize… |
+| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatUnspecialize… |
+| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatUnspecialize… |
+| `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatUnspecialize… |
 | `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatUnspecialize… |
 | `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatUnspecialize… |
 | `heap-sizes-unspecialized` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatUnspecialize… |
@@ -8348,6 +8298,12 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `texture-pairs-plain-contents` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture descriptor of Memoryless storage). rt… |
 | `texture-pairs-plain-contents` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture descriptor of Memoryless storage). rt… |
 | `texture-pairs-plain-contents` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture descriptor of Memoryless storage). rt… |
+| `texture-pairs-plain-contents` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `texture-pairs-plain-contents` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `texture-pairs-plain-contents` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `texture-pairs-plain-contents` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `texture-pairs-plain-contents` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
+| `texture-pairs-plain-contents` | refused: the consumer's own (cpuCacheMode, hazardTrackingMode, allowGPUOptimizedContents). rt's TextureDescriptor states none of them, and its consumer keeps wh… |
 | `texture-pairs-storage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture descriptor of Memoryless storage). rt… |
 | `texture-pairs-storage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture descriptor of Memoryless storage). rt… |
 | `texture-pairs-storage-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture descriptor of Memoryless storage). rt… |
@@ -9353,6 +9309,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `primitive-type-restart-indices` | An accepted difference (docs/API.md section 10, Draws: a line's tie-break is the device's own): the line of vertices 0 and 1 runs exactly through the boundary p… |
 | `primitive-type-restart-indices` | An accepted difference (docs/API.md section 10, Draws: a line's tie-break is the device's own): the line of vertices 0 and 1 runs exactly through the boundary p… |
 | `primitive-type-restart-indices` | An accepted difference (docs/API.md section 10, Draws: a line's tie-break is the device's own): the line of vertices 0 and 1 runs exactly through the boundary p… |
+| `format-footprints-plain-stragglers` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLTextureTypeTextureBuffe… |
 | `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's `OpFConvert` to 16 bits an… |
 | `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's `OpFConvert` to 16 bits an… |
 | `integer-vertex-attributes` | The device's own answer (rule 1): a vertex function's `half`-typed attribute is the fetched `float` rounded to `half` by the module's `OpFConvert` to 16 bits an… |
