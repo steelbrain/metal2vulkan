@@ -1139,6 +1139,7 @@
           "alphaToOne": true,
           "logicOp": true,
           "fullDrawIndexUint32": true,
+          "depthBiasClamp": true,
           "shaderClipDistance": true,
           "tessellationShader": true,
           "shaderTessellationAndGeometryPointSize": true,

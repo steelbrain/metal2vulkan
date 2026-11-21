@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1319 |
 | distinct SDK items the Metal leg reaches, of any status | 804 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7688 |
+| ledger rows (a case whose gap is recorded) | 7687 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -8074,7 +8074,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `render-draw-forms-empty` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no indirect draw). The rt side of the suite answ… |
 | `render-draw-forms-points` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no indirect draw). The rt side of the suite answ… |
 | `render-draw-forms-triangles` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no indirect draw). The rt side of the suite answ… |
-| `render-state-depth-bias` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every setDepthBias:slopeScale:clamp: clamp 0). r… |
 | `render-state-depth-clip` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every depth clip mode Clip). rt refuses it (a dr… |
 | `render-state-facing` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every setTriangleFillMode: Fill). rt refuses it … |
 | `render-state-heap-residency` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no sparse texture, heap or tile call). The rt si… |

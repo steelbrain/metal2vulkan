@@ -566,6 +566,10 @@ fn each_missing_feature_is_named() {
             feature(CORE, "fullDrawIndexUint32"),
         ),
         (
+            |f| f.core.depth_bias_clamp = vk::FALSE,
+            feature(CORE, "depthBiasClamp"),
+        ),
+        (
             |f| f.core.shader_clip_distance = vk::FALSE,
             feature(CORE, "shaderClipDistance"),
         ),
