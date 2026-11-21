@@ -1417,6 +1417,14 @@ fn public_render_cases_plan_or_refuse_typed() {
                 )) => continue,
                 Err(other) => panic!("{}: {other:?}", case.name),
             };
+            // A texture buffer an argument buffer holds is the executor's own context's typed
+            // refusal, before any plan; the runtime draws it.
+            let members = render
+                .stages()
+                .flat_map(|(_, function)| function.resources.argument_buffer_textures.values());
+            if crate::candidate::engine::own_context_refuses_members(members) {
+                continue;
+            }
             let companion = render
                 .companion
                 .as_ref()

@@ -1923,6 +1923,16 @@ fn prepare_on_device(input: &DeviceInput) -> Result<(PreparedCase, CompileWorker
     Ok((prepared, CompileWorker::current()?))
 }
 
+/// Whether the executor's own context refuses a case whose argument buffers hold `members`: a
+/// texture buffer among them, which a run through the runtime makes over a buffer of its bytes
+/// (`platform::runtime_textures`) and the binder's planned heap holds no member of
+/// ([`argument_buffers::used_texture`]).
+pub fn own_context_refuses_members<'a>(
+    mut members: impl Iterator<Item = &'a LiteralTexture>,
+) -> bool {
+    members.any(|texture| texture.texture_type == crate::case::TextureType::Buffer)
+}
+
 /// Compile (in `worker`), bind, and execute one prepared case on the executor's context: a
 /// kernel case as one dispatch, a vertex or fragment case as one draw. The run's row or refusal
 /// records what it compiled, by content ([`artifact::CaseArtifact`]).
@@ -1943,6 +1953,27 @@ fn run_on_context(prepared: &PreparedCase, worker: &CompileWorker) -> RunAttempt
         if runs_render_through_runtime(render) && super::requested_restriction().is_none() {
             return run_render_on_runtime(prepared, render);
         }
+    }
+    let refused = match &prepared.mapped {
+        Mapped::Compute(compute) => {
+            own_context_refuses_members(compute.argument_buffer_textures.values())
+        }
+        Mapped::Render(render) => own_context_refuses_members(
+            render
+                .stages()
+                .flat_map(|(_, function)| function.resources.argument_buffer_textures.values()),
+        ),
+        // A mesh draw's functions take no argument buffer here (`mesh::mesh_shape`).
+        Mapped::Mesh(_) => false,
+    };
+    if refused {
+        return RunAttempt::of(Err(ExecutorError::NotSupported(
+            NotSupported::NotImplemented(
+                "engine candidate: a texture buffer an argument buffer holds, off the runtime: \
+                 the binder's planned heap holds no texture buffer member"
+                    .into(),
+            ),
+        )));
     }
     let artifact = RefCell::new(artifact::CaseArtifact::default());
     let mut attempt = match &prepared.mapped {
