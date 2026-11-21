@@ -4601,7 +4601,8 @@ enables that the translator names.
 The test `tests::feature_enables` holds this to the code: on every committed device profile, and
 under `--cfg m2v_cpu_icd` on the machine's CPU device, it derives the translator's profile with and
 without each feature the device reports that creation does not enable, and fails on one that
-changes the profile and is not in this table, and on a row whose feature creation enables.
+changes the profile and is in neither this table nor `Enabled, not stated`, and on a row whose
+feature creation enables.
 
 ### Enabled, not stated
 
