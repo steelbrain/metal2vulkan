@@ -5,6 +5,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::indexing_slicing))]
 
 pub mod builder;
+pub mod carry;
 pub mod dead;
 pub mod error;
 pub mod half_hold;

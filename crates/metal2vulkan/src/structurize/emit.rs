@@ -29,7 +29,9 @@
 //! variable, `pending` among them. `pending` is set to `0` (no jump pending) in the entry block
 //! before the first statement. Each demoted value and each phi gets a `Function` variable of the
 //! type [`CodeEmitter::var_type`] gives its `DemoteTy`; the emitter receives them all through
-//! [`CodeEmitter::bind`] and emits the loads and stores itself.
+//! [`CodeEmitter::bind`] and emits the loads and stores itself. In a walk that is not
+//! predicated, the demoted values' and the phis' variables are marked `LocalVar::trip_local`,
+//! which lets `spirv::carry` end their values at the top of each loop trip.
 
 use crate::air::ir::{BlockId, ValueId};
 use crate::budget::{Growth, Meter, CONSTRUCT_NESTING};
@@ -248,6 +250,15 @@ pub fn emit(
 ) -> Result<StructVars, Error> {
     check_tree(s, meter)?;
     let vars = allocate(s, fb, c)?;
+    // A walk that is not predicated runs each invocation's trips of a loop as the source does, so
+    // no trip reads a value an earlier one left in a demoted value's or a phi's variable where
+    // the loop holds all of its stores (`spirv::carry`). The predicated walk runs a trip for an
+    // invocation that has left the loop, which reads such a value after it.
+    if !c.predicated() {
+        for (_, v) in vars.demoted.iter().chain(&vars.phis) {
+            fb.mark_trip_local(*v)?;
+        }
+    }
     c.bind(&vars)?;
     let u32_ty = u32_type(fb.module())?;
     // The builder's growth during this walk is charged after each block's code and returned when

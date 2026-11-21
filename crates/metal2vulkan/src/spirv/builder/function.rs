@@ -344,9 +344,22 @@ impl<'m> FunctionBuilder<'m> {
             ptr_ty,
             value,
             init,
+            trip_local: false,
         });
         self.draft_mut()?.vars.push(id);
         Ok(id)
+    }
+
+    /// Mark `Function` variable `var` of this function [`LocalVar::trip_local`]: no trip of a
+    /// loop whose body holds all of its whole stores reads the value an earlier trip left in it.
+    pub fn mark_trip_local(&mut self, var: VarId) -> BResult<()> {
+        match self.m.vars.get_mut(var.index()) {
+            Some(v) if v.func == self.func => {
+                v.trip_local = true;
+                Ok(())
+            }
+            Some(_) | None => Err(BuildError::Dangling(Dangling::Var(var))),
+        }
     }
 
     /// The pointer value of a `Function` variable of this function.

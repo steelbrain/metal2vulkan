@@ -139,6 +139,11 @@ pub struct LocalVar {
     pub ptr_ty: TypeId,
     pub value: Value,
     pub init: Option<ConstId>,
+    /// Whether no trip of a loop whose body holds every whole store of the variable reads the
+    /// value an earlier trip left in it: a demoted value's or a phi's variable of a walk that is
+    /// not predicated, which P8 marks. [`crate::spirv::carry`] ends such a value at each trip's
+    /// top.
+    pub trip_local: bool,
 }
 
 /// One member of the push-constant block, placed by `select`.
@@ -1157,6 +1162,29 @@ impl Terminator {
             | Terminator::Kill
             | Terminator::TerminateInvocation
             | Terminator::Unreachable => {}
+        }
+    }
+
+    /// Call `f` on every block the terminator may branch to, in operand order.
+    pub fn for_each_target(&self, mut f: impl FnMut(BlockId)) {
+        match self {
+            Terminator::Branch(t) => f(*t),
+            Terminator::CondBranch { t, f: e, .. } => {
+                f(*t);
+                f(*e);
+            }
+            Terminator::Switch { default, cases, .. } => {
+                f(*default);
+                for (_, c) in cases {
+                    f(*c);
+                }
+            }
+            Terminator::Return
+            | Terminator::ReturnValue(_)
+            | Terminator::Kill
+            | Terminator::TerminateInvocation
+            | Terminator::Unreachable
+            | Terminator::EmitMeshTasks { .. } => {}
         }
     }
 

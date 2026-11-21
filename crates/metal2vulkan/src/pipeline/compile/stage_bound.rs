@@ -85,6 +85,9 @@ pub(super) fn emit(
         m.weighted(crate::pipeline::compile::weights::HOIST, |m| {
             crate::spirv::hoist::hoist_uniform_loads(&mut emitted.module, p.robustness(), m)
         })?;
+        // A structurizer variable whose value no later trip of a loop reads is ended at each
+        // trip's top, so the driver carries none of it around the loop.
+        crate::spirv::carry::end_dead_carries(&mut emitted.module, m)?;
         let weight = crate::spirv::roll::entry_weight(&emitted.module, m)?;
         if weight <= bounds.compiled || widest == WidestPin::Kept || !plan.families.simd.widest_pin
         {

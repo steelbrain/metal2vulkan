@@ -13,7 +13,9 @@
 //! barrier rule (`BarrierRule::Vulkan`: a returned invocation while others wait at a barrier
 //! traps), in both scheduling orders, at several threadgroup sizes and subgroup widths, giving
 //! the words the predicated reading predicts. A kernel whose barriers are all uniform is not
-//! predicated. No GPU is used.
+//! predicated. An invocation that leaves a predicated loop before the others keeps the value it
+//! reads after the loop: the walk runs the loop's later trips for it too, so `spirv::carry` ends
+//! no value at their tops. No GPU is used.
 //!
 //! `llvm-as` assembles the kernels; a missing tool skips visibly.
 
@@ -61,7 +63,7 @@ fn assemble_file(path: &std::path::Path, what: &str) -> Option<Vec<u8>> {
 /// `body` (the kernel `name`'s definition, parameters `%limits`, `%out`, `%t`) in a module with
 /// the threadgroup arrays `@a` and `@b`, the barrier and simd declarations, and the kernel's AIR
 /// metadata, assembled.
-fn kernel(name: &str, body: &str) -> Option<Vec<u8>> {
+pub(super) fn kernel(name: &str, body: &str) -> Option<Vec<u8>> {
     let text = format!(
         r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
 target triple = "air64_v28-apple-macosx26.0.0"
@@ -219,6 +221,36 @@ done:
   store i32 %r, ptr addrspace(1) %po, align 4
   ret void"#;
 
+/// `i = 0; do { a[t] = 16t + i; barrier; x = a[t ^ 4]; barrier; v = (x + i) | 1 << 31; i++; }
+/// while (i <= (t & 3)); out[t] = v;`: a loop with a per-thread trip count whose last trip's value
+/// is read after it. Thread `t` leaves the loop after `(t & 3) + 1` trips and the walk runs the
+/// other trips for it, not live; it reads `v` of its own last trip.
+const LOOP_LEAVER: &str = r#"entry:
+  %k = and i32 %t, 3
+  %tz = zext i32 %t to i64
+  %pa = getelementptr inbounds [128 x i32], ptr addrspace(3) @a, i64 0, i64 %tz
+  %p = xor i32 %t, 4
+  %pz = zext i32 %p to i64
+  %pp = getelementptr inbounds [128 x i32], ptr addrspace(3) @a, i64 0, i64 %pz
+  %w0 = shl i32 %t, 4
+  br label %body
+body:
+  %i = phi i32 [ 0, %entry ], [ %i1, %body ]
+  %w = add i32 %w0, %i
+  store i32 %w, ptr addrspace(3) %pa, align 4
+  tail call void @air.wg.barrier(i32 2, i32 1) #1
+  %x = load i32, ptr addrspace(3) %pp, align 4
+  tail call void @air.wg.barrier(i32 2, i32 1) #1
+  %v0 = add i32 %x, %i
+  %v = or i32 %v0, -2147483648
+  %i1 = add i32 %i, 1
+  %more = icmp ule i32 %i1, %k
+  br i1 %more, label %body, label %done
+done:
+  %po = getelementptr inbounds i32, ptr addrspace(1) %out, i64 %tz
+  store i32 %v, ptr addrspace(1) %po, align 4
+  ret void"#;
+
 /// `s = simd_sum(1); if (t < limits[0]) { a[t] = s + t; barrier; out[t] = a[(t + 1) %
 /// limits[0]]; } else out[t] = 0xE0000000 | t;`: a simdgroup operation every thread runs, then a
 /// threadgroup barrier under a thread-dependent condition (on an emulating profile the kernel's
@@ -280,9 +312,9 @@ done:
 
 /// The threads of a threadgroup of `n`, and the limits each case passes.
 #[derive(Clone, Copy, Debug)]
-struct Case {
-    n: u32,
-    limits: [u32; 2],
+pub(super) struct Case {
+    pub(super) n: u32,
+    pub(super) limits: [u32; 2],
 }
 
 /// Thread `t`'s expected word of `kernel` in `c`, by the predicated reading: the threads that
@@ -298,6 +330,7 @@ fn expected(kernel: &str, c: Case, t: u32) -> u32 {
             }
         }
         "loop_barrier_k" => (0..(t & 3)).map(|i| ((t ^ 4) << 4) + i).sum(),
+        "loop_leaver_k" => (((t ^ 4) << 4) + 2 * (t & 3)) | 1 << 31,
         "continue_barrier_k" => {
             if t & 3 == 3 {
                 0
@@ -345,7 +378,7 @@ fn cases(kernel: &str, tier: Tier) -> Vec<Case> {
         let limits: Vec<[u32; 2]> = match kernel {
             "continue_barrier_k" => vec![[0, 0], [1, 0], [3, 0]],
             "uniform_barriers_k" => vec![[0, n]],
-            "loop_barrier_k" => vec![[0, 0]],
+            "loop_barrier_k" | "loop_leaver_k" => vec![[0, 0]],
             "a3_early_return_barrier" => {
                 vec![[n, n], [n - n / 4, n / 3 + 1], [n, 1], [n / 2 + 1, n / 2]]
             }
@@ -370,7 +403,7 @@ fn words(b: &[u8]) -> Vec<u32> {
 
 /// The output words after one workgroup of `c.n` threads ran `m` (planned as `plan`) with
 /// `lanes`-wide subgroups under Vulkan's barrier rule, identical in both scheduling orders.
-fn run_case(plan: &Plan, m: &TypedModule, c: Case, lanes: SubgroupSize) -> Vec<u32> {
+pub(super) fn run_case(plan: &Plan, m: &TypedModule, c: Case, lanes: SubgroupSize) -> Vec<u32> {
     let mut spec = BTreeMap::new();
     for (a, v) in [Axis::X, Axis::Y, Axis::Z].into_iter().zip([c.n, 1, 1]) {
         spec.insert(SpecKey::LocalSize(a), u64::from(v));
@@ -480,6 +513,18 @@ fn divergent_barriers_run_predicated_on_every_profile() {
         for stem in PROFILES {
             check(stem, &bc, name, true);
         }
+    }
+}
+
+/// A thread that leaves a predicated loop before the others reads the value of its own last trip
+/// after the loop: no store at a later trip's top, which it runs not live, ends that value.
+#[test]
+fn a_thread_that_leaves_a_vote_loop_early_keeps_its_last_trips_value() {
+    let Some(bc) = kernel("loop_leaver_k", LOOP_LEAVER) else {
+        return;
+    };
+    for stem in PROFILES {
+        check(stem, &bc, "loop_leaver_k", true);
     }
 }
 

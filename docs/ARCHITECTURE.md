@@ -23,10 +23,11 @@ metallib | AIR bitcode
   ── structurize ─► a structured tree over the AIR CFG                  structurize
   ── emit ────────► a typed SPIR-V module through the builder           structurize::emit, lower::*, spirv::builder
   ── tidy ────────► single-store promotion, dead values removed,        structurize::promote, spirv::{dead, roll,
-                    half values held at 16 bits under the 16-bit float   hoist, half_hold}
+                    half values held at 16 bits under the 16-bit float   hoist, carry, half_hold}
                     controls, repeated regions of large entries rolled
                     into loops, loop-invariant loads of uniform views
-                    moved before their loops
+                    moved before their loops, structurizer variables
+                    no later trip reads ended at each loop trip's top
   ── verify ──────► the full verifier; requirements within the profile  spirv::verify, spirv::requirements
   ── serialize ───► SPIR-V 1.5 words with typed relocations, held to    spirv::serialize
                     the word cap
@@ -75,7 +76,7 @@ rest is `crates/metal2vulkan/src/`.
 | `memory/` | Pointer provenance, the `MemoryPlan`, leaf access emitters, arenas, root and handle lookups, word composition, atomics; `memory::views`, a descriptor slot's views: a storage block or a uniform block |
 | `lower/` | `select` (routing every instruction, intrinsic and parameter into the `Plan`), `strategy`, `push` (push-constant placement), `specialized` (bound-texture values read as push data), and one module per family: `arith` (each float operation in the AIR's order, decorated by its own fast-math flags, so the device's compiler groups and fuses only what they allow; `half_chain`, a fast-math `half` chain held at `float` precision between its roundings where the device has no 16-bit floats), `access`, `texture`, `sampler`, `simd`, `sync`, `fragment`, `stage_io`, `dispatch`, `tessellation`, `mesh`, `raytracing` |
 | `structurize/` | The structurizer over the AIR CFG, the emit walk that drives the families, and single-store promotion |
-| `spirv/` | The typed SPIR-V IR and interners, the module and function builders, dead-value removal, the roll pass, the move of loop-invariant loads of uniform views out of their loops (`hoist`), the 16-bit holding of `half` values under the 16-bit float controls (`half_hold`), the verifier, requirement derivation and the serializer. `spirv::interp` is a CPU interpreter used only by tests |
+| `spirv/` | The typed SPIR-V IR and interners, the module and function builders, dead-value removal, the roll pass, the move of loop-invariant loads of uniform views out of their loops (`hoist`), the stores of an undefined value at each loop trip's top that end the structurizer variables no later trip reads (`carry`), the 16-bit holding of `half` values under the 16-bit float controls (`half_hold`), the verifier, requirement derivation and the serializer. `spirv::interp` is a CPU interpreter used only by tests |
 | `spv.rs` | The SPIR-V grammar's opcodes and enumerants the translator names, generated from Khronos's grammar (`scripts/regen-spirv-grammar/`) |
 | `spirv_binary/` | A reader of SPIR-V's binary form over the grammar's instruction table, used only by tests |
 | `device/` | `DeviceDescription` (from a Khronos profile, or from `ash`), `DevicePolicy`, and the derived `DeviceProfile` every decision reads |

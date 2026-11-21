@@ -2225,6 +2225,7 @@ fn local(m: &mut TypedModule, entry: FuncId, pointee: TypeId) -> Result<Value, E
         ptr_ty,
         value,
         init: None,
+        trip_local: false,
     });
     m.functions
         .get_mut(entry.index())
