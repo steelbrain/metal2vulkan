@@ -99,6 +99,15 @@ pub(crate) mod on_device {
             .expect("the step kernel")
     }
 
+    /// [`step`]'s words under an interface that writes no memory (`Interface::has_effects` false,
+    /// from the translator's `PipelineInterface::writes_memory`): its dispatches record nothing.
+    pub(crate) fn quiet_step(device: &Device) -> ComputePipelineState {
+        let fields = vec![region(), address(0, Place::Push(32))];
+        let mut quiet = interface(vec![(0, Access::ReadWrite)], fields, 40);
+        quiet.has_effects = false;
+        ComputePipelineState::for_test(device, &kernels::STEP, quiet).expect("the step kernel")
+    }
+
     fn write_words(buffer: &Buffer, word: impl Fn(u32) -> u32) {
         let contents = buffer.contents().expect("a Shared buffer").cast::<u32>();
         for index in 0..WORDS {
@@ -849,11 +858,7 @@ pub(crate) mod on_device {
                 0..=2 => 1,
                 _ => 0,
             });
-            let fields = vec![region(), address(0, Place::Push(32))];
-            let mut quiet = interface(vec![(0, Access::ReadWrite)], fields, 40);
-            quiet.has_effects = false;
-            let state = ComputePipelineState::for_test(&device, &kernels::STEP, quiet)
-                .expect("the step kernel");
+            let state = quiet_step(&device);
             let before = device.counters().metrics().dispatches_without_effects;
             let queue = device.new_command_queue(4).expect("a queue");
             let command_buffer = queue.command_buffer().expect("a command buffer");

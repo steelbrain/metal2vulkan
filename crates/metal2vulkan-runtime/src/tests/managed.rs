@@ -6,7 +6,10 @@
 //! shaders read the consumer's bytes as they are. In both forms a command buffer reads the bytes
 //! the consumer wrote and named before its commit (Metal's `didModifyRange:` contract), though the
 //! consumer's buffer and block handles go before it runs; nothing writes under a pending command
-//! buffer, where Metal leaves the range undefined for the GPU. A range of three 16 MiB units named
+//! buffer, where Metal leaves the range undefined for the GPU. A commit with nothing for the GPU (no
+//! commands, or one dispatch of a kernel without effects) takes the ranges named before it: with a
+//! device copy its one submission is the copy-in, it completes after it, and the next commit
+//! captures nothing. A range of three 16 MiB units named
 //! arrives whole at one commit, which takes no staging and allocates nothing. A Managed buffer over
 //! an imported dma-buf, a block the runtime does not map, has no `contents`, and a kernel reads the
 //! bytes the consumer wrote through its own mapping and named, in either form. Metal's two-copy
@@ -58,8 +61,9 @@ fn changed_ranges_merge_where_they_overlap_or_touch() {
 
 /// A copy-in waits at its capture's number in the commit order: a command buffer committed before
 /// it never takes it, and the first submitted at or after it does, ahead of its own commands,
-/// whichever queue it is of and wherever the capturing one waits; in a group it lands behind the
-/// members before its taker and ahead of the taker (`crate::capture`, `crate::submit`).
+/// whichever queue it is of and wherever the capturing one waits, so it waits for that one, which
+/// takes a submission for it with nothing for the GPU; in a group it lands behind the members
+/// before its taker and ahead of the taker (`crate::capture`, `crate::submit`).
 #[test]
 fn a_copy_in_goes_ahead_of_the_first_command_buffer_committed_at_or_after_its_capture() {
     assert_eq!(
@@ -143,7 +147,7 @@ fn a_copy_in_goes_ahead_of_the_first_command_buffer_committed_at_or_after_its_ca
 pub(crate) mod on_device {
     use crate::buffer::BufferObject;
     use crate::tests::command::on_device::{each_device, fill, finished, within, Arena};
-    use crate::tests::compute::on_device::{add, step, WORDS};
+    use crate::tests::compute::on_device::{add, quiet_step, step, WORDS};
     use crate::{
         Block, BlockId, Buffer, BytesPlace, CommandBuffer, CommandBufferStatus,
         ComputePipelineState, Device, DispatchType, Error, IndexClass, MemoryClass, PixelFormat,
@@ -772,6 +776,110 @@ pub(crate) mod on_device {
                 writer, reader, event, queue, managed, state, zero, out, arena,
             ));
             (device.release_block(cpu)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        });
+    }
+
+    /// A commit takes the ranges named since the last, with commands or none (`crate::capture`):
+    /// a Managed buffer written and named, then a command buffer that `encode` leaves with nothing
+    /// for the GPU, committed and waited for. With a device copy, its commit captured the range,
+    /// its one submission was the copy-in, and it completed after it, its GPU start and end one
+    /// time as for any command buffer with nothing for the GPU; the next commit captures nothing
+    /// and reads the bytes in the device copy. With one copy nothing is captured or submitted.
+    /// A discrete Mac GPU (an AMD Radeon Pro 5300M) takes a named range at the first commit whose
+    /// encoder binds its buffer: the same commit where the command buffer binds it and records
+    /// nothing, and a later one than here where it binds nothing.
+    fn empty_commit_takes_named_ranges(
+        name: &str,
+        device: &Device,
+        encode: impl FnOnce(&CommandBuffer, &Buffer),
+    ) {
+        let copied = !device.has_unified_memory();
+        let counters = device.counters();
+        let take = || {
+            (device.take_block(MemoryClass::Shared, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"))
+        };
+        let (cpu, side) = (take(), take());
+        let into = (device.new_buffer(side.id, 0, 256, None))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let managed = (new_managed(device, cpu.id, 0, 256, 0))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        // The creation's upload goes first, with a commit of its own.
+        device_bytes(device, &managed, &into, 256);
+        let bytes = vec![0xE7; 256];
+        write(&managed, 0, &bytes);
+        (managed.did_modify_range(0, 256)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        let queue = device.new_command_queue(4).expect("a queue");
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        encode(&command_buffer, &managed);
+        let before = counters.metrics();
+        command_buffer.commit().expect("a commit");
+        let committed = counters.metrics();
+        finished("the empty one", &command_buffer);
+        let after = counters.metrics();
+        let captured = committed.managed_bytes_captured - before.managed_bytes_captured;
+        let one = u64::from(copied);
+        assert_eq!(
+            (
+                captured,
+                after.submissions - before.submissions,
+                after.runtime_command_buffers - before.runtime_command_buffers,
+            ),
+            (256 * one, one, one),
+            "{name}: captured at its commit, its submissions and the runtime's command buffers \
+             in them (device copy: {copied})"
+        );
+        assert_eq!(
+            (command_buffer.status(), command_buffer.error()),
+            (CommandBufferStatus::Completed, None),
+            "{name}"
+        );
+        let (start, end) = (
+            command_buffer.gpu_start_time(),
+            command_buffer.gpu_end_time(),
+        );
+        assert!(
+            start == end && start > 0,
+            "{name}: GPU times {start}, {end}"
+        );
+        let read = device_bytes(device, &managed, &into, 256);
+        let next = counters.metrics().managed_bytes_captured - after.managed_bytes_captured;
+        assert_eq!(next, 0, "{name}: the next commit captures nothing");
+        assert!(
+            read == bytes,
+            "{name}: the bytes shaders reach (device copy: {copied})"
+        );
+        println!("managed empty commit: {name}: device copy {copied}, {captured} bytes captured");
+        drop((command_buffer, queue, managed, into));
+        for block in [cpu, side] {
+            (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        }
+    }
+
+    #[test]
+    fn every_device_takes_named_ranges_at_a_commit_with_no_commands() {
+        each_device("managed empty commit", |name, _, device| {
+            empty_commit_takes_named_ranges(name, &device, |_, _| {});
+        });
+    }
+
+    /// [`empty_commit_takes_named_ranges`] with a command buffer whose one dispatch, over the
+    /// Managed buffer, is of a kernel that writes no memory, and so records nothing.
+    #[test]
+    fn every_device_takes_named_ranges_at_a_commit_whose_dispatch_has_no_effects() {
+        each_device("managed quiet commit", |name, _, device| {
+            let quiet = quiet_step(&device);
+            let before = device.counters().metrics().dispatches_without_effects;
+            empty_commit_takes_named_ranges(name, &device, |command_buffer, managed| {
+                let mut encoder = (command_buffer.compute_command_encoder(DispatchType::Serial))
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&quiet).expect("a state");
+                encoder.set_buffer(Some(managed), 0, 0).expect("a buffer");
+                (encoder.dispatch_threadgroups([1, 1, 1], [16, 1, 1])).expect("a dispatch");
+                encoder.end_encoding();
+            });
+            let elided = device.counters().metrics().dispatches_without_effects - before;
+            assert_eq!(elided, 1, "{name}: the dispatch recorded nothing");
         });
     }
 
