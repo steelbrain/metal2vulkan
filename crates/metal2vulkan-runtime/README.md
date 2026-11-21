@@ -3400,14 +3400,24 @@ or does not check is rebuilt from the generations' names, with young counted ful
   own draw that cover the same pixel, which Metal orders in primitive order: a fragment may read the
   texel from before an earlier fragment of its draw wrote it
   (`PrecisionNote::UnorderedFetchWithinDraw`). Exact for a draw whose primitives do not overlap at a
-  pixel. A raster order group on the colour it reads, or on a colour output of an attachment it
-  reads, takes the same form on every device, the pixel interlock's included: the interlock cannot
-  order the attachment's own write, which happens after the function. A fetch of an attachment the
-  draw cannot read through is `Gap::Draw` of `FetchedAttachment`: a drawable's texture (its image
-  has no feedback usage and no second element; no boot or replay stream fetched one), a texture made
-  with no index, one that is no 2D texture at its first level and slice, a texture of an image
-  another attachment of the pass shares (two planes of one surface), and every attachment on a
-  device without the attachment reads.
+  pixel. A write the translator computes over the function's own read of the attachment, where no
+  Vulkan blend or write mask gives Metal's, is not built: such a state is refused at creation on
+  every device, an `Error::Translation` naming `FramebufferFetch` and
+  `RasterizationOrderColorAttachmentAccess`. These are a padded extended-range attachment's blend,
+  and a write of some of the codes one word of such an attachment holds; a blend no Vulkan state
+  gives on an attachment whose image holds its channels rotated (`ARGB8Unorm` reading destination
+  alpha); a word attachment written under a mask of some of its channels; and a logic operation the
+  device lacks. The translator builds them only over a read ordered after every earlier fragment of
+  the pixel, rasterization-order access over an input attachment, and the runtime enables no
+  rasterization-order access and binds no input attachment. The runtime refused these states on
+  every device before too, worded otherwise (the conformance ledger's 22 such cases). A raster order
+  group on the colour it reads, or on a colour output of an attachment it reads, takes the same form
+  on every device, the pixel interlock's included: the interlock cannot order the attachment's own
+  write, which happens after the function. A fetch of an attachment the draw cannot read through is
+  `Gap::Draw` of `FetchedAttachment`: a drawable's texture (its image has no feedback usage and no
+  second element; no boot or replay stream fetched one), a texture made with no index, one that is
+  no 2D texture at its first level and slice, a texture of an image another attachment of the pass
+  shares (two planes of one surface), and every attachment on a device without the attachment reads.
 - A pass over a surface plane that renders as a linear colour attachment alone (Exported
   surfaces: an opaque handle's plane in place through
   `VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV`, every plane format measured on the RTX 3090
@@ -3909,7 +3919,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `independentBlend` | `VkPhysicalDeviceFeatures` | each color attachment of a render pipeline blended by its own state, as Metal's are |
 | `fragmentStoresAndAtomics` | `VkPhysicalDeviceFeatures` | a fragment function's writes and atomics on device memory |
 | `alphaToOne` | `VkPhysicalDeviceFeatures` | a render pipeline's `alphaToOneEnabled` |
-| `logicOp` | `VkPhysicalDeviceFeatures` | a render pipeline's logic operation (private render state), the device's own; without it the fragment function would compute it, which needs fragment interlock or raster-order attachment access |
+| `logicOp` | `VkPhysicalDeviceFeatures` | a render pipeline's logic operation (private render state), the device's own; without it the fragment function would compute it, which is built only over raster-order attachment access, so the state is refused (Known gaps) |
 | `bresenhamLines` | `VkPhysicalDeviceLineRasterizationFeaturesEXT` | a line drawn by Metal's rule, the pixels whose diamond it exits (`VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT`), where Vulkan's default rule is the device's own: the rectangle of the line's width on a device whose `strictLines` is set (lavapipe, NVIDIA's driver); Vulkan 1.4 requires it |
 | `fullDrawIndexUint32` | `VkPhysicalDeviceFeatures` | an indexed draw's 32-bit indices past `2^24 - 1`; Vulkan 1.4 and Roadmap 2022 require it |
 | `imageCubeArray` | `VkPhysicalDeviceFeatures` | a cube array texture and a view as one, a cube array image view; Vulkan 1.4 and Roadmap 2022 require it |
