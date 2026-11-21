@@ -98,10 +98,6 @@ const COLOR_STRIDE: u64 = 16;
 /// stride is the next multiple of 16.
 const POINT_STRIDE: u64 = 32;
 
-/// How far `point-viewport-coverage` measured Metal keeping a point past the viewport's centre, in
-/// `w` on each axis. The geometry here is drawn on both sides of it.
-const KEPT_BAND: f64 = 1.5;
-
 /// How many runs record mode takes each case over. One pass of one queue, nothing a device may
 /// reorder, so the runs are expected to fold into one outcome; eight say so on evidence.
 const RUNS: u32 = 8;
@@ -296,7 +292,7 @@ const CELL: u32 = 12;
 const ARMS: [(f64, f64); 4] = [(0.0, 7.7), (0.3, 7.4), (0.75, 6.5), (0.5, 7.0)];
 
 /// The covering rectangle's corners, as `tob_rect` takes them: past the clip square on every side,
-/// and inside the band Metal keeps a point in ([`KEPT_BAND`]).
+/// and inside the `1.5 w` band Metal keeps a point in.
 const COVER: [f32; 4] = [-1.25, -1.25, 1.25, 1.25];
 
 /// The covering triangle: the clip square inside it, a unit from each leg and more from the third
@@ -470,7 +466,7 @@ const LINE_CELL: u32 = 16;
 /// The three triangles, in clip space, each through the viewport of its own cell:
 ///
 /// 1. one corner inside the viewport, the other two past its right and its bottom edge and inside
-///    the band Metal keeps a point in ([`KEPT_BAND`]), so every edge crosses the viewport's edge;
+///    the `1.5 w` band Metal keeps a point in, so every edge crosses the viewport's edge;
 /// 2. the same shape with the two outer corners far past that band;
 /// 3. a triangle the whole viewport lies inside, every edge more than a pixel outside it and two
 ///    corners past the band, so whatever it lights is the cut alone.
@@ -624,6 +620,10 @@ mod tests {
     use super::*;
     use crate::transcript::Transcript;
     use std::collections::BTreeSet;
+
+    /// How far `point-viewport-coverage` found Metal keeping a point past the viewport's centre,
+    /// in `w` on each axis. The geometry here is drawn on both sides of it.
+    const KEPT_BAND: f64 = 1.5;
 
     /// The one outcome of `case`'s recorded Metal answer, or `None` where nothing has recorded it.
     /// The runs are expected to fold into one outcome, and this says so where they did not.
