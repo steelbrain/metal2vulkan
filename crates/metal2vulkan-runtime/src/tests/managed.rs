@@ -1555,4 +1555,117 @@ pub(crate) mod on_device {
     fn every_device_reads_a_managed_texture_over_held_for_room_ahead_of_a_later_capture() {
         over_read_before_a_capture("managed over held before a capture", true);
     }
+
+    /// Encodes a copy of `from`'s bytes, packed, into the texture's texels.
+    fn write_over(command_buffer: &CommandBuffer, texture: &Texture, from: &Buffer) {
+        let mut blit = command_buffer.blit_command_encoder().expect("an encoder");
+        let layout = BufferLayout {
+            offset: 0,
+            bytes_per_row: OVER_ROW,
+            bytes_per_image: 0,
+        };
+        let size = [OVER_TEXELS[0], OVER_TEXELS[1], 1];
+        let at = TexturePlace {
+            slice: 0,
+            level: 0,
+            origin: [0; 3],
+        };
+        (blit.copy_from_buffer(from, layout, size, texture, at)).expect("a copy");
+        blit.end_encoding();
+    }
+
+    /// A GPU write of a texture over a Managed buffer in an image of its own ([`over_texture`]),
+    /// by a command buffer committed before a capture over part of the texture's bytes and not
+    /// yet submitted as the capture is taken, reaches a command buffer committed after the
+    /// capture outside the range named: Metal's device copy keeps a GPU write outside a
+    /// `didModifyRange:`'s range, and the range's new bytes reach a command buffer committed after
+    /// it (`MTLBuffer.h`). Behind the busy gate ([`behind_busy`]), W copies a pattern into the
+    /// whole texture; then the consumer writes and names the texture's last row, and R, committed
+    /// after on the same queue, takes the capture and reads the texture. R reads W's pattern in
+    /// the other rows and, with two copies, the new bytes in the named row; with one, W's write
+    /// there races the consumer's, which Metal leaves undefined. With `held`, [`UNSEEN_JOINS`]
+    /// command buffers join the queue's group held first, so W is held for room in no group when
+    /// R commits; else W is in the group held.
+    fn over_write_before_a_capture(test: &str, held: bool) {
+        each_device(test, |name, _, device| {
+            let counters = device.counters();
+            let cpu = (device.take_block(MemoryClass::Shared, 1))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let (managed, bytes, texture, form) = over_texture(name, &device, cpu.id, true);
+            let len = over_rows(&bytes).len();
+            let mut arena = Arena::new(&device);
+            let (pattern, r_read) = (arena.buffer(), arena.buffer());
+            write(&pattern, 0, &vec![0x3C; len]);
+            let queue = device.new_command_queue(16).expect("a queue");
+            let mut kept = Vec::new();
+            let (mut counted, mut unsent, mut in_flight) = (0, false, (0, false));
+            behind_busy(name, &device, &queue, |_, _, _| {
+                for _ in 0..UNSEEN_JOINS * usize::from(held) {
+                    let joins = queue.command_buffer().expect("a command buffer");
+                    (joins.record_for_test(&[], |_, _| {})).expect("a command buffer's commands");
+                    joins.commit().expect("a commit");
+                    kept.push(joins);
+                }
+                let metrics = counters.metrics();
+                let (room, sent) = (metrics.held_for_room, metrics.submissions);
+                let writer = queue.command_buffer().expect("a command buffer");
+                write_over(&writer, &texture, &pattern);
+                writer.commit().expect("a commit");
+                within(name, || writer.status() == CommandBufferStatus::Scheduled);
+                counted = counters.metrics().held_for_room - room;
+                let at = 3 * OVER_PITCH;
+                write(&managed, at, &[0xC5; OVER_ROW as usize]);
+                (managed.did_modify_range(at, OVER_ROW))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let reader = queue.command_buffer().expect("a command buffer");
+                read_over(&reader, &texture, &r_read);
+                reader.commit().expect("a commit");
+                unsent = counters.metrics().submissions == sent;
+                in_flight = device.core().work.in_flight(writer.queue());
+                within(name, || reader.status() == CommandBufferStatus::Scheduled);
+                kept.extend([writer, reader]);
+            });
+            for command_buffer in &kept {
+                finished(name, command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+            }
+            let (r_bytes, named) = (read(&r_read, len), 3 * OVER_ROW as usize);
+            let (outside, inside) = (
+                r_bytes[..named].iter().all(|&byte| byte == 0x3C),
+                r_bytes[named..].iter().all(|&byte| byte == 0xC5),
+            );
+            println!(
+                "{test}: {name}: {form}; W held for room {counted}, the queue's submissions in \
+                 flight and group held as R commits {in_flight:?}, W not yet submitted as R's \
+                 commit took the capture {unsent}; R read W's bytes outside the named row \
+                 {outside} (its first texels {:?}), the new bytes in it {inside} (its first \
+                 texels there {:?})",
+                &r_bytes[..8],
+                &r_bytes[named..named + 8]
+            );
+            assert_eq!(counted, u64::from(held), "{name}: W held for room");
+            assert!(
+                unsent,
+                "{name}: W not yet submitted as the capture is taken"
+            );
+            assert!(outside, "{name}: R reads W's bytes outside the named row");
+            if !device.has_unified_memory() {
+                assert!(inside, "{name}: R reads the new bytes in the named row");
+            }
+            drop((texture, managed, pattern, r_read, arena, queue, kept));
+            (device.release_block(cpu)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        });
+    }
+
+    /// [`over_write_before_a_capture`] with W in the group held when R commits.
+    #[test]
+    fn every_device_keeps_a_managed_texture_over_s_write_in_a_group_outside_a_later_capture() {
+        over_write_before_a_capture("managed over written before a capture", false);
+    }
+
+    /// [`over_write_before_a_capture`] with W held for room in no group when R commits.
+    #[test]
+    fn every_device_keeps_a_managed_texture_over_s_write_held_for_room_outside_a_later_capture() {
+        over_write_before_a_capture("managed over written held before a capture", true);
+    }
 }
