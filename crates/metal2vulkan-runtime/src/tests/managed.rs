@@ -29,7 +29,8 @@
 //!
 //! A texture over a Managed buffer in an image of its own, on every device: a command buffer of
 //! another queue that runs ahead of the first of its own queue's to read it, that one in a group
-//! held or held for room, reads the buffer's bytes, as does that one; and a command buffer
+//! held or held for room, reads the buffer's bytes, as does that one, and so over a Shared buffer
+//! with that one in a group held; and a command buffer
 //! committed before a capture of a range over it, in a group held or held for room, reads the
 //! buffer's bytes outside that range, and the one that takes the capture the new bytes.
 
@@ -1310,26 +1311,34 @@ pub(crate) mod on_device {
     const OVER_PITCH: u64 = OVER_ROW + 4;
     const OVER_LEN: u64 = 512;
 
-    /// A Managed buffer of [`OVER_LEN`] bytes in Shared block `cpu`, its bytes written, named and
-    /// taken by a commit that has run, and a texture over it at [`OVER_PITCH`] made after that:
-    /// its first copy in is owed by its making alone. With two copies
-    /// (`Device::has_unified_memory` false) its buffer's entry owes it
-    /// (`crate::over::ManagedOvers`); with one, the Shared rules copy it in for each submission
-    /// (`crate::over`). Returns the buffer, its bytes, the texture and its form printed.
-    fn over_managed(
+    /// A buffer of [`OVER_LEN`] bytes in Shared block `cpu`, its bytes written, and a texture over
+    /// it at [`OVER_PITCH`] made after. Where `managed`, a Managed buffer whose bytes are named and
+    /// taken by a commit that has run before the texture is made, so the texture's first copy in
+    /// is owed by its making alone: with two copies (`Device::has_unified_memory` false) its
+    /// buffer's entry owes it (`crate::over::ManagedOvers`); with one, as over a Shared buffer
+    /// (else), the Shared rules copy it in for each submission (`crate::over`). Returns the
+    /// buffer, its bytes, the texture and its form printed.
+    fn over_texture(
         name: &str,
         device: &Device,
         cpu: BlockId,
+        managed: bool,
     ) -> (Buffer, Vec<u8>, Texture, String) {
-        let managed = (new_managed(device, cpu, 0, OVER_LEN, 0))
-            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let buffer = match managed {
+            true => new_managed(device, cpu, 0, OVER_LEN, 0),
+            false => device.new_buffer(cpu, 0, OVER_LEN, None),
+        }
+        .unwrap_or_else(|error| panic!("{name}: {error}"));
         let bytes: Vec<u8> = (0..OVER_LEN).map(|i| (i % 251) as u8 + 1).collect();
-        write(&managed, 0, &bytes);
-        (managed.did_modify_range(0, OVER_LEN)).unwrap_or_else(|error| panic!("{name}: {error}"));
-        let queue = device.new_command_queue(1).expect("a queue");
-        let capture = queue.command_buffer().expect("a command buffer");
-        capture.commit().expect("a commit");
-        finished(name, &capture);
+        write(&buffer, 0, &bytes);
+        if managed {
+            (buffer.did_modify_range(0, OVER_LEN))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let queue = device.new_command_queue(1).expect("a queue");
+            let capture = queue.command_buffer().expect("a command buffer");
+            capture.commit().expect("a commit");
+            finished(name, &capture);
+        }
         let first = IndexClass::Texture.range().start;
         (device.grant_indices(IndexClass::Texture, first, 1)).expect("a grant");
         let mut d = TextureDescriptor::new(
@@ -1339,7 +1348,7 @@ pub(crate) mod on_device {
             OVER_TEXELS[1],
         );
         d.usage = TextureUsage::SHADER_READ;
-        let texture = (managed.new_texture(&d, Some(first), 0, OVER_PITCH))
+        let texture = (buffer.new_texture(&d, Some(first), 0, OVER_PITCH))
             .unwrap_or_else(|error| panic!("{name}: {error}"));
         let (two, own, entry) = (
             !device.has_unified_memory(),
@@ -1348,13 +1357,16 @@ pub(crate) mod on_device {
         );
         assert!(own, "{name}: an image of its own");
         assert_eq!(
-            entry, two,
-            "{name}: owed by its buffer's entry with two copies"
+            entry,
+            managed && two,
+            "{name}: owed by its buffer's entry over a Managed buffer with two copies"
         );
+        let kind = if managed { "Managed" } else { "Shared" };
         let form = format!(
-            "two copies {two}, an image of its own {own}, owed by its buffer's entry {entry}"
+            "over a {kind} buffer, two copies {two}, an image of its own {own}, owed by its \
+             buffer's entry {entry}"
         );
-        (managed, bytes, texture, form)
+        (buffer, bytes, texture, form)
     }
 
     /// Encodes a copy of the texture's texels into `into`, packed.
@@ -1385,18 +1397,20 @@ pub(crate) mod on_device {
             .collect()
     }
 
-    /// A texture over a Managed buffer in an image of its own ([`over_managed`]) is read by two
-    /// queues behind the busy gate ([`two_queues`]): by A's command buffer numbered `reader`, the
-    /// first of A's to read it, and by B1, committed after it and run before it. Both read the
-    /// buffer's bytes: Metal's texture over a buffer shares the buffer's storage, and a command
-    /// buffer committed after a `didModifyRange:` and a commit reads what it named. A3 is in A's
+    /// A texture over a buffer in an image of its own ([`over_texture`], over a Managed buffer
+    /// where `managed`, else a Shared one) is read by two queues behind the busy gate
+    /// ([`two_queues`]): by A's command buffer numbered `reader`, the first of A's to read it, and
+    /// by B1, committed after it and run before it. Both read the buffer's bytes: Metal's texture
+    /// over a buffer shares the buffer's storage, and a command buffer committed after a
+    /// `didModifyRange:` and a commit reads what it named (over a Shared buffer, what the host
+    /// wrote before the commit). A3 is in A's
     /// group held when B1 is submitted, A4 held for room in no group. The form, A's submissions
     /// in flight and group held as B1 commits, and the order they ran in are printed.
-    fn over_read_from_two_queues(test: &str, reader: u32) {
+    fn over_read_from_two_queues(test: &str, reader: u32, managed: bool) {
         each_device(test, |name, _, device| {
             let cpu = (device.take_block(MemoryClass::Shared, 1))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let (managed, bytes, texture, form) = over_managed(name, &device, cpu.id);
+            let (buffer, bytes, texture, form) = over_texture(name, &device, cpu.id, managed);
             let mut arena = Arena::new(&device);
             let (a_read, b_read) = (arena.buffer(), arena.buffer());
             let encode =
@@ -1433,7 +1447,7 @@ pub(crate) mod on_device {
                 "{name}: A{reader} reads the buffer's bytes"
             );
             assert!(b_bytes == rows, "{name}: B1 reads the buffer's bytes");
-            drop((texture, managed, a_read, b_read, arena));
+            drop((texture, buffer, a_read, b_read, arena));
             (device.release_block(cpu)).unwrap_or_else(|error| panic!("{name}: {error}"));
         });
     }
@@ -1442,17 +1456,24 @@ pub(crate) mod on_device {
     /// A's to read the texture.
     #[test]
     fn every_device_reads_a_managed_texture_over_on_a_queue_passing_a_group_that_reads_it() {
-        over_read_from_two_queues("managed over passing a group", 3);
+        over_read_from_two_queues("managed over passing a group", 3, true);
+    }
+
+    /// [`over_read_from_two_queues`] with A3, in A's group held when B1 passes it, over a Shared
+    /// buffer: each submission copies the texture in for its own commands (`crate::over`).
+    #[test]
+    fn every_device_reads_a_shared_texture_over_on_a_queue_passing_a_group_that_reads_it() {
+        over_read_from_two_queues("shared over passing a group", 3, false);
     }
 
     /// [`over_read_from_two_queues`] with A4, held for room in no group when B1 passes it, the
     /// first of A's to read the texture.
     #[test]
     fn every_device_reads_a_managed_texture_over_on_a_queue_passing_one_held_for_room() {
-        over_read_from_two_queues("managed over passing one held for room", 4);
+        over_read_from_two_queues("managed over passing one held for room", 4, true);
     }
 
-    /// A copy in a texture over a Managed buffer in an image of its own owes ([`over_managed`])
+    /// A copy in a texture over a Managed buffer in an image of its own owes ([`over_texture`])
     /// stays owed to a command buffer committed before a capture that copies the texture in, as
     /// that capture's copy in runs ahead of a later command buffer only (`crate::capture`). Behind
     /// the busy gate ([`behind_busy`]), R reads the texture; then the consumer writes and names
@@ -1466,7 +1487,7 @@ pub(crate) mod on_device {
             let counters = device.counters();
             let cpu = (device.take_block(MemoryClass::Shared, 1))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let (managed, mut bytes, texture, form) = over_managed(name, &device, cpu.id);
+            let (managed, mut bytes, texture, form) = over_texture(name, &device, cpu.id, true);
             let before = over_rows(&bytes);
             let mut arena = Arena::new(&device);
             let (r_read, c_read) = (arena.buffer(), arena.buffer());
