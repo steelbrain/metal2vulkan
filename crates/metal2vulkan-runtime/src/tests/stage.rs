@@ -148,7 +148,7 @@ fn a_cut_or_foreign_entry_is_a_miss_and_is_removed() {
     }
     let mut body = key(20).to_vec();
     body.extend([1, 0xff]);
-    let framed = [&crate::cache::frame(&body)[..], &body].concat();
+    let framed = [&crate::cache::frame(&body)[..], &body[..]].concat();
     fs::write(path(20), framed).expect("an unknown breach");
     assert_eq!(read_entry(dir, &key(20), &HEADER), None);
     assert!(!path(20).exists(), "the unknown breach is removed");

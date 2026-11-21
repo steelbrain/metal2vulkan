@@ -2438,16 +2438,12 @@ fn a_kernel_past_the_stage_bound_gets_one_answer_through_either_path() {
         };
         let (alone, made, found) = (work(None), work(Some(&entries)), work(Some(&entries)));
         assert_eq!(entries.counts(), (1, 1), "made once, then found");
-        let (want, w) = alone.clone();
+        let (want, w) = alone;
         assert_eq!(want.map(|(_, weight)| weight), Ok(pinned), "bound {cap}");
-        assert_eq!(
-            (made, found),
-            ((want.clone(), w), (want.clone(), w)),
-            "bound {cap}"
-        );
+        assert_eq!((made, found), ((want, w), (want, w)), "bound {cap}");
         // At exactly that many work units, the bound's answer through both paths; at one fewer,
         // the work cap's through both.
-        for (budget, expected) in [(w, want.clone()), (w - 1, Err(Limit::WorkUnits))] {
+        for (budget, expected) in [(w, want), (w - 1, Err(Limit::WorkUnits))] {
             for via in [None, Some(&entries)] {
                 let mut m = capped(budget);
                 let got = answer(compile_stage_bounded(&fd, iris, via, &mut m, at(cap)));

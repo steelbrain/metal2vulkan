@@ -1826,6 +1826,7 @@ impl ComputePipelineState {
             module,
             entry: c"main".to_owned(),
             interface,
+            heavy: None,
             variants: Variants::default(),
         };
         let form = Form::Sized { partial: None };
