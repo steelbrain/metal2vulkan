@@ -460,50 +460,39 @@ fn an_observed_vertex_case_draws_into_its_generated_observer() {
     }
 }
 
-/// A pass of 4 samples: `sample_rate_mask_in` runs once per sample (`sample_id`) and writes its
-/// coverage beside its sample index, so sample `s` of the one pixel holds `(mask, s, 0, 1)` over
-/// the authored contents, each sample's own. Through the runtime the target is filled and read
-/// back sample by sample (`platform::runtime_multisample`) and holds the same words.
+/// A pass of 4 samples whose one pixel's samples are authored apart, sample `s` holding
+/// `(10 + s, 20 + s, 30 + s, 40 + s)`: `sample_rate_mask_out` writes `(1, 0, 1, 1)` under the
+/// sample mask `0x5`, so samples 0 and 2 take its color and samples 1 and 3 keep their own
+/// authored contents. Through the runtime the target is filled and read back sample by sample
+/// (`platform::runtime_multisample`) and holds the same words.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-fn each_sample_of_a_multisampled_target_holds_its_own_invocation() {
+fn each_sample_of_a_multisampled_target_keeps_its_own_contents() {
     let fragment = public("engine/sample_rate.ll");
     let mut authored = crate::companion::tests::case(
         Stage::Fragment,
-        "sample_rate_mask_in",
-        TextureFormat::Rgba32Uint,
+        "sample_rate_mask_out",
+        TextureFormat::Rgba32Float,
     );
     authored.raster_sample_count = Some(4);
-    authored.render_targets[0].initial_bytes_b64 = b64(&[0xab; 4 * 16]);
+    let sample = |s: f32| [10.0 + s, 20.0 + s, 30.0 + s, 40.0 + s];
+    let authored_samples: Vec<f32> = (0..4u8).flat_map(|s| sample(f32::from(s))).collect();
+    authored.render_targets[0].initial_bytes_b64 = b64(&floats(&authored_samples));
     authored.output = OutputSelection::RenderTarget {
         index: 0,
         origin: [0, 0],
         dimensions: [1, 1],
     };
     let (case, companion) = with_companion(&authored, &fragment);
-    // Each sample's `(sample, 0, 1)`, after its coverage word.
-    let indices = |output: &[u8]| -> Vec<[u32; 3]> {
-        let words: Vec<u32> = output
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|word| u32::from_le_bytes(*word))
-            .collect();
-        words
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .map(|sample| [sample[1], sample[2], sample[3]])
-            .collect()
-    };
-    let expected = [[0, 0, 1], [1, 0, 1], [2, 0, 1], [3, 0, 1]];
+    let written = [1.0, 0.0, 1.0, 1.0];
+    let expected = floats(&[written, sample(1.0), written, sample(3.0)].concat());
     #[cfg(target_os = "linux")]
     {
         assert!(crate::candidate::engine::runs_render_through_runtime(
             &authored, &case
         ));
         let through = run_on_runtime(&case, &fragment, Some(&companion)).unwrap();
-        assert_eq!(indices(&through.output), expected, "through the runtime");
+        assert_eq!(through.output, expected, "through the runtime");
     }
     let run = run(
         &case,
@@ -513,11 +502,7 @@ fn each_sample_of_a_multisampled_target_holds_its_own_invocation() {
         },
     )
     .unwrap();
-    assert_eq!(
-        indices(&run.output),
-        expected,
-        "on the executor's own context"
-    );
+    assert_eq!(run.output, expected, "on the executor's own context");
 }
 
 /// A tessellation case drawn through the render executor's patch path: the factor buffer bound
