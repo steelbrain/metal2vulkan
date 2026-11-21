@@ -4141,7 +4141,7 @@ reported the read's page and an instruction pointer.
 The report places each address it gives (`DeviceFault::places`, one line each by `FaultPlace`'s
 `Display`) among the runtime's own ranges a shader reaches by device address: the pool's
 allocations, the parameter ring's blocks, imports, exports, surfaces' buffers and imports over
-several dma-bufs. It names the ranges that meet the address, live or among the last 1,024 freed
+several dma-bufs, and indirect command buffers' preprocess regions. It names the ranges that meet the address, live or among the last 1,024 freed
 (each free's time, the command buffers then in flight and, for the pool, the submission its free
 waited for), and the nearest range below and above. Each range is noted as it is made and as it
 is freed; nothing else runs before the loss. Images, which Vulkan gives no device address, and the

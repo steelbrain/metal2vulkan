@@ -42,9 +42,10 @@ pub struct DeviceFault {
 
 /// Where one of the driver's addresses lies among the runtime's own ranges a shader reaches by
 /// device address: the pool's allocations, the parameter ring's blocks, imports, exports,
-/// surfaces' buffers and imports over several dma-bufs, live, or among the last 1,024 freed. Its
-/// `Display` is one line. Images, which Vulkan gives no device address, and the zero source and
-/// staging memory, which only copies reach, are not among them.
+/// surfaces' buffers, imports over several dma-bufs and indirect command buffers' preprocess
+/// regions, live, or among the last 1,024 freed. Its `Display` is one line. Images, which Vulkan
+/// gives no device address, and the zero source and staging memory, which only copies reach, are
+/// not among them.
 ///
 /// No Metal counterpart: Metal reports no fault address.
 #[non_exhaustive]
@@ -118,6 +119,8 @@ pub enum RangeKind {
     Sparse,
     /// A block of the parameter ring.
     RingBlock,
+    /// A region of an indirect command buffer's execution's preprocess memory.
+    Preprocess,
 }
 
 impl fmt::Display for RangeKind {
@@ -129,6 +132,7 @@ impl fmt::Display for RangeKind {
             RangeKind::Surface => f.write_str("surface buffer"),
             RangeKind::Sparse => f.write_str("import over dma-bufs"),
             RangeKind::RingBlock => f.write_str("parameter ring block"),
+            RangeKind::Preprocess => f.write_str("preprocess region"),
         }
     }
 }

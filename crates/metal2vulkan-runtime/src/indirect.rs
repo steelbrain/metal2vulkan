@@ -26,6 +26,7 @@ use crate::counters::{Gauge, Metric, Site};
 use crate::device::{lock, Core};
 use crate::dgc::{self, Dgc};
 use crate::error::{Error, Gap, IndirectCommandsKind};
+use crate::fault::RangeKind;
 use crate::floor::IndirectCommandLimits;
 use crate::kernel_map::Lru;
 use crate::memory::{self, Block};
@@ -314,6 +315,7 @@ impl Region {
     ///
     /// No pending work uses it.
     unsafe fn destroy(self, core: &Core) {
+        (core.spans).freed(self.buffer, core.pool.in_flight(), None);
         // SAFETY: by the caller.
         unsafe {
             core.device.destroy_buffer(self.buffer, None);
@@ -815,6 +817,7 @@ unsafe fn make_region(core: &Core, size: u64, bits: u32) -> Result<Region, Error
     let address_info = vk::BufferDeviceAddressInfo::default().buffer(buffer);
     // SAFETY: the buffer is bound and of `SHADER_DEVICE_ADDRESS` usage.
     let address = unsafe { device.get_buffer_device_address(&address_info) };
+    (core.spans).made(buffer, address, size, RangeKind::Preprocess);
     Ok(Region { address, ..region })
 }
 

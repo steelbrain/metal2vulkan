@@ -2654,6 +2654,7 @@ unsafe fn free_loose(core: &Core, loose: Loose) {
             memory,
             bytes,
         } => {
+            (core.spans).freed(buffer, core.pool.in_flight(), None);
             // SAFETY: the caller's.
             unsafe {
                 core.device.destroy_buffer(buffer, None);

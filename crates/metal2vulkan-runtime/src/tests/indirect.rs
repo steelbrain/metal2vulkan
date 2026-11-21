@@ -904,6 +904,14 @@ mod on_device {
                 let kept = settled(&|idle| idle <= IDLE_BYTES);
                 assert_eq!(counters.gauges().preprocess_used_bytes, 0, "{name}");
                 assert!(0 < kept && kept <= IDLE_BYTES, "{name}: {kept} idle bytes");
+                // Those freed past the bound are freed ranges of a lost device's report.
+                let freed = (core.spans.freed_kept().iter())
+                    .filter(|range| range.kind == crate::RangeKind::Preprocess)
+                    .count();
+                assert!(
+                    freed > 0,
+                    "{name}: no preprocess region among the freed ranges"
+                );
                 let before = counters.metrics().preprocess_regions_remade;
                 let again: Vec<_> = (0..regions)
                     .map(|_| ok(name, indirect.executed(core, &shape, 1)).0)

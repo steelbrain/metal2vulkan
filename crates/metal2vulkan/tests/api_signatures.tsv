@@ -9477,6 +9477,7 @@ variant	metal2vulkan-runtime::PrecisionNote::ViewBaseTexelOffset	ViewBaseTexelOf
 variant	metal2vulkan-runtime::RangeKind::Allocation	Allocation(AllocationId, MemoryClass)
 variant	metal2vulkan-runtime::RangeKind::Export	Export
 variant	metal2vulkan-runtime::RangeKind::Import	Import
+variant	metal2vulkan-runtime::RangeKind::Preprocess	Preprocess
 variant	metal2vulkan-runtime::RangeKind::RingBlock	RingBlock
 variant	metal2vulkan-runtime::RangeKind::Sparse	Sparse
 variant	metal2vulkan-runtime::RangeKind::Surface	Surface
