@@ -2703,13 +2703,14 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
 
 /// The runtime draws a vertex or fragment case of one sample, its own stage's buffers, textures
 /// and samplers, static vertex strides, color targets, and one direct or indexed draw of
-/// primitives, observing a buffer, a texture, a color target or nothing; and a
-/// rasterization-disabled vertex case, which renders into the oracle's sink; a depth/stencil
-/// attachment of one sample and one aspect, observed or not; and an attribute buffer's
-/// out-of-bounds target. A case with anything else (a depth/stencil attachment of both aspects or
-/// more samples, more samples, layered rendering, a dynamic vertex stride, an argument-buffer
-/// member, an explicit imageblock, a fragment pass with no attachment, which the runtime makes no
-/// pass of, or an index buffer's out-of-bounds target) stays on the executor's own context.
+/// primitives or one patch draw with no index buffer, observing a buffer, a texture, a color
+/// target or nothing; and a rasterization-disabled vertex case, which renders into the oracle's
+/// sink; a depth/stencil attachment of one sample and one aspect, observed or not; and an
+/// attribute buffer's out-of-bounds target. A case with anything else (a depth/stencil attachment
+/// of both aspects or more samples, more samples, layered rendering, a dynamic vertex stride, an
+/// argument-buffer member, an explicit imageblock, a fragment pass with no attachment, which the
+/// runtime makes no pass of, a patch draw through a patch index buffer, or an index buffer's
+/// out-of-bounds target) stays on the executor's own context.
 #[test]
 fn a_plain_draw_and_only_one_runs_through_the_runtime() {
     use super::graphics::tests::two_stage_case;
@@ -2758,6 +2759,23 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
         ..plain.clone()
     };
     assert!(runs_render_through_runtime(&authored, &unrasterized));
+    let patches = |patch_index| RenderCase {
+        assembly: graphics::Assembly::Patches {
+            tessellation: metal2vulkan::pipeline::TessellationDescriptor::default(),
+            factors: vec![0; 12],
+        },
+        draw: DrawCall::Patches {
+            control_points: 3,
+            patch_start: 0,
+            patch_count: 1,
+            patch_index,
+            instance_count: 1,
+            base_instance: 0,
+            control_point_index: None,
+        },
+        ..plain.clone()
+    };
+    assert!(runs_render_through_runtime(&authored, &patches(None)));
     // An attribute buffer's out-of-bounds target draws through the runtime, whose facts refuse or
     // run it (`runtime_bounds::drawn`); no other target does (an index buffer's case carries the
     // runtime's limit, `index_buffer_past_end`, which stops it before either context).
@@ -2883,6 +2901,14 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
             OutOfBoundsResource::IndexBuffer,
             ContainmentForm::IndexBuffer,
         ),
+        patches(Some((
+            metal2vulkan::bind::IndexBufferRef::new(graphics::INDEX_BUFFER_TOKEN, 4),
+            0,
+        ))),
+        RenderCase {
+            draw: patches(None).draw,
+            ..plain.clone()
+        },
     ];
     for other in &others {
         assert!(!runs_render_through_runtime(&authored, other), "{other:?}");

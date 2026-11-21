@@ -13,8 +13,9 @@
 //! the oracle makes it, a Shared `Depth32Float` filled by a draw of the case's depths
 //! (`runtime_depth`, as the runtime takes no upload of one) or a Shared `Stencil8` written from its
 //! bytes, loaded and stored by the pass; the oracle's depth-stencil state, stencil
-//! references, cull mode and winding; one draw, direct or indexed, in one command buffer, waited
-//! for under the hang protocol, then read back.
+//! references, cull mode and winding; one draw, direct, indexed or of patches (its factors a Shared
+//! buffer bound as the tessellation factor buffer, as the oracle binds them), in one command
+//! buffer, waited for under the hang protocol, then read back.
 //!
 //! The row records what the runtime answers, as a kernel's does: the state's precision notes on
 //! the case's own stage, and the float reductions its AIR calls. An out-of-bounds case's facts are
@@ -31,6 +32,7 @@ use crate::candidate::engine::{product_refusal, resources, ComputeRun, RunAttemp
 use crate::case::Stage;
 use crate::check::admission::{ExecutorError, NotSupported};
 use crate::coverage::ModuleCensus;
+use crate::executor_contract::tessellation;
 use crate::gpu::DeviceType;
 use crate::literal::LiteralDepthStencil;
 use metal2vulkan::bind::DrawCall;
@@ -117,6 +119,12 @@ fn run(
         .as_deref()
         .map(|bytes| Placed::new(device, "the index buffer", bytes))
         .transpose()?;
+    let factors = match &case.assembly {
+        Assembly::Patches { factors, .. } => {
+            Some(Placed::new(device, "the tessellation factors", factors)?)
+        }
+        Assembly::Primitives(_) => None,
+    };
     let targets = Targets::make(device, device_type, case, &mut indices)?;
     let depth_stencil = device.new_depth_stencil_state(&case.depth_stencil_state.descriptor);
     let label = crate::gpu::wait::SubmissionLabel {
@@ -151,6 +159,15 @@ fn run(
                 );
                 encoder.set_cull_mode(case.cull_mode);
                 encoder.set_front_facing_winding(case.depth_stencil_state.winding);
+                if let Some(factors) = &factors {
+                    encoder
+                        .set_tessellation_factor_buffer(
+                            Some(&factors.buffer),
+                            tessellation::FACTOR_OFFSET,
+                            tessellation::FACTOR_INSTANCE_STRIDE,
+                        )
+                        .map_err(fail("the tessellation factor buffer"))?;
+                }
                 drawn(&mut encoder, case, index_buffer.as_ref())?;
                 encoder.end_encoding();
                 Ok(())
@@ -630,18 +647,43 @@ fn whole([width, height]: [u32; 2]) -> rt::Region {
     }
 }
 
-/// Encode `case`'s draw: its primitives, direct, or indexed through `index_buffer`.
+/// Encode `case`'s draw: its primitives, direct, or indexed through `index_buffer`, or its patches.
 fn drawn(
     encoder: &mut rt::RenderCommandEncoder,
     case: &RenderCase,
     index_buffer: Option<&Placed>,
 ) -> Result<(), ExecutorError> {
-    let Assembly::Primitives(primitive) = case.assembly else {
-        return Err(ExecutorError::Failed(
-            "a draw through the runtime draws primitives".into(),
-        ));
+    let primitive = match case.assembly {
+        Assembly::Primitives(primitive) => {
+            crate::case::indirect_commands::metal_primitive_type(primitive)
+        }
+        Assembly::Patches { .. } => {
+            let DrawCall::Patches {
+                control_points,
+                patch_start,
+                patch_count,
+                patch_index: None,
+                instance_count,
+                base_instance,
+                control_point_index: None,
+            } = case.draw
+            else {
+                return Err(ExecutorError::Failed(
+                    "a patch draw through the runtime reads no index buffer".into(),
+                ));
+            };
+            return encoder
+                .draw_patches(
+                    control_points,
+                    patch_start,
+                    patch_count,
+                    None,
+                    instance_count,
+                    base_instance,
+                )
+                .map_err(|error| runtime_error("the draw", error));
+        }
     };
-    let primitive = crate::case::indirect_commands::metal_primitive_type(primitive);
     match case.draw {
         DrawCall::Primitives {
             vertex_start,

@@ -466,7 +466,7 @@ fn an_observed_vertex_case_draws_into_its_generated_observer() {
 /// image, over the right half, each tagging its pixels with its patch index (the flat `tag`,
 /// `(patch, 1, 2, 3)`). Without culling both halves are tagged; with back faces culled exactly one
 /// patch survives, a different one for each output winding, and the culled half keeps the target's
-/// fill.
+/// fill. Through the runtime, each draw gives the executor's own bytes.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn a_back_culled_patch_and_its_mirror_leave_exactly_one_drawn() {
@@ -523,7 +523,7 @@ fn a_back_culled_patch_and_its_mirror_leave_exactly_one_drawn() {
     };
     let draw = |authored: &AuthoredCase| {
         let (case, companion) = with_companion(authored, &vertex);
-        run(
+        let output = run(
             &case,
             RenderLibraries {
                 vertex: &vertex,
@@ -531,7 +531,16 @@ fn a_back_culled_patch_and_its_mirror_leave_exactly_one_drawn() {
             },
         )
         .unwrap()
-        .output
+        .output;
+        #[cfg(target_os = "linux")]
+        {
+            assert!(crate::candidate::engine::runs_render_through_runtime(
+                authored, &case
+            ));
+            let through = run_on_runtime(&case, &vertex, Some(&companion)).unwrap();
+            assert_eq!(through.output, output, "through the runtime");
+        }
+        output
     };
     assert_eq!(draw(&authored), tagged(Some(0), Some(1)));
     let one_survivor = [tagged(Some(0), None), tagged(None, Some(1))];

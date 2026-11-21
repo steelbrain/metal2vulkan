@@ -123,7 +123,7 @@ use tables::{function_tables, table_buffers, FunctionTable, TableBuffers};
 /// how it decides a match. A change no recorded row can observe (a case kind no earlier executor
 /// ran, or one it refused) needs no bump; its commit says why. The commit that bumps it says what
 /// changed; this comment keeps no history.
-pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v195";
+pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v196";
 
 /// One kernel case in the terms the binder takes: what this executor supports of an
 /// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures, command
@@ -1398,9 +1398,11 @@ pub struct RuntimeKernel<'a> {
 /// buffers at static strides, its color targets and a depth/stencil attachment of one sample and
 /// one aspect (a fragment case renders into at least one attachment: the runtime makes no pass
 /// without one, `Gap::RenderPass`), the encoder's depth-stencil state, cull mode and winding, and
-/// one direct or indexed draw of primitives, observing a buffer, a texture, a color target, the
-/// depth/stencil attachment's aspect or nothing, whose out-of-bounds targets, if any, are attribute
-/// buffers (`runtime_bounds::drawn` reads their facts). Decided by the case's structure alone:
+/// one direct or indexed draw of primitives or one patch draw with no patch or control-point index
+/// buffer (a post-tessellation vertex function's, its factors bound as the tessellation factor
+/// buffer), observing a buffer, a texture, a color target, the depth/stencil attachment's aspect
+/// or nothing, whose out-of-bounds targets, if any, are attribute buffers
+/// (`runtime_bounds::drawn` reads their facts). Decided by the case's structure alone:
 /// every field the mapping fills is named here, so a new one is decided when it is added.
 pub fn runs_render_through_runtime(authored: &AuthoredCase, case: &graphics::RenderCase) -> bool {
     let graphics::RenderCase {
@@ -1454,8 +1456,20 @@ pub fn runs_render_through_runtime(authored: &AuthoredCase, case: &graphics::Ren
         && color_targets.values().all(|target| target.samples == 1)
         && depth_stencil.as_ref().is_none_or(one_aspect)
         && *render_target_array_length == 0
-        && matches!(assembly, graphics::Assembly::Primitives(_))
-        && matches!(draw, DrawCall::Primitives { .. } | DrawCall::Indexed { .. })
+        && matches!(
+            (assembly, draw),
+            (
+                graphics::Assembly::Primitives(_),
+                DrawCall::Primitives { .. } | DrawCall::Indexed { .. }
+            ) | (
+                graphics::Assembly::Patches { .. },
+                DrawCall::Patches {
+                    patch_index: None,
+                    control_point_index: None,
+                    ..
+                }
+            )
+        )
         && out_of_bounds
             .iter()
             .all(|target| matches!(target.resource, OutOfBoundsResource::AttributeBuffer { .. }))

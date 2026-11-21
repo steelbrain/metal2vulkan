@@ -487,15 +487,17 @@ cargo run -p metal2vulkan-validation --release --bin corpus-moltenvk -- \
   textures, loaded and stored by the pass), a depth/stencil attachment of one aspect as the oracle
   makes it (a Shared `Depth32Float` filled by a draw of its depths, as a 32-bit float depth texture
   is, or a Shared `Stencil8` written from its bytes, loaded and stored by the pass), the oracle's
-  depth-stencil state, cull mode and winding, and one direct or indexed draw of primitives,
-  observing a buffer, a texture, a color target, the attachment's aspect or nothing, its
+  depth-stencil state, cull mode and winding, and one direct or indexed draw of primitives or one
+  patch draw of a post-tessellation vertex function with no patch index buffer (its factors a
+  Shared buffer bound as the tessellation factor buffer at the oracle's offset and instance
+  stride), observing a buffer, a texture, a color target, the attachment's aspect or nothing, its
   out-of-bounds targets, if any, attribute buffers. Their facts are read
   before the state is made, from the translator's compile of the state's descriptor on the
   runtime device's own translator: the runtime's floor enables no buffer robustness, so a
   fixed-function vertex fetch past its buffer is checked nowhere and the case is refused as
   `not_supported{uncontained:unchecked vertex_input}`. A rasterization-disabled vertex case renders
   into the oracle's 1x1 `R8Unorm` attachment. More samples, layered rendering, a dynamic vertex
-  stride, an argument-buffer member, tessellation, an imageblock, a rasterization-rate map, an
+  stride, an argument-buffer member, a patch index buffer, an imageblock, a rasterization-rate map, an
   out-of-bounds target other than an attribute buffer or a fragment pass with no attachment (the
   runtime makes no pass without one) keeps the case on the executor's own context. An indexed
   draw past its index buffer, which the runtime refuses as Metal's validation does
