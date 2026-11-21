@@ -420,24 +420,18 @@ pub fn check_floor(placement: &PushPlacement) -> Result<(), String> {
     }
 }
 
-/// In the open block of a function whose push block `push` holds the stage's tail `field` as
-/// member `member` ([`tail`]): read it, and return from the function where it holds the value the
+/// In the open block of a function whose push block holds the stage's tail `field` ([`tail`]),
+/// `value` its member as the block read it: return from the function where it holds the value the
 /// consumer never pushes there: the tail word non-zero, a two-word field with both words all
 /// ones, an address all ones. The branch is never taken; the return keeps the read from any
 /// optimizer, as everything the function does after it depends on it.
 pub(crate) fn emit_tail_guard(
     fb: &mut crate::spirv::builder::FunctionBuilder<'_>,
-    push: crate::spirv::ids::GlobalId,
-    member: u32,
+    value: crate::spirv::ids::Value,
     field: PushField,
 ) -> crate::spirv::error::BResult<()> {
     use crate::spirv::builder::constructs::{ArmEnd, ArmFn};
-    use crate::spirv::ir::{BinOp, ConstBits, Constant, MemAccess};
-    let base = fb.module().global_value(push)?;
-    let index = fb.u32_const(member)?;
-    let index = fb.module().const_value(index)?;
-    let ptr = fb.access_chain(base, &[index])?;
-    let value = fb.load(ptr, MemAccess::default())?;
+    use crate::spirv::ir::{BinOp, ConstBits, Constant};
     let set = match (field, shape(field)) {
         (PushField::TailWord, _) => {
             let zero = fb.u32_const(0)?;

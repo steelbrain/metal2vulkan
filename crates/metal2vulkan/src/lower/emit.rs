@@ -232,8 +232,8 @@ enum Invariant {
     /// A fragment function's tile's first word in the pass's tile memory buffer
     /// (`access::tile_memory::base`), computed at entry (`access::tile_memory::emit_entry`).
     TileBase,
-    /// A kernel's slot of the runtime's private arena ([`EmitCx::arena_slot`]), computed at entry
-    /// (`dispatch::emit_entry`).
+    /// A kernel's slot of the runtime's private arena ([`EmitCx::arena_slot`]), computed in the
+    /// function's first block.
     ArenaSlot,
     /// The table word of the argument buffer's sampler of a handle, tested for a cubic filter
     /// (`sampler::emit`'s reach test): an operation through the same handle where an earlier test
@@ -317,6 +317,15 @@ impl<'a> EmitCx<'a> {
     /// block the entry hooks end in.
     fn dominates_body(&self, at: SBlockId) -> bool {
         Some(at) == self.entry_block || Some(at) == self.hooks_block
+    }
+
+    /// Record the function's entry block before the entry hooks run: a hook that runs after one
+    /// closed a construct (the floor's tail guard) recalls what the first block holds, a push
+    /// field [`EmitCx::load_push_fields`] loaded there, rather than loading it again where the
+    /// hooks stand.
+    fn begin_hooks(&mut self, fb: &FunctionBuilder<'_>) -> BResult<()> {
+        self.entry_block = fb.entry_block();
+        Ok(())
     }
 
     /// Record the open block as the one the entry hooks end in, where the walk starts.
@@ -405,8 +414,11 @@ impl<'a> EmitCx<'a> {
     /// The device address of the invocation's slot of the runtime's memory that holds the
     /// kernel's private arena (`dispatch::KernelDecl::arena_slot`, of the pushed
     /// `PushField::PrivateArenaAddress` and the slot's bytes, `RuntimeFact::PrivateArena`),
-    /// computed once where it dominates: `dispatch::emit_entry` computes it in the function's
-    /// first block.
+    /// computed once in the function's first block, wherever it is first asked for: its operands
+    /// are that push field, which [`EmitCx::load_push_fields`] loads there, the invocation's
+    /// built-ins and constants, so it dominates every access of the arena. Made where it is asked
+    /// for, it would be made again in every block of the body: `dispatch::emit_entry` asks after
+    /// the floor's tail guard closed a construct, and later hooks may close more before the walk.
     pub(crate) fn arena_slot(&mut self, fb: &mut FunctionBuilder<'_>) -> BResult<SValue> {
         if let Some(v) = self.recall(fb, Invariant::ArenaSlot) {
             return Ok(v);
@@ -418,13 +430,15 @@ impl<'a> EmitCx<'a> {
         let Some(slot_bytes) = slot_bytes else {
             return Err(self.fail("a private arena in device memory without its slot's bytes"));
         };
-        let arena = self.push_field(fb, PushField::PrivateArenaAddress)?;
         let decl: &Declared = self.decl;
         let Some(kernel) = decl.families.dispatch.kernel.as_ref() else {
             return Err(self.fail("a private arena in device memory without its kernel"));
         };
-        let v = kernel.arena_slot(fb, arena, slot_bytes)?;
-        self.remember(fb, Invariant::ArenaSlot, v);
+        let v = fb.in_entry_block(|fb| {
+            let arena = self.push_field(fb, PushField::PrivateArenaAddress)?;
+            kernel.arena_slot(fb, arena, slot_bytes)
+        })?;
+        self.remember_at_entry(fb, Invariant::ArenaSlot, v);
         Ok(v)
     }
 
@@ -499,18 +513,22 @@ impl<'a> EmitCx<'a> {
 
     /// Where the plan's placement ends with a tail (`lower::push::tail`): read it from the push
     /// block, and return where it holds the value the consumer never pushes there
-    /// ([`crate::lower::push::emit_tail_guard`]).
+    /// ([`crate::lower::push::emit_tail_guard`]). A tail field the function reads from its
+    /// member is the load [`EmitCx::load_push_fields`] made in this block, so the member is
+    /// loaded once; the tail word, and a field the function derives elsewhere, are loaded here.
     fn emit_tail_guard(&mut self, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
         let Some(field) = crate::lower::push::tail(&self.plan.push) else {
             return Ok(());
         };
         let member = (self.decl.push.iter()).find(|m| m.field == field);
-        match (member, self.decl.push_global) {
-            (Some(member), Some(push)) => {
-                crate::lower::push::emit_tail_guard(fb, push, member.index, field)
-            }
-            _ => Err(self.fail("a placed tail the push block does not hold")),
-        }
+        let (Some(member), Some(push)) = (member, self.decl.push_global) else {
+            return Err(self.fail("a placed tail the push block does not hold"));
+        };
+        let value = match field != PushField::TailWord && !self.derives(field) {
+            true => self.push_field(fb, field)?,
+            false => Self::load_member(fb, push, member.index)?,
+        };
+        crate::lower::push::emit_tail_guard(fb, value, field)
     }
 
     /// Checked slot `slot`'s bounds (`PushField::SlotBounds`), split: its buffer's bytes before
@@ -589,44 +607,52 @@ impl<'a> EmitCx<'a> {
         Ok(v)
     }
 
+    /// Whether the function derives push field `field` from something other than its own
+    /// member or `ArgumentTable` entry ([`EmitCx::load_push_field`]). A device-replay variant
+    /// reads a slot's Metal address from its root entry, and its dispatch region from the region
+    /// record of its command and region; a flat variant reads its grid from its dispatch's region
+    /// record, and a folded variant its region and group counts; a merged draw's functions read
+    /// their command's slot tables.
+    fn derives(&self, field: PushField) -> bool {
+        let flat = self
+            .plan
+            .dispatch
+            .as_ref()
+            .is_some_and(|d| d.flat_grid || d.folded_groups);
+        let families = &self.plan.families;
+        match field {
+            PushField::RootTableAddress => {
+                families.stage_io.merged.is_some() || families.stage_io.merged_fragment.is_some()
+            }
+            PushField::SlotGuestBase(_) => families.access.replay,
+            PushField::DispatchRegion => families.access.replay || flat,
+            _ => false,
+        }
+    }
+
     /// Load push field `field` in the open block.
     fn load_push_field(
         &mut self,
         fb: &mut FunctionBuilder<'_>,
         field: PushField,
     ) -> BResult<SValue> {
-        // A device-replay variant reads a slot's Metal address from its root entry, and its
-        // dispatch region from the region record of its command and region; a flat variant reads
-        // its grid from its dispatch's region record, and a folded variant its region and group
-        // counts.
-        let flat = self
-            .plan
-            .dispatch
-            .as_ref()
-            .is_some_and(|d| d.flat_grid || d.folded_groups);
-        match field {
-            // A merged draw's vertex function reads its command's slot table.
-            PushField::RootTableAddress if self.plan.families.stage_io.merged.is_some() => {
-                return match self.merged_draw {
-                    Some(m) => Ok(m.table),
-                    None => Err(self.fail("a merged draw's slot table read before its entry")),
-                };
-            }
-            // A merged draw's fragment function reads its command's fragment slot table.
-            PushField::RootTableAddress
-                if self.plan.families.stage_io.merged_fragment.is_some() =>
-            {
-                return self.merged_fragment_table.ok_or_else(|| {
+        if self.derives(field) {
+            return match field {
+                // A merged draw's vertex function reads its command's slot table.
+                PushField::RootTableAddress if self.plan.families.stage_io.merged.is_some() => {
+                    match self.merged_draw {
+                        Some(m) => Ok(m.table),
+                        None => Err(self.fail("a merged draw's slot table read before its entry")),
+                    }
+                }
+                // A merged draw's fragment function reads its command's fragment slot table.
+                PushField::RootTableAddress => self.merged_fragment_table.ok_or_else(|| {
                     self.fail("a merged draw's fragment slot table read before its entry")
-                });
-            }
-            PushField::SlotGuestBase(slot) if self.plan.families.access.replay => {
-                return access::replay_guest_base(self, fb, slot)
-            }
-            PushField::DispatchRegion if self.plan.families.access.replay || flat => {
-                return access::replay_region(self, fb)
-            }
-            _ => {}
+                }),
+                PushField::SlotGuestBase(slot) => access::replay_guest_base(self, fb, slot),
+                PushField::DispatchRegion => access::replay_region(self, fb),
+                _ => Err(self.fail("a derived push field without its source")),
+            };
         }
         let member = self.decl.push.iter().find(|m| m.field == field).copied();
         let (Some(member), Some(g)) = (member, self.decl.push_global) else {
@@ -634,8 +660,13 @@ impl<'a> EmitCx<'a> {
             // access family declares and reads.
             return access::table_field(self, fb, field);
         };
-        let base = fb.module().global_value(g)?;
-        let index = fb.u32_const(member.index)?;
+        Self::load_member(fb, g, member.index)
+    }
+
+    /// Load member `index` of push block `push` in the open block.
+    fn load_member(fb: &mut FunctionBuilder<'_>, push: GlobalId, index: u32) -> BResult<SValue> {
+        let base = fb.module().global_value(push)?;
+        let index = fb.u32_const(index)?;
         let index = fb.module().const_value(index)?;
         let ptr = fb.access_chain(base, &[index])?;
         fb.load(ptr, MemAccess::default())
@@ -1515,7 +1546,8 @@ pub fn emit_module(e: &Entry, plan: &Plan, m: &mut Meter) -> Result<Emitted, Err
             // the walk.
             let r = em
                 .cx
-                .load_push_fields(&mut fb)
+                .begin_hooks(&fb)
+                .and_then(|()| em.cx.load_push_fields(&mut fb))
                 // The floor's tail, read in the first block (`lower::push::emit_tail_guard`).
                 .and_then(|()| em.cx.emit_tail_guard(&mut fb))
                 .and_then(|()| dispatch::emit_entry(&mut em.cx, &mut fb))

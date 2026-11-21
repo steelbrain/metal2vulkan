@@ -45,6 +45,7 @@ mod engine_dead_reads;
 mod engine_debug_info;
 mod engine_declared_varyings;
 mod engine_depth_range;
+mod engine_device_arena;
 mod engine_device_replay;
 mod engine_dispatch;
 mod engine_divergent_barriers;

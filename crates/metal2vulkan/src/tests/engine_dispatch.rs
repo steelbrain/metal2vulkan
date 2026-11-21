@@ -786,7 +786,7 @@ fn a_position_first_used_in_sibling_arms_is_derived_once() {
 
 /// How many times `m` loads each push-block or `ArgumentTable` member: a load through an access
 /// chain with constant indices into a `PushConstant` or `Uniform` variable, keyed by the chain.
-fn field_loads(m: &TypedModule) -> BTreeMap<(u32, Vec<u32>), usize> {
+pub(super) fn field_loads(m: &TypedModule) -> BTreeMap<(u32, Vec<u32>), usize> {
     let chains: BTreeMap<u32, (u32, Vec<u32>)> = m
         .blocks()
         .iter()
