@@ -3640,9 +3640,6 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
   the 2080 against 57,600 with the vertex words in one token (21% more), 567,808 against 557,568
   on lavapipe, and 19,712 either way on the XTX. Only preprocess bytes were measured, not GPU or
   frame time.
-- On NVIDIA's driver (620.70.06, an RTX 2080) an execution whose leading commands draw nothing
-  loses the draws after them in the same part: after a reset of commands 0 to 31, an execution of
-  commands 0 to 63 draws nothing. A cause not yet found.
 - On Mesa's CPU device (lavapipe, Mesa 26.2.6) the size
   `vkGetGeneratedCommandsMemoryRequirementsEXT` reports for a draw layout is quadratic in the
   command count and wraps at 2^32 (8,519,680 bytes at 16,384 commands of four buffers), a driver
