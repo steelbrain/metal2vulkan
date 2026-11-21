@@ -20,17 +20,29 @@
 //!   same encoder runs either way;
 //! - the same texture placed in a heap and reached after `use_heap` alone is not refused.
 //!
-//! `llvm-as` assembles the kernels; without it the tests skip visibly.
+//! And the same textures reached by a draw, through `colored_vertex` and an owned fragment function
+//! that writes an argument buffer's `texture2d<float, write>`, on every device: after the render
+//! encoder's `use_resource` with a write usage, the encoder's next draw is `Gap::StorageElement`
+//! with no slot and the texture's format exactly where the texture has no storage element, though
+//! the same draw before the declaration drew; a draw of `colored_fragment`, which reaches no
+//! texture beyond its slots, draws after it.
+//!
+//! `llvm-as` assembles the functions; without it the tests skip visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::command::on_device::{each_device, finished, Arena};
+    use crate::tests::draw::on_device::{
+        descriptor as render_descriptor, examples, pass, run, state as render_state, target,
+        vertices, Buffers,
+    };
     use crate::texture::TextureObject;
     use crate::{
-        Buffer, ComputeCommandEncoder, ComputePipelineDescriptor, ComputePipelineState, Device,
-        DispatchType, Error, FunctionDescriptor, Gap, HeapRange, IndexClass, Library, MemoryClass,
-        PixelFormat, Resource, ResourceUsage, StageSource, StorageMode, Texture, TextureDescriptor,
-        TextureType, TextureUsage,
+        Buffer, ColorAttachmentDescriptor, ComputeCommandEncoder, ComputePipelineDescriptor,
+        ComputePipelineState, Device, DispatchType, Error, FunctionDescriptor, Gap, HeapRange,
+        IndexClass, Library, MemoryClass, PixelFormat, PrimitiveType, Region, RenderCommandEncoder,
+        RenderPipelineDescriptor, Resource, ResourceUsage, StageSource, StorageMode, Texture,
+        TextureDescriptor, TextureType, TextureUsage,
     };
     use ash::vk;
     use metal2vulkan_devtools::{engine_dir, llvm_assemble, llvm_assemble_text, AssembleError};
@@ -330,6 +342,192 @@ declare { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1), ptr add
             println!(
                 "{name}: a declared write refused for {refused:?}; every other case and every \
                  used heap dispatched"
+            );
+        });
+    }
+
+    /// A fragment function over the argument buffer at fragment buffer 0, whose one member is a
+    /// texture's 8-byte resource ID: it writes `(1, 0, 1, 1)` to texel `(0, 0)` of the member's
+    /// `texture2d<float, write>` and returns opaque green.
+    const ARGUMENT_FRAGMENT: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
+target triple = "air64_v28-apple-macosx26.0.0"
+
+%struct.T = type { ptr addrspace(1) }
+%struct.R = type { %struct.T }
+
+define <4 x float> @argument_write_fragment(ptr addrspace(2) %r) {
+entry:
+  %pt = getelementptr inbounds %struct.R, ptr addrspace(2) %r, i64 0, i32 0, i32 0
+  %t = load ptr addrspace(1), ptr addrspace(2) %pt, align 8
+  tail call void @air.write_texture_2d.v4f32(ptr addrspace(1) %t, <2 x i32> zeroinitializer, <4 x float> <float 1.0, float 0.0, float 1.0, float 1.0>, i32 0, i32 2)
+  ret <4 x float> <float 0.0, float 1.0, float 0.0, float 1.0>
+}
+
+declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float>, i32, i32)
+
+!air.fragment = !{!0}
+!air.version = !{!7}
+!air.language_version = !{!8}
+!0 = !{ptr @argument_write_fragment, !1, !3}
+!1 = !{!2}
+!2 = !{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"float4", !"air.arg_name", !"color"}
+!3 = !{!4}
+!4 = !{i32 0, !"air.indirect_buffer", !"air.buffer_size", i32 8, !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.struct_type_info", !5, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 8, !"air.arg_type_name", !"W", !"air.arg_name", !"r"}
+!5 = !{i32 0, i32 8, i32 0, !"texture2d<float, write>", !"t", !"air.indirect_argument", !6}
+!6 = !{i32 0, !"air.texture", !"air.location_index", i32 0, i32 1, !"air.write", !"air.arg_type_name", !"texture2d<float, write>", !"air.arg_name", !"t"}
+!7 = !{i32 2, i32 8, i32 0}
+!8 = !{!"Metal", i32 4, i32 0, i32 0}
+"#;
+
+    /// One render pass into `color` that `encode` fills, committed and finished: what `encode`
+    /// answered.
+    fn rendered(
+        name: &str,
+        device: &Device,
+        color: &Texture,
+        encode: impl FnOnce(&mut RenderCommandEncoder) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        let queue = device.new_command_queue(1).expect("a queue");
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        let mut encoder = (command_buffer.render_command_encoder(&pass(color, None)))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let answered = encode(&mut encoder);
+        encoder.end_encoding();
+        run(name, &command_buffer);
+        answered
+    }
+
+    #[test]
+    fn every_device_refuses_a_draw_after_a_declared_write_of_a_texture_with_no_storage_element() {
+        let Some(examples) = examples() else {
+            return;
+        };
+        let library = match llvm_assemble_text(ARGUMENT_FRAGMENT) {
+            Ok(bitcode) => Library::from_air(&bitcode).expect("the library"),
+            Err(AssembleError::Missing(why)) => {
+                eprintln!("SKIPPED: {why}");
+                return;
+            }
+            Err(error) => panic!("the argument fragment: {error:?}"),
+        };
+        let mut writing = RenderPipelineDescriptor::new(StageSource::Function(
+            FunctionDescriptor::new(examples.function("colored_vertex").expect("the function")),
+        ));
+        writing.fragment = Some(StageSource::Function(FunctionDescriptor::new(
+            (library.function("argument_write_fragment")).expect("the function"),
+        )));
+        writing.color_attachments[0] =
+            Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+        let plain = render_descriptor(&examples, "colored_fragment", PixelFormat::RGBA8Unorm);
+        each_device("declared storage elements in draws", |name, _, device| {
+            let writing = render_state(name, &device, &writing);
+            let plain = render_state(name, &device, &plain);
+            let grant = (device.grant_indices(IndexClass::Texture, 1, 16))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let descriptor = |pixel_format, storage_mode| {
+                let mut d = TextureDescriptor::new(TextureType::Type2D, pixel_format, 2, 2);
+                d.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+                d.storage_mode = storage_mode;
+                d
+            };
+            let mut index = 1..17;
+            let mut next = || index.next().expect("an index of the grant");
+            let mut cases = Vec::new();
+            for format in [
+                PixelFormat::RGBA8Unorm,
+                PixelFormat::RGBA8UnormSRGB,
+                PixelFormat::BGRA8UnormSRGB,
+                PixelFormat::A8Unorm,
+            ] {
+                let d = descriptor(format, StorageMode::Private);
+                let texture = (device.new_texture(&d, Some(next())))
+                    .unwrap_or_else(|error| panic!("{name}: {format:?}: {error}"));
+                cases.push((format!("{format:?}"), texture));
+            }
+            let parent = descriptor(PixelFormat::RGBA8Unorm, StorageMode::Private);
+            let parent = (device.new_texture(&parent, Some(next())))
+                .unwrap_or_else(|error| panic!("{name}: RGBA8Unorm: {error}"));
+            let view = (parent.new_texture_view(
+                PixelFormat::RGBA8UnormSRGB,
+                TextureType::Type2D,
+                0..1,
+                0..1,
+                Some(next()),
+            ))
+            .unwrap_or_else(|error| panic!("{name}: the sRGB view: {error}"));
+            cases.push((
+                "an RGBA8UnormSRGB view of an RGBA8Unorm texture".into(),
+                view,
+            ));
+            // The texture every draw's fragment function writes, through the argument buffer.
+            let written = descriptor(PixelFormat::RGBA8Unorm, StorageMode::Shared);
+            let written = (device.new_texture(&written, Some(next())))
+                .unwrap_or_else(|error| panic!("{name}: the written texture: {error}"));
+            let mut buffers = Buffers::new(&device);
+            let (positions, colors) = vertices(&device, &mut buffers);
+            let argument = buffers.of(&device, &[0; 8]);
+            place_id(&argument, &written);
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let mut refused = Vec::new();
+            for (case, texture) in &cases {
+                let unstored = texture.unstored();
+                let answered = rendered(name, &device, &color, |encoder| {
+                    encoder.use_resource(Resource::Texture(&written), ResourceUsage::WRITE)?;
+                    encoder.set_vertex_buffer(Some(&positions), 0, 0)?;
+                    encoder.set_vertex_buffer(Some(&colors), 0, 1)?;
+                    encoder.set_fragment_buffer(Some(&argument), 0, 0)?;
+                    encoder.set_render_pipeline_state(&writing)?;
+                    (encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0)).unwrap_or_else(
+                        |error| panic!("{name}: {case}: the draw before the declaration: {error}"),
+                    );
+                    encoder.use_resource(Resource::Texture(texture), ResourceUsage::WRITE)?;
+                    encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0)
+                });
+                match (unstored, answered) {
+                    (None, Ok(())) => {}
+                    (
+                        Some(format),
+                        Err(Error::Unsupported(Gap::StorageElement {
+                            slot: None,
+                            pixel_format,
+                        })),
+                    ) if pixel_format == format => refused.push(case.clone()),
+                    (unstored, other) => {
+                        panic!("{name}: {case}, with no storage element {unstored:?}: {other:?}")
+                    }
+                }
+                (rendered(name, &device, &color, |encoder| {
+                    encoder.use_resource(Resource::Texture(texture), ResourceUsage::WRITE)?;
+                    encoder.set_vertex_buffer(Some(&positions), 0, 0)?;
+                    encoder.set_vertex_buffer(Some(&colors), 0, 1)?;
+                    encoder.set_render_pipeline_state(&plain)?;
+                    encoder.draw_primitives(PrimitiveType::Triangle, 3, 3, 1, 0)
+                }))
+                .unwrap_or_else(|error| {
+                    panic!("{name}: {case}: a draw of no such access: {error}")
+                });
+            }
+            let mut texel = [0; 4];
+            let region = Region {
+                origin: [0; 3],
+                size: [1, 1, 1],
+            };
+            (written.get_bytes(&mut texel, 4, 4, region, 0, 0))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(
+                texel,
+                [255, 0, 255, 255],
+                "{name}: the fragment function's write"
+            );
+            drop((cases, parent, written));
+            (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            println!(
+                "{name}: a draw after a declared write refused for {refused:?}; every other case \
+                 and every draw of no such access drew"
             );
         });
     }

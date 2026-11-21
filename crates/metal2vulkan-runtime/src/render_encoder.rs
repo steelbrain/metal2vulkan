@@ -78,7 +78,9 @@ use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
 use crate::depth_stencil::{DepthStencilState, Face, Tests};
 use crate::device::Core;
-use crate::encoder::{check_alignment, BUFFER_SLOTS, SAMPLER_SLOTS, TEXTURE_SLOTS};
+use crate::encoder::{
+    check_alignment, Resource, ResourceUsage, BUFFER_SLOTS, SAMPLER_SLOTS, TEXTURE_SLOTS,
+};
 use crate::error::{DrawKind, Error, Gap, Limit, Refusal, RenderPassKind};
 use crate::fence::Fence;
 use crate::hazard::Access;
@@ -99,7 +101,7 @@ use metal2vulkan::bind::alpha_test_code;
 use metal2vulkan::metal::format::{integer_channels_word, BICUBIC_TEXELS_UNBOUND};
 use metal2vulkan::metal::state::{input_assembly, DepthStencilDescriptor};
 use metal2vulkan::metal::{
-    CullMode, DepthClipMode, IndexType, PrimitiveType, TriangleFillMode, Winding,
+    CullMode, DepthClipMode, IndexType, PixelFormat, PrimitiveType, TriangleFillMode, Winding,
 };
 use metal2vulkan::pipeline::PrecisionNote;
 use std::sync::Arc;
@@ -253,12 +255,19 @@ struct Facts {
 
 impl Facts {
     /// The facts of a draw of `draws` with `tables` bound in `pass`, but the alignments, which the
-    /// draw checks after its attachment reads.
+    /// draw checks after its attachment reads. `declared` is the pixel format of a texture with
+    /// no storage element that `use_resource` declared written.
     ///
     /// Err: [`Refusal::VertexBufferOffset`]; [`Refusal::NoBufferAtIndex`] for a vertex buffer the
     /// vertex descriptor reads that is not bound; [`Gap::SwizzledReadWrite`];
     /// [`Gap::BicubicTexels`]; [`Gap::StorageElement`].
-    fn find(&mut self, draws: &Draws, tables: &[Tables; 2], pass: &Pass) -> Result<(), Error> {
+    fn find(
+        &mut self,
+        draws: &Draws,
+        tables: &[Tables; 2],
+        pass: &Pass,
+        declared: Option<PixelFormat>,
+    ) -> Result<(), Error> {
         self.vertex.clear();
         for &(binding, index) in &draws.bindings {
             let (buffer, offset) = match tables[VERTEX].buffers.get(index as usize) {
@@ -312,6 +321,14 @@ impl Facts {
                     pixel_format,
                 }));
             }
+        }
+        // A texture declared written with no storage element, which a function may reach through
+        // its storage image beyond its slots.
+        if let (true, Some(pixel_format)) = (draws.unbound_storage, declared) {
+            return Err(Error::Unsupported(Gap::StorageElement {
+                slot: None,
+                pixel_format,
+            }));
         }
         self.attachments = !draws.fetched.is_empty()
             || (draws.textures.iter()).any(|&(table, slot, _)| {
@@ -569,6 +586,9 @@ pub struct RenderCommandEncoder {
     shadow_slots: Vec<(usize, u32)>,
     /// What a draw of the pipeline state reaches of the bound resources.
     facts: Facts,
+    /// The pixel format of the first texture a `use_resource` declaration writes that has no
+    /// storage element ([`TextureObject::unstored`]).
+    declared_unstored_write: Option<PixelFormat>,
     /// The push bytes of the last draw.
     push: Vec<u8>,
     /// The parameter blocks of the last draw's functions, where their fields spill.
@@ -644,6 +664,7 @@ impl CommandBuffer {
                     shadowed: Vec::new(),
                     shadow_slots: Vec::new(),
                     facts: Facts::default(),
+                    declared_unstored_write: None,
                     push: Vec::new(),
                     blocks: [Vec::new(), Vec::new()],
                     push_filled: false,
@@ -1563,6 +1584,51 @@ impl RenderCommandEncoder {
         })
     }
 
+    /// `useResource:usage:stages:` (`useResources:count:usage:stages:` is a loop of it, as are the
+    /// deprecated forms without stages): the command buffer keeps the buffer or the texture until
+    /// it retires. It records nothing, and the stages are not read: every resource is resident to
+    /// every function, and the pass's barriers order its draws after every earlier command and
+    /// before every later one.
+    ///
+    /// A usage that writes a texture, or a view of one, made for shader writes with no storage
+    /// element (not a multisampled one, which Metal's shaders only read) makes every later draw of
+    /// the encoder whose vertex or fragment function may reach a texture through its storage image
+    /// beyond its bound slots (an argument buffer's `access::write` or `access::read_write`
+    /// texture, a resource ID) [`Gap::StorageElement`], with no slot: Metal writes such a texture
+    /// there, and the runtime would drop the writes. A draw whose functions have no such access
+    /// draws.
+    ///
+    /// Err: [`Refusal::OtherDevice`] for another device's resource.
+    pub fn use_resource(
+        &mut self,
+        resource: Resource<'_>,
+        usage: ResourceUsage,
+    ) -> Result<(), Error> {
+        let building = self.building();
+        let unstored = match resource {
+            Resource::Buffer(buffer) => {
+                if !buffer.is_of(building.device.core()) {
+                    return Err(Error::Refused(Refusal::OtherDevice));
+                }
+                building.keep(buffer);
+                None
+            }
+            Resource::Texture(texture) => {
+                if !texture.is_of(building.device.core()) {
+                    return Err(Error::Refused(Refusal::OtherDevice));
+                }
+                building.keep_texture(texture);
+                texture.unstored()
+            }
+        };
+        let writes = usage.access().is_some_and(|access| access.writes());
+        if writes && unstored.is_some() && self.declared_unstored_write.is_none() {
+            self.declared_unstored_write = unstored;
+            self.changed();
+        }
+        Ok(())
+    }
+
     /// `updateFence:afterStages:`: encoders that wait on `fence` after this one, of any queue,
     /// see what this encoder and the ones before it wrote. It records nothing ([`Fence`]): the
     /// pass's second barrier, recorded or owed, already reaches every command submitted after it.
@@ -1807,7 +1873,8 @@ impl RenderCommandEncoder {
             }
         };
         if !self.facts.held {
-            self.facts.find(draws, &self.tables, &self.pass)?;
+            let declared = self.declared_unstored_write;
+            self.facts.find(draws, &self.tables, &self.pass, declared)?;
         }
         // Metal orders a colour attachment's read (`[[color(n)]]`) after every earlier fragment of
         // the pass, with no barrier from the program: after a draw of the pass, a draw that reads

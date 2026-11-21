@@ -6689,6 +6689,7 @@ method	metal2vulkan-runtime::RenderCommandEncoder::set_viewport	pub fn set_viewp
 method	metal2vulkan-runtime::RenderCommandEncoder::set_viewports	pub fn set_viewports(&mut self, viewports: &[Viewport]) -> Result<(), Error>
 method	metal2vulkan-runtime::RenderCommandEncoder::set_visibility_result_mode	pub fn set_visibility_result_mode(&mut self, mode: VisibilityResultMode, offset: u64) -> Result<(), Error>
 method	metal2vulkan-runtime::RenderCommandEncoder::update_fence	pub fn update_fence(&mut self, fence: &Fence) -> Result<(), Error>
+method	metal2vulkan-runtime::RenderCommandEncoder::use_resource	pub fn use_resource(&mut self, resource: Resource<'_>, usage: ResourceUsage) -> Result<(), Error>
 method	metal2vulkan-runtime::RenderCommandEncoder::wait_for_fence	pub fn wait_for_fence(&mut self, fence: &Fence) -> Result<(), Error>
 method	metal2vulkan-runtime::RenderPassDescriptor::precision_note	pub fn precision_note(&self) -> Option<PrecisionNote>
 method	metal2vulkan-runtime::RenderPipelineDescriptor::fragment_writes_depth_unattached	pub fn fragment_writes_depth_unattached(&self, budget: &crate::Budget, entries: &StageEntries) -> Result<bool, Error>

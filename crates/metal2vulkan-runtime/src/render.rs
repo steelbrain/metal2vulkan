@@ -150,6 +150,10 @@ pub(crate) struct Draws {
     pub(crate) reads_unbound: bool,
     /// Whether a function writes through an address that is not one of its slots.
     pub(crate) writes_unbound: bool,
+    /// Whether a function may reach a texture through its storage image through something other
+    /// than its slots (`PipelineInterface::unbound_storage_textures`): an argument buffer's
+    /// `access::write` or `access::read_write` texture, a resource ID.
+    pub(crate) unbound_storage: bool,
     /// Whether a function writes memory (`PipelineInterface::writes_memory`).
     pub(crate) writes_memory: bool,
     /// The bytes of the push range the functions read, from 0.
@@ -360,10 +364,9 @@ impl crate::Device {
     ///
     /// Err: [`Error::Translation`], the translator's typed refusal or a descriptor Metal refuses;
     /// [`Gap::IndirectCommandBuffers`]; [`Gap::RenderPipeline`] for what the runtime does not
-    /// build, naming it; [`Refusal::PointSizeTopology`](crate::Refusal::PointSizeTopology) for a
-    /// vertex function that writes `[[point_size]]` under the line or the triangle class;
-    /// [`Refusal::SamplerIds`](crate::Refusal::SamplerIds) where `sampler_ids` answers another
-    /// count; [`Refusal::IndicesNotGranted`](crate::Refusal::IndicesNotGranted) for a constexpr
+    /// build, naming it; [`Refusal::PointSizeTopology`] for a vertex function that writes
+    /// `[[point_size]]` under the line or the triangle class; [`Refusal::SamplerIds`] where
+    /// `sampler_ids` answers another count; [`Refusal::IndicesNotGranted`] for a constexpr
     /// sampler's index; [`Limit::DeviceSamplers`](crate::Limit::DeviceSamplers); [`Error::Vulkan`].
     pub fn new_render_pipeline_state(
         &self,
@@ -693,6 +696,7 @@ fn draws(
         bindings,
         reads_unbound: translated.reads_unbound_resources,
         writes_unbound: translated.writes_unbound_resources,
+        unbound_storage: translated.unbound_storage_textures,
         writes_memory: translated.writes_memory,
         push_len,
         fields,

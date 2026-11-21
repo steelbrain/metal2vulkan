@@ -30,13 +30,13 @@ Its limits, measured rather than asserted:
 
 | | |
 |---|---|
-| implemented Metal items | 593 |
+| implemented Metal items | 597 |
 | of those, unreachable: `objc2-metal` binds no name for them | 1 |
-| so reachable by some case | 592 |
-| of the reachable, exercised by the suite's Metal leg | 519 |
+| so reachable by some case | 596 |
+| of the reachable, exercised by the suite's Metal leg | 523 |
 | of the reachable, not exercised | 73 |
 | share of the reachable exercised | 88% |
-| of those exercised, no case reaching it loosens anything | 302 |
+| of those exercised, no case reaching it loosens anything | 306 |
 | of those exercised, a case reaching it loosens some site | 217 |
 | case modules | 179 |
 | committed recordings | 1319 |
@@ -363,7 +363,7 @@ Every container with an implemented item, by how much of it the suite reaches. *
 |---|---|---|---|---|---|
 | `MTLArgument` | 17 | 0 | 0 | 17 |  |
 | `MTLRasterizationRateLayerDescriptor` | 9 | 0 | 2 | 7 | `rate_map_degenerate_forms`, `rate_map_sweeps`, `rate_maps` |
-| `MTLRenderCommandEncoder` | 51 | 0 | 46 | 5 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
+| `MTLRenderCommandEncoder` | 55 | 0 | 50 | 5 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
 | the header's free functions | 4 | 0 | 0 | 4 |  |
 | `MTLFunctionConstantValues` | 5 | 0 | 2 | 3 | `function_constants_half3`, `function_facts`, `library_facts` |
 | `MTLLibrary` | 10 | 0 | 7 | 3 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
@@ -450,7 +450,7 @@ A container is one Objective-C type; the SDK header it sits in is the family of 
 | `MTLArgument.h` | 77 | 59 | 18 |
 | `MTLRasterizationRate.h` | 25 | 12 | 13 |
 | `MTLLibrary.h` | 40 | 35 | 5 |
-| `MTLRenderCommandEncoder.h` | 51 | 46 | 5 |
+| `MTLRenderCommandEncoder.h` | 55 | 50 | 5 |
 | `MTLRenderPipeline.h` | 102 | 97 | 5 |
 | `MTLDevice.h` | 33 | 29 | 4 |
 | `MTLFunctionConstantValues.h` | 5 | 2 | 3 |
@@ -599,8 +599,8 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `heap_metal_sizes` | 7 | 7 | 1 tolerance(s): `AcceptedDifference` | 14 |
 | `host_detach` | 1 | 1 | every field | 18 |
 | `host_page_writes` | 4 | 4 | every field | 124 |
-| `indirect_command_depth` | 6 | 6 | every field | 148 |
-| `indirect_commands` | 9 | 9 | every field | 150 |
+| `indirect_command_depth` | 6 | 6 | every field | 149 |
+| `indirect_commands` | 9 | 9 | every field | 151 |
 | `indirect_private_types` | 1 | 0 | every field | 0 |
 | `int_attributes` | 1 | 1 | every field | 103 |
 | `layered_targets` | 5 | 5 | every field | 132 |
@@ -608,7 +608,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `library_facts` | 9 | 9 | every field | 38 |
 | `math_routines` | 2 | 2 | every field | 25 |
 | `mesh_barriers` | 2 | 2 | every field | 50 |
-| `mesh_commands` | 2 | 2 | every field | 47 |
+| `mesh_commands` | 2 | 2 | every field | 48 |
 | `mesh_draws` | 6 | 6 | every field | 46 |
 | `mesh_partial_barriers` | 4 | 4 | every field | 45 |
 | `mesh_pipeline_descriptors` | 3 | 3 | every field | 47 |
@@ -644,7 +644,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `render_depth_stencil_state` | 3 | 3 | every field | 136 |
 | `render_draw_forms` | 4 | 4 | every field | 121 |
 | `render_pass_descriptors` | 12 | 12 | every field | 30 |
-| `render_residency` | 2 | 2 | every field | 122 |
+| `render_residency` | 2 | 2 | every field | 126 |
 | `render_state` | 3 | 3 | every field | 156 |
 | `resolve_then_load` | 1 | 1 | every field | 124 |
 | `resource_facts` | 4 | 4 | every field | 23 |
@@ -1285,6 +1285,10 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `waitForFence:beforeStages:` | no | — | — |
 | `setTessellationFactorBuffer:offset:instanceStride:` | yes | `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps` | 14 |
 | `drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:` | yes | `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps` | 14 |
+| `useResource:usage:` | yes | `render_residency` | 2 |
+| `useResources:count:usage:` | yes | `render_residency` | 2 |
+| `useResource:usage:stages:` | yes | `indirect_command_depth`, `indirect_commands`, `mesh_commands`, `render_residency` | 19 |
+| `useResources:count:usage:stages:` | yes | `render_residency` | 2 |
 | `memoryBarrierWithScope:afterStages:beforeStages:` | yes | `mesh_barriers`, `pass_start_reads`, `render_residency` | 18 |
 | `memoryBarrierWithResources:count:afterStages:beforeStages:` | yes | `mesh_barriers`, `render_residency` | 4 |
 
@@ -1912,10 +1916,6 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 | `MTLRenderCommandEncoder` `useHeap:stages:` | missing | as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` | `render_residency` |
 | `MTLRenderCommandEncoder` `useHeaps:count:` | missing | as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` | `render_residency` |
 | `MTLRenderCommandEncoder` `useHeaps:count:stages:` | missing | as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` | `render_residency` |
-| `MTLRenderCommandEncoder` `useResource:usage:` | missing | as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` | `render_residency` |
-| `MTLRenderCommandEncoder` `useResource:usage:stages:` | missing | as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` | `indirect_command_depth`, `indirect_commands`, `mesh_commands`, `render_residency` |
-| `MTLRenderCommandEncoder` `useResources:count:usage:` | missing | as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` | `render_residency` |
-| `MTLRenderCommandEncoder` `useResources:count:usage:stages:` | missing | as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` | `render_residency` |
 | `MTLRenderPassAttachmentDescriptor` `depthPlane` | missing | a 3D texture's depth plane as an attachment; such an attachment is refused (`RenderPassKind::TextureType`) | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` |
 | `MTLRenderPassAttachmentDescriptor` `storeActionOptions` | missing | store action options, whose one option needs more than one sample | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` |
 | `MTLRenderPassDescriptor` `defaultRasterSampleCount` | missing | a pass with no attachment, which is refused (`RenderPassKind::NoAttachment`) | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`, `buffer_target_clears`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `primitive_type_crossings`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_pass_descriptors`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps`, `texture_view_casts`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `vertex_step_rate`, `visibility`, `wide_int_attributes`, `wide_points` |

@@ -255,7 +255,8 @@ pub enum Refusal {
     /// An event, a buffer, a texture or a pipeline state of another device in an encode call
     /// ([`CommandBuffer::encode_wait_for_event`](crate::CommandBuffer::encode_wait_for_event),
     /// [`CommandBuffer::encode_signal_event`](crate::CommandBuffer::encode_signal_event), or a
-    /// [`ComputeCommandEncoder`](crate::ComputeCommandEncoder) or
+    /// [`ComputeCommandEncoder`](crate::ComputeCommandEncoder),
+    /// [`RenderCommandEncoder`](crate::RenderCommandEncoder) or
     /// [`BlitCommandEncoder`](crate::BlitCommandEncoder) call), or a block of another device
     /// given to [`Device::release_block`](crate::Device::release_block).
     ///
@@ -1195,13 +1196,14 @@ pub enum Gap {
     /// `RG11B10Float` among others on ANV before Gfx12.5): such a read is outside Vulkan's valid
     /// usage (`VUID-vkCmdDispatch-OpTypeImage-07028`), and those formats are outside Metal's
     /// read-write tiers, whose reads Metal's documentation defines. With no slot: a dispatch whose
-    /// kernel may reach a texture through its storage image beyond its slots (an argument
-    /// buffer's `access::write` or `access::read_write` texture, a resource ID), in an encoder
-    /// where `use_resource` declared a write of a texture with no storage element. A texture
-    /// reached by its resource ID with no such declaration is not found: Metal documents no write
-    /// to it (`useHeap:` declares its heap's resources read only), and its writes are dropped. A
-    /// read there of a storage element the device cannot read without a format is not found
-    /// either (the crate's README, known gaps).
+    /// kernel, or a draw whose vertex or fragment function, may reach a texture through its
+    /// storage image beyond its slots (an argument buffer's `access::write` or
+    /// `access::read_write` texture, a resource ID), in an encoder where `use_resource` declared a
+    /// write of a texture with no storage element. A texture reached by its resource ID with no
+    /// such declaration is not found: Metal documents no write to it (`useHeap:` declares its
+    /// heap's resources read only), and its writes are dropped. A read there of a storage element
+    /// the device cannot read without a format is not found either (the crate's README, known
+    /// gaps).
     ///
     /// Basis: ours (the storage element through a view of the nearest format whose storage Vulkan
     /// requires of every device, with the translator's conversion, is the form to build).
@@ -2325,9 +2327,9 @@ impl fmt::Display for Gap {
                 pixel_format,
             } => write!(
                 f,
-                "a kernel that may write or read as storage a texture beyond its slots, where \
-                 useResource declared a write of a {pixel_format:?} texture with no storage \
-                 element on this device, is not built"
+                "a kernel or a draw's function that may write or read as storage a texture \
+                 beyond its slots, where useResource declared a write of a {pixel_format:?} \
+                 texture with no storage element on this device, is not built"
             ),
             Gap::BicubicTexels { slot, pixel_format } => write!(
                 f,

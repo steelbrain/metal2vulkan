@@ -88,7 +88,7 @@ GROUP_NAMES = {
     "buffers": "a buffer made with bytes",
     "pipelines": "pipeline creation forms (from a function, with a completion handler)",
     "render-pass": "render pass descriptor fields",
-    "encoder-calls": "encoder calls (stride setters, indirect draws, store action options, a render encoder's resource and heap uses)",
+    "encoder-calls": "encoder calls (stride setters, indirect draws, store action options, a render encoder's heap uses)",
     "sharing": "texture and event handles shared across processes",
     "library-objects": "a function's options (`MTLFunctionOptions`)",
     "argument-encoders": "argument encoders",

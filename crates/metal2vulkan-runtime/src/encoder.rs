@@ -60,7 +60,7 @@ impl ResourceUsage {
     pub const SAMPLE: ResourceUsage = ResourceUsage(4);
 
     /// The access the usage declares, or None for no usage.
-    fn access(self) -> Option<Access> {
+    pub(crate) fn access(self) -> Option<Access> {
         let reads = self.0 & (Self::READ.0 | Self::SAMPLE.0) != 0;
         let writes = self.0 & Self::WRITE.0 != 0;
         match (reads, writes) {

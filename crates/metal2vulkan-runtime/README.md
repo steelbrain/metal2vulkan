@@ -1404,11 +1404,11 @@ made, with no lock, and never rewritten for layouts.
   device lacks their storage), or holds through a view of another (an `A8Unorm` held in red, the
   extended-range formats), has no storage element. A draw or dispatch whose function writes such
   a texture bound to a slot, or reads it there through its storage image (`access::read_write`),
-  is `Gap::StorageElement`. So is, with no slot, a dispatch whose kernel may reach a texture
-  through its storage image beyond its slots (an argument buffer's `access::write` or
-  `access::read_write` texture, a resource ID) after `use_resource` declared a write of such a
-  texture in its encoder. A draw's twin waits for the render encoder's `useResource:`, which is
-  not built. A write through a resource ID with no such declaration is outside documented Metal
+  is `Gap::StorageElement`. So is, with no slot, a dispatch whose kernel, or a draw whose vertex
+  or fragment function, may reach a texture through its storage image beyond its slots (an
+  argument buffer's `access::write` or `access::read_write` texture, a resource ID) after the
+  compute or render encoder's `use_resource` declared a write of such a texture in its encoder.
+  A write through a resource ID with no such declaration is outside documented Metal
   (`useHeap:` declares its heap's resources read only) and is dropped, and a storage read there
   answers zeros.
 - A texture whose storage element the device cannot read without a format (its format lacks
@@ -3255,13 +3255,19 @@ or does not check is rebuilt from the generations' names, with young counted ful
   conformance cases `visibility-disabled-reset` and `visibility-disabled-accumulate`), so the
   result type is not a field. The replay streams that set a visibility result buffer enable no
   mode.
-- Not built, and so not methods: indirect draws (of patches too), `useResource:`, `useHeap:stages:`, the store action options setters, tile functions,
-  `setVertexBuffer:offset:attributeStride:atIndex:`, `setTessellationFactorScale:` (read only by a
-  state that enables the scale, which is refused) and `drawIndexedPatches:` (whose control-point
-  index buffer only a state of a control-point index type reads, which is refused). Where a replay stream calls
-  `useHeap:stages:` (`command-replay shapes` counts a stream's calls of each selector), it is
-  built in the compute encoder's form, `use_heap`: the command buffer keeps the block and declares
-  no access.
+- `use_resource` is `useResource:usage:stages:`, its plural and their deprecated forms without
+  stages: the command buffer keeps the buffer or the texture until it retires, and nothing is
+  recorded. The stages are not read: every resource is resident to every function, and the pass's
+  barriers order its draws after every earlier command and before every later one. A declared
+  write of a texture with no storage element refuses the encoder's later draws that may reach one
+  beyond their slots (the known gaps of textures).
+- Not built, and so not methods: indirect draws (of patches too), `useHeap:stages:`, the store
+  action options setters, tile functions, `setVertexBuffer:offset:attributeStride:atIndex:`,
+  `setTessellationFactorScale:` (read only by a state that enables the scale, which is refused) and
+  `drawIndexedPatches:` (whose control-point index buffer only a state of a control-point index type
+  reads, which is refused). Where a replay stream calls `useHeap:stages:` (`command-replay shapes`
+  counts a stream's calls of each selector), it is built in the compute encoder's form, `use_heap`:
+  the command buffer keeps the block and declares no access.
 - Refused by `Gap::RenderPass`, naming its `RenderPassKind`: a depth and a stencil attachment
   that are not one texture's same level and slice (`DepthStencilViews`: Vulkan's rendering takes
   one view for both), a `Clear` load of a depth attachment whose clear depth is outside `[0, 1]`

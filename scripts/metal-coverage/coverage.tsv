@@ -1666,10 +1666,10 @@ MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileIntersectionFunc
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setTileAccelerationStructure:atBufferIndex:		O			ray tracing		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	dispatchThreadsPerTile:		M			tile render pipelines; metal2vulkan-runtime makes none	L	tile
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	setThreadgroupMemoryLength:offset:atIndex:		M			a render pass's threadgroup memory, which tile functions use	M	encoder-calls
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useResource:usage:	yes	M			as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap`	S	encoder-calls
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useResources:count:usage:	yes	M			as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap`	S	encoder-calls
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useResource:usage:stages:		M			as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap`	S	encoder-calls
-MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useResources:count:usage:stages:		M			as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap`	S	encoder-calls
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useResource:usage:	yes	I	runtime	RenderCommandEncoder::use_resource	without stages, which are not read		
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useResources:count:usage:	yes	I	runtime	RenderCommandEncoder::use_resource	a loop of it		
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useResource:usage:stages:		I	runtime	RenderCommandEncoder::use_resource	the stages are not read		
+MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useResources:count:usage:stages:		I	runtime	RenderCommandEncoder::use_resource	a loop of it; the stages are not read		
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useHeap:	yes	M			as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap`	S	encoder-calls
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useHeaps:count:	yes	M			as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap`	S	encoder-calls
 MTLRenderCommandEncoder.h	MTLRenderCommandEncoder	method	useHeap:stages:		M			as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap`	S	encoder-calls

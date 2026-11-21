@@ -10,12 +10,12 @@ Every public item of the macOS 27.2 SDK (Xcode 27.2, 27B52)'s Metal headers, by 
 
 | Status | Items | Of which deprecated |
 |---|---|---|
-| implemented | 594 | 25 |
-| missing | 1117 | 38 |
+| implemented | 598 | 27 |
+| missing | 1113 | 36 |
 | out of scope | 424 | 5 |
 | all | 2135 | 68 |
 
-Implemented by the runtime: 238; by the translator's values: 356. Missing by size: S 191, M 208, L 342, XL 376.
+Implemented by the runtime: 242; by the translator's values: 356. Missing by size: S 187, M 208, L 342, XL 376.
 
 ## Missing, in build order
 
@@ -33,7 +33,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | a buffer made with bytes | S | 1 | `MTLDevice.newBufferWithBytes:length:options:` |
 | pipeline creation forms (from a function, with a completion handler) | S | 6 | `MTLDevice.newRenderPipelineStateWithDescriptor:options:completionHandler:`, `MTLDevice.newComputePipelineStateWithFunction:error:`, `MTLDevice.newComputePipelineStateWithFunction:options:reflection:error:`, ... |
 | render pass descriptor fields | S/M/L | 9 | `MTLRenderPassAttachmentDescriptor.depthPlane`, `MTLRenderPassAttachmentDescriptor.storeActionOptions`, `MTLRenderPassDescriptor.imageblockSampleLength`, ... |
-| encoder calls (stride setters, indirect draws, store action options, a render encoder's resource and heap uses) | S/M/L | 36 | `MTLBlitCommandEncoder.synchronizeTexture:slice:level:`, `MTLBlitCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:toTexture:destinationSlice:destinationLevel:sliceCount:levelCount:`, `MTLBlitCommandEncoder.copyFromTexture:toTexture:`, ... |
+| encoder calls (stride setters, indirect draws, store action options, a render encoder's heap uses) | S/M/L | 32 | `MTLBlitCommandEncoder.synchronizeTexture:slice:level:`, `MTLBlitCommandEncoder.copyFromTexture:sourceSlice:sourceLevel:toTexture:destinationSlice:destinationLevel:sliceCount:levelCount:`, `MTLBlitCommandEncoder.copyFromTexture:toTexture:`, ... |
 | `textureBarrier` and queue-stage barriers | S/M | 2 | `MTLCommandEncoder.barrierAfterQueueStages:beforeStages:`, `MTLRenderCommandEncoder.textureBarrier` |
 | a pipeline state's reflection after creation | S | 2 | `MTLComputePipelineState.reflection`, `MTLRenderPipelineState.reflection` |
 | function handles by name, and a handle's type and ID | S | 4 | `MTLComputePipelineState.functionHandleWithName:`, `MTLFunctionHandle.functionType`, `MTLFunctionHandle.gpuResourceID`, ... |
@@ -2122,10 +2122,10 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLRenderCommandEncoder.setTileAccelerationStructure:atBufferIndex:` | method | out of scope | ray tracing |
 | `MTLRenderCommandEncoder.dispatchThreadsPerTile:` | method | missing | L: tile render pipelines; metal2vulkan-runtime makes none |
 | `MTLRenderCommandEncoder.setThreadgroupMemoryLength:offset:atIndex:` | method | missing | M: a render pass's threadgroup memory, which tile functions use |
-| `MTLRenderCommandEncoder.useResource:usage:` (deprecated) | method | missing | S: as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` |
-| `MTLRenderCommandEncoder.useResources:count:usage:` (deprecated) | method | missing | S: as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` |
-| `MTLRenderCommandEncoder.useResource:usage:stages:` | method | missing | S: as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` |
-| `MTLRenderCommandEncoder.useResources:count:usage:stages:` | method | missing | S: as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` |
+| `MTLRenderCommandEncoder.useResource:usage:` (deprecated) | method | implemented | `RenderCommandEncoder::use_resource` (runtime): without stages, which are not read |
+| `MTLRenderCommandEncoder.useResources:count:usage:` (deprecated) | method | implemented | `RenderCommandEncoder::use_resource` (runtime): a loop of it |
+| `MTLRenderCommandEncoder.useResource:usage:stages:` | method | implemented | `RenderCommandEncoder::use_resource` (runtime): the stages are not read |
+| `MTLRenderCommandEncoder.useResources:count:usage:stages:` | method | implemented | `RenderCommandEncoder::use_resource` (runtime): a loop of it; the stages are not read |
 | `MTLRenderCommandEncoder.useHeap:` (deprecated) | method | missing | S: as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` |
 | `MTLRenderCommandEncoder.useHeaps:count:` (deprecated) | method | missing | S: as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` |
 | `MTLRenderCommandEncoder.useHeap:stages:` | method | missing | S: as the compute encoder's `ComputeCommandEncoder::use_resource` and `use_heap` |
