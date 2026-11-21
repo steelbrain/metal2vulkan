@@ -408,16 +408,14 @@ fn the_profile_reads_no_feature_creation_withholds_unrecorded() {
     judge(&read, &reported);
 }
 
-/// Each feature `read` names is recorded in the README's `Not enabled` table or its `Enabled, not
-/// stated` one, and each feature `Not enabled` records is not a feature creation enables, and is
-/// in `read` wherever some device reports it.
-fn judge(read: &BTreeMap<VkFeature, Vec<String>>, reported: &BTreeSet<VkFeature>) {
-    let recorded = recorded();
+/// Each feature `read` names is in the README's `Not enabled` table or its `Enabled, not stated`
+/// one: a feature creation enables only where its own rule says, and never states, is withheld
+/// wherever that rule does not hold.
+fn all_recorded(read: &BTreeMap<VkFeature, Vec<String>>) {
     for (feature, devices) in read {
         println!("feature-enables: {feature:?} changes the profile on {devices:?}");
     }
-    // A feature creation enables only where its own rule says, and never states, is withheld
-    // wherever that rule does not hold.
+    let recorded = recorded();
     let unstated: BTreeSet<VkFeature> = unstated("feature")
         .iter()
         .filter_map(|member| vocabulary(member))
@@ -431,6 +429,14 @@ fn judge(read: &BTreeMap<VkFeature, Vec<String>>, reported: &BTreeSet<VkFeature>
         "read by the translator's profile, withheld by creation and in neither the README's `Not \
          enabled` table nor its `Enabled, not stated` one: {unrecorded:?}"
     );
+}
+
+/// Each feature `read` names is recorded in the README's `Not enabled` table or its `Enabled, not
+/// stated` one, and each feature `Not enabled` records is not a feature creation enables, and is
+/// in `read` wherever some device reports it.
+fn judge(read: &BTreeMap<VkFeature, Vec<String>>, reported: &BTreeSet<VkFeature>) {
+    let recorded = recorded();
+    all_recorded(read);
     let creation = creation_features();
     let enabled: Vec<&VkFeature> = recorded.intersection(&creation).collect();
     assert!(
@@ -489,14 +495,5 @@ fn the_profile_reads_no_feature_the_device_reports_that_creation_withholds_unrec
     }
     drop(runtime);
     assert!(checked > 0, "the loader lists no device of this cfg's kind");
-    let recorded = recorded();
-    let unrecorded: Vec<&VkFeature> = read.keys().filter(|f| !recorded.contains(f)).collect();
-    for (feature, devices) in &read {
-        println!("feature-enables: {feature:?} changes the profile on {devices:?}");
-    }
-    assert!(
-        unrecorded.is_empty(),
-        "read by the translator's profile, withheld by creation and not in the README's `Not \
-         enabled` table: {unrecorded:?}"
-    );
+    all_recorded(&read);
 }
