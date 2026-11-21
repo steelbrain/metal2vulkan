@@ -47,13 +47,6 @@ pub struct LoweringInputs {
     /// it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub one_row: bool,
-    /// A vertex function does not write its `[[render_target_array_index]]` output
-    /// (`VariantKey::dropped_vertex_layer`): the variant a pass of at most one layer runs on, where
-    /// every index renders slice 0. A vertex function that writes the output depends on
-    /// `RuntimeFact::RenderTargetArrayLength`, which states whether it was dropped; any other
-    /// function compiles as without it.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub dropped_vertex_layer: bool,
     /// A kernel's stage-input descriptor (`MTLComputePipelineDescriptor.stageInputDescriptor`): how
     /// each `[[stage_in]]` attribute is fetched from its buffer. A kernel reading a stage-in
     /// attribute needs it (`NeedsInput(StageInputDescriptor)` without it);

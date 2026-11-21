@@ -2084,11 +2084,10 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         }
         if matches!(o.role, OutputRole::RenderTargetArrayIndex) && cx.stage == Stage::Vertex {
             // The slice a vertex function chooses selects one only in a pass of at least two
-            // layers; in a pass of one layer every index renders slice 0, and the variant for it
-            // does not write `Layer`. In every variant the raw varying holds the index as written,
-            // which Metal's fragment function reads. Drawn one amplification at a time, a pass of
-            // one layer writes no `Layer` either.
-            let dropped = cx.inputs.dropped_vertex_layer || amplified.is_some_and(|d| !d.layered);
+            // layers. Drawn one amplification at a time, a pass of one layer writes no `Layer`. In
+            // every variant the raw varying holds the index as written, which Metal's fragment
+            // function reads.
+            let dropped = amplified.is_some_and(|d| !d.layered);
             cx.facts.insert(RuntimeFact::RenderTargetArrayLength {
                 layer_dropped: dropped,
             });

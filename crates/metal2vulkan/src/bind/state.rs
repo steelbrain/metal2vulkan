@@ -50,10 +50,9 @@ pub struct BindState {
     pub imageblock_size: ImageblockSize,
     /// The render pass's `renderTargetArrayLength` (`MTLRenderPassDescriptor`): the number of
     /// layers a vertex function's `[[render_target_array_index]]` can select. Metal's default, 0,
-    /// is a pass that is not layered; 0 and 1 both render every primitive into one slice, so a
-    /// vertex function that chooses its slice runs on the variant that does not write `Layer`
-    /// (`VariantKey::dropped_vertex_layer`). In a longer pass the variant that writes `Layer`
-    /// stores 0 for an index at or past the length, which each draw writes to its push bytes
+    /// is a pass that is not layered; 0 and 1 both render every primitive into one slice. A vertex
+    /// function that chooses its slice stores `Layer` as 0 for an index at or past the length,
+    /// which each draw writes to its push bytes as at least 1
     /// (`PushField::RenderTargetArrayLength`). 0 in a compute encoder.
     #[cfg_attr(feature = "serde", serde(default))]
     pub render_target_array_length: u32,

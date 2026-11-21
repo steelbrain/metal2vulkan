@@ -877,7 +877,8 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   is not shown the same is refused, `NotImplemented(LayeredRendering)`. One shown the same on a
   device without the output is refused needing it, as `Unsupported(LayeredRendering)`, or as
   `Unsupported(VertexAmplification)` for an index the amplification's offset alone sets. The
-  variant for a pass of one layer selects no slice and runs everywhere. A device without
+  stored `Layer` is 0 at or past the pass's length, which each draw pushes, so in a pass of one
+  layer every index renders slice 0, as Metal's does. A device without
   `multiViewport` draws through one viewport, so there the vertex function stores no viewport
   index at all; a draw that selects among more than one viewport there is refused at the draw,
   `Unsupported(LayeredRendering)` needing `multiViewport`. A fragment function that reads an

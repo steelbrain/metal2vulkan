@@ -8,7 +8,6 @@
 //! - An index written the same at every vertex of a primitive is stored to `Layer` or
 //!   `ViewportIndex` where the device stores the builtin from a vertex function; without
 //!   `shaderOutputLayer` (`shaderOutputViewportIndex`) it is refused needing that feature alone.
-//!   The variant for a pass of one layer selects no slice and compiles.
 //! - Without `multiViewport` a draw has one viewport, so the vertex function stores no viewport
 //!   index at all.
 //! - An index not shown the same at every vertex of a primitive is refused as not implemented on
@@ -23,7 +22,6 @@
 use std::path::Path;
 
 use crate::budget::Budget;
-use crate::cache::VariantKey;
 use crate::device::requirements::VkFeature as F;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Capability, Error, Feature, Needs};
@@ -118,7 +116,7 @@ fn needs(feature: F) -> Needs {
 
 /// A slice written the same at every vertex of a primitive is stored to `Layer` where the device
 /// stores it from a vertex function, and refused needing `shaderOutputLayer` alone without it,
-/// `geometryShader` or not; the variant for a pass of one layer compiles either way.
+/// `geometryShader` or not.
 #[test]
 fn a_uniform_slice_takes_the_output_and_nothing_else() {
     let Some(bc) = assemble("rt6_layered.ll") else {
@@ -156,13 +154,6 @@ fn a_uniform_slice_takes_the_output_and_nothing_else() {
             needs(F::ShaderOutputLayer),
             stem,
         );
-        let mut key = VariantKey::new();
-        key.dropped_vertex_layer = true;
-        let one = without
-            .compile_render_variant(&d, &key, &budget)
-            .unwrap_or_else(|e| panic!("{stem}, one layer: {e}"));
-        validate(&one, &without, stem);
-        assert!(!one.requirements.features.contains(&F::ShaderOutputLayer));
     }
 }
 

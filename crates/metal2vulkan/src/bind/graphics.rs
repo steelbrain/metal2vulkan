@@ -76,14 +76,12 @@
 //!   draw. A tessellation pipeline drawn so is not implemented.
 //! - **Render target slice**. A vertex function that writes `[[render_target_array_index]]`
 //!   (`RuntimeFact::RenderTargetArrayLength`) selects a slice only in a pass of at least two
-//!   layers. In a pass of at most one (`BindShape::render_target_array_length` 0, Metal's default,
-//!   or 1) every index renders slice 0, and the plan's variant drops the vertex `Layer` output
-//!   (`VariantKey::dropped_vertex_layer`): exact, and a one-layer framebuffer is never written an
-//!   out-of-range `Layer`, which Vulkan leaves undefined. In a pass of more the pipeline writes
-//!   `Layer` as 0 for an index at or past its `PushField::RenderTargetArrayLength`, the pass's
-//!   length (`BindState::render_target_array_length`), which each draw writes: Metal renders such
-//!   an index into the pass's first layer. A draw of a plan whose pipeline is the other variant is
-//!   `BindError::NeedsVariant`.
+//!   layers. In every pass the pipeline writes `Layer` as 0 for an index at or past its
+//!   `PushField::RenderTargetArrayLength`, the pass's length
+//!   (`BindState::render_target_array_length`), which each draw writes as at least 1: Metal
+//!   renders such an index into the pass's first layer, and in a pass of at most one layer (a
+//!   length of 0, Metal's default, or 1) every index renders slice 0, so a one-layer framebuffer
+//!   is never written an out-of-range `Layer`, which Vulkan leaves undefined.
 //! - **Viewport count**. A vertex function that writes `[[viewport_array_index]]`
 //!   (`RuntimeFact::ViewportCount`) stores `ViewportIndex` as 0 for an index at or past its
 //!   `PushField::ViewportCount`, the encoder's viewport count (`BindState::viewport_count`), which
@@ -863,10 +861,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     {
         return Err(not_implemented(Feature::TileShading));
     }
-    // In a pass of at most one layer every index renders slice 0: the variant drops the vertex
-    // `Layer` output there, and only there. A mesh function writes `Layer` in every variant.
-    let dropped_vertex_layer =
-        vertex_layer.is_some() && !mesh && shape.render_target_array_length <= 1;
     let profile = device.profile();
     let limits = &profile.fields().limits;
     // The pass's colors the pipeline lacks, which plain Metal zeroes where the draw covers them:
@@ -1950,7 +1944,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         ));
     }
     variant.pulled_vertex_buffers = pulled_vertex_buffers;
-    variant.dropped_vertex_layer = dropped_vertex_layer;
     variant.amplification_draws = amplification_draws;
     // A pipeline compiled for a draw replay's bindings states its variant.
     variant.replay_bindings = replayed;
@@ -2010,9 +2003,7 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
             vertex_strides,
             multiview_instance_limit: (views.view_mask != 0)
                 .then_some(limits.max_multiview_instance_index),
-            other_layer_variant: vertex_layer
-                .is_some_and(|dropped| dropped != dropped_vertex_layer)
-                || compiled_draws != amplification_draws
+            other_layer_variant: compiled_draws != amplification_draws
                 || other_colors
                 || compiled_range != depth_clamp_range
                 || compiled_rotated != rotated_weights
@@ -3462,8 +3453,10 @@ fn instantiate(
                     None => return Err(internal("a dispatch region outside a mesh draw")),
                 },
                 PushField::ViewportCount => FieldBytes::of(&state.viewport_count.to_le_bytes()),
+                // At least 1: Metal renders a length of 0 as one of 1, and the function stores
+                // `Layer` as 0 at or past the length either way.
                 PushField::RenderTargetArrayLength => {
-                    FieldBytes::of(&state.render_target_array_length.to_le_bytes())
+                    FieldBytes::of(&state.render_target_array_length.max(1).to_le_bytes())
                 }
                 // Metal's own `[0, 1]` where the state holds none.
                 PushField::DepthClampRange => state

@@ -1216,51 +1216,6 @@ fn the_cubic_sampler_variant_round_trips() {
     assert!(plan.variant.cubic_samplers.is_empty());
 }
 
-/// A render pipeline whose vertex function is compiled without its `Layer` output round trips,
-/// keeps its `RenderTargetArrayLength` fact, and the decoded pipeline's plan for a pass of one
-/// layer states the variant, so a cached variant settles as the compiled one does. The variant that
-/// writes `Layer` keeps the length's push field, which the other lacks.
-#[test]
-fn the_dropped_vertex_layer_variant_round_trips() {
-    use crate::bind::BindShape;
-    use crate::cache::VariantKey;
-    use crate::pipeline::facts::RuntimeFact;
-    use crate::pipeline::sym::PushField;
-    let dev = device("nvidia-rtx50-linux");
-    let Some(bc) = fixture("vertex_amplification") else {
-        return;
-    };
-    let f = Library::from_air(&bc)
-        .and_then(|lib| lib.function("amp_vertex_layer"))
-        .expect("vertex");
-    let d = RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
-    for dropped in [false, true] {
-        let mut key = VariantKey::new();
-        key.dropped_vertex_layer = dropped;
-        let pipeline = dev
-            .compile_render_variant(&d, &key, &Budget::standard())
-            .expect("pipeline");
-        let decoded = RenderPipeline::from_bytes(&pipeline.to_bytes(), &dev).expect("decoded");
-        assert_eq!(decoded, pipeline);
-        assert!(decoded.dependencies.iter().any(|d| d.fact
-            == RuntimeFact::RenderTargetArrayLength {
-                layer_dropped: dropped
-            }));
-        let reads_length = decoded.interface.push.iter().any(|p| {
-            p.fields
-                .iter()
-                .any(|f| f.field == PushField::RenderTargetArrayLength)
-        });
-        assert_eq!(reads_length, !dropped);
-        let shape = BindShape {
-            render_target_array_length: if dropped { 1 } else { 2 },
-            ..BindShape::default()
-        };
-        let plan = decoded.plan(&dev, &shape).expect("plan");
-        assert_eq!(plan.variant, key);
-    }
-}
-
 /// A render pipeline compiled under the amplification draws variant round trips with its fact and
 /// its amplification push fields, and the decoded pipeline's plan for a state whose amplification
 /// multiview cannot express states the variant, so a cached variant settles as the compiled one

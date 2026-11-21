@@ -1598,9 +1598,9 @@ pub enum BindError {
     /// pipeline under `variant` (the plan's key and what the dispatch adds, also
     /// `BindingPlan::dispatch_variant`), plans it for the same shape, whose plan states `variant`,
     /// and instantiates the dispatch there. Nothing is dispatched on the plan asked. A draw answers
-    /// it when the pipeline planned is not the variant its vertex function's render target slice
-    /// asks for at the shape's render target array length (`VariantKey::dropped_vertex_layer`);
-    /// `variant` is then the plan's own. Boxed: a key holds a set per kind of variant, and the
+    /// it when the pipeline planned is not the variant the shape asks for (its amplification
+    /// draws, its colors, its depth clamp range, its rotated weights, its band, its tests, its
+    /// primitive IDs, its list or its regions); `variant` is then the plan's own. Boxed: a key holds a set per kind of variant, and the
     /// error stays small.
     NeedsVariant {
         variant: Box<crate::cache::VariantKey>,

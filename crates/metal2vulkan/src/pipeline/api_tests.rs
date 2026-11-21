@@ -219,7 +219,6 @@ mod serde_round_trips {
             emulated_simdgroups: true,
             one_row: true,
             unit_axes: 6,
-            dropped_vertex_layer: true,
             storage_view_slots: BTreeSet::from([buffer(3)]),
             srgb_textures: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 4)]),
             ycbcr_in_place: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 7)]),
@@ -304,7 +303,6 @@ mod serde_round_trips {
             psb_slots: BTreeSet::from([buffer(0), buffer(30)]),
             emulated_simdgroups: true,
             one_row: true,
-            dropped_vertex_layer: true,
             stage_input: Some({
                 let mut d = StageInputDescriptor::new();
                 d.attributes.insert(

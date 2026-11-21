@@ -107,7 +107,9 @@ use metal2vulkan::bind::{
 };
 use metal2vulkan::device::Device;
 use metal2vulkan::device::VkFeature;
-use metal2vulkan::pipeline::{GraphicsState, RenderPipeline, StageModule, StorageAttachmentView};
+use metal2vulkan::pipeline::{
+    GraphicsState, RenderPipeline, RuntimeFact, StageModule, StorageAttachmentView,
+};
 use metal2vulkan::pipeline::{SlotClass, SlotRef, Stage};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -198,6 +200,17 @@ fn run(
     let mut compile_child = |token: u64, shape: &BindShape, command: &ChildCommand| {
         children(&target, token, shape, command)
     };
+    // A pipeline whose vertex stage stores its slice clamped to the pass's pushed length, drawn
+    // into a pass of at most one layer, the one-layer framebuffer every row draws into: the
+    // layer's warning of its `Layer` write is a false alarm the sink withholds and counts.
+    let clamped = shape.render_target_array_length <= 1
+        && pipeline.dependencies.iter().any(|d| {
+            d.fact
+                == RuntimeFact::RenderTargetArrayLength {
+                    layer_dropped: false,
+                }
+        });
+    context.expect_clamped_layer(clamped);
     let executed = with_submission_label(label, || {
         execute(
             context,
@@ -208,6 +221,7 @@ fn run(
             &mut compile_child,
         )
     });
+    let withheld = context.take_withheld();
     // Every object of the run is destroyed by now, so destruction reports here too.
     let messages = context.take_messages();
     if !messages.is_empty() {
@@ -243,6 +257,7 @@ fn run(
         .map(|(map, plan)| graphics::rate_map_pass_census(map, plan));
     let mut environment = environment(context, device, "engine-render");
     command_replay(&mut environment, &replayed);
+    super::device::record_withheld(&mut environment, withheld);
     Ok(ComputeRun {
         output,
         spv_sha256: Some(spv_sha256),

@@ -155,6 +155,9 @@ fn run() -> Result<(), ExecutorError> {
         "{:?} {} candidate_output_sha256={}",
         observation.status, observation.case_id, observation.candidate_output_sha256
     );
+    if let Some(withheld) = observation.environment.get("withheld_validation_messages") {
+        println!("withheld validation messages: {withheld}");
+    }
     if without_generated_commands {
         println!(
             "not stored: --without-generated-commands slot={} command_replay={}",

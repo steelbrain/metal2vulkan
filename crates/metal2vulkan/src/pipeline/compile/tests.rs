@@ -497,12 +497,6 @@ fn function_keys_cover_their_inputs() {
     let mut emulated = LoweringInputs::new();
     emulated.emulated_simdgroups = true;
     assert_ne!(with_true, a.function_compile_key(&fd, &emulated));
-    // So is the dropped vertex `Layer` output.
-    let mut dropped = LoweringInputs::new();
-    dropped.dropped_vertex_layer = true;
-    let dropped = a.function_compile_key(&fd, &dropped);
-    assert_ne!(with_true, dropped);
-    assert_ne!(a.function_compile_key(&fd, &emulated), dropped);
     // So are the signed-integer color attachments, by attachment.
     let signed = |a_: &[u32]| {
         let mut i = LoweringInputs::new();
@@ -511,13 +505,11 @@ fn function_keys_cover_their_inputs() {
     };
     assert_ne!(with_true, signed(&[0]));
     assert_ne!(signed(&[0]), signed(&[1]));
-    assert_ne!(dropped, signed(&[0]));
     // So is a multisampled pipeline's fragment input.
     let mut multisampled = LoweringInputs::new();
     multisampled.multisampled = true;
     let multisampled = a.function_compile_key(&fd, &multisampled);
     assert_ne!(with_true, multisampled);
-    assert_ne!(dropped, multisampled);
     assert_ne!(signed(&[0]), multisampled);
     // So is a device-replay variant.
     let mut replay = LoweringInputs::new();
@@ -578,7 +570,6 @@ fn function_keys_cover_their_inputs() {
     let layer = a.function_compile_key(&fd, &layer);
     assert_ne!(with_true, layer);
     assert_ne!(viewport, layer);
-    assert_ne!(dropped, layer);
     // So are draws of one amplification each, by what the vertex function writes.
     let draws = |layered, viewports| {
         let mut i = LoweringInputs::new();
@@ -638,8 +629,8 @@ fn function_keys_cover_their_inputs() {
     assert_ne!(maps(&[(0, edges)]), maps(&[(0, mirrored)]));
 }
 
-/// A key without the emulated-simdgroups and dropped-vertex-layer inputs hashes the inputs as it
-/// did before those inputs existed, the derived `Debug` of the three earlier fields, so no cached
+/// A key without the emulated-simdgroups input and the later ones hashes the inputs as it did
+/// before those inputs existed, the derived `Debug` of the three earlier fields, so no cached
 /// function of the common path changes key.
 #[test]
 fn the_inputs_encoding_is_the_earlier_derived_debug() {
@@ -670,7 +661,6 @@ fn the_inputs_encoding_is_the_earlier_derived_debug() {
             derived
                 .replace(", emulated_simdgroups: false", "")
                 .replace(", one_row: false", "")
-                .replace(", dropped_vertex_layer: false", "")
                 .replace(", stage_input: None", "")
                 .replace(", storage_view_slots: {}", "")
                 .replace(", signed_color_attachments: {}", "")

@@ -61,7 +61,7 @@ mod tests;
 /// unchanged version, and its bless records the version. Independent of the crate's version and of
 /// [`ARTIFACT_FORMAT_VERSION`]. The commit that bumps it says what changed; this comment keeps no
 /// history.
-pub const SEMANTICS_VERSION: u32 = 2248;
+pub const SEMANTICS_VERSION: u32 = 2249;
 
 /// The byte-layout version of encoded artifacts (`CompiledFunction::to_bytes` and the
 /// [`PipelineArtifact`] encodings). Every encoded artifact carries it, and a decode under another
@@ -71,7 +71,7 @@ pub const SEMANTICS_VERSION: u32 = 2248;
 /// re-typed in an encoded type, its `codec` body or its `envelope`. A variant removed while its tag
 /// stays unused needs no bump: an entry holding it fails to decode, which is a miss. The commit that
 /// bumps it says what changed; this comment keeps no history.
-pub const ARTIFACT_FORMAT_VERSION: u32 = 584;
+pub const ARTIFACT_FORMAT_VERSION: u32 = 585;
 
 /// The version of what this crate's runtime does with a compiled pipeline: instantiating a binding
 /// plan (`BindingPlan::instantiate_*`: descriptor ranges, push bytes, root, argument, and handle
@@ -178,13 +178,6 @@ pub struct VariantKey {
     /// without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub unit_axes: u8,
-    /// The vertex function's `[[render_target_array_index]]` output is not written: in a pass of at
-    /// most one layer (`BindShape::render_target_array_length` 0 or 1) every index renders slice 0,
-    /// so a pipeline whose vertex function chooses its slice runs on this variant there, and only
-    /// there (a pass of more layers asks for the variant that writes `Layer`). The plan of a
-    /// pipeline compiled under it states it.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub dropped_vertex_layer: bool,
     /// Read-only slots that Profile F's per-stage storage-buffer fallback keeps as storage views:
     /// the shape binds a buffer whose length class does not prove that a uniform view's range fits
     /// `maxUniformBufferRange` at a slot the fallback views as a uniform buffer, so every such
@@ -540,7 +533,6 @@ impl VariantKey {
             && !self.emulated_simdgroups
             && !self.one_row
             && self.unit_axes == 0
-            && !self.dropped_vertex_layer
             && self.storage_view_slots.is_empty()
             && self.srgb_textures.is_empty()
             && self.snapshot_textures.is_empty()
@@ -634,8 +626,6 @@ impl VariantKey {
                 stage,
                 crate::pipeline::sym::Stage::Vertex | crate::pipeline::sym::Stage::Fragment
             );
-        out.dropped_vertex_layer =
-            self.dropped_vertex_layer && stage == crate::pipeline::sym::Stage::Vertex;
         out.amplification_draws = self
             .amplification_draws
             .filter(|_| stage != crate::pipeline::sym::Stage::Kernel);

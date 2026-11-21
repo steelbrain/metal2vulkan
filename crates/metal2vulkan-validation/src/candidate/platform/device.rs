@@ -443,7 +443,10 @@ pub fn echo_validation_messages() {
 /// it, its warning of a pipeline whose primitive restart is dynamic ([`expecting_diagnostics`]);
 /// and on a device whose driver runs the set layouts its support query refuses
 /// ([`MessageSink::unsupported_sets`]), the layer's report of such a layout
-/// (`candidate/unsupported_set.rs`) fails nothing.
+/// (`candidate/unsupported_set.rs`) fails nothing. Nor, for a row that draws a pipeline whose
+/// vertex stage stores its slice clamped to the pass's pushed length into a pass of at most one
+/// layer ([`MessageSink::clamped_layer`]), does the layer's false alarm of that `Layer` write
+/// ([`CLAMPED_LAYER`]), which the row's environment counts ([`record_withheld`]).
 pub(super) struct MessageSink {
     messages: Mutex<Vec<Recorded>>,
     /// The warnings MoltenVK reports as it makes every pipeline of the opened device, whatever its
@@ -455,6 +458,82 @@ pub(super) struct MessageSink {
     /// `vkGetDescriptorSetLayoutSupport` refuses ([`makes_layouts_past_support`]: a heap's set 1
     /// on MoltenVK), set once the opened description is known.
     unsupported_sets: AtomicBool,
+    /// Whether the row draws a pipeline whose vertex stage stores its slice clamped to the pass's
+    /// pushed length into a pass of at most one layer, so the layer's [`CLAMPED_LAYER`] is a false
+    /// alarm the sink withholds ([`VulkanContext::expect_clamped_layer`]).
+    clamped_layer: AtomicBool,
+    /// How many [`CLAMPED_LAYER`] messages the sink withheld for the row, which its environment
+    /// records ([`record_withheld`]).
+    withheld: AtomicUsize,
+}
+
+/// A validation-layer message that is a false alarm for a row of a structure the executor states
+/// ([`MessageSink::clamped_layer`]): withheld only where its severity is `WARNING` of the
+/// validation type and its id name, number and whole text are these.
+struct LayerFalseAlarm {
+    id_name: &'static str,
+    id: i32,
+    text: &'static str,
+}
+
+/// The validation layer's report of a draw whose vertex stage writes `Layer` into a framebuffer of
+/// one layer, whatever value it writes: its id name, number and text for `vkCmdDraw`, the draw the
+/// render executor records, as `VK_LAYER_KHRONOS_validation` 1.4.363 reports it (a minimal draw
+/// of a vertex shader that writes `Layer = 0`, job m3-max-61934). The Vulkan spec leaves the
+/// framebuffer undefined only where "the Layer value is less than 0 or greater than or equal to
+/// the number of layers in the framebuffer" (Layered Rendering). A pipeline whose vertex stage
+/// stores its `[[render_target_array_index]]` clamped to the pass's pushed length
+/// (`RuntimeFact::RenderTargetArrayLength` without `layer_dropped`), drawn in a pass of at most
+/// one layer, pushes the length 1 and so stores 0, which `candidate::tests::engine_render`'s
+/// `an_index_past_a_one_layer_pass_renders_the_pass_s_slice` draws and reads Metal's answer of.
+/// That test also asserts that the layer still reports this message, so the exception goes when
+/// the layer stops reporting it. The render executor's rows are its only reach: the runtime
+/// renders through dynamic rendering, under which the layer reports no such message.
+const CLAMPED_LAYER: LayerFalseAlarm = LayerFalseAlarm {
+    id_name: "Undefined-Value-Layer-Written",
+    id: 0x1fc5_5805,
+    text:
+        "vkCmdDraw(): Shader stage VK_SHADER_STAGE_VERTEX_BIT writes to Layer (gl_Layer) but the \
+           framebuffer was created with VkFramebufferCreateInfo::layer of 1, this write will have \
+           an undefined value set to it.",
+};
+
+impl LayerFalseAlarm {
+    /// Whether the layer's message of `severity`, `types` and `data` is this one.
+    fn is(
+        &self,
+        severity: vk::DebugUtilsMessageSeverityFlagsEXT,
+        types: vk::DebugUtilsMessageTypeFlagsEXT,
+        data: &vk::DebugUtilsMessengerCallbackDataEXT<'_>,
+    ) -> bool {
+        if severity != vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+            || !types.contains(vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION)
+            || data.message_id_number != self.id
+            || data.p_message_id_name.is_null()
+            || data.p_message.is_null()
+        {
+            return false;
+        }
+        // SAFETY: non-null strings of the callback data are NUL-terminated (Vulkan spec).
+        let (id_name, text) = unsafe {
+            (
+                CStr::from_ptr(data.p_message_id_name),
+                CStr::from_ptr(data.p_message),
+            )
+        };
+        id_name.to_bytes() == self.id_name.as_bytes() && text.to_bytes() == self.text.as_bytes()
+    }
+}
+
+/// Record in a row's `environment` how many [`CLAMPED_LAYER`] messages the sink withheld for it,
+/// by the message's id name, where it withheld any.
+pub(super) fn record_withheld(environment: &mut serde_json::Value, withheld: usize) {
+    if let (true, Some(object)) = (withheld > 0, environment.as_object_mut()) {
+        object.insert(
+            "withheld_validation_messages".into(),
+            serde_json::json!({ CLAMPED_LAYER.id_name: withheld }),
+        );
+    }
 }
 
 /// A message MoltenVK reports through `VK_EXT_debug_utils` where Vulkan states nothing wrong, at
@@ -635,6 +714,10 @@ unsafe extern "system" fn record_validation_message(
     // SAFETY: `user` is the `&'static MessageSink` the messenger was created with, and the layer
     // passes a live callback-data struct.
     let (sink, data) = unsafe { (&*user.cast::<MessageSink>(), &*data) };
+    if sink.clamped_layer.load(Ordering::Relaxed) && CLAMPED_LAYER.is(severity, types, data) {
+        sink.withheld.fetch_add(1, Ordering::Relaxed);
+        return vk::FALSE;
+    }
     let text = |pointer: *const std::ffi::c_char| {
         if pointer.is_null() {
             String::new()
@@ -774,6 +857,8 @@ fn only_errors_and_validation_warnings_fail_a_row() {
         messages: Mutex::new(Vec::new()),
         making: OnceLock::new(),
         unsupported_sets: AtomicBool::new(false),
+        clamped_layer: AtomicBool::new(false),
+        withheld: AtomicUsize::new(0),
     };
     for n in 0..100 {
         sink.record("error", "VUID-test".into(), format!("m{n}"));
@@ -793,6 +878,8 @@ fn the_loaders_reports_of_ignored_drivers_fail_no_row() {
         messages: Mutex::new(Vec::new()),
         making: OnceLock::new(),
         unsupported_sets: AtomicBool::new(false),
+        clamped_layer: AtomicBool::new(false),
+        withheld: AtomicUsize::new(0),
     };
     let loader = "Loader Message";
     let no_create = "loader_scanned_icd_add: Could not get 'vkCreateInstance' via \
@@ -829,6 +916,8 @@ fn an_expected_diagnostic_fails_no_row_inside_its_call_alone() {
         messages: Mutex::new(Vec::new()),
         making: OnceLock::new(),
         unsupported_sets: AtomicBool::new(false),
+        clamped_layer: AtomicBool::new(false),
+        withheld: AtomicUsize::new(0),
     };
     let user = std::ptr::from_ref(&sink) as usize;
     let report = |severity: S, text: &str| {
@@ -866,6 +955,60 @@ fn an_expected_diagnostic_fails_no_row_inside_its_call_alone() {
     });
     report(S::WARNING, &warning.text);
     assert_eq!(sink.take().len(), 1, "after the call");
+}
+
+/// The callback withholds the layer's false alarm of a clamped `Layer` write only for a row that
+/// states the clamped store ([`MessageSink::clamped_layer`]), and counts each one it withholds:
+/// the same message for another row, another id number, an error of the same text, or another
+/// draw's text fails the row.
+#[test]
+fn the_clamped_layer_warning_fails_no_row_of_a_clamped_store_alone() {
+    use std::ffi::CString;
+    use vk::DebugUtilsMessageSeverityFlagsEXT as S;
+    use vk::DebugUtilsMessageTypeFlagsEXT as T;
+    let sink = MessageSink {
+        messages: Mutex::new(Vec::new()),
+        making: OnceLock::new(),
+        unsupported_sets: AtomicBool::new(false),
+        clamped_layer: AtomicBool::new(false),
+        withheld: AtomicUsize::new(0),
+    };
+    let user = std::ptr::from_ref(&sink) as usize;
+    let report = |severity: S, id: i32, text: &str| {
+        let id_name = CString::new(CLAMPED_LAYER.id_name).unwrap();
+        let text = CString::new(text).unwrap();
+        let data = vk::DebugUtilsMessengerCallbackDataEXT::default()
+            .message_id_name(&id_name)
+            .message_id_number(id)
+            .message(&text);
+        // SAFETY: the callback data and its strings live for the call, and `user` is the sink,
+        // alive for the test.
+        unsafe {
+            record_validation_message(
+                severity,
+                T::VALIDATION,
+                &data,
+                user as *mut std::ffi::c_void,
+            )
+        };
+    };
+    let (id, text) = (CLAMPED_LAYER.id, CLAMPED_LAYER.text);
+    report(S::WARNING, id, text);
+    assert_eq!(sink.take().len(), 1, "a row that states no clamped store");
+    sink.clamped_layer.store(true, Ordering::Relaxed);
+    report(S::WARNING, id, text);
+    report(S::WARNING, id, text);
+    assert!(sink.take().is_empty(), "withheld");
+    assert_eq!(sink.withheld.load(Ordering::Relaxed), 2);
+    report(S::WARNING, id + 1, text);
+    report(S::ERROR, id, text);
+    report(
+        S::WARNING,
+        id,
+        &text.replace("vkCmdDraw", "vkCmdDrawIndexed"),
+    );
+    assert_eq!(sink.take().len(), 3, "another number, severity or text");
+    assert_eq!(sink.withheld.load(Ordering::Relaxed), 2);
 }
 
 /// Refuse unless `VK_LAYER_KHRONOS_validation` is installed with the three instance extensions a
@@ -1457,6 +1600,8 @@ impl VulkanContext {
             messages: Mutex::new(Vec::new()),
             making: OnceLock::new(),
             unsupported_sets: AtomicBool::new(false),
+            clamped_layer: AtomicBool::new(false),
+            withheld: AtomicUsize::new(0),
         }));
         let messenger_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
             .message_severity(
@@ -1815,6 +1960,23 @@ impl VulkanContext {
     /// Everything the validation layer reported since the last call, and clear the sink.
     pub(super) fn take_messages(&self) -> Vec<String> {
         self.messages.take()
+    }
+
+    /// Withhold [`CLAMPED_LAYER`] from the sink while the row draws, where `clamped`: its
+    /// pipeline's vertex stage stores its slice clamped to the pass's pushed length, in a pass of
+    /// at most one layer. The count starts at 0.
+    pub(super) fn expect_clamped_layer(&self, clamped: bool) {
+        self.messages.withheld.store(0, Ordering::Relaxed);
+        self.messages
+            .clamped_layer
+            .store(clamped, Ordering::Relaxed);
+    }
+
+    /// How many [`CLAMPED_LAYER`] messages the sink withheld since
+    /// [`VulkanContext::expect_clamped_layer`], which stops withholding them.
+    pub(super) fn take_withheld(&self) -> usize {
+        self.messages.clamped_layer.store(false, Ordering::Relaxed);
+        self.messages.withheld.swap(0, Ordering::Relaxed)
     }
 
     /// What the environment records of robustness: the robustness features the context enabled,

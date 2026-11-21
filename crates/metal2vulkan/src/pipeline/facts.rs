@@ -89,13 +89,12 @@ pub enum RuntimeFact {
     /// threadgroup arena.
     ImageblockSize { cell_bytes: u32 },
     /// The vertex function writes `[[render_target_array_index]]`, which selects a slice only
-    /// in a render pass whose `renderTargetArrayLength` is at least 2: in a pass of at most one
-    /// layer every index renders slice 0, and the function runs on the variant that does not write
-    /// `Layer` (`VariantKey::dropped_vertex_layer`). `layer_dropped` states that it was compiled
-    /// under that variant. Its plans state the variant the shape's length asks for, and refuse
-    /// amplified draws whichever it is. The variant that writes `Layer` also reads the length from
-    /// `PushField::RenderTargetArrayLength`, which the binder writes per draw, and stores 0 for an
-    /// index at or past it, where Metal renders the pass's first layer.
+    /// in a render pass whose `renderTargetArrayLength` is at least 2: it reads the length from
+    /// `PushField::RenderTargetArrayLength`, which the binder writes per draw, and stores `Layer`
+    /// as 0 for an index at or past it, where Metal renders the pass's first layer, so in a pass of
+    /// at most one layer every index renders slice 0. `layer_dropped` states that it was compiled
+    /// to draw one amplification at a time in a pass of one layer
+    /// (`LoweringInputs::amplification_draws`, not layered), which writes no `Layer`.
     RenderTargetArrayLength { layer_dropped: bool },
     /// The kernel reads the compute encoder's stage-in region (`setStageInRegion:`): a
     /// `[[stage_in]]` attribute stepping by thread position clamps its element to the region and

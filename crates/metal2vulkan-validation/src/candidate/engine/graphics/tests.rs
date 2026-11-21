@@ -852,9 +852,8 @@ pub(crate) fn two_stage_case(
     }
 }
 
-/// Compile and plan `case` on `device`: no variant but the dropped vertex `Layer` output of a
-/// vertex function that chooses its slice in the one-layer pass the executor binds, no diagnostic,
-/// and one direct draw; or the product's compile refusal.
+/// Compile and plan `case` on `device`: no variant, no diagnostic, and one direct draw; or the
+/// product's compile refusal.
 fn plan_render(
     device: &Device,
     case: &RenderCase,
@@ -914,21 +913,7 @@ fn planned_draw(
     let state = bind_state(case, &addresses, &embedded, BufferRanges::default()).unwrap();
     assert_eq!(state.shape(), shape);
     let plan = pipeline.plan(device, &shape).unwrap();
-    let chooses_slice = pipeline.dependencies.iter().any(|dependency| {
-        matches!(
-            dependency.fact,
-            metal2vulkan::pipeline::RuntimeFact::RenderTargetArrayLength { .. }
-        )
-    });
-    assert_eq!(
-        plan.variant.dropped_vertex_layer,
-        chooses_slice && case.render_target_array_length <= 1,
-        "{}",
-        case.vertex.entry
-    );
-    let mut rest = plan.variant.clone();
-    rest.dropped_vertex_layer = false;
-    assert!(rest.is_empty(), "{}", case.vertex.entry);
+    assert!(plan.variant.is_empty(), "{}", case.vertex.entry);
     assert!(plan.diagnostics.is_empty(), "{:?}", plan.diagnostics);
     let commands = plan.instantiate_draw(&state, &case.draw).unwrap();
     // An indexed case's draw instantiates indexed, every other one direct.
@@ -1604,7 +1589,7 @@ fn render_cases_bind_argument_buffer_buffers_and_texture_arrays() {
 /// The public case whose vertex function chooses its render target slice
 /// (`vertex_amplification_id_layer`) is drawn in the one-layer pass the Metal oracle draws it in:
 /// its render case and bind state carry the length the shared derivation gives, and the
-/// pipeline compiled for that shape is the variant that does not write `Layer`.
+/// pipeline compiled for that shape writes `Layer` (0 for every index in that pass).
 #[test]
 fn a_slice_choosing_case_binds_the_oracles_one_layer_pass() {
     let root = metal2vulkan_devtools::validation_dir().join("corpus");
@@ -1664,13 +1649,13 @@ fn a_slice_choosing_case_binds_the_oracles_one_layer_pass() {
         &shape,
     )
     .unwrap();
-    assert!(!pipeline.graphics.declares_layer);
+    assert!(pipeline.graphics.declares_layer);
     assert!(pipeline
         .dependencies
         .iter()
         .any(|dependency| dependency.fact
             == metal2vulkan::pipeline::RuntimeFact::RenderTargetArrayLength {
-                layer_dropped: true
+                layer_dropped: false
             }));
 }
 

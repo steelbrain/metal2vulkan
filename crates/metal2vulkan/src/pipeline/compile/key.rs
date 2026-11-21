@@ -10,7 +10,7 @@
 //!   links functions, each linked function's list, name, specialized name, specialization, AIR
 //!   hash, and constant values. A stage without linked functions keeps the key it had before
 //!   linking existed, and one
-//!   compiled without `emulated_simdgroups`, `one_row`, `dropped_vertex_layer`, `storage_view_slots`,
+//!   compiled without `emulated_simdgroups`, `one_row`, `storage_view_slots`,
 //!   `signed_color_attachments`, `multisampled`, `replay_bindings`, or `framebuffer_fetch` the key
 //!   it had before those inputs existed. A stage that links dynamic libraries records each library
 //!   its imports are searched in, in order (install name and content hash), and the install name
@@ -195,9 +195,6 @@ pub fn function_key(
     }
     if inputs.one_row {
         h.bytes(b"one-row");
-    }
-    if inputs.dropped_vertex_layer {
-        h.bytes(b"dropped-vertex-layer");
     }
     // Appended only when set, canonical, in its derived `Debug` form (ordered maps of plain enums
     // and integers, a total encoding as `inputs_encoding`'s).

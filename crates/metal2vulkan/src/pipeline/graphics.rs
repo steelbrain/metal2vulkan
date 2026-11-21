@@ -80,9 +80,7 @@ pub struct GraphicsState {
     /// A stage declares `Layer`: the vertex function chooses its render target slice, or the
     /// fragment function reads it. Such a pipeline cannot be multiview
     /// (`VUID-VkGraphicsPipelineCreateInfo-renderPass-06050`, `-06059`), so the binder refuses its
-    /// draws at an amplification count above 1. A vertex function compiled under
-    /// `VariantKey::dropped_vertex_layer` (a pass of one layer) declares none; the binder refuses
-    /// its amplified draws all the same.
+    /// draws at an amplification count above 1.
     pub declares_layer: bool,
     /// The tessellation state of a pipeline whose vertex function is a post-tessellation vertex
     /// function; `None` otherwise. Such a pipeline's `topology` is `PATCH_LIST` (never dynamic) and

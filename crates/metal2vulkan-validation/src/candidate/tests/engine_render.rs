@@ -184,6 +184,54 @@ fn a_constant_fragment_colors_the_quadrant_metal_draws() {
     assert_eq!(run.environment["executor"], "engine-render");
 }
 
+/// `rt6_layered_vertex` (engine `rt6_layered`) writes index 3, from its buffer, in a pass of
+/// Metal's default length 0, a pass of one layer: Metal renders the triangle into the pass's slice
+/// whatever index the function writes, and `rt6_layered_fragment` reads the index as written, so
+/// the slice holds instance 0's word `1 << 8 | 3` (the conformance case
+/// `layered-render-target-array-length`, recorded on an Apple M3 Max under macOS 27.0.1). The
+/// pipeline stores `Layer` as 0 at or past the length it is pushed (1), a value the Vulkan spec
+/// defines in a framebuffer of one layer. The validation layer still reports the draw's `Layer`
+/// write as undefined; the sink withholds exactly that message for this row, and the row's
+/// environment counts it (`platform::device`'s `CLAMPED_LAYER`). When the layer stops reporting
+/// it, this test fails, and the exception goes with it.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[test]
+fn an_index_past_a_one_layer_pass_renders_the_pass_s_slice() {
+    let library = llvm_assemble(&metal2vulkan_devtools::engine_dir().join("rt6_layered.ll"))
+        .expect("llvm-as on the device lane");
+    let target = BTreeMap::from([(
+        0,
+        ColorTarget {
+            format: TextureFormat::R32Uint,
+            dimensions: [1, 1],
+            samples: 1,
+            bytes: 7u32.to_le_bytes().to_vec(),
+        },
+    )]);
+    let mut case = two_stage_case(
+        "rt6_layered_vertex",
+        "rt6_layered_fragment",
+        Vec::new(),
+        target,
+        3,
+    );
+    assert_eq!(case.render_target_array_length, 0);
+    (case.vertex.resources.buffers).insert(0, 3u32.to_le_bytes().to_vec());
+    let run = run(
+        &case,
+        RenderLibraries {
+            vertex: &library,
+            fragment: Some(&library),
+        },
+    )
+    .unwrap();
+    assert_eq!(run.output, (1u32 << 8 | 3).to_le_bytes());
+    assert_eq!(
+        run.environment["withheld_validation_messages"],
+        serde_json::json!({ "Undefined-Value-Layer-Written": 1 })
+    );
+}
+
 /// A varying written by the vertex stage reaches the fragment stage of another library by its
 /// user key; a value equal at every vertex interpolates to itself.
 #[cfg(any(target_os = "linux", target_os = "macos"))]

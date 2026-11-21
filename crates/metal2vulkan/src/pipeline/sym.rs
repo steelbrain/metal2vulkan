@@ -1029,8 +1029,8 @@ pub enum PushField {
     /// (`BindState::viewport_count`).
     ViewportCount,
     /// The render pass's `renderTargetArrayLength` (`u32`) for a vertex function that writes
-    /// `[[render_target_array_index]]`, in the variant that writes `Layer`
-    /// (`RuntimeFact::RenderTargetArrayLength` without `layer_dropped`): it stores `Layer` as 0
+    /// `[[render_target_array_index]]` and writes `Layer` (`RuntimeFact::RenderTargetArrayLength`
+    /// without `layer_dropped`): it stores `Layer` as 0
     /// for an index at or past it, as Metal renders the pass's first layer there
     /// (`BindState::render_target_array_length`).
     RenderTargetArrayLength,

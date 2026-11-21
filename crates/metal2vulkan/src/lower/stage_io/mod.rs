@@ -61,12 +61,11 @@
 //!   `[[render_target_array_index]]` output, which Metal refuses.
 //! - A vertex function's `[[render_target_array_index]]` selects a slice only in a render pass of
 //!   at least two layers. The function depends on the pass's length
-//!   (`RuntimeFact::RenderTargetArrayLength`): under `LoweringInputs::dropped_vertex_layer`, the
-//!   variant a pass of at most one layer runs on, no `Layer` is declared (every index renders slice
-//!   0); otherwise the function reads the length from `PushField::RenderTargetArrayLength` and
-//!   stores `Layer` as `index < length ? index : 0`, as Metal renders the pass's first layer for an
-//!   index at or past it (Metal probes on an M4), where Vulkan leaves the layer undefined. Metal's
-//!   fragment function reads the index as written in both, so in both the vertex function writes it
+//!   (`RuntimeFact::RenderTargetArrayLength`): it reads the length from
+//!   `PushField::RenderTargetArrayLength` and stores `Layer` as `index < length ? index : 0`, as
+//!   Metal renders the pass's first layer for an index at or past it (Metal probes on an M4), where
+//!   Vulkan leaves the layer undefined; in a pass of at most one layer every index renders slice 0.
+//!   Metal's fragment function reads the index as written, so the vertex function also writes it
 //!   to a flat `uint` varying (`IoRole::RenderTargetArrayIndex`), which a fragment function
 //!   compiled under `LoweringInputs::render_target_array_index_varying` reads as its
 //!   `[[render_target_array_index]]`; any other fragment function reads `Layer` (0 when no stage
@@ -370,7 +369,8 @@ pub struct StageIoPlan {
     /// One per output of the specialized entry, in output order (a gated-off output is not
     /// one); a vertex function's `[[viewport_array_index]]` is two, its `ViewportIndex` and then
     /// the raw varying, and its `[[render_target_array_index]]` two, its `Layer` and then the raw
-    /// varying, or under `dropped_vertex_layer` the raw varying alone.
+    /// varying, or drawn one amplification at a time in a pass of one layer the raw varying
+    /// alone.
     pub outputs: Vec<PlannedOutput>,
     /// The outputs a vertex function compiled under `LoweringInputs::amplification_draws` stores
     /// beyond its own: `Layer` and `ViewportIndex` from the amplification's offsets where it

@@ -2391,7 +2391,6 @@ field	metal2vulkan::cache::VariantKey.cross_class	pub cross_class: BTreeMap<Slot
 field	metal2vulkan::cache::VariantKey.cubic_samplers	pub cubic_samplers: BTreeMap<SlotRef, u32>
 field	metal2vulkan::cache::VariantKey.depth_clamp_range	pub depth_clamp_range: bool
 field	metal2vulkan::cache::VariantKey.dropped_colors	pub dropped_colors: BTreeSet<u32>
-field	metal2vulkan::cache::VariantKey.dropped_vertex_layer	pub dropped_vertex_layer: bool
 field	metal2vulkan::cache::VariantKey.emulated_simdgroups	pub emulated_simdgroups: bool
 field	metal2vulkan::cache::VariantKey.extended_range	pub extended_range: BTreeMap<SlotRef, crate::metal::format::ExtendedRange>
 field	metal2vulkan::cache::VariantKey.flat_grid	pub flat_grid: bool
@@ -2946,7 +2945,6 @@ field	metal2vulkan::pipeline::LoweringInputs.cubic_samplers	pub cubic_samplers: 
 field	metal2vulkan::pipeline::LoweringInputs.depth_clamp_range	pub depth_clamp_range: bool
 field	metal2vulkan::pipeline::LoweringInputs.depth_compare_clamp_mask	pub depth_compare_clamp_mask: u32
 field	metal2vulkan::pipeline::LoweringInputs.dropped_colors	pub dropped_colors: BTreeSet<u32>
-field	metal2vulkan::pipeline::LoweringInputs.dropped_vertex_layer	pub dropped_vertex_layer: bool
 field	metal2vulkan::pipeline::LoweringInputs.emulated_simdgroups	pub emulated_simdgroups: bool
 field	metal2vulkan::pipeline::LoweringInputs.extended_range	pub extended_range: BTreeMap<SlotRef, metal::format::ExtendedRange>
 field	metal2vulkan::pipeline::LoweringInputs.extended_range_colors	pub extended_range_colors: BTreeMap<u32, ExtendedRangeColor>

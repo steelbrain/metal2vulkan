@@ -4,21 +4,16 @@
 //! `vertex_amplification_id_layer`:
 //!
 //! - A vertex function that writes `[[render_target_array_index]]` depends on
-//!   `RuntimeFact::RenderTargetArrayLength`. Compiled as is it writes `Layer` as 0 at or past the
-//!   pass's length, which it reads from `PushField::RenderTargetArrayLength`; under
-//!   `VariantKey::dropped_vertex_layer` it declares no `Layer` (so needs no `shaderOutputLayer`).
-//!   Both write the index as written to a flat varying (`IoRole::RenderTargetArrayIndex`), which a
-//!   fragment function that reads the slice behind either reads in place of `Layer`.
-//! - The render plan asks for the dropped variant in a pass of at most one layer (Metal's
-//!   default length 0, and 1) and for the variant that writes `Layer` in a pass of more; each
-//!   variant's plan for its own length states its own key, and a draw of a plan whose pipeline is
-//!   the other variant is `BindError::NeedsVariant`.
-//! - Amplified draws are never views on either variant: they draw one amplification at a time.
+//!   `RuntimeFact::RenderTargetArrayLength`: it writes `Layer` as 0 at or past the pass's length,
+//!   which it reads from `PushField::RenderTargetArrayLength`, in a pass of any length (Metal's
+//!   default length 0 and 1 render every index into slice 0). It also writes the index as written
+//!   to a flat varying (`IoRole::RenderTargetArrayIndex`), which a fragment function that reads the
+//!   slice reads in place of `Layer`.
+//! - The render plan asks for no variant at any length.
+//! - Amplified draws are never views: they draw one amplification at a time.
 //!
-//! Every module that compiles passes L3 (`spirv-val` and requirements within the profile), and the
-//! dropped vertex module on MoltenVK without `shaderOutputLayer` converts to MSL and compiles as
-//! MoltenVK's does (`spirv-cross` and `xcrun metal`, compile only). `llvm-as` assembles the
-//! fixtures; a missing tool skips visibly. No GPU is used.
+//! Every module that compiles passes L3 (`spirv-val` and requirements within the profile).
+//! `llvm-as` assembles the fixtures; a missing tool skips visibly. No GPU is used.
 
 use std::path::Path;
 
@@ -26,18 +21,15 @@ use crate::bind::plan::FieldLocation;
 use crate::bind::{BindState, DrawCall, VertexAmplification, ViewMapping, ViewSetup};
 use crate::budget::Budget;
 use crate::cache::VariantKey;
-use crate::device::requirements::{VkExtension, VkFeature as F};
 use crate::device::{Device, DeviceDescription, DevicePolicy};
-use crate::error::{BindError, Capability, Error, Feature, Needs, RuntimeInput};
+use crate::error::{Error, RuntimeInput};
 use crate::library::Library;
 use crate::pipeline::descriptor::{FunctionDescriptor, RenderPipelineDescriptor, StageSource};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::lower_inputs::LoweringInputs;
 use crate::pipeline::stage_io::{IoRole, StageBuiltin};
 use crate::pipeline::sym::{PushField, Stage, VaryingKey};
-use crate::pipeline::testing::{
-    engine_dir, fixtures_dir, llvm_assemble, moltenvk_msl_compile, AssembleError,
-};
+use crate::pipeline::testing::{engine_dir, fixtures_dir, llvm_assemble, AssembleError};
 use crate::pipeline::{AmplificationDraws, RenderPipeline};
 use crate::spirv::testing::check_words_valid;
 use crate::vk;
@@ -148,12 +140,12 @@ fn valid(p: &RenderPipeline, dev: &Device, what: &str) {
     }
 }
 
-/// A pass of at most one layer runs the vertex function that chooses its slice without its `Layer`
-/// output, a pass of more with it; each plan states the variant its length asks for, and a draw on
-/// the other variant is `NeedsVariant`. Only the variant that writes `Layer` reads the pass's
-/// length, which each of its draws writes.
+/// The vertex function that chooses its slice writes `Layer` in a pass of any length: each plan
+/// states no variant, and each draw writes the pass's length as at least 1, which the function
+/// reads (at 0 and 1 it stores 0 for every index). Amplified draws in a pass of one layer are
+/// drawn one amplification at a time, without `Layer`, never as views.
 #[test]
-fn a_pass_of_one_layer_runs_the_vertex_function_without_its_layer() {
+fn every_pass_runs_the_vertex_function_that_writes_its_layer() {
     let Some(bc) = assemble(&engine_dir().join("vertex_amplification.ll")) else {
         return;
     };
@@ -178,94 +170,29 @@ fn a_pass_of_one_layer_runs_the_vertex_function_without_its_layer() {
             assert_eq!(layer_fact(&written), Some(false), "{what}");
             assert!(written.graphics.declares_layer, "{what}");
             assert!(reads_length(&written), "{what}");
-            assert_eq!(length_word(&written, &dev, 4), 4u32.to_le_bytes(), "{what}");
-
-            // Metal's default length (0) and a one-slice pass ask for the dropped variant, which
-            // the pipeline that writes `Layer` does not draw.
-            let mut dropped_key = None;
-            for length in [0, 1] {
-                let plan = written.plan(&dev, &pass(length).shape()).expect("plan");
-                assert!(plan.variant.dropped_vertex_layer, "{what} {length}");
+            for length in [0, 1, 4] {
                 assert_eq!(
-                    plan.instantiate_draw(&pass(length), &draw()),
-                    Err(BindError::NeedsVariant {
-                        variant: Box::new(plan.variant.clone())
-                    }),
+                    length_word(&written, &dev, length),
+                    length.max(1).to_le_bytes(),
                     "{what} {length}"
                 );
-                dropped_key = Some(plan.variant);
-            }
-            let dropped_key = dropped_key.expect("a key");
-            // A layered pass keeps it.
-            let plan = written.plan(&dev, &pass(4).shape()).expect("plan");
-            assert!(plan.variant.is_empty(), "{what}");
-            plan.instantiate_draw(&pass(4), &draw())
-                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
-
-            let keys = dev
-                .render_variant_key(
-                    &d,
-                    &dropped_key,
-                    &budget,
-                    &crate::pipeline::StageEntries::new(),
-                )
-                .expect("keys");
-            assert!(
-                keys.vertex_inputs
-                    .as_ref()
-                    .expect("inputs")
-                    .dropped_vertex_layer,
-                "{what}"
-            );
-            assert_ne!(
-                keys.vertex,
-                dev.render_pipeline_key(&d, &budget).expect("keys").vertex,
-                "{what}"
-            );
-            let dropped = dev
-                .compile_render_variant(&d, &dropped_key, &budget)
-                .unwrap_or_else(|e| panic!("{what}: {e}"));
-            valid(&dropped, &dev, &what);
-            assert_eq!(dropped.key, keys.pipeline, "{what}");
-            assert_eq!(layer_fact(&dropped), Some(true), "{what}");
-            // No stage declares `Layer` now: a fragment function that reads the slice reads the
-            // raw varying.
-            assert!(!dropped.graphics.declares_layer, "{what}");
-            assert!(!reads_length(&dropped), "{what}");
-            for length in [0, 1] {
-                let plan = dropped.plan(&dev, &pass(length).shape()).expect("plan");
-                assert_eq!(plan.variant, dropped_key, "{what} {length}");
+                let plan = written.plan(&dev, &pass(length).shape()).expect("plan");
+                assert!(plan.variant.is_empty(), "{what} {length}");
                 plan.instantiate_draw(&pass(length), &draw())
                     .unwrap_or_else(|e| panic!("{what} {length}: {e:?}"));
             }
-            let plan = dropped.plan(&dev, &pass(4).shape()).expect("plan");
+            let mut amplified = pass(1);
+            amplified.vertex_amplification =
+                VertexAmplification::new(2, vec![ViewMapping::new(0, 0), ViewMapping::new(0, 1)]);
+            let plan = written
+                .plan(&dev, &amplified.shape())
+                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
+            assert_eq!(plan.views, ViewSetup::default(), "{what}");
             assert_eq!(
-                plan.instantiate_draw(&pass(4), &draw()),
-                Err(BindError::NeedsVariant {
-                    variant: Box::new(VariantKey::new())
-                }),
+                plan.variant.amplification_draws,
+                Some(AmplificationDraws::new(false, false)),
                 "{what}"
             );
-
-            // Neither variant draws amplified as views: each plans the draws of one amplification
-            // at a time, without `Layer` in a pass of one layer.
-            for p in [&written, &dropped] {
-                let mut amplified = pass(1);
-                amplified.vertex_amplification = VertexAmplification::new(
-                    2,
-                    vec![ViewMapping::new(0, 0), ViewMapping::new(0, 1)],
-                );
-                let plan = p
-                    .plan(&dev, &amplified.shape())
-                    .unwrap_or_else(|e| panic!("{what}: {e:?}"));
-                assert_eq!(plan.views, ViewSetup::default(), "{what}");
-                assert!(plan.variant.dropped_vertex_layer, "{what}");
-                assert_eq!(
-                    plan.variant.amplification_draws,
-                    Some(AmplificationDraws::new(false, false)),
-                    "{what}"
-                );
-            }
         }
     }
 }
@@ -293,62 +220,11 @@ fn a_fragment_reading_its_slice_alone_asks_for_no_variant() {
     }
 }
 
-/// The dropped variant declares no `Layer` output, so a device that cannot write `Layer` from a
-/// vertex function runs a pass of one layer exactly, where the variant that writes `Layer` is
-/// refused typed. The device keeps `VK_EXT_shader_viewport_index_layer`: without
-/// `shaderOutputLayer` it grants no `Layer` output (the capability a module declares at the 1.2
-/// floor is the feature's), so the refusal names the feature rather than failing as a requirement
-/// beyond the profile. The dropped variant's vertex module converts to MSL that Metal compiles.
-#[test]
-fn the_dropped_variant_needs_no_output_layer() {
-    let Some(bc) = assemble(&engine_dir().join("vertex_amplification.ll")) else {
-        return;
-    };
-    let mut desc = description("moltenvk-m3");
-    assert!(desc.features.remove(&F::ShaderOutputLayer));
-    assert!(desc
-        .extensions
-        .contains(&VkExtension::ExtShaderViewportIndexLayer));
-    let dev = Device::from_queries(desc, DevicePolicy::default()).expect("device");
-    let d = render(&bc, "amp_vertex_layer", None, 1);
-    let budget = Budget::standard();
-    match dev.compile_render_pipeline(&d, &budget) {
-        Err(Error::Unsupported(u)) => {
-            assert_eq!(u.feature, Feature::LayeredRendering);
-            assert_eq!(
-                u.needs,
-                Needs::AnyOf(vec![vec![Capability::Feature(F::ShaderOutputLayer)]])
-            );
-        }
-        other => panic!("{other:?}"),
-    }
-    let mut key = VariantKey::new();
-    key.dropped_vertex_layer = true;
-    let p = dev
-        .compile_render_variant(&d, &key, &budget)
-        .expect("dropped variant");
-    valid(&p, &dev, "without shaderOutputLayer");
-    assert!(!p.requirements.features.contains(&F::ShaderOutputLayer));
-    let words = &(p.stages.iter())
-        .find(|m| m.stage == vk::ShaderStage::VERTEX)
-        .expect("vertex")
-        .spirv;
-    match moltenvk_msl_compile(words) {
-        Ok(()) => {}
-        Err(AssembleError::Missing(why)) => eprintln!("SKIPPED: {why}"),
-        Err(AssembleError::Rejected(why)) => panic!("MoltenVK's MSL: {why}"),
-    }
-    let plan = p.plan(&dev, &pass(1).shape()).expect("plan");
-    assert_eq!(plan.variant, key);
-    plan.instantiate_draw(&pass(1), &draw()).expect("draw");
-}
-
 /// A vertex function that writes `[[render_target_array_index]]` writes the index as written to a
-/// flat varying (`IoRole::RenderTargetArrayIndex`) in both variants, and in the one whose pipeline
-/// declares `Layer` stores `Layer` and reads the pass's length from its push data. In its pipeline
-/// a fragment function that reads the slice compiles under `render_target_array_index_varying` and
-/// reads that varying, as
-/// `render_pipeline_key` names, behind either variant; a fragment function that does not read it
+/// flat varying (`IoRole::RenderTargetArrayIndex`), stores `Layer` and reads the pass's length from
+/// its push data. In its pipeline a fragment function that reads the slice compiles under
+/// `render_target_array_index_varying` and reads that varying, as `render_pipeline_key` names; a
+/// fragment function that does not read it
 /// keeps the key it has without the field. A reading fragment compiled for the other kind of vertex
 /// function is `NeedsInput(RenderTargetArrayIndex)` either way. Every module passes L3.
 #[test]
@@ -364,63 +240,52 @@ fn a_fragment_reads_the_slice_index_its_vertex_function_wrote() {
     let budget = Budget::standard();
     let reader = function("amp_fragment_layer");
     let d = render(&bc, "amp_vertex_layer", Some("amp_fragment_layer"), 1);
-    let mut dropped = VariantKey::new();
-    dropped.dropped_vertex_layer = true;
-    for key in [VariantKey::new(), dropped] {
-        let what = format!("dropped {}", key.dropped_vertex_layer);
-        let vertex_inputs = key.lowering_inputs(Stage::Vertex);
-        let vertex = dev
-            .compile_function(&function("amp_vertex_layer"), &vertex_inputs, &budget)
-            .expect("vertex");
-        let io = &vertex.artifact().interface.io;
-        let raw: Vec<_> = io
-            .outputs
-            .iter()
-            .filter(|v| v.role == IoRole::RenderTargetArrayIndex)
-            .collect();
-        assert_eq!(raw.len(), 1, "{what}");
-        assert_eq!(
-            raw[0].key,
-            VaryingKey::render_target_array_index(),
-            "{what}"
-        );
-        // Its slice is the same at every vertex of a primitive: the variant that writes `Layer`
-        // stores it, and the dropped one declares none.
-        assert_eq!(
-            io.builtins.contains(&StageBuiltin::Layer),
-            !key.dropped_vertex_layer,
-            "{what}"
-        );
+    let key = VariantKey::new();
+    let what = "the vertex function's pipeline";
+    let vertex_inputs = key.lowering_inputs(Stage::Vertex);
+    let vertex = dev
+        .compile_function(&function("amp_vertex_layer"), &vertex_inputs, &budget)
+        .expect("vertex");
+    let io = &vertex.artifact().interface.io;
+    let raw: Vec<_> = io
+        .outputs
+        .iter()
+        .filter(|v| v.role == IoRole::RenderTargetArrayIndex)
+        .collect();
+    assert_eq!(raw.len(), 1, "{what}");
+    assert_eq!(
+        raw[0].key,
+        VaryingKey::render_target_array_index(),
+        "{what}"
+    );
+    // Its slice is the same at every vertex of a primitive: the function stores it as `Layer`.
+    assert!(io.builtins.contains(&StageBuiltin::Layer), "{what}");
 
-        let keys = dev
-            .render_variant_key(&d, &key, &budget, &crate::pipeline::StageEntries::new())
-            .expect("keys");
-        let inputs = keys.fragment_inputs.clone().expect("fragment inputs");
-        assert!(inputs.render_target_array_index_varying, "{what}");
-        // The vertex function writes every input the reader reads: none is absent.
-        assert!(inputs.absent_varyings.is_empty(), "{what}");
-        let pipe = dev
-            .compile_render_variant(&d, &key, &budget)
-            .unwrap_or_else(|e| panic!("{what}: {e}"));
-        assert_eq!(pipe.key, keys.pipeline, "{what}");
-        assert_eq!(
-            pipe.graphics.declares_layer, !key.dropped_vertex_layer,
-            "{what}"
-        );
-        valid(&pipe, &dev, &what);
-        let fragment = dev
-            .compile_function(&reader, &inputs, &budget)
-            .expect("fragment");
-        assert_eq!(Some(*fragment.key()), keys.fragment, "{what}");
-        let io = &fragment.artifact().interface.io;
-        assert!(
-            io.inputs
-                .iter()
-                .any(|v| v.role == IoRole::RenderTargetArrayIndex),
-            "{what}"
-        );
-        assert!(!io.builtins.contains(&StageBuiltin::Layer), "{what}");
-    }
+    let keys = dev
+        .render_variant_key(&d, &key, &budget, &crate::pipeline::StageEntries::new())
+        .expect("keys");
+    let inputs = keys.fragment_inputs.clone().expect("fragment inputs");
+    assert!(inputs.render_target_array_index_varying, "{what}");
+    // The vertex function writes every input the reader reads: none is absent.
+    assert!(inputs.absent_varyings.is_empty(), "{what}");
+    let pipe = dev
+        .compile_render_variant(&d, &key, &budget)
+        .unwrap_or_else(|e| panic!("{what}: {e}"));
+    assert_eq!(pipe.key, keys.pipeline, "{what}");
+    assert!(pipe.graphics.declares_layer, "{what}");
+    valid(&pipe, &dev, what);
+    let fragment = dev
+        .compile_function(&reader, &inputs, &budget)
+        .expect("fragment");
+    assert_eq!(Some(*fragment.key()), keys.fragment, "{what}");
+    let io = &fragment.artifact().interface.io;
+    assert!(
+        io.inputs
+            .iter()
+            .any(|v| v.role == IoRole::RenderTargetArrayIndex),
+        "{what}"
+    );
+    assert!(!io.builtins.contains(&StageBuiltin::Layer), "{what}");
 
     // A fragment that does not read the slice keeps its key: its only output is the color 0 it
     // writes, which the pipeline has no attachment for. Its stage input `color` (`user(locn0)`),
