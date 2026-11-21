@@ -2984,14 +2984,14 @@ fn a_ray_tracing_refusal_is_out_of_scope_never_refused_or_a_gap() {
     let report = judge(&input);
     let out_of_scope = Verdict::OutOfScope(OutOfScope::RayTracing);
     assert_eq!(out_of_scope.as_str(), "out_of_scope_ray_tracing");
-    let slot = slot(&report, RADV);
-    assert_eq!(verdict_of(slot, &query), out_of_scope);
-    assert_eq!(verdict_of(slot, &intersect), out_of_scope);
-    assert_eq!(slot.count(out_of_scope), 2);
-    assert_eq!(slot.count(Verdict::Refused), 0);
-    assert!(slot.holds());
+    let held = slot(&report, RADV);
+    assert_eq!(verdict_of(held, &query), out_of_scope);
+    assert_eq!(verdict_of(held, &intersect), out_of_scope);
+    assert_eq!(held.count(out_of_scope), 2);
+    assert_eq!(held.count(Verdict::Refused), 0);
+    assert!(held.holds());
     // The slot lists each with the refusal it holds.
-    assert!(slot
+    assert!(held
         .rows
         .iter()
         .all(|row| row.verdict == out_of_scope && row.refusal.is_some()));

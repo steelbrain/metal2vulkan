@@ -306,7 +306,7 @@ fn main(backend: Backend, mode: &str, args: Vec<String>) -> Result<(), String> {
             }
             let pending = plan(
                 &cases,
-                &passes,
+                &[Pass::Engine],
                 &read_done_list(&config.out.join(DONE_LIST))?,
                 None,
             )
