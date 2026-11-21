@@ -2621,7 +2621,9 @@ created here from that compile's cache data alone.
   `serve_stage` with an instance made as its own process's and the `DeviceOptions` the device was
   opened with, and hands the helper's two pipes to `Device::fill_stage` on a thread of its own.
   That call writes the request, reads the helper's cache data and keeps it as the entry
-  (`Metrics::stage_fills`); the make then succeeds when asked again. A request holds the module's
+  (`Metrics::stage_fills`), and answers the helper's own times, from its host clock
+  (`StageSpans`: its device's creation and its one `vkCreateComputePipelines` call); the make
+  then succeeds when asked again. A request holds the module's
   words, the pipeline's entry point, specialization and pinned subgroup size, and the device's
   `deviceUUID`, `driverUUID`, pipeline cache header and enables, so the helper opens the same
   device with the same features; a helper whose device differs is answered `StageFill::NoDevice`

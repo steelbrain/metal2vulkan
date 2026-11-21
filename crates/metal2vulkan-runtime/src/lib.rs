@@ -143,7 +143,7 @@ pub use render_encoder::{
     IndexBuffer, RenderCommandEncoder, ScissorRect, Viewport, VisibilityResultMode,
 };
 pub use sampler::SamplerState;
-pub use stage::{serve_stage, StageBreach, StageFill, StageRequest};
+pub use stage::{serve_stage, StageBreach, StageFill, StageRequest, StageSpans};
 pub use surface::{
     PlaneLayout, PlaneSpec, Surface, SurfaceCopy, SurfaceExport, SurfaceForm, SurfaceSpec,
 };

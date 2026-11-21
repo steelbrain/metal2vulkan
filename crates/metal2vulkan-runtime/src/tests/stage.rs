@@ -234,8 +234,9 @@ mod on_device {
     /// (lavapipe), its make is refused ([`Gap::StageSize`]). Elsewhere it is refused unfilled; a
     /// helper served over two pipes on a thread of the test fills its entry, and the make made
     /// again creates the `VkPipeline` from that entry alone, with the fail-on-compile-required
-    /// flag, counted, leaving the device's own pipeline cache's data as it was. A breach recorded
-    /// for the request refuses a later device's make, with no helper asked.
+    /// flag, counted, leaving the device's own pipeline cache's data as it was; the fill answers
+    /// the helper's device creation and compile times. A breach recorded for the request refuses a
+    /// later device's make, with no helper asked.
     #[test]
     fn a_kernel_past_the_stage_bound_is_made_only_from_its_helpers_fill() {
         let Some(descriptor) = tiled() else {
@@ -297,8 +298,11 @@ mod on_device {
                 let filled = device.fill_stage(&request, to_helper, from_helper);
                 (filled, helper.join().expect("the helper's thread"))
             });
-            assert_eq!(served.0, Ok(()), "{name}: the fill");
+            let spans = (served.0).unwrap_or_else(|fill| panic!("{name}: the fill: {fill}"));
             served.1.expect("the helper's pipes");
+            // The helper's own times: its device's creation and its compile, each a span.
+            assert!(spans.device_nanos > 0, "{name}: {spans:?}");
+            assert!(spans.compile_nanos > 0, "{name}: {spans:?}");
             let counters = device.counters();
             assert_eq!(counters.metrics().stage_fills, 1, "{name}");
             let state = make(&device).unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -324,8 +328,10 @@ mod on_device {
                 "{name}: {refused:?}"
             );
             println!(
-                "{name}: refused unfilled, filled by its helper, made from the entry alone, then \
-                 refused by its breach"
+                "{name}: refused unfilled, filled by its helper (device {} ms, compile {} ms), made \
+                 from the entry alone, then refused by its breach",
+                spans.device_nanos / 1_000_000,
+                spans.compile_nanos / 1_000_000
             );
         }
     }

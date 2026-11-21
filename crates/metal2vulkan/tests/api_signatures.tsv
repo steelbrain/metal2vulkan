@@ -1866,6 +1866,8 @@ field	metal2vulkan-runtime::SiteAllocations.takes_ahead	pub takes_ahead: u64
 field	metal2vulkan-runtime::SiteAllocations.takes_ahead_bytes	pub takes_ahead_bytes: u64
 field	metal2vulkan-runtime::SizeAndAlign.align	pub align: u64
 field	metal2vulkan-runtime::SizeAndAlign.size	pub size: u64
+field	metal2vulkan-runtime::StageSpans.compile_nanos	pub compile_nanos: u64
+field	metal2vulkan-runtime::StageSpans.device_nanos	pub device_nanos: u64
 field	metal2vulkan-runtime::StencilDescriptor.depth_failure_operation	pub depth_failure_operation: StencilOperation
 field	metal2vulkan-runtime::StencilDescriptor.depth_stencil_pass_operation	pub depth_stencil_pass_operation: StencilOperation
 field	metal2vulkan-runtime::StencilDescriptor.read_mask	pub read_mask: u32
@@ -6558,7 +6560,7 @@ method	metal2vulkan-runtime::Device::counters	pub fn counters(&self) -> Counters
 method	metal2vulkan-runtime::Device::dma_buf_granule	#[cfg(unix)] pub fn dma_buf_granule(&self) -> Option<u64>
 method	metal2vulkan-runtime::Device::extensions	pub fn extensions(&self) -> &[CString]
 method	metal2vulkan-runtime::Device::features	pub fn features(&self) -> &[ConsumerFeature]
-method	metal2vulkan-runtime::Device::fill_stage	pub fn fill_stage(&self, request: &StageRequest, mut to_helper: impl Write, mut from_helper: impl Read) -> Result<(), StageFill>
+method	metal2vulkan-runtime::Device::fill_stage	pub fn fill_stage(&self, request: &StageRequest, mut to_helper: impl Write, mut from_helper: impl Read) -> Result<StageSpans, StageFill>
 method	metal2vulkan-runtime::Device::grant_indices	pub fn grant_indices(&self, class: IndexClass, first: u32, count: u32) -> Result<IndexGrant, Error>
 method	metal2vulkan-runtime::Device::has_unified_memory	pub fn has_unified_memory(&self) -> bool
 method	metal2vulkan-runtime::Device::heap_buffer_size_and_align	pub fn heap_buffer_size_and_align(&self, length: u64, _options: u64) -> SizeAndAlign
@@ -7639,6 +7641,7 @@ struct	metal2vulkan-runtime::SharedEvent	#[derive(Clone)] pub struct SharedEvent
 struct	metal2vulkan-runtime::SiteAllocations	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct SiteAllocations
 struct	metal2vulkan-runtime::SizeAndAlign	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct SizeAndAlign
 struct	metal2vulkan-runtime::StageRequest	#[derive(Clone)] pub struct StageRequest(Arc<Request>)
+struct	metal2vulkan-runtime::StageSpans	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct StageSpans
 struct	metal2vulkan-runtime::StencilDescriptor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct StencilDescriptor
 struct	metal2vulkan-runtime::Surface	pub struct Surface
 struct	metal2vulkan-runtime::SurfaceExport	#[derive(Debug)] #[non_exhaustive] pub struct SurfaceExport

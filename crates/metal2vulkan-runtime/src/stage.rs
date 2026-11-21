@@ -70,7 +70,7 @@ const STAGES: &str = "stages";
 /// The first bytes of a frame on the wire.
 const WIRE: &[u8; 8] = b"m2vstage";
 /// The wire's version: a frame of another is not read.
-const WIRE_VERSION: u32 = 1;
+const WIRE_VERSION: u32 = 2;
 /// The longest payload a frame is read with.
 const MAX_PAYLOAD: u64 = 1 << 30;
 /// An entry's kinds, after its key.
@@ -115,6 +115,18 @@ impl StageBreach {
             StageBreach::CompileRequired => 3,
         }
     }
+}
+
+/// No Metal counterpart: the helper's own times in one fill ([`Device::fill_stage`]), from its
+/// host clock, for the consumer to log beside its own (the helper's start, the wait on its pipe).
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StageSpans {
+    /// The helper's device creation ([`Device::new`]), in nanoseconds.
+    pub device_nanos: u64,
+    /// The helper's compile: its one `vkCreateComputePipelines` call, through an empty
+    /// `VkPipelineCache`, in nanoseconds.
+    pub compile_nanos: u64,
 }
 
 /// No Metal counterpart: why [`Device::fill_stage`] kept no cache data. Only
@@ -389,6 +401,7 @@ impl Device {
     /// `to_helper`, closes it, and reads the helper's reply ([`serve_stage`]) from `from_helper`,
     /// on the calling thread, until the reply is whole or the helper's end closes the pipe: a
     /// consumer that kills the helper (its cap, its time limit, a cancel) ends the call at once.
+    /// Ok: the helper's device creation and compile times ([`StageSpans`]).
     ///
     /// Err: [`StageFill`] for each reply that keeps no cache data; a failed compile is kept as
     /// [`StageBreach::Compile`].
@@ -397,7 +410,7 @@ impl Device {
         request: &StageRequest,
         mut to_helper: impl Write,
         mut from_helper: impl Read,
-    ) -> Result<(), StageFill> {
+    ) -> Result<StageSpans, StageFill> {
         let request = &request.0;
         let sent = write_frame(&mut to_helper, &request_payload(request));
         drop(to_helper);
@@ -421,7 +434,11 @@ impl Device {
         };
         match status {
             DONE => {
-                let data = reply.bytes().ok_or(StageFill::Ended)?;
+                let (Some(device_nanos), Some(compile_nanos), Some(data)) =
+                    (reply.u64(), reply.u64(), reply.bytes())
+                else {
+                    return Err(StageFill::Ended);
+                };
                 if !data.starts_with(&request.header) {
                     return Err(StageFill::NoDevice);
                 }
@@ -429,7 +446,10 @@ impl Device {
                     return Err(StageFill::Unkept);
                 }
                 core.counters.count(Metric::StageFills);
-                Ok(())
+                Ok(StageSpans {
+                    device_nanos,
+                    compile_nanos,
+                })
             }
             COMPILE => {
                 let raw = reply.u32().ok_or(StageFill::Ended)?;
@@ -481,8 +501,10 @@ pub fn serve_stage(
     let mut reply = Vec::new();
     reply.extend_from_slice(&request.key);
     match serve(instance, options, &request) {
-        Ok(data) => {
+        Ok((data, spans)) => {
             reply.extend(DONE.to_le_bytes());
+            reply.extend(spans.device_nanos.to_le_bytes());
+            reply.extend(spans.compile_nanos.to_le_bytes());
             put_bytes(&mut reply, &data);
         }
         Err(Served::Compile(result)) => {
@@ -503,33 +525,41 @@ enum Served {
 }
 
 /// The helper's compile of `request` on a device of `instance` opened with `options`: the data
-/// of an empty `VkPipelineCache` the pipeline was created through.
+/// of an empty `VkPipelineCache` the pipeline was created through, and the times of the device's
+/// creation and of the compile.
 fn serve(
     instance: &Instance,
     options: DeviceOptions,
     request: &Request,
-) -> Result<Vec<u8>, Served> {
+) -> Result<(Vec<u8>, StageSpans), Served> {
     let raw = instance.raw().1;
     let physical = (instance.physical_devices().map_err(|_| Served::NoDevice)?)
         .into_iter()
         .find(|physical| uuids(raw, physical.raw()) == request.uuids)
         .ok_or(Served::NoDevice)?;
+    let began = host_time();
     let device = Device::new(&physical, options).map_err(|_| Served::NoDevice)?;
+    let device_nanos = host_time().saturating_sub(began);
     let core = device.core();
     if core.enables() != request.enables {
         return Err(Served::Enables);
     }
     // SAFETY: the words are the parent's translator's SPIR-V for a device of these enables.
-    unsafe { compile(core, request) }.map_err(Served::Compile)
+    let (data, compile_nanos) = unsafe { compile(core, request) }.map_err(Served::Compile)?;
+    let spans = StageSpans {
+        device_nanos,
+        compile_nanos,
+    };
+    Ok((data, spans))
 }
 
 /// Compiles `request`'s pipeline on `core`'s device through an empty `VkPipelineCache` and gives
-/// the cache's data; everything it made is destroyed.
+/// the cache's data and the create's nanoseconds; everything it made is destroyed.
 ///
 /// # Safety
 ///
 /// `request`'s words are a valid SPIR-V module for the features `core`'s device enabled.
-unsafe fn compile(core: &Core, request: &Request) -> Result<Vec<u8>, vk::Result> {
+unsafe fn compile(core: &Core, request: &Request) -> Result<(Vec<u8>, u64), vk::Result> {
     let device = &core.device;
     let info = vk::ShaderModuleCreateInfo::default().code(&request.words);
     // SAFETY: the caller's contract.
@@ -571,15 +601,17 @@ unsafe fn compile(core: &Core, request: &Request) -> Result<Vec<u8>, vk::Result>
     let info = vk::ComputePipelineCreateInfo::default()
         .stage(stage)
         .layout(core.layout);
+    let began = host_time();
     // SAFETY: the module, the layout and the cache are the device's, and the specialization gives
     // each constant a 4-byte value, as the parent's create does.
     let made = unsafe { device.create_compute_pipelines(cache, &[info], None) };
+    let nanos = host_time().saturating_sub(began);
     let data = match made {
         Ok(pipelines) => {
             // SAFETY: the pipeline is the device's, and nothing uses it.
             unsafe { device.destroy_pipeline(pipelines[0], None) };
             // SAFETY: the cache is the device's.
-            unsafe { device.get_pipeline_cache_data(cache) }
+            unsafe { device.get_pipeline_cache_data(cache) }.map(|data| (data, nanos))
         }
         Err((_, result)) => Err(result),
     };
