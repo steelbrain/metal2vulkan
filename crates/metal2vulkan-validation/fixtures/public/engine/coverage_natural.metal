@@ -1,10 +1,8 @@
-// Owned fixture: fragment functions that read [[sample_mask]] and
-// write memory, which Metal runs once per covered sample, and which read no [[position]] beside
-// a sample index or a sample-qualified varying. On a driver that runs a memory writer once per
-// covered sample itself (MoltenVK on Apple's GPU) such a function compiles as written and keeps
-// the pixel's coverage in every run; elsewhere it loops over its covered samples. Drawn by the
-// generated full-screen triangle into a 1x1 pass without attachments; each function writes fixed
-// words. Loop-free.
+// Owned fixture: fragment functions that read [[sample_mask]] and write memory, and read no
+// [[position]] beside a sample index or a sample-qualified varying. Documented Metal names no count
+// of runs for a function that writes memory, so each runs as the device runs it, on every device,
+// and its module carries PrecisionNote::DeviceFragmentRuns. Drawn by the generated full-screen
+// triangle into a 1x1 pass without attachments; each function writes fixed words. Loop-free.
 #include <metal_stdlib>
 using namespace metal;
 
