@@ -16,9 +16,7 @@ use metal2vulkan::error::{
     Limit, Location, Needs, RuntimeInput,
 };
 use metal2vulkan::library::{CompiledFunction, FunctionConstantValues};
-use metal2vulkan::pipeline::{
-    CompileReport, EntryDescriptor, EntryRef, LoweringInputs, PipelineLayout,
-};
+use metal2vulkan::pipeline::{CompileReport, EntryDescriptor, EntryRef, LoweringInputs};
 use metal2vulkan::Budget;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -491,12 +489,12 @@ impl Attempt {
     }
 
     /// Settle this attempt, as it stands if `spirv-val` accepts its module
-    /// ([`translate_unvalidated`]), with L3's `checked` result (or panic): unchanged, and `true`,
-    /// when the module was accepted; else L3's outcome, keeping the compile's cost without the
-    /// module's hash, and `false`.
-    pub fn settle_l3(&mut self, checked: std::thread::Result<Result<(), L3Failure>>) -> bool {
+    /// ([`translate_unvalidated`]), with L3's `checked` result (or panic): unchanged when the
+    /// module was accepted; else L3's outcome, keeping the compile's cost without the module's
+    /// hash.
+    pub fn settle_l3(&mut self, checked: std::thread::Result<Result<(), L3Failure>>) {
         let failed = match checked {
-            Ok(Ok(())) => return true,
+            Ok(Ok(())) => return,
             Ok(Err(l3)) => l3_attempt(&l3),
             Err(payload) => panic_attempt(payload.as_ref()),
         };
@@ -506,7 +504,6 @@ impl Attempt {
         if let Some(cost) = &mut self.cost {
             cost.spirv_sha256 = None;
         }
-        false
     }
 }
 
@@ -561,18 +558,6 @@ pub fn translate_new(
     profile: &DeviceProfile,
     deadline: Option<Instant>,
 ) -> Attempt {
-    translate_new_linked(bitcode, entry, profile, deadline).0
-}
-
-/// [`translate_new`], and a translated module's final words (the words L3 accepted) with the
-/// pipeline layout link gave it alone (what `msl_portability::moltenvk` configures MoltenVK's
-/// conversion from).
-pub fn translate_new_linked(
-    bitcode: &[u8],
-    entry: &str,
-    profile: &DeviceProfile,
-    deadline: Option<Instant>,
-) -> (Attempt, Option<(Vec<u32>, PipelineLayout)>) {
     validated(translate_new_unvalidated(bitcode, entry, profile, deadline))
 }
 
@@ -605,26 +590,12 @@ pub fn translate_new_unvalidated(
     })
 }
 
-/// One engine attempt whose compile `compile` makes under the per-attempt wall deadline
-/// `deadline`, linked alone and checked by L3 for `profile` in this process:
-/// [`translate_unvalidated`], then [`PendingL3::validate`]. [`translate_new_linked`] and the
-/// specialization audit's attempts (`specialization::attempt`) are its two compiles.
-pub fn translate_with(
-    profile: &DeviceProfile,
-    deadline: Option<Instant>,
-    compile: impl FnOnce(&Budget) -> (Result<CompiledFunction, Error>, CompileReport),
-) -> (Attempt, Option<(Vec<u32>, PipelineLayout)>) {
-    validated(translate_unvalidated(profile, deadline, compile))
-}
-
 /// An attempt [`translate_unvalidated`] left `pending`, settled by L3 in this process
 /// ([`PendingL3::validate`]); any other attempt as it is.
-pub fn validated(
-    (attempt, pending): (Attempt, Option<PendingL3>),
-) -> (Attempt, Option<(Vec<u32>, PipelineLayout)>) {
+pub fn validated((attempt, pending): (Attempt, Option<PendingL3>)) -> Attempt {
     match pending {
         Some(pending) => pending.validate(attempt),
-        None => (attempt, None),
+        None => attempt,
     }
 }
 
@@ -693,7 +664,6 @@ pub fn translate_unvalidated(
         Ok::<_, Result<L3Failure, Error>>(PendingL3 {
             plan: L3Plan::of(profile, function.requirements()),
             words: module.words,
-            layout: module.layout,
         })
     }));
     match run {
@@ -777,22 +747,19 @@ impl L3Plan {
 }
 
 /// A module [`translate_unvalidated`] linked, relocated, and found within the profile, which
-/// `spirv-val` has yet to check: its words, the pipeline layout link gave it alone, and L3's plan.
+/// `spirv-val` has yet to check: its words and L3's plan.
 #[derive(Debug)]
 pub struct PendingL3 {
     pub words: Vec<u32>,
-    pub layout: PipelineLayout,
     pub plan: L3Plan,
 }
 
 impl PendingL3 {
     /// L3's `spirv-val` in this process: `attempt` (as it stands if the module is accepted) as L3
-    /// leaves it ([`Attempt::settle_l3`]), with the words and layout when it accepts them.
-    pub fn validate(self, mut attempt: Attempt) -> (Attempt, Option<(Vec<u32>, PipelineLayout)>) {
-        let linked = attempt
-            .settle_l3(self.check())
-            .then_some((self.words, self.layout));
-        (attempt, linked)
+    /// leaves it ([`Attempt::settle_l3`]).
+    pub fn validate(self, mut attempt: Attempt) -> Attempt {
+        attempt.settle_l3(self.check());
+        attempt
     }
 
     /// L3's `spirv-val` on the module in this process, under `catch_unwind`.
@@ -936,17 +903,6 @@ pub fn translate_row(
     profile: &DeviceProfile,
     deadline: Option<Instant>,
 ) -> Attempt {
-    translate_row_linked(source, entry, profile, deadline).0
-}
-
-/// [`translate_row`], and a translated module's final words and pipeline layout
-/// ([`translate_new_linked`]).
-pub fn translate_row_linked(
-    source: &RowSource<'_>,
-    entry: &str,
-    profile: &DeviceProfile,
-    deadline: Option<Instant>,
-) -> (Attempt, Option<(Vec<u32>, PipelineLayout)>) {
     validated(translate_row_unvalidated(source, entry, profile, deadline))
 }
 

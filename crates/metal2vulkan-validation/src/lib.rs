@@ -61,8 +61,6 @@ mod mesh_cases;
 #[cfg(not(windows))]
 pub mod metal;
 #[cfg(not(windows))]
-pub mod msl_portability;
-#[cfg(not(windows))]
 pub mod no_effect;
 #[cfg(not(windows))]
 pub mod observation;

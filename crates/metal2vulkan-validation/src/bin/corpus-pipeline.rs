@@ -30,9 +30,8 @@
 //!   them, so a creation may hit what an earlier process compiled: run twice, the second run times
 //!   the warm creation a program's later launches see, beside the cold one the ceiling times (the
 //!   summary's `driver_caches`). `--keep-modules DIR` writes each compiled row's stage modules,
-//!   their specialization layouts and lowering strategies' words, and the MoltenVK MSL helper's
-//!   configurations into DIR, a diagnostic (with `--compile-only` on any host): what a by-hand
-//!   conversion and Metal compile of a row's module starts from. `--pulled` compiles every vertex
+//!   their specialization layouts and lowering strategies' words into DIR, a diagnostic (with
+//!   `--compile-only` on any host). `--pulled` compiles every vertex
 //!   attribute pulled in the shader instead of the projection the product derives: the repeatable
 //!   form of the pulled sweep, with `--compile-only` or on a device. `--fixtures` sweeps the owned
 //!   `validation/fixtures/public/engine` sources instead of the corpus, which is what the Linux
@@ -138,10 +137,8 @@ fn usage() -> String {
      --driver-caches-on leaves the drivers' shader disk caches as the environment sets them (warm\n\
      creations, when an earlier run compiled the same pipelines); every other run compiles cold.\n\
      --keep-modules DIR writes each compiled row's stage modules into DIR (a diagnostic): per stage\n\
-     <hash>.<stage>.spv, its entry point, specialization layout and strategy census (each lowering\n\
-     strategy's uses and words) in <hash>.<stage>.json, and the\n\
-     MoltenVK MSL helper's configuration of each set-0 variant in <hash>.<stage>.<variant>.cfg\n\
-     (scripts/moltenvk-msl-helper, for converting the module as MoltenVK 1.4.1 does).\n\
+     <hash>.<stage>.spv, and its entry point, specialization layout and strategy census (each\n\
+     lowering strategy's uses and words) in <hash>.<stage>.json.\n\
      --draws FILE compiles and creates the draws FILE lists (one JSON object per line, {\"id\",\n\
      \"vertex\": <source hash>, \"fragment\": <source hash>, \"template\": <render template>}),\n\
      each its vertex and fragment functions under the descriptor an application logged.\n\
@@ -1061,17 +1058,9 @@ fn attempt_row(
 }
 
 /// Write row `key`'s stage modules into `dir` (`--keep-modules`): per stage, the SPIR-V as
-/// `<key>.<stage>.spv`, its entry point and specialization layout as `<key>.<stage>.json`, and
-/// the MoltenVK MSL helper's configuration of each set-0 variant as `<key>.<stage>.<variant>.cfg`
-/// (`msl_portability::moltenvk`, what the helper converts a module with), or the reason there is
-/// none in `<key>.<stage>.cfg.err`.
+/// `<key>.<stage>.spv`, and its entry point, specialization layout and strategy census as
+/// `<key>.<stage>.json`.
 fn keep_modules(dir: &Path, key: &str, pipeline: &RowPipeline) -> Result<(), String> {
-    use metal2vulkan_validation::msl_portability::moltenvk;
-    let layout = match pipeline {
-        RowPipeline::Compute { pipeline, .. } => &pipeline.layout,
-        RowPipeline::Render { pipeline, .. } => &pipeline.layout,
-    };
-    let layout = moltenvk::Layout::from(layout);
     let write = |name: String, bytes: &[u8]| {
         let path = dir.join(name);
         std::fs::write(&path, bytes).map_err(|error| format!("write {}: {error}", path.display()))
@@ -1093,19 +1082,6 @@ fn keep_modules(dir: &Path, key: &str, pipeline: &RowPipeline) -> Result<(), Str
         let meta = serde_json::to_vec_pretty(&meta)
             .map_err(|error| format!("encode {name}.json: {error}"))?;
         write(format!("{name}.json"), &meta)?;
-        match moltenvk::entry_point(&stage.spirv)
-            .and_then(|entry| moltenvk::conversions(&entry, &layout))
-        {
-            Ok(conversions) => {
-                for conversion in conversions {
-                    write(
-                        format!("{name}.{}.cfg", conversion.set0.as_str()),
-                        conversion.config_text().as_bytes(),
-                    )?;
-                }
-            }
-            Err(why) => write(format!("{name}.cfg.err"), why.as_bytes())?,
-        }
     }
     Ok(())
 }

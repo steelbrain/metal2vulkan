@@ -1,7 +1,7 @@
 //! One specialization audit attempt: a row's compile under one value set, answering each
 //! pipeline input the compile asks for that the audit can derive from the row's AIR.
 //!
-//! The compile runs exactly as the plain census's ([`crate::engine::translate_with`]: the same
+//! The compile runs exactly as the plain census's ([`crate::engine::translate_unvalidated`]: the same
 //! meter, deadline, allocator measure, standalone link, relocation, and L3), with the set's
 //! function-constant values. When it stops at `NeedsInput`, the audit derives that input from the
 //! row and compiles again on a fresh meter under the same deadline, as the plain census does for
