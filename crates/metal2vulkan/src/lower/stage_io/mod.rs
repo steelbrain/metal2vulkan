@@ -492,9 +492,6 @@ pub struct StageIoPlan {
     /// builtin, because its device takes the first vertex's as Metal does
     /// (`VkProperty::MetalFirstVertexIndices`): the module requires that property.
     pub first_vertex_indices_by_device: bool,
-    /// A vertex function compiled under `LoweringInputs::window_depth_varying` writes its
-    /// position's window depth to a varying ([`WindowDepth`]).
-    pub window_depth: Option<WindowDepth>,
     /// A vertex function compiled in the de-indexed or private list form reads its vertex from
     /// the draw's indices ([`CapturedIndex`]): planned where the function reads it
     /// (`[[vertex_id]]`, a per-vertex attribute, `[[base_vertex]]` or the primitive ID).
@@ -581,21 +578,6 @@ pub enum FirstVertex {
 /// an extract, the subtraction, the division and the store.
 const PRIMITIVE_ID_WORDS: u64 = 56;
 
-/// How a vertex function compiled under `LoweringInputs::window_depth_varying` writes its
-/// window depth: at each return, the `z / w` of the value it stores to its `Position` object
-/// (`position`, after any clamp) to its `IoRole::WindowDepth` varying
-/// (`object`), for a fragment function that computes each sample's depth from it
-/// (`lower::fragment`'s `depth_test`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct WindowDepth {
-    pub position: usize,
-    pub object: usize,
-}
-
-/// The words a vertex function's window depth adds: its variable, decorations and interface
-/// entry, two extracts, the division, and the store.
-const WINDOW_DEPTH_WORDS: u64 = 40;
-
 /// How a vertex function compiled in the primitive ID's de-indexed form
 /// (`LoweringInputs::primitive_id_indices`) reads its vertex: its stream position
 /// `p = VertexIndex` (`vertex` is the input builtin's object; the draw starts at vertex 0) names
@@ -623,15 +605,6 @@ pub struct CapturedIndex {
 /// place (its block and pointer types, conversion and access chain), the load, a `u16`'s
 /// alignment and shift, and the base vertex's extract and add (at most 224, a `u16` read's).
 pub(super) const CAPTURED_INDEX_WORDS: u64 = 400;
-
-/// Plan the fragment's window-depth input for a fragment function that computes each sample's
-/// depth for its in-shader depth test: the index of its object, a no-perspective `float` varying of
-/// `IoRole::WindowDepth`.
-pub fn window_depth_input(cx: &mut SelectCx<'_>) -> Result<usize, Error> {
-    let sp = &mut cx.families.stage_io;
-    sp.words = sp.words.saturating_add(WINDOW_DEPTH_WORDS);
-    plan::window_depth(sp, IoDir::Input)
-}
 
 /// The second output (`[[color(n), index(1)]]`) a fragment function writes for an attachment held
 /// with its channels rotated (`LoweringInputs::rotated_factors`): beside its first output there,
@@ -1848,7 +1821,6 @@ pub fn emit_return(
     let seconds = plan.rotated_seconds.clone();
     let region_copy = plan.region_copy;
     let depth_clamp = plan.depth_clamp;
-    let window_depth = plan.window_depth;
     let primitive_id = plan.primitive_id;
     // The private masks: the pixel's ANDed into the function's own `[[sample_mask]]` output
     // where this return stores one, else stored as that output.
@@ -1891,9 +1863,6 @@ pub fn emit_return(
                     }
                     None => part,
                 };
-                if let Some(w) = window_depth.filter(|w| w.position == o.link.object) {
-                    store_window_depth(cx, fb, w, part)?;
-                }
                 let part = match private_mask.filter(|m| m.object == o.link.object) {
                     Some(m) => {
                         masked = true;
@@ -2041,28 +2010,6 @@ pub(crate) fn metal_point_size(fb: &mut FunctionBuilder<'_>, size: SValue) -> BR
 /// The words [`metal_point_size`] adds to a store: the two comparisons, the two selects and the
 /// three constants.
 pub(crate) const POINT_SIZE_WORDS: u64 = 7;
-
-/// Store the window depth `z / w` of position `position`, as the vertex function stores it, to
-/// its varying ([`WindowDepth`]): the division of the measured form, unfused.
-fn store_window_depth(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    w: WindowDepth,
-    position: SValue,
-) -> BResult<()> {
-    let z = fb.composite_extract(position, &[2])?;
-    let clip_w = fb.composite_extract(position, &[3])?;
-    let depth = fb.binary(BinOp::FDiv, z, clip_w)?;
-    let link = Link {
-        object: w.object,
-        place: Place::Whole,
-        form: Form {
-            held: Held::Float(crate::lower::arith::FloatFmt::F32),
-            lanes: 1,
-        },
-    };
-    store(cx, fb, &link, depth)
-}
 
 /// Store the primitive ID of the primitive the vertex provokes to its varying
 /// ([`PrimitiveIdStore`]): `(VertexIndex - first) / n`, `n` from

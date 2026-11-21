@@ -61,7 +61,7 @@ mod tests;
 /// unchanged version, and its bless records the version. Independent of the crate's version and of
 /// [`ARTIFACT_FORMAT_VERSION`]. The commit that bumps it says what changed; this comment keeps no
 /// history.
-pub const SEMANTICS_VERSION: u32 = 2226;
+pub const SEMANTICS_VERSION: u32 = 2227;
 
 /// The byte-layout version of encoded artifacts (`CompiledFunction::to_bytes` and the
 /// [`PipelineArtifact`] encodings). Every encoded artifact carries it, and a decode under another
@@ -71,7 +71,7 @@ pub const SEMANTICS_VERSION: u32 = 2226;
 /// re-typed in an encoded type, its `codec` body or its `envelope`. A variant removed while its tag
 /// stays unused needs no bump: an entry holding it fails to decode, which is a miss. The commit that
 /// bumps it says what changed; this comment keeps no history.
-pub const ARTIFACT_FORMAT_VERSION: u32 = 571;
+pub const ARTIFACT_FORMAT_VERSION: u32 = 572;
 
 /// The version of what this crate's runtime does with a compiled pipeline: instantiating a binding
 /// plan (`BindingPlan::instantiate_*`: descriptor ranges, push bytes, root, argument, and handle
@@ -94,7 +94,7 @@ pub const ARTIFACT_FORMAT_VERSION: u32 = 571;
 /// changes no behaviour, and then updates that hash alone with the commit saying why, or changes
 /// behaviour and also bumps this version. The commit that bumps it says what changed; this comment
 /// keeps no history.
-pub const RUNTIME_VERSION: u32 = 2546;
+pub const RUNTIME_VERSION: u32 = 2547;
 
 /// Writes a digest as lowercase hex.
 pub(crate) fn write_hex(f: &mut fmt::Formatter<'_>, name: &str, hash: &Hash256) -> fmt::Result {
@@ -401,25 +401,6 @@ pub struct VariantKey {
     /// it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub read_only_tests: bool,
-    /// Only the draw's depth test can drop fragments (`BindShape::fragment_tests`,
-    /// `FragmentTests::Depth`), and the fragment function stores a color through the interlocked
-    /// storage form before the tests (`RuntimeFact::TestedStorageWrites`): the variant whose
-    /// function runs the depth test itself against a stand-in of the depth attachment
-    /// (`LoweringInputs::shader_tests`). The plan of a pipeline compiled under it states it.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub shader_tests: bool,
-    /// Under `shader_tests`, the draw's stencil test can drop fragments or write too
-    /// (`FragmentTests::Stencil`, or `FragmentTests::Drop` for a function without an early-tests
-    /// variant), in a pass with a depth and a stencil attachment: the variant whose function also
-    /// runs the stencil test itself against a stand-in of the stencil attachment
-    /// (`LoweringInputs::shader_stencil`). The plan of a pipeline compiled under it states it.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub shader_stencil: bool,
-    /// Under `shader_tests` at more than one sample, on a device whose fragment function computes
-    /// each sample's depth (`VkProperty::CenterFragCoordDepth`): the vertex function also writes
-    /// its window depth for it (`LoweringInputs::window_depth_varying`).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub window_depth_varying: bool,
     /// The runtime sampler slots of a `RuntimeFact::CubicSampler` that the shape binds to a
     /// sampler whose min or mag filter is `Cubic`, each with the bound word masked by
     /// `SamplerWord::CUBIC_STATE` (`LoweringInputs::cubic_samplers`): the variant whose function
@@ -604,9 +585,6 @@ impl VariantKey {
             && !self.addressed_function_tables
             && self.interlocked_colors.is_empty()
             && !self.read_only_tests
-            && !self.shader_tests
-            && !self.shader_stencil
-            && !self.window_depth_varying
             && self.cubic_samplers.is_empty()
             && self.primitive_id_indices.is_none()
             && !self.quad_primitive_ids
@@ -776,11 +754,7 @@ impl VariantKey {
             out.depth_clamp_range = self.depth_clamp_range;
             out.rotated_weights = self.rotated_weights;
             out.read_only_tests = self.read_only_tests;
-            out.shader_tests = self.shader_tests;
-            out.shader_stencil = self.shader_stencil;
         }
-        out.window_depth_varying =
-            self.window_depth_varying && stage == crate::pipeline::sym::Stage::Vertex;
         out.primitive_id_indices = self
             .primitive_id_indices
             .filter(|_| stage == crate::pipeline::sym::Stage::Vertex);

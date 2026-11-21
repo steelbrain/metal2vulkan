@@ -54,10 +54,6 @@ assoc-const	metal2vulkan::bind::AstcDecode::BLOCK_BYTES	pub const BLOCK_BYTES: u
 assoc-const	metal2vulkan::bind::ChromaDecode::ALL	pub const ALL: [ChromaDecode; 2]
 assoc-const	metal2vulkan::bind::ChromaDecode::BLOCK_BYTES	pub const BLOCK_BYTES: u32
 assoc-const	metal2vulkan::bind::ChromaDecode::TEXEL_BYTES	pub const TEXEL_BYTES: u32
-assoc-const	metal2vulkan::bind::DepthSplitModule::DESTINATION_BINDING	pub const DESTINATION_BINDING: u32
-assoc-const	metal2vulkan::bind::DepthSplitModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
-assoc-const	metal2vulkan::bind::DepthSplitModule::SET	pub const SET: u32
-assoc-const	metal2vulkan::bind::DepthSplitModule::SOURCE_BINDING	pub const SOURCE_BINDING: u32
 assoc-const	metal2vulkan::bind::DepthStencilCopyModules::SET	pub const SET: u32
 assoc-const	metal2vulkan::bind::DepthStencilCopyModules::SOURCE_BINDING	pub const SOURCE_BINDING: u32
 assoc-const	metal2vulkan::bind::DrawMergeModule::HEADER_PUSH	pub const HEADER_PUSH: u32
@@ -272,10 +268,6 @@ assoc-const-value	metal2vulkan::bind::AstcDecode::BLOCK_BYTES	16
 assoc-const-value	metal2vulkan::bind::ChromaDecode::ALL	[ChromaDecode::Gbgr, ChromaDecode::Bgrg]
 assoc-const-value	metal2vulkan::bind::ChromaDecode::BLOCK_BYTES	4
 assoc-const-value	metal2vulkan::bind::ChromaDecode::TEXEL_BYTES	4
-assoc-const-value	metal2vulkan::bind::DepthSplitModule::DESTINATION_BINDING	1
-assoc-const-value	metal2vulkan::bind::DepthSplitModule::LOCAL_SIZE	8
-assoc-const-value	metal2vulkan::bind::DepthSplitModule::SET	0
-assoc-const-value	metal2vulkan::bind::DepthSplitModule::SOURCE_BINDING	0
 assoc-const-value	metal2vulkan::bind::DepthStencilCopyModules::SET	0
 assoc-const-value	metal2vulkan::bind::DepthStencilCopyModules::SOURCE_BINDING	0
 assoc-const-value	metal2vulkan::bind::DrawMergeModule::HEADER_PUSH	0
@@ -810,7 +802,6 @@ enum	metal2vulkan::bind::BoundTexture	#[cfg_attr(feature = "serde", derive(serde
 enum	metal2vulkan::bind::BufferShape	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum BufferShape
 enum	metal2vulkan::bind::ChromaDecode	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ChromaDecode
 enum	metal2vulkan::bind::CopySource	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum CopySource
-enum	metal2vulkan::bind::DepthStandInForm	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum DepthStandInForm
 enum	metal2vulkan::bind::DepthStencilCopy	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum DepthStencilCopy
 enum	metal2vulkan::bind::Dispatch	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Dispatch
 enum	metal2vulkan::bind::DrawCall	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum DrawCall
@@ -961,7 +952,6 @@ enum	metal2vulkan::pipeline::SnapshotRefusal	#[cfg_attr(feature = "serde", deriv
 enum	metal2vulkan::pipeline::SpecKey	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum SpecKey
 enum	metal2vulkan::pipeline::Stage	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum Stage
 enum	metal2vulkan::pipeline::StageSource	#[derive(Clone, Debug, PartialEq, Eq)] pub enum StageSource
-enum	metal2vulkan::pipeline::StandInView	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum StandInView
 enum	metal2vulkan::pipeline::StorageAttachmentView	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub enum StorageAttachmentView
 enum	metal2vulkan::pipeline::StorageFormatClass	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum StorageFormatClass
 enum	metal2vulkan::pipeline::StorageImageClass	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum StorageImageClass
@@ -1995,8 +1985,6 @@ field	metal2vulkan::bind::BindState.alpha_test_reference	pub alpha_test_referenc
 field	metal2vulkan::bind::BindState.argument_samplers	pub argument_samplers: Vec<ArgumentSampler>
 field	metal2vulkan::bind::BindState.blend_color	pub blend_color: [f32; 4]
 field	metal2vulkan::bind::BindState.depth_clamp_range	pub depth_clamp_range: Option<[f32; 2]>
-field	metal2vulkan::bind::BindState.depth_clip_mode_clamp	pub depth_clip_mode_clamp: bool
-field	metal2vulkan::bind::BindState.depth_range	pub depth_range: [f32; 2]
 field	metal2vulkan::bind::BindState.depth_stencil	pub depth_stencil: metal::state::DepthStencilDescriptor
 field	metal2vulkan::bind::BindState.dropped_colors	pub dropped_colors: BTreeSet<u32>
 field	metal2vulkan::bind::BindState.far_vertex_buffers	pub far_vertex_buffers: BTreeSet<u32>
@@ -2021,7 +2009,6 @@ field	metal2vulkan::bind::BindState.rotated_weights	pub rotated_weights: bool
 field	metal2vulkan::bind::BindState.snapshot_textures	pub snapshot_textures: BTreeSet<u32>
 field	metal2vulkan::bind::BindState.stage_in_region	pub stage_in_region: Option<StageInRegion>
 field	metal2vulkan::bind::BindState.stages	pub stages: BTreeMap<Stage, StageTable>
-field	metal2vulkan::bind::BindState.stencil_references	pub stencil_references: [u32; 2]
 field	metal2vulkan::bind::BindState.tessellation_factors	pub tessellation_factors: TessellationFactors
 field	metal2vulkan::bind::BindState.tile_threadgroup	pub tile_threadgroup: TileThreadgroupMemory
 field	metal2vulkan::bind::BindState.uniform_views_at_residual	pub uniform_views_at_residual: bool
@@ -2056,8 +2043,6 @@ field	metal2vulkan::bind::BufferRanges.storage	pub storage: u32
 field	metal2vulkan::bind::BufferRanges.uniform	pub uniform: u32
 field	metal2vulkan::bind::ByteRange.len	pub len: u64
 field	metal2vulkan::bind::ByteRange.offset	pub offset: u64
-field	metal2vulkan::bind::DepthSplitModule.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::DepthSplitModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::DepthStencilCopyModules.fragment	pub fragment: Arc<[u32]>
 field	metal2vulkan::bind::DepthStencilCopyModules.requirements	pub requirements: Requirements
 field	metal2vulkan::bind::DepthStencilCopyModules.vertex	pub vertex: Arc<[u32]>
@@ -2436,8 +2421,6 @@ field	metal2vulkan::cache::VariantKey.region_fan_out	pub region_fan_out: Option<
 field	metal2vulkan::cache::VariantKey.region_viewports	pub region_viewports: bool
 field	metal2vulkan::cache::VariantKey.replay_bindings	pub replay_bindings: bool
 field	metal2vulkan::cache::VariantKey.rotated_weights	pub rotated_weights: bool
-field	metal2vulkan::cache::VariantKey.shader_stencil	pub shader_stencil: bool
-field	metal2vulkan::cache::VariantKey.shader_tests	pub shader_tests: bool
 field	metal2vulkan::cache::VariantKey.snapshot_textures	pub snapshot_textures: BTreeMap<SlotRef, SnapshotForm>
 field	metal2vulkan::cache::VariantKey.srgb_textures	pub srgb_textures: BTreeSet<SlotRef>
 field	metal2vulkan::cache::VariantKey.storage_images	pub storage_images: BTreeMap<SlotRef, StorageImageChoice>
@@ -2446,7 +2429,6 @@ field	metal2vulkan::cache::VariantKey.swizzled_storage	pub swizzled_storage: BTr
 field	metal2vulkan::cache::VariantKey.texel_buffer_parts	pub texel_buffer_parts: BTreeMap<SlotRef, u32>
 field	metal2vulkan::cache::VariantKey.texel_rows	pub texel_rows: BTreeSet<SlotRef>
 field	metal2vulkan::cache::VariantKey.unit_axes	pub unit_axes: u8
-field	metal2vulkan::cache::VariantKey.window_depth_varying	pub window_depth_varying: bool
 field	metal2vulkan::cache::VariantKey.ycbcr_in_place	pub ycbcr_in_place: BTreeSet<SlotRef>
 field	metal2vulkan::cache::VariantKey.ycbcr_planes_sampled	pub ycbcr_planes_sampled: BTreeMap<SlotRef, crate::bind::YCbCrPlanesSampler>
 field	metal2vulkan::cache::VariantKey.zeroed_colors	pub zeroed_colors: BTreeMap<u32, crate::metal::PixelFormat>
@@ -2931,7 +2913,6 @@ field	metal2vulkan::pipeline::GraphicsState.reads_barycentric_coord	pub reads_ba
 field	metal2vulkan::pipeline::GraphicsState.reads_primitive_id	pub reads_primitive_id: bool
 field	metal2vulkan::pipeline::GraphicsState.region_fan_out	pub region_fan_out: Option<FanOutState>
 field	metal2vulkan::pipeline::GraphicsState.sample_mask	pub sample_mask: Option<u32>
-field	metal2vulkan::pipeline::GraphicsState.shader_tests	pub shader_tests: Option<ShaderTestsUse>
 field	metal2vulkan::pipeline::GraphicsState.shadow_stencil	pub shadow_stencil: Option<ShadowStencilUse>
 field	metal2vulkan::pipeline::GraphicsState.snapshot_reads	pub snapshot_reads: bool
 field	metal2vulkan::pipeline::GraphicsState.stencil_format	pub stencil_format: Option<vk::Format>
@@ -3018,8 +2999,6 @@ field	metal2vulkan::pipeline::LoweringInputs.rotated_colors	pub rotated_colors: 
 field	metal2vulkan::pipeline::LoweringInputs.rotated_factors	pub rotated_factors: BTreeMap<u32, [FactorLane; 4]>
 field	metal2vulkan::pipeline::LoweringInputs.rotated_weights	pub rotated_weights: bool
 field	metal2vulkan::pipeline::LoweringInputs.sample_mask	pub sample_mask: Option<[u32; 4]>
-field	metal2vulkan::pipeline::LoweringInputs.shader_stencil	pub shader_stencil: bool
-field	metal2vulkan::pipeline::LoweringInputs.shader_tests	pub shader_tests: bool
 field	metal2vulkan::pipeline::LoweringInputs.signed_color_attachments	pub signed_color_attachments: BTreeSet<u32>
 field	metal2vulkan::pipeline::LoweringInputs.snapshot_textures	pub snapshot_textures: BTreeMap<SlotRef, SnapshotForm>
 field	metal2vulkan::pipeline::LoweringInputs.srgb_textures	pub srgb_textures: BTreeSet<SlotRef>
@@ -3037,7 +3016,6 @@ field	metal2vulkan::pipeline::LoweringInputs.uniform_varyings	pub uniform_varyin
 field	metal2vulkan::pipeline::LoweringInputs.unit_axes	pub unit_axes: u8
 field	metal2vulkan::pipeline::LoweringInputs.vertex_fetch	pub vertex_fetch: Option<VertexFetchProjection>
 field	metal2vulkan::pipeline::LoweringInputs.viewport_index_varying	pub viewport_index_varying: bool
-field	metal2vulkan::pipeline::LoweringInputs.window_depth_varying	pub window_depth_varying: bool
 field	metal2vulkan::pipeline::LoweringInputs.word_colors	pub word_colors: BTreeMap<u32, metal::format::WordAttachment>
 field	metal2vulkan::pipeline::LoweringInputs.ycbcr_in_place	pub ycbcr_in_place: BTreeSet<SlotRef>
 field	metal2vulkan::pipeline::LoweringInputs.ycbcr_planes_sampled	pub ycbcr_planes_sampled: BTreeMap<SlotRef, crate::bind::YCbCrPlanesSampler>
@@ -3179,8 +3157,6 @@ field	metal2vulkan::pipeline::SamplerLevels.max_lod	pub max_lod: f32
 field	metal2vulkan::pipeline::SamplerLevels.min_lod	pub min_lod: f32
 field	metal2vulkan::pipeline::SamplerSlot.compare	pub compare: bool
 field	metal2vulkan::pipeline::SamplerSlot.coordinate_sensitive	pub coordinate_sensitive: bool
-field	metal2vulkan::pipeline::ShaderTestsUse.depth	pub depth: StandInUse
-field	metal2vulkan::pipeline::ShaderTestsUse.stencil	pub stencil: Option<StandInUse>
 field	metal2vulkan::pipeline::ShadowStencilUse.format	pub format: vk::Format
 field	metal2vulkan::pipeline::ShadowStencilUse.formatless	pub formatless: bool
 field	metal2vulkan::pipeline::ShadowStencilUse.samples	pub samples: u32
@@ -3228,10 +3204,6 @@ field	metal2vulkan::pipeline::StageModule.stage	pub stage: vk::ShaderStage
 field	metal2vulkan::pipeline::StageModule.stage_flags	pub stage_flags: vk::PipelineShaderStageCreateFlags
 field	metal2vulkan::pipeline::StageModule.stats	pub stats: ModuleStats
 field	metal2vulkan::pipeline::StageModule.strategies	pub strategies: StrategyCensus
-field	metal2vulkan::pipeline::StandInUse.format	pub format: vk::Format
-field	metal2vulkan::pipeline::StandInUse.formatless	pub formatless: bool
-field	metal2vulkan::pipeline::StandInUse.samples	pub samples: u32
-field	metal2vulkan::pipeline::StandInUse.view	pub view: StandInView
 field	metal2vulkan::pipeline::StandaloneModule.layout	pub layout: PipelineLayout
 field	metal2vulkan::pipeline::StandaloneModule.words	pub words: Vec<u32>
 field	metal2vulkan::pipeline::StorageAttachmentUse.color_index	pub color_index: u32
@@ -3382,7 +3354,6 @@ fn	metal2vulkan-runtime::host_time	pub fn host_time() -> u64
 fn	metal2vulkan::ash_interop::sampler_create_info	pub fn sampler_create_info<'a>(desc: &vk::SamplerDesc, reduction: &'a mut ash::vk::SamplerReductionModeCreateInfo<'static>, border: &'a mut ash::vk::SamplerBorderColorComponentMappingCreateInfoEXT<'static>) -> ash::vk::SamplerCreateInfo<'a>
 fn	metal2vulkan::bind::alpha_test_code	pub fn alpha_test_code(reference: f32) -> u32
 fn	metal2vulkan::bind::clamped_depth	pub const fn clamped_depth(bits: u32) -> u32
-fn	metal2vulkan::bind::depth_split_module	pub fn depth_split_module(device: &Device, form: DepthStandInForm, feature: Feature) -> Result<DepthSplitModule, Error>
 fn	metal2vulkan::bind::depth_stencil_copy_modules	pub fn depth_stencil_copy_modules(device: &Device, copy: DepthStencilCopy, feature: Feature) -> Result<DepthStencilCopyModules, Error>
 fn	metal2vulkan::bind::draw_merge_module	pub fn draw_merge_module(device: &Device, phase: MergePhase) -> Result<DrawMergeModule, Error>
 fn	metal2vulkan::bind::draw_replay_draw	pub fn draw_replay_draw(commands: &DrawCommands, (plan, key): (&BindingPlan, &VariantKey), merged: bool) -> Result<(), DrawReplayRule>
@@ -7359,7 +7330,6 @@ method	metal2vulkan::pipeline::VaryingKey::selected_layer	pub fn selected_layer(
 method	metal2vulkan::pipeline::VaryingKey::selected_viewport	pub fn selected_viewport() -> VaryingKey
 method	metal2vulkan::pipeline::VaryingKey::user	pub fn user(k: &[u8]) -> VaryingKey
 method	metal2vulkan::pipeline::VaryingKey::viewport_index	pub fn viewport_index() -> VaryingKey
-method	metal2vulkan::pipeline::VaryingKey::window_depth	pub fn window_depth() -> VaryingKey
 method	metal2vulkan::pipeline::VertexAttributeDescriptor::new	pub fn new(format: metal::VertexFormat, offset: u32, buffer_index: u32) -> Self
 method	metal2vulkan::pipeline::VertexBufferLayoutDescriptor::new	pub fn new(stride: Option<u32>) -> VertexBufferLayoutDescriptor
 method	metal2vulkan::pipeline::VertexDescriptor::new	pub fn new() -> VertexDescriptor
@@ -7683,7 +7653,6 @@ struct	metal2vulkan::bind::BufferRange	#[cfg_attr(feature = "serde", derive(serd
 struct	metal2vulkan::bind::BufferRanges	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct BufferRanges
 struct	metal2vulkan::bind::ByteRange	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ByteRange
 struct	metal2vulkan::bind::ComputeTemplate	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ComputeTemplate
-struct	metal2vulkan::bind::DepthSplitModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DepthSplitModule
 struct	metal2vulkan::bind::DepthStencilCopyModules	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DepthStencilCopyModules
 struct	metal2vulkan::bind::DescriptorBytes	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct DescriptorBytes
 struct	metal2vulkan::bind::DescriptorRange	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct DescriptorRange
@@ -7893,7 +7862,6 @@ struct	metal2vulkan::pipeline::SampledLevels	#[cfg_attr(feature = "serde", deriv
 struct	metal2vulkan::pipeline::SamplerArray	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct SamplerArray
 struct	metal2vulkan::pipeline::SamplerLevels	#[derive(Clone, Copy, Debug, PartialEq)] #[non_exhaustive] pub struct SamplerLevels
 struct	metal2vulkan::pipeline::SamplerSlot	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct SamplerSlot
-struct	metal2vulkan::pipeline::ShaderTestsUse	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ShaderTestsUse
 struct	metal2vulkan::pipeline::ShadowStencilUse	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ShadowStencilUse
 struct	metal2vulkan::pipeline::SlotRef	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct SlotRef
 struct	metal2vulkan::pipeline::SpecClause	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct SpecClause
@@ -7906,7 +7874,6 @@ struct	metal2vulkan::pipeline::StageInputAttributeDescriptor	#[cfg_attr(feature 
 struct	metal2vulkan::pipeline::StageInputDescriptor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct StageInputDescriptor
 struct	metal2vulkan::pipeline::StageInputLayoutDescriptor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct StageInputLayoutDescriptor
 struct	metal2vulkan::pipeline::StageModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct StageModule
-struct	metal2vulkan::pipeline::StandInUse	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct StandInUse
 struct	metal2vulkan::pipeline::StandaloneModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct StandaloneModule
 struct	metal2vulkan::pipeline::StorageAttachmentUse	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct StorageAttachmentUse
 struct	metal2vulkan::pipeline::StorageImageChoice	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct StorageImageChoice
@@ -9318,7 +9285,6 @@ variant	metal2vulkan-runtime::PrecisionNote::CappedLodBias	CappedLodBias
 variant	metal2vulkan-runtime::PrecisionNote::ClippedCoverageSplit	ClippedCoverageSplit
 variant	metal2vulkan-runtime::PrecisionNote::ColorAttachmentGroups	ColorAttachmentGroups
 variant	metal2vulkan-runtime::PrecisionNote::CompressedTexelDecode	CompressedTexelDecode
-variant	metal2vulkan-runtime::PrecisionNote::ComputedSampleDepth	ComputedSampleDepth
 variant	metal2vulkan-runtime::PrecisionNote::CoverageReadsRoundedAlpha	CoverageReadsRoundedAlpha
 variant	metal2vulkan-runtime::PrecisionNote::CubeGradientFootprint	CubeGradientFootprint
 variant	metal2vulkan-runtime::PrecisionNote::DepthDenormals	DepthDenormals
@@ -9581,13 +9547,10 @@ variant	metal2vulkan::bind::ChromaDecode::Bgrg	Bgrg
 variant	metal2vulkan::bind::ChromaDecode::Gbgr	Gbgr
 variant	metal2vulkan::bind::CopySource::Aspect	Aspect
 variant	metal2vulkan::bind::CopySource::Shadow	Shadow
-variant	metal2vulkan::bind::DepthStandInForm::Multisampled	Multisampled
-variant	metal2vulkan::bind::DepthStandInForm::SamplePlanes	SamplePlanes
 variant	metal2vulkan::bind::DepthStencilCopy::Depth	Depth
 variant	metal2vulkan::bind::DepthStencilCopy::Depth16Bits	Depth16Bits
 variant	metal2vulkan::bind::DepthStencilCopy::Depth16Code	Depth16Code
 variant	metal2vulkan::bind::DepthStencilCopy::DepthBits	DepthBits
-variant	metal2vulkan::bind::DepthStencilCopy::DepthFromStandIn	DepthFromStandIn { form: DepthStandInForm }
 variant	metal2vulkan::bind::DepthStencilCopy::StencilBits	StencilBits
 variant	metal2vulkan::bind::DepthStencilCopy::StencilExport	StencilExport { source: CopySource }
 variant	metal2vulkan::bind::DepthStencilCopy::StencilPlane	StencilPlane { source: CopySource, bit: StencilBit }
@@ -9616,7 +9579,6 @@ variant	metal2vulkan::bind::DrawReplayRule::Operations	Operations(u32)
 variant	metal2vulkan::bind::DrawReplayRule::OwnPipelineStates	OwnPipelineStates
 variant	metal2vulkan::bind::DrawReplayRule::PrimitiveTypes	PrimitiveTypes(u8)
 variant	metal2vulkan::bind::DrawReplayRule::ShaderStencil	ShaderStencil
-variant	metal2vulkan::bind::DrawReplayRule::ShaderTests	ShaderTests
 variant	metal2vulkan::bind::DrawReplayRule::SharedSlotTable	SharedSlotTable
 variant	metal2vulkan::bind::DrawReplayRule::VertexAttributes	VertexAttributes
 variant	metal2vulkan::bind::DrawReplayRule::VertexWritesMemory	VertexWritesMemory
@@ -9764,7 +9726,6 @@ variant	metal2vulkan::bind::WriteSource::Buffer	Buffer { slot: SlotRef }
 variant	metal2vulkan::bind::WriteSource::CombinedImageSampler	CombinedImageSampler { image: ImageSource, sampler: SamplerSource }
 variant	metal2vulkan::bind::WriteSource::ConstantBlob	ConstantBlob { stage: Stage }
 variant	metal2vulkan::bind::WriteSource::ControlPointIndices	ControlPointIndices
-variant	metal2vulkan::bind::WriteSource::DepthStandIn	DepthStandIn
 variant	metal2vulkan::bind::WriteSource::ExecutionStatus	ExecutionStatus
 variant	metal2vulkan::bind::WriteSource::FunctionTable	FunctionTable { index: u32 }
 variant	metal2vulkan::bind::WriteSource::FunctionTableSnapshot	FunctionTableSnapshot
@@ -9779,7 +9740,6 @@ variant	metal2vulkan::bind::WriteSource::RateMapRegions	RateMapRegions
 variant	metal2vulkan::bind::WriteSource::Sampler	Sampler { slot: SlotRef, compare: bool, integer: bool, opaque_black: OpaqueBlackBorder }
 variant	metal2vulkan::bind::WriteSource::ShadowStencil	ShadowStencil
 variant	metal2vulkan::bind::WriteSource::SnapshotTexels	SnapshotTexels { slot: u32 }
-variant	metal2vulkan::bind::WriteSource::StencilStandIn	StencilStandIn
 variant	metal2vulkan::bind::WriteSource::TessellationFactors	TessellationFactors
 variant	metal2vulkan::bind::WriteSource::TexelBuffer	TexelBuffer { slot: SlotRef, format: vk::Format, window: Window }
 variant	metal2vulkan::bind::WriteSource::TexelRows	TexelRows { slot: SlotRef, format: vk::Format }
@@ -10266,7 +10226,6 @@ variant	metal2vulkan::device::VkLimit::MinTexelBufferOffsetAlignment	MinTexelBuf
 variant	metal2vulkan::device::VkLimit::MinTexelGatherOffset	MinTexelGatherOffset
 variant	metal2vulkan::device::VkLimit::MinTexelOffset	MinTexelOffset
 variant	metal2vulkan::device::VkLimit::MinUniformBufferOffsetAlignment	MinUniformBufferOffsetAlignment
-variant	metal2vulkan::device::VkProperty::CenterFragCoordDepth	CenterFragCoordDepth
 variant	metal2vulkan::device::VkProperty::ColorAttachmentSampleCount	ColorAttachmentSampleCount(vk::Format, u32)
 variant	metal2vulkan::device::VkProperty::DenormIndependence32BitOnly	DenormIndependence32BitOnly
 variant	metal2vulkan::device::VkProperty::DenormIndependenceAll	DenormIndependenceAll
@@ -10316,7 +10275,6 @@ variant	metal2vulkan::device::VkProperty::RequiredSubgroupSizeStage	RequiredSubg
 variant	metal2vulkan::device::VkProperty::Rgba4OpaqueBlackSwizzled	Rgba4OpaqueBlackSwizzled
 variant	metal2vulkan::device::VkProperty::RoundingIndependence32BitOnly	RoundingIndependence32BitOnly
 variant	metal2vulkan::device::VkProperty::RoundingIndependenceAll	RoundingIndependenceAll
-variant	metal2vulkan::device::VkProperty::SampleFragCoordDepth	SampleFragCoordDepth
 variant	metal2vulkan::device::VkProperty::SampleLocationSampleCount	SampleLocationSampleCount(u32)
 variant	metal2vulkan::device::VkProperty::SimdgroupLockstep	SimdgroupLockstep
 variant	metal2vulkan::device::VkProperty::StencilResolveMode	StencilResolveMode(ResolveMode)
@@ -10458,7 +10416,6 @@ variant	metal2vulkan::error::DescriptorError::VertexAmplificationCount	VertexAmp
 variant	metal2vulkan::error::DescriptorError::VertexAttribute	VertexAttribute { attribute: u32 }
 variant	metal2vulkan::error::DescriptorError::VertexLayout	VertexLayout { layout: u32 }
 variant	metal2vulkan::error::DescriptorError::VertexStepRate	VertexStepRate { step_rate: u32 }
-variant	metal2vulkan::error::DriverDeviation::CenterFragCoordDepth	CenterFragCoordDepth
 variant	metal2vulkan::error::DriverDeviation::CubeGradientRoute	CubeGradientRoute
 variant	metal2vulkan::error::DriverDeviation::GraphicsCubeGradientTangents	GraphicsCubeGradientTangents
 variant	metal2vulkan::error::DriverDeviation::MetalAlphaCoverage	MetalAlphaCoverage
@@ -10491,7 +10448,6 @@ variant	metal2vulkan::error::DriverDeviation::MetalSmallFloatColorWrites	MetalSm
 variant	metal2vulkan::error::DriverDeviation::MetalSmallFloatNans	MetalSmallFloatNans
 variant	metal2vulkan::error::DriverDeviation::MetalUnaryDenormals	MetalUnaryDenormals
 variant	metal2vulkan::error::DriverDeviation::MetalVertexSimdgroups	MetalVertexSimdgroups
-variant	metal2vulkan::error::DriverDeviation::SampleFragCoordDepth	SampleFragCoordDepth
 variant	metal2vulkan::error::DriverDeviation::SimdgroupLockstep	SimdgroupLockstep
 variant	metal2vulkan::error::DynamicLibraryProblem::FunctionConstants	FunctionConstants
 variant	metal2vulkan::error::DynamicLibraryProblem::NoInstallName	NoInstallName
@@ -10577,7 +10533,6 @@ variant	metal2vulkan::error::Feature::MeshShading	MeshShading
 variant	metal2vulkan::error::Feature::MinLodClamp	MinLodClamp
 variant	metal2vulkan::error::Feature::MipmapGeneration	MipmapGeneration
 variant	metal2vulkan::error::Feature::ModuleRecord	ModuleRecord { code: u32 }
-variant	metal2vulkan::error::Feature::MultisampledShaderDepthTest	MultisampledShaderDepthTest
 variant	metal2vulkan::error::Feature::PixelCoverageAtSampleRate	PixelCoverageAtSampleRate
 variant	metal2vulkan::error::Feature::PixelSamplerCompare	PixelSamplerCompare
 variant	metal2vulkan::error::Feature::PointerCompare	PointerCompare
@@ -10937,7 +10892,6 @@ variant	metal2vulkan::pipeline::PrecisionNote::CappedLodBias	CappedLodBias
 variant	metal2vulkan::pipeline::PrecisionNote::ClippedCoverageSplit	ClippedCoverageSplit
 variant	metal2vulkan::pipeline::PrecisionNote::ColorAttachmentGroups	ColorAttachmentGroups
 variant	metal2vulkan::pipeline::PrecisionNote::CompressedTexelDecode	CompressedTexelDecode
-variant	metal2vulkan::pipeline::PrecisionNote::ComputedSampleDepth	ComputedSampleDepth
 variant	metal2vulkan::pipeline::PrecisionNote::CoverageReadsRoundedAlpha	CoverageReadsRoundedAlpha
 variant	metal2vulkan::pipeline::PrecisionNote::CubeGradientFootprint	CubeGradientFootprint
 variant	metal2vulkan::pipeline::PrecisionNote::DepthDenormals	DepthDenormals
@@ -11045,8 +10999,6 @@ variant	metal2vulkan::pipeline::PushField::RegionProbe	RegionProbe
 variant	metal2vulkan::pipeline::PushField::RenderTargetArrayLength	RenderTargetArrayLength
 variant	metal2vulkan::pipeline::PushField::ReplayRegionAddress	ReplayRegionAddress
 variant	metal2vulkan::pipeline::PushField::RootTableAddress	RootTableAddress
-variant	metal2vulkan::pipeline::PushField::ShaderStencilState	ShaderStencilState
-variant	metal2vulkan::pipeline::PushField::ShaderTestsState	ShaderTestsState
 variant	metal2vulkan::pipeline::PushField::ShadowStencilState	ShadowStencilState
 variant	metal2vulkan::pipeline::PushField::SlotBindOffset	SlotBindOffset(SlotRef)
 variant	metal2vulkan::pipeline::PushField::SlotBounds	SlotBounds(SlotRef)
@@ -11160,8 +11112,6 @@ variant	metal2vulkan::pipeline::RuntimeFact::RowLockstep	RowLockstep
 variant	metal2vulkan::pipeline::RuntimeFact::SampleCount	SampleCount
 variant	metal2vulkan::pipeline::RuntimeFact::SamplerCoordinates	SamplerCoordinates { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::SamplerReduction	SamplerReduction { slot: SlotRef }
-variant	metal2vulkan::pipeline::RuntimeFact::ShaderStencilTest	ShaderStencilTest { formatless: bool }
-variant	metal2vulkan::pipeline::RuntimeFact::ShaderTests	ShaderTests { formatless: bool, multisampled: bool, planes: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::ShadowStencil	ShadowStencil { formatless: bool, multisampled: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::SimdgroupEmulation	SimdgroupEmulation { bytes_per_simdgroup: u32, arena: Option<u32> }
 variant	metal2vulkan::pipeline::RuntimeFact::SparseTexture	SparseTexture { slot: SlotRef, sparse_arm: bool, tile_map: bool }
@@ -11280,8 +11230,6 @@ variant	metal2vulkan::pipeline::Stage::Object	Object
 variant	metal2vulkan::pipeline::Stage::Vertex	Vertex
 variant	metal2vulkan::pipeline::StageSource::Compiled	Compiled(CompiledFunction)
 variant	metal2vulkan::pipeline::StageSource::Function	Function(FunctionDescriptor)
-variant	metal2vulkan::pipeline::StandInView::Image	Image
-variant	metal2vulkan::pipeline::StandInView::SamplePlanes	SamplePlanes { layers: u32 }
 variant	metal2vulkan::pipeline::StorageAttachmentView::Attachment	Attachment
 variant	metal2vulkan::pipeline::StorageAttachmentView::SamplePlanes	SamplePlanes { layers: u32 }
 variant	metal2vulkan::pipeline::StorageFormatClass::Format	Format(vk::Format)
@@ -11302,7 +11250,6 @@ variant	metal2vulkan::pipeline::Symbol::SpecId	SpecId(SpecKey)
 variant	metal2vulkan::pipeline::SyntheticBinding::ArgumentTable	ArgumentTable
 variant	metal2vulkan::pipeline::SyntheticBinding::ConstantBlob	ConstantBlob
 variant	metal2vulkan::pipeline::SyntheticBinding::ControlPointIndices	ControlPointIndices
-variant	metal2vulkan::pipeline::SyntheticBinding::DepthStandIn	DepthStandIn
 variant	metal2vulkan::pipeline::SyntheticBinding::ExecutionStatus	ExecutionStatus
 variant	metal2vulkan::pipeline::SyntheticBinding::FunctionTableDirectory	FunctionTableDirectory
 variant	metal2vulkan::pipeline::SyntheticBinding::FunctionTableSnapshot	FunctionTableSnapshot
@@ -11314,7 +11261,6 @@ variant	metal2vulkan::pipeline::SyntheticBinding::RateMapRegions	RateMapRegions
 variant	metal2vulkan::pipeline::SyntheticBinding::RootTable	RootTable
 variant	metal2vulkan::pipeline::SyntheticBinding::SamplerTable	SamplerTable
 variant	metal2vulkan::pipeline::SyntheticBinding::ShadowStencil	ShadowStencil
-variant	metal2vulkan::pipeline::SyntheticBinding::StencilStandIn	StencilStandIn
 variant	metal2vulkan::pipeline::SyntheticBinding::TessellationFactors	TessellationFactors
 variant	metal2vulkan::pipeline::SyntheticBinding::TileMemory	TileMemory
 variant	metal2vulkan::pipeline::UniformViewChoice::Kept	Kept

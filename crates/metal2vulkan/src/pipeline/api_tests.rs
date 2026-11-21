@@ -250,9 +250,6 @@ mod serde_round_trips {
             addressed_function_tables: true,
             interlocked_colors: BTreeSet::from([1]),
             read_only_tests: true,
-            shader_tests: true,
-            shader_stencil: true,
-            window_depth_varying: true,
             address_maps: BTreeMap::from([(
                 slot(Stage::Kernel, SlotClass::Texture, 7),
                 metal::sampler::AddressModeMap::IDENTITY.with(
@@ -449,9 +446,6 @@ mod serde_round_trips {
             logic_operation: Some(crate::vk::LogicOp::XOR),
             depth_compare_clamp_mask: 0x8000_0005,
             read_only_tests: true,
-            shader_tests: true,
-            shader_stencil: true,
-            window_depth_varying: true,
             rotated_colors: BTreeSet::from([4]),
             alpha_in_red_colors: BTreeSet::from([4]),
             rotated_factors: BTreeMap::from([(
@@ -639,20 +633,6 @@ mod serde_round_trips {
             fragment_writes_memory: true,
             color_outputs: 0b101,
             sample_mask: Some(0b1001),
-            shader_tests: Some(crate::pipeline::graphics::ShaderTestsUse {
-                depth: crate::pipeline::graphics::StandInUse {
-                    format: vk::Format::R32_SFLOAT,
-                    formatless: false,
-                    samples: 4,
-                    view: crate::pipeline::graphics::StandInView::SamplePlanes { layers: 4 },
-                },
-                stencil: Some(crate::pipeline::graphics::StandInUse {
-                    format: vk::Format::R8_UINT,
-                    formatless: true,
-                    samples: 4,
-                    view: crate::pipeline::graphics::StandInView::Image,
-                }),
-            }),
             snapshot_reads: true,
             color_group: Some(crate::pipeline::ColorGroup {
                 present: vec![0, 5],
@@ -1015,9 +995,6 @@ mod bind_serde_round_trips {
             interlocked_colors: BTreeSet::from([0, 3]),
             fragment_tests: crate::bind::FragmentTests::Depth { writes: true },
             snapshot_textures: BTreeSet::from([2]),
-            depth_range: [0.25, 0.75],
-            depth_clip_mode_clamp: true,
-            stencil_references: [0x5A, 0xC3],
             blend_color: [0.25, -0.5, 1.5, 0.75],
             alpha_test_reference: Some(0.375),
             primitive_type: Some(metal::PrimitiveType::TriangleStrip),

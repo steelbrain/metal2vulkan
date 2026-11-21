@@ -514,22 +514,18 @@ fn declared_early(cx: &SelectCx<'_>) -> bool {
 /// - any other writes before Vulkan's tests and states `RuntimeFact::TestedStorageWrites`, as the
 ///   framebuffer fetch's storage form does: a draw whose tests drop no fragment runs it as
 ///   compiled, one whose tests drop some but write and count nothing the variant that declares
-///   early tests (where only a discard kept them away, `early_variant`), and one whose depth test
-///   acts the variant that runs the draw's depth test itself, before the write
-///   (`depth_test`), and its stencil test too where that acts (`bind::graphics`).
+///   early tests (where only a discard kept them away, `early_variant`); the binder refuses a draw
+///   whose depth or stencil test acts (`bind::graphics`).
 fn plan_tests(cx: &mut SelectCx<'_>) -> Result<bool, Error> {
     if declared_early(cx) {
         return Ok(false);
     }
-    let outputs = &cx.entry.ep.outputs;
-    let field =
-        |role: fn(&OutputRole) -> bool| outputs.iter().find(|o| role(&o.role)).map(|o| o.field);
-    let exports = super::depth_test::Exports {
-        depth: field(|r| matches!(r, OutputRole::Depth(_))),
-        stencil: field(|r| matches!(r, OutputRole::Stencil)),
-        mask: field(|r| matches!(r, OutputRole::SampleMask)),
-    };
-    let exported = exports.depth.is_some() || exports.stencil.is_some() || exports.mask.is_some();
+    let exported = cx.entry.ep.outputs.iter().any(|o| {
+        matches!(
+            o.role,
+            OutputRole::Depth(_) | OutputRole::Stencil | OutputRole::SampleMask
+        )
+    });
     let body = super::fetch::body_facts(cx);
     let only_outputs = !exported && !body.side_effects;
     let fp = &cx.families.fragment;
@@ -550,9 +546,6 @@ fn plan_tests(cx: &mut SelectCx<'_>) -> Result<bool, Error> {
             early_tests: only_outputs && cx.inputs.read_only_tests,
             early_variant: only_outputs,
         });
-        if cx.inputs.shader_tests && cx.families.fragment.depth_test.is_none() {
-            super::depth_test::plan(cx, exports)?;
-        }
     }
     Ok(stated.is_none() && only_outputs && cx.inputs.read_only_tests)
 }

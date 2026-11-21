@@ -18,9 +18,6 @@
 //! - [`IoRole::RenderTargetArrayIndex`]: the `[[render_target_array_index]]` a vertex function
 //!   writes, as written, carried to a fragment function that reads it. A flat `uint` varying for
 //!   link, one key ([`VaryingKey::render_target_array_index`]) on both sides.
-//! - [`IoRole::WindowDepth`]: a vertex function's window depth, carried to a fragment function
-//!   that runs its draw's depth test itself at more than one sample. A no-perspective `float`
-//!   varying for link, one key ([`VaryingKey::window_depth`]) on both sides.
 //! - [`IoRole::Barycentric`]: the first two barycentric weights a fragment function reads as
 //!   `[[barycentric_coord]]` on a device without `fragmentShaderBarycentric`, which the pipeline's
 //!   synthesized geometry stage writes. A `float2` varying, perspective-correct or not, one key
@@ -41,7 +38,7 @@
 //!
 //! The roles live in disjoint key namespaces ([`VaryingKey::user`], [`VaryingKey::attribute`],
 //! [`VaryingKey::color`], [`VaryingKey::viewport_index`],
-//! [`VaryingKey::render_target_array_index`], [`VaryingKey::window_depth`],
+//! [`VaryingKey::render_target_array_index`],
 //! [`VaryingKey::barycentric`], [`VaryingKey::selected_layer`],
 //! [`VaryingKey::selected_viewport`], [`VaryingKey::primitive_id`],
 //! [`VaryingKey::merged_command`]): the key bytes start with a
@@ -75,7 +72,6 @@ const ATTRIBUTE: u8 = 1;
 const COLOR: u8 = 2;
 const VIEWPORT_INDEX: u8 = 3;
 const RENDER_TARGET_ARRAY_INDEX: u8 = 4;
-const WINDOW_DEPTH: u8 = 5;
 const BARYCENTRIC: u8 = 6;
 const SELECTED_LAYER: u8 = 7;
 const SELECTED_VIEWPORT: u8 = 8;
@@ -116,12 +112,6 @@ impl VaryingKey {
     /// function reads (`IoRole::RenderTargetArrayIndex`).
     pub fn render_target_array_index() -> VaryingKey {
         VaryingKey(AirUserKey(vec![RENDER_TARGET_ARRAY_INDEX].into()))
-    }
-
-    /// The key of the window depth a vertex function writes and a fragment function that runs
-    /// its draw's depth test itself at more than one sample reads (`IoRole::WindowDepth`).
-    pub fn window_depth() -> VaryingKey {
-        VaryingKey(AirUserKey(vec![WINDOW_DEPTH].into()))
     }
 
     /// The key of the barycentric weights a pipeline's synthesized geometry stage writes and a
@@ -744,12 +734,6 @@ pub enum IoRole {
     /// flat [`IoRole::Varying`] its function reads per primitive
     /// ([`StageIo::primitive_inputs`]).
     PrimitiveVarying { user: AirUserKey },
-    /// The window depth `z / w` of the position a vertex function compiled under
-    /// `LoweringInputs::window_depth_varying` stores: a vertex output, and the no-perspective
-    /// input of a fragment function that runs its draw's depth test itself at more than one
-    /// sample, which reads it at its sample and at the pixel centre to compute each sample's
-    /// depth (`lower::fragment`'s `depth_test`).
-    WindowDepth,
     /// The first two barycentric weights a fragment function compiled for a device without
     /// `fragmentShaderBarycentric` reads as its `[[barycentric_coord]]`: a center-sampled `float2`
     /// input, perspective-correct when `perspective`, which no Metal function writes. Link
@@ -793,7 +777,7 @@ pub enum IoRole {
 
 impl IoRole {
     /// Whether the role is a varying: a user varying, a raw index a vertex function writes for
-    /// its fragment function, its window depth, the barycentric weights a synthesized geometry
+    /// its fragment function, the barycentric weights a synthesized geometry
     /// stage writes, a selected index the geometry stage reads, the primitive ID, or a merged
     /// draw's command. Link numbers these, and packs those a vertex function writes.
     pub(crate) fn is_varying(&self) -> bool {
@@ -802,7 +786,6 @@ impl IoRole {
             IoRole::Varying { .. }
                 | IoRole::ViewportIndex
                 | IoRole::RenderTargetArrayIndex
-                | IoRole::WindowDepth
                 | IoRole::Barycentric { .. }
                 | IoRole::SelectedLayer
                 | IoRole::SelectedViewport
@@ -971,18 +954,9 @@ mod tests {
         let color = VaryingKey::color(3, 0);
         let viewport = VaryingKey::viewport_index();
         let layer = VaryingKey::render_target_array_index();
-        let depth = VaryingKey::window_depth();
         let perspective = VaryingKey::barycentric(true);
         let linear = VaryingKey::barycentric(false);
-        let tagged = [
-            &attr,
-            &color,
-            &viewport,
-            &layer,
-            &depth,
-            &perspective,
-            &linear,
-        ];
+        let tagged = [&attr, &color, &viewport, &layer, &perspective, &linear];
         for (i, a) in tagged.iter().enumerate() {
             for b in &tagged[i + 1..] {
                 assert_ne!(a, b);

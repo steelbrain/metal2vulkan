@@ -17,11 +17,7 @@
 //!   stage writes, is `NeedsInput(ViewportIndex)`. The raw render target slice index
 //!   (`IoRole::RenderTargetArrayIndex`) is the same for `[[render_target_array_index]]`
 //!   (`LoweringInputs::render_target_array_index_varying`, `NeedsInput(RenderTargetArrayIndex)`),
-//!   which a vertex function writes in every variant, the one without `Layer` included. The window
-//!   depth (`IoRole::WindowDepth`) is such a varying too, read without perspective: a fragment
-//!   function that reads it was compiled for a draw whose vertex function writes it
-//!   (`LoweringInputs::window_depth_varying`), and one linked with another vertex function is
-//!   `NeedsInput(FramebufferFetch)`.
+//!   which a vertex function writes in every variant, the one without `Layer` included.
 //!   The primitive ID (`IoRole::PrimitiveId`) is such a varying, read flat: a fragment function
 //!   compiled for a device that cannot declare a fragment `PrimitiveId` reads its
 //!   `[[primitive_id]]` from it, and its pipeline's
@@ -139,7 +135,6 @@ fn check_roles(stage: Stage, io: &StageIo) -> Result<(), Error> {
                             ..
                         } | IoRole::ViewportIndex
                             | IoRole::RenderTargetArrayIndex
-                            | IoRole::WindowDepth
                             | IoRole::SelectedLayer
                             | IoRole::SelectedViewport
                             | IoRole::PrimitiveId
@@ -157,7 +152,6 @@ fn check_roles(stage: Stage, io: &StageIo) -> Result<(), Error> {
                             ..
                         } | IoRole::ViewportIndex
                             | IoRole::RenderTargetArrayIndex
-                            | IoRole::WindowDepth
                             | IoRole::Barycentric { .. }
                             | IoRole::PrimitiveId
                             | IoRole::MergedCommand
@@ -200,12 +194,6 @@ fn check_raw_indices(v: &StageIo, f: &StageIo) -> Result<(), Error> {
         if (writes && reads_builtin) || (!writes && reads_varying) {
             return Err(Error::NeedsInput(input));
         }
-    }
-    // The window depth: compiled for a draw whose vertex function writes it.
-    let writes = v.outputs.iter().any(|x| x.role == IoRole::WindowDepth);
-    let reads = f.inputs.iter().any(|x| x.role == IoRole::WindowDepth);
-    if reads && !writes {
-        return Err(Error::NeedsInput(RuntimeInput::FramebufferFetch));
     }
     Ok(())
 }
@@ -480,11 +468,6 @@ fn varyings<'a>(
         | IoRole::SelectedViewport
         | IoRole::PrimitiveId
         | IoRole::MergedCommand => Some(Interpolation::Flat),
-        // The window depth is read without perspective, at the centre and at a sample.
-        IoRole::WindowDepth => Some(Interpolation::Smooth {
-            sampling: crate::pipeline::stage_io::Sampling::Center,
-            perspective: false,
-        }),
         IoRole::Barycentric { perspective } => Some(Interpolation::Smooth {
             sampling: crate::pipeline::stage_io::Sampling::Center,
             perspective: *perspective,

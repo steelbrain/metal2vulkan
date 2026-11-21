@@ -364,10 +364,7 @@ surface! {
         struct InputAttachmentUse N;
         struct LineBandState N;
         enum RegionFanOut E;
-        struct ShaderTestsUse N;
         struct ShadowStencilUse N;
-        struct StandInUse N;
-        enum StandInView N;
         struct StorageAttachmentUse N;
         enum StorageAttachmentView E;
         struct TessellationState N;
@@ -653,10 +650,7 @@ surface! {
         struct InterleaveSplitModule N;
         fn depth_stencil_copy_modules;
         fn stencil_split_module;
-        fn depth_split_module;
         enum CopySource E;
-        enum DepthStandInForm E;
-        struct DepthSplitModule N;
         enum DepthStencilCopy N;
         struct DepthStencilCopyModules N;
         struct StencilBit O;

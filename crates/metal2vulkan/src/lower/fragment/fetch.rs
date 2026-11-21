@@ -1881,21 +1881,6 @@ pub(super) fn plan(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             early_tests,
             early_variant: tested && !untested,
         });
-        // Compiled for a draw whose depth test alone can drop a fragment, the function runs that
-        // test itself, before its store (`depth_test`).
-        if cx.inputs.shader_tests {
-            // A returned depth is tested, a returned stencil is the stencil test's reference, and
-            // a returned sample mask keeps the fragment's samples before the tests.
-            let field = |role: fn(&OutputRole) -> bool| {
-                outputs.iter().find(|o| role(&o.role)).map(|o| o.field)
-            };
-            let exports = super::depth_test::Exports {
-                depth: field(|r| matches!(r, OutputRole::Depth(_))),
-                stencil: field(|r| matches!(r, OutputRole::Stencil)),
-                mask: field(|r| matches!(r, OutputRole::SampleMask)),
-            };
-            super::depth_test::plan(cx, exports)?;
-        }
     }
     // A per-sample function's returned mask gates its storage writes. At one sample too, on the
     // mask's bit 0 (measured: Metal stores no color there without it).

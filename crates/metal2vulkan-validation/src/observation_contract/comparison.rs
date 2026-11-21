@@ -304,7 +304,6 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::QuadsCountedBeforeDiscard
         | N::DeviceInterpolation
         | N::ExtrapolatedInterpolation
-        | N::ComputedSampleDepth
         | N::QuadsSplitByClipping
         | N::FragmentSimdgroupGrouping
         | N::BlendedWriteRounding

@@ -109,8 +109,6 @@ pub enum Degradation {
     RotatedBlendRounding,
     /// `metal2vulkan-degrade-linked-sampler-numbering`.
     LinkedSamplerNumbering,
-    /// `metal2vulkan-degrade-computed-sample-depth`.
-    ComputedSampleDepth,
     /// `metal2vulkan-degrade-argument-pixel-sampler-scaling`.
     ArgumentPixelSamplerScaling,
     /// `metal2vulkan-degrade-half-output-precision`.
@@ -241,7 +239,6 @@ impl Degradation {
         Degradation::BlendedWriteRounding,
         Degradation::RotatedBlendRounding,
         Degradation::LinkedSamplerNumbering,
-        Degradation::ComputedSampleDepth,
         Degradation::ArgumentPixelSamplerScaling,
         Degradation::HalfOutputPrecision,
         Degradation::ExtendedRangeBlendSource,
@@ -356,7 +353,6 @@ impl Degradation {
             Degradation::BlendedWriteRounding => "metal2vulkan-degrade-blended-write-rounding",
             Degradation::RotatedBlendRounding => "metal2vulkan-degrade-rotated-blend-rounding",
             Degradation::LinkedSamplerNumbering => "metal2vulkan-degrade-linked-sampler-numbering",
-            Degradation::ComputedSampleDepth => "metal2vulkan-degrade-computed-sample-depth",
             Degradation::ArgumentPixelSamplerScaling => {
                 "metal2vulkan-degrade-argument-pixel-sampler-scaling"
             }
@@ -467,7 +463,6 @@ impl Degradation {
             PrecisionNote::BlendedWriteRounding => Degradation::BlendedWriteRounding,
             PrecisionNote::RotatedBlendRounding => Degradation::RotatedBlendRounding,
             PrecisionNote::LinkedSamplerNumbering => Degradation::LinkedSamplerNumbering,
-            PrecisionNote::ComputedSampleDepth => Degradation::ComputedSampleDepth,
             PrecisionNote::ArgumentPixelSamplerScaling => Degradation::ArgumentPixelSamplerScaling,
             PrecisionNote::HalfOutputPrecision => Degradation::HalfOutputPrecision,
             PrecisionNote::ExtendedRangeBlendSource => Degradation::ExtendedRangeBlendSource,

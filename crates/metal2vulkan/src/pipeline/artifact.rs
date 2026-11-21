@@ -1288,21 +1288,6 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance and no explanation from it: a difference stays a
     /// mismatch for review.
     LinkedSamplerNumbering,
-    /// A fragment function runs its draw's depth test itself at more than one sample on a device
-    /// whose `FragCoord.z` is the pixel centre's there
-    /// ([`VkProperty::CenterFragCoordDepth`](crate::device::VkProperty::CenterFragCoordDepth)), and
-    /// computes each sample's depth from its vertex function's window depth read at the sample,
-    /// plus `FragCoord.z` less that depth read at the centre, which carries the depth bias. On the
-    /// M4 that is the depth MoltenVK stores at every sample of flat, sloped and steep triangles
-    /// at the viewport's default depth range, under a constant bias, and where the clamp decides;
-    /// under perspective, a slope-scaled bias, or another depth range a sample's depth may be up
-    /// to 2 ulp from it, so a depth test between surfaces that close may decide
-    /// otherwise than Metal's. No draw's state is known when the module is made, so the function
-    /// records the note wherever it computes the depth.
-    ///
-    /// Validation derives no tolerance and no explanation from it: a difference stays a
-    /// mismatch for review, deferred in C3 until an exact path exists.
-    ComputedSampleDepth,
     /// An access through an argument buffer's sampler whose word the specialized module cannot read
     /// may hand the device a pixel coordinate scaled by the texture's size, where the sampler
     /// states pixel coordinates: the device's sampler reads its texels from that coordinate in its

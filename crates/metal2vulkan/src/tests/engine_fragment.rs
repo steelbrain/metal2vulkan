@@ -1065,10 +1065,9 @@ fn the_storage_form_declares_early_tests_only_where_they_keep_metals_writes() {
 /// the tests, and states `TestedStorageWrites` without the early-tests variant: Metal runs its
 /// memory writes for the fragments its tests drop. Without such an attachment it
 /// states nothing. The whole pipeline on `moltenvk-m3` (a `BGRA8Unorm_sRGB` color,
-/// `Depth32Float_Stencil8`) plans a draw whose tests drop no fragment, and refuses one that does
-/// not state its tests, or whose tests a visibility result counts, at the depth attachment. (A draw
-/// whose tests may drop fragments but write and count nothing runs the variant whose function runs
-/// both tests itself, after its memory writes, as Metal tests after them.)
+/// `Depth32Float_Stencil8`) plans a draw whose tests drop no fragment, and refuses at the depth
+/// attachment one that does not state its tests, whose tests a visibility result counts, or whose
+/// tests may drop fragments but write and count nothing.
 #[test]
 fn a_fetch_that_writes_memory_beside_depth_runs_only_draws_whose_tests_drop_nothing() {
     use crate::bind::FragmentTests;
@@ -1151,20 +1150,13 @@ fn a_fetch_that_writes_memory_beside_depth_runs_only_draws_whose_tests_drop_noth
                 .at_attachment(Attachment::Depth)
         ))
     );
-    let drop = base.plan(&dev, &shape(FragmentTests::Drop)).expect("drop");
-    assert!(drop.variant.shader_tests && drop.variant.shader_stencil);
-    assert!(!drop.variant.read_only_tests);
-    let variant = dev
-        .compile_render_variant(&d, &drop.variant, &Budget::standard())
-        .expect("the in-shader tests' variant");
-    for m in &variant.stages {
-        check_words_valid(&m.spirv, &variant.requirements, dev.profile())
-            .unwrap_or_else(|e| panic!("L3: {e}"));
-    }
-    let again = variant
-        .plan(&dev, &shape(FragmentTests::Drop))
-        .expect("the variant's plan");
-    assert_eq!(again.variant, drop.variant, "a fixed point");
+    assert_eq!(
+        base.plan(&dev, &shape(FragmentTests::Drop)).map(|_| ()),
+        Err(BindError::Unsupported(
+            Unsupported::not_implemented(Feature::FramebufferFetch)
+                .at_attachment(Attachment::Depth)
+        ))
+    );
 }
 
 /// The pipeline state of `con_fetch_coverage`, as the guest's path-coverage pipeline has it: a
@@ -2498,8 +2490,10 @@ fn a_fetched_extended_range_attachment_is_refused() {
 /// `RGB10A2Unorm_sRGB`, the four-channel padded form, where the guest's were `RGB10A8_2P_XR10`,
 /// whose blend is refused (`blended_pipelines`). On `moltenvk-m3` the whole pipeline is made; a
 /// draw whose tests drop no fragment runs it as compiled, one whose tests drop fragments but write
-/// and count nothing asks for the early-tests variant, whose plan states the same key, and any
-/// other (or one that states nothing) is refused `NotImplemented(FramebufferFetch)`.
+/// and count nothing asks for the early-tests variant, whose plan states the same key; one whose
+/// depth test writes is refused `NotImplemented(FramebufferFetch)` at the depth attachment, one
+/// whose stencil test acts at the stencil attachment, and any other (or one that states nothing)
+/// so without an attachment.
 #[test]
 fn a_discarding_fetch_beside_depth_stores_before_the_tests_its_draws_check() {
     use crate::bind::FragmentTests;
@@ -2693,48 +2687,35 @@ fn a_discarding_fetch_beside_depth_stores_before_the_tests_its_draws_check() {
         .plan(&dev, &shape(FragmentTests::Drop))
         .expect("variant plan");
     assert_eq!(again.variant, drop.variant, "a fixed point");
-    // A depth test that writes nothing keeps the early-tests variant; one that writes runs the
-    // variant whose function tests depth itself against the stand-in, at one sample.
+    // A depth test that writes nothing keeps the early-tests variant; one that writes, and a
+    // stencil test that acts, are refused at their attachments: the function stores before
+    // Vulkan's tests.
     let read_only = base
         .plan(&dev, &shape(FragmentTests::Depth { writes: false }))
         .expect("depth without writes");
-    assert!(read_only.variant.read_only_tests && !read_only.variant.shader_tests);
-    let depth = base
-        .plan(&dev, &shape(FragmentTests::Depth { writes: true }))
-        .expect("depth with writes");
-    assert!(depth.variant.shader_tests && !depth.variant.read_only_tests);
-    let tested = dev
-        .compile_render_variant(&d, &depth.variant, &Budget::standard())
-        .expect("the in-shader depth test's variant");
-    assert!(tested.dependencies.iter().any(|x| x.fact
-        == RuntimeFact::ShaderTests {
-            formatless: false,
-            multisampled: false,
-            planes: false,
-        }));
-    let stand_in = tested.graphics.shader_tests.expect("the stand-in").depth;
-    assert_eq!(stand_in.format, crate::vk::Format::R32_SFLOAT);
-    assert_eq!(stand_in.samples, 1);
-    assert_eq!(stand_in.view, crate::pipeline::StandInView::Image);
-    for m in &tested.stages {
-        check_words_valid(&m.spirv, &tested.requirements, dev.profile())
-            .unwrap_or_else(|e| panic!("L3: {e}"));
+    assert!(read_only.variant.read_only_tests);
+    for (tests, at) in [
+        (
+            FragmentTests::Depth { writes: true },
+            crate::error::Attachment::Depth,
+        ),
+        (FragmentTests::Stencil, crate::error::Attachment::Stencil),
+    ] {
+        assert_eq!(
+            base.plan(&dev, &shape(tests)).map(|_| ()),
+            Err(BindError::Unsupported(
+                crate::error::Unsupported::not_implemented(Feature::FramebufferFetch)
+                    .at_attachment(at)
+            )),
+            "{tests:?}"
+        );
     }
-    let again = tested
-        .plan(&dev, &shape(FragmentTests::Depth { writes: true }))
-        .expect("the in-shader depth test's plan");
-    assert_eq!(again.variant, depth.variant, "a fixed point");
-    assert!(again
-        .descriptors
-        .iter()
-        .any(|w| w.source == crate::bind::WriteSource::DepthStandIn));
 }
 
 /// At 4 samples a discarding fetch that stores a color through the interlock beside a
-/// `Depth32Float_Stencil8` attachment, without early tests: a draw whose depth test writes would run
-/// the variant whose function tests depth itself, which needs each sample's depth, so the draw is
-/// refused at the depth attachment on every device (MoltenVK on the M3 Max, RADV, Intel's ANV), as
-/// its own kind: `Feature::MultisampledShaderDepthTest`.
+/// `Depth32Float_Stencil8` attachment, without early tests: a draw whose depth test writes is
+/// refused `NotImplemented(FramebufferFetch)` at the depth attachment on every device (MoltenVK on
+/// the M3 Max, RADV, Intel's ANV), as at one sample.
 #[test]
 fn a_per_sample_depth_test_is_refused_at_the_depth_attachment() {
     use crate::bind::FragmentTests;
@@ -2781,167 +2762,23 @@ fn a_per_sample_depth_test_is_refused_at_the_depth_attachment() {
             base.plan(&dev, &shape(FragmentTests::Depth { writes: true }))
                 .map(|_| ()),
             Err(BindError::Unsupported(
-                Unsupported::not_implemented(Feature::MultisampledShaderDepthTest)
+                Unsupported::not_implemented(Feature::FramebufferFetch)
                     .at_attachment(Attachment::Depth)
             )),
             "{stem}"
         );
     }
-}
-
-/// A discarding fetch that stores a color through the interlock beside a `Depth32Float_Stencil8`
-/// attachment, without early tests. A draw whose stencil test acts and whose tests write
-/// (`FragmentTests::Stencil`) runs the variant whose function runs the stencil test itself before
-/// the depth test: at one sample on MoltenVK (M3 Max, M4), RADV and Intel's ANV, the variant states
-/// `ShaderStencilTest`, holds the stencil's stand-in as an `R8_UINT` image of the pipeline's
-/// samples, validates, and plans as a fixed point that binds both stand-ins. At four samples
-/// MoltenVK and RADV are refused at the depth attachment: the depth test in the shader needs each
-/// sample's depth, which no profile states
-/// (`a_per_sample_depth_test_is_refused_at_the_depth_attachment`). A draw whose stencil test drops
-/// fragments but whose tests write nothing keeps the early-tests variant, and a pass with a
-/// stencil attachment alone is refused at it.
-#[test]
-fn a_stencil_test_that_acts_runs_in_the_shader_before_the_depth_test() {
-    use crate::bind::FragmentTests;
-    use crate::error::{Attachment, Unsupported};
-    let (Some(tested), Some(io)) = (fixture("tsw_fetch_discard"), fixture("stage_io")) else {
-        return;
-    };
-    let function = |bc: &[u8], name: &str| {
-        StageSource::Function(FunctionDescriptor::new(
-            Library::from_air(bc)
-                .expect("library")
-                .function(name)
-                .expect("function"),
-        ))
-    };
-    let device = |stem: &str| {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(format!("../metal2vulkan-validation/profiles/{stem}.json"));
-        let text = std::fs::read_to_string(path).expect("profile");
-        let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        Device::from_queries(desc, DevicePolicy::default()).expect("device")
-    };
-    let descriptor = |samples: u32| {
-        let mut d = RenderPipelineDescriptor::new(function(&io, "stage_io_vertex_position"));
-        d.fragment = Some(function(&tested, "tsw_fetch_discard"));
-        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA16Float));
-        d.color_attachments[1] = Some(ColorAttachmentDescriptor::new(PixelFormat::RG16Float));
-        d.depth_format = Some(PixelFormat::Depth32FloatStencil8);
-        d.stencil_format = Some(PixelFormat::Depth32FloatStencil8);
-        d.raster_sample_count = samples;
-        d
-    };
-    let shape = |fragment_tests: FragmentTests| {
-        BindState {
-            fragment_tests,
-            ..Default::default()
-        }
-        .shape()
-    };
-    let shipped = [
-        ("moltenvk-m3", 1),
-        ("amd-780m-radv", 1),
-        ("intel-irisxe-rplp-anv", 1),
-    ];
-    for (stem, samples) in shipped {
-        let at = format!("{stem} at {samples}");
-        let dev = device(stem);
-        let d = descriptor(samples);
-        let base = dev
-            .compile_render_pipeline(&d, &Budget::standard())
-            .expect("the pipeline");
-        let plan = base
-            .plan(&dev, &shape(FragmentTests::Stencil))
-            .unwrap_or_else(|e| panic!("{at}: {e:?}"));
-        assert!(
-            plan.variant.shader_tests && plan.variant.shader_stencil,
-            "{at}"
-        );
-        assert!(!plan.variant.read_only_tests, "{at}");
-        let variant = dev
-            .compile_render_variant(&d, &plan.variant, &Budget::standard())
-            .expect("the in-shader tests' variant");
-        assert!(
-            variant
-                .dependencies
-                .iter()
-                .any(|x| matches!(x.fact, RuntimeFact::ShaderStencilTest { .. })),
-            "{at}"
-        );
-        let tests = variant.graphics.shader_tests.expect("the stand-ins");
-        let stencil = tests.stencil.expect("the stencil's stand-in");
-        assert_eq!(stencil.format, crate::vk::Format::R8_UINT, "{at}");
-        assert_eq!(stencil.samples, samples, "{at}");
-        assert_eq!(stencil.view, crate::pipeline::StandInView::Image, "{at}");
-        for m in &variant.stages {
-            check_words_valid(&m.spirv, &variant.requirements, dev.profile())
-                .unwrap_or_else(|e| panic!("{at} L3: {e}"));
-        }
-        let again = variant
-            .plan(&dev, &shape(FragmentTests::Stencil))
-            .expect("the variant's plan");
-        assert_eq!(again.variant, plan.variant, "{at}: a fixed point");
-        for source in [WriteSource::DepthStandIn, WriteSource::StencilStandIn] {
-            assert!(
-                again.descriptors.iter().any(|w| w.source == source),
-                "{at}: {source:?}"
-            );
-        }
-        // A stencil test that drops fragments but writes nothing, beside a depth test that
-        // writes nothing, keeps the early-tests variant.
-        let drop = base
-            .plan(&dev, &shape(FragmentTests::Drop))
-            .expect("the plan without writes");
-        assert!(
-            drop.variant.read_only_tests && !drop.variant.shader_stencil,
-            "{at}"
-        );
-    }
-    // At four samples: the depth test in the shader needs each sample's depth.
-    for stem in ["moltenvk-m3", "amd-780m-radv"] {
-        let dev = device(stem);
-        let base = dev
-            .compile_render_pipeline(&descriptor(4), &Budget::standard())
-            .expect("the pipeline");
-        assert_eq!(
-            base.plan(&dev, &shape(FragmentTests::Stencil)).map(|_| ()),
-            Err(BindError::Unsupported(
-                Unsupported::not_implemented(Feature::MultisampledShaderDepthTest)
-                    .at_attachment(Attachment::Depth)
-            )),
-            "{stem}"
-        );
-    }
-    // A pass with a stencil attachment alone.
-    let dev = device("amd-780m-radv");
-    let mut d = descriptor(1);
-    d.depth_format = None;
-    d.stencil_format = Some(PixelFormat::Stencil8);
-    let base = dev
-        .compile_render_pipeline(&d, &Budget::standard())
-        .expect("the stencil-only pipeline");
-    assert_eq!(
-        base.plan(&dev, &shape(FragmentTests::Stencil)).map(|_| ()),
-        Err(BindError::Unsupported(
-            Unsupported::not_implemented(Feature::FramebufferFetch)
-                .at_attachment(Attachment::Stencil)
-        ))
-    );
 }
 
 /// A fetch that writes its color through the interlock and returns its depth
 /// (`dsx_fetch_returned_depth`), beside a `Depth32Float` attachment, stores before the tests and
-/// has no early-tests variant; a draw whose depth test writes runs the variant whose function tests
-/// the depth it returns. At one sample and at four on MoltenVK (M3 Max, M4), RADV and Intel's ANV
-/// alike: a returned depth is the same at every sample, so no device needs a per-sample depth
-/// source for it, no vertex function writes the window depth, and no note is recorded. The
-/// variant's words validate and its plan is a fixed point that binds the stand-in. The compiled
-/// pipeline (a draw under `Always`, `FragmentTests::Pass`) and the variant alike record a positive
-/// NaN it returns as discarded and kill it once, after the critical section (the lanes: before, the
-/// compiled pipeline stored its color).
+/// has no early-tests variant. At one sample and at four on MoltenVK (M3 Max, M4), RADV and Intel's
+/// ANV alike, the compiled pipeline (a draw under `Always`, `FragmentTests::Pass`) records a
+/// positive NaN it returns as discarded and kills it once, after the critical section (the lanes:
+/// before, the compiled pipeline stored its color), and a draw whose depth test writes is refused
+/// `NotImplemented(FramebufferFetch)` at the depth attachment.
 #[test]
-fn a_returned_depth_is_tested_in_the_shader_at_every_sample_count() {
+fn a_fetch_that_returns_its_depth_refuses_a_draw_whose_depth_test_writes() {
     use crate::bind::FragmentTests;
     let (Some(returned), Some(io)) = (fixture("dsx_fetch_returned_depth"), fixture("stage_io"))
     else {
@@ -2995,44 +2832,13 @@ fn a_returned_depth_is_tested_in_the_shader_at_every_sample_count() {
                     }),
                 "{at}: stores before the tests, without an early-tests variant"
             );
-            let plan = base
-                .plan(&dev, &shape(FragmentTests::Depth { writes: true }))
-                .unwrap_or_else(|e| panic!("{at}: the plan: {e:?}"));
-            assert!(plan.variant.shader_tests, "{at}");
-            assert!(!plan.variant.window_depth_varying, "{at}");
-            let variant = dev
-                .compile_render_variant(&d, &plan.variant, &Budget::standard())
-                .expect("the in-shader depth test's variant");
-            assert!(
-                variant.dependencies.iter().any(|x| matches!(
-                    x.fact,
-                    RuntimeFact::ShaderTests { multisampled, .. } if multisampled == (samples > 1)
+            assert_eq!(
+                base.plan(&dev, &shape(FragmentTests::Depth { writes: true }))
+                    .map(|_| ()),
+                Err(BindError::Unsupported(
+                    crate::error::Unsupported::not_implemented(Feature::FramebufferFetch)
+                        .at_attachment(crate::error::Attachment::Depth)
                 )),
-                "{at}"
-            );
-            assert!(
-                kills_after_the_interlock(&variant.stages),
-                "{at}: the variant"
-            );
-            let notes: Vec<PrecisionNote> = variant
-                .stages
-                .iter()
-                .flat_map(|m| m.precision_notes.iter().copied())
-                .collect();
-            assert!(!notes.contains(&PrecisionNote::ComputedSampleDepth), "{at}");
-            for m in &variant.stages {
-                check_words_valid(&m.spirv, &variant.requirements, dev.profile())
-                    .unwrap_or_else(|e| panic!("{at} L3: {e}"));
-            }
-            let again = variant
-                .plan(&dev, &shape(FragmentTests::Depth { writes: true }))
-                .expect("the variant's plan");
-            assert_eq!(again.variant, plan.variant, "{at}: a fixed point");
-            assert!(
-                again
-                    .descriptors
-                    .iter()
-                    .any(|w| w.source == WriteSource::DepthStandIn),
                 "{at}"
             );
         }
@@ -3041,18 +2847,13 @@ fn a_returned_depth_is_tested_in_the_shader_at_every_sample_count() {
 
 /// Fetches that write their color through the interlock and return a stencil, a sample mask, or
 /// both (`dsx_fetch_returned_stencil`), beside a `Depth32Float_Stencil8` attachment, store before
-/// the tests without an early-tests variant. A draw whose stencil test acts runs the variant that
-/// runs both tests in the shader, the returned stencil its reference and the returned mask keeping
-/// the fragment's samples; a draw whose depth test alone acts, the depth test's variant. At one
-/// sample on MoltenVK (M4), RADV, Intel's ANV and NVIDIA (without stencil export, whose compiled
-/// pipeline holds a returned stencil in the shader-side stencil's shadow, and refuses a returned
-/// sample mask beside it): each variant states its tests, holds no shader-side stencil (the stencil
-/// output is stored nowhere), validates, and plans as a fixed point that binds its stand-ins. At
-/// four samples RADV refuses the variants at the depth attachment: the depth test in the shader
-/// needs each sample's depth, which no profile states
-/// (`a_per_sample_depth_test_is_refused_at_the_depth_attachment`).
+/// the tests without an early-tests variant. At one sample on RADV, Intel's ANV and NVIDIA (without
+/// stencil export, whose compiled pipeline holds a returned stencil in the shader-side stencil's
+/// shadow, and refuses a returned sample mask beside it), and at four on RADV, a draw whose stencil
+/// test acts or whose depth test writes is refused `NotImplemented(FramebufferFetch)` at the depth
+/// attachment.
 #[test]
-fn a_returned_stencil_and_sample_mask_are_tested_in_the_shader() {
+fn a_returned_stencil_or_sample_mask_refuses_a_draw_whose_tests_act() {
     use crate::bind::FragmentTests;
     let (Some(returned), Some(io)) = (fixture("dsx_fetch_returned_stencil"), fixture("stage_io"))
     else {
@@ -3108,10 +2909,8 @@ fn a_returned_stencil_and_sample_mask_are_tested_in_the_shader() {
             assert_eq!(
                 base.plan(&radv, &shape(tests)).map(|_| ()),
                 Err(BindError::Unsupported(
-                    crate::error::Unsupported::not_implemented(
-                        Feature::MultisampledShaderDepthTest
-                    )
-                    .at_attachment(crate::error::Attachment::Depth)
+                    crate::error::Unsupported::not_implemented(Feature::FramebufferFetch)
+                        .at_attachment(crate::error::Attachment::Depth)
                 )),
                 "{name} at 4x under {tests:?}"
             );
@@ -3147,49 +2946,18 @@ fn a_returned_stencil_and_sample_mask_are_tested_in_the_shader() {
                     }),
                 "{at}: stores before the tests, without an early-tests variant"
             );
-            for (tests, stencil) in [
-                (FragmentTests::Stencil, true),
-                (FragmentTests::Depth { writes: true }, false),
+            for tests in [
+                FragmentTests::Stencil,
+                FragmentTests::Depth { writes: true },
             ] {
-                let at = format!("{at} under {tests:?}");
-                let plan = base
-                    .plan(&dev, &shape(tests))
-                    .unwrap_or_else(|e| panic!("{at}: the plan: {e:?}"));
-                assert!(plan.variant.shader_tests, "{at}");
-                assert_eq!(plan.variant.shader_stencil, stencil, "{at}");
-                let variant = dev
-                    .compile_render_variant(&d, &plan.variant, &Budget::standard())
-                    .unwrap_or_else(|e| panic!("{at}: the variant: {e:?}"));
                 assert_eq!(
-                    variant
-                        .dependencies
-                        .iter()
-                        .any(|x| matches!(x.fact, RuntimeFact::ShaderStencilTest { .. })),
-                    stencil,
-                    "{at}"
+                    base.plan(&dev, &shape(tests)).map(|_| ()),
+                    Err(BindError::Unsupported(
+                        crate::error::Unsupported::not_implemented(Feature::FramebufferFetch)
+                            .at_attachment(crate::error::Attachment::Depth)
+                    )),
+                    "{at} under {tests:?}"
                 );
-                assert!(
-                    variant.graphics.shadow_stencil.is_none(),
-                    "{at}: no shader-side stencil"
-                );
-                for m in &variant.stages {
-                    check_words_valid(&m.spirv, &variant.requirements, dev.profile())
-                        .unwrap_or_else(|e| panic!("{at} L3: {e}"));
-                }
-                let again = variant
-                    .plan(&dev, &shape(tests))
-                    .unwrap_or_else(|e| panic!("{at}: the variant's plan: {e:?}"));
-                assert_eq!(again.variant, plan.variant, "{at}: a fixed point");
-                let sources: &[WriteSource] = match stencil {
-                    true => &[WriteSource::DepthStandIn, WriteSource::StencilStandIn],
-                    false => &[WriteSource::DepthStandIn],
-                };
-                for source in sources {
-                    assert!(
-                        again.descriptors.iter().any(|w| w.source == *source),
-                        "{at}: {source:?}"
-                    );
-                }
             }
         }
     }

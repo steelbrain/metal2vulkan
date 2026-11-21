@@ -27,9 +27,7 @@
 //! The shader-side stencil's shadow (`Synthetic(ShadowStencil)`) is the product's too: its writes
 //! carry Metal's stencil test, which Metal applies per sample whether the function runs per pixel
 //! or per sample, so they do not make the function run per sample. An image write counts unless its
-//! image is a load of that binding. So are the depth and stencil attachments' stand-ins
-//! (`Synthetic(DepthStandIn)` and `Synthetic(StencilStandIn)`), whose writes carry Metal's depth
-//! and stencil tests.
+//! image is a load of that binding.
 //!
 //! So is a color attachment's interlocked storage form (`TileAttachment`): its writes carry
 //! Metal's color attachment write, a
@@ -95,9 +93,8 @@ fn class(m: &TypedModule, ptr: Value) -> BResult<StorageClass> {
 struct Status<'m> {
     /// The variables of the `Synthetic(ExecutionStatus)` binding.
     bindings: Vec<Value>,
-    /// The variables of the `Synthetic(ShadowStencil)`, `Synthetic(DepthStandIn)`,
-    /// `Synthetic(StencilStandIn)`, `TileAttachment` and `SnapshotTexels` bindings, and the loads
-    /// of them.
+    /// The variables of the `Synthetic(ShadowStencil)`, `TileAttachment` and `SnapshotTexels`
+    /// bindings, and the loads of them.
     shadows: Vec<Value>,
     /// The push block's variable.
     block: Option<Value>,
@@ -124,11 +121,8 @@ impl<'m> Status<'m> {
                 GlobalKind::Resource(slot)
                     if matches!(
                         slot.kind,
-                        ResourceKind::Synthetic(
-                            SyntheticBinding::ShadowStencil
-                                | SyntheticBinding::DepthStandIn
-                                | SyntheticBinding::StencilStandIn
-                        ) | ResourceKind::TileAttachment(_)
+                        ResourceKind::Synthetic(SyntheticBinding::ShadowStencil)
+                            | ResourceKind::TileAttachment(_)
                             | ResourceKind::SnapshotTexels(_)
                     ) =>
                 {

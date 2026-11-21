@@ -813,8 +813,6 @@ pub fn graphics_state(
         // The storage form's writes join the outputs' once `link::fetch` decided them.
         color_outputs: 0,
         sample_mask: None,
-        // The fragment stage's facts decide it (`link::shader_tests`).
-        shader_tests: None,
         snapshot_reads,
         color_group: r.color_group.clone(),
         // The pipeline's private logic operation, once compile decided it

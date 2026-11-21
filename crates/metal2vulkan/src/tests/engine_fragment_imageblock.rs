@@ -818,9 +818,8 @@ fn the_binder_writes_the_storage_and_refuses_layered_passes() {
 /// layers `sample * words + w`; the pipeline links, and the graphics state records the storage. A
 /// function whose only effects are its outputs and its write declares early tests as at one
 /// sample, on MoltenVK on the M3 Max and on RADV alike; a function that states
-/// `TestedStorageWrites` needs, for a draw whose depth test acts, the variant that tests depth in
-/// the shader, before the write, whose plan is refused at the depth attachment on every device:
-/// each sample's test needs its sample's depth (`Feature::MultisampledShaderDepthTest`).
+/// `TestedStorageWrites`, for a draw whose depth test acts, is refused `NotImplemented(Imageblocks)`
+/// at the depth attachment on every device, as its write precedes Vulkan's tests.
 #[test]
 fn a_multisampled_pipeline_reaches_each_sample_s_cell() {
     use crate::bind::FragmentTests;
@@ -862,7 +861,7 @@ fn a_multisampled_pipeline_reaches_each_sample_s_cell() {
                 (true, Some(_)) => panic!("{what}: early tests beside a tested write"),
             };
             assert_eq!(got, want, "{what}");
-            // A draw whose depth test acts runs the in-shader test before the write.
+            // A draw whose depth test acts is refused: the write precedes Vulkan's tests.
             if let Tests::Tested { .. } = got {
                 let shape = BindState {
                     fragment_tests: FragmentTests::Depth { writes: true },
@@ -870,11 +869,15 @@ fn a_multisampled_pipeline_reaches_each_sample_s_cell() {
                 }
                 .shape();
                 match p.plan(&dev, &shape) {
-                    Err(BindError::Unsupported(u)) => assert_eq!(
-                        (u.feature, u.needs),
-                        (Feature::MultisampledShaderDepthTest, Needs::NotImplemented),
-                        "{what}"
-                    ),
+                    Err(BindError::Unsupported(u)) => {
+                        assert_eq!(
+                            (u.feature, u.needs),
+                            (Feature::Imageblocks, Needs::NotImplemented),
+                            "{what}"
+                        );
+                        let at = u.location.as_ref().and_then(|l| l.attachment());
+                        assert_eq!(at, Some(crate::error::Attachment::Depth), "{what}");
+                    }
                     other => panic!("{what}: the plan: {:?}", other.map(|_| ())),
                 }
             }

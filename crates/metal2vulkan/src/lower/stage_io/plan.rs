@@ -1682,38 +1682,6 @@ fn zero_index(
     Ok(())
 }
 
-/// The window depth's `float` variable in direction `dir` (`IoRole::WindowDepth`): a vertex
-/// function's output, or the no-perspective input of a fragment function that computes each
-/// sample's depth from it.
-pub(super) fn window_depth(sp: &mut StageIoPlan, dir: IoDir) -> Result<usize, Error> {
-    let key = VaryingKey::window_depth();
-    let ty = IoType {
-        numeric: IoNumeric::Float,
-        components: 1,
-        source_bits: 32,
-    };
-    let mut deco = IoDecor {
-        packed: true,
-        ..IoDecor::default()
-    };
-    let list = match dir {
-        IoDir::Input => {
-            deco.interpolation = SInterp::NoPerspective;
-            &mut sp.interface.inputs
-        }
-        IoDir::Output => &mut sp.interface.outputs,
-    };
-    push_var(
-        list,
-        IoVariable {
-            key: key.clone(),
-            role: IoRole::WindowDepth,
-            ty,
-        },
-    );
-    user(sp, key, dir, ty, deco)
-}
-
 /// The primitive ID's flat `uint` variable in direction `dir` (`IoRole::PrimitiveId`): the input a
 /// fragment function reads as `[[primitive_id]]` on a device without a fragment `PrimitiveId` or
 /// under `LoweringInputs::primitive_id_varying`, or the output of a vertex function compiled under
@@ -2394,17 +2362,6 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             crate::lower::fragment::select_imageblock_output(cx, o.field, ib, o.ty.align, ty)?;
             continue;
         }
-        // Compiled for draws whose fragment function runs their depth and stencil tests itself
-        // (`fragment::depth_test`), the device's stencil test is off: a stencil output is the
-        // in-shader stencil test's reference where the draws' stencil test acts, and changes
-        // nothing where it does not. Stored nowhere, on any device, so no shader-side stencil.
-        if matches!(o.role, OutputRole::Stencil)
-            && cx.stage == Stage::Fragment
-            && cx.inputs.shader_tests
-        {
-            int_scalar_form(cx, ty)?;
-            continue;
-        }
         // A stencil output on a device without stencil export is the shader-side stencil,
         // written to the stencil's shadow, not an interface variable.
         if matches!(o.role, OutputRole::Stencil)
@@ -2665,27 +2622,6 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     }
     if cx.inputs.region_copies && cx.stage == Stage::Vertex {
         region_copy(cx, &outputs, returned)?;
-    }
-    // The window depth of the position the function stores, for a fragment function that
-    // computes each sample's depth from it. A function that writes no position rasterizes
-    // nothing.
-    if cx.inputs.window_depth_varying && cx.stage == Stage::Vertex {
-        let sp = &mut cx.families.stage_io;
-        let position = sp.objects.iter().position(|o| {
-            matches!(
-                o,
-                IoObject::Builtin {
-                    builtin: B::Position,
-                    dir: IoDir::Output,
-                    ..
-                }
-            )
-        });
-        if let Some(position) = position {
-            let object = window_depth(sp, IoDir::Output)?;
-            sp.window_depth = Some(super::WindowDepth { position, object });
-            sp.words = sp.words.saturating_add(super::WINDOW_DEPTH_WORDS);
-        }
     }
     // The primitive ID a fragment function reads from its varying.
     if cx.inputs.primitive_id_varying && cx.stage == Stage::Vertex {

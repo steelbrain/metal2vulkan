@@ -278,14 +278,6 @@ impl DeviceProfile {
                 .enabled
                 .properties
                 .contains(&VkProperty::MetalVertexSimdgroups),
-            DriverDeviation::CenterFragCoordDepth => f
-                .enabled
-                .properties
-                .contains(&VkProperty::CenterFragCoordDepth),
-            DriverDeviation::SampleFragCoordDepth => f
-                .enabled
-                .properties
-                .contains(&VkProperty::SampleFragCoordDepth),
             DriverDeviation::MetalHalfTexelWrites => f
                 .enabled
                 .properties

@@ -144,12 +144,9 @@
 //!   `RuntimeFact::MovableStorageWrites`, which states the `early_variant` the moved writer's
 //!   variant states, where the pipeline as compiled states no `TestedStorageWrites`; a moved write
 //!   whose mask names none of the attachment's components stores nothing, and takes no tests. (A
-//!   draw whose depth test alone acts, `Depth`, runs the variant whose function runs it itself,
-//!   `VariantKey::shader_tests`, unless it writes nothing and the early-tests variant serves it;
-//!   one whose stencil test acts and whose tests write, `Stencil`, or a `Drop` draw of a function
-//!   without the early-tests variant, runs the variant whose function runs both,
-//!   `VariantKey::shader_stencil`, in a pass with a depth and a stencil attachment; a pass with a
-//!   stencil attachment alone is `NotImplemented(FramebufferFetch)` at it.)
+//!   draw whose depth test alone acts, `Depth`, is `NotImplemented(FramebufferFetch)` at the depth
+//!   attachment, unless it writes nothing and the early-tests variant serves it; one whose stencil
+//!   test acts and whose tests write, `Stencil`, is so at the stencil attachment.)
 //! - **Draws.** A Metal draw maps to the Vulkan draw of the same arguments; an indirect draw is
 //!   GPU-side unless a stage reads `BaseVertexInstance` from push constants or the plan is
 //!   multiview, in which case `indirect_needs_arguments` asks for the CPU read.
@@ -292,8 +289,8 @@ use crate::bind::plan::slots::{
 use crate::bind::plan::{
     AccessClass, BindingPlan, BoundKind, ByteRange, DescriptorWrite, FactorTemplate, FieldLocation,
     GraphicsTemplate, GroupLimits, GroupStage, MeshTemplate, PlannedVertexBuffer,
-    PushFieldPlacement, PushTemplate, ResourceUse, ShaderTestsTemplate, ShadowTemplate,
-    StageTemplate, StrideRules, UseTarget, VertexBufferBind, ViewSetup, WriteSource,
+    PushFieldPlacement, PushTemplate, ResourceUse, ShadowTemplate, StageTemplate, StrideRules,
+    UseTarget, VertexBufferBind, ViewSetup, WriteSource,
 };
 use crate::bind::resident::{stage_root_table, table_entries};
 use crate::bind::state::{
@@ -988,8 +985,8 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     // run the same fragments (the pipeline differs only in its dynamic write masks), the first
     // with every mask 0 running none of the function past its copy, so the pipeline may hold
     // nothing else either draw writes, tests, or orders: one sample, no depth or stencil, no
-    // memory either function writes, no attachment, imageblock, tile memory, stencil shadow or
-    // stand-in of the storage form or an input attachment, and no other interlock. A tessellation
+    // memory either function writes, no attachment, imageblock, tile memory or stencil shadow of
+    // the storage form or an input attachment, and no other interlock. A tessellation
     // or mesh pipeline's, and an amplified or layered draw's are not built.
     // The device makes the variant's pipeline: its feedback loop flag and dynamic write masks
     // need `attachmentFeedbackLoopLayout` and `extendedDynamicState3ColorWriteMask`.
@@ -1009,7 +1006,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         && p.graphics.storage_attachments.is_empty()
         && p.graphics.input_attachments.is_empty()
         && p.graphics.fragment_imageblock.is_none()
-        && p.graphics.shader_tests.is_none()
         && p.graphics.tessellation.is_none()
         && shadow.is_none()
         && tile_memory.is_none()
@@ -1113,94 +1109,46 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         Some(_) if p.graphics.storage_attachments.is_empty() => Feature::Imageblocks,
         _ => Feature::FramebufferFetch,
     };
-    // Where only the depth test can drop a fragment, the stencil test does nothing and nothing
-    // is counted, the variant whose function runs the depth test itself (`shader_tests`), where
-    // the device ships it at the pipeline's samples; a draw whose tests write nothing keeps the
-    // early-tests variant where the function has one.
-    let samples = p.graphics.rasterization_samples.as_raw().max(1);
-    // The variant whose function runs the depth test itself, and the stencil test too where
-    // `stencil`, or the refusal of the device or the attachment that lacks it.
-    let in_shader = |stencil: bool| -> Result<(bool, bool, bool, bool), BindError> {
-        // The stand-in holds 32-bit float depth (link refuses Metal's other depth formats).
-        let float = matches!(
-            p.graphics.depth_format,
-            Some(vk::Format::D32_SFLOAT | vk::Format::D32_SFLOAT_S8_UINT)
-        );
-        if !float {
-            return Err(BindError::Unsupported(
-                Unsupported::not_implemented(tested_feature.clone())
-                    .at_attachment(Attachment::Depth),
-            ));
-        }
-        // A function that returns its depth tests that, at every sample alike.
-        let form =
-            crate::lower::fragment::depth_test_form(profile, samples > 1, p.graphics.writes_depth)
-                .map_err(|refused| {
-                    BindError::Unsupported(refused.at_attachment(Attachment::Depth))
-                })?;
-        if stencil {
-            crate::lower::fragment::stencil_test_form(profile, samples > 1).map_err(|refused| {
-                BindError::Unsupported(refused.at_attachment(Attachment::Stencil))
-            })?;
-        }
-        // Each sample's depth computed from the vertex function's window depth.
-        Ok((false, true, form.computed, stencil))
-    };
+    // A draw whose tests drop some fragments but write and count nothing runs the early-tests
+    // variant where the function has one; a draw whose tests may drop a fragment and write, or
+    // count, is not implemented, as the function stores before Vulkan's tests. The refusal is
+    // placed at the tested attachment: the depth one where the pipeline has one, else the
+    // stencil.
     let depth = p.graphics.depth_format.is_some();
     let stencil = p.graphics.stencil_format.is_some();
-    let (read_only_tests, shader_tests, window_depth_varying, shader_stencil) =
-        match (tested, shape.fragment_tests) {
-            (Some((_, true)), FragmentTests::Drop | FragmentTests::Depth { writes: false })
-                if tested_attachments =>
-            {
-                (true, false, false, false)
-            }
-            (Some(_), FragmentTests::Depth { .. }) if depth => in_shader(false)?,
-            // The stencil test acts (or, for a function without the early-tests variant, may):
-            // the function runs both tests, in a pass with both attachments. A pass with a
-            // stencil attachment alone has no depth for the form's attachment: not implemented,
-            // refused at the stencil attachment.
-            (Some(_), FragmentTests::Drop | FragmentTests::Stencil) if depth && stencil => {
-                in_shader(true)?
-            }
-            (Some(_), FragmentTests::Drop | FragmentTests::Stencil) if stencil => {
-                return Err(BindError::Unsupported(
-                    Unsupported::not_implemented(tested_feature.clone())
-                        .at_attachment(Attachment::Stencil),
-                ));
-            }
-            // A function that writes other memory or returns depth, stencil, or a sample mask: its
-            // stores are Metal's only where no test can drop a fragment. The refusal is placed at
-            // the tested attachment (the depth one where the pipeline has one, else the stencil).
-            (
-                Some((_, false)),
-                FragmentTests::Drop
-                | FragmentTests::Depth { .. }
-                | FragmentTests::Any
-                | FragmentTests::Stencil,
-            ) if tested_attachments => {
-                let at = match p.graphics.depth_format {
-                    Some(_) => Attachment::Depth,
-                    None => Attachment::Stencil,
-                };
-                return Err(BindError::Unsupported(
-                    Unsupported::not_implemented(tested_feature.clone()).at_attachment(at),
-                ));
-            }
-            (Some(_), FragmentTests::Any | FragmentTests::Stencil) if tested_attachments => {
-                return Err(not_implemented(tested_feature.clone()));
-            }
-            _ => (false, false, false, false),
-        };
+    let at = |attachment: Attachment| {
+        Err(BindError::Unsupported(
+            Unsupported::not_implemented(tested_feature.clone()).at_attachment(attachment),
+        ))
+    };
+    let read_only_tests = match (tested, shape.fragment_tests) {
+        (Some((_, true)), FragmentTests::Drop | FragmentTests::Depth { writes: false })
+            if tested_attachments =>
+        {
+            true
+        }
+        // A function that writes other memory or returns depth, stencil, or a sample mask: its
+        // stores are Metal's only where no test can drop a fragment.
+        (
+            Some((_, false)),
+            FragmentTests::Drop
+            | FragmentTests::Depth { .. }
+            | FragmentTests::Any
+            | FragmentTests::Stencil,
+        ) if tested_attachments => {
+            return at(match depth {
+                true => Attachment::Depth,
+                false => Attachment::Stencil,
+            });
+        }
+        (Some(_), FragmentTests::Depth { .. }) if depth => return at(Attachment::Depth),
+        (Some(_), FragmentTests::Stencil) if stencil => return at(Attachment::Stencil),
+        (Some(_), FragmentTests::Any | FragmentTests::Stencil) if tested_attachments => {
+            return Err(not_implemented(tested_feature.clone()));
+        }
+        _ => false,
+    };
     let compiled_tests = tested.is_some_and(|(early, _)| early);
-    let compiled_shader_tests = p
-        .dependencies
-        .iter()
-        .any(|d| matches!(d.fact, RuntimeFact::ShaderTests { .. }));
-    let compiled_shader_stencil = p
-        .dependencies
-        .iter()
-        .any(|d| matches!(d.fact, RuntimeFact::ShaderStencilTest { .. }));
     // A mesh entry's `Layer` at or past `maxMeshOutputLayers` is undefined: a pass of more layers
     // than that, which a mesh function choosing its slice could render into, is past the device.
     let mesh_layers = limits.mesh.max_mesh_output_layers;
@@ -1349,10 +1297,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 PushField::YCbCrInPlace(_) | PushField::TexelRows(_) => {}
                 // The encoder's stencil state, which instantiation reads from the state.
                 PushField::ShadowStencilState if stage == Stage::Fragment => {}
-                // The encoder's depth state, which instantiation reads from the state, and its
-                // stencil state and references.
-                PushField::ShaderTestsState | PushField::ShaderStencilState
-                    if stage == Stage::Fragment => {}
                 // The encoder's viewport count, which instantiation reads from the state, in the
                 // stage that chooses a viewport (a mesh function per primitive).
                 PushField::ViewportCount if matches!(stage, Stage::Vertex | Stage::Mesh) => {}
@@ -1669,28 +1613,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                                 samples: p.graphics.rasterization_samples.as_raw().max(1),
                                 storage_format: Some(crate::lower::fragment::SHADOW_FORMAT),
                             }),
-                        }
-                    }
-                    // The depth attachment's stand-in: a plan asks for the variant only where the
-                    // pipeline has a depth attachment, whose pipeline states its stand-in.
-                    SyntheticBinding::DepthStandIn if stage == Stage::Fragment => {
-                        match &p.graphics.shader_tests {
-                            Some(_) => WriteSource::DepthStandIn,
-                            None => {
-                                return Err(internal("a depth stand-in without a depth attachment"))
-                            }
-                        }
-                    }
-                    // The stencil attachment's stand-in: a plan asks for the variant only where
-                    // the pipeline has a depth and a stencil attachment.
-                    SyntheticBinding::StencilStandIn if stage == Stage::Fragment => {
-                        match p.graphics.shader_tests.and_then(|t| t.stencil) {
-                            Some(_) => WriteSource::StencilStandIn,
-                            None => {
-                                return Err(internal(
-                                    "a stencil stand-in without a stencil attachment",
-                                ))
-                            }
                         }
                     }
                     // The command buffer's status, on a device that does not address buffers.
@@ -2118,9 +2040,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     variant.rotated_weights = rotated_weights;
     variant.line_band = line_band;
     variant.read_only_tests = read_only_tests;
-    variant.shader_tests = shader_tests;
-    variant.shader_stencil = shader_stencil;
-    variant.window_depth_varying = window_depth_varying;
     variant.primitive_id_indices = primitive_id_indices;
     variant.quad_primitive_ids = quad_primitive_ids;
     variant.private_list = private_list;
@@ -2159,8 +2078,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 || compiled_rotated != rotated_weights
                 || compiled_band != line_band
                 || compiled_tests != read_only_tests
-                || compiled_shader_tests != shader_tests
-                || compiled_shader_stencil != shader_stencil
                 || compiled_quads != quad_primitive_ids
                 || compiled_list != private_list
                 || compiled_regions != region_viewports
@@ -2190,11 +2107,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
             )?,
             shadow_stencil: shadow,
             mesh,
-            shader_tests: p
-                .graphics
-                .shader_tests
-                .is_some()
-                .then_some(ShaderTestsTemplate),
             deindexed: primitive_id_indices,
             private_list,
             storage_kept: storage_kept(p)?,
@@ -2265,8 +2177,6 @@ fn shadow_stencil_words(t: &ShadowTemplate, state: &BindState) -> Result<FieldBy
     })))
 }
 
-/// The `PushField::ShaderTestsState` words of a draw under encoder state `state`: the depth compare
-/// function, write enable and clip mode, and viewport 0's depth range.
 /// The 8-bit unorm code Metal's private alpha test compares the reference `reference` as
 /// (`setAlphaTestReferenceValue:`, Apple SPI; `PushField::AlphaTestReference`, probes on an Apple
 /// M3 Max): NaN is 0, the value is clamped to `[0, 1]`, and the code is the exact product with
@@ -2280,38 +2190,6 @@ pub fn alpha_test_code(reference: f32) -> u32 {
         false => f64::from(reference.clamp(0.0, 1.0)),
     };
     (clamped * 255.0).round_ties_even() as u32
-}
-
-fn shader_tests_words(state: &BindState) -> FieldBytes {
-    let ds = &state.depth_stencil;
-    let clamp = state.depth_clip_mode_clamp;
-    let word = crate::lower::fragment::depth_test_word(
-        ds.depth_compare_function.as_raw(),
-        ds.depth_write_enabled,
-        clamp,
-    );
-    let [near, far] = state.depth_range;
-    FieldBytes::words([word, near.to_bits(), far.to_bits(), 0])
-}
-
-/// The `PushField::ShaderStencilState` words of a draw under encoder state `state`: each face's
-/// stencil word (`lower::fragment::stencil_test_word`), the front then the back, the references'
-/// low 8 bits (front in bits 0 to 7, back in bits 8 to 15), and a zero word.
-fn shader_stencil_words(state: &BindState) -> FieldBytes {
-    let ds = &state.depth_stencil;
-    let [front_face, back_face] = [&ds.front_face_stencil, &ds.back_face_stencil].map(|f| {
-        crate::lower::fragment::stencil_test_word(
-            f.stencil_compare_function.as_raw(),
-            f.stencil_failure_operation.as_raw(),
-            f.depth_failure_operation.as_raw(),
-            f.depth_stencil_pass_operation.as_raw(),
-            f.read_mask,
-            f.write_mask,
-        )
-    });
-    let [front, back] = state.stencil_references;
-    let references = (front & 0xFF) | (back & 0xFF) << 8;
-    FieldBytes::words([front_face, back_face, references, 0])
 }
 
 /// The address alignment and the element bytes the fixed-function attributes of `binding` read
@@ -3642,18 +3520,6 @@ fn instantiate(
                         return Err(internal("a stencil state without its shader-side stencil"));
                     };
                     shadow_stencil_words(shadow, state)?
-                }
-                PushField::ShaderTestsState => {
-                    if t.shader_tests.is_none() {
-                        return Err(internal("a depth state without its in-shader depth test"));
-                    }
-                    shader_tests_words(state)
-                }
-                PushField::ShaderStencilState => {
-                    if t.shader_tests.is_none() {
-                        return Err(internal("a stencil state without its in-shader tests"));
-                    }
-                    shader_stencil_words(state)
                 }
                 PushField::DispatchRegion => match mesh.as_ref().and_then(|m| m.region(st.stage)) {
                     Some(region) => FieldBytes::of(&region),

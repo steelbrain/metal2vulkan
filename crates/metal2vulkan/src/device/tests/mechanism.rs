@@ -193,17 +193,11 @@ fn every_fact() -> Vec<RuntimeFact> {
         RuntimeFact::CubicArgumentSampler {
             stage: Stage::Kernel,
         },
-        RuntimeFact::ShaderTests {
-            formatless: false,
-            multisampled: true,
-            planes: true,
-        },
         RuntimeFact::StorageTextureIntegerChannels { slot },
         RuntimeFact::HeapRawSamples {
             stage: Stage::Fragment,
             sampler: Some(1),
         },
-        RuntimeFact::ShaderStencilTest { formatless: true },
         RuntimeFact::ExtendedRangeInputBlend {
             color: 0,
             blend: {
@@ -367,9 +361,7 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::ConstexprSampled { .. } => 67,
         RuntimeFact::CubicSampler { .. } => 68,
         RuntimeFact::CubicArgumentSampler { .. } => 69,
-        RuntimeFact::ShaderTests { .. } => 70,
         RuntimeFact::HeapRawSamples { .. } => 73,
-        RuntimeFact::ShaderStencilTest { .. } => 74,
         RuntimeFact::ExtendedRangeInputBlend { .. } => 75,
         RuntimeFact::CrossClassReads { .. } => 76,
         RuntimeFact::StorageTextureWriteRounding { .. } => 77,
@@ -400,8 +392,8 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::TexelRows { .. } => 99,
         RuntimeFact::HeapStorageReads { .. } => 100,
         RuntimeFact::UnitAxes { .. } => 101,
-        RuntimeFact::TexelBufferParts { .. } => 102,
-        RuntimeFact::OpenClLineTexture { .. } => 103,
+        RuntimeFact::TexelBufferParts { .. } => 70,
+        RuntimeFact::OpenClLineTexture { .. } => 74,
         RuntimeFact::AddressAlignment { .. } => 71,
         RuntimeFact::GridTiles => 55,
     }
@@ -411,7 +403,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..104).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..102).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -531,8 +523,6 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::FragmentImageblock { .. }
                 | RuntimeFact::InterlockedFramebufferFetch { .. }
                 | RuntimeFact::ShadowStencil { .. }
-                | RuntimeFact::ShaderTests { .. }
-                | RuntimeFact::ShaderStencilTest { .. }
                 | RuntimeFact::TileImageblock { .. }
                 | RuntimeFact::ExtendedRangeInputBlend { .. }
                 | RuntimeFact::RotatedInputBlend { .. }

@@ -751,11 +751,6 @@ pub struct SlotRow {
 ///   (`RotatedBlendRounding`): Apple's blend computes a factor pair apart in its color and alpha
 ///   arithmetic, which the rotation swaps for Metal's alpha and blue, and the stored code is
 ///   ordinary data later words use. Open until the blend state has a measured form.
-/// - A fragment function that runs its draw's depth test itself at more than one sample from
-///   each sample's computed depth (`ComputedSampleDepth`): under perspective, a slope-scaled bias
-///   or another depth range a sample's depth may be up to 2 ulp from the device's, so a close test
-///   may decide otherwise and keep or drop a sample's color. Open until the sample's own depth is
-///   read exactly.
 ///
 /// A varying the device interpolates (`DeviceInterpolation`) is not deferred: every fragment
 /// function that reads one records it on every device but MoltenVK's, so a row-level deferral
@@ -768,7 +763,7 @@ pub struct SlotRow {
 /// denormal, a `half` rounding) belongs in a per-word judgement of a reading's differing words,
 /// beside the check of each against Apple's bound, never in this list: a row-level match would
 /// reopen every signed-off reading whose row merely records the note.
-pub const DEFERRED_NEAR_EQUIVALENTS: [PrecisionNote; 10] = [
+pub const DEFERRED_NEAR_EQUIVALENTS: [PrecisionNote; 9] = [
     PrecisionNote::RasterizationRateMap,
     PrecisionNote::SparseResidency,
     PrecisionNote::CubeGradientFootprint,
@@ -778,7 +773,6 @@ pub const DEFERRED_NEAR_EQUIVALENTS: [PrecisionNote; 10] = [
     PrecisionNote::BlendedWriteRounding,
     PrecisionNote::CoverageReadsRoundedAlpha,
     PrecisionNote::RotatedBlendRounding,
-    PrecisionNote::ComputedSampleDepth,
 ];
 
 /// Why a case stays open in a slot although its difference is known: deferred until an exact
@@ -886,13 +880,6 @@ fn near_equivalent_bound(note: PrecisionNote) -> &'static str {
              and alpha arithmetic, and the rotation moves Metal's blue into the image's alpha \
              and Metal's alpha into its red (up to 1,767 of 65,536 tie-heavy texels over 440 \
              swept states); exact path: a measured form for the state"
-        }
-        PrecisionNote::ComputedSampleDepth => {
-            "a fragment function that runs its draw's depth test itself at more than one sample \
-             computes each sample's depth from its vertex function's window depth; under \
-             perspective, a slope-scaled bias or another depth range it may be up to 2 ulp from \
-             the depth the device stores, so a close test may decide \
-             otherwise; exact path: the sample's own depth read exactly"
         }
         _ => "unbounded",
     }

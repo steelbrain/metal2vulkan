@@ -75,7 +75,6 @@ fn every_precision_note_has_its_table_row() {
         (N::CoverageReadsRoundedAlpha, Allowance::Unbounded),
         (N::DeviceAlphaCoverage, Allowance::Unbounded),
         (N::RotatedBlendRounding, Allowance::Unbounded),
-        (N::ComputedSampleDepth, Allowance::Unbounded),
         (N::UnorderedFetchWithinDraw, Allowance::Unbounded),
         (N::NativeLogicOperation, Allowance::Unbounded),
         (N::NativeFloat8, Allowance::Unbounded),

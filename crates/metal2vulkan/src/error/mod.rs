@@ -660,25 +660,6 @@ pub enum DriverDeviation {
     /// requires the property in place of `VkProperty::SubgroupStage(Vertex)`. Unmeasured, the stage
     /// has none, as the device states.
     MetalVertexSimdgroups,
-    /// In a fragment invocation of a multisampled pipeline that runs once per sample, the device
-    /// gives `FragCoord.z` at the pixel centre, the draw's depth bias included, as Metal gives
-    /// `[[position]].z`, reads a no-perspective varying at the pixel centre where it is read as it
-    /// is and at the sample through `InterpolateAtSample`, and its depth test stores each sample's
-    /// own depth (`VkProperty::CenterFragCoordDepth`). Where the profile takes it, a fragment
-    /// function that runs its draw's depth test itself at more than one sample computes each
-    /// sample's depth: its vertex function's window depth read at the sample, plus `FragCoord.z`
-    /// less that varying read at the centre, which carries the bias
-    /// (`PrecisionNote::ComputedSampleDepth`). Unmeasured, that test is refused at more than one
-    /// sample.
-    CenterFragCoordDepth,
-    /// In a fragment invocation of a multisampled pipeline that runs once per sample, the device
-    /// gives `FragCoord.z` at the invocation's sample, the draw's depth bias included: the depth
-    /// its own depth test stores at that sample (`VkProperty::SampleFragCoordDepth`). Where the
-    /// profile takes it, a fragment function that runs its draw's depth test itself at more than
-    /// one sample tests `FragCoord.z` at each sample, exact as at one sample. Unmeasured, that test
-    /// is refused at more than one sample, or computes each sample's depth where the profile takes
-    /// [`DriverDeviation::CenterFragCoordDepth`].
-    SampleFragCoordDepth,
     /// The device stores a `half` texel's write as Metal stores it once the shader hands it the
     /// half widened to `float` in a 16-bit float storage image, and the NaN `0x7fc00000` in a
     /// packed small float one (`VkProperty::MetalHalfTexelWrites`): the half's own bits, a
@@ -1010,13 +991,6 @@ pub enum Feature {
     /// access, or the pixel interlock's storage form where the pipeline's state lets it be
     /// exact), or in a shape not implemented.
     FramebufferFetch,
-    /// A fragment function that runs its draw's depth test itself (`lower::fragment::depth_test`)
-    /// at more than one sample, where it does not return its depth: not lowered, on any device.
-    /// Each sample's test needs that sample's depth, and Vulkan states no location for
-    /// `FragCoord.z` under sample shading: devices differ (RADV answers the sample's, MoltenVK the
-    /// pixel centre's), and no device query says which. A function that returns its depth tests
-    /// that, the same at every sample, and is lowered.
-    MultisampledShaderDepthTest,
     /// `[[primitive_id]]` in a fragment function: behind a mesh function on a device without
     /// geometry or tessellation shaders, whose fragment stage reads it from a varying no mesh
     /// function writes; and, of a pipeline whose vertex function writes that varying, the

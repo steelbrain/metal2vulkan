@@ -48,8 +48,6 @@ pub enum DrawReplayRule {
     FragmentImageblock,
     /// The state tests stencil in its shaders.
     ShaderStencil,
-    /// The state tests depth or stencil in its shaders.
-    ShaderTests,
     /// The state reads its attachments.
     InputAttachments,
     /// The state's indirect draw needs its arguments on the CPU.
@@ -106,9 +104,6 @@ impl fmt::Display for DrawReplayRule {
             }
             DrawReplayRule::FragmentImageblock => "the inherited state has a fragment imageblock",
             DrawReplayRule::ShaderStencil => "the inherited state tests stencil in its shaders",
-            DrawReplayRule::ShaderTests => {
-                "the inherited state tests depth or stencil in its shaders"
-            }
             DrawReplayRule::InputAttachments => "the inherited state reads its attachments",
             DrawReplayRule::ArgumentsOnCpu => {
                 "the inherited state's indirect draw needs its arguments on the CPU"
@@ -218,7 +213,6 @@ pub fn draw_replay_state(graphics: &GraphicsState, merged: bool) -> Result<(), D
             graphics.shadow_stencil.is_some(),
             DrawReplayRule::ShaderStencil,
         ),
-        (graphics.shader_tests.is_some(), DrawReplayRule::ShaderTests),
         (
             !graphics.input_attachments.is_empty(),
             DrawReplayRule::InputAttachments,

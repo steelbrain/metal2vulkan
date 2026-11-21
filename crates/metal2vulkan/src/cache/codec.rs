@@ -42,8 +42,7 @@ use crate::pipeline::facts::{Mechanism, RuntimeFact, UniformViewChoice};
 use crate::pipeline::graphics::{
     BandPrimitive, BlendState, ColorAttachmentState, FanOutState, FragmentImageblock,
     GraphicsState, ImageblockMechanism, InputAttachmentUse, LineBandState, RegionFanOut,
-    ShaderTestsUse, ShadowStencilUse, StandInUse, StandInView, StorageAttachmentUse,
-    StorageAttachmentView, TessellationState,
+    ShadowStencilUse, StorageAttachmentUse, StorageAttachmentView, TessellationState,
 };
 use crate::pipeline::interface::{
     AccessSet, BufferForm, BufferKind, BufferSlot, CommandWrites, DescriptorView, LevelReads,
@@ -858,8 +857,6 @@ codec_enum! {
         ControlPointIndices,
         TileMemory,
         FunctionTableSnapshot,
-        DepthStandIn,
-        StencilStandIn,
     }
     ResourceKind {
         Buffer, Texture, Sampler, Heap(f0), Synthetic(f0), InputAttachment(f0),
@@ -893,11 +890,9 @@ codec_enum! {
         PatchIndexOffset, PatchIndexBound, ControlPointIndexOffset, StageInStride(f0),
         AmplificationId, AmplificationLayerOffset, AmplificationViewportOffset,
         DepthClampRange,
-        ShaderTestsState,
         CaptureLayout,
         CaptureIndexAddress,
         StorageKeptChannels,
-        ShaderStencilState,
         TextureIntegerChannels(f0),
         BicubicTexels(f0),
         Specialized(f0),
@@ -1057,7 +1052,7 @@ codec_enum! {
         MetalHalfFma, MetalFloatDenormals,
         MetalCenterVaryings, MetalSmallFloatColorWrites, MetalNorm16ColorWrites, MetalMinMax,
         MetalHalfArithmetic, MetalHalfStorageWrites, MetalHalfStorageNans,
-        MetalFragmentSimdgroups, MetalVertexSimdgroups, CenterFragCoordDepth, SampleFragCoordDepth,
+        MetalFragmentSimdgroups, MetalVertexSimdgroups,
         MetalHalfTexelWrites, MetalNormStorageWrites, DeviceSampling,
         MetalDepth16Stores, MetalDepth16BiasedStores, MetalInterpolation, MetalFirstVertexIndices,
         MetalFullQuads, ProvokingVertexModePerPipeline,
@@ -1198,7 +1193,7 @@ codec_enum! {
     IoRole {
         Attribute { index }, Varying { user, interpolation },
         Color { attachment, index },
-        ViewportIndex, RenderTargetArrayIndex, PrimitiveVarying { user }, WindowDepth,
+        ViewportIndex, RenderTargetArrayIndex, PrimitiveVarying { user },
         Barycentric { perspective }, SelectedLayer, SelectedViewport, PrimitiveId, MergedCommand,
     }
     IoInterpolation { Flat, Smooth { sampling, perspective } }
@@ -1289,9 +1284,7 @@ codec_enum! {
         ConstexprSampled { slot, modes },
         CubicSampler { slot },
         CubicArgumentSampler { stage },
-        ShaderTests { formatless, multisampled, planes },
         HeapRawSamples { stage, sampler },
-        ShaderStencilTest { formatless },
         ExtendedRangeInputBlend { color, blend, kept },
         WordInputMerge { color, kept },
         CrossClassReads { slot },
@@ -1410,7 +1403,7 @@ codec_struct! {
         tessellation, fragment_imageblock, vertex_writes_memory, writes_viewport_index,
         storage_attachments, shadow_stencil, writes_point_size, writes_depth,
         reads_barycentric_coord, reads_primitive_id, fragment_writes_memory, color_outputs,
-        sample_mask, shader_tests, snapshot_reads, color_group, logic_op, line_band, region_fan_out,
+        sample_mask, snapshot_reads, color_group, logic_op, line_band, region_fan_out,
     }
     TessellationState {
         patch_control_points, domain, control_points, factor_step_function, push_offset,
@@ -1424,8 +1417,6 @@ codec_struct! {
     InputAttachmentUse { color_index, input_attachment_index, format_class }
     StorageAttachmentUse { color_index, format, writes, formatless, view, view_alias, kept }
     ShadowStencilUse { format, formatless, samples }
-    ShaderTestsUse { depth, stencil }
-    StandInUse { format, formatless, samples, view }
 }
 
 codec_enum! {
@@ -1435,7 +1426,6 @@ codec_enum! {
     SlotWriteGap { UnresolvedIndex, UnmeasuredPayloadStage, MemberRole }
     ImageblockMechanism { StorageImageInterlock }
     StorageAttachmentView { Attachment, SamplePlanes { layers } }
-    StandInView { Image, SamplePlanes { layers } }
     BandPrimitive { Lines, Triangles }
     RegionFanOut { Draw, Probe, DrawFew, RegionCopies }
     PrecisionNote {
@@ -1467,7 +1457,6 @@ codec_enum! {
         BlendedWriteRounding,
         RotatedBlendRounding,
         LinkedSamplerNumbering,
-        ComputedSampleDepth,
         ArgumentPixelSamplerScaling,
         HalfOutputPrecision,
         ExtendedRangeBlendSource,

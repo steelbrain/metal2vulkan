@@ -748,21 +748,6 @@ pub enum VkProperty {
     /// No Vulkan query reports it. A vertex module that uses subgroup operations requires it in
     /// place of `SubgroupStage(Vertex)` on such a device.
     MetalVertexSimdgroups,
-    /// In a per-sample fragment invocation of a multisampled pipeline the device gives
-    /// `FragCoord.z`, the draw's depth bias included, and a no-perspective varying read as it is
-    /// at the pixel centre, and `InterpolateAtSample` at the sample, while its depth test stores
-    /// each sample's own depth (the driver's measured deviation
-    /// [`DriverDeviation::CenterFragCoordDepth`](crate::error::DriverDeviation::CenterFragCoordDepth)).
-    /// No Vulkan query reports it. A fragment module that computes each sample's depth from those
-    /// reads for its in-shader depth test requires it.
-    CenterFragCoordDepth,
-    /// In a per-sample fragment invocation of a multisampled pipeline the device gives
-    /// `FragCoord.z` at the invocation's sample, the draw's depth bias included, the depth its
-    /// depth test stores there (the driver's measured deviation
-    /// [`DriverDeviation::SampleFragCoordDepth`](crate::error::DriverDeviation::SampleFragCoordDepth)).
-    /// No Vulkan query reports it. A fragment module whose in-shader depth test reads `FragCoord.z`
-    /// at each sample requires it.
-    SampleFragCoordDepth,
     /// The device stores the widened `half` a shader writes to a 16-bit float storage image as
     /// the half's own bits, a signalling NaN's unquieted, and the NaN `0x7fc00000` written to a
     /// packed small float one as the format's canonical NaN (the driver's measured deviation

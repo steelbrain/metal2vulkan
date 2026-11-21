@@ -120,9 +120,8 @@ pub use astc_decode::{AstcDecode, AstcTexels};
 pub use chroma_decode::ChromaDecode;
 pub use depth_clamp::clamped_depth;
 pub use depth_stencil_copy::{
-    depth_split_module, depth_stencil_copy_modules, stencil_split_module, CopySource,
-    DepthSplitModule, DepthStandInForm, DepthStencilCopy, DepthStencilCopyModules, StencilBit,
-    StencilSplitModule,
+    depth_stencil_copy_modules, stencil_split_module, CopySource, DepthStencilCopy,
+    DepthStencilCopyModules, StencilBit, StencilSplitModule,
 };
 pub use dispatch::{Dispatch, DispatchCommands, DispatchRegion, IndirectArgs};
 pub use etc_decode::{EtcDecode, EtcTexels};

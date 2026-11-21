@@ -617,7 +617,6 @@ fn instantiation_bounds_a_draw_by_its_index_buffer() {
         robust_index_fetch,
         shadow_stencil: None,
         mesh: None,
-        shader_tests: None,
         deindexed: None,
         private_list: false,
         storage_kept: 0,
@@ -667,7 +666,6 @@ fn a_draw_of_no_index_binds_inside_the_buffer() {
         robust_index_fetch,
         shadow_stencil: None,
         mesh: None,
-        shader_tests: None,
         deindexed: None,
         private_list: false,
         storage_kept: 0,
@@ -752,7 +750,6 @@ fn an_unbounded_indexed_indirect_draw_reads_its_arguments() {
         robust_index_fetch,
         shadow_stencil: None,
         mesh: None,
-        shader_tests: None,
         deindexed: None,
         private_list: false,
         storage_kept: 0,
@@ -809,7 +806,6 @@ fn draws_bind_vertex_buffers_at_aligned_offsets_with_their_windows() {
         robust_index_fetch: false,
         shadow_stencil: None,
         mesh: None,
-        shader_tests: None,
         deindexed: None,
         private_list: false,
         storage_kept: 0,
@@ -901,7 +897,6 @@ fn inline_vertex_bytes_bind_the_strides_a_dynamic_layout_reads() {
         robust_index_fetch: false,
         shadow_stencil: None,
         mesh: None,
-        shader_tests: None,
         deindexed: None,
         private_list: false,
         storage_kept: 0,
@@ -1505,7 +1500,6 @@ fn mesh_template(flat: bool, multiples: Vec<u32>) -> GraphicsTemplate {
             folded: false,
             partial_groups: false,
         }),
-        shader_tests: None,
         deindexed: None,
         private_list: false,
         storage_kept: 0,
@@ -2110,49 +2104,4 @@ fn mesh_draws_specialize_their_threadgroup_within_the_device() {
         instantiate(&other, &state, &primitives(0, 3, (0, 1))).map(|c| c.specialization),
         Ok(None)
     );
-}
-
-/// `PushField::ShaderStencilState`'s words: each face's word in its documented bits (the
-/// shader-side stencil's fields, the depth-failure operation in bits 25 to 27, masks cut to 8
-/// bits), the front face's first, then the references' low 8 bits (front in bits 0 to 7, back in
-/// bits 8 to 15), then zero.
-#[test]
-fn shader_stencil_words_pack_each_face_then_the_references() {
-    use metal::{CompareFunction, StencilOperation};
-    let mut state = BindState::default();
-    let front = &mut state.depth_stencil.front_face_stencil;
-    front.stencil_compare_function = CompareFunction::Equal;
-    front.stencil_failure_operation = StencilOperation::Zero;
-    front.depth_failure_operation = StencilOperation::DecrementWrap;
-    front.depth_stencil_pass_operation = StencilOperation::Replace;
-    front.read_mask = 0x0F;
-    front.write_mask = 0x1F0;
-    let back = &mut state.depth_stencil.back_face_stencil;
-    back.stencil_compare_function = CompareFunction::Greater;
-    back.depth_failure_operation = StencilOperation::Invert;
-    state.stencil_references = [0x1A5, 0x3C];
-    let words: Vec<u32> = shader_stencil_words(&state)
-        .chunks(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-        .collect();
-    let field = |w: u32, offset: u32, width: u32| (w >> offset) & ((1 << width) - 1);
-    let [f, b, references, zero] = words[..] else {
-        panic!("{words:?}");
-    };
-    // compare, stencil failure, pass, read mask, write mask, depth failure
-    let fields = |w| {
-        [
-            field(w, 0, 3),
-            field(w, 3, 3),
-            field(w, 6, 3),
-            field(w, 9, 8),
-            field(w, 17, 8),
-            field(w, 25, 3),
-        ]
-    };
-    assert_eq!(fields(f), [2, 1, 2, 0x0F, 0xF0, 7]);
-    assert_eq!(fields(b), [4, 0, 0, 0xFF, 0xFF, 5]);
-    assert_eq!([f >> 28, b >> 28], [0, 0], "bits 28 to 31 stay clear");
-    assert_eq!(references, 0xA5 | 0x3C << 8);
-    assert_eq!(zero, 0);
 }

@@ -48,15 +48,6 @@
 //!   The fragment stage reads `SampleId`, so it runs once per sample (`sampleRateShading`): the
 //!   consumer enables sample shading with `minSampleShading` 1, and each invocation writes its own
 //!   sample. A pixel's `FragCoord` is its center, `(x + 0.5, y + 0.5)`, truncated to `(x, y)`.
-//! - **The depth stand-in's copy back** ([`DepthStencilCopy::DepthFromStandIn`]): the draw's
-//!   fragment stage reads sample `SampleId` of pixel `FragCoord.xy` of a depth stand-in, an
-//!   `R32_SFLOAT` storage image ([`DepthStandInForm`]: multisampled, or the sample planes of a 2D
-//!   array whose layer `s` holds sample `s`), and writes it as `FragDepth`, as
-//!   [`DepthStencilCopy::Depth`] does from an aspect.
-//! - **The depth split** ([`DepthSplitModule`]): as the stencil split below, from the float depth
-//!   aspect into a depth stand-in of either form: the stand-in's copy in. Its invocation `(x, y,
-//!   s)` inside the stand-in's extent and the source's samples writes sample `s` of texel `(x, y)`
-//!   of a multisampled stand-in, or texel `(x, y, s)` of the planes.
 //! - **The stencil split** ([`StencilSplitModule`]): a `GLCompute` entry `main` with local size
 //!   ([`StencilSplitModule::LOCAL_SIZE`], [`StencilSplitModule::LOCAL_SIZE`], 1) whose invocation
 //!   `(x, y, s)` inside the destination fetches sample `s` of pixel `(x, y)` of the unsigned source
@@ -142,59 +133,6 @@ pub enum DepthStencilCopy {
     /// of the unsigned colour output at `Location` 0, from a sampled view of a 16-bit depth
     /// aspect: a 16-bit depth's copy out, exact by construction (the module docs).
     Depth16Bits,
-    /// The depth, as `FragDepth`, from a depth stand-in of `form`.
-    DepthFromStandIn { form: DepthStandInForm },
-}
-
-/// The form of a depth stand-in: an `R32_SFLOAT` storage image of the pass's extent that holds its
-/// depth attachment's samples while a fragment function tests depth itself.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum DepthStandInForm {
-    /// A multisampled 2D image: sample `s` of texel `(x, y)` holds sample `s` of pixel `(x, y)`
-    /// (`shaderStorageImageMultisample`).
-    Multisampled,
-    /// Sample planes: a single-sample 2D-array image whose texel `(x, y)` of layer `s` holds sample
-    /// `s` of pixel `(x, y)`.
-    SamplePlanes,
-}
-
-/// The crate-owned depth split of one device and stand-in form, validated like any output.
-#[non_exhaustive]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DepthSplitModule {
-    /// SPIR-V 1.5 words, entry point `main`, bindings numbered as below in set 0.
-    pub spirv: Arc<[u32]>,
-    /// What the module needs from the device: multisampled storage images for a multisampled
-    /// stand-in.
-    pub requirements: Requirements,
-}
-
-impl DepthSplitModule {
-    /// Descriptor set of every binding.
-    pub const SET: u32 = 0;
-    /// The source, a sampled image of the depth aspect.
-    pub const SOURCE_BINDING: u32 = 0;
-    /// The destination, the stand-in's `R32_SFLOAT` storage image.
-    pub const DESTINATION_BINDING: u32 = 1;
-    /// Invocations of one workgroup along x, and along y.
-    pub const LOCAL_SIZE: u32 = 8;
-}
-
-/// The `R32_SFLOAT` storage image type of a depth stand-in of `form` (`f32_` the float type).
-fn stand_in_image(b: &mut ModuleBuilder, f32_: TypeId, form: DepthStandInForm) -> BResult<TypeId> {
-    let format = crate::spv::ImageFormat::R32f;
-    match form {
-        DepthStandInForm::Multisampled => multisampled_image(b, f32_, ImageUsage::Storage, format),
-        DepthStandInForm::SamplePlanes => b.ty(Type::Image(ImageType {
-            sampled_type: f32_,
-            dim: Dim::D2,
-            depth: false,
-            arrayed: true,
-            multisampled: false,
-            usage: ImageUsage::Storage,
-            format,
-        })),
-    }
 }
 
 /// The crate-owned modules of one copy draw on one device, validated like any output.
@@ -324,15 +262,9 @@ pub fn fragment_typed_module(copy: DepthStencilCopy) -> BResult<TypedModule> {
         | DepthStencilCopy::DepthBits
         | DepthStencilCopy::StencilBits
         | DepthStencilCopy::Depth16Code
-        | DepthStencilCopy::Depth16Bits
-        | DepthStencilCopy::DepthFromStandIn { .. } => CopySource::Aspect,
-    };
-    let stand_in = match copy {
-        DepthStencilCopy::DepthFromStandIn { form } => Some(form),
-        _ => None,
+        | DepthStencilCopy::Depth16Bits => CopySource::Aspect,
     };
     let source_ty = match (copy, source) {
-        (DepthStencilCopy::DepthFromStandIn { form }, _) => stand_in_image(&mut b, f32_, form)?,
         (
             DepthStencilCopy::Depth | DepthStencilCopy::DepthBits | DepthStencilCopy::Depth16Bits,
             _,
@@ -375,19 +307,9 @@ pub fn fragment_typed_module(copy: DepthStencilCopy) -> BResult<TypedModule> {
         sample: Some(sample),
         ..ImageOperands::default()
     };
-    let texel = match (stand_in, source) {
-        (Some(DepthStandInForm::Multisampled), _) => {
-            f.read(image, pixel, &ops, TexelMemory::default())?
-        }
-        (Some(DepthStandInForm::SamplePlanes), _) => {
-            let uvec3 = f.module().ty(Type::Vector { elem: u32_, len: 3 })?;
-            let layer = f.convert(ConvOp::Bitcast, sample, u32_)?;
-            let at = f.composite_construct(uvec3, &[x, y, layer])?;
-            let plain = ImageOperands::default();
-            f.read(image, at, &plain, TexelMemory::default())?
-        }
-        (None, CopySource::Aspect) => f.fetch(image, pixel, &ops)?,
-        (None, CopySource::Shadow) => f.read(image, pixel, &ops, TexelMemory::default())?,
+    let texel = match source {
+        CopySource::Aspect => f.fetch(image, pixel, &ops)?,
+        CopySource::Shadow => f.read(image, pixel, &ops, TexelMemory::default())?,
     };
     let value = f.composite_extract(texel, &[0])?;
     match copy {
@@ -411,7 +333,7 @@ pub fn fragment_typed_module(copy: DepthStencilCopy) -> BResult<TypedModule> {
             let output = f.module().global_value(output)?;
             f.store(output, reference, MemAccess::default())?;
         }
-        DepthStencilCopy::Depth | DepthStencilCopy::DepthFromStandIn { .. } => {
+        DepthStencilCopy::Depth => {
             let output = f
                 .module()
                 .builtin(crate::spv::BuiltIn::FragDepth, IoDir::Output, f32_)?;
@@ -461,9 +383,9 @@ pub fn fragment_typed_module(copy: DepthStencilCopy) -> BResult<TypedModule> {
     match copy {
         DepthStencilCopy::StencilPlane { .. } => {}
         DepthStencilCopy::StencilExport { .. } => modes.push(ExecMode::StencilRefReplacing),
-        DepthStencilCopy::Depth
-        | DepthStencilCopy::Depth16Code
-        | DepthStencilCopy::DepthFromStandIn { .. } => modes.push(ExecMode::DepthReplacing),
+        DepthStencilCopy::Depth | DepthStencilCopy::Depth16Code => {
+            modes.push(ExecMode::DepthReplacing)
+        }
         DepthStencilCopy::DepthBits
         | DepthStencilCopy::StencilBits
         | DepthStencilCopy::Depth16Bits => {}
@@ -553,97 +475,6 @@ pub fn split_typed_module() -> BResult<TypedModule> {
     b.finalize()
 }
 
-/// The depth split into a stand-in of `form` as a typed module, before serialization: the module
-/// [`depth_split_module`] serializes. Its bindings are the symbols [`SPLIT_SOURCE`] and
-/// [`SPLIT_DESTINATION`], numbered as the stencil split's.
-pub fn depth_split_typed_module(form: DepthStandInForm) -> BResult<TypedModule> {
-    let mut b = ModuleBuilder::new();
-    let u32_ = u32_ty(&mut b)?;
-    let f32_ = b.ty(Type::Float { width: 32 })?;
-    let uvec2 = b.ty(Type::Vector { elem: u32_, len: 2 })?;
-    let uvec3 = b.ty(Type::Vector { elem: u32_, len: 3 })?;
-    let source_ty = multisampled_image(
-        &mut b,
-        f32_,
-        ImageUsage::Sampled,
-        crate::spv::ImageFormat::Unknown,
-    )?;
-    let destination_ty = stand_in_image(&mut b, f32_, form)?;
-    let source = b.resource(SPLIT_SOURCE, StorageClass::UniformConstant, source_ty)?;
-    let destination = b.resource(
-        SPLIT_DESTINATION,
-        StorageClass::UniformConstant,
-        destination_ty,
-    )?;
-    let invocation = b.builtin(crate::spv::BuiltIn::GlobalInvocationId, IoDir::Input, uvec3)?;
-    let void = b.ty(Type::Void)?;
-    let mut f = b.function(void)?;
-    let invocation = f.module().global_value(invocation)?;
-    let invocation = f.load(invocation, MemAccess::default())?;
-    let destination = f.module().global_value(destination)?;
-    let destination = f.load(destination, MemAccess::default())?;
-    let source = f.module().global_value(source)?;
-    let source = f.load(source, MemAccess::default())?;
-    let size = f.query(ImageQuery::Size, destination)?;
-    let samples = f.query(ImageQuery::Samples, source)?;
-    let mut inside = None;
-    for axis in 0..3 {
-        let at = f.composite_extract(invocation, &[axis])?;
-        let end = if axis < 2 {
-            f.composite_extract(size, &[axis])?
-        } else {
-            samples
-        };
-        let below = f.binary(BinOp::ULessThan, at, end)?;
-        inside = Some(match inside {
-            None => below,
-            Some(all) => f.binary(BinOp::LogicalAnd, all, below)?,
-        });
-    }
-    let inside = inside.ok_or(crate::spirv::error::BuildError::IdSpaceExhausted)?;
-    // Invocation `(x, y, s)` inside the stand-in copies sample `s` of pixel `(x, y)`.
-    let copy_sample: ArmFn<'_, ()> = Box::new(move |f, _| {
-        let x = f.composite_extract(invocation, &[0])?;
-        let y = f.composite_extract(invocation, &[1])?;
-        let s = f.composite_extract(invocation, &[2])?;
-        let pixel = f.composite_construct(uvec2, &[x, y])?;
-        let ops = ImageOperands {
-            sample: Some(s),
-            ..ImageOperands::default()
-        };
-        let texel = f.fetch(source, pixel, &ops)?;
-        match form {
-            DepthStandInForm::Multisampled => {
-                f.write(destination, pixel, texel, &ops, TexelMemory::default())?;
-            }
-            DepthStandInForm::SamplePlanes => {
-                let plain = ImageOperands::default();
-                f.write(
-                    destination,
-                    invocation,
-                    texel,
-                    &plain,
-                    TexelMemory::default(),
-                )?;
-            }
-        }
-        Ok(ArmEnd::FallThrough(Vec::new()))
-    });
-    f.if_(&mut (), inside, copy_sample, None)?;
-    f.ret(None)?;
-    let id = f.finish()?;
-    b.entry(
-        ExecModel::GLCompute,
-        id,
-        vec![ExecMode::LocalSize {
-            x: DepthSplitModule::LOCAL_SIZE,
-            y: DepthSplitModule::LOCAL_SIZE,
-            z: 1,
-        }],
-    )?;
-    b.finalize()
-}
-
 /// The fixed binding numbers of the modules' symbols.
 fn binding_of(sym: &Symbol) -> Option<u32> {
     match sym {
@@ -724,26 +555,6 @@ pub fn stencil_split_module(
 ) -> Result<StencilSplitModule, Error> {
     let (spirv, requirements) = finish(device, split_typed_module()?, &feature, "stencil split")?;
     Ok(StencilSplitModule {
-        spirv,
-        requirements,
-    })
-}
-
-/// The depth split into a stand-in of `form` on `device`, built and checked as
-/// [`depth_stencil_copy_modules`] is; refused likewise where the device lacks what it needs
-/// (multisampled storage images, for a multisampled stand-in).
-pub fn depth_split_module(
-    device: &Device,
-    form: DepthStandInForm,
-    feature: Feature,
-) -> Result<DepthSplitModule, Error> {
-    let (spirv, requirements) = finish(
-        device,
-        depth_split_typed_module(form)?,
-        &feature,
-        "depth split",
-    )?;
-    Ok(DepthSplitModule {
         spirv,
         requirements,
     })

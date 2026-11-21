@@ -585,20 +585,6 @@ pub enum RuntimeFact {
     /// states it: the mark is a store, which costs a fragment function the device's hidden-surface
     /// removal and early depth test although it never runs.
     CubicArgumentSampler { stage: Stage },
-    /// The function runs the draw's depth test itself (`LoweringInputs::shader_tests`): compiled
-    /// for a draw whose tests may drop fragments, a function with `TestedStorageWrites` tests its
-    /// fragment's depth against a stand-in of the depth attachment inside the ordered pixel
-    /// interlock (`SyntheticBinding::DepthStandIn`, `PushField::ShaderTestsState`), stores its
-    /// colors and writes the stand-in only where it passes, and kills a fragment that fails
-    /// (`GraphicsState::shader_tests`). `formatless`: the module declares the stand-in without a
-    /// format (`Unknown`), else as `R32f`. `multisampled`: compiled for a pipeline of more than
-    /// one sample, the stand-in holds each sample, `planes` as a single-sample 2D array of one
-    /// layer per sample, else as a multisampled image.
-    ShaderTests {
-        formatless: bool,
-        multisampled: bool,
-        planes: bool,
-    },
     /// The `stage` function samples, gathers, or queries a level of a heap texture of a sampled
     /// float class of one sample, where for a texture a heap holds by its raw texels alone
     /// (`bind::heap_raw_form`) it reads the class's neutral (zero, or the neutral's level) where
@@ -616,15 +602,6 @@ pub enum RuntimeFact {
     /// with `None`, or naming a slot whose bound sampler states what the emulation does not
     /// answer (`Unsupported(ArgumentBufferTextures)`).
     HeapRawSamples { stage: Stage, sampler: Option<u32> },
-    /// Beside its depth test (`ShaderTests`), the function runs the draw's stencil test itself,
-    /// before the depth test, against a stand-in of the stencil attachment inside the ordered
-    /// pixel interlock (`SyntheticBinding::StencilStandIn`, `PushField::ShaderStencilState`): the
-    /// face's comparison of the reference with the stand-in's value under the read mask, then
-    /// its stencil-failure, depth-failure or pass operation under the write mask, as the two
-    /// tests decide. A fragment that fails either test is killed (`ShaderTestsUse::stencil`).
-    /// `formatless`: the module declares the stand-in without a format (`Unknown`), else as
-    /// `R8ui`. The stand-in holds the pipeline's samples as a multisampled image at more than one.
-    ShaderStencilTest { formatless: bool },
     /// On a device that orders framebuffer fetch through rasterization-order input attachments,
     /// the function computes Metal's blend `blend` into extended-range color attachment `color`
     /// in the shader: it reads the attachment's raw texel through its input attachment
@@ -958,9 +935,7 @@ impl RuntimeFact {
             RuntimeFact::ConstexprSampled { .. } => "ConstexprSampled",
             RuntimeFact::CubicSampler { .. } => "CubicSampler",
             RuntimeFact::CubicArgumentSampler { .. } => "CubicArgumentSampler",
-            RuntimeFact::ShaderTests { .. } => "ShaderTests",
             RuntimeFact::HeapRawSamples { .. } => "HeapRawSamples",
-            RuntimeFact::ShaderStencilTest { .. } => "ShaderStencilTest",
             RuntimeFact::ExtendedRangeInputBlend { .. } => "ExtendedRangeInputBlend",
             RuntimeFact::RotatedInputBlend { .. } => "RotatedInputBlend",
             RuntimeFact::WordInputMerge { .. } => "WordInputMerge",

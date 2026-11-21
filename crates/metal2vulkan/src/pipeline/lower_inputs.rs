@@ -639,25 +639,6 @@ pub struct LoweringInputs {
     /// do, and states the fact with `early_tests`. Any other function compiles as without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub read_only_tests: bool,
-    /// Only the depth test of the draws that run the fragment function can drop fragments
-    /// (`VariantKey::shader_tests`): a function that stores a color through the interlocked
-    /// storage form before the tests (`RuntimeFact::TestedStorageWrites`) runs the depth test
-    /// itself, inside the ordered pixel interlock, against a stand-in of the depth attachment, and
-    /// states `RuntimeFact::ShaderTests`. Any other function compiles as without it.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub shader_tests: bool,
-    /// Under `shader_tests`, the draw's stencil test can drop fragments or write too
-    /// (`VariantKey::shader_stencil`): the function also runs the stencil test itself, before its
-    /// depth test, against a stand-in of the stencil attachment, and states
-    /// `RuntimeFact::ShaderStencilTest`.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub shader_stencil: bool,
-    /// A vertex function's fragment function runs its draw's depth test itself at more than one
-    /// sample from each sample's computed depth (`VariantKey::window_depth_varying`): the function
-    /// also writes its position's window depth `z / w` to a no-perspective varying
-    /// (`IoRole::WindowDepth`), which the fragment function reads. Read only by a vertex function.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub window_depth_varying: bool,
     /// The color attachments the fragment function's render pipeline gives a format held with
     /// its channels rotated (`metal::format::rotated_channels`, `ARGB8Unorm`), by color index:
     /// each such attachment's image holds Metal's alpha, red, green and blue in its red, green,

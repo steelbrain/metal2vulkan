@@ -23,17 +23,8 @@ fn every_copy() -> Vec<DepthStencilCopy> {
     copies.push(DepthStencilCopy::StencilBits);
     copies.push(DepthStencilCopy::Depth16Code);
     copies.push(DepthStencilCopy::Depth16Bits);
-    for form in FORMS {
-        copies.push(DepthStencilCopy::DepthFromStandIn { form });
-    }
     copies
 }
-
-/// Both depth stand-in forms.
-const FORMS: [DepthStandInForm; 2] = [
-    DepthStandInForm::Multisampled,
-    DepthStandInForm::SamplePlanes,
-];
 
 /// The requirements of `m` as serialized.
 fn needs(m: TypedModule) -> Requirements {
@@ -73,8 +64,6 @@ fn each_module_needs_what_its_docs_say() {
                 ..
             } | DepthStencilCopy::StencilExport {
                 source: CopySource::Shadow
-            } | DepthStencilCopy::DepthFromStandIn {
-                form: DepthStandInForm::Multisampled
             }
         );
         assert_eq!(
@@ -92,26 +81,6 @@ fn each_module_needs_what_its_docs_say() {
         assert!(r.features.contains(&feature), "{feature:?}: {r:?}");
     }
     assert!(!r.features.contains(&VkFeature::SampleRateShading), "{r:?}");
-    // The depth split: multisampled storage images for a multisampled stand-in alone, and no
-    // extended format (`R32_SFLOAT` is a base storage format) nor sample-rate shading.
-    for form in FORMS {
-        let r = needs(depth_split_typed_module(form).expect("depth split"));
-        assert_eq!(
-            r.features
-                .contains(&VkFeature::ShaderStorageImageMultisample),
-            form == DepthStandInForm::Multisampled,
-            "{form:?}: {r:?}"
-        );
-        assert!(
-            !r.features
-                .contains(&VkFeature::ShaderStorageImageExtendedFormats),
-            "{form:?}: {r:?}"
-        );
-        assert!(
-            !r.features.contains(&VkFeature::SampleRateShading),
-            "{form:?}: {r:?}"
-        );
-    }
 }
 
 /// Every committed device (`validation/profiles/*.json`), derived with the default policy, by
@@ -179,34 +148,6 @@ fn the_modules_are_valid_where_the_device_has_what_they_need() {
         }
     }
     assert!(draws > 0 && splits > 0, "{draws} {splits}");
-}
-
-/// On every committed device the depth split into each stand-in form is valid where the device
-/// has what it needs and refused, typed, where it does not; the planes' form runs on every
-/// committed device (it needs no multisampled storage image).
-#[test]
-fn the_depth_split_is_valid_where_the_device_has_what_it_needs() {
-    let feature = Feature::FramebufferFetch;
-    for (name, device) in committed_devices() {
-        let profile = device.profile();
-        for form in FORMS {
-            let m = || depth_split_typed_module(form).expect("depth split");
-            let fit = profile.check(&needs(m())).is_ok();
-            match depth_split_module(&device, form, feature.clone()) {
-                Ok(module) => {
-                    assert!(fit, "{name} {form:?}");
-                    assert_valid(m(), profile);
-                    assert!(!module.spirv.is_empty());
-                }
-                Err(Error::Unsupported(u)) => {
-                    assert!(!fit, "{name} {form:?}");
-                    assert!(form != DepthStandInForm::SamplePlanes, "{name}");
-                    assert_eq!(u.feature, feature, "{name} {form:?}");
-                }
-                Err(other) => panic!("{name} {form:?}: {other}"),
-            }
-        }
-    }
 }
 
 /// The 16-bit depth pair's arithmetic is exact for **every** code: of all 65536 codes, each one

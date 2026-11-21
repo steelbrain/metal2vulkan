@@ -123,12 +123,6 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         // The consumer keeps the stencil's shadow and binds it, with the encoder's stencil state
         // as push data (`GraphicsState::shadow_stencil`).
         RuntimeFact::ShadowStencil { .. } => Mechanism::RenderPassContract,
-        // The consumer keeps the depth attachment's stand-in and binds it, with the encoder's
-        // depth state as push data (`GraphicsState::shader_tests`).
-        RuntimeFact::ShaderTests { .. } => Mechanism::RenderPassContract,
-        // The consumer keeps the stencil attachment's stand-in and binds it, with the encoder's
-        // stencil state and references as push data (`ShaderTestsUse::stencil`).
-        RuntimeFact::ShaderStencilTest { .. } => Mechanism::RenderPassContract,
         // The vote word is fixed in the module; the planner counts it against the limit.
         RuntimeFact::PredicationVote => Mechanism::PlanTimeCheck,
         // The binder pushes the bound format's class, which selects its conversion.

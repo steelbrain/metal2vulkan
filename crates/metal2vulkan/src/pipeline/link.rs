@@ -56,7 +56,6 @@ pub mod geometry;
 pub mod graphics;
 pub mod imageblock;
 pub mod mesh;
-pub mod shader_tests;
 pub mod stencil;
 pub mod tessellation;
 pub mod varyings;
@@ -646,8 +645,6 @@ fn render_state(
     // The shader-side stencil against this pipeline's state, before the sample invocations its
     // shadow writes would also refuse.
     let shadow = stencil::shadow_stencil(r, fragment, p)?;
-    // The fragment's own depth test against this pipeline's state.
-    let shader_tests = shader_tests::shader_tests(r, fragment, p)?;
     // The extended-range blends the fragment computes over input attachments, against this
     // pipeline's attachments.
     let input_blends = fetch::input_blends(r, fragment, p)?;
@@ -677,7 +674,6 @@ fn render_state(
     gs.color_outputs = color_outputs(fs, &storage)?;
     gs.storage_attachments = storage;
     gs.shadow_stencil = shadow;
-    gs.shader_tests = shader_tests;
     Ok(gs)
 }
 

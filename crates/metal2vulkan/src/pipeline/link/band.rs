@@ -299,7 +299,7 @@ pub fn plan(
                         IoRole::Varying {
                             interpolation: Some(Interpolation::Smooth { .. }),
                             ..
-                        } | IoRole::WindowDepth
+                        }
                     )
                 });
             BandVarying {

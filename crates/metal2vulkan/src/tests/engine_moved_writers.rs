@@ -6,9 +6,8 @@
 //! function and so before the depth and stencil tests. The owned fixture `smw_writers` has one
 //! plain writer of color 0 per way those tests bear on such a store: none (no discard, no other
 //! write, or Metal's early tests), its discard alone (the early-tests variant where the tests
-//! write nothing, the function's own depth or stencil test where they write), and a write of
-//! other memory or a returned depth or sample mask (the function's own tests wherever the draw's
-//! tests can drop a fragment).
+//! write nothing, refused where they write), and a write of other memory or a returned depth or
+//! sample mask (refused wherever the draw's tests can drop a fragment).
 //!
 //! On every committed profile that orders fetch through the pixel interlock alone, in a pass with
 //! a depth and stencil attachment, under each kind of draw tests: the plan of the pipeline as
@@ -139,17 +138,16 @@ fn device(stem: &str) -> Device {
     Device::from_queries(desc, DevicePolicy::default()).expect("device")
 }
 
-/// The early-tests variant (`read_only_tests`) and the function's own tests (`shader_tests`) a
-/// writer of `class` needs under `tests`; `None` where the draw is refused (tests that may count
-/// what they keep, or that the draw does not state).
-fn wanted(class: Class, tests: FragmentTests) -> Option<(bool, bool)> {
+/// Whether a writer of `class` needs the early-tests variant (`read_only_tests`) under `tests`;
+/// `None` where the draw is refused (tests that may drop a fragment and write or count, or that
+/// the draw does not state).
+fn wanted(class: Class, tests: FragmentTests) -> Option<bool> {
     match (class, tests) {
-        (Class::Free, _) | (_, FragmentTests::Pass) => Some((false, false)),
+        (Class::Free, _) | (_, FragmentTests::Pass) => Some(false),
         (Class::EarlyVariant, FragmentTests::Drop | FragmentTests::Depth { writes: false }) => {
-            Some((true, false))
+            Some(true)
         }
-        (_, FragmentTests::Any) => None,
-        _ => Some((false, true)),
+        _ => None,
     }
 }
 
@@ -160,9 +158,9 @@ fn a_moved_writer_selects_its_tests_in_its_first_plan() {
     };
     let devices = ordering_devices();
     // The profiles checked, and the writers' variants that planned themselves, by the tests
-    // they run (`read_only_tests`, `shader_tests`).
+    // they run (`read_only_tests`).
     let mut checked = Vec::new();
-    let mut fixed_points = std::collections::BTreeSet::<(&str, (bool, bool))>::new();
+    let mut fixed_points = std::collections::BTreeSet::<(&str, bool)>::new();
     for (stem, dev) in &devices {
         checked.push(stem.as_str());
         for (writer, class) in WRITERS {
@@ -211,11 +209,6 @@ fn a_moved_writer_selects_its_tests_in_its_first_plan() {
                 let plan = match (planned, wanted(class, tests)) {
                     (Ok(plan), Some(_)) => plan,
                     (Err(BindError::Unsupported(_)), None) => continue,
-                    // The function's own tests the device does not ship.
-                    (Err(BindError::Unsupported(u)), Some((_, true))) => {
-                        eprintln!("{what}: its own tests refused: {u:?}");
-                        continue;
-                    }
                     (planned, want) => {
                         panic!(
                             "{what}: planned {:?}, wanted {want:?}",
@@ -223,12 +216,8 @@ fn a_moved_writer_selects_its_tests_in_its_first_plan() {
                         )
                     }
                 };
-                let (read_only, shader) = wanted(class, tests).expect("planned");
-                assert_eq!(
-                    (plan.variant.read_only_tests, plan.variant.shader_tests),
-                    (read_only, shader),
-                    "{what}"
-                );
+                let read_only = wanted(class, tests).expect("planned");
+                assert_eq!(plan.variant.read_only_tests, read_only, "{what}");
                 let variant = variant.expect("compiled for the plan");
                 assert!(
                     storage_write(&variant).is_some(),
@@ -243,17 +232,16 @@ fn a_moved_writer_selects_its_tests_in_its_first_plan() {
                     check_words_valid(&m.spirv, &variant.requirements, dev.profile())
                         .unwrap_or_else(|e| panic!("{what}: L3: {e}"));
                 }
-                fixed_points.insert((writer, (read_only, shader)));
+                fixed_points.insert((writer, read_only));
             }
         }
     }
     // Not vacuous: each writer planned itself under every kind of tests it takes.
     eprintln!("moved writers: checked on {checked:?}");
     for (writer, class) in WRITERS {
-        let kinds: &[(bool, bool)] = match class {
-            Class::Free => &[(false, false)],
-            Class::EarlyVariant => &[(false, false), (true, false), (false, true)],
-            Class::Untested => &[(false, false), (false, true)],
+        let kinds: &[bool] = match class {
+            Class::Free | Class::Untested => &[false],
+            Class::EarlyVariant => &[false, true],
         };
         for kind in kinds {
             assert!(
@@ -314,7 +302,7 @@ fn a_moved_writer_that_stores_nothing_selects_no_tests() {
                     }
                 };
                 let key = &plan.variant;
-                if key.read_only_tests || key.shader_tests || key.shader_stencil {
+                if key.read_only_tests {
                     miss("the plan selects tests");
                 }
                 let variant = dev

@@ -215,11 +215,6 @@ pub struct GraphicsTemplate {
     /// specialization.
     #[cfg_attr(feature = "serde", serde(default))]
     pub(crate) mesh: Option<MeshTemplate>,
-    /// A fragment function that runs the draw's depth test itself: its draws write the encoder's
-    /// depth state as `PushField::ShaderTestsState`, and, where it runs the stencil test too, the
-    /// encoder's stencil state and references as `PushField::ShaderStencilState`.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub(crate) shader_tests: Option<ShaderTestsTemplate>,
     /// A pipeline compiled in the primitive ID's de-indexed form of this index type
     /// (`VariantKey::primitive_id_indices`): its indexed draws write `PushField::CaptureLayout`
     /// and run without indices.
@@ -300,12 +295,6 @@ pub(crate) enum GroupStage {
     /// A mesh function's (`MESH_EXT`).
     Mesh,
 }
-
-/// What a draw of a pipeline whose fragment function runs the draw's depth test itself
-/// instantiates: the encoder's depth state, which the plan reads from the draw's state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub(crate) struct ShaderTestsTemplate;
 
 /// What a draw of a pipeline with a shader-side stencil instantiates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -802,23 +791,12 @@ pub enum WriteSource {
     /// zero ([`ExecutionStatus::initial`](crate::bind::ExecutionStatus::initial)). The consumer
     /// reads it once the command buffer completes.
     ExecutionStatus,
-    /// The stand-in of the render pass's depth attachment that a fragment function that runs
-    /// the draw's depth test itself tests and writes (`GraphicsState::shader_tests`): the
-    /// consumer's `R32_SFLOAT` storage image of the attachment's extent, holding its samples as
-    /// the stand-in's view says, in `GENERAL` layout
-    /// ([`StandInUse`](crate::pipeline::StandInUse)).
-    DepthStandIn,
     /// The snapshot of the texture the draw binds at fragment texture slot `slot`
     /// (`BindingSource::SnapshotTexels`, `VariantKey::snapshot_textures`): the consumer's
     /// single-sample 2D `R32G32B32A32_UINT` storage image covering the draw's render area, in
     /// `GENERAL` layout, which the draw's fragments write at their pixels in the draw that takes
     /// the snapshot and read in the draw that reads it (`PushHole::SnapshotPhase`).
     SnapshotTexels { slot: u32 },
-    /// The stand-in of the render pass's stencil attachment that a fragment function that runs
-    /// the draw's stencil test itself tests and writes (`ShaderTestsUse::stencil`): the
-    /// consumer's `R8_UINT` storage image of the attachment's extent and the pipeline's samples,
-    /// in `GENERAL` layout ([`StandInUse`](crate::pipeline::StandInUse)).
-    StencilStandIn,
 }
 
 /// The image of a combined image-sampler write.

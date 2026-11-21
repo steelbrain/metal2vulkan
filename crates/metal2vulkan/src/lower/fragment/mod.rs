@@ -29,12 +29,6 @@
 //!   output is tested and written by the function itself against a shadow of the stencil, inside
 //!   the interlock critical section, at each return; a failing fragment is recorded as discarded
 //!   and killed after the critical section.
-//! - **The depth test in the shader** (`depth_test`): a function that stores a color in the storage
-//!   form before its draws' tests, compiled for a draw whose depth test alone can drop a fragment,
-//!   tests and writes its depth itself against a stand-in of the depth attachment, inside the
-//!   interlock critical section, at each return; a failing fragment is recorded as discarded and
-//!   killed after the critical section. Compiled for a draw whose stencil test acts too, it runs
-//!   that first, against a stand-in of the stencil attachment.
 //! - **Coverage at sample rate** (`coverage`): a function that reads `[[sample_mask]]` and that
 //!   Metal runs once per covered sample runs, compiled for a multisampled pipeline, once per pixel,
 //!   and its body once per covered sample from a loop over the pixel's coverage ([`wrap_entry`]),
@@ -57,7 +51,6 @@
 
 mod color;
 mod coverage;
-mod depth_test;
 mod discard;
 pub(crate) mod fetch;
 mod imageblock;
@@ -100,10 +93,6 @@ use crate::spirv::ir::{
 
 pub use color::ColorInput;
 pub use coverage::CoveragePlan;
-pub use depth_test::DepthTest;
-pub(crate) use depth_test::{
-    depth_test_form, depth_test_word, stencil_test_form, stencil_test_word, STAND_IN_FORMAT,
-};
 pub use discard::DiscardForm;
 pub(crate) use fetch::{
     compiled_write_mask, extended_range_blend, half_float_format, inputs_order, interlock_orders,
@@ -238,9 +227,6 @@ pub struct FragmentPlan {
     pub fetch_mask: Option<u32>,
     /// The function's `[[stencil]]` output is a shader-side stencil (`stencil`).
     pub stencil: Option<ShadowStencil>,
-    /// The function runs its draw's depth test itself against a stand-in of the depth
-    /// attachment (`depth_test`).
-    pub depth_test: Option<DepthTest>,
     /// The function reads `[[sample_mask]]` and runs once per covered sample on Metal: its loop
     /// over the covered samples, or why it has none (`coverage`).
     pub coverage: Option<CoveragePlan>,
@@ -274,15 +260,14 @@ impl FragmentPlan {
 
     /// The function declares `discarded`: a predicated site, inside an interlocked body a
     /// terminate-form site (which records the discard and returns to the entry) or a depth output
-    /// (whose returns record a positive NaN), a shader-side stencil, or an in-shader depth test,
-    /// which records a failing fragment.
+    /// (whose returns record a positive NaN), or a shader-side stencil, which records a failing
+    /// fragment.
     pub fn records_discards(&self) -> bool {
         self.predicated()
             || (self.interlock.is_some()
                 && (self.depth_output
                     || self.discards.values().any(|f| *f == DiscardForm::Terminate)))
             || self.stencil.is_some()
-            || self.depth_test.is_some()
     }
 
     fn kill_form(&self) -> KillForm {
@@ -416,7 +401,6 @@ pub fn finish(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<(), Error> {
         .saturating_add(input_blend::words(cx, returns(cx)))
         .saturating_add(word_input::words(cx, returns(cx)))
         .saturating_add(logic::words(cx, returns(cx)))
-        .saturating_add(depth_test::words(cx, rets))
         .saturating_add(killing_rets.saturating_mul(RETURN_KILL_WORDS))
         .saturating_add((quad_exits.len() as u64).saturating_mul(QUAD_EXIT_WORDS))
         .saturating_add((guarded.len() as u64).saturating_mul(GUARD_WORDS))
@@ -452,10 +436,6 @@ pub struct Declared {
     pub imageblock: Option<GlobalId>,
     /// The shadow of a shader-side stencil.
     pub shadow_stencil: Option<GlobalId>,
-    /// The stand-in of the depth attachment an in-shader depth test reads and writes.
-    pub depth_stand_in: Option<GlobalId>,
-    /// The stand-in of the stencil attachment an in-shader stencil test reads and writes.
-    pub stencil_stand_in: Option<GlobalId>,
     /// The `Private u32` holding the sample of the loop's pass over the covered samples.
     pub loop_sample: Option<GlobalId>,
     /// The `Private u32` copy of the `SampleMask` input's word, which the entry stores before it
@@ -504,8 +484,6 @@ pub fn declare(
     )?;
     d.imageblock = imageblock::declare(mb, fp.imageblock.as_ref())?;
     d.shadow_stencil = stencil::declare(mb, fp.stencil.as_ref())?;
-    d.depth_stand_in = depth_test::declare(mb, fp.depth_test.as_ref())?;
-    d.stencil_stand_in = depth_test::declare_stencil(mb, fp.depth_test.as_ref())?;
     d.loop_sample = coverage::declare(mb, plan)?;
     d.snapshot = snapshot::declare(mb, &fp.snapshot)?;
     if wraps_body(fp) && sample_mask_input(plan).is_some() {
@@ -862,9 +840,8 @@ pub fn not_discarded(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResu
 }
 
 /// Emit the entry's return terminator after `stage_io::emit_return` stored the outputs: a
-/// shader-side stencil tests and writes its shadow, recording a failing fragment as discarded, and
-/// an in-shader depth test its stand-in; the outputs of returned value `v` to attachments in the
-/// storage form and its imageblock output are written, then a predicated discard kills a discarded
+/// shader-side stencil tests and writes its shadow, recording a failing fragment as discarded; the
+/// outputs of returned value `v` to attachments in the storage form and its imageblock output are written, then a predicated discard kills a discarded
 /// invocation, which drops its outputs. An interlocked body only returns; its caller kills after
 /// the critical section.
 pub fn emit_return(
@@ -873,7 +850,6 @@ pub fn emit_return(
     v: Option<crate::air::ir::ValueId>,
 ) -> BResult<()> {
     stencil::emit_return(cx, fb, v)?;
-    depth_test::emit_return(cx, fb, v)?;
     fetch::emit_return(cx, fb, v)?;
     imageblock::emit_return(cx, fb, v)?;
     let fp = &cx.plan.families.fragment;

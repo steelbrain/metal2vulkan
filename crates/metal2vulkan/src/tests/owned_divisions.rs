@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use crate::bind::{self, DepthStandInForm, PlanesCopy};
+use crate::bind::{self, PlanesCopy};
 use crate::device::{Device, DevicePolicy};
 use crate::error::{Error, Feature};
 use crate::spirv::testing::{all_ones_divisions, committed_descriptions};
@@ -56,15 +56,6 @@ fn modules() -> Vec<Build> {
         "stencil_split_module".into(),
         Box::new(|d| Ok(bind::stencil_split_module(d, Feature::Format)?.spirv)),
     );
-    for form in [
-        DepthStandInForm::Multisampled,
-        DepthStandInForm::SamplePlanes,
-    ] {
-        push(
-            format!("depth_split_module({form:?})"),
-            Box::new(move |d| Ok(bind::depth_split_module(d, form, Feature::Format)?.spirv)),
-        );
-    }
     out
 }
 

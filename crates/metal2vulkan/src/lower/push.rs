@@ -180,10 +180,6 @@ pub const fn shape(f: PushField) -> FieldShape {
         PushField::VerticesPerPrimitive => FieldShape::U32,
         // The front face's word, then the back face's.
         PushField::ShadowStencilState => FieldShape::UVec2,
-        // The depth word, viewport 0's near and far, and a zero word.
-        PushField::ShaderTestsState => FieldShape::UVec4Array(1),
-        // The faces' stencil words, the references, and a zero word.
-        PushField::ShaderStencilState => FieldShape::UVec4Array(1),
         // A zero word, the index count, the first instance, and the base vertex.
         PushField::CaptureLayout => FieldShape::UVec4Array(1),
         // Four bits of kept channels per color attachment.

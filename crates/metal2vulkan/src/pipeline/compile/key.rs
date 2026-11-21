@@ -443,18 +443,6 @@ pub fn function_key(
         h.bytes(b"read-only-tests");
     }
     // Appended only when set.
-    if inputs.shader_tests {
-        h.bytes(b"shader-tests");
-    }
-    // Appended only when set.
-    if inputs.shader_stencil {
-        h.bytes(b"shader-stencil");
-    }
-    // Appended only when set.
-    if inputs.window_depth_varying {
-        h.bytes(b"window-depth-varying");
-    }
-    // Appended only when set.
     if inputs.threadgroup_size_matches_tile_size {
         h.bytes(b"threadgroup-size-matches-tile-size");
     }

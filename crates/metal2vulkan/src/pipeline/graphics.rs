@@ -220,13 +220,6 @@ pub struct GraphicsState {
     /// or declares `[[early_fragment_tests]]` does; the consumer then passes no mask.
     #[cfg_attr(feature = "serde", serde(default))]
     pub sample_mask: Option<u32>,
-    /// The fragment function runs the draw's depth test itself, inside the ordered pixel
-    /// interlock, against a stand-in of the pass's depth attachment: a function that stores a color
-    /// through the interlocked storage form before Vulkan's tests, compiled for a draw whose tests
-    /// may drop fragments (`VariantKey::shader_tests`). `None` for every other pipeline. See
-    /// [`ShaderTestsUse`] for the consumer contract.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub shader_tests: Option<ShaderTestsUse>,
     /// The fragment function reads textures through snapshots (`VariantKey::snapshot_textures`):
     /// each draw of the pipeline is drawn twice in its subpass, the texture's attachment in
     /// `VK_IMAGE_LAYOUT_ATTACHMENT_FEEDBACK_LOOP_OPTIMAL_EXT`, first with every color write mask 0,
@@ -478,7 +471,6 @@ impl GraphicsState {
             fragment_writes_memory: false,
             color_outputs: 0,
             sample_mask: None,
-            shader_tests: None,
             snapshot_reads: false,
             color_group: None,
             logic_op: None,
@@ -1081,120 +1073,6 @@ impl ShadowStencilUse {
         }
         out
     }
-}
-
-/// A render pipeline whose fragment function runs the draw's depth test itself
-/// (`GraphicsState::shader_tests`).
-///
-/// A function that stores a color through the interlocked storage form stores before Vulkan's
-/// tests, where Metal stores only the fragments that pass them. For a draw whose tests may drop
-/// fragments, the function tests itself: at each return, inside the ordered pixel interlock, it
-/// reads the pixel's depth (its sample's, in a pipeline of more than one sample) from a stand-in of
-/// the depth attachment, compares the fragment's depth with it by the encoder's compare function,
-/// writes the stand-in where the test passes and depth writes are enabled, and stores its colors
-/// only where it passes; a failing fragment is killed after the critical section, so the pass's
-/// other color attachments drop it too. A discarded fragment changes nothing. The fragment's depth
-/// is the device's `FragCoord.z` (Metal's `[[position]].z`), clamped as Metal clamps it: to `[0,
-/// 1]` in depth clip mode, to the viewport's depth range in clamp mode.
-///
-/// The consumer, for each draw with such a pipeline:
-///
-/// - keeps the pass's depth/stencil attachment in the draw's subpass, with the depth test
-///   enabled under `VK_COMPARE_OP_ALWAYS`, depth writes, the stencil test, and depth bounds off,
-///   whatever the encoder's depth/stencil state: the function is the test, and the attachment is
-///   not written during the draw;
-/// - keeps the stand-in ([`StandInUse`]): an image of the depth attachment's extent with
-///   `STORAGE` usage, in `GENERAL` layout, bound as the plan's `WriteSource::DepthStandIn`,
-///   whose texel `(x, y)` holds pixel `(x, y)`'s depth as an `f32` (each sample's, as the
-///   stand-in's view says);
-/// - fills the stand-in from the depth aspect before the draw (or sets it to the pass's clear
-///   depth where the draw's render pass instance clears the attachment) and writes it back to the
-///   depth aspect after it, outside the render pass, with the barriers each copy needs.
-///   Consecutive such draws share one fill and one write-back while nothing else uses the depth
-///   attachment between them; a draw of another pipeline in between ends the instance;
-/// - sets `BindState::depth_stencil`, `BindState::depth_range` and
-///   `BindState::depth_clip_mode_clamp` to the encoder's state for the draw.
-///
-/// Where the draw's stencil test can drop a fragment or write (`stencil`), the function runs it
-/// too, first, as Metal does: the face's (`FrontFacing`) comparison of its reference with the
-/// stand-in's value under the read mask, then its stencil-failure, depth-failure or pass operation
-/// under the write mask, and the depth test and color stores only where the stencil test passes.
-/// The consumer then also (the stencil test staying off, as above):
-///
-/// - keeps the stencil's stand-in: an `R8_UINT` image of the stencil attachment's extent and the
-///   pipeline's samples (multisampled at more than one) with `STORAGE` usage, in `GENERAL`
-///   layout, bound as the plan's `WriteSource::StencilStandIn`, whose texel `(x, y)` (each
-///   sample) holds pixel `(x, y)`'s stencil (that sample's);
-/// - fills it from the stencil aspect before the draw (or sets it to the pass's clear value
-///   where the draw's render pass instance clears the stencil) and writes it back to the stencil
-///   aspect after it, as for the depth: of one sample through a buffer, of more by
-///   `vkCmdCopyImage` between the stencil aspect and the stand-in, which `VK_KHR_maintenance8`
-///   allows (the pipeline requires it then), as for the shader-side stencil's shadow
-///   ([`ShadowStencilUse`]);
-/// - sets `BindState::stencil_references` to the encoder's front and back references.
-///
-/// The binder refuses a counted draw (a visibility result mode is set), an amplified draw, and a
-/// pass of more than one layer; it asks for the function only for a pass with a depth
-/// attachment, and for the stencil's stand-in only for a pass with both.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct ShaderTestsUse {
-    /// The depth attachment's stand-in.
-    pub depth: StandInUse,
-    /// The stencil attachment's stand-in, where the function runs the stencil test too
-    /// (`RuntimeFact::ShaderStencilTest`): `R8_UINT`, viewed as an image of the pipeline's
-    /// samples. `None` where the draws it serves have a stencil test that does nothing.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub stencil: Option<StandInUse>,
-}
-
-/// A stand-in of a depth or stencil attachment's plane, which a fragment function that runs the
-/// draw's tests itself reads and writes as a storage image (`GraphicsState::shader_tests`).
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct StandInUse {
-    /// The stand-in's format: `R32_SFLOAT` for depth, `R8_UINT` for stencil.
-    pub format: vk::Format,
-    /// The function declares the stand-in without a format (`Unknown`), so the format supports
-    /// storage reads and writes without one; otherwise the declaration names it.
-    pub formatless: bool,
-    /// The pipeline's rasterization samples.
-    pub samples: u32,
-    /// How the image holds the samples.
-    pub view: StandInView,
-}
-
-impl StandInUse {
-    /// The format usages the consumer's stand-in image and view need: `StorageImage`, and the
-    /// without-format accesses of a formatless declaration.
-    pub(crate) fn format_usages(
-        &self,
-    ) -> Vec<(vk::Format, crate::device::requirements::FormatUsage)> {
-        use crate::device::requirements::FormatUsage as U;
-        let mut out = vec![(self.format, U::StorageImage)];
-        if self.formatless {
-            out.push((self.format, U::StorageImageReadWithoutFormat));
-            out.push((self.format, U::StorageImageWriteWithoutFormat));
-        }
-        out
-    }
-}
-
-/// How a stand-in holds a pipeline's samples (as the storage form's attachments do).
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum StandInView {
-    /// A 2D image of the pipeline's samples: single-sample at one sample, multisampled at more
-    /// (on a device with multisampled storage images), sample `s` of pixel `(x, y)` at texel
-    /// `(x, y)`, sample `s`.
-    Image,
-    /// A single-sample 2D-array image of `layers` layers (the pipeline's samples), bound through
-    /// a 2D-array view: layer `s` holds sample `s` of each pixel, on a device without multisampled
-    /// storage images.
-    SamplePlanes { layers: u32 },
 }
 
 /// A framebuffer-fetch input: color attachment `color_index` read as input attachment

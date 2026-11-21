@@ -340,18 +340,6 @@ pub enum SyntheticBinding {
     /// its words ([`FunctionTableSnapshot`](crate::bind::FunctionTableSnapshot)). The stage's
     /// function-table directory gives each id the word offset of its table's record.
     FunctionTableSnapshot,
-    /// The stand-in of the render pass's depth attachment a fragment function that runs the
-    /// draw's depth test itself tests and writes (`GraphicsState::shader_tests`): a coherent
-    /// `R32f` storage image holding pixel `(x, y)`'s depth at texel `(x, y)` (its samples as the
-    /// stand-in's view says), read and written inside the fragment's ordered pixel-interlock
-    /// critical section.
-    DepthStandIn,
-    /// The stand-in of the render pass's stencil attachment a fragment function that runs the
-    /// draw's stencil test itself, beside its depth test, tests and writes
-    /// (`ShaderTestsUse::stencil`): a coherent `R8ui` storage image holding pixel `(x, y)`'s
-    /// stencil at texel `(x, y)` (each sample, multisampled at more than one), read and written
-    /// inside the fragment's ordered pixel-interlock critical section.
-    StencilStandIn,
 }
 
 /// What kind of resource a [`ResourceSlot`] names.
@@ -1135,12 +1123,6 @@ pub enum PushField {
     /// the bits of two `f32`s, `[low, high]`, which the function clamps the depth it writes to
     /// after Metal's `[0, 1]` (`BindState::depth_clamp_range`).
     DepthClampRange,
-    /// The draw's depth state for a fragment function that runs the draw's depth test itself
-    /// (`RuntimeFact::ShaderTests`), a `uvec4`: word 0 holds the depth `MTLCompareFunction` in
-    /// bits 0 to 2, whether depth writes are enabled in bit 3, and whether the encoder's depth
-    /// clip mode is `MTLDepthClipModeClamp` in bit 4; words 1 and 2 the bits of viewport 0's near
-    /// and far depth (`f32`); word 3 is 0 (`bind::shader_tests_words`).
-    ShaderTestsState,
     /// The draw's layout for a vertex function compiled in the primitive ID's de-indexed form
     /// (`LoweringInputs::primitive_id_indices`), a `uvec4`, of a draw run from vertex 0: 0, the
     /// index count, the first instance, and the base vertex. Stream position `p = VertexIndex`
@@ -1153,15 +1135,6 @@ pub enum PushField {
     /// (`StorageAttachmentUse::kept`), so every write mask that keeps some of a format's channels
     /// shares one module.
     StorageKeptChannels,
-    /// The draw's stencil state for a fragment function that runs the draw's stencil test itself
-    /// beside its depth test (`RuntimeFact::ShaderStencilTest`), a `uvec4`: words 0 and 1 the
-    /// front face's and the back face's words, each holding the face's `MTLCompareFunction` in
-    /// bits 0 to 2, its stencil-failure and depth-stencil-pass `MTLStencilOperation`s in bits 3 to
-    /// 5 and 6 to 8, its read mask in bits 9 to 16, its write mask in bits 17 to 24, and its
-    /// depth-failure operation in bits 25 to 27; word 2 the front reference in bits 0 to 7 and
-    /// the back reference in bits 8 to 15 (`BindState::stencil_references`); word 3 is 0
-    /// (`bind::shader_stencil_words`).
-    ShaderStencilState,
     /// The channel widths of the storage texture bound to the slot (`u32`;
     /// `metal::format::integer_channels_word`, 0 where the binder binds a neutral): byte `c`
     /// holds `32 - bits` of channel `c` (red to alpha) of an integer format narrower than 32 bits,

@@ -324,27 +324,6 @@ pub struct BindState {
     /// the shape.
     #[cfg_attr(feature = "serde", serde(default))]
     pub alpha_test_reference: Option<f32>,
-    /// Viewport 0's depth range `[near, far]` as the encoder set it (`setViewport:`; Metal's
-    /// default viewport has `[0, 1]`), which a fragment function that runs the draw's depth test
-    /// itself clamps its depth to in depth clamp mode (`PushField::ShaderTestsState`). Read only
-    /// by a draw of such a pipeline (`GraphicsState::shader_tests`), whose consumer sets it;
-    /// only the draw's bytes depend on it, so it is not part of the shape.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub depth_range: [f32; 2],
-    /// The encoder's depth clip mode is `MTLDepthClipModeClamp` (`setDepthClipMode:`), under
-    /// which such a function clamps its depth to the viewport's range, where in clip mode it
-    /// clamps to `[0, 1]` (`PushField::ShaderTestsState`). Read only by a draw of such a
-    /// pipeline; not part of the shape.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub depth_clip_mode_clamp: bool,
-    /// The encoder's stencil references, the front face's then the back face's
-    /// (`setStencilReferenceValue:` sets both, `setStencilFrontReferenceValue:backReferenceValue:`
-    /// each; Metal's default is 0), which a fragment function that runs the draw's stencil test
-    /// itself compares and replaces with (`PushField::ShaderStencilState`). Read only by a draw of
-    /// such a pipeline (`ShaderTestsUse::stencil`), whose consumer sets it; only the draw's bytes
-    /// depend on it, so it is not part of the shape.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub stencil_references: [u32; 2],
 }
 
 /// What a draw's depth and stencil tests can do to its fragments (`BindState::fragment_tests`).
@@ -353,9 +332,8 @@ pub struct BindState {
 /// storage form stores inside the shader, so where it discards, and so cannot be tested early
 /// whatever the draw's state, whether its store is Metal's is the draw's tests' to decide.
 ///
-/// Where the tests drop fragments, such a function runs them itself where it can:
-/// [`FragmentTests::Depth`] and [`FragmentTests::Stencil`] name the tests it runs, and a
-/// [`FragmentTests::Drop`] draw of a function that may not declare early tests runs both.
+/// Where the tests drop fragments and write, such a draw is refused: [`FragmentTests::Depth`] and
+/// [`FragmentTests::Stencil`] name the test that acts, and so the attachment the refusal names.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -372,25 +350,23 @@ pub enum FragmentTests {
     /// the encoder counts nothing: early tests drop the fragments Metal's later tests drop and
     /// leave the attachments as Metal's do, so such a draw runs the variant that declares them
     /// (`VariantKey::read_only_tests`). (A function that may not declare them, since it writes
-    /// other memory or returns depth, runs the tests itself as under [`FragmentTests::Stencil`].)
+    /// other memory or returns depth, is refused at the tested attachment.)
     Drop,
     /// No test can drop a fragment: a store before the tests is the store Metal makes after
     /// them, so such a draw runs the pipeline as compiled.
     Pass,
     /// Only the depth test can drop a fragment, and it writes the depth attachment where
     /// `writes`; the stencil test can neither drop nor write, and the encoder counts nothing.
-    /// Such a draw of a function that stores before the tests runs the variant whose function
-    /// runs the depth test itself (`VariantKey::shader_tests`) where the device ships it, or, where
-    /// it writes nothing and the function has one, the variant that declares early tests, as
+    /// Such a draw of a function that stores before the tests is refused
+    /// `NotImplemented(FramebufferFetch)` at the depth attachment, unless it writes nothing and
+    /// the function has the variant that declares early tests, which it runs, as
     /// [`FragmentTests::Drop`].
     Depth { writes: bool },
     /// The stencil test can drop a fragment or write the stencil attachment, and some test
     /// writes its attachment (the stencil test's operations, or the depth test's writes; where
     /// none does, the tests are [`FragmentTests::Drop`]); the encoder counts nothing. Such a draw
-    /// of a function that stores before the tests runs the variant whose function runs the
-    /// stencil and depth tests itself (`VariantKey::shader_stencil`), where the pass has a depth
-    /// and a stencil attachment and the device ships the form; a pass with a stencil attachment
-    /// alone is refused at it.
+    /// of a function that stores before the tests is refused `NotImplemented(FramebufferFetch)`
+    /// at the stencil attachment.
     Stencil,
 }
 

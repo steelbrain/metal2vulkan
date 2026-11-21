@@ -1212,24 +1212,6 @@ fn graphics_requirements(
             requirements.features.insert(VkFeature::Maintenance8);
         }
     }
-    // An in-shader depth test's stand-in; the module's own requirements name the interlock and
-    // the fragment stores. A multisampled stand-in has the pipeline's samples; planes are
-    // single-sample.
-    let mut multisampled_stand_in = false;
-    if let Some(t) = &graphics.shader_tests {
-        requirements.formats.extend(t.depth.format_usages());
-        multisampled_stand_in =
-            t.depth.view == crate::pipeline::graphics::StandInView::Image && t.depth.samples > 1;
-        // The stencil's stand-in, a multisampled image at more than one sample, copied to and
-        // from the stencil aspect by image copies there (`maintenance8`).
-        if let Some(s) = &t.stencil {
-            requirements.formats.extend(s.format_usages());
-            if s.samples > 1 {
-                requirements.features.insert(VkFeature::Maintenance8);
-                multisampled_stand_in = true;
-            }
-        }
-    }
     let multisampled_shadow = artifacts.iter().any(|a| {
         a.facts.iter().any(|f| {
             matches!(
@@ -1248,7 +1230,7 @@ fn graphics_requirements(
         .iter()
         .any(|a| a.view == StorageAttachmentView::Attachment)
         && graphics.rasterization_samples.as_raw() > 1;
-    if multisampled_shadow || multisampled_storage || multisampled_stand_in {
+    if multisampled_shadow || multisampled_storage {
         requirements
             .properties
             .insert(VkProperty::StorageImageSampleCount(

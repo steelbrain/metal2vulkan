@@ -101,7 +101,6 @@ const GRAPHICS_STATE: &[(&str, Verdict)] = &[
         Fact("the runtime takes every attachment of a draw's pass as written"),
     ),
     ("sample_mask", Applied),
-    ("shader_tests", Refused(VARIANT)),
     ("snapshot_reads", Refused(VARIANT)),
     (
         "color_group",

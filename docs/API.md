@@ -2334,10 +2334,6 @@ bound.
   do not decide; or a function a table can hold that linking did not import could not be planned, so
   its samplers are not known; or a dynamic library's symbol, a binary function or a function-pointer
   group's function brings them, whose numbering is not measured.
-- `metal2vulkan-degrade-computed-sample-depth` (precision). `PrecisionNote::ComputedSampleDepth`:
-  Recorded by no device: its condition, the measured `VkProperty::CenterFragCoordDepth`, is in no
-  profile, so a fragment function that would run its draw's depth test itself at more than one
-  sample, without returning its depth, is `Feature::MultisampledShaderDepthTest`, not implemented.
 - `metal2vulkan-degrade-argument-pixel-sampler-scaling` (precision).
   `PrecisionNote::ArgumentPixelSamplerScaling`: A sample, gather or comparison through an argument
   buffer's sampler whose word the specialized module cannot read may hand the device a pixel

@@ -118,8 +118,7 @@ pub use descriptor::{
 pub use graphics::{
     BandPrimitive, BlendState, ColorAttachmentState, FanOutState, FragmentImageblock,
     GraphicsState, ImageblockMechanism, InputAttachmentUse, LineBandState, RegionFanOut,
-    ShaderTestsUse, ShadowStencilUse, StandInUse, StandInView, StorageAttachmentUse,
-    StorageAttachmentView, TessellationState,
+    ShadowStencilUse, StorageAttachmentUse, StorageAttachmentView, TessellationState,
 };
 pub use interface::{
     AccessSet, AttributeFetch, BufferForm, BufferKind, BufferSlot, CommandWrites, DescriptorView,
