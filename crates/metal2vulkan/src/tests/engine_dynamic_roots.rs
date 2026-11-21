@@ -944,8 +944,8 @@ fn volatile_accesses_through_a_loaded_pointer_are_exact() {
 }
 
 /// A volatile load of a pointer from the allocation a loaded pointer reaches (a pointer loaded
-/// through a wide pointer): its guest address's two words are volatile loads by device address, and
-/// the pointer it yields resolves to its allocation.
+/// through a wide pointer): its guest address, two whole words, is one volatile load by device
+/// address, and the pointer it yields resolves to its allocation.
 #[test]
 fn a_volatile_pointer_load_through_a_loaded_pointer_is_exact() {
     let name = "dyn_volatile_chase";
@@ -971,7 +971,7 @@ fn a_volatile_pointer_load_through_a_loaded_pointer_is_exact() {
         let a = compile(&bc, name, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
         link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
         let (plan, m) = typed_module(&bc, name, &p).expect("module");
-        assert_eq!(volatiles(&m), (vec![(PSB, 2)], vec![]), "{what}");
+        assert_eq!(volatiles(&m), (vec![(PSB, 1)], vec![]), "{what}");
         let res = Resources {
             buffers: vec![
                 slot_buffer(0, ptrs.clone()),
