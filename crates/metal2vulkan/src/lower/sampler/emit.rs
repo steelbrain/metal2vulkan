@@ -1409,13 +1409,23 @@ fn identity_sampler(
 }
 
 /// Field `field` of the sampler table entry an argument buffer's sampler handle `handle` names: the
-/// handle is the entry's index, the null entry's 0 for a missed or null id.
+/// handle is the entry's index, the null entry's 0 for a missed or null id. Under the identity
+/// domains the handle is the sampler's resource ID (`access::handle::emit_identity_sampler`): the
+/// element is its guarded index and the flags its word.
 fn heap_sampler_field(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     handle: ValueId,
     field: EntryField,
 ) -> BResult<SValue> {
+    if cx.plan.families.access.identity {
+        let id = cx.operand(fb, handle)?;
+        let word = match field {
+            EntryField::Element => 0,
+            EntryField::Flags => 1,
+        };
+        return fb.composite_extract(id, &[word]);
+    }
     let Some(table) = cx.decl.families.access.sampler_table else {
         return Err(cx.fail("an argument buffer's sampler without its sampler table"));
     };

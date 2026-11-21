@@ -2991,9 +2991,11 @@ fn places_wrapped_offset(op: &SampleOp) -> bool {
 /// stage never marks it: the mark is a store, and a fragment function holding one loses the
 /// device's hidden-surface removal and early depth test although the store never runs (an M4: 16
 /// hidden layers cost 13.5 times what they cost without it), so the planner refuses a listed cubic
-/// sampler beside a fragment stage.
+/// sampler beside a fragment stage. Under the identity domains no test: the runtime makes no device
+/// sampler of a cubic filter (its state is refused), so no live sampler's resource ID carries the
+/// word's `CUBIC` bit.
 fn cubic_reach(cx: &mut SelectCx<'_>) {
-    if cx.stage == Stage::Fragment {
+    if cx.stage == Stage::Fragment || crate::lower::access::identity(cx.profile) {
         return;
     }
     if cx.families.sampler.cubic_reach || crate::lower::access::absent::status_writable(cx) {

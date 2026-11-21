@@ -620,10 +620,9 @@ fn an_argument_buffer_texture_is_the_texture_at_its_field() {
 /// A sampler of an argument buffer beside the texture it samples: the owned
 /// `argument_sampler_sample` kernel samples the member texture at `(0.25g + 0.125, 0.25g +
 /// 0.125)` through the member sampler, nearest and normalized, so thread `g` reads texel
-/// `(g, g)` of the 4x4 texture, whose red is `x + 4y`. The executor's own context runs it; on
-/// Linux the runtime's make refuses it, as the translator's identity domains read no execution
-/// status address an encoder supplies (`Unsupported{IdentityDomains}`), the typed refusal a run
-/// through the runtime records.
+/// `(g, g)` of the 4x4 texture, whose red is `x + 4y`: the executor's own context and, on Linux,
+/// the runtime, which samples through the element of the sampler arrays the member's resource ID
+/// names.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn an_argument_buffer_sampler_samples_its_member_texture() {
@@ -672,19 +671,9 @@ fn an_argument_buffer_sampler_samples_its_member_texture() {
     let expected: Vec<f32> = (0..4)
         .flat_map(|g| [5.0 * g as f32, 0.0, 0.0, 1.0])
         .collect();
-    assert_eq!(run(&case, &bitcode).unwrap().output, floats(&expected));
-    #[cfg(target_os = "linux")]
-    {
-        use crate::check::admission::NotSupported;
-        let refused = super::engine_compute::run_through_runtime(&case, &bitcode);
-        assert!(
-            matches!(
-                &refused,
-                Err(ExecutorError::NotSupported(NotSupported::Product { detail, .. }))
-                    if detail.contains("IdentityDomains")
-            ),
-            "{refused:?}"
-        );
+    for (name, run) in runs() {
+        let run = run(&case, &bitcode).unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(run.output, floats(&expected), "{name}");
     }
 }
 

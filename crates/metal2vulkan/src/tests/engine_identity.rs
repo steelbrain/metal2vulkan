@@ -72,6 +72,12 @@
 //!   0; each passes L3. Constexpr samplers a lane chooses among, where they are one array of
 //!   samplers, are still refused as `Unsupported{IdentityDomains}`, not implemented, naming that
 //!   form.
+//! - A kernel that samples an argument buffer's texture through the sampler the argument buffer
+//!   holds beside it (`engine/tail_argument_samplers`, `engine/tail_argument_cube_gradient`) takes
+//!   the sampler's resource ID as its handle: the element of the set-1 sampler array of its use at
+//!   the ID's index, element 0 where the index is past the arrays, and the word's fields from the
+//!   ID's high word, with no sampler table, no execution status address and no cubic test; each
+//!   passes L3.
 //! - A kernel that encodes compute commands into an indirect command buffer it reaches through an
 //!   argument buffer (`engine/icb_replay_encode`) is refused as
 //!   `Unsupported{GpuEncodedIndirectCommands}`, not implemented: the feature it uses, not the
@@ -1044,6 +1050,75 @@ target triple = \"air64_v28-apple-macosx26.0.0\"\n\n{}",
                 }
                 (other, _) => panic!("{what}: {other:?}"),
             }
+        }
+    }
+}
+
+/// Under the identity domains a kernel that samples, compares or fetches an argument buffer's
+/// texture through the sampler the argument buffer holds beside it (`engine/tail_argument_samplers`'
+/// kernels and `engine/tail_argument_cube_gradient`'s) takes the sampler's resource ID from the
+/// member's 8 bytes as its handle (`access::handle::emit_identity_sampler`): the sampler is the
+/// element of the set-1 sampler array of its use that the ID's guarded index names, and its word's
+/// fields are the ID's high word. No sampler table, nothing in set 0, no sampler slot's ID, constexpr
+/// sampler index or execution status address pushed, and no cubic test
+/// (`RuntimeFact::CubicArgumentSampler`). Each passes L3 on every
+/// profile; the default domains compile each as before.
+#[test]
+fn an_argument_buffers_sampler_samples_through_the_identity_arrays_by_its_resource_id() {
+    let (Some(samplers), Some(cube)) = (
+        assemble("tail_argument_samplers"),
+        assemble("tail_argument_cube_gradient"),
+    ) else {
+        return;
+    };
+    // Each entry and the set-1 bindings it uses.
+    let cases: [(&[u8], &str, &[u32]); 5] = [
+        (&samplers, "argument_sampler_sample", &[0, 2]),
+        (&samplers, "argument_sampler_edges", &[0, 2]),
+        (&samplers, "argument_sampler_compare", &[0, 3]),
+        (&samplers, "argument_sampler_integer", &[0, 4]),
+        (&cube, "argument_sampler_cube_gradient", &[0, 2]),
+    ];
+    for stem in PROFILES {
+        let default = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+        for (bc, entry, bindings) in cases {
+            let what = format!("{stem}: {entry}");
+            compile(bc, entry, &default).unwrap_or_else(|e| panic!("{what}: default domains: {e}"));
+            let (a, plan, _) =
+                compile_kept(bc, entry, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+            let pushed: Vec<_> = (plan.push.fields.iter())
+                .map(|f| f.field)
+                .filter(|f| match f {
+                    PushField::SlotGuestBase(s) => s.class == SlotClass::Sampler,
+                    PushField::ExecutionStatusAddress | PushField::ConstexprSampler(_) => true,
+                    _ => false,
+                })
+                .collect();
+            assert_eq!(pushed, [], "{what}");
+            assert!(
+                !(a.facts.iter()).any(|f| matches!(f, RuntimeFact::CubicArgumentSampler { .. })),
+                "{what}"
+            );
+            let linked = link(&[&a], &LinkInputs::standalone(), &p)
+                .unwrap_or_else(|e| panic!("{what}: {e}"));
+            let sets: Vec<_> = (linked.layout.sets.iter())
+                .map(|s| {
+                    let b: Vec<_> = (s.bindings.iter())
+                        .map(|b| (b.binding, b.ty, b.count))
+                        .collect();
+                    (s.set, b)
+                })
+                .collect();
+            assert_eq!(sets, [(0, vec![]), (1, identity_arrays())], "{what}");
+            let mut used: Vec<u32> = (linked.table.bindings.values())
+                .filter(|(set, _)| *set == 1)
+                .map(|(_, binding)| *binding)
+                .collect();
+            used.sort();
+            used.dedup();
+            assert_eq!(used, bindings, "{what}");
         }
     }
 }

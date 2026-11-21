@@ -79,8 +79,12 @@ A constexpr sampler has no ID: the consumer places a device sampler of it (the f
 `PushField::ConstexprSampler` names it and its use, and `CombinedSampler::constexpr_sampler`
 describes it) at an index of the use's array and pushes that index as a `u32`. Its coordinates
 are normalized; the shader scales a pixel sampler's coordinate itself. It samples with its own
-address modes. An argument buffer's sampler is not lowered under these domains yet; the change
-that first lowers it masks its index as an argument buffer's texture's is masked.
+address modes. A shader takes an argument buffer's sampler's ID from the member's 8 bytes,
+samples through the element of its use's array that its low word indexes, and reads the word's
+fields as a runtime sampler slot's. The program writes the ID, so the shader compares its index
+with the arrays' length: an index of 4,000 or more reads element 0, the default sampler, never one
+outside the arrays. The runtime makes no sampler of a cubic filter, so no live ID's word carries
+bit 30, and the shader does not test it.
 
 ## The texture word
 

@@ -1201,8 +1201,9 @@ pub(crate) const IDENTITY_TEXTURES: u32 = 65_536;
 const _: () = assert!(IDENTITY_TEXTURES.is_power_of_two());
 
 /// Each sampler array of the identity domains' set 1: bindings 2, 3 and 4, one element per index a
-/// sampler's resource ID may hold (`docs/RESOURCE-ID.md`).
-const IDENTITY_SAMPLERS: u32 = 4_000;
+/// sampler's resource ID may hold (`docs/RESOURCE-ID.md`). An argument buffer's sampler index not
+/// below it reads element 0 (`lower::access::handle`).
+pub(crate) const IDENTITY_SAMPLERS: u32 = 4_000;
 
 /// Set 1 under the identity domains: the same layout for every pipeline, so the consumer binds one
 /// set for every command. Binding 0 is the sampled-image array and binding 1 the storage-image

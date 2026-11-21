@@ -614,8 +614,8 @@ impl SelectCx<'_> {
             // An index word is held as its low word.
             Ok(word)
         } else if access::handle::is_word(&self.families.access, v) {
-            // A handle word is held as its handle index.
-            Ok(DemoteTy::HandleIndex)
+            // A handle word is held as its handle index, or as its resource ID.
+            Ok(access::handle::word_repr(self, v))
         } else if let Some(p) = access::cell::word_pointer(self, v) {
             // A pointer word from a forwarding cell is held as its pointer.
             access::lowered_pointer(self, p)
@@ -2047,11 +2047,12 @@ fn identity_refusal(plan: &Plan) -> Option<String> {
         ));
     }
     // Samples only of a texture slot or an argument buffer's texture through a runtime sampler
-    // slot or a constexpr sampler (`sampler::IdentitySampling`, `SamplerPlan::heap_identity`), a
-    // runtime sampler's word read from its resource ID, and a 2D texture slot's bicubic sample at
-    // normalized coordinates, the bound format's treatment read from its push field
-    // (`PushField::BicubicTexels`): no argument buffer's sampler, array of samplers, bicubic
-    // sample at pixel coordinates, bicubic sample of a 1D texture (`Routine::Line`), or
+    // slot or a constexpr sampler (`sampler::IdentitySampling`, `SamplerPlan::heap_identity`), of
+    // an argument buffer's texture through an argument buffer's sampler (its resource ID the
+    // handle, `access::handle::emit_identity_sampler`), a runtime sampler's word read from its
+    // resource ID, and a 2D texture slot's bicubic sample at normalized coordinates, the bound
+    // format's treatment read from its push field (`PushField::BicubicTexels`): no array of
+    // samplers, bicubic sample at pixel coordinates, bicubic sample of a 1D texture (`Routine::Line`), or
     // specialization of a slot's state. A two-plane texture's sample read in place
     // (`Routine::Quad`) never reaches here: its slot's `PushField::YCbCrInPlace` is refused first,
     // as an encoder value the identity domains do not source.
@@ -2062,10 +2063,6 @@ fn identity_refusal(plan: &Plan) -> Option<String> {
             !(sampled.combined.iter()).all(|k| sampled.identity.contains_key(k))
                 || !sampled.decls.is_empty(),
             "a texture argument sampled through a sampler the identity sampling does not take",
-        ),
-        (
-            !sampled.heap_samplers.is_empty() || sampled.cubic_reach,
-            "an argument buffer's sampler",
         ),
         (
             !sampled.arrays.is_empty() || !sampled.heap_arrays.is_empty(),

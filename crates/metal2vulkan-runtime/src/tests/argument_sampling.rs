@@ -2,9 +2,14 @@
 //! the cfg's kind: `examples/heap_samples`' `hs_sample` samples a `half` and a `float` texture its
 //! argument buffer holds through a constexpr nearest sampler, at the index the consumer gives it,
 //! and through a nearest sampler state bound at a sampler slot. Each thread samples one texel at its
-//! centre, and every answer is that texel's exact value.
+//! centre, and every answer is that texel's exact value. `engine/tail_argument_samplers`'
+//! `argument_sampler_edges` samples a texture through the sampler its argument buffer holds beside
+//! it, at texel edges, so a linear sampler's answer differs from the default sampler's.
+//! `engine/px_samplers`' `px_sample_argument` and `engine/xr_samples`' `xr_sample_runtime` sample
+//! one texture through one normalized sampler state held in an argument buffer and bound at a
+//! sampler slot, which read the same texels.
 //!
-//! `llvm-as` assembles the kernel; without it the test skips visibly.
+//! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
@@ -46,43 +51,43 @@ mod on_device {
         -1.5 - (4 * i + c) as f32
     }
 
-    /// The `hs_sample` kernel's library, or None where `llvm-as` is missing.
-    fn library() -> Option<Library> {
-        match llvm_assemble(&fixtures_dir().join("examples/heap_samples.ll")) {
+    /// The library of fixture `path`, or None where `llvm-as` is missing.
+    fn library(path: &str) -> Option<Library> {
+        match llvm_assemble(&fixtures_dir().join(path)) {
             Ok(bitcode) => Some(Library::from_air(&bitcode).expect("the library")),
             Err(AssembleError::Missing(why)) => {
                 eprintln!("SKIPPED: {why}");
                 None
             }
-            Err(error) => panic!("heap_samples.ll: {error:?}"),
+            Err(error) => panic!("{path}: {error:?}"),
         }
     }
 
-    /// A 2D texture of `format` (`texel` bytes a texel), `SIDE` a side, shader-read, at texture
+    /// A 2D texture of `format` (`texel` bytes a texel), `side` a side, shader-read, at texture
     /// index `index`, its bytes `bytes` row by row.
     fn texture(
         name: &str,
         device: &Device,
         (format, texel): (PixelFormat, u64),
-        index: u32,
+        (index, side): (u32, u32),
         bytes: &[u8],
     ) -> Texture {
-        let mut d = TextureDescriptor::new(TextureType::Type2D, format, SIDE, SIDE);
+        let mut d = TextureDescriptor::new(TextureType::Type2D, format, side, side);
         d.usage = TextureUsage::SHADER_READ;
         let texture =
             (device.new_texture(&d, Some(index))).unwrap_or_else(|error| panic!("{name}: {error}"));
         let whole = Region {
             origin: [0; 3],
-            size: [SIDE, SIDE, 1],
+            size: [side, side, 1],
         };
-        let row = u64::from(SIDE) * texel;
+        let row = u64::from(side) * texel;
         (texture.replace_region(
             whole,
             0,
             0,
             crate::HostBytes::from(bytes),
             row,
-            row * u64::from(SIDE),
+            row * u64::from(side),
         ))
         .unwrap_or_else(|error| panic!("{name}: {error}"));
         texture
@@ -113,7 +118,7 @@ mod on_device {
     /// nearest sampler state at slot 0, and writes the four answers: each is the texel.
     #[test]
     fn every_device_samples_an_argument_buffers_textures_through_slot_and_constexpr_samplers() {
-        let Some(library) = library() else {
+        let Some(library) = library("examples/heap_samples.ll") else {
             return;
         };
         each_device("argument_sampling", |name, _, device| {
@@ -146,8 +151,20 @@ mod on_device {
                 .flat_map(|i| (0..4).map(move |c| float_at(i, c)))
                 .flat_map(f32::to_le_bytes)
                 .collect();
-            let h = texture(name, &device, (PixelFormat::RGBA16Float, 8), 1, &halves);
-            let f = texture(name, &device, (PixelFormat::RGBA32Float, 16), 2, &floats);
+            let h = texture(
+                name,
+                &device,
+                (PixelFormat::RGBA16Float, 8),
+                (1, SIDE),
+                &halves,
+            );
+            let f = texture(
+                name,
+                &device,
+                (PixelFormat::RGBA32Float, 16),
+                (2, SIDE),
+                &floats,
+            );
             let sampler = (device.new_sampler_state(&SamplerDescriptor::new(), SLOT_SAMPLER))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let block = (device.take_block(MemoryClass::Shared, 65_536)).expect("a Shared block");
@@ -191,6 +208,343 @@ mod on_device {
             }
             println!(
                 "{name}: an argument buffer's textures sampled through slot and constexpr samplers"
+            );
+        });
+    }
+
+    /// Each thread `g` of `argument_sampler_edges` samples the 4 by 4 texture its argument buffer
+    /// holds, whose texel `(x, y)` has red `x + 4y`, at normalized `(g / 4, g / 4)`, a texel edge,
+    /// through the sampler the argument buffer holds beside it. Through a linear sampler state at
+    /// its own index each answer averages the four texels around the edge, clamped at the texture's
+    /// edge for `g` 0: red 0, 2.5, 7.5, 12.5. Through a resource ID with that state's word and index
+    /// 4,000, one past the sampler arrays, each samples through element 0, the default nearest
+    /// sampler: red `5g`, the texel past the edge.
+    #[test]
+    fn every_device_samples_an_argument_buffers_texture_through_its_own_sampler() {
+        use crate::SamplerMinMagFilter;
+        const EDGE_SIDE: u32 = 4;
+        let Some(library) = library("engine/tail_argument_samplers.ll") else {
+            return;
+        };
+        each_device("argument_sampling", |name, _, device| {
+            let grants = [
+                (IndexClass::Texture, 1),
+                (IndexClass::Sampler, SLOT_SAMPLER),
+            ]
+            .map(|(class, first)| {
+                (device.grant_indices(class, first, 1))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"))
+            });
+            let function = library
+                .function("argument_sampler_edges")
+                .expect("the kernel");
+            let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+                FunctionDescriptor::new(function),
+            ));
+            let state = (device.new_compute_pipeline_state(&descriptor, |samplers| {
+                assert!(samplers.is_empty(), "{name}: {samplers:?}");
+                Ok(Vec::new())
+            }))
+            .unwrap_or_else(|error| panic!("{name}: argument_sampler_edges: {error}"));
+            let texels: Vec<u8> = (0..EDGE_SIDE * EDGE_SIDE)
+                .flat_map(|i| [i as f32, 0.0, 0.0, 1.0])
+                .flat_map(f32::to_le_bytes)
+                .collect();
+            let t = texture(
+                name,
+                &device,
+                (PixelFormat::RGBA32Float, 16),
+                (1, EDGE_SIDE),
+                &texels,
+            );
+            let mut linear = SamplerDescriptor::new();
+            linear.min_filter = SamplerMinMagFilter::Linear;
+            linear.mag_filter = SamplerMinMagFilter::Linear;
+            let sampler = (device.new_sampler_state(&linear, SLOT_SAMPLER))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let id = sampler.gpu_resource_id().to_bits();
+            assert_eq!(id & 0xffff_ffff, u64::from(SLOT_SAMPLER), "{name}");
+            let past = (id & !0xffff_ffff) | 4_000;
+            let block = (device.take_block(MemoryClass::Shared, 65_536)).expect("a Shared block");
+            let material = |sampler: u64| -> Vec<u8> {
+                let mut bytes = t.gpu_resource_id().to_bits().to_le_bytes().to_vec();
+                bytes.extend(sampler.to_le_bytes());
+                bytes
+            };
+            let held = [id, past]
+                .iter()
+                .enumerate()
+                .map(|(k, s)| shared(&device, &block, 256 * k as u64, &material(*s)))
+                .collect::<Vec<_>>();
+            let outs = (0..2)
+                .map(|k| shared(&device, &block, 1024 + 256 * k, &[0; 64]))
+                .collect::<Vec<_>>();
+            let queue = device.new_command_queue(1).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder =
+                (command_buffer.compute_command_encoder(DispatchType::Serial)).expect("an encoder");
+            encoder.set_compute_pipeline_state(&state).expect("a state");
+            (encoder.use_resource(Resource::Texture(&t), ResourceUsage::READ)).expect("a texture");
+            for (held, out) in held.iter().zip(&outs) {
+                encoder.set_buffer(Some(held), 0, 0).expect("held");
+                encoder.set_buffer(Some(out), 0, 1).expect("out");
+                (encoder.dispatch_threadgroups([1, 1, 1], [EDGE_SIDE, 1, 1]))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            assert_eq!(
+                float4s(&outs[0], 4),
+                [0.0, 2.5, 7.5, 12.5].map(|r| [r, 0.0, 0.0, 1.0]),
+                "{name}: through the linear sampler's resource ID"
+            );
+            assert_eq!(
+                float4s(&outs[1], 4),
+                [0.0, 5.0, 10.0, 15.0].map(|r| [r, 0.0, 0.0, 1.0]),
+                "{name}: through a resource ID whose index is past the sampler arrays"
+            );
+            drop((command_buffer, queue, state, sampler, t));
+            for grant in grants {
+                (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+            println!(
+                "{name}: an argument buffer's texture sampled through the argument buffer's sampler"
+            );
+        });
+    }
+
+    /// The conformance case `pixel-samplers`' coordinates over its 5 by 3 texture: per integer
+    /// from -1 to 6 the texel edge and one ulp either side, `i + 1/512`, the quarter, the centre
+    /// and one ulp either side, three quarters and `255/256`, across ten rows from -0.5 to 3.25,
+    /// each divided by the size.
+    fn normalized_grid(width: u32, height: u32) -> Vec<[f32; 2]> {
+        let mut xs = Vec::new();
+        for i in -1..=(width as i32 + 1) {
+            let (b, h) = (i as f32, i as f32 + 0.5);
+            let (lo, hi) = match i {
+                0 => (-(2f32.powi(-24)), 2f32.powi(-24)),
+                _ => (b.next_down(), b.next_up()),
+            };
+            xs.extend([
+                lo,
+                b,
+                hi,
+                b + 2f32.powi(-9),
+                b + 0.25,
+                h.next_down(),
+                h,
+                h.next_up(),
+                b + 0.75,
+                b + 255.0 / 256.0,
+            ]);
+        }
+        let ys = [
+            -0.5,
+            0.0,
+            0.5,
+            1f32.next_down(),
+            1.0,
+            1.25,
+            1.5f32.next_up(),
+            2.5,
+            3.0,
+            3.25,
+        ];
+        (ys.iter())
+            .flat_map(|&y| {
+                xs.iter()
+                    .map(move |&x| [x / width as f32, y / height as f32])
+            })
+            .collect()
+    }
+
+    /// One `RGBA32Float` texture of 5 by 3 texels, `100x + 10y + c` in channel `c`, sampled at the
+    /// conformance case `pixel-samplers`' 800 coordinates over its size ([`normalized_grid`])
+    /// through one normalized nearest sampler state under each address mode that case asks
+    /// (clamp to edge, to zero, to an opaque white border, and mirror clamp to edge): bound at
+    /// sampler slot 0 beside texture slot 0 (`xr_samples`' `xr_sample_runtime`), and held in an
+    /// argument buffer beside the texture (`px_samplers`' `px_sample_argument`). The two read the
+    /// same texels, bit for bit, at every coordinate under every mode.
+    #[test]
+    fn every_device_samples_alike_through_an_argument_buffers_sampler_and_a_slots() {
+        use crate::{SamplerAddressMode, SamplerBorderColor};
+        const WIDTH: u32 = 5;
+        const HEIGHT: u32 = 3;
+        let (Some(slots), Some(arguments)) = (
+            library("engine/xr_samples.ll"),
+            library("engine/px_samplers.ll"),
+        ) else {
+            return;
+        };
+        let modes = [
+            SamplerAddressMode::ClampToEdge,
+            SamplerAddressMode::ClampToZero,
+            SamplerAddressMode::ClampToBorderColor,
+            SamplerAddressMode::MirrorClampToEdge,
+        ];
+        let uv = normalized_grid(WIDTH, HEIGHT);
+        let count = uv.len();
+        each_device("argument_sampling", |name, _, device| {
+            let grants = [
+                (IndexClass::Texture, 1, 1),
+                (IndexClass::Sampler, SLOT_SAMPLER, 4),
+            ]
+            .map(|(class, first, n)| {
+                (device.grant_indices(class, first, n))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"))
+            });
+            let state = |library: &Library, entry: &str| {
+                let function = library.function(entry).expect("the kernel");
+                let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+                    FunctionDescriptor::new(function),
+                ));
+                (device.new_compute_pipeline_state(&descriptor, |samplers| {
+                    assert!(samplers.is_empty(), "{name}: {entry}: {samplers:?}");
+                    Ok(Vec::new())
+                }))
+                .unwrap_or_else(|error| panic!("{name}: {entry}: {error}"))
+            };
+            let (slot_state, argument_state) = (
+                state(&slots, "xr_sample_runtime"),
+                state(&arguments, "px_sample_argument"),
+            );
+            let texels: Vec<u8> = (0..HEIGHT)
+                .flat_map(|y| (0..WIDTH).map(move |x| (x, y)))
+                .flat_map(|(x, y)| (0..4).map(move |c| (100 * x + 10 * y + c) as f32))
+                .flat_map(f32::to_le_bytes)
+                .collect();
+            let mut d = TextureDescriptor::new(
+                TextureType::Type2D,
+                PixelFormat::RGBA32Float,
+                WIDTH,
+                HEIGHT,
+            );
+            d.usage = TextureUsage::SHADER_READ;
+            let t =
+                (device.new_texture(&d, Some(1))).unwrap_or_else(|error| panic!("{name}: {error}"));
+            let whole = Region {
+                origin: [0; 3],
+                size: [WIDTH, HEIGHT, 1],
+            };
+            let row = u64::from(WIDTH) * 16;
+            (t.replace_region(
+                whole,
+                0,
+                0,
+                crate::HostBytes::from(&texels[..]),
+                row,
+                row * u64::from(HEIGHT),
+            ))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let samplers: Vec<_> = (modes.iter().zip(SLOT_SAMPLER..))
+                .map(|(mode, index)| {
+                    let mut s = SamplerDescriptor::new();
+                    (s.s_address_mode, s.t_address_mode, s.r_address_mode) = (*mode, *mode, *mode);
+                    s.border_color = SamplerBorderColor::OpaqueWhite;
+                    (device.new_sampler_state(&s, index))
+                        .unwrap_or_else(|error| panic!("{name}: {mode:?}: {error}"))
+                })
+                .collect();
+            let block = (device.take_block(MemoryClass::Shared, 1 << 20)).expect("a Shared block");
+            let coordinates: Vec<u8> = (uv.iter())
+                .flat_map(|[u, v]| [*u, *v])
+                .flat_map(f32::to_le_bytes)
+                .collect();
+            let held_uv = shared(&device, &block, 0, &coordinates);
+            let out_bytes = 16 * count as u64;
+            let outs: Vec<[Buffer; 2]> = (0..modes.len() as u64)
+                .map(|k| {
+                    let at = 65_536 + 2 * k * out_bytes.next_multiple_of(256);
+                    let next = at + out_bytes.next_multiple_of(256);
+                    let blank = vec![0xab; out_bytes as usize];
+                    [
+                        shared(&device, &block, at, &blank),
+                        shared(&device, &block, next, &blank),
+                    ]
+                })
+                .collect();
+            let materials: Vec<Buffer> = (samplers.iter().enumerate())
+                .map(|(k, s)| {
+                    let mut bytes = t.gpu_resource_id().to_bits().to_le_bytes().to_vec();
+                    bytes.extend(s.gpu_resource_id().to_bits().to_le_bytes());
+                    shared(&device, &block, 32_768 + 256 * k as u64, &bytes)
+                })
+                .collect();
+            let queue = device.new_command_queue(1).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder =
+                (command_buffer.compute_command_encoder(DispatchType::Serial)).expect("an encoder");
+            encoder.set_buffer(Some(&held_uv), 0, 0).expect("uv");
+            (encoder.use_resource(Resource::Texture(&t), ResourceUsage::READ)).expect("a texture");
+            let groups = [(count as u32).div_ceil(32), 1, 1];
+            for ((sampler, material), [slot_out, argument_out]) in
+                samplers.iter().zip(&materials).zip(&outs)
+            {
+                encoder
+                    .set_compute_pipeline_state(&slot_state)
+                    .expect("a state");
+                encoder.set_texture(Some(&t), 0).expect("the texture");
+                (encoder.set_sampler_state(Some(sampler), 0)).expect("the sampler");
+                encoder.set_buffer(Some(slot_out), 0, 1).expect("out");
+                (encoder.dispatch_threadgroups(groups, [32, 1, 1]))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                encoder
+                    .set_compute_pipeline_state(&argument_state)
+                    .expect("a state");
+                encoder
+                    .set_buffer(Some(material), 0, 2)
+                    .expect("the material");
+                encoder.set_buffer(Some(argument_out), 0, 1).expect("out");
+                (encoder.dispatch_threadgroups(groups, [32, 1, 1]))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            for (mode, [slot_out, argument_out]) in modes.iter().zip(&outs) {
+                let bits = |b: &Buffer| -> Vec<[u32; 4]> {
+                    float4s(b, count)
+                        .iter()
+                        .map(|t| t.map(f32::to_bits))
+                        .collect()
+                };
+                let (slot, argument) = (bits(slot_out), bits(argument_out));
+                let differing: Vec<_> = (0..count)
+                    .filter(|&g| slot[g] != argument[g])
+                    .map(|g| {
+                        (
+                            uv[g],
+                            slot[g].map(f32::from_bits),
+                            argument[g].map(f32::from_bits),
+                        )
+                    })
+                    .collect();
+                assert!(
+                    differing.is_empty(),
+                    "{name}: {mode:?}: {} of {count} coordinates differ, the first (uv, slot, \
+                     argument buffer) {:?}",
+                    differing.len(),
+                    differing.first()
+                );
+            }
+            drop((
+                command_buffer,
+                queue,
+                slot_state,
+                argument_state,
+                samplers,
+                t,
+            ));
+            for grant in grants {
+                (device.release_indices(grant)).unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
+            println!(
+                "{name}: one texture sampled alike through an argument buffer's sampler and a \
+                 slot's, under {} address modes at {count} coordinates",
+                modes.len()
             );
         });
     }

@@ -1796,6 +1796,11 @@ pub fn declare(
         if d.identity.contains_key(&use_) {
             continue;
         }
+        // An argument buffer's sampler of the use declared it: the same binding.
+        if let Some(g) = arrays.get(&use_) {
+            d.identity.insert(use_, *g);
+            continue;
+        }
         let sampler = mb.ty(SType::Sampler)?;
         let array = mb.ty(SType::RuntimeArray {
             elem: sampler,

@@ -1526,8 +1526,9 @@ made, with no lock, and never rewritten for layouts.
   Once its last handle and the last command buffer that used it are gone, its elements read the
   defaults again and its index is free; a device sampler no other state holds goes to the reaper.
 - Anisotropy is the device's own filter (`samplerAnisotropy` is in the floor). A cubic filter is
-  `Gap::CubicSampler`. A descriptor the translator makes no device sampler of is
-  `Error::Translation`.
+  `Gap::CubicSampler`: the runtime makes no cubic sampler, so no live sampler's resource ID carries
+  the sampler word's cubic bit (30), and a shader does not test an argument buffer's sampler for
+  it. A descriptor the translator makes no device sampler of is `Error::Translation`.
 - A state bound with LOD clamps (`set_sampler_state_with_lod_clamps`, and the render encoder's
   `set_vertex_sampler_state_with_lod_clamps` and `set_fragment_sampler_state_with_lod_clamps`:
   Metal's `lodMinClamp:lodMaxClamp:` forms, whose range forms are loops of them) is bound as it
@@ -1936,11 +1937,11 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
 - No guest word indexes a set 1 array past its length. A slot's texture or sampler, and a
   constexpr sampler, are read at the runtime's own placement (texture indices 1 to 65,535, sampler
   indices 1 to 3,999; a placement outside them is refused). An argument buffer's texture is read at
-  its resource ID's index masked to its low 16 bits, read or sampled, so a bad ID reads an element
-  of the arrays, never one past them; an argument buffer's sampler is refused at the pipeline's
-  make. Metal leaves a resource ID that names no live resource of the access undefined: an index
-  within an array that no live object owns reads its null descriptor or default sampler, with no
-  fault.
+  its resource ID's index masked to its low 16 bits, read or sampled, and an argument buffer's
+  sampler at its resource ID's index where that is below 4,000 and at element 0 (the default
+  sampler) otherwise, so a bad ID reads an element of the arrays, never one past them. Metal leaves
+  a resource ID that names no live resource of the access undefined: an index within an array that
+  no live object owns reads its null descriptor or default sampler, with no fault.
 - An indirect dispatch's threadgroup counts are the GPU's to read, so a count above the device's
   `maxComputeWorkGroupCount` is not refused; Vulkan leaves such a dispatch undefined. A direct
   dispatch past it is split into dispatches of at most that many, each told its first
@@ -2502,7 +2503,6 @@ or does not check is rebuilt from the generations' names, with young counted ful
   - a sample or gather of an argument buffer's color texture with a `half` result on a device
     that samples through Metal's own sampler (`VkProperty::MetalSampler`), which no device's
     derivation states: no test;
-  - an argument buffer's sampler: no test yet;
   - a bicubic sample at pixel coordinates ("a bicubic filter at pixel coordinates") and one of a
     1D texture ("a bicubic filter of a 1D texture"): the translator test
     `a_bicubic_kernel_reads_each_slots_format_treatment_from_its_pushed_field` asserts each text;
