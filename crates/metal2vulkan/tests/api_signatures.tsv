@@ -1742,6 +1742,7 @@ field	metal2vulkan-runtime::RenderPassDepthAttachmentDescriptor.slice	pub slice:
 field	metal2vulkan-runtime::RenderPassDepthAttachmentDescriptor.store_action	pub store_action: StoreAction
 field	metal2vulkan-runtime::RenderPassDepthAttachmentDescriptor.texture	pub texture: Option<Texture>
 field	metal2vulkan-runtime::RenderPassDescriptor.color_attachments	pub color_attachments: [RenderPassColorAttachmentDescriptor; MAX_COLOR_ATTACHMENTS]
+field	metal2vulkan-runtime::RenderPassDescriptor.default_raster_sample_count	pub default_raster_sample_count: u32
 field	metal2vulkan-runtime::RenderPassDescriptor.depth_attachment	pub depth_attachment: RenderPassDepthAttachmentDescriptor
 field	metal2vulkan-runtime::RenderPassDescriptor.render_target_array_length	pub render_target_array_length: u32
 field	metal2vulkan-runtime::RenderPassDescriptor.render_target_height	pub render_target_height: u32
@@ -9375,6 +9376,7 @@ variant	metal2vulkan-runtime::Refusal::ManagedCopyOnUnified	ManagedCopyOnUnified
 variant	metal2vulkan-runtime::Refusal::ManagedTextureBytes	ManagedTextureBytes { level: u32, slice: u32 }
 variant	metal2vulkan-runtime::Refusal::MipmapFormat	MipmapFormat { pixel_format: PixelFormat }
 variant	metal2vulkan-runtime::Refusal::ModifiedRange	ModifiedRange { start: u64, length: u64, buffer_length: u64 }
+variant	metal2vulkan-runtime::Refusal::NoAttachmentPass	NoAttachmentPass { width: u32, height: u32, samples: u32 }
 variant	metal2vulkan-runtime::Refusal::NoBufferAtIndex	NoBufferAtIndex { index: u32 }
 variant	metal2vulkan-runtime::Refusal::NoCommandBuffers	NoCommandBuffers
 variant	metal2vulkan-runtime::Refusal::NoPipeline	NoPipeline

@@ -57,6 +57,7 @@ mod min_lod;
 mod mipmaps;
 mod narrow;
 mod nil_slots;
+mod no_attachment;
 mod null_descriptor;
 mod one_path;
 mod over;

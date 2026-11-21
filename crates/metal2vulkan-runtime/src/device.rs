@@ -688,6 +688,7 @@ impl Device {
             viewport_bounds: limits.viewport_bounds_range,
             max_framebuffer_layers: limits.max_framebuffer_layers,
             arena_budget: crate::arena::budget(&capabilities.memory, max_block_len),
+            max_framebuffer: [limits.max_framebuffer_width, limits.max_framebuffer_height],
         };
         let resolve_modes = ResolveModes {
             depth: vulkan12.supported_depth_resolve_modes,
@@ -1420,6 +1421,9 @@ pub(crate) struct EncoderLimits {
     pub(crate) max_framebuffer_layers: u32,
     /// The most bytes a dispatch's slots of the private arena take (`crate::arena::budget`).
     pub(crate) arena_budget: u64,
+    /// `maxFramebufferWidth` and `maxFramebufferHeight`: the largest area of a render pass with
+    /// no attachment, whose area is its `renderTargetWidth` and `renderTargetHeight` alone.
+    pub(crate) max_framebuffer: [u32; 2],
 }
 
 impl Core {

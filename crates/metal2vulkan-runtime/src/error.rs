@@ -853,6 +853,20 @@ pub enum Refusal {
         /// The texture's pixel format.
         pixel_format: PixelFormat,
     },
+    /// A render pass with no attachment whose `renderTargetWidth` or `renderTargetHeight` is 0,
+    /// or whose `defaultRasterSampleCount` is no sample count, a power of two up to 64 (Metal's
+    /// default 0 included).
+    ///
+    /// Basis: ours (such a pass has no area or no samples to render at, and Vulkan's rendering
+    /// has an area, VUID-VkRenderingInfo-None-08994 and -08995).
+    NoAttachmentPass {
+        /// `renderTargetWidth`.
+        width: u32,
+        /// `renderTargetHeight`.
+        height: u32,
+        /// `defaultRasterSampleCount`.
+        samples: u32,
+    },
     /// A draw whose vertex descriptor reads a vertex buffer at an offset at or past the buffer's
     /// length.
     ///
@@ -1574,7 +1588,10 @@ pub enum RenderPassKind {
     /// A `Clear` load action on an attachment whose format the runtime clears only through a
     /// shader: an extended-range, bfloat or YCbCr format.
     ClearFormat,
-    /// A pass with no attachment, its size from `renderTargetWidth` and `renderTargetHeight` alone.
+    /// A pass with no attachment wider or taller than the device's `maxFramebufferWidth` or
+    /// `maxFramebufferHeight`: Vulkan's rendering covers at most that
+    /// (VUID-VkRenderingInfo-pNext-07815 and -07816). Every venue dumped reports 16384 or more,
+    /// Metal's largest side (jobs m3-max-48727 to 48731, 48736, 48737 and 61508).
     NoAttachment,
     /// A `renderTargetArrayLength` past the device's `maxFramebufferLayers`: Vulkan's rendering
     /// renders at most that many layers (VUID-VkRenderingInfo-layerCount-07817), and requires 256
@@ -2233,6 +2250,14 @@ impl fmt::Display for Refusal {
             Refusal::AttachmentFormat { pixel_format } => write!(
                 f,
                 "an attachment of {pixel_format:?} is not of its kind's formats"
+            ),
+            Refusal::NoAttachmentPass {
+                width,
+                height,
+                samples,
+            } => write!(
+                f,
+                "a pass with no attachment of {width} by {height} pixels at {samples} samples"
             ),
             Refusal::ResolveTexture => {
                 write!(f, "a store action resolves an attachment with no resolve texture")

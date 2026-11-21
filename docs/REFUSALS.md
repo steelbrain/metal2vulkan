@@ -32,7 +32,7 @@ Columns:
 | Rate maps the compile layer does not compile | 5 | 5 | 0 | 0 | 4 | 1 | 0 |
 | The translation deadline | 1 | 1 | 0 | 0 | 0 | 1 | 0 |
 | Devices below the runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
-| The runtime's `Refusal` | 76 | 76 | 0 | 0 | 0 | 0 | 0 |
+| The runtime's `Refusal` | 77 | 77 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Limit` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Gap` | 30 | 30 | 0 | 0 | 0 | 0 | 0 |
 
@@ -46,7 +46,7 @@ Columns:
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 5 |
 | The translation deadline | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
 | Devices below the runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
-| The runtime's `Refusal` | 21 | 20 | 0 | 0 | 35 | 0 | 0 | 0 |
+| The runtime's `Refusal` | 21 | 20 | 0 | 0 | 36 | 0 | 0 | 0 |
 | The runtime's `Limit` | 0 | 0 | 0 | 13 | 4 | 0 | 0 | 0 |
 | The runtime's `Gap` | 0 | 0 | 0 | 2 | 28 | 0 | 0 | 0 |
 
@@ -326,6 +326,7 @@ Columns:
 | `ResolveFormat` | A resolve of a render pass color attachment of an integer pixel format | every device (a public call's own check of its arguments) | `metal-documented`: Metal's validation asserts that an integer color format "cannot be a MSAA resolve target", and plain Metal writes values no sample holds | 1: `crates/metal2vulkan-runtime/src/pass.rs (check)` | `-` |
 | `AttachmentPlace` | A render pass attachment or resolve texture of a level or slice past its texture's | every device (a public call's own check of its arguments) | `ours`: no texel of the texture is there to render into | 2: `crates/metal2vulkan-runtime/src/texture.rs (attachment_view, 2 sites)` | `-` |
 | `AttachmentFormat` | A render pass color attachment of a depth or stencil pixel format, a depth attachment of a format without depth, or a stencil attachment of a... | every device (a public call's own check of its arguments) | `metal-documented`: a color attachment takes a color-renderable format, a depth attachment a format with depth and a stencil attachment a format with stencil; Metal's validation stops the descriptor | 3: `crates/metal2vulkan-runtime/src/pass.rs (check, 3 sites)` | `-` |
+| `NoAttachmentPass` | A render pass with no attachment whose `renderTargetWidth` or `renderTargetHeight` is 0, or whose `defaultRasterSampleCount` is no sample count, a... | every device (a public call's own check of its arguments) | `ours`: such a pass has no area or no samples to render at, and Vulkan's rendering has an area, VUID-VkRenderingInfo-None-08994 and -08995 | 1: `crates/metal2vulkan-runtime/src/pass.rs (check)` | `-` |
 | `VertexBufferOffset` | A draw whose vertex descriptor reads a vertex buffer at an offset at or past the buffer's length | every device (a public call's own check of its arguments) | `metal-documented`: a buffer's offset lies inside it; Metal's validation stops the bind | 1: `crates/metal2vulkan-runtime/src/render_encoder.rs (find)` | `-` |
 | `IndexBufferOffset` | An indexed draw whose index buffer offset is not a multiple of the index size, or whose indices leave the buffer | every device (a public call's own check of its arguments) | `metal-documented`: the offset is a multiple of the index size and the indices lie in the buffer; Metal's validation stops the draw | 1: `crates/metal2vulkan-runtime/src/render_encoder.rs (draw)` | `-` |
 | `TessellationFactorOffset` | A tessellation factor buffer whose factors, at its address plus the offset, start at an odd byte | every device (a public call's own check of its arguments) | `metal-documented`: `setTessellationFactorBuffer:offset:instanceStride:`'s offset is a multiple of 4; Metal's validation stops a patch draw with any other | 1: `crates/metal2vulkan-runtime/src/render_encoder.rs (set_tessellation_factor_buffer)` | `-` |
@@ -621,6 +622,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::ResolveFormat`: `crates/metal2vulkan-runtime/src/pass.rs (check)`
 - `rt:Refusal::AttachmentPlace`: `crates/metal2vulkan-runtime/src/texture.rs (attachment_view, 2 sites)`
 - `rt:Refusal::AttachmentFormat`: `crates/metal2vulkan-runtime/src/pass.rs (check, 3 sites)`
+- `rt:Refusal::NoAttachmentPass`: `crates/metal2vulkan-runtime/src/pass.rs (check)`
 - `rt:Refusal::VertexBufferOffset`: `crates/metal2vulkan-runtime/src/render_encoder.rs (find)`
 - `rt:Refusal::IndexBufferOffset`: `crates/metal2vulkan-runtime/src/render_encoder.rs (draw)`
 - `rt:Refusal::TessellationFactorOffset`: `crates/metal2vulkan-runtime/src/render_encoder.rs (set_tessellation_factor_buffer)`

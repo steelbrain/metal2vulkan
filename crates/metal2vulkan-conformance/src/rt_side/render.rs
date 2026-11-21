@@ -363,6 +363,7 @@ impl RtSide<'_> {
         if let Some(size) = pass.size {
             descriptor.render_target_width = size[0];
             descriptor.render_target_height = size[1];
+            descriptor.default_raster_sample_count = 1;
         }
         descriptor.render_target_array_length = pass.array_length;
         for (at, color) in pass.colors.iter().enumerate() {

@@ -342,9 +342,7 @@ impl Default for RenderPassStencilAttachmentDescriptor {
 /// ([`CommandBuffer::render_command_encoder`](crate::CommandBuffer::render_command_encoder)).
 ///
 /// Not built, and so not fields: a rasterization rate map, tile sizes, imageblock and threadgroup
-/// memory lengths, sample buffer attachments and a pass with no attachment
-/// (`defaultRasterSampleCount`); a pass with no attachment is refused,
-/// [`Gap::RenderPass`] of [`RenderPassKind::NoAttachment`]. `visibilityResultType` is not a field:
+/// memory lengths and sample buffer attachments. `visibilityResultType` is not a field:
 /// it decides only what an enabled visibility result mode writes, and no mode but `Disabled` is
 /// built.
 #[derive(Clone, Default)]
@@ -357,11 +355,19 @@ pub struct RenderPassDescriptor {
     pub stencil_attachment: RenderPassStencilAttachmentDescriptor,
     /// `renderTargetWidth`: where nonzero, the width of Metal's render area, cut to the smallest
     /// attachment's. The pass's draws are cut to that area; its load, store and resolve act on it
-    /// rounded up to 32 pixels and cut to the smallest attachment, as a Mac's `Clear` reaches.
+    /// rounded up to 32 pixels and cut to the smallest attachment, as a Mac's `Clear` reaches. A
+    /// pass with no attachment is that wide.
     pub render_target_width: u32,
     /// `renderTargetHeight`: where nonzero, the height of Metal's render area, cut to the smallest
-    /// attachment's, rounded up as the width is for the load, store and resolve.
+    /// attachment's, rounded up as the width is for the load, store and resolve. A pass with no
+    /// attachment is that tall.
     pub render_target_height: u32,
+    /// `defaultRasterSampleCount`: the samples of a pass with no attachment, 0 by default as in
+    /// Metal. Such a pass draws with pipeline states of that `raster_sample_count`
+    /// ([`DrawKind::AttachmentFormats`](crate::DrawKind::AttachmentFormats) otherwise), which
+    /// reach their answers through memory alone. A pass with an attachment takes its
+    /// attachments' samples and reads none of this, as Metal's does.
+    pub default_raster_sample_count: u32,
     /// `renderTargetArrayLength`: the layers the pass renders, 0 by default. At 2 or more every
     /// attachment and every resolve texture renders that many slices from its own `slice` (a
     /// cube's faces are slices), the pass's load, store and resolve act on each of them, and a
@@ -658,7 +664,8 @@ impl Pass {
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's texture or visibility result buffer;
     /// [`Refusal::AttachmentUsage`]; [`Refusal::AttachmentPlace`]; [`Refusal::AttachmentFormat`];
-    /// [`Refusal::ResolveTexture`]; [`Refusal::ResolveFormat`]; [`Gap::RenderPass`];
+    /// [`Refusal::ResolveTexture`]; [`Refusal::ResolveFormat`]; [`Refusal::NoAttachmentPass`];
+    /// [`Gap::RenderPass`];
     /// [`Gap::LinearPlanePass`] for a shape [`linear_shape`] names; [`Error::Vulkan`] where an
     /// attachment's view cannot be made.
     pub(crate) fn check(core: &Arc<Core>, d: &RenderPassDescriptor) -> Result<Pass, Error> {
@@ -914,12 +921,29 @@ impl Pass {
             samples = own;
         }
         pass.samples = samples;
-        let level = pass.targets().fold([u32::MAX; 2], |level, t| {
+        let mut level = pass.targets().fold([u32::MAX; 2], |level, t| {
             let extent = t.attachment.extent;
             [level[0].min(extent[0]), level[1].min(extent[1])]
         });
         if level[0] == u32::MAX {
-            return Err(gap(RenderPassKind::NoAttachment));
+            // No attachment: Metal's area is `renderTargetWidth` by `renderTargetHeight`, and its
+            // samples `defaultRasterSampleCount`, which a draw's pipeline state matches; Vulkan's
+            // rendering of no attachment takes the pipeline's samples alone.
+            let size = [d.render_target_width, d.render_target_height];
+            let count = d.default_raster_sample_count;
+            if size.contains(&0) || !(count.is_power_of_two() && count <= 64) {
+                return Err(Error::Refused(Refusal::NoAttachmentPass {
+                    width: size[0],
+                    height: size[1],
+                    samples: count,
+                }));
+            }
+            // VUID-VkRenderingInfo-pNext-07815 and -07816.
+            if (size.iter().zip(core.limits.max_framebuffer)).any(|(&side, max)| side > max) {
+                return Err(gap(RenderPassKind::NoAttachment));
+            }
+            pass.samples = vk::SampleCountFlags::from_raw(count);
+            level = size;
         }
         for (axis, set) in [d.render_target_width, d.render_target_height]
             .into_iter()

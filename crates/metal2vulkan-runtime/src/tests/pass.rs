@@ -825,8 +825,10 @@ mod on_device {
                 ),
                 (
                     RenderPassDescriptor::default(),
-                    Error::Unsupported(Gap::RenderPass {
-                        kind: RenderPassKind::NoAttachment,
+                    Error::Refused(Refusal::NoAttachmentPass {
+                        width: 0,
+                        height: 0,
+                        samples: 0,
                     }),
                 ),
             ];

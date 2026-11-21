@@ -2978,7 +2978,7 @@ or does not check is rebuilt from the generations' names, with young counted ful
   rendering a Metal render encoder, with no render pass object or framebuffer.
 - `RenderPassDescriptor` is `MTLRenderPassDescriptor`: eight color attachments
   (`MAX_COLOR_ATTACHMENTS`), a depth and a stencil attachment, `renderTargetWidth`,
-  `renderTargetHeight` and `renderTargetArrayLength`. Each attachment is one level of its texture
+  `renderTargetHeight`, `defaultRasterSampleCount` and `renderTargetArrayLength`. Each attachment is one level of its texture
   and, from its `slice`, the pass's layers (below): a 2D texture, a 2D
   array, a cube or a cube array, or a 2D multisample texture or array, of `RenderTarget` usage;
   every attachment of a pass has one sample count, and a draw's pipeline state that count as its
@@ -2988,6 +2988,14 @@ or does not check is rebuilt from the generations' names, with young counted ful
   image view of that level and those layers with the identity swizzle (a 2D view of one layer, a
   2D array view of more), made at the first pass that renders into it and freed with the texture
   (`Gauges::attachment_views`).
+- A pass with no attachment is `renderTargetWidth` by `renderTargetHeight` pixels at
+  `defaultRasterSampleCount` samples: one dynamic rendering of no attachment, whose draws'
+  pipeline states have that `rasterSampleCount` and no attachment format, and write their answers
+  to memory. Vulkan takes the samples from the pipeline (`framebufferNoAttachmentsSampleCounts`
+  the translator's query for its state). A side of 0 or a count that is no sample count, Metal's
+  default 0 included, is `Refusal::NoAttachmentPass`; a side past the device's
+  `maxFramebufferWidth` or `maxFramebufferHeight`, `Gap::RenderPass` of `NoAttachment` (every
+  venue dumped reports 16384 or more, Metal's largest side).
 - A pass of `renderTargetArrayLength` N of 2 or more is one rendering of `layerCount` N: every
   attachment and every resolve texture renders N slices from its own `slice` (a cube's faces are
   its slices), and the rendering's load, store and resolve act on all N, so a layer no draw
@@ -3368,7 +3376,8 @@ or does not check is rebuilt from the generations' names, with young counted ful
   range, bfloat, YCbCr), a `renderTargetArrayLength` past the device's `maxFramebufferLayers`
   (`ArrayLength`: Vulkan renders at most that many layers,
   `VUID-VkRenderingInfo-layerCount-07817`, and requires 256 of it, where Metal's arrays hold 2048
-  slices), and a pass with no attachment. The descriptor has no field for a
+  slices), and a pass with no attachment past the device's `maxFramebufferWidth` or
+  `maxFramebufferHeight` (`NoAttachment`). The descriptor has no field for a
   rasterization rate map, tile sizes, imageblock and threadgroup memory, sample buffer
   attachments or store action options. The replay
   streams' passes render into one or two color attachments and a stencil attachment or a
