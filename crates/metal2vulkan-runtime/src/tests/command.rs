@@ -1930,7 +1930,10 @@ pub(crate) mod on_device {
     /// The consumer's cross-queue order, a timeline: A5, held for room, signals a shared event's
     /// value that B1 waits for. B1 is held for the value until A5's signal is submitted, so it
     /// runs after A1 to A5, which complete in order: a queue's signal never completes before
-    /// that queue's earlier command buffers.
+    /// that queue's earlier command buffers. That order held before the room rule too, every
+    /// queue then on the `VkQueue` at once: there only A's held count (`two_queues`) fails, so
+    /// the test guards the order under the rule and proves none of the rule's own. The two-queue
+    /// tests and the fence's carry those.
     #[test]
     fn every_device_runs_a_wait_for_a_held_queues_signal_after_all_of_that_queue() {
         each_device("command_two_queues_event", |name, _, device| {
