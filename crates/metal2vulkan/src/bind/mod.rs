@@ -121,7 +121,6 @@ pub(crate) mod texel_rows;
 pub(crate) mod tile_map;
 pub(crate) mod ycbcr_convert;
 pub(crate) mod ycbcr_in_place;
-pub(crate) mod ycbcr_write;
 
 pub use acceleration::{
     geometry_flags, geometry_table_offset, instance_record, primitive_wrap, InstanceRecord,
@@ -224,4 +223,3 @@ pub use ycbcr_convert::{
     ycbcr_read, ycbcr_texel, YCbCrCodes, YCbCrMatrix, YCbCrOutput, YCbCrPlanes, YCbCrRange,
 };
 pub use ycbcr_in_place::{YCbCrInPlace, YCbCrPlanesSampler};
-pub use ycbcr_write::{ycbcr_store, ycbcr_write, ycbcr_write_module, YCbCrWriteModule};

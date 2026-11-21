@@ -549,13 +549,6 @@ pub struct Write {
     /// exchanges red and blue where the handle's class and red-blue order name a member the heap
     /// views through its storage choice's alias ([`heap_storage_conversions`]).
     pub heap_conversions: HeapConversions,
-    /// A `float` or `half` texel of four lanes written through a heap handle of a 2D texture:
-    /// where the handle carries its entry's `FLAG_YCBCR_WRITES` (a 4:4:4 two-plane YCbCr member
-    /// whose element is its write shadow, `bind::heap`) under the stage's
-    /// `SpecKey::HeapYCbCrWrites`, the write stores the texel's red, green and blue as the
-    /// function wrote them and alpha 1, the mark a slot of the texture writes
-    /// (`StorageImageClass::YCbCrWrite`), in place of the converted texel ([`heap_ycbcr_writes`]).
-    pub heap_ycbcr: bool,
     /// The slot is one of `LoweringInputs::swizzled_storage`: the write undoes the bound
     /// texture's swizzle on its held value, before converting it, under the slot's
     /// `TextureSwizzle` specialization (`emit::unswizzled`).
@@ -956,11 +949,6 @@ impl TextureStrategy {
                         0
                     }
                     + w.heap_conversions.words(false)
-                    + if w.heap_ycbcr {
-                        emit::HEAP_YCBCR_WRITE_WORDS
-                    } else {
-                        0
-                    }
                     + if w.cross.is_some() { 48 } else { 0 }
                     + w.saturate.words()
             }
@@ -3845,8 +3833,6 @@ fn select_write(
     if !heap_conversions.srgb.is_empty() {
         cx.precision.insert(PrecisionNote::DevicePackConversion);
     }
-    // A 4:4:4 two-plane YCbCr member's write shadow, marked where the handle carries its flag.
-    let heap_ycbcr = heap_ycbcr_writes(cx, image, shape, texel);
     // A constant texel none of whose lanes is a NaN stores none, whatever the device's encoding.
     let nans = !holds_no_nan(cx, value);
     if texel.conv == TexelConv::F32 {
@@ -3884,36 +3870,10 @@ fn select_write(
         class,
         heap_alpha_red,
         heap_conversions,
-        heap_ycbcr,
         swizzle,
         cross,
         saturate,
     }))
-}
-
-/// Whether a write of `texel` through `image` of shape `shape` marks a 4:4:4 two-plane YCbCr
-/// member's write shadow ([`Write::heap_ycbcr`]): a `float` or `half` texel of four lanes through a
-/// heap handle of a 2D texture, neither arrayed nor multisampled, the one class whose array holds
-/// such a member (`bind::heap::fit`). The handle-table search then carries the entry's
-/// `FLAG_YCBCR_WRITES` under the stage's `SpecKey::HeapYCbCrWrites`
-/// (`memory::handles::Lookup::Flagged`'s `ycbcr`).
-fn heap_ycbcr_writes(
-    cx: &mut SelectCx<'_>,
-    image: ImageRef,
-    shape: ImageShape,
-    texel: TexelForm,
-) -> bool {
-    let applies = tabled(cx, image)
-        && matches!(texel.conv, TexelConv::F32 | TexelConv::F16)
-        && texel.lanes == 4
-        && shape.dim == ImageDim::D2
-        && !shape.array
-        && !shape.ms
-        && !shape.depth;
-    if applies {
-        cx.families.access.heap_ycbcr_writes = true;
-    }
-    applies
 }
 
 /// How a write of `texel` (the image's own class's form) to `image` saturates its lanes

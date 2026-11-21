@@ -65,7 +65,7 @@ use crate::metal::bicubic::{texels as bicubic_texels, BicubicTexels};
 use crate::metal::format::{
     accessed_without_format, aspects, copies_only, direct_format, is_depth_stencil, sampled_type,
     srgb_raw_twin, storage_choice, texel_buffer_alpha_in_red, vk_format, writes_dropped,
-    ycbcr_writes_stored, ExtendedRange, FormatMapping, StorageUse,
+    ExtendedRange, FormatMapping, StorageUse,
 };
 use crate::metal::sampler::{
     check_border_view, check_sampler, opaque_black_reads_transparent, vk_filtering,
@@ -1118,15 +1118,6 @@ impl ResourcePlanner<'_> {
                     && matches!(s, TextureShape::Texture { .. })
                     && writes_dropped(s.pixel_format()))
         });
-        // A 4:4:4 two-plane YCbCr texture whose writes Metal stores into its planes
-        // (`metal::format::ycbcr_writes_stored`) at a storage slot its function only writes: the
-        // function writes each texel's bits and a mark through an `R32G32B32A32_UINT` view of the
-        // texture's write shadow, which the consumer encodes into the planes as Metal stores
-        // them (`StorageImageClass::YCbCrWrite`). A slot that reads it keeps the format's
-        // refusal.
-        let ycbcr_write = only_written
-            && matches!(compat, Some(TextureShape::Texture { pixel_format, .. })
-                if ycbcr_writes_stored(pixel_format));
         // A texture of one of Apple's extended-range formats joins the variant, under which the
         // function reads and writes its raw texels through a view of their unsigned integer
         // format: a texture's, not yet a texture buffer's or a sparse texture's.
@@ -1146,10 +1137,6 @@ impl ResourcePlanner<'_> {
                 sampled_type: SampledType::Uint,
                 ..base
             },
-            None if ycbcr_write => ImageHandleClass {
-                sampled_type: SampledType::Uint,
-                ..base
-            },
             None => base,
         };
         // The storage choice of a compatible bound format for the slot's accesses, when its texels
@@ -1162,13 +1149,6 @@ impl ResourcePlanner<'_> {
         };
         let accessed = storage && (t.access.read || t.access.write) && !ulong_atomic;
         let choice = match compat {
-            Some(TextureShape::Texture { .. }) if ycbcr_write => Some((
-                StorageImageChoice::new(
-                    vk::Format::R32G32B32A32_UINT,
-                    StorageImageClass::YCbCrWrite,
-                ),
-                vk::Format::R32G32B32A32_UINT,
-            )),
             Some(
                 TextureShape::Texture { pixel_format, .. }
                 | TextureShape::Buffer { pixel_format, .. },
@@ -1404,16 +1384,8 @@ impl ResourcePlanner<'_> {
                     let format = match choice {
                         _ if ulong_atomic => vk::Format::R64_UINT,
                         Some(c) if c.alias.is_some() => c.vk_format,
-                        // The write shadow's own format, and the `R8_UNORM` image an `A8Unorm`
-                        // texture holds its alpha in.
-                        Some(c)
-                            if matches!(
-                                c.class,
-                                StorageImageClass::YCbCrWrite | StorageImageClass::AlphaInRed
-                            ) =>
-                        {
-                            c.vk_format
-                        }
+                        // The `R8_UNORM` image an `A8Unorm` texture holds its alpha in.
+                        Some(c) if c.class == StorageImageClass::AlphaInRed => c.vk_format,
                         _ => direct_format(pixel_format)
                             .ok_or_else(|| internal("a storage texture without a format"))?,
                     };

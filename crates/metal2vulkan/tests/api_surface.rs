@@ -643,10 +643,6 @@ surface! {
         enum YCbCrOutput N;
         enum YCbCrRange N;
         enum YCbCrMatrix N;
-        fn ycbcr_write_module;
-        fn ycbcr_write;
-        fn ycbcr_store;
-        struct YCbCrWriteModule N;
         fn planes_merge_modules;
         fn planes_split_module;
         enum PlanesCopy N;
@@ -833,7 +829,6 @@ surface! {
         fn storage_view_formats;
         fn ycbcr;
         fn writes_dropped;
-        fn ycbcr_writes_stored;
         fn ycbcr_renders;
         fn ycbcr_pass_refused;
         fn extended_range_blend;

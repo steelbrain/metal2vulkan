@@ -139,10 +139,9 @@ pub enum FormatEmulation {
     /// (`metal::texel_format::PackedTexels::YCbCr2048` and `YCbCr8192`), but where the function
     /// reads the planes in place (`bind::YCbCrInPlace`), Metal's filter. Admitted for sampling only:
     /// Metal drops a function's writes to a 4:2:0 or 4:2:2 format ([`writes_dropped`]), stores a
-    /// 4:4:4 one's into both planes (which a slot that only writes one of [`ycbcr_writes_stored`]
-    /// does through the texture's write shadow; the others are refused), and renders into such a
-    /// texture by an inverse conversion, which a pass into one of [`ycbcr_renders`] does through
-    /// [`FormatEmulation::YCbCrRendered`] (a packed one's pass is refused, its pipeline made,
+    /// 4:4:4 one's into both planes (refused here, `storage_choice`), and renders into such a
+    /// texture by an inverse conversion, for which a pipeline into one of [`ycbcr_renders`] is
+    /// made through [`FormatEmulation::YCbCrRendered`] (a packed one's too,
     /// [`ycbcr_pass_refused`]; the others are not modelled).
     YCbCr,
     /// `ARGB8Unorm`'s bytes (alpha, then red, green and blue) held in `R8G8B8A8_UNORM`, whose red,
@@ -158,16 +157,14 @@ pub enum FormatEmulation {
     /// factor gives the fragment function computes over the texel where the device orders
     /// framebuffer fetch (`pipeline::color_writes::shader_rotated_blend`).
     RotatedView,
-    /// A render pass's color attachment of a two-plane YCbCr format whose store Metal's planes
-    /// are matched for ([`ycbcr_renders`]): `R32G32B32A32_SFLOAT` of the values the pass leaves
-    /// in each texel (the fragment function's output, the clear color through `float`, or the
-    /// texel the pass loads), which the consumer encodes into the surface's planes as the pass
-    /// stores (`bind::ycbcr_store`, the encode kernel's store of every texel). Exact for an
-    /// attachment a fragment function writes unblended, under any write mask (a masked channel
-    /// keeps the texel's value, as Metal's tile keeps it). Admitted for a color attachment and
-    /// its blend (where the device blends `R32G32B32A32_SFLOAT`), which the device computes in
-    /// floats where Metal's tile blends halves: within a code of Metal's, which the consumer
-    /// announces.
+    /// A render pass's color attachment of a two-plane YCbCr format Metal renders into
+    /// ([`ycbcr_renders`]): `R32G32B32A32_SFLOAT` of the values the pass leaves in each texel (the
+    /// fragment function's output, the clear color through `float`, or the texel the pass loads),
+    /// under any write mask (a masked channel keeps the texel's value, as Metal's tile keeps it).
+    /// The pass's store of those values into the surface's planes is not implemented:
+    /// `metal2vulkan-runtime` refuses such a texture (`Gap::TextureFormat`), so the pipeline is
+    /// made and no pass renders into one. Admitted for a color attachment and its blend (where the
+    /// device blends `R32G32B32A32_SFLOAT`).
     YCbCrRendered,
     /// A pipeline's color attachment of a packed 10-bit two-plane YCbCr format whose pass is
     /// refused ([`ycbcr_pass_refused`]): `R32G32B32A32_SFLOAT`, which no pass renders into.
@@ -1896,8 +1893,7 @@ pub fn ycbcr(pf: PixelFormat) -> bool {
 /// macOS 27.0.1, `YCBCR8_420_2P`), which the writes leave as Metal leaves the texture.
 ///
 /// An unpacked 4:4:4 YCbCr format's writes are not dropped: Metal stores each texel's codes into
-/// both planes, which a slot that only writes one of [`ycbcr_writes_stored`]
-/// does as Metal does; a slot that writes another is refused (`storage_choice`).
+/// both planes, and a slot that writes one is refused (`storage_choice`).
 pub fn writes_dropped(pf: PixelFormat) -> bool {
     matches!(pf, PixelFormat::GBGR422 | PixelFormat::BGRG422)
         || (ycbcr(pf)
@@ -1905,37 +1901,12 @@ pub fn writes_dropped(pf: PixelFormat) -> bool {
                 .is_some_and(|f| f.subsampling != ChromaSubsampling::Chroma444 || f.packed))
 }
 
-/// Whether a function's writes to a two-plane YCbCr texture of `pf` ([`ycbcr`]) store into its
-/// planes as Metal stores them, at a slot that only writes it
-/// (`pipeline::lower_inputs::StorageImageClass::YCbCrWrite`), and through an argument buffer's
-/// handle, which a heap's float storage class holds through the texture's write shadow
-/// (`bind::heap`; Metal stores the same bytes either way, an Apple M3 Max under macOS 27.0.1):
-/// the 4:4:4 formats of unpacked 8- and 10-bit codes read converted, as codes or through the sRGB
-/// curve, `YCBCR8_444_2P`, `YCBCR10_444_2P`, `RGB8_444_2P`, `RGB10_444_2P`,
-/// `YCBCR8_444_2P_sRGB` and `YCBCR10_444_2P_sRGB`. Metal stores each written texel's luma code into the luma plane and its
-/// own chroma pair into the chroma plane, the codes `bind::ycbcr_write` states (an Apple M4 under
-/// macOS 27.0.1, and an Apple M3 Max under macOS 26.7, byte for byte the same; the `_sRGB` twins'
-/// on an Apple M3 Max under macOS 27.0.1, each channel through the sRGB curve first). Not the
-/// packed formats, whose writes Metal drops ([`writes_dropped`]).
-pub fn ycbcr_writes_stored(pf: PixelFormat) -> bool {
-    ycbcr(pf)
-        && ycbcr_format(pf).is_some_and(|f| {
-            f.subsampling == ChromaSubsampling::Chroma444
-                && !f.packed
-                && matches!(f.bits, 8 | 10)
-                && matches!(
-                    f.reads,
-                    YCbCrReads::Converted | YCbCrReads::Codes | YCbCrReads::Srgb
-                )
-        })
-}
-
 /// Whether a render pass stores its color attachment of a two-plane YCbCr texture of `pf`
 /// ([`ycbcr`]) into the texture's planes as Metal stores it: the formats of unpacked 8- and
 /// 10-bit codes read converted, `YCBCR8_420_2P`, `YCBCR8_422_2P`, `YCBCR8_444_2P`,
 /// `YCBCR10_420_2P`, `YCBCR10_422_2P` and `YCBCR10_444_2P`, or read as codes, `RGB8_420_2P` to
 /// `RGB10_444_2P`. Metal re-encodes every texel of the attachment, drawn or not, into both planes
-/// at the pass's store, by the codes `bind::ycbcr_store` states (an Apple M4 under macOS 27.0.1:
+/// at the pass's store, by an inverse conversion (an Apple M4 under macOS 27.0.1:
 /// every byte of the 8-bit formats' clears and full-screen draws over `420v`, `420f`, `422v` and
 /// `444v` surfaces, no matrix and BT.709; the consumer's run of the same probe on an Apple M3 Max
 /// under macOS 26.7: the M4's bytes in every case; the same M4: every byte of the 10-bit formats'
@@ -1944,9 +1915,9 @@ pub fn ycbcr_writes_stored(pf: PixelFormat) -> bool {
 /// `YCBCR8_444_2P_sRGB` and `YCBCR10_444_2P_sRGB`, each texel's channels through the sRGB curve
 /// first (an Apple M3 Max under macOS 27.0.1: clears over `444v` and `x444`, no matrix).
 /// Such an attachment renders into `R32G32B32A32_SFLOAT` ([`FormatEmulation::YCbCrRendered`]),
-/// through any write mask and, where the device blends that format, any blend (within a code of
-/// Metal's, the runtime announces it; refused elsewhere, `Unsupported(Format)` naming the need)
-/// but an `_sRGB` twin's: Metal's blend into one and its load of one are not measured (whether its
+/// whose store into the planes is not implemented, through any write mask and, where the device
+/// blends that format, any blend (refused elsewhere, `Unsupported(Format)` naming the need) but
+/// an `_sRGB` twin's: Metal's blend into one and its load of one are not measured (whether its
 /// tile holds the texels' linear values or their encoding), so a pipeline that blends into one is
 /// refused at the attachment and a pass that loads one at its start (`NotImplemented(Format)`).
 /// Not the 4:2:0 and 4:2:2 `_sRGB` twins, nor the packed formats, whose stores no rule matches
@@ -2209,9 +2180,9 @@ pub(crate) fn write_conversion(pf: PixelFormat) -> Option<WriteConversion> {
     if ExtendedRange::of(pf).is_some() {
         return Some(WriteConversion::Encoded);
     }
-    // A two-plane YCbCr attachment a pass renders holds the function's floats, which the
-    // consumer's store converts as Metal's does (`FormatEmulation::YCbCrRendered`); a packed
-    // one's pass is refused, so nothing converts its writes (`ycbcr_pass_refused`).
+    // A two-plane YCbCr attachment a pass renders holds the function's floats
+    // (`FormatEmulation::YCbCrRendered`), whose store into the planes is not implemented; a
+    // packed one's pass is refused (`ycbcr_pass_refused`): nothing converts their writes.
     if ycbcr_renders(pf) || ycbcr_pass_refused(pf) {
         return Some(WriteConversion::Exact);
     }
@@ -2740,9 +2711,8 @@ fn held_storage_choice(
     }
     // A YCbCr texture's image holds converted values, not the planes' bytes a write would store
     // into: Metal drops a write-only slot's writes to a 4:2:0 or 4:2:2 format
-    // ([`writes_dropped`]), and a write-only slot of a format whose writes Metal stores into both
-    // planes ([`ycbcr_writes_stored`]) writes the texture's write shadow (`bind::plan`); the other
-    // 4:4:4 formats' writes, and a slot that reads and writes any of them, are not modelled.
+    // ([`writes_dropped`]); the 4:4:4 formats' writes, which Metal stores into both planes, and a
+    // slot that reads and writes any of them, are not modelled.
     // Nor does a function write a texture held for copies alone ([`copies_only`]).
     if matches!(
         candidates[0].emulation,

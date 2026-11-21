@@ -79,7 +79,6 @@ mod engine_heap_binder;
 mod engine_heap_residency;
 mod engine_heap_storage_reads;
 mod engine_heap_texel_buffers;
-mod engine_heap_ycbcr_writes;
 mod engine_helper_threads;
 mod engine_identity;
 mod engine_identity_contain;

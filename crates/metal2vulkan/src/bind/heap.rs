@@ -43,13 +43,10 @@
 //!   holds a texture whose writes Metal drops
 //!   (`metal::format::writes_dropped`: the 4:2:2 formats, the subsampled and packed two-plane
 //!   YCbCr ones) as its neutral ([`Fit::Dropped`]), which the writes leave as Metal leaves the
-//!   texture, and a 4:4:4 two-plane YCbCr texture whose writes Metal stores into its planes
-//!   (`metal::format::ycbcr_writes_stored`) through the `R32G32B32A32_SFLOAT` view of its write
-//!   shadow, whose texels a heap write marks where the handle carries [`FLAG_YCBCR_WRITES`] and
-//!   which the consumer encodes into the planes as a slot's writes; a stage that reads such a
-//!   class (`RuntimeFact::HeapStorageReads`) refuses either texture it reaches there,
-//!   `Unsupported { feature: Format, needs: NotImplemented }`, as a slot that reads one is
-//!   refused. Every other element up to the members' count is the class's neutral; the elements
+//!   texture; a stage that reads such a class (`RuntimeFact::HeapStorageReads`) refuses such a
+//!   texture it reaches there, `Unsupported { feature: Format, needs: NotImplemented }`, as a slot
+//!   that reads one is refused. A 4:4:4 two-plane YCbCr texture, whose writes Metal stores into
+//!   its planes, has no storage choice, and a storage class refuses it as any member without one. Every other element up to the members' count is the class's neutral; the elements
 //!   past it are left unwritten (the arrays are `PARTIALLY_BOUND`, and no table entry names them).
 //!   All heap writes of one member share one layout, `GENERAL` when some storage array holds it; a
 //!   member bound at a slot shares it with the slot's own writes, `GENERAL` when either is a
@@ -85,8 +82,7 @@
 //!   its pixel format is blue-first (`metal::format::red_blue_exchanged`); its border texels in
 //!   [`FLAG_BORDER_TEXELS`] (`metal::sampler::border_texels` of its pixel format and swizzle, a
 //!   placeholder format's those of the neutral it reads), which a read through a sampler hands
-//!   back at a border; [`FLAG_YCBCR_WRITES`] where it is a 4:4:4 two-plane YCbCr texture whose
-//!   writes Metal stores (`metal::format::ycbcr_writes_stored`); its texel class in
+//!   back at a border; its texel class in
 //!   [`FLAG_TEXEL_CLASS`]; and [`FLAG_STORAGE_UNREADABLE`] where the plan's profile cannot read its
 //!   storage view without a format ([`storage_unreadable`], `HeapMember::unreadable`). Every other
 //!   bit is 0.
@@ -170,11 +166,11 @@ use crate::error::{BindError, Feature, Unsupported};
 use crate::memory::handles::{
     lookup_host, ENTRY_ELEMENT, ENTRY_FLAGS, ENTRY_ID_HI, ENTRY_ID_LO, FLAG_BORDER_TEXELS,
     FLAG_OUT_OF_BOUNDS_ALPHA_ONE, FLAG_RED_BLUE, FLAG_STORAGE_UNREADABLE, FLAG_TEXEL_CLASS,
-    FLAG_YCBCR_WRITES, NEUTRAL_ELEMENT, TABLE_CAPACITY, TABLE_ENTRY_BYTES,
+    NEUTRAL_ELEMENT, TABLE_CAPACITY, TABLE_ENTRY_BYTES,
 };
 use crate::metal::format::{
     is_depth_stencil, red_blue_exchanged, sampled_type, storage_choice, storage_view_formats,
-    vk_format, without_format_gaps, writes_dropped, ycbcr_writes_stored, StorageUse,
+    vk_format, without_format_gaps, writes_dropped, StorageUse,
 };
 use crate::metal::sampler::{
     check_argument_sampler, check_border_view, vk_filtering, SamplerUse, SamplerWord,
@@ -523,28 +519,6 @@ fn member_view(
         // The class does not say which accesses the function makes, so the member serves
         // every access the device lets a heap make.
         let use_ = heap_storage_use(profile);
-        // A 4:4:4 two-plane YCbCr texture whose writes Metal stores into its planes: its write
-        // shadow's float view, whose texels a heap write marks (`FLAG_YCBCR_WRITES`), the
-        // consumer's to encode into the planes.
-        if ycbcr_writes_stored(pixel_format) {
-            let format = vk::Format::R32G32B32A32_SFLOAT;
-            let gaps = without_format_gaps(format, use_, profile);
-            if !gaps.is_empty() {
-                return Err(BindError::Unsupported(Unsupported::needs_any_of(
-                    Feature::ArgumentBufferTextures,
-                    vec![gaps],
-                )));
-            }
-            return Ok(ImageViewDesc {
-                view_type: view_type(class)?,
-                format,
-                aspect: vk::ImageAspectFlags::COLOR,
-                layout,
-                components: vk::ComponentMapping::IDENTITY,
-                level: None,
-                shader_swizzle: false,
-            });
-        }
         let c = storage_choice(pixel_format, use_, profile).map_err(bind_error)?;
         // The class's one formatless declaration cannot convert per element: a member is viewed
         // through its own format.
@@ -674,10 +648,7 @@ pub fn heap_element(
 /// (`metal::sampler::border_texels` of its pixel format and swizzle), which a Metal 4.1 read
 /// through a sampler hands back at a border; bits 16 to 28 the index of the texture's texel class
 /// (`metal::texel_format::heap_class_index` of its pixel format and swizzle), by which the shader
-/// emulates Metal's linear filter of the texture's texels, 0 for a swizzled texture; bit 15 where
-/// it is a 4:4:4 two-plane YCbCr texture whose writes Metal stores into its planes
-/// (`metal::format::ycbcr_writes_stored`), so a heap write marks its write shadow
-/// (`memory::handles::FLAG_YCBCR_WRITES`); bit 28 where `profile` reads storage without a format
+/// emulates Metal's linear filter of the texture's texels, 0 for a swizzled texture; bit 28 where `profile` reads storage without a format
 /// by the formats' own bits alone and cannot read the texture's view in the heap's storage arrays
 /// so (`memory::handles::FLAG_STORAGE_UNREADABLE`), whereupon a storage read through its handle
 /// reads the null element; every other bit 0. A caller passes the word through as is.
@@ -706,20 +677,11 @@ fn entry_flags(shape: &TextureShape, unreadable: bool) -> u32 {
         << FLAG_BORDER_TEXELS.trailing_zeros();
     let index = crate::metal::texel_format::heap_class_index(pixel_format, swizzle);
     let class = index << FLAG_TEXEL_CLASS.trailing_zeros();
-    let ycbcr = match ycbcr_writes_stored(pixel_format) {
-        true => FLAG_YCBCR_WRITES,
-        false => 0,
-    };
     let unreadable = match unreadable {
         true => FLAG_STORAGE_UNREADABLE,
         false => 0,
     };
-    alpha
-        | red_blue
-        | ycbcr
-        | unreadable
-        | (border & FLAG_BORDER_TEXELS)
-        | (class & FLAG_TEXEL_CLASS)
+    alpha | red_blue | unreadable | (border & FLAG_BORDER_TEXELS) | (class & FLAG_TEXEL_CLASS)
 }
 
 /// Whether `profile` reads storage without a format by the formats' own bits alone
@@ -1670,8 +1632,8 @@ impl<'a> HeapPlanner<'a> {
             let element =
                 u32::try_from(i + 1).map_err(|_| internal("a heap element beyond u32"))?;
             let fits = fit(&m.shape, &image);
-            // A texture whose writes Metal drops or stores through its write shadow, in a storage
-            // class a stage it reaches reads: Metal's read of it is not measured.
+            // A texture whose writes Metal drops, in a storage class a stage it reaches reads:
+            // Metal's read of it is not measured.
             if matches!(fits, Fit::Holds | Fit::Dropped) && self.reads_unmeasured(m, &image) {
                 return Err(BindError::Unsupported(Unsupported::not_implemented(
                     Feature::Format,
@@ -1758,14 +1720,13 @@ impl<'a> HeapPlanner<'a> {
 
     /// Whether a stage member `m` reaches reads it in the storage class `class`
     /// (`RuntimeFact::HeapStorageReads`) where `m` is a texture whose writes Metal drops
-    /// (`metal::format::writes_dropped`) or stores into its planes through its write shadow
-    /// (`metal::format::ycbcr_writes_stored`), whose read there is not measured.
+    /// (`metal::format::writes_dropped`), whose read there is not measured.
     fn reads_unmeasured(&self, m: &HeapMember, class: &ImageHandleClass) -> bool {
         let TextureShape::Texture { pixel_format, .. } = m.shape else {
             return false;
         };
         class.access == ImageAccess::Storage
-            && (writes_dropped(pixel_format) || ycbcr_writes_stored(pixel_format))
+            && writes_dropped(pixel_format)
             && m.stages.iter().any(|s| {
                 self.storage_reads
                     .get(s)

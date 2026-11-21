@@ -59,11 +59,6 @@
 //! these rules: [`ycbcr_read`] of a texel's codes, [`ycbcr_texel`] of 8-bit ones.
 
 use crate::metal::format::ChromaSubsampling;
-use crate::pipeline::sym::ResourceSlot;
-use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
-use crate::spirv::error::BResult;
-use crate::spirv::ids::{GlobalId, TypeId, Value};
-use crate::spirv::ir::{natural_layout, ConstBits, Constant, LayoutRule, StorageClass, Type};
 
 /// The range of a YCbCr surface's codes, which its pixel format names.
 #[non_exhaustive]
@@ -317,33 +312,6 @@ pub fn ycbcr_read(
         YCbCrOutput::Converted => sums().map(|t| ((t + 2048) >> 12).clamp(0, 2048) as u16),
         YCbCrOutput::Srgb => sums().map(|t| srgb_step(((t + 512) >> 10).clamp(0, 8192) as u32)),
     }
-}
-
-/// A `Block { u32 words[]; }` storage buffer bound at `sym`.
-pub(super) fn words_buffer(
-    b: &mut ModuleBuilder,
-    sym: ResourceSlot,
-    u32_: TypeId,
-) -> BResult<GlobalId> {
-    let rta = b.ty(Type::RuntimeArray {
-        elem: u32_,
-        stride: Some(4),
-    })?;
-    let layout = natural_layout(b.types(), LayoutRule::Std430, true, &[rta])?;
-    let block = b.ty(Type::Struct {
-        members: [rta].into(),
-        layout: Some(layout),
-    })?;
-    b.resource(sym, StorageClass::StorageBuffer, block)
-}
-
-/// A scalar constant of `ty` with `bits`, as a value.
-pub(super) fn scalar(f: &mut FunctionBuilder<'_>, ty: TypeId, bits: u64) -> BResult<Value> {
-    let c = f.module().constant(Constant::Scalar {
-        ty,
-        bits: ConstBits(bits),
-    })?;
-    f.module().const_value(c)
 }
 
 #[cfg(test)]

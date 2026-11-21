@@ -813,11 +813,6 @@ pub struct AccessPlan {
     /// red-blue order (`lower::texture::heap_storage_conversions`): the handle-table search
     /// carries the entry's `FLAG_RED_BLUE` too (`memory::handles::Lookup::Flagged`).
     pub heap_red_blue: bool,
-    /// A `float` or `half` texel the function writes through a heap handle marks the texel it
-    /// stores in a member's write shadow where the handle carries the entry's
-    /// `FLAG_YCBCR_WRITES` (`lower::texture::emit`): the handle-table search carries it, under
-    /// the stage's `SpecKey::HeapYCbCrWrites` (`memory::handles::Lookup::Flagged`).
-    pub heap_ycbcr_writes: bool,
     /// A heap storage read the function makes on a device that reads storage without a format by
     /// the formats' own bits alone reads the null element where the handle carries the entry's
     /// `FLAG_STORAGE_UNREADABLE` (`lower::texture::emit`): the handle-table search carries it
@@ -848,21 +843,19 @@ impl AccessPlan {
     pub fn lookup(&self) -> crate::memory::handles::Lookup {
         use crate::memory::handles::Lookup;
         let (alpha, class, red_blue) = (self.heap_alpha, self.carries_class(), self.heap_red_blue);
-        let (ycbcr, unreadable) = (self.heap_ycbcr_writes, self.heap_unreadable);
+        let unreadable = self.heap_unreadable;
         if self.heap_border {
             Lookup::Indexed {
                 alpha,
                 class,
                 red_blue,
-                ycbcr,
                 unreadable,
             }
-        } else if alpha || class || red_blue || ycbcr || unreadable {
+        } else if alpha || class || red_blue || unreadable {
             Lookup::Flagged {
                 alpha,
                 class,
                 red_blue,
-                ycbcr,
                 unreadable,
             }
         } else {

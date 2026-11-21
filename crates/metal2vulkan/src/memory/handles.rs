@@ -48,16 +48,6 @@
 //! read selects its out-of-bounds alpha by. An element is below [`TABLE_CAPACITY`], so the bit is
 //! never an element's.
 //!
-//! **YCbCr writes**. A texture entry's flags carry [`FLAG_YCBCR_WRITES`] when the resident
-//! texture's pixel format is a 4:4:4 two-plane YCbCr one whose writes Metal stores into its planes
-//! (`metal::format::ycbcr_writes_stored`), whose element in the heap's float storage array is its
-//! write shadow (`bind::heap`). A module with a `float` or `half` write through a heap handle
-//! calls the search's flagged form with `ycbcr`: the handle carries the flag in bit 29
-//! ([`HANDLE_YCBCR_WRITES`]), by which the write marks the texel it stores there, as a slot of the
-//! texture marks it. The search carries the flag only under the stage's `SpecKey::HeapYCbCrWrites`
-//! ([`ycbcr_writes_spec`]): a pipeline specialized where the command names no such texture carries
-//! and loads nothing for it.
-//!
 //! **Border texels**. A texture entry's flags also hold Metal's border texels of the resident
 //! texture, its pixel format's and swizzle's ([`FLAG_BORDER_TEXELS`]), which a Metal 4.1 read
 //! through a sampler hands back at an index outside the level on a border axis. A module with such
@@ -91,13 +81,11 @@ use crate::memory::leaf::k32;
 use crate::memory::views::{self, View};
 use crate::pipeline::sym::ImageAccess;
 use crate::pipeline::sym::ResourceSlot;
-use crate::pipeline::sym::{SpecKey, Stage};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
-use crate::spirv::ids::{ConstId, FuncId, GlobalId as SGlobalId, TypeId, Value as SValue};
+use crate::spirv::ids::{FuncId, GlobalId as SGlobalId, TypeId, Value as SValue};
 use crate::spirv::ir::{
-    natural_layout, BinOp, ConstBits, Constant, ConvOp, LayoutRule, MemAccess, SpecOp,
-    StorageClass, Type as SType,
+    natural_layout, BinOp, ConvOp, LayoutRule, MemAccess, StorageClass, Type as SType,
 };
 
 use super::abi_index::AbiIndex;
@@ -405,8 +393,8 @@ pub const ENTRY_ELEMENT: u32 = 2;
 /// Word of an entry holding the flags: for a sampler, its
 /// [`SamplerWord`](crate::metal::sampler::SamplerWord); for a texture,
 /// [`FLAG_OUT_OF_BOUNDS_ALPHA_ONE`], [`FLAG_RED_BLUE`], its border texels in
-/// [`FLAG_BORDER_TEXELS`], [`FLAG_YCBCR_WRITES`], the index of its texel class in
-/// [`FLAG_TEXEL_CLASS`], and [`FLAG_STORAGE_UNREADABLE`], every other bit 0.
+/// [`FLAG_BORDER_TEXELS`], the index of its texel class in [`FLAG_TEXEL_CLASS`], and
+/// [`FLAG_STORAGE_UNREADABLE`], every other bit 0.
 pub const ENTRY_FLAGS: u32 = 3;
 /// The flag of a texture entry whose pixel format has no alpha
 /// (`metal::format::out_of_bounds_alpha_one`): Metal's out-of-bounds read of such a texture
@@ -421,14 +409,6 @@ pub const FLAG_OUT_OF_BOUNDS_ALPHA_ONE: u32 = 1 << 1;
 /// (`bind::heap::storage_conversions`). A handle carries it beside its class
 /// ([`HANDLE_RED_BLUE`]).
 pub const FLAG_RED_BLUE: u32 = 1 << 2;
-/// The flag of a texture entry whose pixel format is a 4:4:4 two-plane YCbCr one whose writes
-/// Metal stores into both its planes (`metal::format::ycbcr_writes_stored`): the heap's float
-/// storage array holds such a member's write shadow (`bind::heap`), and a `float` or `half` write
-/// through its handle stores the texel's red, green and blue there with alpha 1, the mark the
-/// shadow's encoding reads as written, as a slot of the texture writes its texel
-/// (`StorageImageClass::YCbCrWrite`). A handle carries it in [`HANDLE_YCBCR_WRITES`], in a module
-/// whose search carries it ([`Lookup::Flagged`]'s `ycbcr`).
-pub const FLAG_YCBCR_WRITES: u32 = 1 << 15;
 /// The field of a texture entry's flags holding the index of its texel class in
 /// `metal::texel_format::heap_classes`: the class a slot bound to the texture would state in its
 /// `TexelFormat` specialization, `OTHER` (index 0) for a swizzled texture, by which a function
@@ -458,10 +438,6 @@ pub const HANDLE_ALPHA_ONE: u32 = 1 << 31;
 /// The bit of a heap handle that carries its entry's [`FLAG_RED_BLUE`], in a module whose search
 /// carries the texel class ([`Lookup::Flagged`]'s `class`).
 pub const HANDLE_RED_BLUE: u32 = 1 << 30;
-/// The bit of a heap handle that carries its entry's [`FLAG_YCBCR_WRITES`], in a module whose
-/// search carries it ([`Lookup::Flagged`]'s `ycbcr`) where the stage's `SpecKey::HeapYCbCrWrites`
-/// is set ([`ycbcr_writes_spec`]).
-pub const HANDLE_YCBCR_WRITES: u32 = 1 << 29;
 /// The field of a texture entry's flags holding Metal's border texels of its texture
 /// (`metal::sampler::border_texels` of its pixel format and swizzle, the layout of a slot's
 /// `BorderTexels` specialization moved up by the field's first bit): bit `3c + b` of the field is
@@ -484,25 +460,12 @@ const _: () = assert!((FLAG_TEXEL_CLASS | FLAG_OUT_OF_BOUNDS_ALPHA_ONE) & FLAG_R
 const _: () = assert!(
     (FLAG_TEXEL_CLASS | FLAG_OUT_OF_BOUNDS_ALPHA_ONE | FLAG_RED_BLUE) & FLAG_BORDER_TEXELS == 0
 );
-const _: () =
-    assert!((HANDLE_TEXEL_CLASS | HANDLE_ALPHA_ONE | HANDLE_RED_BLUE) & HANDLE_YCBCR_WRITES == 0);
-const _: () = assert!(
-    (FLAG_TEXEL_CLASS | FLAG_OUT_OF_BOUNDS_ALPHA_ONE | FLAG_RED_BLUE | FLAG_BORDER_TEXELS)
-        & FLAG_YCBCR_WRITES
-        == 0
-);
 const _: () = assert!(TABLE_CAPACITY <= 1 << HANDLE_ENTRY.trailing_zeros());
 const _: () = assert!(
-    (HANDLE_TEXEL_CLASS | HANDLE_ALPHA_ONE | HANDLE_RED_BLUE | HANDLE_YCBCR_WRITES)
-        & HANDLE_STORAGE_UNREADABLE
-        == 0
+    (HANDLE_TEXEL_CLASS | HANDLE_ALPHA_ONE | HANDLE_RED_BLUE) & HANDLE_STORAGE_UNREADABLE == 0
 );
 const _: () = assert!(
-    (FLAG_TEXEL_CLASS
-        | FLAG_OUT_OF_BOUNDS_ALPHA_ONE
-        | FLAG_RED_BLUE
-        | FLAG_BORDER_TEXELS
-        | FLAG_YCBCR_WRITES)
+    (FLAG_TEXEL_CLASS | FLAG_OUT_OF_BOUNDS_ALPHA_ONE | FLAG_RED_BLUE | FLAG_BORDER_TEXELS)
         & FLAG_STORAGE_UNREADABLE
         == 0
 );
@@ -1319,9 +1282,6 @@ pub struct Table {
     /// in one instruction; `None` for a word view `{ u32 words[]; }`, which compares an id's two
     /// words.
     u64_ty: Option<TypeId>,
-    /// The stage whose table it is: its search carries [`FLAG_YCBCR_WRITES`] under the stage's
-    /// `SpecKey::HeapYCbCrWrites` ([`ycbcr_writes_spec`]).
-    stage: Stage,
 }
 
 /// Declare the handle table at binding symbol `sym`: an entry array when `int64` (the profile
@@ -1333,7 +1293,6 @@ pub fn declare_table(mb: &mut ModuleBuilder, sym: ResourceSlot, int64: bool) -> 
             global: v.global,
             u32_ty: v.u32_ty,
             u64_ty: None,
-            stage: sym.stage,
         });
     }
     let int = |width| SType::Int {
@@ -1361,7 +1320,6 @@ pub fn declare_table(mb: &mut ModuleBuilder, sym: ResourceSlot, int64: bool) -> 
         global,
         u32_ty,
         u64_ty: Some(u64_ty),
-        stage: sym.stage,
     })
 }
 
@@ -1406,10 +1364,7 @@ pub enum Lookup {
     /// shader-checked heap read observes the alpha; where `class`, its [`FLAG_TEXEL_CLASS`] in
     /// [`HANDLE_TEXEL_CLASS`], the handle of a module that reads a heap texture's texel class;
     /// where `red_blue`, its [`FLAG_RED_BLUE`] in [`HANDLE_RED_BLUE`], the handle of a module whose
-    /// storage access converts a member by it (`bind::heap::storage_conversions`); where `ycbcr`,
-    /// its [`FLAG_YCBCR_WRITES`] in [`HANDLE_YCBCR_WRITES`] under the stage's
-    /// `SpecKey::HeapYCbCrWrites` ([`ycbcr_writes_spec`]), the handle of a module with a `float`
-    /// or `half` write through a heap handle; where `unreadable`, its
+    /// storage access converts a member by it (`bind::heap::storage_conversions`); where `unreadable`, its
     /// [`FLAG_STORAGE_UNREADABLE`] in [`HANDLE_STORAGE_UNREADABLE`], the handle of a module that
     /// reads a heap storage class on a device that reads storage without a format by the formats'
     /// own bits alone. Every heap access masks them off ([`Lookup::element_mask`]).
@@ -1417,22 +1372,20 @@ pub enum Lookup {
         alpha: bool,
         class: bool,
         red_blue: bool,
-        ycbcr: bool,
         unreadable: bool,
     },
     /// The entry's element with the entry's index beside it, in [`HANDLE_ENTRY`] (0 for a miss,
     /// the null entry's): the handle of a module whose read through a sampler of a heap texture
     /// may hand back its border texels, which its entry holds ([`FLAG_BORDER_TEXELS`],
     /// [`border_texels`]). The handle has no room for them beside the flags `Flagged` carries, so
-    /// it carries none: a use reads the ones its module reads (`alpha`, `class`, `red_blue`,
-    /// `ycbcr` and `unreadable` as `Flagged`'s) from the entry, in the handle `Flagged` would have
+    /// it carries none: a use reads the ones its module reads (`alpha`, `class`, `red_blue` and
+    /// `unreadable` as `Flagged`'s) from the entry, in the handle `Flagged` would have
     /// yielded ([`flagged_handle`]). Every heap access masks the index off
     /// ([`Lookup::element_mask`]).
     Indexed {
         alpha: bool,
         class: bool,
         red_blue: bool,
-        ycbcr: bool,
         unreadable: bool,
     },
     /// The index of the entry found, 0 (the null entry) for a miss: the handle of an argument
@@ -1449,14 +1402,12 @@ impl Lookup {
             alpha,
             class,
             red_blue,
-            ycbcr,
             unreadable,
         }
         | Lookup::Indexed {
             alpha,
             class,
             red_blue,
-            ycbcr,
             unreadable,
         }) = self
         else {
@@ -1471,26 +1422,13 @@ impl Lookup {
             FLAG_RED_BLUE,
             HANDLE_RED_BLUE.trailing_zeros() - FLAG_RED_BLUE.trailing_zeros(),
         ));
-        let ycbcr = ycbcr.then_some((
-            FLAG_YCBCR_WRITES,
-            HANDLE_YCBCR_WRITES.trailing_zeros() - FLAG_YCBCR_WRITES.trailing_zeros(),
-        ));
         let unreadable = unreadable.then_some((FLAG_STORAGE_UNREADABLE, 0));
         alpha
             .into_iter()
             .chain(class)
             .chain(red_blue)
-            .chain(ycbcr)
             .chain(unreadable)
             .collect()
-    }
-
-    /// Whether the handle this form yields carries [`FLAG_YCBCR_WRITES`] in
-    /// [`HANDLE_YCBCR_WRITES`] (`Flagged`'s `ycbcr`), under the stage's `SpecKey::HeapYCbCrWrites`:
-    /// its element mask clears the bit only there ([`ycbcr_element_mask`]). An `Indexed` handle
-    /// carries the entry's index in that bit's place, which its mask clears whatever the constant.
-    pub fn carries_ycbcr(self) -> bool {
-        matches!(self, Lookup::Flagged { ycbcr: true, .. })
     }
 
     /// The bits of a handle this form yields that are its element, where it carries anything
@@ -1510,20 +1448,16 @@ impl Lookup {
 }
 
 /// `word` with each of `form`'s carried fields of the entry flags `flags` (both `u32`) moved into
-/// its handle bits ([`Lookup::carried`]): [`FLAG_YCBCR_WRITES`] where `stage`'s
-/// `SpecKey::HeapYCbCrWrites` is set ([`ycbcr_flag_mask`]).
+/// its handle bits ([`Lookup::carried`]).
 fn carry(
     fb: &mut FunctionBuilder<'_>,
     word: SValue,
     flags: SValue,
-    (form, stage): (Lookup, Stage),
+    form: Lookup,
 ) -> BResult<SValue> {
     let mut word = word;
     for (carried_flags, shift) in form.carried() {
-        let mask = match carried_flags {
-            FLAG_YCBCR_WRITES => ycbcr_flag_mask(fb, stage)?,
-            _ => k32(fb, carried_flags)?,
-        };
+        let mask = k32(fb, carried_flags)?;
         let carried = fb.binary(BinOp::BitwiseAnd, flags, mask)?;
         let shift = k32(fb, shift)?;
         let carried = fb.binary(BinOp::ShiftLeftLogical, carried, shift)?;
@@ -1553,80 +1487,7 @@ pub fn flagged_handle(
     let mask = k32(fb, !HANDLE_ENTRY)?;
     let element = fb.binary(BinOp::BitwiseAnd, h, mask)?;
     let flags = entry_field(fb, t, k, EntryField::Flags)?;
-    carry(fb, element, flags, (form, t.stage))
-}
-
-/// The stage's `SpecKey::HeapYCbCrWrites`, a `u32` specialization constant: 1 where a texture the
-/// stage's handles can name is one whose writes a heap stores into its write shadow
-/// ([`FLAG_YCBCR_WRITES`]), which a plan gives from the command's heap members
-/// (`bind::plan::slots::heap_ycbcr_writes`), else 0. It defaults to 1, every such write marked,
-/// where nothing specializes it.
-pub fn ycbcr_writes_spec(fb: &mut FunctionBuilder<'_>, stage: Stage) -> BResult<ConstId> {
-    let u32_ = fb.module().ty(SType::Int {
-        width: 32,
-        signed: false,
-    })?;
-    fb.module()
-        .spec(SpecKey::HeapYCbCrWrites(stage), u32_, ConstBits(1))
-}
-
-/// The `u32` constant `v`, as a module constant.
-fn k32_const(fb: &mut FunctionBuilder<'_>, v: u32) -> BResult<ConstId> {
-    let u32_ = fb.module().ty(SType::Int {
-        width: 32,
-        signed: false,
-    })?;
-    fb.module().constant(Constant::Scalar {
-        ty: u32_,
-        bits: ConstBits(u64::from(v)),
-    })
-}
-
-/// The mask of the entry flags a search carries [`FLAG_YCBCR_WRITES`] by: the flag where `stage`'s
-/// `SpecKey::HeapYCbCrWrites` is 1, else 0, a constant fixed at pipeline creation, so a pipeline
-/// specialized for a command whose handles name no such texture carries nothing for it.
-fn ycbcr_flag_mask(fb: &mut FunctionBuilder<'_>, stage: Stage) -> BResult<SValue> {
-    let spec = ycbcr_writes_spec(fb, stage)?;
-    let flag = k32_const(fb, FLAG_YCBCR_WRITES)?;
-    let u32_ = fb.module().ty(SType::Int {
-        width: 32,
-        signed: false,
-    })?;
-    let mask = fb.module().spec_op(SpecOp::IMul, u32_, &[spec, flag])?;
-    fb.module().const_value(mask)
-}
-
-/// The element mask of a handle whose search may carry [`HANDLE_YCBCR_WRITES`] (`mask`, which
-/// clears it, [`Lookup::element_mask`]): `mask` where `stage`'s `SpecKey::HeapYCbCrWrites` is 1,
-/// else `mask` with the bit set, which no handle then carries, a constant fixed at pipeline
-/// creation (all bits set where the search carries nothing else, an `and` a compiler drops).
-pub fn ycbcr_element_mask(
-    fb: &mut FunctionBuilder<'_>,
-    stage: Stage,
-    mask: u32,
-) -> BResult<SValue> {
-    let spec = ycbcr_writes_spec(fb, stage)?;
-    let u32_ = fb.module().ty(SType::Int {
-        width: 32,
-        signed: false,
-    })?;
-    let open = k32_const(fb, mask | HANDLE_YCBCR_WRITES)?;
-    let minus = k32_const(fb, 0u32.wrapping_sub(HANDLE_YCBCR_WRITES))?;
-    let cleared = fb.module().spec_op(SpecOp::IMul, u32_, &[spec, minus])?;
-    let mask = fb.module().spec_op(SpecOp::IAdd, u32_, &[open, cleared])?;
-    fb.module().const_value(mask)
-}
-
-/// Whether `stage`'s `SpecKey::HeapYCbCrWrites` is set, a `bool` constant fixed at pipeline
-/// creation: a write that tests [`HANDLE_YCBCR_WRITES`] under it is dead code where it is not.
-pub fn ycbcr_writes_set(fb: &mut FunctionBuilder<'_>, stage: Stage) -> BResult<SValue> {
-    let spec = ycbcr_writes_spec(fb, stage)?;
-    let bool_ = fb.module().ty(SType::Bool)?;
-    let zero = k32_const(fb, 0)?;
-    let set = fb
-        .module()
-        .spec_op(SpecOp::ULessThan, bool_, &[zero, spec])?;
-    fb.module().const_value(set)
+    carry(fb, element, flags, form)
 }
 
 /// The border texels of the texture of the [`Lookup::Indexed`] handle `h` (a `u32`) of the
@@ -1792,7 +1653,7 @@ pub fn lookup(
         _ if form.carried().is_empty() => element,
         _ => {
             let flags = entry_field(fb, t, base, EntryField::Flags)?;
-            carry(fb, element, flags, (form, t.stage))?
+            carry(fb, element, flags, form)?
         }
     };
     let neutral = k32(fb, NEUTRAL_ELEMENT)?;
@@ -2092,37 +1953,33 @@ mod tests {
     /// and beyond them) gets [`lookup_host`]'s element, through an entry array (`u64` ids) and a
     /// word view. [`Lookup::Flagged`] also carries a found entry's [`FLAG_OUT_OF_BOUNDS_ALPHA_ONE`]
     /// in [`HANDLE_ALPHA_ONE`] where it carries the alpha, its texel class where it carries that,
-    /// its [`FLAG_RED_BLUE`] in [`HANDLE_RED_BLUE`] where it carries that, and its
-    /// [`FLAG_YCBCR_WRITES`] in [`HANDLE_YCBCR_WRITES`] where it carries that (the stage's
-    /// `SpecKey::HeapYCbCrWrites` at its default), carrying no other bit of the entry;
+    /// and its [`FLAG_RED_BLUE`] in [`HANDLE_RED_BLUE`] where it carries that, carrying no other
+    /// bit of the entry;
     /// [`Lookup::Indexed`] carries the found entry's index in [`HANDLE_ENTRY`] beside the element,
     /// whatever flags its uses read; and [`Lookup::Entry`] yields the index of the last entry of
     /// the key's id, 0 for a miss.
     #[test]
     fn the_emitted_search_matches_the_host_model() {
         for int64 in [true, false] {
-            let flagged = |alpha, class, red_blue, ycbcr, unreadable| Lookup::Flagged {
+            let flagged = |alpha, class, red_blue, unreadable| Lookup::Flagged {
                 alpha,
                 class,
                 red_blue,
-                ycbcr,
                 unreadable,
             };
             for form in [
                 Lookup::Element,
-                flagged(true, false, false, false, false),
-                flagged(false, true, false, false, false),
-                flagged(false, false, true, false, false),
-                flagged(false, false, false, true, false),
-                flagged(false, false, false, false, true),
-                flagged(true, true, false, false, false),
-                flagged(true, true, true, false, false),
-                flagged(true, true, true, true, true),
+                flagged(true, false, false, false),
+                flagged(false, true, false, false),
+                flagged(false, false, true, false),
+                flagged(false, false, false, true),
+                flagged(true, true, false, false),
+                flagged(true, true, true, false),
+                flagged(true, true, true, true),
                 Lookup::Indexed {
                     alpha: true,
                     class: true,
                     red_blue: false,
-                    ycbcr: true,
                     unreadable: true,
                 },
                 Lookup::Entry,
@@ -2132,149 +1989,49 @@ mod tests {
         }
     }
 
-    /// A search that carries [`FLAG_YCBCR_WRITES`] carries it only under the stage's
-    /// `SpecKey::HeapYCbCrWrites`: over the CPU interpreter, every key of a table of 17 entries
-    /// gets [`HANDLE_YCBCR_WRITES`] beside its element exactly where its entry has the flag and
-    /// the constant is 1 (given, or at its default), and its element alone where it is 0; the
-    /// constant's element mask clears the bit where it is 1 and leaves every bit where it is 0.
-    #[test]
-    fn a_search_carries_the_ycbcr_flag_only_under_its_constant() {
-        use crate::pipeline::sym::{ResourceKind, ResourceSlot};
-        use crate::spirv::interp::{run, Buffer, Config, Resources};
-        let sym = |index| ResourceSlot {
-            stage: Stage::Kernel,
-            kind: ResourceKind::Buffer,
-            index,
-        };
-        let form = Lookup::Flagged {
-            alpha: false,
-            class: false,
-            red_blue: false,
-            ycbcr: true,
-            unreadable: false,
-        };
-        let t = table(17);
-        let bytes = table_bytes(&t);
-        assert!(
-            t.iter().any(|(_, e)| flags(*e) & FLAG_YCBCR_WRITES != 0)
-                && t.iter()
-                    .any(|(_, e)| *e != 0 && flags(*e) & FLAG_YCBCR_WRITES == 0),
-            "the flag occurs set and clear"
-        );
-        for int64 in [true, false] {
-            // The search's handle, then its element through the constant's mask.
-            let m = search_module(int64, form, |fb, _, h| {
-                let mask = ycbcr_element_mask(fb, Stage::Kernel, !HANDLE_YCBCR_WRITES)?;
-                Ok(vec![h, fb.binary(BinOp::BitwiseAnd, h, mask)?])
-            })
-            .expect("module");
-            for spec in [None, Some(0u64), Some(1)] {
-                for chunk in keys(&t).chunks(KEYS as usize) {
-                    let mut io: Vec<u8> = Vec::new();
-                    for i in 0..KEYS as usize {
-                        let id = chunk.get(i).copied().unwrap_or(0);
-                        io.extend((id as u32).to_le_bytes());
-                        io.extend(((id >> 32) as u32).to_le_bytes());
-                    }
-                    io.extend(vec![0xAA; 8 * KEYS as usize]);
-                    let res = Resources {
-                        buffers: vec![
-                            Buffer {
-                                slot: Some(sym(0)),
-                                address: None,
-                                bytes: bytes.clone(),
-                            },
-                            Buffer {
-                                slot: Some(sym(1)),
-                                address: None,
-                                bytes: io,
-                            },
-                        ],
-                        push: Vec::new(),
-                        spec: spec
-                            .map(|v| (SpecKey::HeapYCbCrWrites(Stage::Kernel), v))
-                            .into_iter()
-                            .collect(),
-                    };
-                    let out = run(&m, &Config::default(), res).expect("run");
-                    let io = &out.buffers[1];
-                    let word = |w: usize| {
-                        let at = 4 * (2 * KEYS as usize + w);
-                        u32::from_le_bytes(io[at..at + 4].try_into().expect("word"))
-                    };
-                    for (i, id) in chunk.iter().enumerate() {
-                        let e = lookup_host(&t, *id);
-                        let carried = spec != Some(0) && flags(e) & FLAG_YCBCR_WRITES != 0;
-                        let want = match carried {
-                            true => e | HANDLE_YCBCR_WRITES,
-                            false => e,
-                        };
-                        let what = format!("int64 {int64} spec {spec:?} id {id:#x}");
-                        assert_eq!(word(2 * i), want, "{what}");
-                        assert_eq!(word(2 * i + 1), e, "{what}: the element");
-                    }
-                }
-            }
-        }
-    }
-
     /// Each flagged form's element mask clears exactly the bits it carries.
     #[test]
     fn a_flagged_handle_masks_off_the_bits_it_carries() {
-        let flagged = |alpha, class, red_blue, ycbcr, unreadable| {
+        let flagged = |alpha, class, red_blue, unreadable| {
             Lookup::Flagged {
                 alpha,
                 class,
                 red_blue,
-                ycbcr,
                 unreadable,
             }
             .element_mask()
         };
         assert_eq!(Lookup::Element.element_mask(), None);
         assert_eq!(Lookup::Entry.element_mask(), None);
-        assert_eq!(flagged(false, false, false, false, false), None);
-        assert_eq!(
-            flagged(true, false, false, false, false),
-            Some(!HANDLE_ALPHA_ONE)
-        );
+        assert_eq!(flagged(false, false, false, false), None);
+        assert_eq!(flagged(true, false, false, false), Some(!HANDLE_ALPHA_ONE));
         assert_eq!(HANDLE_TEXEL_CLASS, 0xfff << 16);
         assert_eq!(
-            flagged(false, true, false, false, false),
+            flagged(false, true, false, false),
             Some(!HANDLE_TEXEL_CLASS)
         );
+        assert_eq!(flagged(false, false, true, false), Some(!HANDLE_RED_BLUE));
         assert_eq!(
-            flagged(false, false, true, false, false),
-            Some(!HANDLE_RED_BLUE)
-        );
-        assert_eq!(
-            flagged(false, false, false, true, false),
-            Some(!HANDLE_YCBCR_WRITES)
-        );
-        assert_eq!(
-            flagged(false, false, false, false, true),
+            flagged(false, false, false, true),
             Some(!HANDLE_STORAGE_UNREADABLE)
         );
         assert_eq!(
-            flagged(true, true, true, true, true),
+            flagged(true, true, true, true),
             Some(
                 !(HANDLE_ALPHA_ONE
                     | HANDLE_TEXEL_CLASS
                     | HANDLE_RED_BLUE
-                    | HANDLE_YCBCR_WRITES
                     | HANDLE_STORAGE_UNREADABLE)
             ),
             "every carried field is masked off, and the element's 16 bits stay"
         );
-        for (alpha, class, red_blue, ycbcr, unreadable) in [
-            (false, false, false, false, false),
-            (true, true, true, true, true),
-        ] {
+        for (alpha, class, red_blue, unreadable) in
+            [(false, false, false, false), (true, true, true, true)]
+        {
             let indexed = Lookup::Indexed {
                 alpha,
                 class,
                 red_blue,
-                ycbcr,
                 unreadable,
             };
             assert_eq!(
@@ -2302,7 +2059,7 @@ mod tests {
     }
 
     /// The flags of the test tables' entry of `element`: none on the null entry, else its low six
-    /// bits, a class index of it, [`FLAG_YCBCR_WRITES`] where its bit 4 is set, and
+    /// bits, a class index of it, its bit 4 moved to bit 15, which no form carries, and
     /// [`FLAG_STORAGE_UNREADABLE`] where its bit 3 is, so each carried flag occurs set and clear,
     /// beside bits no form carries.
     fn flags(element: u32) -> u32 {
@@ -2341,22 +2098,19 @@ mod tests {
             index,
         };
         for int64 in [true, false] {
-            for (alpha, class, red_blue, ycbcr, unreadable) in [
-                (true, true, true, true, true),
-                (false, true, false, false, false),
-            ] {
+            for (alpha, class, red_blue, unreadable) in
+                [(true, true, true, true), (false, true, false, false)]
+            {
                 let indexed = Lookup::Indexed {
                     alpha,
                     class,
                     red_blue,
-                    ycbcr,
                     unreadable,
                 };
                 let flagged = Lookup::Flagged {
                     alpha,
                     class,
                     red_blue,
-                    ycbcr,
                     unreadable,
                 };
                 let m = search_module(int64, indexed, |fb, t, h| {
@@ -2407,7 +2161,6 @@ mod tests {
                         let want = e
                             | carried(alpha, FLAG_OUT_OF_BOUNDS_ALPHA_ONE, HANDLE_ALPHA_ONE)
                             | carried(red_blue, FLAG_RED_BLUE, HANDLE_RED_BLUE)
-                            | carried(ycbcr, FLAG_YCBCR_WRITES, HANDLE_YCBCR_WRITES)
                             | carried(
                                 unreadable,
                                 FLAG_STORAGE_UNREADABLE,
@@ -2489,12 +2242,10 @@ mod tests {
                             alpha,
                             class,
                             red_blue,
-                            ycbcr,
                             unreadable,
                         } => {
                             e | carried(alpha, FLAG_OUT_OF_BOUNDS_ALPHA_ONE, HANDLE_ALPHA_ONE)
                                 | carried(red_blue, FLAG_RED_BLUE, HANDLE_RED_BLUE)
-                                | carried(ycbcr, FLAG_YCBCR_WRITES, HANDLE_YCBCR_WRITES)
                                 | carried(
                                     unreadable,
                                     FLAG_STORAGE_UNREADABLE,

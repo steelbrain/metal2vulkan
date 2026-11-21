@@ -1026,57 +1026,6 @@ fn a_swizzled_extended_texture_joins_the_variant_at_a_sampled_slot() {
     assert!(planned > 0);
 }
 
-/// A storage slot of `YCbCrWrite`, a 4:4:4 two-plane YCbCr texture's write shadow, stores each
-/// texel the kernel writes as its red, green and blue bits and the mark 1 in an
-/// `R32G32B32A32_UINT` image, which the encode kernel reads (`bind::ycbcr_write`); the module
-/// validates on the profiles. The held lanes run from below 0 to above 1. A slot that also reads
-/// the texture keeps the format's refusal.
-#[test]
-fn ycbcr_write_slots_store_each_texel_s_bits_and_mark() {
-    let Some(bc) = assemble("ycbcr-write", &kernel(Source::Read, false, 0)) else {
-        return;
-    };
-    let shadow = StorageImageChoice::new(
-        crate::vk::Format::R32G32B32A32_UINT,
-        StorageImageClass::YCbCrWrite,
-    );
-    let mut i = LowerInputs::new();
-    i.storage_images.insert(TARGET, shadow);
-    let value = |k: u32| (k % 211) as f32 / 128.0 - 0.25;
-    let held = |n: u32| -> [u32; 4] { [0, 1, 2, 3].map(|c| value(4 * n + c).to_bits()) };
-    for (stem, p) in profiles() {
-        let (plan, m) =
-            typed_module_with(&bc, "k", &p, &i).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        validate(&bc, &i, &p, stem);
-        let images = [image(0, held), image(1, |_| [0; 4])];
-        let (_, images) = run(&m, &resources(&plan, 16, &[]), &images);
-        let target = texels_of(&images, 1);
-        let layout = image(1, |_| [0; 4]);
-        for n in 0..SIDE * SIDE {
-            let [r, g, b, _] = held(n);
-            let at = layout
-                .index(0, 0, 0, [n % SIDE, n / SIDE, 0])
-                .expect("texel");
-            assert_eq!(target[at], [r, g, b, 1], "{stem}: texel {n}");
-        }
-    }
-    let Some(bc) = assemble("ycbcr-write-read", &kernel(Source::ReadWrite, false, 0)) else {
-        return;
-    };
-    let mut both = LowerInputs::new();
-    both.storage_images.insert(SOURCE, shadow);
-    both.storage_images.insert(TARGET, shadow);
-    for (stem, p) in profiles() {
-        match typed_module_with(&bc, "k", &p, &both) {
-            Err(crate::error::Error::Unsupported(u)) => {
-                assert_eq!(u.feature, Feature::Format, "{stem}: {u:?}")
-            }
-            Err(other) => panic!("{stem}: {other}"),
-            Ok(_) => panic!("{stem}: a YCbCr write slot that reads is lowered"),
-        }
-    }
-}
-
 /// A `half` read of a slot bound in an extended-range form decodes the texel's codes and rounds
 /// the decoded `f32` through the device's conversion (`narrow::round_texel`). On `moltenvk-m3` the
 /// module records `NativeHalfConversion` for it and `DevicePackConversion`, which states the

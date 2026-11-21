@@ -179,12 +179,6 @@ assoc-const	metal2vulkan::bind::YCbCrInPlace::LUMA_AT	pub const LUMA_AT: usize
 assoc-const	metal2vulkan::bind::YCbCrInPlace::LUMA_ROW	pub const LUMA_ROW: usize
 assoc-const	metal2vulkan::bind::YCbCrInPlace::WIDTH	pub const WIDTH: usize
 assoc-const	metal2vulkan::bind::YCbCrInPlace::WORDS	pub const WORDS: usize
-assoc-const	metal2vulkan::bind::YCbCrWriteModule::BYTES_BINDING	pub const BYTES_BINDING: u32
-assoc-const	metal2vulkan::bind::YCbCrWriteModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
-assoc-const	metal2vulkan::bind::YCbCrWriteModule::SET	pub const SET: u32
-assoc-const	metal2vulkan::bind::YCbCrWriteModule::SHAPE_BINDING	pub const SHAPE_BINDING: u32
-assoc-const	metal2vulkan::bind::YCbCrWriteModule::SHAPE_WORDS	pub const SHAPE_WORDS: u32
-assoc-const	metal2vulkan::bind::YCbCrWriteModule::WRITTEN_BINDING	pub const WRITTEN_BINDING: u32
 assoc-const	metal2vulkan::bind::indirect_commands::BufferBinding::MIN_BUFFER_ADDRESS	pub const MIN_BUFFER_ADDRESS: u64
 assoc-const	metal2vulkan::bind::indirect_commands::RenderDraws::PRIMITIVES	pub const PRIMITIVES: RenderDraws
 assoc-const	metal2vulkan::device::ApiVersion::V1_2	pub const V1_2: ApiVersion
@@ -439,12 +433,6 @@ assoc-const-value	metal2vulkan::bind::YCbCrInPlace::LUMA_AT	2
 assoc-const-value	metal2vulkan::bind::YCbCrInPlace::LUMA_ROW	3
 assoc-const-value	metal2vulkan::bind::YCbCrInPlace::WIDTH	0
 assoc-const-value	metal2vulkan::bind::YCbCrInPlace::WORDS	8
-assoc-const-value	metal2vulkan::bind::YCbCrWriteModule::BYTES_BINDING	2
-assoc-const-value	metal2vulkan::bind::YCbCrWriteModule::LOCAL_SIZE	8
-assoc-const-value	metal2vulkan::bind::YCbCrWriteModule::SET	0
-assoc-const-value	metal2vulkan::bind::YCbCrWriteModule::SHAPE_BINDING	1
-assoc-const-value	metal2vulkan::bind::YCbCrWriteModule::SHAPE_WORDS	word::ROWS + 3 * word::ROW_WORDS
-assoc-const-value	metal2vulkan::bind::YCbCrWriteModule::WRITTEN_BINDING	0
 assoc-const-value	metal2vulkan::bind::indirect_commands::BufferBinding::MIN_BUFFER_ADDRESS	1 <<32
 assoc-const-value	metal2vulkan::bind::indirect_commands::RenderDraws::PRIMITIVES	RenderDraws
 assoc-const-value	metal2vulkan::device::ApiVersion::V1_2	ApiVersion
@@ -2495,8 +2483,6 @@ field	metal2vulkan::bind::YCbCrPlanes.luma	pub luma: [u32; 2]
 field	metal2vulkan::bind::YCbCrPlanes.matrix	pub matrix: YCbCrMatrix
 field	metal2vulkan::bind::YCbCrPlanes.range	pub range: YCbCrRange
 field	metal2vulkan::bind::YCbCrPlanes.size	pub size: [u32; 2]
-field	metal2vulkan::bind::YCbCrWriteModule.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::YCbCrWriteModule.spirv	pub spirv: Arc<[u32]>
 field	metal2vulkan::bind::indirect_commands::Bindings.pipeline	pub pipeline: Option<NonZeroU64>
 field	metal2vulkan::bind::indirect_commands::BufferBinding.address	pub address: u64
 field	metal2vulkan::bind::indirect_commands::BufferBinding.attribute_stride	pub attribute_stride: Option<u64>
@@ -3565,10 +3551,7 @@ fn	metal2vulkan::bind::sampler_desc	pub fn sampler_desc(device: &crate::device::
 fn	metal2vulkan::bind::stencil_split_module	pub fn stencil_split_module(device: &Device, feature: Feature) -> Result<StencilSplitModule, Error>
 fn	metal2vulkan::bind::texel_buffer_parts	pub fn texel_buffer_parts(limits: &Limits, texels: u64) -> u32
 fn	metal2vulkan::bind::ycbcr_read	pub fn ycbcr_read(codes: YCbCrCodes, (range, matrix): (YCbCrRange, YCbCrMatrix), [y, cb, cr]: [u16; 3]) -> [u16; 3]
-fn	metal2vulkan::bind::ycbcr_store	pub fn ycbcr_store(codes: YCbCrCodes, (range, matrix): (YCbCrRange, YCbCrMatrix), texels: &[[f32; 3]], size: [u32; 2]) -> Option<(Vec<u16>, Vec<[u16; 2]>)>
 fn	metal2vulkan::bind::ycbcr_texel	pub fn ycbcr_texel(range: YCbCrRange, matrix: YCbCrMatrix, y: u8, cb: u8, cr: u8) -> [u16; 3]
-fn	metal2vulkan::bind::ycbcr_write	pub fn ycbcr_write(codes: YCbCrCodes, (range, matrix): (YCbCrRange, YCbCrMatrix), [r, g, b]: [f32; 3]) -> Option<[u16; 3]>
-fn	metal2vulkan::bind::ycbcr_write_module	pub fn ycbcr_write_module(device: &Device) -> Result<YCbCrWriteModule, Error>
 fn	metal2vulkan::device::vk_stage	pub fn vk_stage(stage: Stage) -> vk::ShaderStage
 fn	metal2vulkan::metal::format::alpha_in_red	pub fn alpha_in_red(pf: PixelFormat, profile: &DeviceProfile) -> bool
 fn	metal2vulkan::metal::format::alpha_in_red_format	pub fn alpha_in_red_format(pf: PixelFormat) -> Option<vk::Format>
@@ -3604,7 +3587,6 @@ fn	metal2vulkan::metal::format::ycbcr	pub fn ycbcr(pf: PixelFormat) -> bool
 fn	metal2vulkan::metal::format::ycbcr_format	pub fn ycbcr_format(pf: PixelFormat) -> Option<YCbCrFormat>
 fn	metal2vulkan::metal::format::ycbcr_pass_refused	pub fn ycbcr_pass_refused(pf: PixelFormat) -> bool
 fn	metal2vulkan::metal::format::ycbcr_renders	pub fn ycbcr_renders(pf: PixelFormat) -> bool
-fn	metal2vulkan::metal::format::ycbcr_writes_stored	pub fn ycbcr_writes_stored(pf: PixelFormat) -> bool
 fn	metal2vulkan::metal::sampler::border_color	pub fn border_color(color: SamplerBorderColor, integer_texture: bool) -> vk::BorderColor
 fn	metal2vulkan::metal::sampler::check_border_swizzle	pub fn check_border_swizzle(desc: &SamplerDescriptor, pf: PixelFormat, mapping: &FormatMapping, swizzle: TextureSwizzleChannels, profile: &DeviceProfile) -> Result<(), Error>
 fn	metal2vulkan::metal::sampler::check_border_view	pub fn check_border_view(opaque_black: bool, pf: PixelFormat, mapping: &FormatMapping, swizzle: TextureSwizzleChannels, profile: &DeviceProfile) -> Result<(), Error>
@@ -7140,8 +7122,6 @@ method	metal2vulkan::bind::YCbCrPlanesSampler::bits	pub fn bits(self) -> u32
 method	metal2vulkan::bind::YCbCrPlanesSampler::format	pub fn format(self) -> vk::Format
 method	metal2vulkan::bind::YCbCrPlanesSampler::matrix	pub fn matrix(self) -> YCbCrMatrix
 method	metal2vulkan::bind::YCbCrPlanesSampler::range	pub fn range(self) -> YCbCrRange
-method	metal2vulkan::bind::YCbCrWriteModule::groups	pub fn groups(planes: &YCbCrPlanes) -> [u32; 2]
-method	metal2vulkan::bind::YCbCrWriteModule::shape	pub fn shape(planes: &YCbCrPlanes, all: bool) -> [u8; Self::SHAPE_WORDS as usize * 4]
 method	metal2vulkan::bind::indirect_commands::Action::writes	pub fn writes(&self) -> crate::pipeline::CommandWrites
 method	metal2vulkan::bind::indirect_commands::Bindings::buffers	pub fn buffers(&self, stage: BufferStage) -> &[Option<BufferBinding>; BINDING_COUNT]
 method	metal2vulkan::bind::indirect_commands::Bindings::buffers_mut	pub fn buffers_mut(&mut self, stage: BufferStage) -> &mut [Option<BufferBinding>; BINDING_COUNT]
@@ -7954,7 +7934,6 @@ struct	metal2vulkan::bind::YCbCrCodes	#[derive(Clone, Copy, Debug, PartialEq, Eq
 struct	metal2vulkan::bind::YCbCrInPlace	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] #[non_exhaustive] pub struct YCbCrInPlace
 struct	metal2vulkan::bind::YCbCrPlanes	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct YCbCrPlanes
 struct	metal2vulkan::bind::YCbCrPlanesSampler	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] #[non_exhaustive] pub struct YCbCrPlanesSampler
-struct	metal2vulkan::bind::YCbCrWriteModule	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct YCbCrWriteModule
 struct	metal2vulkan::bind::indirect_commands::Bindings	#[derive(Clone, Debug, Default, PartialEq, Eq)] pub struct Bindings
 struct	metal2vulkan::bind::indirect_commands::BufferBinding	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct BufferBinding
 struct	metal2vulkan::bind::indirect_commands::CommandBuffer	pub struct CommandBuffer<'a>
@@ -11452,7 +11431,6 @@ variant	metal2vulkan::pipeline::SpecKey::FlatLocalSize	FlatLocalSize
 variant	metal2vulkan::pipeline::SpecKey::HeapNanFamilies	HeapNanFamilies(Stage)
 variant	metal2vulkan::pipeline::SpecKey::HeapRawTextures	HeapRawTextures(Stage)
 variant	metal2vulkan::pipeline::SpecKey::HeapYCbCrTextures	HeapYCbCrTextures(Stage)
-variant	metal2vulkan::pipeline::SpecKey::HeapYCbCrWrites	HeapYCbCrWrites(Stage)
 variant	metal2vulkan::pipeline::SpecKey::ImageblockHeight	ImageblockHeight
 variant	metal2vulkan::pipeline::SpecKey::ImageblockWidth	ImageblockWidth
 variant	metal2vulkan::pipeline::SpecKey::LocalSize	LocalSize(Axis)
@@ -11502,7 +11480,6 @@ variant	metal2vulkan::pipeline::StorageImageClass::SharedExponentBits	SharedExpo
 variant	metal2vulkan::pipeline::StorageImageClass::SrgbEncode	SrgbEncode
 variant	metal2vulkan::pipeline::StorageImageClass::SrgbEncodeBgra	SrgbEncodeBgra
 variant	metal2vulkan::pipeline::StorageImageClass::SwizzleBgra	SwizzleBgra
-variant	metal2vulkan::pipeline::StorageImageClass::YCbCrWrite	YCbCrWrite
 variant	metal2vulkan::pipeline::Symbol::Binding	Binding(ResourceSlot)
 variant	metal2vulkan::pipeline::Symbol::Component	Component(VaryingKey)
 variant	metal2vulkan::pipeline::Symbol::DescriptorSet	DescriptorSet(ResourceSlot)

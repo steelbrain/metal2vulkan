@@ -691,12 +691,7 @@ fn heap_element_index(cx: &EmitCx<'_>, fb: &mut FunctionBuilder<'_>, h: SValue) 
     let Some(element) = form.element_mask() else {
         return Ok(h);
     };
-    // A search that carries `FLAG_YCBCR_WRITES` carries it only under the stage's constant: its
-    // mask clears the bit only there (`memory::handles::ycbcr_element_mask`).
-    let mask = match form.carries_ycbcr() {
-        true => crate::memory::handles::ycbcr_element_mask(fb, cx.plan.stage, element)?,
-        false => u32s(fb, 1, element)?,
-    };
+    let mask = u32s(fb, 1, element)?;
     fb.binary(BinOp::BitwiseAnd, h, mask)
 }
 
@@ -983,38 +978,6 @@ fn alpha_in_red(fb: &mut FunctionBuilder<'_>, x: SValue, read: bool) -> BResult<
 /// comparison, the shuffle and the select.
 pub(crate) const HEAP_ALPHA_IN_RED_WORDS: u32 = 40;
 
-/// The words [`heap_ycbcr_mark`] and its select emit, at most: the flag's mask and comparison,
-/// the constant's test and its conjunction, the mark's insertion, the select, and their constants.
-pub(crate) const HEAP_YCBCR_WRITE_WORDS: u32 = 48;
-
-/// Whether a write through heap handle `handle` stores into a 4:4:4 two-plane YCbCr member's
-/// write shadow, and what it stores there of image texel `x` (four `f32` lanes, the function's
-/// own values): its red, green and blue, and alpha 1.0, whose bits are nonzero: the mark a slot of
-/// such a texture writes as the integer 1 (`StorageImageClass::YCbCrWrite`,
-/// [`ycbcr_write_texel`]), which the shadow's encoding reads as written (`bind::ycbcr_write`). The handle carries the entry's
-/// `memory::handles::FLAG_YCBCR_WRITES` in `HANDLE_YCBCR_WRITES`; the test holds only under the
-/// stage's `SpecKey::HeapYCbCrWrites` (`memory::handles::ycbcr_writes_set`), so a pipeline whose
-/// command names no such texture compiles none of it.
-fn heap_ycbcr_mark(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    handle: ValueId,
-    x: SValue,
-) -> BResult<(SValue, SValue)> {
-    use crate::memory::handles::{ycbcr_writes_set, HANDLE_YCBCR_WRITES};
-    let h = cx.operand(fb, handle)?;
-    let HeapFlags(h) = heap_flags(cx, fb, h)?;
-    let bit = u32s(fb, 1, HANDLE_YCBCR_WRITES)?;
-    let flag = fb.binary(BinOp::BitwiseAnd, h, bit)?;
-    let zero = u32s(fb, 1, 0)?;
-    let flagged = fb.binary(BinOp::INotEqual, flag, zero)?;
-    let set = ycbcr_writes_set(fb, cx.plan.stage)?;
-    let is = fb.binary(BinOp::LogicalAnd, set, flagged)?;
-    let one = f32s(fb, 1, 1.0)?;
-    let shadow = fb.composite_insert(one, x, &[3])?;
-    Ok((is, shadow))
-}
-
 /// Image texel `x` (four `f32` lanes) of a storage access through heap handle `handle`, as
 /// [`alpha_in_red`] converts it (`read`: the image's to Metal's; else Metal's to the image's) where
 /// the handle's class index is `A8Unorm`'s (`metal::texel_format::heap_alpha_in_red_index`), as
@@ -1179,8 +1142,6 @@ fn from_image(
         }
         StorageImageClass::RotateArgb => rotate_argb(fb, x, true)?,
         StorageImageClass::AlphaInRed => alpha_in_red(fb, x, true)?,
-        // A `YCbCrWrite` slot is only written (`StorageImageClass::YCbCrWrite`).
-        StorageImageClass::YCbCrWrite => x,
         // An `RGB9E5Float` word, through its `R32_UINT` alias, decoded exactly.
         StorageImageClass::SharedExponentBits => return shared_exponent_texel(fb, form, x),
     };
@@ -1684,7 +1645,6 @@ pub fn to_image(
                 crate::spirv::error::TypeRule::FunctionSignature,
             ))
         }
-        StorageImageClass::YCbCrWrite => ycbcr_write_texel(fb, form, x)?,
         StorageImageClass::SharedExponentBits => shared_exponent_word(fb, form, x)?,
     };
     match decl.x_channel && form.lanes == 4 {
@@ -1715,34 +1675,6 @@ fn x_channel_read(fb: &mut FunctionBuilder<'_>, decl: &ImageDecl, x: SValue) -> 
 /// channel, Metal's X field.
 fn x_channel_write(fb: &mut FunctionBuilder<'_>, x: SValue) -> BResult<SValue> {
     fb.vector_shuffle(x, x, &[0, 1, 2, 1])
-}
-
-/// The words of [`ycbcr_write_texel`] on four lanes: three extracts and their bitcasts, the
-/// constants, and the construction.
-pub(crate) const YCBCR_WRITE_WORDS: u32 = 32;
-
-/// The `uvec4` a `YCbCrWrite` slot stores for held texel `x` (`f32` lanes of `form`, a `half`
-/// texel's widened exactly): the bits of its red, green and blue (0 for a lane the texel lacks)
-/// and the mark 1 of a written texel (`StorageImageClass::YCbCrWrite`). Its slot is a `float`
-/// one's (`slot::declare_slot`).
-fn ycbcr_write_texel(fb: &mut FunctionBuilder<'_>, form: TexelForm, x: SValue) -> BResult<SValue> {
-    let u = u32_ty(fb)?;
-    let zero = u32s(fb, 1, 0)?;
-    let mut words = Vec::with_capacity(4);
-    for lane in 0..3u32 {
-        let word = match (form.lanes, lane) {
-            (1, 0) => fb.convert(ConvOp::Bitcast, x, u)?,
-            (n, lane) if lane < u32::from(n) && n > 1 => {
-                let channel = fb.composite_extract(x, &[lane])?;
-                fb.convert(ConvOp::Bitcast, channel, u)?
-            }
-            _ => zero,
-        };
-        words.push(word);
-    }
-    words.push(u32s(fb, 1, 1)?);
-    let ty = vec(fb, u, 4)?;
-    fb.composite_construct(ty, &words)
 }
 
 /// The held texel (`form`, a `half` or `float` result) of a `SharedExponentBits` slot's image texel
@@ -1903,12 +1835,10 @@ fn heap_class_among(
 }
 
 /// The estimated words of a write's conversion by storage class `class` on four lanes: an 8-bit
-/// sRGB format's codes ([`srgb_codes`]), an `RGB9E5Float` word ([`shared_exponent_word`]), or a
-/// YCbCr texel's bits and mark ([`ycbcr_write_texel`]), none for the other classes' swizzles,
-/// which the write's base estimate covers.
+/// sRGB format's codes ([`srgb_codes`]) or an `RGB9E5Float` word ([`shared_exponent_word`]), none
+/// for the other classes' swizzles, which the write's base estimate covers.
 pub(crate) fn class_write_words(class: StorageImageClass) -> u32 {
     match class {
-        StorageImageClass::YCbCrWrite => YCBCR_WRITE_WORDS,
         StorageImageClass::SrgbEncode | StorageImageClass::SrgbEncodeBgra => SRGB_WRITE_WORDS,
         StorageImageClass::SharedExponentBits => SHARED_EXPONENT_WORDS,
         _ => 0,
@@ -3291,12 +3221,6 @@ fn write(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, w: &Write) -> BResul
     };
     // An integer texel's lanes, saturated to the format's channels as Metal stores them.
     let texel = saturated(cx, fb, &decl, (w.saturate, w.texel), texel)?;
-    // A 4:4:4 two-plane YCbCr member's write shadow: the texel's red, green and blue as written,
-    // and the mark, in place of any member's conversion below.
-    let marked = match (w.heap_ycbcr, w.image) {
-        (true, ImageRef::Heap { handle, .. }) => Some(heap_ycbcr_mark(cx, fb, handle, texel)?),
-        _ => None,
-    };
     // An `A8Unorm` storage member's alpha, stored in its image's red.
     let texel = match (w.heap_alpha_red, w.image) {
         (true, ImageRef::Heap { handle, .. }) => heap_alpha_in_red(cx, fb, handle, texel, false)?,
@@ -3309,10 +3233,6 @@ fn write(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, w: &Write) -> BResul
             heap_converted(cx, fb, handle, texel, &w.heap_conversions, w.texel, false)?
         }
         ImageRef::Slot(_) => texel,
-    };
-    let texel = match marked {
-        Some((is, shadow)) => fb.select(is, shadow, texel)?,
-        None => texel,
     };
     // The write's notes account for the texel's stored NaN (`moves_unfolded`).
     fb.module().note_stored_texel(texel);

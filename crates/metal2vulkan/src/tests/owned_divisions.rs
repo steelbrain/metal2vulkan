@@ -30,7 +30,6 @@ fn modules() -> Vec<Build> {
         index_bounds_fill_module,
         index_bounds_plan_module,
         replay_preprocess_module,
-        ycbcr_write_module,
     );
     let mut push =
         |name: String, build: Box<dyn Fn(&Device) -> Result<Arc<[u32]>, Error> + Sync>| {

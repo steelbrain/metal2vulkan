@@ -721,9 +721,7 @@ pub enum RuntimeFact {
     HeapResidency { stage: Stage },
     /// The `stage` function reads members of the heap's storage array of `class` (a `read_write`
     /// argument-buffer texture's read). Such an array holds a texture whose writes Metal drops
-    /// (`metal::format::writes_dropped`) as its neutral, and a 4:4:4 two-plane YCbCr texture whose
-    /// writes Metal stores into its planes (`metal::format::ycbcr_writes_stored`) as its write
-    /// shadow, which its writes mark and nothing reads; Metal's read of either through such a
+    /// (`metal::format::writes_dropped`) as its neutral; Metal's read of one through such a
     /// texture is not measured, as for a slot that reads one. The planner refuses such a texture
     /// the stage reaches in that class (a member the plan names, or one resident for the
     /// command), `Unsupported { feature: Format, needs: NotImplemented }`.

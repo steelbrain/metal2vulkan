@@ -910,17 +910,6 @@ pub enum SpecKey {
     /// the texture's swizzle deciding it (`metal::sampler::border_texels`,
     /// `RuntimeFact::BorderTexels`).
     BorderTexels(SlotRef),
-    /// Boolean (`u32`, default 1): a texture the stage's handles can name is a 4:4:4 two-plane
-    /// YCbCr one whose writes Metal stores into its planes (`metal::format::ycbcr_writes_stored`)
-    /// that a storage class can hold (its usage writes): a heap member of the command reaching the
-    /// stage, as for [`HeapYCbCrTextures`](Self::HeapYCbCrTextures), given by a plan
-    /// (`bind::plan::slots::heap_ycbcr_writes`). A stage with a `float` or `half` write through a
-    /// heap handle declares it as a constant, under which its handle-table search carries the
-    /// entry's `memory::handles::FLAG_YCBCR_WRITES` and the write marks the texel it stores in
-    /// such a member's write shadow (`lower::texture::emit`): where it is 0 the search carries
-    /// nothing for it and the write's test is dead code at pipeline creation, exactly, since no
-    /// handle the command names then names such a texture. A pipeline's key carries it.
-    HeapYCbCrWrites(Stage),
     /// Boolean: the kernel's threadgroup runs as one row (default false). Its workgroup is then
     /// `(sx·sy·sz, 1, 1)`, and its position in the threadgroup is its `LocalInvocationIndex`
     /// unflattened over `(sx, sy, sz)`, `x` fastest, which is Metal's order, so its linear index

@@ -1412,12 +1412,6 @@ pub enum StorageImageClass {
     /// Metal's do (probe `a8`, an M3 Max under macOS 27.0.1: kernel writes of `float` and `half`
     /// texels and `read_write` access).
     AlphaInRed,
-    /// A 4:4:4 two-plane YCbCr texture a slot only writes, through an `R32G32B32A32_UINT` image
-    /// of the texture's own (the consumer's write shadow): the shader writes each texel as the
-    /// bits of its red, green and blue `float` channels (a `half` texel's widened exactly) and a
-    /// 1, the mark of a written texel, which the consumer then encodes into the planes as Metal
-    /// stores it (`bind::ycbcr_write`). The slot is declared `Rgba32ui`; it has no reads.
-    YCbCrWrite,
     /// An `RGB9E5Float` image a slot writes, and may read, viewed through its `R32_UINT` alias, on
     /// every device (one that stores the format rounds each mantissa half up, as Vulkan's
     /// conversion states, where Metal truncates it): the shader writes each texel as the word Metal

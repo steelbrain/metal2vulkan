@@ -864,14 +864,11 @@ fn storage_format(
         ));
     }
     // The converting classes exist for 8-bit UNORM color formats, half and small float ones and
-    // 1-bit alpha ones only. A YCbCr write slot's `float` texels are stored as their bits in an
-    // unsigned integer image, whose class `declare_slot` gives it, as an `RGB9E5Float` slot
-    // stores its words in its `R32_UINT` alias.
+    // 1-bit alpha ones only. An `RGB9E5Float` slot stores its words in its `R32_UINT` alias, whose
+    // class `declare_slot` gives it.
     let converting = !matches!(
         choice.class,
-        StorageImageClass::Identity
-            | StorageImageClass::YCbCrWrite
-            | StorageImageClass::SharedExponentBits
+        StorageImageClass::Identity | StorageImageClass::SharedExponentBits
     );
     if converting && texel != TexelClass::Float {
         return Err(Unsupported::not_representable(Feature::Format).into());
@@ -1250,20 +1247,7 @@ fn declare_slot(
     // A slot bound in an extended-range format holds its raw texels in an unsigned integer
     // image.
     let extended = cx.inputs.extended_range.get(&s.slot).copied();
-    // A slot that only writes a 4:4:4 two-plane YCbCr texture holds each written texel's bits
-    // and mark in an unsigned integer image (`StorageImageClass::YCbCrWrite`): a `float` slot's
-    // writes alone, as the binder chooses it (`bind::plan`); any other use is the format's
-    // refusal.
-    let ycbcr_write = storage
-        && cx
-            .inputs
-            .storage_images
-            .get(&s.slot)
-            .is_some_and(|c| c.class == StorageImageClass::YCbCrWrite);
     let float = image_class(cx.inputs, s) == TexelClass::Float;
-    if ycbcr_write && (s.uses.read || s.uses.atomic || !float) {
-        return Err(Unsupported::not_implemented(Feature::Format).into());
-    }
     // A slot that reads and writes an `RGB9E5Float` texture through its `R32_UINT` alias holds
     // each texel's word there (`StorageImageClass::SharedExponentBits`): a `float` slot's reads
     // and writes, as the binder chooses it (`metal::format::storage_choice`); no atomic.
@@ -1284,7 +1268,7 @@ fn declare_slot(
     }
     let texel = match extended {
         Some(_) => TexelClass::Uint,
-        None if ycbcr_write || words => TexelClass::Uint,
+        None if words => TexelClass::Uint,
         None => image_class(cx.inputs, s),
     };
     if shape.depth && storage {
@@ -1586,8 +1570,8 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         }
     }
     // A storage class the function reads: the planner refuses a texture whose writes Metal drops
-    // or stores through its write shadow that the stage reaches there, whose read is not measured.
-    // The identity domains hold no write shadow.
+    // that the stage reaches there, whose read is not measured. The identity domains' arrays hold
+    // no such neutral (the binder's heap does, `bind::heap`).
     let identity = crate::lower::access::identity(cx.profile);
     for (class, u) in &class_uses {
         if class.access == ImageAccess::Storage && u.read && !identity {

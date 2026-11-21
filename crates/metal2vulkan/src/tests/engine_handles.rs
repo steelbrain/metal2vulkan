@@ -1709,12 +1709,7 @@ declare i32 @air.get_width_texture_2d(ptr addrspace(1), i32)
                     "{stem}"
                 );
                 let converted = if conversions.is_empty() { 0 } else { 700 };
-                // And a 4:4:4 two-plane YCbCr member's write shadow marked under the stage's
-                // `SpecKey::HeapYCbCrWrites` (`memory::handles::FLAG_YCBCR_WRITES`): the flag's
-                // carry and element mask by the constant, and the write's test and select.
-                let ycbcr = 100;
-                let bound =
-                    alpha + converted + ycbcr + if p.fields().leaf.int64 { 1_700 } else { 2_300 };
+                let bound = alpha + converted + if p.fields().leaf.int64 { 1_700 } else { 2_300 };
                 assert!(
                     a.module.words.len() <= bound,
                     "{stem}: {} words over {bound} (alpha in red {a8}, {} conversions)",
