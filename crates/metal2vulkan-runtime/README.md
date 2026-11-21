@@ -1510,8 +1510,11 @@ made, with no lock, and never rewritten for layouts.
   through `access::read_write` where they lack the read bit, is `Gap::StorageElement`
   (`VUID-vkCmdDispatch-OpTypeImage-07029`, `-07030`), whatever its format; so is, with no slot,
   one that may reach it beyond its slots after `use_resource` declared a write of it where they
-  lack the write bit. A write through a resource ID with no such declaration is a write without
-  a format outside Vulkan's valid usage there, as a read is. The UHD Graphics 630's Windows
+  lack the write bit. A write through an argument buffer or a resource ID with no such
+  declaration is outside documented Metal and is not refused: where they lack the write bit it
+  writes the texture buffer's storage element without a format, outside Vulkan's valid usage
+  (`VUID-vkCmdDispatch-OpTypeImage-07029`), as such a read is (`-07030`), and Vulkan does not
+  define what it does. The UHD Graphics 630's Windows
   driver (101.2145) answers neither bit for any format: there a texture buffer a function writes
   or reads through `access::read_write` is refused, but at a slot a texture atomic updates, and
   one it reads through `access::read` runs.

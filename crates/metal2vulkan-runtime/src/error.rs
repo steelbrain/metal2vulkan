@@ -1355,7 +1355,7 @@ pub enum Gap {
     /// resource ID with no such declaration is not found: Metal documents no write to it
     /// (`useHeap:` declares its heap's resources read only); its writes are dropped, but a texture
     /// buffer's that the device cannot write without a format, which are outside Vulkan's valid
-    /// usage. A read there of a storage element the device cannot read without a format is not
+    /// usage (`VUID-vkCmdDispatch-OpTypeImage-07029`). A read there of a storage element the device cannot read without a format is not
     /// found either (the crate's README, known gaps).
     ///
     /// Basis: ours (the storage element through a view of the nearest format whose storage Vulkan
