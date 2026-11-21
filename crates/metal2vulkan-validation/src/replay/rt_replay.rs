@@ -6,6 +6,9 @@
 //!   a pass's target that its setter records clear to red: a blit copies the target to a buffer,
 //!   which the stream checks green, and nothing is skipped.
 //! - A draw of points after it plays, nothing skipped.
+//! - A render encoder's residency declarations play as nothing: after each of its eight
+//!   `useResource`, `useResources`, `useHeap` and `useHeaps` forms, with stages and without, a
+//!   draw plays, nothing refused or skipped.
 //! - `setLineWidth:` plays: at width 1 a draw of lines after it plays; at width 2 a draw of
 //!   triangles plays and one of lines is the runtime's gap, skipped and counted, and the report
 //!   says the play is no verdict past it: its gap, frame and call.
@@ -289,6 +292,9 @@ enum Then {
     Nothing,
     /// The triangle's vertices as points: call 19.
     Points,
+    /// A heap (#16, call 19), the eight residency declarations of a render encoder naming it and
+    /// the vertex buffers (calls 20 to 27), and the triangle again (call 28).
+    Uses,
     /// `setLineWidth:` of the width (call 19), the triangle again (call 20), and its first two
     /// vertices as a line (call 21).
     Lines(f32),
@@ -392,6 +398,38 @@ fn draw_with_clamps(dir: &ScratchDir, green: &[u8], then: Then, clamp: Option<f3
             Then::Points => {
                 // MTLPrimitiveTypePoint: call 19.
                 let draw = [Value::Uint(0), Value::Uint(0), Value::Uint(3)];
+                w.call("drawPrimitives:vertexStart:vertexCount:", 13, 0, &draw, &[])?;
+            }
+            Then::Uses => {
+                let block = [Value::Uint(0x1_0000), Value::Uint(0)];
+                w.call("m2v.newBlockWithLength:storageMode:", 1, 16, &block, &[])?;
+                // MTLResourceUsageRead; MTLRenderStageVertex, Fragment and both.
+                let [read, vertex, fragment, both] = [1, 1, 2, 3].map(Value::Uint);
+                let (buffer, heap) = (Value::Object(8), Value::Object(16));
+                let buffers = Value::List(vec![Value::Object(8), Value::Object(9)]);
+                let heaps = Value::List(vec![Value::Object(16)]);
+                let uses = [
+                    ("useResource:usage:", vec![buffer.clone(), read.clone()]),
+                    (
+                        "useResource:usage:stages:",
+                        vec![Value::Object(9), read.clone(), vertex.clone()],
+                    ),
+                    (
+                        "useResources:count:usage:",
+                        vec![buffers.clone(), Value::Uint(2), read.clone()],
+                    ),
+                    (
+                        "useResources:count:usage:stages:",
+                        vec![buffers, Value::Uint(2), read, both.clone()],
+                    ),
+                    ("useHeap:", vec![heap.clone()]),
+                    ("useHeap:stages:", vec![heap, fragment]),
+                    ("useHeaps:count:", vec![heaps.clone(), Value::Uint(1)]),
+                    ("useHeaps:count:stages:", vec![heaps, Value::Uint(1), both]),
+                ];
+                for (selector, args) in uses {
+                    w.call(selector, 13, 0, &args, &[])?;
+                }
                 w.call("drawPrimitives:vertexStart:vertexCount:", 13, 0, &draw, &[])?;
             }
             Then::Lines(width) => {
@@ -546,6 +584,23 @@ fn a_draw_of_points_plays_on_the_new_runtime() {
     let green: Vec<u8> = [0u8, 255, 0, 255].repeat(16);
     let path = draw_into_a_pass(&dir, &green, Then::Points);
     let (report, _) = play("points", &path);
+    assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+    let executed = &report.total.executed;
+    for skipped in ["skipped_render_commands", "skipped_draws", "skipped_calls"] {
+        assert_eq!(executed[skipped], 0, "{skipped}: {executed:?}");
+    }
+    assert_eq!(report.first_skip, None);
+}
+
+/// A render encoder's eight residency declarations (calls 20 to 27) play as nothing: the play
+/// ends, no call refused, nothing skipped, and the triangle drawn after them (call 28) leaves the
+/// target green.
+#[test]
+fn a_render_encoder_s_residency_declarations_play_as_nothing() {
+    let dir = ScratchDir::new("rt-replay-render-uses").unwrap();
+    let green: Vec<u8> = [0u8, 255, 0, 255].repeat(16);
+    let path = draw_into_a_pass(&dir, &green, Then::Uses);
+    let (report, _) = play("render-uses", &path);
     assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
     let executed = &report.total.executed;
     for skipped in ["skipped_render_commands", "skipped_draws", "skipped_calls"] {

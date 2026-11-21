@@ -887,9 +887,11 @@ records as text, and
   buffers, offsets, bytes, textures and sampler states, the viewport, scissor, cull mode, winding,
   blend color and stencil references, the draws (indexed or not, with instance counts, base
   vertex and base instance), fences and memory barriers (their stages are the runtime's to
-  order). A bind of a range (`withRange:`) of buffers, textures or sampler
-  states plays as the single-slot bind of each, from the range's location, on render and compute
-  encoders alike.
+  order). Their residency declarations (`useResource:usage:`, `useResources:count:usage:`,
+  `useHeap:` and `useHeaps:count:`, each with `stages:` or without) play as nothing: the
+  runtime's render encoder has no such call, and every object of the play is resident. A bind
+  of a range (`withRange:`) of buffers, textures or sampler states plays as the single-slot bind
+  of each, from the range's location, on render and compute encoders alike.
   Compute encoders play `setStageInRegion:` (the runtime takes it and it changes nothing a
   dispatch of a kernel without a stage-in argument does, the only kernel it builds).
 

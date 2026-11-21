@@ -950,6 +950,17 @@ impl NewRuntime {
                 self.render(id).encoder.set_line_width(width);
                 Ok(())
             }
+            // A render encoder's residency declarations: no runtime call, as the runtime's render
+            // encoder has none and every object of the play is resident. What they name is noted
+            // before the call plays, as any encoder call's names are.
+            "useResource:usage:"
+            | "useResource:usage:stages:"
+            | "useResources:count:usage:"
+            | "useResources:count:usage:stages:"
+            | "useHeap:"
+            | "useHeap:stages:"
+            | "useHeaps:count:"
+            | "useHeaps:count:stages:" => Ok(()),
             _ => return Err(refuse(call, "not played on a render encoder")),
         };
         match result {
