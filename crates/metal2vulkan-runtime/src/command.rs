@@ -2,6 +2,7 @@
 //! states from creation to retirement.
 
 use crate::buffer::{Buffer, BufferInner, BufferObject};
+use crate::complete::Completion;
 use crate::counters::{Metric, Stage, Tally};
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Refusal};
@@ -1492,18 +1493,25 @@ pub(crate) fn run_scheduled(inner: Arc<CbInner>, handlers: Vec<Handler>) {
 }
 
 /// On the completion thread: retires a command buffer that completed (`error` None), with its GPU
-/// times where they were read, or ended, recycling its recorder and giving up its blocks, its pair
-/// of timestamp queries with the `written` of them reset, and its place in the queue, then runs
-/// its handlers.
+/// times where they were read (`completion`), or ended, recycling its recorder and giving up its
+/// blocks, its pair of timestamp queries with the `written` of them reset, and its place in the
+/// queue, then runs its handlers.
 pub(crate) fn retire(
     core: &Core,
     inner: Arc<CbInner>,
     gpu: Gpu,
     handlers: Handlers,
     error: Option<CommandBufferError>,
-    gpu_times: Option<(u64, u64)>,
     written: u32,
+    completion: Completion<'_>,
 ) {
+    let Completion {
+        gpu_times,
+        round,
+        spans,
+    } = completion;
+    // Where its retirement begins, the step before its handlers (`Round::steps`): one clock read.
+    let retiring = times::host_time();
     // Its own GPU run, by its timestamps, sets what its queue expects of the next
     // (`QueueInner::expected_run`, which bounds the groups `submit.rs` joins).
     if let Some((start, end)) = gpu_times {
@@ -1556,15 +1564,17 @@ pub(crate) fn retire(
     }
     inner.queue.release(kept);
     // Its stages from its scheduling on, by the times it already holds and the host time its
-    // handlers begin (`Metrics::scheduled_to_gpu_start` and the two after it).
+    // handlers begin (`Metrics::scheduled_to_gpu_start` and the two after it): the part of the
+    // first under the spans retired before it, and the steps of the last.
     if let Some((scheduled, start, end)) = stages {
         let counters = &core.counters;
         counters.stage(Stage::ScheduledToGpuStart, start.saturating_sub(scheduled));
+        counters.scheduled_behind(spans.covered(scheduled, start));
         counters.stage(Stage::GpuRun, end.saturating_sub(start));
-        counters.stage(
-            Stage::GpuEndToHandler,
-            times::host_time().saturating_sub(end),
-        );
+        let handled = times::host_time();
+        let span = handled.saturating_sub(end);
+        counters.stage(Stage::GpuEndToHandler, span);
+        counters.handler_steps(span, round.steps(end, retiring, handled));
     }
     let handle = CommandBuffer { inner };
     for handler in handlers.scheduled.into_iter().chain(handlers.completed) {

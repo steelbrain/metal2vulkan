@@ -390,6 +390,27 @@ const STAGES: [&str; 4] = [
     "gpu_end_to_handler",
 ];
 
+/// The executed counters of the completion thread's steps from a command buffer's GPU end to its
+/// handlers (`rt::Metrics::gpu_end_to_handler_steps_nanos`), all and the tail's, in its order.
+const HANDLER_STEPS: [[&str; 6]; 2] = [
+    [
+        "gpu_end_to_handler_seen_nanos",
+        "gpu_end_to_handler_told_nanos",
+        "gpu_end_to_handler_stamp_read_nanos",
+        "gpu_end_to_handler_calibration_nanos",
+        "gpu_end_to_handler_earlier_nanos",
+        "gpu_end_to_handler_own_nanos",
+    ],
+    [
+        "gpu_end_to_handler_tail_seen_nanos",
+        "gpu_end_to_handler_tail_told_nanos",
+        "gpu_end_to_handler_tail_stamp_read_nanos",
+        "gpu_end_to_handler_tail_calibration_nanos",
+        "gpu_end_to_handler_tail_earlier_nanos",
+        "gpu_end_to_handler_tail_own_nanos",
+    ],
+];
+
 /// The stage histograms of `metrics`.
 fn stages(m: &rt::Metrics) -> Stages {
     [
@@ -2982,6 +3003,13 @@ impl Backend for NewRuntime {
             ),
             ("gpu_run_nanos", metrics.gpu_run_nanos),
             ("gpu_end_to_handler_nanos", metrics.gpu_end_to_handler_nanos),
+            (
+                "scheduled_to_gpu_start_behind_nanos",
+                metrics.scheduled_to_gpu_start_behind_nanos,
+            ),
+            ("gpu_end_to_handler_tail", metrics.gpu_end_to_handler_tail),
+            ("calibrations", metrics.calibrations),
+            ("calibration_nanos", metrics.calibration_nanos),
             ("held_starts", metrics.held_starts),
             ("held_start_gap_nanos", metrics.held_start_gap_nanos),
             ("runtime_command_buffers", metrics.runtime_command_buffers),
@@ -3018,6 +3046,13 @@ impl Backend for NewRuntime {
             ("not_attempted", self.skips.not_attempted_count()),
             ("gap_pipeline_ids", self.unanswered_pipeline_ids),
         ]);
+        let steps = [
+            metrics.gpu_end_to_handler_steps_nanos,
+            metrics.gpu_end_to_handler_tail_steps_nanos,
+        ];
+        for (names, steps) in HANDLER_STEPS.iter().zip(steps) {
+            counters.extend(names.iter().copied().zip(steps));
+        }
         self.surfaces.timed();
         counters.extend(self.surfaces.counted());
         counters.extend(self.videos.counted());

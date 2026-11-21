@@ -47,6 +47,14 @@ pub(crate) fn stage_bucket(nanos: u64) -> usize {
     }
 }
 
+/// The steps of the completion thread that split a command buffer's span from its GPU end to its
+/// handlers ([`Metrics::gpu_end_to_handler_steps_nanos`]).
+pub(crate) const HANDLER_STEPS: usize = 6;
+
+/// The first bucket of [`Metrics::gpu_end_to_handler`] whose spans count in
+/// [`Metrics::gpu_end_to_handler_tail`]: from 1,024 us on.
+const HANDLER_TAIL_BUCKET: usize = 10;
+
 /// A stage of a command buffer's life that [`Metrics`] keeps a histogram of.
 #[derive(Clone, Copy)]
 pub(crate) enum Stage {
@@ -509,6 +517,12 @@ struct Atomics {
     /// Each [`Stage`]'s histogram, at its index, and its spans summed.
     stages: [[AtomicU64; STAGE_BUCKETS]; 4],
     stage_nanos: [AtomicU64; 4],
+    scheduled_behind_nanos: AtomicU64,
+    handler_steps_nanos: [AtomicU64; HANDLER_STEPS],
+    handler_tail: AtomicU64,
+    handler_tail_steps_nanos: [AtomicU64; HANDLER_STEPS],
+    calibrations: AtomicU64,
+    calibration_nanos: AtomicU64,
     event_holds: [AtomicU64; STAGE_BUCKETS],
     held_starts: AtomicU64,
     held_start_gap_nanos: AtomicU64,
@@ -680,9 +694,6 @@ struct Atomics {
     /// Segment ends whose barrier reaches the host, for the tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     host_reaches: AtomicU64,
-    /// Calibrations of the GPU's clock against the host's, for the tests.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    calibrations: AtomicU64,
     /// Barriers that ended a blit of an image, and the global memory barriers they held, for the
     /// tests.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -873,6 +884,37 @@ impl Counters {
     pub(crate) fn stage(&self, stage: Stage, nanos: u64) {
         self.atomics.stages[stage as usize][stage_bucket(nanos)].fetch_add(1, Relaxed);
         self.atomics.stage_nanos[stage as usize].fetch_add(nanos, Relaxed);
+    }
+
+    /// Of a command buffer's span from its scheduling to its GPU start, the `nanos` nanoseconds
+    /// under other command buffers' GPU spans ([`Metrics::scheduled_to_gpu_start_behind_nanos`]).
+    pub(crate) fn scheduled_behind(&self, nanos: u64) {
+        self.atomics
+            .scheduled_behind_nanos
+            .fetch_add(nanos, Relaxed);
+    }
+
+    /// A command buffer's span of `nanos` nanoseconds from its GPU end to its handlers, split at
+    /// the completion thread's `steps` ([`Metrics::gpu_end_to_handler_steps_nanos`], and the tail's
+    /// where the span is 1,024 us or more).
+    pub(crate) fn handler_steps(&self, nanos: u64, steps: [u64; HANDLER_STEPS]) {
+        let a = &self.atomics;
+        for (sum, step) in a.handler_steps_nanos.iter().zip(steps) {
+            sum.fetch_add(step, Relaxed);
+        }
+        if stage_bucket(nanos) >= HANDLER_TAIL_BUCKET {
+            a.handler_tail.fetch_add(1, Relaxed);
+            for (sum, step) in a.handler_tail_steps_nanos.iter().zip(steps) {
+                sum.fetch_add(step, Relaxed);
+            }
+        }
+    }
+
+    /// One more calibration of the GPU's clock against the host's, its call `nanos` nanoseconds
+    /// long ([`Metrics::calibrations`]).
+    pub(crate) fn calibrated(&self, nanos: u64) {
+        self.atomics.calibrations.fetch_add(1, Relaxed);
+        self.atomics.calibration_nanos.fetch_add(nanos, Relaxed);
     }
 
     /// A segment the submit thread held `nanos` nanoseconds for an event's value
@@ -1217,12 +1259,6 @@ impl Counters {
         self.atomics.host_reaches.load(Relaxed)
     }
 
-    /// One more calibration of the GPU's clock against the host's.
-    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-    pub(crate) fn calibrated(&self) {
-        self.atomics.calibrations.fetch_add(1, Relaxed);
-    }
-
     /// The calibrations made.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn calibrations(&self) -> u64 {
@@ -1388,10 +1424,18 @@ impl Counters {
             commit_to_scheduled_nanos: stage_nanos(Stage::CommitToScheduled),
             scheduled_to_gpu_start: stage(Stage::ScheduledToGpuStart),
             scheduled_to_gpu_start_nanos: stage_nanos(Stage::ScheduledToGpuStart),
+            scheduled_to_gpu_start_behind_nanos: a.scheduled_behind_nanos.load(Relaxed),
             gpu_run: stage(Stage::GpuRun),
             gpu_run_nanos: stage_nanos(Stage::GpuRun),
             gpu_end_to_handler: stage(Stage::GpuEndToHandler),
             gpu_end_to_handler_nanos: stage_nanos(Stage::GpuEndToHandler),
+            gpu_end_to_handler_steps_nanos: (a.handler_steps_nanos.each_ref())
+                .map(|n| n.load(Relaxed)),
+            gpu_end_to_handler_tail: a.handler_tail.load(Relaxed),
+            gpu_end_to_handler_tail_steps_nanos: (a.handler_tail_steps_nanos.each_ref())
+                .map(|n| n.load(Relaxed)),
+            calibrations: a.calibrations.load(Relaxed),
+            calibration_nanos: a.calibration_nanos.load(Relaxed),
             event_holds: (a.event_holds.each_ref()).map(|n| n.load(Relaxed)),
             held_starts: a.held_starts.load(Relaxed),
             held_start_gap_nanos: a.held_start_gap_nanos.load(Relaxed),
@@ -1671,6 +1715,12 @@ pub struct Metrics {
     /// The spans [`scheduled_to_gpu_start`](Self::scheduled_to_gpu_start) counts, summed, in
     /// nanoseconds.
     pub scheduled_to_gpu_start_nanos: u64,
+    /// Of [`scheduled_to_gpu_start_nanos`](Self::scheduled_to_gpu_start_nanos), the nanoseconds
+    /// under the GPU span of another command buffer the completion thread retired before this
+    /// one: the program's, or one of the runtime's own (an upload or a copy-in), among the latest
+    /// 128 retired with both timestamps, each placed on the host clock and merged where they
+    /// overlap. The rest of the span lies under none of them.
+    pub scheduled_to_gpu_start_behind_nanos: u64,
     /// The same command buffers by their GPU run: the span from their
     /// [`gpu_start_time`](crate::CommandBuffer::gpu_start_time) to their
     /// [`gpu_end_time`](crate::CommandBuffer::gpu_end_time), their two timestamps' own span, in
@@ -1689,6 +1739,28 @@ pub struct Metrics {
     /// The spans [`gpu_end_to_handler`](Self::gpu_end_to_handler) counts, summed, in
     /// nanoseconds.
     pub gpu_end_to_handler_nanos: u64,
+    /// Those spans split at the completion thread's steps, summed, in nanoseconds: 0, from the
+    /// GPU end to the host time the thread saw the completion (its wait's return and its read of
+    /// the progress semaphore); 1, from then to its read of the round's timestamps (the submit
+    /// thread told of the completion); 2, that read; 3, a calibration, where the round read one
+    /// ([`calibrations`](Self::calibrations)); 4, the retirements before this one in the round,
+    /// the command buffers', uploads' and copy-ins', their handlers included; 5, its own
+    /// retirement until its handlers begin. Each step is the span between its two host times, 0
+    /// where the later comes first, so the six add up to the span wherever the GPU end is no
+    /// later than the time the thread saw it.
+    pub gpu_end_to_handler_steps_nanos: [u64; HANDLER_STEPS],
+    /// Of the command buffers [`gpu_end_to_handler`](Self::gpu_end_to_handler) counts, those whose
+    /// span is 1,024 us or more (its buckets 10 and above).
+    pub gpu_end_to_handler_tail: u64,
+    /// Their spans split at the steps of
+    /// [`gpu_end_to_handler_steps_nanos`](Self::gpu_end_to_handler_steps_nanos), summed, in
+    /// nanoseconds.
+    pub gpu_end_to_handler_tail_steps_nanos: [u64; HANDLER_STEPS],
+    /// Calibrations of the GPU's clock against the host's (`vkGetCalibratedTimestampsKHR` calls):
+    /// one as the device starts, then one at a completion once 100 ms have passed since the last.
+    pub calibrations: u64,
+    /// Those calls' time, summed, in nanoseconds of [`host_time`](crate::host_time).
+    pub calibration_nanos: u64,
     /// Segments the submit thread held for an event's value that neither the host had set nor a
     /// signal submitted to the driver promised: a value the host sets later, or one a command
     /// buffer not yet submitted signals. A wait whose signal is submitted is not held: it goes to

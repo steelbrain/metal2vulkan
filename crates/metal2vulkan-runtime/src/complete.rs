@@ -4,12 +4,12 @@
 
 use crate::capture::CopyIn;
 use crate::command::{self, CbInner, CommandBufferError, DeviceLoss, Gpu, Handlers, Pending};
-use crate::counters::Metric;
+use crate::counters::{Metric, HANDLER_STEPS};
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::{self, EventInner, Listener};
 use crate::submit::{Ended, Finished, Upload};
-use crate::times::{self, Calibration, OwnEnd};
+use crate::times::{self, Calibration, OwnEnd, Spans};
 use ash::vk;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -328,9 +328,10 @@ pub(crate) fn lose(core: &Core, loss: DeviceLoss) {
 }
 
 impl Retiree {
-    /// Retires it, a command buffer with its GPU times where it completed; an upload or a copy-in
-    /// with its timestamps read where it completed (`times::retire_own`).
-    fn retire(self, core: &Core, gpu_times: Option<(u64, u64)>) {
+    /// Retires it, a command buffer by its `completion`; an upload or a copy-in with its
+    /// timestamps read where it completed (`times::retire_own`), which it answers where both
+    /// read.
+    fn retire(self, core: &Core, completion: Completion<'_>) -> Option<(u64, u64)> {
         let end = match self.lost {
             true => OwnEnd::Lost,
             false => OwnEnd::Completed,
@@ -342,7 +343,10 @@ impl Retiree {
                 handlers,
                 error,
                 written,
-            } => command::retire(core, cb, gpu, handlers, error, gpu_times, written),
+            } => {
+                command::retire(core, cb, gpu, handlers, error, written, completion);
+                None
+            }
             Item::Upload(upload) => upload.retire(core, end),
             Item::CopyIn(copy_in) => copy_in.retire(core, end),
         }
@@ -370,6 +374,54 @@ impl Retiree {
         }
         self
     }
+}
+
+/// The host times of a round of the completion thread's steps, which split each of its command
+/// buffers' spans from their GPU end to their handlers (`Metrics::gpu_end_to_handler_steps_nanos`).
+pub(crate) struct Round {
+    /// The thread saw the round's completions.
+    seen: u64,
+    /// Its read of the round's timestamps began.
+    read: u64,
+    /// That read ended.
+    stamped: u64,
+    /// Its calibration ended, where the round read one; else the read's end.
+    calibrated: u64,
+}
+
+impl Round {
+    /// A round that saw its completions at `seen`, read its timestamps from `read` to `stamped`,
+    /// and ended its calibration at `calibrated` (`stamped` where it read none).
+    pub(crate) fn at(seen: u64, read: u64, stamped: u64, calibrated: u64) -> Round {
+        Round {
+            seen,
+            read,
+            stamped,
+            calibrated,
+        }
+    }
+
+    /// The steps of a command buffer's span from its GPU end, `end`, to its handlers, which
+    /// begin at `handled`, its retirement having begun at `retiring`: each from the earlier of
+    /// its two host times, 0 where the later comes first.
+    pub(crate) fn steps(&self, end: u64, retiring: u64, handled: u64) -> [u64; HANDLER_STEPS] {
+        [
+            self.seen.saturating_sub(end),
+            self.read.saturating_sub(self.seen),
+            self.stamped.saturating_sub(self.read),
+            self.calibrated.saturating_sub(self.stamped),
+            retiring.saturating_sub(self.calibrated),
+            handled.saturating_sub(retiring),
+        ]
+    }
+}
+
+/// What the completion thread knows of a command buffer's completion as it retires it: its GPU
+/// times where they were read, its round, and the GPU spans retired before it.
+pub(crate) struct Completion<'a> {
+    pub(crate) gpu_times: Option<(u64, u64)>,
+    pub(crate) round: &'a Round,
+    pub(crate) spans: &'a Spans,
 }
 
 /// What a round of the completion thread saw of the progress semaphore.
@@ -415,6 +467,9 @@ pub(crate) fn run(core: Arc<Core>) {
     // group's submission whose gap was counted (`Metrics::held_start_gap_nanos`).
     let mut last_end: Option<u64> = None;
     let mut gapped = 0;
+    // The latest GPU spans retired, on the host clock, under which a command buffer's span from
+    // its scheduling to its GPU start may lie (`Metrics::scheduled_to_gpu_start_behind_nanos`).
+    let mut spans = Spans::new();
     // A value the counter read and the host wait then reported not reached: the next wait is for
     // it, so the thread sleeps until the wait agrees rather than reading the counter again.
     let mut behind: Option<u64> = None;
@@ -520,16 +575,23 @@ pub(crate) fn run(core: Arc<Core>) {
             // Each completed command buffer's timestamps are placed on the host clock by the
             // last calibration, read again first where the period has passed since it, and moved
             // earlier where it would place an end after the host time the thread saw it complete.
+            // The round's steps are timed by clock reads around them (`Round`): two, and a third
+            // where it calibrates.
             let seen = seen_at.unwrap_or_else(times::host_time);
+            let read = times::host_time();
             let stamps: Vec<Option<(u64, u64)>> =
                 retire.iter().map(|retiree| retiree.stamps(&core)).collect();
+            let stamped = times::host_time();
+            let mut calibrated = stamped;
             if stamps.iter().any(Option::is_some)
                 && calibration.is_none_or(|last| {
-                    times::host_time().saturating_sub(last.host()) >= times::CALIBRATION_PERIOD
+                    stamped.saturating_sub(last.host()) >= times::CALIBRATION_PERIOD
                 })
             {
                 calibration = Calibration::read(&core).or(calibration);
+                calibrated = times::host_time();
             }
+            let round = Round::at(seen, read, stamped, calibrated);
             for (retiree, stamps) in retire.into_iter().zip(stamps) {
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
                 if let Some((start, end)) = stamps {
@@ -552,7 +614,25 @@ pub(crate) fn run(core: Arc<Core>) {
                 let times = stamps
                     .zip(calibration.as_mut())
                     .map(|(stamps, calibration)| calibration.place(&core.ticks, stamps, seen));
-                retiree.retire(&core, times);
+                let completion = Completion {
+                    gpu_times: times,
+                    round: &round,
+                    spans: &spans,
+                };
+                // Its GPU span joins those the later ones' spans lie under: a command buffer's as
+                // placed, an upload's or a copy-in's by the calibration as it stands.
+                let own = retiree.retire(&core, completion);
+                let own = own
+                    .zip(calibration.as_ref())
+                    .map(|((start, end), calibration)| {
+                        (
+                            calibration.at(&core.ticks, start),
+                            calibration.at(&core.ticks, end),
+                        )
+                    });
+                if let Some(span) = own.or(times) {
+                    spans.push(span);
+                }
             }
             for (listener, value) in fire {
                 listener(value);

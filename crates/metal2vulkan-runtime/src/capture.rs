@@ -196,8 +196,9 @@ pub(crate) struct CopyIn {
 impl CopyIn {
     /// Gives its recorder back and drops what it holds, and its pair of timestamp queries, read
     /// where its submission completed (`end`, [`times::retire_own`]): once what took it retired,
-    /// or ended at a loss, or where it never went.
-    pub(crate) fn retire(self, core: &Core, end: times::OwnEnd) {
+    /// or ended at a loss, or where it never went. Answers its two timestamps where it completed
+    /// and both read.
+    pub(crate) fn retire(self, core: &Core, end: times::OwnEnd) -> Option<(u64, u64)> {
         let CopyIn {
             recorder,
             modified,
@@ -205,9 +206,10 @@ impl CopyIn {
             stamps,
             ..
         } = self;
-        times::retire_own(core, stamps, end);
+        let read = times::retire_own(core, stamps, end);
         core.recorders.give_back(core, recorder);
         drop((modified, images));
+        read
     }
 }
 

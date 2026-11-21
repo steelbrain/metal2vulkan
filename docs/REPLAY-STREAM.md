@@ -982,7 +982,14 @@ gpu_end_to_handler=...` for each frame `F` a later call followed and `stages end
 end (the runtime's four histograms of its command buffers' stages, `Metrics::commit_to_scheduled`
 and the three after it, bucket by bucket, as they stood then, since the device was made: a span's
 histogram is the difference of two lines; the executed counters `commit_to_scheduled_nanos` and
-the three like it sum each stage's spans, `held_starts` and `held_start_gap_nanos` count the
+the three like it sum each stage's spans, `scheduled_to_gpu_start_behind_nanos` the part from
+scheduling to GPU start under other command buffers' GPU spans, the runtime's own included,
+`gpu_end_to_handler_seen_nanos`, `_told_nanos`, `_stamp_read_nanos`, `_calibration_nanos`,
+`_earlier_nanos` and `_own_nanos` the completion thread's six steps of the span from GPU end to
+handlers (`Metrics::gpu_end_to_handler_steps_nanos`), `gpu_end_to_handler_tail` the command
+buffers whose span is 1,024 us or more and `gpu_end_to_handler_tail_seen_nanos` and the five
+like it their steps, `calibrations` and `calibration_nanos` the clock calibrations and their
+calls' time, `held_starts` and `held_start_gap_nanos` count the
 groups a queue held behind three submissions in flight and the GPU's time behind them, and
 `runtime_command_buffers` and `runtime_command_buffer_gpu_nanos` the runtime's own uploads and
 copy-ins and their GPU time, outside every Metal command buffer's GPU interval), its

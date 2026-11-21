@@ -9,12 +9,58 @@
 //! counted once in every stage histogram. Without a device: a push whose bytes the command buffer
 //! holds is not recorded again; a queue's expected run rises to a longer run at once and halves
 //! toward a shorter one; the join and send decisions of the group bound; the stage histograms'
-//! bucket edges.
+//! bucket edges; the part of a span under the latest GPU spans, and the completion round's steps.
 
 use crate::command::Pushed;
+use crate::complete::Round;
 use crate::counters::{stage_bucket, STAGE_BUCKETS};
 use crate::queue::next_run;
 use crate::submit::{apart, joins, GROUP_RUN, UNSEEN_JOINS};
+use crate::times::{Spans, SPANS_KEPT};
+
+/// A span from a scheduling to a GPU start lies under the GPU spans kept as their union clipped
+/// to it: overlapping spans count once, one outside it not at all, one of no length is not kept,
+/// and past `SPANS_KEPT` the oldest are no longer kept.
+#[test]
+fn a_span_counts_the_part_under_the_latest_gpu_spans_once() {
+    let mut spans = Spans::new();
+    assert_eq!(spans.covered(0, 100), 0);
+    for span in [
+        (10, 30),
+        (20, 40),
+        (60, 70),
+        (90, 200),
+        (50, 50),
+        (300, 400),
+    ] {
+        spans.push(span);
+    }
+    // [10, 40) once, [60, 70) and [90, 100): 30 + 10 + 10.
+    assert_eq!(spans.covered(0, 100), 50);
+    assert_eq!(spans.covered(25, 65), 20);
+    assert_eq!(spans.covered(40, 60), 0);
+    assert_eq!(spans.covered(100, 100), 0);
+    for at in 0..SPANS_KEPT as u64 {
+        spans.push((1_000 + at, 1_001 + at));
+    }
+    assert_eq!(spans.covered(0, 1_000), 0, "the first spans no longer kept");
+    assert_eq!(
+        spans.covered(1_000, 1_000 + SPANS_KEPT as u64),
+        SPANS_KEPT as u64
+    );
+}
+
+/// A command buffer's span from its GPU end to its handlers splits at the round's host times,
+/// the six steps adding up to the span; a step whose later time comes first is 0.
+#[test]
+fn a_command_buffer_s_span_to_its_handlers_splits_at_the_round_s_steps() {
+    let round = Round::at(100, 110, 130, 160);
+    let steps = round.steps(90, 175, 200);
+    assert_eq!(steps, [10, 10, 20, 30, 15, 25]);
+    assert_eq!(steps.iter().sum::<u64>(), 200 - 90);
+    let none = Round::at(100, 110, 130, 130);
+    assert_eq!(none.steps(120, 140, 150), [0, 10, 20, 0, 10, 10]);
+}
 
 /// The stage histograms' bucket edges: under 2 us in bucket 0, from 2^i us to under 2^(i+1) us
 /// in bucket i, and from 2^22 us on in the last.
@@ -1984,6 +2030,10 @@ pub(crate) mod on_device {
                 ]
             };
             let before = counters.metrics();
+            assert!(
+                before.calibrations >= 1,
+                "{name}: the device start's calibration"
+            );
             let mut spans = [0; 3];
             let mut handled_by = 0;
             for word in 1..=3 {
@@ -2012,6 +2062,20 @@ pub(crate) mod on_device {
                 added[3] <= handled_by,
                 "{name}: GPU end to handlers {} past its bound {handled_by}",
                 added[3]
+            );
+            // Each end is placed no later than the round saw it, so the steps add up to the span.
+            let steps = |m: &crate::Metrics| m.gpu_end_to_handler_steps_nanos.iter().sum::<u64>();
+            assert_eq!(
+                steps(&after) - steps(&before),
+                added[3],
+                "{name}: the completion thread's steps add up to GPU end to handlers"
+            );
+            let behind = after.scheduled_to_gpu_start_behind_nanos
+                - before.scheduled_to_gpu_start_behind_nanos;
+            assert!(
+                behind <= added[1],
+                "{name}: {behind} under earlier spans of {} from scheduling to GPU start",
+                added[1]
             );
             drop((buffer, arena, queue, device));
         });

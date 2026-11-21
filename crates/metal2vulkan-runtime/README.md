@@ -186,7 +186,11 @@ four histograms of each command buffer's stages, in 23 power-of-two buckets from
 to scheduled (`commit_to_scheduled`, counted as it is scheduled), scheduled to GPU start, the GPU
 run, and GPU end to the host time its handlers begin (counted as it retires, for one that
 completes with GPU times), each beside its spans' sum in nanoseconds (`commit_to_scheduled_nanos`
-and the three like it); the segments the submit thread held for an event's value that neither
+and the three like it); of scheduled to GPU start, the part under the GPU spans of other command
+buffers retired before it, the runtime's own included (`scheduled_to_gpu_start_behind_nanos`); GPU
+end to handlers split at the completion thread's six steps, for all and for those of 1,024 us or
+more (`gpu_end_to_handler_steps_nanos`, `gpu_end_to_handler_tail` and its steps); the clock
+calibrations and their calls' time (`calibrations`, `calibration_nanos`); the segments the submit thread held for an event's value that neither
 the host had set nor a submitted signal promised, by the length of each hold (`event_holds`, in
 the same buckets); the groups a queue held behind three submissions in flight that went once a
 completion left fewer running (`held_starts`), and the GPU's time behind them, from the latest

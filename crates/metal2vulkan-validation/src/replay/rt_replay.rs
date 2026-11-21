@@ -447,9 +447,11 @@ fn a_draw_into_a_pass_plays_on_the_new_runtime() {
     assert_eq!(report.first_skip, None);
 }
 
-/// A play's report carries the runtime's stage sums among its executed counters, and its stage
-/// histograms as each frame ended and at the play's end: two frames of one fill each count one
-/// command buffer more in each histogram by each frame's end.
+/// A play's report carries the runtime's stage sums among its executed counters, with the part
+/// from scheduling to GPU start under earlier spans and the completion thread's steps, which add
+/// up to the span from GPU end to handlers, and its stage histograms as each frame ended and at
+/// the play's end: two frames of one fill each count one command buffer more in each histogram by
+/// each frame's end.
 #[test]
 fn a_play_reports_the_runtime_s_command_buffer_stages() {
     let dir = ScratchDir::new("rt-replay-stages").unwrap();
@@ -482,10 +484,38 @@ fn a_play_reports_the_runtime_s_command_buffer_stages() {
         "runtime_command_buffers",
         "runtime_command_buffer_gpu_nanos",
         "untimed_command_buffers",
+        "scheduled_to_gpu_start_behind_nanos",
+        "gpu_end_to_handler_tail",
+        "calibrations",
+        "calibration_nanos",
     ];
     for key in sums {
         assert!(executed.contains_key(key), "{key}: {executed:?}");
     }
+    // The completion thread's six steps add up to each span from a GPU end to its handlers.
+    let steps = [
+        "seen",
+        "told",
+        "stamp_read",
+        "calibration",
+        "earlier",
+        "own",
+    ];
+    let sum = |infix: &str| -> u64 {
+        (steps.iter())
+            .map(|step| executed[format!("gpu_end_to_handler_{infix}{step}_nanos").as_str()])
+            .sum()
+    };
+    assert_eq!(
+        sum(""),
+        executed["gpu_end_to_handler_nanos"],
+        "{executed:?}"
+    );
+    assert!(sum("tail_") <= sum(""), "{executed:?}");
+    assert!(
+        executed["scheduled_to_gpu_start_behind_nanos"] <= executed["scheduled_to_gpu_start_nanos"],
+        "{executed:?}"
+    );
     let counted = |at: &str| -> Vec<u64> {
         let prefix = format!("stages {at} ");
         let line = lines.iter().find(|line| line.starts_with(&prefix));

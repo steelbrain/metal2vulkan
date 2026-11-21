@@ -2102,7 +2102,9 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
             Err(Error::Vulkan { call, result }) => ok = Err(DeviceLoss { call, result }),
             Err(error) => unreachable!("an upload's begin fails only in a Vulkan call: {error}"),
         },
-        (false, Some(upload)) => upload.retire(core, times::OwnEnd::Unsent),
+        (false, Some(upload)) => {
+            upload.retire(core, times::OwnEnd::Unsent);
+        }
         (false, None) => {}
     }
     let mut uploads = kept;
@@ -2287,9 +2289,11 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
 impl Upload {
     /// Recycles the upload's recorder and gives up what it holds, and its pair of timestamp
     /// queries, read where its submission completed (`end`, [`times::retire_own`]): once its
-    /// submission completed, or ended at a loss, or where it never went.
-    pub(crate) fn retire(self, core: &Core, end: times::OwnEnd) {
-        times::retire_own(core, self.stamps, end);
+    /// submission completed, or ended at a loss, or where it never went. Answers its two
+    /// timestamps where it completed and both read.
+    pub(crate) fn retire(self, core: &Core, end: times::OwnEnd) -> Option<(u64, u64)> {
+        let read = times::retire_own(core, self.stamps, end);
         core.recorders.give_back(core, self.recorder);
+        read
     }
 }

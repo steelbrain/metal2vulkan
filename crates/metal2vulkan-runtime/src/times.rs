@@ -171,10 +171,12 @@ impl Calibration {
             vk::CalibratedTimestampInfoKHR::default().time_domain(vk::TimeDomainKHR::DEVICE),
             vk::CalibratedTimestampInfoKHR::default().time_domain(HOST_DOMAIN),
         ];
+        // The call's own time, counted with it (`Metrics::calibrations`): two clock reads.
+        let began = host_time();
         // SAFETY: the device enables the extension (the floor's), and calibrates both domains.
-        let (values, _) = unsafe { core.calibrated.get_calibrated_timestamps(&infos) }.ok()?;
-        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
-        core.counters.calibrated();
+        let read = unsafe { core.calibrated.get_calibrated_timestamps(&infos) };
+        core.counters.calibrated(host_time().saturating_sub(began));
+        let (values, _) = read.ok()?;
         let host = host_nanos(values[1])?;
         #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
         let host = host
@@ -207,11 +209,77 @@ impl Calibration {
         seen: u64,
     ) -> (u64, u64) {
         let span = ticks.span(start, end);
-        let start = (self.host as f64 + ticks.nanos(self.tick, start)) as u64;
+        let start = self.at(ticks, start);
         let excess = (start + span).saturating_sub(seen);
         self.host = self.host.saturating_sub(excess);
         let start = start.saturating_sub(excess);
         (start, start + span)
+    }
+
+    /// The host time of timestamp `tick` by this calibration as it stands, which moves nothing:
+    /// for the spans of the runtime's own command buffers ([`Spans`]).
+    pub(crate) fn at(&self, ticks: &Ticks, tick: u64) -> u64 {
+        (self.host as f64 + ticks.nanos(self.tick, tick)) as u64
+    }
+}
+
+/// How many of the latest GPU spans the completion thread keeps ([`Spans`]): more than the
+/// command buffers, uploads and copy-ins of a queue's three submissions in flight at sixteen
+/// command buffers each.
+pub(crate) const SPANS_KEPT: usize = 128;
+
+/// The completion thread's latest GPU spans on the host clock, of the command buffers it retired
+/// with both timestamps, the program's and the runtime's own: [`SPANS_KEPT`] of them, the oldest
+/// replaced first, in place, with nothing allocated.
+pub(crate) struct Spans {
+    spans: [(u64, u64); SPANS_KEPT],
+    next: usize,
+    kept: usize,
+}
+
+impl Spans {
+    pub(crate) fn new() -> Spans {
+        Spans {
+            spans: [(0, 0); SPANS_KEPT],
+            next: 0,
+            kept: 0,
+        }
+    }
+
+    /// One more span, from `start` to `end`; one of no length is not kept.
+    pub(crate) fn push(&mut self, (start, end): (u64, u64)) {
+        if end <= start {
+            return;
+        }
+        self.spans[self.next] = (start, end);
+        self.next = (self.next + 1) % SPANS_KEPT;
+        self.kept = (self.kept + 1).min(SPANS_KEPT);
+    }
+
+    /// The nanoseconds from `from` to `to` that lie under any span kept, the spans merged where
+    /// they overlap (`Metrics::scheduled_to_gpu_start_behind_nanos`): one pass over the spans
+    /// kept, then a sort of those that meet the range, in place.
+    pub(crate) fn covered(&self, from: u64, to: u64) -> u64 {
+        let mut met = [(0, 0); SPANS_KEPT];
+        let mut count = 0;
+        for &(start, end) in &self.spans[..self.kept] {
+            let (start, end) = (start.max(from), end.min(to));
+            if start < end {
+                met[count] = (start, end);
+                count += 1;
+            }
+        }
+        let met = &mut met[..count];
+        met.sort_unstable();
+        let (mut covered, mut reached) = (0, from);
+        for &(start, end) in met.iter() {
+            let start = start.max(reached);
+            if start < end {
+                covered += end - start;
+                reached = end;
+            }
+        }
+        covered
     }
 }
 
@@ -417,15 +485,16 @@ pub(crate) enum OwnEnd {
 /// Gives back `pair` ([`begin_own`]) as its command buffer retires (`end`). Where it completed,
 /// its span is added to `Metrics::runtime_command_buffer_gpu_nanos` where both timestamps read,
 /// and one that reads as not available is counted ([`Pair::times`]); where it was submitted, both
-/// queries are reset first ([`reset`]).
-pub(crate) fn retire_own(core: &Core, pair: Option<Pair>, end: OwnEnd) {
-    let Some(pair) = pair else {
-        return;
-    };
+/// queries are reset first ([`reset`]). Answers the two timestamps where it completed and both
+/// read, for the completion thread's spans ([`Spans`]).
+pub(crate) fn retire_own(core: &Core, pair: Option<Pair>, end: OwnEnd) -> Option<(u64, u64)> {
+    let pair = pair?;
+    let mut read = None;
     if end == OwnEnd::Completed {
         // SAFETY: the pair's pool is the device's, and only this retirement resets its two
         // queries, after this read.
-        if let Some((start, stop)) = unsafe { pair.times(&core.device, &core.counters) } {
+        read = unsafe { pair.times(&core.device, &core.counters) };
+        if let Some((start, stop)) = read {
             (core.counters).runtime_command_buffer_ran(core.ticks.span(start, stop));
         }
     }
@@ -433,4 +502,5 @@ pub(crate) fn retire_own(core: &Core, pair: Option<Pair>, end: OwnEnd) {
         reset(&core.device, pair.pool, pair.first, 2);
     }
     core.stamps.give_back(pair);
+    read
 }
