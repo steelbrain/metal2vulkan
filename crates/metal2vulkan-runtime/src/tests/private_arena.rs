@@ -5,7 +5,9 @@
 //! other slot's words reproduce. It runs at 7176 words (28,704 bytes a thread), 9216 (36 KiB) and
 //! 51,200 (200 KiB), over 8 threadgroups of 64, under the device's own budget (one piece) and
 //! under a budget of a test's (`Core::arena_budget`) that splits the dispatch: two threadgroups a
-//! piece at 28,704 bytes, four at 36 KiB and one at 200 KiB. Every answer is the CPU's. The counts show the path: one arena
+//! piece at 28,704 bytes, four at 36 KiB and one at 200 KiB. The device's own budget splits a
+//! dispatch too where its slots pass it, into the pieces that budget holds. Every answer is the
+//! CPU's. The counts show the path: one arena
 //! dispatch each, its pieces, a barrier before each piece but the first in a block the dispatch
 //! took new, and none for a kernel without an arena, whose dispatches beside it add no barrier.
 //!
@@ -156,13 +158,19 @@ entry:
             let library = Library::from_air(&bitcode).expect("the library");
             let want: Vec<u32> = (0..threads as u32).map(|gid| reference(n, gid)).collect();
             let slot = u64::from(4 * n);
+            let group = u64::from(THREADS) * slot;
+            // The pieces of a dispatch under `budget`: as many whole threadgroups a piece as its
+            // slots hold, at least one.
+            let pieces_under = |budget: u64| {
+                u64::from(GROUPS).div_ceil((budget / group).clamp(1, u64::from(GROUPS)))
+            };
             // A budget of two threadgroups' slots at 28,704 bytes, four at 36 KiB, one at 200 KiB.
             let per_piece = match n {
                 7176 => 2,
                 9216 => 4,
                 _ => 1,
             };
-            let small = per_piece * u64::from(THREADS) * slot;
+            let small = per_piece * group;
             each_device("private_arena", |name, _, device| {
                 let arena = state(name, &device, &library, "arena");
                 let plain = state(name, &device, &library, "plain");
@@ -182,15 +190,16 @@ entry:
                 );
                 for budget in [0, small] {
                     device.core().arena_budget.store(budget, Relaxed);
-                    let pieces = match budget {
-                        0 => 1,
-                        _ => u64::from(GROUPS) / per_piece,
-                    };
+                    let pieces = pieces_under(device.core().arena_budget());
+                    if budget != 0 {
+                        assert_eq!(pieces, u64::from(GROUPS) / per_piece, "{name}");
+                    }
                     let counters = device.counters();
                     let before = counters.metrics();
                     let kernels = [&plain, &arena, &arena, &plain];
                     let (barriers, after) = barriers(name, &device, &kernels, &outs);
-                    let what = format!("{name}: {n} words, budget {budget}");
+                    let what =
+                        format!("{name}: {n} words, budget {}", device.core().arena_budget());
                     for k in [1, 2] {
                         assert_eq!(words(&outs[k], threads), want, "{what}: arena dispatch {k}");
                     }
