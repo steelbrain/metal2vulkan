@@ -3,7 +3,8 @@
 #   cargo nextest run -p metal2vulkan --all-features --run-ignored ignored-only -E 'test(bless_golden_hashes)'
 # A cell is the first 64 bits of SHA-256 over the final SPIR-V of its subject, or its
 # refusal class. A cell that changes under an unchanged fixture source and profile
-# fingerprint needs cache::SEMANTICS_VERSION above its value at the last bless.
+# fingerprint needs cache::SEMANTICS_VERSION above the semantics line, its bless's.
+semantics	2234
 profile	amd-780m-hawkpoint-radv	801fffb91f235335
 profile	amd-780m-radv	801fffb91f235335
 profile	amd-rdna2-apu-radv	5f7199be97f9d10f

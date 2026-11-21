@@ -30,13 +30,14 @@
 //! for the cache key of the output, host-independently (the key's AIR hash covers bitcode that
 //! differs between `llvm-as` versions).
 //!
-//! `golden_hashes.tsv` must match the observed table, cell for cell; it records no version, so a
-//! `SEMANTICS_VERSION` bump alone leaves it as it is. A cell that changed while its fixture source
-//! and profile fingerprint did not is output that changed under an unchanged key: it needs
-//! `cache::SEMANTICS_VERSION` above its value at the table's last bless, and a bless. New, removed,
-//! or re-keyed cells only need a bless. The bless (ignored) records what it observes and names the
-//! cells that changed under an unchanged key; the master bless refuses those without the bump. It
-//! needs every assembler, so it runs on macOS:
+//! `golden_hashes.tsv` must match the observed table, cell for cell, and records
+//! `cache::SEMANTICS_VERSION` as it was at its bless (its `semantics` line), which a bump alone
+//! leaves as it is. A cell that changed while its fixture source and profile fingerprint did not is
+//! output that changed under an unchanged key: it needs `cache::SEMANTICS_VERSION` above the
+//! table's, and a bless. Such a cell under the table's own number is a missing bump, which the
+//! check names, and which the bless refuses; under a higher one it is a bless due. New, removed,
+//! or re-keyed cells only need a bless. The bless (ignored) records what it observes. It needs
+//! every assembler, so it runs on macOS:
 //!
 //! ```text
 //! cargo nextest run -p metal2vulkan --all-features --run-ignored ignored-only -E 'test(bless_golden_hashes)'
@@ -711,6 +712,8 @@ struct Row {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Table {
+    /// `cache::SEMANTICS_VERSION` when the table was observed (for the committed one, blessed).
+    semantics: u32,
     /// (stem, fingerprint prefix), sorted by stem.
     profiles: Vec<(String, String)>,
     /// By (fixture, subject).
@@ -739,8 +742,9 @@ impl Table {
         s.push_str(
             "# A cell is the first 64 bits of SHA-256 over the final SPIR-V of its subject, or its\n\
              # refusal class. A cell that changes under an unchanged fixture source and profile\n\
-             # fingerprint needs cache::SEMANTICS_VERSION above its value at the last bless.\n",
+             # fingerprint needs cache::SEMANTICS_VERSION above the semantics line, its bless's.\n",
         );
+        s.push_str(&format!("semantics\t{}\n", self.semantics));
         for (stem, fp) in &self.profiles {
             s.push_str(&format!("profile\t{stem}\t{fp}\n"));
         }
@@ -762,6 +766,7 @@ impl Table {
     }
 
     fn parse(text: &str) -> Result<Table, String> {
+        let mut semantics = None;
         let mut profiles = Vec::new();
         let mut header = false;
         let mut rows = BTreeMap::new();
@@ -771,6 +776,9 @@ impl Table {
             }
             let f: Vec<&str> = line.split('\t').collect();
             match f.as_slice() {
+                ["semantics", value] => {
+                    semantics = Some(value.parse().map_err(|e| format!("line {n}: {e}"))?);
+                }
                 ["profile", stem, fp] => profiles.push(((*stem).to_owned(), (*fp).to_owned())),
                 ["fixture", "source", "subject", stems @ ..] => {
                     let expected: Vec<&str> = profiles.iter().map(|(s, _)| s.as_str()).collect();
@@ -797,7 +805,12 @@ impl Table {
                 _ => return Err(format!("line {n}: unexpected {line:?}")),
             }
         }
-        Ok(Table { profiles, rows })
+        let semantics = semantics.ok_or("no semantics line: the SEMANTICS_VERSION of its bless")?;
+        Ok(Table {
+            semantics,
+            profiles,
+            rows,
+        })
     }
 }
 
@@ -855,7 +868,11 @@ fn observe(golden: Golden, devices: &[(String, Device)]) -> Observed {
         .map(|(stem, dev)| (stem.clone(), hex16(&dev.profile().fingerprint())))
         .collect();
     Observed {
-        table: Table { profiles, rows },
+        table: Table {
+            semantics: crate::cache::SEMANTICS_VERSION,
+            profiles,
+            rows,
+        },
         skipped,
     }
 }
@@ -913,6 +930,13 @@ fn diff(committed: &Table, observed: &Observed) -> Diff {
         }
     }
     d
+}
+
+/// Whether a cell that changed under an unchanged key between `committed` and `observed` is a
+/// missing bump: `observed`'s `cache::SEMANTICS_VERSION` is not above the committed table's, so a
+/// cached artifact under that key is served stale. Above it, the change is a bless due.
+fn missing_bump(committed: &Table, observed: &Table) -> bool {
+    observed.semantics <= committed.semantics
 }
 
 /// The stale cells by kind, in the words the matrix reads (scripts/matrix/results.py): a cell under
@@ -997,15 +1021,26 @@ fn matches_the_table(golden: Golden, devices: &[(String, Device)], observed: &Ob
     };
     let d = diff(&committed, observed);
     if !d.changed.is_empty() {
-        panic!(
-            "{table}: output changed under an unchanged key: {} cell(s) changed while their \
-             fixture source and profile fingerprint did not, so a cached artifact under the same \
-             key would be stale unless cache::SEMANTICS_VERSION (src/cache/mod.rs) is above its \
-             value at the table's last bless. Bump it if this change has not, and bless:\n  \
-             {BLESS}\n{}",
-            d.changed.len(),
-            shown(&d.changed)
-        );
+        let (was, now) = (committed.semantics, observed.table.semantics);
+        match missing_bump(&committed, &observed.table) {
+            true => panic!(
+                "{table}: SEMANTICS bump missing: output changed under an unchanged key: {} \
+                 cell(s) changed while their fixture source and profile fingerprint did not, and \
+                 cache::SEMANTICS_VERSION (src/cache/mod.rs) is {now}, the table's at its last \
+                 bless, so a cached artifact under the same key is stale. Bump it, and bless:\n  \
+                 {BLESS}\n{}",
+                d.changed.len(),
+                shown(&d.changed)
+            ),
+            false => panic!(
+                "{table}: bless due: output changed under an unchanged key: {} cell(s) changed \
+                 while their fixture source and profile fingerprint did not, under \
+                 cache::SEMANTICS_VERSION {now}, above the table's {was}. Bless it with\n  \
+                 {BLESS}\n{}",
+                d.changed.len(),
+                shown(&d.changed)
+            ),
+        }
     }
     if !d.stale.is_empty() {
         panic!(
@@ -1024,9 +1059,9 @@ fn matches_the_table(golden: Golden, devices: &[(String, Device)], observed: &Ob
     );
 }
 
-/// Rewrite the table from what this build observes: `BLESS` above. Refuses when an assembler is
-/// missing; names the cells that changed under an unchanged key, which need a
-/// `cache::SEMANTICS_VERSION` bump since the last bless (the master bless checks it).
+/// Rewrite the table from what this build observes, with this build's `cache::SEMANTICS_VERSION`:
+/// `BLESS` above. Refuses when an assembler is missing, and when a cell changed under an unchanged
+/// key while `cache::SEMANTICS_VERSION` is still the table's ([`missing_bump`]): a bump is missing.
 #[test]
 #[ignore]
 fn bless_golden_hashes() {
@@ -1042,14 +1077,15 @@ fn bless_golden_hashes() {
         );
         if let Some(committed) = committed(golden) {
             let d = diff(&committed, &observed);
-            if !d.changed.is_empty() {
-                eprintln!(
-                    "{table}: {} cell(s) changed under an unchanged key: they need \
-                     cache::SEMANTICS_VERSION above its value at the table's last bless\n{}",
-                    d.changed.len(),
-                    shown(&d.changed)
-                );
-            }
+            assert!(
+                d.changed.is_empty() || !missing_bump(&committed, &observed.table),
+                "refusing to bless: SEMANTICS bump missing: {} cell(s) changed under an unchanged \
+                 key while cache::SEMANTICS_VERSION is {}, the table's at its last bless; bump it \
+                 first\n{}",
+                d.changed.len(),
+                committed.semantics,
+                shown(&d.changed)
+            );
         }
         std::fs::write(table_path(golden), observed.table.render(golden)).expect("write the table");
         eprintln!(
@@ -1070,6 +1106,7 @@ fn bless_golden_hashes() {
 fn a_stale_cell_names_the_key_that_moved_and_not_an_unmoved_cell() {
     let at = ("f.ll".to_owned(), "main".to_owned());
     let table = |fp: &str, source: &str, cell: &str| Table {
+        semantics: 1,
         profiles: vec![("a-gpu".to_owned(), fp.to_owned())],
         rows: BTreeMap::from([(
             at.clone(),
@@ -1126,6 +1163,7 @@ fn the_table_format_round_trips() {
         },
     );
     let t = Table {
+        semantics: 2234,
         profiles: vec![
             ("p".to_owned(), "22".repeat(8)),
             ("q".to_owned(), "33".repeat(8)),
@@ -1133,6 +1171,41 @@ fn the_table_format_round_trips() {
         rows,
     };
     assert_eq!(Table::parse(&t.render(DEFAULT)), Ok(t.clone()));
+    // A table with no semantics line is refused: it would make every change a bless due.
+    let unversioned: String = (t.render(DEFAULT).lines())
+        .filter(|line| !line.starts_with("semantics\t"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    assert!(Table::parse(&unversioned).is_err());
+}
+
+/// A cell changed under an unchanged key is a missing bump while the observing build's
+/// `cache::SEMANTICS_VERSION` is the committed table's (emitted SPIR-V changed with the bump left
+/// for a later commit, so a warm cache serves the old modules), and a bless due once it is above.
+#[test]
+fn a_cell_changed_under_its_key_at_the_table_s_own_semantics_is_a_missing_bump() {
+    let table = |semantics: u32, cell: &str| Table {
+        semantics,
+        profiles: vec![("p".to_owned(), "f".to_owned())],
+        rows: BTreeMap::from([(
+            ("a.ll".to_owned(), "k".to_owned()),
+            Row {
+                source: "s".to_owned(),
+                cells: vec![cell.to_owned()],
+            },
+        )]),
+    };
+    let committed = table(2205, "h1");
+    let observed = |semantics: u32| Observed {
+        table: table(semantics, "h2"),
+        skipped: BTreeSet::new(),
+    };
+    let same = observed(2205);
+    assert_eq!(diff(&committed, &same).changed.len(), 1);
+    assert!(missing_bump(&committed, &same.table));
+    let bumped = observed(2206);
+    assert_eq!(diff(&committed, &bumped).changed.len(), 1);
+    assert!(!missing_bump(&committed, &bumped.table));
 }
 
 /// The rule itself on synthetic tables: a changed cell under unchanged inputs needs a bump; a
@@ -1140,6 +1213,7 @@ fn the_table_format_round_trips() {
 #[test]
 fn only_a_cell_changed_under_its_key_needs_a_bump() {
     let table = |source: &str, fp: &str, cells: &[(&str, &str)]| Table {
+        semantics: 1,
         profiles: vec![("p".to_owned(), fp.to_owned())],
         rows: cells
             .iter()

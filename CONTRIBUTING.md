@@ -143,9 +143,11 @@ fixture entry point on every committed profile, in `crates/metal2vulkan/tests/go
 `cache::SEMANTICS_VERSION` is part of every cache key, so a change that moves a cell while its
 fixture and profile are unchanged must bump `SEMANTICS_VERSION`
 (`crates/metal2vulkan/src/cache/mod.rs`) in the same change. New, removed or edited fixtures and
-profiles need only the bless. The table records cells only, no version: a `SEMANTICS_VERSION` bump
-alone leaves it unchanged, and the bless on `development` refuses a cell that moved under an
-unchanged fixture and profile when `SEMANTICS_VERSION` is still its value at the table's last bless.
+profiles need only the bless. The table records `SEMANTICS_VERSION` as it was at its bless (its
+`semantics` line), which a bump alone leaves unchanged. A cell that moved under an unchanged fixture
+and profile while `SEMANTICS_VERSION` is still the table's fails the check as a missing bump, and
+the bless on `development` refuses it; once `SEMANTICS_VERSION` is above the table's, the same cell
+is a bless due.
 
 The tables are re-blessed on `development` after merges, so a change need not carry its own bless.
 One command blesses both (on macOS, which has `xcrun metal-as`):
