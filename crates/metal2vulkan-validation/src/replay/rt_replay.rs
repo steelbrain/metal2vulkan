@@ -12,9 +12,10 @@
 //! - A compute pipeline state the runtime answers with a typed gap is skipped and counted by the
 //!   gap, and a dispatch of it is skipped, and the play goes on.
 //! - Each pipeline state's making is split by the runtime's counters into the translator's time,
-//!   the driver's and the rest: a kernel's first state and a render state are cold, each with
-//!   both halves, and a second state of the kernel is held, with no driver time; the slowest are
-//!   listed by object, with their stages' kinds.
+//!   the driver's and the rest, beside what it made: a kernel's first state and a render state
+//!   are of contents new to the device, which lowered their functions and made a `VkPipeline`,
+//!   with both halves' times, and a second state of the kernel is held, which made nothing and
+//!   took no driver time; the slowest are listed by object, with their stages' kinds.
 //! - A compute encoder's `setStageInRegion:` plays: the runtime takes it.
 //! - The host's library from source is made of its display library where the backend has it, a
 //!   function of it with it; without it both are skipped.
@@ -1070,12 +1071,23 @@ fn each_pipeline_state_s_making_is_split_into_the_translator_s_and_the_driver_s_
         .find(|line| line.starts_with("pipeline makes "))
         .unwrap_or_else(|| panic!("{lines:?}"));
     assert!(
-        summary.starts_with("pipeline makes 3 states: 2 cold, "),
+        summary.starts_with("pipeline makes 3 states: 2 new ("),
         "{summary}"
     );
-    let end = "; 0 beside a pre-pass call, whose work their times count";
+    let end = "; 0 beside a pre-pass call, whose work their figures count";
     assert!(summary.ends_with(end), "{summary}");
-    let [wall, translation, driver, other] = split_after(summary, " cold, ");
+    // The kernel's one or two lowerings and the render state's two, and its triangle class.
+    let (_, made) = summary.split_once(" new (").unwrap();
+    let (made, _) = made.split_once(')').unwrap();
+    let count = |what: &str| -> u64 {
+        let word = made.split(", ").find(|part| part.ends_with(what));
+        word.and_then(|part| part.split(' ').next()?.parse().ok())
+            .unwrap()
+    };
+    assert!(count(" lowered") >= 3, "{summary}");
+    assert_eq!(count(" loaded"), 0, "{summary}");
+    assert!(count(" VkPipelines") >= 1, "{summary}");
+    let [wall, translation, driver, other] = split_after(summary, "VkPipelines), ");
     assert!(
         translation > 0.0 && driver > 0.0 && other >= 0.0,
         "{summary}"
@@ -1092,11 +1104,11 @@ fn each_pipeline_state_s_making_is_split_into_the_translator_s_and_the_driver_s_
         .collect();
     assert_eq!(slowest.len(), 3, "{lines:?}");
     for (state, kinds) in [
-        (7, "kernel cold"),
-        (8, "kernel held"),
-        (9, "vertex+fragment cold"),
+        (7, "kernel new ("),
+        (8, "kernel held (0 lowered, 0 loaded, 0 VkPipelines): wall "),
+        (9, "vertex+fragment new ("),
     ] {
-        let named = format!(" #{state} {kinds}: wall ");
+        let named = format!(" #{state} {kinds}");
         assert!(
             slowest.iter().any(|line| line.contains(&named)),
             "{slowest:?}"
