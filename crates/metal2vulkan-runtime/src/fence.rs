@@ -12,9 +12,11 @@ use std::sync::{Arc, Weak};
 /// The runtime records nothing for a fence. Every queue's command buffers go to the device's one
 /// `VkQueue`, and each encoder's writes reach every command submitted after it through the barrier
 /// at its end or at its segment's end, so a wait sees every update submitted before it. A command
-/// buffer the submit thread holds in a group while its queue's submissions run is submitted, as
-/// Metal would have submitted it, before a command buffer of another queue that waits on a fence
-/// it updates. A waiter with nothing for the GPU completes no sooner than the last submission that
+/// buffer the submit thread holds while its queue's submissions run, in a group or scheduled and
+/// waiting for room, is submitted, as Metal would have submitted it, before a command buffer of
+/// another queue that waits on a fence it updates, with its queue's command buffers before it: one
+/// held for room so after the waiter was is not waited for. A waiter with nothing for the GPU
+/// completes no sooner than the last submission that
 /// updates its fence, as Metal's does. An update in a command buffer held at an event wait, or
 /// behind one held so or enqueued and not committed, is not waited for: Metal evaluates a wait at
 /// its kernel submission against the updates already submitted, and a waiter on another queue runs

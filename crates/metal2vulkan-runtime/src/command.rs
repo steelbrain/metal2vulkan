@@ -63,8 +63,9 @@ pub enum CommandBufferStatus {
     /// `MTLCommandBufferStatusCommitted`: also while the submit thread holds a later segment.
     Committed,
     /// `MTLCommandBufferStatusScheduled`: the last segment is in a submission: passed to
-    /// `vkQueueSubmit2`, or in a group its queue holds while three of its submissions run, which
-    /// goes with no other call. A command buffer that presents a drawable
+    /// `vkQueueSubmit2`, or held, in a group or not yet staged, every wait of its met, while its
+    /// queue has no room on the device's `VkQueue`, which goes with no other call. GPU room is no
+    /// dependency of Metal's. A command buffer that presents a drawable
     /// ([`CommandBuffer::present_drawable`]) is never held: it is scheduled once its submission
     /// has passed `vkQueueSubmit2`. One that waits for an event's value, an [`Event`]'s or a
     /// [`SharedEvent`](crate::SharedEvent)'s, is scheduled so too, while its commands wait on the
@@ -710,7 +711,7 @@ impl CommandBuffer {
     /// that "The command buffer invokes all the completion handlers your app submits with
     /// addScheduledHandler(_:)". Its status reads [`CommandBufferStatus::Scheduled`] inside its
     /// scheduled handlers, before this returns. It sends nothing: a command buffer held in a group
-    /// is scheduled already, and one that presents a drawable
+    /// or for room is scheduled already, and one that presents a drawable
     /// ([`present_drawable`](Self::present_drawable)) is scheduled once its submission has passed
     /// `vkQueueSubmit2`. In a completed handler or a listener of its device, on the completion
     /// thread, it waits for a scheduled command buffer's handlers, which run on the submit thread.

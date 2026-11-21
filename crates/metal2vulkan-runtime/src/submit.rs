@@ -2,19 +2,23 @@
 //! held while a queue's earlier submissions run, the upload that goes ahead of later commits, and
 //! the submissions it passes to `vkQueueSubmit2`.
 //!
-//! Each queue groups on its own. While fewer than [`IN_FLIGHT`] of the queue's submissions are
-//! not seen complete, each of its command buffers goes at once, alone. While that many run, the
-//! ones committed meanwhile are held in one group of at most [`GROUP`], which goes when it fills,
-//! when a completion leaves fewer running (the completion thread wakes the thread as it retires),
-//! while the completion thread runs a round of retirements, completed handlers and listeners (it
-//! sees no completion until the round ends, so a group is held only while it waits on the GPU),
-//! when the host is to wait for one of them ([`Work::send`]), when a command buffer of another
-//! queue that waits on a fence one of them updates is to go (`crate::fence`), or at teardown. The
+//! Each queue groups on its own. While the queue has room ([`room`]), each of its command buffers
+//! goes at once, alone. Without room, the ones committed meanwhile are held in one group of at
+//! most [`GROUP`], each scheduled as it joins; one the group does not take waits in the queue's
+//! list, not staged, with the queue's later commits behind it, each scheduled there as it would
+//! be in the group, in commit order with every queue's, once its waits are met
+//! ([`WorkState::hold`]), while other queues' go on. Only its `vkQueueSubmit2` waits for room.
+//! The group goes when a completion leaves room (the completion thread wakes the thread as
+//! it retires), while the completion thread runs a round of retirements, completed handlers and
+//! listeners (it sees no completion until the round ends, so a group is held only while it waits
+//! on the GPU), when the host is to wait for one of them or one waiting behind it
+//! ([`Work::send`]), when a command buffer of another queue that waits on a fence one of them
+//! updates is to go (`crate::fence`), or at teardown. The
 //! driver runs a submission's command buffers as one kernel job, which a job timeout ends as a
 //! whole (Linux's amdgpu ends a job past its timeout and resets the ring), so a command buffer
 //! joins the group only while the group's expected GPU runs, summed, stay within [`GROUP_RUN`];
 //! one whose queue has no run yet, or whose run is past the bound, goes alone, the group held
-//! going first. The
+//! going first where the queue has room. The
 //! bound is tested again as the group goes, with the expected run as it then stands (a completion
 //! between a join and the send may have raised it): a group past it goes member by member, one
 //! `vkQueueSubmit2` each, only the last signalling. At most [`UNSEEN_JOINS`] command buffers join
@@ -80,8 +84,9 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 /// command buffers in half the time no bound did (probe 06860a3848, job m3-max-44105).
 pub(crate) const GROUP: usize = 16;
 
-/// The most expected GPU run, in nanoseconds, of the command buffers one group holds, summed: 16
-/// ms, the owner's line for an intolerable wait. Each command buffer's
+/// The most expected GPU run, in nanoseconds, of the command buffers one group holds, summed, and
+/// of a queue's submissions behind its oldest not seen complete ([`room`]): 16 ms, the owner's
+/// line for an intolerable wait. Each command buffer's
 /// expected run is its queue's (`QueueInner::expected_run`), from the GPU times of the queue's
 /// command buffers as they retire. Command buffers each within the driver's job timeout may pass
 /// it summed in one job.
@@ -121,7 +126,7 @@ pub(crate) fn apart(members: u64, run: Option<u64>) -> bool {
 }
 
 /// The submissions of a queue not yet seen complete at which its command buffers are held in a
-/// group. Three, not two: with two, the GPU idles between a group's end and the next
+/// group ([`room`]). Three, not two: with two, the GPU idles between a group's end and the next
 /// submission's start whenever the completion that sends the held group comes late. Behind three,
 /// the frame of five command buffers on the UHD 630 completed in 420-429 us against 895-1137 us,
 /// and the second of four long command buffers was seen complete 74.7 ms after its commit against
@@ -133,6 +138,18 @@ pub(crate) fn apart(members: u64, run: Option<u64>) -> bool {
 /// 1850-1860 us, more of its command buffers going alone, and the RTX 2080's long rows came to
 /// 78.1-78.2 ms against 42.8-43.2 ms (jobs m3-max-44442 and m3-max-44443).
 pub(crate) const IN_FLIGHT: usize = 3;
+
+/// Whether a queue whose submissions not seen complete have the expected runs `in_flight`, oldest
+/// first (`u64::MAX` for one not known), has room for a group whose expected run is `run`: with
+/// fewer than two of them always, so one waits on the GPU behind the one running and long command
+/// buffers run back to back; with fewer than [`IN_FLIGHT`] while the runs behind the oldest, the
+/// group's with them, stay within [`GROUP_RUN`]. So a queue keeps on the device's one `VkQueue`
+/// no more than about that bound behind what runs, and another queue's command buffer committed
+/// later waits behind no more of it.
+pub(crate) fn room(in_flight: &VecDeque<(u64, u64)>, run: u64) -> bool {
+    let behind = (in_flight.iter().skip(1)).fold(run, |sum, &(_, run)| sum.saturating_add(run));
+    in_flight.len() < 2 || (in_flight.len() < IN_FLIGHT && behind <= GROUP_RUN)
+}
 
 /// The calls the uploads not yet submitted record at most: a call past them waits for them to
 /// complete.
@@ -229,6 +246,8 @@ pub(crate) struct WorkState {
     /// The staging calls asleep for a span of the region another call holds ([`Work::stage`]): a
     /// release signals [`Work::spans`] only while there are any, so with none it makes no call.
     span_sleepers: u32,
+    /// The command buffers scheduled while held for room so far ([`WorkState::hold`]).
+    holds: u64,
 }
 
 struct Fifo {
@@ -236,8 +255,9 @@ struct Fifo {
     entries: VecDeque<Entry>,
     /// The group staged and not yet submitted.
     group: Option<Batch>,
-    /// The progress values of the queue's submissions not yet seen complete, in order.
-    in_flight: VecDeque<u64>,
+    /// The progress values of the queue's submissions not yet seen complete, in order, each with
+    /// its expected run ([`room`]).
+    in_flight: VecDeque<(u64, u64)>,
     /// A host wait is to come for the command buffer at this place: a group from it or before
     /// goes at once.
     send_through: u64,
@@ -259,6 +279,9 @@ struct Entry {
     /// Ended before it was submitted: it retires with this error behind its queue's earlier
     /// work.
     error: Option<CommandBufferError>,
+    /// Scheduled while its queue held it, not staged, for room ([`WorkState::hold`]), numbered in
+    /// the order of those holds: its staging schedules it no more.
+    held: Option<u64>,
 }
 
 /// Commands recorded into one command buffer apart from any command buffer of the guest's (zero
@@ -435,8 +458,8 @@ struct Batch {
     unseen: usize,
     /// It goes member by member ([`GROUP_RUN`], tested again as it goes).
     apart: bool,
-    /// It was held as a pass ended, its queue having [`IN_FLIGHT`] submissions not seen complete;
-    /// once closed, that it goes because a completion left fewer (`Metrics::held_starts`).
+    /// It was held as a pass ended, its queue without room ([`room`]); once closed, that it goes
+    /// because a completion left room (`Metrics::held_starts`).
     held: bool,
     /// Events it signals that the completion thread is not yet watching.
     watch: Vec<Arc<EventInner>>,
@@ -538,6 +561,7 @@ impl Work {
                 closed: false,
                 loss: None,
                 span_sleepers: 0,
+                holds: 0,
             }),
             changed: Condvar::new(),
             spans: Condvar::new(),
@@ -1145,31 +1169,30 @@ impl Work {
         }
     }
 
-    /// Ends `queue`'s command buffers not yet in a submission or a group with `NotRun`. A group
-    /// it holds still goes: its command buffers are scheduled.
-    pub(crate) fn abandon(&self, core: &Core, queue: &QueueInner) {
-        let (ended, held) = {
-            let mut guard = self.lock();
-            let state = &mut *guard;
-            let (ended, held) = match state.fifos.iter_mut().find(|fifo| fifo.queue.is(queue)) {
-                Some(fifo) => {
-                    let entries: Vec<Entry> = fifo.entries.drain(..).collect();
-                    let mut ended = Vec::new();
-                    for entry in entries {
-                        fifo.end(entry, CommandBufferError::NotRun, &mut ended);
-                    }
-                    (ended, fifo.group.is_some())
-                }
-                None => (Vec::new(), false),
-            };
-            // The ended ones joined the group held, which goes at once.
-            state.dirty |= held;
-            (ended, held)
+    /// Ends `queue`'s command buffers not yet scheduled with `NotRun`: one not committed at its
+    /// commit, the rest in the queue's order as the submit thread reaches each
+    /// (`WorkState::step`), behind those scheduled, in a group held or held for room, which go at
+    /// once.
+    pub(crate) fn abandon(&self, queue: &QueueInner) {
+        let mut state = self.lock();
+        let Some(fifo) = state.fifos.iter_mut().find(|fifo| fifo.queue.is(queue)) else {
+            return;
         };
-        if held {
-            self.wake();
-        }
-        core.done.end_all(core, ended);
+        fifo.entries
+            .retain_mut(|entry| match (&entry.pending, entry.held) {
+                (None, _) => {
+                    entry.cb.end_uncommitted(CommandBufferError::NotRun);
+                    false
+                }
+                (Some(_), None) => {
+                    entry.error.get_or_insert(CommandBufferError::NotRun);
+                    true
+                }
+                (Some(_), Some(_)) => true,
+            });
+        state.dirty = true;
+        drop(state);
+        self.wake();
     }
 
     /// Closes the device to commits and uploads, and tells the submit thread to end.
@@ -1401,6 +1424,7 @@ impl WorkState {
             place,
             pending: None,
             error: None,
+            held: None,
         });
         entries.back_mut().expect("an entry just pushed")
     }
@@ -1451,46 +1475,120 @@ impl WorkState {
         }
     }
 
-    /// The FIFO whose head goes next: of the committed heads that are ended or whose next segment
-    /// is ready, the earliest committed.
-    fn next_ready(&self) -> Option<usize> {
-        let mut best: Option<(usize, u64)> = None;
+    /// The FIFO whose command buffer goes next, and whether its head waits for room
+    /// ([`waits_for_room`](Self::waits_for_room)). First a head scheduled while held for room that
+    /// no longer waits, the earliest held: it was scheduled before anything that comes next.
+    /// Else, of the committed heads that are ended or whose next segment is ready, and of the
+    /// first command buffers not yet scheduled behind heads that wait, ended or with every
+    /// segment's waits met, the earliest committed.
+    fn next_ready(&self, busy: bool) -> Option<(usize, bool)> {
+        let mut held: Option<(u64, usize)> = None;
+        let mut best: Option<(usize, bool, u64)> = None;
         for (index, fifo) in self.fifos.iter().enumerate() {
+            let waits = self.waits_for_room(fifo, busy);
+            if let (false, Some(at)) = (waits, fifo.entries.front().and_then(|head| head.held)) {
+                held = held.filter(|&(first, _)| first < at).or(Some((at, index)));
+                continue;
+            }
+            let entry = match waits {
+                true => fifo.entries.iter().find(|entry| entry.held.is_none()),
+                false => fifo.entries.front(),
+            };
             let Some(Entry {
                 pending: Some(pending),
                 error,
                 ..
-            }) = fifo.entries.front()
+            }) = entry
             else {
                 continue;
             };
-            if best.is_some_and(|(_, seq)| seq < pending.seq) {
+            if best.is_some_and(|(.., seq)| seq < pending.seq) {
                 continue;
             }
-            if error.is_some() || ready(&pending.gpu.segments[pending.next]) {
-                best = Some((index, pending.seq));
+            let from = if waits { 0 } else { pending.next };
+            let to = if waits {
+                pending.gpu.segments.len()
+            } else {
+                from + 1
+            };
+            if error.is_some() || pending.gpu.segments[from..to].iter().all(ready) {
+                best = Some((index, waits, pending.seq));
             }
         }
-        best.map(|(index, _)| index)
+        (held.map(|(_, index)| (index, false))).or(best.map(|(index, waits, _)| (index, waits)))
     }
 
-    /// The FIFO, other than the one at `index`, whose held group holds a command buffer, finished
-    /// or its queue's head, that updates a fence the head at `index` waits on.
-    fn updater_held(&self, index: usize) -> Option<usize> {
-        let waiter = &self.fifos[index].head()?.gpu.fences;
+    /// Whether the head of `fifo` waits in its list, not staged, for room: committed, with
+    /// commands or a copy-in for the GPU, its first segment not yet staged, behind a group held
+    /// that neither takes it ([`Batch::takes`]), nor conflicts with it, nor goes
+    /// ([`Fifo::goes`]). The command buffers behind it wait with it.
+    fn waits_for_room(&self, fifo: &Fifo, busy: bool) -> bool {
+        let (Some(head), Some(group)) = (fifo.entries.front(), &fifo.group) else {
+            return false;
+        };
+        let (Some(pending), None) = (&head.pending, head.error) else {
+            return false;
+        };
+        let empty = pending.gpu.is_empty() && !self.changes.captured.waits_for(pending.seq);
+        pending.next == 0
+            && !empty
+            && !group.leans.conflicts(&pending.gpu.segments[0].overs)
+            && !group.takes(fifo.queue.expected_run(), fifo.queue.retired())
+            && !fifo.goes(self.stop, busy)
+    }
+
+    /// The first command buffer not yet scheduled of the FIFO at `index`, whose head waits for
+    /// room, every wait of its met: scheduled now, as it would be in a group held, its scheduled
+    /// handlers going to `joined`, and counted. One that presents a drawable (scheduled once
+    /// submitted), has nothing for the GPU, or ended has the queue sent through to it instead,
+    /// as its group would go at once.
+    fn hold(&mut self, index: usize, now: u64, counters: &Counters, joined: &mut Vec<Joined>) {
+        let captured = &self.changes.captured;
+        let fifo = &mut self.fifos[index];
+        let Some(entry) = fifo.entries.iter_mut().find(|entry| entry.held.is_none()) else {
+            return;
+        };
+        let Some(pending) = entry.pending.as_mut() else {
+            return;
+        };
+        let empty = pending.gpu.is_empty() && !captured.waits_for(pending.seq);
+        if entry.error.is_some() || empty || pending.gpu.presents() {
+            fifo.send_through = fifo.send_through.max(entry.place);
+            return;
+        }
+        let scheduled = std::mem::take(&mut pending.handlers.scheduled);
+        entry.cb.scheduled(now, !scheduled.is_empty());
+        if !scheduled.is_empty() {
+            joined.push((Arc::clone(&entry.cb), scheduled));
+        }
+        self.holds += 1;
+        entry.held = Some(self.holds);
+        counters.held_for_room();
+    }
+
+    /// The FIFO, other than the one at `index`, holding a command buffer that updates a fence the
+    /// head at `index` waits on, and the place its queue goes through to: the last such command
+    /// buffer scheduled while held for room before that head was (`crate::fence`), or where none
+    /// is, its group held's first, where that group holds one, finished or its queue's head.
+    fn updater_held(&self, index: usize) -> Option<(usize, u64)> {
+        let head = self.fifos[index].entries.front()?;
+        let waiter = &head.pending.as_ref()?.gpu.fences;
         if !waiter.waits() {
             return None;
         }
-        (0..self.fifos.len()).find(|&other| {
-            let fifo = &self.fifos[other];
-            other != index
-                && fifo.group.as_ref().is_some_and(|group| {
-                    (group.finished.iter())
-                        .any(|(_, pending, _)| pending.gpu.fences.updates_for(waiter))
-                        || (group.partial
-                            && (fifo.head())
-                                .is_some_and(|pending| pending.gpu.fences.updates_for(waiter)))
-                })
+        let before = head.held.unwrap_or(u64::MAX);
+        let updates = |pending: &Pending| pending.gpu.fences.updates_for(waiter);
+        (self.fifos.iter().enumerate()).find_map(|(other, fifo)| {
+            let group = fifo.group.as_ref().filter(|_| other != index)?;
+            let held = (fifo.entries.iter())
+                .map_while(|entry| entry.held.filter(|&at| at < before).map(|_| entry))
+                .filter(|entry| entry.pending.as_ref().is_some_and(updates))
+                .last()
+                .map(|entry| entry.place);
+            let grouped = (group.finished.iter()).any(|(_, pending, _)| updates(pending))
+                || (group.partial && fifo.head().is_some_and(updates));
+            held.or(grouped.then_some(group.first))
+                .map(|place| (other, place))
         })
     }
 
@@ -1500,7 +1598,7 @@ impl WorkState {
             self.carried.pop_front();
         }
         self.fifos.retain_mut(|fifo| {
-            while (fifo.in_flight.front()).is_some_and(|&value| value <= completed) {
+            while (fifo.in_flight.front()).is_some_and(|&(value, _)| value <= completed) {
                 fifo.in_flight.pop_front();
             }
             !(fifo.entries.is_empty() && fifo.group.is_none() && fifo.in_flight.is_empty())
@@ -1513,7 +1611,8 @@ impl WorkState {
     /// presents a drawable, which `submit` schedules once its submission has passed
     /// `vkQueueSubmit2`; one ended with nothing held goes to `ended`. With `busy` (the completion
     /// thread runs a round of retirements and handlers, `Done::busy`) a group goes as each
-    /// command buffer joins it, as no completion would send it until the round ends.
+    /// command buffer joins it, as no completion would send it until the round ends. Behind a
+    /// head that waits for room, the next command buffer is scheduled instead ([`hold`](Self::hold)).
     fn step(
         &mut self,
         now: u64,
@@ -1522,9 +1621,13 @@ impl WorkState {
         joined: &mut Vec<Joined>,
         ended: &mut Vec<Ended>,
     ) -> Step {
-        let Some(index) = self.next_ready() else {
+        let Some((index, waits)) = self.next_ready(busy) else {
             return Step::Idle;
         };
+        if waits {
+            self.hold(index, now, counters, joined);
+            return Step::Staged;
+        }
         let stop = self.stop;
         let fifo = &mut self.fifos[index];
         let Some(entry) = fifo.entries.front_mut() else {
@@ -1537,13 +1640,12 @@ impl WorkState {
             return Step::Staged;
         }
         // A command buffer that waits on a fence goes after each command buffer of another queue
-        // held in a group that updates it, which Metal would have submitted at its commit
-        // (`crate::fence`): that group goes first, as a host wait for it would send it.
-        if let Some(other) = self.updater_held(index) {
+        // held in a group or for room that updates it, which Metal would have submitted at its
+        // commit (`crate::fence`): that queue goes through to it first, as a host wait for it
+        // would send it.
+        if let Some((other, place)) = self.updater_held(index) {
             let fifo = &mut self.fifos[other];
-            if let Some(group) = &fifo.group {
-                fifo.send_through = fifo.send_through.max(group.first);
-            }
+            fifo.send_through = fifo.send_through.max(place);
             return Step::Goes(other);
         }
         let fifo = &mut self.fifos[index];
@@ -1580,17 +1682,12 @@ impl WorkState {
         }
         // A command buffer joins the group held only while the group's expected GPU runs, summed,
         // stay within the bound: the group goes first where its own run is not known or would take
-        // the sum past it.
+        // the sum past it. Without room, the command buffer waits instead (`next_ready`).
         let run = fifo.queue.expected_run();
         let retired = fifo.queue.retired();
         let leads = pending.next == 0;
         if let (true, Some(group)) = (leads, &fifo.group) {
-            let unseen = if group.seen == retired {
-                group.unseen
-            } else {
-                0
-            };
-            if !joins(group.run, unseen, run) {
+            if !group.takes(run, retired) {
                 return Step::Goes(index);
             }
         }
@@ -1675,12 +1772,13 @@ impl WorkState {
         let Some(Entry {
             cb,
             pending: Some(mut pending),
+            held,
             ..
         }) = fifo.entries.pop_front()
         else {
             return Step::Staged;
         };
-        if !pending.gpu.presents() {
+        if held.is_none() && !pending.gpu.presents() {
             let scheduled = std::mem::take(&mut pending.handlers.scheduled);
             cb.scheduled(now, !scheduled.is_empty());
             if !scheduled.is_empty() {
@@ -1690,13 +1788,7 @@ impl WorkState {
         group.finished.push((cb, pending, None));
         group.partial = false;
         group.count += 1;
-        let goes = signals
-            || stop
-            || busy
-            || group.count >= GROUP
-            || fifo.in_flight.len() < IN_FLIGHT
-            || fifo.send_through >= group.first;
-        match goes {
+        match signals || fifo.goes(stop, busy) {
             true => Step::Goes(index),
             false => Step::Staged,
         }
@@ -1716,9 +1808,9 @@ impl WorkState {
         // The bound again, with the expected run as it now stands: a completion since a join may
         // have raised it.
         batch.apart = apart(batch.starts.len() as u64, fifo.queue.expected_run());
-        // A group held that goes with fewer than `IN_FLIGHT` in flight goes as a completion left
-        // it, whatever else would have sent it now.
-        batch.held &= fifo.in_flight.len() < IN_FLIGHT;
+        // A group held that goes with room goes as a completion left it, whatever else would have
+        // sent it now.
+        batch.held &= room(&fifo.in_flight, batch.run);
         if batch.held {
             core.counters.held_start();
         }
@@ -1727,7 +1819,7 @@ impl WorkState {
         batch.take(self.changes.captured.take(&batch.leads));
         self.progress += 1;
         let value = self.progress;
-        fifo.in_flight.push_back(value);
+        fifo.in_flight.push_back((value, batch.run));
         if batch.partial {
             if let Some(Entry {
                 pending: Some(pending),
@@ -1750,18 +1842,19 @@ impl WorkState {
         Some((value, uploads, batch))
     }
 
-    /// The first FIFO whose group goes at the end of a pass: unless its queue has [`IN_FLIGHT`]
-    /// submissions not seen complete, no host wait is to come for it, and the completion thread
-    /// waits for the GPU (not `busy` with a round of retirements and handlers).
+    /// The first FIFO whose group goes at the end of a pass ([`Fifo::goes`]).
     fn unheld(&self, busy: bool) -> Option<usize> {
-        self.fifos.iter().position(|fifo| {
-            fifo.group.as_ref().is_some_and(|group| {
-                self.stop
-                    || busy
-                    || fifo.in_flight.len() < IN_FLIGHT
-                    || fifo.send_through >= group.first
-            })
-        })
+        (self.fifos.iter()).position(|fifo| fifo.goes(self.stop, busy))
+    }
+}
+
+impl Batch {
+    /// Whether a command buffer of its queue that leads joins it, the queue's expected run being
+    /// `run` and `retired` of its command buffers retired: while it holds fewer than [`GROUP`],
+    /// as [`joins`] answers.
+    fn takes(&self, run: Option<u64>, retired: u64) -> bool {
+        let unseen = if self.seen == retired { self.unseen } else { 0 };
+        self.count < GROUP && joins(self.run, unseen, run)
     }
 }
 
@@ -1769,6 +1862,15 @@ impl Fifo {
     /// Its head's pending part, where its head is committed.
     fn head(&self) -> Option<&Pending> {
         (self.entries.front()).and_then(|entry| entry.pending.as_ref())
+    }
+
+    /// Whether it holds a group that goes now: at teardown (`stop`), while the completion thread
+    /// runs a round of retirements and handlers (`busy`), where a host wait is to come for one of
+    /// its command buffers or one behind it, or with room ([`room`]).
+    fn goes(&self, stop: bool, busy: bool) -> bool {
+        self.group.as_ref().is_some_and(|group| {
+            stop || busy || self.send_through >= group.first || room(&self.in_flight, group.run)
+        })
     }
 
     /// Ends `entry` with `error` (its own, where it has one): behind the group held, which it
@@ -1814,7 +1916,7 @@ impl Fifo {
                 // Behind its queue's work, and, where it waits on a fence, behind the last
                 // submission that updates it, as Metal's fence wait holds a command buffer with no
                 // work too (`crate::fence`).
-                let in_flight = self.in_flight.back().copied().unwrap_or(0);
+                let in_flight = self.in_flight.back().map_or(0, |&(value, _)| value);
                 let waited = pending.gpu.fences.waited_through();
                 pending.value = pending.value.max(in_flight).max(self.behind).max(waited);
                 self.behind = pending.value;

@@ -12,7 +12,9 @@
 mod on_device {
     use crate::submit::IN_FLIGHT;
     use crate::tests::blit::on_device::settled;
-    use crate::tests::command::on_device::{behind_busy, each_device, finished, within, word};
+    use crate::tests::command::on_device::{
+        behind_busy, each_device, finished, two_queues, within, word,
+    };
     use crate::tests::draw::on_device::{pass, target};
     use crate::{
         Buffer, BufferLayout, CommandBuffer, CommandBufferStatus, CommandQueue, Device,
@@ -310,6 +312,30 @@ mod on_device {
                 (updater, waiter)
             });
             assert_eq!(word(&copy), 0x5a5a_5a5a, "{name}: the copy reads the fill");
+        });
+    }
+
+    /// An update on queue A in a command buffer held for room, not yet in a group, scheduled,
+    /// which Metal would have submitted at its commit: a wait on queue B committed after it, B
+    /// having nothing in flight, has A go through to the update first, so the wait runs after it
+    /// (`two_queues`: A4 updates, B1 waits). Without that, B1 runs after A2.
+    #[test]
+    fn every_device_orders_a_wait_on_another_queue_after_an_update_held_for_room() {
+        each_device("fence_room", |name, _, device| {
+            let fence = device.new_fence();
+            let encode = |number: u32, command_buffer: &CommandBuffer, after: bool| {
+                if let (4, true) | (6, false) = (number, after) {
+                    let mut blit = command_buffer.blit_command_encoder().expect("an encoder");
+                    match after {
+                        true => blit.update_fence(&fence),
+                        false => blit.wait_for_fence(&fence),
+                    }
+                    .expect("a fence's update or wait");
+                    blit.end_encoding();
+                }
+            };
+            let log = two_queues(name, &device, encode, |_, _| {});
+            assert_eq!(log, [0, 1, 2, 3, 6, 4], "{name}: the one run before each");
         });
     }
 

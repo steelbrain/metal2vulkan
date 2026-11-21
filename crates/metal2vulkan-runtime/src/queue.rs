@@ -127,20 +127,20 @@ impl CommandQueue {
     /// event wait or has not yet scheduled with
     /// [`CommandBufferError::NotRun`](crate::CommandBufferError::NotRun), and runs their handlers,
     /// as a Mac drops a dead process's held command buffers. One enqueued and not yet committed
-    /// ends so at its commit. Segments already submitted still complete, and so does a group of
-    /// scheduled command buffers the queue holds while three of its submissions run. Each ended
-    /// command buffer retires in the queue's order, behind its work held or in flight. The queue
-    /// stays usable.
+    /// ends so at its commit. Segments already submitted still complete, and so do the scheduled
+    /// command buffers the queue holds while it has no room for them on the device's `VkQueue`,
+    /// which go at once. Each ended command buffer retires in the queue's order, behind its work
+    /// held or in flight. The queue stays usable.
     pub fn abandon(&self) {
-        let core = self.device.core();
-        core.work.abandon(core, &self.inner);
+        self.device.core().work.abandon(&self.inner);
     }
 
     /// No Metal counterpart: the wait hint. Where `command_buffer`, of this queue, is committed and
-    /// not yet submitted, its group goes now, as a host wait for it sends it
-    /// ([`CommandBuffer::wait_until_completed`]): held in a group while three of the queue's
-    /// submissions run, or committed behind such a group, or at an event wait (then its group goes
-    /// as it is staged). For a consumer that learns of a wait the runtime does not see.
+    /// not yet submitted, it goes now, with the queue's command buffers before it, as a host wait
+    /// for it sends it ([`CommandBuffer::wait_until_completed`]): held, scheduled, while the queue
+    /// has no room for them on the device's `VkQueue` (the README's "Queues, command buffers and
+    /// events"), or at an event wait (then its group goes as it is staged). For a consumer that
+    /// learns of a wait the runtime does not see.
     ///
     /// Callable from any thread: it takes the submit side's lock briefly and waits for no GPU
     /// work. A no-op for a command buffer already submitted, completed or ended, not yet

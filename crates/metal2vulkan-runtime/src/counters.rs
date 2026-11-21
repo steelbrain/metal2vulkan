@@ -576,6 +576,7 @@ struct Atomics {
     event_holds: [AtomicU64; STAGE_BUCKETS],
     held_starts: AtomicU64,
     held_start_gap_nanos: AtomicU64,
+    held_for_room: AtomicU64,
     passes: AtomicU64,
     barriers: AtomicU64,
     bytes_copied: AtomicU64,
@@ -996,10 +997,16 @@ impl Counters {
         self.atomics.event_holds[stage_bucket(nanos)].fetch_add(1, Relaxed);
     }
 
-    /// A group held behind its queue's submissions in flight goes, a completion having left fewer
-    /// of them ([`Metrics::held_starts`]).
+    /// A group held behind its queue's submissions in flight goes, a completion having left room
+    /// ([`Metrics::held_starts`]).
     pub(crate) fn held_start(&self) {
         self.atomics.held_starts.fetch_add(1, Relaxed);
+    }
+
+    /// A command buffer is scheduled while its queue holds it, not staged, for room
+    /// ([`Metrics::held_for_room`]).
+    pub(crate) fn held_for_room(&self) {
+        self.atomics.held_for_room.fetch_add(1, Relaxed);
     }
 
     /// Such a group's first timed command buffer started `nanos` nanoseconds after the latest end
@@ -1522,6 +1529,7 @@ impl Counters {
             event_holds: (a.event_holds.each_ref()).map(|n| n.load(Relaxed)),
             held_starts: a.held_starts.load(Relaxed),
             held_start_gap_nanos: a.held_start_gap_nanos.load(Relaxed),
+            held_for_room: a.held_for_room.load(Relaxed),
             passes: a.passes.load(Relaxed),
             barriers: a.barriers.load(Relaxed),
             bytes_copied: a.bytes_copied.load(Relaxed),
@@ -1871,12 +1879,12 @@ pub struct Metrics {
     /// [`commit_to_scheduled`](Self::commit_to_scheduled). Counted as each is staged; one that
     /// ends unstaged counts none.
     pub event_holds: [u64; STAGE_BUCKETS],
-    /// Submissions of a group that a queue held, its three submissions before it not yet seen
-    /// complete as the submit thread finished a pass, and that went once a completion left fewer
-    /// than three of them running: counted as each goes, before its `vkQueueSubmit2` calls. A
-    /// group that goes while three are running (at its sixteenth command buffer, an event's
-    /// signal, a host wait or [`CommandQueue::send_now`](crate::CommandQueue::send_now)) counts
-    /// none, and so does a command buffer sent at once.
+    /// Submissions of a group that a queue held, without room for it on the device's `VkQueue` as
+    /// the submit thread finished a pass (the README's "Queues, command buffers and events"), and
+    /// that went once a completion left room: counted as each goes, before its `vkQueueSubmit2`
+    /// calls. A group that goes without room (at an event's signal, a host wait or
+    /// [`CommandQueue::send_now`](crate::CommandQueue::send_now)) counts none, and so does a
+    /// command buffer sent at once.
     pub held_starts: u64,
     /// The GPU's nanoseconds, in total, from the latest end of the command buffers submitted
     /// before each of those submissions to the start of its own first, where the start is the
@@ -1887,6 +1895,11 @@ pub struct Metrics {
     /// its handlers run; a submission with no such command buffer, or with none before it,
     /// counts none.
     pub held_start_gap_nanos: u64,
+    /// Command buffers scheduled while their queue held them, not yet in a group, for room on the
+    /// device's `VkQueue`: behind a group held that they could not join, so a command buffer of
+    /// another queue committed after them could go first. Counted as each is scheduled, its
+    /// scheduled handlers run as in a group. No Metal counterpart: Metal keeps no such room.
+    pub held_for_room: u64,
     /// Encoders recorded: compute, blit and render.
     pub passes: u64,
     /// Pipeline-barrier commands recorded into command buffers' work: one at the end of each

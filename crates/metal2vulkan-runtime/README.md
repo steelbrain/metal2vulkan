@@ -192,10 +192,11 @@ end to handlers split at the completion thread's six steps, for all and for thos
 more (`gpu_end_to_handler_steps_nanos`, `gpu_end_to_handler_tail` and its steps); the clock
 calibrations and their calls' time (`calibrations`, `calibration_nanos`); the segments the submit thread held for an event's value that neither
 the host had set nor a submitted signal promised, by the length of each hold (`event_holds`, in
-the same buckets); the groups a queue held behind three submissions in flight that went once a
-completion left fewer running (`held_starts`), and the GPU's time behind them, from the latest
+the same buckets); the groups a queue held without room that went once a completion left room
+(`held_starts`), and the GPU's time behind them, from the latest
 end of the command buffers submitted before each to the start of its first, on their timestamps
-(`held_start_gap_nanos`); the command buffers of the runtime's own it submitted, the uploads and
+(`held_start_gap_nanos`); the command buffers scheduled while their queue held them for room,
+not yet in a group (`held_for_room`); the command buffers of the runtime's own it submitted, the uploads and
 the Managed buffers' copy-ins (`runtime_command_buffers`), and the GPU's time they ran, on
 timestamps of their own (`runtime_command_buffer_gpu_nanos`);
 the copies of textures over a buffer that no linear image holds are split by cause
@@ -1692,17 +1693,26 @@ made, with no lock, and never rewritten for layouts.
   each upload that holds a released object. `Metrics::held_releases` and `held_release_bytes`
   count every release they held, and `held_release_starts` those that were the first since they
   came to hold the object, each a submission it started. While
-  fewer than three of a queue's submissions are not yet seen complete, each of its command buffers
-  goes at once, alone. While three are, the ones committed meanwhile are held in one group, each
-  scheduled as it joins, and the group goes when it holds sixteen, when a completion leaves fewer
-  than three in flight (the completion thread wakes the submit thread as it retires; no commit or
+  a queue has room on the device's `VkQueue`, each of its command buffers goes at once, alone. It
+  has room while fewer than two of its submissions are not yet seen complete, and while fewer than
+  three are whose expected GPU runs (below) behind the oldest, with the next's, sum to 16 ms or
+  less; a run not yet known passes that. So a queue keeps on the `VkQueue` no more than about 16
+  ms of work behind what runs, and one behind it always, and a command buffer of another queue
+  committed later waits behind no more of it. Without room, the ones committed meanwhile are held
+  in one group of at most sixteen, each scheduled as it joins; one the group does not take is held
+  too, not yet in a group, scheduled as it would be in one (its waits met, in its queue's order,
+  its scheduled handlers run: `Metrics::held_for_room`), and so are its queue's later command
+  buffers. The held work goes when a completion leaves room (the completion thread wakes the
+  submit thread as it retires; no commit or
   wait is needed), while the completion thread runs a round of retirements, completed handlers and
   listeners (it sees no completion until the round ends: a group is held only while the completion
   thread waits on the GPU, so a slow completed handler holds no later submission), when the host
   is to wait for one of them (`wait_until_completed`, or
   `CommandQueue::send_now`, the hint for a wait the runtime does not see), or at teardown. Waiting
   for a place in the queue sends nothing. A segment that signals an event ends its group, which goes
-  at once, and so does a presenting command buffer's last (see "Presenting"). The
+  at once as it is staged, and so does a presenting command buffer's last (see "Presenting"); one
+  held for room is staged once there is room, so a signal of its waits with it, while a presenting
+  one has its queue go at once, through to it. The
   driver runs a submission's command buffers as one kernel job, which a job timeout ends as a whole
   (Linux's amdgpu ends a job past its timeout and resets the ring), so a group is bounded by its
   expected GPU run: a queue's expected run follows its command buffers'
@@ -1719,9 +1729,9 @@ made, with no lock, and never rewritten for layouts.
   command buffers behind it, while the segments before it run, so the host can see a signal the
   command buffer makes before its wait. Other queues go on. Each queue groups on its own count:
   a command buffer of a queue with nothing running is submitted at once, ahead of every command
-  buffer committed after it on any queue, while one its queue holds in a group may be passed by
-  another queue's command buffer committed after it, which only a fence or an event then orders
-  after it. Metal's hazard tracking orders such a pair against work already submitted, and no
+  buffer committed after it on any queue, while one its queue holds, in a group or for room, may
+  be passed by another queue's command buffer committed after it, which only a fence or an event
+  then orders after it. Metal's hazard tracking orders such a pair against work already submitted, and no
   more. Recorded on an M3 Max with macOS 27.0.1, with tracked buffers and no fence, a blit fill on
   one queue and a copy of what it filled on another, committed after it, five runs each: where the
   fill's queue had nothing ahead of it, the copy read the fill, starting 0.004 to 0.065 ms after
@@ -1729,7 +1739,7 @@ made, with no lock, and never rewritten for layouts.
   was committed behind one command buffer of long work on its queue (job m3-max-52432) or three
   (job m3-max-52415), the copy read none of it, and behind one it reached the GPU about 1 ms
   before any of that queue's work. `Scheduled` means the last segment is in
-  a submission: passed to `vkQueueSubmit2`, or in a group held; a command buffer that presents a
+  a submission: passed to `vkQueueSubmit2`, or held, in a group or for room; a command buffer that presents a
   drawable is never held, and is scheduled once its submission has passed `vkQueueSubmit2` (see
   "Presenting"). One that waits for an event's value whose signal is submitted, of an `Event` or
   a `SharedEvent`, is scheduled so too, while its commands wait on the GPU for the signaller's:
@@ -1783,9 +1793,9 @@ made, with no lock, and never rewritten for layouts.
   `CommandQueue::command_buffer` on a queue whose maximum count are made and not yet completed,
   which a scheduled handler answers the same way. No wait of the runtime's hangs by construction.
   A command buffer of a group is seen complete with the group's last: up to the GPU time of the
-  fifteen after it late. Only a queue already three submissions behind holds a group; one whose
-  submissions have completed sends its next command buffer alone. Without a wait or a hint, the lateness is bounded only while three submissions are
-  in flight, and the completion that leaves fewer sends the group (the measured lateness is under
+  fifteen after it late. Only a queue without room holds a group; one whose
+  submissions have completed sends its next command buffer alone. Without a wait or a hint, the lateness is bounded only while the queue has no room,
+  and the completion that leaves room sends the group (the measured lateness is under
   "Known gaps"). A command buffer ended while its queue holds a group joins it, and retires in its
   place; the group goes at once.
 - A command buffer's times, its GPU times included, are nanoseconds of one host clock,

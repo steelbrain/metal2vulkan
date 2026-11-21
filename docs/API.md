@@ -2960,8 +2960,8 @@ named states the rule in full.
 **Command queues**
 
 - **A write whose queue holds nothing back is seen by another queue's command buffer committed
-  after it** (`metal2vulkan-runtime`). A writer whose queue has fewer than three submissions in flight
-  is submitted at once, ahead of every command buffer committed after it on any queue, so a later
+  after it** (`metal2vulkan-runtime`). A writer whose queue has room on the device's `VkQueue`
+  (fewer than two submissions in flight always, the runtime's README) is submitted at once, ahead of every command buffer committed after it on any queue, so a later
   reader on another queue reads the write, on every device and every run: all 1024 words in the
   conformance case `fence-none-tracked-behind-one`, whose writer's queue has one busy command
   buffer in flight. That is the order Apple describes for a tracked resource: the framework

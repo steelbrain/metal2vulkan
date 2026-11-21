@@ -75,8 +75,7 @@ struct Retiree {
 }
 
 /// A submission passed to `vkQueueSubmit2`: its progress value, and whether it is a group its
-/// queue held behind its submissions in flight that goes because a completion left fewer
-/// (`Metrics::held_starts`).
+/// queue held without room that goes because a completion left room (`Metrics::held_starts`).
 pub(crate) struct Sent {
     pub(crate) value: u64,
     pub(crate) held: bool,

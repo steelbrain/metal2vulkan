@@ -1825,6 +1825,129 @@ pub(crate) mod on_device {
         });
     }
 
+    /// The expected run of queue A of [`two_queues`]: past `GROUP_RUN` with one more behind its
+    /// oldest submission, so it has room for two.
+    const LONG_RUN: u64 = 20_000_000;
+
+    /// Two queues behind the busy gate ([`Busy::new`]), so nothing they submit completes until
+    /// it opens: A, its expected run [`LONG_RUN`], commits five command buffers, then B, its run
+    /// [`BODY_RUN`], one. Each copies the cursor's word to its own word of the log, then fills
+    /// the cursor with its number, 1 to 5 for A's and 6 for B's, so the log names the command
+    /// buffer that ran just before each (0 for none). `encode(number, command_buffer, after)`
+    /// encodes before (`after` false) and after that copy and fill. A's held work is checked
+    /// before `body` runs and B commits: A1 and A2 submitted, A3 in a group held, A4 and A5 held
+    /// for room, not yet in a group, each scheduled with its scheduled handler run
+    /// (`Metrics::held_for_room`). B's is staged, or held for an event's value, before the gate
+    /// opens. Returns the log of A1 to B1 once each completed.
+    pub(crate) fn two_queues(
+        name: &str,
+        device: &Device,
+        encode: impl Fn(u32, &CommandBuffer, bool),
+        body: impl FnOnce(&CommandQueue, &[CommandBuffer]),
+    ) -> Vec<u32> {
+        let mut arena = Arena::new(device);
+        let (log, cursor) = (arena.buffer(), arena.buffer());
+        let (a, b) = (queue(device), queue(device));
+        for (queue, run) in [(&a, LONG_RUN), (&b, BODY_RUN)] {
+            let first = queue.command_buffer().expect("a command buffer");
+            (first.record_for_test(&[], |_, _| {})).expect("a command buffer's commands");
+            first.commit().expect("a commit");
+            finished(name, &first);
+            first.queue().set_run_for_test(run);
+        }
+        within(name, || !device.core().done.busy());
+        let busy = Busy::new(device);
+        let scheduled = Arc::new(AtomicUsize::new(0));
+        let logged = |queue: &CommandQueue, number: u32| {
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            encode(number, &command_buffer, false);
+            let mut blit = command_buffer.blit_command_encoder().expect("an encoder");
+            let at = u64::from(number) * 4;
+            (blit.copy_from_buffer_to_buffer(&cursor, 0, &log, at, 4)).expect("a copy");
+            (blit.fill_buffer(&cursor, 0..4, number as u8)).expect("a fill");
+            blit.end_encoding();
+            encode(number, &command_buffer, true);
+            let counted = Arc::clone(&scheduled);
+            (command_buffer.add_scheduled_handler(move |_| {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }))
+            .expect("a handler");
+            command_buffer.commit().expect("a commit");
+            command_buffer
+        };
+        let held = device.counters().metrics().held_for_room;
+        let a_work: Vec<CommandBuffer> = (1..=5).map(|number| logged(&a, number)).collect();
+        within(name, || scheduled.load(Ordering::SeqCst) == 5);
+        let statuses: Vec<_> = a_work.iter().map(CommandBuffer::status).collect();
+        assert_eq!(
+            (statuses, device.core().work.in_flight(a_work[0].queue())),
+            (vec![CommandBufferStatus::Scheduled; 5], (2, true)),
+            "{name}: A's held work, each scheduled"
+        );
+        let counted = device.counters().metrics().held_for_room - held;
+        assert_eq!(counted, 2, "{name}: A4 and A5 held for room");
+        body(&a, &a_work);
+        let b_work = logged(&b, 6);
+        within(name, || {
+            b_work.status() != CommandBufferStatus::Committed || device.core().work.holding() == 1
+        });
+        busy.open();
+        for command_buffer in a_work.iter().chain([&b_work]) {
+            finished(name, command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+        }
+        let contents = log.contents().expect("a Shared buffer");
+        // SAFETY: the buffer is alive and 256 bytes long, and no command writes it now.
+        let words = |at: usize| unsafe { contents.cast::<u32>().as_ptr().add(at).read_volatile() };
+        (1..=6).map(|at| words(at) & 0xff).collect()
+    }
+
+    /// One queue's command buffer committed after another queue's backlog runs ahead of all but
+    /// two of it: behind A1 and A2, the two A keeps on the `VkQueue`, B1 runs, then A3 to A5.
+    #[test]
+    fn every_device_runs_a_queues_command_buffer_ahead_of_another_queues_backlog() {
+        each_device("command_two_queues", |name, _, device| {
+            let log = two_queues(name, &device, |_, _, _| {}, |_, _| {});
+            assert_eq!(log, [0, 1, 6, 3, 4, 2], "{name}: the one run before each");
+        });
+    }
+
+    /// A host wait for A4 (here its hint, `send_now`) sends A through to it, A5 staying held: B1
+    /// then runs after A4.
+    #[test]
+    fn every_device_sends_a_queue_through_to_a_host_waits_command_buffer() {
+        each_device("command_two_queues_sent", |name, _, device| {
+            let body = |a: &CommandQueue, a_work: &[CommandBuffer]| {
+                a.send_now(&a_work[3]);
+                let work = &device.core().work;
+                within(name, || work.in_flight(a_work[0].queue()) == (4, true));
+            };
+            let log = two_queues(name, &device, |_, _, _| {}, body);
+            assert_eq!(log, [0, 1, 2, 3, 6, 4], "{name}: the one run before each");
+        });
+    }
+
+    /// The consumer's cross-queue order, a timeline: A5, held for room, signals a shared event's
+    /// value that B1 waits for. B1 is held for the value until A5's signal is submitted, so it
+    /// runs after A1 to A5, which complete in order: a queue's signal never completes before
+    /// that queue's earlier command buffers.
+    #[test]
+    fn every_device_runs_a_wait_for_a_held_queues_signal_after_all_of_that_queue() {
+        each_device("command_two_queues_event", |name, _, device| {
+            let event = shared_event(&device);
+            let encode = |number: u32, command_buffer: &CommandBuffer, after: bool| {
+                match (number, after) {
+                    (5, true) => command_buffer.encode_signal_event(event.as_event(), 1),
+                    (6, false) => command_buffer.encode_wait_for_event(event.as_event(), 1),
+                    _ => Ok(()),
+                }
+                .expect("an event's signal or wait")
+            };
+            let log = two_queues(name, &device, encode, |_, _| {});
+            assert_eq!(log, [0, 1, 2, 3, 4, 5], "{name}: the one run before each");
+        });
+    }
+
     /// A commit's wait for the submission lock is counted: one made while another thread holds
     /// the lock counts at least the time from the start of its count to the lock's release, here
     /// 20 ms or more. No clock of the test's bounds it from above.
@@ -2148,9 +2271,9 @@ pub(crate) mod on_device {
     /// A command buffer joins a held group only while the group's expected GPU runs, summed, stay
     /// within `GROUP_RUN`, each its queue's expected run: behind three running submissions, three
     /// fills on a queue whose command buffers ran 1 ms go as one group, and on a queue whose
-    /// command buffers ran past the bound as three submissions, the first two as they are
-    /// staged, the last held until the queue sends it (`send_now`), all before the busy work
-    /// ends. The expected run is set behind the busy work as a retiring command buffer's GPU
+    /// command buffers ran past the bound as three submissions, each held, scheduled, until the
+    /// queue sends them (`send_now`), all before the busy work ends: the queue has no room for
+    /// the two the group does not take (`submit::room`). The expected run is set behind the busy work as a retiring command buffer's GPU
     /// times set it (`QueueInner::ran`); the busy work retires only after the fills were sent,
     /// and the retirements move it.
     #[test]
@@ -2173,13 +2296,7 @@ pub(crate) mod on_device {
                         });
                     }
                     let sent = || device.counters().metrics().submissions - before;
-                    let early = if alone { 2 } else { 0 };
-                    within(name, || sent() >= AHEAD + early);
-                    assert_eq!(
-                        sent(),
-                        AHEAD + early,
-                        "{name}: {run} ns, sent behind the busy work"
-                    );
+                    assert_eq!(sent(), AHEAD, "{name}: {run} ns, held behind the busy work");
                     // The held group goes before the busy work ends, at the run set here: sent
                     // once a busy one retires, it would go at the run their own runs leave.
                     queue.send_now(held.last().expect("a fill"));
@@ -2249,8 +2366,9 @@ pub(crate) mod on_device {
 
     /// At most `UNSEEN_JOINS` command buffers join a group while none of their queue's retires:
     /// behind three running submissions, on a queue whose command buffers ran 1 ms, that many
-    /// fills and two more go as two groups before the busy work ends, the first as the next fill
-    /// finds it full, the second as the queue sends it (`send_now`). Sent only once the busy work
+    /// fills and two more go as two groups before the busy work ends, each held until the queue
+    /// sends them (`send_now`), the two the full group does not take scheduled while the queue
+    /// has no room for them (`submit::room`). Sent only once the busy work
     /// ends, the second could go member by member: the busy work's long runs, retiring, raise the
     /// expected run before or after it goes.
     #[test]
@@ -2273,8 +2391,7 @@ pub(crate) mod on_device {
                     });
                 }
                 let sent = || device.counters().metrics().submissions - before;
-                within(name, || sent() > AHEAD);
-                assert_eq!(sent(), AHEAD + 1, "{name}: sent behind the busy work");
+                assert_eq!(sent(), AHEAD, "{name}: held behind the busy work");
                 let last = held.last().expect("a fill");
                 queue.send_now(last);
                 within(name, || sent() > AHEAD + 1);
@@ -2292,13 +2409,17 @@ pub(crate) mod on_device {
 
     /// A queue keeps three submissions in flight: behind two running ones a commit goes at once,
     /// alone, and the commit after it is held, both seen before the first busy one ends on the
-    /// GPU.
+    /// GPU. The queue's expected run is 1 ms, known: one not yet known leaves no room for a
+    /// third (`submit::room`).
     #[test]
     fn every_device_keeps_three_submissions_in_flight_and_holds_the_fourth() {
         each_device("command_in_flight", |name, _, device| {
             let mut arena = Arena::new(&device);
             let buffer = arena.buffer();
             let queue = queue(&device);
+            let probe = queue.command_buffer().expect("a command buffer");
+            probe.queue().set_run_for_test(BODY_RUN);
+            drop(probe);
             let submissions = || device.counters().metrics().submissions;
             let before = submissions();
             let mut busy = Busy::new(&device);

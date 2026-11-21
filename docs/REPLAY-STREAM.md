@@ -1023,7 +1023,7 @@ handlers (`Metrics::gpu_end_to_handler_steps_nanos`), `gpu_end_to_handler_tail` 
 buffers whose span is 1,024 us or more and `gpu_end_to_handler_tail_seen_nanos` and the five
 like it their steps, `calibrations` and `calibration_nanos` the clock calibrations and their
 calls' time, `held_starts` and `held_start_gap_nanos` count the
-groups a queue held behind three submissions in flight and the GPU's time behind them, and
+groups a queue held without room for them and the GPU's time behind them, and
 `runtime_command_buffers` and `runtime_command_buffer_gpu_nanos` the runtime's own uploads and
 copy-ins and their GPU time, outside every Metal command buffer's GPU interval), its
 `pipeline makes N states: C new (MADE), SPLIT; H held, SPLIT; B beside a pre-pass call, whose work
