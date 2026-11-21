@@ -2835,18 +2835,12 @@ impl RenderCommandEncoder {
             counts = placed.address + u64::from(ExecutionCounts::COUNTS_AT);
             let command = building.ordered_command()?;
             let push = placed.address.to_le_bytes();
-            // SAFETY: the command buffer records outside any rendering; the pipeline and the
-            // layout are the device's, the kernel's push field lies in the layout's one push
-            // range, of `PUSH_STAGES`, and its block in the ring, which the command buffer keeps
-            // until it retires.
+            // SAFETY: the command buffer is the current segment's and records outside any
+            // rendering; the pipeline is the device's, of its layout, the kernel's push field
+            // lies in the layout's one push range, of `PUSH_STAGES`, and its block in the ring,
+            // which the command buffer keeps until it retires.
             unsafe {
-                if building.bind(pipeline) {
-                    (core.device).cmd_bind_pipeline(
-                        command,
-                        vk::PipelineBindPoint::COMPUTE,
-                        pipeline,
-                    );
-                }
+                building.bind_compute(core, command, pipeline);
                 if building.push_needed(&push) {
                     (core.device).cmd_push_constants(command, core.layout, PUSH_STAGES, 0, &push);
                 }

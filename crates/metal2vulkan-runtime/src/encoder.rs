@@ -1706,26 +1706,11 @@ impl Building {
         let command = self.command(Reach::Dispatches {
             indirect: matches!(launch, Launch::Indirect(..)),
         })?;
-        // Set 1, which every pipeline's layout shares, is bound once in each command buffer,
-        // before its first pipeline; it stays bound across the pipelines after it.
-        let first = self.unbound();
-        // SAFETY: the command buffer is recording outside any render pass; the pipeline, the
-        // layout and set 1 are the device's, set 1 of that layout and update-after-bind, and the
-        // window lies in the layout's one push range, of `PUSH_STAGES`.
+        // SAFETY: the command buffer is the current segment's, recording outside any render pass;
+        // the pipeline is the device's, of its layout, and the window lies in the layout's one
+        // push range, of `PUSH_STAGES`.
         unsafe {
-            if first {
-                device.cmd_bind_descriptor_sets(
-                    command,
-                    vk::PipelineBindPoint::COMPUTE,
-                    core.layout,
-                    1,
-                    &[core.arrays.set()],
-                    &[],
-                );
-            }
-            if self.bind(pipeline) {
-                device.cmd_bind_pipeline(command, vk::PipelineBindPoint::COMPUTE, pipeline);
-            }
+            self.bind_compute(core, command, pipeline);
             if !push.is_empty() && self.push_needed(push) {
                 device.cmd_push_constants(command, core.layout, PUSH_STAGES, 0, push);
             }

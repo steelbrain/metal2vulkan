@@ -210,7 +210,8 @@ pub(crate) struct Building {
     /// between dispatches leaves them out unless the dispatch after it is indirect, so an
     /// indirect dispatch after such a write needs one that reaches them.
     args_unordered: bool,
-    /// The compute pipeline bound in the current segment's command buffer.
+    /// The compute pipeline bound in the current segment's command buffer; set 1 is bound at the
+    /// compute bind point with the first ([`bind_compute`](Self::bind_compute)).
     bound: Option<vk::Pipeline>,
     /// The graphics pipeline bound in the current segment's command buffer.
     drawn: Option<vk::Pipeline>,
@@ -1174,17 +1175,41 @@ impl Building {
         }
     }
 
-    /// Whether the current command buffer has no compute pipeline bound yet.
-    pub(crate) fn unbound(&self) -> bool {
-        self.bound.is_none()
-    }
-
-    /// Whether the compute pipeline `pipeline` needs binding in the current command buffer; it is
-    /// bound from now.
-    pub(crate) fn bind(&mut self, pipeline: vk::Pipeline) -> bool {
-        let needed = self.bound != Some(pipeline);
+    /// Binds the compute pipeline `pipeline` into `command`, the current segment's command
+    /// buffer, where another or none is bound there; before the command buffer's first compute
+    /// pipeline, set 1 at the compute bind point, where it stays bound across the pipelines after
+    /// it, every pipeline's layout sharing it. Every compute pipeline a command buffer binds, a
+    /// program's or the runtime's own, is bound here, so no dispatch runs without set 1.
+    ///
+    /// # Safety
+    ///
+    /// `command` is the current segment's, recording outside any render pass; `pipeline` is a
+    /// compute pipeline of `core`'s layout, which the command buffer keeps until it retires.
+    pub(crate) unsafe fn bind_compute(
+        &mut self,
+        core: &Core,
+        command: vk::CommandBuffer,
+        pipeline: vk::Pipeline,
+    ) {
+        // SAFETY: by the caller; the layout and set 1 are the device's, set 1 of that layout and
+        // update-after-bind.
+        unsafe {
+            if self.bound.is_none() {
+                core.device.cmd_bind_descriptor_sets(
+                    command,
+                    vk::PipelineBindPoint::COMPUTE,
+                    core.layout,
+                    1,
+                    &[core.arrays.set()],
+                    &[],
+                );
+            }
+            if self.bound != Some(pipeline) {
+                core.device
+                    .cmd_bind_pipeline(command, vk::PipelineBindPoint::COMPUTE, pipeline);
+            }
+        }
         self.bound = Some(pipeline);
-        needed
     }
 
     /// Whether the graphics pipeline `pipeline` needs binding in the current command buffer, and
