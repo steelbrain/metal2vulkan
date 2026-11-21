@@ -22,6 +22,13 @@
 //! - its copies hold at most [`UNROLLED`] instructions, and the entry's unrolling adds at most
 //!   [`GROWTH`] instructions over all rounds.
 //!
+//! A loop's counters also decide a texel offset: one a texture operation of its body reads,
+//! computed that way. A device without the `Offset` operand takes such an offset as a switch over
+//! all its values, so the loop is unrolled where its offsets are its only reason ([`Decides::Offset`]):
+//! where the loop and every loop nested in it run at most [`OFFSET_TRIPS`] times together (each
+//! decided as above), within the same ceilings, and the copies are kept whatever their size, so
+//! every device reads each offset as a constant.
+//!
 //! Only the outermost qualifying loops are unrolled in a round; a loop nested in one is copied
 //! with it, and the next round, after SCCP, takes each copy whose counter now decides its body.
 //! There are at most [`ROUNDS`] rounds. The body all rounds leave, folded, replaces the entry's
@@ -39,8 +46,9 @@
 use crate::budget::Meter;
 use crate::error::Error;
 use crate::graph::{Cfg, LoopForest, LoopId};
+use crate::intrinsics::{AirIntrinsic, TexRole};
 use crate::ir::{Arena, Block, BlockId, Body, CastOp, Const, ConstId, Constant, Global};
-use crate::ir::{GlobalId, Idx, Inst, InstId, InstKind, ModuleParts, Unroll, Value};
+use crate::ir::{Callee, GlobalId, Idx, Inst, InstId, InstKind, ModuleParts, Unroll, Value};
 
 use super::const_loads;
 use super::fold::Folder;
@@ -56,6 +64,18 @@ pub(super) const GROWTH: u64 = 1 << 15;
 pub(super) const ROUNDS: u32 = 4;
 /// The most instructions evaluated to decide one iteration's exits.
 pub(super) const SLICE: u32 = 256;
+
+/// The most times a loop unrolled for its texel offsets runs with the loops nested in it.
+pub(super) const OFFSET_TRIPS: u64 = 25;
+
+/// What a round's loops are unrolled for (the module docs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Decides {
+    /// A branch or switch of the body.
+    Branch,
+    /// A texel offset of the body.
+    Offset,
+}
 
 /// No entry in a dense table.
 const NONE: u32 = u32::MAX;
@@ -160,7 +180,7 @@ impl Plan {
 pub(super) fn round(
     body: &Body,
     parts: &mut ModuleParts,
-    grown: &mut u64,
+    (grown, decides): (&mut u64, Decides),
     m: &mut Meter,
 ) -> Result<Option<Body>, Error> {
     if *grown >= GROWTH || !has_back_edge(body) {
@@ -169,7 +189,7 @@ pub(super) fn round(
     let cfg = Cfg::build(body, m)?;
     let r = LoopForest::compute(&cfg, m).and_then(|forest| {
         let r = scoped(m, |m, held| {
-            unroll_in(body, parts, (&cfg, &forest), grown, m, held)
+            unroll_in(body, parts, (&cfg, &forest), (grown, decides), m, held)
         });
         m.release(forest.ledger_bytes());
         r
@@ -243,7 +263,7 @@ fn unroll_in(
     body: &Body,
     parts: &mut ModuleParts,
     graphs: (&Cfg<BlockId>, &LoopForest<BlockId>),
-    grown: &mut u64,
+    (grown, decides): (&mut u64, Decides),
     m: &mut Meter,
     held: &mut usize,
 ) -> Result<Option<Body>, Error> {
@@ -264,7 +284,14 @@ fn unroll_in(
             consts,
             held: 0,
         };
-        let plan = plan(&cx, l, (&mut folder, globals), &mut inside, *grown, m)?;
+        let plan = plan(
+            &cx,
+            l,
+            (&mut folder, globals),
+            &mut inside,
+            (*grown, decides),
+            m,
+        )?;
         if let Some(plan) = plan {
             let added =
                 u64::from(plan.trips - 1) * u64::from(plan.copy_insts) + u64::from(plan.last_insts);
@@ -517,7 +544,7 @@ fn plan(
     l: LoopId,
     (folder, globals): (&mut Folder<'_>, &Arena<GlobalId, Global>),
     inside: &mut [bool],
-    grown: u64,
+    (grown, decides): (u64, Decides),
     m: &mut Meter,
 ) -> Result<Option<Plan>, Error> {
     let (body, forest) = (cx.body, cx.forest);
@@ -548,7 +575,9 @@ fn plan(
             return Ok(None);
         }
     }
-    let profitable = scoped(m, |m, _| profitable(cx, l, folder.types, inside, m));
+    let profitable = scoped(m, |m, _| {
+        profitable(cx, l, (folder.types, decides), inside, m)
+    });
     if !profitable? {
         s.release(m);
         return Ok(None);
@@ -558,6 +587,28 @@ fn plan(
         s.release(m);
         return Ok(None);
     };
+    // For its offsets: the runs of the loop and of every loop nested in it, together.
+    if decides == Decides::Offset {
+        let mut together = u64::from(trips);
+        for n in forest
+            .loops()
+            .filter(|&n| n != l && forest.loop_contains(l, n))
+        {
+            let nested = match shape(cx, n, m)? {
+                Some(ns) => {
+                    let r = runs(cx, n, &ns, (folder, globals), TRIPS, m, |_, _| {});
+                    ns.release(m);
+                    r?
+                }
+                None => None,
+            };
+            together = nested.map_or(u64::MAX, |(t, _)| together.saturating_mul(u64::from(t)));
+            if together > OFFSET_TRIPS {
+                s.release(m);
+                return Ok(None);
+            }
+        }
+    }
     let Shape {
         phis, header_exit, ..
     } = s;
@@ -596,7 +647,8 @@ fn plan(
     Ok(Some(Plan { last_insts, ..plan }))
 }
 
-/// Whether a conditional branch or switch of loop `l`'s body tests a value that is constant in
+/// Whether a conditional branch or switch of loop `l`'s body (`decides` a branch), or the texel
+/// offset of a texture operation of its body (an offset), tests a value that is constant in
 /// each iteration once the loop and the loops nested in it are unrolled: computed by integer
 /// operations, element and member accesses and constant-global reads from constants and the PHIs
 /// of their headers (those PHIs included when all their entries are such values). The exits of
@@ -605,7 +657,7 @@ fn plan(
 fn profitable(
     cx: &Cx<'_>,
     l: LoopId,
-    types: &crate::ir::TypeTable,
+    (types, decides): (&crate::ir::TypeTable, Decides),
     inside: &mut [bool],
     m: &mut Meter,
 ) -> Result<bool, Error> {
@@ -678,8 +730,15 @@ fn profitable(
             }
         }
     }
-    let mut decides = false;
-    if !changed {
+    let mut decided = false;
+    let offsets = decides == Decides::Offset;
+    if !changed && offsets {
+        let mut ops = forest.blocks(l).flat_map(|b| body.block_insts(b));
+        decided = ops.any(|(_, inst)| {
+            texel_offset(inst).is_some_and(|o| matches!(o, Value::Inst(_)) && known(inside, o))
+        });
+    }
+    if !changed && !offsets {
         for b in forest.blocks(l) {
             let Some(term) = body.terminator(b) else {
                 continue;
@@ -694,7 +753,7 @@ fn profitable(
                 .innermost(b)
                 .is_some_and(|inner| body.successors(b).any(|s| !forest.contains(inner, s)));
             if !own && matches!(c, Value::Inst(_)) && known(inside, c) {
-                decides = true;
+                decided = true;
                 break;
             }
         }
@@ -706,7 +765,22 @@ fn profitable(
             }
         }
     }
-    Ok(decides)
+    Ok(decided)
+}
+
+/// The texel offset a texture operation `inst` reads, if it reads one.
+fn texel_offset(inst: &Inst) -> Option<Value> {
+    let InstKind::Call(call) = &inst.kind else {
+        return None;
+    };
+    let Callee::Air {
+        op: AirIntrinsic::Texture(t),
+        ..
+    } = &call.callee
+    else {
+        return None;
+    };
+    call.args.get(t.layout().index(TexRole::Offset)?).copied()
 }
 
 /// The evaluation of one iteration's exits.

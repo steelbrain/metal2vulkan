@@ -721,14 +721,29 @@ pub fn specialize_dynamic(
     } else {
         resolved
     };
+    // Loops whose trip count the constants decided, unrolled where their counters decide a texel
+    // offset of their body, in nests of at most `unroll::OFFSET_TRIPS` runs, and kept: every
+    // offset is then a constant. SCCP after each round folds the copies' offsets.
+    let mut grown = 0;
+    for _ in 0..unroll::ROUNDS {
+        let offsets = (&mut grown, unroll::Decides::Offset);
+        let Some(unrolled) = unroll::round(&body, &mut parts, offsets, m)? else {
+            break;
+        };
+        let solved = solve(&unrolled, &mut parts, &fcs, &name, m)?;
+        unrolled.release(m);
+        body.release(m);
+        body = solved.body;
+        undefined_reads.extend(solved.reads);
+    }
     // Loops whose trip count the constants decided, unrolled where their counters decide a branch
     // of their body; SCCP after each round folds what the copies decide. The unrolled body is
     // kept only where it comes out no larger than the loops it replaces (`unroll::live_size`).
-    let mut grown = 0;
     let mut trial: Option<(Body, BTreeSet<u32>)> = None;
     for _ in 0..unroll::ROUNDS {
         let current = trial.as_ref().map_or(&body, |(b, _)| b);
-        let Some(unrolled) = unroll::round(current, &mut parts, &mut grown, m)? else {
+        let branches = (&mut grown, unroll::Decides::Branch);
+        let Some(unrolled) = unroll::round(current, &mut parts, branches, m)? else {
             break;
         };
         let solved = solve(&unrolled, &mut parts, &fcs, &name, m)?;
