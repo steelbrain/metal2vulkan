@@ -3646,17 +3646,50 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
   sample at its worst (45,024 commands of 17 tokens in 11 executions, 710 parts): about 108 MB of
   preprocess regions on the 2080 and 28 MB on the XTX, where single executions would take about 27
   MB on each (592 and 608 bytes a command).
+- A command's buffer slots reach its functions through the push bytes alone, so each slot a
+  command binds needs its word in the state's 256 push bytes, which the vertex and fragment
+  functions and all their other fields share. The translator places the vertex function's fields
+  from byte 0 to byte 248 (the last 8 bytes are kept for the fragment function's parameter block
+  address), in a fixed order:
+  1. its parameter block's address (8 bytes), where any of its fields spill;
+  2. any other leading address (8 bytes, so each costs one slot word);
+  3. the execution range's address (8 bytes), then the command's sequence word and its part's
+     first command (4 bytes each), then any other leading word (4 bytes each);
+  4. its buffer slots' words, in slot order (8 bytes each);
+  5. its other fields, including, for each slot it reads at an offset that is not a
+     translation-time constant, that slot's bounds and the zero range's address (8 bytes each);
+  6. 24 bytes of gap and a 4-byte tail word, or its last bounds field as the tail.
+  From the first field that does not fit, its fields sit in its parameter block. So a vertex
+  function with no other leading address pushes 25 slot words ((248 - 16 - 28) / 8, rounded down)
+  only where it pushes nothing past them but one 4-byte word or one bounds field. Anything more
+  makes it spill, the block address joins, and it pushes 24: a slot read at a variable offset adds
+  its bounds and the zero range's address after the slot words, so 25 no longer fit. The fragment
+  function's fields run from where the vertex function's end to byte 256, in the same order and with
+  the same tail, except that a lone field of 8 bytes or less takes no tail. From code: a fragment
+  function whose only field is one slot word fits beside a vertex function of 24 or 25 words. Its
+  room past one slot is not measured. An execution whose command binds a slot whose word sits in a
+  parameter block is refused (`IndirectCommandsKind::DrawInput`). Measured on an RTX 3090 and a
+  Radeon RX 7900 XTX (the consumer's jobs m3-max-63155, 63163 and 63164, the runtime at 173861f4f7):
+  a vertex function reading N buffer slots with a fragment function reading 1 draws for N up to 24,
+  and is refused as `DrawInput` for N from 25 to 29; with 28 slots read, commands that bind up to 24
+  vertex slots draw. The token count binds first only on lavapipe (13 slot words, below).
 - Each slot word a command holds is a push constant token of its own, on every device, where a run
   of words at consecutive offsets could share one: on NVIDIA's driver (620.70.06, an RTX 2080) a
   24-byte push constant token in an execution of 96 commands or more carried command 31's bytes in
   every later command, and three 8-byte tokens of the same bytes carried each command's own (a
-  standalone program, which draws right either way on RADV and lavapipe). The cost: a command takes
-  at most `maxIndirectCommandsTokenCount` less 3 buffer slots (13 on lavapipe, 29 on NVIDIA's
-  driver, 125 on RADV), refused past that (`IndirectCommandsKind::Tokens`); and that program's
-  part of 64 commands of three vertex words and one fragment word takes 69,888 preprocess bytes on
-  the 2080 against 57,600 with the vertex words in one token (21% more), 567,808 against 557,568
-  on lavapipe, and 19,712 either way on the XTX. Only preprocess bytes were measured, not GPU or
-  frame time.
+  standalone program, which draws right either way on RADV and lavapipe). The cost:
+  - A command takes at most `maxIndirectCommandsTokenCount` less 3 slot words, refused past that
+    (`IndirectCommandsKind::Tokens`). That binds before the push bytes only on lavapipe, at 13. On
+    NVIDIA's driver (29) and RADV (125), the push bytes above run out first.
+  - That program's part of 64 commands of three vertex words and one fragment word takes 69,888
+    preprocess bytes on the 2080, against 57,600 with the vertex words in one token (21% more);
+    567,808 against 557,568 on lavapipe; and 19,712 either way on the XTX.
+  - On an RX 7900 XTX (RADV), one execution of 512 such commands in parts of 64: the execute call
+    took 338,352 user-space instructions against 339,490 with one token for each run of words
+    (0.34% fewer), and the command buffer 271.6 us of GPU time against 280.3 us, which reads as
+    not worse, since the runs-of-words form ran first in the same hold (job m3-max-63201, medians
+    of 9).
+  - NVIDIA's driver has no right form to compare against.
 - On Mesa's CPU device (lavapipe, Mesa 26.2.6) the size
   `vkGetGeneratedCommandsMemoryRequirementsEXT` reports for a draw layout is quadratic in the
   command count and wraps at 2^32 (8,519,680 bytes at 16,384 commands of four buffers), a driver
@@ -3677,9 +3710,10 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
   `maxIndirectSequenceCount` (`Capacity`), a compute state for indirect command buffers
   (`ComputeCommands`), an execution with a state made without `supportIndirectCommandBuffers`
   (`UnflaggedState`), one whose slots take more tokens than `maxIndirectCommandsTokenCount`
-  (`Tokens`: 16 on lavapipe, 32 on NVIDIA's driver, 128 on RADV), and one whose functions read what
-  a command cannot carry: a slot the command holds outside the push bytes, a fixed-function vertex
-  binding, or a vertex layout that must draw from base instance 0 (`DrawInput`).
+  (`Tokens`, which only lavapipe's 16 reach before the push bytes run out), and one whose functions
+  read what a command cannot carry: a slot the command holds outside the push bytes (at most 24
+  vertex slots once the vertex function spills, above), a fixed-function vertex binding, or a
+  vertex layout that must draw from base instance 0 (`DrawInput`).
 - Commands draw with the executing encoder's render states whatever the descriptor's other
   `inherit*` properties say. Not built: commands the CPU encodes (`indirectRenderCommandAtIndex:`),
   `copyIndirectCommandBuffer:sourceRange:destination:destinationIndex:`, compute commands, and a
