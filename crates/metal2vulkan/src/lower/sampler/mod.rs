@@ -22,6 +22,10 @@
 //! by a value that may differ between invocations (`shaderSampledImageArrayNonUniformIndexing`).
 //! Any other sampler of several static candidates beside a heap image is a switch-at-use over
 //! them, one arm per candidate, each the heap element through that candidate's heap sampler.
+//! Under the identity domains a heap image has no heap sampler binding: its runtime or constexpr
+//! sampler is the element of the set-1 sampler array of its use that a texture slot's sampling
+//! reads there ([`IdentitySampling`]), at the index the sampler slot's pushed resource ID holds or
+//! at the constexpr sampler's pushed index (`PushField::ConstexprSampler`).
 //!
 //! **Argument buffers' samplers** (the sampler half). A heap image sampled through a sampler loaded
 //! from an argument buffer reads `OpSampledImage` of its heap element and of the heap sampler's
@@ -1232,6 +1236,9 @@ pub struct SamplerPlan {
     pub heap: BTreeSet<HeapKey>,
     /// The binding each reads, set by [`finish`].
     pub heap_decls: BTreeMap<HeapKey, CombinedSampler>,
+    /// Under the identity domains, the set-1 sampler array's use each separate heap sampler use
+    /// reads, set by [`finish`] in place of its binding ([`IdentitySampling`]'s sampler half).
+    pub heap_identity: BTreeMap<HeapKey, SamplerUse>,
     /// Every use of an argument buffer's sampler.
     pub heap_samplers: BTreeSet<HeapSamplerKey>,
     /// The sampler array each reads, by its use, set by [`finish`].
@@ -1440,6 +1447,7 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         );
     }
     let mut heap_decls = BTreeMap::new();
+    let mut heap_identity = BTreeMap::new();
     for key in &cx.families.sampler.heap {
         let h = cx
             .families
@@ -1454,6 +1462,17 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         // this use.
         if let SamplerRef::Constexpr(words) = key.sampler {
             constexpr_desc(words, sampler.sampler_use(), cx.profile)?;
+        }
+        // Under the identity domains the sampler is the element of the set-1 sampler array of
+        // its use that a texture slot's sampling reads ([`IdentitySampling`]): no binding of its
+        // own, a constexpr sampler's index pushed.
+        if crate::lower::access::identity(cx.profile) {
+            if let SamplerRef::Constexpr(_) = key.sampler {
+                cx.push
+                    .insert(crate::pipeline::sym::PushField::ConstexprSampler(sampler));
+            }
+            heap_identity.insert(*key, sampler.sampler_use());
+            continue;
         }
         heap_decls.insert(*key, sampler);
     }
@@ -1577,6 +1596,7 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     cx.families.sampler.identity = identity;
     cx.families.sampler.separate = separate;
     cx.families.sampler.heap_decls = heap_decls;
+    cx.families.sampler.heap_identity = heap_identity;
     cx.families.sampler.heap_sampler_decls = heap_sampler_decls;
     cx.families.sampler.heap_array_decls = heap_array_decls;
     cx.descriptors = cx.descriptors.plus(&counts);
@@ -1768,9 +1788,11 @@ pub fn declare(
         };
         d.heap_arrays.insert(*key, g);
     }
-    // Under the identity domains one set-1 sampler array per use, and a slot's word is its pushed
-    // resource ID's (`emit::sampler_word`).
-    for use_ in plan.families.sampler.identity.values().map(|i| i.use_) {
+    // Under the identity domains one set-1 sampler array per use, a texture slot's sampling's or a
+    // heap element's, and a slot's word is its pushed resource ID's (`emit::sampler_word`).
+    let sampling = &plan.families.sampler;
+    let slot_uses = sampling.identity.values().map(|i| i.use_);
+    for use_ in slot_uses.chain(sampling.heap_identity.values().copied()) {
         if d.identity.contains_key(&use_) {
             continue;
         }

@@ -1936,11 +1936,11 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
 - No guest word indexes a set 1 array past its length. A slot's texture or sampler, and a
   constexpr sampler, are read at the runtime's own placement (texture indices 1 to 65,535, sampler
   indices 1 to 3,999; a placement outside them is refused). An argument buffer's texture is read at
-  its resource ID's index masked to its low 16 bits, so a bad ID reads an element of the arrays,
-  never one past them; a sample, gather or comparison of an argument buffer's texture, and an
-  argument buffer's sampler, are refused at the pipeline's make. Metal leaves a resource ID that
-  names no live resource of the access undefined: an index within an array that no live object
-  owns reads its null descriptor or default sampler, with no fault.
+  its resource ID's index masked to its low 16 bits, read or sampled, so a bad ID reads an element
+  of the arrays, never one past them; an argument buffer's sampler is refused at the pipeline's
+  make. Metal leaves a resource ID that names no live resource of the access undefined: an index
+  within an array that no live object owns reads its null descriptor or default sampler, with no
+  fault.
 - An indirect dispatch's threadgroup counts are the GPU's to read, so a count above the device's
   `maxComputeWorkGroupCount` is not refused; Vulkan leaves such a dispatch undefined. A direct
   dispatch past it is split into dispatches of at most that many, each told its first
@@ -2494,12 +2494,15 @@ or does not check is rebuilt from the generations' names, with young counted ful
   domains, which every state is translated under: a state over a function that holds one is
   `Error::Translation` of `Unsupported{IdentityDomains}`, not implemented, whose symbol names the
   first form it holds. By form:
-  - a sample, gather or comparison of an argument buffer's texture: the translator test
-    `an_argument_buffer_textures_sample_is_refused_as_the_sample_form_under_the_identity_domains`
-    asserts the text;
-  - a depth texture of an argument buffer both compared and sampled without comparison: no test
-    yet;
-  - an argument buffer's sampler, and an array of samplers: no test yet;
+  - an array of samplers (constexpr samplers a lane chooses among beside an argument buffer's
+    texture, on a device that indexes a sampler array by a value that may differ between
+    invocations): the translator test
+    `an_argument_buffer_textures_sample_in_a_form_not_lowered_is_refused_naming_it` asserts the
+    text;
+  - a sample or gather of an argument buffer's color texture with a `half` result on a device
+    that samples through Metal's own sampler (`VkProperty::MetalSampler`), which no device's
+    derivation states: no test;
+  - an argument buffer's sampler: no test yet;
   - a bicubic sample at pixel coordinates ("a bicubic filter at pixel coordinates") and one of a
     1D texture ("a bicubic filter of a 1D texture"): the translator test
     `a_bicubic_kernel_reads_each_slots_format_treatment_from_its_pushed_field` asserts each text;

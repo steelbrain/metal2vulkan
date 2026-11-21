@@ -1,6 +1,7 @@
 mod ahead;
 mod aliased_encoders;
 mod alpha_test;
+mod argument_sampling;
 mod argument_tier;
 mod arrays;
 mod bicubic;

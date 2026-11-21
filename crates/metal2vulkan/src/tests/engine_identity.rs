@@ -62,11 +62,16 @@
 //!   `SpecKey::BicubicTexels` and state `RuntimeFact::BicubicTexels` as before. It passes L3. A
 //!   bicubic sample of a 1D texture (`engine/bcu_forms`) or at pixel coordinates
 //!   (`engine/bcu_address`) is still refused as `Unsupported{IdentityDomains}`, not implemented.
-//! - A kernel that samples a `half` and a `float` texture its argument buffer holds through a
-//!   constexpr nearest sampler and through a sampler slot (`examples/heap_samples`' `hs_sample`)
-//!   is refused as `Unsupported{IdentityDomains}`, not implemented, naming the sample form
-//!   ([`HEAP_SAMPLE_FORM`]), not a raw member's decode, which the identity domains plan for no
-//!   argument buffer's texture.
+//! - A kernel that samples, compares or fetches through a pixel sampler a texture its argument
+//!   buffer holds, through a runtime sampler slot or a constexpr sampler (`engine/handles`' heap
+//!   samplings, `examples/heap_samples`' `hs_sample`, and a generated comparison, alone and beside
+//!   a sample of the same depth texture without comparison), takes the
+//!   texture from its class's set-1 array at the index the member's resource ID holds and the
+//!   sampler from the set-1 sampler array of its use at the index the slot's pushed resource ID or
+//!   the constexpr sampler's pushed index names, with no heap sampler binding and nothing in set
+//!   0; each passes L3. Constexpr samplers a lane chooses among, where they are one array of
+//!   samplers, are still refused as `Unsupported{IdentityDomains}`, not implemented, naming that
+//!   form.
 //! - A kernel that encodes compute commands into an indirect command buffer it reaches through an
 //!   argument buffer (`engine/icb_replay_encode`) is refused as
 //!   `Unsupported{GpuEncodedIndirectCommands}`, not implemented: the feature it uses, not the
@@ -101,9 +106,7 @@ use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Error, Feature, Needs};
 use crate::library::Library;
 use crate::lower::dispatch::{nonuniform_region_bytes, region_bytes, NONUNIFORM};
-use crate::lower::select::{
-    LowerInputs, Plan, BICUBIC_LINE_FORM, BICUBIC_PIXEL_FORM, HEAP_SAMPLE_FORM,
-};
+use crate::lower::select::{LowerInputs, Plan, BICUBIC_LINE_FORM, BICUBIC_PIXEL_FORM};
 use crate::memory::handles::Lookup;
 use crate::metal::resource_word::TextureWord;
 use crate::metal::{PixelFormat, TextureSwizzleChannels};
@@ -825,36 +828,222 @@ fn a_bicubic_kernel_reads_each_slots_format_treatment_from_its_pushed_field() {
     }
 }
 
-/// Under the identity domains a kernel that samples the `half` and the `float` texture its
-/// argument buffer holds, through a constexpr nearest sampler and through a sampler slot, is
-/// refused naming the sample form on every profile, where the default domains compile it.
+/// A constexpr sampler's words: nearest filters, no mip filter, normalized coordinates clamped to
+/// the edge, comparing under `less`.
+const NEAREST_LESS: u64 = 0x007b_ff00_0001_0049;
+
+/// A kernel `k` that samples the `depth2d<float>` its argument buffer (buffer 0) holds at
+/// `(0.25, 0.25)` with comparison against 0.5 through a constexpr [`NEAREST_LESS`] sampler and,
+/// where `plain`, also without comparison through a constexpr nearest one, and writes the answers
+/// to the first lanes of buffer 1's `float4` at lane `gid`.
+fn heap_depth_kernel(plain: bool) -> String {
+    let nearest = super::engine_handles::CHOSEN_SAMPLERS[0];
+    let (global, sample, store, declare, states, state) = match plain {
+        true => (
+            format!("@plain = internal addrspace(2) constant [2 x i64] [i64 {nearest}, i64 0], align 8\n"),
+            "  %q = call { float, i8 } @air.sample_depth_2d.f32(ptr addrspace(1) %t, ptr addrspace(2) @plain, i32 1, <2 x float> <float 0.25, float 0.25>, i1 true, <2 x i32> zeroinitializer, i1 true, float 0.0, float 0.0, i32 0)\n  %y = extractvalue { float, i8 } %q, 0\n  %v = insertelement <4 x float> %w, float %y, i64 1\n",
+            "%v",
+            "declare { float, i8 } @air.sample_depth_2d.f32(ptr addrspace(1), ptr addrspace(2), i32, <2 x float>, i1, <2 x i32>, i1, float, float, i32)\n",
+            "!20, !21",
+            "!21 = !{!\"air.sampler_state\", ptr addrspace(2) @plain}\n",
+        ),
+        false => (String::new(), "", "%w", "", "!20", ""),
+    };
+    format!(
+        r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
+target triple = "air64_v28-apple-macosx26.0.0"
+
+%struct.M = type {{ ptr addrspace(1) }}
+@less = internal addrspace(2) constant [2 x i64] [i64 {NEAREST_LESS}, i64 0], align 8
+{global}
+define void @k(ptr addrspace(2) %m, ptr addrspace(1) %out, i32 %gid) {{
+  %pt = getelementptr inbounds %struct.M, ptr addrspace(2) %m, i64 0, i32 0
+  %t = load ptr addrspace(1), ptr addrspace(2) %pt, align 8
+  %r = call {{ float, i8 }} @air.sample_compare_depth_2d.f32(ptr addrspace(1) %t, ptr addrspace(2) @less, i32 1, <2 x float> <float 0.25, float 0.25>, float 0.5, i1 true, <2 x i32> zeroinitializer, i1 true, float 0.0, float 0.0, i32 0)
+  %x = extractvalue {{ float, i8 }} %r, 0
+  %w = insertelement <4 x float> zeroinitializer, float %x, i64 0
+{sample}  %o = getelementptr inbounds <4 x float>, ptr addrspace(1) %out, i32 %gid
+  store <4 x float> {store}, ptr addrspace(1) %o, align 16
+  ret void
+}}
+declare {{ float, i8 }} @air.sample_compare_depth_2d.f32(ptr addrspace(1), ptr addrspace(2), i32, <2 x float>, float, i1, <2 x i32>, i1, float, float, i32)
+{declare}!air.kernel = !{{!0}}
+!air.version = !{{!11}}
+!air.language_version = !{{!12}}
+!air.sampler_states = !{{{states}}}
+!0 = !{{ptr @k, !1, !2}}
+!1 = !{{}}
+!2 = !{{!3, !6, !8}}
+!3 = !{{i32 0, !"air.indirect_buffer", !"air.buffer_size", i32 8, !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.struct_type_info", !4, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 8, !"air.arg_type_name", !"M", !"air.arg_name", !"m"}}
+!4 = !{{i32 0, i32 8, i32 0, !"depth2d<float, sample>", !"d", !"air.indirect_argument", !5}}
+!5 = !{{i32 0, !"air.texture", !"air.location_index", i32 0, i32 1, !"air.sample", !"air.arg_type_name", !"depth2d<float, sample>", !"air.arg_name", !"d"}}
+!6 = !{{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"float4", !"air.arg_name", !"out"}}
+!8 = !{{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"gid"}}
+!11 = !{{i32 2, i32 8, i32 0}}
+!12 = !{{!"Metal", i32 4, i32 0, i32 0}}
+!20 = !{{!"air.sampler_state", ptr addrspace(2) @less}}
+{state}"#
+    )
+}
+
+/// Under the identity domains a kernel that samples, compares or fetches through a pixel sampler a
+/// texture its argument buffer holds, through a runtime sampler slot or a constexpr sampler
+/// (`engine/handles`' heap samplings, `examples/heap_samples`' `hs_sample`, and
+/// [`heap_depth_kernel`]'s comparison, alone and beside a sample of the same depth texture
+/// without comparison), takes the texture as the element of its class's set-1
+/// array that the member's resource ID names and the sampler as the element of the set-1 sampler
+/// array of its use that the slot's pushed resource ID or the constexpr sampler's pushed index
+/// (`PushField::ConstexprSampler`) names: no heap sampler binding and nothing in set 0. Each passes
+/// L3 on every profile; the default domains compile each as before.
+///
+/// The depth texture's sample without comparison reads the same element of its depth-comparison
+/// class (`Depth` 1) as its comparison, through the plain sampler array (binding 2). SPIR-V 1.6
+/// (revision 8) leaves the comparison to the opcode, not the image type: `OpTypeImage`'s "Depth
+/// is whether or not this image is a depth image. (Note that whether or not depth comparisons are
+/// actually done is a property of the sampling opcode, not of this type declaration.)", and
+/// `OpImageSampleImplicitLod` and `OpImageSampleExplicitLod` constrain only its `Dim` and `MS`.
+/// Vulkan 1.4.366's "Instruction/Format/Sampler/Image View Validation" makes an instruction that is
+/// not `OpImage*Dref*` poison only through a sampler whose `compareEnable` is `VK_TRUE`, which no
+/// element of the plain array has, and its image-view compatibility list does not name `Depth`.
 #[test]
-fn an_argument_buffer_textures_sample_is_refused_as_the_sample_form_under_the_identity_domains() {
-    let Some(bc) = assembled(
-        "heap_samples",
-        llvm_assemble(&engine_dir().join("../examples/heap_samples.ll")),
+fn an_argument_buffer_textures_sample_takes_its_sampler_from_the_identity_arrays() {
+    let (Some(handles), Some(examples), Some(depth), Some(both)) = (
+        assemble("handles"),
+        assembled(
+            "heap_samples",
+            llvm_assemble(&engine_dir().join("../examples/heap_samples.ll")),
+        ),
+        assemble_text("heap_depth", &heap_depth_kernel(false)),
+        assemble_text("heap_depth_both", &heap_depth_kernel(true)),
     ) else {
+        return;
+    };
+    // Each entry, the set-1 bindings it uses, how many sampler slots' resource IDs it pushes, and
+    // each constexpr sampler's pushed use (comparison, integer texture).
+    type Case<'a> = (&'a [u8], &'a str, &'a [u32], usize, &'a [(bool, bool)]);
+    let cases: [Case<'_>; 8] = [
+        // A linear sample, and a nearest pixel sample's exact fetch, written to a member.
+        (
+            &handles,
+            "argument_buffer_sample",
+            &[0, 1, 2],
+            0,
+            &[(false, false); 2],
+        ),
+        (
+            &handles,
+            "argument_buffer_sample_int",
+            &[0, 1, 4],
+            0,
+            &[(false, true)],
+        ),
+        (&handles, "argument_buffer_runtime_sampler", &[0, 2], 1, &[]),
+        (
+            &handles,
+            "argument_buffer_sample_compare",
+            &[0, 3],
+            0,
+            &[(true, false)],
+        ),
+        (
+            &handles,
+            "argument_buffer_sample_border",
+            &[0, 2],
+            0,
+            &[(false, false)],
+        ),
+        (&examples, "hs_sample", &[0, 2], 1, &[(false, false)]),
+        (&depth, "k", &[0, 3], 0, &[(true, false)]),
+        (&both, "k", &[0, 2, 3], 0, &[(false, false), (true, false)]),
+    ];
+    for stem in PROFILES {
+        let default = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+        for (bc, entry, bindings, slots, constexpr) in cases {
+            let what = format!("{stem}: {entry}");
+            compile(bc, entry, &default).unwrap_or_else(|e| panic!("{what}: default domains: {e}"));
+            let (a, plan, _) =
+                compile_kept(bc, entry, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+            let pushed_slots = (plan.push.fields.iter())
+                .filter(|f| {
+                    matches!(f.field, PushField::SlotGuestBase(s) if s.class == SlotClass::Sampler)
+                })
+                .count();
+            let mut uses: Vec<(bool, bool)> = (plan.push.fields.iter())
+                .filter_map(|f| match f.field {
+                    PushField::ConstexprSampler(c) => Some((c.compare, c.integer)),
+                    _ => None,
+                })
+                .collect();
+            uses.sort();
+            assert_eq!((pushed_slots, &uses[..]), (slots, constexpr), "{what}");
+            let linked = link(&[&a], &LinkInputs::standalone(), &p)
+                .unwrap_or_else(|e| panic!("{what}: {e}"));
+            let sets: Vec<_> = (linked.layout.sets.iter())
+                .map(|s| {
+                    let b: Vec<_> = (s.bindings.iter())
+                        .map(|b| (b.binding, b.ty, b.count))
+                        .collect();
+                    (s.set, b)
+                })
+                .collect();
+            assert_eq!(sets, [(0, vec![]), (1, identity_arrays())], "{what}");
+            let mut used: Vec<u32> = (linked.table.bindings.values())
+                .filter(|(set, _)| *set == 1)
+                .map(|(_, binding)| *binding)
+                .collect();
+            used.sort();
+            used.dedup();
+            assert_eq!(used, bindings, "{what}");
+        }
+    }
+}
+
+/// Under the identity domains constexpr samplers a lane chooses among beside an argument buffer's
+/// texture (`engine_handles::chosen_sampler_kernel`) are refused as `Unsupported{IdentityDomains}`,
+/// not implemented, naming the array of samplers they are on a profile that indexes a sampler
+/// array by a value that may differ between invocations, where the default domains compile them;
+/// elsewhere they are a switch over the candidates, each arm sampling as through that sampler
+/// alone, which compiles and passes L3.
+#[test]
+fn an_argument_buffer_textures_sample_in_a_form_not_lowered_is_refused_naming_it() {
+    use super::engine_handles::chosen_sampler_kernel;
+    let chosen = format!(
+        "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
+target triple = \"air64_v28-apple-macosx26.0.0\"\n\n{}",
+        chosen_sampler_kernel(&[0, 1, 2], None)
+    );
+    let Some(chosen) = assemble_text("chosen", &chosen) else {
         return;
     };
     for stem in PROFILES {
         let default = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
-        compile(&bc, "hs_sample", &default)
-            .unwrap_or_else(|e| panic!("{stem}: default domains: {e}"));
         let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
-        match compile(&bc, "hs_sample", &p) {
-            Err(Error::Unsupported(u)) => {
-                assert_eq!(
-                    (u.feature, u.needs),
-                    (Feature::IdentityDomains, Needs::NotImplemented),
-                    "{stem}"
-                );
-                assert_eq!(
-                    u.symbol.map(|f| f.to_string()).as_deref(),
-                    Some(HEAP_SAMPLE_FORM),
-                    "{stem}"
-                );
+        let array = p.fields().descriptors.non_uniform_sampled_image;
+        let form = array.then_some("an array of samplers");
+        {
+            let what = format!("{stem}: chosen");
+            compile(&chosen, "chosen", &default)
+                .unwrap_or_else(|e| panic!("{what}: default domains: {e}"));
+            match (compile(&chosen, "chosen", &p), form) {
+                (Err(Error::Unsupported(u)), Some(form)) => {
+                    assert_eq!(
+                        (u.feature, u.needs),
+                        (Feature::IdentityDomains, Needs::NotImplemented),
+                        "{what}"
+                    );
+                    assert_eq!(
+                        u.symbol.map(|f| f.to_string()).as_deref(),
+                        Some(form),
+                        "{what}"
+                    );
+                }
+                (Ok(a), None) => {
+                    link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+                }
+                (other, _) => panic!("{what}: {other:?}"),
             }
-            other => panic!("{stem}: {other:?}"),
         }
     }
 }

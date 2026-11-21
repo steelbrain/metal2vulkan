@@ -19,7 +19,7 @@ use crate::spirv::ir::{
 use crate::air::ir::ValueId;
 use crate::lower::texture::TexelClass;
 use crate::memory::handles::{entry_field, EntryField};
-use crate::metal::sampler::SamplerWord;
+use crate::metal::sampler::{SamplerUse, SamplerWord};
 use crate::pipeline::sym::{CombinedSampler, SamplerRef};
 
 use super::{
@@ -671,6 +671,22 @@ pub(super) fn sampled_image(
                 return Err(cx.fail(format!("combined binding {key:?} is not declared")));
             };
             Ok((binding.sampled_image(fb)?, image, None))
+        }
+        // Under the identity domains the heap element through the slot's or constexpr sampler's
+        // element of the set-1 sampler array of the use, as a texture slot's sampling reads it.
+        Source::Heap { handle, key } if cx.plan.families.access.identity => {
+            let Some(use_) = cx.plan.families.sampler.heap_identity.get(&key).copied() else {
+                return Err(cx.fail(format!("heap sampler {key:?} has no identity use")));
+            };
+            let element = heap_element(cx, fb, (key.group, !key.compare), handle)?;
+            let sampler = identity_sampler(cx, fb, key.sampler, use_)?;
+            let si = fb.sampled_image(element.img, sampler)?;
+            let image = CombinedImage {
+                plane: super::plane_of(element.decl.dim),
+                arrayed: element.decl.arrayed,
+                texel: element.decl.texel,
+            };
+            Ok((si, image, element.live))
         }
         Source::Heap { handle, key } => {
             let Some(g) = cx.decl.families.sampler.heap.get(&key).copied() else {
@@ -1326,9 +1342,8 @@ fn sampler_id(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, n: u32) -> BRes
 
 /// Under the identity domains, the sampled image of combined binding `key`
 /// ([`super::IdentitySampling`]): the texture slot's element of its class's set-1 array at the
-/// index its pushed resource ID holds, and the element of the set-1 sampler array of the use at
-/// the index a runtime sampler slot's pushed resource ID holds, or a constexpr sampler's pushed
-/// index (`PushField::ConstexprSampler`), uniform over the call, joined by `OpSampledImage`.
+/// index its pushed resource ID holds, and its sampler ([`identity_sampler`]), joined by
+/// `OpSampledImage`.
 fn identity_sampled_image(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -1345,8 +1360,7 @@ fn identity_sampled_image(
         .get(&key.texture)
         .map(|s| s.slot);
     let images = cx.decl.families.texture.heap.get(&i.class).copied();
-    let samplers = cx.decl.families.sampler.identity.get(&i.use_).copied();
-    let (Some(slot), Some(images), Some(samplers)) = (slot, images, samplers) else {
+    let (Some(slot), Some(images)) = (slot, images) else {
         return Err(cx.fail(format!("combined binding {key:?} is not declared")));
     };
     let id = cx.push_field(fb, crate::pipeline::sym::PushField::SlotGuestBase(slot))?;
@@ -1354,19 +1368,7 @@ fn identity_sampled_image(
     let base = fb.module().global_value(images)?;
     let p = fb.access_chain(base, &[element])?;
     let img = fb.load(p, MemAccess::default())?;
-    let element = match key.sampler {
-        SamplerRef::Slot(n) => {
-            let id = sampler_id(cx, fb, n)?;
-            fb.composite_extract(id, &[0])?
-        }
-        SamplerRef::Constexpr(_) => {
-            let c = CombinedSampler::new(key.sampler, key.compare, i.use_.integer_texture);
-            cx.push_field(fb, crate::pipeline::sym::PushField::ConstexprSampler(c))?
-        }
-    };
-    let base = fb.module().global_value(samplers)?;
-    let p = fb.access_chain(base, &[element])?;
-    let sampler = fb.load(p, MemAccess::default())?;
+    let sampler = identity_sampler(cx, fb, key.sampler, i.use_)?;
     let si = fb.sampled_image(img, sampler)?;
     Ok((
         si,
@@ -1376,6 +1378,34 @@ fn identity_sampled_image(
             texel: i.image.texel,
         },
     ))
+}
+
+/// Under the identity domains, sampler `sampler` in use `use_`: the element of the set-1 sampler
+/// array of the use at the index a runtime sampler slot's pushed resource ID holds, or at a
+/// constexpr sampler's pushed index (`PushField::ConstexprSampler`), uniform over the call. A
+/// texture slot's sampling and a heap element's read it alike.
+fn identity_sampler(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    sampler: SamplerRef,
+    use_: SamplerUse,
+) -> BResult<SValue> {
+    let Some(samplers) = cx.decl.families.sampler.identity.get(&use_).copied() else {
+        return Err(cx.fail(format!("the sampler array of {use_:?} is not declared")));
+    };
+    let element = match sampler {
+        SamplerRef::Slot(n) => {
+            let id = sampler_id(cx, fb, n)?;
+            fb.composite_extract(id, &[0])?
+        }
+        SamplerRef::Constexpr(_) => {
+            let c = CombinedSampler::new(sampler, use_.compare, use_.integer_texture);
+            cx.push_field(fb, crate::pipeline::sym::PushField::ConstexprSampler(c))?
+        }
+    };
+    let base = fb.module().global_value(samplers)?;
+    let p = fb.access_chain(base, &[element])?;
+    fb.load(p, MemAccess::default())
 }
 
 /// Field `field` of the sampler table entry an argument buffer's sampler handle `handle` names: the
