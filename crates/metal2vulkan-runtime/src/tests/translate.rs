@@ -1821,7 +1821,8 @@ mod on_device {
                 .compile_compute_pipeline(&plain, &budget)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let checked: Vec<u32> = (pipeline.interface.push.iter())
-                .filter_map(|placement| match placement.field {
+                .flat_map(|placement| &placement.fields)
+                .filter_map(|placed| match placed.field {
                     PushField::SlotBounds(SlotRef {
                         class: SlotClass::Buffer,
                         index,
