@@ -210,8 +210,13 @@ struct Book {
 }
 
 impl Spans {
-    /// `buffer`'s range, `len` bytes at `address`, was made.
+    /// `buffer`'s range, `len` bytes at `address`, was made. A block of no buffer (an opaque
+    /// handle's surface allocation, which holds only the surface's plane images) has no device
+    /// address, and is not noted.
     pub(crate) fn made(&self, buffer: vk::Buffer, address: u64, len: u64, kind: RangeKind) {
+        if buffer == vk::Buffer::null() {
+            return;
+        }
         let made = crate::host_time();
         let span = FaultRange {
             kind,

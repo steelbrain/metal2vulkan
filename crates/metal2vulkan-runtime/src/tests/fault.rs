@@ -36,6 +36,41 @@ fn instruction_pointers_stay_apart_from_accesses_as_reported() {
     );
 }
 
+/// Two opaque handles' surface allocations, blocks of no buffer and address 0, are not noted: an
+/// address in their first bytes lies in no range, and a later range is placed as noted.
+#[test]
+fn a_block_of_no_buffer_is_placed_nowhere() {
+    let spans = Spans::default();
+    spans.made(vk::Buffer::null(), 0, 0x180_0000, RangeKind::Export);
+    spans.made(vk::Buffer::null(), 0, 0x260_0000, RangeKind::Export);
+    spans.made(
+        vk::Buffer::from_raw(7),
+        0x4000_0000,
+        0x10_0000,
+        RangeKind::Import,
+    );
+    let place = spans.place(
+        &FaultAddress {
+            kind: Kind::READ_INVALID,
+            address: 0x10_0000,
+            precision: 0x1000,
+        },
+        0,
+    );
+    assert_eq!(
+        (place.holders.len(), place.below),
+        (0, None),
+        "no range at address 0"
+    );
+    assert_eq!(
+        place.above.map(|range| (range.kind, range.address)),
+        Some((RangeKind::Import, 0x4000_0000)),
+        "the import above"
+    );
+    spans.freed(vk::Buffer::null(), 0, None);
+    assert!(spans.freed_kept().is_empty(), "nothing of no buffer freed");
+}
+
 /// The device's book of its ranges keeps the last [`FREED`] freed, the oldest dropped first, and
 /// places an address among the ranges that meet its bytes, the live ones first, then the freed
 /// ones newest first, with the nearest range wholly below and wholly above them.
