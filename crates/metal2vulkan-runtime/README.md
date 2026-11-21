@@ -2419,6 +2419,11 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
 - Each lowering of a state's creation is one translation within its own 500 MiB ceiling, one
   after another, so the width of the consumer's creating threads multiplies the bound:
   creations on 4 threads at once hold at most 2 GiB of translation.
+- That ceiling is on the bytes a translation holds live, and the high-water of what it freed can
+  stay resident under the process's allocator once it returns, which is the consumer's to return:
+  on glibc 2.44, resident memory stayed within about 10 MiB of the live bytes while an attempt ran,
+  and about 140 MiB of an attempt that peaked near 250 MiB stayed resident after it until
+  `malloc_trim(0)` returned it.
 - `ComputePipelineState::precision_notes` carries the translator's notes of where the kernel's
   answers may differ from Metal's on this device, fixed per operation: those of the modules made
   with the state, its variants among them. A kernel compiled

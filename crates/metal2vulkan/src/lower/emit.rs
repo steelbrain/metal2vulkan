@@ -1482,6 +1482,9 @@ pub struct Emitted {
     /// The buffer slots a store merged a partial word into through the sub-word store's atomics:
     /// the module reads each of them, whatever the function's own accesses are.
     pub merged: BTreeSet<SlotRef>,
+    /// The ledger bytes charged for the module as its builder grew: they go when serialization
+    /// consumes it.
+    pub held: usize,
 }
 
 /// Structurize and emit `e` under `plan` into a finalized module with P9 applied.
@@ -1496,7 +1499,7 @@ pub fn emit_module(e: &Entry, plan: &Plan, m: &mut Meter) -> Result<Emitted, Err
         crate::structurize::structurize(&view, m)
     })?;
     let mut mb = ModuleBuilder::new();
-    let emitted = (|| -> Result<(TypedModule, Vec<Offer>, BTreeSet<SlotRef>), Error> {
+    let emitted = (|| -> Result<(TypedModule, Vec<Offer>, BTreeSet<SlotRef>, usize), Error> {
         let decl = declare(&mut mb, plan)?;
         // The builder is charged as it grows: the declarations here, the walk's growth by
         // `structurize::emit` after each block, and what the walk left once it returns.
@@ -1596,10 +1599,10 @@ pub fn emit_module(e: &Entry, plan: &Plan, m: &mut Meter) -> Result<Emitted, Err
         let offers = mb.offers().to_vec();
         let module = mb.finalize()?;
         m.charge(std::mem::size_of_val(offers.as_slice()))?;
-        Ok((module, offers, merged))
+        Ok((module, offers, merged, held.charged()))
     })();
     structured.release(m);
-    let (mut module, offers, merged) = emitted?;
+    let (mut module, offers, merged, held) = emitted?;
     promote_single_store(&mut module, m)?;
     // What no instruction reads leaves the module, after P9 turned its loads into copies, and the
     // offers that make it smaller are taken.
@@ -1611,7 +1614,11 @@ pub fn emit_module(e: &Entry, plan: &Plan, m: &mut Meter) -> Result<Emitted, Err
     if plan.families.arith.controls {
         crate::spirv::half_hold::hold(&mut module, m)?;
     }
-    Ok(Emitted { module, merged })
+    Ok(Emitted {
+        module,
+        merged,
+        held,
+    })
 }
 
 #[cfg(test)]

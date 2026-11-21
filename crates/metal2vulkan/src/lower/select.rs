@@ -1283,9 +1283,11 @@ fn select_entry(
     stage_io::plan_entry(&mut cx).map_err(|e| located_param(e, &cx, None))?;
     mesh::plan_entry(&mut cx).map_err(|e| located_param(e, &cx, None))?;
 
-    // Uses: which parameters are read, and the block of every use (for demotion).
+    // The strategy table, and the walk's scratch: which parameters are read, and the block of
+    // every use (for demotion).
     let n = cx.values.len();
-    let bytes = n.saturating_mul(std::mem::size_of::<Option<Strategy>>() + 8);
+    let table = n.saturating_mul(std::mem::size_of::<Option<Strategy>>());
+    let bytes = table.saturating_add(n.saturating_mul(8));
     m.charge(bytes)?;
     // The pointer phis' incoming values, once per phi, before any use reads them.
     let phis = match access::phis::plan(&cx, m) {
@@ -1308,9 +1310,16 @@ fn select_entry(
     let noted = cx.noted;
     let result = selected.and_then(|sel| finish(cx, sel, widest_pin, &mut fact_bytes, m));
     m.release(noted);
-    m.release(fact_bytes.charged());
-    m.release(bytes);
     m.release(phi_bytes);
+    // The plan holds the strategy table and the facts through emission and serialization: they
+    // stay on the ledger.
+    match &result {
+        Ok(_) => m.release(bytes - table),
+        Err(_) => {
+            m.release(bytes);
+            m.release(fact_bytes.charged());
+        }
+    }
     result
 }
 

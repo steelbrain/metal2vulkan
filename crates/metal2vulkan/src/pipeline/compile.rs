@@ -3197,7 +3197,11 @@ fn lower_bounded<K>(
             kernel,
             unbound,
         },
-        crate::lower::emit::Emitted { mut module, merged },
+        crate::lower::emit::Emitted {
+            mut module,
+            merged,
+            held,
+        },
     ) = stage_bound::emit(r, p, (word_cap, bounds), m)?;
     let function_tables = spec.function_tables.clone();
     let reaches_command_buffers = spec.may_encode_indirect_commands();
@@ -3334,7 +3338,8 @@ fn lower_bounded<K>(
     let ids = crate::spirv::serialize::id_table_bytes(&module);
     m.charge(ids)?;
     let module = crate::spirv::serialize::serialize(module)?;
-    m.release(ids);
+    // The typed module is gone with its serialization, and its charge with it.
+    m.release(ids.saturating_add(held));
     m.charge(module.footprint())?; // The retained words and relocations.
 
     // The estimate refused early; the cap holds on what was emitted.

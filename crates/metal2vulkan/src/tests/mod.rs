@@ -220,6 +220,7 @@ mod env_registry;
 mod fuzz_interp;
 mod fuzz_soak;
 mod golden_hashes;
+mod ledger_resident;
 mod library_entries_decode_once;
 mod library_hash_beside;
 mod module_version_1;
