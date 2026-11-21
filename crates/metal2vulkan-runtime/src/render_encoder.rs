@@ -57,6 +57,14 @@
 //! every shadow holding nothing, so the next draw that reads an attachment copies what it reads
 //! again, after what the earlier draws rendered; it records nothing itself.
 //!
+//! A `Boolean` or `Counting` visibility result mode counts the draws after it in one precise
+//! occlusion query, begun before its first draw and ended in the rendering as the next mode set
+//! or the encoder's end ends it; after the rendering ends, the pass copies each count into the
+//! visibility result buffer (`crate::visibility`). Vulkan's query begins and ends inside one
+//! rendering, so while it counts, a command that would end the rendering is refused
+//! ([`DrawKind::VisibilityResultInterrupt`]); a segment's first draw may still end it, before the
+//! query begins.
+//!
 //! A draw sets Metal's state as dynamic state: every state at the encoder's first draw, Metal's
 //! defaults where the encoder set none, and after that what changed. A viewport is Vulkan's with
 //! its height negated (from `y + height`), so framebuffer rows, the fragment position and
@@ -91,6 +99,7 @@ use crate::memory::BlockId;
 use crate::over::{self, Reached};
 use crate::pass::{
     layout_barrier, ops, resolving, LoadAction, Pass, RenderPassDescriptor, StoreAction, Target,
+    VisibilityResultType,
 };
 use crate::pipeline::{address_word, FieldValue, PUSH_STAGES};
 use crate::record::{memory_barrier, Reach};
@@ -99,6 +108,7 @@ use crate::ring::{Placed, CHUNK};
 use crate::sampler::SamplerState;
 use crate::shadow::{self, Area, Held};
 use crate::texture::{Texture, TextureInner, TextureObject};
+use crate::visibility::Results;
 use ash::vk;
 use metal2vulkan::bind::alpha_test_code;
 use metal2vulkan::metal::format::{integer_channels_word, BICUBIC_TEXELS_UNBOUND};
@@ -140,18 +150,26 @@ pub struct ScissorRect {
 }
 
 /// `MTLVisibilityResultMode`, which
-/// [`RenderCommandEncoder::set_visibility_result_mode`] takes: `Disabled` alone is built.
+/// [`RenderCommandEncoder::set_visibility_result_mode`] takes.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum VisibilityResultMode {
     /// `MTLVisibilityResultModeDisabled`, Metal's default: the draws write no result.
     #[default]
     Disabled,
-    /// `MTLVisibilityResultModeBoolean`: not built, [`DrawKind::VisibilityResults`].
+    /// `MTLVisibilityResultModeBoolean`: the draws write whether a sample passed the depth and
+    /// stencil tests, as the count of such samples, nonzero exactly where one did; Metal documents
+    /// a nonzero result, and an Apple M3 Max writes 1 (docs/API.md, accepted differences).
     Boolean,
-    /// `MTLVisibilityResultModeCounting`: not built, [`DrawKind::VisibilityResults`].
+    /// `MTLVisibilityResultModeCounting`: the draws write the count of samples that passed the
+    /// depth and stencil tests, the device's own
+    /// ([`RenderCommandEncoder::VISIBILITY_NOTE`]).
     Counting,
 }
+
+/// A pass's visibility result buffer, borrowed from what the command buffer keeps
+/// (`crate::kept`), and its `visibilityResultType`.
+type Visibility = (Lent<Buffer>, VisibilityResultType);
 
 /// The index buffer of an indexed draw
 /// ([`RenderCommandEncoder::draw_indexed_primitives`]): `indexBuffer`, `indexBufferOffset` and
@@ -572,10 +590,10 @@ struct Declarations {
 /// [`DrawKind::LineWidth`]), the store actions an encoder sets for an attachment whose pass left
 /// them unknown, memory barriers, fences, draws of points, lines and triangles, indexed or not,
 /// draws of patches with a tessellation factor buffer, each direct or indirect, executions of an
-/// indirect command buffer's indexed triangle draws, `useResource:`, `useHeap:`, and the
-/// `Disabled` visibility result mode (`Boolean` and `Counting` are
-/// [`DrawKind::VisibilityResults`]). Not built, and so not methods: the store action options
-/// setters, tile functions, the `setVertexBuffer:offset:attributeStride:atIndex:` family,
+/// indirect command buffer's indexed triangle draws, `useResource:`, `useHeap:`, and every
+/// visibility result mode in a pass of the `Reset` type (in an `Accumulate` pass, `Boolean` and
+/// `Counting` are [`DrawKind::AccumulatedVisibilityResults`]). Not built, and so not methods: the
+/// store action options setters, tile functions, the `setVertexBuffer:offset:attributeStride:atIndex:` family,
 /// `setTessellationFactorScale:` (read by a pipeline that enables the scale, which is refused),
 /// and indexed patch draws (`drawIndexedPatches:`, read by a pipeline of a control-point index
 /// type, which is refused). A draw of what the runtime does not build is [`Gap::Draw`], naming
@@ -638,6 +656,10 @@ pub struct RenderCommandEncoder {
     dirty: u32,
     /// The topology and primitive restart the last draw set.
     topology: Option<(vk::PrimitiveTopology, bool)>,
+    /// The pass's visibility result buffer and its `visibilityResultType`.
+    visibility: Option<Visibility>,
+    /// The visibility results' segments and their queries.
+    results: Results,
     /// A draw since the rendering began wrote memory: a memory barrier ends the rendering.
     wrote: bool,
     /// A draw since the encoder last ordered its draws rendered.
@@ -692,7 +714,7 @@ impl CommandBuffer {
         // nothing uses the borrow after that, and a refused descriptor drops it with no use.
         let core = unsafe { Uncounted::of(building.device.core()) };
         match begin(&mut building, &core, descriptor) {
-            Ok((pass, command)) => {
+            Ok((pass, command, visibility)) => {
                 let [width, height] = pass.area;
                 Ok(RenderCommandEncoder {
                     command_buffer: self.clone(),
@@ -728,6 +750,8 @@ impl CommandBuffer {
                     recorded: None,
                     dirty: ALL,
                     topology: None,
+                    visibility,
+                    results: Results::default(),
                     wrote: false,
                     drew: false,
                     pass_drew: false,
@@ -753,12 +777,13 @@ impl CommandBuffer {
 }
 
 /// Checks `descriptor` and records its pass's first barrier, where it has one, and its
-/// `vkCmdBeginRendering`.
+/// `vkCmdBeginRendering`; the visibility result buffer borrowed, with the pass's
+/// `visibilityResultType`.
 fn begin(
     building: &mut Building,
     core: &Arc<Core>,
     descriptor: &RenderPassDescriptor,
-) -> Result<(Pass, vk::CommandBuffer), Error> {
+) -> Result<(Pass, vk::CommandBuffer, Option<Visibility>), Error> {
     let pass = Pass::check(core, descriptor)?;
     // The attachments, and where the pass resolves the resolve textures, which the pass writes:
     // a pass that resolves nothing walks no resolve.
@@ -788,11 +813,12 @@ fn begin(
             building.wrote_texture_managed(&r.texture);
         }
     }
-    // Kept as Metal's pass holds it, and no access declared: no draw writes it while `Disabled`
-    // is the only mode built.
-    if let Some(buffer) = &descriptor.visibility_result_buffer {
-        building.keep(buffer);
-    }
+    // Kept as Metal's pass holds it; its writes are the encoder's, at its first mode and its end.
+    let visibility = (descriptor.visibility_result_buffer.as_ref()).map(|buffer| {
+        // SAFETY: the encoder holds the borrow, and it ends before its command buffer commits.
+        let lent = unsafe { building.lend_buffer(buffer) };
+        (lent, descriptor.visibility_result_type)
+    });
     building.overs_before(overs(), false)?;
     let opens = building.opens_command_buffer();
     let command = building.ordered_command()?;
@@ -838,7 +864,7 @@ fn begin(
     // SAFETY: the command buffer records outside any render pass and keeps each attachment's
     // texture until it retires; each attachment is in the layout the pass names.
     unsafe { pass.begin(device, command, false) };
-    Ok((pass, command))
+    Ok((pass, command, visibility))
 }
 
 impl RenderCommandEncoder {
@@ -1359,25 +1385,140 @@ impl RenderCommandEncoder {
         Ok(())
     }
 
-    /// `setVisibilityResultMode:offset:`: `Disabled`, Metal's default, is every draw's, at any
-    /// offset, and records nothing; `Boolean` and `Counting` are not built. A program may set
-    /// `Disabled` with no visibility result buffer and at an offset it never enables.
+    /// The static precision note of a `Boolean` or `Counting` visibility result
+    /// ([`set_visibility_result_mode`](Self::set_visibility_result_mode)).
+    pub const VISIBILITY_NOTE: PrecisionNote = PrecisionNote::DeviceOcclusionCount;
+
+    /// `setVisibilityResultMode:offset:`: from the next draw, the encoder's draws count the
+    /// samples that pass the depth and stencil tests into the 8 bytes at `offset` of the pass's
+    /// visibility result buffer, until the next mode set or the encoder's end; `Disabled`, Metal's
+    /// default, counts none, at any offset, with or without a buffer. Each `Boolean` or `Counting`
+    /// mode set is one precise occlusion query (`crate::visibility`), begun in the rendering
+    /// before its first draw and ended there as the next mode set or the encoder's end ends it;
+    /// the pass copies its count, 64 bits, to the offset after its rendering ends, and a mode with
+    /// no draw writes 0. `Boolean` writes the count too, nonzero exactly where a sample passed
+    /// ([`VisibilityResultMode::Boolean`]). Which samples a device counts is its own
+    /// ([`VISIBILITY_NOTE`](Self::VISIBILITY_NOTE)). The first such mode of the encoder records
+    /// the copies a texture over the buffer in an image of its own owes before the buffer is
+    /// written (`crate::over`), ending the rendering to record them.
     ///
-    /// Err: [`Gap::Draw`] of [`DrawKind::VisibilityResults`] for `Boolean` and `Counting`.
+    /// Once a mode's query has begun, nothing may end the rendering until the next mode set: a
+    /// command that would is refused ([`DrawKind::VisibilityResultInterrupt`]).
+    ///
+    /// Err, for `Boolean` and `Counting`, the encoder's mode unchanged:
+    /// [`Refusal::NoVisibilityResultBuffer`]; [`Refusal::VisibilityResultOffset`] for an offset
+    /// that is not a multiple of 8 or whose 8 bytes run past the buffer;
+    /// [`Refusal::ArgumentPlace`] for an offset at a byte of the buffer's allocation that is not a
+    /// multiple of 8; [`Refusal::VisibilityResultOffsetTaken`]; [`Gap::Draw`] of
+    /// [`DrawKind::AccumulatedVisibilityResults`] in a pass whose `visibilityResultType` is
+    /// `Accumulate`; [`Error::Vulkan`] where the device makes no query pool or the command buffer
+    /// cannot record.
     pub fn set_visibility_result_mode(
         &mut self,
         mode: VisibilityResultMode,
         offset: u64,
     ) -> Result<(), Error> {
-        // Metal reads the offset only for an enabled mode: `Disabled` takes any.
-        match (mode, offset) {
-            (VisibilityResultMode::Disabled, _) => Ok(()),
-            (VisibilityResultMode::Boolean | VisibilityResultMode::Counting, _) => {
-                Err(Error::Unsupported(Gap::Draw {
-                    kind: DrawKind::VisibilityResults,
-                }))
-            }
+        if mode == VisibilityResultMode::Disabled {
+            // SAFETY: the command buffer is inside the pass's rendering and keeps the query's pool
+            // until it retires.
+            unsafe { self.results.end(&self.core.device, self.command) };
+            return Ok(());
         }
+        let accumulate = {
+            let Some((buffer, kind)) = &self.visibility else {
+                return Err(Error::Refused(Refusal::NoVisibilityResultBuffer));
+            };
+            let length = buffer.length();
+            if !offset.is_multiple_of(8) || offset.checked_add(8).is_none_or(|end| end > length) {
+                return Err(Error::Refused(Refusal::VisibilityResultOffset {
+                    offset,
+                    length,
+                }));
+            }
+            let place = buffer.device_range().1 + offset;
+            if !place.is_multiple_of(8) {
+                return Err(Error::Refused(Refusal::ArgumentPlace {
+                    place,
+                    alignment: 8,
+                }));
+            }
+            *kind == VisibilityResultType::Accumulate
+        };
+        if self.results.taken(offset) {
+            return Err(Error::Refused(Refusal::VisibilityResultOffsetTaken {
+                offset,
+            }));
+        }
+        if accumulate {
+            self.building().count(Metric::AccumulatedVisibilityRefused);
+            return Err(Error::Unsupported(Gap::Draw {
+                kind: DrawKind::AccumulatedVisibilityResults,
+            }));
+        }
+        if self.results.is_empty() {
+            self.results_owed()?;
+        }
+        let query = self.building().take_query()?;
+        // SAFETY: as above.
+        unsafe { self.results.end(&self.core.device, self.command) };
+        self.results.start(offset, query);
+        Ok(())
+    }
+
+    /// Before the encoder's first `Boolean` or `Counting` mode, while no query counts its draws:
+    /// the copies that the visibility result buffer's write at the pass's end needs first, of
+    /// textures over it in images of their own and over its device copy (`crate::over`), each
+    /// recorded between the rendering's end and its new beginning; nothing where none is owed.
+    ///
+    /// Err: [`Error::Vulkan`] where the command buffer cannot record.
+    fn results_owed(&mut self) -> Result<(), Error> {
+        let (Some((buffer, _)), Some(building)) = (&self.visibility, self.building.as_mut()) else {
+            return Ok(());
+        };
+        let written = [(Reached::Buffer(buffer.span()), Access::Write)];
+        let copies = building.overs_owed(written, false);
+        let backs = over::backs(&**buffer, None, true);
+        if copies.is_empty() && backs.is_empty() {
+            return Ok(());
+        }
+        self.interrupt(|building, _| {
+            building.record_overs(copies)?;
+            building.managed_backs(backs)
+        })
+    }
+
+    /// After the pass's rendering ends: each visibility result copied into the buffer, written
+    /// as a blit's copy writes it, for textures over it in images of their own and over its
+    /// device copy, and for the host where it is Shared; before the pass's second barrier, which
+    /// orders the copies before every later command.
+    fn copy_results(&self, building: &mut Building) {
+        let Some((buffer, _)) = &self.visibility else {
+            return;
+        };
+        if self.results.is_empty() {
+            return;
+        }
+        // SAFETY: every segment ended; the command buffer records outside any rendering and keeps
+        // the buffer until it retires; each offset was checked a multiple of 8 in its allocation,
+        // its 8 bytes in the buffer (`set_visibility_result_mode`).
+        unsafe {
+            self.results
+                .copy(&self.core.device, self.command, buffer.device_range())
+        };
+        building.overs_after([(Reached::Buffer(buffer.span()), Access::Write)], false);
+        building.wrote_managed(&**buffer);
+        if buffer.is_shared() {
+            building.wrote_host();
+        }
+    }
+
+    /// A command that would end the rendering while a visibility result's query counts the
+    /// draws: refused, and counted.
+    fn interrupt_refused(&mut self) -> Error {
+        self.building().count(Metric::VisibilityInterruptsRefused);
+        Error::Unsupported(Gap::Draw {
+            kind: DrawKind::VisibilityResultInterrupt,
+        })
     }
 
     /// `setDepthClipMode:` for the encoder's later draws: `Clip`, Metal's default, or `Clamp`,
@@ -1485,8 +1626,13 @@ impl RenderCommandEncoder {
     /// without the feedback loop, after draws, every shadow holds nothing from then, so the next
     /// draw that reads an attachment copies what it reads again (`crate::shadow`).
     ///
-    /// Err: [`Error::Vulkan`] where the command buffer cannot record.
+    /// Err: [`Gap::Draw`] of [`DrawKind::VisibilityResultInterrupt`] after a draw that wrote
+    /// memory while a visibility result's query counts the draws, the encoder as it was;
+    /// [`Error::Vulkan`] where the command buffer cannot record.
     pub fn memory_barrier(&mut self) -> Result<(), Error> {
+        if self.wrote && self.results.counting() {
+            return Err(self.interrupt_refused());
+        }
         if self.drew {
             for shadowed in &mut self.shadowed {
                 shadowed.held.clear();
@@ -2374,6 +2520,10 @@ impl RenderCommandEncoder {
                 }
             }
             self.record_state(topology, restart, hidden);
+            // A mode's query begins at its first draw, after what that draw ended the rendering
+            // to record first: the command buffer is inside the pass's rendering, and keeps the
+            // query's pool until it retires.
+            self.results.draw(&self.core.device, command);
         }
         let core = &*self.core;
         let device = &core.device;
@@ -2760,6 +2910,9 @@ impl RenderCommandEncoder {
         overs: bool,
         commands: bool,
     ) -> Result<(), Error> {
+        if self.results.counting() && self.ends_rendering(reads.as_ref(), index, overs) {
+            return Err(self.interrupt_refused());
+        }
         let reads_attachment = match reads {
             Some(found) => {
                 if !found.moves.is_empty() {
@@ -2845,6 +2998,51 @@ impl RenderCommandEncoder {
         }
         self.overs_after(commands);
         Ok(())
+    }
+
+    /// Whether [`draw_reaches`](Self::draw_reaches) may end the rendering for the draw: where it
+    /// moves an image to the feedback layout, pays the barrier owed before an attachment read, or
+    /// reads what an attachment's shadow does not hold; and, not looking at whether a copy is
+    /// owed, where it looks at textures over a buffer in an image of their own (`overs`), or
+    /// reaches a Managed buffer with textures over its device copy.
+    fn ends_rendering(
+        &self,
+        reads: Option<&AttachmentReads>,
+        index: [Option<&Buffer>; 2],
+        overs: bool,
+    ) -> bool {
+        if overs {
+            return true;
+        }
+        if let Some(found) = reads {
+            let held = |(texture, areas): &(Arc<TextureInner>, Vec<Area>)| {
+                let hazard = texture.hazard_id();
+                (self.shadowed.iter())
+                    .find(|s| s.hazard == hazard)
+                    .map_or_else(|| Held::default().holds(areas), |s| s.held.holds(areas))
+            };
+            if !found.moves.is_empty()
+                || (found.reads && self.owed)
+                || !found.shadow_reads.iter().all(held)
+            {
+                return true;
+            }
+        }
+        let Some(state) = &self.pipeline else {
+            return false;
+        };
+        let draws = &state.inner.compiled.draws;
+        let tables = &self.tables;
+        let managed = |buffer: &Arc<BufferInner>| buffer.managed_overs().is_some();
+        let factors = (self.factors.as_ref())
+            .filter(|_| draws.patches)
+            .map(|(buffer, _)| &**buffer);
+        (draws.buffers.iter())
+            .filter_map(|&(table, slot, _)| tables[table].buffer(slot))
+            .chain((draws.bindings.iter()).filter_map(|&(_, index)| tables[VERTEX].buffer(index)))
+            .chain(index.into_iter().flatten().map(BufferObject::object))
+            .chain(factors)
+            .any(managed)
     }
 
     /// After a draw of the pipeline state: what it wrote, for the textures over a buffer in an
@@ -3059,6 +3257,10 @@ impl RenderCommandEncoder {
         &mut self,
         record: impl FnOnce(&mut Building, &Core) -> Result<(), Error>,
     ) -> Result<(), Error> {
+        debug_assert!(
+            !self.results.counting(),
+            "no command ends the rendering while a visibility result's query counts the draws"
+        );
         let building = (self.building.as_mut())
             .expect("an encoder holds its command buffer's recording until it ends");
         let core = &*self.core;
@@ -3075,8 +3277,8 @@ impl RenderCommandEncoder {
         recorded
     }
 
-    /// `endEncoding`: ends the pass, one `vkCmdEndRendering` and the pass's second barrier, owed
-    /// where no attachment moves home.
+    /// `endEncoding`: ends the pass, one `vkCmdEndRendering`, the copies of its visibility
+    /// results, and the pass's second barrier, owed where no attachment moves home.
     pub fn end_encoding(mut self) {
         self.end();
     }
@@ -3107,8 +3309,12 @@ impl RenderCommandEncoder {
         }
         let device = &core.device;
         // SAFETY: the command buffer is inside the pass's rendering, which nothing else records
-        // into while the encoder holds it.
-        unsafe { device.cmd_end_rendering(self.command) };
+        // into while the encoder holds it, and keeps the query's pool until it retires.
+        unsafe {
+            self.results.end(device, self.command);
+            device.cmd_end_rendering(self.command);
+        }
+        self.copy_results(&mut building);
         if self.pass.resolving {
             for _ in self.pass.resolves() {
                 building.count(Metric::Resolves);

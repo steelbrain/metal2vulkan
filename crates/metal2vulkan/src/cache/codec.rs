@@ -1471,6 +1471,7 @@ codec_enum! {
         SimdgroupAccessOrder,
         DeviceLineRasterization,
         DeviceFragmentRuns,
+        DeviceOcclusionCount,
     }
     BindingSource {
         Buffer(f0), Texture(f0), Sampler(f0), CombinedTextureSampler { texture, sampler },

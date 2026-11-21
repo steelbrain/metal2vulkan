@@ -1676,9 +1676,10 @@ the translated module, the pixel format, the descriptor or the state, on every d
 - `DepthStencilState::precision_note`: `DepthDenormals` where the state tests or writes depth;
 - `RenderPassDescriptor::precision_note`: `DeviceRoundedResolve` where a color attachment
   resolves;
-- `BlitCommandEncoder::GENERATE_MIPMAPS_NOTE` (`DeviceFilteredMipmaps`, of `generate_mipmaps`) and
+- `BlitCommandEncoder::GENERATE_MIPMAPS_NOTE` (`DeviceFilteredMipmaps`, of `generate_mipmaps`),
   `RenderCommandEncoder::DEPTH_BIAS_NOTE` (`DeviceDepthBias`, of a draw of triangles under a depth
-  bias).
+  bias) and `RenderCommandEncoder::VISIBILITY_NOTE` (`DeviceOcclusionCount`, of a `Boolean` or
+  `Counting` visibility result).
 
 A note is never fatal: the work runs on every device. The runtime prints and sends no note; a
 consumer reads them through these items. The translator's own API gives a stage's notes
@@ -2564,6 +2565,17 @@ bound.
   documented Metal names no count (MSL section 5.5 makes a function run per sample only for a
   sample-qualified input, `[[sample_id]]` or `[[color(m)]]`). Vulkan runs a fragment shader
   without sample shading at least once per pixel and more where the device chooses (vkspec 35.5).
+- `metal2vulkan-degrade-device-occlusion-count` (precision). `PrecisionNote::DeviceOcclusionCount`:
+  A `Boolean` or `Counting` visibility result (`set_visibility_result_mode`), the static note
+  `RenderCommandEncoder::VISIBILITY_NOTE` on every device. The count is the device's precise
+  occlusion query's, where Metal documents "the number of samples that passed depth and stencil
+  tests". Vulkan does not hold devices to one count ("Occlusion Queries"): a device may kill
+  fragments before rasterization, which then count nothing, and may count the samples that pass
+  once for each colour output; and where `earlyFragmentMultisampleCoverageAfterSampleCounting` is
+  false, a fragment function with early fragment tests may shade and drop coverage before the
+  samples are counted. No bound against Metal's count is measured. Cost: a count can differ from
+  Metal's, and a `Boolean` result with it, where a sample is killed, dropped or counted once per
+  colour output.
 
 ## 10. Accepted differences
 
@@ -2596,6 +2608,12 @@ named states the rule in full.
   `PrecisionNote::DeviceFragmentRuns` (section 9). The conformance case `a2c-off-4-alpha-50` records
   four runs of a fully covered pixel at four samples on an Apple M3 Max, and compares the runs word
   as nonzero alone.
+- **A `Boolean` visibility result is the count of samples that passed.** Metal documents a
+  nonzero result where a sample passed the depth and stencil tests and 0 where none did
+  (`MTLVisibilityResultModeBoolean`); an Apple M3 Max writes 1. Here a `Boolean` mode writes the
+  same precise count as `Counting`, nonzero exactly where a sample passed
+  (`RenderCommandEncoder::VISIBILITY_NOTE`, section 9). The conformance cases `visibility-boolean-*`
+  compare its word as nonzero alone.
 
 **Resource IDs and identifiers**
 

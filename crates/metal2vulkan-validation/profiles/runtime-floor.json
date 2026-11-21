@@ -1150,7 +1150,8 @@
           "dualSrcBlend": true,
           "sampleRateShading": true,
           "vertexPipelineStoresAndAtomics": true,
-          "multiViewport": true
+          "multiViewport": true,
+          "occlusionQueryPrecise": true
         },
         "VkPhysicalDeviceVulkan11Features": {
           "storageBuffer16BitAccess": true,

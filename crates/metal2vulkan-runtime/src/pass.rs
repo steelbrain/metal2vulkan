@@ -68,6 +68,23 @@ pub enum LoadAction {
     Clear,
 }
 
+/// `MTLVisibilityResultType`: what a pass's visibility results do with the words of the
+/// visibility result buffer they are written to.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum VisibilityResultType {
+    /// `MTLVisibilityResultTypeReset`, Metal's default: each offset a mode of the encoder takes
+    /// is written its result; every other word keeps its bytes, as an Apple M3 Max's do (macOS
+    /// 27.0.1).
+    #[default]
+    Reset,
+    /// `MTLVisibilityResultTypeAccumulate`: each result is added to its word. Not built: a
+    /// `Boolean` or `Counting` mode in such a pass is
+    /// [`DrawKind::AccumulatedVisibilityResults`](crate::DrawKind::AccumulatedVisibilityResults);
+    /// a pass whose encoder sets none leaves the buffer as it was, as Metal's does.
+    Accumulate,
+}
+
 /// `MTLStoreAction`: what an attachment keeps as its pass ends.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -342,9 +359,7 @@ impl Default for RenderPassStencilAttachmentDescriptor {
 /// ([`CommandBuffer::render_command_encoder`](crate::CommandBuffer::render_command_encoder)).
 ///
 /// Not built, and so not fields: a rasterization rate map, tile sizes, imageblock and threadgroup
-/// memory lengths and sample buffer attachments. `visibilityResultType` is not a field:
-/// it decides only what an enabled visibility result mode writes, and no mode but `Disabled` is
-/// built.
+/// memory lengths and sample buffer attachments.
 #[derive(Clone, Default)]
 pub struct RenderPassDescriptor {
     /// `colorAttachments`.
@@ -380,13 +395,16 @@ pub struct RenderPassDescriptor {
     /// would render; a length past the device's `maxFramebufferLayers`, [`Gap::RenderPass`] of
     /// [`RenderPassKind::ArrayLength`].
     pub render_target_array_length: u32,
-    /// `visibilityResultBuffer`: `None` by default. The command buffer keeps it until it retires,
-    /// and the pass leaves its bytes as they were: Metal's pass does so under either
-    /// `visibilityResultType` where its encoder enables no mode (an Apple M3 Max, macOS 27.0.1),
-    /// and `Disabled` is the only mode
-    /// [`RenderCommandEncoder::set_visibility_result_mode`](crate::RenderCommandEncoder::set_visibility_result_mode)
-    /// builds. It joins no hazard tracking: no command of the pass reaches it.
+    /// `visibilityResultBuffer`: `None` by default. The command buffer keeps it until it retires.
+    /// The pass writes the 8 bytes at each offset a `Boolean` or `Counting` mode of its encoder
+    /// takes
+    /// ([`RenderCommandEncoder::set_visibility_result_mode`](crate::RenderCommandEncoder::set_visibility_result_mode)),
+    /// after its rendering and before its second barrier, ordered as a blit's write is; every other
+    /// byte keeps its value, as Metal's pass keeps it under either `visibilityResultType` where its
+    /// encoder enables no mode (an Apple M3 Max, macOS 27.0.1).
     pub visibility_result_buffer: Option<Buffer>,
+    /// `visibilityResultType`: [`VisibilityResultType::Reset`] by default.
+    pub visibility_result_type: VisibilityResultType,
 }
 
 impl RenderPassDescriptor {

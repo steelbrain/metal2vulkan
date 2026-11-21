@@ -53,6 +53,7 @@ assoc-const	metal2vulkan-runtime::IndirectCommandType::DRAW_MESH_THREADS	pub con
 assoc-const	metal2vulkan-runtime::IndirectCommandType::DRAW_PATCHES	pub const DRAW_PATCHES: IndirectCommandType
 assoc-const	metal2vulkan-runtime::PixelFormatInfo::INVALID	pub const INVALID: PixelFormatInfo
 assoc-const	metal2vulkan-runtime::RenderCommandEncoder::DEPTH_BIAS_NOTE	pub const DEPTH_BIAS_NOTE: PrecisionNote
+assoc-const	metal2vulkan-runtime::RenderCommandEncoder::VISIBILITY_NOTE	pub const VISIBILITY_NOTE: PrecisionNote
 assoc-const	metal2vulkan-runtime::ResourceUsage::READ	pub const READ: ResourceUsage
 assoc-const	metal2vulkan-runtime::ResourceUsage::SAMPLE	pub const SAMPLE: ResourceUsage
 assoc-const	metal2vulkan-runtime::ResourceUsage::WRITE	pub const WRITE: ResourceUsage
@@ -274,6 +275,7 @@ assoc-const-value	metal2vulkan-runtime::IndirectCommandType::DRAW_MESH_THREADS	I
 assoc-const-value	metal2vulkan-runtime::IndirectCommandType::DRAW_PATCHES	IndirectCommandType(1 <<2)
 assoc-const-value	metal2vulkan-runtime::PixelFormatInfo::INVALID	PixelFormatInfo
 assoc-const-value	metal2vulkan-runtime::RenderCommandEncoder::DEPTH_BIAS_NOTE	PrecisionNote::DeviceDepthBias
+assoc-const-value	metal2vulkan-runtime::RenderCommandEncoder::VISIBILITY_NOTE	PrecisionNote::DeviceOcclusionCount
 assoc-const-value	metal2vulkan-runtime::ResourceUsage::READ	ResourceUsage(1)
 assoc-const-value	metal2vulkan-runtime::ResourceUsage::SAMPLE	ResourceUsage(4)
 assoc-const-value	metal2vulkan-runtime::ResourceUsage::WRITE	ResourceUsage(2)
@@ -791,6 +793,7 @@ enum	metal2vulkan-runtime::SurfaceForm	#[derive(Clone, Copy, Debug, PartialEq, E
 enum	metal2vulkan-runtime::TextureViewKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TextureViewKind
 enum	metal2vulkan-runtime::VariantStart	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum VariantStart
 enum	metal2vulkan-runtime::VisibilityResultMode	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum VisibilityResultMode
+enum	metal2vulkan-runtime::VisibilityResultType	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum VisibilityResultType
 enum	metal2vulkan-runtime::floor::Missing	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Missing
 enum	metal2vulkan::bind::AccessClass	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum AccessClass
 enum	metal2vulkan::bind::ArgumentLayoutError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum ArgumentLayoutError
@@ -1523,6 +1526,7 @@ field	metal2vulkan-runtime::Gauges.indirect_command_buffers	pub indirect_command
 field	metal2vulkan-runtime::Gauges.kernel_entries	pub kernel_entries: u64
 field	metal2vulkan-runtime::Gauges.kernels	pub kernels: u64
 field	metal2vulkan-runtime::Gauges.managed_spilled_bytes	pub managed_spilled_bytes: u64
+field	metal2vulkan-runtime::Gauges.occlusion_pools	pub occlusion_pools: u64
 field	metal2vulkan-runtime::Gauges.pipeline_cache_bytes	pub pipeline_cache_bytes: u64
 field	metal2vulkan-runtime::Gauges.pipelines	pub pipelines: u64
 field	metal2vulkan-runtime::Gauges.preprocess_idle_bytes	pub preprocess_idle_bytes: u64
@@ -1583,6 +1587,7 @@ field	metal2vulkan-runtime::IndirectCommandBufferDescriptor.inherit_pipeline_sta
 field	metal2vulkan-runtime::IndirectCommandBufferDescriptor.max_fragment_buffer_bind_count	pub max_fragment_buffer_bind_count: u32
 field	metal2vulkan-runtime::IndirectCommandBufferDescriptor.max_kernel_buffer_bind_count	pub max_kernel_buffer_bind_count: u32
 field	metal2vulkan-runtime::IndirectCommandBufferDescriptor.max_vertex_buffer_bind_count	pub max_vertex_buffer_bind_count: u32
+field	metal2vulkan-runtime::Metrics.accumulated_visibility_refused	pub accumulated_visibility_refused: u64
 field	metal2vulkan-runtime::Metrics.allocation_map_refusals	pub allocation_map_refusals: u64
 field	metal2vulkan-runtime::Metrics.allocations_freed	pub allocations_freed: u64
 field	metal2vulkan-runtime::Metrics.allocations_mapped	pub allocations_mapped: u64
@@ -1754,6 +1759,7 @@ field	metal2vulkan-runtime::Metrics.translations	pub translations: u64
 field	metal2vulkan-runtime::Metrics.translations_loaded	pub translations_loaded: u64
 field	metal2vulkan-runtime::Metrics.untimed_command_buffers	pub untimed_command_buffers: u64
 field	metal2vulkan-runtime::Metrics.upload_waits	pub upload_waits: u64
+field	metal2vulkan-runtime::Metrics.visibility_interrupts_refused	pub visibility_interrupts_refused: u64
 field	metal2vulkan-runtime::Metrics.waits_behind_counter	pub waits_behind_counter: u64
 field	metal2vulkan-runtime::Metrics.zero_source_allocations	pub zero_source_allocations: SiteAllocations
 field	metal2vulkan-runtime::Metrics.zero_writes	pub zero_writes: Timed
@@ -1804,6 +1810,7 @@ field	metal2vulkan-runtime::RenderPassDescriptor.render_target_height	pub render
 field	metal2vulkan-runtime::RenderPassDescriptor.render_target_width	pub render_target_width: u32
 field	metal2vulkan-runtime::RenderPassDescriptor.stencil_attachment	pub stencil_attachment: RenderPassStencilAttachmentDescriptor
 field	metal2vulkan-runtime::RenderPassDescriptor.visibility_result_buffer	pub visibility_result_buffer: Option<Buffer>
+field	metal2vulkan-runtime::RenderPassDescriptor.visibility_result_type	pub visibility_result_type: VisibilityResultType
 field	metal2vulkan-runtime::RenderPassStencilAttachmentDescriptor.clear_stencil	pub clear_stencil: u32
 field	metal2vulkan-runtime::RenderPassStencilAttachmentDescriptor.level	pub level: u32
 field	metal2vulkan-runtime::RenderPassStencilAttachmentDescriptor.load_action	pub load_action: LoadAction
@@ -9206,6 +9213,7 @@ variant	metal2vulkan-runtime::Dispatch::Threadgroups	Threadgroups([u32; 3])
 variant	metal2vulkan-runtime::Dispatch::Threads	Threads([u32; 3])
 variant	metal2vulkan-runtime::DispatchType::Concurrent	Concurrent
 variant	metal2vulkan-runtime::DispatchType::Serial	Serial
+variant	metal2vulkan-runtime::DrawKind::AccumulatedVisibilityResults	AccumulatedVisibilityResults
 variant	metal2vulkan-runtime::DrawKind::AttachmentFormats	AttachmentFormats
 variant	metal2vulkan-runtime::DrawKind::AttachmentRead	AttachmentRead
 variant	metal2vulkan-runtime::DrawKind::DividedBaseInstance	DividedBaseInstance
@@ -9215,7 +9223,7 @@ variant	metal2vulkan-runtime::DrawKind::LineWidth	LineWidth
 variant	metal2vulkan-runtime::DrawKind::PatchIndexBuffer	PatchIndexBuffer
 variant	metal2vulkan-runtime::DrawKind::Viewport	Viewport
 variant	metal2vulkan-runtime::DrawKind::Viewports	Viewports
-variant	metal2vulkan-runtime::DrawKind::VisibilityResults	VisibilityResults
+variant	metal2vulkan-runtime::DrawKind::VisibilityResultInterrupt	VisibilityResultInterrupt
 variant	metal2vulkan-runtime::Error::BelowFloor	BelowFloor(BelowFloor)
 variant	metal2vulkan-runtime::Error::Fd	Fd(io::Error)
 variant	metal2vulkan-runtime::Error::Limit	Limit(Limit)
@@ -9348,6 +9356,7 @@ variant	metal2vulkan-runtime::PrecisionNote::DeviceInterpolation	DeviceInterpola
 variant	metal2vulkan-runtime::PrecisionNote::DeviceInterpolationOffset	DeviceInterpolationOffset
 variant	metal2vulkan-runtime::PrecisionNote::DeviceLineRasterization	DeviceLineRasterization
 variant	metal2vulkan-runtime::PrecisionNote::DeviceNanEncoding	DeviceNanEncoding
+variant	metal2vulkan-runtime::PrecisionNote::DeviceOcclusionCount	DeviceOcclusionCount
 variant	metal2vulkan-runtime::PrecisionNote::DevicePackConversion	DevicePackConversion
 variant	metal2vulkan-runtime::PrecisionNote::DevicePointSize	DevicePointSize
 variant	metal2vulkan-runtime::PrecisionNote::DeviceRayIntersection	DeviceRayIntersection
@@ -9460,6 +9469,7 @@ variant	metal2vulkan-runtime::Refusal::NoBufferAtIndex	NoBufferAtIndex { index: 
 variant	metal2vulkan-runtime::Refusal::NoCommandBuffers	NoCommandBuffers
 variant	metal2vulkan-runtime::Refusal::NoPipeline	NoPipeline
 variant	metal2vulkan-runtime::Refusal::NoTessellationFactorBuffer	NoTessellationFactorBuffer
+variant	metal2vulkan-runtime::Refusal::NoVisibilityResultBuffer	NoVisibilityResultBuffer
 variant	metal2vulkan-runtime::Refusal::NotDrawable	NotDrawable
 variant	metal2vulkan-runtime::Refusal::NotExported	NotExported { block: BlockId }
 variant	metal2vulkan-runtime::Refusal::OtherDevice	OtherDevice
@@ -9491,6 +9501,8 @@ variant	metal2vulkan-runtime::Refusal::TextureZeroExtent	TextureZeroExtent
 variant	metal2vulkan-runtime::Refusal::ThreadgroupSize	ThreadgroupSize { size: [u32; 3], max: u32 }
 variant	metal2vulkan-runtime::Refusal::VertexBufferOffset	VertexBufferOffset { index: u32, offset: u64, length: u64 }
 variant	metal2vulkan-runtime::Refusal::ViewportNotFinite	ViewportNotFinite
+variant	metal2vulkan-runtime::Refusal::VisibilityResultOffset	VisibilityResultOffset { offset: u64, length: u64 }
+variant	metal2vulkan-runtime::Refusal::VisibilityResultOffsetTaken	VisibilityResultOffsetTaken { offset: u64 }
 variant	metal2vulkan-runtime::Refusal::WaitOnOwnThread	WaitOnOwnThread
 variant	metal2vulkan-runtime::Refusal::ZeroRangePastBlock	ZeroRangePastBlock { offset: u64, length: u64, block_len: u64 }
 variant	metal2vulkan-runtime::Refusal::ZeroRangeShared	ZeroRangeShared { block: BlockId }
@@ -9568,6 +9580,8 @@ variant	metal2vulkan-runtime::VariantStart::State	State
 variant	metal2vulkan-runtime::VisibilityResultMode::Boolean	Boolean
 variant	metal2vulkan-runtime::VisibilityResultMode::Counting	Counting
 variant	metal2vulkan-runtime::VisibilityResultMode::Disabled	Disabled
+variant	metal2vulkan-runtime::VisibilityResultType::Accumulate	Accumulate
+variant	metal2vulkan-runtime::VisibilityResultType::Reset	Reset
 variant	metal2vulkan-runtime::floor::Missing::Extension	Extension(&'static CStr)
 variant	metal2vulkan-runtime::floor::Missing::Feature	Feature { structure: &'static str, member: String }
 variant	metal2vulkan-runtime::floor::Missing::Limit	Limit { name: &'static str, device: u32, needed: u32 }
@@ -10477,7 +10491,6 @@ variant	metal2vulkan::error::Feature::ComputeDerivativesWithSimd	ComputeDerivati
 variant	metal2vulkan::error::Feature::Constant	Constant { record: ConstantRecord }
 variant	metal2vulkan::error::Feature::ConstantAlphaBlendFactor	ConstantAlphaBlendFactor
 variant	metal2vulkan::error::Feature::ConstantGlobalEscaping	ConstantGlobalEscaping
-variant	metal2vulkan::error::Feature::CountingVisibility	CountingVisibility
 variant	metal2vulkan::error::Feature::CubeArray	CubeArray
 variant	metal2vulkan::error::Feature::DepthBiasClamp	DepthBiasClamp
 variant	metal2vulkan::error::Feature::DepthClipClamp	DepthClipClamp
@@ -10894,6 +10907,7 @@ variant	metal2vulkan::pipeline::PrecisionNote::DeviceInterpolation	DeviceInterpo
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceInterpolationOffset	DeviceInterpolationOffset
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceLineRasterization	DeviceLineRasterization
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceNanEncoding	DeviceNanEncoding
+variant	metal2vulkan::pipeline::PrecisionNote::DeviceOcclusionCount	DeviceOcclusionCount
 variant	metal2vulkan::pipeline::PrecisionNote::DevicePackConversion	DevicePackConversion
 variant	metal2vulkan::pipeline::PrecisionNote::DevicePointSize	DevicePointSize
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceRayIntersection	DeviceRayIntersection

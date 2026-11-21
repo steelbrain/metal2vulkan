@@ -27,6 +27,7 @@ use crate::sampler::{Constexpr, SamplerTable};
 use crate::submit::{self, Work};
 use crate::submit_calls::SubmitCalls;
 use crate::times::{StampPools, Ticks};
+use crate::visibility::OcclusionPools;
 use ash::vk;
 use metal2vulkan::device::{ApiVersion, DeviceDescription, DevicePolicy};
 use metal2vulkan::metal::{ArgumentBuffersTier, ReadWriteTextureTier};
@@ -338,6 +339,8 @@ pub(crate) struct Core {
     pub(crate) reaper: Reaper,
     /// The timestamp pools every command buffer takes its pair of queries from.
     pub(crate) stamps: StampPools,
+    /// The occlusion query pools command buffers take their visibility results' queries from.
+    pub(crate) occlusion: OcclusionPools,
     /// The one pipeline layout of every pipeline: the empty set 0, set 1, and the push window
     /// over every stage.
     pub(crate) layout: vk::PipelineLayout,
@@ -792,6 +795,7 @@ impl Device {
             done,
             reaper: Reaper::new(),
             stamps: StampPools::new(),
+            occlusion: OcclusionPools::new(),
             layout,
             arrays,
             samplers: Mutex::new(SamplerTable::new(sampler_cap)),
@@ -1679,6 +1683,7 @@ impl Drop for Core {
         #[cfg(unix)]
         self.imports.destroy(&self.device);
         self.stamps.destroy(&self.device, &self.counters);
+        self.occlusion.destroy(&self.device, &self.counters);
         // SAFETY: the device is idle; nothing reads the ring.
         let ring_blocks = unsafe { self.ring.destroy(&self.device) };
         let filler = self.filler.take();

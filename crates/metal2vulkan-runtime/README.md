@@ -3443,10 +3443,11 @@ cache is answered compile-required on both.
   without `fillModeNonSolid` (KosmicKrisp on the M3 Max, of the venues dumped, m3-max-48737) and
   the fill mode of raw value 2, which no SDK header declares (`FillMode`,
   `set_triangle_fill_mode`), no viewport or scissor rectangle, or more than 16 (`Viewports`,
-  `set_viewports`, `set_scissor_rects`), a visibility result mode but `Disabled`
-  (`VisibilityResults`, `set_visibility_result_mode`), each refused where it is set, the
-  encoder's state unchanged; the replay streams set Metal's defaults alone, which those setters
-  take as nothing; a draw of lines or a line strip while the encoder's line width
+  `set_viewports`, `set_scissor_rects`), and a `Boolean` or `Counting` visibility result mode in a
+  pass whose `visibility_result_type` is `Accumulate` (`AccumulatedVisibilityResults`,
+  `set_visibility_result_mode`; counted in `Metrics::accumulated_visibility_refused`), each
+  refused where it is set, the encoder's state unchanged; the replay streams set Metal's defaults
+  alone, which those setters take as nothing; a draw of lines or a line strip while the encoder's line width
   (`set_line_width`, which keeps every width) is not 1 (`LineWidth`): Metal draws such a line as
   a parallelogram that width wide, and Vulkan's wider lines are a device feature (`wideLines`)
   the floor does not require; a
@@ -3518,15 +3519,43 @@ cache is answered compile-required on both.
   robustness, so there is no bounds guarantee beyond the device's. A post-tessellation function's
   control points and a kernel's stage-in are fetched in the shader instead, checked as a buffer
   argument's access is (see "Known gaps").
-- A pass's visibility result buffer (`visibility_result_buffer`, Metal's
-  `visibilityResultBuffer`) is kept by the command buffer until it retires, and its bytes stay as
-  they were: no command of the pass reaches it, and it joins no hazard tracking.
-  `set_visibility_result_mode` (`setVisibilityResultMode:offset:`) takes `Disabled` at any offset
-  and records nothing. Metal's pass leaves the buffer's bytes as they were under either
-  `visibilityResultType` where its encoder enables no mode (an Apple M3 Max, macOS 27.0.1; the
-  conformance cases `visibility-disabled-reset` and `visibility-disabled-accumulate`), so the
-  result type is not a field. The replay streams that set a visibility result buffer enable no
-  mode.
+- Visibility results (`set_visibility_result_mode`, Metal's `setVisibilityResultMode:offset:`):
+  each `Boolean` or `Counting` mode set counts the samples its later draws pass, up to the next
+  mode set or the encoder's end, in one precise occlusion query (`occlusionQueryPrecise`, the
+  floor's), begun in the pass's rendering before the mode's first draw and ended there as the
+  mode ends; a mode with no draw counts none. After the rendering ends, the pass copies each
+  count, 64 bits, into the visibility result buffer (`visibility_result_buffer`, Metal's
+  `visibilityResultBuffer`) at its offset, one `vkCmdCopyQueryPoolResults` for each run of
+  offsets 8 bytes apart, before the pass's second barrier, which orders the copies before every
+  later command; the host sees them once the command buffer completes, as a blit's write. Every
+  other byte of the buffer keeps its value, as Metal's pass keeps it; a pass whose encoder
+  enables no mode leaves the buffer as it was under either `visibility_result_type` (an Apple M3
+  Max, macOS 27.0.1; the conformance cases `visibility-disabled-reset` and
+  `visibility-disabled-accumulate`). `Disabled` takes any offset, with or without a buffer. A
+  `Boolean` mode writes the count too, which is nonzero exactly where a sample passed (Metal
+  documents a nonzero word; an Apple M3 Max writes 1), and the count is the device's own
+  (`RenderCommandEncoder::VISIBILITY_NOTE`, `PrecisionNote::DeviceOcclusionCount`). Metal's own
+  refusals, each where the mode is set, the encoder's mode unchanged: a mode with no visibility
+  result buffer (`Refusal::NoVisibilityResultBuffer`), at an offset that is not a multiple of 8
+  or whose 8 bytes run past the buffer (`Refusal::VisibilityResultOffset`), and at an offset a
+  mode of the encoder took before (`Refusal::VisibilityResultOffsetTaken`: Apple documents each
+  offset as set once per pass). A command buffer takes its queries from pools of its own, 256
+  queries each, which the device lends it and takes back as it retires, each query reset on the
+  host (`hostQueryReset`); the device keeps at most 16 free (`Gauges::occlusion_pools`).
+- While a `Boolean` or `Counting` mode's query counts the draws (from the mode's first draw to the
+  next mode set or the encoder's end), a command that would end the pass's rendering is refused,
+  `Gap::Draw` of `VisibilityResultInterrupt`, the encoder as it was, and counted in
+  `Metrics::visibility_interrupts_refused`: a memory barrier after a draw that wrote memory; a
+  draw that moves an attachment to the feedback layout, pays the barrier owed before an
+  attachment read, or copies into an attachment's shadow what it reads; and, whether or not a
+  copy is owed, a draw that looks at textures over a buffer in images of their own (one bound or
+  declared, or, while such a texture lives, a draw through addresses outside its resources, an
+  execution of an indirect command buffer, or a draw while such a texture's image is ahead of its
+  buffer) or that reaches a Managed buffer with textures over its device copy. Vulkan's query
+  begins and ends inside one rendering, and carrying a count across the rendering's end into a
+  second query, with the parts added, is not built. A mode's first draw may still end the
+  rendering, before the query begins, and so may every command after a mode set before its first
+  draw.
 - `use_resource` is `useResource:usage:stages:`, its plural and their deprecated forms without
   stages: the command buffer keeps the buffer or the texture until it retires, and nothing is
   recorded. The stages are not read: every resource is resident to every function, and the pass's
@@ -4013,6 +4042,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `dualSrcBlend` | `VkPhysicalDeviceFeatures` | a fragment function's second output for colour attachment 0 (`[[color(0), index(1)]]`) as the blend's second source (`Source1Color`, `Source1Alpha` and their complements) |
 | `sampleRateShading` | `VkPhysicalDeviceFeatures` | a fragment function that reads its `[[sample_id]]`, or an interpolant at a sample, run once per covered sample as Metal runs it; Vulkan 1.4 requires it |
 | `vertexPipelineStoresAndAtomics` | `VkPhysicalDeviceFeatures` | a vertex or post-tessellation vertex function's writes and atomics on device memory |
+| `occlusionQueryPrecise` | `VkPhysicalDeviceFeatures` | a `Boolean` or `Counting` visibility result (`set_visibility_result_mode`), a precise occlusion query's count; Roadmap 2022 requires it, and every venue's device profile reports it |
 | `multiview` | `VkPhysicalDeviceVulkan11Features` | Vulkan 1.1 requires it; the translator's multiview forms |
 | `shaderDrawParameters` | `VkPhysicalDeviceVulkan11Features` | a vertex function's `[[base_vertex]]` and `[[base_instance]]` as the draw's own `BaseVertex` and `BaseInstance`, so no draw pushes its bases; Vulkan 1.1 requires it where the device lists `VK_KHR_shader_draw_parameters`, Roadmap 2024 of every device |
 | `shaderSubgroupExtendedTypes` | `VkPhysicalDeviceVulkan12Features` | SIMD-group operations on 8-, 16- and 64-bit values; Vulkan 1.2 requires it |
@@ -4020,7 +4050,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `shaderTerminateInvocation` | `VkPhysicalDeviceVulkan13Features` | a fragment's termination; Vulkan 1.3 requires it |
 | `shaderZeroInitializeWorkgroupMemory` | `VkPhysicalDeviceVulkan13Features` | threadgroup memory zeroed at its declaration where the translator zeroes it; Vulkan 1.3 requires it |
 | `timelineSemaphore` | `VkPhysicalDeviceVulkan12Features` | submission and completion |
-| `hostQueryReset` | `VkPhysicalDeviceVulkan12Features` | a command buffer's timestamp queries reset on the host as it retires |
+| `hostQueryReset` | `VkPhysicalDeviceVulkan12Features` | a command buffer's timestamp and occlusion queries reset on the host as it retires |
 | `synchronization2` | `VkPhysicalDeviceVulkan13Features` | barriers, layout changes and submission |
 | `dynamicRendering` | `VkPhysicalDeviceVulkan13Features` | render passes |
 | `pipelineCreationCacheControl` | `VkPhysicalDeviceVulkan13Features` | a kernel past the stage bound created from its helper's cache data alone, never compiled in the process (Kernels past the stage bound); Vulkan 1.3 requires it |

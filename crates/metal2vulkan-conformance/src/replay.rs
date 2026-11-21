@@ -480,7 +480,9 @@ pub fn reads_opaque_black_border(spec: &crate::case::SamplerSpec) -> bool {
 ///   alpha to one draws its lines in, Vulkan's Bresenham mode taking neither
 ///   (`device-line-rasterization`), announced by every such state whether or not it draws lines;
 /// - **depth bias**: the device's own slope measure and unit of a draw of triangles under a depth
-///   bias (`device-depth-bias`), announced by every such draw.
+///   bias (`device-depth-bias`), announced by every such draw;
+/// - **visibility results**: the device's own precise occlusion count of a `Boolean` or `Counting`
+///   visibility result (`device-occlusion-count`), announced by every such mode set.
 ///
 /// **What is not here**, and stays each case's to declare: a note of what the device **lacks**
 /// (`device-signed-zero-inf-nan`, `device-anisotropic-filter`, `device-point-size`,
@@ -534,6 +536,7 @@ pub const NATIVE_NOTES: &[crate::degradation::Degradation] = {
         D::DeviceAlphaCoverage,
         D::DeviceLineRasterization,
         D::DeviceDepthBias,
+        D::DeviceOcclusionCount,
     ]
 };
 

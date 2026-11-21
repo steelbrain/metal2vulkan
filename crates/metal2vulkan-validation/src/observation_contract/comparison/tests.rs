@@ -91,6 +91,7 @@ fn every_precision_note_has_its_table_row() {
         (N::SimdgroupAccessOrder, Allowance::Unbounded),
         (N::DeviceLineRasterization, Allowance::Unbounded),
         (N::DeviceFragmentRuns, Allowance::Unbounded),
+        (N::DeviceOcclusionCount, Allowance::Unbounded),
     ];
     for (note, expected) in rows {
         assert_eq!(allowance(note), expected, "{note:?}");

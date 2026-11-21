@@ -43,14 +43,13 @@ fn every_committed_profile_derives() {
     }
 }
 
-/// `occlusionQueryPrecise` is read from each committed profile whose source states it, and enabled
-/// there: every venue's source does; the derived Vulkan 1.2 floor, whose base
-/// (`VP_LUNARG_minimum_requirements_1_2`) does not require it, leaves it unstated.
+/// `occlusionQueryPrecise` is read from each committed profile, and enabled there: every venue's
+/// source states it, and the runtime floor's block (`m2v_runtime_floor`) requires it.
 #[test]
 fn occlusion_query_precise_follows_each_source() {
     for (stem, text) in committed_profiles() {
         let stated = text.contains("\"occlusionQueryPrecise\": true");
-        assert_eq!(stated, stem != "runtime-floor", "{stem}");
+        assert!(stated, "{stem}");
         let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
         assert_eq!(
             desc.features.contains(&VkFeature::OcclusionQueryPrecise),

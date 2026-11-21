@@ -880,9 +880,6 @@ pub enum Feature {
     /// A command buffer's GPU times (`GPUStartTime`, `GPUEndTime`) on a device whose queue
     /// family writes no timestamps (`timestampValidBits` 0).
     GpuTimes,
-    /// A `Counting` visibility result (`MTLVisibilityResultModeCounting`) on a device without
-    /// `occlusionQueryPrecise`: the samples that passed are a precise occlusion query's count.
-    CountingVisibility,
     /// A texture view whose format has other components, or components of other widths, than
     /// its texture's (`RGBA8Unorm` as `R32Uint`), on a device whose `VK_KHR_portability_subset`
     /// withholds `imageViewFormatReinterpretation`, or that the runtime adopted without being

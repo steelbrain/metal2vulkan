@@ -117,7 +117,6 @@ feature	TextureSwizzle	app	texture swizzles whose Metal behaviour is unmeasured
 feature	MipmapGeneration	app	generateMipmapsForTexture: of a format or chain neither the device's blits nor the compute filter can run
 feature	HostMemory	system	newBufferWithBytesNoCopy: where the device cannot import the memory
 feature	GpuTimes	rare	GPU times on a queue without timestamps
-feature	CountingVisibility	rare	counting occlusion queries on a device without precise queries
 feature	ViewFormatReinterpretation	app	a view of another component layout on a portability subset (MoltenVK)
 feature	SeparateMultisampledDepthStencil	rare	separate multisampled depth and stencil textures
 feature	PostDepthCoverage	rare	the coverage after early depth and stencil tests on a device without VK_EXT_post_depth_coverage

@@ -2114,6 +2114,25 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
     DeviceFragmentRuns,
+    /// A `Boolean` or `Counting` visibility result (`setVisibilityResultMode:offset:`): the count
+    /// of samples that passed is the device's precise occlusion query's
+    /// (`VK_QUERY_CONTROL_PRECISE_BIT`), where Metal documents "the number of samples that passed
+    /// depth and stencil tests". Vulkan lets devices count otherwise ("Occlusion Queries"):
+    /// "Setting VK_QUERY_CONTROL_PRECISE_BIT does not guarantee that different implementations
+    /// return the same number of samples in an occlusion query. Some implementations may kill
+    /// fragments in the pre-rasterization shader stage, and these killed fragments do not
+    /// contribute to the final result of the query", and "Some implementations may track the
+    /// number of samples that pass the per-fragment tests multiplied for each color output"; and
+    /// on a device whose `earlyFragmentMultisampleCoverageAfterSampleCounting` is false, a fragment
+    /// function with early fragment tests may have its shading and its coverage "performed before
+    /// sample counting" ("Fragment Operations"). A `Boolean` result is the same count, nonzero
+    /// exactly where the count is. Static per operation: no pipeline stage records it;
+    /// `metal2vulkan-runtime`'s render encoder carries it
+    /// (`RenderCommandEncoder::VISIBILITY_NOTE`).
+    ///
+    /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
+    /// explains.
+    DeviceOcclusionCount,
 }
 
 /// Which lowering strategies a module used, with their word costs.

@@ -1730,7 +1730,7 @@ MTLRenderPass.h	MTLRenderPassDescriptor	method	setSamplePositions:count:		M			pr
 MTLRenderPass.h	MTLRenderPassDescriptor	method	getSamplePositions:count:		M			programmable sample positions	M	render-pass
 MTLRenderPass.h	MTLRenderPassDescriptor	property	rasterizationRateMap		M			rasterization rate maps	L	render-pass
 MTLRenderPass.h	MTLRenderPassDescriptor	property	sampleBufferAttachments		M			counter sample buffers	M	counters
-MTLRenderPass.h	MTLRenderPassDescriptor	property	visibilityResultType		M			what an enabled visibility result mode writes; only `Disabled` is built	S	render-pass
+MTLRenderPass.h	MTLRenderPassDescriptor	property	visibilityResultType		I	runtime	RenderPassDescriptor.visibility_result_type			
 MTLRenderPass.h	MTLRenderPassDescriptor	property	supportColorAttachmentMapping		M			color attachment mapping	M	colormap
 MTLRenderPass.h		function	MTLClearColorMake		I	runtime	ClearColor::new			
 MTLRenderPipeline.h	MTLRenderPipelineColorAttachmentDescriptor	class	MTLRenderPipelineColorAttachmentDescriptor		I	translator	ColorAttachmentDescriptor			

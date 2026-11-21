@@ -260,10 +260,14 @@ pub(crate) enum Metric {
     StageFills,
     /// [`Metrics::pipelines_from_stage_fills`].
     PipelinesFromStageFills,
+    /// [`Metrics::visibility_interrupts_refused`].
+    VisibilityInterruptsRefused,
+    /// [`Metrics::accumulated_visibility_refused`].
+    AccumulatedVisibilityRefused,
 }
 
 /// The number of [`Metric`]s.
-const METRICS: usize = Metric::PipelinesFromStageFills as usize + 1;
+const METRICS: usize = Metric::AccumulatedVisibilityRefused as usize + 1;
 
 /// Every [`Metric`], in its order: each at its own index.
 const METRIC_ORDER: [Metric; METRICS] = [
@@ -305,6 +309,8 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::PreprocessRegionsRemade,
     Metric::StageFills,
     Metric::PipelinesFromStageFills,
+    Metric::VisibilityInterruptsRefused,
+    Metric::AccumulatedVisibilityRefused,
 ];
 
 // Each metric of the order is at its own index.
@@ -404,6 +410,8 @@ pub(crate) enum Gauge {
     TexturesCopiedOver,
     /// [`Gauges::timestamp_pools`].
     TimestampPools,
+    /// [`Gauges::occlusion_pools`].
+    OcclusionPools,
     /// [`Gauges::imports`].
     Imports,
     /// [`Gauges::exports`].
@@ -668,6 +676,8 @@ struct Atomics {
     preprocess_regions_remade: AtomicU64,
     stage_fills: AtomicU64,
     pipelines_from_stage_fills: AtomicU64,
+    visibility_interrupts_refused: AtomicU64,
+    accumulated_visibility_refused: AtomicU64,
     /// Each [`Part`]'s calls, at its index: their count, bytes, total and longest nanoseconds,
     /// and those over each of [`OVER_NANOS`].
     parts: [[AtomicU64; 7]; PARTS],
@@ -715,6 +725,7 @@ struct Atomics {
     shadow_bytes: AtomicU64,
     textures_copied_over: AtomicU64,
     timestamp_pools: AtomicU64,
+    occlusion_pools: AtomicU64,
     imports: AtomicU64,
     exports: AtomicU64,
     surface_imports: AtomicU64,
@@ -816,6 +827,8 @@ impl Counters {
             Metric::PreprocessRegionsRemade => &a.preprocess_regions_remade,
             Metric::StageFills => &a.stage_fills,
             Metric::PipelinesFromStageFills => &a.pipelines_from_stage_fills,
+            Metric::VisibilityInterruptsRefused => &a.visibility_interrupts_refused,
+            Metric::AccumulatedVisibilityRefused => &a.accumulated_visibility_refused,
         }
     }
 
@@ -1399,6 +1412,7 @@ impl Counters {
             Gauge::ShadowBytes => &a.shadow_bytes,
             Gauge::TexturesCopiedOver => &a.textures_copied_over,
             Gauge::TimestampPools => &a.timestamp_pools,
+            Gauge::OcclusionPools => &a.occlusion_pools,
             Gauge::Imports => &a.imports,
             Gauge::Exports => &a.exports,
             Gauge::SurfaceImports => &a.surface_imports,
@@ -1640,6 +1654,8 @@ impl Counters {
             preprocess_regions_remade: a.preprocess_regions_remade.load(Relaxed),
             stage_fills: a.stage_fills.load(Relaxed),
             pipelines_from_stage_fills: a.pipelines_from_stage_fills.load(Relaxed),
+            visibility_interrupts_refused: a.visibility_interrupts_refused.load(Relaxed),
+            accumulated_visibility_refused: a.accumulated_visibility_refused.load(Relaxed),
             takes: part(Part::Take),
             take_lock_waits: part(Part::TakeLock),
             take_makes: part(Part::TakeMake),
@@ -1710,6 +1726,7 @@ impl Counters {
             shadow_bytes: a.shadow_bytes.load(Relaxed),
             textures_copied_over: a.textures_copied_over.load(Relaxed),
             timestamp_pools: a.timestamp_pools.load(Relaxed),
+            occlusion_pools: a.occlusion_pools.load(Relaxed),
             imports: a.imports.load(Relaxed),
             exports: a.exports.load(Relaxed),
             surface_imports: a.surface_imports.load(Relaxed),
@@ -2446,6 +2463,16 @@ pub struct Metrics {
     /// so the driver compiled nothing for them in this process. Each is counted in
     /// [`pipelines_created`](Self::pipelines_created) too.
     pub pipelines_from_stage_fills: u64,
+    /// Commands a render encoder refused because they would end its pass's rendering while a
+    /// `Boolean` or `Counting` visibility result's query counts the draws
+    /// ([`DrawKind::VisibilityResultInterrupt`](crate::DrawKind::VisibilityResultInterrupt)):
+    /// memory barriers and draws the guest asked for that did not run.
+    pub visibility_interrupts_refused: u64,
+    /// `setVisibilityResultMode:offset:` calls of a `Boolean` or `Counting` mode refused in a pass
+    /// whose `visibilityResultType` is `Accumulate`
+    /// ([`DrawKind::AccumulatedVisibilityResults`](crate::DrawKind::AccumulatedVisibilityResults)):
+    /// results the guest asked for that were not written.
+    pub accumulated_visibility_refused: u64,
     /// Takes from the pool on the consumer's threads, each whole: a block of
     /// [`Device::take_block`](crate::Device::take_block) and a texture block, carved from a free
     /// range or from an allocation the take made ([`take_makes`](Self::take_makes)); their bytes
@@ -2725,6 +2752,10 @@ pub struct Gauges {
     /// from its first record until its times are read at its completion: made as command buffers
     /// need them, and kept until the device drops.
     pub timestamp_pools: u64,
+    /// The device's occlusion query pools, each of 256 queries, for render encoders' visibility
+    /// results: a command buffer takes them as its encoders set `Boolean` and `Counting` modes,
+    /// and gives them back as it retires; at most 16 are kept free, and the rest destroyed.
+    pub occlusion_pools: u64,
     /// Imports whose memory is not yet freed: one for each imported block
     /// (`Device::import_dma_buf` on Unix,
     /// [`Device::import_host_memory`](crate::Device::import_host_memory)), and one for each

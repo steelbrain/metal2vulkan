@@ -68,9 +68,9 @@
 //!     a pipeline state of other formats than the pass's, a depth test, a stencil test without a
 //!     stencil attachment, a misaligned index offset, a non-finite viewport and a mirrored one.
 //!   - a pass with a visibility result buffer draws, its command buffer keeps the buffer until it
-//!     retires, and its bytes stay as they were; `Disabled` at any offset records nothing, the
-//!     pass takes the submission, barrier and pass one without the buffer takes, and `Boolean`
-//!     and `Counting` are `DrawKind::VisibilityResults`.
+//!     retires, and its bytes stay as they were; `Disabled` at any offset records nothing, and the
+//!     pass takes the submission, barrier and pass one without the buffer takes (`Boolean` and
+//!     `Counting` are `tests::visibility`'s).
 //!
 //! `llvm-as` assembles the fixtures; without it a device test skips visibly.
 
@@ -3003,8 +3003,8 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
     /// A pass with a visibility result buffer draws, keeps the buffer until its command buffer
     /// retires, and leaves its bytes as they were, as Metal's pass does where its encoder enables
     /// no mode: `Disabled` at any offset records nothing, and the pass takes the submission,
-    /// barrier and pass one without the buffer takes, as the buffer joins no hazard tracking.
-    /// `Boolean` and `Counting` are `DrawKind::VisibilityResults`.
+    /// barrier and pass one without the buffer takes, as no command of an encoder that enables no
+    /// mode reaches the buffer.
     #[test]
     fn every_device_keeps_a_pass_s_visibility_buffer_and_leaves_its_bytes() {
         let Some(library) = examples() else {
@@ -3041,21 +3041,6 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
                 draw(encoder.set_visibility_result_mode(VisibilityResultMode::Disabled, 8));
                 draw(encoder.set_visibility_result_mode(VisibilityResultMode::Disabled, 1 << 40));
-                for mode in [
-                    VisibilityResultMode::Boolean,
-                    VisibilityResultMode::Counting,
-                ] {
-                    assert_eq!(
-                        format!("{:?}", encoder.set_visibility_result_mode(mode, 0)),
-                        format!(
-                            "{:?}",
-                            Err::<(), _>(Error::Unsupported(Gap::Draw {
-                                kind: DrawKind::VisibilityResults
-                            }))
-                        ),
-                        "{name}: {mode:?}"
-                    );
-                }
                 draw(encoder.set_render_pipeline_state(&state));
                 draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
                 draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));

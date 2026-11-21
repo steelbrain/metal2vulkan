@@ -530,6 +530,10 @@ pub(crate) const REQUIRED: &[Feature] = &[
     // A vertex or post-tessellation vertex function writes and atomically updates device memory,
     // as Metal's may. A device without it is below the floor.
     feature!(core.vertex_pipeline_stores_and_atomics => VertexPipelineStoresAndAtomics),
+    // A `Counting` visibility result is the count of samples that passed: a precise occlusion
+    // query's, which `Boolean` takes too. Roadmap 2022 requires it of every device, and every
+    // venue's driver reports it.
+    feature!(core.occlusion_query_precise => OcclusionQueryPrecise),
     // What Vulkan 1.1 to 1.3 require of every device and the translator's shaders use where they
     // are enabled: multiview, subgroup operations on 8-, 16- and 64-bit values, a fragment's
     // demotion to a helper and its termination, and workgroup memory zeroed at its declaration.
@@ -544,8 +548,9 @@ pub(crate) const REQUIRED: &[Feature] = &[
     feature!(vulkan13.shader_zero_initialize_workgroup_memory => ShaderZeroInitializeWorkgroupMemory),
     // Submission, barriers and render passes.
     feature!(vulkan12.timeline_semaphore),
-    // GPU times: a command buffer's two timestamp queries reset on the host as it retires, so no
-    // command buffer the GPU runs resets a query. Vulkan 1.2 requires it.
+    // GPU times and visibility results: a command buffer's timestamp and occlusion queries reset
+    // on the host as it retires, so no command buffer the GPU runs resets a query. Vulkan 1.2
+    // requires it.
     feature!(vulkan12.host_query_reset),
     feature!(vulkan13.synchronization2 => Synchronization2),
     feature!(vulkan13.dynamic_rendering),

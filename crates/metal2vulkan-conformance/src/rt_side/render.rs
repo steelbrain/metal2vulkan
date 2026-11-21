@@ -15,7 +15,7 @@ use crate::render::{
 use crate::transcript::{Negative, Value};
 use crate::values::{
     LoadAction, MultisampleDepthResolveFilter, MultisampleStencilResolveFilter, StoreAction,
-    StoreActionOptions, VisibilityResultMode,
+    StoreActionOptions, VisibilityResultMode, VisibilityResultType,
 };
 use crate::work::Plane;
 use metal2vulkan_runtime as rt;
@@ -331,6 +331,10 @@ impl RtSide<'_> {
                             RenderStep::DepthStencilState(state) => (self.depth_stencils)
                                 .get(state.0 as usize)
                                 .and_then(rt::DepthStencilState::precision_note),
+                            RenderStep::VisibilityResultMode {
+                                mode: VisibilityResultMode::Boolean | VisibilityResultMode::Counting,
+                                ..
+                            } => Some(rt::RenderCommandEncoder::VISIBILITY_NOTE),
                             _ => None,
                         });
                         let notes: Vec<rt::PrecisionNote> = notes.collect();
@@ -419,11 +423,13 @@ impl RtSide<'_> {
             attachment.store_action = store(stencil.store)?;
             attachment.clear_stencil = stencil.clear;
         }
-        // `visibilityResultType` is not the runtime's field: it decides only what an enabled mode
-        // writes, and the runtime builds `Disabled` alone.
         if let Some(visibility) = pass.visibility {
             descriptor.visibility_result_buffer = Some(self.held(visibility)?.clone());
         }
+        descriptor.visibility_result_type = match pass.visibility_type {
+            VisibilityResultType::Reset => rt::VisibilityResultType::Reset,
+            VisibilityResultType::Accumulate => rt::VisibilityResultType::Accumulate,
+        };
         if !pass.positions.is_empty() {
             return Err(Failure::unavailable("setSamplePositions:count:"));
         }

@@ -21,6 +21,7 @@ use crate::ring::{Placed, Writes};
 use crate::sampler::SamplerState;
 use crate::texture::{Image, OverCopy, Texture, TextureInner, TextureObject};
 use crate::times::{self, Pair, Times};
+use crate::visibility::{Queries, Query};
 use ash::vk;
 use std::sync::atomic::Ordering;
 use std::sync::atomic::Ordering::Relaxed;
@@ -280,6 +281,9 @@ pub(crate) struct Gpu {
     /// Its executions of indirect command buffers' layouts and preprocess regions, each region
     /// given back to the device's pool as it retires (`crate::indirect`).
     pub(crate) executed: Vec<crate::indirect::Executed>,
+    /// The occlusion queries of its render encoders' visibility results, from pools of its own,
+    /// each given back to the device as it retires (`crate::visibility`).
+    pub(crate) queries: Queries,
 }
 
 impl Gpu {
@@ -390,6 +394,7 @@ impl CommandBuffer {
                             images: Vec::new(),
                             fences: Fences::default(),
                             executed: Vec::new(),
+                            queries: Queries::default(),
                         },
                         handlers: Handlers {
                             scheduled: Vec::new(),
@@ -1258,6 +1263,13 @@ impl Building {
         self.gpu.executed.push(executed);
     }
 
+    /// The next occlusion query, from the command buffer's own pools (`crate::visibility`).
+    ///
+    /// Err: [`Error::Vulkan`] where the device makes no pool.
+    pub(crate) fn take_query(&mut self) -> Result<Query, Error> {
+        self.gpu.queries.take(self.device.core())
+    }
+
     /// The push bytes are undefined from now: an execution of an indirect command buffer's
     /// commands left them so, and the next draw pushes its own again.
     pub(crate) fn pushes_lost(&mut self) {
@@ -1530,8 +1542,8 @@ pub(crate) fn run_scheduled(inner: Arc<CbInner>, handlers: Vec<Handler>) {
 
 /// On the completion thread: retires a command buffer that completed (`error` None), with its GPU
 /// times where they were read (`completion`), or ended, recycling its recorder and giving up its
-/// blocks, its pair of timestamp queries with the `written` of them reset, and its place in the
-/// queue, then runs its handlers.
+/// blocks, its pair of timestamp queries with the `written` of them reset, its occlusion queries'
+/// pools, and its place in the queue, then runs its handlers.
 pub(crate) fn retire(
     core: &Core,
     inner: Arc<CbInner>,
@@ -1590,12 +1602,14 @@ pub(crate) fn retire(
         images,
         fences,
         executed,
+        queries,
     } = gpu;
     if let Some(recorder) = recorder {
         core.recorders.give_back(core, recorder);
     }
     ring.give_back(core);
     drop((segments, blocks, images, fences, executed));
+    queries.give_back(core);
     kept.clear();
     if let Some(pair) = stamps {
         times::reset(&core.device, pair.pool, pair.first, written);
@@ -1628,8 +1642,8 @@ impl Drop for CbInner {
     fn drop(&mut self) {
         let state = self.state.get_mut().unwrap_or_else(PoisonError::into_inner);
         // A command buffer never committed gives back its recorder, its pair of timestamp
-        // queries, which no submission wrote, so they stay reset, and its place in the queue; a
-        // committed one did so when it retired.
+        // queries, which no submission wrote, so they stay reset, its occlusion queries' pools,
+        // and its place in the queue; a committed one did so when it retired.
         if let Some(Building {
             device,
             gpu,
@@ -1647,6 +1661,7 @@ impl Drop for CbInner {
                 recorder,
                 mut kept,
                 ring,
+                queries,
                 ..
             } = gpu;
             if let Some(recorder) = recorder {
@@ -1656,6 +1671,7 @@ impl Drop for CbInner {
             if let Some(pair) = stamps {
                 core.stamps.give_back(pair);
             }
+            queries.give_back(core);
             kept.clear();
             self.queue.release(kept);
         }

@@ -336,7 +336,8 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::SharedExponentKept
         | N::SwizzledOpaqueBlackBorder
         | N::DeviceLineRasterization
-        | N::DeviceFragmentRuns => Allowance::Unbounded,
+        | N::DeviceFragmentRuns
+        | N::DeviceOcclusionCount => Allowance::Unbounded,
     }
 }
 

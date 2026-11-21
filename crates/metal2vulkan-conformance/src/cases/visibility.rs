@@ -12,8 +12,9 @@
 //! recordings against the table. A fresh answer that disagrees with the table is a finding about
 //! one of the two chips, not a nuisance.
 //!
-//! Every word compares exactly, a `Boolean` result's included: the M3 Max writes 1 where a sample
-//! passed.
+//! Every word compares exactly but a `Boolean` result's, which compares as zero or nonzero alone:
+//! the M3 Max writes 1 where a sample passed, Metal documents a nonzero word, and the runtime
+//! writes the count (`docs/API.md`'s accepted difference `BOOLEAN_COUNT`).
 //!
 //! The shapes, each its own case so a device that lacks precise occlusion queries loses only the
 //! counted rows:
@@ -61,6 +62,7 @@
 //!
 //! //! Nothing here can fault a GPU: one 4 by 4 target a pass, three vertices a draw, no loop.
 
+use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{Abort, Case, Failure, Handle, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -165,6 +167,10 @@ const OFF: VisibilityResultMode = VisibilityResultMode::Disabled;
 /// `Reset`, Metal's default, and `Accumulate`.
 const RESET: VisibilityResultType = VisibilityResultType::Reset;
 const ACCUMULATE: VisibilityResultType = VisibilityResultType::Accumulate;
+
+/// The slug of `docs/API.md`'s accepted difference that a `Boolean` result is the count of samples
+/// that passed.
+const BOOLEAN_COUNT: &str = "a-boolean-visibility-result-is-the-count-of-samples-that-passed";
 
 /// A word whose low half a count of 16 takes past 32 bits.
 const CARRY: u64 = 0xffff_fff8;
@@ -776,6 +782,35 @@ impl Visibility {
 impl Case for Visibility {
     fn name(&self) -> &'static str {
         self.shape.name
+    }
+
+    /// Each word whose last mode, as a command buffer's words are read, is `Boolean` compares as
+    /// zero or nonzero alone (`BOOLEAN_COUNT`).
+    fn allowances(&self) -> Vec<Allowance> {
+        let mut boolean = std::collections::BTreeMap::new();
+        let mut allowances = Vec::new();
+        for group in groups(self.shape) {
+            for &index in &group {
+                for act in self.shape.passes[index] {
+                    if let Act::Mode(mode, offset) = act {
+                        match mode {
+                            VisibilityResultMode::Boolean => boolean.insert(*offset, true),
+                            VisibilityResultMode::Counting => boolean.insert(*offset, false),
+                            VisibilityResultMode::Disabled => None,
+                        };
+                    }
+                }
+            }
+            let last = group.last().copied().unwrap_or_default();
+            for (offset, _) in boolean.iter().filter(|(_, boolean)| **boolean) {
+                allowances.push(Allowance::new(
+                    format!("case/pass-{last}/words/{offset}"),
+                    Loosening::Nonzero,
+                    Justification::AcceptedDifference(BOOLEAN_COUNT.to_owned()),
+                ));
+            }
+        }
+        allowances
     }
 
     fn metal_source(&self) -> MetalSource {

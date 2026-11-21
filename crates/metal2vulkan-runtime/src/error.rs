@@ -908,28 +908,29 @@ pub enum Refusal {
         /// The offset asked for.
         offset: u64,
     },
-    /// An indirect dispatch's arguments, or an indexed draw's indices, at a byte of the
-    /// allocation the buffer's block lies in (its device copy's, for a Managed buffer with one)
-    /// that is not a multiple of 4, or of the index size.
+    /// An indirect dispatch's arguments, an indexed draw's indices, or a visibility result, at a
+    /// byte of the allocation the buffer's block lies in (its device copy's, for a Managed buffer
+    /// with one) that is not a multiple of 4, of the index size, or of 8.
     ///
-    /// Metal's offset rules keep both at such a multiple of the buffer's start, so only a buffer
+    /// Metal's offset rules keep each at such a multiple of the buffer's start, so only a buffer
     /// that starts off it meets this: a no-copy buffer
-    /// (`newBufferWithBytesNoCopy:length:options:deallocator:`) over a pointer that is not a
-    /// multiple of 4 (indirect arguments) or of the index size (indexed draws), which documented
-    /// Metal does not allow, its pointer being page-aligned. The consumer places every other
-    /// buffer at an aligned byte. Such a buffer is still made, and every other use of it runs:
-    /// only the dispatch or draw that reads its arguments or indices is refused.
+    /// (`newBufferWithBytesNoCopy:length:options:deallocator:`) over a pointer that is not such a
+    /// multiple, which documented Metal does not allow, its pointer being page-aligned. The
+    /// consumer places every other buffer at an aligned byte. Such a buffer is still made, and
+    /// every other use of it runs: only the dispatch or draw that reads its arguments or indices,
+    /// or the visibility result mode set at the offset, is refused.
     ///
     /// Basis: ours (`vkCmdDispatchIndirect` reads its arguments at a multiple of 4 in the
-    /// `VkBuffer`, and `vkCmdBindIndexBuffer` takes indices at a multiple of their size in the
-    /// memory; a Metal buffer starts at an aligned address, so Metal's offset rule alone keeps
-    /// both aligned there).
+    /// `VkBuffer`, `vkCmdBindIndexBuffer` takes indices at a multiple of their size in the
+    /// memory, and `vkCmdCopyQueryPoolResults` writes 64-bit results at a multiple of 8,
+    /// `VUID-vkCmdCopyQueryPoolResults-flags-00823`; a Metal buffer starts at an aligned address,
+    /// so Metal's offset rules alone keep each aligned there).
     ArgumentPlace {
-        /// The byte of the allocation the arguments or indices start at: their block's offset
-        /// there ([`BlockInfo::offset`](crate::BlockInfo::offset)) plus their place in the
+        /// The byte of the allocation the arguments, indices or result start at: their block's
+        /// offset there ([`BlockInfo::offset`](crate::BlockInfo::offset)) plus their place in the
         /// block.
         place: u64,
-        /// The multiple Vulkan reads them at: 4, or the index size.
+        /// The multiple Vulkan reads or writes them at: 4, the index size, or 8.
         alignment: u64,
     },
     /// A viewport with a field that is NaN or infinite (but its origin's x, which draws nothing).
@@ -943,6 +944,37 @@ pub enum Refusal {
     /// Basis: metal-measured (an Apple M4, macOS 27.0.1: Metal's validation stops the draw; plain
     /// Metal tests it against a hidden stencil of 0 that the runtime does not keep).
     StencilAttachment,
+    /// A visibility result mode but `Disabled` (`setVisibilityResultMode:offset:`) in a pass
+    /// with no visibility result buffer.
+    ///
+    /// Basis: metal-documented (Apple's page for `setVisibilityResultMode(_:offset:)`: "To create
+    /// a render pass that can enable visibility testing, assign an MTLBuffer instance to the
+    /// visibilityResultBuffer property of an MTLRenderPassDescriptor").
+    NoVisibilityResultBuffer,
+    /// A visibility result mode but `Disabled` at an offset that is not a multiple of 8, or whose
+    /// 8 bytes run past the visibility result buffer.
+    ///
+    /// Basis: metal-documented (`MTLRenderCommandEncoder.h`: "offset must be a multiple of 8";
+    /// Apple's page for `visibilityResultBuffer`: "The GPU stores visibility results as 64-bit
+    /// integers, so you need to reserve 8 bytes for each visibility result").
+    VisibilityResultOffset {
+        /// The offset asked for.
+        offset: u64,
+        /// The visibility result buffer's length.
+        length: u64,
+    },
+    /// A visibility result mode but `Disabled` at an offset a mode of the encoder took before,
+    /// `Disabled` between them or not.
+    ///
+    /// Basis: metal-documented (Apple's page for `setVisibilityResultMode(_:offset:)`: "You can
+    /// set a specific offset value only once per render pass"; Metal's validation stops it, "using
+    /// the same offset (0) in the visibility buffer twice in the same command encoder is not
+    /// allowed", an Apple M3 Max, macOS 27.0.1, the conformance case
+    /// `visibility-counting-revisit`, where plain Metal adds the later draws to the result).
+    VisibilityResultOffsetTaken {
+        /// The offset asked for.
+        offset: u64,
+    },
 }
 
 /// A Metal feature the runtime does not build yet, with what it was asked. Each is refused until a
@@ -1594,9 +1626,23 @@ pub enum DrawKind {
     /// no replay stream's patch draws name: the control stage takes each patch's index from its
     /// position.
     PatchIndexBuffer,
-    /// A visibility result mode but `Disabled` (`setVisibilityResultMode:offset:`'s `Boolean` or
-    /// `Counting`), which no replay stream sets: the runtime records no occlusion query.
-    VisibilityResults,
+    /// A command that ends the pass's rendering to record between, while a `Boolean` or
+    /// `Counting` visibility result's query counts the draws (from the first draw after its
+    /// `setVisibilityResultMode:offset:` to the next mode set): a memory barrier after draws that
+    /// wrote memory, a draw that moves an attachment to the feedback layout, pays a barrier owed
+    /// before an attachment read or copies what it reads into an attachment's shadow, and a draw
+    /// that binds or declares a texture over a buffer in an image of its own, that draws while
+    /// such a texture the segment used has its image ahead of its buffer, or that reaches a Managed
+    /// buffer with textures over its device copy, whether or not it owes a copy. Vulkan's query
+    /// begins and ends inside one render pass instance, and a query's count carried across one
+    /// into the next is not built. Counted in
+    /// [`Metrics::visibility_interrupts_refused`](crate::Metrics::visibility_interrupts_refused).
+    VisibilityResultInterrupt,
+    /// A `Boolean` or `Counting` visibility result mode in a pass whose `visibilityResultType` is
+    /// `Accumulate`, which takes each result into the word at its offset: adding a result to a
+    /// word is not built. Counted in
+    /// [`Metrics::accumulated_visibility_refused`](crate::Metrics::accumulated_visibility_refused).
+    AccumulatedVisibilityResults,
 }
 
 /// What a render pass asks that the runtime does not build ([`Gap::RenderPass`]).
@@ -2376,6 +2422,17 @@ impl fmt::Display for Refusal {
             Refusal::StencilAttachment => {
                 f.write_str("a draw tests the stencil in a pass without a stencil attachment")
             }
+            Refusal::NoVisibilityResultBuffer => {
+                f.write_str("a visibility result mode is set in a pass without a visibility result buffer")
+            }
+            Refusal::VisibilityResultOffset { offset, length } => write!(
+                f,
+                "a visibility result at offset {offset} of a {length}-byte buffer is misaligned or past its end"
+            ),
+            Refusal::VisibilityResultOffsetTaken { offset } => write!(
+                f,
+                "the visibility result offset {offset} is taken a second time in one encoder"
+            ),
         }
     }
 }

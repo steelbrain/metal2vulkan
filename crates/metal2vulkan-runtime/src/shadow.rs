@@ -222,6 +222,12 @@ impl Held {
         copies
     }
 
+    /// Whether the shadow holds every read of `reads`: whether [`plan`](Self::plan) copies none.
+    pub(crate) fn holds(&self, reads: &[Area]) -> bool {
+        (reads.iter().filter(|read| !read.is_empty()))
+            .all(|read| (self.areas.iter()).any(|held| read.past(held).is_empty()))
+    }
+
     /// The shadow holds `area`: a held area inside it is dropped, and past [`HELD`] the oldest.
     fn hold(&mut self, area: Area) {
         self.areas.retain(|held| !area.contains(held));

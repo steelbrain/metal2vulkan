@@ -64,6 +64,7 @@ mod surface;
 mod tests;
 mod texture;
 mod times;
+mod visibility;
 
 pub use arrays::{IndexClass, IndexGrant, ResourceId};
 pub use blit::{BlitCommandEncoder, BlitOption, BufferLayout, TexturePlace};
@@ -133,7 +134,8 @@ pub use metal2vulkan::pipeline::{
 pub use pass::{
     ClearColor, LoadAction, MultisampleDepthResolveFilter, MultisampleStencilResolveFilter,
     RenderPassColorAttachmentDescriptor, RenderPassDepthAttachmentDescriptor, RenderPassDescriptor,
-    RenderPassStencilAttachmentDescriptor, StoreAction, MAX_COLOR_ATTACHMENTS,
+    RenderPassStencilAttachmentDescriptor, StoreAction, VisibilityResultType,
+    MAX_COLOR_ATTACHMENTS,
 };
 pub use pipeline::{ComputePipelineState, DispatchVariant};
 pub use pixel_format_info::{PixelFormatInfo, TextureLevelInfo, TextureLevelQuery};
