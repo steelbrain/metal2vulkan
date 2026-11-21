@@ -1195,7 +1195,8 @@
           "shaderZeroInitializeWorkgroupMemory": true,
           "synchronization2": true,
           "dynamicRendering": true,
-          "pipelineCreationCacheControl": true
+          "pipelineCreationCacheControl": true,
+          "maintenance4": true
         },
         "VkPhysicalDeviceRobustness2FeaturesEXT": {
           "nullDescriptor": true,

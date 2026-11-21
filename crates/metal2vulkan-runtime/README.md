@@ -4280,6 +4280,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `timelineSemaphore` | `VkPhysicalDeviceVulkan12Features` | submission and completion |
 | `hostQueryReset` | `VkPhysicalDeviceVulkan12Features` | a command buffer's timestamp and occlusion queries reset on the host as it retires |
 | `synchronization2` | `VkPhysicalDeviceVulkan13Features` | barriers, layout changes and submission |
+| `maintenance4` | `VkPhysicalDeviceVulkan13Features` | nothing of the runtime's own; Vulkan 1.3 requires it, and the translator's description states it enabled, so its modules are valid under it (`spirv-val --allow-localsizeid`) |
 | `dynamicRendering` | `VkPhysicalDeviceVulkan13Features` | render passes |
 | `pipelineCreationCacheControl` | `VkPhysicalDeviceVulkan13Features` | a kernel past the stage bound created from its helper's cache data alone, never compiled in the process (Kernels past the stage bound); Vulkan 1.3 requires it |
 

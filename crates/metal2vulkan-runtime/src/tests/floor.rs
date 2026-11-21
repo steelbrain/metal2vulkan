@@ -122,6 +122,7 @@ fn at_the_floor() -> Queried {
     features.vulkan13.synchronization2 = vk::TRUE;
     features.vulkan13.dynamic_rendering = vk::TRUE;
     features.vulkan13.pipeline_creation_cache_control = vk::TRUE;
+    features.vulkan13.maintenance4 = vk::TRUE;
     features.robustness2.null_descriptor = vk::TRUE;
     features.line_rasterization.bresenham_lines = vk::TRUE;
 
@@ -387,10 +388,11 @@ fn the_translator_sees_only_what_device_creation_enables() {
         .features
         .contains(&VkFeature::ShaderZeroInitializeWorkgroupMemory));
     assert!(enables.features.contains(&VkFeature::NullDescriptor));
-    // Enabled for the visibility results' occlusion queries, which no shader reads: the
-    // translator's profile, and so every key it makes, stays as it was without it.
+    // Enabled for the visibility results' occlusion queries, which no shader reads; the
+    // translator's description states it, as it states every feature creation enables that the
+    // translator names.
     assert_eq!(capabilities.features.core.occlusion_query_precise, vk::TRUE);
-    assert!(!enables.features.contains(&VkFeature::OcclusionQueryPrecise));
+    assert!(enables.features.contains(&VkFeature::OcclusionQueryPrecise));
     for reported in [
         VkFeature::GeometryShader,
         VkFeature::RobustBufferAccess2,
@@ -477,7 +479,7 @@ fn each_missing_feature_is_named() {
     const CORE: &str = "VkPhysicalDeviceFeatures";
     const ROBUSTNESS2: &str = "VkPhysicalDeviceRobustness2FeaturesEXT";
     type Clear = fn(&mut Features);
-    let cases: [(Clear, Missing); 67] = [
+    let cases: [(Clear, Missing); 68] = [
         (
             |f| f.vulkan12.buffer_device_address = vk::FALSE,
             feature(V12, "bufferDeviceAddress"),
@@ -689,6 +691,10 @@ fn each_missing_feature_is_named() {
         (
             |f| f.vulkan13.pipeline_creation_cache_control = vk::FALSE,
             feature(V13, "pipelineCreationCacheControl"),
+        ),
+        (
+            |f| f.vulkan13.maintenance4 = vk::FALSE,
+            feature(V13, "maintenance4"),
         ),
         (
             |f| f.robustness2.null_descriptor = vk::FALSE,

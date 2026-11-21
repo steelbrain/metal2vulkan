@@ -194,9 +194,7 @@ pub struct IndirectCommandLimits {
     pub stride: u32,
 }
 
-/// The translator's name for an extension device creation enables that its shaders may use, or
-/// that its description of the device must enable: the portability subset, where the device lists
-/// it.
+/// The translator's name for an extension device creation enables, where the translator names it.
 fn shader_extension(name: &CStr) -> Option<VkExtension> {
     if name == ash::khr::shader_maximal_reconvergence::NAME {
         Some(VkExtension::KhrShaderMaximalReconvergence)
@@ -220,6 +218,18 @@ fn shader_extension(name: &CStr) -> Option<VkExtension> {
         Some(VkExtension::ExtVertexAttributeDivisor)
     } else if name == MAINTENANCE8 {
         Some(VkExtension::KhrMaintenance8)
+    } else if name == ash::ext::line_rasterization::NAME {
+        Some(VkExtension::ExtLineRasterization)
+    } else if name == ash::ext::attachment_feedback_loop_layout::NAME {
+        Some(VkExtension::ExtAttachmentFeedbackLoopLayout)
+    } else if name == ash::ext::border_color_swizzle::NAME {
+        Some(VkExtension::ExtBorderColorSwizzle)
+    } else if name == ash::ext::custom_border_color::NAME {
+        Some(VkExtension::ExtCustomBorderColor)
+    } else if name == ash::ext::external_memory_host::NAME {
+        Some(VkExtension::ExtExternalMemoryHost)
+    } else if name == ash::khr::maintenance5::NAME {
+        Some(VkExtension::KhrMaintenance5)
     } else {
         None
     }
@@ -452,6 +462,12 @@ macro_rules! feature {
     (@structure maintenance8) => {
         "VkPhysicalDeviceMaintenance8FeaturesKHR"
     };
+    (@structure generated_commands) => {
+        "VkPhysicalDeviceDeviceGeneratedCommandsFeaturesEXT"
+    };
+    (@structure maintenance5) => {
+        "VkPhysicalDeviceMaintenance5FeaturesKHR"
+    };
     (@translator) => {
         None
     };
@@ -543,7 +559,7 @@ pub(crate) const REQUIRED: &[Feature] = &[
     // Vulkan's default rule is the device's own, the rectangle of the line's width on a device
     // whose `strictLines` is set (lavapipe, NVIDIA's driver). Vulkan 1.4 requires it of every
     // device.
-    feature!(line_rasterization.bresenham_lines),
+    feature!(line_rasterization.bresenham_lines => BresenhamLines),
     // A render pipeline's logic operation (private render state), the device's own `logicOp`. A
     // device without it would compute the operation in the fragment function, which needs
     // fragment interlock or raster-order attachment access, neither in the floor. Every floor
@@ -558,11 +574,11 @@ pub(crate) const REQUIRED: &[Feature] = &[
     feature!(core.image_cube_array => ImageCubeArray),
     // A depth bias's clamp (`setDepthBias:slopeScale:clamp:`), the device's own, set as dynamic
     // state. Vulkan 1.4 and Roadmap 2022 require it of every device.
-    feature!(core.depth_bias_clamp),
+    feature!(core.depth_bias_clamp => DepthBiasClamp),
     // An indirect draw's base instance, which the GPU reads from Metal's arguments as Vulkan's
     // `firstInstance`; without it Vulkan takes 0 alone there. Vulkan 1.4 requires it of every
     // device.
-    feature!(core.draw_indirect_first_instance),
+    feature!(core.draw_indirect_first_instance => DrawIndirectFirstInstance),
     // The depth clip mode `Clamp` (`setDepthClipMode:`), a pipeline's depth clamp, the device's
     // own. Vulkan 1.4 and Roadmap 2022 require it of every device.
     feature!(core.depth_clamp => DepthClamp),
@@ -602,8 +618,8 @@ pub(crate) const REQUIRED: &[Feature] = &[
     feature!(core.vertex_pipeline_stores_and_atomics => VertexPipelineStoresAndAtomics),
     // A `Counting` visibility result is the count of samples that passed: a precise occlusion
     // query's, which `Boolean` takes too. Roadmap 2022 requires it of every device, and every
-    // venue's driver reports it. No shader uses it, so the translator is not told of it.
-    feature!(core.occlusion_query_precise),
+    // venue's driver reports it.
+    feature!(core.occlusion_query_precise => OcclusionQueryPrecise),
     // What Vulkan 1.1 to 1.3 require of every device and the translator's shaders use where they
     // are enabled: multiview, subgroup operations on 8-, 16- and 64-bit values, a fragment's
     // demotion to a helper and its termination, and workgroup memory zeroed at its declaration.
@@ -623,6 +639,9 @@ pub(crate) const REQUIRED: &[Feature] = &[
     // requires it.
     feature!(vulkan12.host_query_reset),
     feature!(vulkan13.synchronization2 => Synchronization2),
+    // Vulkan 1.3 requires it of every device. The translator's profile takes it as enabled: its
+    // modules are valid under it (`spirv-val --allow-localsizeid`).
+    feature!(vulkan13.maintenance4 => Maintenance4),
     feature!(vulkan13.dynamic_rendering),
     // A kernel past the stage bound is created only from its helper's cache data, with
     // `VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT`, so the process never compiles
@@ -664,7 +683,7 @@ pub(crate) const OPTIONAL: &[Feature] = &[
 /// where the device reads attachments and reports both, and neither otherwise; a device that reads
 /// attachments without them reads through a copy of the image.
 pub(crate) const ATTACHMENT_READS: &[Feature] = &[
-    feature!(feedback_loop.attachment_feedback_loop_layout),
+    feature!(feedback_loop.attachment_feedback_loop_layout => AttachmentFeedbackLoopLayout),
     feature!(feedback_loop_dynamic.attachment_feedback_loop_dynamic_state),
 ];
 
@@ -718,11 +737,12 @@ pub(crate) const BARYCENTRICS: &[Feature] =
 
 /// The features of `VK_EXT_border_color_swizzle` ([`BORDER_SWIZZLE_EXTENSIONS`]): enabled together
 /// where the device lists the extensions and reports `borderColorSwizzleFromImage` (Vulkan requires
-/// `borderColorSwizzle` of a device that lists it), and neither otherwise. No answer chooses a second form, and the
-/// translator, whose samplers chain no border mapping, is not told of them.
+/// `borderColorSwizzle` of a device that lists it), and neither otherwise. No answer chooses a
+/// second form. The translator's description states both where they are enabled; the runtime's
+/// samplers chain no border mapping.
 pub(crate) const BORDER_SWIZZLE: &[Feature] = &[
-    feature!(border_swizzle.border_color_swizzle),
-    feature!(border_swizzle.border_color_swizzle_from_image),
+    feature!(border_swizzle.border_color_swizzle => BorderColorSwizzle),
+    feature!(border_swizzle.border_color_swizzle_from_image => BorderColorSwizzleFromImage),
 ];
 
 /// The feature of `VK_NV_linear_color_attachment` (one of [`OPTIONAL_EXTENSIONS`]), which Vulkan
@@ -730,31 +750,52 @@ pub(crate) const BORDER_SWIZZLE: &[Feature] = &[
 /// it. It adds no form: an exported surface's plane takes one of the surface's two forms by the
 /// device's queries, and with it a `LINEAR` image whose format renders through
 /// `VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV` alone holds the plane in place, rendered
-/// only as Vulkan's rule for such images allows (`Gap::LinearPlanePass`). The translator is not
-/// told of it.
+/// only as Vulkan's rule for such images allows (`Gap::LinearPlanePass`). The translator does not
+/// name it.
 pub(crate) const LINEAR_ATTACHMENTS: &[Feature] =
     &[feature!(linear_attachment.linear_color_attachment)];
 
 /// The feature of `VK_EXT_device_fault` (one of [`OPTIONAL_EXTENSIONS`]), which Vulkan requires of
 /// a device that lists it: enabled where the device lists the extension and reports it. It adds no
 /// form: a lost device's report is read once, at its first loss, and nothing is read beside the
-/// work ([`DeviceLoss::fault`](crate::DeviceLoss::fault)). The translator is not told of it.
+/// work ([`DeviceLoss::fault`](crate::DeviceLoss::fault)). The translator does not name it.
 pub(crate) const FAULT_REPORTS: &[Feature] = &[feature!(fault.device_fault)];
 
-/// What the translator's shaders may use of what device creation enables: each enabled feature of
-/// `capabilities` the translator names, and each enabled extension it names.
+/// The features of [`INDIRECT_COMMANDS`]: enabled together where the device offers indirect
+/// command buffers ([`IndirectCommandLimits`]), and neither otherwise.
+pub(crate) const INDIRECT_COMMAND_FEATURES: &[Feature] = &[
+    feature!(generated_commands.device_generated_commands),
+    feature!(maintenance5.maintenance5 => Maintenance5),
+];
+
+/// Every table of features device creation enables, each where its own rule says: the floor's,
+/// the portability subset's, and the optional ones. [`shader_enables`] reads the translator's
+/// names from all of them, so a feature creation enables reaches the translator wherever the
+/// translator names it.
+pub(crate) const ENABLED: &[&[Feature]] = &[
+    REQUIRED,
+    PORTABILITY,
+    OPTIONAL,
+    ATTACHMENT_READS,
+    STEP_RATES,
+    MIN_LOD_CLAMPS,
+    FILL_MODES,
+    QUAD_CONTROL,
+    PIXEL_INTERLOCK,
+    BARYCENTRICS,
+    BORDER_SWIZZLE,
+    LINEAR_ATTACHMENTS,
+    FAULT_REPORTS,
+    INDIRECT_COMMAND_FEATURES,
+];
+
+/// What the translator's description of the device states as enabled: each feature of
+/// `capabilities` device creation enables ([`ENABLED`]) that the translator names, and each
+/// enabled extension it names.
 pub(crate) fn shader_enables(capabilities: &Capabilities) -> EnableSet {
     let mut features = capabilities.features;
     let mut enables = EnableSet::new();
-    for feature in (REQUIRED.iter().chain(OPTIONAL))
-        .chain(PORTABILITY)
-        .chain(STEP_RATES)
-        .chain(MIN_LOD_CLAMPS)
-        .chain(FILL_MODES)
-        .chain(QUAD_CONTROL)
-        .chain(PIXEL_INTERLOCK)
-        .chain(BARYCENTRICS)
-    {
+    for feature in ENABLED.iter().copied().flatten() {
         if let Some(name) = feature.translator {
             if *(feature.field)(&mut features) == vk::TRUE {
                 enables.features.insert(name);
@@ -1361,8 +1402,9 @@ fn indirect_commands(device: &Queried, features: &mut Features) -> Option<Indire
     if !offered {
         return None;
     }
-    features.generated_commands.device_generated_commands = vk::TRUE;
-    features.maintenance5.maintenance5 = vk::TRUE;
+    for feature in INDIRECT_COMMAND_FEATURES {
+        *(feature.field)(features) = vk::TRUE;
+    }
     Some(IndirectCommandLimits {
         sequences: p.max_indirect_sequence_count,
         tokens: p.max_indirect_commands_token_count,

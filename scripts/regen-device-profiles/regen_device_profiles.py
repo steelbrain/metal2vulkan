@@ -142,7 +142,7 @@ RUNTIME_FLOOR = {
             "subgroupSizeControl", "computeFullSubgroups", "robustImageAccess",
             "shaderDemoteToHelperInvocation", "shaderTerminateInvocation",
             "shaderZeroInitializeWorkgroupMemory", "synchronization2", "dynamicRendering",
-            "pipelineCreationCacheControl")},
+            "pipelineCreationCacheControl", "maintenance4")},
         "VkPhysicalDeviceRobustness2FeaturesEXT": {"nullDescriptor": True,
                                                    "robustImageAccess2": True},
         "VkPhysicalDeviceLineRasterizationFeaturesEXT": {"bresenhamLines": True},
