@@ -30,19 +30,19 @@ Its limits, measured rather than asserted:
 
 | | |
 |---|---|
-| implemented Metal items | 597 |
+| implemented Metal items | 600 |
 | of those, unreachable: `objc2-metal` binds no name for them | 1 |
-| so reachable by some case | 596 |
-| of the reachable, exercised by the suite's Metal leg | 523 |
-| of the reachable, not exercised | 73 |
+| so reachable by some case | 599 |
+| of the reachable, exercised by the suite's Metal leg | 525 |
+| of the reachable, not exercised | 74 |
 | share of the reachable exercised | 88% |
-| of those exercised, no case reaching it loosens anything | 306 |
+| of those exercised, no case reaching it loosens anything | 308 |
 | of those exercised, a case reaching it loosens some site | 217 |
 | case modules | 179 |
 | committed recordings | 1319 |
 | distinct SDK items the Metal leg reaches, of any status | 804 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7692 |
+| ledger rows (a case whose gap is recorded) | 7689 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -363,7 +363,7 @@ Every container with an implemented item, by how much of it the suite reaches. *
 |---|---|---|---|---|---|
 | `MTLArgument` | 17 | 0 | 0 | 17 |  |
 | `MTLRasterizationRateLayerDescriptor` | 9 | 0 | 2 | 7 | `rate_map_degenerate_forms`, `rate_map_sweeps`, `rate_maps` |
-| `MTLRenderCommandEncoder` | 55 | 0 | 50 | 5 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
+| `MTLRenderCommandEncoder` | 58 | 0 | 52 | 6 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
 | the header's free functions | 4 | 0 | 0 | 4 |  |
 | `MTLFunctionConstantValues` | 5 | 0 | 2 | 3 | `function_constants_half3`, `function_facts`, `library_facts` |
 | `MTLLibrary` | 10 | 0 | 7 | 3 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
@@ -449,8 +449,8 @@ A container is one Objective-C type; the SDK header it sits in is the family of 
 |---|---|---|---|
 | `MTLArgument.h` | 77 | 59 | 18 |
 | `MTLRasterizationRate.h` | 25 | 12 | 13 |
+| `MTLRenderCommandEncoder.h` | 58 | 52 | 6 |
 | `MTLLibrary.h` | 40 | 35 | 5 |
-| `MTLRenderCommandEncoder.h` | 55 | 50 | 5 |
 | `MTLRenderPipeline.h` | 102 | 97 | 5 |
 | `MTLDevice.h` | 33 | 29 | 4 |
 | `MTLFunctionConstantValues.h` | 5 | 2 | 3 |
@@ -642,7 +642,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `read_write_tiers` | 6 | 6 | every field | 46 |
 | `render_chains` | 3 | 3 | every field | 136 |
 | `render_depth_stencil_state` | 3 | 3 | every field | 136 |
-| `render_draw_forms` | 4 | 4 | every field | 121 |
+| `render_draw_forms` | 4 | 4 | every field | 123 |
 | `render_pass_descriptors` | 12 | 12 | every field | 30 |
 | `render_residency` | 2 | 2 | every field | 126 |
 | `render_state` | 3 | 3 | every field | 156 |
@@ -699,7 +699,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `vertex_fetch_reach` | 1 | 1 | every field | 104 |
 | `vertex_formats` | 4 | 4 | every field | 103 |
 | `vertex_step_rate` | 1 | 1 | every field | 103 |
-| `visibility` | 16 | 16 | every field | 128 |
+| `visibility` | 16 | 16 | every field | 129 |
 | `visible_tables` | 18 | 18 | every field | 38 |
 | `wide_int_attributes` | 2 | 2 | every field | 103 |
 | `wide_points` | 1 | 1 | every field | 117 |
@@ -1281,10 +1281,13 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:` | yes | `primitive_type_crossings`, `render_draw_forms` | 5 |
 | `drawPrimitives:vertexStart:vertexCount:instanceCount:baseInstance:` | yes | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `color_write_masks`, `compute_render_chains`, `depth_resolve_pairs`, `depth_stencil_space`, `discard_hoist`, `draw_state_changes`, `extended_range_blends`, `extended_range_gamut`, `extended_range_gradients`, `extended_range_targets`, `fetch_ordered`, `frame_chains`, `half_output_blends`, `host_page_writes`, `int_attributes`, `layered_targets`, `padded_blends`, `padded_fetch`, `pass_attachment_pairs`, `pass_bound_pairs`, `pass_sequence_actions`, `pass_start_reads`, `render_chains`, `render_depth_stencil_state`, `render_draw_forms`, `render_residency`, `render_state`, `resolve_then_load`, `rotated_planes`, `rotated_targets`, `sample_positions`, `shader_stencil`, `snorm_tile_store`, `srgb_fetch`, `stencil_resolve_pairs`, `stencil_resolved_sample`, `topology_classes`, `vertex_attribute_strides`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_formats`, `visibility`, `wide_int_attributes`, `wide_points` | 319 |
 | `drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:baseVertex:baseInstance:` | yes | `render_draw_forms`, `vertex_constant_step`, `vertex_fetch_reach`, `vertex_step_rate` | 7 |
+| `drawPrimitives:indirectBuffer:indirectBufferOffset:` | yes | `render_draw_forms`, `visibility` | 20 |
+| `drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:` | yes | `render_draw_forms` | 4 |
 | `updateFence:afterStages:` | no | — | — |
 | `waitForFence:beforeStages:` | no | — | — |
 | `setTessellationFactorBuffer:offset:instanceStride:` | yes | `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps` | 14 |
 | `drawPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:instanceCount:baseInstance:` | yes | `tessellation_crossings`, `tessellation_rendered`, `tessellation_sweeps` | 14 |
+| `drawPatches:patchIndexBuffer:patchIndexBufferOffset:indirectBuffer:indirectBufferOffset:` | no | — | — |
 | `useResource:usage:` | yes | `render_residency` | 2 |
 | `useResources:count:usage:` | yes | `render_residency` | 2 |
 | `useResource:usage:stages:` | yes | `indirect_command_depth`, `indirect_commands`, `mesh_commands`, `render_residency` | 19 |
@@ -1897,11 +1900,9 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 | `MTLRasterizationRateMap` `screenSize` | missing | rasterization rate maps; the render pass descriptor has no field for one | `rate_map_degenerate_forms`, `rate_map_sweeps`, `rate_maps` |
 | `MTLRenderCommandEncoder` `dispatchThreadsPerTile:` | missing | tile render pipelines; metal2vulkan-runtime makes none | `tile_threadgroups` |
 | `MTLRenderCommandEncoder` `drawIndexedPatches:patchStart:patchCount:patchIndexBuffer:patchIndexBufferOffset:controlPointIndexBuffer:controlPointIndexBufferOffset:instanceCount:baseInstance:` | missing | patches through a control-point index buffer | `tessellation_sweeps` |
-| `MTLRenderCommandEncoder` `drawIndexedPrimitives:indexType:indexBuffer:indexBufferOffset:indirectBuffer:indirectBufferOffset:` | missing | indirect draws | `render_draw_forms` |
 | `MTLRenderCommandEncoder` `drawMeshThreadgroups:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | missing | mesh render pipelines; metal2vulkan-runtime makes none | `mesh_barriers`, `mesh_draws`, `mesh_partial_barriers` |
 | `MTLRenderCommandEncoder` `drawMeshThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | missing | mesh render pipelines; metal2vulkan-runtime makes none | `mesh_barriers`, `mesh_draws` |
 | `MTLRenderCommandEncoder` `drawMeshThreads:threadsPerObjectThreadgroup:threadsPerMeshThreadgroup:` | missing | mesh render pipelines; metal2vulkan-runtime makes none | `mesh_draws`, `mesh_partial_barriers` |
-| `MTLRenderCommandEncoder` `drawPrimitives:indirectBuffer:indirectBufferOffset:` | missing | indirect draws | `render_draw_forms`, `visibility` |
 | `MTLRenderCommandEncoder` `executeCommandsInBuffer:withRange:` | missing | indirect command buffers; a compute state that asks for them is refused (`Gap::IndirectCommandBuffers`) | `indirect_command_depth`, `indirect_commands`, `mesh_commands` |
 | `MTLRenderCommandEncoder` `setMeshBuffer:offset:atIndex:` | missing | mesh render pipelines; metal2vulkan-runtime makes none | `mesh_barriers`, `mesh_partial_barriers` |
 | `MTLRenderCommandEncoder` `setObjectBuffer:offset:atIndex:` | missing | mesh render pipelines; metal2vulkan-runtime makes none | `mesh_barriers`, `mesh_draws`, `mesh_partial_barriers` |
@@ -8076,9 +8077,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatRGBA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatRGBA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
 | `read-write-tier-round-trip-float` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatRGBA8Unorm_sRGB, so rt binds no such texture to a read_wr… |
-| `render-draw-forms-empty` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no indirect draw). The rt side of the suite answ… |
-| `render-draw-forms-points` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no indirect draw). The rt side of the suite answ… |
-| `render-draw-forms-triangles` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no indirect draw). The rt side of the suite answ… |
 | `render-state-depth-clip` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every depth clip mode Clip). rt refuses it (a dr… |
 | `render-state-facing` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every setTriangleFillMode: Fill). rt refuses it … |
 | `render-state-heap-residency` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no sparse texture, heap or tile call). The rt si… |
