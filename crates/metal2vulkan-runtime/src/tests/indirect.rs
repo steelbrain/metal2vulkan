@@ -26,6 +26,11 @@
 //!   - an execution over a range a buffer holds runs as a `Boolean` visibility mode's first draw,
 //!     its samples counted, and after a draw of a mode it is
 //!     `DrawKind::VisibilityResultInterrupt`, counted.
+//!   - a dispatch after executions over ranges a buffer holds (all four commands, none, and the
+//!     first record again), in the same command buffer, reads its texture through set 1, texel
+//!     for texel: the count kernel, the command buffer's first compute pipeline, leaves set 1
+//!     bound at the compute bind point (`VUID-vkCmdDispatch-None-08600` in the layer's log
+//!     otherwise).
 //!   - a kernel's reset of command 1 and a blit's reset of command 3 leave commands 0 and 2 to
 //!     draw; an optimize records nothing; a blit reset past the commands is refused.
 //!   - a command's slots go unchecked on both sides: a vertex function that reads four elements
@@ -152,11 +157,12 @@ mod on_device {
     use crate::tests::draw::on_device::{library, pass, read, run, state, target, Buffers};
     use crate::{
         Buffer, ColorAttachmentDescriptor, ComputePipelineDescriptor, ComputePipelineState,
-        CullMode, Device, DispatchType, DrawKind, Error, FunctionDescriptor, Gap, IndexBuffer,
-        IndexType, IndirectCommandBuffer, IndirectCommandBufferDescriptor, IndirectCommandType,
-        IndirectCommandsKind, Library, MemoryClass, PixelFormat, PrimitiveType, Refusal,
-        RenderCommandEncoder, RenderPipelineDescriptor, RenderPipelineKind, RenderPipelineState,
-        Resource, ResourceUsage, StageSource, TextureUsage, VisibilityResultMode,
+        CullMode, Device, DispatchType, DrawKind, Error, FunctionDescriptor, Gap, HostBytes,
+        IndexBuffer, IndexClass, IndexType, IndirectCommandBuffer, IndirectCommandBufferDescriptor,
+        IndirectCommandType, IndirectCommandsKind, Library, MemoryClass, PixelFormat,
+        PrimitiveType, Refusal, Region, RenderCommandEncoder, RenderPipelineDescriptor,
+        RenderPipelineKind, RenderPipelineState, Resource, ResourceUsage, StageSource,
+        TextureDescriptor, TextureType, TextureUsage, VisibilityResultMode,
     };
     use ash::vk;
     use metal2vulkan::metal::VertexFormat;
@@ -164,7 +170,7 @@ mod on_device {
         IndirectDrawLayout, VertexAttributeDescriptor, VertexBufferLayoutDescriptor,
         VertexDescriptor,
     };
-    use metal2vulkan_devtools::engine_dir;
+    use metal2vulkan_devtools::{engine_dir, fixtures_dir};
     use std::time::{Duration, Instant};
 
     /// The commands the scene's kernel encodes.
@@ -685,6 +691,136 @@ mod on_device {
             println!(
                 "{name}: an execution over a held range as a Boolean mode's first draw counted 64 \
                  samples; after a draw of the next mode it was refused and counted"
+            );
+        });
+    }
+
+    /// The texture [`every_device_reads_set_1_in_a_dispatch_after_held_executions`] reads: its
+    /// size, and texel (x, y), whose channels no zero, no other texel and no earlier contents hold.
+    const TEXELS: [u32; 2] = [8, 4];
+
+    fn texel(x: u32, y: u32) -> [u8; 4] {
+        [
+            17 + 8 * x + y,
+            101 + 30 * y + x,
+            230 - x - 8 * y,
+            255 - 7 * y,
+        ]
+        .map(|c| c as u8)
+    }
+
+    /// A dispatch after executions over ranges a buffer holds, in the same command buffer, reads
+    /// its texture through set 1: the count kernel is the command buffer's first compute pipeline,
+    /// and set 1 is bound at the compute bind point before it, as before a program's first. The
+    /// pass executes the commands over a range of all four, over a range of length 0 and over the
+    /// first range again (two executions of one record); then a kernel (`rows_read`) reads the
+    /// texture into a buffer, checked texel for texel. Without set 1 bound there, the validation
+    /// layer reports `VUID-vkCmdDispatch-None-08600` and the test fails on its log, whatever the
+    /// read returned.
+    #[test]
+    fn every_device_reads_set_1_in_a_dispatch_after_held_executions() {
+        let Some(indexed) = library(&engine_dir().join("icb_merged_indexed.ll")) else {
+            return;
+        };
+        let Some(rows) = library(&fixtures_dir().join("examples/texel_rows.ll")) else {
+            return;
+        };
+        each_device("icb_held_then_dispatch", |name, _, device| {
+            let Some(commands) = commands(name, &device, &descriptor(3, 1), N) else {
+                return;
+            };
+            let state = flagged(
+                name,
+                &device,
+                &indexed,
+                ("icb_indexed_vertex", "icb_indexed_fragment"),
+            );
+            let encoder = kernel(name, &device, &indexed, "icb_indexed_16");
+            let reader = kernel(name, &device, &rows, "rows_read");
+            let mut buffers = Buffers::new(&device);
+            let s = Scene::new(&device, &mut buffers, &commands);
+            encode(name, &device, &encoder, &commands, (&s, &s.xy, 0), N);
+            // Two records: all four commands at byte 0, none at byte 8.
+            let ranges = buffers.of(&device, &words(&[0, N, 0, 0]));
+            let index = IndexClass::Texture.range().start;
+            let _grant = ok(name, device.grant_indices(IndexClass::Texture, index, 1));
+            let [width, height] = TEXELS;
+            let mut d =
+                TextureDescriptor::new(TextureType::Type2D, PixelFormat::RGBA8Unorm, width, height);
+            d.usage = TextureUsage::SHADER_READ;
+            let texture = ok(name, device.new_texture(&d, Some(index)));
+            let texels: Vec<u8> = (0..height)
+                .flat_map(|y| (0..width).flat_map(move |x| texel(x, y)))
+                .collect();
+            let whole = Region {
+                origin: [0; 3],
+                size: [width, height, 1],
+            };
+            let row = u64::from(4 * width);
+            ok(
+                name,
+                texture.replace_region(
+                    whole,
+                    0,
+                    0,
+                    HostBytes::from(&texels[..]),
+                    row,
+                    row * u64::from(height),
+                ),
+            );
+            let out = buffers.of(&device, &vec![0; 4 * texels.len()]);
+            let color = target(
+                &device,
+                PixelFormat::RGBA32Uint,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut e = ok(
+                name,
+                command_buffer.render_command_encoder(&pass(&color, None)),
+            );
+            ok(name, e.set_render_pipeline_state(&state));
+            e.set_cull_mode(CullMode::None);
+            for offset in [0, 8, 0] {
+                ok(
+                    name,
+                    e.execute_commands_in_buffer_with_range(&commands, &ranges, offset),
+                );
+            }
+            e.end_encoding();
+            let mut c = ok(
+                name,
+                command_buffer.compute_command_encoder(DispatchType::Serial),
+            );
+            ok(name, c.set_compute_pipeline_state(&reader));
+            ok(name, c.set_texture(Some(&texture), 0));
+            ok(name, c.set_buffer(Some(&out), 0, 0));
+            ok(name, c.set_bytes(&width.to_le_bytes(), 1));
+            ok(
+                name,
+                c.dispatch_threads([width, height, 1], [width, height, 1]),
+            );
+            c.end_encoding();
+            run(name, &command_buffer);
+            assert_eq!(
+                marks(name, &read(&color, 16)),
+                want(&[0, 1, 2, 3]),
+                "{name}: the executions"
+            );
+            let contents = out.contents().expect("a Shared buffer");
+            // SAFETY: the buffer holds a float for each texel byte, which the finished command
+            // buffer wrote and whose writes reach the host.
+            let floats = unsafe {
+                std::slice::from_raw_parts(contents.as_ptr().cast::<f32>(), texels.len())
+            };
+            let got: Vec<u8> = (floats.iter())
+                .map(|&v| (v * 255.0).round() as u8)
+                .collect();
+            assert_eq!(got, texels, "{name}: the dispatch's texels, through set 1");
+            println!(
+                "{name}: after executions over held ranges (all four, none, all four again) in a \
+                 pass, a dispatch in the same command buffer read its texture through set 1"
             );
         });
     }
