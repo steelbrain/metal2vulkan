@@ -57,7 +57,7 @@ use crate::check::admission::{
 use crate::check::interface::AirInterface;
 use crate::check::CheckedCase;
 use crate::companion::{Companion, Spelling};
-use crate::coverage::{ExecutedCensus, ExecutionClass};
+use crate::coverage::ExecutedCensus;
 use crate::engine::{bounded_detail, Outcome, RowSource};
 use crate::executor_contract::out_of_bounds::{self, OutOfBoundsRun, TargetRun};
 use crate::executor_contract::stage_inputs;
@@ -1583,14 +1583,12 @@ pub fn is_engine_slot(environment_id: &str) -> bool {
 }
 
 /// How a compiled module contains each of `targets` (`out_of_bounds::containment`: its slot's
-/// form and `profile`'s encodings) on a device that executes as `class`, or `None` for a case
-/// without targets: the run's out-of-bounds facts, before what its guards count
-/// (`TargetRun::escaped`, `TargetRun::past_end`). A target whose form the device leaves
-/// uncontained under that encoding, or whose accesses the module checks nowhere
-/// (`out_of_bounds::Check::Unchecked`), refuses the run, so it is decided before anything is
+/// form and `profile`'s encodings), or `None` for a case without targets: the run's
+/// out-of-bounds facts, before what its guards count (`TargetRun::escaped`,
+/// `TargetRun::past_end`). A target whose accesses the module checks nowhere
+/// (`out_of_bounds::Check::Unchecked`) refuses the run, so it is decided before anything is
 /// submitted, before the executor's context executes.
 pub(crate) fn out_of_bounds_run(
-    class: Option<ExecutionClass>,
     profile: &DeviceProfile,
     module: &out_of_bounds::ModuleFacts<'_>,
     targets: &[OutOfBoundsTarget],
@@ -1613,15 +1611,13 @@ pub(crate) fn out_of_bounds_run(
             })
         })
         .collect::<Result<Vec<_>, ExecutorError>>()?;
-    let uncontained = out_of_bounds::uncontained(&targets, class);
     let unchecked = targets
         .iter()
         .filter(|target| target.mechanism.check == out_of_bounds::Check::Unchecked)
         .map(|target| target.form)
         .collect::<BTreeSet<_>>();
-    if !uncontained.is_empty() || !unchecked.is_empty() {
+    if !unchecked.is_empty() {
         return Err(NotSupported::Uncontained {
-            forms: uncontained,
             unchecked,
             variant: None,
         }
@@ -1634,13 +1630,11 @@ pub(crate) fn out_of_bounds_run(
 /// `device`, that runs the Metal vertex function (`graphics::vertex_module`) contains each of
 /// `case`'s targets, its attributes fetched from `case`'s vertex buffers.
 pub(crate) fn draw_out_of_bounds_run(
-    class: Option<ExecutionClass>,
     device: &metal2vulkan::device::Device,
     pipeline: &RenderPipeline,
     case: &graphics::RenderCase,
 ) -> Result<Option<OutOfBoundsRun>, ExecutorError> {
     out_of_bounds_run(
-        class,
         device.profile(),
         &out_of_bounds::ModuleFacts {
             stage: ShaderStage::Vertex,

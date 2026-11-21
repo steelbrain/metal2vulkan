@@ -186,8 +186,8 @@ fn run(
         .map(|map| graphics::rate_map_regions(map, &context.region_limits(), &pipeline.graphics))
         .transpose()?;
     // How the Metal vertex function's module contains each out-of-bounds target on this device,
-    // decided before anything runs; a form the device leaves uncontained is refused, never run.
-    let out_of_bounds = draw_out_of_bounds_run(context.execution_class, device, pipeline, case)?;
+    // decided before anything runs; a target checked nowhere is refused, never run.
+    let out_of_bounds = draw_out_of_bounds_run(device, pipeline, case)?;
     let spv_sha256 = sha256_bytes(
         &pipeline
             .stages

@@ -276,11 +276,10 @@ fn run(
         return Err(NotSupported::NotEnabled(missing).into());
     }
     // How the compiled module contains each out-of-bounds target on this device, decided before
-    // anything runs; a form the device leaves uncontained is refused, never run. A kernel fetches
-    // each stage input as the descriptor it was compiled under says.
+    // anything runs; a target checked nowhere is refused, never run. A kernel fetches each stage
+    // input as the descriptor it was compiled under says.
     let attributes = out_of_bounds::Fetch::of_stage_input(case.stage_input.as_ref());
     let out_of_bounds = out_of_bounds_run(
-        context.execution_class,
         device.profile(),
         &out_of_bounds::ModuleFacts {
             stage: Stage::Kernel,

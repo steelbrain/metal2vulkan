@@ -24,7 +24,6 @@ use crate::candidate::engine::{
     draw_out_of_bounds_run, out_of_bounds_run, product_refusal, ComputeCase,
 };
 use crate::check::admission::{ExecutorError, NotSupported};
-use crate::coverage::ExecutionClass;
 use crate::executor_contract::out_of_bounds::{self, OutOfBoundsRun};
 use metal2vulkan::error::Error as TranslationError;
 use metal2vulkan::pipeline::{
@@ -33,18 +32,17 @@ use metal2vulkan::pipeline::{
 use metal2vulkan::Budget;
 use metal2vulkan_runtime as rt;
 
-/// The out-of-bounds facts of `case`'s run of `descriptor` on `device`, executing as `class`, as
-/// the module documentation says: `None` for a case without targets.
+/// The out-of-bounds facts of `case`'s run of `descriptor` on `device`, as the module
+/// documentation says: `None` for a case without targets.
 ///
 /// Err: the translator's refusal of every variant, as the product's (`product_refusal`), the
 /// first one's named; its other errors the same way; `NotSupported::Uncontained` where the
-/// variants disagree or `class` leaves a form uncontained; a target no variant's module reaches
-/// as validation knows fails the run.
+/// variants disagree or a target's accesses are checked nowhere; a target no variant's module
+/// reaches as validation knows fails the run.
 pub(super) fn contained(
     device: &rt::Device,
     case: &ComputeCase,
     descriptor: &ComputePipelineDescriptor,
-    class: Option<ExecutionClass>,
 ) -> Result<Option<OutOfBoundsRun>, ExecutorError> {
     if case.out_of_bounds.is_empty() {
         return Ok(None);
@@ -83,7 +81,7 @@ pub(super) fn contained(
             policy: *translator.policy(),
             strategies: lowered.strategies(),
         };
-        let run = out_of_bounds_run(class, translator.profile(), &module, &case.out_of_bounds);
+        let run = out_of_bounds_run(translator.profile(), &module, &case.out_of_bounds);
         runs.push((variant, run));
     }
     let Some(((_, first), rest)) = runs.split_first() else {
@@ -94,7 +92,6 @@ pub(super) fn contained(
     };
     if let Some(&(variant, _)) = rest.iter().find(|(_, run)| run != first) {
         return Err(NotSupported::Uncontained {
-            forms: Default::default(),
             unchecked: Default::default(),
             variant: Some(variant),
         }
@@ -103,18 +100,16 @@ pub(super) fn contained(
     first.clone()
 }
 
-/// The out-of-bounds facts of `case`'s draw of `descriptor` on `device`, executing as `class`, as
-/// the module documentation says: `None` for a case without targets.
+/// The out-of-bounds facts of `case`'s draw of `descriptor` on `device`, as the module
+/// documentation says: `None` for a case without targets.
 ///
 /// Err: the translator's refusal of the descriptor, as the product's (`product_refusal`);
-/// `NotSupported::Uncontained` where `class` leaves a form uncontained or a target's accesses are
-/// checked nowhere; a target the vertex function's module does not reach as validation knows fails
-/// the draw.
+/// `NotSupported::Uncontained` where a target's accesses are checked nowhere; a target the vertex
+/// function's module does not reach as validation knows fails the draw.
 pub(super) fn drawn(
     device: &rt::Device,
     case: &RenderCase,
     descriptor: &RenderPipelineDescriptor,
-    class: Option<ExecutionClass>,
 ) -> Result<Option<OutOfBoundsRun>, ExecutorError> {
     if case.out_of_bounds.is_empty() {
         return Ok(None);
@@ -123,5 +118,5 @@ pub(super) fn drawn(
     let pipeline = translator
         .compile_render_pipeline(descriptor, &Budget::standard())
         .map_err(|error| product_refusal(&error))?;
-    draw_out_of_bounds_run(class, translator, &pipeline, case)
+    draw_out_of_bounds_run(translator, &pipeline, case)
 }

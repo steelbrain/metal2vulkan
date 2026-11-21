@@ -387,8 +387,7 @@ fn run(
     let descriptor = descriptor(case, kernel)?;
     // How the modules the state may dispatch contain each out-of-bounds target, decided before
     // anything is made or submitted.
-    let out_of_bounds =
-        runtime_bounds::contained(device, case, &descriptor, Some(execution_class(identity)))?;
+    let out_of_bounds = runtime_bounds::contained(device, case, &descriptor)?;
     let (threads_per_group, dispatch) = match case.dispatch {
         Dispatch::Threads {
             threads,
@@ -589,7 +588,7 @@ pub(super) fn ran(
 }
 
 /// The class of the device `identity` names.
-pub(super) fn execution_class(identity: &Identity) -> ExecutionClass {
+fn execution_class(identity: &Identity) -> ExecutionClass {
     match identity.device_type {
         vk::PhysicalDeviceType::CPU => ExecutionClass::CpuIcd,
         _ => ExecutionClass::Host(HostClass(metal2vulkan::vk::DriverId::from_raw(

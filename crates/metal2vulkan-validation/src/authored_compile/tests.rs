@@ -910,7 +910,6 @@ fn a_stopped_case_worker_fails_every_cell_of_its_case() {
 fn every_outcome_kind_round_trips_through_a_bless() {
     use crate::case::out_of_bounds::ContainmentForm;
     use crate::check::admission::ExecutionRefused;
-    use crate::coverage::RobustBufferForm;
     use crate::engine::{LimitKind, UnsupportedReason};
     use crate::requirement::ToolingRequirement;
     let product = |outcome: Outcome| {
@@ -979,12 +978,6 @@ fn every_outcome_kind_round_trips_through_a_bless() {
             ToolingRequirement::VertexAttributeLiteral,
         ]))),
         executor(NotSupported::Uncontained {
-            forms: BTreeSet::from([RobustBufferForm::LoadStore, RobustBufferForm::Atomic]),
-            unchecked: BTreeSet::new(),
-            variant: None,
-        }),
-        executor(NotSupported::Uncontained {
-            forms: BTreeSet::new(),
             unchecked: BTreeSet::from([ContainmentForm::LoadedPointer]),
             variant: None,
         }),

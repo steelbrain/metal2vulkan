@@ -17,12 +17,6 @@
 //! robustness feature ([`Leg`]): as stated, which selects the robust encodings, and with every
 //! robustness feature removed ([`robustness_off`]), which selects the in-shader ones, the ones the
 //! runtime's floor compiles, as it enables no robustness feature.
-//!
-//! A driver that advertises buffer robustness without containing some of its forms is a recorded
-//! limitation (MoltenVK leaves loads, stores, and atomics through buffer descriptors and
-//! fixed-function vertex input uncontained): a run of the robust buffer encoding there is
-//! evidence for the in-bounds path only, never containment evidence for those forms
-//! ([`HostClass::robust_buffers_uncontained`], which out-of-bounds evidence reads).
 
 use crate::candidate::engine::artifact::ExecutedArtifact;
 use crate::case::Stage;
@@ -92,9 +86,7 @@ pub enum BufferEncoding {
     /// (`DeviceProfile::checks_buffers_in_shader`).
     Checked,
     /// Left to robust descriptors: `robustBufferAccess` or `robustBufferAccess2` is enabled, and
-    /// the shader emits no check. Both levels select the same shader. A device may
-    /// advertise the feature without containing every form
-    /// ([`HostClass::robust_buffers_uncontained`], MoltenVK).
+    /// the shader emits no check. Both levels select the same shader.
     Robust,
 }
 
@@ -359,8 +351,7 @@ impl ModuleCensus {
     }
 }
 
-/// A Vulkan driver (`VkDriverId`): the host class of a GPU (NVIDIA proprietary, RADV, ANV,
-/// MoltenVK, ...).
+/// A Vulkan driver (`VkDriverId`): the host class of a GPU (NVIDIA proprietary, RADV, ANV, ...).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct HostClass(pub vk::DriverId);
@@ -391,75 +382,6 @@ impl ExecutionClass {
         description
             .driver_id
             .map(|driver| ExecutionClass::Host(HostClass(driver)))
-    }
-
-    /// The forms this class leaves uncontained under the robust buffer encoding: its driver's
-    /// ([`HostClass::robust_buffers_uncontained`]); none for a CPU ICD.
-    pub fn robust_buffers_uncontained(self) -> &'static [RobustBufferForm] {
-        match self {
-            ExecutionClass::Host(host) => host.robust_buffers_uncontained(),
-            ExecutionClass::CpuIcd => &[],
-        }
-    }
-}
-
-/// An out-of-bounds access Vulkan's robust buffer access keeps inside the buffer's memory (the
-/// specification's "Shader Out-of-Bounds Memory Access" and "Vertex Input Extraction" under
-/// `robustBufferAccess`): what the robust buffer encoding ([`BufferEncoding::Robust`]) leaves to
-/// the device.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RobustBufferForm {
-    /// A load or store through a storage or uniform buffer descriptor.
-    LoadStore,
-    /// An atomic on a storage buffer.
-    Atomic,
-    /// A read, write, or atomic on a uniform or storage texel buffer.
-    TexelBuffer,
-    /// A fixed-function vertex attribute fetch.
-    VertexInput,
-}
-
-impl RobustBufferForm {
-    /// The form's name in the report.
-    pub fn label(self) -> &'static str {
-        match self {
-            RobustBufferForm::LoadStore => "load-store",
-            RobustBufferForm::Atomic => "atomic",
-            RobustBufferForm::TexelBuffer => "texel-buffer",
-            RobustBufferForm::VertexInput => "vertex-input",
-        }
-    }
-}
-
-impl HostClass {
-    /// The forms this driver leaves uncontained although it advertises `robustBufferAccess`, a
-    /// recorded driver limitation: on it a run of the robust buffer encoding is evidence for the
-    /// in-bounds path of these forms only, never for their containment.
-    ///
-    /// MoltenVK advertises the feature on every device and adds no bounds check for it (its
-    /// shader converter emits none, and Metal bounds neither a buffer access nor a
-    /// vertex-descriptor fetch). On an Apple M3 Max (macOS 26.7, MoltenVK 1.4.1) loads, stores,
-    /// and atomics through storage and uniform buffer descriptors, and fixed-function vertex
-    /// fetches, past their buffer read or wrote the next buffer's bytes; texel buffer accesses
-    /// were contained. By user decision the product keeps the robust encoding there (no in-shader
-    /// check), as native Metal bounds none of these either. SwiftShader's robustness leaves a
-    /// storage buffer's atomics uncontained too, below the floor. Under `robustBufferAccess` its storage
-    /// buffer loads and stores and its storage texel buffer atomic add and store were measured
-    /// contained, and OB1's cases (storage, uniform, and texel buffers, and buffer atomics with the
-    /// check) matched. Its vertex-input fetches and index-buffer reads were not measured; like
-    /// every other driver's, they are taken to follow Vulkan's rules until a measurement says
-    /// otherwise.
-    pub fn robust_buffers_uncontained(self) -> &'static [RobustBufferForm] {
-        if self.0 == vk::DriverId::MOLTENVK {
-            &[
-                RobustBufferForm::LoadStore,
-                RobustBufferForm::Atomic,
-                RobustBufferForm::VertexInput,
-            ]
-        } else {
-            &[]
-        }
     }
 }
 

@@ -91,11 +91,10 @@ fn run(
     let _grant = runtime::sampler_grant(device)?;
     let descriptor = descriptor(case, draw)?;
     // How the state's vertex function contains each out-of-bounds target, decided before anything
-    // is made: a target the device leaves uncontained or checked nowhere refuses the draw. The
-    // routed targets are attribute buffers (`engine::runs_render_through_runtime`), which the
-    // draw places without guards, so a contained one is not drawn either.
-    let class = Some(runtime::execution_class(identity));
-    if runtime_bounds::drawn(device, case, &descriptor, class)?.is_some() {
+    // is made: a target checked nowhere refuses the draw. The routed targets are attribute
+    // buffers (`engine::runs_render_through_runtime`), which the draw places without guards, so a
+    // contained one is not drawn either.
+    if runtime_bounds::drawn(device, case, &descriptor)?.is_some() {
         return Err(NotSupported::NotImplemented(
             "a draw through the runtime whose out-of-bounds targets are contained: it places \
              its vertex buffers without guards"

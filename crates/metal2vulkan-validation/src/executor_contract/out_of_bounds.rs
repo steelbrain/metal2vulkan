@@ -49,7 +49,6 @@
 
 use crate::case::out_of_bounds::{ContainmentForm, OutOfBoundsResource, OutOfBoundsTarget};
 use crate::case::{AuthoredCase, OutputSelection};
-use crate::coverage::{ExecutionClass, RobustBufferForm};
 use crate::observation_contract::{ComparisonClass, ObservationLanes};
 use base64::Engine as _;
 use metal2vulkan::device::{DevicePolicy, DeviceProfile, HandleDomain, PointerDomain, Robustness};
@@ -160,41 +159,6 @@ impl Mechanism {
             Check::Unchecked => "unchecked",
         };
         format!("{medium}:{check}")
-    }
-
-    /// The form of the robust buffer encoding this mechanism leaves to the device
-    /// ([`RobustBufferForm`]): a descriptor view's loads and stores or atomics, a texel buffer, and
-    /// fixed-function vertex input, under buffer robustness; `None` for every in-shader check, for
-    /// the binder's and the padded copy's, for an unchecked access, for images, and for an index
-    /// fetch, which only `robustBufferAccess2` bounds.
-    pub fn robust_buffer_form(self, form: ContainmentForm) -> Option<RobustBufferForm> {
-        match (self.medium, self.check) {
-            (
-                _,
-                Check::Shader
-                | Check::ShaderReads
-                | Check::Binder
-                | Check::Padded
-                | Check::Unchecked,
-            ) => None,
-            (Medium::DescriptorView, _) if form == ContainmentForm::BufferAtomic => {
-                Some(RobustBufferForm::Atomic)
-            }
-            (Medium::DescriptorView, _) => Some(RobustBufferForm::LoadStore),
-            (Medium::TexelBuffer, _) => Some(RobustBufferForm::TexelBuffer),
-            (Medium::VertexInput, _) => Some(RobustBufferForm::VertexInput),
-            (
-                Medium::DeviceAddress
-                | Medium::Arena
-                | Medium::Image
-                | Medium::TypedObject
-                | Medium::HandleTable
-                | Medium::ResourceId
-                | Medium::IndexBuffer
-                | Medium::HandleArray,
-                _,
-            ) => None,
-        }
     }
 }
 
@@ -738,24 +702,6 @@ pub fn robust_check(profile: &DeviceProfile) -> Result<Check, String> {
         }),
         _ => Err("a robustness validation does not know".into()),
     }
-}
-
-/// The forms among `targets` that `class` leaves uncontained
-/// ([`ExecutionClass::robust_buffers_uncontained`]): a run there would access memory outside the
-/// target, so the candidate refuses it before any submission, a recorded driver limitation.
-pub fn uncontained(
-    targets: &[TargetRun],
-    class: Option<ExecutionClass>,
-) -> BTreeSet<RobustBufferForm> {
-    let Some(class) = class else {
-        return BTreeSet::new();
-    };
-    let limited = class.robust_buffers_uncontained();
-    targets
-        .iter()
-        .filter_map(|target| target.mechanism.robust_buffer_form(target.form))
-        .filter(|form| limited.contains(form))
-        .collect()
 }
 
 /// Whether a candidate observation `candidate` of `case` matches its Metal observation `golden`

@@ -1,7 +1,6 @@
 //! A refusal's class from the executor's typed refusal, and a refusal record's own checks.
 
 use super::*;
-use crate::coverage::RobustBufferForm;
 use crate::engine::{LimitKind, Outcome, UnsupportedReason};
 use crate::requirement::ToolingRequirement;
 
@@ -37,8 +36,7 @@ fn a_refusal_is_classed_by_its_type() {
         ),
         (
             NotSupported::Uncontained {
-                forms: [RobustBufferForm::LoadStore].into(),
-                unchecked: Default::default(),
+                unchecked: [crate::case::out_of_bounds::ContainmentForm::LoadedPointer].into(),
                 variant: None,
             },
             RefusalClass::Device,

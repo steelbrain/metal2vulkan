@@ -7,7 +7,7 @@ use crate::case::out_of_bounds::{ContainmentForm, OutOfBoundsResource, OutOfBoun
 use crate::case::AuthoredCase;
 use std::collections::BTreeMap;
 
-const MOLTENVK: HostClass = HostClass(vk::DriverId::MOLTENVK);
+const RADV: HostClass = HostClass(vk::DriverId::MESA_RADV);
 
 const FREE: SubgroupShape = SubgroupShape {
     required_size: None,
@@ -43,14 +43,14 @@ fn executed_census_round_trips() {
     let census = ExecutedCensus {
         out_of_bounds: None,
         rate_map_pass: None,
-        device: Some(ExecutionClass::Host(MOLTENVK)),
+        device: Some(ExecutionClass::Host(RADV)),
         product: "p".into(),
         restricted_to: None,
         modules: vec![module(Stage::Kernel, pinned(32, true), &["simd.reduce"])],
         artifact: None,
     };
     let json = serde_json::to_value(&census).unwrap();
-    assert_eq!(json["device"], serde_json::json!({"host": 14}));
+    assert_eq!(json["device"], serde_json::json!({"host": 3}));
     assert_eq!(
         json["modules"][0]["containment"],
         serde_json::json!({"buffers": "robust", "images": "unused"})
@@ -74,7 +74,7 @@ fn a_rate_mapped_pass_records_its_regions() {
             regions: 2,
             precision: BTreeSet::new(),
         }),
-        device: Some(ExecutionClass::Host(MOLTENVK)),
+        device: Some(ExecutionClass::Host(RADV)),
         product: "p".into(),
         restricted_to: None,
         modules: vec![module(Stage::Fragment, FREE, &["arith.float"])],

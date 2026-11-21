@@ -80,7 +80,7 @@ Reading notes for consumers of these files:
 - A file states what its source reports, not what the driver honors. `moltenvk-m3` states
   `robustBufferAccess` as MoltenVK reports it, but MoltenVK adds no bounds check for it: on the
   captured device out-of-bounds storage and uniform buffer accesses, buffer atomics, and vertex
-  fetches read and wrote the next buffer's memory, while texel buffers were contained. Validation records it as a driver limitation (`HostClass::robust_buffers_uncontained`).
+  fetches read and wrote the next buffer's memory, while texel buffers were contained.
 - A file states no deviation from the specifications, and the product reads none: its profile is
   derived from the file's Vulkan queries alone (`Device::from_queries`). The product refuses a file
   that holds the former top-level `m2v_deviations` object.
