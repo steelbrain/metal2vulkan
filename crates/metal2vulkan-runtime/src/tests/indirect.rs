@@ -645,6 +645,158 @@ mod on_device {
         (block, whole, first)
     }
 
+    /// How the commands that draw nothing in a part are made ([`empties_in_a_part`]).
+    #[derive(Clone, Copy, Debug)]
+    enum Empty {
+        /// A blit's reset of the encoded commands.
+        Reset,
+        /// Encoded with 0 instances and their indices.
+        NoInstances,
+        /// Encoded with their instances and 0 indices.
+        NoIndices,
+    }
+
+    /// One cell of the parts' empties: the kernel encodes 64 commands, each drawing band `i % 4`
+    /// with its own mark, those of `empties` made by `empty` to draw nothing; one execution of
+    /// `executed` (at most a part) leaves each band with the mark of its last command that
+    /// draws, or none. Each cell is a test of its own, one process each, so a device fault stops
+    /// at its cell. On NVIDIA's driver (620.70.06, an RTX 2080) runs of slot words in one push
+    /// constant token lost the draws after leading empties (`crate::indirect::Tokens`).
+    fn empties_in_a_part(
+        tag: &str,
+        empty: Empty,
+        empties: std::ops::Range<u32>,
+        executed: std::ops::Range<u32>,
+    ) {
+        const COUNT: u32 = 64;
+        let Some(indexed) = library(&engine_dir().join("icb_merged_indexed.ll")) else {
+            return;
+        };
+        each_device(tag, |name, _, device| {
+            let Some(commands) = commands(name, &device, &descriptor(3, 1), COUNT) else {
+                return;
+            };
+            let state = flagged(
+                name,
+                &device,
+                &indexed,
+                ("icb_indexed_vertex", "icb_indexed_fragment"),
+            );
+            let kernel = kernel(name, &device, &indexed, "icb_indexed_16");
+            let mut buffers = Buffers::new(&device);
+            let mut s = Scene::of(&device, &mut buffers, &commands, COUNT);
+            if !matches!(empty, Empty::Reset) {
+                let draws: Vec<u32> = (0..COUNT)
+                    .flat_map(|i| {
+                        let inside = empties.contains(&i);
+                        let count = match (inside, empty) {
+                            (true, Empty::NoIndices) => 0,
+                            _ => 6,
+                        };
+                        let instances = match (inside, empty) {
+                            (true, Empty::NoInstances) => 0,
+                            _ => 1,
+                        };
+                        [first(i), count, instances, 4 * i, i]
+                    })
+                    .collect();
+                s.draws = buffers.of(&device, &words(&draws));
+            }
+            encode(name, &device, &kernel, &commands, (&s, &s.xy, 0), COUNT);
+            if matches!(empty, Empty::Reset) && !empties.is_empty() {
+                let queue = device.new_command_queue(4).expect("a queue");
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut blit = ok(name, command_buffer.blit_command_encoder());
+                ok(
+                    name,
+                    blit.reset_commands_in_buffer(&commands, empties.clone()),
+                );
+                blit.end_encoding();
+                run(name, &command_buffer);
+            }
+            let texels = drawn(name, &device, &state, |e| {
+                ok(
+                    name,
+                    e.execute_commands_in_buffer(&commands, executed.clone()),
+                )
+            });
+            let got = marks(name, &texels);
+            let want: Vec<u32> = (0..8)
+                .map(|row| {
+                    (executed.clone().rev())
+                        .find(|i| i % 4 == row / 2 && !empties.contains(i))
+                        .map_or(0, |i| MARK + i)
+                })
+                .collect();
+            let bands = |m: &[u32]| -> Vec<i64> {
+                (m.iter().step_by(2))
+                    .map(|&v| i64::from(v) - i64::from(MARK))
+                    .collect()
+            };
+            let verdict = if got == want { "right" } else { "WRONG" };
+            println!(
+                "MATRIX {name}: {empty:?} {empties:?}, executed {executed:?}: {verdict}; bands {:?}, \
+                 want {:?}",
+                bands(&got),
+                bands(&want)
+            );
+            assert_eq!(
+                got, want,
+                "{name}: {empty:?} {empties:?}, executed {executed:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn every_device_draws_a_part_of_no_empties() {
+        empties_in_a_part("icb_empties_none", Empty::Reset, 0..0, 0..64);
+    }
+
+    #[test]
+    fn every_device_draws_a_part_after_its_first_half_reset() {
+        empties_in_a_part("icb_empties_reset_0_31", Empty::Reset, 0..32, 0..64);
+    }
+
+    #[test]
+    fn every_device_draws_a_part_after_its_first_quarter_reset() {
+        empties_in_a_part("icb_empties_reset_0_15", Empty::Reset, 0..16, 0..64);
+    }
+
+    #[test]
+    fn every_device_draws_a_part_after_its_first_command_reset() {
+        empties_in_a_part("icb_empties_reset_0", Empty::Reset, 0..1, 0..64);
+    }
+
+    #[test]
+    fn every_device_draws_a_part_around_its_second_quarter_reset() {
+        empties_in_a_part("icb_empties_reset_16_31", Empty::Reset, 16..32, 0..64);
+    }
+
+    #[test]
+    fn every_device_draws_a_part_before_its_second_half_reset() {
+        empties_in_a_part("icb_empties_reset_32_63", Empty::Reset, 32..64, 0..64);
+    }
+
+    #[test]
+    fn every_device_draws_a_part_of_32_after_its_first_half_reset() {
+        empties_in_a_part("icb_empties_part_32", Empty::Reset, 0..16, 0..32);
+    }
+
+    #[test]
+    fn every_device_draws_a_part_of_16_after_its_first_half_reset() {
+        empties_in_a_part("icb_empties_part_16", Empty::Reset, 0..8, 0..16);
+    }
+
+    #[test]
+    fn every_device_draws_a_part_after_commands_of_no_instances() {
+        empties_in_a_part("icb_empties_no_instances", Empty::NoInstances, 0..32, 0..64);
+    }
+
+    #[test]
+    fn every_device_draws_a_part_after_commands_of_no_indices() {
+        empties_in_a_part("icb_empties_no_indices", Empty::NoIndices, 0..32, 0..64);
+    }
+
     #[test]
     fn every_device_reads_a_commands_slots_unchecked_on_both_sides() {
         let Some(indexed) = library(&engine_dir().join("icb_merged_indexed.ll")) else {
