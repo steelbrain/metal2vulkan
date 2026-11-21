@@ -34,7 +34,7 @@ Columns:
 | Devices below the runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Refusal` | 82 | 82 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Limit` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
-| The runtime's `Gap` | 31 | 31 | 0 | 0 | 0 | 0 | 0 |
+| The runtime's `Gap` | 32 | 32 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
@@ -48,7 +48,7 @@ Columns:
 | Devices below the runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The runtime's `Refusal` | 22 | 25 | 0 | 0 | 35 | 0 | 0 | 0 |
 | The runtime's `Limit` | 0 | 0 | 0 | 13 | 4 | 0 | 0 | 0 |
-| The runtime's `Gap` | 0 | 0 | 0 | 3 | 28 | 0 | 0 | 0 |
+| The runtime's `Gap` | 0 | 0 | 0 | 3 | 29 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -378,7 +378,8 @@ Columns:
 | `LodClamps` | A sampler state bound with LOD clamps its samples read otherwise through (`ComputeCommandEncoder::set_sampler_state_with_lod_clamps` and the... | every device (a public call's own check of its arguments) | `ours`: no replay stream binds such clamps: every bind-time clamp the streams make reads as its state's own | 1: `crates/metal2vulkan-runtime/src/sampler.rs (clamps_at_bind)` | `-` |
 | `TextureBytes` | `Texture::replace_region`, `Texture::get_bytes` or a blit copy between a buffer and a texture (`BlitCommandEncoder::copy_from_buffer`) of a... | every device (a public call's own check of its arguments) | `ours`: no copy between such an image and bytes is built, nor a texture buffer's copy as a buffer copy; no recorded stream copies a texture buffer | 5: `crates/metal2vulkan-runtime/src/blit.rs (buffer_copy, 2 sites)`, `crates/metal2vulkan-runtime/src/blit.rs (with_option)` (+2) | `-` |
 | `FloatDepthUpload` | `Texture::replace_region` or `BlitCommandEncoder::copy_from_buffer` into a 32-bit float depth (`Depth32Float`) | every device (a public call's own check of its arguments) | `ours`: no upload of a 32-bit float depth is built | 3: `crates/metal2vulkan-runtime/src/blit.rs (buffer_copy)`, `crates/metal2vulkan-runtime/src/texture.rs (replace_region)` (+1) | `-` |
-| `TextureCopy` | `BlitCommandEncoder::copy_from_texture` that the floor's `vkCmdCopyImage` does not make | every device (a public call's own check of its arguments) | `ours`: Vulkan 1.3 copies none of these with one command, nor these regions in slabs along one axis; each is built when a replay stream makes one | 2: `crates/metal2vulkan-runtime/src/blit.rs (copy_from_texture)`, `crates/metal2vulkan-runtime/src/blit.rs (texture_copy)` | `-` |
+| `TextureCopy` | `BlitCommandEncoder::copy_from_texture` that the floor's `vkCmdCopyImage` does not make | every device (a public call's own check of its arguments) | `ours`: Vulkan 1.3 copies none of these with one command; each is built when a replay stream makes one | 2: `crates/metal2vulkan-runtime/src/blit.rs (copy_from_texture)`, `crates/metal2vulkan-runtime/src/blit.rs (texture_copy)` | `-` |
+| `OverlappingCopy` | A blit copy whose source and destination share memory where no copy command orders it as from the source before the copy, which Metal leaves... | every device (a public call's own check of its arguments) | `ours`: no copy command reads bytes it writes, `VUID-vkCmdCopyImage-pRegions-00124` and its twins; the first shapes are built, cut on two levels, when a replay stream or a walk counts one | 2: `crates/metal2vulkan-runtime/src/blit.rs (buffer_copy)`, `crates/metal2vulkan-runtime/src/blit.rs (copy_from_texture)` | `-` |
 | `TextureOverBuffer` | A texture over a buffer (`Buffer::new_texture`) the runtime does not make | every device (a public call's own check of its arguments) | `ours`: the in-place linear image and the copy form take one 2D color image, and a texture buffer's view the texel-buffer offset alignment of Vulkan 1.3 | 4: `crates/metal2vulkan-runtime/src/texture.rs (check_over)`, `crates/metal2vulkan-runtime/src/texture.rs (error)` (+2) | `-` |
 | `HeapTexture` | A heap texture the runtime does not place (`Device::new_heap_texture`, `Device::new_heap_texture_for_views` and `Device::heap_texture_size_and_align`) | every device (a public call's own check of its arguments) | `ours`: heap textures are built for Private heaps of placeable images | 2: `crates/metal2vulkan-runtime/src/texture.rs (heap_fit)`, `crates/metal2vulkan-runtime/src/texture.rs (heap_source)` | `-` |
 | `SurfaceUsage` | A surface plane in place (`Device::new_exported_surface`) whose texture's uses ask an image usage its linear tiling lacks (storage, for one) | at the device's limit | `device`: the image format query and the format features of the plane's tiling | 3: `crates/metal2vulkan-runtime/src/d3d11.rs (d3d11_plane)`, `crates/metal2vulkan-runtime/src/surface.rs (plane)` (+1) | `-` |
@@ -670,6 +671,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Gap::TextureBytes`: `crates/metal2vulkan-runtime/src/blit.rs (buffer_copy, 2 sites)`; `crates/metal2vulkan-runtime/src/blit.rs (with_option)`; `crates/metal2vulkan-runtime/src/texture.rs (check_places)`; `crates/metal2vulkan-runtime/src/texture.rs (copy)`
 - `rt:Gap::FloatDepthUpload`: `crates/metal2vulkan-runtime/src/blit.rs (buffer_copy)`; `crates/metal2vulkan-runtime/src/texture.rs (replace_region)`; `crates/metal2vulkan-runtime/src/texture.rs (upload_region)`
 - `rt:Gap::TextureCopy`: `crates/metal2vulkan-runtime/src/blit.rs (copy_from_texture)`; `crates/metal2vulkan-runtime/src/blit.rs (texture_copy)`
+- `rt:Gap::OverlappingCopy`: `crates/metal2vulkan-runtime/src/blit.rs (buffer_copy)`; `crates/metal2vulkan-runtime/src/blit.rs (copy_from_texture)`
 - `rt:Gap::TextureOverBuffer`: `crates/metal2vulkan-runtime/src/texture.rs (check_over)`; `crates/metal2vulkan-runtime/src/texture.rs (error)`; `crates/metal2vulkan-runtime/src/texture.rs (over_texel)`; `crates/metal2vulkan-runtime/src/texture.rs (texel_texture)`
 - `rt:Gap::HeapTexture`: `crates/metal2vulkan-runtime/src/texture.rs (heap_fit)`; `crates/metal2vulkan-runtime/src/texture.rs (heap_source)`
 - `rt:Gap::SurfaceUsage`: `crates/metal2vulkan-runtime/src/d3d11.rs (d3d11_plane)`; `crates/metal2vulkan-runtime/src/surface.rs (plane)`; `crates/metal2vulkan-runtime/src/texture.rs (surface_texture)`

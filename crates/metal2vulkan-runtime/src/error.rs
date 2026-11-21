@@ -1188,19 +1188,37 @@ pub enum Gap {
     /// [`BlitCommandEncoder::copy_from_texture`](crate::BlitCommandEncoder::copy_from_texture)
     /// that the floor's `vkCmdCopyImage` does not make: a multisample texture; a format of depth
     /// and stencil both; one pixel format held in two Vulkan formats, which the two textures'
-    /// usages chose; a 1D texture with one of another type; or regions of two textures in place
-    /// over one buffer whose rows meet shifted both ways, or not shifted, along each axis, so
-    /// that no cut into slabs along one axis copies them as from the source before the copy (a
-    /// destination row across the end of its own source row and the start of the next is one);
-    /// or a texture buffer, whose texels are its buffer's bytes and no image.
+    /// usages chose; a 1D texture with one of another type; or a texture buffer, whose texels
+    /// are its buffer's bytes and no image.
     ///
-    /// Basis: ours (Vulkan 1.3 copies none of these with one command, nor these regions in slabs
-    /// along one axis; each is built when a replay stream makes one).
+    /// Basis: ours (Vulkan 1.3 copies none of these with one command; each is built when a
+    /// replay stream makes one).
     TextureCopy {
         /// The source texture's pixel format.
         source: PixelFormat,
         /// The destination texture's pixel format.
         destination: PixelFormat,
+    },
+    /// A blit copy whose source and destination share memory where no copy command orders it as
+    /// from the source before the copy, which Metal leaves undefined
+    /// ([`BlitCommandEncoder::copy_from_texture`](crate::BlitCommandEncoder::copy_from_texture),
+    /// [`BlitCommandEncoder::copy_from_buffer`](crate::BlitCommandEncoder::copy_from_buffer) and
+    /// [`BlitCommandEncoder::copy_from_texture_to_buffer`](crate::BlitCommandEncoder::copy_from_texture_to_buffer)
+    /// and their options forms): rows of a texture in place over a buffer
+    /// ([`Buffer::new_texture`](crate::Buffer::new_texture)) that meet the other side's rows
+    /// shifted both ways, or not shifted, along each axis, so that no cut into slabs along one
+    /// axis keeps the order (a destination row across the end of its own source row and the
+    /// start of the next; rows of two pitches that meet at their starts); or a texture placed in
+    /// a heap ([`Device::new_heap_texture`](crate::Device::new_heap_texture)), whose texels the
+    /// device lays out as it chooses, whose memory meets the other side's. Counted in
+    /// [`Metrics::overlapping_copies_refused`](crate::Metrics::overlapping_copies_refused).
+    ///
+    /// Basis: ours (no copy command reads bytes it writes, `VUID-vkCmdCopyImage-pRegions-00124`
+    /// and its twins; the first shapes are built, cut on two levels, when a replay stream or a
+    /// walk counts one).
+    OverlappingCopy {
+        /// The textures' pixel format.
+        pixel_format: PixelFormat,
     },
     /// A texture over a buffer ([`Buffer::new_texture`](crate::Buffer::new_texture)) the runtime
     /// does not make: other than 2D of one level, sample and slice, or a texture buffer; of a
@@ -2567,6 +2585,11 @@ impl fmt::Display for Gap {
             } => write!(
                 f,
                 "this copy from a texture of {source:?} to one of {destination:?} is not built"
+            ),
+            Gap::OverlappingCopy { pixel_format } => write!(
+                f,
+                "this copy of {pixel_format:?} whose source and destination share memory in no \
+                 order a copy command keeps is not built"
             ),
             Gap::TextureOverBuffer { pixel_format } => write!(
                 f,

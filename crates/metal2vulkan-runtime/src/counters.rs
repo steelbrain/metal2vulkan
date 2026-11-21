@@ -264,10 +264,12 @@ pub(crate) enum Metric {
     VisibilityInterruptsRefused,
     /// [`Metrics::accumulated_visibility_refused`].
     AccumulatedVisibilityRefused,
+    /// [`Metrics::overlapping_copies_refused`].
+    OverlappingCopiesRefused,
 }
 
 /// The number of [`Metric`]s.
-const METRICS: usize = Metric::AccumulatedVisibilityRefused as usize + 1;
+const METRICS: usize = Metric::OverlappingCopiesRefused as usize + 1;
 
 /// Every [`Metric`], in its order: each at its own index.
 const METRIC_ORDER: [Metric; METRICS] = [
@@ -311,6 +313,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::PipelinesFromStageFills,
     Metric::VisibilityInterruptsRefused,
     Metric::AccumulatedVisibilityRefused,
+    Metric::OverlappingCopiesRefused,
 ];
 
 // Each metric of the order is at its own index.
@@ -678,6 +681,7 @@ struct Atomics {
     pipelines_from_stage_fills: AtomicU64,
     visibility_interrupts_refused: AtomicU64,
     accumulated_visibility_refused: AtomicU64,
+    overlapping_copies_refused: AtomicU64,
     /// Each [`Part`]'s calls, at its index: their count, bytes, total and longest nanoseconds,
     /// and those over each of [`OVER_NANOS`].
     parts: [[AtomicU64; 7]; PARTS],
@@ -829,6 +833,7 @@ impl Counters {
             Metric::PipelinesFromStageFills => &a.pipelines_from_stage_fills,
             Metric::VisibilityInterruptsRefused => &a.visibility_interrupts_refused,
             Metric::AccumulatedVisibilityRefused => &a.accumulated_visibility_refused,
+            Metric::OverlappingCopiesRefused => &a.overlapping_copies_refused,
         }
     }
 
@@ -1656,6 +1661,7 @@ impl Counters {
             pipelines_from_stage_fills: a.pipelines_from_stage_fills.load(Relaxed),
             visibility_interrupts_refused: a.visibility_interrupts_refused.load(Relaxed),
             accumulated_visibility_refused: a.accumulated_visibility_refused.load(Relaxed),
+            overlapping_copies_refused: a.overlapping_copies_refused.load(Relaxed),
             takes: part(Part::Take),
             take_lock_waits: part(Part::TakeLock),
             take_makes: part(Part::TakeMake),
@@ -2473,6 +2479,13 @@ pub struct Metrics {
     /// ([`DrawKind::AccumulatedVisibilityResults`](crate::DrawKind::AccumulatedVisibilityResults)):
     /// results the guest asked for that were not written.
     pub accumulated_visibility_refused: u64,
+    /// Blit copies refused because their source and destination share memory that no copy
+    /// command orders as from the source before the copy
+    /// ([`Gap::OverlappingCopy`](crate::Gap::OverlappingCopy)): rows of a texture in place over
+    /// a buffer that meet the other side's shifted both ways, or not shifted, along each axis,
+    /// and a texture placed in a heap whose memory meets the other side's. Copies the guest
+    /// asked for that did not run.
+    pub overlapping_copies_refused: u64,
     /// Takes from the pool on the consumer's threads, each whole: a block of
     /// [`Device::take_block`](crate::Device::take_block) and a texture block, carved from a free
     /// range or from an allocation the take made ([`take_makes`](Self::take_makes)); their bytes

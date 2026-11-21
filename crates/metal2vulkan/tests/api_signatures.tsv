@@ -1699,6 +1699,7 @@ field	metal2vulkan-runtime::Metrics.over_copy_bytes_pitch	pub over_copy_bytes_pi
 field	metal2vulkan-runtime::Metrics.over_copy_bytes_render_reach	pub over_copy_bytes_render_reach: u64
 field	metal2vulkan-runtime::Metrics.over_copy_bytes_spilled	pub over_copy_bytes_spilled: u64
 field	metal2vulkan-runtime::Metrics.over_copy_bytes_surface	pub over_copy_bytes_surface: u64
+field	metal2vulkan-runtime::Metrics.overlapping_copies_refused	pub overlapping_copies_refused: u64
 field	metal2vulkan-runtime::Metrics.passes	pub passes: u64
 field	metal2vulkan-runtime::Metrics.pipeline_cache_lock_wait_max_nanos	pub pipeline_cache_lock_wait_max_nanos: u64
 field	metal2vulkan-runtime::Metrics.pipeline_cache_lock_wait_nanos	pub pipeline_cache_lock_wait_nanos: u64
@@ -9269,6 +9270,7 @@ variant	metal2vulkan-runtime::Gap::LodClamps	LodClamps
 variant	metal2vulkan-runtime::Gap::MemorylessTexture	MemorylessTexture
 variant	metal2vulkan-runtime::Gap::MipmapFilter	MipmapFilter { pixel_format: PixelFormat }
 variant	metal2vulkan-runtime::Gap::NoStageInRegion	NoStageInRegion
+variant	metal2vulkan-runtime::Gap::OverlappingCopy	OverlappingCopy { pixel_format: PixelFormat }
 variant	metal2vulkan-runtime::Gap::PartialSimdgroups	PartialSimdgroups { threads_per_threadgroup: [u32; 3], width: u32 }
 variant	metal2vulkan-runtime::Gap::PartialThreadgroups	PartialThreadgroups { threads_per_grid: [u32; 3], threads_per_threadgroup: [u32; 3] }
 variant	metal2vulkan-runtime::Gap::RenderPass	RenderPass { kind: RenderPassKind }

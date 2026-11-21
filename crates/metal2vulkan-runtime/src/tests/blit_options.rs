@@ -35,8 +35,10 @@ fn copy(
         unit: None,
         base: [0, 0],
         rows: None,
+        bound: None,
     };
     let lies = Lies {
+        buffer: vk::Buffer::null(),
         base: 0,
         len: 4096,
         layout: BufferLayout {
@@ -59,7 +61,8 @@ fn plane(result: Result<Option<BufferCopy>, Error>) -> (u32, u32) {
         Ok(Some(copy)) => {
             let aspect = copy.unit.aspect;
             assert!(copy
-                .regions()
+                .slabs()
+                .flatten()
                 .all(|r| r.image_subresource.aspect_mask == aspect));
             (aspect.as_raw(), copy.unit.bytes)
         }

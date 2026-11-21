@@ -2231,7 +2231,12 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   for the linear images: in rows along y, in whole texels along x. Regions on the same bytes copy
   nothing. Where the rows meet shifted both ways, or not shifted, along each axis (a destination
   row across the end of its own source row and the start of the next), no cut along one axis
-  keeps the order, and the copy is `Gap::TextureCopy`.
+  keeps the order, and the copy is `Gap::OverlappingCopy` (below).
+- Two textures whose memory meets where one is placed in a heap (`Device::new_heap_texture`),
+  which Metal leaves undefined as it does any aliased heap resources' contents: the device lays
+  that texture's texels out as it chooses, so no copy command is known to read no byte it writes,
+  and the copy is `Gap::OverlappingCopy`. Two slices or levels of one heap texture are one
+  image's, and copy as any texture's.
 - `copy_from_buffer` is `copyFromBuffer:sourceOffset:sourceBytesPerRow:sourceBytesPerImage:`
   `sourceSize:toTexture:destinationSlice:destinationLevel:destinationOrigin:` and
   `copy_from_texture_to_buffer` is `copyFromTexture:sourceSlice:sourceLevel:sourceOrigin:`
@@ -2254,6 +2259,15 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   second's global memory barrier making a write into either visible to every later command, and a
   write into a Shared buffer marks the segment, whose end barrier then reaches the host. A command
   buffer of one copy into a Shared buffer has three barriers.
+- A region whose bytes meet those of a texture in place over the buffer (`Buffer::new_texture`),
+  either way, copies as two textures over one buffer do: in slabs, each shift that from a
+  destination row to a source row on its bytes, the region's rows its `bytes_per_row` apart and
+  the texture's at the row pitch the device reports, as from the source before the copy, an
+  execution barrier between two slabs. The region on the texture's own texels copies nothing.
+  Where the rows meet in no order a cut along one axis keeps, and where the region's bytes meet
+  the memory of a texture placed in a heap, the copy is `Gap::OverlappingCopy` (below). Metal
+  leaves such a copy undefined; the answer between a buffer and its texture was not recorded on
+  a Mac, and is the one an Apple M3 Max gives between two textures over one buffer.
 - Refused (`Refusal::BufferCopyLayout`), as Metal's validation stops them: an offset or row stride
   of no whole number of a format's texels, rows or images closer than the region's, and a region
   past the buffer's end. Metal reads no row stride of a region one row high and no image stride of a
@@ -2302,6 +2316,22 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
 - The slice-and-level and whole-texture forms of `copyFromTexture`,
   `synchronizeTexture:slice:level:` (no recorded stream calls it), and the other blit commands
   are not built yet.
+
+### Known gaps of blit encoders
+
+- A copy whose source and destination share memory in no order a copy command keeps is not
+  built (`Gap::OverlappingCopy`), and each refusal counts in
+  `Metrics::overlapping_copies_refused`: no Vulkan copy command reads bytes it writes
+  (`VUID-vkCmdCopyImage-pRegions-00124`, `VUID-vkCmdCopyBufferToImage-pRegions-00173`,
+  `VUID-vkCmdCopyImageToBuffer-pRegions-00184`). Two shapes of rows in place over one buffer,
+  between two textures or a buffer and a texture, are cut along no one axis: a destination row
+  across the end of its own source row and the start of the next, and rows of two pitches that
+  meet at their starts. Each is built, as a cut on two levels (rows, then the texels within
+  them), when a replay stream or a walk counts one.
+- A copy between a texture placed in a heap and a texture or a buffer whose memory meets its
+  range is refused alike (`Gap::OverlappingCopy`): the device lays the heap texture's texels out
+  as it chooses, and Metal leaves the contents of aliased heap resources undefined, so nothing is
+  emulated.
 
 ## Compute pipeline states
 

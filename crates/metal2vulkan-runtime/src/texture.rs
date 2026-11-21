@@ -484,8 +484,8 @@ struct Shadowing {
 
 /// What holds the memory an image lies in that is not its own.
 enum Under {
-    /// A heap texture's block.
-    Heap { _block: Arc<Block> },
+    /// A heap texture's block, and the image's first byte there.
+    Heap { block: Arc<Block>, at: u64 },
     /// The buffer a texture over a buffer lies over: its block, or its device copy.
     Buffer { _buffer: Buffer },
     /// A surface plane's image in place ([`Device::new_exported_surface`]): the opaque
@@ -1446,7 +1446,8 @@ impl Device {
                     heap,
                     offset,
                 };
-                (bind, Some(Under::Heap { _block: block }))
+                let at = heap.offset.saturating_add(offset);
+                (bind, Some(Under::Heap { block, at }))
             }
             Source::Over(..)
                 if named
@@ -4772,6 +4773,24 @@ pub(crate) trait TextureObject {
             buffer,
             offset: at + place.offset,
             pitch: place.bytes_per_row,
+        })
+    }
+
+    /// Where its image's memory lies in the bytes commands reach a block the consumer holds
+    /// through, which other resources there may share: in place over a buffer, from its first
+    /// texel ([`in_place`](Self::in_place)); placed in a heap ([`Device::new_heap_texture`]),
+    /// its range there, whose texels the device lays out as it chooses. `None` for any other
+    /// texture, a texture buffer among them.
+    fn bound(&self) -> Option<crate::blit::Span> {
+        let image = self.object().image_of()?;
+        let (buffer, base) = match &image._under {
+            Some(Under::Heap { block, at }) => block.memory.range(*at),
+            _ => self.in_place().map(|rows| (rows.buffer, rows.offset))?,
+        };
+        Some(crate::blit::Span {
+            buffer,
+            base,
+            len: image.bytes,
         })
     }
 

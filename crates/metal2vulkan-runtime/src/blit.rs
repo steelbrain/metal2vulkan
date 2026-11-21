@@ -9,13 +9,15 @@
 //! heap's aliases), not through the image alone. Nothing is copied but the region Metal names.
 //! Regions whose bytes meet, of one level and slice or of two textures in place over one buffer,
 //! are the one exception to one command: slabs, one `vkCmdCopyImage` each, an execution barrier
-//! between two ([`Slabs`]).
+//! between two ([`Slabs`]). Memory a texture placed in a heap shares with the other side is in no
+//! order a copy command keeps (`Gap::OverlappingCopy`).
 //!
 //! A copy between a buffer and a texture is the same: `vkCmdCopyBufferToImage` or
 //! `vkCmdCopyImageToBuffer` against the bytes shaders reach (the buffer's range of its block, or a
 //! Managed buffer's device copy where it has one), one region per image of
-//! the region, between the same two barriers; a write into a Shared buffer is also visible to the
-//! host. A mipmap chain ends on the same kind of barrier.
+//! the region, between the same two barriers, and in slabs where the region's bytes meet those of
+//! the texture in place over them; a write into a Shared buffer is also visible to the host. A
+//! mipmap chain ends on the same kind of barrier.
 //!
 //! A copy between buffers is one `vkCmdCopyBuffer` region between the bytes shaders reach, and a
 //! fill one `vkCmdFillBuffer`, each between two barriers: the first after every earlier command,
@@ -181,8 +183,10 @@ impl BlitCommandEncoder {
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's texture; [`Refusal::TextureRegion`] for
     /// a level, slice or region outside either texture or off its format's block grid;
-    /// [`Refusal::TextureCopyMismatch`]; [`Gap::TextureCopy`], regions of two textures over one
-    /// buffer whose bytes meet where no axis cuts them so among it; [`Error::Vulkan`] where the
+    /// [`Refusal::TextureCopyMismatch`]; [`Gap::TextureCopy`]; [`Gap::OverlappingCopy`], counted,
+    /// for regions of two textures over one buffer whose bytes meet where no axis cuts them so,
+    /// and for two textures whose memory meets where one is placed in a heap
+    /// ([`Device::new_heap_texture`](crate::Device::new_heap_texture)); [`Error::Vulkan`] where the
     /// command buffer cannot record.
     pub fn copy_from_texture(
         &mut self,
@@ -208,6 +212,11 @@ impl BlitCommandEncoder {
         let Some(copy) = texture_copy(&sides.0, from, size, &sides.1, to, same)? else {
             return Ok(());
         };
+        if copy.slabs.is_none() {
+            building.count(Metric::OverlappingCopiesRefused);
+            let pixel_format = sides.0.descriptor.pixel_format;
+            return Err(Error::Unsupported(Gap::OverlappingCopy { pixel_format }));
+        }
         building.keep_texture(source);
         building.keep_texture(destination);
         building.wrote_texture_managed(destination);
@@ -253,11 +262,7 @@ impl BlitCommandEncoder {
                 (&away_one, &back_one)
             }
         };
-        // Between two slabs, every hazard is a write after a read: no slab reads a byte an
-        // earlier one wrote (`Slabs`), so an execution dependency orders them.
-        let between = [vk::MemoryBarrier2::default()
-            .src_stage_mask(vk::PipelineStageFlags2::COPY)
-            .dst_stage_mask(vk::PipelineStageFlags2::COPY)];
+        let between = [between()];
         let device = &core.device;
         let (named_read, named_write) = (source.copy_layout(read), destination.copy_layout(write));
         // SAFETY: the command buffer records outside any render pass and keeps both images until
@@ -299,13 +304,19 @@ impl BlitCommandEncoder {
     /// `vkCmdCopyBufferToImage` a 3D region's image. The options form with no option is this
     /// call. Sizes of 0 copy as [`copy_from_texture`](Self::copy_from_texture)'s do. The command
     /// buffer keeps the texture and the buffer until it retires. A Managed buffer's bytes here are
-    /// those shaders reach: its device copy, where the device keeps one.
+    /// those shaders reach: its device copy, where the device keeps one. A texture in place over
+    /// those bytes ([`Buffer::new_texture`]) whose rows meet the region's, which Metal leaves
+    /// undefined, copies as [`copy_from_texture`](Self::copy_from_texture) copies two textures over
+    /// one buffer whose bytes meet: in slabs, as from the source before the copy; the region on
+    /// its own texels copies nothing.
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's buffer or texture;
     /// [`Refusal::TextureRegion`]; [`Refusal::BufferCopyLayout`] for a layout Metal's validation
     /// stops; [`Gap::BufferCopyAlignment`] for one no copy command in the floor addresses;
-    /// [`Gap::TextureBytes`]; [`Gap::FloatDepthUpload`]; [`Error::Vulkan`] where the command
-    /// buffer cannot record.
+    /// [`Gap::TextureBytes`]; [`Gap::FloatDepthUpload`]; [`Gap::OverlappingCopy`], counted, for
+    /// rows of a texture in place that meet the region's where no axis cuts them so, and for a
+    /// texture placed in a heap whose memory meets the region's bytes; [`Error::Vulkan`] where the
+    /// command buffer cannot record.
     pub fn copy_from_buffer(
         &mut self,
         source: &Buffer,
@@ -490,8 +501,9 @@ impl BlitCommandEncoder {
             }));
         }
         // A Managed buffer's GPU side is its device copy, where it has one.
-        let base = buffer.device_range().1;
+        let (vk_buffer, base) = buffer.device_range();
         let lies = Lies {
+            buffer: vk_buffer,
             base,
             len: buffer.length(),
             layout,
@@ -500,6 +512,11 @@ impl BlitCommandEncoder {
         let Some(copy) = buffer_copy(&side, at, size, lies, into_image)? else {
             return Ok(());
         };
+        if copy.slabs.is_none() {
+            self.building().count(Metric::OverlappingCopiesRefused);
+            let pixel_format = side.descriptor.pixel_format;
+            return Err(Error::Unsupported(Gap::OverlappingCopy { pixel_format }));
+        }
         self.record_buffer_copies(texture, buffer, &[copy], into_image)
     }
 
@@ -576,13 +593,14 @@ impl BlitCommandEncoder {
                 (&away_each, &back_each)
             }
         };
+        let between = [between()];
         let device = &core.device;
         let named = texture.copy_layout(layout);
         // SAFETY: the command buffer records outside any render pass and keeps the image and the
         // buffer until it retires; each copy's level and slice is in its home layout between
         // commands and in `named` between the barriers; each region lies in the image and, by
         // `buffer_copy`, in the buffer's device range, its offset aligned as the command
-        // requires.
+        // requires, and each slab's bytes in the buffer share none with its texels.
         unsafe {
             device.cmd_pipeline_barrier2(
                 command,
@@ -591,22 +609,29 @@ impl BlitCommandEncoder {
                     .image_memory_barriers(away),
             );
             for copy in copies {
-                for region in copy.regions() {
-                    match into_image {
-                        true => device.cmd_copy_buffer_to_image(
-                            command,
-                            vk_buffer,
-                            texture.image(),
-                            named,
-                            &[region],
-                        ),
-                        false => device.cmd_copy_image_to_buffer(
-                            command,
-                            texture.image(),
-                            named,
-                            vk_buffer,
-                            copy_out::regions(&copy.unit, region).as_slice(),
-                        ),
+                for (n, slab) in copy.slabs().enumerate() {
+                    if n > 0 {
+                        let dependency = vk::DependencyInfo::default().memory_barriers(&between);
+                        device.cmd_pipeline_barrier2(command, &dependency);
+                        building.count(Metric::Barriers);
+                    }
+                    for region in slab {
+                        match into_image {
+                            true => device.cmd_copy_buffer_to_image(
+                                command,
+                                vk_buffer,
+                                texture.image(),
+                                named,
+                                &[region],
+                            ),
+                            false => device.cmd_copy_image_to_buffer(
+                                command,
+                                texture.image(),
+                                named,
+                                vk_buffer,
+                                copy_out::regions(&copy.unit, region).as_slice(),
+                            ),
+                        }
                     }
                 }
             }
@@ -958,7 +983,7 @@ impl BlitCommandEncoder {
         let d = texture.descriptor();
         let slices = places.len() as u32 / d.mipmap_level_count;
         let side = Side::of(texture);
-        let base = bytes.device_range().1;
+        let (vk_buffer, base) = bytes.device_range();
         let mut copies = Vec::with_capacity(places.len());
         for (at, &place) in (0..).zip(places) {
             let BytesPlace {
@@ -972,6 +997,7 @@ impl BlitCommandEncoder {
                 bytes_per_image,
             };
             let lies = Lies {
+                buffer: vk_buffer,
                 base,
                 len: bytes.length(),
                 layout,
@@ -1223,6 +1249,14 @@ impl Drop for BlitCommandEncoder {
     }
 }
 
+/// The barrier between two slabs of a copy ([`Slabs`]): an execution dependency, every hazard
+/// between them a write after a read, as no slab reads a byte an earlier one wrote.
+fn between() -> vk::MemoryBarrier2<'static> {
+    vk::MemoryBarrier2::default()
+        .src_stage_mask(vk::PipelineStageFlags2::COPY)
+        .dst_stage_mask(vk::PipelineStageFlags2::COPY)
+}
+
 /// The barrier after a blit's write: the write visible to every later command.
 fn written() -> vk::MemoryBarrier2<'static> {
     vk::MemoryBarrier2::default()
@@ -1254,14 +1288,16 @@ unsafe fn close(core: &Core, command: vk::CommandBuffer, back: &[vk::ImageMemory
 }
 
 /// One texture of a copy: its descriptor, its image's format, the unit its copies move, where it
-/// starts in its image (a view's first level and array layer), and, in place over a buffer, where
-/// its texels lie in the buffer's bytes.
+/// starts in its image (a view's first level and array layer), in place over a buffer where its
+/// texels lie in the buffer's bytes, and where its memory lies that other resources may share
+/// (`TextureObject::bound`).
 pub(crate) struct Side<'a> {
     pub(crate) descriptor: &'a TextureDescriptor,
     pub(crate) format: vk::Format,
     pub(crate) unit: Option<CopyUnit>,
     pub(crate) base: [u32; 2],
     pub(crate) rows: Option<Rows>,
+    pub(crate) bound: Option<Span>,
 }
 
 impl<'a> Side<'a> {
@@ -1272,6 +1308,7 @@ impl<'a> Side<'a> {
             unit: texture.unit(),
             base: texture.base(),
             rows: texture.in_place(),
+            bound: texture.bound(),
         }
     }
 
@@ -1299,45 +1336,31 @@ impl<'a> Side<'a> {
 
 /// A copy between two textures, checked: the region in each, the aspect it copies, whether the
 /// two regions lie in one subresource of one image, which the copy takes in the general layout,
-/// and the slabs it copies in.
+/// and the slabs it copies in: `None` where the two share bytes that no copy command orders
+/// (`texture_copy`), which [`Gap::OverlappingCopy`] names.
 pub(crate) struct ImageCopy {
     pub(crate) from: Placed,
     pub(crate) to: Placed,
     pub(crate) aspect: vk::ImageAspectFlags,
     pub(crate) shared: bool,
-    pub(crate) slabs: Slabs,
+    pub(crate) slabs: Option<Slabs>,
 }
 
 impl ImageCopy {
     /// Its copy commands' regions, in the order they run: one a slab.
     pub(crate) fn regions(&self) -> impl Iterator<Item = vk::ImageCopy> + '_ {
-        let Slabs {
-            axis,
-            thickness,
-            reversed,
-        } = self.slabs;
-        let extent = self.from.size[axis];
-        let count = extent.div_ceil(thickness);
-        (0..count).map(move |n| {
-            let start = thickness
-                * match reversed {
-                    true => count - 1 - n,
-                    false => n,
-                };
-            let slab = |placed: &Placed| {
-                let mut slab = *placed;
-                slab.origin[axis] += start;
-                slab.size[axis] = thickness.min(extent - start);
-                slab
-            };
-            let (from, to) = (slab(&self.from), slab(&self.to));
-            vk::ImageCopy {
-                src_subresource: from.layers(self.aspect),
-                src_offset: from.offset(),
-                dst_subresource: to.layers(self.aspect),
-                dst_offset: to.offset(),
-                extent: from.extent(),
-            }
+        self.slabs.into_iter().flat_map(|slabs| {
+            slabs.of(self.from).map(move |(start, from)| {
+                let mut to = self.to;
+                to.origin[slabs.axis] += start;
+                vk::ImageCopy {
+                    src_subresource: from.layers(self.aspect),
+                    src_offset: from.offset(),
+                    dst_subresource: to.layers(self.aspect),
+                    dst_offset: to.offset(),
+                    extent: from.extent(),
+                }
+            })
         })
     }
 }
@@ -1357,6 +1380,31 @@ pub(crate) struct Slabs {
     pub(crate) reversed: bool,
 }
 
+impl Slabs {
+    /// `placed` cut into its slabs, in the order they run: each one's first texel along the axis
+    /// from the region's, and its region.
+    fn of(self, placed: Placed) -> impl Iterator<Item = (u32, Placed)> {
+        let Slabs {
+            axis,
+            thickness,
+            reversed,
+        } = self;
+        let extent = placed.size[axis];
+        let count = extent.div_ceil(thickness);
+        (0..count).map(move |n| {
+            let start = thickness
+                * match reversed {
+                    true => count - 1 - n,
+                    false => n,
+                };
+            let mut slab = placed;
+            slab.origin[axis] += start;
+            slab.size[axis] = thickness.min(extent - start);
+            (start, slab)
+        })
+    }
+}
+
 /// Checks a fill of `range` of a buffer at `base` in its block, `len` bytes long: its offset in
 /// the block and its length.
 ///
@@ -1374,13 +1422,22 @@ pub(crate) fn fill_range(base: u64, len: u64, range: Range<u64>) -> Result<(u64,
     Ok((offset, length))
 }
 
-/// One buffer of a copy between buffers: the `VkBuffer` shaders reach it in, its offset there,
-/// and its length.
+/// Bytes a copy reaches: the `VkBuffer` shaders reach them in, their offset there, and their
+/// length. One buffer of a copy between buffers, or a texture's memory (`TextureObject::bound`).
 #[derive(Clone, Copy)]
 pub(crate) struct Span {
     pub(crate) buffer: vk::Buffer,
     pub(crate) base: u64,
     pub(crate) len: u64,
+}
+
+impl Span {
+    /// Whether the two share a byte.
+    fn meets(self, other: Span) -> bool {
+        self.buffer == other.buffer
+            && self.base < other.base + other.len
+            && other.base < self.base + self.len
+    }
 }
 
 /// Checks a copy of `size` bytes from `source_offset` in `source` to `destination_offset` in
@@ -1432,17 +1489,20 @@ pub(crate) fn buffer_to_buffer(
     }))
 }
 
-/// A buffer's side of a copy: its offset in its block, its length, and where the region lies
-/// in it.
+/// A buffer's side of a copy: the `VkBuffer` shaders reach it through, its offset there, its
+/// length, and where the region lies in it.
 #[derive(Clone, Copy)]
 pub(crate) struct Lies {
+    pub(crate) buffer: vk::Buffer,
     pub(crate) base: u64,
     pub(crate) len: u64,
     pub(crate) layout: BufferLayout,
 }
 
-/// A copy between a buffer and a texture, checked: the texture's region, its copy unit, and where
-/// each image of it lies in the `VkBuffer` shaders reach the buffer through.
+/// A copy between a buffer and a texture, checked: the texture's region, its copy unit, where
+/// each image of it lies in the `VkBuffer` shaders reach the buffer through, and the slabs it
+/// copies in: `None` where the buffer's bytes meet the texture's where no copy command orders
+/// them (`buffer_copy`), which [`Gap::OverlappingCopy`] names.
 pub(crate) struct BufferCopy {
     pub(crate) placed: Placed,
     pub(crate) unit: CopyUnit,
@@ -1451,35 +1511,52 @@ pub(crate) struct BufferCopy {
     /// A row's stride in texels; 0 for a region one row high.
     pub(crate) row_length: u32,
     pub(crate) bytes_per_image: u64,
+    pub(crate) slabs: Option<Slabs>,
 }
 
 impl BufferCopy {
-    /// One region an image of the texture's region, each with its own offset: a stride of
-    /// images that is no whole number of rows needs no row count.
-    pub(crate) fn regions(&self) -> impl Iterator<Item = vk::BufferImageCopy> + '_ {
-        let [x, y, z] = self.placed.origin;
-        let [width, height, depth] = self.placed.size;
-        (0..depth).map(move |image| vk::BufferImageCopy {
-            buffer_offset: self.offset + u64::from(image) * self.bytes_per_image,
-            buffer_row_length: self.row_length,
-            buffer_image_height: 0,
-            image_subresource: self.placed.layers(self.unit.aspect),
-            image_offset: vk::Offset3D {
-                x: x as i32,
-                y: y as i32,
-                z: (z + image) as i32,
-            },
-            image_extent: vk::Extent3D {
-                width,
-                height,
-                depth: 1,
-            },
+    /// Its copy commands' regions, slab by slab in the order the slabs run: one region an image
+    /// of the slab, each with its own offset (a stride of images that is no whole number of rows
+    /// needs no row count). A slab's bytes start as far on as its first texel: whole texels across,
+    /// rows down, as a texture in place over the buffer, of one texel an element, is cut.
+    pub(crate) fn slabs(
+        &self,
+    ) -> impl Iterator<Item = impl Iterator<Item = vk::BufferImageCopy> + '_> + '_ {
+        let texel = u64::from(self.unit.bytes);
+        let step = [
+            texel,
+            u64::from(self.row_length) * texel,
+            self.bytes_per_image,
+        ];
+        self.slabs.into_iter().flat_map(move |slabs| {
+            slabs.of(self.placed).map(move |(start, placed)| {
+                let offset = self.offset + u64::from(start) * step[slabs.axis];
+                let [x, y, z] = placed.origin;
+                let [width, height, depth] = placed.size;
+                (0..depth).map(move |image| vk::BufferImageCopy {
+                    buffer_offset: offset + u64::from(image) * self.bytes_per_image,
+                    buffer_row_length: self.row_length,
+                    buffer_image_height: 0,
+                    image_subresource: placed.layers(self.unit.aspect),
+                    image_offset: vk::Offset3D {
+                        x: x as i32,
+                        y: y as i32,
+                        z: (z + image) as i32,
+                    },
+                    image_extent: vk::Extent3D {
+                        width,
+                        height,
+                        depth: 1,
+                    },
+                })
+            })
         })
     }
 }
 
 /// Checks a copy of `size` texels at `at` in `texture` and the bytes `lies` names in a buffer,
-/// `into_image` for a copy into the texture. `None` where it copies nothing.
+/// `into_image` for a copy into the texture. `None` where it copies nothing; slabs of `None`
+/// where its bytes meet the texture's in no order a copy command keeps.
 ///
 /// Metal's validation stops an offset or a row stride of a format of single texels that is no
 /// whole number of its texels, rows or images closer than the region's, and a region past the
@@ -1523,7 +1600,12 @@ pub(crate) fn buffer_copy(
     let Some(placed) = place(d, texture.base, unit.block, region, at.level, at.slice)? else {
         return Ok(None);
     };
-    let Lies { base, len, layout } = lies;
+    let Lies {
+        buffer,
+        base,
+        len,
+        layout,
+    } = lies;
     let BufferLayout {
         offset,
         bytes_per_row,
@@ -1561,12 +1643,10 @@ pub(crate) fn buffer_copy(
             .checked_mul(bytes_per_image)
             .and_then(|span| span.checked_add(image_span)),
     };
-    if span
-        .and_then(|span| span.checked_add(offset))
-        .is_none_or(|end| end > len)
-    {
+    let Some(span) = span.filter(|span| span.checked_add(offset).is_some_and(|end| end <= len))
+    else {
         return Err(refused());
-    }
+    };
     let align = match unit.aspect {
         vk::ImageAspectFlags::COLOR => bytes,
         _ => 4,
@@ -1589,17 +1669,56 @@ pub(crate) fn buffer_copy(
             bytes_per_image,
         }));
     };
+    // The region's bytes may be a texture's own: in place over the buffer, or placed in a heap
+    // with it. No command's source and destination share a byte
+    // (`VUID-vkCmdCopyBufferToImage-pRegions-00173`, `VUID-vkCmdCopyImageToBuffer-pRegions-00184`):
+    // rows of a texture in place cut into slabs as two textures over one buffer do (`meeting`),
+    // the region's rows `bytes_per_row` apart; bytes of an image the device lays out as it
+    // chooses, none.
+    let region = Span {
+        buffer,
+        base: start,
+        len: span,
+    };
+    let slabs = match (texture.rows, texture.bound) {
+        (Some(rows), _) if rows.buffer == buffer => {
+            let image = first(rows, &placed, bytes);
+            let pitch = bytes_per_row.max(row);
+            let bytes_at = Rows {
+                offset: start,
+                pitch,
+                ..rows
+            };
+            let (from, to) = match into_image {
+                true => (bytes_at, image),
+                false => (image, bytes_at),
+            };
+            cut(
+                meeting(from, to, placed.size, bytes),
+                [u128::from(bytes), 1, 1],
+                placed.size,
+            )
+        }
+        (_, Some(bound)) if bound.meets(region) => None,
+        _ => cut(None, [1; 3], placed.size),
+    };
+    let slabs = match slabs {
+        Some(None) => return Ok(None),
+        slabs => slabs.flatten(),
+    };
     Ok(Some(BufferCopy {
         placed,
         unit,
         offset: start,
         row_length,
         bytes_per_image,
+        slabs,
     }))
 }
 
 /// Checks a copy of `size` texels from `from` in `source` to `to` in `destination`, `same` where
-/// they are one texture. `None` where it copies nothing.
+/// they are one texture. `None` where it copies nothing; slabs of `None` where the two regions'
+/// bytes meet in no order a copy command keeps.
 ///
 /// Err: [`Refusal::TextureCopyMismatch`]; [`Gap::TextureCopy`]; [`Refusal::TextureRegion`].
 pub(crate) fn texture_copy(
@@ -1699,19 +1818,24 @@ pub(crate) fn texture_copy(
         }
         (Some(a), Some(b)) if a.buffer == b.buffer => {
             let texel = u64::from(unit.bytes);
-            let first = |rows: Rows, placed: &Placed| Rows {
-                offset: rows.offset
-                    + u64::from(placed.origin[1]) * rows.pitch
-                    + u64::from(placed.origin[0]) * texel,
-                ..rows
-            };
-            let rows = meeting(first(a, &from), first(b, &to), from.size, texel);
+            let rows = meeting(
+                first(a, &from, texel),
+                first(b, &to, texel),
+                from.size,
+                texel,
+            );
             cut(rows, [u128::from(texel), 1, 1], from.size)
+        }
+        // Memory one of them shares with the other where the device lays its texels out as it
+        // chooses (a texture placed in a heap): no order.
+        _ if !same && (source.bound.zip(destination.bound)).is_some_and(|(a, b)| a.meets(b)) => {
+            None
         }
         _ => cut(None, [1; 3], from.size),
     };
-    let Some(slabs) = slabs.ok_or_else(gap)? else {
-        return Ok(None);
+    let slabs = match slabs {
+        Some(None) => return Ok(None),
+        slabs => slabs.flatten(),
     };
     Ok(Some(ImageCopy {
         from,
@@ -1774,13 +1898,25 @@ fn cut(
         .map(Some)
 }
 
-/// The shifts ([`cut`]) of a copy of `size` texels of `texel` bytes between two textures in place
-/// over one buffer, from the region whose first texel is at `from` to the one at `to`: for each
+/// Of a texture whose texels of `texel` bytes lie in `rows`, where the first texel of `placed`
+/// lies.
+fn first(rows: Rows, placed: &Placed, texel: u64) -> Rows {
+    Rows {
+        offset: rows.offset
+            + u64::from(placed.origin[1]) * rows.pitch
+            + u64::from(placed.origin[0]) * texel,
+        ..rows
+    }
+}
+
+/// The shifts ([`cut`]) of a copy of `size` texels of `texel` bytes between two regions of rows on
+/// one buffer (two textures in place over it, or a region of the buffer and a texture in place
+/// over it), from the region whose first texel is at `from` to the one at `to`: for each
 /// destination row on bytes of a source row, the destination row's first byte less the source
 /// row's along x (in bytes, the source texel on a destination texel's bytes less that texel, in
-/// the region), and the source row less the destination row along y. A row of the texture is no
-/// longer than its pitch, so a source row meets at most the two destination rows whose starts lie
-/// nearest before and after its own. Regions whose spans of bytes do not meet meet in no row.
+/// the region), and the source row less the destination row along y. A row is no longer than its
+/// pitch, so a source row meets at most the two destination rows whose starts lie nearest before
+/// and after its own. Regions whose spans of bytes do not meet meet in no row.
 fn meeting(from: Rows, to: Rows, size: [u32; 3], texel: u64) -> impl Iterator<Item = [i128; 3]> {
     let row = i128::from(size[0]) * i128::from(texel);
     let rows = i128::from(size[1]);
