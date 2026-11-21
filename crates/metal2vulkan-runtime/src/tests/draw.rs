@@ -2023,6 +2023,69 @@ define internal void @_GLOBAL__sub_I_() section "air.static_init" {
         });
     }
 
+    /// An attribute whose value reaches only a varying a function constant gates off is not read,
+    /// as Metal's specialized function marks it inactive: with `has_color` false, a vertex
+    /// descriptor of attribute 0 alone makes the state (no `VertexAttribute { attribute: 1 }`
+    /// refusal), and the draw stores the fragment function's `shade`, (0.25, 0.5, 0.75, 1).
+    #[test]
+    fn every_device_makes_and_draws_a_state_without_an_attribute_only_a_gated_off_varying_reads() {
+        let Some(library) = library(&engine_dir().join("fca_vertex_unread_attribute.ll")) else {
+            return;
+        };
+        let constants = FunctionConstantValues::defaults()
+            .with_index(0, FunctionConstantValue::new(DataType::Bool, [0]));
+        let function = |name| {
+            let mut f = FunctionDescriptor::new(library.function(name).expect("the function"));
+            f.constants = constants.clone();
+            f.specialized = true;
+            StageSource::Function(f)
+        };
+        let mut d = RenderPipelineDescriptor::new(function("fca_vertex_unread_attribute"));
+        d.fragment = Some(function("fca_fragment_unread_attribute"));
+        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+        let mut vertex = VertexDescriptor::new();
+        let attribute = VertexAttributeDescriptor::new(VertexFormat::Float4, 0, 0);
+        vertex.attributes.insert(0, attribute);
+        vertex
+            .layouts
+            .insert(0, VertexBufferLayoutDescriptor::new(Some(16)));
+        d.vertex_descriptor = Some(vertex);
+        // Three positions that cover the target.
+        let positions: Vec<f32> = [[-1.0, -1.0], [3.0, -1.0], [-1.0, 3.0]]
+            .iter()
+            .flat_map(|[x, y]| [*x, *y, 0.0, 1.0])
+            .collect();
+        let positions = floats(&positions);
+        each_device("draw_unread_attribute", |name, _, device| {
+            let state = state(name, &device, &d);
+            let mut buffers = Buffers::new(&device);
+            let vertices = buffers.of(&device, &positions);
+            let color = target(
+                &device,
+                PixelFormat::RGBA8Unorm,
+                TextureUsage::RENDER_TARGET,
+            );
+            let queue = device.new_command_queue(1).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            draw(encoder.set_render_pipeline_state(&state));
+            draw(encoder.set_vertex_buffer(Some(&vertices), 0, 0));
+            draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
+            encoder.end_encoding();
+            run(name, &command_buffer);
+            // (64, 128, 191, 255), each channel within one code: near a tie the device may store
+            // the other code nearest it.
+            for texel in read(&color, 4).chunks(4) {
+                let near = (texel.iter().zip([64u8, 128, 191, 255]))
+                    .all(|(&got, want)| got.abs_diff(want) <= 1);
+                assert!(near, "{name}: {texel:?}");
+            }
+            println!("{name}: a state without the gated-off varying's attribute draws");
+        });
+    }
+
     /// An unnormalized signed-integer attribute is fetched in fixed function into a variable
     /// declared `int`: `ima_vertex`'s mark, a `short` of -2, reaches `ima_fragment`'s unsigned
     /// output as its sign-extended bits.
