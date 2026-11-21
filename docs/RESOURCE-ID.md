@@ -48,21 +48,25 @@ displaced form is for that window.
 ## The arrays
 
 Under the identity domains set 1 has one layout for every pipeline: binding 0 is the sampled-image
-array of 65,536 elements, binding 1 the storage-image array of 65,536, and bindings 2, 3 and 4 the
-sampler arrays of 4,000 elements each, every one partially bound, updated after binding and while
-unused elements are pending, and seen by every stage. Element `i` of each image array is the
-texture whose ID holds index `i`, so the consumer writes an element once, as it makes the texture,
-for every pipeline. Element 0 is a null descriptor (`nullDescriptor`, which the floor requires): a
-nil texture sizes 0, reads and samples zero, and drops a store, as Metal answers for a nil texture,
-with no code in the shader. So is every image element no texture owns: the runtime writes every
-element at device creation, a null descriptor in each image array and a default sampler (nearest,
+array of 65,536 elements, binding 1 the storage-image array of 65,536, bindings 2, 3 and 4 the
+sampler arrays of 4,000 elements each, and bindings 5 and 6 the uniform and the storage
+texel-buffer arrays of 65,536 elements each, every one partially bound, updated after binding and
+while unused elements are pending, and seen by every stage. Element `i` of each image array is the
+texture whose ID holds index `i`, and element `i` of each texel-buffer array the texture buffer
+whose ID holds it (a read texture buffer is a uniform texel buffer, a written one a storage texel
+buffer), so the consumer writes an element once, as it makes the texture, for every pipeline; a
+texture's texel-buffer elements and a texture buffer's image elements are null. Element 0 is a null
+descriptor (`nullDescriptor`, which the floor requires): a nil texture sizes 0, reads and samples
+zero, and drops a store, as Metal answers for a nil texture, with no code in the shader. So is every
+image and texel-buffer element no texture owns: the runtime writes every element at device
+creation, a null descriptor in each image and texel-buffer array and a default sampler (nearest,
 clamped to the edge; the comparison array's compares with `NEVER`) in each sampler array, as
 Vulkan has no null sampler, and writes an element back to that once its owner goes. An index
 nobody owns, nil, freed or stale, reads as nil and cannot reach a destroyed view or sampler. Each
 texture class a shader declares (its shape, numeric type and depth
 comparison, sampled, or storage without a format, or storage of `R32Uint` or `R32Sint` for a
-texture atomic or of `RG32Uint` for a `ulong` texture's reads and writes) is a variable of its
-descriptor type's binding.
+texture atomic or of `RG32Uint` for a `ulong` texture's reads and writes; a texture buffer's of
+the same, a texel buffer) is a variable of its descriptor type's binding.
 
 A shader takes a texture slot's ID from the slot's push field (`PushField::SlotGuestBase`), and an
 argument buffer's texture's ID from the member's 8 bytes, with no table between. It indexes the

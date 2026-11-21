@@ -238,14 +238,18 @@ and so do the command line, the compile worker and every validation tool. It hol
   member reaches included, reads and writes its `ulong` texture slots (an `RG32` unsigned image,
   declared `Rg32ui` where it is a storage image, the element at its ID's index), updates its
   texture slots atomically (a slot declared `R32ui` or `R32i`, the storage-image array's element
-  at its ID's index), and samples its texture slots
+  at its ID's index), reads, writes and updates atomically its texture buffers, slots and
+  argument buffers' members alike (a uniform texel buffer where it reads one, a storage texel
+  buffer where it writes one, the element of set 1's texel-buffer array at its ID's index), and
+  samples its texture slots
   through its runtime sampler slots and its constexpr samplers and reads them through those (MSL
   4.1's `read(sampler, coord)`, its border texel from bits 0-11 of the ID's word). Any other
   function is refused as `Unsupported{IdentityDomains}`, whose symbol names the first such form
   the function holds: one that samples through an argument buffer's sampler or samples an
   argument buffer's texture, emulates a sampler's anisotropy, samples a 1D
-  texture or at pixel coordinates through a bicubic filter, uses a texture buffer, a slot's levels
-  or swizzle, a two-plane, extended-range or sRGB-twin form, reads an argument buffer's texture
+  texture or at pixel coordinates through a bicubic filter, uses a texture buffer's parts or rows
+  form, a slot's levels or swizzle, a two-plane, extended-range or sRGB-twin form, reads an
+  argument buffer's texture
   through another numeric type or as raw texels, or uses any other state of a texture or sampler
   beyond its ID.
   An argument buffer's texture reads the element at its ID's index masked to its low 16 bits,

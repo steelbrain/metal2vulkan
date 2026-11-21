@@ -1469,6 +1469,16 @@ made, with no lock, and never rewritten for layouts.
 
 ### Known gaps of textures
 
+- A texture buffer with a swizzle other than each channel's own is `Gap::TextureBufferSwizzle`:
+  Metal applies it to the reads, and neither a buffer view nor a `gpuResourceID` carries one.
+- A view of a texture buffer (`newTextureViewWithPixelFormat:` and its kin) is `Gap::TextureView`
+  of `TextureViewKind::TextureBuffer`, and a blit copy of one is `Gap::TextureCopy` between
+  textures and `Gap::TextureBytes` with a buffer: no copy reads a buffer view, and none is built
+  as the buffer copy it would be.
+- A texture buffer's format needs both the uniform and the storage texel buffer in its buffer
+  features: its view is of a buffer of both usages, and without `VK_KHR_maintenance5`, which the
+  floor does not require, the view takes its buffer's usage. A format that lacks one is
+  `Gap::TextureFormat` (`BGRA8Unorm` on KosmicKrisp, whose storage texel buffers lack it).
 - `replace_region` and `get_bytes` of a texture without named bytes go through the staging region:
   a copy Metal does not make, counted in `Metrics::bytes_copied`.
 - A texture made for shader writes whose format the device does not store through a storage

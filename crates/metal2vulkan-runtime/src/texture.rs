@@ -3507,7 +3507,7 @@ impl TextureInner {
 
 impl TextureInner {
     /// Its image: its own, or a view's parent's; `None` for a texture buffer.
-    fn image(&self) -> Option<&Arc<Image>> {
+    fn image_of(&self) -> Option<&Arc<Image>> {
         match &self.body {
             Body::Image(image) => Some(image),
             Body::Texels(_) => None,
@@ -3518,7 +3518,7 @@ impl TextureInner {
     /// refuses it first (copies and blits, render pass attachments, views, drawables and the
     /// copies over buffers, whose texture is never one), and a texture buffer takes no upload.
     fn imaged(&self) -> &Arc<Image> {
-        self.image()
+        self.image_of()
             .expect("an image path reached by a texture buffer, which every such call refuses")
     }
 
@@ -3938,7 +3938,9 @@ impl Texture {
     /// last presented, and waited for the acquire's fence; its swapchain is not destroyed. These
     /// are Vulkan's rules on a swapchain's image, which the runtime cannot check.
     pub unsafe fn drawable_acquired(&self) -> Result<(), Error> {
-        let drawable = (self.inner.image())
+        let drawable = self
+            .inner
+            .image_of()
             .and_then(|image| image.drawable.as_ref())
             .ok_or(Error::Refused(Refusal::NotDrawable))?;
         let before = {
@@ -4314,7 +4316,7 @@ pub(crate) trait TextureObject {
     /// `attachment_reads`): its image in the feedback layout, or, on a device without the
     /// attachment feedback loop, its view of its image's shadow.
     fn attachment_reads(&self) -> bool {
-        (self.object().image()).is_some_and(|image| {
+        self.object().image_of().is_some_and(|image| {
             image.attachment_reads && (image.looped() || self.object().shadow.is_some())
         })
     }
@@ -4323,7 +4325,7 @@ pub(crate) trait TextureObject {
     /// ([`Image`]'s `looped`), where its image has the feedback usage; else through its view of
     /// the image's shadow.
     fn looped(&self) -> bool {
-        (self.object().image()).is_some_and(|image| image.looped())
+        self.object().image_of().is_some_and(|image| image.looped())
     }
 
     /// Its resource id while a draw reads an attachment through it: its second element's, at its
@@ -4379,7 +4381,8 @@ pub(crate) trait TextureObject {
 
     /// The format its image's shadow is made in, the image's; `None` for an image of no shadow.
     fn shadow_format(&self) -> Option<vk::Format> {
-        (self.object().image())
+        self.object()
+            .image_of()
             .and_then(|image| image.shadowing.as_ref())
             .map(|shadowing| shadowing.made.2.format)
     }
@@ -4492,7 +4495,11 @@ pub(crate) trait TextureObject {
     fn resolve_attachment(&self, level: u32, slice: u32, layers: u32) -> Result<Attachment, Error> {
         let renders =
             vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT;
-        if !(self.object().image()).is_some_and(|image| image.usage.intersects(renders)) {
+        if !self
+            .object()
+            .image_of()
+            .is_some_and(|image| image.usage.intersects(renders))
+        {
             return Err(Error::Unsupported(Gap::RenderPass {
                 kind: RenderPassKind::ResolveUsage,
             }));
@@ -4638,7 +4645,9 @@ pub(crate) trait TextureObject {
     ///
     /// Err: [`Refusal::NotDrawable`]; [`Refusal::DrawableNotAcquired`].
     fn present_turn(&self) -> Result<(), Error> {
-        let drawable = (self.object().image())
+        let drawable = self
+            .object()
+            .image_of()
             .and_then(|image| image.drawable.as_ref())
             .ok_or(Error::Refused(Refusal::NotDrawable))?;
         let mut turn = lock(&drawable.turn);
@@ -4652,7 +4661,11 @@ pub(crate) trait TextureObject {
     /// The command buffer that presents the drawable was dropped uncommitted: it is acquired
     /// again, for another present.
     fn unpresent(&self) {
-        if let Some(drawable) = (self.object().image()).and_then(|image| image.drawable.as_ref()) {
+        if let Some(drawable) = self
+            .object()
+            .image_of()
+            .and_then(|image| image.drawable.as_ref())
+        {
             *lock(&drawable.turn) = Turn::Acquired;
         }
     }
@@ -4660,7 +4673,11 @@ pub(crate) trait TextureObject {
     /// The command buffer that presents the drawable is committed: the image is the presentation
     /// engine's once that command buffer has run, in the present layout.
     fn presented(&self) {
-        if let Some(drawable) = (self.object().image()).and_then(|image| image.drawable.as_ref()) {
+        if let Some(drawable) = self
+            .object()
+            .image_of()
+            .and_then(|image| image.drawable.as_ref())
+        {
             *lock(&drawable.turn) = Turn::Engine;
         }
     }
@@ -5073,7 +5090,7 @@ fn texel_form(core: &Core, pf: PixelFormat) -> Result<TexelForm, Error> {
         formats::vk_format(pf, &formats::texture_usages(pf, usage), profile).map_err(|_| gap())?;
     let block = mapping.format.block().ok_or_else(gap)?;
     let format: vk::Format = mapping.format.into();
-    let supports = |use_| profile.supports_format(format, use_);
+    let supports = |use_| profile.supports_format(mapping.format, use_);
     let color = block.depth.is_none() && block.stencil.is_none();
     if mapping.emulation != FormatEmulation::Direct
         || !color
