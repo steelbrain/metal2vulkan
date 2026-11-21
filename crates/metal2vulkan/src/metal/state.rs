@@ -623,15 +623,24 @@ mod tests {
     }
 
     fn committed(name: &str) -> Device {
-        let (_, desc) = committed_descriptions()
+        committed_without(name, &[])
+    }
+
+    /// Committed profile `name`'s device with `withheld` removed from its description.
+    fn committed_without(name: &str, withheld: &[VkFeature]) -> Device {
+        let (_, mut desc) = committed_descriptions()
             .into_iter()
             .find(|(s, _)| s == name)
             .unwrap();
+        for f in withheld {
+            assert!(desc.features.remove(f), "{name} has {f:?}");
+        }
         Device::from_queries(desc, DevicePolicy::default()).unwrap()
     }
 
     /// The encoder's fill mode, depth clip mode, and depth bias clamp map where the device has
-    /// their features and are refused, naming the feature, where it does not.
+    /// their features and are refused, naming the feature, where it does not. The floor states
+    /// `depthBiasClamp`, so its refusal is on `runtime-floor` without it (below the floor).
     #[test]
     fn encoder_raster_state_needs_its_features() {
         let (floor, lavapipe) = (committed("runtime-floor"), committed("lavapipe"));
@@ -702,6 +711,11 @@ mod tests {
         );
         assert_eq!(
             depth_bias(triangles, 1.0, 2.0, 0.5, floor.profile()),
+            bias(true, 1.0, 0.5, 2.0)
+        );
+        let below = committed_without("runtime-floor", &[VkFeature::DepthBiasClamp]);
+        assert_eq!(
+            depth_bias(triangles, 1.0, 2.0, 0.5, below.profile()),
             Err(needs(Feature::DepthBiasClamp, VkFeature::DepthBiasClamp))
         );
         assert_eq!(
