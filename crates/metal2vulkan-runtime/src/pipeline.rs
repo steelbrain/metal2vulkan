@@ -704,7 +704,7 @@ pub(crate) enum FieldValue {
     /// A `u32`: how Metal's bicubic filter treats the texels of the texture bound at the slot
     /// (`metal::format::bicubic_texels_word`, under the swizzle it is sampled through),
     /// `metal::format::BICUBIC_TEXELS_UNBOUND` where none is; a texture of a format with no
-    /// such treatment is refused at the dispatch ([`Gap::BicubicTexels`]).
+    /// such treatment is refused at the dispatch or the draw ([`Gap::BicubicTexels`]).
     BicubicTexels(u32),
     /// A `u32`: the sampler index the consumer gave the constexpr sampler at this place of the
     /// state's numbered samplers (a render state's: the vertex function's, then the fragment

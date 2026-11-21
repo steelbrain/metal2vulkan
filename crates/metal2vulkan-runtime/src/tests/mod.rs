@@ -5,6 +5,7 @@ mod argument_sampling;
 mod argument_tier;
 mod arrays;
 mod bicubic;
+mod bicubic_draw;
 mod blit;
 mod border;
 mod cache;

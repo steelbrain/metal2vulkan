@@ -96,7 +96,7 @@ use crate::shadow::{self, Area, Held};
 use crate::texture::{Texture, TextureInner, TextureObject};
 use ash::vk;
 use metal2vulkan::bind::alpha_test_code;
-use metal2vulkan::metal::format::integer_channels_word;
+use metal2vulkan::metal::format::{integer_channels_word, BICUBIC_TEXELS_UNBOUND};
 use metal2vulkan::metal::state::{input_assembly, DepthStencilDescriptor};
 use metal2vulkan::metal::{
     CullMode, DepthClipMode, IndexType, PrimitiveType, TriangleFillMode, Winding,
@@ -257,7 +257,7 @@ impl Facts {
     ///
     /// Err: [`Refusal::VertexBufferOffset`]; [`Refusal::NoBufferAtIndex`] for a vertex buffer the
     /// vertex descriptor reads that is not bound; [`Gap::SwizzledReadWrite`];
-    /// [`Gap::StorageElement`].
+    /// [`Gap::BicubicTexels`]; [`Gap::StorageElement`].
     fn find(&mut self, draws: &Draws, tables: &[Tables; 2], pass: &Pass) -> Result<(), Error> {
         self.vertex.clear();
         for &(binding, index) in &draws.bindings {
@@ -283,6 +283,18 @@ impl Facts {
         for &(table, slot) in &draws.storage_reads {
             if tables[table].texture(slot).is_some_and(|t| t.swizzled()) {
                 return Err(Error::Unsupported(Gap::SwizzledReadWrite { slot }));
+            }
+        }
+        // A bicubic sample's texture, of a format the filter's treatment is known for; a content
+        // with no bicubic slot has none to look at.
+        for &(table, slot) in &draws.bicubic {
+            if let Some(texture) = tables[table].texture(slot) {
+                if texture.bicubic_texels().is_none() {
+                    return Err(Error::Unsupported(Gap::BicubicTexels {
+                        slot,
+                        pixel_format: texture.descriptor().pixel_format,
+                    }));
+                }
             }
         }
         for &(table, slot, access) in &draws.textures {
@@ -2539,6 +2551,15 @@ impl Drop for RenderCommandEncoder {
     }
 }
 
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+impl RenderCommandEncoder {
+    /// The push bytes the encoder's last draw filled, which `tests::bicubic` reads its fields'
+    /// words from.
+    pub(crate) fn pushed(&self) -> &[u8] {
+        &self.push
+    }
+}
+
 /// The topology of a draw of `primitive_type`, and whether it restarts strips.
 fn primitives(primitive_type: PrimitiveType) -> (vk::PrimitiveTopology, bool) {
     let (topology, restart) = input_assembly(primitive_type);
@@ -2606,6 +2627,13 @@ fn fill_push(
                     .map_or(0, |t| integer_channels_word(t.descriptor().pixel_format));
                 bytes[at..at + 4].copy_from_slice(&word.to_le_bytes());
             }
+            // A texture of no bicubic treatment was refused at the draw's checks.
+            FieldValue::BicubicTexels(slot) => {
+                let word = (tables.texture(slot)).map_or(BICUBIC_TEXELS_UNBOUND, |t| {
+                    t.bicubic_texels().unwrap_or(BICUBIC_TEXELS_UNBOUND)
+                });
+                bytes[at..at + 4].copy_from_slice(&word.to_le_bytes());
+            }
             FieldValue::ConstexprSampler(place) => {
                 let index = ids.get(place).copied().unwrap_or(0);
                 bytes[at..at + 4].copy_from_slice(&index.to_le_bytes());
@@ -2625,11 +2653,8 @@ fn fill_push(
                     .map_or(0, |target| target.texture.second_resource_id().index);
                 bytes[at..at + 4].copy_from_slice(&index.to_le_bytes());
             }
-            // A render content has no dispatch or stage-in region, and no bicubic slot's field
-            // (`render::draws`).
-            FieldValue::DispatchRegion
-            | FieldValue::StageInRegion
-            | FieldValue::BicubicTexels(_) => {}
+            // A render content has no dispatch or stage-in region (`render::draws`).
+            FieldValue::DispatchRegion | FieldValue::StageInRegion => {}
         }
     }
 }

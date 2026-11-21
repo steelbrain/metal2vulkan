@@ -139,6 +139,11 @@ pub(crate) struct Draws {
     /// attachment read of the pass through its texture's second element, ordered after every
     /// earlier draw of the pass (`crate::render_encoder`).
     pub(crate) fetched: Vec<u32>,
+    /// Each texture slot a function samples through a bicubic constexpr sampler, with its
+    /// function: the slots whose `PushField::BicubicTexels` a draw writes from the bound texture,
+    /// and whose texture a draw's checks refuse where the filter's treatment of its format is not
+    /// established (`Gap::BicubicTexels`). Empty for every other content.
+    pub(crate) bicubic: Vec<(usize, u32)>,
     /// Each fixed-function vertex binding: its binding and the vertex buffer index it reads.
     pub(crate) bindings: Vec<(u32, u32)>,
     /// Whether a function reads through an address that is not one of its slots.
@@ -528,6 +533,7 @@ fn draws(
     let mut constexprs = Vec::new();
     let mut fields = Vec::new();
     let mut fetched = Vec::new();
+    let mut bicubic = Vec::new();
     let mut push_len = 0;
     let mut blocks = [None; 2];
     for placement in &translated.push {
@@ -577,6 +583,18 @@ fn draws(
                     index,
                 }) => {
                     fields.push((offset, table(stage)?, FieldValue::IntegerChannels(index)));
+                    continue;
+                }
+                // How Metal's bicubic filter treats the bound texture's texels, the word a
+                // dispatch writes for its kernel's slot (`FieldValue::BicubicTexels`).
+                PushField::BicubicTexels(SlotRef {
+                    stage,
+                    class: SlotClass::Texture,
+                    index,
+                }) => {
+                    let of = table(stage)?;
+                    fields.push((offset, of, FieldValue::BicubicTexels(index)));
+                    bicubic.push((of, index));
                     continue;
                 }
                 PushField::ConstexprSampler(sampler) => {
@@ -659,6 +677,7 @@ fn draws(
         storage_reads,
         own_pixel,
         fetched,
+        bicubic,
         bindings,
         reads_unbound: translated.reads_unbound_resources,
         writes_unbound: translated.writes_unbound_resources,

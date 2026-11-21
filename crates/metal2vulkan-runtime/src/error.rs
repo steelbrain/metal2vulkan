@@ -1209,19 +1209,19 @@ pub enum Gap {
         /// The texture's pixel format.
         pixel_format: PixelFormat,
     },
-    /// A dispatch whose kernel samples texture slot `slot` through a constexpr sampler with
-    /// Metal's bicubic filter (`filter::bicubic`), where the texture bound there is of a pixel
-    /// format whose treatment under that filter the runtime does not establish: a format of no
-    /// family Metal's bicubic filter was measured on (compressed, YUV, stencil, integer and
-    /// extended-range formats), or of 8-bit sRGB codes, whose taps the filter sums decoded. The
-    /// function reads how the filter treats the bound format's texels (its inner taps, its clamp
-    /// and its border texels) from a field the runtime writes from the bound texture
-    /// (`metal2vulkan::metal::format::bicubic_texels_word`). Found when the pipeline state or a
-    /// binding changes.
+    /// A dispatch or a draw whose function samples texture slot `slot` through a constexpr
+    /// sampler with Metal's bicubic filter (`filter::bicubic`), where the texture bound there is
+    /// of a pixel format whose treatment under that filter the runtime does not establish: a
+    /// format of no family Metal's bicubic filter was measured on (compressed, YUV, stencil,
+    /// integer and extended-range formats), or of 8-bit sRGB codes, whose taps the filter sums
+    /// decoded. The function reads how the filter treats the bound format's texels (its inner
+    /// taps, its clamp and its border texels) from a field the runtime writes from the bound
+    /// texture (`metal2vulkan::metal::format::bicubic_texels_word`). Found when the pipeline
+    /// state or a binding changes.
     ///
     /// Basis: ours (each refused format's treatment is built when a guest binds one).
     BicubicTexels {
-        /// The kernel's texture slot.
+        /// The function's texture slot.
         slot: u32,
         /// The bound texture's pixel format.
         pixel_format: PixelFormat,
@@ -2328,8 +2328,8 @@ impl fmt::Display for Gap {
             ),
             Gap::BicubicTexels { slot, pixel_format } => write!(
                 f,
-                "texture slot {slot}, which a kernel samples through a bicubic filter, bound to a \
-                 {pixel_format:?} texture, whose bicubic sample is not built"
+                "texture slot {slot}, which a function samples through a bicubic filter, bound to \
+                 a {pixel_format:?} texture, whose bicubic sample is not built"
             ),
             Gap::RenderPipeline { kind } => {
                 write!(f, "a render pipeline state with {kind:?} is not built")
