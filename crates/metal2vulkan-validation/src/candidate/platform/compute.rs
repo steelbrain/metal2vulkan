@@ -300,6 +300,7 @@ fn run(
             attributes: &attributes,
             resident_roots: pipeline.interface.needs_pointer_translation,
             handle_table: pipeline.interface.needs_handle_translation,
+            policy: *device.policy(),
             strategies: &pipeline.stage.strategies,
         },
         &case.out_of_bounds,

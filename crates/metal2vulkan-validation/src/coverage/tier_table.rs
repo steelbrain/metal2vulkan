@@ -262,6 +262,8 @@ pub fn compile_module(
         attributes: &attributes,
         resident_roots: function.reads_resident_roots(),
         handle_table: function.resolves_handles(),
+        // Every committed profile's device takes the default domains (`committed_profiles`).
+        policy: DevicePolicy::default(),
         strategies: function.strategies(),
     };
     let out_of_bounds = inputs

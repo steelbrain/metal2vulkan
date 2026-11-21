@@ -511,8 +511,8 @@ fn a_loaded_pointers_buffer_reads_zero_and_is_guarded() {
 
 /// A thread-local array is a typed object and a handle array lies in its argument buffer: no
 /// host memory holds either beside the case's own, so neither has a guard. A read past the array is
-/// zero; a read past the handle array is a texel of a texture the case binds, or zero (the null
-/// handle), never another value.
+/// zero; a read past the handle array, through the handle table or a masked resource id, is a texel
+/// of a texture the case binds, or zero (the null handle or descriptor), never another value.
 #[test]
 fn an_in_layout_target_has_no_guard_and_its_own_read_rule() {
     let class = ComparisonClass::Exact;
@@ -530,6 +530,14 @@ fn an_in_layout_target_has_no_guard_and_its_own_read_rule() {
             },
             ContainmentForm::HandleArrayIndex,
             Medium::HandleTable,
+        ),
+        (
+            OutOfBoundsResource::ArgumentBufferTextureArray {
+                buffer_binding: 0,
+                field_offset: 0,
+            },
+            ContainmentForm::HandleArrayIndex,
+            Medium::ResourceId,
         ),
     ] {
         let case = embedded_case(resource, form, texel);
@@ -551,7 +559,7 @@ fn an_in_layout_target_has_no_guard_and_its_own_read_rule() {
         let resident = with_reads([texel, 0, texel, 0]);
         assert_eq!(
             matches(&case, &class, &golden(), &resident, Some(&ran(None))),
-            medium == Medium::HandleTable,
+            medium != Medium::TypedObject,
             "{form}"
         );
         let foreign = with_reads([0xA000_0005, 0, 0, 0]);
@@ -784,6 +792,7 @@ fn thread_memory_is_contained_by_the_typed_arrays_check_only() {
             attributes: &BTreeMap::new(),
             resident_roots: true,
             handle_table: true,
+            policy: DevicePolicy::default(),
             strategies: &strategies,
         };
         let target = OutOfBoundsTarget {
@@ -847,6 +856,137 @@ fn thread_memory_is_contained_by_the_typed_arrays_check_only() {
     }
 }
 
+/// Under the identity domains a pointer loaded from an argument buffer is the device address it
+/// holds, which nothing checks, so the run is refused before anything is made; an argument
+/// buffer's texture array is the descriptor arrays the loaded id's masked index reads, whose read
+/// past the array is a texel of a texture the case binds or zero. Under the resident table and the
+/// handle table, the same module facts without the table's reads access neither target.
+#[test]
+fn the_identity_domains_leave_a_loaded_pointer_unchecked_and_mask_a_resource_id() {
+    use crate::candidate::engine::out_of_bounds_run;
+    use crate::check::admission::{ExecutorError, NotSupported};
+    use metal2vulkan::pipeline::{StrategyCensus, StrategyUse};
+    let profiles = crate::coverage::tier_table::committed_profiles().unwrap();
+    let profile = &profiles
+        .iter()
+        .find(|entry| entry.tier.stem == "lavapipe")
+        .unwrap()
+        .profile;
+    let mut identity = DevicePolicy::default();
+    identity.pointer_domain = PointerDomain::Identity;
+    identity.handle_domain = HandleDomain::Identity;
+    let slots = BTreeMap::from([(
+        SlotRef {
+            stage: SymStage::Kernel,
+            class: SlotClass::Buffer,
+            index: 1,
+        },
+        // The argument buffer's slot, read through its device address (the interface has no
+        // constructor outside the product).
+        serde_json::from_value::<SlotInterface>(serde_json::json!({"Buffer": {
+            "access": {"read": true, "write": false},
+            "window": "Whole",
+            "form": "Psb",
+            "kind": "Buffer",
+        }}))
+        .unwrap(),
+    )]);
+    let mut strategies = StrategyCensus::default();
+    for name in [
+        "access.dynamic.load_pointer",
+        "access.dynamic.load",
+        "access.handle.lookup",
+    ] {
+        strategies
+            .entries
+            .insert(name.into(), StrategyUse::default());
+    }
+    let module = |policy| ModuleFacts {
+        stage: SymStage::Kernel,
+        slots: &slots,
+        attributes: &BTreeMap::new(),
+        resident_roots: false,
+        handle_table: false,
+        policy,
+        strategies: &strategies,
+    };
+    let target = |resource, form| OutOfBoundsTarget {
+        resource,
+        form,
+        reach_before: 0,
+        reach_after: 16,
+    };
+    let pointer = target(
+        OutOfBoundsResource::ArgumentBufferBuffer {
+            buffer_binding: 1,
+            field_offset: 0,
+        },
+        ContainmentForm::LoadedPointer,
+    );
+    let handles = target(
+        OutOfBoundsResource::ArgumentBufferTextureArray {
+            buffer_binding: 1,
+            field_offset: 0,
+        },
+        ContainmentForm::HandleArrayIndex,
+    );
+    let loaded = containment(&pointer, &module(identity), profile).unwrap();
+    assert_eq!(
+        (loaded.form, loaded.mechanism.label(), loaded.written),
+        (
+            ContainmentForm::LoadedPointer,
+            "device-address:unchecked".into(),
+            false
+        )
+    );
+    assert_eq!(
+        loaded
+            .mechanism
+            .robust_buffer_form(ContainmentForm::LoadedPointer),
+        None
+    );
+    let masked = containment(&handles, &module(identity), profile).unwrap();
+    assert_eq!(
+        (masked.form, masked.mechanism.label()),
+        (
+            ContainmentForm::HandleArrayIndex,
+            "resource-id:shader".into()
+        )
+    );
+    assert_eq!(
+        read_rule(ContainmentForm::HandleArrayIndex, masked.mechanism, false),
+        ReadRule::ResidentTexels
+    );
+    assert!(
+        containment(&pointer, &module(DevicePolicy::default()), profile)
+            .unwrap_err()
+            .contains("no memory through a pointer loaded")
+    );
+    assert!(
+        containment(&handles, &module(DevicePolicy::default()), profile)
+            .unwrap_err()
+            .contains("resolves no handle")
+    );
+    // The unchecked target refuses the run, naming its form; the masked one runs.
+    match out_of_bounds_run(None, profile, &module(identity), &[pointer, handles]) {
+        Err(ExecutorError::NotSupported(refused @ NotSupported::Uncontained { .. })) => {
+            assert_eq!(
+                refused.outcome(),
+                "not_supported{uncontained:unchecked loaded_pointer}"
+            );
+            assert!(
+                refused.to_string().contains("checks the accesses"),
+                "{refused}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    let run = out_of_bounds_run(None, profile, &module(identity), &[handles])
+        .unwrap()
+        .unwrap();
+    assert_eq!(run.targets[0].mechanism, masked.mechanism);
+}
+
 /// A draw's targets: a fixed-function attribute is contained by the device's buffer robustness, and
 /// only there; a direct indexed draw's index buffer by the padded copy of its indices on every
 /// device; a top-level texture array by the clamped handle-array load. A pulled attribute is
@@ -869,6 +1009,7 @@ fn a_draws_targets_are_contained_by_their_fetch() {
             attributes,
             resident_roots: false,
             handle_table: false,
+            policy: DevicePolicy::default(),
             strategies,
         };
         let target = OutOfBoundsTarget {

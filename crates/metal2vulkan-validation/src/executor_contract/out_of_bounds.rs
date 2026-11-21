@@ -17,19 +17,23 @@
 //!   checked in the shader. A buffer reached through a pointer loaded from an argument buffer is a
 //!   device address the resident set resolves, a thread-local array a typed object whose index is
 //!   checked against its length, and an argument buffer's texture array a handle table the loaded
-//!   resource id is looked up in: each checked in the shader in every leg. An attribute buffer is
-//!   fetched by fixed-function vertex input, left to the device's buffer robustness, or pulled in
-//!   the shader through the slot its fetch names, contained as that slot is ([`Fetch`]); a direct
-//!   indexed draw's index buffer is bounded by `robustBufferAccess2` or the binder's clamp; and a
-//!   top-level texture array's dynamic index is clamped onto its elements in the shader.
+//!   resource id is looked up in: each checked in the shader in every leg. Under the identity
+//!   domains (`DevicePolicy`) a loaded pointer is the address it holds, which nothing checks, so
+//!   the candidate does not run the case ([`Check::Unchecked`]), and a loaded resource id's index
+//!   is masked onto the descriptor arrays, whose elements no live texture owns are null
+//!   descriptors. An attribute buffer is fetched by fixed-function vertex input, left to the
+//!   device's buffer robustness, or pulled in the shader through the slot its fetch names,
+//!   contained as that slot is ([`Fetch`]); a direct indexed draw's index buffer is bounded by
+//!   `robustBufferAccess2` or the binder's clamp; and a top-level texture array's dynamic index is
+//!   clamped onto its elements in the shader.
 //! - **The read rule** ([`read_rule`]) says what an out-of-bounds read of the target may return:
 //!   zero under an in-shader check and under `robustBufferAccess2` (Vulkan's "Robust Buffer
 //!   Access 2": "reads ... outside of the checked range will return zero values"), anything for
 //!   an atomic's return under robust buffer access ("will return an undefined value"), and under
 //!   `robustBufferAccess` alone zero, `(0, 0, 0, x)`, or a value of the buffer's own memory. A
 //!   read through a handle past a handle array returns a texel of a texture the case binds, or
-//!   zero (the null handle). An index read past an index buffer is index 0 or none, so the
-//!   vertex ids only a read past it gives stay unshaded.
+//!   zero (the null handle or the null descriptor). An index read past an index buffer is index 0
+//!   or none, so the vertex ids only a read past it gives stay unshaded.
 //! - **Nothing escapes**: every byte of the guard the candidate allocates around a buffer (an
 //!   argument buffer's included) or texture buffer target is unchanged ([`TargetRun::escaped`]),
 //!   and so is the memory bound to it past its end ([`TargetRun::past_end`]) except under
@@ -48,7 +52,7 @@ use crate::case::{AuthoredCase, OutputSelection};
 use crate::coverage::{ExecutionClass, RobustBufferForm};
 use crate::observation_contract::{ComparisonClass, ObservationLanes};
 use base64::Engine as _;
-use metal2vulkan::device::{DeviceProfile, Robustness};
+use metal2vulkan::device::{DevicePolicy, DeviceProfile, HandleDomain, PointerDomain, Robustness};
 use metal2vulkan::library::CompiledFunction;
 use metal2vulkan::pipeline::{AttributeFetch, StrategyCensus};
 use metal2vulkan::pipeline::{BufferForm, DescriptorView, SlotInterface};
@@ -77,6 +81,10 @@ pub enum Medium {
     /// The handle table a texture's resource id, loaded from an argument buffer, is looked up in:
     /// an id of no resident texture is the null handle.
     HandleTable,
+    /// The descriptor arrays a texture's resource id, loaded from an argument buffer, indexes
+    /// under the identity handle domain (`HandleDomain::Identity`), its index masked onto the
+    /// arrays' elements: an element no live texture owns is the null descriptor.
+    ResourceId,
     /// Vulkan's fixed-function vertex input, fetching a vertex buffer binding (only under buffer
     /// robustness).
     VertexInput,
@@ -109,6 +117,12 @@ pub enum Check {
     /// reads, so no index fetch lies past the bound range, where Vulkan states no index: each
     /// position past where Metal's fetch stops reads index 0.
     Padded,
+    /// Nothing checks the access: neither the shader nor the device's robustness bounds it (a
+    /// pointer loaded from memory under the identity pointer domain, `PointerDomain::Identity`,
+    /// is the device address it holds, used as given). A run would reach memory no binding gave
+    /// the case, so the candidate refuses the case before it makes the pipeline
+    /// (`NotSupported::Uncontained`).
+    Unchecked,
 }
 
 /// How a compiled module contains one out-of-bounds target.
@@ -130,6 +144,7 @@ impl Mechanism {
             Medium::Image => "image",
             Medium::TypedObject => "typed-object",
             Medium::HandleTable => "handle-table",
+            Medium::ResourceId => "resource-id",
             Medium::VertexInput => "vertex-input",
             Medium::IndexBuffer => "index-buffer",
             Medium::HandleArray => "handle-array",
@@ -141,6 +156,7 @@ impl Mechanism {
             Check::Robust2 => "robust2",
             Check::Binder => "binder",
             Check::Padded => "padded",
+            Check::Unchecked => "unchecked",
         };
         format!("{medium}:{check}")
     }
@@ -148,11 +164,18 @@ impl Mechanism {
     /// The form of the robust buffer encoding this mechanism leaves to the device
     /// ([`RobustBufferForm`]): a descriptor view's loads and stores or atomics, a texel buffer, and
     /// fixed-function vertex input, under buffer robustness; `None` for every in-shader check, for
-    /// the binder's and the padded copy's, for images, and for an index fetch, which only
-    /// `robustBufferAccess2` bounds.
+    /// the binder's and the padded copy's, for an unchecked access, for images, and for an index
+    /// fetch, which only `robustBufferAccess2` bounds.
     pub fn robust_buffer_form(self, form: ContainmentForm) -> Option<RobustBufferForm> {
         match (self.medium, self.check) {
-            (_, Check::Shader | Check::ShaderReads | Check::Binder | Check::Padded) => None,
+            (
+                _,
+                Check::Shader
+                | Check::ShaderReads
+                | Check::Binder
+                | Check::Padded
+                | Check::Unchecked,
+            ) => None,
             (Medium::DescriptorView, _) if form == ContainmentForm::BufferAtomic => {
                 Some(RobustBufferForm::Atomic)
             }
@@ -165,6 +188,7 @@ impl Mechanism {
                 | Medium::Image
                 | Medium::TypedObject
                 | Medium::HandleTable
+                | Medium::ResourceId
                 | Medium::IndexBuffer
                 | Medium::HandleArray,
                 _,
@@ -259,10 +283,16 @@ pub enum ReadRule {
 /// ([`TargetRun::read_rule`]).
 pub fn read_rule(form: ContainmentForm, mechanism: Mechanism, written: bool) -> ReadRule {
     match (mechanism.medium, mechanism.check) {
+        // An unchecked access reads whatever the device holds there; the candidate never runs one.
+        (_, Check::Unchecked) => ReadRule::Any,
         // An id past the handle array is another handle of the argument buffer, which the table
-        // resolves to a resident texture or the null handle. An index past a top-level array is
-        // clamped onto its last element, a texture the case binds.
-        (Medium::HandleTable | Medium::HandleArray, _) => ReadRule::ResidentTexels,
+        // resolves to a resident texture or the null handle, and which the identity handle domain
+        // masks onto the descriptor arrays, whose elements no live texture owns are null
+        // descriptors. An index past a top-level array is clamped onto its last element, a texture
+        // the case binds.
+        (Medium::HandleTable | Medium::ResourceId | Medium::HandleArray, _) => {
+            ReadRule::ResidentTexels
+        }
         // An index read past the buffer is index 0 from the padded copy (and was under robust
         // buffer access 2, and the binder drew none); the case's in-range indices include index 0
         // (its checker rule), so none reaches a byte the in-range indices do not, and the declared
@@ -373,7 +403,8 @@ impl Fetch {
 
 /// What [`containment`] reads of one compiled module: the stage it was compiled for, its Metal
 /// argument slots, how it fetches each attribute, whether it reads the resident root table and
-/// resolves handles through the handle table, and the census of the strategies its lowering used.
+/// resolves handles through the handle table, the domains it was compiled under, and the census of
+/// the strategies its lowering used.
 #[derive(Clone, Copy, Debug)]
 pub struct ModuleFacts<'a> {
     pub stage: SymStage,
@@ -387,6 +418,9 @@ pub struct ModuleFacts<'a> {
     /// The module resolves texture or sampler handles through the handle table
     /// (`needs_handle_translation`).
     pub handle_table: bool,
+    /// The pointer and handle domains of the device the module was compiled for
+    /// (`Device::policy`).
+    pub policy: DevicePolicy,
     pub strategies: &'a StrategyCensus,
 }
 
@@ -434,9 +468,11 @@ mod census {
 /// buffer, and a `device_address` when it reaches it by its address, except that a
 /// `buffer_atomic` target (one an AIR atomic accesses, which the case checker establishes) stays
 /// one in every medium. A buffer an argument buffer points to is a `loaded_pointer` when the
-/// module loads a pointer and accesses memory through it, thread memory a `sized_array` when the
-/// module indexes a typed thread-local array at a dynamic index, and an argument buffer's texture
-/// array a `handle_array_index` when the module looks its handles up in the handle table. `Err`
+/// module loads a pointer and accesses memory through it, which the resident table checks and the
+/// identity pointer domain leaves unchecked ([`Check::Unchecked`]), thread memory a `sized_array`
+/// when the module indexes a typed thread-local array at a dynamic index, and an argument buffer's
+/// texture array a `handle_array_index` when the module looks its handles up in the handle table,
+/// or, under the identity handle domain, masks their ids onto the descriptor arrays. `Err`
 /// when the module does not access the target, reaches it in a way validation does not know (thread
 /// memory in the private arena, whose check is the arena's bounds, not the array's).
 pub fn containment(
@@ -518,18 +554,25 @@ pub fn containment(
         OutOfBoundsResource::ArgumentBufferBuffer { buffer_binding, .. } => {
             slot(SlotClass::Buffer, buffer_binding)?;
             let accessed = module.uses(census::DYNAMIC_LOAD) || module.uses(census::DYNAMIC_STORE);
-            if !module.resident_roots || !module.uses_family(census::LOAD_POINTER) || !accessed {
+            // Under the resident table the loaded pointer resolves to the resident allocation
+            // holding it, and each access is checked against that allocation's size in the shader,
+            // in every leg. Under the identity pointer domain it is the device address it holds,
+            // used as given: nothing checks the access.
+            let (resolved, check) = match module.policy.pointer_domain {
+                PointerDomain::ResidentTable => (module.resident_roots, Check::Shader),
+                PointerDomain::Identity => (true, Check::Unchecked),
+                _ => return Err("a pointer domain validation does not know".into()),
+            };
+            if !resolved || !module.uses_family(census::LOAD_POINTER) || !accessed {
                 return Err(format!(
                     "the compiled module accesses no memory through a pointer loaded from {}",
                     target.resource.label()
                 ));
             }
-            // The loaded pointer resolves to the resident allocation holding it, and each access is
-            // checked against that allocation's size in the shader, in every leg.
             made(
                 ContainmentForm::LoadedPointer,
                 Medium::DeviceAddress,
-                Check::Shader,
+                check,
                 module.uses(census::DYNAMIC_STORE),
             )
         }
@@ -557,15 +600,22 @@ pub fn containment(
         }
         OutOfBoundsResource::ArgumentBufferTextureArray { buffer_binding, .. } => {
             slot(SlotClass::Buffer, buffer_binding)?;
-            if !module.handle_table || !module.uses_family(census::HANDLE_LOOKUP) {
+            // The handle table resolves a loaded id to a resident texture or the null handle; the
+            // identity handle domain masks the id's index onto the descriptor arrays.
+            let (resolved, medium) = match module.policy.handle_domain {
+                HandleDomain::Table => (module.handle_table, Medium::HandleTable),
+                HandleDomain::Identity => (true, Medium::ResourceId),
+                _ => return Err("a handle domain validation does not know".into()),
+            };
+            if !resolved || !module.uses_family(census::HANDLE_LOOKUP) {
                 return Err(format!(
-                    "the compiled module looks no handle of {} up in the handle table",
+                    "the compiled module resolves no handle of {}",
                     target.resource.label()
                 ));
             }
             made(
                 ContainmentForm::HandleArrayIndex,
-                Medium::HandleTable,
+                medium,
                 Check::Shader,
                 false,
             )

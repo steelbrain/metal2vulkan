@@ -70,6 +70,7 @@ pub(super) fn contained(
             attributes: &attributes,
             resident_roots: lowered.reads_resident_roots(),
             handle_table: lowered.resolves_handles(),
+            policy: *translator.policy(),
             strategies: lowered.strategies(),
         };
         let run = out_of_bounds_run(class, translator.profile(), &module, &case.out_of_bounds);
@@ -84,6 +85,7 @@ pub(super) fn contained(
     if let Some(&(variant, _)) = rest.iter().find(|(_, run)| run != first) {
         return Err(NotSupported::Uncontained {
             forms: Default::default(),
+            unchecked: Default::default(),
             variant: Some(variant),
         }
         .into());

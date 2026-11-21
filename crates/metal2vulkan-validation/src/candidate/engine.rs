@@ -96,7 +96,7 @@ use metal2vulkan::pipeline::StageInputDescriptor;
 use metal2vulkan::pipeline::{ComputePipeline, RenderPipeline};
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Duration;
 
@@ -123,7 +123,7 @@ use tables::{function_tables, table_buffers, FunctionTable, TableBuffers};
 /// how it decides a match. A change no recorded row can observe (a case kind no earlier executor
 /// ran, or one it refused) needs no bump; its commit says why. The commit that bumps it says what
 /// changed; this comment keeps no history.
-pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v192";
+pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v193";
 
 /// One kernel case in the terms the binder takes: what this executor supports of an
 /// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures, command
@@ -1581,8 +1581,9 @@ pub fn is_robustness_off_slot(environment_id: &str) -> bool {
 /// form and `profile`'s encodings) on a device that executes as `class`, or `None` for a case
 /// without targets: the run's out-of-bounds facts, before what its guards count
 /// (`TargetRun::escaped`, `TargetRun::past_end`). A target whose form the device leaves
-/// uncontained under that encoding refuses the run, so it is decided before anything is submitted,
-/// before the executor's context executes.
+/// uncontained under that encoding, or whose accesses the module checks nowhere
+/// (`out_of_bounds::Check::Unchecked`), refuses the run, so it is decided before anything is
+/// submitted, before the executor's context executes.
 pub(crate) fn out_of_bounds_run(
     class: Option<ExecutionClass>,
     profile: &DeviceProfile,
@@ -1608,9 +1609,15 @@ pub(crate) fn out_of_bounds_run(
         })
         .collect::<Result<Vec<_>, ExecutorError>>()?;
     let uncontained = out_of_bounds::uncontained(&targets, class);
-    if !uncontained.is_empty() {
+    let unchecked = targets
+        .iter()
+        .filter(|target| target.mechanism.check == out_of_bounds::Check::Unchecked)
+        .map(|target| target.form)
+        .collect::<BTreeSet<_>>();
+    if !uncontained.is_empty() || !unchecked.is_empty() {
         return Err(NotSupported::Uncontained {
             forms: uncontained,
+            unchecked,
             variant: None,
         }
         .into());
@@ -1618,18 +1625,18 @@ pub(crate) fn out_of_bounds_run(
     Ok(Some(OutOfBoundsRun { targets }))
 }
 
-/// [`out_of_bounds_run`] for a render case's draw: how `pipeline`'s module that runs the Metal
-/// vertex function (`graphics::vertex_module`) contains each of `case`'s targets, its attributes
-/// fetched from `case`'s vertex buffers.
+/// [`out_of_bounds_run`] for a render case's draw: how `pipeline`'s module, compiled for
+/// `device`, that runs the Metal vertex function (`graphics::vertex_module`) contains each of
+/// `case`'s targets, its attributes fetched from `case`'s vertex buffers.
 pub(crate) fn draw_out_of_bounds_run(
     class: Option<ExecutionClass>,
-    profile: &DeviceProfile,
+    device: &metal2vulkan::device::Device,
     pipeline: &RenderPipeline,
     case: &graphics::RenderCase,
 ) -> Result<Option<OutOfBoundsRun>, ExecutorError> {
     out_of_bounds_run(
         class,
-        profile,
+        device.profile(),
         &out_of_bounds::ModuleFacts {
             stage: ShaderStage::Vertex,
             slots: &pipeline.interface.slots,
@@ -1641,6 +1648,7 @@ pub(crate) fn draw_out_of_bounds_run(
             ),
             resident_roots: pipeline.interface.needs_pointer_translation,
             handle_table: pipeline.interface.needs_handle_translation,
+            policy: *device.policy(),
             strategies: &graphics::vertex_module(pipeline)?.strategies,
         },
         &case.out_of_bounds,

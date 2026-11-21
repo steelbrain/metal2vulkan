@@ -94,12 +94,15 @@ pub enum NotSupported {
     Requirements(BTreeSet<ToolingRequirement>),
     /// An out-of-bounds case whose run would reach memory no binding gave it, so it is not run
     /// there: the opened device leaves accesses of `forms` uncontained under the robust buffer
-    /// encoding the case's module compiled to (`HostClass::robust_buffers_uncontained`), or, for a
-    /// run through the runtime, the kernel's `variant` contains one of its targets otherwise than
-    /// the first variant the translator lowered of it (`platform::runtime_bounds`), so which module
-    /// a dispatch runs would decide it.
+    /// encoding the case's module compiled to (`HostClass::robust_buffers_uncontained`), the
+    /// module checks the accesses of its targets of the `unchecked` forms nowhere
+    /// (`out_of_bounds::Check::Unchecked`), or, for a run through the runtime, the kernel's
+    /// `variant` contains one of its targets otherwise than the first variant the translator
+    /// lowered of it (`platform::runtime_bounds`), so which module a dispatch runs would decide it.
     Uncontained {
         forms: BTreeSet<crate::coverage::RobustBufferForm>,
+        #[serde(default)]
+        unchecked: BTreeSet<crate::case::out_of_bounds::ContainmentForm>,
         #[serde(default)]
         variant: Option<metal2vulkan::pipeline::KernelVariant>,
     },
@@ -123,11 +126,20 @@ impl NotSupported {
                 "not_supported{{tooling_requirement:{}}}",
                 requirement_names(requirements)
             ),
-            Self::Uncontained { forms, variant } => format!(
+            Self::Uncontained {
+                forms,
+                unchecked,
+                variant,
+            } => format!(
                 "not_supported{{uncontained:{}}}",
                 forms
                     .iter()
                     .map(|form| form.label().to_owned())
+                    .chain(
+                        unchecked
+                            .iter()
+                            .map(|form| format!("unchecked {}", form.as_str()))
+                    )
                     .chain(variant.map(|variant| format!("variant {variant:?}")))
                     .collect::<Vec<_>>()
                     .join(",")
@@ -158,6 +170,17 @@ impl fmt::Display for NotSupported {
             Self::Requirements(_) => write!(
                 formatter,
                 "{}: the executor does not run these families",
+                self.outcome()
+            ),
+            Self::Uncontained {
+                unchecked,
+                variant: None,
+                ..
+            } if !unchecked.is_empty() => write!(
+                formatter,
+                "{}: the compiled module checks the accesses of these forms nowhere, neither in \
+                 the shader nor by the device's robustness, so the case's out-of-bounds accesses \
+                 are not run",
                 self.outcome()
             ),
             Self::Uncontained { variant: None, .. } => write!(

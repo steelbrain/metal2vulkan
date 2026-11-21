@@ -38,6 +38,7 @@ fn a_refusal_is_classed_by_its_type() {
         (
             NotSupported::Uncontained {
                 forms: [RobustBufferForm::LoadStore].into(),
+                unchecked: Default::default(),
                 variant: None,
             },
             RefusalClass::Device,

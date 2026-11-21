@@ -471,7 +471,12 @@ cargo run -p metal2vulkan-validation --release --bin corpus-moltenvk -- \
   out-of-bounds case's facts are read before the state is made, from each variant the translator
   lowers of the kernel on the runtime device's own translator (`Device::translator`, under
   `LoweringInputs::kernel_variant`); variants that contain a target differently refuse the case,
-  `not_supported{uncontained:variant ...}` naming the one that differs. Each buffer target sits
+  `not_supported{uncontained:variant ...}` naming the one that differs. The facts are the identity
+  domains' (`DevicePolicy`): a buffer reached through a pointer loaded from an argument buffer is
+  the address the pointer holds, which nothing checks (the runtime's README states it), so such a
+  case is refused as `not_supported{uncontained:unchecked loaded_pointer}`, and an argument
+  buffer's texture array is the descriptor arrays its resource ids' masked indices read
+  (`resource-id:shader`), a read past it a texel of a bound texture or zero. Each buffer target sits
   between guards of its declared reach in a Shared block of its own, read back after the
   dispatch. A multisampled, sparse, texture-buffer or cube-array texture keeps the case on the executor's own
   context. A pixel format the runtime makes no image of on the device records `not_enabled`, as

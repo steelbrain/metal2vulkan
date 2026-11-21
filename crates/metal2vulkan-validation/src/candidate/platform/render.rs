@@ -187,8 +187,7 @@ fn run(
         .transpose()?;
     // How the Metal vertex function's module contains each out-of-bounds target on this device,
     // decided before anything runs; a form the device leaves uncontained is refused, never run.
-    let out_of_bounds =
-        draw_out_of_bounds_run(context.execution_class, device.profile(), pipeline, case)?;
+    let out_of_bounds = draw_out_of_bounds_run(context.execution_class, device, pipeline, case)?;
     let spv_sha256 = sha256_bytes(
         &pipeline
             .stages
