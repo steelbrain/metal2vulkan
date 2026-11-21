@@ -13,7 +13,7 @@
 use super::super::args::{arg, data, index, list, metal, refuse, uint, Fields};
 use super::super::translator::{self, attachment_keys, LINKED_KEYS, PASS_KEYS};
 use super::encoders::first;
-use super::{failed, unaddressed, NewRuntime, Object, Skips};
+use super::{failed, makes, unaddressed, NewRuntime, Object, Skips};
 use crate::replay::player::{Made, PlayError};
 use crate::replay::stream::Call;
 use crate::replay::value::Value;
@@ -230,6 +230,23 @@ macro_rules! set_attachment {
     }};
 }
 
+/// The kinds of a render pipeline descriptor's stages: `vertex`, or `post-tessellation vertex`
+/// where its vertex function draws patches (its `patchType` is not none, as the library states
+/// it), then `+fragment` where it has a fragment function.
+fn stage_kinds(descriptor: &rt::RenderPipelineDescriptor) -> &'static str {
+    let patches = match &descriptor.vertex {
+        rt::StageSource::Function(f) => (f.function.properties(&metal2vulkan::Budget::default()))
+            .is_ok_and(|p| p.patch_type() != metal2vulkan::metal::PatchType::None),
+        rt::StageSource::Compiled(_) => false,
+    };
+    match (patches, descriptor.fragment.is_some()) {
+        (false, false) => "vertex",
+        (false, true) => "vertex+fragment",
+        (true, false) => "post-tessellation vertex",
+        (true, true) => "post-tessellation vertex+fragment",
+    }
+}
+
 impl NewRuntime {
     /// `newRenderPipelineStateWithDescriptor:error:`: its constexpr samplers numbered as a compute
     /// pipeline state's are; skipped and counted where the runtime answers a typed gap or the
@@ -249,11 +266,15 @@ impl NewRuntime {
                 function.descriptor.with_linked(linked),
             )))
         })?;
+        let mark = makes::Mark::new(&self.device, self.prepass.as_ref());
         let made = self.numbered(|device, ids| {
             device.new_render_pipeline_state(&descriptor, |samplers| ids(samplers))
         });
         match made {
             Ok(state) => {
+                let (device, prepass) = (&self.device, self.prepass.as_ref());
+                let kinds = || stage_kinds(&descriptor);
+                (self.makes).made(mark, device, prepass, call.result, kinds);
                 self.skips.states_made[0] += 1;
                 if !records_tessellation(&call.args) {
                     self.unrecorded_tessellation.states.insert(call.result);

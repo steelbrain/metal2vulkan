@@ -15,6 +15,7 @@ mod guest_ram;
 mod imports;
 pub(super) mod indices;
 mod judged;
+mod makes;
 pub(super) mod places;
 mod prepass;
 mod render;
@@ -525,6 +526,8 @@ pub struct NewRuntime {
     /// Each compute pipeline state made, in order, and the kernels made so far.
     creations: Vec<Creation>,
     kernels: HashSet<Kernel>,
+    /// Where each pipeline state's making went: the translator's, the driver's and the rest.
+    makes: makes::Makes,
     /// The device's `minImportedHostPointerAlignment`, where it imports host memory: the
     /// alignment of the host pages a no-copy buffer's memory is imported from (`imports`).
     host_alignment: Option<u64>,
@@ -923,6 +926,7 @@ impl NewRuntime {
             block_bytes: [0; 2],
             creations: Vec::new(),
             kernels: HashSet::new(),
+            makes: makes::Makes::default(),
         })
     }
 
@@ -1677,7 +1681,7 @@ impl NewRuntime {
         descriptor: &rt::ComputePipelineDescriptor,
         kernel: Kernel,
     ) -> Result<Option<(Object, Made)>, PlayError> {
-        let began = std::time::Instant::now();
+        let mark = makes::Mark::new(&self.device, self.prepass.as_ref());
         let state = match self.compute_pipeline_state(descriptor) {
             Ok(state) => {
                 self.skips.states_made[1] += 1;
@@ -1688,8 +1692,10 @@ impl NewRuntime {
             }
             Err(error) => return Err(failed(call)(error)),
         };
+        let (device, prepass) = (&self.device, self.prepass.as_ref());
+        let nanos = (self.makes).made(mark, device, prepass, call.result, || "kernel");
         self.creations.push(Creation {
-            nanos: u64::try_from(began.elapsed().as_nanos()).unwrap_or(u64::MAX),
+            nanos,
             new_kernel: self.kernels.insert(kernel),
         });
         unaddressed(Object::ComputePipeline(state))
@@ -3029,6 +3035,7 @@ impl Backend for NewRuntime {
         // A maximum since the device was made: it does not sum, so it is not a frame's counter.
         let longest = self.device.counters().metrics().commit_lock_wait_max_nanos;
         lines.push(format!("commit lock wait longest {longest} ns"));
+        lines.extend(self.makes.lines());
         if let Some(copies) = self.managed {
             let from = match self.identity {
                 true => "the stream's device identity",

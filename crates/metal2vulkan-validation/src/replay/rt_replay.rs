@@ -11,6 +11,10 @@
 //!   says the play is no verdict past it: its gap, frame and call.
 //! - A compute pipeline state the runtime answers with a typed gap is skipped and counted by the
 //!   gap, and a dispatch of it is skipped, and the play goes on.
+//! - Each pipeline state's making is split by the runtime's counters into the translator's time,
+//!   the driver's and the rest: a kernel's first state and a render state are cold, each with
+//!   both halves, and a second state of the kernel is held, with no driver time; the slowest are
+//!   listed by object, with their stages' kinds.
 //! - A compute encoder's `setStageInRegion:` plays: the runtime takes it.
 //! - The host's library from source is made of its display library where the backend has it, a
 //!   function of it with it; without it both are skipped.
@@ -1014,6 +1018,90 @@ fn a_compute_state_the_runtime_does_not_build_is_counted_and_its_dispatch_skippe
     assert_eq!(executed["skipped_dispatches"], 1, "{executed:?}");
     let line = "skipped compute states IndirectCommandBuffers 1, the first #5: ";
     assert!(lines.iter().any(|l| l.starts_with(line)), "{lines:?}");
+}
+
+/// The milliseconds `line` gives after `label`: its making's or makings' `wall W ms =
+/// translation T ms + driver D ms + other O ms`, as `[W, T, D, O]`.
+fn split_after(line: &str, label: &str) -> [f64; 4] {
+    let (_, rest) = line.split_once(label).expect(label);
+    let numbers: Vec<f64> = (rest.split(' '))
+        .take(16)
+        .filter_map(|word| word.parse().ok())
+        .collect();
+    numbers[..4].try_into().unwrap()
+}
+
+#[test]
+fn each_pipeline_state_s_making_is_split_into_the_translator_s_and_the_driver_s_time() {
+    let dir = ScratchDir::new("rt-replay-makes").unwrap();
+    let functions = [
+        ("scale_and_offset", 2, 0),
+        ("colored_vertex", 0, 1),
+        ("colored_fragment", 1, 2),
+    ];
+    let path = written(&dir, |w| {
+        let library = w.blob(&library(&dir, &functions))?;
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        let library = [Value::Blob(library)];
+        w.call("newLibraryWithData:error:", 1, 3, &library, &[])?;
+        for (id, (name, _, _)) in (4..).zip(functions) {
+            w.call(
+                "newFunctionWithName:",
+                3,
+                id,
+                &[Value::Str(name.into())],
+                &[],
+            )?;
+        }
+        // Two states of one kernel: the device holds the second's content.
+        let made = "newComputePipelineStateWithFunction:error:";
+        w.call(made, 1, 7, &[Value::Object(4)], &[])?;
+        w.call(made, 1, 8, &[Value::Object(4)], &[])?;
+        let pipeline = Value::Map(vec![
+            ("vertex".into(), Value::Object(5)),
+            ("fragment".into(), Value::Object(6)),
+            ("color0PixelFormat".into(), Value::Uint(70)),
+        ]);
+        let made = "newRenderPipelineStateWithDescriptor:error:";
+        w.call(made, 1, 9, &[pipeline], &[])
+    });
+    let (_, lines) = play("makes", &path);
+    let summary = (lines.iter())
+        .find(|line| line.starts_with("pipeline makes "))
+        .unwrap_or_else(|| panic!("{lines:?}"));
+    assert!(
+        summary.starts_with("pipeline makes 3 states: 2 cold, "),
+        "{summary}"
+    );
+    let end = "; 0 beside a pre-pass call, whose work their times count";
+    assert!(summary.ends_with(end), "{summary}");
+    let [wall, translation, driver, other] = split_after(summary, " cold, ");
+    assert!(
+        translation > 0.0 && driver > 0.0 && other >= 0.0,
+        "{summary}"
+    );
+    assert!(wall >= translation + driver, "{summary}");
+    let [.., other] = split_after(summary, " held, ");
+    let (_, held) = summary.split_once(" held, ").unwrap();
+    assert!(
+        held.contains(" + driver 0.000 ms + ") && other >= 0.0,
+        "{summary}"
+    );
+    let slowest: Vec<&String> = (lines.iter())
+        .filter(|line| line.starts_with("pipeline make slowest "))
+        .collect();
+    assert_eq!(slowest.len(), 3, "{lines:?}");
+    for (state, kinds) in [
+        (7, "kernel cold"),
+        (8, "kernel held"),
+        (9, "vertex+fragment cold"),
+    ] {
+        let named = format!(" #{state} {kinds}: wall ");
+        assert!(
+            slowest.iter().any(|line| line.contains(&named)),
+            "{slowest:?}"
+        );
+    }
 }
 
 #[test]

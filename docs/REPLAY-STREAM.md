@@ -973,6 +973,19 @@ making's wall time, and whether no state of another specialization of the kernel
 function by name, was made before), its `commit lock wait longest N ns` (the runtime's
 `commit_lock_wait_max_nanos`: the longest wait of a commit for the runtime's work lock in the play;
 the executed counter `commit_lock_wait_nanos` gives the waits by frame, summed), its
+`pipeline makes N states: C cold, SPLIT; H held, SPLIT; B beside a pre-pass call, whose work their
+times count` and, for each of the ten slowest makings, slowest first, `pipeline make slowest K #ID
+KINDS cold|held: SPLIT` (where each render and compute pipeline state's making went, read from the
+runtime's counters on the player's thread before and after it: `SPLIT` is `wall W ms =
+translation T ms + driver D ms + other O ms`, the making's wall time on the runtime's clock,
+`host_time`, and of it the translator's calls, `translation_nanos`, the driver's
+`vkCreate*Pipelines` calls, `pipeline_creation_nanos`, and the rest; a making is cold where it
+lowered a function or made a `VkPipeline`, `translations` or `pipelines_created` rose, and held
+where the device held the state's content; the counters sum every thread's calls, so the `B`
+makings during which a pre-pass thread ran a call, each marked `, beside a pre-pass call`, count
+that call's work too; `ID` the state's object and `KINDS` `kernel`, or `vertex` or
+`post-tessellation vertex`, where the library states a `patchType`, then `+fragment` where the
+state has a fragment function; states the runtime refused are not among them), its
 `skipped render states GAP N, the first #ID: WHY` for each
 typed gap a render pipeline state met (`GAP` the runtime's gap as Rust prints it for debugging, such
 as `RenderPipeline { kind: DepthAttachment }`, or `Translation(KIND)` where the translator refused
