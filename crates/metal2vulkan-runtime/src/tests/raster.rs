@@ -7,9 +7,12 @@
 //!   `Clip` and every texel under `Clamp`, which keeps it at the near plane (the conformance case
 //!   `render-state-depth-clip`).
 //! - Under `Lines`, where the device has `fillModeNonSolid`, the triangle at z 0.5 through a
-//!   viewport half a pixel right of and above the target's corner draws the two edges that lie
-//!   inside the target through texel centers, column 0 and row 7, and nothing inside them; without
-//!   the feature the mode is `DrawKind::FillMode` and the encoder's mode stays `Fill`.
+//!   viewport 0.4 pixels right of and 0.3 above the target's corner draws the two edges that lie
+//!   inside the target, column 0 and row 7, and nothing inside them; without the feature the mode
+//!   is `DrawKind::FillMode` and the encoder's mode stays `Fill`. Each edge crosses its pixels'
+//!   diamonds off their centers and corners, and both start strictly inside the corner pixel's, so
+//!   Bresenham's diamond-exit rule draws them on every device: a line through texel centers ties
+//!   at each diamond's corners, where lavapipe drew row 7 not at all (m3-max-62049).
 //! - The first draw under each raster state makes one pipeline, a first-use wait of the raster
 //!   site; a later encoder's draw under the same state makes none.
 
@@ -97,10 +100,11 @@ mod on_device {
                     (other, _) => panic!("{name}: {fill:?}: {other:?}"),
                 }
                 if lines && non_solid {
-                    // Clip space's left and bottom edges through texel centers.
+                    // Clip space's left and bottom edges at x 0.4 and y 7.7, inside column 0's
+                    // and row 7's diamonds.
                     draw(encoder.set_viewport(Viewport {
-                        origin_x: 0.5,
-                        origin_y: -0.5,
+                        origin_x: 0.4,
+                        origin_y: -0.3,
                         width: f64::from(SIDE),
                         height: f64::from(SIDE),
                         znear: 0.0,
