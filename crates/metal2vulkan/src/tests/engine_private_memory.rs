@@ -23,6 +23,8 @@
 //! `llvm-as` assembles the functions; a missing tool skips visibly.
 
 use crate::budget::SPIRV_WORDS;
+use crate::device::profile::{HandleDomain, PointerDomain};
+use crate::device::DevicePolicy;
 use crate::device::{DeviceProfile, VkLimit};
 use crate::error::{Capability, Error, Feature, Unsupported};
 use crate::library::{FunctionConstantValue, FunctionConstantValues};
@@ -30,8 +32,11 @@ use crate::lower::select::LowerInputs;
 use crate::metal::DataType;
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::compile::{compile_bitcode_linked, EntryRef, LinkedSource};
+use crate::pipeline::facts::RuntimeFact;
+use crate::pipeline::sym::PushField;
 use crate::pipeline::testing::{
-    compile, engine_dir, link_and_validate, llvm_assemble, meter, profile, AssembleError,
+    compile, compile_kept, engine_dir, link_and_validate, llvm_assemble, meter, profile,
+    AssembleError,
 };
 
 /// The functions, `words`, `vwords` and `fwords` with a private array of `n` words.
@@ -241,6 +246,57 @@ fn render_stages_past_the_floor_of_a_device_not_measured_run_noted_up_to_metal_s
     }
     let kernel = notes(stem, 4352, "words").expect("assembled");
     assert_eq!(kernel.map(|_| ()), needs(4352 * 4, 16 * 1024));
+}
+
+/// Under the identity domains a kernel whose private memory passes the floor keeps it in the
+/// runtime's device memory, one slot an invocation (`memory::plan::ArenaLayout::device`): the
+/// `words` kernel of 7176 words (28,704 bytes), 9216 (36 KiB) and 51,200 (200 KiB) compiles on the
+/// 780M's, the Iris Xe's and an RTX 50's profiles with no note, pushes
+/// `PushField::PrivateArenaAddress`, states `RuntimeFact::PrivateArena` of its arena's bytes, a
+/// multiple of 16, holds no private bytes, and passes L3. Under the default domains, whose binder supplies no such memory, it is
+/// refused as before, needing its bytes of the floor.
+#[test]
+fn a_kernel_past_the_floor_keeps_its_private_memory_in_the_runtimes_memory_under_identity() {
+    let identity = DevicePolicy {
+        pointer_domain: PointerDomain::Identity,
+        handle_domain: HandleDomain::Identity,
+        ..DevicePolicy::default()
+    };
+    for stem in ["amd-780m-radv", "intel-irisxe-anv", "nvidia-rtx50-linux"] {
+        let p = profile(stem, identity).expect("profile");
+        for n in [7176u32, 9216, 51_200] {
+            let Some(bitcode) = module(n) else {
+                return;
+            };
+            let what = format!("{stem}: words {n}");
+            let (a, plan, _) =
+                compile_kept(&bitcode, "words", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+            assert!(plan.families.access.local.private_device, "{what}");
+            assert_eq!(plan.memory.private_bytes, 0, "{what}");
+            assert!(
+                plan.facts
+                    .contains(&RuntimeFact::PrivateArena { slot_bytes: 4 * n }),
+                "{what}: {:?}",
+                plan.facts
+            );
+            assert!(
+                (plan.push.fields.iter()).any(|f| f.field == PushField::PrivateArenaAddress),
+                "{what}"
+            );
+            assert!(
+                !a.precision.contains(&PrecisionNote::FunctionStorageAssumed),
+                "{what}: {:?}",
+                a.precision
+            );
+            let default = notes(stem, n, "words").expect("assembled");
+            assert_eq!(
+                default.map(|_| ()),
+                needs(4 * u64::from(n), 16 * 1024),
+                "{what}"
+            );
+        }
+    }
 }
 
 /// An array reached only at constant indices counts nothing: a driver holds its parts in registers.

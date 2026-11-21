@@ -1001,6 +1001,14 @@ pub enum Gap {
     ///
     /// Basis: ours (no replay stream dispatches such a kernel without setting a region).
     NoStageInRegion,
+    /// `dispatchThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerThreadgroup:` of a
+    /// kernel whose private memory lives in the runtime's arena, past the translator's floor
+    /// (`crate::arena`): the GPU reads the counts and the runtime never does, so it can neither
+    /// size the arena for the dispatch nor split it under the arena's budget. Metal runs it.
+    /// Refused at the dispatch; the state's direct dispatches run.
+    ///
+    /// Basis: ours (no replay stream dispatches such a kernel indirectly).
+    IndirectPrivateArena,
     /// A texture of `Memoryless` storage, which only render passes use.
     ///
     /// Basis: ours (render passes are not built).
@@ -2280,6 +2288,9 @@ impl fmt::Display for Gap {
             Gap::NoStageInRegion => {
                 f.write_str("the kernel reads the stage-in region, which the encoder never set")
             }
+            Gap::IndirectPrivateArena => f.write_str(
+                "an indirect dispatch of a kernel whose private memory is in the runtime's arena",
+            ),
             Gap::PartialSimdgroups {
                 threads_per_threadgroup,
                 width,

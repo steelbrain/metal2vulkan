@@ -290,6 +290,12 @@ pub(crate) struct Core {
     /// of device memory, before the driver is called.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fail_private: std::sync::atomic::AtomicU32,
+    /// For the device tests: where nonzero, the private arena's budget in place of the device's
+    /// ([`Core::arena_budget`]), so a small dispatch splits.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) arena_budget: std::sync::atomic::AtomicU64,
+    /// The private arena's last block (`crate::arena`).
+    pub(crate) arena: crate::arena::Last,
     /// For the device tests: nanoseconds added to the host time of each calibration read, as a
     /// calibration whose host clock is read that long after its GPU tick.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -672,16 +678,17 @@ impl Device {
         let limits = &properties.properties.limits;
         // The sampler arrays' two defaults count against the device's samplers too.
         let sampler_cap = limits.max_sampler_allocation_count.saturating_sub(2);
+        let max_block_len = vulkan11
+            .max_memory_allocation_size
+            .min(vulkan13.max_buffer_size);
         let limits = EncoderLimits {
             max_group_count: limits.max_compute_work_group_count,
             max_shared_memory: limits.max_compute_shared_memory_size,
             max_viewport: limits.max_viewport_dimensions,
             viewport_bounds: limits.viewport_bounds_range,
             max_framebuffer_layers: limits.max_framebuffer_layers,
+            arena_budget: crate::arena::budget(&capabilities.memory, max_block_len),
         };
-        let max_block_len = vulkan11
-            .max_memory_allocation_size
-            .min(vulkan13.max_buffer_size);
         let resolve_modes = ResolveModes {
             depth: vulkan12.supported_depth_resolve_modes,
             stencil: vulkan12.supported_stencil_resolve_modes,
@@ -730,6 +737,9 @@ impl Device {
             granularity,
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             fail_private: std::sync::atomic::AtomicU32::new(0),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            arena_budget: std::sync::atomic::AtomicU64::new(0),
+            arena: Mutex::new(Weak::new()),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             calibration_lateness: std::sync::atomic::AtomicU64::new(0),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -1408,9 +1418,24 @@ pub(crate) struct EncoderLimits {
     pub(crate) viewport_bounds: [f32; 2],
     /// `maxFramebufferLayers`: the most layers a render pass renders (`renderTargetArrayLength`).
     pub(crate) max_framebuffer_layers: u32,
+    /// The most bytes a dispatch's slots of the private arena take (`crate::arena::budget`).
+    pub(crate) arena_budget: u64,
 }
 
 impl Core {
+    /// The most bytes a dispatch's slots of the private arena take: the device's
+    /// ([`EncoderLimits::arena_budget`]), or in a device test the one the test set.
+    pub(crate) fn arena_budget(&self) -> u64 {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        {
+            let set = self.arena_budget.load(Ordering::Relaxed);
+            if set != 0 {
+                return set;
+            }
+        }
+        self.limits.arena_budget
+    }
+
     /// The gauges of the device's stage entries ([`Gauges::stage_entries`] and
     /// [`Gauges::stage_entry_bytes`]), read after a creation moved them.
     ///

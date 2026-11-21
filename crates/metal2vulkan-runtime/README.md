@@ -2009,6 +2009,25 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   encoder that set none is `Gap::NoStageInRegion`: what Metal's kernel reads then is not
   established. A kernel with a `[[stage_in]]` argument, which fetches by the region, is
   `Gap::KernelInput` of `KernelInputKind::StageIn` at its state's creation.
+- A kernel whose private memory passes the translator's 16 KiB floor (its arrays a thread
+  indexes at run time: Metal holds such a kernel's thread memory itself) keeps it in the runtime's
+  device memory, the private arena (`RuntimeFact::PrivateArena`): one slot of the kernel's bytes,
+  rounded up to 16, for each invocation of the dispatch, at the address the dispatch pushes
+  (`PushField::PrivateArenaAddress`), its invocation's slot at its index in the Vulkan dispatch.
+  The arena is one Private block of the pool, never zeroed (Metal's private memory is undefined
+  until the thread writes it). The device keeps the last block it took while a command buffer
+  keeps it, and a dispatch that needs no more takes it again; one that needs more takes a block of
+  its need rounded up to a power of two. A dispatch's slots take at most a sixteenth of the
+  device's largest device-local heap, within its longest block, or one threadgroup's slots where
+  those are more: a dispatch past that runs as several, each of as many whole threadgroups as the
+  budget holds, its region carrying its first threadgroup, as a count past
+  `maxComputeWorkGroupCount` does. Each piece is ordered after the commands before it by a
+  barrier, but the first in a block the dispatch took new, which nothing reached before; a
+  dispatch of a kernel without an arena takes no such barrier.
+  `Metrics::private_arena_dispatches`, `private_arena_pieces` and `private_arena_blocks` count
+  them, and `private_arena_allocations` the blocks' takes. An indirect dispatch of such a kernel
+  is `Gap::IndirectPrivateArena`: the GPU reads its counts, so the runtime can neither size its
+  arena nor split it.
 - `use_heap` is `useHeap:`, for the block a heap's memory is: the command buffer keeps the block
   until it retires, as it keeps a used buffer's block, so a heap given back while the work runs
   stays valid under it. It declares no access (Metal states no retention for it; keeping is the

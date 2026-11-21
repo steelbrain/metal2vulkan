@@ -52,6 +52,7 @@ pub(crate) mod on_device {
             block_address: 0,
             fields,
             stage_in_region: false,
+            private_arena: None,
             constants: vec![
                 (0, Constant::Size(0)),
                 (1, Constant::Size(1)),

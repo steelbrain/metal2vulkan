@@ -1672,6 +1672,10 @@ field	metal2vulkan-runtime::Metrics.pipeline_cache_lock_waits	pub pipeline_cache
 field	metal2vulkan-runtime::Metrics.pipeline_cache_looks_skipped	pub pipeline_cache_looks_skipped: u64
 field	metal2vulkan-runtime::Metrics.pipeline_creation_nanos	pub pipeline_creation_nanos: u64
 field	metal2vulkan-runtime::Metrics.pipelines_created	pub pipelines_created: u64
+field	metal2vulkan-runtime::Metrics.private_arena_allocations	pub private_arena_allocations: SiteAllocations
+field	metal2vulkan-runtime::Metrics.private_arena_blocks	pub private_arena_blocks: u64
+field	metal2vulkan-runtime::Metrics.private_arena_dispatches	pub private_arena_dispatches: u64
+field	metal2vulkan-runtime::Metrics.private_arena_pieces	pub private_arena_pieces: u64
 field	metal2vulkan-runtime::Metrics.private_long_reuses	pub private_long_reuses: u64
 field	metal2vulkan-runtime::Metrics.private_remade_after_frees	pub private_remade_after_frees: u64
 field	metal2vulkan-runtime::Metrics.private_take_allocations	pub private_take_allocations: SiteAllocations
@@ -9223,6 +9227,7 @@ variant	metal2vulkan-runtime::Gap::FloatDepthUpload	FloatDepthUpload { pixel_for
 variant	metal2vulkan-runtime::Gap::HeapTexture	HeapTexture { pixel_format: PixelFormat }
 variant	metal2vulkan-runtime::Gap::ImageblockLength	ImageblockLength
 variant	metal2vulkan-runtime::Gap::IndirectCommandBuffers	IndirectCommandBuffers
+variant	metal2vulkan-runtime::Gap::IndirectPrivateArena	IndirectPrivateArena
 variant	metal2vulkan-runtime::Gap::KernelInput	KernelInput { kind: KernelInputKind }
 variant	metal2vulkan-runtime::Gap::LinearPlanePass	LinearPlanePass { kind: LinearPlanePassKind }
 variant	metal2vulkan-runtime::Gap::LodClamps	LodClamps
@@ -10954,6 +10959,7 @@ variant	metal2vulkan::pipeline::PushField::LineBand	LineBand
 variant	metal2vulkan::pipeline::PushField::MergedDrawAddress	MergedDrawAddress
 variant	metal2vulkan::pipeline::PushField::PatchIndexBound	PatchIndexBound
 variant	metal2vulkan::pipeline::PushField::PatchIndexOffset	PatchIndexOffset
+variant	metal2vulkan::pipeline::PushField::PrivateArenaAddress	PrivateArenaAddress
 variant	metal2vulkan::pipeline::PushField::RegionBox	RegionBox
 variant	metal2vulkan::pipeline::PushField::RegionProbe	RegionProbe
 variant	metal2vulkan::pipeline::PushField::RenderTargetArrayLength	RenderTargetArrayLength
@@ -11056,6 +11062,7 @@ variant	metal2vulkan::pipeline::RuntimeFact::OutOfBoundsAlpha	OutOfBoundsAlpha {
 variant	metal2vulkan::pipeline::RuntimeFact::PartialObjectThreadgroups	PartialObjectThreadgroups
 variant	metal2vulkan::pipeline::RuntimeFact::PartialThreadgroups	PartialThreadgroups
 variant	metal2vulkan::pipeline::RuntimeFact::PredicationVote	PredicationVote
+variant	metal2vulkan::pipeline::RuntimeFact::PrivateArena	PrivateArena { slot_bytes: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::PrivateList	PrivateList
 variant	metal2vulkan::pipeline::RuntimeFact::QuadPrimitiveIds	QuadPrimitiveIds
 variant	metal2vulkan::pipeline::RuntimeFact::RegionViewports	RegionViewports

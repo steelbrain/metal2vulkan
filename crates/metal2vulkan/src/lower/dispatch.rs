@@ -536,6 +536,9 @@ pub struct DispatchPlan {
     /// A kernel of the [`LocalSizeForm::Spec`] form without compute derivatives (whose quads are two-dimensional): it declares
     /// `SpecKey::DeepThreadgroup`, under which its threadgroup runs as one row (the module docs).
     pub deep: bool,
+    /// A kernel whose private arena lives in device memory (`memory::plan::ArenaLayout::device`):
+    /// each invocation reaches its slot by its index in its dispatch ([`arena_slot`]).
+    pub private_arena: bool,
 }
 
 /// The words a flat grid adds: its thread's index, position, and early return, derived once for the
@@ -744,6 +747,7 @@ pub fn plan_kernel(cx: &mut SelectCx<'_>, tier: Tier) -> Result<DispatchPlan, Er
         identity: crate::lower::access::identity(cx.profile),
         pinned_subgroup_size,
         deep,
+        private_arena: cx.memory.priv_arena.device,
     })
 }
 
@@ -770,6 +774,10 @@ pub fn emit_entry(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>) -> BResult<
     let Some(plan) = cx.plan.dispatch.as_ref() else {
         return Ok(());
     };
+    // The private arena's slot, in the first block, which every access of the arena reads.
+    if plan.private_arena {
+        cx.arena_slot(fb)?;
+    }
     // A flat grid's invocation past the grid's last thread returns before the body. Its position
     // is derived here once, with the test, and is the `thread_position_in_grid` every parameter
     // reads: a second derivation would repeat the divisions in a construct of its own, which the
@@ -979,6 +987,8 @@ pub struct KernelDecl {
     uvec3: TypeId,
     /// `sx, sy, sz`.
     size: [ConstId; 3],
+    /// The `WorkgroupSize` composite.
+    workgroup: ConstId,
     /// `SpecKey::DeepThreadgroup`, where the plan declares it ([`DispatchPlan::deep`]).
     deep: Option<ConstId>,
     /// How the kernel tells a region, when it reads a grid builtin.
@@ -1080,14 +1090,20 @@ impl Needs {
         .any(has)
             || (local_pos && (dp.local_size == LocalSizeForm::Flat || dp.tile))
             || partial;
+        // A private arena in device memory counts its slot from the workgroup's position.
+        let arena = dp.private_arena;
         Needs {
             lin,
             local_pos,
             workgroup_id: folded
                 || partial
+                || arena
                 || has(K::ThreadPositionInGrid)
                 || has(K::ThreadgroupPositionInGrid),
-            num_workgroups: folded || has(K::ThreadsPerGrid) || has(K::ThreadgroupsPerGrid),
+            num_workgroups: folded
+                || arena
+                || has(K::ThreadsPerGrid)
+                || has(K::ThreadgroupsPerGrid),
         }
     }
 }
@@ -1240,7 +1256,7 @@ impl KernelDecl {
         .map(|(k, d)| mb.spec(k, u32_, ConstBits(u64::from(d))));
         let size = [sx?, sy?, sz?];
         let mut deep = None;
-        match dp.local_size {
+        let workgroup = match dp.local_size {
             LocalSizeForm::Spec if dp.deep => {
                 let b = mb.ty(Type::Bool)?;
                 let one_row = mb.spec(SpecKey::DeepThreadgroup, b, ConstBits(0))?;
@@ -1252,12 +1268,10 @@ impl KernelDecl {
                 })?;
                 let [x, y, z] = [(sn, size[0]), (one, size[1]), (one, size[2])]
                     .map(|(deep, own)| mb.spec_op(SpecOp::Select, u32_, &[one_row, deep, own]));
-                mb.workgroup_size(x?, y?, z?)?;
                 deep = Some(one_row);
+                mb.workgroup_size(x?, y?, z?)?
             }
-            LocalSizeForm::Spec => {
-                mb.workgroup_size(size[0], size[1], size[2])?;
-            }
+            LocalSizeForm::Spec => mb.workgroup_size(size[0], size[1], size[2])?,
             LocalSizeForm::Flat => {
                 let n = u64::from(dx) * u64::from(dy) * u64::from(dz);
                 let sn = mb.spec(keys.flat, u32_, ConstBits(n))?;
@@ -1265,9 +1279,9 @@ impl KernelDecl {
                     ty: u32_,
                     bits: ConstBits(1),
                 })?;
-                mb.workgroup_size(sn, one, one)?;
+                mb.workgroup_size(sn, one, one)?
             }
-        }
+        };
         let multi_region = match (dp.multi_region, dp.identity) {
             (false, _) => None,
             (true, identity) => {
@@ -1291,7 +1305,8 @@ impl KernelDecl {
         // A grid tile counts by `LocalInvocationIndex` in either form too, and a deep
         // threadgroup's position is unflattened from it.
         let index = (needs.lin && (!flat || by_index || dp.grid_edge))
-            || (needs.local_pos && deep.is_some());
+            || (needs.local_pos && deep.is_some())
+            || dp.private_arena;
         let subgroups = needs.lin && flat && !by_index && !dp.grid_edge;
         use crate::spv::BuiltIn as B;
         let mut var = |on: bool, b: crate::spv::BuiltIn, ty: TypeId| -> BResult<Option<GlobalId>> {
@@ -1315,6 +1330,7 @@ impl KernelDecl {
             draw_index: var(dp.draw_pieces, B::DrawIndex, u32_)?,
             uvec3,
             size,
+            workgroup,
             deep,
             multi_region,
             local_id: var(
@@ -1337,6 +1353,44 @@ impl KernelDecl {
             partial_groups: dp.partial_groups,
             grid_edge: dp.grid_edge,
         })
+    }
+
+    /// The device address (a `u64`) of the invocation's slot of `slot_bytes` in the private
+    /// arena at `arena` (`PushField::PrivateArenaAddress`): `arena + i · slot_bytes` for its index
+    /// in its dispatch `i = ((wz · ny + wy) · nx + wx) · n + LocalInvocationIndex`, `n` the
+    /// workgroup's invocations. The runtime keeps a dispatch's invocations under 2^32, so `i` is
+    /// counted in 32 bits.
+    pub(crate) fn arena_slot(
+        &self,
+        fb: &mut FunctionBuilder<'_>,
+        arena: SValue,
+        slot_bytes: u32,
+    ) -> BResult<SValue> {
+        let wg = self.load(fb, self.workgroup_id)?;
+        let groups = self.load(fb, self.num_workgroups)?;
+        let index = self.load(fb, self.local_index)?;
+        let size = fb.module().const_value(self.workgroup)?;
+        let n = Self::volume(fb, size)?;
+        let [wx, wy, wz] = [0, 1, 2].map(|i| fb.composite_extract(wg, &[i]));
+        let [nx, ny] = [0, 1].map(|i| fb.composite_extract(groups, &[i]));
+        let group = fb.binary(BinOp::IMul, wz?, ny?)?;
+        let group = fb.binary(BinOp::IAdd, group, wy?)?;
+        let group = fb.binary(BinOp::IMul, group, nx?)?;
+        let group = fb.binary(BinOp::IAdd, group, wx?)?;
+        let first = fb.binary(BinOp::IMul, group, n)?;
+        let at = fb.binary(BinOp::IAdd, first, index)?;
+        let u64_ = fb.module().ty(Type::Int {
+            width: 64,
+            signed: false,
+        })?;
+        let at = fb.convert(ConvOp::UConvert, at, u64_)?;
+        let bytes = fb.module().constant(Constant::Scalar {
+            ty: u64_,
+            bits: ConstBits(u64::from(slot_bytes)),
+        })?;
+        let bytes = fb.module().const_value(bytes)?;
+        let offset = fb.binary(BinOp::IMul, at, bytes)?;
+        fb.binary(BinOp::IAdd, arena, offset)
     }
 
     fn load(&self, fb: &mut FunctionBuilder<'_>, g: Option<GlobalId>) -> BResult<SValue> {

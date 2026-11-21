@@ -68,6 +68,7 @@ mod pixel_format_info;
 mod pixel_interlock;
 mod places;
 mod present;
+mod private_arena;
 mod push_window;
 mod quad_control;
 mod read_write_tier;

@@ -2774,7 +2774,7 @@ fn fill_push(
                 bytes[at..at + 4].copy_from_slice(&pass.layers.to_le_bytes());
             }
             // A render content has no dispatch or stage-in region (`render::draws`).
-            FieldValue::DispatchRegion | FieldValue::StageInRegion => {}
+            FieldValue::DispatchRegion | FieldValue::StageInRegion | FieldValue::PrivateArena => {}
         }
     }
 }

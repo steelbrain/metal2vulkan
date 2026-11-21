@@ -571,6 +571,10 @@ pub(crate) struct Interface {
     /// Whether the kernel reads the stage-in region ([`FieldValue::StageInRegion`]), which a
     /// dispatch needs the encoder to have set.
     pub(crate) stage_in_region: bool,
+    /// The bytes of each invocation's slot in the kernel's private arena
+    /// (`RuntimeFact::PrivateArena`), where its private memory passes the translator's floor: a
+    /// dispatch of it takes the runtime's arena (`crate::arena`, [`FieldValue::PrivateArena`]).
+    pub(crate) private_arena: Option<u32>,
     /// The kernel's specialization constants: each one's id and what sets it.
     pub(crate) constants: Vec<(u32, Constant)>,
     /// The index of each threadgroup memory argument the kernel takes, in the order of
@@ -739,6 +743,10 @@ pub(crate) enum FieldValue {
     /// past which a vertex function's `[[render_target_array_index]]` stores `Layer` 0
     /// (`PushField::RenderTargetArrayLength`).
     RenderTargetArrayLength,
+    /// A `u64`: the address of a dispatch's slots in the private arena (`crate::arena`), each
+    /// invocation's at its index in the dispatch times the slot's bytes
+    /// (`PushField::PrivateArenaAddress`).
+    PrivateArena,
 }
 
 /// A `VkPipeline`'s specialization: the threadgroup size, the threadgroup memory lengths in the
@@ -1260,6 +1268,7 @@ fn interface(
     let mut multiples = Vec::new();
     let mut aligned = Vec::new();
     let mut vote = 0;
+    let mut private_arena = None;
     let mut own = OwnMemory::Static(pipeline.metal_info.static_threadgroup_memory_length);
     for dependency in &pipeline.dependencies {
         match dependency.fact {
@@ -1276,6 +1285,9 @@ fn interface(
             } if align.is_power_of_two() => aligned.push((index, u64::from(align) - 1)),
             // The walk's vote word: 4 bytes beside the threadgroup memory.
             RuntimeFact::PredicationVote => vote = 4,
+            // Each invocation's slot of the private arena, which the encoder places
+            // (`FieldValue::PrivateArena`).
+            RuntimeFact::PrivateArena { slot_bytes } => private_arena = Some(slot_bytes),
             // The emulated tier's arena and scratch, in place of Metal's static part.
             RuntimeFact::SimdgroupEmulation {
                 bytes_per_simdgroup,
@@ -1421,6 +1433,7 @@ fn interface(
                     _,
                 ) => FieldValue::BufferBounds(index),
                 (PushField::ZeroAddress, _) => FieldValue::ZeroAddress,
+                (PushField::PrivateArenaAddress, _) => FieldValue::PrivateArena,
                 _ => return Err(KernelInputKind::PushField),
             };
             fields.push(Field { place, value });
@@ -1513,6 +1526,7 @@ fn interface(
         block_address,
         stage_in_region: (fields.iter())
             .any(|field| matches!(field.value, FieldValue::StageInRegion)),
+        private_arena,
         fields,
         constants,
         threadgroups,

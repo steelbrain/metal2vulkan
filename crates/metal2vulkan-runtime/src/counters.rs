@@ -193,6 +193,12 @@ pub(crate) enum Metric {
     BlocksMade,
     /// [`Metrics::dispatches_without_effects`].
     DispatchesWithoutEffects,
+    /// [`Metrics::private_arena_dispatches`].
+    PrivateArenaDispatches,
+    /// [`Metrics::private_arena_pieces`].
+    PrivateArenaPieces,
+    /// [`Metrics::private_arena_blocks`].
+    PrivateArenaBlocks,
     /// [`Metrics::translations`].
     Translations,
     /// [`Metrics::translations_loaded`].
@@ -258,6 +264,9 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::PipelinesCreated,
     Metric::BlocksMade,
     Metric::DispatchesWithoutEffects,
+    Metric::PrivateArenaDispatches,
+    Metric::PrivateArenaPieces,
+    Metric::PrivateArenaBlocks,
     Metric::Translations,
     Metric::TranslationsLoaded,
     Metric::RenderRecordsRead,
@@ -439,6 +448,8 @@ pub(crate) enum Site {
     SharedTake,
     /// [`Metrics::private_take_allocations`].
     PrivateTake,
+    /// [`Metrics::private_arena_allocations`].
+    PrivateArena,
 }
 
 impl Site {
@@ -452,7 +463,7 @@ impl Site {
 }
 
 /// The number of [`Site`]s.
-const SITES: usize = Site::PrivateTake as usize + 1;
+const SITES: usize = Site::PrivateArena as usize + 1;
 
 /// Why a texture over a buffer lives in an image of its own that the device copies its bytes into
 /// and back (`crate::over`), as the texture's making decides it (`crate::texture::check_over`,
@@ -564,6 +575,9 @@ struct Atomics {
     maker_yields: AtomicU64,
     maker_yield_nanos: AtomicU64,
     dispatches_without_effects: AtomicU64,
+    private_arena_dispatches: AtomicU64,
+    private_arena_pieces: AtomicU64,
+    private_arena_blocks: AtomicU64,
     shared_long_reuses: AtomicU64,
     private_long_reuses: AtomicU64,
     allocations_mapped: AtomicU64,
@@ -735,6 +749,9 @@ impl Counters {
             Metric::PipelinesCreated => &a.pipelines_created,
             Metric::BlocksMade => &a.blocks_made,
             Metric::DispatchesWithoutEffects => &a.dispatches_without_effects,
+            Metric::PrivateArenaDispatches => &a.private_arena_dispatches,
+            Metric::PrivateArenaPieces => &a.private_arena_pieces,
+            Metric::PrivateArenaBlocks => &a.private_arena_blocks,
             Metric::Translations => &a.translations,
             Metric::TranslationsLoaded => &a.translations_loaded,
             Metric::RenderRecordsRead => &a.render_records_read,
@@ -1478,6 +1495,7 @@ impl Counters {
             zero_source_allocations: site(Site::ZeroSource),
             shared_take_allocations: site(Site::SharedTake),
             private_take_allocations: site(Site::PrivateTake),
+            private_arena_allocations: site(Site::PrivateArena),
             maker_waits: a.maker_waits.load(Relaxed),
             maker_wait_max_nanos: a.maker_wait_max_nanos.load(Relaxed),
             maker_memory_calls: a.maker_memory_calls.load(Relaxed),
@@ -1489,6 +1507,9 @@ impl Counters {
             allocations_mapped_on_takes: a.allocations_mapped_on_takes.load(Relaxed),
             allocation_map_refusals: a.allocation_map_refusals.load(Relaxed),
             dispatches_without_effects: a.dispatches_without_effects.load(Relaxed),
+            private_arena_dispatches: a.private_arena_dispatches.load(Relaxed),
+            private_arena_pieces: a.private_arena_pieces.load(Relaxed),
+            private_arena_blocks: a.private_arena_blocks.load(Relaxed),
             translations: a.translations.load(Relaxed),
             translations_loaded: a.translations_loaded.load(Relaxed),
             render_records_read: a.render_records_read.load(Relaxed),
@@ -1952,6 +1973,9 @@ pub struct Metrics {
     /// Private blocks. Texture blocks' are
     /// [`texture_block_allocations`](Self::texture_block_allocations).
     pub private_take_allocations: SiteAllocations,
+    /// As [`private_take_allocations`](Self::private_take_allocations), of the takes of the
+    /// private arena's blocks (`crate::arena`), on the thread of the dispatch that needed one.
+    pub private_arena_allocations: SiteAllocations,
     /// Calls that waited for the block-maker thread's make of one of the runtime's fixed-size
     /// internals they need, which it makes off every caller's thread: the zero source, a
     /// parameter ring block or the staging region (the sites above). Such a
@@ -1994,6 +2018,16 @@ pub struct Metrics {
     /// direct and indirect: each was checked as Metal checks it, and nothing was recorded, bound
     /// or read for it, as it has no effect a program can observe.
     pub dispatches_without_effects: u64,
+    /// Direct dispatches of a kernel whose private memory is in the runtime's arena, past the
+    /// translator's floor (`crate::arena`). No Metal counterpart: Metal holds such a kernel's
+    /// private memory itself.
+    pub private_arena_dispatches: u64,
+    /// The `vkCmdDispatch`es those recorded: one each, and one more for each piece past the first
+    /// of a dispatch whose slots passed the arena's budget.
+    pub private_arena_pieces: u64,
+    /// The arena's blocks taken from the pool: one for the first such dispatch, and one more each
+    /// time a dispatch needed more than the last block held, or no command buffer kept it.
+    pub private_arena_blocks: u64,
     /// Functions the translator lowered, each a module of a pipeline content the device did not
     /// hold compiled: of a compute content, one for a kernel that does not observe its threadgroup
     /// partition and two for one that does; of a render content, one for each of its functions

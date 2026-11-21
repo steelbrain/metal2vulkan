@@ -66,11 +66,11 @@ use crate::memory::leaf::{Coherence, WordMem, WordOps};
 use crate::memory::plan::ArenaLayout;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, SpecKey, Stage, SyntheticBinding};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
-use crate::spirv::error::BResult;
+use crate::spirv::error::{BResult, BuildError, Dangling};
 use crate::spirv::ids::{ConstId, GlobalId, TypeId, Value};
 use crate::spirv::ir::{
-    AtomicOp, BinOp, ConstBits, Constant, MemAccess, Scope, Semantics, SpecOp, StorageClass, Type,
-    UnOp,
+    AtomicOp, BinOp, ConstBits, Constant, ConvOp, MemAccess, Scope, Semantics, SpecOp,
+    StorageClass, Type, UnOp,
 };
 
 /// The smallest arena array in bytes: the widest leaf (4 lanes of 8 bytes). A contained
@@ -278,11 +278,12 @@ pub fn workgroup_limit(stage: Stage, limits: &Limits) -> WorkgroupLimit {
 
 /// A declared arena: its `u32` array variable and its byte size, the containment domain (a
 /// plain `u32` constant, or for a threadgroup arena with regions an `OpSpecConstantOp`), or a
-/// threadgroup arena's `float` array.
+/// threadgroup arena's `float` array. A private arena in device memory has no variable: its words
+/// are the invocation's slot of the runtime's memory, at `slot`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ArenaDecl {
     pub arena: Arena,
-    pub global: GlobalId,
+    pub global: Option<GlobalId>,
     pub size: ConstId,
     /// A fragment function's threadgroup arena (the module docs): `global` is the pass's tile
     /// memory buffer, a storage view, whose word `tile_base` (a `u32` of the function that emits
@@ -291,6 +292,10 @@ pub struct ArenaDecl {
     pub tile_base: Option<Value>,
     /// An arena of `float` words (the module docs): `global` is a `float` array.
     pub floats: bool,
+    /// A private arena in device memory (`memory::plan::ArenaLayout::device`): the device address
+    /// (a `u64` of the function that emits the access, `lower::dispatch::arena_slot`) of the
+    /// invocation's slot, the arena's word 0. `None` for any other arena, and in the declaration.
+    pub slot: Option<Value>,
 }
 
 /// The declared threadgroup arena and the byte offset of each region: `(parameter, offset)` in
@@ -416,10 +421,11 @@ pub fn declare_threadgroup(
         return Ok(TgDecl {
             decl: ArenaDecl {
                 arena: Arena::Threadgroup,
-                global,
+                global: Some(global),
                 size,
                 tile_base: None,
                 floats,
+                slot: None,
             },
             regions: Vec::new(),
             imageblock: None,
@@ -488,10 +494,11 @@ pub fn declare_threadgroup(
     Ok(TgDecl {
         decl: ArenaDecl {
             arena: Arena::Threadgroup,
-            global,
+            global: Some(global),
             size,
             tile_base: None,
             floats,
+            slot: None,
         },
         regions,
         imageblock,
@@ -518,10 +525,11 @@ fn declare_fragment(mb: &mut ModuleBuilder, shape: &TgShape, coord: usize) -> BR
     Ok(TgDecl {
         decl: ArenaDecl {
             arena: Arena::Threadgroup,
-            global: view.global,
+            global: Some(view.global),
             size: tile_length(mb)?,
             tile_base: None,
             floats: false,
+            slot: None,
         },
         regions,
         imageblock: None,
@@ -564,24 +572,32 @@ pub fn declare_payload(mb: &mut ModuleBuilder, size: u64) -> BResult<ArenaDecl> 
     let global = array(mb, StorageClass::TaskPayloadWorkgroupEXT, words, false)?;
     Ok(ArenaDecl {
         arena: Arena::Payload,
-        global,
+        global: Some(global),
         size: bytes,
         tile_base: None,
         floats: false,
+        slot: None,
     })
 }
 
-/// Declare the private arena of `size` bytes.
-pub fn declare_private(mb: &mut ModuleBuilder, size: u64) -> BResult<ArenaDecl> {
+/// Declare the private arena of `size` bytes: a `Private` array, or where it is in `device`
+/// memory, no variable (its words are the invocation's slot of the runtime's memory).
+pub fn declare_private(mb: &mut ModuleBuilder, size: u64, device: bool) -> BResult<ArenaDecl> {
     let bytes = konst(mb, size)?;
-    let words = konst(mb, static_words(size))?;
-    let global = array(mb, StorageClass::Private, words, false)?;
+    let global = match device {
+        true => None,
+        false => {
+            let words = konst(mb, static_words(size))?;
+            Some(array(mb, StorageClass::Private, words, false)?)
+        }
+    };
     Ok(ArenaDecl {
         arena: Arena::Private,
         global,
         size: bytes,
         tile_base: None,
         floats: false,
+        slot: None,
     })
 }
 
@@ -595,10 +611,32 @@ pub fn declare_private(mb: &mut ModuleBuilder, size: u64) -> BResult<ArenaDecl> 
 pub struct ArenaMem(pub ArenaDecl, pub WordOps);
 
 impl ArenaMem {
-    /// A pointer to word `word` (a `u32` index) of the arena: of its array, or for a fragment
-    /// function's tile memory, word `tile_base + word` of the pass's buffer.
+    /// A pointer to word `word` (a `u32` index) of the arena: of its array, for a fragment
+    /// function's tile memory word `tile_base + word` of the pass's buffer, or for a private arena
+    /// in device memory the `PhysicalStorageBuffer` word `4 · word` bytes past its slot.
     pub fn ptr(&self, fb: &mut FunctionBuilder<'_>, word: Value) -> BResult<Value> {
-        let base = fb.module().global_value(self.0.global)?;
+        let global = match (self.0.slot, self.0.global) {
+            (Some(slot), _) => {
+                let u64_ = fb.module().ty(Type::Int {
+                    width: 64,
+                    signed: false,
+                })?;
+                let u32_ = u32_ty(fb.module())?;
+                // An arena's bytes fit `u32`, so its byte offset does.
+                let two = crate::memory::leaf::k32(fb, 2)?;
+                let at = fb.binary(BinOp::ShiftLeftLogical, word, two)?;
+                let at = fb.convert(ConvOp::UConvert, at, u64_)?;
+                let address = fb.binary(BinOp::IAdd, slot, at)?;
+                return fb.device_place(address, u32_);
+            }
+            (None, Some(global)) => global,
+            // A private arena in device memory reached before its function placed its slot
+            // (`lower::access::local::decl_of` places it).
+            (None, None) => {
+                return Err(BuildError::Dangling(Dangling::Value(Value::new(u32::MAX))))
+            }
+        };
+        let base = fb.module().global_value(global)?;
         match self.0.tile_base {
             None => fb.access_chain(base, &[word]),
             Some(first) => {
@@ -628,8 +666,11 @@ impl ArenaMem {
     fn access(&self, fb: &mut FunctionBuilder<'_>, store: bool) -> BResult<MemAccess> {
         match self.0.arena {
             Arena::Threadgroup => self.1.access(fb, MemAccess::default(), store),
+            // A word in device memory is aligned to 4, as a `PhysicalStorageBuffer` access
+            // states.
             Arena::Private | Arena::Payload => Ok(MemAccess {
                 volatile: self.1.volatile,
+                aligned: self.0.slot.map(|_| 4),
                 ..MemAccess::default()
             }),
         }

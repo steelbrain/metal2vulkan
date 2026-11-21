@@ -41,6 +41,7 @@ fn plan(form: LocalSizeForm, multi_region: bool) -> DispatchPlan {
         identity: false,
         pinned_subgroup_size: None,
         deep: false,
+        private_arena: false,
     }
 }
 

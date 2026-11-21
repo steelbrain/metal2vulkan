@@ -34,13 +34,13 @@ Columns:
 | Devices below the runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Refusal` | 76 | 76 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Limit` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
-| The runtime's `Gap` | 30 | 30 | 0 | 0 | 0 | 0 | 0 |
+| The runtime's `Gap` | 31 | 31 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
 | Kind | `metal-measured` | `metal-documented` | `metal-takes` | `device` | `ours` | `unknown` | `delegated` | `-` |
 |---|---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 0 | 0 | 0 | 41 | 57 | 0 | 0 | 37 |
+| Translator and front-end refusals | 0 | 0 | 0 | 42 | 57 | 0 | 0 | 36 |
 | Binder refusals at a device limit | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
 | Translation caps | 0 | 0 | 0 | 0 | 14 | 0 | 0 | 0 |
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 5 |
@@ -48,7 +48,7 @@ Columns:
 | Devices below the runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The runtime's `Refusal` | 21 | 20 | 0 | 0 | 35 | 0 | 0 | 0 |
 | The runtime's `Limit` | 0 | 0 | 0 | 13 | 4 | 0 | 0 | 0 |
-| The runtime's `Gap` | 0 | 0 | 0 | 2 | 28 | 0 | 0 | 0 |
+| The runtime's `Gap` | 0 | 0 | 0 | 2 | 29 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -173,7 +173,7 @@ Columns:
 | `CountingVisibility` | A `Counting` visibility result (`MTLVisibilityResultModeCounting`) on a device without `occlusionQueryPrecise` | - | `-` | 0 | `rare`: counting occlusion queries on a device without precise queries |
 | `ViewFormatReinterpretation` | A texture view whose format has other components, or components of other widths, than its texture's (`RGBA8Unorm` as `R32Uint`), on a device whose... | - | `-` | 0 | `app`: a view of another component layout on a portability subset (MoltenVK) |
 | `SeparateMultisampledDepthStencil` | A render pass whose depth and stencil attachments are separate multisampled textures that it loads or may store, on a device without maintenance8 | - | `-` | 0 | `rare`: separate multisampled depth and stencil textures |
-| `PrivateMemory` | A stage whose private memory (its `thread` variables and arrays, and the constants it holds per thread) takes more Function storage a thread than... | - | `-` | via a helper: 1: `crates/metal2vulkan/src/lower/select.rs (function_storage)` | `rare`: very large per-thread arrays |
+| `PrivateMemory` | A stage whose private memory (its `thread` variables and arrays, and the constants it holds per thread) takes more Function storage a thread than... | devices without a capability the site computes (`limit`) | `device` | 1: `crates/metal2vulkan/src/lower/access/local.rs (device_arena)` | `rare`: very large per-thread arrays |
 | `SparseTextures` | A sparse heap (`MTLHeapTypeSparse`), or a texture made from one, on a device without what a sparse resident image of it needs, which `missing` names | - | `-` | 0 | `rare`: sparse heaps on a device without sparse images |
 | `TimelineSemaphores` | Command buffers and events, which the runtime completes and signals through timeline semaphores (core in Vulkan 1.2), on a device whose... | - | `-` | 0 | `none`: a device below the runtime's floor |
 | `Reflection` | Reflection of an argument whose answer Metal's has not been measured for (`reflection`) | every device (not implemented) | `ours` | 8: `crates/metal2vulkan/src/reflection/derive.rs (gap_at)`, `crates/metal2vulkan/src/reflection/derive.rs (read_attributes)` (+6) | `rare`: reflection of argument kinds Metal's answer is unmeasured for |
@@ -220,7 +220,7 @@ Columns:
 | `InstructionCount` | Instructions of the decoded module | every device (a deterministic cap) | `ours` | 8: `crates/metal2vulkan-air/src/bitcode/function.rs (call)`, `crates/metal2vulkan-air/src/bitcode/function.rs (constants)` (+4) | `rare`: very large modules |
 | `LayoutNesting` | Nesting depth of `air.struct_type_info` layouts and the argument-buffer members inside them | every device (a deterministic cap) | `ours` | 3: `crates/metal2vulkan-air/src/abi/structs.rs (finish)`, `crates/metal2vulkan-air/src/abi/structs.rs (open)` (+1) | `none`: argument-buffer layouts nested past the cap |
 | `ConstructNesting` | Nesting depth of structured constructs the structurizer emits (P8 recurses once per level) | every device (a deterministic cap) | `ours` | 2: `crates/metal2vulkan/src/structurize/emit.rs (check_tree)`, `crates/metal2vulkan/src/structurize/emit/predicate.rs (facts_of)` | `none`: control flow nested past the cap |
-| `PrivateArenaBytes` | Bytes of a function's private arena, whose pointers are `u32` byte offsets | every device (a deterministic cap) | `ours` | 3: `crates/metal2vulkan/src/lower/access/local.rs (use_arena)`, `crates/metal2vulkan/src/memory/plan.rs (place_allocas, 2 sites)` | `none`: a private arena past 4 GiB |
+| `PrivateArenaBytes` | Bytes of a function's private arena, whose pointers are `u32` byte offsets | every device (a deterministic cap) | `ours` | 4: `crates/metal2vulkan/src/lower/access/local.rs (device_arena)`, `crates/metal2vulkan/src/lower/access/local.rs (use_arena)` (+1) | `none`: a private arena past 4 GiB |
 | `CallStackBytes` | Bytes of a kernel's call stack | every device (a deterministic cap) | `ours` | 1: `crates/metal2vulkan-air/src/canon/recursion.rs (metal_stack)` | `rare`: deep visible-function call stacks |
 
 ## 4. Rate maps the compile layer does not compile (`UnpinnedCompile`)
@@ -365,6 +365,7 @@ Columns:
 | `PartialSimdgroups` | A dispatch whose threadgroup is not whole SIMD groups of a kernel whose tier runs each SIMD group as one subgroup of `width` threads (a pinned... | every device (a public call's own check of its arguments) | `ours`: no emulated-SIMD-group module | 1: `crates/metal2vulkan-runtime/src/encoder.rs (decide)` | `-` |
 | `PartialThreadgroups` | `dispatchThreads` with a grid that is not a whole number of threadgroups on some axis, of a kernel that observes its threadgroup partition and... | every device (a public call's own check of its arguments) | `ours`: the translator's partial-threadgroups variant does not take the emulated SIMD-group tier, nor a vote word past the workgroup memory | 1: `crates/metal2vulkan-runtime/src/encoder.rs (decide)` | `-` |
 | `NoStageInRegion` | A dispatch of a kernel that reads the stage-in region (`[[grid_origin]]`, `[[grid_size]]`) on an encoder that never set one... | every device (a public call's own check of its arguments) | `ours`: no replay stream dispatches such a kernel without setting a region | 1: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch)` | `-` |
+| `IndirectPrivateArena` | `dispatchThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerThreadgroup:` of a kernel whose private memory lives in the runtime's... | every device (a public call's own check of its arguments) | `ours`: no replay stream dispatches such a kernel indirectly | 1: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch)` | `-` |
 | `MemorylessTexture` | A texture of `Memoryless` storage, which only render passes use | every device (a public call's own check of its arguments) | `ours`: render passes are not built | 1: `crates/metal2vulkan-runtime/src/texture.rs (checked)` | `-` |
 | `TextureBuffer` | A texture buffer (`MTLTextureTypeTextureBuffer`) | every device (a public call's own check of its arguments) | `ours`: no texel-buffer array; no replay stream or live session has used one; harvested guest render functions declare one in an argument buffer, validation's texture_buffer_member | 2: `crates/metal2vulkan-runtime/src/texture.rs (shape, 2 sites)` | `-` |
 | `CubeArrayTexture` | A cube array texture (`MTLTextureTypeCubeArray`), and so a view of one | every device (a public call's own check of its arguments) | `ours`: no replay stream makes a cube array texture or view; built when one does | 2: `crates/metal2vulkan-runtime/src/texture.rs (checked)`, `crates/metal2vulkan-runtime/src/texture.rs (view)` | `-` |
@@ -503,7 +504,7 @@ Each refusal's sites, with the function that builds it.
 - `feature::ConstantAlphaBlendFactor`: `crates/metal2vulkan/src/metal/state.rs (check_constant_alpha)`
 - `feature::SparseTexture`: `crates/metal2vulkan/src/bind/plan/slots.rs (check_sparse_textures, 2 sites)`
 - `feature::TextureSwizzle`: `crates/metal2vulkan/src/bind/heap.rs (member_texel_view)`; `crates/metal2vulkan/src/bind/plan/resources.rs (plain_texture)`; `crates/metal2vulkan/src/lower/sampler/select.rs (select_one)`; `crates/metal2vulkan/src/lower/texture/mod.rs (select_read_as)`; `crates/metal2vulkan/src/lower/texture/mod.rs (select_write)`; `crates/metal2vulkan/src/lower/texture/slice.rs (select)`
-- `feature::PrivateMemory`: `crates/metal2vulkan/src/lower/select.rs (function_storage)`
+- `feature::PrivateMemory`: `crates/metal2vulkan/src/lower/access/local.rs (device_arena)`
 - `feature::Reflection`: `crates/metal2vulkan/src/reflection/derive.rs (gap_at)`; `crates/metal2vulkan/src/reflection/derive.rs (read_attributes)`; `crates/metal2vulkan/src/reflection/derive.rs (specialized_reads)`; `crates/metal2vulkan/src/reflection/function.rs (attribute)`; `crates/metal2vulkan/src/reflection/function.rs (module_constants)`; `crates/metal2vulkan/src/reflection/function.rs (unmeasured)`; `crates/metal2vulkan/src/reflection/linked.rs (function)`; `crates/metal2vulkan/src/reflection/mod.rs (kernel_stage)`
 - `feature::IndirectRenderState`: `crates/metal2vulkan/src/lower/access/encode.rs (select_command)`
 - `feature::GlobalBuiltinInFragment`: `crates/metal2vulkan/src/lower/select.rs (route_air)`
@@ -535,7 +536,7 @@ Each refusal's sites, with the function that builds it.
 - `limit::InstructionCount`: `crates/metal2vulkan-air/src/bitcode/function.rs (call)`; `crates/metal2vulkan-air/src/bitcode/function.rs (constants)`; `crates/metal2vulkan-air/src/bitcode/function.rs (count_record, 2 sites)`; `crates/metal2vulkan-air/src/bitcode/function.rs (decode)`; `crates/metal2vulkan-air/src/bitcode/function.rs (forward)`; `crates/metal2vulkan-air/src/bitcode/function.rs (push, 2 sites)`
 - `limit::LayoutNesting`: `crates/metal2vulkan-air/src/abi/structs.rs (finish)`; `crates/metal2vulkan-air/src/abi/structs.rs (open)`; `crates/metal2vulkan/src/bind/argument_buffer.rs (layout)`
 - `limit::ConstructNesting`: `crates/metal2vulkan/src/structurize/emit.rs (check_tree)`; `crates/metal2vulkan/src/structurize/emit/predicate.rs (facts_of)`
-- `limit::PrivateArenaBytes`: `crates/metal2vulkan/src/lower/access/local.rs (use_arena)`; `crates/metal2vulkan/src/memory/plan.rs (place_allocas, 2 sites)`
+- `limit::PrivateArenaBytes`: `crates/metal2vulkan/src/lower/access/local.rs (device_arena)`; `crates/metal2vulkan/src/lower/access/local.rs (use_arena)`; `crates/metal2vulkan/src/memory/plan.rs (place_allocas, 2 sites)`
 - `limit::CallStackBytes`: `crates/metal2vulkan-air/src/canon/recursion.rs (metal_stack)`
 - `ratemap::ScreenExtent`: `crates/metal2vulkan/src/bind/rate_map.rs (new)`
 - `ratemap::LayerCount`: `crates/metal2vulkan/src/bind/rate_map.rs (new)`
@@ -650,6 +651,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Gap::PartialSimdgroups`: `crates/metal2vulkan-runtime/src/encoder.rs (decide)`
 - `rt:Gap::PartialThreadgroups`: `crates/metal2vulkan-runtime/src/encoder.rs (decide)`
 - `rt:Gap::NoStageInRegion`: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch)`
+- `rt:Gap::IndirectPrivateArena`: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch)`
 - `rt:Gap::MemorylessTexture`: `crates/metal2vulkan-runtime/src/texture.rs (checked)`
 - `rt:Gap::TextureBuffer`: `crates/metal2vulkan-runtime/src/texture.rs (shape, 2 sites)`
 - `rt:Gap::CubeArrayTexture`: `crates/metal2vulkan-runtime/src/texture.rs (checked)`; `crates/metal2vulkan-runtime/src/texture.rs (view)`

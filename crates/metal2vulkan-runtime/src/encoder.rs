@@ -1,5 +1,6 @@
 //! Compute command encoders: their binding state, their dispatches, and where barriers go.
 
+use crate::arena;
 use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
@@ -1008,6 +1009,11 @@ impl ComputeCommandEncoder {
         if inner.whole.interface.stage_in_region && self.stage_in_region.is_none() {
             return Err(Error::Unsupported(Gap::NoStageInRegion));
         }
+        // A private arena is sized and split by the dispatch's counts, which an indirect
+        // dispatch's GPU reads alone (`crate::arena`).
+        if inner.whole.interface.private_arena.is_some() && matches!(grid, Grid::Indirect(..)) {
+            return Err(Error::Unsupported(Gap::IndirectPrivateArena));
+        }
         if let Grid::Indirect(buffer, _) = &grid {
             recording(&mut self.building).keep(buffer);
         }
@@ -1115,9 +1121,26 @@ impl ComputeCommandEncoder {
         let ids = &state.numbered.ids;
         match (direct, grid) {
             (Some((threads, groups, ragged)), _) => {
-                // A count past the device's limit on an axis is split: each piece starts at its
+                // A count past the device's limit on an axis is split, and so is one whose slots
+                // of the private arena pass its budget (`crate::arena`): each piece starts at its
                 // first threadgroup in Metal's grid, which its region carries.
-                let limit = limits.max_group_count;
+                let (limit, arena) = match interface.private_arena {
+                    None => (limits.max_group_count, None),
+                    Some(slot_bytes) => {
+                        let budget = core.arena_budget();
+                        let invocations = local.iter().map(|&n| u64::from(n)).product::<u64>();
+                        let pair = (groups, limits.max_group_count);
+                        let limit = arena::piece(pair, invocations, slot_bytes, budget);
+                        let piece = limit.iter().map(|&n| u64::from(n)).product::<u64>();
+                        let need = piece * invocations * u64::from(slot_bytes);
+                        let (block, fresh) = arena::take(&self.core, need, budget)?;
+                        let building = recording(&mut self.building);
+                        building.keep_block(&block);
+                        building.count(Metric::PrivateArenaDispatches);
+                        (limit, Some((block.memory.address, fresh)))
+                    }
+                };
+                let mut first = true;
                 for z in (0..groups[2]).step_by(limit[2] as usize) {
                     for y in (0..groups[1]).step_by(limit[1] as usize) {
                         for x in (0..groups[0]).step_by(limit[0] as usize) {
@@ -1127,10 +1150,22 @@ impl ComputeCommandEncoder {
                             });
                             let region = region(base, threads, ragged)?;
                             let bound = (&self.slots[..], &self.textures[..], &self.samplers[..]);
-                            let regions = (&region, self.stage_in_region.as_ref());
+                            let address = arena.map_or(0, |(address, _)| address);
+                            let regions = (&region, self.stage_in_region.as_ref(), address);
                             self.parameters
                                 .fill(kernel, (bound, self.facts.nil), ids, regions);
-                            recording(&mut self.building).record_dispatch(
+                            let building = recording(&mut self.building);
+                            // The piece reuses the slots the commands before it may have used:
+                            // all but the first in a block the dispatch took new, which nothing
+                            // reached before.
+                            if let Some((_, fresh)) = arena {
+                                if !(first && fresh) {
+                                    building.owe();
+                                }
+                                building.count(Metric::PrivateArenaPieces);
+                            }
+                            first = false;
+                            building.record_dispatch(
                                 core,
                                 vk_pipeline,
                                 &mut self.parameters,
@@ -1144,7 +1179,7 @@ impl ComputeCommandEncoder {
             (None, Grid::Indirect(buffer, offset)) => {
                 let region = region([0; 3], [0; 3], false)?;
                 let bound = (&self.slots[..], &self.textures[..], &self.samplers[..]);
-                let regions = (&region, self.stage_in_region.as_ref());
+                let regions = (&region, self.stage_in_region.as_ref(), 0);
                 self.parameters
                     .fill(kernel, (bound, self.facts.nil), ids, regions);
                 recording(&mut self.building).record_dispatch(
@@ -1380,7 +1415,7 @@ impl Parameters {
         kernel: &Kernel,
         (bound, (nil, zero)): (Bound<'_>, (u64, u64)),
         sampler_ids: &[u32],
-        (region, stage_in): (&[u8; 32], Option<&[u8; 32]>),
+        (region, stage_in, arena): (&[u8; 32], Option<&[u8; 32]>, u64),
     ) {
         let (slots, textures, samplers) = bound;
         let interface: &Interface = &kernel.interface;
@@ -1453,6 +1488,7 @@ impl Parameters {
                     bytes[at..at + 4].copy_from_slice(&index.to_le_bytes());
                 }
                 FieldValue::DispatchRegion => bytes[at..at + 32].copy_from_slice(region),
+                FieldValue::PrivateArena => bytes[at..at + 8].copy_from_slice(&arena.to_le_bytes()),
                 FieldValue::StageInRegion => {
                     if let Some(stage_in) = stage_in {
                         bytes[at..at + 32].copy_from_slice(stage_in);

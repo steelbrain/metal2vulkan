@@ -13,10 +13,13 @@
 //! runs up to [`METAL`], 192 KiB a thread, the most a Metal device was measured to hold, and
 //! records `PrecisionNote::FunctionStorageAssumed`: past the floor it rests on no measurement, and
 //! a driver that holds less can answer wrongly or hang the GPU, as the RTX 5080 at 48 KiB and the
-//! RTX 3090 at 192 KiB hung when probed. A kernel, an object or a mesh function past the floor is
-//! refused, as is a vertex or fragment function past [`METAL`]: typed (`Unsupported{PrivateMemory}`,
-//! or `Unsupported{Recursion}` for a stage with a call stack, needing
-//! `VkLimit::FunctionStorageBytesPerThread`).
+//! RTX 3090 at 192 KiB hung when probed. A kernel without a call stack past the floor keeps the
+//! private memory a run-time index reaches in device memory the runtime owns, one slot a thread
+//! (`memory::plan::ArenaLayout::device`, `RuntimeFact::PrivateArena`), and what is left is held
+//! to the floor. An object or a mesh function past the floor is refused, as are a kernel with a
+//! call stack past it, a tile function past it, and a vertex or fragment function past [`METAL`]:
+//! typed (`Unsupported{PrivateMemory}`, or `Unsupported{Recursion}` for a stage with a call stack,
+//! needing `VkLimit::FunctionStorageBytesPerThread`).
 //!
 //! [`ProfileFields::function_storage`]: crate::device::profile::ProfileFields::function_storage
 

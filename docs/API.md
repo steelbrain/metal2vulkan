@@ -209,7 +209,17 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   read-only signed-integer attachment joins `signed_color_attachments`. A vertex function that
   writes `[[render_target_array_index]]` compiles in the variant that writes `Layer`, which stores
   0 for an index at or past the render pass's length the consumer pushes
-  (`PushField::RenderTargetArrayLength`, `renderTargetArrayLength` at least 1). Every precision note is
+  (`PushField::RenderTargetArrayLength`, `renderTargetArrayLength` at least 1). A kernel without a
+  call stack whose private bytes pass the 16 KiB floor every device holds keeps its private memory
+  in the consumer's device memory: every alloca it indexes at run time is in its private arena,
+  whose words for an invocation are the slot of `RuntimeFact::PrivateArena { slot_bytes }` (the
+  arena's bytes rounded up to 16) at the address the consumer pushes
+  (`PushField::PrivateArenaAddress`, a `u64`, a multiple of 16) plus `i * slot_bytes`, `i` the
+  invocation's index in its Vulkan dispatch, `((wz * ny + wy) * nx + wx) * n` plus its
+  `LocalInvocationIndex` (`n` the workgroup's invocations), counted in 32 bits. The consumer
+  supplies `count * slot_bytes` bytes for each dispatch of `count` invocations, and keeps a
+  dispatch's invocations under `2^32`. The memory needs no zeros: Metal's private memory is
+  undefined until the thread writes it. Every precision note is
   static there: no constant or binder decides one. So far they lower a kernel that reaches memory
   through its buffer slots and the device addresses it loads (an argument buffer's pointer
   member, a stored `gpuAddress`) or makes from integers, and reads, writes, sizes or tests for nil

@@ -1402,7 +1402,7 @@ pub fn wrap_entry(cx: &mut EmitCx<'_>, mb: &mut ModuleBuilder, body: FuncId) -> 
         let grid = fb.load(p, access)?;
         let [x, y, z] = [0, 1, 2].map(|i| fb.composite_extract(grid, &[i]));
         let [x, y, z] = bounded_grid(cx, &mut fb, [x?, y?, z?])?;
-        let payload = cx.decl.families.access.local.payload.map(|d| d.global);
+        let payload = cx.decl.families.access.local.payload.and_then(|d| d.global);
         fb.emit_mesh_tasks(x, y, z, payload)?;
         return fb.finish();
     }

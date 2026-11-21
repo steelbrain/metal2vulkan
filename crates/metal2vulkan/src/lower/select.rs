@@ -1140,7 +1140,9 @@ pub fn selector_form(
 }
 
 /// Whether `p`'s device holds `e`'s private memory: what a driver backs with scratch, the plan's
-/// `private_bytes` (the private arena, and each typed `alloca`, call stacks among them, and each
+/// `private_bytes` (the private arena where it is not in the runtime's device memory, which a
+/// kernel's past the floor is, `memory::plan::ArenaLayout::device`; and each typed `alloca`, call
+/// stacks among them, and each
 /// constant held as a `Private` variable that an access indexes at run time), may take a thread
 /// up to `device::function_storage::ceiling`: the profile's `function_storage`, or Metal's 192 KiB
 /// for a vertex or fragment function on a device not measured. Past it the entry is
@@ -1923,7 +1925,9 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
 /// fragment function reads a colour attachment through (`PushField::FetchedColor`, framebuffer
 /// fetch on a device with neither ordered form); and the render pass's length, at or past which a
 /// vertex function that writes `[[render_target_array_index]]` stores `Layer` 0
-/// (`PushField::RenderTargetArrayLength`). Its fields past the push window are a parameter block, whose
+/// (`PushField::RenderTargetArrayLength`); and the address of the runtime's memory that holds a
+/// kernel's private arena past the floor (`PushField::PrivateArenaAddress`). Its fields past the
+/// push window are a parameter block, whose
 /// address the window holds. Its refusal names the first form the plan holds that they do not
 /// lower ([`identity_refusal`]).
 fn identity_admits(plan: &Plan) -> Result<(), Error> {
@@ -1966,6 +1970,7 @@ fn identity_refusal(plan: &Plan) -> Option<String> {
                 | PushField::AlphaTestReference
                 | PushField::FetchedColor { .. }
                 | PushField::RenderTargetArrayLength
+                | PushField::PrivateArenaAddress
         ),
     });
     if let Some(f) = field {
