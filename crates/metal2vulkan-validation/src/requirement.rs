@@ -271,6 +271,41 @@ pub enum ToolingRequirement {
     /// `setVertexBuffer:offset:attributeStride:atIndex:`, a known gap its README states, which is
     /// its guard.
     DynamicVertexStride,
+    /// An indirect command buffer of compute commands a case holds
+    /// (`executor_contract::case_requirements`). The runtime builds no compute command:
+    /// `Device::new_indirect_command_buffer` makes indexed draw commands alone
+    /// (`metal2vulkan_runtime::Gap::IndirectCommandBuffers` of `IndirectCommandsKind::CommandTypes`
+    /// for any other type), and a compute pipeline state made for indirect command buffers is
+    /// `IndirectCommandsKind::ComputeCommands`, known gaps its README states, which are its guard.
+    IndirectComputeCommands,
+    /// An indirect command buffer of render commands whose descriptor allows draws other than
+    /// indexed draws alone (`executor_contract::case_requirements`): draws of primitives, patch or
+    /// indexed patch draws, or mesh draws of threadgroups or threads. The runtime's indirect
+    /// command buffer holds indexed draws alone
+    /// (`metal2vulkan_runtime::Gap::IndirectCommandBuffers` of `IndirectCommandsKind::CommandTypes`
+    /// for any other type), and the translator refuses a kernel's encoding of any draw but an
+    /// indexed triangle draw (`Unsupported{GpuEncodedIndirectCommands, NotImplemented}`), known
+    /// gaps its README states, which are its guard.
+    IndirectDrawTypes,
+    /// An indirect command buffer of render commands that set their own pipeline state
+    /// (`inheritPipelineState` false) or draw with the executing encoder's buffers
+    /// (`inheritBuffers` true) (`executor_contract::case_requirements`). The runtime builds commands
+    /// that inherit the pipeline state and bind their own buffers alone
+    /// (`metal2vulkan_runtime::Gap::IndirectCommandBuffers` of
+    /// `IndirectCommandsKind::CommandPipelines` or `IndirectCommandsKind::InheritedBuffers`),
+    /// known gaps its README states, which are its guard.
+    IndirectCommandInheritance,
+    /// A command the host encodes into an indirect command buffer before its producer runs
+    /// (`executor_contract::case_requirements`, the command buffer's `commands`). The runtime has
+    /// no `indirectRenderCommandAtIndex:` or `indirectComputeCommandAtIndex:`: the CPU encodes no
+    /// command into its Private records, a known gap its README states, which is its guard.
+    HostEncodedIndirectCommands,
+    /// A render or compute pipeline state an argument buffer holds
+    /// (`executor_contract::case_requirements`, the case's `pipeline_states`). The runtime's
+    /// pipeline states answer no `gpuResourceID`, so no call of it gives the word a program writes
+    /// into an argument buffer's pipeline-state field, and its indirect commands set no pipeline
+    /// state of their own (`IndirectCommandsKind::CommandPipelines`).
+    ArgumentBufferPipelineState,
 }
 
 /// Every executor (the requirement leaves no case to author, or none to observe).
@@ -278,7 +313,7 @@ const AUTHORING: &[Executor] = &Executor::ALL;
 const ENGINE: &[Executor] = &[Executor::EngineCandidate];
 
 impl ToolingRequirement {
-    pub const ALL: [Self; 39] = [
+    pub const ALL: [Self; 44] = [
         Self::FunctionConstantLiteral,
         Self::VertexAttributeLiteral,
         Self::TessellationAttributeLiteral,
@@ -318,6 +353,11 @@ impl ToolingRequirement {
         Self::KernelStageInput,
         Self::RasterizationRateMap,
         Self::DynamicVertexStride,
+        Self::IndirectComputeCommands,
+        Self::IndirectDrawTypes,
+        Self::IndirectCommandInheritance,
+        Self::HostEncodedIndirectCommands,
+        Self::ArgumentBufferPipelineState,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -363,6 +403,11 @@ impl ToolingRequirement {
             Self::KernelStageInput => "kernel_stage_input",
             Self::RasterizationRateMap => "rasterization_rate_map",
             Self::DynamicVertexStride => "dynamic_vertex_stride",
+            Self::IndirectComputeCommands => "indirect_compute_commands",
+            Self::IndirectDrawTypes => "indirect_draw_types",
+            Self::IndirectCommandInheritance => "indirect_command_inheritance",
+            Self::HostEncodedIndirectCommands => "host_encoded_indirect_commands",
+            Self::ArgumentBufferPipelineState => "argument_buffer_pipeline_state",
         }
     }
 
@@ -431,7 +476,12 @@ impl ToolingRequirement {
             | Self::KernelAccelerationStructure
             | Self::KernelStageInput
             | Self::RasterizationRateMap
-            | Self::DynamicVertexStride => ENGINE,
+            | Self::DynamicVertexStride
+            | Self::IndirectComputeCommands
+            | Self::IndirectDrawTypes
+            | Self::IndirectCommandInheritance
+            | Self::HostEncodedIndirectCommands
+            | Self::ArgumentBufferPipelineState => ENGINE,
         }
     }
 
@@ -453,8 +503,12 @@ impl ToolingRequirement {
     /// [`ToolingRequirement::KernelFunctionTable`], [`ToolingRequirement::KernelImageblock`],
     /// [`ToolingRequirement::TextureBuffer`], [`ToolingRequirement::FragmentImageblock`],
     /// [`ToolingRequirement::SparseTexture`], [`ToolingRequirement::KernelAccelerationStructure`],
-    /// [`ToolingRequirement::KernelStageInput`], [`ToolingRequirement::RasterizationRateMap`] and
-    /// [`ToolingRequirement::DynamicVertexStride`], which the runtime refuses or does not build.
+    /// [`ToolingRequirement::KernelStageInput`], [`ToolingRequirement::RasterizationRateMap`],
+    /// [`ToolingRequirement::DynamicVertexStride`], [`ToolingRequirement::IndirectComputeCommands`],
+    /// [`ToolingRequirement::IndirectDrawTypes`], [`ToolingRequirement::IndirectCommandInheritance`],
+    /// [`ToolingRequirement::HostEncodedIndirectCommands`] and
+    /// [`ToolingRequirement::ArgumentBufferPipelineState`], which the runtime refuses or does not
+    /// build.
     pub const fn limit(self) -> Limit {
         match self {
             Self::KernelMinLodClamp => Limit::Metal,
@@ -474,7 +528,12 @@ impl ToolingRequirement {
             | Self::KernelAccelerationStructure
             | Self::KernelStageInput
             | Self::RasterizationRateMap
-            | Self::DynamicVertexStride => Limit::Runtime,
+            | Self::DynamicVertexStride
+            | Self::IndirectComputeCommands
+            | Self::IndirectDrawTypes
+            | Self::IndirectCommandInheritance
+            | Self::HostEncodedIndirectCommands
+            | Self::ArgumentBufferPipelineState => Limit::Runtime,
             _ => Limit::Tooling,
         }
     }
@@ -729,6 +788,23 @@ mod tests {
                 ToolingRequirement::DynamicVertexStride,
                 "dynamic_vertex_stride",
             ),
+            (
+                ToolingRequirement::IndirectComputeCommands,
+                "indirect_compute_commands",
+            ),
+            (ToolingRequirement::IndirectDrawTypes, "indirect_draw_types"),
+            (
+                ToolingRequirement::IndirectCommandInheritance,
+                "indirect_command_inheritance",
+            ),
+            (
+                ToolingRequirement::HostEncodedIndirectCommands,
+                "host_encoded_indirect_commands",
+            ),
+            (
+                ToolingRequirement::ArgumentBufferPipelineState,
+                "argument_buffer_pipeline_state",
+            ),
         ] {
             assert_eq!(requirement.stops(), [Executor::EngineCandidate]);
             assert_eq!(requirement.limit(), Limit::Runtime, "{requirement}");
@@ -799,6 +875,11 @@ mod tests {
                 ToolingRequirement::KernelStageInput,
                 ToolingRequirement::RasterizationRateMap,
                 ToolingRequirement::DynamicVertexStride,
+                ToolingRequirement::IndirectComputeCommands,
+                ToolingRequirement::IndirectDrawTypes,
+                ToolingRequirement::IndirectCommandInheritance,
+                ToolingRequirement::HostEncodedIndirectCommands,
+                ToolingRequirement::ArgumentBufferPipelineState,
             ]
         );
         for executor in Executor::ALL {

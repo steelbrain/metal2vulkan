@@ -1138,103 +1138,55 @@ fn a_restricted_row_has_its_own_engine_slot() {
     }
 }
 
-/// The checker accepts the committed public cases over pipeline-state members (a kernel's and a
-/// rasterization-disabled vertex function's), resolving their two templates, with no requirement
-/// that stops this executor, which prepares each device-free: every authored pipeline state is its
-/// authored token in its owner at its field, the word a command's pipeline field records, and the
-/// owner is created holding it there beside the authored data the function reads.
+/// The committed public cases over an indirect command buffer or a pipeline state an argument
+/// buffer holds stop this executor as they are prepared, device-free, by the runtime's limits the
+/// vocabulary names: compute commands, draws other than indexed ones, inheritance other than the
+/// pipeline state's alone, commands the host encodes, and pipeline states in an argument buffer.
 #[test]
-fn checked_pipeline_state_cases_prepare_with_their_tokens_in_their_owners() {
+fn committed_command_buffer_and_pipeline_state_cases_refuse_by_their_requirements() {
+    use ToolingRequirement::{
+        ArgumentBufferPipelineState, HostEncodedIndirectCommands, IndirectCommandInheritance,
+        IndirectComputeCommands, IndirectDrawTypes,
+    };
     let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let cases = CorpusStore::new(&root).read_all_cases().unwrap();
-    for name in [
-        "pipeline-states-beside-the-data-of-two-stages",
-        "pipeline-states-beside-the-data-a-vertex-reads",
-    ] {
-        let case = cases
-            .iter()
-            .find(|case| case.name == name)
-            .unwrap_or_else(|| panic!("the committed public case {name}"))
-            .clone();
-        let expected = case
-            .pipeline_states
-            .iter()
-            .map(|pipeline| {
-                (
-                    (pipeline.buffer_binding, pipeline.field_offset),
-                    pipeline.token,
-                )
-            })
-            .collect::<BTreeMap<_, _>>();
-        assert_eq!(
-            expected.keys().copied().collect::<Vec<_>>(),
-            [(0, 0), (0, 8)],
-            "{name}"
-        );
-        let device = DeviceType::Cpu;
-        let admitted = admit(&root, case, ExecutionRequest::EngineCandidate { device })
-            .unwrap_or_else(|error| panic!("{name}: {error}"));
-        assert_eq!(admitted.checked().pipeline_templates.len(), 2, "{name}");
-        assert_eq!(
-            crate::executor_contract::require_executor(
-                &admitted.checked().requirements(),
-                Executor::EngineCandidate
-            ),
-            Ok(()),
-            "{name}"
-        );
-        let prepared = prepare_case(device, admitted).unwrap_or_else(|error| panic!("{error}"));
-        let (objects, buffers) = match &prepared.mapped {
-            Mapped::Compute(compute) => (&compute.objects, &compute.buffers),
-            Mapped::Render(render) => (
-                &render.vertex.resources.objects,
-                &render.vertex.resources.buffers,
-            ),
-            Mapped::Mesh(_) => panic!("{name}: a kernel or vertex case maps onto no mesh draw"),
-        };
-        assert_eq!(objects, &expected, "{name}");
-        let fields = argument_buffers::field_words(
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            objects.iter().map(|(&key, &word)| (key, word)),
-        )
-        .unwrap();
-        let owner = argument_buffers::owner_bytes(buffers, 0, &fields).unwrap();
-        let word = |at: usize| u64::from_le_bytes(owner[at..at + 8].try_into().unwrap());
-        assert_eq!(
-            [word(0), word(8)],
-            [expected[&(0, 0)], expected[&(0, 8)]],
-            "{name}"
-        );
-        assert_eq!(
-            owner[16..20],
-            buffers[&0][16..20],
-            "{name}: the first scale"
-        );
-    }
-}
-
-/// The committed render replay cases (a rasterization-disabled vertex producer, the row's shape,
-/// and a kernel whose draws run on host-encoded or inherited vertex buffers) carry no requirement,
-/// and prepare device-free: the parent pipeline's token maps to the render template, a
-/// rasterization-disabled vertex function bound by its buffers alone, beside the producer's own
-/// executor case.
-#[test]
-fn checked_render_replay_cases_prepare_their_render_template() {
-    let root = metal2vulkan_devtools::validation_dir().join("corpus");
-    let cases = CorpusStore::new(&root).read_all_cases().unwrap();
-    for (name, render) in [
+    for (name, expected) in [
+        (
+            "pipeline-states-beside-the-data-of-two-stages",
+            vec![ArgumentBufferPipelineState],
+        ),
+        (
+            "pipeline-states-beside-the-data-a-vertex-reads",
+            vec![ArgumentBufferPipelineState],
+        ),
+        (
+            "execute-two-gpu-encoded-template-dispatches",
+            vec![IndirectComputeCommands, ArgumentBufferPipelineState],
+        ),
+        (
+            "gpu-encoded-buffers-keep-the-host-encoded-dispatches",
+            vec![IndirectComputeCommands, HostEncodedIndirectCommands],
+        ),
         (
             "gpu-encoded-vertex-buffers-run-the-host-encoded-draws",
-            true,
+            vec![IndirectDrawTypes, HostEncodedIndirectCommands],
         ),
         (
             "gpu-encoded-draws-run-the-host-encoded-vertex-buffers",
-            false,
+            vec![IndirectDrawTypes, HostEncodedIndirectCommands],
         ),
-        ("gpu-encoded-draws-run-the-inherited-vertex-buffers", false),
+        (
+            "gpu-encoded-draws-run-the-inherited-vertex-buffers",
+            vec![IndirectDrawTypes, IndirectCommandInheritance],
+        ),
+        (
+            "patch-draws-a-kernel-encodes-at-factor-scales-and-the-host-encodes",
+            vec![
+                IndirectDrawTypes,
+                IndirectCommandInheritance,
+                HostEncodedIndirectCommands,
+            ],
+        ),
     ] {
         let case = cases
             .iter()
@@ -1244,32 +1196,11 @@ fn checked_render_replay_cases_prepare_their_render_template() {
         let device = DeviceType::Cpu;
         let admitted = admit(&root, case, ExecutionRequest::EngineCandidate { device })
             .unwrap_or_else(|error| panic!("{name}: {error}"));
-        assert!(admitted.checked().requirements().is_empty(), "{name}");
-        let prepared = prepare_case(device, admitted).unwrap_or_else(|error| panic!("{error}"));
-        assert_eq!(
-            matches!(prepared.mapped, Mapped::Render(_)),
-            render,
-            "{name}"
-        );
-        assert_eq!(
-            prepared.templates.keys().copied().collect::<Vec<_>>(),
-            [1],
-            "{name}"
-        );
-        let TemplateCase::Render(template) = &prepared.templates[&1].mapped else {
-            panic!("{name}: the parent pipeline is a render template");
-        };
-        assert!(template.fragment.is_none(), "{name}");
-        assert_eq!(
-            template
-                .vertex
-                .resources
-                .buffers
-                .keys()
-                .copied()
-                .collect::<Vec<_>>(),
-            [0, 1],
-            "{name}"
+        let refused = prepare_case(device, admitted).err();
+        assert!(
+            matches!(&refused, Some(ExecutorError::NotSupported(NotSupported::Requirements(stops)))
+                if stops.iter().eq(&expected)),
+            "{name}: {refused:?}"
         );
     }
 }
@@ -1292,146 +1223,6 @@ fn a_replayed_draw_stays_in_its_templates_topology_class() {
     assert_eq!(replayed_draw_in_class(&lines, Primitive::LineStrip), Ok(()));
 }
 
-/// The device replay registers each compute template with its own threadgroup size and lengths, and
-/// each dispatch the host encodes into an executed compute command buffer with its pipeline (the
-/// parent's where the commands inherit it) and its regions' sizes, deduplicated in order; where the
-/// producer encodes an action, each template also registers every edge size of its own. K14b's
-/// committed case whose producer encodes the dispatches registers `icb_replay_template`'s eight
-/// sizes of 1 to 8 threads (threadgroup length 32), the one whose host encodes them only its own
-/// (groups of 8). A host command of another threadgroup size registers a second variant; one with
-/// no dispatch makes the producer's, and the template's edges, registered; a ragged host-encoded
-/// thread grid registers its edges.
-#[test]
-fn committed_compute_replay_cases_register_their_templates_variant() {
-    use crate::case::indirect_commands::HostAction;
-    use std::num::NonZeroU64;
-    let root = metal2vulkan_devtools::validation_dir().join("corpus");
-    let cases = CorpusStore::new(&root).read_all_cases().unwrap();
-    let mut lengths = [0u32; 31];
-    lengths[0] = 32;
-    let variant = |token: u64, threads: [u32; 3]| {
-        ReplayVariant::new(NonZeroU64::new(token).unwrap(), threads, lengths)
-    };
-    let prepared = |name: &str| {
-        let case = cases
-            .iter()
-            .find(|case| case.name == name)
-            .unwrap_or_else(|| panic!("the committed public case {name}"))
-            .clone();
-        let device = DeviceType::Cpu;
-        let admitted = admit(&root, case, ExecutionRequest::EngineCandidate { device })
-            .unwrap_or_else(|error| panic!("{name}: {error}"));
-        prepare_case(device, admitted).unwrap_or_else(|error| panic!("{name}: {error}"))
-    };
-    // The producer encodes the first case's actions, so its template registers every edge size
-    // of its own; the host encodes the second's.
-    let edges =
-        |token: u64| -> Vec<ReplayVariant> { (1..=8).map(|x| variant(token, [x, 1, 1])).collect() };
-    let prepared_gpu = prepared("execute-two-gpu-encoded-template-dispatches");
-    let Mapped::Compute(compute) = &prepared_gpu.mapped else {
-        panic!("a kernel case");
-    };
-    assert_eq!(
-        replay_variants(compute, &prepared_gpu.templates).unwrap(),
-        edges(1)
-    );
-    let name = "gpu-encoded-buffers-keep-the-host-encoded-dispatches";
-    let host = prepared(name);
-    let Mapped::Compute(compute) = &host.mapped else {
-        panic!("{name}: a kernel case");
-    };
-    assert_eq!(
-        replay_variants(compute, &host.templates).unwrap(),
-        [variant(2, [8, 1, 1])],
-        "{name}"
-    );
-    let prepared = prepared("gpu-encoded-buffers-keep-the-host-encoded-dispatches");
-    let Mapped::Compute(mut compute) = prepared.mapped else {
-        panic!("a kernel case");
-    };
-    let commands = &mut compute
-        .command_buffers
-        .values_mut()
-        .next()
-        .unwrap()
-        .commands;
-    let Some(HostAction::DispatchThreadgroups {
-        threads_per_threadgroup,
-        ..
-    }) = &mut commands[1].action
-    else {
-        panic!("command 1 dispatches threadgroups");
-    };
-    *threads_per_threadgroup = [4, 2, 1];
-    let first = commands[0].action.take();
-    let mut expected = vec![variant(2, [4, 2, 1])];
-    expected.extend(edges(2));
-    expected.sort_by_key(|v| v.threads_per_threadgroup);
-    assert_eq!(
-        replay_variants(&compute, &prepared.templates).unwrap(),
-        expected,
-        "a command whose action the producer encodes registers the template's edges"
-    );
-    // A host-encoded thread grid registers its regions' sizes: 10 x 3 threads in groups of 4 x 2
-    // run groups of 4 x 2, 2 x 2, 4 x 1, and 2 x 1.
-    let commands = &mut compute
-        .command_buffers
-        .values_mut()
-        .next()
-        .unwrap()
-        .commands;
-    commands[0].action = first;
-    commands[1].action = Some(HostAction::DispatchThreads {
-        grid: [10, 3, 1],
-        threads_per_threadgroup: [4, 2, 1],
-    });
-    let mut expected = vec![
-        variant(2, [2, 1, 1]),
-        variant(2, [2, 2, 1]),
-        variant(2, [4, 1, 1]),
-        variant(2, [4, 2, 1]),
-        variant(2, [8, 1, 1]),
-    ];
-    expected.sort_by_key(|v| v.threads_per_threadgroup);
-    assert_eq!(
-        replay_variants(&compute, &prepared.templates).unwrap(),
-        expected
-    );
-}
-
-/// A template the executor's context cannot replay refuses its case as it is prepared, by the
-/// requirement the vocabulary names: the committed kernel case whose patch draws run a
-/// post-tessellation template.
-#[test]
-fn a_template_the_context_cannot_replay_refuses_its_case_by_its_requirement() {
-    let root = metal2vulkan_devtools::validation_dir().join("corpus");
-    let name = "patch-draws-a-kernel-encodes-at-factor-scales-and-the-host-encodes";
-    let case = CorpusStore::new(&root)
-        .read_all_cases()
-        .unwrap()
-        .into_iter()
-        .find(|case| case.name == name)
-        .unwrap_or_else(|| panic!("the committed public case {name}"));
-    let device = DeviceType::Cpu;
-    let admitted = admit(&root, case, ExecutionRequest::EngineCandidate { device })
-        .unwrap_or_else(|error| panic!("{name}: {error}"));
-    let refused = prepare_case(device, admitted)
-        .err()
-        .expect("the context's refusal");
-    assert!(
-        matches!(&refused, ExecutorError::NotSupported(NotSupported::Requirements(requirements))
-            if requirements.contains(&ToolingRequirement::ReplayedTemplateResources)),
-        "{refused}"
-    );
-}
-
-/// K14d's committed replay cases register the variants their regions select. The producer of
-/// `gpu-encoded-ragged-grids-...` encodes every action, so its template (groups of 8 x 4, a
-/// 128-byte length) registers all 32 sizes no larger; the host of `host-encoded-over-limit-...`
-/// encodes every action, so it registers the template's own size and each of its dispatches'
-/// regions (one-thread groups, groups of 2 and their one-thread edge, and groups of 4 x 2 with
-/// their 1 x 2, 4 x 1, and 1 x 1 edges); and the replay-fault case's template (groups of 4 x 4, 64
-/// bytes) registers its 16 sizes, none with the commands' 128-byte length.
 /// A device replay records as many regions per command as keep its dispatches within the
 /// product's bound, so a range executor v92 ran is never refused for its length: 3,971 commands of
 /// 33 variants take all eight regions, 3,972 take seven (eight would be `TooManyDispatches`), and
@@ -1481,72 +1272,6 @@ fn a_long_replay_records_the_regions_its_dispatch_bound_holds() {
             reason: ReplayRefusal::TooManyDispatches { .. }
         })
     ));
-}
-
-#[test]
-fn k14d_replay_cases_register_their_regions_variants() {
-    use std::num::NonZeroU64;
-    let root = metal2vulkan_devtools::validation_dir().join("corpus");
-    let cases = CorpusStore::new(&root).read_all_cases().unwrap();
-    let registered = |name: &str| {
-        let case = cases
-            .iter()
-            .find(|case| case.name == name)
-            .unwrap_or_else(|| panic!("the committed public case {name}"))
-            .clone();
-        let device = DeviceType::Cpu;
-        let admitted = admit(&root, case, ExecutionRequest::EngineCandidate { device })
-            .unwrap_or_else(|error| panic!("{name}: {error}"));
-        let prepared =
-            prepare_case(device, admitted).unwrap_or_else(|error| panic!("{name}: {error}"));
-        let Mapped::Compute(compute) = &prepared.mapped else {
-            panic!("{name}: a kernel case");
-        };
-        replay_variants(compute, &prepared.templates).unwrap()
-    };
-    let variants = |length: u32, sizes: &[[u32; 3]]| -> Vec<ReplayVariant> {
-        let mut lengths = [0u32; 31];
-        lengths[0] = length;
-        let mut out: Vec<ReplayVariant> = sizes
-            .iter()
-            .map(|&size| ReplayVariant::new(NonZeroU64::new(1).unwrap(), size, lengths))
-            .collect();
-        out.sort_by_key(|v| v.threads_per_threadgroup);
-        out
-    };
-    let edges = |local: [u32; 3]| -> Vec<[u32; 3]> {
-        let mut out = Vec::new();
-        for z in 1..=local[2] {
-            for y in 1..=local[1] {
-                for x in 1..=local[0] {
-                    out.push([x, y, z]);
-                }
-            }
-        }
-        out
-    };
-    assert_eq!(
-        registered("gpu-encoded-ragged-grids-replay-with-the-inherited-pipeline-and-buffers"),
-        variants(128, &edges([8, 4, 1]))
-    );
-    assert_eq!(
-        registered("host-encoded-over-limit-and-ragged-dispatches-in-two-command-buffers"),
-        variants(
-            128,
-            &[
-                [1, 1, 1],
-                [1, 2, 1],
-                [2, 1, 1],
-                [4, 1, 1],
-                [4, 2, 1],
-                [8, 4, 1]
-            ]
-        )
-    );
-    assert_eq!(
-        registered("gpu-encoded-commands-of-a-length-no-variant-registers"),
-        variants(64, &edges([4, 4, 1]))
-    );
 }
 
 /// A device replay's fault refuses the row (`not_supported{bind}`) only when every reason is one of

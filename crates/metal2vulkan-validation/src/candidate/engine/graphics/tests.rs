@@ -988,6 +988,7 @@ fn render_cases_bind_argument_buffer_buffers_and_texture_arrays() {
         .filter(|case| {
             matches!(case.stage, Stage::Vertex | Stage::Fragment)
                 && !case.argument_buffer_buffers.is_empty()
+                && crate::executor_contract::case_requirements(case).is_empty()
         })
         .find_map(|case| {
             let row = sources
@@ -1180,16 +1181,12 @@ fn render_cases_bind_argument_buffer_buffers_and_texture_arrays() {
     );
 
     // An argument-buffer texture of the fragment stage is a used texture of both stages whose token
-    // follows the buffers' and whose resource id its owner holds at its field; a command buffer is
-    // its record storage, an argument-buffer buffer (initialized under its descriptor) whose guest
-    // address its owner holds, and a pipeline state is its token there; the texture's region is an
-    // output. An argument-buffer sampler is an argument sampler of the bind state whose id its
-    // owner holds at its field.
-    use crate::candidate::engine::argument_buffers::{
-        field_words, records_storage, resource_id, sampler_id,
-    };
+    // follows the buffers' and whose resource id its owner holds at its field; the texture's region
+    // is an output. An argument-buffer sampler is an argument sampler of the bind state whose id
+    // its owner holds at its field.
+    use crate::candidate::engine::argument_buffers::{field_words, resource_id, sampler_id};
     let mut members = case.clone();
-    let (texture_field, command_field, pipeline_field) = (key.1 + 64, key.1 + 72, key.1 + 80);
+    let texture_field = key.1 + 64;
     let sampler_field = key.1 + 88;
     members
         .argument_buffer_samplers
@@ -1216,29 +1213,6 @@ fn render_cases_bind_argument_buffer_buffers_and_texture_arrays() {
             bytes_b64: None,
             initial_bytes_b64: Some(b64(&[7, 8])),
         });
-    members.command_buffers.push(
-        serde_json::from_value(serde_json::json!({
-            "buffer_binding": key.0,
-            "field_offset": command_field,
-            "capacity": 1,
-            "descriptor": {"kind": "render", "max_fragment_buffer_bind_count": 0,
-                           "max_vertex_buffer_bind_count": 0,
-                           "support_dynamic_attribute_stride": false},
-            "execution_range": [0, 1],
-            "inherit_buffers": true,
-            "inherit_pipeline_state": true
-        }))
-        .unwrap(),
-    );
-    members
-        .pipeline_states
-        .push(crate::case::indirect_commands::PipelineResource {
-            buffer_binding: key.0,
-            field_offset: pipeline_field,
-            token: 3,
-            air_sha256: "22".repeat(32),
-            case_id: "33".repeat(32),
-        });
     members.output = OutputSelection::ArgumentBufferTexture {
         buffer_binding: key.0,
         field_offset: texture_field,
@@ -1264,56 +1238,14 @@ fn render_cases_bind_argument_buffer_buffers_and_texture_arrays() {
             .collect::<Vec<_>>(),
         [(key.0, texture_field)]
     );
-    let records = &fragment.argument_buffer_buffers[&(key.0, command_field)];
-    let command = &members.command_buffers[0];
-    let mut initialized = vec![0; command.record_storage_bytes().unwrap()];
-    command.initialize_records(&mut initialized).unwrap();
-    assert_eq!(records, &initialized);
-    assert_eq!(
-        fragment.command_buffers,
-        BTreeMap::from([((key.0, command_field), command.clone())])
-    );
-    assert_eq!(
-        fragment.objects,
-        BTreeMap::from([((key.0, pipeline_field), 3)])
-    );
     let member = (ShaderStage::Fragment, key.0, texture_field);
     let tokens = texture_tokens(&render).unwrap();
-    assert_eq!(tokens, BTreeMap::from([(member, 2)]));
-    // The command buffer's ID is 1, its record storage at that ID's records address with a
-    // device address of its own.
-    let command_key = (ShaderStage::Fragment, key.0, command_field);
-    let ids = records_ids(&render).unwrap();
-    assert_eq!(ids, BTreeMap::from([(command_key, 1)]));
-    assert_eq!(
-        synthetic_used_addresses(&render).unwrap()[&command_key],
-        records_storage(1, None)
-    );
-    let storage = records_storage(1, Some(0x7100_0000));
-    let embedded = BTreeMap::from([
-        ((ShaderStage::Fragment, key.0, key.1), pointee),
-        (command_key, storage),
-    ]);
+    assert_eq!(tokens, BTreeMap::from([(member, 1)]));
+    let embedded = BTreeMap::from([((ShaderStage::Fragment, key.0, key.1), pointee)]);
     let state = bind_state(&render, &addresses, &embedded, BufferRanges::default()).unwrap();
-    let [_, stored, used] = state.used_resources.as_slice() else {
+    let [_, used] = state.used_resources.as_slice() else {
         panic!("{:?}", state.used_resources);
     };
-    assert_eq!(
-        (
-            stored.class,
-            stored.token,
-            stored.gpu_address,
-            stored.device_address,
-            stored.length
-        ),
-        (
-            metal2vulkan::bind::ResourceClass::Buffer,
-            1,
-            Some(storage.guest),
-            storage.host,
-            records.len() as u64
-        )
-    );
     assert!(
         matches!(used.class, metal2vulkan::bind::ResourceClass::Texture(_)),
         "{used:?}"
@@ -1321,8 +1253,8 @@ fn render_cases_bind_argument_buffer_buffers_and_texture_arrays() {
     assert_eq!(
         (used.token, used.resource_id, used.stages),
         (
-            2,
-            Some(resource_id(2)),
+            1,
+            Some(resource_id(1)),
             RenderStages::VERTEX | RenderStages::FRAGMENT
         )
     );
@@ -1344,29 +1276,21 @@ fn render_cases_bind_argument_buffer_buffers_and_texture_arrays() {
         listed.desc,
         resources::argument_sampler_descriptor(&members.argument_buffer_samplers[0])
     );
-    let words = field_words(&embedded, &ids, &tokens, &samplers, render.objects()).unwrap();
+    let words = field_words(
+        &embedded,
+        &BTreeMap::new(),
+        &tokens,
+        &samplers,
+        std::iter::empty(),
+    )
+    .unwrap();
     assert_eq!(
         words,
         BTreeMap::from([
             ((ShaderStage::Fragment, key.0, key.1), pointee.guest),
-            (member, resource_id(2)),
-            (command_key, 1),
-            ((ShaderStage::Fragment, key.0, pipeline_field), 3),
+            (member, resource_id(1)),
             (sampler, sampler_id(0).unwrap()),
         ])
-    );
-    // The run checks each command buffer's final records: as initialized they decode, and a set
-    // fault flag (an encoding the descriptor's policy refused) fails the run.
-    let mut finals = BTreeMap::from([(command_key, records.clone())]);
-    assert_eq!(
-        argument_buffers::validate_records(render.command_buffers(), &finals),
-        Ok(())
-    );
-    finals.get_mut(&command_key).unwrap()[4] = 1;
-    assert!(
-        argument_buffers::validate_records(render.command_buffers(), &finals)
-            .unwrap_err()
-            .contains("encoding failed"),
     );
     let finals = RenderFinals {
         argument_buffer_textures: BTreeMap::from([(

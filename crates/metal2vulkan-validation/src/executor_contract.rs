@@ -19,6 +19,7 @@ use crate::air::reflect::{
     ResourceKind, ShaderInterface, ShaderStage, TextureDimension,
     TextureFormat as ReflectedTextureFormat,
 };
+use crate::case::indirect_commands::{CommandDescriptor, RenderDraws};
 use crate::case::out_of_bounds::OutOfBoundsResource;
 use crate::case::{
     AuthoredCase, DeviceBufferArrayResource, OutputSelection, Primitive, Stage, TextureFormat,
@@ -810,8 +811,11 @@ pub fn engine_source_requirements(reflection: &ShaderInterface) -> BTreeSet<Tool
 /// attachment of both aspects ([`ToolingRequirement::SeparateDepthStencil`]). So are the families
 /// the runtime builds no call for, or refuses at creation on every device: a kernel's function
 /// table, explicit imageblock, acceleration structure or stage inputs, a bound texture buffer or
-/// sparse texture, a fragment function's imageblock, a rasterization-rate map, and a vertex
-/// buffer's dynamic stride.
+/// sparse texture, a fragment function's imageblock, a rasterization-rate map, a vertex
+/// buffer's dynamic stride, an indirect command buffer of any form but kernel-encoded indexed
+/// draws that inherit the pipeline state and bind their own buffers (its compute commands, its
+/// other draw types, its other inheritance, or a command the host encodes), and a pipeline state
+/// an argument buffer holds.
 pub fn case_requirements(case: &AuthoredCase) -> BTreeSet<ToolingRequirement> {
     let render = matches!(case.stage, Stage::Vertex | Stage::Fragment);
     let kernel = case.stage == Stage::Kernel;
@@ -931,12 +935,53 @@ pub fn case_requirements(case: &AuthoredCase) -> BTreeSet<ToolingRequirement> {
             case.vertex_inputs.iter().any(|input| input.dynamic_stride),
             ToolingRequirement::DynamicVertexStride,
         ),
+        (
+            case.command_buffers
+                .iter()
+                .any(|buffer| matches!(buffer.descriptor, CommandDescriptor::Compute { .. })),
+            ToolingRequirement::IndirectComputeCommands,
+        ),
+        (
+            case.command_buffers.iter().any(|buffer| {
+                matches!(&buffer.descriptor, CommandDescriptor::Render { draws, .. }
+                    if *draws != INDEXED_DRAWS_ALONE)
+            }),
+            ToolingRequirement::IndirectDrawTypes,
+        ),
+        (
+            case.command_buffers.iter().any(|buffer| {
+                matches!(buffer.descriptor, CommandDescriptor::Render { .. })
+                    && (!buffer.inherit_pipeline_state || buffer.inherit_buffers)
+            }),
+            ToolingRequirement::IndirectCommandInheritance,
+        ),
+        (
+            case.command_buffers
+                .iter()
+                .any(|buffer| !buffer.commands.is_empty()),
+            ToolingRequirement::HostEncodedIndirectCommands,
+        ),
+        (
+            !case.pipeline_states.is_empty(),
+            ToolingRequirement::ArgumentBufferPipelineState,
+        ),
     ]
     .into_iter()
     .filter_map(|(present, requirement)| present.then_some(requirement))
     .chain(depth_range::depth_range_requirement(case))
     .collect()
 }
+
+/// The one draw type the runtime's indirect command buffer holds: indexed draws alone
+/// ([`ToolingRequirement::IndirectDrawTypes`] for any other).
+const INDEXED_DRAWS_ALONE: RenderDraws = RenderDraws {
+    primitives: false,
+    indexed: true,
+    patches: false,
+    indexed_patches: false,
+    mesh_threadgroups: false,
+    mesh_threads: false,
+};
 
 /// Every requirement of `case` against its source: what the source's structure raises
 /// ([`unsupported_source_requirements`]), what its mesh draw needs ([`mesh::mesh_requirements`]),
@@ -1777,9 +1822,12 @@ mod tests {
                 mesh_buffers: vec![],
             },
         )));
+        // The executed compute commands are the runtime's limit alone, no reflection gap.
         assert_eq!(
             require_reflection(&executing, encoding_only, &reflection, "test executor"),
-            Ok(BTreeSet::new())
+            Ok(BTreeSet::from([
+                ToolingRequirement::IndirectComputeCommands
+            ]))
         );
 
         let vertex = crate::air::reflect::interface_from_vertex(
@@ -1816,7 +1864,9 @@ mod tests {
         executing_vertex.command_buffers = executing.command_buffers.clone();
         assert_eq!(
             require_reflection(&executing_vertex, indexed, &vertex, "test executor"),
-            Ok(BTreeSet::new())
+            Ok(BTreeSet::from([
+                ToolingRequirement::IndirectComputeCommands
+            ]))
         );
         // Commands no replay observes leave the vertex function without an observed effect: a
         // fragment buffer alone, which no replayed command reads.
@@ -2024,12 +2074,20 @@ mod tests {
             assert!(!requirement(&ll), "{modeled}");
         }
 
-        // The executors' shared gate supplies authored command-buffer and pipeline handles.
+        // The executors' shared gate supplies authored command-buffer and pipeline handles; a
+        // buffer of compute commands is the runtime's limit alone, so the Metal oracle runs it.
+        let engine_only = |case: &AuthoredCase| {
+            let requirements = case_requirements(case);
+            assert!(requirements.contains(&ToolingRequirement::IndirectComputeCommands));
+            for requirement in requirements {
+                assert_eq!(requirement.stops(), [Executor::EngineCandidate]);
+            }
+        };
         let mut authored = case();
         authored.command_buffers.push(command_buffer(None));
         assert!(require_case(&authored, "test executor").is_ok());
-        assert!(case_requirements(&authored).is_empty());
-        // Host-encoded or executed commands are no executor's gap.
+        engine_only(&authored);
+        // Host-encoded or executed commands are no authoring gap.
         let mut host = command_buffer(None);
         host.commands
             .push(crate::case::indirect_commands::HostCommand {
@@ -2056,7 +2114,7 @@ mod tests {
         ] {
             let mut authored = case();
             authored.command_buffers.push(resource);
-            assert!(case_requirements(&authored).is_empty());
+            engine_only(&authored);
         }
     }
 
@@ -2890,19 +2948,6 @@ entry:
             assert_eq!(requirement.stops(), [Executor::EngineCandidate]);
         };
 
-        let mut pipelines = kernel.clone();
-        pipelines
-            .pipeline_states
-            .push(crate::case::indirect_commands::PipelineResource {
-                buffer_binding: 0,
-                field_offset: 8,
-                token: 1,
-                air_sha256: "33".repeat(32),
-                case_id: "44".repeat(32),
-            });
-        // A pipeline-state literal is an opaque id in its owner.
-        assert!(case_requirements(&pipelines).is_empty());
-
         // A kernel's imageblock, a tile function's implicit one or an explicit one, is the
         // runtime's limit.
         let mut tile = kernel.clone();
@@ -3136,6 +3181,83 @@ entry:
             &disabled,
             ToolingRequirement::RasterizationDisabledRenderTarget,
         );
+        // What the runtime builds of an indirect command buffer: kernel-encoded indexed draws that
+        // inherit the pipeline state and bind their own buffers, which raise nothing here. Its
+        // compute commands, its other draw types, its other inheritance and a command the host
+        // encodes are each the runtime's limit, and so is a pipeline state an argument buffer
+        // holds.
+        use crate::case::indirect_commands::{CommandDescriptor, HostCommand, RenderDraws};
+        let indexed = crate::case::indirect_commands::CommandBufferResource {
+            inherit_pipeline_state: true,
+            descriptor: CommandDescriptor::Render {
+                draws: INDEXED_DRAWS_ALONE,
+                max_vertex_buffer_bind_count: 1,
+                max_fragment_buffer_bind_count: 0,
+                max_object_buffer_bind_count: 0,
+                max_mesh_buffer_bind_count: 0,
+                support_dynamic_attribute_stride: false,
+            },
+            ..command_buffer(None)
+        };
+        let mut encoding = kernel.clone();
+        encoding.command_buffers = vec![indexed.clone()];
+        assert!(case_requirements(&encoding).is_empty());
+        encoding.command_buffers = vec![command_buffer(None)];
+        only(&encoding, ToolingRequirement::IndirectComputeCommands);
+        for draws in [
+            RenderDraws::default(),
+            RenderDraws {
+                patches: true,
+                ..INDEXED_DRAWS_ALONE
+            },
+            RenderDraws {
+                indexed: false,
+                mesh_threads: true,
+                ..INDEXED_DRAWS_ALONE
+            },
+        ] {
+            let mut drawn = indexed.clone();
+            if let CommandDescriptor::Render { draws: allowed, .. } = &mut drawn.descriptor {
+                *allowed = draws;
+            }
+            encoding.command_buffers = vec![drawn];
+            only(&encoding, ToolingRequirement::IndirectDrawTypes);
+        }
+        for (inherit_pipeline_state, inherit_buffers) in [(false, false), (true, true)] {
+            encoding.command_buffers =
+                vec![crate::case::indirect_commands::CommandBufferResource {
+                    inherit_pipeline_state,
+                    inherit_buffers,
+                    ..indexed.clone()
+                }];
+            only(&encoding, ToolingRequirement::IndirectCommandInheritance);
+        }
+        encoding.command_buffers = vec![crate::case::indirect_commands::CommandBufferResource {
+            commands: vec![HostCommand {
+                index: 0,
+                action: None,
+                barrier: false,
+                pipeline: None,
+                buffers: Vec::new(),
+                threadgroup_memory_lengths: Vec::new(),
+                stage_in_region: None,
+                vertex_buffers: Vec::new(),
+                fragment_buffers: Vec::new(),
+            }],
+            ..indexed
+        }];
+        only(&encoding, ToolingRequirement::HostEncodedIndirectCommands);
+        let mut holding = kernel.clone();
+        holding
+            .pipeline_states
+            .push(crate::case::indirect_commands::PipelineResource {
+                buffer_binding: 0,
+                field_offset: 0,
+                token: 1,
+                air_sha256: "33".repeat(32),
+                case_id: "44".repeat(32),
+            });
+        only(&holding, ToolingRequirement::ArgumentBufferPipelineState);
 
         // The engine's candidate draws a tessellation in any authored state.
         let mut patches = vertex.clone();

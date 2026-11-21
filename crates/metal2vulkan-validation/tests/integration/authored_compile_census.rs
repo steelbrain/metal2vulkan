@@ -261,19 +261,12 @@ fn corpus_with_templates(name: &str) -> (ScratchDir, metal2vulkan_validation::ca
     (scratch, case)
 }
 
-/// The executor's requests for a case whose executed compute command buffer the device replay
-/// runs: on a profile with device addresses, the case's pipeline and each registered variant; on
-/// one without, the command buffer is host-replayed and only the case's own pipeline. A render
-/// command buffer is always host-replayed. Both devices take the resident-table domains, the
-/// executor's own context's, which runs the command buffers. The case's kernel encodes commands,
-/// which no device lowers (`GpuEncodedIndirectCommands`), so its cell is that refusal on both, with
-/// no digest.
+/// A case over an indirect command buffer, which no candidate runs (here the runtime's limits on
+/// compute commands and on commands the host encodes), is refused in the census by those
+/// requirements, as a run's preparation refuses it: one cell per device, no compile, no digest.
 #[test]
-fn case_compiles_lists_the_replay_variants_where_the_device_replay_runs() {
-    use metal2vulkan_validation::authored_compile::compile_prepared;
-    use metal2vulkan_validation::candidate::engine::{case_compiles, prepare_case, CompileSubject};
-    use metal2vulkan_validation::check::admission::{admit, ExecutionRequest};
-    use metal2vulkan_validation::gpu::DeviceType;
+fn the_census_refuses_command_buffer_cases_by_their_requirements() {
+    use metal2vulkan_validation::authored_compile::compile_case;
     if !llvm_as_available() {
         return;
     }
@@ -282,64 +275,26 @@ fn case_compiles_lists_the_replay_variants_where_the_device_replay_runs() {
         let _ = Command::new(&program).arg("--help").output();
         CompileWorker::program(program)
     };
-    let prepared = |root: &Path, case: &metal2vulkan_validation::case::AuthoredCase| {
-        let device = DeviceType::Cpu;
-        let admitted = admit(
-            root,
-            case.clone(),
-            ExecutionRequest::EngineCandidate { device },
-        )
-        .unwrap_or_else(|error| panic!("admission: {error}"));
-        prepare_case(device, admitted).unwrap_or_else(|error| panic!("preparation: {error}"))
-    };
-    let resident = |description| {
-        metal2vulkan_validation::worker::compile::WorkerDevice::new(
-            description,
-            metal2vulkan::device::DevicePolicy::RESIDENT_TABLES,
-        )
-        .unwrap()
-    };
-    let lavapipe = resident(metal2vulkan_validation::engine::load_description("lavapipe").unwrap());
-    // A device without device addresses (`runtime-floor` without `bufferDeviceAddress`, below the
-    // runtime's floor): the GPU-encoded command buffers replay on the host there.
-    let floor = {
-        let mut description =
-            metal2vulkan_validation::engine::load_description("runtime-floor").unwrap();
-        assert!(description
-            .features
-            .remove(&metal2vulkan::device::VkFeature::BufferDeviceAddress));
-        resident(description)
-    };
-
+    let lavapipe = metal2vulkan_validation::worker::compile::WorkerDevice::new(
+        metal2vulkan_validation::engine::load_description("lavapipe").unwrap(),
+        metal2vulkan::device::DevicePolicy::RESIDENT_TABLES,
+    )
+    .unwrap();
     let (scratch, case) =
         corpus_with_templates("gpu-encoded-buffers-keep-the-host-encoded-dispatches");
-    let compute = prepared(scratch.path(), &case);
-    let on_device = case_compiles(&compute, &lavapipe).unwrap();
-    assert_eq!(on_device.host_replayed, 0);
-    assert_eq!(on_device.compiles[0].subject, CompileSubject::Case);
-    assert!(on_device.compiles.len() > 1);
-    assert!(on_device.compiles[1..]
-        .iter()
-        .all(|compile| matches!(compile.subject, CompileSubject::ReplayVariant { .. })));
-    let refused = Ok(CellOutcome::Refused(
-        "not_supported{unsupported:not_implemented GpuEncodedIndirectCommands}".into(),
-    ));
-    let cell = compile_prepared(&compute, &worker, &lavapipe);
-    assert_eq!(cell.outcome, refused, "{cell:?}");
-    assert_eq!(cell.artifact, None, "{cell:?}");
-    let on_host = case_compiles(&compute, &floor).unwrap();
-    assert_eq!(on_host.host_replayed, 1);
-    assert_eq!(on_host.compiles.len(), 1);
-    let host = compile_prepared(&compute, &worker, &floor);
-    assert_eq!(host.outcome, refused, "{host:?}");
-    assert_eq!(host.artifact, None, "{host:?}");
-
-    let (scratch, case) =
-        corpus_with_templates("gpu-encoded-vertex-buffers-run-the-host-encoded-draws");
-    let render = prepared(scratch.path(), &case);
-    let drawn = case_compiles(&render, &lavapipe).unwrap();
-    assert_eq!(drawn.host_replayed, 1);
-    assert_eq!(drawn.compiles.len(), 1);
+    let cells = compile_case(scratch.path(), &worker, &case, &[&lavapipe]);
+    assert_eq!(cells.len(), 1, "{cells:?}");
+    assert_eq!(
+        cells[0].outcome,
+        Ok(CellOutcome::Refused(
+            "not_supported{tooling_requirement:indirect_compute_commands,\
+             host_encoded_indirect_commands}"
+                .into()
+        )),
+        "{cells:?}"
+    );
+    assert_eq!(cells[0].compiles, 0, "{cells:?}");
+    assert_eq!(cells[0].artifact, None, "{cells:?}");
 }
 
 /// An object or mesh case, which no candidate draws (`mesh_render_pipeline`), still compiles its
