@@ -36,7 +36,8 @@
 //! What a state's make is given is made at the make, as Metal compiles a state when it is made:
 //! every module ([`Lowered`] holds each variant's), and each `VkPipeline` whose key the descriptor
 //! holds (a tiling kernel's tiles, an image-only kernel's square workgroups, and an observing
-//! kernel's at the descriptor's `requiredThreadsPerThreadgroup`). Nothing the runtime records
+//! kernel's at the descriptor's `requiredThreadsPerThreadgroup`, or, with none, at `[N, 1, 1]`
+//! for the bound `N` of threads its state declares). Nothing the runtime records
 //! depends on when a compile finishes: an encoding call whose `VkPipeline` is not made yet makes
 //! it and waits for it, then records, so there is one recorded form. Each such wait is a
 //! first-use wait, counted with its time
@@ -136,6 +137,11 @@ impl DispatchVariant {
         }
     }
 }
+
+/// Metal's `maxTotalThreadsPerThreadgroup` of a kernel nothing bounds: Apple's 1024, which only a
+/// declared bound brings Metal's answer below
+/// (`ComputePipelineMetalInfo::metal_max_total_threads_per_threadgroup`).
+const METAL_MAX_THREADS: u32 = 1024;
 
 /// The number the next [`Compiled`] takes: each content made has its own, never reused in the
 /// process, which a [`DispatchVariant`] names it by.
@@ -765,8 +771,11 @@ impl crate::Device {
     /// variant, whose 256-wide tile's `VkPipeline`, or an image-only kernel's 16x16 workgroups'
     /// one, is made here too, and one that does as its plain module and its partial-threadgroups
     /// variant, with the `VkPipeline`s a whole and a ragged grid run at the descriptor's
-    /// `requiredThreadsPerThreadgroup` where it sets one and the kernel takes no threadgroup
-    /// memory length from the encoder. A kernel whose tier runs only whole SIMD groups has its
+    /// `requiredThreadsPerThreadgroup` where it sets one, or else at `[N, 1, 1]` where the state
+    /// declares a bound of threads (the descriptor's `maxTotalThreadsPerThreadgroup`, or the
+    /// kernel's `[[max_total_threads_per_threadgroup(n)]]`), `N` the state's
+    /// `maxTotalThreadsPerThreadgroup`, and the kernel takes no threadgroup memory length from
+    /// the encoder. A kernel whose tier runs only whole SIMD groups has its
     /// emulated-SIMD-group variant lowered here too. The translator answers whether the kernel
     /// observes its partition without lowering, where the cache directory holds no lowering of
     /// the variant to answer it. Where the device has a cache directory
@@ -984,11 +993,20 @@ impl Compiled {
             let more = lock(&kernel.variants.more);
             kernel.make_pending(&compiled.core, more, variant, VariantStart::State, None)?;
         }
-        // An observing kernel at the descriptor's `requiredThreadsPerThreadgroup`, the size its
-        // dispatches give: the `VkPipeline`s a whole grid and a ragged one run, where the module
-        // takes no threadgroup memory length from the encoder. A make that fails here is made
-        // again by the dispatch that needs it, which reports its own error.
-        if let (Form::Sized { .. }, Some(size)) = (&compiled.form, required) {
+        // An observing kernel at the size its state gives: the descriptor's
+        // `requiredThreadsPerThreadgroup`, the size its dispatches give, or, with none, `[N, 1, 1]`
+        // where the state declares a bound of threads, `N` its `maxTotalThreadsPerThreadgroup`.
+        // The bound is declared by the descriptor's `maxTotalThreadsPerThreadgroup`, or by the
+        // kernel's `[[max_total_threads_per_threadgroup(n)]]`, which alone brings Metal's answer
+        // below its 1024; the device's own limit is no declared bound. The `VkPipeline`s a whole
+        // grid and a ragged one run are made, where the module takes no threadgroup memory length
+        // from the encoder. A make that fails here is made again by the dispatch that needs it,
+        // which reports its own error.
+        let interface = &compiled.whole.interface;
+        let declared = descriptor.max_total_threads_per_threadgroup.is_some()
+            || interface.metal_max_total_threads < METAL_MAX_THREADS;
+        let bound = declared.then_some([interface.max_total_threads, 1, 1]);
+        if let (Form::Sized { .. }, Some(size)) = (&compiled.form, required.or(bound)) {
             let ragged = size.map(|axis| axis.saturating_add(1));
             for dispatch in [Dispatch::Threadgroups([1; 3]), Dispatch::Threads(ragged)] {
                 let found = compiled.dispatched(dispatch, size, &[]);

@@ -2652,7 +2652,11 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
     /// ragged grid run at that size, so its 512 x 4 and 512 x 3 grids make nothing and wait for
     /// nothing. Every read sees the other row's word, Metal's answer: the probe
     /// `metal2vulkan-conformance/probes/row_barrier_reads.m` ran the same source over the same
-    /// grids on an Apple M3 Max under macOS 27.0.1, and no word of `seen` differed from it.
+    /// grids on an Apple M3 Max under macOS 27.0.1, and no word of `seen` differed from it. A
+    /// state whose descriptor declares `maxTotalThreadsPerThreadgroup` 64 and no required size
+    /// makes, with the state, the pipelines a whole and a ragged grid run at 64 x 1, so its first
+    /// 512 x 1 and 500 x 1 grids in 64 x 1 make nothing and wait for nothing; one row reads no
+    /// other row's word.
     #[test]
     fn every_device_keeps_a_kernel_that_reads_across_rows_after_a_barrier_at_its_own_size() {
         let Some(descriptor) = harness_kernel("row_barrier") else {
@@ -2752,9 +2756,104 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
                 (0, 0, 0),
                 "{name}: the required size's grids made nothing and waited for nothing"
             );
+            // At a declared bound and no required size, the make makes what a whole and a ragged
+            // grid run at the bound's row.
+            let mut bounded = descriptor.clone();
+            bounded.max_total_threads_per_threadgroup = Some(64);
+            let before = device.counters().metrics();
+            let bound = self::state(name, &device, &bounded);
+            let made = device.counters().metrics();
+            assert_eq!(bound.max_total_threads_per_threadgroup(), 64, "{name}");
+            assert_eq!(
+                made.pipelines_created - before.pipelines_created,
+                2,
+                "{name}: the declared bound's state: its whole and ragged grids' pipelines"
+            );
+            run(&bound, [512, 1, 1], [64, 1, 1]);
+            run(&bound, [500, 1, 1], [64, 1, 1]);
+            let after = device.counters().metrics();
+            assert_eq!(
+                (
+                    after.pipelines_created - made.pipelines_created,
+                    after.first_use_waits - made.first_use_waits,
+                ),
+                (0, 0),
+                "{name}: the declared bound's grids made nothing and waited for nothing"
+            );
             println!(
                 "{name}: row barrier reads checked in 512 x 4 and 512 x 3 in 32 x 2 and 96 x 5 in \
-                 32 x 4, at their own size"
+                 32 x 4, at their own size; declared bound 64: whole and ragged grids made with \
+                 the state"
+            );
+        });
+    }
+
+    /// `compute_thread_limit_64` declares `[[max_total_threads_per_threadgroup(64)]]` and observes
+    /// its threadgroups, with no required size: its state makes the pipelines a whole and a ragged
+    /// grid run at 64 x 1 x 1, so its first 128 x 1 and 100 x 1 grids in 64 x 1 make nothing and
+    /// wait for nothing, and each grid runs each of its threads once in threadgroups of 64. The
+    /// same kernel without the attribute, bounded only by the device, makes none with its state.
+    #[test]
+    fn every_device_makes_a_declared_bound_s_grids_with_the_state() {
+        let (Some(bounded), Some(plain)) = (
+            descriptor_of("compute_thread_limit", "compute_thread_limit_64"),
+            descriptor_of("compute_thread_limit", "compute_thread_limit_plain"),
+        ) else {
+            return;
+        };
+        each_device("compute_declared_bound", |name, _, device| {
+            let counters = device.counters();
+            let before = counters.metrics();
+            let unbounded = state(name, &device, &plain);
+            let made = counters.metrics();
+            assert_eq!(
+                made.pipelines_created - before.pipelines_created,
+                0,
+                "{name}: the device's own limit ({}) is no declared bound",
+                unbounded.max_total_threads_per_threadgroup()
+            );
+            let state = state(name, &device, &bounded);
+            let created = counters.metrics();
+            assert_eq!(state.max_total_threads_per_threadgroup(), 64, "{name}");
+            assert_eq!(
+                created.pipelines_created - made.pipelines_created,
+                2,
+                "{name}: the whole and ragged grids' pipelines, made with the state"
+            );
+            let queue = device.new_command_queue(4).expect("a queue");
+            for threads in [128, 100] {
+                let mut buffers = Buffers::new(&device, 4096);
+                let out = buffers.buffer(16);
+                write(&out, 0, &le_bytes(&[0; 4]));
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&state).expect("a state");
+                encoder.set_buffer(Some(&out), 0, 0).expect("a buffer");
+                (encoder.dispatch_threads([threads, 1, 1], [64, 1, 1]))
+                    .unwrap_or_else(|error| panic!("{name}: {threads} threads: {error}"));
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+                assert_eq!(
+                    words(&out, 0, 4),
+                    [threads, 64, 1, 1],
+                    "{name}: {threads} threads in 64"
+                );
+            }
+            let after = counters.metrics();
+            assert_eq!(
+                (
+                    after.pipelines_created - created.pipelines_created,
+                    after.first_use_waits - created.first_use_waits,
+                ),
+                (0, 0),
+                "{name}: the declared bound's grids made nothing and waited for nothing"
+            );
+            println!(
+                "{name}: declared bound 64: 128 x 1 and 100 x 1 in 64 x 1 made with the state"
             );
         });
     }

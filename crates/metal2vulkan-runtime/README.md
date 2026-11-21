@@ -2278,9 +2278,14 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
 - What a state's creation is given it makes there, as Metal compiles a state when it is made:
   every module (the kernel's, and its partial-threadgroups and emulated-SIMD-group variants), the
   `VkPipeline` of a tiling kernel's tiles or of an image-only kernel's square workgroups, and,
-  where the descriptor sets `requiredThreadsPerThreadgroup` and the kernel takes no threadgroup
-  memory length from the encoder, an observing kernel's `VkPipeline`s of a whole and of a ragged
-  grid at that size. A kernel's `VkPipeline` at a threadgroup size and threadgroup memory lengths
+  where the kernel takes no threadgroup memory length from the encoder, an observing kernel's
+  `VkPipeline`s of a whole and of a ragged grid at the descriptor's
+  `requiredThreadsPerThreadgroup`, or, where it sets none and the state declares a bound of
+  threads (the descriptor's `maxTotalThreadsPerThreadgroup` or the kernel's
+  `[[max_total_threads_per_threadgroup(n)]]`), at `[N, 1, 1]`, `N` the state's
+  `maxTotalThreadsPerThreadgroup`. The device's own limit is no declared bound, and a kernel's
+  bound of Metal's own 1024 is not told apart from none. A kernel's `VkPipeline` at a
+  threadgroup size and threadgroup memory lengths
   only a dispatch gives is made at the consumer's `prepare_dispatch` call (below) or at the
   dispatch: one per module, threadgroup size and threadgroup memory lengths, on the encoding
   thread that first dispatches any of its states with them, which waits for it. Nothing the
