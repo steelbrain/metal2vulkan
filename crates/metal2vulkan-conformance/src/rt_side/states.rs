@@ -1,10 +1,13 @@
 //! The rt side's state and target calls that the runtime has the counterpart of: a compute state's
 //! limit under its descriptor, a compute state for indirect commands (the runtime's typed refusal),
-//! a compute state of a whole descriptor, a command queue's slots, a fragment fill and a render
-//! target of the mesh family's format.
+//! a compute state of a whole descriptor, a command queue's slots, a fragment fill, an execution
+//! of a kernel-encoded indirect command buffer over a range the GPU writes, and a render target of
+//! the mesh family's format.
 
 use super::{keep, waited_for, RtSide, QUEUE_COMMAND_BUFFERS, WAIT};
-use crate::case::{Answer, FragmentFill, FragmentFilled, Handle, Side, StageInput};
+use crate::case::{
+    Answer, EncodedRange, FragmentFill, FragmentFilled, Handle, RangeWrite, Side, StageInput,
+};
 use crate::pipeline_facts::ComputeStateSpec;
 use crate::pipeline_limits::{floored, ComputeLimitsSpec, ComputeStateLimits, Creation};
 use crate::transcript::{Negative, Value};
@@ -169,6 +172,147 @@ impl RtSide<'_> {
         let at = keep(&mut self.render_pipelines, state);
         self.drawn.insert(at.0 as usize);
         let bytes = self.read_level(&target, fill.size, fill.row_pitch)?;
+        keep(&mut self.textures, target);
+        Ok(FragmentFilled { status, bytes })
+    }
+
+    /// [`Side::encoded_range`]: the runtime's indirect command buffer
+    /// (`Device::new_indirect_command_buffer`), encoded by the kernel through its
+    /// `gpu_resource_id`, and executed over the range a buffer holds
+    /// (`RenderCommandEncoder::execute_commands_in_buffer_with_range`), all in one command
+    /// buffer, the range written first as the run states.
+    pub(super) fn execute_range(&mut self, run: &EncodedRange<'_>) -> Answer<FragmentFilled> {
+        let function = |side: &Self, library: Handle, name: &str| -> Answer<rt::StageSource> {
+            let function = (side.held_library(library)?.function(name))
+                .map_err(|error| side.on.translation_failure(&error))?;
+            Ok(rt::StageSource::Function(rt::FunctionDescriptor::new(
+                function,
+            )))
+        };
+        let on = self.on;
+        // A render pipeline over one attachment of the run's format: the commands' state, or the
+        // rasterization-disabled writer of the range.
+        let render_state = |vertex: rt::StageSource, fragment: Option<rt::StageSource>| {
+            let rasterizes = fragment.is_some();
+            let mut descriptor = rt::RenderPipelineDescriptor::new(vertex);
+            descriptor.fragment = fragment;
+            descriptor.rasterization_enabled = rasterizes;
+            descriptor.support_indirect_command_buffers = rasterizes;
+            descriptor.color_attachments[0] = Some(rt::ColorAttachmentDescriptor::new(run.format));
+            (on.device)
+                .new_render_pipeline_state(&descriptor, |samplers| Ok(on.sampler_ids(samplers)))
+                .map_err(|error| on.failure(&error))
+        };
+        let kernel = rt::ComputePipelineDescriptor::new(function(self, run.library, run.kernel)?);
+        let kernel = (on.device)
+            .new_compute_pipeline_state(&kernel, |samplers| Ok(on.sampler_ids(samplers)))
+            .map_err(|error| on.failure(&error))?;
+        let state = render_state(
+            function(self, run.library, run.vertex)?,
+            Some(function(self, run.library, run.fragment)?),
+        )?;
+        let (writer, from, params) = match run.written {
+            RangeWrite::Copied { from } => (None, Some(self.held(from)?.clone()), None),
+            RangeWrite::Drawn {
+                library,
+                function: name,
+                params,
+            } => (
+                Some(render_state(function(self, library, name)?, None)?),
+                None,
+                Some(self.held(params)?.clone()),
+            ),
+        };
+        let mut descriptor = rt::IndirectCommandBufferDescriptor::new();
+        descriptor.command_types = rt::IndirectCommandType::DRAW_INDEXED;
+        descriptor.inherit_pipeline_state = true;
+        descriptor.max_vertex_buffer_bind_count = run.bind_counts[0];
+        descriptor.max_fragment_buffer_bind_count = run.bind_counts[1];
+        let icb = (on.device)
+            .new_indirect_command_buffer(&descriptor, run.commands)
+            .map_err(of_rt)?;
+        let arguments = self.buffer(&icb.gpu_resource_id().to_le_bytes())?;
+        let arguments = self.held(arguments)?.clone();
+        let cloned = |side: &Self, handles: &[Handle]| {
+            (handles.iter())
+                .map(|&handle| side.held(handle).cloned())
+                .collect::<Answer<Vec<rt::Buffer>>>()
+        };
+        let buffers = cloned(self, run.buffers)?;
+        let used = cloned(self, run.used)?;
+        let range = self.held(run.range)?.clone();
+        let [width, height] = run.size;
+        let mut target =
+            rt::TextureDescriptor::new(rt::TextureType::Type2D, run.format, width, height);
+        target.usage = rt::TextureUsage::RENDER_TARGET;
+        target.storage_mode = rt::StorageMode::Private;
+        let index = on.texture_index(target.pixel_format, target.usage);
+        let target = on.device.new_texture(&target, index).map_err(of_rt)?;
+        let command_buffer = self.queue()?.command_buffer().map_err(of_rt)?;
+
+        // The kernel encodes the commands, one thread a command.
+        let mut compute =
+            (command_buffer.compute_command_encoder(rt::DispatchType::Serial)).map_err(of_rt)?;
+        let encoded = (|| {
+            compute.set_compute_pipeline_state(&kernel).map_err(of_rt)?;
+            (compute.set_buffer(Some(&arguments), 0, 0)).map_err(of_rt)?;
+            for (index, buffer) in (1..).zip(&buffers) {
+                (compute.set_buffer(Some(buffer), 0, index)).map_err(of_rt)?;
+            }
+            let written = rt::Resource::IndirectCommandBuffer(&icb);
+            (compute.use_resource(written, rt::ResourceUsage::WRITE)).map_err(of_rt)?;
+            let threads = [run.commands, 1, 1];
+            (compute.dispatch_threads(threads, [run.commands.min(64), 1, 1])).map_err(of_rt)
+        })();
+        compute.end_encoding();
+        encoded?;
+
+        if let Some(from) = &from {
+            let mut blit = command_buffer.blit_command_encoder().map_err(of_rt)?;
+            let copied = blit.copy_from_buffer_to_buffer(from, 0, &range, run.offset, 8);
+            blit.end_encoding();
+            copied.map_err(of_rt)?;
+        }
+
+        let mut pass = rt::RenderPassDescriptor::default();
+        let attachment = &mut pass.color_attachments[0];
+        attachment.texture = Some(target.clone());
+        attachment.load_action = rt::LoadAction::Clear;
+        attachment.clear_color = rt::ClearColor {
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 0.0,
+        };
+        attachment.store_action = rt::StoreAction::Store;
+        let mut encoder = (command_buffer.render_command_encoder(&pass)).map_err(of_rt)?;
+        let encoded = (|| {
+            for buffer in &used {
+                (encoder.use_resource(rt::Resource::Buffer(buffer), rt::ResourceUsage::READ))
+                    .map_err(of_rt)?;
+            }
+            if let (Some(writer), Some(params)) = (&writer, &params) {
+                encoder.set_render_pipeline_state(writer).map_err(of_rt)?;
+                (encoder.set_vertex_buffer(Some(params), 0, 0)).map_err(of_rt)?;
+                (encoder.set_vertex_buffer(Some(&range), run.offset, 1)).map_err(of_rt)?;
+                (encoder.draw_primitives(rt::PrimitiveType::Point, 0, 2, 1, 0)).map_err(of_rt)?;
+                encoder.memory_barrier().map_err(of_rt)?;
+            }
+            encoder.set_render_pipeline_state(&state).map_err(of_rt)?;
+            (encoder.execute_commands_in_buffer_with_range(&icb, &range, run.offset)).map_err(of_rt)
+        })();
+        encoder.end_encoding();
+        encoded?;
+        command_buffer.commit().map_err(of_rt)?;
+        let status = waited_for(&command_buffer, WAIT)
+            .map_or(Value::Nothing(Negative::NeverReturned), Value::unit_variant);
+        let at = keep(&mut self.pipelines, kernel);
+        self.dispatched.insert(at.0 as usize);
+        for state in std::iter::once(state).chain(writer) {
+            let at = keep(&mut self.render_pipelines, state);
+            self.drawn.insert(at.0 as usize);
+        }
+        let bytes = self.read_level(&target, run.size, run.row_pitch)?;
         keep(&mut self.textures, target);
         Ok(FragmentFilled { status, bytes })
     }

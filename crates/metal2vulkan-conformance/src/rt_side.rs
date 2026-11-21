@@ -1625,6 +1625,13 @@ impl Side for RtSide<'_> {
         self.fill(fill)
     }
 
+    fn encoded_range(
+        &mut self,
+        run: &crate::case::EncodedRange<'_>,
+    ) -> Answer<crate::case::FragmentFilled> {
+        self.execute_range(run)
+    }
+
     fn render_target(&mut self, width: u32, height: u32) -> Answer<Handle> {
         self.mesh_target(width, height)
     }

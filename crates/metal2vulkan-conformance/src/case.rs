@@ -1519,6 +1519,22 @@ pub trait Side {
         Err(Failure::unavailable("fragment_fill"))
     }
 
+    /// Run one execution of a kernel-encoded indirect command buffer over a range the GPU writes
+    /// ([`EncodedRange`]) and answer the command buffer's status and the target's bytes.
+    ///
+    /// Both sides run it whole, in one command buffer: the indirect command buffer
+    /// (`newIndirectCommandBufferWithDescriptor:maxCommandCount:options:`), its `gpuResourceID`
+    /// in a buffer the kernel reads as an argument buffer; a compute encoder that makes the
+    /// indirect command buffer resident for writing and dispatches one thread a command; the
+    /// range's write ([`RangeWrite`]); one render pass over a private target cleared to zero
+    /// that makes the commands' buffers resident and runs
+    /// `executeCommandsInBuffer:indirectBuffer:indirectBufferOffset:`; then a blit of level 0
+    /// into a shared buffer the host reads.
+    fn encoded_range(&mut self, run: &EncodedRange<'_>) -> Answer<FragmentFilled> {
+        let _ = run;
+        Err(Failure::unavailable("encoded_range"))
+    }
+
     /// `newRenderPipelineStateWithMeshDescriptor:options:reflection:error:` of the library's
     /// functions, over `functions.attachments` color attachments of [`TARGET_FORMAT`].
     fn mesh_pipeline(&mut self, library: Handle, functions: &MeshFunctions<'_>) -> Answer<Handle> {
@@ -3140,6 +3156,61 @@ pub struct FragmentFilled {
     pub status: Value,
     /// The target's level 0, row after row at the fill's row pitch.
     pub bytes: Vec<u8>,
+}
+
+/// One execution of a kernel-encoded indirect command buffer over a range a buffer holds, which
+/// the GPU writes first: the one shape of indirect command buffer both sides build, indexed
+/// triangle draws that inherit the pipeline state and bind their own buffers, encoded by a
+/// kernel through the buffer's `gpuResourceID`.
+#[derive(Clone, Copy, Debug)]
+pub struct EncodedRange<'a> {
+    /// The library of the kernel and of the drawing functions.
+    pub library: Handle,
+    /// The kernel: thread `t` encodes command `t`, through the `command_buffer` member of the
+    /// argument buffer at its buffer 0, which holds the indirect command buffer's
+    /// `gpuResourceID` alone.
+    pub kernel: &'a str,
+    /// The kernel's buffers 1 and up, in order.
+    pub buffers: &'a [Handle],
+    /// The commands the indirect command buffer holds, which the kernel's threads encode.
+    pub commands: u32,
+    /// `maxVertexBufferBindCount` and `maxFragmentBufferBindCount`.
+    pub bind_counts: [u32; 2],
+    /// The pipeline the commands inherit: these vertex and fragment functions over one color
+    /// attachment of `format`, with `supportIndirectCommandBuffers`.
+    pub vertex: &'a str,
+    pub fragment: &'a str,
+    pub format: PixelFormat,
+    /// The target's extent in texels, cleared to zero, and the row pitch of its read-back.
+    pub size: [u32; 2],
+    pub row_pitch: u32,
+    /// The buffers the commands read through their bindings, made resident for the vertex and
+    /// fragment stages (`useResource:usage:stages:`, read).
+    pub used: &'a [Handle],
+    /// The buffer holding the range (`MTLIndirectCommandBufferExecutionRange`), and the range's
+    /// offset in it.
+    pub range: Handle,
+    pub offset: u64,
+    /// How the GPU writes the range before the execution reads it.
+    pub written: RangeWrite<'a>,
+}
+
+/// How [`EncodedRange`]'s range is written by the GPU, in the command buffer of the execution.
+#[derive(Clone, Copy, Debug)]
+pub enum RangeWrite<'a> {
+    /// `copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:` of `from`'s first 8 bytes
+    /// to the range, a blit before the pass.
+    Copied { from: Handle },
+    /// In the pass, before the execution: a rasterization-disabled pipeline of `function` (a
+    /// `vertex void` function of `library`) over the pass's attachment, `params` at vertex buffer
+    /// 0 and the range buffer at the range's offset at vertex buffer 1, `drawPrimitives:` of two
+    /// points, then `memoryBarrierWithScope:afterStages:beforeStages:` of buffers, after the
+    /// vertex stage and before the vertex and fragment stages.
+    Drawn {
+        library: Handle,
+        function: &'a str,
+        params: Handle,
+    },
 }
 
 /// The color format every mesh case's attachments take: `MTLPixelFormatRGBA32Uint`, whose texel is

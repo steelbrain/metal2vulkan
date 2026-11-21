@@ -16,11 +16,11 @@ use crate::archives::{
 };
 use crate::argument_encoders::{ArgumentDescriptorSpec, ArgumentWrite, EncoderFacts};
 use crate::case::{
-    Answer, ArgumentSlot, Bindings, CommandDraw, CoordinateProbe, Failure, FragmentFill,
-    FragmentFilled, Handle, MappedCoordinates, MeshCommand, MeshFunctions, MeshReflectionSpec,
-    MeshStep, PassOutcome, RateMapFacts, RateMapForm, RateMapLayer, RateMapRequest, SamplerSpec,
-    ShaderSource, Side, StageInRegion, StageInput, TextureRole, TextureSpec, TileFacts,
-    TilePipelineSpec, TileStep, Venue,
+    Answer, ArgumentSlot, Bindings, CommandDraw, CoordinateProbe, EncodedRange, Failure,
+    FragmentFill, FragmentFilled, Handle, MappedCoordinates, MeshCommand, MeshFunctions,
+    MeshReflectionSpec, MeshStep, PassOutcome, RangeWrite, RateMapFacts, RateMapForm, RateMapLayer,
+    RateMapRequest, SamplerSpec, ShaderSource, Side, StageInRegion, StageInput, TextureRole,
+    TextureSpec, TileFacts, TilePipelineSpec, TileStep, Venue,
 };
 use crate::command_buffer_facts::CommandBufferFacts;
 use crate::compute_descriptors::{
@@ -4575,6 +4575,212 @@ impl Side for MetalSide {
         let status = Value::unit_variant(status_word(command_buffer.status()));
         keep(&mut self.command_buffers, command_buffer);
         let bytes = self.blit_out(&target, fill.size, fill.row_pitch)?;
+        keep(&mut self.textures, target);
+        Ok(FragmentFilled { status, bytes })
+    }
+
+    fn encoded_range(&mut self, run: &EncodedRange<'_>) -> Answer<FragmentFilled> {
+        let format = MTLPixelFormat(run.format.as_raw() as usize);
+        let function = |side: &Self, library: Handle, name: &str| {
+            let library = side
+                .libraries
+                .get(library.0 as usize)
+                .ok_or_else(|| Failure::named("NoSuchHandle", format!("library {}", library.0)))?;
+            library
+                .newFunctionWithName(&NSString::from_str(name))
+                .ok_or_else(|| Failure::named("NoSuchFunction", name.to_owned()))
+        };
+        // A render pipeline over one attachment of the run's format: the commands' state, or the
+        // rasterization-disabled writer of the range.
+        let render_state =
+            |vertex: &ProtocolObject<dyn MTLFunction>,
+             fragment: Option<&ProtocolObject<dyn MTLFunction>>| {
+                let descriptor = MTLRenderPipelineDescriptor::new();
+                descriptor.setVertexFunction(Some(vertex));
+                descriptor.setFragmentFunction(fragment);
+                descriptor.setRasterizationEnabled(fragment.is_some());
+                descriptor.setSupportIndirectCommandBuffers(fragment.is_some());
+                // SAFETY: attachment 0 is inside the eight every Metal pipeline descriptor holds.
+                let attachment =
+                    unsafe { descriptor.colorAttachments().objectAtIndexedSubscript(0) };
+                attachment.setPixelFormat(format);
+                self.device
+                    .newRenderPipelineStateWithDescriptor_error(&descriptor)
+                    .map_err(|error| Failure::named("NewRenderPipelineState", error.to_string()))
+            };
+        let kernel = self
+            .device
+            .newComputePipelineStateWithFunction_error(&function(self, run.library, run.kernel)?)
+            .map_err(|error| Failure::named("NewComputePipelineState", error.to_string()))?;
+        let state = render_state(
+            &function(self, run.library, run.vertex)?,
+            Some(&function(self, run.library, run.fragment)?),
+        )?;
+        let writer = match run.written {
+            RangeWrite::Copied { .. } => None,
+            RangeWrite::Drawn {
+                library,
+                function: name,
+                ..
+            } => Some(render_state(&function(self, library, name)?, None)?),
+        };
+        let descriptor = MTLIndirectCommandBufferDescriptor::new();
+        descriptor.setCommandTypes(MTLIndirectCommandType::DrawIndexed);
+        descriptor.setInheritPipelineState(true);
+        descriptor.setInheritBuffers(false);
+        descriptor.setMaxVertexBufferBindCount(run.bind_counts[0] as usize);
+        descriptor.setMaxFragmentBufferBindCount(run.bind_counts[1] as usize);
+        // SAFETY: the kernel's threads encode exactly `commands` commands, each inside the count.
+        let icb = unsafe {
+            self.device
+                .newIndirectCommandBufferWithDescriptor_maxCommandCount_options(
+                    &descriptor,
+                    run.commands as usize,
+                    MTLResourceOptions::StorageModeShared,
+                )
+        }
+        .ok_or_else(|| {
+            Failure::named(
+                "NewIndirectCommandBuffer",
+                format!("{} commands returned nil", run.commands),
+            )
+        })?;
+        let arguments = self.buffer(&icb.gpuResourceID().to_raw().to_le_bytes())?;
+        let arguments = Retained::from(self.held(arguments)?);
+        let retained = |side: &Self, handles: &[Handle]| {
+            (handles.iter())
+                .map(|handle| side.held(*handle).map(Retained::from))
+                .collect::<Answer<Vec<Retained<ProtocolObject<dyn MTLBuffer>>>>>()
+        };
+        let buffers = retained(self, run.buffers)?;
+        let used = retained(self, run.used)?;
+        let range = Retained::from(self.held(run.range)?);
+        let [width, height] = run.size;
+        // SAFETY: the descriptor constructor reads only the format and the size it is given.
+        let target_descriptor = unsafe {
+            MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+                format,
+                width as usize,
+                height as usize,
+                false,
+            )
+        };
+        target_descriptor.setUsage(MTLTextureUsage::RenderTarget);
+        target_descriptor.setStorageMode(MTLStorageMode::Private);
+        let target = (self.device)
+            .newTextureWithDescriptor(&target_descriptor)
+            .ok_or_else(|| {
+                Failure::named(
+                    "NewTextureWithDescriptor",
+                    format!("{width}x{height} render target returned nil"),
+                )
+            })?;
+        let command_buffer = self
+            .queue
+            .commandBuffer()
+            .ok_or_else(|| Failure::named("CommandBuffer", "returned nil".to_owned()))?;
+
+        // The kernel encodes the commands, one thread a command.
+        let compute = command_buffer
+            .computeCommandEncoder()
+            .ok_or_else(|| Failure::named("ComputeCommandEncoder", "returned nil".to_owned()))?;
+        compute.setComputePipelineState(&kernel);
+        // SAFETY: each buffer is at least as long as the kernel's binding reads, and the encoder
+        // outlives the calls.
+        unsafe {
+            compute.setBuffer_offset_atIndex(Some(&arguments), 0, 0);
+            for (index, buffer) in buffers.iter().enumerate() {
+                compute.setBuffer_offset_atIndex(Some(buffer), 0, index + 1);
+            }
+        }
+        compute.useResource_usage(ProtocolObject::from_ref(&*icb), MTLResourceUsage::Write);
+        let threads = run.commands as usize;
+        compute.dispatchThreads_threadsPerThreadgroup(
+            MTLSize {
+                width: threads,
+                height: 1,
+                depth: 1,
+            },
+            MTLSize {
+                width: threads.min(64),
+                height: 1,
+                depth: 1,
+            },
+        );
+        compute.endEncoding();
+
+        if let RangeWrite::Copied { from } = run.written {
+            let from = self.held(from)?;
+            let blit = command_buffer
+                .blitCommandEncoder()
+                .ok_or_else(|| Failure::named("BlitCommandEncoder", "returned nil".to_owned()))?;
+            // SAFETY: the case's source holds 8 bytes and the range buffer 8 at the offset.
+            unsafe {
+                blit.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(
+                    from,
+                    0,
+                    &range,
+                    run.offset as usize,
+                    8,
+                );
+            }
+            blit.endEncoding();
+        }
+
+        let pass = MTLRenderPassDescriptor::renderPassDescriptor();
+        // SAFETY: attachment 0 is inside the eight every Metal pass holds.
+        let color = unsafe { pass.colorAttachments().objectAtIndexedSubscript(0) };
+        color.setTexture(Some(&target));
+        color.setLoadAction(MTLLoadAction::Clear);
+        color.setClearColor(MTLClearColor {
+            red: 0.0,
+            green: 0.0,
+            blue: 0.0,
+            alpha: 0.0,
+        });
+        color.setStoreAction(MTLStoreAction::Store);
+        let encoder = command_buffer
+            .renderCommandEncoderWithDescriptor(&pass)
+            .ok_or_else(|| Failure::named("RenderCommandEncoder", "returned nil".to_owned()))?;
+        for buffer in &used {
+            encoder.useResource_usage_stages(
+                ProtocolObject::from_ref(&**buffer),
+                MTLResourceUsage::Read,
+                MTLRenderStages::Vertex | MTLRenderStages::Fragment,
+            );
+        }
+        if let (Some(writer), RangeWrite::Drawn { params, .. }) = (&writer, run.written) {
+            let params = self.held(params)?;
+            encoder.setRenderPipelineState(writer);
+            // SAFETY: the writer reads two words of `params` and writes two words at the range's
+            // offset, which the range buffer holds; the encoder outlives the calls.
+            unsafe {
+                encoder.setVertexBuffer_offset_atIndex(Some(params), 0, 0);
+                encoder.setVertexBuffer_offset_atIndex(Some(&range), run.offset as usize, 1);
+                encoder.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::Point, 0, 2);
+            }
+            encoder.memoryBarrierWithScope_afterStages_beforeStages(
+                MTLBarrierScope::Buffers,
+                MTLRenderStages::Vertex,
+                MTLRenderStages::Vertex | MTLRenderStages::Fragment,
+            );
+        }
+        encoder.setRenderPipelineState(&state);
+        // SAFETY: the range lies at the offset of the range buffer, a multiple of 4, and the
+        // commands' state inherits the pipeline set just above.
+        unsafe {
+            encoder.executeCommandsInBuffer_indirectBuffer_indirectBufferOffset(
+                &icb,
+                &range,
+                run.offset as usize,
+            );
+        }
+        encoder.endEncoding();
+        command_buffer.commit();
+        command_buffer.waitUntilCompleted();
+        let status = Value::unit_variant(status_word(command_buffer.status()));
+        keep(&mut self.command_buffers, command_buffer);
+        let bytes = self.blit_out(&target, run.size, run.row_pitch)?;
         keep(&mut self.textures, target);
         Ok(FragmentFilled { status, bytes })
     }
