@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1319 |
 | distinct SDK items the Metal leg reaches, of any status | 804 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7535 |
+| ledger rows (a case whose gap is recorded) | 7695 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -2184,11 +2184,11 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
 | `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
 | `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to zero on… |
-| `argument-encoder-array-element` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `argument-encoder-mixed-descriptors` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `argument-encoder-ranges` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `argument-encoder-state-descriptors` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `argument-encoder-texture-sampler` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
+| `argument-encoder-array-element` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no argument encoder). The rt side of the suite a… |
+| `argument-encoder-mixed-descriptors` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no argument encoder). The rt side of the suite a… |
+| `argument-encoder-ranges` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no argument encoder). The rt side of the suite a… |
+| `argument-encoder-state-descriptors` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no argument encoder). The rt side of the suite a… |
+| `argument-encoder-texture-sampler` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no argument encoder). The rt side of the suite a… |
 | `astc-10x10-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x10_LDR with the usage the case asks, so rt makes no such … |
 | `astc-10x10-srgb` | The device's own answer (rule 1): ANV's decode of the case's sRGB blocks, read through the device's decode (notes `compressed-texel-decode` and `srgb-texel-deco… |
 | `astc-10x10-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_10x10_sRGB with the usage the case asks, so rt makes no such… |
@@ -3342,33 +3342,193 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pipeline-options-compute-undefined-bit-31` | refused: the consumer's own (MTLComputePipelineReflection, MTLRenderPipelineReflection, MTLPipelineOptionFailOnBinaryArchiveMiss, MTLPipelineOptionArgumentInfo,… |
 | `pipeline-options-compute-undefined-bit-40` | refused: the consumer's own (MTLComputePipelineReflection, MTLRenderPipelineReflection, MTLPipelineOptionFailOnBinaryArchiveMiss, MTLPipelineOptionArgumentInfo,… |
 | `pipeline-options-render-undefined-bit-40` | refused: the consumer's own (MTLComputePipelineReflection, MTLRenderPipelineReflection, MTLPipelineOptionFailOnBinaryArchiveMiss, MTLPipelineOptionArgumentInfo,… |
-| `pixel-downscales-1000x1080` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-downscales-1366x1080` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-downscales-1440x1080` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-downscales-1440x1152` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-downscales-1536x1080` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-downscales-1536x1152` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-downscales-1920x1080` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-samplers-rgba16f-linear-border` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-samplers-rgba16f-linear-edge` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-samplers-rgba16f-linear-mirror` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-samplers-rgba16f-linear-zero` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-samplers-rgba16f-nearest-border` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-samplers-rgba16f-nearest-edge` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-samplers-rgba16f-nearest-mirror` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-samplers-rgba16f-nearest-zero` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-samplers-rgba8-linear-border` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-samplers-rgba8-linear-edge` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-samplers-rgba8-linear-mirror` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-samplers-rgba8-linear-zero` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-samplers-rgba8-nearest-border` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-samplers-rgba8-nearest-edge` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-samplers-rgba8-nearest-mirror` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-samplers-rgba8-nearest-zero` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-samplers-subnormal-border` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-samplers-subnormal-edge` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-samplers-subnormal-mirror` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `pixel-samplers-subnormal-zero` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1000x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1366x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1440x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1536x1152` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-downscales-1920x1080` | The device's own answer (rule 1), every source alike: the downscale's linear sample through the texture slot's runtime pixel sampler (`slot`) hands lavapipe's n… |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba16f-linear-border` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba16f-linear-edge` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba16f-linear-mirror` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba16f-linear-mirror` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba16f-linear-mirror` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba16f-linear-zero` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba16f-nearest-mirror` | The device's own answer (rule 1): lavapipe's mirror clamp to edge at the normalized coordinates over the size. Our `norm` (an argument buffer's normalized neare… |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba8-linear-border` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba8-linear-edge` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba8-linear-mirror` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba8-linear-mirror` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba8-linear-mirror` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba8-linear-zero` | The device's own answer (rule 1), every source alike: one digest across `slot`, `arg`, `norm` and `const`, as Metal's is one. lavapipe's linear filter at the ca… |
+| `pixel-samplers-rgba8-nearest-border` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
+| `pixel-samplers-rgba8-nearest-border` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
+| `pixel-samplers-rgba8-nearest-border` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
+| `pixel-samplers-rgba8-nearest-border` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
+| `pixel-samplers-rgba8-nearest-edge` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
+| `pixel-samplers-rgba8-nearest-edge` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
+| `pixel-samplers-rgba8-nearest-edge` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
+| `pixel-samplers-rgba8-nearest-edge` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
+| `pixel-samplers-rgba8-nearest-mirror` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
+| `pixel-samplers-rgba8-nearest-mirror` | The device's own answer (rule 1): lavapipe's mirror clamp to edge at the normalized coordinates over the size. Our `norm` (an argument buffer's normalized neare… |
+| `pixel-samplers-rgba8-nearest-mirror` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
+| `pixel-samplers-rgba8-nearest-zero` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
+| `pixel-samplers-rgba8-nearest-zero` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
+| `pixel-samplers-rgba8-nearest-zero` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
+| `pixel-samplers-rgba8-nearest-zero` | The device's own answer (rule 1), every source alike: one digest across the sources, as Metal's, where every `RGBA16Float` nearest source but the mirrored `norm… |
+| `pixel-samplers-subnormal-border` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
+| `pixel-samplers-subnormal-border` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
+| `pixel-samplers-subnormal-border` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
+| `pixel-samplers-subnormal-border` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
+| `pixel-samplers-subnormal-edge` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
+| `pixel-samplers-subnormal-edge` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
+| `pixel-samplers-subnormal-edge` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
+| `pixel-samplers-subnormal-edge` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
+| `pixel-samplers-subnormal-mirror` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
+| `pixel-samplers-subnormal-mirror` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
+| `pixel-samplers-subnormal-mirror` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
+| `pixel-samplers-subnormal-zero` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
+| `pixel-samplers-subnormal-zero` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
+| `pixel-samplers-subnormal-zero` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
+| `pixel-samplers-subnormal-zero` | The device's own answer (rule 1), every source alike: one digest per answer across the sources, as Metal's. lavapipe converts the `RGBA8Unorm` texture's codes b… |
 | `read-through-a8` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
 | `read-through-half` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
 | `read-through-heap-border` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
