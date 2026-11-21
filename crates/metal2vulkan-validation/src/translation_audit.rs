@@ -41,8 +41,8 @@ const PRODUCT_FINGERPRINT: &str = env!("METAL2VULKAN_PRODUCT_FINGERPRINT");
 /// in its L3 stage, a fresh image of itself, so an attempt's peak is the larger of its
 /// translation's and its validation's, not their sum. 7: a fragment function refused for writing
 /// more colors than the profile draws at once is translated in color groups, one module a group,
-/// each checked by L3 (`engine::color_groups`).
-pub const ENGINE_CENSUS_VERSION: u32 = 7;
+/// each checked by L3. 8: such a function keeps its limit refusal.
+pub const ENGINE_CENSUS_VERSION: u32 = 8;
 
 /// The external tools a census row can depend on: `llvm-as` (a public row's bitcode) and
 /// `spirv-val` (L3). Each is keyed by its `--version` output.

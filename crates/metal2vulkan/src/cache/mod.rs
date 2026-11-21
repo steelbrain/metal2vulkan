@@ -61,7 +61,7 @@ mod tests;
 /// unchanged version, and its bless records the version. Independent of the crate's version and of
 /// [`ARTIFACT_FORMAT_VERSION`]. The commit that bumps it says what changed; this comment keeps no
 /// history.
-pub const SEMANTICS_VERSION: u32 = 2227;
+pub const SEMANTICS_VERSION: u32 = 2228;
 
 /// The byte-layout version of encoded artifacts (`CompiledFunction::to_bytes` and the
 /// [`PipelineArtifact`] encodings). Every encoded artifact carries it, and a decode under another
@@ -71,7 +71,7 @@ pub const SEMANTICS_VERSION: u32 = 2227;
 /// re-typed in an encoded type, its `codec` body or its `envelope`. A variant removed while its tag
 /// stays unused needs no bump: an entry holding it fails to decode, which is a miss. The commit that
 /// bumps it says what changed; this comment keeps no history.
-pub const ARTIFACT_FORMAT_VERSION: u32 = 572;
+pub const ARTIFACT_FORMAT_VERSION: u32 = 573;
 
 /// The version of what this crate's runtime does with a compiled pipeline: instantiating a binding
 /// plan (`BindingPlan::instantiate_*`: descriptor ranges, push bytes, root, argument, and handle
@@ -459,18 +459,6 @@ pub struct VariantKey {
     /// as that 1D texture and reads it. The plan of a pipeline compiled under it states it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub open_cl_lines: BTreeSet<SlotRef>,
-    /// The group of the render pipeline's color attachments the variant draws, where the device
-    /// draws them in groups (`crate::pipeline::ColorGroup`, `GraphicsState::color_group`): its
-    /// fragment function writes that group's attachments alone, at locations `0..`
-    /// (`LoweringInputs::color_group`), and its graphics state holds them alone. The key's other
-    /// choices of colors (`zeroed_colors`, `dropped_colors`, `interlocked_colors`) then name the
-    /// group's locations, as a bind plan of the variant over its
-    /// group's part of the pass asks for them; no bind plan sets the group itself. 0, the first
-    /// group, by default; a group past the pipeline's last is no plan's (an invariant). Not a
-    /// lowering input of its own: the render pipeline's compile derives the fragment function's
-    /// from it, the descriptor and the profile.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub color_group: u32,
     /// The render pipeline draws a rasterization-rate-mapped pass's regions several at a time,
     /// each one draw of a multi-draw whose index selects its viewport and scissor
     /// (`BindShape::region_viewports`): its vertex function stores `ViewportIndex` as `DrawIndex`
@@ -592,7 +580,6 @@ impl VariantKey {
             && self.cross_class.is_empty()
             && self.anisotropic_samplers.is_empty()
             && self.open_cl_lines.is_empty()
-            && self.color_group == 0
             && !self.region_viewports
             && self.region_fan_out.is_none()
     }

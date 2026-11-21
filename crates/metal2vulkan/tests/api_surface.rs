@@ -401,7 +401,6 @@ surface! {
         struct AmplificationDraws N;
         struct BlendEquation N;
         enum ChannelWrite N;
-        struct ColorGroup N;
         struct ExtendedRangeColor N;
         enum FactorLane N;
         struct FetchedAttachment N;

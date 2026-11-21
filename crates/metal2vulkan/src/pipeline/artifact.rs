@@ -1942,20 +1942,6 @@ pub enum PrecisionNote {
     /// unless the stage records it outright for another conversion. Validation derives no
     /// tolerance from it.
     DevicePackConversion,
-    /// A render pipeline whose color attachments the device draws in more than one group
-    /// (`GraphicsState::color_group`, the module docs of `pipeline::compile::color_group`): a
-    /// device without Metal's eight color attachments draws each of its draws once per group,
-    /// each group's variant writing that group's attachments over its own copy of the depth and
-    /// stencil the pass loads. Every variant's vertex stage is the same module, its `Position`
-    /// decorated `Invariant`, and every fragment variant computes `FragDepth`, `SampleMask` and
-    /// `FragStencilRefEXT` by the same expressions, decorated `Invariant` (SPIR-V: "computed
-    /// invariantly with respect to other shaders computing the same expressions"). Vulkan's
-    /// invariance appendix promises no more across pipelines of other fragment modules and
-    /// attachments (its Rule 4 holds for "identical pipelines", its Corollary 1 across the state
-    /// of its Rule 2). **Residual:** groups past the first may differ at discard or depth edges if
-    /// the driver compiles the variants differently. Nothing broader. Recorded only by a fragment
-    /// stage of such a pipeline. Validation derives no tolerance from it.
-    ColorAttachmentGroups,
     /// A tessellation pipeline drawn through the device's tessellation stages (a device with
     /// `tessellationShader`), on every device (no Vulkan query tells Apple's tessellator apart):
     /// the device's tessellator orders each patch's triangles and picks each one's first corner,

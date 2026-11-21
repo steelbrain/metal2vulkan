@@ -2201,19 +2201,6 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     }
     let (returned, tys) = output_types(cx)?;
     cx.families.stage_io.returned = returned;
-    // A fragment function of one of its pipeline's color groups (`LoweringInputs::color_group`),
-    // its colors renumbered before planning (`pipeline::compile::color_group::entry`): stated for
-    // link, and, where the pipeline takes more than one group, its per-fragment outputs invariant
-    // across the groups' variants, and the note of what is not.
-    if cx.stage == Stage::Fragment {
-        if let Some(group) = cx.inputs.color_group.clone() {
-            if group.groups() > 1 {
-                cx.families.stage_io.invariant_fragment_outputs = true;
-                cx.precision.insert(PrecisionNote::ColorAttachmentGroups);
-            }
-            cx.families.stage_io.interface.color_group = Some(group);
-        }
-    }
     // A fragment function compiled for a multisampled pipeline reads `[[position]]` at the pixel
     // center.
     cx.families.stage_io.interface.multisampled =

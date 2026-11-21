@@ -381,12 +381,6 @@ pub struct StageIo {
     /// Empty for every other function.
     #[cfg_attr(feature = "serde", serde(default))]
     pub zero_indices: Vec<StageBuiltin>,
-    /// The group of its render pipeline's color attachments the fragment function writes
-    /// (`LoweringInputs::color_group`): its colors at locations `0..`. Link refuses the function
-    /// in a pipeline variant of another group (`NeedsInput(ColorWrites)`). `None` for a function
-    /// compiled with each color at its own index, and for every other function.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub color_group: Option<crate::pipeline::lower_inputs::ColorGroup>,
 }
 
 /// The samplers a fragment function makes depth comparisons through ([`StageIo::depth_compares`]),

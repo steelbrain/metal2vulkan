@@ -10,21 +10,19 @@
 //! error taxonomy, never a second list of reasons.
 
 use crate::l3::L3Failure;
-use metal2vulkan::device::VkLimit;
 use metal2vulkan::device::{DevicePolicy, DeviceProfile, Requirements};
 use metal2vulkan::error::{
-    CanonError, Capability, Error, ErrorClass, Feature, InputError, InputErrorKind, InternalError,
-    InternalKind, Limit, Location, Needs, RuntimeInput,
+    CanonError, Capability, Error, ErrorClass, Feature, InputError, InputErrorKind, InternalKind,
+    Limit, Location, Needs, RuntimeInput,
 };
 use metal2vulkan::library::{CompiledFunction, FunctionConstantValues};
 use metal2vulkan::pipeline::{
-    ColorGroup, CompileReport, EntryDescriptor, EntryRef, LoweringInputs, PipelineLayout,
+    CompileReport, EntryDescriptor, EntryRef, LoweringInputs, PipelineLayout,
 };
 use metal2vulkan::Budget;
-use metal2vulkan_air::abi::{AbiInt, OutputRole, Stage as AbiStage};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -553,10 +551,7 @@ pub fn bounded_detail(detail: &str) -> String {
 /// that reads `[[stage_in]]` attributes asks for its stage-input descriptor
 /// (`NeedsInput(StageInputDescriptor)`): it is translated again, on a fresh meter, under the one
 /// its AIR implies (`executor_contract::stage_inputs::implied_descriptor`), and keeps the
-/// `NeedsInput` when the tool cannot derive one. A fragment function refused for writing more
-/// colors than the profile draws at once is translated as the render pipeline of its own colors
-/// draws it there, in color groups (`color_groups`): one module a group, each linked and checked
-/// by L3.
+/// `NeedsInput` when the tool cannot derive one.
 ///
 /// `deadline` is the per-attempt wall deadline of the engine's meter. Every stage runs under
 /// `catch_unwind`, so a panic is an outcome, never an unwind into the caller.
@@ -589,115 +584,25 @@ pub fn translate_new_unvalidated(
     deadline: Option<Instant>,
 ) -> (Attempt, Option<PendingL3>) {
     let descriptor = EntryDescriptor::new(bitcode, EntryRef::Name(entry));
-    translate_modules_unvalidated(profile, deadline, |budget| {
-        let (compiled, report) =
-            match profile.compile_entry(&descriptor, &LoweringInputs::new(), budget) {
-                (Err(e @ Error::NeedsInput(RuntimeInput::StageInputDescriptor { .. })), report) => {
-                    match crate::executor_contract::stage_inputs::implied_descriptor(
-                        bitcode,
-                        entry,
-                        &FunctionConstantValues::defaults(),
-                    ) {
-                        Ok(Some(stage_input)) => {
-                            let mut inputs = LoweringInputs::new();
-                            inputs.stage_input = Some(stage_input);
-                            profile.compile_entry(&descriptor, &inputs, budget)
-                        }
-                        Ok(None) | Err(_) => (Err(e), report),
+    translate_unvalidated(profile, deadline, |budget| {
+        match profile.compile_entry(&descriptor, &LoweringInputs::new(), budget) {
+            (Err(e @ Error::NeedsInput(RuntimeInput::StageInputDescriptor { .. })), report) => {
+                match crate::executor_contract::stage_inputs::implied_descriptor(
+                    bitcode,
+                    entry,
+                    &FunctionConstantValues::defaults(),
+                ) {
+                    Ok(Some(stage_input)) => {
+                        let mut inputs = LoweringInputs::new();
+                        inputs.stage_input = Some(stage_input);
+                        profile.compile_entry(&descriptor, &inputs, budget)
                     }
+                    Ok(None) | Err(_) => (Err(e), report),
                 }
-                other => other,
-            };
-        match compiled {
-            Err(refusal) if color_limit(&refusal) => {
-                color_groups(profile, &descriptor, budget, (refusal, report))
             }
-            compiled => (compiled.map(|function| vec![function]), report),
+            other => other,
         }
     })
-}
-
-/// Whether `error` is the refusal of a function's color outputs past what the profile draws at
-/// once (`InterfaceComponents` at `MaxFragmentOutputAttachments` or `MaxColorAttachments`).
-fn color_limit(error: &Error) -> bool {
-    let Error::Unsupported(u) = error else {
-        return false;
-    };
-    let limit = |c: &Capability| {
-        matches!(
-            c,
-            Capability::Limit {
-                limit: VkLimit::MaxFragmentOutputAttachments | VkLimit::MaxColorAttachments,
-                ..
-            }
-        )
-    };
-    u.feature == Feature::InterfaceComponents
-        && matches!(&u.needs, Needs::AnyOf(sets) if sets.iter().flatten().any(limit))
-}
-
-/// The fragment function of `descriptor`, refused alone for writing more colors than `profile`
-/// draws at once (`refusal`, after `report`), compiled as each color group of the render pipeline
-/// whose attachments are the colors it writes ([`ColorGroup::of`], `LoweringInputs::color_group`),
-/// as the runtime draws that pipeline on the profile (`pipeline::compile::color_group`): every
-/// group's module, in group order, or the first group's refusal. A function that is not a fragment
-/// function, or whose colors take no group, keeps `refusal`, and so does one of more groups that
-/// writes memory, which the pipeline's link refuses so ([`CompiledFunction::writes_memory`]).
-/// Each compile runs on a fresh meter of `budget`; the report is their total work and their
-/// highest ledger peak.
-fn color_groups(
-    profile: &DeviceProfile,
-    descriptor: &EntryDescriptor<'_>,
-    budget: &Budget,
-    (refusal, report): (Error, CompileReport),
-) -> (Result<Vec<CompiledFunction>, Error>, CompileReport) {
-    let present: BTreeSet<u32> =
-        match profile.specialized_entry(descriptor, &LoweringInputs::new(), budget) {
-            Ok(entry) if matches!(entry.ep.stage, AbiStage::Fragment { .. }) => entry
-                .ep
-                .outputs
-                .iter()
-                .filter_map(|output| match output.role {
-                    OutputRole::RenderTarget {
-                        attachment: AbiInt::Const(color),
-                        ..
-                    } => Some(color),
-                    _ => None,
-                })
-                .collect(),
-            Ok(_) | Err(_) => return (Err(refusal), report),
-        };
-    let width = ColorGroup::width_on(profile);
-    let Some(grouping) = ColorGroup::of(present.into_iter().collect(), width, 0) else {
-        return (Err(refusal), report);
-    };
-    let mut total = report;
-    let mut modules = Vec::with_capacity(grouping.groups() as usize);
-    for group in 0..grouping.groups() {
-        let Some(of_group) = ColorGroup::of(grouping.present.clone(), width, group) else {
-            return (Err(refusal), total);
-        };
-        // The colors of the other groups, at their locations past the group's, have no
-        // attachment in the group's pipeline: stored nowhere, as `compile_render_variant` compiles
-        // the group's variant (`LoweringInputs::unattached_colors`).
-        let mut inputs = LoweringInputs::new();
-        inputs.unattached_colors = (grouping.present.iter())
-            .filter(|color| !of_group.colors().contains(color))
-            .map(|&color| of_group.location(color))
-            .collect();
-        inputs.color_group = Some(of_group);
-        let (compiled, report) = profile.compile_entry(descriptor, &inputs, budget);
-        total.work_units += report.work_units;
-        total.ledger_peak = total.ledger_peak.max(report.ledger_peak);
-        match compiled {
-            Ok(function) => modules.push(function),
-            Err(error) => return (Err(error), total),
-        }
-    }
-    if grouping.groups() > 1 && modules.iter().any(CompiledFunction::writes_memory) {
-        return (Err(refusal), total);
-    }
-    (Ok(modules), total)
 }
 
 /// One engine attempt whose compile `compile` makes under the per-attempt wall deadline
@@ -741,22 +646,6 @@ pub fn translate_unvalidated(
     deadline: Option<Instant>,
     compile: impl FnOnce(&Budget) -> (Result<CompiledFunction, Error>, CompileReport),
 ) -> (Attempt, Option<PendingL3>) {
-    translate_modules_unvalidated(profile, deadline, |budget| {
-        let (compiled, report) = compile(budget);
-        (compiled.map(|function| vec![function]), report)
-    })
-}
-
-/// [`translate_unvalidated`] of a compile that may make several modules of the one function, its
-/// color groups' ([`color_groups`]): each is linked alone, relocated and checked against
-/// `profile` as one module is, and the first refusal is the attempt's. The attempt's words are
-/// theirs together, its hash that of their bytes in order, and its strategies' words their sums;
-/// L3 checks every module ([`PendingL3`]).
-fn translate_modules_unvalidated(
-    profile: &DeviceProfile,
-    deadline: Option<Instant>,
-    compile: impl FnOnce(&Budget) -> (Result<Vec<CompiledFunction>, Error>, CompileReport),
-) -> (Attempt, Option<PendingL3>) {
     let budget = Budget::with_deadline(deadline);
     // The allocator window is exactly the compiles' scope: everything their ledgers are charged
     // for (decode through serialization) and nothing after it.
@@ -772,23 +661,8 @@ fn translate_modules_unvalidated(
             spirv_sha256: None,
         })
     };
-    let no_module = || {
-        Error::Internal(InternalError::new(
-            InternalKind::Invariant,
-            "a compile that made no module",
-        ))
-    };
-    let (functions, report) = match compiled {
-        Ok((Ok(functions), report)) if !functions.is_empty() => (functions, report),
-        Ok((Ok(_), report)) => {
-            return (
-                Attempt {
-                    cost: cost(report, BTreeMap::new()),
-                    ..error_attempt(&no_module())
-                },
-                None,
-            )
-        }
+    let (function, report) = match compiled {
+        Ok((Ok(function), report)) => (function, report),
         Ok((Err(error), report)) => {
             return (
                 Attempt {
@@ -809,42 +683,26 @@ fn translate_modules_unvalidated(
         }
     };
     let mut strategy_words = BTreeMap::new();
-    for function in &functions {
-        for (name, used) in &function.strategies().entries {
-            *strategy_words.entry(name.clone()).or_insert(0) += used.words;
-        }
+    for (name, used) in &function.strategies().entries {
+        *strategy_words.entry(name.clone()).or_insert(0) += used.words;
     }
     let cost = cost(report, strategy_words);
     let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let mut modules = Vec::with_capacity(functions.len());
-        for function in &functions {
-            let module = profile.link_standalone(function).map_err(Err)?;
-            crate::l3::check_requirements(function.requirements(), profile).map_err(Ok)?;
-            modules.push(PendingModule {
-                plan: L3Plan::of(profile, function.requirements()),
-                words: module.words,
-                layout: module.layout,
-            });
-        }
-        let mut modules = modules.into_iter();
-        let first = modules.next().ok_or_else(|| Err(no_module()))?;
+        let module = profile.link_standalone(&function).map_err(Err)?;
+        crate::l3::check_requirements(function.requirements(), profile).map_err(Ok)?;
         Ok::<_, Result<L3Failure, Error>>(PendingL3 {
-            plan: first.plan,
-            words: first.words,
-            layout: first.layout,
-            groups: modules.collect(),
+            plan: L3Plan::of(profile, function.requirements()),
+            words: module.words,
+            layout: module.layout,
         })
     }));
     match run {
         Ok(Ok(pending)) => {
-            let bytes: Vec<u8> = pending
-                .modules()
-                .flat_map(|(words, _)| words.iter().flat_map(|w| w.to_le_bytes()))
-                .collect();
+            let bytes: Vec<u8> = pending.words.iter().flat_map(|w| w.to_le_bytes()).collect();
             let attempt = Attempt {
                 outcome: Outcome::Translated,
                 detail: None,
-                words: Some(pending.modules().map(|(words, _)| words.len() as u64).sum()),
+                words: Some(pending.words.len() as u64),
                 cost: cost.map(|cost| AttemptCost {
                     spirv_sha256: Some(crate::hash::sha256_bytes(&bytes)),
                     ..cost
@@ -919,20 +777,9 @@ impl L3Plan {
 }
 
 /// A module [`translate_unvalidated`] linked, relocated, and found within the profile, which
-/// `spirv-val` has yet to check: its words, the pipeline layout link gave it alone, and L3's plan;
-/// for a function translated in color groups (`color_groups`), the first group's, and the later
-/// groups' modules, which L3 checks after it.
+/// `spirv-val` has yet to check: its words, the pipeline layout link gave it alone, and L3's plan.
 #[derive(Debug)]
 pub struct PendingL3 {
-    pub words: Vec<u32>,
-    pub layout: PipelineLayout,
-    pub plan: L3Plan,
-    pub groups: Vec<PendingModule>,
-}
-
-/// A later color group's module of a [`PendingL3`]: its words, its layout and L3's plan for it.
-#[derive(Debug)]
-pub struct PendingModule {
     pub words: Vec<u32>,
     pub layout: PipelineLayout,
     pub plan: L3Plan,
@@ -940,8 +787,7 @@ pub struct PendingModule {
 
 impl PendingL3 {
     /// L3's `spirv-val` in this process: `attempt` (as it stands if the module is accepted) as L3
-    /// leaves it ([`Attempt::settle_l3`]), with the words and layout when it accepts them (the
-    /// first group's, for a function translated in color groups).
+    /// leaves it ([`Attempt::settle_l3`]), with the words and layout when it accepts them.
     pub fn validate(self, mut attempt: Attempt) -> (Attempt, Option<(Vec<u32>, PipelineLayout)>) {
         let linked = attempt
             .settle_l3(self.check())
@@ -949,22 +795,11 @@ impl PendingL3 {
         (attempt, linked)
     }
 
-    /// L3's `spirv-val` on each module in this process, in order, under `catch_unwind`: the
-    /// first failure, else success.
+    /// L3's `spirv-val` on the module in this process, under `catch_unwind`.
     pub fn check(&self) -> std::thread::Result<Result<(), L3Failure>> {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.modules()
-                .try_for_each(|(words, plan)| plan.check(words))
+            self.plan.check(&self.words)
         }))
-    }
-
-    /// Each module's words and L3's plan for it, the first group's first.
-    pub fn modules(&self) -> impl Iterator<Item = (&[u32], &L3Plan)> {
-        std::iter::once((self.words.as_slice(), &self.plan)).chain(
-            self.groups
-                .iter()
-                .map(|module| (module.words.as_slice(), &module.plan)),
-        )
     }
 }
 
@@ -1538,13 +1373,11 @@ mod tests {
     }
 
     /// A fragment function of more colors than a device draws at once (four: `runtime-floor` with
-    /// four color attachments, below the runtime's floor of eight), refused alone, is
-    /// translated as each color group of the pipeline of its colors, every module checked by L3:
-    /// five and seven colors in two groups, colors 0 and 5 in one renumbered. One that writes
-    /// memory keeps its limit refusal, which a pipeline of more groups meets at link. On lavapipe
-    /// (eight) each is one module, as it was.
+    /// four color attachments, below the runtime's floor of eight) keeps its limit refusal:
+    /// five and seven colors, colors 0 and 5, and one that writes memory. On lavapipe (eight)
+    /// each translates.
     #[test]
-    fn a_fragment_function_of_more_colors_than_the_floor_translates_in_color_groups() {
+    fn a_fragment_function_of_more_colors_than_the_device_draws_is_refused() {
         use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
         let bitcode = match llvm_assemble(&engine_dir().join("color_groups.ll")) {
             Ok(bytes) => bytes,
@@ -1567,28 +1400,18 @@ mod tests {
             .clone()
         };
         let lavapipe = load_profile("lavapipe").unwrap();
-        for (stem, profile, groups) in [("four colors", four, 2), ("lavapipe", lavapipe, 1)] {
-            for (entry, modules) in [("cg_five", groups), ("cg_seven", groups), ("cg_sparse", 1)] {
-                let (attempt, pending) = translate_new_unvalidated(&bitcode, entry, &profile, None);
-                assert_eq!(attempt.outcome, Outcome::Translated, "{entry} on {stem}");
-                let pending = pending.unwrap();
-                assert_eq!(pending.modules().count(), modules, "{entry} on {stem}");
-                let words: usize = pending.modules().map(|(words, _)| words.len()).sum();
-                assert_eq!(attempt.words, Some(words as u64), "{entry} on {stem}");
-                let (attempt, linked) = pending.validate(attempt);
-                assert_eq!(attempt.outcome, Outcome::Translated, "{entry} on {stem}");
-                assert!(linked.is_some(), "{entry} on {stem}");
+        for (stem, profile, expected) in [
+            ("four colors", four, "device_capability_missing"),
+            ("lavapipe", lavapipe, "translated"),
+        ] {
+            for entry in ["cg_five", "cg_seven", "cg_sparse", "cg_counts"] {
+                let attempt = translate_new(&bitcode, entry, &profile, None);
+                assert_eq!(
+                    attempt.outcome.label(),
+                    expected,
+                    "{entry} on {stem}: {attempt:?}"
+                );
             }
-            let counts = translate_new(&bitcode, "cg_counts", &profile, None);
-            let expected = match stem {
-                "lavapipe" => "translated",
-                _ => "device_capability_missing",
-            };
-            assert_eq!(
-                counts.outcome.label(),
-                expected,
-                "cg_counts on {stem}: {counts:?}"
-            );
         }
     }
 

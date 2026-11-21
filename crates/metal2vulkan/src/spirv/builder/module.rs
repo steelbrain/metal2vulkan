@@ -852,16 +852,13 @@ impl ModuleBuilder {
 
     /// Decorate builtin output `g` `Invariant`: SPIR-V's "expressions computing its value be
     /// computed invariantly with respect to other shaders computing the same expressions". Only
-    /// the `Position` output (Metal's `[[invariant]]` position), the `ClipDistance` output (a
-    /// rate-mapped pass's copies of its triangles, `pipeline::link::fan_out`) and a fragment's
-    /// per-fragment outputs, `FragDepth`, `SampleMask` and `FragStencilRefEXT` (the variants of
-    /// one render pipeline's color groups, `LoweringInputs::color_group`), can be invariant.
+    /// the `Position` output (Metal's `[[invariant]]` position) and the `ClipDistance` output (a
+    /// rate-mapped pass's copies of its triangles, `pipeline::link::fan_out`) can be invariant.
     pub fn invariant(&mut self, g: GlobalId) -> BResult<()> {
         use crate::spv::BuiltIn as B;
         match self.global(g)?.kind {
             GlobalKind::BuiltIn {
-                builtin:
-                    B::Position | B::ClipDistance | B::FragDepth | B::SampleMask | B::FragStencilRefEXT,
+                builtin: B::Position | B::ClipDistance,
                 dir: IoDir::Output,
             } => {
                 self.invariant.insert(g);

@@ -2403,7 +2403,6 @@ field	metal2vulkan::cache::VariantKey.addressed_function_tables	pub addressed_fu
 field	metal2vulkan::cache::VariantKey.amplification_draws	pub amplification_draws: Option<crate::pipeline::AmplificationDraws>
 field	metal2vulkan::cache::VariantKey.anisotropic_samplers	pub anisotropic_samplers: BTreeSet<SlotRef>
 field	metal2vulkan::cache::VariantKey.call_threadgroups	pub call_threadgroups: bool
-field	metal2vulkan::cache::VariantKey.color_group	pub color_group: u32
 field	metal2vulkan::cache::VariantKey.cross_class	pub cross_class: BTreeMap<SlotRef, crate::pipeline::sym::SampledType>
 field	metal2vulkan::cache::VariantKey.cubic_samplers	pub cubic_samplers: BTreeMap<SlotRef, u32>
 field	metal2vulkan::cache::VariantKey.depth_clamp_range	pub depth_clamp_range: bool
@@ -2818,9 +2817,6 @@ field	metal2vulkan::pipeline::ColorAttachmentDescriptor.write_mask	pub write_mas
 field	metal2vulkan::pipeline::ColorAttachmentState.blend	pub blend: Option<BlendState>
 field	metal2vulkan::pipeline::ColorAttachmentState.format	pub format: vk::Format
 field	metal2vulkan::pipeline::ColorAttachmentState.write_mask	pub write_mask: vk::ColorComponentFlags
-field	metal2vulkan::pipeline::ColorGroup.group	pub group: u32
-field	metal2vulkan::pipeline::ColorGroup.present	pub present: Vec<u32>
-field	metal2vulkan::pipeline::ColorGroup.width	pub width: u32
 field	metal2vulkan::pipeline::CombinedSampler.compare	pub compare: bool
 field	metal2vulkan::pipeline::CombinedSampler.integer	pub integer: bool
 field	metal2vulkan::pipeline::CombinedSampler.sampler	pub sampler: SamplerRef
@@ -2904,7 +2900,6 @@ field	metal2vulkan::pipeline::FunctionDescriptor.specialized	pub specialized: bo
 field	metal2vulkan::pipeline::GraphicsState.alpha_to_coverage	pub alpha_to_coverage: bool
 field	metal2vulkan::pipeline::GraphicsState.alpha_to_one	pub alpha_to_one: bool
 field	metal2vulkan::pipeline::GraphicsState.color_attachments	pub color_attachments: Vec<Option<ColorAttachmentState>>
-field	metal2vulkan::pipeline::GraphicsState.color_group	pub color_group: Option<crate::pipeline::lower_inputs::ColorGroup>
 field	metal2vulkan::pipeline::GraphicsState.color_outputs	pub color_outputs: u32
 field	metal2vulkan::pipeline::GraphicsState.declares_layer	pub declares_layer: bool
 field	metal2vulkan::pipeline::GraphicsState.depth_format	pub depth_format: Option<vk::Format>
@@ -2966,7 +2961,6 @@ field	metal2vulkan::pipeline::LoweringInputs.alpha_test	pub alpha_test: Option<c
 field	metal2vulkan::pipeline::LoweringInputs.amplification_draws	pub amplification_draws: Option<AmplificationDraws>
 field	metal2vulkan::pipeline::LoweringInputs.anisotropic_samplers	pub anisotropic_samplers: BTreeSet<SlotRef>
 field	metal2vulkan::pipeline::LoweringInputs.call_threadgroups	pub call_threadgroups: bool
-field	metal2vulkan::pipeline::LoweringInputs.color_group	pub color_group: Option<ColorGroup>
 field	metal2vulkan::pipeline::LoweringInputs.color_writes	pub color_writes: BTreeMap<u32, [Option<ChannelWrite>; 4]>
 field	metal2vulkan::pipeline::LoweringInputs.cross_class	pub cross_class: BTreeMap<SlotRef, SampledType>
 field	metal2vulkan::pipeline::LoweringInputs.cubic_samplers	pub cubic_samplers: BTreeMap<SlotRef, u32>
@@ -7213,11 +7207,6 @@ method	metal2vulkan::pipeline::BufferForm::uniform_view	pub fn uniform_view(self
 method	metal2vulkan::pipeline::ColorAttachmentDescriptor::new	pub fn new(pixel_format: metal::PixelFormat) -> ColorAttachmentDescriptor
 method	metal2vulkan::pipeline::ColorAttachmentDescriptor::specialized	#[must_use] pub fn specialized(&self) -> ColorAttachmentDescriptor
 method	metal2vulkan::pipeline::ColorAttachmentState::new	pub fn new(format: vk::Format, write_mask: vk::ColorComponentFlags, blend: Option<BlendState>) -> ColorAttachmentState
-method	metal2vulkan::pipeline::ColorGroup::colors	pub fn colors(&self) -> &[u32]
-method	metal2vulkan::pipeline::ColorGroup::groups	pub fn groups(&self) -> u32
-method	metal2vulkan::pipeline::ColorGroup::location	pub fn location(&self, color: u32) -> u32
-method	metal2vulkan::pipeline::ColorGroup::of	pub fn of(present: Vec<u32>, width: u32, group: u32) -> Option<ColorGroup>
-method	metal2vulkan::pipeline::ColorGroup::width_on	pub fn width_on(profile: &crate::device::DeviceProfile) -> u32
 method	metal2vulkan::pipeline::CombinedSampler::constexpr_sampler	pub fn constexpr_sampler(&self, profile: &crate::device::DeviceProfile) -> Result<Option<vk::SamplerDesc>, crate::error::Error>
 method	metal2vulkan::pipeline::CombinedSampler::from_heap_index	pub fn from_heap_index(sampler: SamplerRef, index: u32) -> CombinedSampler
 method	metal2vulkan::pipeline::CombinedSampler::heap_index	pub fn heap_index(&self) -> u32
@@ -7827,7 +7816,6 @@ struct	metal2vulkan::pipeline::BlendState	#[cfg_attr(feature = "serde", derive(s
 struct	metal2vulkan::pipeline::BufferSlot	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct BufferSlot
 struct	metal2vulkan::pipeline::ColorAttachmentDescriptor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ColorAttachmentDescriptor
 struct	metal2vulkan::pipeline::ColorAttachmentState	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ColorAttachmentState
-struct	metal2vulkan::pipeline::ColorGroup	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct ColorGroup
 struct	metal2vulkan::pipeline::CombinedSampler	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct CombinedSampler
 struct	metal2vulkan::pipeline::CommandWrites	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct CommandWrites
 struct	metal2vulkan::pipeline::CompileReport	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct CompileReport
@@ -9294,7 +9282,6 @@ variant	metal2vulkan-runtime::PrecisionNote::BicubicFilterArithmetic	BicubicFilt
 variant	metal2vulkan-runtime::PrecisionNote::BlendedWriteRounding	BlendedWriteRounding
 variant	metal2vulkan-runtime::PrecisionNote::CappedLodBias	CappedLodBias
 variant	metal2vulkan-runtime::PrecisionNote::ClippedCoverageSplit	ClippedCoverageSplit
-variant	metal2vulkan-runtime::PrecisionNote::ColorAttachmentGroups	ColorAttachmentGroups
 variant	metal2vulkan-runtime::PrecisionNote::CompressedTexelDecode	CompressedTexelDecode
 variant	metal2vulkan-runtime::PrecisionNote::CoverageReadsRoundedAlpha	CoverageReadsRoundedAlpha
 variant	metal2vulkan-runtime::PrecisionNote::CubeGradientFootprint	CubeGradientFootprint
@@ -10904,7 +10891,6 @@ variant	metal2vulkan::pipeline::PrecisionNote::BicubicFilterArithmetic	BicubicFi
 variant	metal2vulkan::pipeline::PrecisionNote::BlendedWriteRounding	BlendedWriteRounding
 variant	metal2vulkan::pipeline::PrecisionNote::CappedLodBias	CappedLodBias
 variant	metal2vulkan::pipeline::PrecisionNote::ClippedCoverageSplit	ClippedCoverageSplit
-variant	metal2vulkan::pipeline::PrecisionNote::ColorAttachmentGroups	ColorAttachmentGroups
 variant	metal2vulkan::pipeline::PrecisionNote::CompressedTexelDecode	CompressedTexelDecode
 variant	metal2vulkan::pipeline::PrecisionNote::CoverageReadsRoundedAlpha	CoverageReadsRoundedAlpha
 variant	metal2vulkan::pipeline::PrecisionNote::CubeGradientFootprint	CubeGradientFootprint

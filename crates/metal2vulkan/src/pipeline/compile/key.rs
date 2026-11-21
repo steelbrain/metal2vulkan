@@ -491,11 +491,6 @@ pub fn function_key(
         h.bytes(b"instanced-attributes")
             .bytes(format!("{:?}", inputs.instanced_attributes).as_bytes());
     }
-    // Appended only when set, in its derived `Debug` form (integers), as `dropped_colors` is.
-    if let Some(group) = &inputs.color_group {
-        h.bytes(b"color-group")
-            .bytes(format!("{group:?}").as_bytes());
-    }
     // Appended only when set: a mesh function whose own payload arena holds its object
     // function's keeps its key.
     if let Some(bytes) = inputs.object_payload {

@@ -37,9 +37,6 @@ struct Pending<R> {
     plan: L3Plan,
     /// The module's words, little-endian.
     words: PathBuf,
-    /// The later color groups' modules of a function translated in color groups
-    /// ([`PendingL3::groups`]), each its words' file and its plan, checked after the first.
-    groups: Vec<(PathBuf, L3Plan)>,
 }
 
 /// Report `result` once L3 has settled its attempt, whose outcome stands if `spirv-val` accepts
@@ -57,30 +54,18 @@ pub fn report_after_l3<R: Serialize>(
     let dir = std::env::temp_dir();
     let words_path = dir.join(format!("l3-words-{}.spv", std::process::id()));
     let pending_path = dir.join(format!("l3-pending-{}.json", std::process::id()));
-    let PendingL3 {
-        words,
-        plan,
-        groups,
-        ..
-    } = pending;
+    let PendingL3 { words, plan, .. } = pending;
     let write = |path: &Path, words: Vec<u32>| {
         let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
         drop(words);
         std::fs::write(path, bytes).map_err(|error| format!("write {}: {error}", path.display()))
     };
     write(&words_path, words)?;
-    let mut group_files = Vec::with_capacity(groups.len());
-    for (index, group) in groups.into_iter().enumerate() {
-        let path = dir.join(format!("l3-words-{}-{}.spv", std::process::id(), index + 1));
-        write(&path, group.words)?;
-        group_files.push((path, group.plan));
-    }
     let text = serde_json::to_vec(&Pending {
         peaks: super::Peaks::now(),
         result,
         plan,
         words: words_path,
-        groups: group_files,
     })
     .map_err(|error| format!("encode the L3 stage's input: {error}"))?;
     std::fs::write(&pending_path, text)
@@ -122,21 +107,12 @@ pub fn serve<R: Serialize + DeserializeOwned>(
         mut result,
         plan,
         words,
-        groups,
     } = serde_json::from_slice::<Pending<R>>(&text)
         .map_err(|error| format!("decode {}: {error}", pending.display()))?;
     drop(text);
-    // The tools read each module from its file; this image never holds one. The first failure is
-    // the attempt's.
-    let modules: Vec<(PathBuf, L3Plan)> = std::iter::once((words, plan)).chain(groups).collect();
-    let checked = std::panic::catch_unwind(|| {
-        modules
-            .iter()
-            .try_for_each(|(words, plan)| plan.check_file(words))
-    });
-    for (words, _) in &modules {
-        let _ = std::fs::remove_file(words);
-    }
+    // The tools read the module from its file; this image never holds it.
+    let checked = std::panic::catch_unwind(|| plan.check_file(&words));
+    let _ = std::fs::remove_file(&words);
     attempt(&mut result).settle_l3(checked);
     super::report_with_peaks(&result, peaks.max(super::Peaks::now()))
 }

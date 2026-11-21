@@ -246,9 +246,6 @@ impl UlpTable {
 ///   difference is a mismatch for review, never accepted or explained by the note.
 /// - `LinkedSamplerNumbering`: [`Allowance::Recorded`]. Only sampler resource IDs may differ, no
 ///   shader value; a difference is a mismatch for review.
-/// - `ColorAttachmentGroups`: [`Allowance::Recorded`]. Only a group past the first may differ, at
-///   a discard or depth edge where the driver compiled the groups' variants apart; a difference is
-///   a mismatch for review.
 /// - `DeviceInterpolationOffset`: [`Allowance::Recorded`]. Recorded at every read at an offset,
 ///   where only an offset past the device's range or off its grid reads otherwise than Metal; a
 ///   difference is a mismatch for review, never accepted or explained by the note.
@@ -270,7 +267,7 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::FunctionStorageAssumed
         | N::ViewBaseTexelOffset => Allowance::Recorded,
         N::DeviceColorConversion => Allowance::Recorded,
-        N::LinkedSamplerNumbering | N::ColorAttachmentGroups => Allowance::Recorded,
+        N::LinkedSamplerNumbering => Allowance::Recorded,
         N::DeviceInterpolationOffset => Allowance::Recorded,
         N::GradFromBias
         | N::DeviceTranscendentals

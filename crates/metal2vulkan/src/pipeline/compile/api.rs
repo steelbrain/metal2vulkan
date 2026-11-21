@@ -42,10 +42,9 @@ use crate::pipeline::compile::key::{
     render_descriptor_key,
 };
 use crate::pipeline::compile::{
-    color_group, compile_stage, compile_stage_from, dynamic_order, guarded,
-    kernel_observes_partition, linked_keys, primitive_id_varying_on, reads_primitive_id_varying,
-    stage_inputs, vertex_push_end, FragmentPass, InputsFrom, RawIndices, StageEntries,
-    NO_PRIMITIVE_VARYINGS,
+    compile_stage, compile_stage_from, dynamic_order, guarded, kernel_observes_partition,
+    linked_keys, primitive_id_varying_on, reads_primitive_id_varying, stage_inputs,
+    vertex_push_end, FragmentPass, InputsFrom, RawIndices, StageEntries, NO_PRIMITIVE_VARYINGS,
 };
 use crate::pipeline::descriptor::{
     ComputePipelineDescriptor, FunctionDescriptor, MeshPipelineDescriptor,
@@ -405,11 +404,7 @@ impl Device {
             let (operated, logic) = crate::pipeline::private_state::logic_operation(d, p)?;
             let logic = crate::pipeline::private_state::LogicDraw::shader(logic);
             let d = operated.as_ref();
-            // A color group's variant is the pipeline of its group's attachments
-            // (`render_pipeline`).
-            let group = color_group::group(d, v, p)?;
-            let grouped = group.as_ref().map(|g| color_group::descriptor(d, g));
-            let zeroed = with_zeroed_colors(grouped.as_ref().unwrap_or(d), v)?;
+            let zeroed = with_zeroed_colors(d, v)?;
             let d = zeroed.as_ref();
             // The vertex function writes the primitive ID a fragment function reads from its
             // varying, on a device without a fragment `PrimitiveId`.
@@ -459,7 +454,6 @@ impl Device {
                     // Whether the function applies the private masks itself shows only in its
                     // module, so a pipeline whose masks drop a sample lowers it once.
                     let mut pass: FragmentPass<'_> = d.into();
-                    pass.color_group = group.as_ref();
                     pass.logic_operation = logic;
                     pass.push_base = push_end;
                     if crate::pipeline::private_state::applied_masks(d).is_some() {
@@ -828,9 +822,7 @@ impl Device {
         })
     }
 
-    /// [`Device::compile_render_variant`] with the caller's meter. A variant of one of
-    /// the pipeline's color groups (`VariantKey::color_group`) compiles and links as the pipeline
-    /// of its group's attachments (`color_group`), its key's choices of colors naming the group's.
+    /// [`Device::compile_render_variant`] with the caller's meter.
     pub(crate) fn render_pipeline(
         &self,
         d: &RenderPipelineDescriptor,
@@ -844,13 +836,10 @@ impl Device {
         // function's, where one is needed.
         let (operated, logic) = crate::pipeline::private_state::logic_operation(d, p)?;
         let d = operated.as_ref();
-        let group = color_group::group(d, v, p)?;
-        let grouped = group.as_ref().map(|g| color_group::descriptor(d, g));
-        let zeroed = with_zeroed_colors(grouped.as_ref().unwrap_or(d), v)?;
+        let zeroed = with_zeroed_colors(d, v)?;
         let d = zeroed.as_ref();
         let pass = || {
             let mut pass = FragmentPass::from(d);
-            pass.color_group = group.as_ref();
             pass.logic_operation = crate::pipeline::private_state::LogicDraw::shader(logic);
             pass
         };
@@ -935,11 +924,7 @@ impl Device {
         }
         let compiled: Vec<&CompiledFunction> = std::iter::once(&vertex).chain(&fragment).collect();
         let artifacts: Vec<&FunctionArtifact> = compiled.iter().map(|c| c.artifact()).collect();
-        let linked = link(
-            &artifacts,
-            &LinkInputs::render_variant(d, v, group.clone()),
-            p,
-        )?;
+        let linked = link(&artifacts, &LinkInputs::render_variant(d, v), p)?;
         let mut stages = Vec::with_capacity(compiled.len());
         for (i, c) in compiled.iter().enumerate() {
             stages.push(stage_module(c, &linked, i)?);
@@ -1652,15 +1637,10 @@ fn compute_fields(d: &ComputePipelineDescriptor) -> String {
     }
 }
 
-/// The pipeline key's fields of variant `v` past its stages' keys: its color group past the first
-/// (`VariantKey::color_group`), whose variant of a pipeline without a fragment function has no
-/// stage of its own, and a band variant's synthesized tessellation stages. Empty for every other variant, so a pipeline keeps its key.
+/// The pipeline key's fields of variant `v` past its stages' keys: a band variant's synthesized
+/// tessellation stages. Empty for every other variant, so a pipeline keeps its key.
 fn variant_fields(v: &VariantKey) -> String {
     let mut fields = String::new();
-    // The group a pipeline without a fragment function keeps in no stage's key.
-    if v.color_group != 0 {
-        fields.push_str(&format!(" color_group {}", v.color_group));
-    }
     // The band's synthesized stages, in no stage's key.
     match v.line_band {
         None => {}

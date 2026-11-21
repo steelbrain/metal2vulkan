@@ -229,17 +229,6 @@ pub struct GraphicsState {
     /// requirements name `attachmentFeedbackLoopLayout` and `extendedDynamicState3ColorWriteMask`.
     #[cfg_attr(feature = "serde", serde(default))]
     pub snapshot_reads: bool,
-    /// The group of the pipeline's color attachments this variant draws
-    /// (`VariantKey::color_group`), where the device draws them in groups
-    /// ([`ColorGroup`](crate::pipeline::ColorGroup)): every color-indexed part of the state
-    /// (`color_attachments`, `input_attachments`, `storage_attachments` among them) indexes the group's attachments by location, Metal's attachment
-    /// `colors()[l]` at location `l`, and the fragment stage writes those alone. Each draw of the
-    /// pipeline is a draw of every group's variant, in a pass of that group's attachments; the
-    /// vertex stage is the same module in every variant, and the fragment stage's `FragDepth`,
-    /// `SampleMask` and `FragStencilRefEXT` outputs are decorated `Invariant` where there is more
-    /// than one group. `None` where each attachment is at its own index.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub color_group: Option<crate::pipeline::lower_inputs::ColorGroup>,
     /// `VkPipelineColorBlendStateCreateInfo::logicOp` with `logicOpEnable`: the descriptor's
     /// private `logicOperation`
     /// ([`PrivateRenderState::logic_operation`](crate::pipeline::PrivateRenderState::logic_operation)),
@@ -472,7 +461,6 @@ impl GraphicsState {
             color_outputs: 0,
             sample_mask: None,
             snapshot_reads: false,
-            color_group: None,
             logic_op: None,
         }
     }

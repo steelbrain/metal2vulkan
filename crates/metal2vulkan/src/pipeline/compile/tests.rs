@@ -730,7 +730,6 @@ fn the_inputs_encoding_is_the_earlier_derived_debug() {
                 .replace(", open_cl_lines: {}", "")
                 .replace(", uniform_varyings: {}", "")
                 .replace(", instanced_attributes: {}", "")
-                .replace(", color_group: None", "")
                 .replace(", object_payload: None", "")
                 .replace(", tessellation: None", "")
                 .replace(", region_viewports: false", "")

@@ -276,9 +276,7 @@ impl CompiledFunction {
     }
 
     /// Whether the function writes memory another invocation or a later command can read: it
-    /// stores to a buffer or a texture, or updates one atomically. A render pipeline whose colors
-    /// the device draws in more than one group refuses such a function, which each group's draw
-    /// would run again ([`ColorGroup`](crate::pipeline::ColorGroup)).
+    /// stores to a buffer or a texture, or updates one atomically.
     pub fn writes_memory(&self) -> bool {
         self.0.interface.writes_memory
     }

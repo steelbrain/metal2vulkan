@@ -271,7 +271,6 @@ mod serde_round_trips {
             )]),
             anisotropic_samplers: BTreeSet::from([slot(Stage::Fragment, SlotClass::Sampler, 1)]),
             open_cl_lines: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 1)]),
-            color_group: 1,
             region_viewports: true,
             region_fan_out: Some(crate::pipeline::RegionFanOut::Probe),
         });
@@ -479,11 +478,6 @@ mod serde_round_trips {
             open_cl_lines: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 2)]),
             uniform_varyings: BTreeSet::from([VaryingKey::user(b"user(tint)")]),
             instanced_attributes: BTreeSet::from([1]),
-            color_group: Some(crate::pipeline::ColorGroup {
-                present: vec![0, 1, 2, 3, 5, 7],
-                width: 4,
-                group: 1,
-            }),
             object_payload: Some(64),
             region_viewports: true,
             region_copies: true,
@@ -634,11 +628,6 @@ mod serde_round_trips {
             color_outputs: 0b101,
             sample_mask: Some(0b1001),
             snapshot_reads: true,
-            color_group: Some(crate::pipeline::ColorGroup {
-                present: vec![0, 5],
-                width: 4,
-                group: 0,
-            }),
             logic_op: Some(vk::LogicOp::EQUIVALENT),
             line_band: Some(crate::pipeline::LineBandState {
                 push_offset: 112,

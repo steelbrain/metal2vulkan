@@ -155,8 +155,6 @@ pub enum Degradation {
     NativeMix,
     /// `metal2vulkan-degrade-device-pack-conversion`.
     DevicePackConversion,
-    /// `metal2vulkan-degrade-color-attachment-groups`.
-    ColorAttachmentGroups,
     /// `metal2vulkan-degrade-tessellation-triangle-order`.
     TessellationTriangleOrder,
     /// `metal2vulkan-degrade-unmeasured-group-speculation`.
@@ -262,7 +260,6 @@ impl Degradation {
         Degradation::NativeDot,
         Degradation::NativeMix,
         Degradation::DevicePackConversion,
-        Degradation::ColorAttachmentGroups,
         Degradation::TessellationTriangleOrder,
         Degradation::UnmeasuredGroupSpeculation,
         Degradation::NotMipmappedAnisotropicFilter,
@@ -386,7 +383,6 @@ impl Degradation {
             Degradation::NativeDot => "metal2vulkan-degrade-native-dot",
             Degradation::NativeMix => "metal2vulkan-degrade-native-mix",
             Degradation::DevicePackConversion => "metal2vulkan-degrade-device-pack-conversion",
-            Degradation::ColorAttachmentGroups => "metal2vulkan-degrade-color-attachment-groups",
             Degradation::TessellationTriangleOrder => {
                 "metal2vulkan-degrade-tessellation-triangle-order"
             }
@@ -488,7 +484,6 @@ impl Degradation {
             PrecisionNote::NativeDot => Degradation::NativeDot,
             PrecisionNote::NativeMix => Degradation::NativeMix,
             PrecisionNote::DevicePackConversion => Degradation::DevicePackConversion,
-            PrecisionNote::ColorAttachmentGroups => Degradation::ColorAttachmentGroups,
             PrecisionNote::TessellationTriangleOrder => Degradation::TessellationTriangleOrder,
             PrecisionNote::UnmeasuredGroupSpeculation => Degradation::UnmeasuredGroupSpeculation,
             PrecisionNote::NotMipmappedAnisotropicFilter => {

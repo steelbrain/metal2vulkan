@@ -87,7 +87,6 @@ use crate::pipeline::interface::{PipelineInterface, StageDescriptor, StageInterf
 use crate::pipeline::layout::{
     BindingSource, DescriptorBinding, DescriptorSetLayout, PipelineLayout, PushConstantRange,
 };
-use crate::pipeline::lower_inputs::ColorGroup;
 use crate::pipeline::stage_io::StageBuiltin;
 use crate::pipeline::sym::{
     CombinedSampler, HandleClass, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage,
@@ -150,17 +149,11 @@ impl LinkInputs {
     }
 
     /// A render pipeline of `desc`'s fixed-function state under `variant`'s pulled vertex
-    /// buffers, the variant of color group `group` where it draws one, whose descriptor `desc`
-    /// holds the group's attachments alone (`pipeline::compile::color_group::descriptor`).
-    pub fn render_variant(
-        desc: &RenderPipelineDescriptor,
-        variant: &VariantKey,
-        group: Option<ColorGroup>,
-    ) -> LinkInputs {
+    /// buffers.
+    pub fn render_variant(desc: &RenderPipelineDescriptor, variant: &VariantKey) -> LinkInputs {
         let mut r = RenderLinkInputs::from(desc);
         r.pulled_vertex_buffers = variant.pulled_vertex_buffers.clone();
         r.pull_every = variant.primitive_id_indices.is_some() || variant.private_list;
-        r.color_group = group;
         r.line_band = variant.line_band;
         r.region_fan_out = variant.region_fan_out;
         LinkInputs::Render(Box::new(r))
@@ -200,10 +193,6 @@ pub struct RenderLinkInputs {
     pub tessellation: Option<TessellationDescriptor>,
     /// `textureWriteRoundingMode`: the color writes the fragment stage rounds by.
     pub texture_write_rounding_mode: metal::TextureWriteRoundingMode,
-    /// The group of the pipeline's color attachments the variant draws, whose attachments
-    /// alone [`color_attachments`](Self::color_attachments) holds, at their locations
-    /// (`GraphicsState::color_group`); `None` where each attachment is at its own index.
-    pub color_group: Option<ColorGroup>,
     /// The variant draws its lines, or its triangles' edges, as bands through synthesized
     /// tessellation stages (`VariantKey::line_band`, [`band`]), each patch one primitive of this
     /// kind; `None` for every other variant.
@@ -232,7 +221,6 @@ impl RenderLinkInputs {
             max_vertex_amplification_count: 1,
             tessellation: None,
             texture_write_rounding_mode: metal::TextureWriteRoundingMode::TowardZero,
-            color_group: None,
             line_band: None,
             region_fan_out: None,
         }
@@ -262,7 +250,6 @@ impl From<&RenderPipelineDescriptor> for RenderLinkInputs {
             max_vertex_amplification_count: d.max_vertex_amplification_count,
             tessellation: d.tessellation,
             texture_write_rounding_mode: d.texture_write_rounding_mode,
-            color_group: None,
             line_band: None,
             region_fan_out: None,
         }

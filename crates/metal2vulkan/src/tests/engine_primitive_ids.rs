@@ -333,32 +333,6 @@ fn the_fragment_reads_the_id_flat() {
     assert_eq!(flat, 3);
 }
 
-/// With five colors on a device of four, each color group's variant reads the ID from the same
-/// varying of the same vertex module: the groups' vertex words are identical, and the varying
-/// takes one location beside the vertex function's own.
-#[test]
-fn color_groups_share_the_vertex_function_s_id() {
-    let Some(bc) = fixture() else { return };
-    let dev = withheld(4);
-    let d = pipeline(&bc, "pi_place", Some("pi_five"), 5);
-    let groups: Vec<RenderPipeline> = (0..2)
-        .map(|g| {
-            let mut v = VariantKey::new();
-            v.color_group = g;
-            dev.compile_render_variant(&d, &v, &Budget::standard())
-                .unwrap_or_else(|e| panic!("group {g}: {e}"))
-        })
-        .collect();
-    for p in &groups {
-        assert!(reads_layout(p));
-        validate(p, &dev);
-    }
-    assert_eq!(
-        stage(&groups[0], vk::ShaderStage::VERTEX).spirv,
-        stage(&groups[1], vk::ShaderStage::VERTEX).spirv
-    );
-}
-
 // ---- Indexed draws: the de-indexed form (VariantKey::primitive_id_indices) -------------------
 
 /// A state binding `pi_place`'s and `pi_counts`' buffers, at device addresses.

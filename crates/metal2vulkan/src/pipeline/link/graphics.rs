@@ -279,30 +279,6 @@ fn topology(class: PrimitiveTopologyClass) -> vk::PrimitiveTopology {
     }
 }
 
-/// Check the color group of render inputs `r` (`RenderLinkInputs::color_group`) with vertex stage
-/// `vs`, fragment stage `fs`, a tessellation pipeline where `tessellated`, on `p`: the fragment
-/// stage compiled for the variant's own group (`NeedsInput(ColorWrites)` for one compiled for
-/// another, or for none), and, where the pipeline takes more than one group, neither stage writes
-/// memory and the pipeline is no tessellation pipeline, which each group's draw would run again
-/// (the limit refusal, `compile::color_group`).
-fn color_group(
-    r: &RenderLinkInputs,
-    (vs, fs): (&StageInterface, Option<&StageInterface>),
-    tessellated: bool,
-    p: &DeviceProfile,
-) -> Result<(), Error> {
-    if fs.is_some_and(|fs| fs.io.color_group != r.color_group) {
-        return Err(Error::NeedsInput(RuntimeInput::ColorWrites));
-    }
-    let Some(g) = r.color_group.as_ref().filter(|g| g.groups() > 1) else {
-        return Ok(());
-    };
-    if tessellated || vs.writes_memory || fs.is_some_and(|fs| fs.writes_memory) {
-        return Err(crate::pipeline::compile::color_group::refusal(g, p));
-    }
-    Ok(())
-}
-
 /// The vertex amplification count of render inputs `r` (see the module docs), of a mesh pipeline
 /// where `mesh`: it draws no amplification as a view, so it needs no multiview (its draws of more
 /// than one amplification are refused at the draw, `bind::graphics`).
@@ -350,7 +326,6 @@ pub fn graphics_state(
         )
         .into());
     }
-    color_group(r, (vs, fs), tessellation.is_some(), p)?;
     let max_vertex_amplification_count = vertex_amplification(r, vs.stage == Stage::Mesh, p)?;
     // A vertex function that selects its slice through the synthesized geometry stage
     // (`IoRole::SelectedLayer`) declares `Layer` there, and a fragment function that reads it as 0
@@ -814,7 +789,6 @@ pub fn graphics_state(
         color_outputs: 0,
         sample_mask: None,
         snapshot_reads,
-        color_group: r.color_group.clone(),
         // The pipeline's private logic operation, once compile decided it
         // (`private_state::logic_operation`).
         logic_op: None,

@@ -792,20 +792,6 @@ pub struct LoweringInputs {
     /// projection). Empty for any other function.
     #[cfg_attr(feature = "serde", serde(default))]
     pub instanced_attributes: BTreeSet<u32>,
-    /// The group of its render pipeline's color attachments a fragment function writes
-    /// ([`ColorGroup`]), where the pipeline has more color attachments than the device draws to at
-    /// once, or one at an index at or past that count: the function writes the group's colors at
-    /// locations `0..` in the order of their indices, and every other color index it names, its
-    /// `[[color(n)]]` inputs' included, is renumbered past them ([`ColorGroup::location`]), so a
-    /// color of another group or without an attachment is stored nowhere
-    /// (`unattached_colors`). Where the pipeline takes more than one group, the function reads no
-    /// color outside its group, and its `FragDepth`, `SampleMask` and `FragStencilRefEXT` outputs
-    /// are decorated `Invariant` (`PrecisionNote::ColorAttachmentGroups`).
-    /// `Device::compile_render_variant` sets it for a `Function` fragment stage from the
-    /// descriptor, `VariantKey::color_group` and the profile; `None`, each color at its own index,
-    /// for a pipeline the device draws in one pass as it is, and for any other function.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub color_group: Option<ColorGroup>,
     /// The payload bytes of the object or mesh function's mesh render pipeline: for a mesh
     /// function, its object function's payload arena (`StageInterface::payload`), where it is
     /// larger than the mesh function's own; for an object function, and a mesh function without
@@ -896,86 +882,6 @@ pub struct LoweringInputs {
     /// 0.
     #[cfg_attr(feature = "serde", serde(default))]
     pub push_base: u32,
-}
-
-/// One group of a render pipeline's color attachments (`LoweringInputs::color_group`,
-/// `GraphicsState::color_group`). A device draws to at most [`width`](Self::width) color
-/// attachments at once, the lesser of its `maxColorAttachments` and
-/// `maxFragmentOutputAttachments`, at locations below it. A render pipeline whose attachments with
-/// a pixel format ([`present`](Self::present)) number more draws them in groups of `width`, in the
-/// order of their indices, each group a variant of the pipeline (`VariantKey::color_group`) that
-/// writes its attachments at locations `0..`; one whose attachments number no more but reach an
-/// index at or past `width` takes one group, renumbered below `width`.
-#[non_exhaustive]
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct ColorGroup {
-    /// The pipeline's color attachments with a pixel format, by index, ascending.
-    pub present: Vec<u32>,
-    /// The attachments a group holds: the lesser of the device's `maxColorAttachments` and
-    /// `maxFragmentOutputAttachments`.
-    pub width: u32,
-    /// The group: the attachments of [`present`](Self::present) from `group · width` on, `width`
-    /// of them or the rest.
-    pub group: u32,
-}
-
-impl ColorGroup {
-    /// Group `group` of a pipeline whose attachments with a pixel format are `present`
-    /// (ascending) on a device that draws to `width` at once; `None` where every one of them is
-    /// below `width`, which the device draws in one pass at their own indices.
-    pub fn of(present: Vec<u32>, width: u32, group: u32) -> Option<ColorGroup> {
-        let beyond = present.last().is_some_and(|&last| last >= width);
-        beyond.then_some(ColorGroup {
-            present,
-            width,
-            group,
-        })
-    }
-
-    /// The attachments a group holds on `profile`: the lesser of its `maxColorAttachments` and
-    /// `maxFragmentOutputAttachments` (a subpass, or a dynamic rendering, holds at most the
-    /// first, `VUID-VkSubpassDescription-colorAttachmentCount-00845`, and a fragment shader's
-    /// outputs lie below the second, `VUID-RuntimeSpirv-Location-06272`).
-    pub fn width_on(profile: &crate::device::DeviceProfile) -> u32 {
-        let l = profile.limits();
-        l.max_color_attachments
-            .min(l.max_fragment_output_attachments)
-    }
-
-    /// The group's attachments, by location: attachment `colors()[l]` at location `l`.
-    pub fn colors(&self) -> &[u32] {
-        let width = self.width as usize;
-        let start = (self.group as usize).saturating_mul(width);
-        let end = start.saturating_add(width).min(self.present.len());
-        self.present.get(start..end).unwrap_or(&[])
-    }
-
-    /// How many groups the pipeline's attachments take: one draw of the pipeline is one draw of
-    /// each group's variant.
-    pub fn groups(&self) -> u32 {
-        match self.width {
-            0 => 0,
-            width => u32::try_from(self.present.len())
-                .unwrap_or(u32::MAX)
-                .div_ceil(width),
-        }
-    }
-
-    /// The location of Metal's color index `color` in the group's variant: an attachment of the
-    /// group at its place among [`colors`](Self::colors); every other index past them, in the order
-    /// of the indices, so no two indices share a location and none outside the group reaches one
-    /// below `colors().len()`.
-    pub fn location(&self, color: u32) -> u32 {
-        let colors = self.colors();
-        match colors.iter().position(|&c| c == color) {
-            Some(at) => at as u32,
-            None => {
-                let below = colors.iter().filter(|&&c| c < color).count() as u32;
-                colors.len() as u32 + color - below
-            }
-        }
-    }
 }
 
 /// How the blend of an attachment held with its channels rotated reads the fragment function's

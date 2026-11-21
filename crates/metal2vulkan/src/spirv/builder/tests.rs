@@ -1065,11 +1065,10 @@ fn a_push_block_that_is_not_std430_uses_scalar_layout() {
     assert_eq!(m.push_members().len(), 2);
 }
 
-/// Only the `Position` output (Metal `[[invariant]]`), the `ClipDistance` output (a rate-mapped
-/// pass's copies) and a fragment's per-fragment outputs (the variants of a render pipeline's
-/// color groups) can be decorated `Invariant`.
+/// Only the `Position` output (Metal `[[invariant]]`) and the `ClipDistance` output (a
+/// rate-mapped pass's copies) can be decorated `Invariant`.
 #[test]
-fn only_the_position_clip_distances_and_per_fragment_outputs_are_invariant() {
+fn only_the_position_and_clip_distances_are_invariant() {
     let mut t = T::new();
     let f = t.f32();
     let v4 = t.vec(f, 4);
@@ -1091,8 +1090,7 @@ fn only_the_position_clip_distances_and_per_fragment_outputs_are_invariant() {
             .expect("varying");
     assert_eq!(t.b.invariant(pos), Ok(()));
     assert_eq!(t.b.invariant(clips), Ok(()));
-    assert_eq!(t.b.invariant(depth), Ok(()));
-    for g in [size, color] {
+    for g in [depth, size, color] {
         assert_eq!(
             t.b.invariant(g),
             Err(BuildError::Global(GlobalRule::InvariantTarget))

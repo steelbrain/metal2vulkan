@@ -55,8 +55,7 @@ use crate::pipeline::layout::{
     BindingSource, DescriptorBinding, DescriptorSetLayout, PipelineLayout, PushConstantRange,
 };
 use crate::pipeline::lower_inputs::{
-    BlendEquation, ChannelWrite, ColorGroup, ExtendedRangeColor, FactorLane, RotatedBlendForm,
-    VertexFetch,
+    BlendEquation, ChannelWrite, ExtendedRangeColor, FactorLane, RotatedBlendForm, VertexFetch,
 };
 use crate::pipeline::stage_io::{
     CoverageLoop, CoverageLoopRefusal, DepthCompares, DepthMode, Interpolation as IoInterpolation,
@@ -1161,11 +1160,10 @@ codec_struct! {
         rotated_colors, rotated_factors, rotated_blends, decoded_fetches,
         texture_write_rounding, uniform_outputs, uniform_inputs, instanced_attributes,
         half_blend_colors, half_fast_colors, float_blend_colors, zero_indices,
-        color_group, word_colors, alpha_in_red_colors, alpha_test, depth_compares,
+        word_colors, alpha_in_red_colors, alpha_test, depth_compares,
         logic_operation,
     }
     DepthCompares { samplers, clamped }
-    ColorGroup { present, width, group }
     WordField { shift, bits }
     ExtendedRangeColor { form, blended, nearest_even }
     PulledInput { index, ty, fetch }
@@ -1403,7 +1401,7 @@ codec_struct! {
         tessellation, fragment_imageblock, vertex_writes_memory, writes_viewport_index,
         storage_attachments, shadow_stencil, writes_point_size, writes_depth,
         reads_barycentric_coord, reads_primitive_id, fragment_writes_memory, color_outputs,
-        sample_mask, snapshot_reads, color_group, logic_op, line_band, region_fan_out,
+        sample_mask, snapshot_reads, logic_op, line_band, region_fan_out,
     }
     TessellationState {
         patch_control_points, domain, control_points, factor_step_function, push_offset,
@@ -1479,7 +1477,6 @@ codec_enum! {
         NativeDot,
         NativeMix,
         DevicePackConversion,
-        ColorAttachmentGroups,
         TessellationTriangleOrder,
         UnmeasuredGroupSpeculation,
         NotMipmappedAnisotropicFilter,

@@ -906,27 +906,10 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   the list, at the list's address (`PushHole::CaptureIndexAddress`), adding them as Metal's vertex
   ID wraps, so each position runs once and the positions count Metal's primitives.
 - A device draws to at most the lesser of its `maxColorAttachments` and
-  `maxFragmentOutputAttachments` color attachments at once (four at Vulkan's floor), where Metal
-  takes eight. A pipeline whose attachments with a pixel format number more draws them in groups
-  of that many, in the order of their indices: variant `VariantKey::color_group` of the pipeline
-  draws one group, its fragment function writing that group's attachments alone at locations `0..`
-  and its `graphics` holding them alone (`graphics.color_group`, a `ColorGroup`;
-  `ColorGroup::of(present, width, group)` names a group, and `ColorGroup::width_on(profile)` is a
-  device's group width). A pipeline whose
-  attachments number no more but reach an index at or past the count (`color(0)` and `color(5)` on
-  a device of four) takes one group, renumbered. Every group's variant has the same vertex module;
-  where there is more than one group, their fragment stages' `FragDepth`, `SampleMask` and
-  `FragStencilRefEXT` are decorated `Invariant` and record
-  `PrecisionNote::ColorAttachmentGroups`. What each group's draw would run again or read from
-  another group is the pipeline's limit refusal (`InterfaceComponents` at `MaxColorAttachments`):
-  a vertex or fragment function that writes memory, alpha to coverage, a tessellation pipeline, a
-  `[[color(n)]]` input of another group that the specialized function reads (one whose read its
-  function constants fold away reads nothing and is not refused), imageblocks, and a raster order
-  group on a color output or on a parameter the specialized function uses (one on a parameter it
-  never uses orders nothing and is not refused). Mesh and tile pipelines take no groups. The
-  runtime draws such a pass group by group, each group's colors in a pass of its own over a twin
-  of the depth and stencil (the runtime's `render/color_groups.rs`; what it refuses there is
-  `RuntimeGap::ColorAttachmentGroups`).
+  `maxFragmentOutputAttachments` color attachments at once (eight at the runtime's floor), where
+  Metal takes eight. A pipeline with an attachment at an index at or past the first is refused
+  `InterfaceComponents` at `MaxColorAttachments`, and a fragment function with a color output at
+  a location at or past the second at `MaxFragmentOutputAttachments`.
 - A pipeline's band variant (`VariantKey::line_band`, of a `BandPrimitive`) draws each line, or
   each edge of a triangle in fill mode `Lines`, as the parallelogram Metal draws for a line under
   Apple's `setLineWidth:` at a width the device's own lines do not draw (the runtime chooses
@@ -2662,16 +2645,6 @@ bound.
   where a texture its handles can name is one (`SpecKey::HeapRawTextures`, which the binding plan
   gives from the textures the command makes resident or binds), so a reading of the module alone
   holds it, and so does a command that can name one.
-- `metal2vulkan-degrade-color-attachment-groups` (precision).
-  `PrecisionNote::ColorAttachmentGroups`: A render pipeline whose color attachments the device
-  draws in more than one group (more than the lesser of its `maxColorAttachments` and
-  `maxFragmentOutputAttachments`, four on a device at Vulkan's floor): each draw runs once per
-  group, each group's variant writing its own attachments over its own copy of the depth and
-  stencil the pass loads. Every variant's vertex stage is the same module, `Position` invariant,
-  and every fragment variant's `FragDepth`, `SampleMask` and `FragStencilRefEXT` are decorated
-  `Invariant`; Vulkan promises no more across pipelines of other fragment modules and attachments.
-  Groups past the first may differ at discard or depth edges if the driver compiles the variants
-  differently.
 - `metal2vulkan-degrade-device-fragment-runs` (precision). `PrecisionNote::DeviceFragmentRuns`: A
   fragment function that writes memory (`StageInterface::writes_memory`) in a render pipeline of
   more than one sample, which the pipeline's compile records on its fragment stage, decided by the

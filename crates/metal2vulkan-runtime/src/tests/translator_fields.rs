@@ -102,14 +102,6 @@ const GRAPHICS_STATE: &[(&str, Verdict)] = &[
     ),
     ("sample_mask", Applied),
     ("snapshot_reads", Refused(VARIANT)),
-    (
-        "color_group",
-        Fact(
-            "cannot be stated above the floor: a group takes a device of fewer than 8 color \
-             attachments or fragment outputs, and the floor's maxColorAttachments and \
-             maxFragmentOutputAttachments rows (floor::limits) require 8",
-        ),
-    ),
     ("logic_op", Applied),
 ];
 

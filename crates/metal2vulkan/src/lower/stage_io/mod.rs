@@ -424,11 +424,6 @@ pub struct StageIoPlan {
     pub point_size_default: Option<usize>,
     /// The `Position` object of a vertex function, decorated `Invariant`.
     pub invariant: Option<usize>,
-    /// A fragment function of one of its pipeline's color groups, where the pipeline takes more
-    /// than one (`LoweringInputs::color_group`): its `FragDepth`, `SampleMask` and
-    /// `FragStencilRefEXT` outputs are decorated `Invariant`, so every group's variant computes
-    /// them alike (the module docs of `pipeline::compile::color_group`).
-    pub invariant_fragment_outputs: bool,
     /// The entry's execution modes (fragment origin, early tests, depth and stencil modes).
     pub modes: Vec<ExecMode>,
     /// The artifact's stage-IO interface.
@@ -2804,19 +2799,6 @@ pub fn declare(
             mb.invariant(*g)?;
         }
         d.region_table = Some(crate::pipeline::link::fan_out::declare_table(mb)?);
-    }
-    if sp.invariant_fragment_outputs {
-        use crate::spv::BuiltIn as B;
-        for (o, g) in sp.objects.iter().zip(&d.globals) {
-            if let IoObject::Builtin {
-                builtin: B::FragDepth | B::SampleMask | B::FragStencilRefEXT,
-                dir: IoDir::Output,
-                ..
-            } = o
-            {
-                mb.invariant(*g)?;
-            }
-        }
     }
     modes.extend(sp.modes.iter().copied());
     Ok(d)

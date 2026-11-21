@@ -14,7 +14,6 @@
 //! key derivation is [`key`].
 
 pub mod api;
-pub(crate) mod color_group;
 mod entry;
 mod images;
 pub mod key;
@@ -153,10 +152,6 @@ pub struct FragmentPass<'a> {
     /// The pipeline's private `fragmentDepthCompareClampMask`
     /// (`LoweringInputs::depth_compare_clamp_mask`).
     pub(crate) depth_compare_clamp_mask: u32,
-    /// The group of the pipeline's color attachments the function writes
-    /// (`LoweringInputs::color_group`), whose variant's descriptor `color_attachments` is
-    /// (`color_group::descriptor`); `None` from a descriptor, set by the compile layer.
-    pub(crate) color_group: Option<&'a crate::pipeline::lower_inputs::ColorGroup>,
     /// Where the function's push fields start on the floor (`LoweringInputs::push_base`): 0 from
     /// a render descriptor, set by the compile layer from the vertex function it compiled; past
     /// the object and mesh functions' windows for a mesh pipeline's.
@@ -181,7 +176,6 @@ impl<'a> From<&'a RenderPipelineDescriptor> for FragmentPass<'a> {
                 .flatten(),
             logic_operation: None,
             depth_compare_clamp_mask: d.private.fragment_depth_compare_clamp_mask,
-            color_group: None,
             push_base: 0,
         }
     }
@@ -202,7 +196,6 @@ impl<'a> From<&'a MeshPipelineDescriptor> for FragmentPass<'a> {
             alpha_test: None,
             logic_operation: None,
             depth_compare_clamp_mask: 0,
-            color_group: None,
             push_base: crate::lower::push::window(crate::pipeline::sym::Stage::Mesh, 0).1,
         }
     }
@@ -264,41 +257,17 @@ impl<'a> InputsFrom<'a> {
             InputsFrom::Vertex(..) | InputsFrom::Fragment(..) => &NONE,
         }
     }
-
-    /// The group of its pipeline's color attachments a fragment stage compiles for
-    /// (`LoweringInputs::color_group`): the given inputs', or the render pipeline variant's.
-    fn color_group(&self) -> Option<&'a crate::pipeline::lower_inputs::ColorGroup> {
-        match self {
-            InputsFrom::Given(i) => i.color_group.as_ref(),
-            InputsFrom::Vertex(..) => None,
-            InputsFrom::Fragment(pass, ..) => pass.color_group,
-        }
-    }
-}
-
-/// The specialized entry `spec` as a compile under `inputs` lowers it on `p`: renumbered for its
-/// color group (`color_group::entry`) where it compiles for one.
-fn grouped_entry(
-    spec: air::Entry,
-    inputs: InputsFrom<'_>,
-    p: &DeviceProfile,
-) -> Result<air::Entry, Error> {
-    match inputs.color_group() {
-        Some(g) => color_group::entry(spec, g, p),
-        None => Ok(spec),
-    }
 }
 
 /// Where `inputs` are a render pipeline's fragment stage's, each `[[color(n)]]` input the
 /// specialized fragment entry `spec` declares has an attachment with a pixel format in the
-/// pipeline (the pass's attachments, or its color group's `ColorGroup::present`, the pipeline's
-/// own), whether or not the body reads it: plain Metal refuses the pipeline otherwise, with the
+/// pipeline, whether or not the body reads it: plain Metal refuses the pipeline otherwise, with the
 /// read dead after specialization as with it live ("Shaders reads from a color attachment whose
 /// pixel format is MTLPixelFormatInvalid",
 /// `metal2vulkan-conformance/probes/dead_ordered_and_unattached_reads.m`, an M3 Max under macOS
 /// 27.0.1). `InvalidDescriptor(ColorAttachment)` at the first index without one. An input its
-/// constants gate is no parameter of the specialized entry. Checked on the entry before its
-/// group renumbers it, by both a stage's keys ([`stage_inputs`]) and its compile.
+/// constants gate is no parameter of the specialized entry. Checked by both a stage's keys
+/// ([`stage_inputs`]) and its compile.
 fn color_inputs_attached(spec: &air::Entry, inputs: InputsFrom<'_>) -> Result<(), Error> {
     let InputsFrom::Fragment(pass, ..) = inputs else {
         return Ok(());
@@ -311,13 +280,10 @@ fn color_inputs_attached(spec: &air::Entry, inputs: InputsFrom<'_>) -> Result<()
         else {
             continue;
         };
-        let attached = match pass.color_group {
-            Some(g) => g.present.contains(&color),
-            None => pass
-                .color_attachments
-                .get(color as usize)
-                .is_some_and(Option::is_some),
-        };
+        let attached = pass
+            .color_attachments
+            .get(color as usize)
+            .is_some_and(Option::is_some);
         if !attached {
             return Err(Error::InvalidDescriptor(DescriptorError::ColorAttachment {
                 index: color,
@@ -641,12 +607,7 @@ pub fn stage_inputs(
         let open_cl = (inputs.open_cl_mode(), inputs.open_cl_lines());
         let specialized = entries.specialized(fd, inputs.call_stack_depth(), open_cl, m)?;
         color_inputs_attached(&specialized.spec, inputs)?;
-        // A color group's variant reads its own renumbering of the entry the creation shares.
-        let grouped = match inputs.color_group() {
-            Some(_) => Some(grouped_entry(specialized.spec.clone(), inputs, p)?),
-            None => None,
-        };
-        let spec = grouped.as_ref().unwrap_or(&specialized.spec);
+        let spec = &specialized.spec;
         let inputs = lower_inputs(spec, inputs, p, m)?;
         let uniform = crate::lower::stage_io::uniform_varyings(spec, &inputs, m)?;
         let writes = raw_indices_written(spec, &inputs);
@@ -2846,7 +2807,6 @@ fn lower_inputs(
         }
         InputsFrom::Fragment(d, variant, written, primitive, varyings, uniform) => {
             let mut out = fragment_inputs(d, variant, p);
-            out.color_group = d.color_group.cloned();
             out.signed_color_attachments = signed_colors_written(spec, d.color_attachments);
             out.signed_color_attachments.extend(signed_colors_fetched(
                 spec,
@@ -3133,7 +3093,6 @@ fn analyze_one(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Anal
         before,
     } = ordered_entry(r, p, m)?;
     color_inputs_attached(&spec, r.inputs)?;
-    let spec = grouped_entry(spec, r.inputs, p)?;
     let inputs = lower_inputs(&spec, r.inputs, p, m)?;
     // A flat variant runs its grid in threadgroups of its own: only a kernel that does not observe
     // its partition computes the same there; one of the call's threadgroups, also a kernel that
