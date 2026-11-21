@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1319 |
 | distinct SDK items the Metal leg reaches, of any status | 804 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7491 |
+| ledger rows (a case whose gap is recorded) | 7535 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -4644,6 +4644,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-masked-bgr10xr-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-masked-bgr10xr-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-masked-bgr10xr-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-masked-bgr10xr-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-masked-bgr10xr-srgb-blue-green` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
 | `xr-masked-bgr10xr-srgb-blue-green` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
 | `xr-masked-bgr10xr-srgb-blue-green` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The st… |
@@ -4659,11 +4660,14 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-masked-bgr10xr-srgb-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-masked-bgr10xr-srgb-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-masked-bgr10xr-srgb-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-masked-bgr10xr-srgb-red-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-masked-bgra10xr-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-masked-bgra10xr-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-masked-bgra10xr-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-masked-bgra10xr-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-masked-bgra10xr-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-masked-bgra10xr-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-masked-bgra10xr-srgb-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-masked-bgra10xr-srgb-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-masked-bgra10xr-srgb-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-masked-bgra10xr-srgb-rgb-over` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
@@ -8759,6 +8763,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-blend-bgr10xr-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgr10xr-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgr10xr-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-blend-bgr10xr-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-blend-bgr10xr-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgr10xr-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgr10xr-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgr10xr-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
@@ -8771,6 +8777,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-blend-bgr10xr-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgr10xr-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgr10xr-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-blend-bgr10xr-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-blend-bgr10xr-srgb-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgr10xr-srgb-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgr10xr-srgb-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgr10xr-srgb-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
@@ -8783,6 +8791,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-blend-bgr10xr-srgb-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgr10xr-srgb-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgr10xr-srgb-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-blend-bgr10xr-srgb-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-blend-bgr10xr-srgb-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgr10xr-srgb-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgr10xr-srgb-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgr10xr-srgb-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
@@ -8795,6 +8805,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-blend-bgra10xr-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgra10xr-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgra10xr-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-blend-bgra10xr-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-blend-bgra10xr-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgra10xr-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgra10xr-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgra10xr-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
@@ -8807,6 +8819,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-blend-bgra10xr-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgra10xr-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgra10xr-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-blend-bgra10xr-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-blend-bgra10xr-srgb-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgra10xr-srgb-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgra10xr-srgb-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgra10xr-srgb-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
@@ -8819,6 +8833,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-blend-bgra10xr-srgb-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgra10xr-srgb-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgra10xr-srgb-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-blend-bgra10xr-srgb-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-blend-bgra10xr-srgb-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgra10xr-srgb-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgra10xr-srgb-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-bgra10xr-srgb-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
@@ -8831,6 +8847,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-blend-planes-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-planes-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-planes-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-blend-planes-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-blend-planes-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-planes-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-planes-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-planes-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
@@ -8843,6 +8861,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-blend-planes-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-planes-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-planes-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-blend-planes-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-blend-planes-srgb-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-planes-srgb-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-planes-srgb-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-planes-srgb-add` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
@@ -8855,6 +8875,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-blend-planes-srgb-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-planes-srgb-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-planes-srgb-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-blend-planes-srgb-one-zero` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-blend-planes-srgb-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-planes-srgb-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-planes-srgb-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-blend-planes-srgb-premul` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
@@ -8873,6 +8895,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-gamut-bgra10xr-over-float-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-over-float-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-over-float-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-gamut-bgra10xr-over-float-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-gamut-bgra10xr-over-float-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-over-float-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-over-float-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-over-float-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
@@ -8885,6 +8909,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-gamut-bgra10xr-over-half-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-over-half-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-over-half-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-gamut-bgra10xr-over-half-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-gamut-bgra10xr-over-half-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-over-half-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-over-half-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-over-half-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
@@ -8897,6 +8923,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-gamut-bgra10xr-over-half-x4-stencil` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-over-half-x4-stencil` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-over-half-x4-stencil` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-gamut-bgra10xr-over-half-x4-stencil` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-gamut-bgra10xr-srgb-over-float-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-srgb-over-float-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-srgb-over-float-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-srgb-over-float-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
@@ -8909,6 +8937,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-gamut-bgra10xr-srgb-over-float-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-srgb-over-float-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-srgb-over-float-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-gamut-bgra10xr-srgb-over-float-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-gamut-bgra10xr-srgb-over-half-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-srgb-over-half-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-srgb-over-half-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-srgb-over-half-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
@@ -8921,6 +8951,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-gamut-bgra10xr-srgb-over-half-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-srgb-over-half-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-srgb-over-half-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-gamut-bgra10xr-srgb-over-half-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-gamut-bgra10xr-srgb-over-half-x4-stencil` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-srgb-over-half-x4-stencil` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-srgb-over-half-x4-stencil` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-srgb-over-half-x4-stencil` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
@@ -8933,6 +8965,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-gamut-bgra10xr-srgb-straight-float-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-srgb-straight-float-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-srgb-straight-float-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-gamut-bgra10xr-srgb-straight-float-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-gamut-bgra10xr-srgb-straight-float-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-srgb-straight-float-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-srgb-straight-float-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-srgb-straight-float-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
@@ -8945,6 +8979,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-gamut-bgra10xr-srgb-straight-half-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-srgb-straight-half-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-srgb-straight-half-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-gamut-bgra10xr-srgb-straight-half-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-gamut-bgra10xr-srgb-straight-half-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-srgb-straight-half-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-srgb-straight-half-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-srgb-straight-half-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
@@ -8957,6 +8993,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-gamut-bgra10xr-straight-float-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-straight-float-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-straight-float-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-gamut-bgra10xr-straight-float-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-gamut-bgra10xr-straight-float-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-straight-float-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-straight-float-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-straight-float-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
@@ -8969,6 +9007,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-gamut-bgra10xr-straight-half-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-straight-half-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-straight-half-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-gamut-bgra10xr-straight-half-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-gamut-bgra10xr-straight-half-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-straight-half-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-straight-half-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gamut-bgra10xr-straight-half-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
@@ -8981,6 +9021,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-gradient-bgra10xr-blended-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gradient-bgra10xr-blended-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gradient-bgra10xr-blended-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-gradient-bgra10xr-blended-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-gradient-bgra10xr-blended-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gradient-bgra10xr-blended-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gradient-bgra10xr-blended-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gradient-bgra10xr-blended-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
@@ -8993,6 +9035,8 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `xr-gradient-bgra10xr-srgb-blended-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gradient-bgra10xr-srgb-blended-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gradient-bgra10xr-srgb-blended-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-gradient-bgra10xr-srgb-blended-x1` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
+| `xr-gradient-bgra10xr-srgb-blended-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gradient-bgra10xr-srgb-blended-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gradient-bgra10xr-srgb-blended-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `xr-gradient-bgra10xr-srgb-blended-x4` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
