@@ -209,7 +209,9 @@ compile does. `DevicePolicy::default()` is `DevicePolicy::UNTRUSTED`:
   read-only signed-integer attachment joins `signed_color_attachments`. A vertex function that
   writes `[[render_target_array_index]]` compiles in the variant that writes `Layer`, which stores
   0 for an index at or past the render pass's length the consumer pushes
-  (`PushField::RenderTargetArrayLength`, `renderTargetArrayLength` at least 1). A kernel without a
+  (`PushField::RenderTargetArrayLength`, `renderTargetArrayLength` at least 1), and one that writes
+  `[[viewport_array_index]]` stores `ViewportIndex` 0 for an index at or past the draw's viewport
+  count the consumer pushes (`PushField::ViewportCount`). A kernel without a
   call stack whose private bytes pass the 16 KiB floor every device holds keeps its private memory
   in the consumer's device memory: every alloca it indexes at run time is in its private arena,
   whose words for an invocation are the slot of `RuntimeFact::PrivateArena { slot_bytes }` (the

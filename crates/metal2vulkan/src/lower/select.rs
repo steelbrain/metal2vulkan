@@ -1923,13 +1923,14 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
 /// reference code a fragment function under the private alpha test compares with
 /// (`PushField::AlphaTestReference`); the index of the sampled-texture array's element a
 /// fragment function reads a colour attachment through (`PushField::FetchedColor`, framebuffer
-/// fetch on a device with neither ordered form); and the render pass's length, at or past which a
+/// fetch on a device with neither ordered form); the render pass's length, at or past which a
 /// vertex function that writes `[[render_target_array_index]]` stores `Layer` 0
-/// (`PushField::RenderTargetArrayLength`); and the address of the runtime's memory that holds a
-/// kernel's private arena past the floor (`PushField::PrivateArenaAddress`). Its fields past the
-/// push window are a parameter block, whose
-/// address the window holds. Its refusal names the first form the plan holds that they do not
-/// lower ([`identity_refusal`]).
+/// (`PushField::RenderTargetArrayLength`); the address of the runtime's memory that holds a
+/// kernel's private arena past the floor (`PushField::PrivateArenaAddress`); and the draw's
+/// viewport count, at or past which a vertex function that writes `[[viewport_array_index]]` stores
+/// `ViewportIndex` 0 (`PushField::ViewportCount`). Its fields past the push window are a parameter
+/// block, whose address the window holds. Its refusal names the first form the plan holds that
+/// they do not lower ([`identity_refusal`]).
 fn identity_admits(plan: &Plan) -> Result<(), Error> {
     match identity_refusal(plan) {
         None => Ok(()),
@@ -1971,6 +1972,7 @@ fn identity_refusal(plan: &Plan) -> Option<String> {
                 | PushField::FetchedColor { .. }
                 | PushField::RenderTargetArrayLength
                 | PushField::PrivateArenaAddress
+                | PushField::ViewportCount
         ),
     });
     if let Some(f) = field {

@@ -29,6 +29,12 @@
 //!   `rt6_layered_vertex`, which reads it from `constant` memory at its instance) compiles in its
 //!   one form: it pushes the pass's length (`RenderTargetArrayLength`) in its window, depends on
 //!   `RuntimeFact::RenderTargetArrayLength` with no dropped layer, and declares `Layer`.
+//! - On `Device::from_queries`' profile of lavapipe, which enables `multiViewport` and
+//!   `shaderOutputViewportIndex`, a vertex function that writes `[[viewport_array_index]]` (the
+//!   owned fixture `engine/rt6_viewports`'s `rt6_select`, which selects its instance's viewport)
+//!   compiles in its one form: it pushes the draw's viewport count (`ViewportCount`) in its window,
+//!   depends on `RuntimeFact::ViewportCount`, and stores `ViewportIndex` under
+//!   `shaderOutputViewportIndex`.
 //!
 //! `llvm-as` assembles the fixture; a missing tool skips visibly. No GPU is used.
 
@@ -624,5 +630,59 @@ fn pulls_at_pushed_strides(
     for stage in &p.stages {
         check_words_valid(&stage.spirv, &p.requirements, device.profile())
             .unwrap_or_else(|e| panic!("{stem}: {form}: {:?}: {e}", stage.stage));
+    }
+}
+
+/// Under the identity domains on lavapipe's profile, `rt6_select` pushes the draw's viewport count
+/// in its window, depends on it and stores `ViewportIndex`, beside `rt6_viewport_read`, which reads
+/// the index; both modules pass L3.
+#[test]
+fn from_queries_pushes_the_viewport_count_to_a_vertex_function_that_selects_its_viewport() {
+    let ll = engine_dir().join("rt6_viewports.ll");
+    let library = match llvm_assemble(&ll) {
+        Ok(bitcode) => Library::from_air(&bitcode).expect("the library"),
+        Err(AssembleError::Missing(why)) => {
+            eprintln!("SKIPPED: {why}");
+            return;
+        }
+        Err(e) => panic!("{}: {e:?}", ll.display()),
+    };
+    let function = |name| {
+        StageSource::Function(FunctionDescriptor::new(
+            library.function(name).expect("the function"),
+        ))
+    };
+    let mut d = RenderPipelineDescriptor::new(function("rt6_select"));
+    d.fragment = Some(function("rt6_viewport_read"));
+    d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+    let desc = description("lavapipe").unwrap_or_else(|e| panic!("{e}"));
+    let device = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
+    let enabled = &device.profile().enabled().features;
+    assert!(
+        enabled.contains(&VkFeature::MultiViewport)
+            && enabled.contains(&VkFeature::ShaderOutputViewportIndex),
+        "lavapipe's profile enables multiViewport and shaderOutputViewportIndex"
+    );
+    let p = (device.compile_render_pipeline(&d, &Budget::standard()))
+        .unwrap_or_else(|e| panic!("lavapipe: {e:?}"));
+    let vertex = &p.interface.push[0];
+    assert_eq!(vertex.stage, Stage::Vertex);
+    assert!(
+        (vertex.fields.iter())
+            .any(|f| f.field == PushField::ViewportCount && matches!(f.loc, PushLoc::Push { .. })),
+        "the vertex function pushes the draw's viewport count in its window"
+    );
+    assert!(
+        (p.dependencies.iter()).any(|dependency| dependency.fact == RuntimeFact::ViewportCount),
+        "the vertex function depends on the viewport count"
+    );
+    assert!(
+        p.graphics.writes_viewport_index
+            && (p.requirements.features).contains(&VkFeature::ShaderOutputViewportIndex),
+        "the vertex function stores ViewportIndex under shaderOutputViewportIndex"
+    );
+    for stage in &p.stages {
+        check_words_valid(&stage.spirv, &p.requirements, device.profile())
+            .unwrap_or_else(|e| panic!("lavapipe: {:?}: {e}", stage.stage));
     }
 }
