@@ -394,12 +394,12 @@ impl Stages {
 }
 
 /// The pass's color attachments, by Metal index, and its depth/stencil attachment's aspect; in a
-/// pass of more samples, the texture index each color attachment's per-sample read binds its view
-/// at.
+/// pass of more samples, each color attachment's unsigned-integer view, which its fill renders
+/// through and its per-sample read reads (`runtime_multisample::color_view`).
 struct Targets {
     textures: BTreeMap<u32, rt::Texture>,
     depth_stencil: Option<DepthStencil>,
-    views: BTreeMap<u32, u32>,
+    views: BTreeMap<u32, rt::Texture>,
     _grant: Option<rt::IndexGrant>,
 }
 
@@ -486,13 +486,23 @@ impl Targets {
                 (index, next()?),
             )?;
             if target.samples > 1 {
+                let read = sample_read(target.format).map_err(ExecutorError::Failed)?;
+                let SampleRead::Color(reading) = read else {
+                    return Err(ExecutorError::Failed(format!(
+                        "color target {index} reads back as no color"
+                    )));
+                };
+                let view = runtime_multisample::color_view(&texture, reading, next()?).map_err(
+                    |error| runtime_error(&format!("color target {index}'s view"), error),
+                )?;
                 fills.push(runtime_multisample::Fill {
                     texture: texture.clone(),
+                    view: Some(view.clone()),
                     slice: 0,
-                    read: sample_read(target.format).map_err(ExecutorError::Failed)?,
+                    read,
                     texels: target.bytes.clone(),
                 });
-                views.insert(index, next()?);
+                views.insert(index, view);
                 textures.insert(index, texture);
                 continue;
             }
@@ -623,7 +633,7 @@ impl Targets {
                 let texture = self.textures.get(&index).ok_or_else(|| {
                     ExecutorError::Failed(format!("color target {index} is not made"))
                 })?;
-                if let Some(&view) = self.views.get(&index) {
+                if let Some(view) = self.views.get(&index) {
                     let read = sample_read(authored.format).map_err(ExecutorError::Failed)?;
                     let bytes = runtime_multisample::read_back(
                         device,
@@ -710,6 +720,7 @@ impl DepthStencil {
                     _ => {
                         let fill = runtime_multisample::Fill {
                             texture: made.texture.clone(),
+                            view: None,
                             slice: 0,
                             read: SampleRead::Depth,
                             texels: depths.clone(),

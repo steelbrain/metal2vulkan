@@ -481,6 +481,30 @@ fn each_sample_of_a_multisampled_target_holds_its_own_invocation() {
         dimensions: [1, 1],
     };
     let (case, companion) = with_companion(&authored, &fragment);
+    // Each sample's `(sample, 0, 1)`, after its coverage word.
+    let indices = |output: &[u8]| -> Vec<[u32; 3]> {
+        let words: Vec<u32> = output
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|word| u32::from_le_bytes(*word))
+            .collect();
+        words
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|sample| [sample[1], sample[2], sample[3]])
+            .collect()
+    };
+    let expected = [[0, 0, 1], [1, 0, 1], [2, 0, 1], [3, 0, 1]];
+    #[cfg(target_os = "linux")]
+    {
+        assert!(crate::candidate::engine::runs_render_through_runtime(
+            &authored, &case
+        ));
+        let through = run_on_runtime(&case, &fragment, Some(&companion)).unwrap();
+        assert_eq!(indices(&through.output), expected, "through the runtime");
+    }
     let run = run(
         &case,
         RenderLibraries {
@@ -489,24 +513,11 @@ fn each_sample_of_a_multisampled_target_holds_its_own_invocation() {
         },
     )
     .unwrap();
-    let words: Vec<u32> = run
-        .output
-        .chunks_exact(4)
-        .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
-        .collect();
-    let indices: Vec<[u32; 3]> = words
-        .chunks_exact(4)
-        .map(|sample| [sample[1], sample[2], sample[3]])
-        .collect();
-    assert_eq!(indices, [[0, 0, 1], [1, 0, 1], [2, 0, 1], [3, 0, 1]]);
-    #[cfg(target_os = "linux")]
-    {
-        assert!(crate::candidate::engine::runs_render_through_runtime(
-            &authored, &case
-        ));
-        let through = run_on_runtime(&case, &fragment, Some(&companion)).unwrap();
-        assert_eq!(through.output, run.output, "through the runtime");
-    }
+    assert_eq!(
+        indices(&run.output),
+        expected,
+        "on the executor's own context"
+    );
 }
 
 /// A tessellation case drawn through the render executor's patch path: the factor buffer bound

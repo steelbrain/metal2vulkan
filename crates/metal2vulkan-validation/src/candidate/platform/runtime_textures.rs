@@ -23,7 +23,7 @@ use crate::candidate::engine::argument_buffers::FieldKey;
 use crate::candidate::engine::{resources, ComputeCase, RuntimeKernel};
 use crate::case::{ArgumentBufferSamplerResource, SamplerResource, TextureFormat};
 use crate::check::admission::ExecutorError;
-use crate::executor_contract::multisample::sample_read;
+use crate::executor_contract::multisample::{sample_read, SampleRead};
 use crate::gpu::DeviceType;
 use crate::literal::LiteralTexture;
 use metal2vulkan::metal::TextureUsage;
@@ -148,11 +148,22 @@ pub(super) fn make(
     indices: &mut Indices,
     error: impl Fn(&str, rt::Error) -> ExecutorError,
 ) -> Result<Bound, ExecutorError> {
-    let count = wanted.textures.len() + wanted.members.len();
+    // A multisampled color texture's fill renders through a view, which takes an index too.
+    let views = wanted
+        .textures
+        .values()
+        .chain(wanted.members.values())
+        .filter(|texture| {
+            texture.sample_count > 1
+                && matches!(sample_read(texture.format), Ok(SampleRead::Color(_)))
+        })
+        .count();
+    let count = wanted.textures.len() + wanted.members.len() + views;
     let (grant, mut at) = texture_indices(device, indices, count, &error)?;
     let mut fills = Fills::default();
     let mut textures = BTreeMap::new();
-    for ((&binding, texture), index) in wanted.textures.iter().zip(&mut at) {
+    for (&binding, texture) in wanted.textures.iter() {
+        let index = next_index(&mut at)?;
         let usage = wanted
             .texture_usages
             .get(&binding)
@@ -162,18 +173,19 @@ pub(super) fn make(
             })?;
         textures.insert(
             binding,
-            made_texture(device, texture, usage, index, &error, &mut fills)?,
+            made_texture(device, texture, usage, index, &mut at, &error, &mut fills)?,
         );
     }
     let mut members = BTreeMap::new();
-    for ((&key, texture), index) in wanted.members.iter().zip(&mut at) {
+    for (&key, texture) in wanted.members.iter() {
+        let index = next_index(&mut at)?;
         let usage = wanted.member_usages.get(&key).copied().ok_or_else(|| {
             ExecutorError::Failed(format!(
                 "argument-buffer texture {}+{} has no declared usage",
                 key.0, key.1
             ))
         })?;
-        let made = made_texture(device, texture, usage, index, &error, &mut fills)?;
+        let made = made_texture(device, texture, usage, index, &mut at, &error, &mut fills)?;
         members.insert(key, made);
     }
     if !fills.depths.is_empty() {
@@ -212,13 +224,21 @@ struct Fills {
     samples: Vec<runtime_multisample::Fill>,
 }
 
+/// The next texture index of the run's grant `at`.
+fn next_index(at: &mut std::ops::Range<u32>) -> Result<u32, ExecutorError> {
+    at.next()
+        .ok_or_else(|| ExecutorError::Failed("the run's textures outnumber their indices".into()))
+}
+
 /// `texture` made with `usage` at `index`, every level's slices written from its bytes; a 32-bit
-/// float depth's and a multisampled texture's are pushed to `fills` instead, which the run renders.
+/// float depth's and a multisampled texture's are pushed to `fills` instead, which the run renders,
+/// a multisampled color one through its view at the next of `views`.
 fn made_texture(
     device: &rt::Device,
     texture: &LiteralTexture,
     usage: rt::TextureUsage,
     index: u32,
+    views: &mut std::ops::Range<u32>,
     error: &impl Fn(&str, rt::Error) -> ExecutorError,
     fills: &mut Fills,
 ) -> Result<rt::Texture, ExecutorError> {
@@ -255,6 +275,13 @@ fn made_texture(
         .map_err(|e| error(&what, e))?;
     if multisampled {
         let read = sample_read(texture.format).map_err(ExecutorError::Failed)?;
+        let view = match read {
+            SampleRead::Color(reading) => Some(
+                runtime_multisample::color_view(&made, reading, next_index(views)?)
+                    .map_err(|e| error(&format!("{what}'s view"), e))?,
+            ),
+            SampleRead::Depth | SampleRead::Stencil => None,
+        };
         let slice = layout.width as usize
             * layout.height as usize
             * layout.sample_count as usize
@@ -269,6 +296,7 @@ fn made_texture(
         for (at, texels) in texture.bytes.chunks_exact(slice).take(slices).enumerate() {
             fills.samples.push(runtime_multisample::Fill {
                 texture: made.clone(),
+                view: view.clone(),
                 slice: at as u32,
                 read,
                 texels: texels.to_vec(),

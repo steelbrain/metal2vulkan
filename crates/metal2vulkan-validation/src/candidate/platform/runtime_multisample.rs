@@ -3,8 +3,9 @@
 //! neither does the runtime, so each slice is filled by one draw of the owned `sample_fill`
 //! fixture (`fixtures/public/engine/sample_fill.metal`) whose fragment runs once per sample
 //! (`sample_id`) and writes that sample's texel from a buffer: a color texel through an
-//! unsigned-integer view of its texel size (the texture made with `PixelFormatView` usage), so
-//! its bits cross unconverted, and a `Depth32Float` one as `depth(any)` under an always-passing
+//! unsigned-integer view of its texel size (the texture made with `PixelFormatView` usage,
+//! [`color_view`], which takes a texture index of the run's grant, as shaders reach it), so its
+//! bits cross unconverted, and a `Depth32Float` one as `depth(any)` under an always-passing
 //! depth test that writes. A depth outside `[0, 1]` is refused, typed, as `runtime_depth`
 //! refuses it. A stencil aspect holds one value in every sample (`uniform_stencil`), which the
 //! case's pass clears it to. After the work, a dispatch of the fixture's kernels reads every
@@ -36,8 +37,10 @@ const SAMPLE_FILL: &str = include_str!("../../../fixtures/public/engine/sample_f
 
 /// One slice of a multisampled texture and the texels it is filled with, read as `read` (a color
 /// view or depth): every sample of each pixel, pixels row-major, as the case's bytes lay them out.
+/// A color texture renders through `view`, its [`color_view`]; a depth one has none.
 pub(super) struct Fill {
     pub(super) texture: rt::Texture,
+    pub(super) view: Option<rt::Texture>,
     pub(super) slice: u32,
     pub(super) read: SampleRead,
     pub(super) texels: Vec<u8>,
@@ -145,11 +148,9 @@ impl Filling {
                 let format = view_format(reading);
                 descriptor.fragment = Some(stage(library, "sample_fill_color")?);
                 descriptor.color_attachments[0] = Some(ColorAttachmentDescriptor::new(format));
-                let slices = made.array_length.max(1);
-                let view = fill
-                    .texture
-                    .new_texture_view(format, made.texture_type, 0..1, 0..slices, None)
-                    .map_err(|e| error("a multisampled fill's view", e))?;
+                let view = fill.view.clone().ok_or_else(|| {
+                    ExecutorError::Failed("a multisampled color fill has no view".into())
+                })?;
                 (widened(&fill.texels, reading.texel_bytes())?, Some(view))
             }
             SampleRead::Depth => {
@@ -180,15 +181,33 @@ impl Filling {
     }
 }
 
+/// The unsigned-integer view of the multisampled color `texture` that its fill renders through and
+/// its read reads, of `read`'s texel size, at texture index `at` of the run's grant: shaders reach
+/// it, so it takes an index (`Refusal::TextureIndex`).
+pub(super) fn color_view(
+    texture: &rt::Texture,
+    read: ReadbackView,
+    at: u32,
+) -> Result<rt::Texture, rt::Error> {
+    let made = texture.descriptor();
+    texture.new_texture_view(
+        view_format(read),
+        made.texture_type,
+        0..1,
+        0..made.array_length.max(1),
+        Some(at),
+    )
+}
+
 /// Every sample of the 2D multisampled `texture`, read as `read`, in the attachment layout. A
-/// color texture is read through a view made at `view_index` of the run's grant; a depth or
-/// stencil one is bound itself, at its own index (`view_index` then `None`).
+/// color texture is read through `view`, its [`color_view`]; a depth or stencil one is bound
+/// itself, at its own index (`view` then `None`).
 pub(super) fn read_back(
     device: &rt::Device,
     device_type: DeviceType,
     texture: &rt::Texture,
     read: SampleRead,
-    view_index: Option<u32>,
+    view: Option<&rt::Texture>,
     error: &impl Fn(&str, rt::Error) -> ExecutorError,
 ) -> Result<Vec<u8>, ExecutorError> {
     let made = texture.descriptor();
@@ -204,19 +223,14 @@ pub(super) fn read_back(
     let state = runtime::made_within(|numbered| {
         device.new_compute_pipeline_state(&descriptor, |samplers| numbered(samplers))
     })?;
-    let view = match read {
-        SampleRead::Color(view) => Some(
-            texture
-                .new_texture_view(
-                    view_format(view),
-                    made.texture_type,
-                    0..1,
-                    0..made.array_length.max(1),
-                    view_index,
-                )
-                .map_err(|e| error("the multisampled read's view", e))?,
-        ),
-        SampleRead::Depth | SampleRead::Stencil => None,
+    let bound = match (read, view) {
+        (SampleRead::Color(_), Some(view)) => view,
+        (SampleRead::Color(_), None) => {
+            return Err(ExecutorError::Failed(
+                "a multisampled color read has no view".into(),
+            ))
+        }
+        (SampleRead::Depth | SampleRead::Stencil, _) => texture,
     };
     let length = readback_bytes(dimensions, samples, read).map_err(ExecutorError::Failed)?;
     let words = Placed::new(device, "the multisampled read's words", &vec![0; length])?;
@@ -239,7 +253,7 @@ pub(super) fn read_back(
                 .set_compute_pipeline_state(&state)
                 .map_err(fail("the multisampled read's pipeline state"))?;
             encoder
-                .set_texture(Some(view.as_ref().unwrap_or(texture)), 0)
+                .set_texture(Some(bound), 0)
                 .map_err(fail("the multisampled read's texture"))?;
             encoder
                 .set_buffer(Some(&words.buffer), 0, 0)
@@ -288,7 +302,7 @@ fn shape(width: u32, samples: u32, words: u32) -> Vec<u8> {
 /// The `uint4` each sample's texel of `texel` bytes is to the fill's fragment: its little-endian
 /// words, the last zero-extended, then zeros.
 fn widened(texels: &[u8], texel: usize) -> Result<Vec<u8>, ExecutorError> {
-    if texel == 0 || texels.len() % texel != 0 {
+    if texel == 0 || !texels.len().is_multiple_of(texel) {
         return Err(ExecutorError::Failed(format!(
             "a multisampled fill of {} bytes is no whole number of {texel}-byte texels",
             texels.len()
