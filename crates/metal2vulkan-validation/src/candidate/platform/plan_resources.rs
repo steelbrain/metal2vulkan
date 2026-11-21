@@ -112,9 +112,8 @@ pub(super) struct Guest<'a> {
     /// reads (framebuffer fetch), in `GENERAL`. A dispatch has none.
     pub(super) attachments: &'a BTreeMap<u32, vk::ImageView>,
     /// The run's `ExecutionStatus` buffer, which a stage binds on a device that does not address
-    /// buffers (`WriteSource::ExecutionStatus`). A device replay, which needs the addresses,
-    /// has none.
-    pub(super) status: Option<vk::Buffer>,
+    /// buffers (`WriteSource::ExecutionStatus`).
+    pub(super) status: vk::Buffer,
 }
 
 /// What one descriptor write points at.
@@ -406,17 +405,12 @@ impl<'a> PlanResources<'a> {
                 whole(buffer)
             }
             // The run's status words, the ones every command of it writes.
-            WriteSource::ExecutionStatus => {
-                let status = guest
-                    .status
-                    .ok_or("the plan binds an execution status the run has none of")?;
-                Info::Buffer(
-                    vk::DescriptorBufferInfo::default()
-                        .buffer(status)
-                        .offset(0)
-                        .range(ExecutionStatus::BYTES as u64),
-                )
-            }
+            WriteSource::ExecutionStatus => Info::Buffer(
+                vk::DescriptorBufferInfo::default()
+                    .buffer(guest.status)
+                    .offset(0)
+                    .range(ExecutionStatus::BYTES as u64),
+            ),
             WriteSource::Texture { slot, view } => {
                 let (image, layout) = self.image(TextureKey::Slot(*slot))?;
                 let view = self.view(context, image, view)?;

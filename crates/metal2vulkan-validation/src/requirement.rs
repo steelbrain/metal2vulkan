@@ -162,13 +162,6 @@ pub enum ToolingRequirement {
     /// the authored compile census still compiles an object or mesh case's pipeline
     /// (`engine::prepare_compile`).
     MeshRenderPipeline,
-    /// A replayed pipeline template the engine's candidate does not replay
-    /// (`candidate::engine::replay_templates`): a compute template that binds more than buffers
-    /// and threadgroup memory, or a render template that is not a rasterization-disabled vertex
-    /// function binding buffers only (a template of a family the runtime does not build is refused
-    /// as that family first). A case's templates raise it, never a source's structure, so no census
-    /// row carries it.
-    ReplayedTemplateResources,
     /// A sequentially consistent fence its entry's pipeline compiles
     /// (`executor_contract::seq_cst_fence`): an `atomic_thread_fence` of `memory_order_seq_cst`
     /// that orders a memory beyond its thread, or a `seq_cst` barrier of the MSL 4.1 form whose
@@ -313,7 +306,7 @@ const AUTHORING: &[Executor] = &Executor::ALL;
 const ENGINE: &[Executor] = &[Executor::EngineCandidate];
 
 impl ToolingRequirement {
-    pub const ALL: [Self; 44] = [
+    pub const ALL: [Self; 43] = [
         Self::FunctionConstantLiteral,
         Self::VertexAttributeLiteral,
         Self::TessellationAttributeLiteral,
@@ -338,7 +331,6 @@ impl ToolingRequirement {
         Self::MeshCompanion,
         Self::DepthOutsideUnitRange,
         Self::MeshRenderPipeline,
-        Self::ReplayedTemplateResources,
         Self::SeqCstFence,
         Self::RenderFunctionTable,
         Self::IndexBufferPastEnd,
@@ -388,7 +380,6 @@ impl ToolingRequirement {
             Self::MeshCompanion => "mesh_companion",
             Self::DepthOutsideUnitRange => "depth_outside_unit_range",
             Self::MeshRenderPipeline => "mesh_render_pipeline",
-            Self::ReplayedTemplateResources => "replayed_template_resources",
             Self::SeqCstFence => "seq_cst_fence",
             Self::RenderFunctionTable => "render_function_table",
             Self::IndexBufferPastEnd => "index_buffer_past_end",
@@ -425,9 +416,8 @@ impl ToolingRequirement {
     ///   rasterization-rate map data a case can author only as bytes, which hold one
     ///   implementation's private layout where the engine's module decodes this crate's, and a
     ///   depth outside `[0, 1]` a case gives a depth image, which the runtime puts nowhere
-    ///   ([`ToolingRequirement::DepthOutsideUnitRange`]), and a mesh render pipeline or a replayed
-    ///   template it does not draw or replay ([`ToolingRequirement::MeshRenderPipeline`],
-    ///   [`ToolingRequirement::ReplayedTemplateResources`]), and a texture buffer an argument
+    ///   ([`ToolingRequirement::DepthOutsideUnitRange`]), and a mesh render pipeline it does not
+    ///   draw ([`ToolingRequirement::MeshRenderPipeline`]), and a texture buffer an argument
     ///   buffer or a texture-handle array holds ([`ToolingRequirement::TextureBufferMember`]),
     ///   and a sequentially consistent fence, a render function's function table, an indexed draw
     ///   past its index buffer, a 64-bit texture atomic and separate depth and stencil attachments,
@@ -462,7 +452,6 @@ impl ToolingRequirement {
             | Self::DepthOutsideUnitRange
             | Self::MeshRenderPipeline
             | Self::TextureBufferMember
-            | Self::ReplayedTemplateResources
             | Self::SeqCstFence
             | Self::RenderFunctionTable
             | Self::IndexBufferPastEnd

@@ -36,7 +36,6 @@ fn run(case: &RenderCase, libraries: RenderLibraries<'_>) -> Result<ComputeRun, 
                 .collect::<Vec<_>>();
             compile_render(compile_worker(), device, &request, &sources)
         },
-        |_, token, _, _| Err(format!("no template has pipeline token {token}").into()),
     )
     .result
 }

@@ -14,17 +14,15 @@ use super::device::{
     refused_restriction, with_validated_context, RefusedRestriction, VulkanContext,
 };
 use super::plan_resources::{padded, Guest, PlanResources, TextureKey};
-use crate::candidate::engine::argument_buffers::{
-    field_words, owner_bytes, records_storage, validate_records,
-};
+use crate::candidate::engine::argument_buffers::{field_words, owner_bytes};
 use crate::candidate::engine::guards::{
     embedded_guard_reach, guard_reach, with_escaped, GuardCount, GuardReach,
 };
 use crate::candidate::engine::{
     bind_refusal, bind_state, compute_shape, engine_fingerprint, out_of_bounds_run,
-    product_refusal, records_ids, resources, run_allocations, sampler_ids, select_output,
-    status_verdict, synthetic_used_addresses, texture_tokens, BufferAddress, ComputeCase,
-    ComputeOutput, ComputeRun, RunAllocation, RunAttempt,
+    product_refusal, resources, sampler_ids, select_output, status_verdict,
+    synthetic_used_addresses, texture_tokens, BufferAddress, ComputeCase, ComputeOutput,
+    ComputeRun, RunAttempt,
 };
 use crate::case::out_of_bounds::OutOfBoundsResource;
 use crate::check::admission::{ExecutorError, NotSupported};
@@ -40,8 +38,8 @@ use ash::vk;
 use metal2vulkan::bind::BindingPlan;
 use metal2vulkan::bind::{BindShape, BufferRanges};
 use metal2vulkan::bind::{
-    DispatchCommands, DispatchRegion, ExecutionStatus, NeutralResource, PushHole, ReplayVariant,
-    RootTable, SamplerDescriptor,
+    DispatchCommands, DispatchRegion, ExecutionStatus, NeutralResource, PushHole, RootTable,
+    SamplerDescriptor,
 };
 use metal2vulkan::device::VkFeature;
 use metal2vulkan::device::{Device, DeviceDescription, DeviceProfile};
@@ -52,43 +50,26 @@ use std::ffi::CString;
 use std::sync::Arc;
 use std::time::Duration;
 
-mod device_replay;
-mod draw_replay;
-mod replay;
-use crate::candidate::engine::{ChildCommand, CompiledChild};
-pub(super) use device_replay::{replay_commands, OnDevice, ReplayPath};
-pub(in crate::candidate) use replay::CompileChild;
-pub(super) use replay::{Live, Replay};
-
 /// One region's push-constant writes: `(stages, offset, bytes)`, holes filled.
 type PushWrites = Vec<(vk::ShaderStageFlags, u32, Vec<u8>)>;
 
 /// Compile `case` for the device `device_type` opens with `compile` (given the opened device's
 /// description and policy, and the shape the dispatch binds, which decides the lowering inputs; it
 /// returns the pipeline), plan and execute its dispatch, and
-/// read the status before the output. The commands of each executed command buffer run after it,
-/// compiled with `children`: on the device over the `registered` replay variants where the product
-/// sets the device replay up, by the host replay elsewhere. Every refusal is typed; only a device,
-/// driver, or tool failure is `Failed`. A typed refusal after the device opened names that device
+/// read the status before the output. Every refusal is typed; only a device, driver, or tool
+/// failure is `Failed`. A typed refusal after the device opened names that device
 /// ([`RunAttempt::refused_on`]).
 pub fn execute_engine(
     device_type: DeviceType,
     case_id: &str,
     case: &ComputeCase,
     compile: impl FnOnce(&WorkerDevice, &BindShape) -> Result<ComputePipeline, ExecutorError>,
-    children: impl FnMut(
-        &WorkerDevice,
-        u64,
-        &BindShape,
-        &ChildCommand,
-    ) -> Result<CompiledChild, ExecutorError>,
-    registered: &[ReplayVariant],
 ) -> RunAttempt {
     if let Some(refused) = refused_attempt(device_type, "engine-compute") {
         return refused;
     }
     with_validated_context(device_type, |context| {
-        let result = run(context, case_id, case, (compile, children), registered);
+        let result = run(context, case_id, case, compile);
         Ok(attempt(context, result, "engine-compute"))
     })
     .unwrap_or_else(|error| RunAttempt::of(Err(ExecutorError::Failed(error))))
@@ -227,16 +208,7 @@ fn run(
     context: &VulkanContext,
     case_id: &str,
     case: &ComputeCase,
-    (compile, mut children): (
-        impl FnOnce(&WorkerDevice, &BindShape) -> Result<ComputePipeline, ExecutorError>,
-        impl FnMut(
-            &WorkerDevice,
-            u64,
-            &BindShape,
-            &ChildCommand,
-        ) -> Result<CompiledChild, ExecutorError>,
-    ),
-    registered: &[ReplayVariant],
+    compile: impl FnOnce(&WorkerDevice, &BindShape) -> Result<ComputePipeline, ExecutorError>,
 ) -> Result<ComputeRun, ExecutorError> {
     let target = opened_device(context)?;
     let addressed = context
@@ -274,17 +246,8 @@ fn run(
         case_id: case_id.into(),
         module_sha256: spv_sha256.clone(),
     };
-    let mut compile_child = |token: u64, shape: &BindShape, command: &ChildCommand| {
-        children(&target, token, shape, command)
-    };
     let executed = with_submission_label(label, || {
-        execute(
-            context,
-            device,
-            (&pipeline, &shape),
-            case,
-            (&mut compile_child, registered),
-        )
+        execute(context, device, (&pipeline, &shape), case)
     });
     // Every object of the run is destroyed by now, so destruction reports here too.
     let messages = context.take_messages();
@@ -302,23 +265,19 @@ fn run(
     let Executed {
         output,
         status,
-        children,
         escaped,
-        replayed,
     } = executed?;
-    // The census covers every module the run executed: the producer's, under the specialization
-    // its plan for the shape gives, and each replayed command's.
+    // The census covers the module the run executed, under the specialization its plan for the
+    // shape gives.
     let planned = pipeline.plan(device, &shape).ok();
-    let mut modules = module_censuses(
+    let modules = module_censuses(
         std::slice::from_ref(&pipeline.stage),
         device.profile(),
         planned.as_ref(),
     )?;
-    modules.extend(children);
     let out_of_bounds = out_of_bounds.map(|run| with_escaped(run, &escaped));
     let census = executed_census(context, modules, out_of_bounds);
-    let mut environment = environment(context, device, "engine-compute");
-    command_replay(&mut environment, &replayed);
+    let environment = environment(context, device, "engine-compute");
     Ok(ComputeRun {
         output,
         spv_sha256: Some(spv_sha256),
@@ -351,15 +310,6 @@ pub(super) fn executed_census(
             .map(|restriction| restriction.stem.clone()),
         modules,
         artifact: None,
-    }
-}
-
-/// Record in `environment` which replay ran each executed command buffer, in key order
-/// (`command_replay`, [`ReplayPath::name`]), where any ran.
-pub(super) fn command_replay(environment: &mut serde_json::Value, replayed: &[ReplayPath]) {
-    if let (false, Some(object)) = (replayed.is_empty(), environment.as_object_mut()) {
-        let paths: Vec<&str> = replayed.iter().map(|path| path.name()).collect();
-        object.insert("command_replay".into(), serde_json::json!(paths));
     }
 }
 
@@ -439,15 +389,12 @@ impl Drop for Objects<'_> {
     }
 }
 
-/// What [`execute`] read after the run: the output, the status, the census of each module a
-/// replayed command executed, the guard and padding bytes that changed around each guarded buffer,
-/// by out-of-bounds target, and which replay ran each executed command buffer, in key order.
+/// What [`execute`] read after the run: the output, the status, and the guard and padding bytes
+/// that changed around each guarded buffer, by out-of-bounds target.
 struct Executed {
     output: Vec<u8>,
     status: metal2vulkan::bind::StatusReport,
-    children: Vec<ModuleCensus>,
     escaped: BTreeMap<OutOfBoundsResource, GuardCount>,
-    replayed: Vec<ReplayPath>,
 }
 
 /// A buffer the run allocated, with its device address when the device has them.
@@ -503,18 +450,15 @@ fn not_implemented(what: impl Into<String>) -> ExecutorError {
 }
 
 /// Allocate the case's buffers (argument-buffer buffers first, so each owner is created with their
-/// addresses, its textures' and samplers' resource ids, and its command buffers', [`field_words`],
-/// [`owner_bytes`]), plan and instantiate its dispatch, create what every plan write names
-/// (`plan_resources`: textures, argument-buffer textures, heap arrays, handle tables, samplers, and
-/// neutrals included), record and submit it, wait, and read the status and then
-/// the output ([`Executed`]). `compile` compiles the children the case's executed command
-/// buffers dispatch, each in a compile worker: on the device, the `registered` replay variants.
+/// addresses and its textures' and samplers' resource ids, [`field_words`], [`owner_bytes`]), plan
+/// and instantiate its dispatch, create what every plan write names (`plan_resources`: textures,
+/// argument-buffer textures, heap arrays, handle tables, samplers, and neutrals included), record
+/// and submit it, wait, and read the status and then the output ([`Executed`]).
 fn execute(
     context: &VulkanContext,
     device: &Device,
     (pipeline, compiled_for): (&ComputePipeline, &BindShape),
     case: &ComputeCase,
-    (compile, registered): (&mut CompileChild<'_>, &[ReplayVariant]),
 ) -> Result<Executed, ExecutorError> {
     let addressed = context
         .enabled
@@ -527,7 +471,6 @@ fn execute(
         None => Ok(synthetic),
     };
     let synthetic_used = synthetic_used_addresses(case).map_err(ExecutorError::Failed)?;
-    let records = records_ids(case).map_err(ExecutorError::Failed)?;
     let mut embedded = BTreeMap::new();
     let mut embedded_addresses = BTreeMap::new();
     for (&key, bytes) in &case.argument_buffer_buffers {
@@ -540,21 +483,14 @@ fn execute(
             vk::BufferUsageFlags::empty(),
             embedded_guard_reach(case, key),
         )?;
-        // A command buffer's record storage lies at its ID's records address.
-        let address = match records.get(&key) {
-            Some(&id) => records_storage(id, allocation.address),
-            None => own_guest(&allocation, synthetic_used[&key])?,
-        };
-        embedded_addresses.insert(key, address);
+        embedded_addresses.insert(key, own_guest(&allocation, synthetic_used[&key])?);
         embedded.insert(key, allocation);
     }
     let tokens = texture_tokens(case).map_err(ExecutorError::Failed)?;
     let fields = field_words(
         &embedded_addresses,
-        &records,
         &tokens,
         &sampler_ids(case).map_err(ExecutorError::Failed)?,
-        case.objects.iter().map(|(&key, &word)| (key, word)),
     )
     .map_err(ExecutorError::Failed)?;
     let mut buffers = BTreeMap::new();
@@ -580,23 +516,6 @@ fn execute(
             ))
         })
         .collect::<Result<_, ExecutorError>>()?;
-    // The commands the host encodes, written into their record storage before the producer runs,
-    // each buffer at its case buffer's guest address.
-    for (key, command) in &case.command_buffers {
-        if command.commands.is_empty() {
-            continue;
-        }
-        let storage = embedded
-            .get(key)
-            .ok_or_else(|| format!("command buffer {key:?} has no record storage"))?;
-        // SAFETY: the storage was created for this run and nothing has been submitted yet.
-        let mapped = unsafe { storage.buffer.map()? };
-        command
-            .encode_host_records(mapped.bytes, |buffer| {
-                addresses.get(&buffer).map(|address| address.guest)
-            })
-            .map_err(ExecutorError::Failed)?;
-    }
     let ranges = BufferRanges::of(device.profile().limits());
     let state =
         bind_state(case, &addresses, &embedded_addresses, ranges).map_err(ExecutorError::Failed)?;
@@ -695,7 +614,7 @@ fn execute(
             // A dispatch draws no patches and has no attachments.
             tessellation_factors: None,
             attachments: &BTreeMap::new(),
-            status: Some(status.buffer.buffer),
+            status: status.buffer.buffer,
         },
         observed,
     )?;
@@ -751,64 +670,11 @@ fn execute(
         .try_into()
         .expect("the status buffer holds ExecutionStatus::BYTES bytes");
     let report = status_verdict(&status_bytes)?;
-    // Each command buffer's records as the host contract decodes them: an encoding fault fails the
-    // run. Then the commands the case executes run, over the run's allocations.
-    let mut records = BTreeMap::new();
-    for &key in case.command_buffers.keys() {
-        let allocation = embedded
-            .get(&key)
-            .ok_or_else(|| format!("command buffer {key:?} has no record storage"))?;
-        let len = case.argument_buffer_buffers[&key].len();
-        // SAFETY: as for the status buffer.
-        let bytes = unsafe { allocation.buffer.map()? }.bytes[..len].to_vec();
-        records.insert(key, bytes);
-    }
-    validate_records(
-        case.command_buffers
-            .iter()
-            .map(|(&key, command)| (key, command)),
-        &records,
-    )
-    .map_err(ExecutorError::Failed)?;
-    // Each allocation at its guest address and the length the guest sees (not the padding), in
-    // the run's order (`run_allocations`), which the device replay's resident set follows.
-    let live = run_allocations(case)
-        .into_iter()
-        .map(|(held, length)| {
-            let (address, allocation) = match held {
-                RunAllocation::Buffer(index) => (addresses[&index], &buffers[&index]),
-                RunAllocation::ArgumentBuffer(key) => (embedded_addresses[&key], &embedded[&key]),
-            };
-            Live {
-                buffer: allocation.buffer.buffer,
-                address,
-                length,
-            }
-        })
-        .collect::<Vec<_>>();
-    let (executed, replayed) = replay_commands(
-        context,
-        device,
-        case.command_buffers
-            .iter()
-            .map(|(&key, command)| (key, command)),
-        Replay {
-            live: &live,
-            records: &records,
-            addresses: &|_, buffer| addresses.get(&buffer).map(|address| address.guest),
-            compile,
-        },
-        OnDevice {
-            registered,
-            storage: &|key| embedded.get(&key).and_then(|allocation| allocation.address),
-            writes: pipeline.interface.command_writes,
-        },
-    )?;
     let mut finals = BTreeMap::new();
     let mut escaped = BTreeMap::new();
     for (&index, allocation) in &buffers {
         let len = case.buffers[&index].len();
-        // SAFETY: as for the status buffer; every replayed command completed too.
+        // SAFETY: as for the status buffer.
         let bytes = unsafe { allocation.buffer.map()? }.bytes[..len].to_vec();
         finals.insert(index, bytes);
         // SAFETY: as for the status buffer.
@@ -872,9 +738,7 @@ fn execute(
     Ok(Executed {
         output,
         status: report,
-        children: executed,
         escaped,
-        replayed,
     })
 }
 

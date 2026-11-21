@@ -583,7 +583,6 @@ pub(crate) fn draw_request<'a>(
                 function: function(&case.vertex),
                 template: render_template(case),
                 shape: Some(shape.clone()),
-                form: crate::candidate::engine::variants::DrawForm::Bound,
             },
             vec![libraries.vertex],
         ),
@@ -1276,14 +1275,7 @@ fn render_cases_bind_argument_buffer_buffers_and_texture_arrays() {
         listed.desc,
         resources::argument_sampler_descriptor(&members.argument_buffer_samplers[0])
     );
-    let words = field_words(
-        &embedded,
-        &BTreeMap::new(),
-        &tokens,
-        &samplers,
-        std::iter::empty(),
-    )
-    .unwrap();
+    let words = field_words(&embedded, &tokens, &samplers).unwrap();
     assert_eq!(
         words,
         BTreeMap::from([

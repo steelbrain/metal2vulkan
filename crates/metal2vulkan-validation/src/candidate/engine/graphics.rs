@@ -15,7 +15,7 @@
 //!   oracle's slots ([`vertex_input_slots`]), the oracle's 1×1 `R8Unorm` color attachment as API
 //!   scaffolding, and the case's buffers, textures (texture-array elements at their slots),
 //!   samplers, argument-buffer buffers ([`super::argument_buffers`]), and argument-buffer textures
-//!   and command buffers bound to the vertex stage;
+//!   and samplers bound to the vertex stage;
 //! - a fragment case draws through its generated passthrough vertex companion, with the case's
 //!   resources bound to the fragment stage and its render targets attached;
 //! - a vertex case observed through its position or a varying draws into its generated observer
@@ -37,7 +37,6 @@ use super::{
     function_constants, require_case_families, resources, select_range, views_told_apart,
     BufferAddress,
 };
-use crate::case::indirect_commands::CommandBufferResource;
 use crate::case::out_of_bounds::OutOfBoundsTarget;
 use crate::case::{
     ArgumentBufferSamplerResource, AttributeFormat, AuthoredCase, OutputSelection, Primitive,
@@ -85,14 +84,6 @@ pub struct StageResources {
     /// Each argument-buffer sampler, by `(owner Metal index, field offset)`: an argument sampler
     /// whose id its owner holds at the field.
     pub argument_buffer_samplers: BTreeMap<FieldKey, ArgumentBufferSamplerResource>,
-    /// Each pipeline state, by `(owner Metal index, field offset)`: the case's token for it, the
-    /// word its owner holds at the field ([`argument_buffers::embed_objects`]).
-    pub objects: BTreeMap<FieldKey, u64>,
-    /// Each command buffer, by `(owner Metal index, field offset)`: its record storage is the
-    /// argument-buffer buffer at the key, at its ID's records address, and its owner holds its ID
-    /// ([`records_ids`]); the run checks its final records
-    /// ([`argument_buffers::validate_records`]).
-    pub command_buffers: BTreeMap<FieldKey, CommandBufferResource>,
     /// Each bound texture (texture-array elements included, each element at its own slot,
     /// [`resources::bound_textures`]) with its initial contents.
     pub textures: BTreeMap<u32, LiteralTexture>,
@@ -306,32 +297,6 @@ impl RenderCase {
                 .argument_buffer_samplers
                 .iter()
                 .map(move |(&(owner, field), sampler)| ((stage, owner, field), sampler))
-        })
-    }
-
-    /// Each pipeline state of each stage with its token, by `(stage, owner, field offset)`, in
-    /// stage order.
-    pub fn objects(&self) -> impl Iterator<Item = ((ShaderStage, u32, u32), u64)> + '_ {
-        self.stages().flat_map(|(stage, function)| {
-            function
-                .resources
-                .objects
-                .iter()
-                .map(move |(&(owner, field), &word)| ((stage, owner, field), word))
-        })
-    }
-
-    /// Each command buffer of each stage, by `(stage, owner, field offset)`, in stage order: its
-    /// record storage is the argument-buffer buffer at the same key.
-    pub fn command_buffers(
-        &self,
-    ) -> impl Iterator<Item = ((ShaderStage, u32, u32), &CommandBufferResource)> {
-        self.stages().flat_map(|(stage, function)| {
-            function
-                .resources
-                .command_buffers
-                .iter()
-                .map(move |(&(owner, field), command)| ((stage, owner, field), command))
         })
     }
 
@@ -677,14 +642,20 @@ pub fn stage_output(
 }
 
 /// What the case's own function binds, from its literals `literal`: its buffers (an argument
-/// buffer's owner covering each pointer field), its argument buffers' members, the pipeline states
-/// and command buffers its argument buffers hold, its textures (texture-array elements each at its
-/// own slot) and samplers. The one mapping a render case's and a mesh case's own stage share.
+/// buffer's owner covering each pointer field), its argument buffers' members, its textures
+/// (texture-array elements each at its own slot) and samplers. The one mapping a render case's and
+/// a mesh case's own stage share. A case with an indirect command buffer or a pipeline state in an
+/// argument buffer is not mapped (`NotImplemented`).
 pub fn stage_resources(
     case: &AuthoredCase,
     literal: &LiteralResources,
 ) -> Result<StageResources, ExecutorError> {
     let gap = |what: &str| NotSupported::NotImplemented(format!("engine candidate: {what}"));
+    if !case.command_buffers.is_empty() || !case.pipeline_states.is_empty() {
+        return Err(
+            gap("an indirect command buffer or a pipeline state in an argument buffer").into(),
+        );
+    }
     let mut resources = StageResources::default();
     for buffer in &literal.buffers {
         if resources
@@ -704,15 +675,6 @@ pub fn stage_resources(
     resources.argument_buffer_samplers =
         argument_buffers::embed_samplers(&mut resources.buffers, &case.argument_buffer_samplers)
             .map_err(|error| gap(&error))?;
-    let objects = argument_buffers::embed_objects(
-        &mut resources.buffers,
-        &mut resources.argument_buffer_buffers,
-        &case.command_buffers,
-        &case.pipeline_states,
-    )
-    .map_err(|error| gap(&error))?;
-    resources.objects = objects.pipeline_tokens;
-    resources.command_buffers = objects.command_buffers;
     resources.textures = resources::bound_textures(&literal.textures, &literal.texture_arrays)
         .map_err(|error| gap(&error))?;
     for sampler in &case.samplers {
@@ -873,25 +835,6 @@ pub fn vertex_format(format: AttributeFormat) -> metal::VertexFormat {
 /// The topology class of a draw's primitive (`inputPrimitiveTopology`, as the oracle sets it).
 pub fn topology_class(primitive: Primitive) -> metal::PrimitiveTopologyClass {
     primitive.topology_class()
-}
-
-/// Whether a replayed draw of `primitive` is one the template compiled for `assembly` defines:
-/// Metal compiles a render template for its own draw's topology class, so a draw of another class
-/// (a GPU-encoded one; the checker refuses a host-encoded one) fails the run, and a patch template
-/// is not replayed.
-pub fn replayed_draw_in_class(assembly: &Assembly, primitive: Primitive) -> Result<(), String> {
-    match assembly {
-        Assembly::Primitives(compiled)
-            if topology_class(*compiled) == topology_class(primitive) =>
-        {
-            Ok(())
-        }
-        Assembly::Primitives(compiled) => Err(format!(
-            "a replayed draw of {primitive:?} is outside the topology class of its template, \
-             compiled for {compiled:?}"
-        )),
-        Assembly::Patches { .. } => Err("a replayed draw's template draws patches".into()),
-    }
 }
 
 /// The Vulkan input assembly of a draw's primitive, the consumer's pipeline state within the
@@ -1200,22 +1143,11 @@ pub fn texture_tokens(case: &RenderCase) -> Result<BTreeMap<(ShaderStage, u32, u
 }
 
 /// The synthetic guest address of each argument-buffer buffer of `case`, by its key
-/// ([`argument_buffers::synthetic_addresses`]): a command buffer's record storage at its records
-/// address ([`records_ids`]), every other buffer at its [`BufferAddress::synthetic_used`].
+/// ([`argument_buffers::synthetic_addresses`]): its [`BufferAddress::synthetic_used`].
 pub fn synthetic_used_addresses(
     case: &RenderCase,
 ) -> Result<BTreeMap<(ShaderStage, u32, u32), BufferAddress>, String> {
-    argument_buffers::synthetic_addresses(
-        case.argument_buffer_buffers().map(|(key, _)| key),
-        &records_ids(case)?,
-    )
-}
-
-/// The `gpuResourceID` of each command buffer of `case`, by `(stage, owner, field offset)`, in
-/// stage order ([`argument_buffers::records_ids`]): the word its owner holds, which the product
-/// resolves to its record storage. The stages' command buffers share one space, as Metal's do.
-pub fn records_ids(case: &RenderCase) -> Result<BTreeMap<(ShaderStage, u32, u32), u64>, String> {
-    argument_buffers::records_ids(case.command_buffers().map(|(key, _)| key))
+    argument_buffers::synthetic_addresses(case.argument_buffer_buffers().map(|(key, _)| key))
 }
 
 /// The `BindShape` the render executor binds `case` with on a device that has device addresses

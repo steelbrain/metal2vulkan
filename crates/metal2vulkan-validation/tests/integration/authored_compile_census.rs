@@ -305,9 +305,7 @@ fn the_census_refuses_command_buffer_cases_by_their_requirements() {
 #[test]
 fn the_census_compiles_the_mesh_pipelines_no_candidate_draws() {
     use metal2vulkan_validation::authored_compile::compile_case;
-    use metal2vulkan_validation::candidate::engine::{
-        case_compiles, prepare_case, prepare_compile, CompileSubject,
-    };
+    use metal2vulkan_validation::candidate::engine::{case_compile, prepare_case, prepare_compile};
     use metal2vulkan_validation::check::admission::{
         admit, ExecutionRequest, ExecutorError, NotSupported,
     };
@@ -348,17 +346,7 @@ fn the_census_compiles_the_mesh_pipelines_no_candidate_draws() {
         );
         let prepared = prepare_compile(device, admitted())
             .unwrap_or_else(|error| panic!("{name}: preparation: {error}"));
-        let planned = case_compiles(&prepared, &lavapipe).unwrap();
-        assert_eq!(planned.host_replayed, 0, "{name}");
-        assert_eq!(
-            planned
-                .compiles
-                .iter()
-                .map(|compile| compile.subject)
-                .collect::<Vec<_>>(),
-            [CompileSubject::Case],
-            "{name}"
-        );
+        case_compile(&prepared, &lavapipe).unwrap();
         let cells = compile_case(scratch.path(), &worker, &case, &[&lavapipe]);
         assert_eq!(cells.len(), 1, "{name}");
         assert_eq!(

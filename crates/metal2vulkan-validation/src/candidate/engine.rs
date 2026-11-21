@@ -14,8 +14,8 @@
 //! ([`linked_modules`]). Each element of a texture array is the texture at its own Metal slot
 //! ([`resources::bound_textures`]), and an argument-buffer buffer of either executor is a used
 //! resource whose address its owner holds ([`argument_buffers`]); an argument-buffer texture is a
-//! used texture whose resource id its owner holds, a member of the plan's heap, and a command
-//! buffer an opaque id in its owner. Nothing about the layout is re-derived here.
+//! used texture whose resource id its owner holds, a member of the plan's heap. Nothing about the
+//! layout is re-derived here.
 //!
 //! Safety and evidence rules, in the order they apply:
 //!
@@ -40,7 +40,6 @@
 
 use crate::acceptance::{LinkedLibrary, PipelineRequest, RequestFunction};
 use crate::c3::{VenueProfile, Venues, VENUE_PROFILE};
-use crate::case::indirect_commands::CommandBufferResource;
 use crate::case::out_of_bounds::{OutOfBoundsResource, OutOfBoundsTarget};
 use crate::case::{
     ArgumentBufferSamplerResource, AuthoredCase, OutputSelection, SamplerResource, Stage,
@@ -77,7 +76,7 @@ use crate::worker::WorkerFailure;
 use base64::Engine as _;
 use metal2vulkan::bind::{
     BindShape, BindState, BoundBuffer, BufferRanges, Dispatch, DrawCall, ExecutionStatus,
-    ReplayVariant, StageTable, StatusReport,
+    StageTable, StatusReport,
 };
 use metal2vulkan::cache::Hash256;
 use metal2vulkan::device::DeviceProfile;
@@ -114,8 +113,8 @@ pub mod variants;
 pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v207";
 
 /// One kernel case in the terms the binder takes: what this executor supports of an
-/// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures, command
-/// buffers and pipeline states, textures, texture arrays, samplers, threadgroup lengths, function
+/// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures,
+/// textures, texture arrays, samplers, threadgroup lengths, function
 /// constants, a `dispatchThreads` grid, and a buffer, argument-buffer buffer, texture or
 /// argument-buffer texture output).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -146,16 +145,6 @@ pub struct ComputeCase {
     /// argument samplers, so the plan's sampler arrays hold it and the function's sampler table
     /// finds it.
     pub argument_buffer_samplers: BTreeMap<(u32, u32), ArgumentBufferSamplerResource>,
-    /// Each pipeline state, by `(owner Metal index, field offset)`: the case's token for it, the
-    /// word the owner holds at the field ([`argument_buffers::embed_objects`]). The product reads
-    /// the word only as an encoder's operand, the pipeline a command records.
-    pub objects: BTreeMap<(u32, u32), u64>,
-    /// Each command buffer, by `(owner Metal index, field offset)`: its record storage is the
-    /// argument-buffer buffer at the key ([`ComputeCase::argument_buffer_buffers`]), initialized
-    /// under its descriptor, at its ID's records address rather than its own, and its owner holds
-    /// its ID ([`records_ids`]); the run checks its final records
-    /// ([`argument_buffers::validate_records`]).
-    pub command_buffers: BTreeMap<(u32, u32), CommandBufferResource>,
     /// Each bound texture (initial contents included), by Metal texture index: the case's textures
     /// and each element of its texture arrays at its own slot ([`resources::bound_textures`]).
     pub textures: BTreeMap<u32, LiteralTexture>,
@@ -171,7 +160,7 @@ pub struct ComputeCase {
     pub out_of_bounds: Vec<OutOfBoundsTarget>,
     /// The bound each driver creation of the case's own pipeline is held to
     /// (`budgets::creation_within`): the case's declared one (`AuthoredCase::creation_bound`), or
-    /// the shared ceiling. An executed command's pipelines, its templates', keep the ceiling.
+    /// the shared ceiling.
     pub creation_bound: Duration,
 }
 
@@ -283,6 +272,10 @@ pub fn compute_case(case: &AuthoredCase) -> Result<ComputeCase, NotSupported> {
     }
     require_case_families(case)?;
     for (present, what) in [
+        (
+            !case.command_buffers.is_empty() || !case.pipeline_states.is_empty(),
+            "an indirect command buffer or a pipeline state in an argument buffer",
+        ),
         (case.depth_stencil.is_some(), "a depth/stencil attachment"),
         (!case.vertex_inputs.is_empty(), "vertex inputs"),
         (case.draw.is_some() || case.tessellation.is_some(), "draws"),
@@ -391,7 +384,7 @@ pub fn compute_case(case: &AuthoredCase) -> Result<ComputeCase, NotSupported> {
             return Err(gap(&format!("buffer {binding} bound twice")));
         }
     }
-    let mut argument_buffer_buffers =
+    let argument_buffer_buffers =
         argument_buffers::embed(&mut buffers, &resources.argument_buffer_buffers)
             .map_err(|error| gap(&error))?;
     let argument_buffer_textures =
@@ -400,13 +393,6 @@ pub fn compute_case(case: &AuthoredCase) -> Result<ComputeCase, NotSupported> {
     let argument_buffer_samplers =
         argument_buffers::embed_samplers(&mut buffers, &case.argument_buffer_samplers)
             .map_err(|error| gap(&error))?;
-    let objects = argument_buffers::embed_objects(
-        &mut buffers,
-        &mut argument_buffer_buffers,
-        &case.command_buffers,
-        &case.pipeline_states,
-    )
-    .map_err(|error| gap(&error))?;
     let textures = resources::bound_textures(&resources.textures, &resources.texture_arrays)
         .map_err(|error| gap(&error))?;
     let mut samplers = BTreeMap::new();
@@ -426,8 +412,6 @@ pub fn compute_case(case: &AuthoredCase) -> Result<ComputeCase, NotSupported> {
         argument_buffer_buffers,
         argument_buffer_textures,
         argument_buffer_samplers,
-        objects: objects.pipeline_tokens,
-        command_buffers: objects.command_buffers,
         textures,
         samplers,
         threadgroup_lengths,
@@ -458,10 +442,8 @@ pub fn compute_case(case: &AuthoredCase) -> Result<ComputeCase, NotSupported> {
 /// check keeps a case mapped without the checker to the same rule. (The compute executor binds
 /// device buffer arrays, [`compute_case`]. Both executors bind argument-buffer buffers,
 /// [`argument_buffers`], and texture arrays, each element the texture at its slot,
-/// [`resources::bound_textures`], argument-buffer textures and command buffers, each command buffer
-/// its record storage, and pipeline states, each its token in its owner; the compute executor
-/// executes a kernel case's commands. Visible-function references are no resource: the case's
-/// function links them, [`linked_modules`].)
+/// [`resources::bound_textures`], and argument-buffer textures and samplers. Visible-function
+/// references are no resource: the case's function links them, [`linked_modules`].)
 pub fn require_case_families(case: &AuthoredCase) -> Result<(), NotSupported> {
     crate::executor_contract::require_executor(
         &crate::executor_contract::case_requirements(case),
@@ -599,13 +581,6 @@ pub fn texture_tokens(case: &ComputeCase) -> Result<BTreeMap<(u32, u32), u32>, S
 /// ([`argument_buffers::sampler_ids`]).
 pub fn sampler_ids(case: &ComputeCase) -> Result<BTreeMap<(u32, u32), u64>, String> {
     argument_buffers::sampler_ids(case.argument_buffer_samplers.keys().copied())
-}
-
-/// The `gpuResourceID` of each command buffer of `case`, by its key, in key order
-/// ([`argument_buffers::records_ids`]): the word its owner holds, which the product resolves to its
-/// record storage.
-pub fn records_ids(case: &ComputeCase) -> Result<BTreeMap<(u32, u32), u64>, String> {
-    argument_buffers::records_ids(case.command_buffers.keys().copied())
 }
 
 /// A bound buffer's addresses: the Metal `gpuAddress` the guest sees and the host Vulkan device
@@ -755,8 +730,6 @@ pub fn runs_through_runtime(case: &ComputeCase) -> bool {
         argument_buffer_buffers: _,
         argument_buffer_textures: _,
         argument_buffer_samplers: _,
-        objects,
-        command_buffers,
         textures: _,
         samplers: _,
         threadgroup_lengths: _,
@@ -765,12 +738,10 @@ pub fn runs_through_runtime(case: &ComputeCase) -> bool {
         out_of_bounds: _,
         creation_bound: _,
     } = case;
-    objects.is_empty()
-        && command_buffers.is_empty()
-        && matches!(
-            dispatch,
-            Dispatch::Threads { .. } | Dispatch::Threadgroups { .. }
-        )
+    matches!(
+        dispatch,
+        Dispatch::Threads { .. } | Dispatch::Threadgroups { .. }
+    )
 }
 
 /// The bytes of each buffer a run through the runtime binds, by Metal index, as the Metal oracle
@@ -957,8 +928,8 @@ pub struct RuntimeKernel<'a> {
 /// every field the mapping fills is named here, so a new one is decided when it is added.
 pub fn runs_render_through_runtime(case: &graphics::RenderCase) -> bool {
     let graphics::RenderCase {
-        vertex,
-        fragment,
+        vertex: _,
+        fragment: _,
         vertex_buffers: _,
         color_targets: _,
         depth_stencil,
@@ -973,27 +944,12 @@ pub fn runs_render_through_runtime(case: &graphics::RenderCase) -> bool {
         companion: _,
         raster_sample_count: _,
     } = case;
-    let bound = |function: &graphics::RenderFunction| {
-        let graphics::StageResources {
-            buffers: _,
-            argument_buffer_buffers: _,
-            argument_buffer_textures: _,
-            argument_buffer_samplers: _,
-            objects,
-            command_buffers,
-            textures: _,
-            samplers: _,
-        } = &function.resources;
-        objects.is_empty() && command_buffers.is_empty()
-    };
     // The runtime renders into no separate depth and stencil textures in one pass
     // (`Gap::RenderPass` of `DepthStencilViews`), which the oracle makes of an attachment of both.
     let one_aspect = |attachment: &LiteralDepthStencil| {
         attachment.depth.is_none() || attachment.stencil.is_none()
     };
-    bound(vertex)
-        && fragment.as_ref().is_none_or(bound)
-        && depth_stencil.as_ref().is_none_or(one_aspect)
+    depth_stencil.as_ref().is_none_or(one_aspect)
         && *render_target_array_length == 0
         && matches!(
             (assembly, draw),
@@ -1331,146 +1287,8 @@ pub fn compute_request<'a>(
         function: linking(&case.entry, &case.constants, linked),
         shape: shape.clone(),
         dispatch: Some(case.dispatch),
-        replay: false,
     };
     (request, with_linked(&[library], linked))
-}
-
-/// The verdict of a device replay whose preprocess refused commands for `faults`, `what` naming the
-/// command buffer. The product's typed limits refuse the row (`not_supported{bind}`): no registered
-/// variant has the command's pipeline and lengths and the threadgroup size of one of its regions
-/// (its own, or an edge's), the command has more regions than the execution records, its grid
-/// exceeds `2^32 - 1` threads, or a merged draw replay's commands draw `2^62` vertices or more,
-/// where the host replay of v72 ran the command. Every other reason
-/// fails it, as the host replay failed: the records passed the host contract's decode before the
-/// replay (`validate_records`: no encoding fault, malformed record, draw, missing pipeline, or
-/// state set while inherited), every allocation of the run is resident and the execution's capacity
-/// is the storage's, so an encoding, record, action, pipeline, buffers, or range fault is a case
-/// the host replay fails too (a dynamic stride) or a preprocess that disagrees with the host
-/// contract.
-pub fn replay_fault_verdict(what: &str, faults: metal2vulkan::bind::ReplayFaults) -> ExecutorError {
-    use metal2vulkan::bind::ReplayFaults as F;
-    let names = [
-        (F::ENCODING, "encoding"),
-        (F::ACTION, "a draw"),
-        (F::PIPELINE, "pipeline"),
-        (F::BUFFERS, "buffers"),
-        (F::VARIANT, "no registered variant"),
-        (F::GROUP_COUNT, "a grid past 2^32 - 1 threads"),
-        (F::RECORD, "a malformed record"),
-        (F::RANGE, "a command past the storage's capacity"),
-        (F::REGIONS, "more regions than the execution records"),
-        (F::BARRIER, "a set barrier between draws"),
-        (F::VERTICES, "a merged draw of 2^62 vertices or more"),
-    ];
-    let named: Vec<&str> = names
-        .iter()
-        .filter(|(bit, _)| faults.contains(*bit))
-        .map(|(_, name)| *name)
-        .collect();
-    let reasons = format!("{:#x}: {}", faults.0, named.join(", "));
-    let limits = F::VARIANT.0 | F::GROUP_COUNT.0 | F::REGIONS.0 | F::VERTICES.0;
-    if faults.0 != 0 && faults.0 & !limits == 0 {
-        NotSupported::Bind(format!(
-            "{what}: the device replay dispatched nothing for command(s) the registered variants \
-             do not run ({reasons})"
-        ))
-        .into()
-    } else {
-        ExecutorError::Failed(format!(
-            "{what}: the device replay refused command(s) the host contract admits or a run \
-             cannot bind ({reasons}); the output is not evidence"
-        ))
-    }
-}
-
-/// The dispatch of a device-replay variant for a threadgroup of `threads_per_group` threads:
-/// indirect, its group counts the replay's arguments, so it plans on the pipeline variant every
-/// such dispatch runs on (`dispatch_variant`). The arguments' buffer is the replay's scratch, which
-/// no plan names.
-pub fn replay_dispatch(threads_per_group: [u32; 3]) -> Dispatch {
-    Dispatch::ThreadgroupsIndirect {
-        indirect: metal2vulkan::bind::IndirectRef::new(0, 0),
-        threads_per_group,
-    }
-}
-
-/// The compile request for the device-replay variant of the template `case` (its dispatch a
-/// [`replay_dispatch`]) for the bind shape `shape`, which binds no kernel buffer:
-/// [`compute_request`] with `replay` set, so the kernel compiles with
-/// `LoweringInputs::replay_bindings`.
-pub fn replay_request<'a>(
-    library: &RowSource<'a>,
-    linked: &[LinkedModule],
-    case: &ComputeCase,
-    shape: &BindShape,
-) -> (PipelineRequest, Vec<RowSource<'a>>) {
-    let request = PipelineRequest::BoundCompute {
-        function: linking(&case.entry, &case.constants, linked),
-        shape: shape.clone(),
-        dispatch: Some(case.dispatch),
-        replay: true,
-    };
-    (request, with_linked(&[library], linked))
-}
-
-/// One allocation of a compute run that a replayed command may bind or reach through a pointer, by
-/// what it holds.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RunAllocation {
-    /// The case buffer at this Metal index.
-    Buffer(u32),
-    /// The argument-buffer buffer at this key (its owner's index and field offset).
-    ArgumentBuffer((u32, u32)),
-}
-
-/// Every allocation of `case`'s run that a replayed command may bind or reach, in the order the
-/// run lists them, each its token in the device replay's resident set ([`replay_resident`]):
-/// each case buffer, then each argument-buffer buffer,
-/// with the length the guest sees (not the padding). The compute executor's run lists its
-/// allocations by it, and the authored compile census its variants' resident set.
-pub fn run_allocations(case: &ComputeCase) -> Vec<(RunAllocation, u64)> {
-    case.buffers
-        .iter()
-        .map(|(&index, bytes)| (RunAllocation::Buffer(index), bytes.len() as u64))
-        .chain(
-            case.argument_buffer_buffers
-                .iter()
-                .map(|(&key, bytes)| (RunAllocation::ArgumentBuffer(key), bytes.len() as u64)),
-        )
-        .collect()
-}
-
-/// The bind state the device replay's variants start from: each of `allocations` (its address and
-/// the length the guest sees; its token its position) resident for reading and writing, as the
-/// Metal oracle's `useResource` makes every allocation of the run resident.
-pub fn replay_resident(
-    allocations: impl IntoIterator<Item = (BufferAddress, u64)>,
-) -> Result<BindState, String> {
-    let mut resident = BindState::default();
-    for (token, (address, length)) in allocations.into_iter().enumerate() {
-        resident.used_resources.push(argument_buffers::used_buffer(
-            token,
-            length as usize,
-            address,
-            RenderStages::empty(),
-        )?);
-    }
-    Ok(resident)
-}
-
-/// The bind state the registered replay variant `variant` is compiled and planned for: `resident`
-/// ([`replay_resident`]) with the variant's threadgroup lengths and no kernel buffer.
-pub fn replay_variant_state(resident: &BindState, variant: &ReplayVariant) -> BindState {
-    let mut state = resident.clone();
-    let mut table = StageTable::default();
-    for (slot, &length) in variant.threadgroup_memory_lengths.iter().enumerate() {
-        if length != 0 {
-            table.threadgroup_lengths.insert(slot as u32, length);
-        }
-    }
-    state.stages.insert(ShaderStage::Kernel, table);
-    state
 }
 
 /// The source of `case`'s generated companion, when it has one: its opaque AIR text, which the
@@ -1511,7 +1329,6 @@ pub fn render_request<'a>(
                 function: own(&case.vertex),
                 template,
                 shape: Some(shape.clone()),
-                form: variants::DrawForm::Bound,
             };
             Ok((request, with_linked(&[library], linked)))
         }
@@ -1719,15 +1536,11 @@ pub fn compute_shape(
 }
 
 /// The synthetic guest address of each argument-buffer buffer of `case`, by its key
-/// ([`argument_buffers::synthetic_addresses`]): a command buffer's record storage at its records
-/// address ([`records_ids`]), every other buffer at its [`BufferAddress::synthetic_used`].
+/// ([`argument_buffers::synthetic_addresses`]): its [`BufferAddress::synthetic_used`].
 pub fn synthetic_used_addresses(
     case: &ComputeCase,
 ) -> Result<BTreeMap<(u32, u32), BufferAddress>, String> {
-    argument_buffers::synthetic_addresses(
-        case.argument_buffer_buffers.keys().copied(),
-        &records_ids(case)?,
-    )
+    argument_buffers::synthetic_addresses(case.argument_buffer_buffers.keys().copied())
 }
 
 /// A binder refusal as the executor reports it: an `Unsupported` is the product's typed outcome,
@@ -1803,357 +1616,6 @@ pub struct PreparedCase {
     mapped: Mapped,
     /// The libraries the case's own function links ([`linked_modules`]).
     linked: Vec<LinkedModule>,
-    /// The template of each pipeline token the case's executed commands may run, as the
-    /// executor's context replays them ([`replay_templates`]).
-    templates: BTreeMap<u64, ReplayTemplate>,
-}
-
-/// A pipeline template an executed command may run: its checked case (by id in
-/// [`CheckedCase::pipeline_templates`]), mapped, and the libraries it links.
-pub struct ReplayTemplate {
-    case_id: String,
-    mapped: TemplateCase,
-    linked: Vec<LinkedModule>,
-}
-
-/// What a replayed command runs: a compute command's dispatch, or a render command's draw of
-/// `primitive`; or, for the device replay, the template's replay variant for a threadgroup of
-/// `threads_per_group` threads, which every command selecting it dispatches indirectly; or, for
-/// the device replay of render commands, the render template's draw replay variant, `merged` into
-/// one draw or drawn once per command, which every command of the execution draws indirectly.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ChildCommand {
-    Dispatch(Dispatch),
-    Draw {
-        draw: DrawCall,
-        primitive: crate::case::Primitive,
-    },
-    ReplayVariant {
-        threads_per_group: [u32; 3],
-    },
-    DrawReplay {
-        merged: bool,
-    },
-}
-
-/// A template compiled for one replayed command: a compute pipeline for a dispatch, and for a
-/// draw the template's render case (with the command's draw) and its pipeline.
-pub enum CompiledChild {
-    Compute(Box<ComputePipeline>),
-    Render(Box<graphics::RenderCase>, Box<RenderPipeline>),
-}
-
-/// A replay template's case in the terms of the executor that runs it: a compute template a
-/// dispatch runs, or a render template a draw runs.
-#[derive(Clone, Debug)]
-pub enum TemplateCase {
-    Compute(Box<ComputeCase>),
-    Render(Box<graphics::RenderCase>),
-}
-
-/// The template of each pipeline token an executed command of `checked`'s case may select: each
-/// pipeline state's and each execution's parent pipeline's, by token, of a family some executed
-/// command buffer runs. A compute template is mapped only when compute commands execute, a render
-/// template only when render commands do, as the checker requires of render templates only then
-/// (`check::check_render_replay_templates`): a command never selects a template of the other
-/// family, so such a literal is no template here. A replayed compute template binds buffers and
-/// threadgroup memory only; a replayed render template is a
-/// rasterization-disabled vertex function (which the checker requires) that binds buffers only,
-/// with no vertex input. A template with any other resource of its own refuses the case, before
-/// any device ([`ToolingRequirement::ReplayedTemplateResources`]), and so does an object or mesh
-/// template, whose mesh draw the executor does not draw
-/// ([`ToolingRequirement::MeshRenderPipeline`]).
-pub fn replay_templates(
-    checked: &CheckedCase,
-) -> Result<BTreeMap<u64, ReplayTemplate>, ExecutorError> {
-    let case = &checked.primary.case;
-    let executed = || {
-        case.command_buffers
-            .iter()
-            .filter(|command| command.execute.is_some())
-    };
-    let executes_compute = executed().any(|command| !command.is_render());
-    let executes_render = executed().any(|command| command.is_render());
-    let parents = executed().filter_map(|command| {
-        let template = command.execute.as_ref()?.pipeline.as_ref()?;
-        Some((template.token, &template.case_id))
-    });
-    let mut templates = BTreeMap::new();
-    for (token, case_id) in case
-        .pipeline_states
-        .iter()
-        .map(|state| (state.token, &state.case_id))
-        .chain(parents)
-    {
-        let template = checked
-            .pipeline_templates
-            .get(case_id)
-            .ok_or_else(|| format!("pipeline template {case_id} was not checked"))?;
-        let executes_family = match template.case.stage {
-            Stage::Kernel => executes_compute,
-            Stage::Vertex | Stage::Fragment | Stage::Object | Stage::Mesh => executes_render,
-        };
-        if !executes_family {
-            continue;
-        }
-        let mapped = match template.case.stage {
-            Stage::Kernel => {
-                let mapped = compute_case(&template.case)?;
-                let replayable = mapped.textures.is_empty()
-                    && mapped.samplers.is_empty()
-                    && mapped.argument_buffer_buffers.is_empty()
-                    && mapped.argument_buffer_textures.is_empty()
-                    && mapped.argument_buffer_samplers.is_empty()
-                    && mapped.objects.is_empty();
-                if !replayable {
-                    return Err(NotSupported::Requirements(
-                        [ToolingRequirement::ReplayedTemplateResources].into(),
-                    )
-                    .into());
-                }
-                TemplateCase::Compute(Box::new(mapped))
-            }
-            Stage::Vertex | Stage::Fragment => {
-                let mapped = graphics::render_case(
-                    &template.case,
-                    &template.interface,
-                    template.entry_ll(),
-                    template.companion.as_ref(),
-                )?;
-                let resources = &mapped.vertex.resources;
-                // An index buffer or an out-of-bounds target is the template's own draw's; the
-                // replayed draw is the command's, which binds neither.
-                let replayable = mapped.fragment.is_none()
-                    && mapped.companion.is_none()
-                    && mapped.vertex_buffers.is_empty()
-                    && mapped.index_buffer.is_none()
-                    && mapped.out_of_bounds.is_empty()
-                    && mapped.depth_stencil.is_none()
-                    && matches!(mapped.assembly, graphics::Assembly::Primitives(_))
-                    && resources.textures.is_empty()
-                    && resources.samplers.is_empty()
-                    && resources.argument_buffer_buffers.is_empty()
-                    && resources.argument_buffer_textures.is_empty()
-                    && resources.argument_buffer_samplers.is_empty()
-                    && resources.objects.is_empty()
-                    && resources.command_buffers.is_empty();
-                if !replayable {
-                    return Err(NotSupported::Requirements(
-                        [ToolingRequirement::ReplayedTemplateResources].into(),
-                    )
-                    .into());
-                }
-                TemplateCase::Render(Box::new(mapped))
-            }
-            Stage::Object | Stage::Mesh => {
-                return Err(NotSupported::Requirements(
-                    [ToolingRequirement::MeshRenderPipeline].into(),
-                )
-                .into())
-            }
-        };
-        templates.insert(
-            token,
-            ReplayTemplate {
-                case_id: case_id.clone(),
-                mapped,
-                linked: linked_modules(&template.linked_functions)?,
-            },
-        );
-    }
-    Ok(templates)
-}
-
-/// The variants the device replay registers for `case`'s executed compute commands, deduplicated in
-/// a fixed order: each compute template of `templates` with the threadgroup size of its own
-/// dispatch and its threadgroup lengths, and each dispatch the host encodes into an executed
-/// compute command buffer with its pipeline (its own, or the execution's parent pipeline where the
-/// commands inherit it), threadgroup lengths, and the threadgroup size of each of its regions (its
-/// own, and a thread grid's edges, which run the remaining threads, [`region_sizes`]). Where an
-/// executed compute command buffer has a command in its range whose action the host does not
-/// encode, the producer may encode a thread grid of any size, so each compute template also
-/// registers every edge size of its own threadgroup size (each size no larger on any axis,
-/// [`edge_sizes`]), in token order, while the variants stay within the product's
-/// `MAX_REPLAY_VARIANTS`; a template whose edges do not fit keeps its own size, and a ragged
-/// command of it faults `VARIANT`. Registration is the consumer's: a command that selects another
-/// variant dispatches nothing, and the run fails on its replay fault. A template threadgroup length
-/// at an index no record holds is the executor's refusal.
-pub fn replay_variants(
-    case: &ComputeCase,
-    templates: &BTreeMap<u64, ReplayTemplate>,
-) -> Result<Vec<ReplayVariant>, ExecutorError> {
-    use crate::case::indirect_commands::HostAction;
-    const LENGTHS: usize = crate::air::reflect::THREADGROUP_BUFFER_ARGUMENT_COUNT_USIZE;
-    let lengths = |entries: &mut dyn Iterator<Item = (u32, u32)>| {
-        let mut out = [0u32; LENGTHS];
-        for (index, length) in entries {
-            *out.get_mut(index as usize).ok_or_else(|| {
-                NotSupported::NotImplemented(format!(
-                    "engine candidate: a replayed threadgroup length at index {index}"
-                ))
-            })? = length;
-        }
-        Ok::<_, ExecutorError>(out)
-    };
-    let mut registered = std::collections::BTreeSet::new();
-    // Each compute template's own variant, in token order.
-    let mut own = Vec::new();
-    for (&token, template) in templates {
-        let TemplateCase::Compute(mapped) = &template.mapped else {
-            continue;
-        };
-        let threads_per_group = match mapped.dispatch {
-            Dispatch::Threadgroups {
-                threads_per_group, ..
-            }
-            | Dispatch::Threads {
-                threads_per_group, ..
-            }
-            | Dispatch::ThreadgroupsIndirect {
-                threads_per_group, ..
-            } => threads_per_group,
-            other => {
-                return Err(NotSupported::NotImplemented(format!(
-                    "engine candidate: a replayed template's dispatch {other:?}"
-                ))
-                .into())
-            }
-        };
-        let lengths = lengths(&mut mapped.threadgroup_lengths.iter().map(|(&i, &l)| (i, l)))?;
-        registered.insert((token, threads_per_group, lengths));
-        own.push((token, threads_per_group, lengths));
-    }
-    let mut gpu_encoded = false;
-    for command in case.command_buffers.values() {
-        let Some(execution) = command.execute.as_ref().filter(|_| !command.is_render()) else {
-            continue;
-        };
-        let [start, end] = command.execution_range;
-        gpu_encoded |= (start..end).any(|index| {
-            !command
-                .commands
-                .iter()
-                .any(|host| host.index == index && host.action.is_some())
-        });
-        let parent = execution.pipeline.as_ref().map(|template| template.token);
-        for host in &command.commands {
-            let sizes = match host.action {
-                Some(HostAction::DispatchThreadgroups {
-                    threads_per_threadgroup,
-                    ..
-                }) => vec![threads_per_threadgroup],
-                Some(HostAction::DispatchThreads {
-                    grid,
-                    threads_per_threadgroup,
-                }) => region_sizes(grid, threads_per_threadgroup),
-                Some(
-                    HostAction::DrawPrimitives { .. }
-                    | HostAction::DrawIndexedPrimitives { .. }
-                    | HostAction::DrawPatches { .. },
-                )
-                | None => continue,
-            };
-            let token = if command.inherit_pipeline_state {
-                parent
-            } else {
-                host.pipeline
-            };
-            let Some(token) = token else {
-                continue;
-            };
-            let lengths = lengths(
-                &mut host
-                    .threadgroup_memory_lengths
-                    .iter()
-                    .map(|l| (l.index, l.length)),
-            )?;
-            registered.extend(sizes.into_iter().map(|size| (token, size, lengths)));
-        }
-    }
-    if gpu_encoded {
-        let most = metal2vulkan::bind::MAX_REPLAY_VARIANTS as usize;
-        for (token, threads_per_group, lengths) in own {
-            let count: u64 = threads_per_group.iter().map(|&a| u64::from(a)).product();
-            if count > most as u64 {
-                continue;
-            }
-            let edges: Vec<_> = edge_sizes(threads_per_group)
-                .into_iter()
-                .map(|size| (token, size, lengths))
-                .filter(|variant| !registered.contains(variant))
-                .collect();
-            if registered.len() + edges.len() <= most {
-                registered.extend(edges);
-            }
-        }
-    }
-    registered
-        .into_iter()
-        .map(|(token, threads_per_group, lengths)| {
-            let pipeline = std::num::NonZeroU64::new(token)
-                .ok_or("a replayed pipeline token of 0 names no pipeline")?;
-            Ok(ReplayVariant::new(pipeline, threads_per_group, lengths))
-        })
-        .collect()
-}
-
-/// The regions a device replay of `commands` commands over `variants` registered variants records
-/// per command: `MAX_REPLAY_REGIONS`, or as many as keep its dispatches, `commands * regions *
-/// variants`, within `MAX_REPLAY_DISPATCHES`. So every range executor v92 ran (one dispatch per
-/// command and variant, at most 16,384 x 64 = 2^20) still runs, and a command that needs more
-/// regions than a long range records is a typed `REGIONS` fault, never a refused range. Both of the
-/// device replay's paths record the same regions.
-pub(crate) fn replay_regions(commands: u32, variants: usize) -> u32 {
-    use metal2vulkan::bind::{MAX_REPLAY_DISPATCHES, MAX_REPLAY_REGIONS};
-    let per_region = u64::from(commands.max(1)) * (variants.max(1) as u64);
-    let fit = MAX_REPLAY_DISPATCHES / per_region;
-    u32::try_from(fit.min(u64::from(MAX_REPLAY_REGIONS)))
-        .expect("at most MAX_REPLAY_REGIONS")
-        .max(1)
-}
-
-/// The threadgroup sizes of the regions of a thread grid `grid` in threadgroups of `local`: per
-/// axis, the whole threadgroups' size where the grid holds one, and the remaining threads where it
-/// is not a multiple. A grid with a zero axis runs nothing and needs no variant; it registers
-/// `local`, as a host-encoded dispatch always has.
-pub fn region_sizes(grid: [u32; 3], local: [u32; 3]) -> Vec<[u32; 3]> {
-    if grid.contains(&0) || local.contains(&0) {
-        return vec![local];
-    }
-    let axis = |i: usize| {
-        let mut sizes = Vec::with_capacity(2);
-        if grid[i] >= local[i] {
-            sizes.push(local[i]);
-        }
-        if !grid[i].is_multiple_of(local[i]) {
-            sizes.push(grid[i] % local[i]);
-        }
-        sizes
-    };
-    let (xs, ys, zs) = (axis(0), axis(1), axis(2));
-    let mut out = Vec::with_capacity(xs.len() * ys.len() * zs.len());
-    for &z in &zs {
-        for &y in &ys {
-            for &x in &xs {
-                out.push([x, y, z]);
-            }
-        }
-    }
-    out
-}
-
-/// Every threadgroup size an edge of a thread grid in threadgroups of `local` can run: each size of
-/// 1 to `local`'s threads on every axis, `local` itself among them.
-pub fn edge_sizes(local: [u32; 3]) -> Vec<[u32; 3]> {
-    let mut out = Vec::new();
-    for z in 1..=local[2] {
-        for y in 1..=local[1] {
-            for x in 1..=local[0] {
-                out.push([x, y, z]);
-            }
-        }
-    }
-    out
 }
 
 /// An admitted case in the terms of the executor that runs it (boxed: the two differ in size).
@@ -2182,7 +1644,7 @@ pub fn prepare_case(
 /// [`prepare_case`] for the authored compile census (`authored_compile`): a case whose only stop
 /// is the mesh render pipeline the executor does not draw
 /// ([`ToolingRequirement::MeshRenderPipeline`]) is prepared too, its draw mapped
-/// ([`mesh::mesh_case`]), so [`case_compiles`] lists the pipeline a run of it would compile. A
+/// ([`mesh::mesh_case`]), so [`case_compile`] plans the pipeline a run of it would compile. A
 /// run's preparation refuses such a case before any device, its device worker's included.
 pub fn prepare_compile(
     device: DeviceType,
@@ -2219,33 +1681,17 @@ fn prepare(
         )?)),
     };
     let linked = linked_modules(&checked.primary.linked_functions)?;
-    let templates = replay_templates(&checked)?;
     Ok(PreparedCase {
         device,
         checked,
         mapped,
         linked,
-        templates,
     })
 }
 
-/// What one compile of [`case_compiles`] builds.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CompileSubject {
-    /// The case's own pipeline: its kernel's, or its draw's with its generated companion.
-    Case,
-    /// The device-replay variant of the compute template of pipeline token `token` for a
-    /// threadgroup of `threads_per_group` threads.
-    ReplayVariant {
-        token: u64,
-        threads_per_group: [u32; 3],
-    },
-}
-
-/// One pipeline a run of a prepared case compiles, with the request and libraries the executor
+/// The one pipeline a run of a prepared case compiles, with the request and libraries the executor
 /// builds for it.
 pub struct CaseCompile<'a> {
-    pub subject: CompileSubject,
     pipeline: PlannedPipeline<'a>,
 }
 
@@ -2278,7 +1724,7 @@ impl CaseCompile<'_> {
     ) -> (Result<(), CompileFailure>, Option<crate::worker::Measured>) {
         let mut record = |pipeline: &dyn artifact::Planned, shape| {
             artifact
-                .record(self.subject, pipeline, device.device(), shape)
+                .record(pipeline, device.device(), shape)
                 .map_err(CompileFailure::Artifact)
         };
         match &self.pipeline {
@@ -2304,121 +1750,33 @@ impl CaseCompile<'_> {
     }
 }
 
-/// Every pipeline a run of `prepared` compiles on `device` before it reads any device output, in
-/// the order the run compiles them, and how many of its executed command buffers compile what no
-/// device-free compile builds there.
-pub struct CaseCompiles<'a> {
-    pub compiles: Vec<CaseCompile<'a>>,
-    /// The executed command buffers (with a non-empty execution range) whose commands' pipelines no
-    /// device-free compile builds on this device: a render command buffer, whose host replay
-    /// compiles each command's pipeline for the bind shape of the records the producer writes on
-    /// the device, and whose draw replay (`platform::compute::draw_replay`) compiles its
-    /// template's variant for the bind state of the execution's encoder; and a compute one the host
-    /// replay runs, where the product sets no device replay up or the case registers no variant.
-    pub host_replayed: usize,
-}
-
-/// The pipelines a run of `prepared` compiles on `device` before it reads any device output,
-/// with the requests the executor builds for them: the case's own pipeline ([`compute_request`] for
-/// the bind shape [`compute_shape`] gives, or [`render_request`] with its generated companion for
-/// [`graphics::render_shape`]'s), and, where the device replay runs an executed compute command
-/// buffer (the product sets it up on `device` and the case registers variants), each registered
-/// variant (`replay_variant_request` for the bind state [`replay_variant_state`] of the run's
-/// resident allocations, [`run_allocations`]). The bind shapes depend on the device only through
-/// whether it has device addresses, which the executor reads from what its context enabled and this
-/// from `device`'s description: the same fact for an opened device, whose description is restricted
-/// to what was enabled; and through its profile's range limits (`BufferRanges::of`), which both
-/// read from the device's profile. The authored compile census compiles these on each committed profile; the
-/// executor builds the same requests through [`compile_case`], [`compile_render_case`], and
-/// `compile_child`.
-pub fn case_compiles<'a>(
+/// The pipeline a run of `prepared` compiles on `device` before it reads any device output, with
+/// the request the executor builds for it: the case's own pipeline ([`compute_request`] for the
+/// bind shape [`compute_shape`] gives, [`render_request`] with its generated companion for
+/// [`graphics::render_shape`]'s, or a mesh draw's, `mesh::mesh_request`). The bind shapes depend
+/// on the device only through whether it has device addresses, which the executor reads from what
+/// its context enabled and this from `device`'s description: the same fact for an opened device,
+/// whose description is restricted to what was enabled; and through its profile's range limits
+/// (`BufferRanges::of`), which both read from the device's profile. The authored compile census
+/// compiles it on each committed profile; the executor builds the same request through
+/// [`compile_case`] and [`compile_render_case`].
+pub fn case_compile<'a>(
     prepared: &'a PreparedCase,
     device: &WorkerDevice,
-) -> Result<CaseCompiles<'a>, ExecutorError> {
+) -> Result<CaseCompile<'a>, ExecutorError> {
     use metal2vulkan::device::VkFeature;
     let addressed = device.description().has(VkFeature::BufferDeviceAddress);
     let ranges = BufferRanges::of(device.device().profile().limits());
-    let executed = |command: &CommandBufferResource| {
-        command.execute.is_some() && command.execution_range[0] != command.execution_range[1]
-    };
     let library = RowSource::of_row(&prepared.checked.primary.source);
     let linked = prepared.linked.as_slice();
-    let mut compiles = Vec::new();
-    let mut host_replayed = 0;
-    match &prepared.mapped {
+    let pipeline = match &prepared.mapped {
         Mapped::Compute(compute) => {
-            let registered = replay_variants(compute, &prepared.templates)?;
             let shape = compute_shape(compute, addressed, ranges).map_err(ExecutorError::Failed)?;
             let (request, libraries) = compute_request(&library, linked, compute, &shape);
-            compiles.push(CaseCompile {
-                subject: CompileSubject::Case,
-                pipeline: PlannedPipeline::Compute {
-                    request,
-                    libraries,
-                    shape,
-                },
-            });
-            // Whether the product sets the device replay up on this device, asked only of a case
-            // whose executed compute commands could take it (`device_replay::replay_commands`).
-            let mut set_up = None;
-            let mut on_device = false;
-            for command in compute.command_buffers.values().filter(|c| executed(c)) {
-                if command.is_render() || registered.is_empty() {
-                    host_replayed += 1;
-                    continue;
-                }
-                let runs = match set_up {
-                    Some(runs) => runs,
-                    None => {
-                        let runs =
-                            match metal2vulkan::bind::replay_preprocess_module(device.device()) {
-                                Ok(_) => true,
-                                Err(Error::Unsupported(_)) => false,
-                                Err(error) => return Err(product_refusal(&error)),
-                            };
-                        set_up = Some(runs);
-                        runs
-                    }
-                };
-                if runs {
-                    on_device = true;
-                } else {
-                    host_replayed += 1;
-                }
-            }
-            if on_device {
-                let resident =
-                    replay_resident(run_allocations(compute).into_iter().enumerate().map(
-                        |(token, (_, length))| {
-                            let address = BufferAddress::synthetic_used(token as u32);
-                            (
-                                BufferAddress {
-                                    host: Some(address.guest),
-                                    ..address
-                                },
-                                length,
-                            )
-                        },
-                    ))
-                    .map_err(ExecutorError::Failed)?;
-                for variant in &registered {
-                    let token = variant.pipeline.get();
-                    let threads_per_group = variant.threads_per_threadgroup;
-                    let shape = replay_variant_state(&resident, variant).shape();
-                    let (request, libraries) =
-                        replay_variant_request(prepared, token, threads_per_group, &shape)?;
-                    compiles.push(CaseCompile {
-                        subject: CompileSubject::ReplayVariant {
-                            token,
-                            threads_per_group,
-                        },
-                        pipeline: PlannedPipeline::Compute {
-                            request,
-                            libraries,
-                            shape,
-                        },
-                    });
-                }
+            PlannedPipeline::Compute {
+                request,
+                libraries,
+                shape,
             }
         }
         Mapped::Render(render) => {
@@ -2427,18 +1785,11 @@ pub fn case_compiles<'a>(
             let companion = companion_source(render);
             let (request, libraries) =
                 render_request(&library, companion.as_ref(), linked, render, &shape)?;
-            compiles.push(CaseCompile {
-                subject: CompileSubject::Case,
-                pipeline: PlannedPipeline::Render {
-                    request,
-                    libraries,
-                    shape,
-                },
-            });
-            host_replayed = render
-                .command_buffers()
-                .filter(|(_, command)| executed(command))
-                .count();
+            PlannedPipeline::Render {
+                request,
+                libraries,
+                shape,
+            }
         }
         Mapped::Mesh(mesh) => {
             let shape = mesh::mesh_shape(mesh, addressed, ranges)?;
@@ -2447,20 +1798,14 @@ pub fn case_compiles<'a>(
                 .as_ref()
                 .map(|generated| RowSource::Text(Cow::Owned(generated.air_text(Spelling::Opaque))));
             let (request, libraries) = mesh::mesh_request(&library, companion, mesh, &shape)?;
-            compiles.push(CaseCompile {
-                subject: CompileSubject::Case,
-                pipeline: PlannedPipeline::Render {
-                    request,
-                    libraries,
-                    shape,
-                },
-            });
+            PlannedPipeline::Render {
+                request,
+                libraries,
+                shape,
+            }
         }
-    }
-    Ok(CaseCompiles {
-        compiles,
-        host_replayed,
-    })
+    };
+    Ok(CaseCompile { pipeline })
 }
 
 /// The device worker's half of [`execute_prepared`] (`worker::device`): admit and prepare `input`'s
@@ -2583,7 +1928,6 @@ fn prepare_on_device(input: &DeviceInput) -> Result<(PreparedCase, CompileWorker
 /// records what it compiled, by content ([`artifact::CaseArtifact`]).
 fn run_on_context(prepared: &PreparedCase, worker: &CompileWorker) -> RunAttempt {
     let case = &prepared.checked.primary.case;
-    let templates = &prepared.templates;
     // The worker assembles a row that retains no bitcode (a public fixture), and a companion.
     let library = RowSource::of_row(&prepared.checked.primary.source);
     let linked = &prepared.linked;
@@ -2601,43 +1945,19 @@ fn run_on_context(prepared: &PreparedCase, worker: &CompileWorker) -> RunAttempt
         }
     }
     let artifact = RefCell::new(artifact::CaseArtifact::default());
-    // Each executed command's template, compiled for the command's bind shape and dispatch or
-    // draw.
-    let children =
-        |target: &WorkerDevice, token: u64, shape: &BindShape, command: &ChildCommand| {
-            let compiled = compile_child(prepared, worker, target, (token, shape, command))?;
-            record_child(
-                &mut artifact.borrow_mut(),
-                target,
-                (token, shape, command),
-                &compiled,
-            )?;
-            Ok(compiled)
-        };
     let mut attempt = match &prepared.mapped {
-        Mapped::Compute(compute) => {
-            let registered = match replay_variants(compute, templates) {
-                Ok(registered) => registered,
-                Err(error) => return RunAttempt::of(Err(error)),
-            };
-            super::platform::execute_engine(
-                prepared.device,
-                &case.case_id,
-                compute,
-                |target, shape| {
-                    let compiled = compile_case(worker, target, &library, linked, compute, shape)?;
-                    artifact.borrow_mut().record(
-                        CompileSubject::Case,
-                        &compiled,
-                        target.device(),
-                        shape,
-                    )?;
-                    Ok(compiled)
-                },
-                children,
-                &registered,
-            )
-        }
+        Mapped::Compute(compute) => super::platform::execute_engine(
+            prepared.device,
+            &case.case_id,
+            compute,
+            |target, shape| {
+                let compiled = compile_case(worker, target, &library, linked, compute, shape)?;
+                artifact
+                    .borrow_mut()
+                    .record(&compiled, target.device(), shape)?;
+                Ok(compiled)
+            },
+        ),
         Mapped::Render(render) => {
             let companion = companion_source(render);
             super::platform::execute_engine_render(
@@ -2654,15 +1974,11 @@ fn run_on_context(prepared: &PreparedCase, worker: &CompileWorker) -> RunAttempt
                         render,
                         shape,
                     )?;
-                    artifact.borrow_mut().record(
-                        CompileSubject::Case,
-                        &compiled,
-                        target.device(),
-                        shape,
-                    )?;
+                    artifact
+                        .borrow_mut()
+                        .record(&compiled, target.device(), shape)?;
                     Ok(compiled)
                 },
-                children,
             )
         }
         // A run's preparation refuses a mesh case before it maps (`prepare_case`); only the
@@ -2680,135 +1996,6 @@ fn run_on_context(prepared: &PreparedCase, worker: &CompileWorker) -> RunAttempt
         opened.artifact = Some(executed);
     }
     attempt
-}
-
-/// Record a compiled child in the run's artifact: a device-replay variant by its subject, with the
-/// preprocess module the device replay runs it under; a host replay's pipeline (for a record a
-/// producer wrote on the device) and a draw replay's variant (for the bind state of the execution's
-/// encoder) as ones the census cannot compile.
-fn record_child(
-    artifact: &mut artifact::CaseArtifact,
-    target: &WorkerDevice,
-    (token, shape, command): (u64, &BindShape, &ChildCommand),
-    compiled: &CompiledChild,
-) -> Result<(), ExecutorError> {
-    match (command, compiled) {
-        (&ChildCommand::ReplayVariant { threads_per_group }, CompiledChild::Compute(compiled)) => {
-            artifact.record(
-                CompileSubject::ReplayVariant {
-                    token,
-                    threads_per_group,
-                },
-                compiled.as_ref(),
-                target.device(),
-                shape,
-            )?;
-            artifact.record_replay_module(target.device())
-        }
-        _ => {
-            artifact.record_uncovered();
-            Ok(())
-        }
-    }
-}
-
-/// Compile the template of `token` for one command the case executes, in `worker`, for the bind
-/// shape `shape`: a compute template for a dispatch, with the command's dispatch, or its replay
-/// variant; a render template for a draw, with the command's draw (its class stays the template's
-/// own, as Metal compiles it), or its draw replay variant for an execution's commands. A token
-/// without a template, or a template of the other family, fails the run.
-fn compile_child(
-    prepared: &PreparedCase,
-    worker: &CompileWorker,
-    target: &WorkerDevice,
-    (token, shape, command): (u64, &BindShape, &ChildCommand),
-) -> Result<CompiledChild, ExecutorError> {
-    let template = prepared.templates.get(&token).ok_or_else(|| {
-        ExecutorError::Failed(format!(
-            "an executed command's pipeline token {token} names no template"
-        ))
-    })?;
-    let source = RowSource::of_row(&prepared.checked.pipeline_templates[&template.case_id].source);
-    // A render template's vertex function alone, its variant in `form`.
-    let render_child = |child: graphics::RenderCase, form: variants::DrawForm| {
-        let (mut request, libraries) =
-            render_request(&source, None, &template.linked, &child, shape)?;
-        let PipelineRequest::VertexDraw { form: formed, .. } = &mut request else {
-            return Err(ExecutorError::Failed(
-                "an executed command's render template has a fragment stage".into(),
-            ));
-        };
-        *formed = form;
-        let compiled = compile_render(worker, target, &request, &libraries)?;
-        Ok(CompiledChild::Render(Box::new(child), Box::new(compiled)))
-    };
-    match (&template.mapped, command) {
-        (TemplateCase::Compute(mapped), ChildCommand::Dispatch(dispatch)) => {
-            let child = ComputeCase {
-                dispatch: *dispatch,
-                ..(**mapped).clone()
-            };
-            compile_case(worker, target, &source, &template.linked, &child, shape)
-                .map(|c| CompiledChild::Compute(Box::new(c)))
-        }
-        (TemplateCase::Compute(_), &ChildCommand::ReplayVariant { threads_per_group }) => {
-            let (request, libraries) =
-                replay_variant_request(prepared, token, threads_per_group, shape)?;
-            compile_request(worker, target, &libraries, &request)
-                .map(|c| CompiledChild::Compute(Box::new(c)))
-        }
-        // In the large-buffer form, as the runtime's host step draws an executed render command.
-        (TemplateCase::Render(mapped), &ChildCommand::Draw { draw, .. }) => {
-            let child = graphics::RenderCase {
-                draw,
-                ..(**mapped).clone()
-            };
-            render_child(child, variants::DrawForm::Large)
-        }
-        // In a draw replay's form, as the runtime's GPU form draws an execution's commands
-        // (`platform::compute::draw_replay`).
-        (TemplateCase::Render(mapped), &ChildCommand::DrawReplay { merged }) => {
-            let form = match merged {
-                true => variants::DrawForm::Merged,
-                false => variants::DrawForm::Replay,
-            };
-            render_child((**mapped).clone(), form)
-        }
-        _ => Err(ExecutorError::Failed(format!(
-            "an executed command's pipeline token {token} names a template of the other command \
-             family"
-        ))),
-    }
-}
-
-/// The compile of the device-replay variant of the compute template of pipeline token `token` for
-/// a threadgroup of `threads_per_group` threads, bound as `shape`: the template's case with a
-/// [`replay_dispatch`], and [`replay_request`]'s request and libraries for it. The executor's
-/// compile of a variant ([`compile_child`]) and the authored compile census ([`case_compiles`])
-/// build it here. A token without a template, or with a render template, fails the run.
-fn replay_variant_request<'a>(
-    prepared: &'a PreparedCase,
-    token: u64,
-    threads_per_group: [u32; 3],
-    shape: &BindShape,
-) -> Result<(PipelineRequest, Vec<RowSource<'a>>), ExecutorError> {
-    let template = prepared.templates.get(&token).ok_or_else(|| {
-        ExecutorError::Failed(format!(
-            "an executed command's pipeline token {token} names no template"
-        ))
-    })?;
-    let TemplateCase::Compute(mapped) = &template.mapped else {
-        return Err(ExecutorError::Failed(format!(
-            "an executed command's pipeline token {token} names a template of the other command \
-             family"
-        )));
-    };
-    let source = RowSource::of_row(&prepared.checked.pipeline_templates[&template.case_id].source);
-    let child = ComputeCase {
-        dispatch: replay_dispatch(threads_per_group),
-        ..(**mapped).clone()
-    };
-    Ok(replay_request(&source, &template.linked, &child, shape))
 }
 
 /// [`execute_case`] of a case [`prepare_case`] accepted: the device half in a device worker

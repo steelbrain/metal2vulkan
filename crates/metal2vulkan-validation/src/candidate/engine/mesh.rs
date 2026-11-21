@@ -247,8 +247,7 @@ impl MeshTemplate {
 /// apart and classing lengths under `ranges` ([`views_told_apart`]), so its plan is the runtime's
 /// of the same binds. What the compile worker compiles the draw for
 /// (`variants::compile_mesh_for_shape`).
-/// A case whose own function takes an argument buffer, a command buffer or a pipeline state is not
-/// built here (`NotImplemented`).
+/// A case whose own function takes an argument buffer is not built here (`NotImplemented`).
 pub fn mesh_shape(
     mesh: &MeshCase,
     addressed: bool,
@@ -259,9 +258,7 @@ pub fn mesh_shape(
         let resources = &function.resources;
         if !(resources.argument_buffer_buffers.is_empty()
             && resources.argument_buffer_textures.is_empty()
-            && resources.argument_buffer_samplers.is_empty()
-            && resources.command_buffers.is_empty()
-            && resources.objects.is_empty())
+            && resources.argument_buffer_samplers.is_empty())
         {
             return Err(NotSupported::NotImplemented(
                 "engine candidate: a device-free compile of a mesh draw whose function takes an \

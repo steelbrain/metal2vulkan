@@ -261,11 +261,6 @@ pub enum PipelineRequest {
         shape: BindShape,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dispatch: Option<Dispatch>,
-        /// The kernel compiles as a device-replay variant (`LoweringInputs::replay_bindings`,
-        /// `variants::compile_replay_for_shape`): a replayed template's pipeline, its buffers read
-        /// through the slot table the replay's preprocess writes per command.
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        replay: bool,
     },
     /// The L4 row `entry`, a `stage` function with the function-constant values `constants`
     /// (none, the default: Metal's undefined, the plain census's compile), built as [`row`]
@@ -288,15 +283,6 @@ pub enum PipelineRequest {
         template: RenderTemplate,
         #[serde(default)]
         shape: Option<BindShape>,
-        /// With a `shape`, the form of the variant it decides the stages compile in
-        /// (`variants::DrawForm`): the plain one, or an executed render command's, the
-        /// large-buffer form the runtime's host step draws in or a draw replay's forms its GPU
-        /// form draws in.
-        #[serde(
-            default,
-            skip_serializing_if = "crate::candidate::engine::variants::DrawForm::is_bound"
-        )]
-        form: crate::candidate::engine::variants::DrawForm,
     },
     /// `Device::compile_render_pipeline` of `vertex` and `fragment`, rasterization enabled, from
     /// the Metal oracle's descriptor `template`: the engine candidate's draw of a case and its
@@ -716,14 +702,13 @@ fn compile_counted(
         Ok::<_, Error>(function)
     };
     let budget = Budget::with_deadline(deadline);
-    let render =
-        |descriptor: &RenderPipelineDescriptor, shape: Option<&BindShape>, form| match shape {
-            None => device.compile_render_pipeline(descriptor, &budget),
-            Some(shape) => crate::candidate::engine::variants::compile_render_for_shape(
-                device, descriptor, shape, form, &budget,
-            )
-            .map(|(pipeline, _)| pipeline),
-        };
+    let render = |descriptor: &RenderPipelineDescriptor, shape: Option<&BindShape>| match shape {
+        None => device.compile_render_pipeline(descriptor, &budget),
+        Some(shape) => crate::candidate::engine::variants::compile_render_for_shape(
+            device, descriptor, shape, &budget,
+        )
+        .map(|(pipeline, _)| pipeline),
+    };
     Ok(match request {
         PipelineRequest::Compute { entry, constants } => {
             let kernel = function(
@@ -743,26 +728,25 @@ fn compile_counted(
             function: kernel,
             shape,
             dispatch,
-            replay,
         } => {
-            use crate::candidate::engine::variants;
             let kernel = function(0, Stage::Kernel, kernel, linked(0))?;
-            let compile = match replay {
-                true => variants::compile_replay_for_shape,
-                false => variants::compile_compute_for_shape,
-            };
-            let (pipeline, _) = compile(device, &kernel, shape, dispatch.as_ref(), &budget)?;
+            let (pipeline, _) = crate::candidate::engine::variants::compile_compute_for_shape(
+                device,
+                &kernel,
+                shape,
+                dispatch.as_ref(),
+                &budget,
+            )?;
             AcceptancePipeline::Compute(Box::new(pipeline))
         }
         PipelineRequest::VertexDraw {
             function: vertex,
             template,
             shape,
-            form,
         } => {
             let vertex = function(0, Stage::Vertex, vertex, linked(0))?;
             let descriptor = template.descriptor(StageSource::Function(vertex), None)?;
-            AcceptancePipeline::Render(Box::new(render(&descriptor, shape.as_ref(), *form)?))
+            AcceptancePipeline::Render(Box::new(render(&descriptor, shape.as_ref())?))
         }
         PipelineRequest::Draw {
             vertex,
@@ -776,11 +760,7 @@ fn compile_counted(
                 StageSource::Function(vertex),
                 Some(StageSource::Function(fragment)),
             )?;
-            AcceptancePipeline::Render(Box::new(render(
-                &descriptor,
-                shape.as_ref(),
-                crate::candidate::engine::variants::DrawForm::Bound,
-            )?))
+            AcceptancePipeline::Render(Box::new(render(&descriptor, shape.as_ref())?))
         }
         PipelineRequest::MeshDraw {
             object,
@@ -1648,7 +1628,6 @@ mod tests {
             },
             shape: BindShape::default(),
             dispatch: None,
-            replay: false,
         };
         let library = |names: &[&str]| LinkedLibrary {
             functions: names.iter().map(|name| (*name).to_owned()).collect(),
@@ -1715,7 +1694,6 @@ mod tests {
             function: function("k", 2),
             shape: BindShape::default(),
             dispatch: None,
-            replay: false,
         };
         assert_eq!(kernel.linked_ranges(), vec![Range { start: 1, end: 3 }]);
         assert_eq!(kernel.libraries(), 3);
@@ -1723,7 +1701,6 @@ mod tests {
             function: function("v", 1),
             template,
             shape: None,
-            form: crate::candidate::engine::variants::DrawForm::Bound,
         };
         assert_eq!(vertex.linked_ranges(), vec![Range { start: 1, end: 2 }]);
         let row = PipelineRequest::Compute {

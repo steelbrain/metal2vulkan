@@ -10,13 +10,10 @@
 //!
 //! - **The request.** A case is admitted and prepared by the executor's own device-free half
 //!   (`engine::prepare_compile`: its run's preparation, except that an object or mesh case, whose
-//!   mesh render pipeline the executor does not draw, is prepared to compile it), and every
-//!   pipeline a run compiles before it reads device output
-//!   comes from `engine::case_compiles`: the case's own, and on a device where the device
-//!   replay runs, each registered replay variant. Each compiles in a compile worker (the 20-s and
-//!   500-MiB per-attempt ceilings, a process-group kill). The pipelines of host-replayed commands
-//!   are compiled for bind shapes the producer's records decide on the device, so they are counted
-//!   per case and profile as uncovered, never compiled here; the count is part of the cell.
+//!   mesh render pipeline the executor does not draw, is prepared to compile it), and the one
+//!   pipeline a run compiles before it reads device output, the case's own, comes from
+//!   `engine::case_compile`. It compiles in a compile worker (the 20-s and 500-MiB per-attempt
+//!   ceilings, a process-group kill).
 //! - **The bounds.** Each case is admitted, prepared, and compiled in its own case worker
 //!   ([`CaseWorkers`]) under the 500-MiB ceiling, so the census's process holds only the
 //!   committed cases and their cells; `jobs` cases run at once, each case's compiles one at a time.
@@ -47,8 +44,7 @@
 
 use crate::candidate::engine::artifact::CaseArtifact;
 use crate::candidate::engine::{
-    case_compiles, prepare_compile, CompileFailure, CompileSubject, PreparedCase,
-    ENGINE_EXECUTOR_ABI,
+    case_compile, prepare_compile, CompileFailure, PreparedCase, ENGINE_EXECUTOR_ABI,
 };
 use crate::case::AuthoredCase;
 use crate::check::admission::{admit, ExecutionRequest, ExecutorError, NotSupported};
@@ -445,7 +441,7 @@ pub trait CaseCompiler: Sync {
 }
 
 /// The executor's admission and compile preparation ([`prepare_compile`]) of `case` over the
-/// corpus at `root`, then every pipeline [`case_compiles`] lists for each of `devices`, each in a
+/// corpus at `root`, then the pipeline [`case_compile`] plans for each of `devices`, each in a
 /// compile worker of `worker`: one cell per device, in order.
 pub fn compile_case(
     root: &Path,
@@ -648,63 +644,31 @@ pub fn serve_if_requested() {
     ))
 }
 
-/// `prepared` compiled on `device`: each pipeline of [`case_compiles`] in order, stopping at the
-/// first that does not compile, as the executor's run stops, and the digest of what a run there
-/// executes when every one compiled: each compile's, and the device replay's preprocess module
-/// where the device replay runs its variants, as the executor's run records them; none when the
-/// host replay runs any command buffer there.
+/// `prepared` compiled on `device`: the pipeline of [`case_compile`], and the digest of what a run
+/// there executes when it compiled, as the executor's run records it.
 pub fn compile_prepared(
     prepared: &PreparedCase,
     worker: &CompileWorker,
     device: &WorkerDevice,
 ) -> CellResult {
-    let planned = match case_compiles(prepared, device) {
+    let planned = match case_compile(prepared, device) {
         Ok(planned) => planned,
         Err(error) => return CellResult::decided(executor_outcome(error, FailureClass::Case)),
     };
+    let mut artifact = CaseArtifact::default();
+    let (result, measured) = planned.compile(worker, device, &mut artifact);
     let mut cell = CellResult {
         outcome: Ok(CellOutcome::Compiled),
-        host_replayed: planned.host_replayed,
-        compiles: 0,
+        host_replayed: 0,
+        compiles: 1,
         cost: Cost::default(),
         artifact: None,
     };
-    let mut artifact = CaseArtifact::default();
-    for compile in &planned.compiles {
-        let (result, measured) = compile.compile(worker, device, &mut artifact);
-        cell.compiles += 1;
-        cell.cost.add(measured.as_ref());
-        if let Err(failure) = result {
-            cell.outcome = compile_outcome(failure).map_err(|failure| CellFailure {
-                detail: match compile.subject {
-                    CompileSubject::Case => failure.detail,
-                    CompileSubject::ReplayVariant {
-                        token,
-                        threads_per_group,
-                    } => format!(
-                        "the replay variant of pipeline token {token} for {threads_per_group:?}: {}",
-                        failure.detail
-                    ),
-                },
-                ..failure
-            });
-            return cell;
-        }
+    cell.cost.add(measured.as_ref());
+    match result {
+        Ok(()) => cell.artifact = artifact.sha256(),
+        Err(failure) => cell.outcome = compile_outcome(failure),
     }
-    let replays = planned
-        .compiles
-        .iter()
-        .any(|compile| matches!(compile.subject, CompileSubject::ReplayVariant { .. }));
-    if replays {
-        if let Err(error) = artifact.record_replay_module(device.device()) {
-            cell.outcome = executor_outcome(error, FailureClass::Tool);
-            return cell;
-        }
-    }
-    if planned.host_replayed > 0 {
-        artifact.record_uncovered();
-    }
-    cell.artifact = artifact.sha256();
     cell
 }
 

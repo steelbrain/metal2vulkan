@@ -491,7 +491,8 @@ cargo run -p metal2vulkan-validation --release --bin corpus-vulkan -- \
   inherit the encoder's buffers `indirect_command_inheritance`, a command the host encodes
   `host_encoded_indirect_commands`, and a pipeline state an argument buffer holds, which the
   runtime gives no `gpuResourceID`, `argument_buffer_pipeline_state`: each the runtime's limit,
-  run on Metal alone. A pixel format the runtime makes no image of on the device records `not_enabled`, as
+  run on Metal alone. A command buffer of the runtime's form is refused as not implemented
+  (`executor_not_implemented`): the executor does not route one yet. A pixel format the runtime makes no image of on the device records `not_enabled`, as
   the executor's own context records a format its query lacks. A vertex or fragment case of any
   sample count draws through the runtime the same way (`engine::runs_render_through_runtime`): its own
   stage's buffers, bound textures and samplers, argument buffers of buffers, textures and samplers
@@ -515,9 +516,8 @@ cargo run -p metal2vulkan-validation --release --bin corpus-vulkan -- \
   `not_supported{uncontained:unchecked vertex_input}`. A rasterization-disabled vertex case renders
   into the oracle's 1x1 `R8Unorm` attachment, and a fragment case of no attachment into the
   oracle's pass of none: `renderTargetWidth` and `renderTargetHeight` 1, `defaultRasterSampleCount`
-  the case's samples. Layered rendering, an indirect command buffer, a patch index buffer or an
-  out-of-bounds target other than an attribute buffer keeps the case on the executor's own
-  context. A vertex buffer's dynamic stride carries `dynamic_vertex_stride` and a fragment
+  the case's samples. Layered rendering, a patch index buffer or an out-of-bounds target other
+  than an attribute buffer keeps the case on the executor's own context. A vertex buffer's dynamic stride carries `dynamic_vertex_stride` and a fragment
   function's imageblock `fragment_imageblock`, each the runtime's limit. An indexed
   draw past its index buffer, which the runtime refuses as Metal's validation does
   (`Refusal::IndexBufferOffset`), carries `index_buffer_past_end`, and a depth/stencil attachment

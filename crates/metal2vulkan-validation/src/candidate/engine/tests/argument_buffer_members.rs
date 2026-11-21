@@ -184,14 +184,7 @@ fn argument_buffer_members_are_written_into_their_owner() {
     }
 
     // The owner holds, at each field, the word Metal's argument encoder writes there.
-    let fields = field_words(
-        &embedded,
-        &BTreeMap::new(),
-        &tokens,
-        &BTreeMap::new(),
-        std::iter::empty(),
-    )
-    .unwrap();
+    let fields = field_words(&embedded, &tokens, &BTreeMap::new()).unwrap();
     let owner = owner_bytes(&mapped.buffers, 0, &fields).unwrap();
     let word = |at: usize| u64::from_le_bytes(owner[at..at + 8].try_into().unwrap());
     assert_eq!(&owner[..8], &[0xab, 0xab, 0xab, 0xab, 0, 0, 0, 0]);
@@ -206,14 +199,7 @@ fn argument_buffer_members_are_written_into_their_owner() {
     assert_eq!(ids.len(), 64);
     assert!(!ids.contains(&0));
     // A field named by two members, overlapping fields, and a field past the owner are refused.
-    assert!(field_words(
-        &embedded,
-        &BTreeMap::new(),
-        &BTreeMap::from([((0, 8), 1)]),
-        &BTreeMap::new(),
-        std::iter::empty()
-    )
-    .is_err());
+    assert!(field_words(&embedded, &BTreeMap::from([((0, 8), 1)]), &BTreeMap::new(),).is_err());
     let overlapping = BTreeMap::from([((0, 8), 1), ((0, 12), 2)]);
     assert!(owner_bytes(&mapped.buffers, 0, &overlapping).is_err());
     assert!(owner_bytes(&mapped.buffers, 0, &BTreeMap::from([((0, 32), 1)])).is_err());
@@ -338,10 +324,8 @@ fn an_argument_buffer_texture_is_the_heap_member_its_owner_names() {
     assert_eq!(bytes.len(), bytes_len as usize);
     let fields = field_words(
         &BTreeMap::new(),
-        &BTreeMap::new(),
         &texture_tokens(&mapped).unwrap(),
         &BTreeMap::new(),
-        std::iter::empty(),
     )
     .unwrap();
     let owner = owner_bytes(&mapped.buffers, 0, &fields).unwrap();
@@ -428,10 +412,8 @@ fn an_argument_buffer_sampler_maps_by_its_field() {
     let mapped = map_kernel(&shared).unwrap();
     assert!(field_words(
         &BTreeMap::new(),
-        &BTreeMap::new(),
         &texture_tokens(&mapped).unwrap(),
         &sampler_ids(&mapped).unwrap(),
-        std::iter::empty(),
     )
     .is_err());
 }
@@ -525,10 +507,8 @@ fn an_argument_buffer_sampler_is_the_sampler_table_entry_its_owner_names() {
     let commands = plan.instantiate_dispatch(&state, &mapped.dispatch).unwrap();
     let fields = field_words(
         &BTreeMap::new(),
-        &BTreeMap::new(),
         &texture_tokens(&mapped).unwrap(),
         &sampler_ids(&mapped).unwrap(),
-        std::iter::empty(),
     )
     .unwrap();
     let owner = owner_bytes(&mapped.buffers, 0, &fields).unwrap();

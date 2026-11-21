@@ -379,9 +379,6 @@ pub(super) struct VulkanContext {
     /// The robustness features the context could not enable
     /// (`enables::Enables::unmet_robustness`): every run on the context is refused naming them.
     pub(super) unmet_robustness: BTreeSet<VkFeature>,
-    /// Whether the context enabled `VK_EXT_device_generated_commands` with its
-    /// `deviceGeneratedCommands` ([`enables::enable_generated_commands`]).
-    pub(super) generated_commands: bool,
     /// What the runtime probe's context enabled beyond the engine's list
     /// ([`with_runtime_probe_context`]); `None` on every other context.
     pub(super) runtime_probe: Option<enables::RuntimeProbeExtensions>,
@@ -1832,7 +1829,6 @@ impl VulkanContext {
             restriction,
             hidden,
             unmet_robustness: enables.unmet_robustness,
-            generated_commands,
             runtime_probe,
             messenger,
             messages,
@@ -1855,31 +1851,6 @@ impl VulkanContext {
             self.loader_word.restore();
             self.device.allocate_command_buffers(info)
         }
-    }
-
-    /// `VK_EXT_device_generated_commands`'s commands, loaded through the loader's
-    /// `vkGetDeviceProcAddr`, which reads the device's loader word ([`LoaderWord`]): the word is
-    /// put back first. `None` where the context did not enable the extension (or a command does not
-    /// load).
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "the one call site, after the loader word is put back"
-    )]
-    pub(super) fn generated_commands(&self) -> Option<super::generated_commands::Commands> {
-        if !self.generated_commands {
-            return None;
-        }
-        let handle = self.device.handle();
-        let load = |name: &CStr| {
-            // SAFETY: the device is live, its context is used by its own thread only, and the
-            // word is put back before each load.
-            unsafe {
-                self.loader_word.restore();
-                self.instance.get_device_proc_addr(handle, name.as_ptr())
-            }
-        };
-        // SAFETY: each name is the extension's command of this device, which enabled it.
-        unsafe { super::generated_commands::Commands::load(handle, load) }
     }
 
     /// `vkGetMemoryHostPointerPropertiesEXT` (`VK_EXT_external_memory_host`), loaded through the

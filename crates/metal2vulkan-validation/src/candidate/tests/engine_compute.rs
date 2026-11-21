@@ -26,8 +26,6 @@ pub(crate) fn case(entry: &str, buffer: Vec<u8>, dispatch: Dispatch) -> ComputeC
         argument_buffer_buffers: BTreeMap::new(),
         argument_buffer_textures: BTreeMap::new(),
         argument_buffer_samplers: BTreeMap::new(),
-        objects: std::collections::BTreeMap::new(),
-        command_buffers: std::collections::BTreeMap::new(),
         textures: BTreeMap::new(),
         samplers: BTreeMap::new(),
         threadgroup_lengths: BTreeMap::new(),
@@ -73,8 +71,6 @@ fn run_linked(
                 shape,
             )
         },
-        |_, token, _, _| Err(format!("no template has pipeline token {token}").into()),
-        &[],
     )
     .result
 }

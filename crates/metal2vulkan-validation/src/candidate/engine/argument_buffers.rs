@@ -16,26 +16,15 @@
 //!   that resource id ([`used_texture`]): a heap member, which the plan writes into every heap
 //!   array whose class holds it and enters in each stage's handle table, so a handle loaded from
 //!   the field finds its element;
-//! - a command buffer is its `gpuResourceID` in the owner, a small integer of its own
-//!   ([`records_ids`]), and its record storage an argument-buffer buffer at the guest address the
-//!   product resolves that ID at (`records_address`, [`records_storage`]), which the product's
-//!   encoder writes each command through, and which the run checks as the host contract decodes it
-//!   ([`embed_objects`], [`validate_records`]);
 //! - a sampler is its `gpuResourceID` in the owner and an argument sampler of the bind state with
 //!   that id ([`embed_samplers`], [`sampler_ids`]): the plan writes it into each sampler array
 //!   and enters it in each stage's sampler table, so a sampler loaded from the field finds its
-//!   element;
-//! - a pipeline state is the case's token for it in the owner and nothing else: the product reads
-//!   the field's word only as an encoder's operand and refuses every other use of the handle and
-//!   every access but the handle load that may reach the field's bytes (`ArgumentBufferObjects`),
-//!   so no observation depends on it but through the records, and the binder has no class for one.
+//!   element.
 
 use super::resources;
 use super::BufferAddress;
-use crate::case::indirect_commands::{CommandBufferResource, PipelineResource};
 use crate::case::{ArgumentBufferSamplerResource, TextureType};
 use crate::literal::{LiteralArgumentBufferBuffer, LiteralArgumentBufferTexture, LiteralTexture};
-use metal2vulkan::bind::indirect_commands::{records_address, RECORDS_ID_LIMIT};
 use metal2vulkan::bind::{ArgumentSampler, BoundTexture, ResourceClass, UsedResource};
 use metal2vulkan::metal::{RenderStages, ResourceUsage};
 use std::collections::BTreeMap;
@@ -146,91 +135,6 @@ pub fn embed_samplers(
     Ok(embedded)
 }
 
-/// The indirect-command objects of a function whose bound buffers are `buffers`: its command
-/// buffers `commands` and pipeline states `pipelines`, each owner grown with zeros to cover the
-/// object's 8-byte field.
-///
-/// - A command buffer is its record storage (`HostRecordsV1`, initialized under the case's
-///   descriptor, capacity, and inheritance, [`CommandBufferResource::initialize_records`]), an
-///   argument-buffer buffer added to `embedded` at its key, at its records address
-///   ([`records_storage`]) and a used buffer the resident set reaches there ([`used_buffer`]);
-///   its owner holds its ID ([`records_ids`], [`field_words`]), which the product resolves to
-///   that address to write each command through it. The result names each one by its key, for
-///   [`validate_records`] after the run.
-/// - A pipeline state is the case's token for it, the word a command's pipeline field holds and
-///   the replay's key for the compiled template; the product reads the field's word only as an
-///   encoder's operand.
-///
-/// A key authored twice, or one that an argument-buffer buffer of `embedded` also names, is
-/// refused.
-pub fn embed_objects(
-    buffers: &mut BTreeMap<u32, Vec<u8>>,
-    embedded: &mut BTreeMap<FieldKey, Vec<u8>>,
-    commands: &[CommandBufferResource],
-    pipelines: &[PipelineResource],
-) -> Result<EmbeddedObjects, String> {
-    let mut objects = EmbeddedObjects::default();
-    for command in commands {
-        let key = (command.buffer_binding, command.field_offset);
-        cover(buffers, key, "command buffer")?;
-        let mut storage = vec![0; command.record_storage_bytes()?];
-        command.initialize_records(&mut storage)?;
-        if embedded.insert(key, storage).is_some()
-            || objects
-                .command_buffers
-                .insert(key, command.clone())
-                .is_some()
-        {
-            return Err(format!("command buffer {}+{} bound twice", key.0, key.1));
-        }
-    }
-    for pipeline in pipelines {
-        let key = (pipeline.buffer_binding, pipeline.field_offset);
-        cover(buffers, key, "pipeline state")?;
-        if embedded.contains_key(&key)
-            || objects
-                .pipeline_tokens
-                .insert(key, pipeline.token)
-                .is_some()
-        {
-            return Err(format!("pipeline state {}+{} bound twice", key.0, key.1));
-        }
-    }
-    Ok(objects)
-}
-
-/// A function's indirect-command objects ([`embed_objects`]).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct EmbeddedObjects {
-    /// Each command buffer, by key: its record storage is the argument-buffer buffer at the key.
-    pub command_buffers: BTreeMap<FieldKey, CommandBufferResource>,
-    /// Each pipeline state's token, by key: the word its owner holds at the field.
-    pub pipeline_tokens: BTreeMap<FieldKey, u64>,
-}
-
-/// Check each command buffer of `commands` in its final record storage (`finals`, the
-/// argument-buffer buffers' bytes after the run, by key) as the host contract decodes it
-/// ([`CommandBufferResource::validated_records`]): a fault flag the product's encoder set (a
-/// write its descriptor policy refuses, which Metal leaves undefined and whose guarded setter the
-/// oracle faults too), a header the run changed, or a record the contract does not decode fails
-/// the run.
-pub fn validate_records<'a, K: Ord + Copy + std::fmt::Debug + 'a>(
-    commands: impl Iterator<Item = (K, &'a CommandBufferResource)>,
-    finals: &BTreeMap<K, Vec<u8>>,
-) -> Result<(), String> {
-    for (key, command) in commands {
-        let bytes = finals
-            .get(&key)
-            .ok_or_else(|| format!("command buffer {key:?} has no final records"))?;
-        // Decoding validates every record, not only the execution range it then selects.
-        command
-            .validated_records(bytes)
-            .map(|_| ())
-            .map_err(|error| format!("command buffer {key:?}: {error}"))?;
-    }
-    Ok(())
-}
-
 /// The synthetic `gpuResourceID` of the used resource whose consumer token is `token`: nonzero
 /// (a handle table never enters id 0, the null entry) and distinct per token.
 pub fn resource_id(token: u32) -> u64 {
@@ -273,29 +177,6 @@ pub fn argument_samplers<'a, K>(
         .collect()
 }
 
-/// The `gpuResourceID` of each command buffer `keys` (in order), by key: Metal's is a small
-/// integer, the lowest an indirect command buffer does not hold, so the run's command buffers, made
-/// in this order, take 1, 2, and on, each below `RECORDS_ID_LIMIT`.
-pub fn records_ids<K: Ord>(keys: impl Iterator<Item = K>) -> Result<BTreeMap<K, u64>, String> {
-    keys.zip(1u64..)
-        .map(|(key, id)| {
-            (id < RECORDS_ID_LIMIT)
-                .then_some((key, id))
-                .ok_or_else(|| "too many command buffers".into())
-        })
-        .collect()
-}
-
-/// The addresses of the record storage of the command buffer whose ID is `id`, its host device
-/// address `host`: its guest address is the one the product resolves the ID at (`records_address`),
-/// whether or not the allocation has a device address of its own.
-pub fn records_storage(id: u64, host: Option<u64>) -> BufferAddress {
-    BufferAddress {
-        guest: records_address(id),
-        host,
-    }
-}
-
 /// The consumer token of each argument-buffer texture `keys` (in order) of a case whose
 /// argument-buffer buffers number `buffers`: its position after them, so the buffers keep theirs.
 pub fn texture_tokens<K: Ord>(
@@ -314,40 +195,24 @@ pub fn texture_tokens<K: Ord>(
 }
 
 /// The 8 bytes Metal's argument encoder writes at each member's field, as a little-endian word
-/// by key: each argument-buffer buffer's guest address (`buffers`), but a command buffer's ID
-/// where `buffers` holds its record storage (`records`, [`records_ids`]; the storage at its
-/// [`records_storage`] address), each argument-buffer texture's [`resource_id`] (`textures`, by
-/// consumer token), each argument-buffer sampler's id (`samplers`, [`sampler_ids`]), and each
-/// pipeline state's token (`objects`, [`embed_objects`]). A key named by two members, a command
-/// buffer without its record storage, and record storage away from its ID's address are refused.
+/// by key: each argument-buffer buffer's guest address (`buffers`), each argument-buffer
+/// texture's [`resource_id`] (`textures`, by consumer token), and each argument-buffer sampler's
+/// id (`samplers`, [`sampler_ids`]). A key named by two members is refused.
 pub fn field_words<K: Ord + Copy + std::fmt::Debug>(
     buffers: &BTreeMap<K, BufferAddress>,
-    records: &BTreeMap<K, u64>,
     textures: &BTreeMap<K, u32>,
     samplers: &BTreeMap<K, u64>,
-    objects: impl Iterator<Item = (K, u64)>,
 ) -> Result<BTreeMap<K, u64>, String> {
     let mut words = BTreeMap::new();
-    for (key, &id) in records {
-        let storage = buffers
-            .get(key)
-            .ok_or_else(|| format!("command buffer {key:?} has no record storage"))?;
-        if storage.guest != records_address(id) {
-            return Err(format!(
-                "command buffer {key:?}'s record storage is not at its ID {id}'s address"
-            ));
-        }
-    }
     let members = buffers
         .iter()
-        .map(|(&key, address)| (key, records.get(&key).copied().unwrap_or(address.guest)))
+        .map(|(&key, address)| (key, address.guest))
         .chain(
             textures
                 .iter()
                 .map(|(&key, &token)| (key, resource_id(token))),
         )
-        .chain(samplers.iter().map(|(&key, &id)| (key, id)))
-        .chain(objects);
+        .chain(samplers.iter().map(|(&key, &id)| (key, id)));
     for (key, word) in members {
         if words.insert(key, word).is_some() {
             return Err(format!("argument-buffer field {key:?} holds two members"));
@@ -429,21 +294,14 @@ pub fn used_texture(
 }
 
 /// The guest address of each argument-buffer buffer of `keys` (in token order) on a device
-/// without device addresses, by key: a command buffer's record storage (`records`, its ID by key,
-/// [`records_ids`]) at its [`records_storage`] address, every other buffer at its
-/// [`BufferAddress::synthetic_used`].
+/// without device addresses, by key: its [`BufferAddress::synthetic_used`].
 pub fn synthetic_addresses<K: Ord>(
     keys: impl Iterator<Item = K>,
-    records: &BTreeMap<K, u64>,
 ) -> Result<BTreeMap<K, BufferAddress>, String> {
     keys.enumerate()
         .map(|(token, key)| {
             let token = u32::try_from(token).map_err(|_| "too many argument-buffer buffers")?;
-            let address = match records.get(&key) {
-                Some(&id) => records_storage(id, None),
-                None => BufferAddress::synthetic_used(token),
-            };
-            Ok((key, address))
+            Ok((key, BufferAddress::synthetic_used(token)))
         })
         .collect()
 }

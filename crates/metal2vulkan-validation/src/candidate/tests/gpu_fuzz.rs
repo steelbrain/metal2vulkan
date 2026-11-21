@@ -109,23 +109,16 @@ pub(super) mod device {
         bitcode: &[u8],
     ) -> Result<crate::candidate::engine::ComputeRun, ExecutorError> {
         super::device_wait();
-        platform::execute_engine(
-            crate::gpu::TEST_DEVICE,
-            label,
-            case,
-            |device, shape| {
-                crate::candidate::engine::compile_case(
-                    super::super::compile_worker(),
-                    device,
-                    &crate::acceptance::retained(bitcode),
-                    &[],
-                    case,
-                    shape,
-                )
-            },
-            |_, token, _, _| Err(format!("no template has pipeline token {token}").into()),
-            &[],
-        )
+        platform::execute_engine(crate::gpu::TEST_DEVICE, label, case, |device, shape| {
+            crate::candidate::engine::compile_case(
+                super::super::compile_worker(),
+                device,
+                &crate::acceptance::retained(bitcode),
+                &[],
+                case,
+                shape,
+            )
+        })
         .result
     }
 
@@ -168,8 +161,6 @@ pub(super) mod device {
             argument_buffer_buffers,
             argument_buffer_textures: BTreeMap::new(),
             argument_buffer_samplers: BTreeMap::new(),
-            objects: BTreeMap::new(),
-            command_buffers: BTreeMap::new(),
             textures: BTreeMap::new(),
             samplers: BTreeMap::new(),
             threadgroup_lengths: BTreeMap::new(),

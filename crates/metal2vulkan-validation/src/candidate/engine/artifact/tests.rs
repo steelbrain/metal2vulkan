@@ -27,16 +27,12 @@ fn a_case_artifact_is_its_parts_by_subject() {
         }
     );
 
-    let variant = subject_label(CompileSubject::ReplayVariant {
-        token: 3,
-        threads_per_group: [32, 1, 1],
-    });
-    assert_eq!(variant, "replay-variant/3/32x1x1");
+    let other = "another".to_owned();
     let mut a = CaseArtifact::default();
     a.insert("case".into(), digest(1)).unwrap();
-    a.insert(variant.clone(), digest(2)).unwrap();
+    a.insert(other.clone(), digest(2)).unwrap();
     let mut b = CaseArtifact::default();
-    b.insert(variant.clone(), digest(2)).unwrap();
+    b.insert(other.clone(), digest(2)).unwrap();
     b.insert("case".into(), digest(1)).unwrap();
     assert_eq!(a.sha256(), b.sha256());
     assert_eq!(a.sha256().unwrap().len(), 64);
@@ -48,18 +44,9 @@ fn a_case_artifact_is_its_parts_by_subject() {
 
     let mut c = CaseArtifact::default();
     c.insert("case".into(), digest(1)).unwrap();
-    assert_ne!(
-        a.sha256(),
-        c.sha256(),
-        "a missing variant moves the artifact"
-    );
-    c.insert(variant, digest(3)).unwrap();
-    assert_ne!(a.sha256(), c.sha256(), "a moved variant moves the artifact");
-
-    // A run that compiled a host replay's pipeline has no digest, whatever else it compiled.
-    a.record_uncovered();
-    assert_eq!(a.sha256(), None);
-    assert_eq!(a.executed().sha256, None);
+    assert_ne!(a.sha256(), c.sha256(), "a missing part moves the artifact");
+    c.insert(other, digest(3)).unwrap();
+    assert_ne!(a.sha256(), c.sha256(), "a moved part moves the artifact");
 }
 
 /// The record's JSON: the runtime version always, the digest when there is one, nothing else.
@@ -129,7 +116,7 @@ fn the_runtime_sources_are_the_committed_ones() {
 
     let compile = "compile-time translation, reached only from the compile-time parts of mixed runtime files; what it produces is in the pipeline the artifact digests";
     let values = "the compiled pipeline's value types; the artifact digests their values";
-    let spirv = "the SPIR-V builder: at run time it builds the device replay's preprocess module, whose words the artifact digests";
+    let spirv = "the SPIR-V builder: at run time it builds only the device replay's preprocess module, which no engine run executes";
     let packed = "compile-time translation, reached only through lower/arith/pack.rs's pack and unpack intrinsics, which the compile emits; the runtime's YCbCr write takes that file's sRGB encode (srgb_encode), which reaches none of it";
     let not_runtime = BTreeMap::from([
         ("metal2vulkan-air/src/abi/mod.rs", compile),

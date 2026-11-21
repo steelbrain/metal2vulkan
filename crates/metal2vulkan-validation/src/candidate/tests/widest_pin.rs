@@ -95,8 +95,6 @@ fn run(
                 shape,
             )
         },
-        |_, token, _, _| Err(format!("no template has pipeline token {token}").into()),
-        &[],
     )
     .result
 }

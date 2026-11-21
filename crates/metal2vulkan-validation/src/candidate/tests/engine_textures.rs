@@ -71,8 +71,6 @@ fn kernel(
         argument_buffer_buffers: BTreeMap::new(),
         argument_buffer_textures: BTreeMap::new(),
         argument_buffer_samplers: BTreeMap::new(),
-        objects: std::collections::BTreeMap::new(),
-        command_buffers: std::collections::BTreeMap::new(),
         textures: textures
             .into_iter()
             .map(|texture| (texture.binding, texture))

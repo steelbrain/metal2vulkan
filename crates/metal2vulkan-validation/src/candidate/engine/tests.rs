@@ -392,39 +392,13 @@ fn the_cases_own_function_links_and_its_libraries_follow_the_stages() {
             function: linking(&kernel.entry),
             shape: shape.clone(),
             dispatch: Some(kernel.dispatch),
-            replay: false,
         }
     );
     assert_eq!(given, expected_libraries(&[&case]));
-    // A plain request's serialization names no replay, so it reads back as before.
     let json = serde_json::to_value(&request).unwrap();
-    assert!(json.to_string().find("\"replay\"").is_none(), "{json}");
     assert_eq!(
         serde_json::from_value::<PipelineRequest>(json).unwrap(),
         request
-    );
-    // The device-replay variant's request: the same function and libraries, the variant's indirect
-    // dispatch, and the replay input, which its serialization carries.
-    let variant = ComputeCase {
-        dispatch: replay_dispatch([8, 1, 1]),
-        ..kernel.clone()
-    };
-    let (replayed, given) = replay_request(&case, &linked, &variant, &shape);
-    assert_eq!(
-        replayed,
-        PipelineRequest::BoundCompute {
-            function: linking(&kernel.entry),
-            shape: shape.clone(),
-            dispatch: Some(replay_dispatch([8, 1, 1])),
-            replay: true,
-        }
-    );
-    assert_eq!(given, expected_libraries(&[&case]));
-    let json = serde_json::to_value(&replayed).unwrap();
-    assert!(json.to_string().contains("\"replay\":true"), "{json}");
-    assert_eq!(
-        serde_json::from_value::<PipelineRequest>(json).unwrap(),
-        replayed
     );
     assert_eq!(
         request.linked_ranges(),
@@ -440,7 +414,6 @@ fn the_cases_own_function_links_and_its_libraries_follow_the_stages() {
             function: linking("shade"),
             template: graphics::render_template(&vertex_case),
             shape: Some(shape.clone()),
-            form: crate::candidate::engine::variants::DrawForm::Bound,
         }
     );
     assert_eq!(given, expected_libraries(&[&case]));
@@ -728,14 +701,8 @@ fn arrays_and_argument_buffers_map_onto_the_binder() {
     );
 
     // The owner is created holding the pointer, little endian, at its field.
-    let fields = argument_buffers::field_words(
-        &embedded,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        std::iter::empty(),
-    )
-    .unwrap();
+    let fields =
+        argument_buffers::field_words(&embedded, &BTreeMap::new(), &BTreeMap::new()).unwrap();
     let owner_bytes = |index| argument_buffers::owner_bytes(&mapped.buffers, index, &fields);
     let owner = owner_bytes(0).unwrap();
     assert_eq!(&owner[..4], &[0xab; 4]);
@@ -1045,8 +1012,6 @@ fn the_binder_plans_the_executors_state() {
         argument_buffer_buffers: BTreeMap::new(),
         argument_buffer_textures: BTreeMap::new(),
         argument_buffer_samplers: BTreeMap::new(),
-        objects: BTreeMap::new(),
-        command_buffers: BTreeMap::new(),
         textures: BTreeMap::new(),
         samplers: BTreeMap::new(),
         threadgroup_lengths: BTreeMap::new(),
@@ -1205,327 +1170,6 @@ fn committed_command_buffer_and_pipeline_state_cases_refuse_by_their_requirement
     }
 }
 
-/// A replayed draw runs only in its template's topology class (Metal compiled the template for it),
-/// whatever primitive of that class the record names; another class fails the run, as a record the
-/// GPU encoded with a draw its template does not define.
-#[test]
-fn a_replayed_draw_stays_in_its_templates_topology_class() {
-    use crate::case::Primitive;
-    use graphics::{replayed_draw_in_class, Assembly};
-    let points = Assembly::Primitives(Primitive::Point);
-    assert_eq!(replayed_draw_in_class(&points, Primitive::Point), Ok(()));
-    let error = replayed_draw_in_class(&points, Primitive::Triangle).unwrap_err();
-    assert!(error.contains("outside the topology class"), "{error}");
-    let strips = Assembly::Primitives(Primitive::TriangleStrip);
-    assert_eq!(replayed_draw_in_class(&strips, Primitive::Triangle), Ok(()));
-    assert!(replayed_draw_in_class(&strips, Primitive::LineStrip).is_err());
-    let lines = Assembly::Primitives(Primitive::Line);
-    assert_eq!(replayed_draw_in_class(&lines, Primitive::LineStrip), Ok(()));
-}
-
-/// A device replay records as many regions per command as keep its dispatches within the
-/// product's bound, so a range executor v92 ran is never refused for its length: 3,971 commands of
-/// 33 variants take all eight regions, 3,972 take seven (eight would be `TooManyDispatches`), and
-/// Metal's most, 16,384 commands of 64 variants, one.
-#[test]
-fn a_long_replay_records_the_regions_its_dispatch_bound_holds() {
-    use metal2vulkan::bind::BindState;
-    use metal2vulkan::bind::{replay_preprocess, ReplayExecution, ReplayRefusal};
-    use metal2vulkan::bind::{MAX_REPLAY_DISPATCHES, MAX_REPLAY_REGIONS};
-    use metal2vulkan::error::BindError;
-    use std::num::NonZeroU64;
-    let path = crate::engine::profiles_dir().join("gate-lavapipe.json");
-    let text = std::fs::read_to_string(path).unwrap();
-    let description = DeviceDescription::from_khronos_json(&text, None).unwrap();
-    let device = Device::from_queries(description, DevicePolicy::RESIDENT_TABLES).unwrap();
-    let variants = |n: u32| -> Vec<ReplayVariant> {
-        (1..=n)
-            .map(|x| ReplayVariant::new(NonZeroU64::new(7).unwrap(), [x, 1, 1], [0; 31]))
-            .collect()
-    };
-    let run = |count: u32, registered: &[ReplayVariant], regions: u32| {
-        let mut execution = ReplayExecution::new(count, 0, count);
-        execution.regions = regions;
-        replay_preprocess(&device, &BindState::default(), &execution, registered).map(|_| ())
-    };
-    for (count, n, regions) in [
-        (1, 1, MAX_REPLAY_REGIONS),
-        (3_971, 33, 8),
-        (3_972, 33, 7),
-        (16_384, 64, 1),
-    ] {
-        let registered = variants(n);
-        assert_eq!(
-            replay_regions(count, registered.len()),
-            regions,
-            "{count} x {n}"
-        );
-        let dispatches = u64::from(count) * u64::from(n) * u64::from(regions);
-        assert!(dispatches <= MAX_REPLAY_DISPATCHES, "{count} x {n}");
-        run(count, &registered, regions).unwrap_or_else(|e| panic!("{count} x {n}: {e:?}"));
-    }
-    // Eight regions at the boundary are the refusal the chosen count avoids.
-    let registered = variants(33);
-    assert!(matches!(
-        run(3_972, &registered, MAX_REPLAY_REGIONS),
-        Err(BindError::InvalidReplay {
-            reason: ReplayRefusal::TooManyDispatches { .. }
-        })
-    ));
-}
-
-/// A device replay's fault refuses the row (`not_supported{bind}`) only when every reason is one of
-/// the product's typed limits (no registered variant, a grid past `2^32 - 1` threads, more regions
-/// than the execution records); any other reason, alone or beside them, fails the row, as the host
-/// replay fails a dynamic stride, and as a preprocess that
-/// disagrees with the host decode must. The verdict names the reasons.
-#[test]
-fn a_replay_fault_refuses_the_row_only_for_the_products_typed_limits() {
-    use metal2vulkan::bind::ReplayFaults as F;
-    let limits = [F::VARIANT, F::GROUP_COUNT, F::REGIONS];
-    let others = [
-        F::ENCODING,
-        F::ACTION,
-        F::PIPELINE,
-        F::BUFFERS,
-        F::RECORD,
-        F::RANGE,
-    ];
-    let refused = |faults: u32| match replay_fault_verdict("command buffer (0, 0)", F(faults)) {
-        ExecutorError::NotSupported(NotSupported::Bind(why)) => Ok(why),
-        ExecutorError::Failed(why) => Err(why),
-        other => panic!("{other:?}"),
-    };
-    for bit in limits {
-        let why = refused(bit.0).unwrap_or_else(|why| panic!("{bit:?} failed: {why}"));
-        assert!(why.starts_with("command buffer (0, 0): "), "{why}");
-    }
-    let all_limits = limits.iter().fold(0, |all, bit| all | bit.0);
-    let why = refused(all_limits).unwrap_or_else(|why| panic!("{why}"));
-    assert!(
-        why.contains(
-            "no registered variant, a grid past 2^32 - 1 threads, more regions than the \
-             execution records"
-        ),
-        "{why}"
-    );
-    for bit in others {
-        let why = refused(bit.0).expect_err("fails the row");
-        assert!(why.contains(&format!("{:#x}", bit.0)), "{why}");
-        refused(bit.0 | F::VARIANT.0).expect_err("fails the row beside a limit");
-    }
-    // A fault bit with no reason is no typed limit.
-    refused(0).expect_err("fails the row");
-}
-
-/// An executed command buffer of `descriptor`'s family with no commands, no parent pipeline, and
-/// no parent buffers: what `replay_templates` reads of it is that it executes, and its family.
-fn executed_command_buffer(
-    descriptor: crate::case::indirect_commands::CommandDescriptor,
-) -> crate::case::indirect_commands::CommandBufferResource {
-    crate::case::indirect_commands::CommandBufferResource {
-        buffer_binding: 0,
-        field_offset: 16,
-        capacity: 1,
-        execution_range: [0, 1],
-        inherit_pipeline_state: false,
-        inherit_buffers: false,
-        descriptor,
-        commands: vec![],
-        execute: Some(crate::case::indirect_commands::Execution {
-            pipeline: None,
-            buffers: vec![],
-            vertex_buffers: vec![],
-            fragment_buffers: vec![],
-            object_buffers: vec![],
-            mesh_buffers: vec![],
-        }),
-    }
-}
-
-/// A compute command buffer's descriptor, for [`executed_command_buffer`].
-fn compute_commands() -> crate::case::indirect_commands::CommandDescriptor {
-    crate::case::indirect_commands::CommandDescriptor::Compute {
-        dispatch: crate::case::indirect_commands::ComputeDispatch::Both,
-        max_buffer_bind_count: 1,
-        max_threadgroup_memory_bind_count: 0,
-        support_dynamic_attribute_stride: false,
-    }
-}
-
-/// The templates the replay maps are of the families the case's executed command buffers run. The
-/// committed case over a fragment template's and a kernel template's pipeline states
-/// (`pipeline-states-beside-the-data-of-two-stages`), given an executed compute command buffer,
-/// maps only the kernel template: no compute command selects the fragment one, which the checker
-/// and the oracle accept beside compute commands. Given an executed render command buffer instead,
-/// the fragment template is the one mapped, and refused: it is no rasterization-disabled vertex
-/// function.
-#[test]
-fn replay_templates_map_only_the_families_executed_commands_run() {
-    use crate::case::indirect_commands::CommandDescriptor;
-    let root = metal2vulkan_devtools::validation_dir().join("corpus");
-    let case = CorpusStore::new(&root)
-        .read_all_cases()
-        .unwrap()
-        .into_iter()
-        .find(|case| case.name == "pipeline-states-beside-the-data-of-two-stages")
-        .expect("the committed public case");
-    let request = ExecutionRequest::EngineCandidate {
-        device: DeviceType::Cpu,
-    };
-    let mut checked = admit(&root, case, request)
-        .unwrap_or_else(|error| panic!("{error}"))
-        .into_checked_for(request)
-        .unwrap();
-    let stages = checked
-        .pipeline_templates
-        .values()
-        .map(|template| template.case.stage)
-        .collect::<Vec<_>>();
-    assert!(stages.contains(&Stage::Fragment) && stages.contains(&Stage::Kernel));
-    // Not executing commands, the case selects no template.
-    assert!(replay_templates(&checked).unwrap().is_empty());
-    checked
-        .primary
-        .case
-        .command_buffers
-        .push(executed_command_buffer(compute_commands()));
-    let templates = replay_templates(&checked).unwrap_or_else(|error| panic!("{error}"));
-    let kernel_token = checked
-        .primary
-        .case
-        .pipeline_states
-        .iter()
-        .find(|state| checked.pipeline_templates[&state.case_id].case.stage == Stage::Kernel)
-        .unwrap()
-        .token;
-    assert_eq!(
-        templates.keys().copied().collect::<Vec<_>>(),
-        [kernel_token]
-    );
-    assert!(matches!(
-        templates[&kernel_token].mapped,
-        TemplateCase::Compute(_)
-    ));
-    checked.primary.case.command_buffers[0] = executed_command_buffer(CommandDescriptor::Render {
-        draws: crate::case::indirect_commands::RenderDraws::default(),
-        max_vertex_buffer_bind_count: 1,
-        max_fragment_buffer_bind_count: 0,
-        max_object_buffer_bind_count: 0,
-        max_mesh_buffer_bind_count: 0,
-        support_dynamic_attribute_stride: false,
-    });
-    let error = replay_templates(&checked).err().unwrap();
-    assert!(
-        matches!(&error, ExecutorError::NotSupported(NotSupported::Requirements(requirements))
-            if requirements.contains(&ToolingRequirement::ReplayedTemplateResources)),
-        "{error}"
-    );
-}
-
-/// The mirror and the mixed run of
-/// [`replay_templates_map_only_the_families_executed_commands_run`]. Beside render commands only
-/// (`gpu-encoded-draws-run-the-inherited-vertex-buffers`), a kernel pipeline-state literal that
-/// binds beyond buffers (`pipeline-states-beside-the-data-of-two-stages`'s kernel template with a
-/// sampler added) is no template: no render command selects it, so it is skipped, not refused.
-/// Once compute commands execute too, it is a template, and refused. With its buffers only, the
-/// mixed run maps both families, each token to its own.
-#[test]
-fn replay_templates_skip_another_familys_literal_and_map_both_families_of_a_mixed_run() {
-    use crate::case::{SamplerAddressMode, SamplerFilter, SamplerMipFilter, SamplerResource};
-    let root = metal2vulkan_devtools::validation_dir().join("corpus");
-    let cases = CorpusStore::new(&root).read_all_cases().unwrap();
-    let request = ExecutionRequest::EngineCandidate {
-        device: DeviceType::Cpu,
-    };
-    let checked_case = |name: &str| {
-        let case = cases
-            .iter()
-            .find(|case| case.name == name)
-            .unwrap_or_else(|| panic!("the committed public case {name}"))
-            .clone();
-        admit(&root, case, request)
-            .unwrap_or_else(|error| panic!("{name}: {error}"))
-            .into_checked_for(request)
-            .unwrap()
-    };
-    let mut checked = checked_case("gpu-encoded-draws-run-the-inherited-vertex-buffers");
-    assert!(checked
-        .primary
-        .case
-        .command_buffers
-        .iter()
-        .all(|command| command.execute.is_none() || command.is_render()));
-    let render = replay_templates(&checked).unwrap_or_else(|error| panic!("{error}"));
-    assert!(!render.is_empty());
-    assert!(render
-        .values()
-        .all(|template| matches!(template.mapped, TemplateCase::Render(_))));
-
-    let mut beside = checked_case("pipeline-states-beside-the-data-of-two-stages");
-    let mut literal = beside
-        .primary
-        .case
-        .pipeline_states
-        .iter()
-        .find(|state| beside.pipeline_templates[&state.case_id].case.stage == Stage::Kernel)
-        .cloned()
-        .unwrap();
-    let mut kernel = beside.pipeline_templates.remove(&literal.case_id).unwrap();
-    assert!(kernel.case.samplers.is_empty());
-    kernel.case.samplers.push(SamplerResource {
-        binding: 0,
-        address_mode: SamplerAddressMode::ClampToEdge,
-        min_filter: SamplerFilter::Nearest,
-        mag_filter: SamplerFilter::Nearest,
-        mip_filter: SamplerMipFilter::NotMipmapped,
-        normalized_coordinates: true,
-    });
-    let token = render.keys().max().unwrap() + 1;
-    literal.token = token;
-    let case_id = literal.case_id.clone();
-    checked.pipeline_templates.insert(case_id.clone(), kernel);
-    checked.primary.case.pipeline_states.push(literal);
-
-    // Render commands only: the kernel literal is skipped, not refused.
-    let skipped = replay_templates(&checked).unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(
-        skipped.keys().collect::<Vec<_>>(),
-        render.keys().collect::<Vec<_>>()
-    );
-
-    // Compute commands execute too: the literal is a template, and it binds beyond buffers.
-    checked
-        .primary
-        .case
-        .command_buffers
-        .push(executed_command_buffer(compute_commands()));
-    let error = replay_templates(&checked).err().unwrap();
-    assert!(
-        matches!(&error, ExecutorError::NotSupported(NotSupported::Requirements(requirements))
-            if requirements.contains(&ToolingRequirement::ReplayedTemplateResources)),
-        "{error}"
-    );
-
-    // With its buffers only, the mixed run maps both families.
-    checked
-        .pipeline_templates
-        .get_mut(&case_id)
-        .unwrap()
-        .case
-        .samplers
-        .pop();
-    let both = replay_templates(&checked).unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(
-        both.keys().copied().collect::<Vec<_>>(),
-        render.keys().copied().chain([token]).collect::<Vec<_>>()
-    );
-    assert!(matches!(both[&token].mapped, TemplateCase::Compute(_)));
-    for token in render.keys() {
-        assert!(matches!(both[token].mapped, TemplateCase::Render(_)));
-    }
-}
-
 /// An allocation's guest address names a buffer whatever device address it has: NVIDIA's lie
 /// below 2^32 (a vertex buffer at 0x5020000 on an RTX 3090), where a guest address equal to it
 /// was a nil buffer's offset to a record, and RADV's sign-extended upper half
@@ -1575,8 +1219,6 @@ fn plain_kernel() -> ComputeCase {
         argument_buffer_buffers: BTreeMap::new(),
         argument_buffer_textures: BTreeMap::new(),
         argument_buffer_samplers: BTreeMap::new(),
-        objects: BTreeMap::new(),
-        command_buffers: BTreeMap::new(),
         textures: BTreeMap::new(),
         samplers: BTreeMap::new(),
         threadgroup_lengths: BTreeMap::from([(0, 64)]),
@@ -1597,8 +1239,8 @@ fn plain_kernel() -> ComputeCase {
 /// by threads or threadgroups and observing a buffer, a texture, an argument-buffer member or
 /// nothing, a 32-bit float depth or a multisampled texture among its textures (which the run
 /// fills by a draw), a cube array among them, and its out-of-bounds targets among them
-/// (`platform::runtime_bounds`); a case with anything else (a pipeline state in an argument
-/// buffer, an indirect dispatch) stays on the executor's own context.
+/// (`platform::runtime_bounds`); a case with an indirect dispatch stays on the executor's own
+/// context.
 #[test]
 fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
     use crate::case::{
@@ -1688,8 +1330,6 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
         };
         assert!(runs_through_runtime(&case));
     }
-    let mut object = plain.clone();
-    object.objects.insert((1, 0), 7);
     let depth = LiteralTexture {
         format: TextureFormat::Depth32Float,
         bytes: vec![0; 64],
@@ -1716,16 +1356,14 @@ fn a_plain_kernel_case_and_only_one_runs_through_the_runtime() {
         ..plain.clone()
     };
     assert!(runs_through_runtime(&bounded));
-    let others = [
-        object,
-        ComputeCase {
-            dispatch: replay_dispatch([2, 1, 1]),
-            ..plain.clone()
+    let indirect = ComputeCase {
+        dispatch: Dispatch::ThreadgroupsIndirect {
+            indirect: metal2vulkan::bind::IndirectRef::new(0, 0),
+            threads_per_group: [2, 1, 1],
         },
-    ];
-    for other in &others {
-        assert!(!runs_through_runtime(other), "{other:?}");
-    }
+        ..plain.clone()
+    };
+    assert!(!runs_through_runtime(&indirect), "{indirect:?}");
 }
 
 /// The runtime draws a vertex or fragment case of any sample count, its own stage's buffers,

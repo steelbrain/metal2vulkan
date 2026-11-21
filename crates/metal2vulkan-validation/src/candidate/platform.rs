@@ -5,7 +5,6 @@ mod buffers;
 mod compute;
 mod device;
 mod enables;
-mod generated_commands;
 mod graphics_pipeline;
 mod ignored_drivers;
 mod loader_word;

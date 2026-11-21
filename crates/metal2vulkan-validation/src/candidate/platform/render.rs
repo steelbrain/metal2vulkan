@@ -43,25 +43,22 @@
 use super::acceptance::{unmet_requirements, LayoutError, LayoutObjects};
 use super::buffers::{create_host_buffer, HostBuffer};
 use super::compute::{
-    allocate, allocate_in, attempt, command_replay, environment, executed_census,
-    incompatible_binding, module_censuses, opened_device, refused_attempt, replay_commands,
-    upload_root_table, Allocation, CompileChild, Live, OnDevice, Replay, ReplayPath,
+    allocate, allocate_in, attempt, environment, executed_census, incompatible_binding,
+    module_censuses, opened_device, refused_attempt, upload_root_table, Allocation,
 };
 use super::device::{with_validated_context, ExtendedDynamicState, VulkanContext};
 use super::graphics_pipeline::{self, GraphicsError};
 use super::plan_resources::{barrier, create_image, layers, Guest, PlanResources, TextureKey};
-use crate::candidate::engine::argument_buffers::{
-    field_words, owner_bytes, records_storage, validate_records,
-};
+use crate::candidate::engine::argument_buffers::{field_words, owner_bytes};
 use crate::candidate::engine::graphics::{
     self, stage_of, Assembly, ColorTarget, RenderCase, RenderFinals, RenderOutput,
 };
 use crate::candidate::engine::guards::{declared_reach, with_escaped, GuardCount};
+use crate::candidate::engine::index_padding_agrees;
 use crate::candidate::engine::{
     bind_refusal, draw_out_of_bounds_run, engine_fingerprint, resources, status_verdict,
     BufferAddress, ComputeRun, RunAttempt,
 };
-use crate::candidate::engine::{index_padding_agrees, ChildCommand, CompiledChild};
 use crate::case::out_of_bounds::OutOfBoundsResource;
 use crate::check::admission::{ExecutorError, NotSupported};
 use crate::executor_contract::multisample::AttachmentTransfer;
@@ -73,8 +70,8 @@ use crate::literal::{LiteralDepthStencil, LiteralTexture};
 use crate::worker::compile::WorkerDevice;
 use ash::vk;
 use metal2vulkan::bind::{
-    BindShape, BindState, BindingPlan, BufferRanges, DrawCommands, ExecutionStatus, PushHole,
-    SamplerDescriptor, StatusReport, DRAW_ARGUMENT_BYTES,
+    BindShape, BufferRanges, DrawCommands, ExecutionStatus, PushHole, SamplerDescriptor,
+    StatusReport,
 };
 use metal2vulkan::device::Device;
 use metal2vulkan::device::VkFeature;
@@ -91,25 +88,18 @@ fn not_implemented(what: impl Into<String>) -> ExecutorError {
 /// description and policy and the bind shape the draw binds, `graphics::render_shape`; the tools'
 /// compile worker; it returns the pipeline), plan and
 /// execute its draw, and read the status before the output. Every refusal is typed; only a device,
-/// driver, or tool failure is `Failed`. `children` compiles the template each command the case
-/// executes runs, in a compile worker.
+/// driver, or tool failure is `Failed`.
 pub fn execute_engine_render(
     device_type: DeviceType,
     case_id: &str,
     case: &RenderCase,
     compile: impl FnOnce(&WorkerDevice, &BindShape) -> Result<RenderPipeline, ExecutorError>,
-    children: impl FnMut(
-        &WorkerDevice,
-        u64,
-        &BindShape,
-        &ChildCommand,
-    ) -> Result<CompiledChild, ExecutorError>,
 ) -> RunAttempt {
     if let Some(refused) = refused_attempt(device_type, "engine-render") {
         return refused;
     }
     with_validated_context(device_type, |context| {
-        let result = run(context, case_id, case, (compile, children));
+        let result = run(context, case_id, case, compile);
         Ok(attempt(context, result, "engine-render"))
     })
     .unwrap_or_else(|error| RunAttempt::of(Err(ExecutorError::Failed(error))))
@@ -119,15 +109,7 @@ fn run(
     context: &VulkanContext,
     case_id: &str,
     case: &RenderCase,
-    (compile, mut children): (
-        impl FnOnce(&WorkerDevice, &BindShape) -> Result<RenderPipeline, ExecutorError>,
-        impl FnMut(
-            &WorkerDevice,
-            u64,
-            &BindShape,
-            &ChildCommand,
-        ) -> Result<CompiledChild, ExecutorError>,
-    ),
+    compile: impl FnOnce(&WorkerDevice, &BindShape) -> Result<RenderPipeline, ExecutorError>,
 ) -> Result<ComputeRun, ExecutorError> {
     let target = opened_device(context)?;
     let addressed = context
@@ -156,9 +138,6 @@ fn run(
         case_id: case_id.into(),
         module_sha256: spv_sha256.clone(),
     };
-    let mut compile_child = |token: u64, shape: &BindShape, command: &ChildCommand| {
-        children(&target, token, shape, command)
-    };
     // A pipeline whose vertex stage stores its slice clamped to the pass's pushed length, drawn
     // into a pass of at most one layer, the one-layer framebuffer every row draws into: the
     // layer's warning of its `Layer` write is a false alarm the sink withholds and counts.
@@ -177,7 +156,6 @@ fn run(
             (pipeline, &shape),
             case,
             out_of_bounds.as_ref(),
-            &mut compile_child,
         )
     });
     let withheld = context.take_withheld();
@@ -198,21 +176,17 @@ fn run(
         output,
         status,
         escaped,
-        children,
-        replayed,
     } = executed?;
-    // Every stage module drawn, in the order `spv_sha256` hashes them, then each replayed
-    // command's, and the guard bytes each out-of-bounds target's run changed.
+    // Every stage module drawn, in the order `spv_sha256` hashes them, and the guard bytes each
+    // out-of-bounds target's run changed.
     let planned = pipeline.plan(device, &shape).ok();
-    let mut modules = module_censuses(&pipeline.stages, device.profile(), planned.as_ref())?;
-    modules.extend(children);
+    let modules = module_censuses(&pipeline.stages, device.profile(), planned.as_ref())?;
     let census = executed_census(
         context,
         modules,
         out_of_bounds.map(|run| with_escaped(run, &escaped)),
     );
     let mut environment = environment(context, device, "engine-render");
-    command_replay(&mut environment, &replayed);
     super::device::record_withheld(&mut environment, withheld);
     Ok(ComputeRun {
         output,
@@ -226,22 +200,18 @@ fn run(
 }
 
 /// Allocate the case's buffers (argument-buffer buffers first, so each owner is created with
-/// their addresses, its textures' and samplers' resource ids, and its command buffers',
-/// [`field_words`],
-/// [`owner_bytes`]) and vertex buffers, write the commands the host encodes into their record storage, plan and instantiate
-/// its draw, create what every plan write names (argument-buffer textures, heap arrays, and
-/// handle tables included), the color targets, and the pipeline, record and submit the draw,
-/// wait, read the status, check the records, execute the commands the case executes (`compile`
-/// compiling each child in a compile worker), and read the output; with the guard and padding bytes
-/// the draw changed around each out-of-bounds target (`out_of_bounds`), by target, and the census
-/// of each module a replayed command executed.
+/// their addresses and its textures' and samplers' resource ids, [`field_words`], [`owner_bytes`])
+/// and vertex buffers, plan and instantiate its draw, create what every plan write names
+/// (argument-buffer textures, heap arrays, and handle tables included), the color targets, and the
+/// pipeline, record and submit the draw, wait, read the status, and read the output; with the
+/// guard and padding bytes the draw changed around each out-of-bounds target (`out_of_bounds`), by
+/// target.
 fn execute(
     context: &VulkanContext,
     device: &Device,
     (pipeline, compiled_for): (&RenderPipeline, &BindShape),
     case: &RenderCase,
     out_of_bounds: Option<&OutOfBoundsRun>,
-    compile: &mut CompileChild<'_>,
 ) -> Result<Drawn, ExecutorError> {
     let addressed = context
         .enabled
@@ -259,7 +229,6 @@ fn execute(
         None => Ok(synthetic),
     };
     let synthetic_used = graphics::synthetic_used_addresses(case).map_err(ExecutorError::Failed)?;
-    let records = graphics::records_ids(case).map_err(ExecutorError::Failed)?;
     let mut embedded: BTreeMap<(Stage, u32, u32), Allocation> = BTreeMap::new();
     let mut embedded_addresses = BTreeMap::new();
     for (key, bytes) in case.argument_buffer_buffers() {
@@ -272,24 +241,13 @@ fn execute(
             addressed,
             vk::BufferUsageFlags::empty(),
         )?;
-        // A command buffer's record storage lies at its ID's records address.
-        let address = match records.get(&key) {
-            Some(&id) => records_storage(id, allocation.address),
-            None => own_guest(&allocation, synthetic_used[&key])?,
-        };
-        embedded_addresses.insert(key, address);
+        embedded_addresses.insert(key, own_guest(&allocation, synthetic_used[&key])?);
         embedded.insert(key, allocation);
     }
     let tokens = graphics::texture_tokens(case).map_err(ExecutorError::Failed)?;
     let samplers = graphics::sampler_ids(case).map_err(ExecutorError::Failed)?;
-    let words = field_words(
-        &embedded_addresses,
-        &records,
-        &tokens,
-        &samplers,
-        case.objects(),
-    )
-    .map_err(ExecutorError::Failed)?;
+    let words =
+        field_words(&embedded_addresses, &tokens, &samplers).map_err(ExecutorError::Failed)?;
     let mut buffers: BTreeMap<(Stage, u32), Allocation> = BTreeMap::new();
     for (stage, function) in case.stages() {
         let resources = &function.resources;
@@ -357,25 +315,6 @@ fn execute(
             Ok(((stage, index), address))
         })
         .collect::<Result<_, ExecutorError>>()?;
-    // The guest address of a case buffer of the stage that owns a command buffer.
-    let case_address = |(stage, _, _): (Stage, u32, u32), buffer: u32| {
-        addresses.get(&(stage, buffer)).map(|a| a.guest)
-    };
-    // The commands the host encodes, written into their record storage before the producer runs,
-    // each buffer at its case buffer's guest address.
-    for (key, command) in case.command_buffers() {
-        if command.commands.is_empty() {
-            continue;
-        }
-        let storage = embedded
-            .get(&key)
-            .ok_or_else(|| format!("command buffer {key:?} has no record storage"))?;
-        // SAFETY: the storage was created for this run and nothing has been submitted yet.
-        let mapped = unsafe { storage.buffer.map()? };
-        command
-            .encode_host_records(mapped.bytes, |buffer| case_address(key, buffer))
-            .map_err(ExecutorError::Failed)?;
-    }
     let ranges = BufferRanges::of(device.profile().limits());
     let state = graphics::bind_state(case, &addresses, &embedded_addresses, ranges)
         .map_err(ExecutorError::Failed)?;
@@ -515,7 +454,7 @@ fn execute(
             descriptor_bytes: &commands.descriptor_bytes,
             tessellation_factors: factors.as_ref().map(|factors| factors.buffer.buffer),
             attachments: &attachments,
-            status: Some(status.buffer.buffer),
+            status: status.buffer.buffer,
         },
         observed,
     )?;
@@ -525,7 +464,7 @@ fn execute(
         let (table, sink) = upload_root_table(context, table, addressed)?;
         roots.push((vk::ShaderStageFlags::from(*stages), table, sink));
     }
-    let push = push_writes(&commands, &roots, &status, &|_| None)?;
+    let push = push_writes(&commands, &roots, &status)?;
 
     let layout = match LayoutObjects::create(&context.device, &pipeline.layout) {
         Ok(layout) => layout,
@@ -598,7 +537,6 @@ fn execute(
             rasterizer_discard: pipeline.graphics.rasterizer_discard,
             graphics: &pipeline.graphics,
             draw: &commands,
-            replayed: None,
         },
     )?;
 
@@ -648,85 +586,6 @@ fn execute(
         let bytes = unsafe { allocation.buffer.map()? }.bytes[..len].to_vec();
         finals.argument_buffer_buffers.insert(key, bytes);
     }
-    // Each command buffer's records as the host contract decodes them: an encoding fault fails the
-    // run. Then the commands the case executes run, over the run's allocations, and the buffers are
-    // read again.
-    validate_records(case.command_buffers(), &finals.argument_buffer_buffers)
-        .map_err(ExecutorError::Failed)?;
-    let (children, replayed) = if case
-        .command_buffers()
-        .any(|(_, command)| command.execute.is_some())
-    {
-        // Each allocation at its guest address and the length the guest sees (not the padding).
-        let lengths = |stage: Stage, index: u32| {
-            case.function(stage).map_or(0, |function| {
-                function
-                    .resources
-                    .buffers
-                    .get(&index)
-                    .map_or(0, |bytes| bytes.len() as u64)
-            })
-        };
-        let live = buffers
-            .iter()
-            .filter(|(&(stage, index), _)| lengths(stage, index) != 0)
-            .map(|(&(stage, index), allocation)| {
-                (
-                    addresses[&(stage, index)],
-                    lengths(stage, index),
-                    allocation,
-                )
-            })
-            .chain(embedded.iter().map(|(key, allocation)| {
-                (
-                    embedded_addresses[key],
-                    finals.argument_buffer_buffers[key].len() as u64,
-                    allocation,
-                )
-            }))
-            .map(|(address, length, allocation)| Live {
-                buffer: allocation.buffer.buffer,
-                address,
-                length,
-            })
-            .collect::<Vec<_>>();
-        // A render command buffer on the device where the runtime's GPU form draws it, from what
-        // the host and this draw's functions may write into its records; every other one by the
-        // host replay. A render case registers no compute replay variant.
-        let replayed = replay_commands(
-            context,
-            device,
-            case.command_buffers(),
-            Replay {
-                live: &live,
-                records: &finals.argument_buffer_buffers,
-                addresses: &case_address,
-                compile,
-            },
-            OnDevice {
-                registered: &[],
-                storage: &|key| embedded.get(&key).and_then(|allocation| allocation.address),
-                writes: pipeline.interface.command_writes,
-            },
-        )?;
-        for (&(stage, index), allocation) in &buffers {
-            if let Some(bytes) = finals.buffers.get_mut(&(stage, index)) {
-                let len = bytes.len();
-                // SAFETY: as for the status buffer; every replayed command completed too.
-                *bytes = unsafe { allocation.buffer.map()? }.bytes[..len].to_vec();
-            }
-        }
-        for (key, allocation) in &embedded {
-            if let Some(bytes) = finals.argument_buffer_buffers.get_mut(key) {
-                let len = bytes.len();
-                // SAFETY: as for the status buffer.
-                *bytes = unsafe { allocation.buffer.map()? }.bytes[..len].to_vec();
-            }
-        }
-        replayed
-    } else {
-        (Vec::new(), Vec::new())
-    };
     match (observed, case.output) {
         (Some(key @ TextureKey::Slot(observed)), _) => {
             if let Some(texture) = textures.get(&observed) {
@@ -778,267 +637,23 @@ fn execute(
         output,
         status: report,
         escaped,
-        children,
-        replayed,
     })
 }
 
-/// What [`execute`] read after the draw: the output, the status, the guard and padding bytes
-/// that changed around each guarded out-of-bounds target, by target, the census of each module
-/// a replayed command executed, and which replay ran each executed command buffer.
+/// What [`execute`] read after the draw: the output, the status, and the guard and padding bytes
+/// that changed around each guarded out-of-bounds target, by target.
 struct Drawn {
     output: Vec<u8>,
     status: StatusReport,
     escaped: BTreeMap<OutOfBoundsResource, GuardCount>,
-    children: Vec<crate::coverage::ModuleCensus>,
-    replayed: Vec<ReplayPath>,
 }
 
-/// Draw one replayed render command: `pipeline`, compiled for `case` (a render template with the
-/// command's draw, which the checker requires to be a rasterization-disabled vertex case and the
-/// candidate a vertex function that binds buffers only, `engine::replay_templates`), planned
-/// for `state` (the plan must name no other variant and no neutral), over the run's allocations
-/// `guest` (by slot), with `primitive`'s topology, which must be within the class the template was
-/// compiled for (`graphics::replayed_draw_in_class`; a draw of another class fails the run). Its
-/// pass is the template's own: the oracle's 1x1 `R8Unorm` scaffolding, which rasterization-disabled
-/// drawing never writes. Each draw is submitted and waited for, with a clean status required,
-/// before the next command.
-pub(super) fn submit_draw_child(
-    context: &VulkanContext,
-    device: &Device,
-    case: &RenderCase,
-    pipeline: &RenderPipeline,
-    state: &metal2vulkan::bind::BindState,
-    primitive: crate::case::Primitive,
-    guest: &BTreeMap<SlotRef, vk::Buffer>,
-) -> Result<(), ExecutorError> {
-    graphics::replayed_draw_in_class(&case.assembly, primitive).map_err(ExecutorError::Failed)?;
-    let addressed = context
-        .enabled
-        .features
-        .contains(&VkFeature::BufferDeviceAddress);
-    let shape = state.shape();
-    let plan = pipeline
-        .plan(device, &shape)
-        .map_err(|e| bind_refusal(&e))?;
-    if let Some(diagnostic) = plan.diagnostics.first() {
-        return Err(incompatible_binding(diagnostic));
-    }
-    if !plan.vertex_buffers.is_empty() {
-        return Err(not_implemented("a replayed draw's vertex inputs"));
-    }
-    let commands = plan
-        .instantiate_draw(state, &case.draw)
-        .map_err(|e| bind_refusal(&e))?;
-    if commands.indirect_needs_arguments {
-        return Err(not_implemented("an indirect draw read on the CPU"));
-    }
-    let status = allocate(
-        context,
-        "replayed draw status",
-        &ExecutionStatus::initial(),
-        addressed,
-        vk::BufferUsageFlags::empty(),
-    )?;
-    draw_child(
-        context,
-        device,
-        (case, primitive),
-        (pipeline, &plan, &commands),
-        (state, guest),
-        (&status, &|_| None),
-        None,
-    )?;
-    // SAFETY: the submission completed (the fence signaled), and nothing else maps it.
-    let status_bytes: [u8; ExecutionStatus::BYTES] = unsafe { status.buffer.map()? }.bytes
-        [..ExecutionStatus::BYTES]
-        .try_into()
-        .map_err(|_| "the status buffer is shorter than ExecutionStatus")?;
-    status_verdict(&status_bytes)?;
-    Ok(())
-}
-
-/// What a draw replay records around its variant's draw (`compute::draw_replay`): before the
-/// render pass, each owned kernel's pass in order (the preprocess, then a merged replay's two
-/// merge passes), the first after a barrier from every command earlier in submission order and
-/// each after one from the pass before it; in the pass, in place of the draw's own, each of
-/// `draws` in order.
-pub(super) struct ReplayedDraws<'a> {
-    pub(super) passes: &'a [OwnedPass],
-    /// The scratch the draws read their arguments from.
-    pub(super) scratch: vk::Buffer,
-    pub(super) draws: &'a [ReplayedDraw],
-}
-
-/// The address a draw replay gives a push hole of its variant's draw (a slot table's, its merged
-/// draw's header), where it fills that hole.
-pub(super) type Holes<'a> = &'a dyn Fn(&PushHole) -> Option<u64>;
-
-/// One owned kernel's dispatch: its pipeline and layout, push bytes (`COMPUTE`, offset 0), and
-/// group count.
-pub(super) struct OwnedPass {
-    pub(super) pipeline: vk::Pipeline,
-    pub(super) layout: vk::PipelineLayout,
-    pub(super) push: Vec<u8>,
-    pub(super) group_count: [u32; 3],
-}
-
-/// One draw of a draw replay: `vkCmdDrawIndirect` of one draw at `arguments` in the scratch, after
-/// the push writes that make it its command's (none for the first, whose writes the variant's
-/// draw carries).
-pub(super) struct ReplayedDraw {
-    pub(super) push: Vec<(vk::ShaderStageFlags, u32, Vec<u8>)>,
-    pub(super) arguments: u64,
-}
-
-/// Draw a replayed execution's commands on the device: `pipeline`, the draw replay variant of
-/// `case` (a render template, as [`submit_draw_child`] states it), planned as `plan` and
-/// instantiated as `commands` (one indirect draw) for `state`, over the run's allocations `guest`
-/// (by slot), with `primitive`'s topology, which must be within the template's class; its push
-/// holes the replay fills (`holes`: a slot table's, the merged draw's header) with their
-/// addresses, `status` its `ExecutionStatus`, and `replayed`'s passes and draws in place of the
-/// draw's own. Submitted and waited for; the caller reads the status.
-pub(super) fn submit_replayed_draws(
-    context: &VulkanContext,
-    device: &Device,
-    (case, primitive): (&RenderCase, crate::case::Primitive),
-    instantiated: (&RenderPipeline, &BindingPlan, &DrawCommands),
-    bound: (&BindState, &BTreeMap<SlotRef, vk::Buffer>),
-    filled: (&Allocation, Holes<'_>),
-    replayed: &ReplayedDraws<'_>,
-) -> Result<(), ExecutorError> {
-    graphics::replayed_draw_in_class(&case.assembly, primitive).map_err(ExecutorError::Failed)?;
-    draw_child(
-        context,
-        device,
-        (case, primitive),
-        instantiated,
-        bound,
-        filled,
-        Some(replayed),
-    )
-}
-
-/// Record and submit one replayed command's draw (or a draw replay's, `replayed`) of `pipeline`,
-/// planned as `plan` and instantiated as `commands` for `state`, over the run's allocations
-/// `guest`, in its template's pass (as [`submit_draw_child`] states it) with `primitive`'s
-/// topology, its push holes filled by `holes` first, then from what the draw names (its root
-/// tables, `status`); wait for it. The caller reads the status.
-fn draw_child(
-    context: &VulkanContext,
-    device: &Device,
-    (case, primitive): (&RenderCase, crate::case::Primitive),
-    (pipeline, plan, commands): (&RenderPipeline, &BindingPlan, &DrawCommands),
-    (state, guest): (&BindState, &BTreeMap<SlotRef, vk::Buffer>),
-    (status, holes): (&Allocation, Holes<'_>),
-    replayed: Option<&ReplayedDraws<'_>>,
-) -> Result<(), ExecutorError> {
-    let addressed = context
-        .enabled
-        .features
-        .contains(&VkFeature::BufferDeviceAddress);
-    let mut constant_blobs: BTreeMap<Stage, Arc<[u8]>> = BTreeMap::new();
-    for module in &pipeline.stages {
-        if let Some(blob) = &module.constant_blob {
-            let stage = stage_of(module, false)?
-                .ok_or("a replayed draw's synthesized stage carries a constant blob")?;
-            constant_blobs.insert(stage, blob.clone());
-        }
-    }
-    let targets = Targets::create(context, &pipeline.graphics, case)?;
-    // A multisampled template's attachments leave the initializer's layout the same way.
-    let readers = multisampled::SampleReaders::create(context, &targets)?;
-    let mut resources = PlanResources::create(
-        context,
-        device,
-        &plan.descriptors,
-        &Guest {
-            buffers: guest,
-            textures: &BTreeMap::new(),
-            used_textures: &BTreeMap::new(),
-            samplers: &BTreeMap::new(),
-            argument_samplers: &state.argument_samplers,
-            constant_blobs: &constant_blobs,
-            descriptor_ranges: &commands.descriptor_ranges,
-            descriptor_bytes: &commands.descriptor_bytes,
-            tessellation_factors: None,
-            attachments: &BTreeMap::new(),
-            status: Some(status.buffer.buffer),
-        },
-        None,
-    )?;
-    let mut roots = Vec::new();
-    for (stages, table) in &commands.root_tables {
-        let (table, sink) = upload_root_table(context, table, addressed)?;
-        roots.push((vk::ShaderStageFlags::from(*stages), table, sink));
-    }
-    let push = push_writes(commands, &roots, status, holes)?;
-    let layout = match LayoutObjects::create(&context.device, &pipeline.layout) {
-        Ok(layout) => layout,
-        Err(LayoutError::Shape(why) | LayoutError::Refused(why)) => {
-            return Err(ExecutorError::Failed(why))
-        }
-    };
-    let mut objects = Objects {
-        device: &context.device,
-        modules: Vec::new(),
-        render_pass: vk::RenderPass::null(),
-        framebuffer: vk::Framebuffer::null(),
-        pipeline: vk::Pipeline::null(),
-        command_pool: vk::CommandPool::null(),
-        fence: vk::Fence::null(),
-        layout,
-    };
-    create_render_pass(context, &mut objects, &pipeline.graphics, &targets)?;
-    let (topology, primitive_restart) = graphics::input_assembly(primitive);
-    let topology: vk::PrimitiveTopology = topology.into();
-    let encoder = EncoderState::of(case)?;
-    create_pipeline(
-        context,
-        &mut objects,
-        pipeline,
-        &plan.specialization,
-        (topology, primitive_restart),
-        encoder,
-    )?;
-    let sets = resources.write_sets(context, &objects.layout)?;
-    record_and_submit(
-        context,
-        &mut objects,
-        Recording {
-            resources: &resources,
-            targets: &targets,
-            readers: readers.as_ref(),
-            area: draw_area(targets.extent),
-            sets: &sets,
-            push: &push,
-            vertex_buffers: &[],
-            index_buffer: None,
-            dynamic: &pipeline.graphics.dynamic_states,
-            topology,
-            primitive_restart,
-            encoder,
-            rasterizer_discard: pipeline.graphics.rasterizer_discard,
-            graphics: &pipeline.graphics,
-            draw: commands,
-            replayed,
-        },
-    )?;
-    drop(objects);
-    drop(readers);
-    drop(targets);
-    drop(resources);
-    Ok(())
-}
-
-/// Each stage's push-constant writes with the consumer's holes filled: the address `filled` gives
-/// a hole (a draw replay's slot table, its merged draw's header), else its root table's and the
+/// Each stage's push-constant writes with the consumer's holes filled: its root table's and the
 /// status buffer's device addresses.
 fn push_writes(
     commands: &DrawCommands,
     roots: &[(vk::ShaderStageFlags, Allocation, Allocation)],
     status: &Allocation,
-    filled: Holes<'_>,
 ) -> Result<Vec<(vk::ShaderStageFlags, u32, Vec<u8>)>, ExecutorError> {
     let mut writes: Vec<(vk::ShaderStageFlags, u32, Vec<u8>)> = commands
         .push_constants
@@ -1046,13 +661,8 @@ fn push_writes(
         .map(|w| (w.stages.into(), w.offset, w.bytes.clone()))
         .collect();
     for hole in &commands.push_holes {
-        let (stages, offset, address) = match (*hole, filled(hole)) {
-            (
-                PushHole::RootTableAddress { stages, offset }
-                | PushHole::MergedDrawAddress { stages, offset },
-                Some(address),
-            ) => (stages.into(), offset, address),
-            (PushHole::RootTableAddress { stages, offset }, None) => {
+        let (stages, offset, address) = match *hole {
+            PushHole::RootTableAddress { stages, offset } => {
                 let stages = vk::ShaderStageFlags::from(stages);
                 let root = roots
                     .iter()
@@ -1061,14 +671,14 @@ fn push_writes(
                     .ok_or("a root-table hole without its stage's root table")?;
                 (stages, offset, root)
             }
-            (PushHole::ExecutionStatusAddress { stages, offset }, _) => (
+            PushHole::ExecutionStatusAddress { stages, offset } => (
                 stages.into(),
                 offset,
                 status
                     .address
                     .ok_or("a status-address hole without device addresses")?,
             ),
-            (other, _) => return Err(not_implemented(format!("the push hole {other:?}"))),
+            other => return Err(not_implemented(format!("the push hole {other:?}"))),
         };
         let write = writes
             .iter_mut()
@@ -1929,9 +1539,6 @@ struct Recording<'r> {
     /// The pipeline's graphics state, whose render pass the draws record in.
     graphics: &'r GraphicsState,
     draw: &'r DrawCommands,
-    /// A draw replay's passes before the render pass and draws in place of `draw`'s own, which is
-    /// then one indirect draw.
-    replayed: Option<&'r ReplayedDraws<'r>>,
 }
 
 /// A vertex buffer's `(binding, buffer, offset)`.
@@ -2158,50 +1765,17 @@ fn record_and_submit(
         offset: vk::Offset2D { x: 0, y: 0 },
         extent,
     };
-    let draw = match (
-        recording.draw.draw,
-        recording.index_buffer,
-        recording.replayed,
-    ) {
-        (metal2vulkan::vk::DrawCommand::Draw { .. }, None, None)
-        | (metal2vulkan::vk::DrawCommand::DrawIndexed { .. }, Some(_), None)
-        | (metal2vulkan::vk::DrawCommand::DrawIndirect { .. }, None, Some(_)) => {
-            recording.draw.draw
-        }
-        (_, _, Some(_)) => return Err("a draw replay's draw is not one indirect draw".into()),
-        (metal2vulkan::vk::DrawCommand::DrawIndexed { .. }, None, _) => {
+    let draw = match (recording.draw.draw, recording.index_buffer) {
+        (metal2vulkan::vk::DrawCommand::Draw { .. }, None)
+        | (metal2vulkan::vk::DrawCommand::DrawIndexed { .. }, Some(_)) => recording.draw.draw,
+        (metal2vulkan::vk::DrawCommand::DrawIndexed { .. }, None) => {
             return Err("an indexed draw without an index buffer".into())
         }
-        (metal2vulkan::vk::DrawCommand::Draw { .. }, Some(_), _) => {
+        (metal2vulkan::vk::DrawCommand::Draw { .. }, Some(_)) => {
             return Err("an index buffer for a draw that is not indexed".into())
         }
         _ => return Err(not_implemented("an indirect draw")),
     };
-    // A draw replay's barriers. Its preprocess reads the records and the buffers they name, which
-    // the producer's command buffer wrote: a pipeline barrier recorded outside a render pass
-    // instance has every command earlier in submission order in its first synchronization scope
-    // (the Vulkan specification's `vkCmdPipelineBarrier`), so one from every command makes those
-    // writes visible. Each pass's writes (the slot tables, the arguments, a merged replay's
-    // sections) before the next pass reads and writes them and the draws read them, as indirect
-    // arguments and in their functions; and the draws' writes, which the host reads after the
-    // wait, made visible to it.
-    let earlier = vk::MemoryBarrier::default()
-        .src_access_mask(vk::AccessFlags::MEMORY_WRITE)
-        .dst_access_mask(vk::AccessFlags::SHADER_READ);
-    let passed = vk::MemoryBarrier::default()
-        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-        .dst_access_mask(
-            vk::AccessFlags::SHADER_READ
-                | vk::AccessFlags::SHADER_WRITE
-                | vk::AccessFlags::INDIRECT_COMMAND_READ,
-        );
-    let drawn = vk::MemoryBarrier::default()
-        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-        .dst_access_mask(vk::AccessFlags::HOST_READ);
-    let after_pass = vk::PipelineStageFlags::COMPUTE_SHADER
-        | vk::PipelineStageFlags::DRAW_INDIRECT
-        | vk::PipelineStageFlags::VERTEX_SHADER
-        | vk::PipelineStageFlags::FRAGMENT_SHADER;
     // SAFETY: every handle recorded is live until the fence signals; the buffer is recorded once.
     unsafe {
         device
@@ -2258,38 +1832,6 @@ fn record_and_submit(
         }
         if let Some(readers) = recording.readers {
             readers.record_initialized(command, attachment_stages);
-        }
-        if let Some(replayed) = recording.replayed {
-            device.cmd_pipeline_barrier(
-                command,
-                vk::PipelineStageFlags::ALL_COMMANDS,
-                vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::DependencyFlags::empty(),
-                &[earlier],
-                &[],
-                &[],
-            );
-            for pass in replayed.passes {
-                device.cmd_bind_pipeline(command, vk::PipelineBindPoint::COMPUTE, pass.pipeline);
-                device.cmd_push_constants(
-                    command,
-                    pass.layout,
-                    vk::ShaderStageFlags::COMPUTE,
-                    0,
-                    &pass.push,
-                );
-                let [x, y, z] = pass.group_count;
-                device.cmd_dispatch(command, x, y, z);
-                device.cmd_pipeline_barrier(
-                    command,
-                    vk::PipelineStageFlags::COMPUTE_SHADER,
-                    after_pass,
-                    vk::DependencyFlags::empty(),
-                    &[passed],
-                    &[],
-                    &[],
-                );
-            }
         }
         let begin = vk::RenderPassBeginInfo::default()
             .render_pass(objects.render_pass)
@@ -2427,46 +1969,10 @@ fn record_and_submit(
                 first_vertex,
                 first_instance,
             ),
-            // A draw replay's draws, each of one draw at its arguments.
-            (metal2vulkan::vk::DrawCommand::DrawIndirect { .. }, _) => {
-                if let Some(replayed) = recording.replayed {
-                    for draw in replayed.draws {
-                        for (stages, offset, bytes) in &draw.push {
-                            device.cmd_push_constants(
-                                command,
-                                objects.layout.pipeline_layout,
-                                *stages,
-                                *offset,
-                                bytes,
-                            );
-                        }
-                        device.cmd_draw_indirect(
-                            command,
-                            replayed.scratch,
-                            draw.arguments,
-                            1,
-                            DRAW_ARGUMENT_BYTES as u32,
-                        );
-                    }
-                }
-            }
             // Refused before recording began.
             _ => {}
         }
         device.cmd_end_render_pass(command);
-        if recording.replayed.is_some() {
-            device.cmd_pipeline_barrier(
-                command,
-                vk::PipelineStageFlags::COMPUTE_SHADER
-                    | vk::PipelineStageFlags::VERTEX_SHADER
-                    | vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::PipelineStageFlags::HOST,
-                vk::DependencyFlags::empty(),
-                &[drawn],
-                &[],
-                &[],
-            );
-        }
         if !to_source.is_empty() {
             device.cmd_pipeline_barrier(
                 command,

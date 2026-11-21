@@ -172,13 +172,6 @@ mod platform {
             &crate::worker::compile::WorkerDevice,
             &metal2vulkan::bind::BindShape,
         ) -> Result<metal2vulkan::pipeline::ComputePipeline, ExecutorError>,
-        _children: impl FnMut(
-            &crate::worker::compile::WorkerDevice,
-            u64,
-            &metal2vulkan::bind::BindShape,
-            &super::engine::ChildCommand,
-        ) -> Result<super::engine::CompiledChild, ExecutorError>,
-        _registered: &[metal2vulkan::bind::ReplayVariant],
     ) -> super::engine::RunAttempt {
         super::engine::RunAttempt::of(Err(
             "candidate execution is supported only on Linux and macOS".into(),
@@ -193,12 +186,6 @@ mod platform {
             &crate::worker::compile::WorkerDevice,
             &metal2vulkan::bind::BindShape,
         ) -> Result<metal2vulkan::pipeline::RenderPipeline, ExecutorError>,
-        _children: impl FnMut(
-            &crate::worker::compile::WorkerDevice,
-            u64,
-            &metal2vulkan::bind::BindShape,
-            &super::engine::ChildCommand,
-        ) -> Result<super::engine::CompiledChild, ExecutorError>,
     ) -> super::engine::RunAttempt {
         super::engine::RunAttempt::of(Err(
             "candidate execution is supported only on Linux and macOS".into(),

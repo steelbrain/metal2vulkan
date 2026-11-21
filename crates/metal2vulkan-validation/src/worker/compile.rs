@@ -753,8 +753,6 @@ mod tests {
             argument_buffer_buffers: Default::default(),
             argument_buffer_textures: Default::default(),
             argument_buffer_samplers: Default::default(),
-            objects: Default::default(),
-            command_buffers: Default::default(),
             textures: [(
                 0,
                 crate::literal::LiteralTexture {
@@ -783,7 +781,6 @@ mod tests {
             function: RequestFunction::new(case.entry.as_str(), case.constants.clone()),
             shape: shape.clone(),
             dispatch: None,
-            replay: false,
         };
         let (bytes, digest) = input(&device, &bitcode, request.clone());
         let (output, artifact) = served(&bytes, Instant::now()).unwrap();
@@ -855,7 +852,6 @@ mod tests {
                 )
                 .unwrap(),
             ),
-            form: crate::candidate::engine::variants::DrawForm::Bound,
         };
         let (bytes, digest) = input(&device, &bitcode, request.clone());
         let (output, artifact) = served(&bytes, Instant::now()).unwrap();
@@ -969,7 +965,6 @@ mod tests {
             },
             shape: BindShape::default(),
             dispatch: None,
-            replay: false,
         };
         let libraries = [caller.as_slice(), functions.as_slice(), caller.as_slice()];
         let (bytes, digest) = libraries_input(&device, &libraries, request.clone());
