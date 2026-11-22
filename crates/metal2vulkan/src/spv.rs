@@ -5790,14 +5790,6 @@ impl std::fmt::Debug for Dim {
     }
 }
 
-/// SPIR-V's `FPEncoding`, by its grammar values.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[repr(u32)]
-pub enum FPEncoding {
-    Float8E4M3EXT = 4214,
-    Float8E5M2EXT = 4215,
-}
-
 /// SPIR-V's `ImageFormat`, by its grammar values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(u32)]
