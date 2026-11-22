@@ -1850,86 +1850,168 @@ pub(crate) mod on_device {
         });
     }
 
-    /// A command buffer committed to an idle queue fills the first half of a tracked buffer with
-    /// 1, waits for a shared event's value 1, then fills the second half with 3; one of another
-    /// idle queue, committed after it, copies the buffer and signals that value, and the host
-    /// sends it at once (`send_now`, as a host wait for it sends it). Metal submits the first at
-    /// its commit, its queue having nothing ahead of it, so its hazard tracking orders the copy
-    /// after the fill before the wait, and the copy reads that fill and not the one after the
-    /// wait (the conformance case event-signaller-of-a-wait, M3 Max, job m3-max-68673). The
-    /// submit thread, parked in a scheduled handler, first looks at the two once both are
-    /// committed and the second sent. Where the copy has not completed within ten seconds, the
-    /// host sets the value, so both finish and the case fails instead of stalling.
+    /// What [`wait_split`] saw: whether the copy completed within ten seconds, and the bytes of
+    /// the copy and of the buffer it copied, each as runs of one value, `(value, count)`.
+    type WaitSplit = (bool, Vec<(u8, usize)>, Vec<(u8, usize)>);
+
+    /// Metal's answer to [`wait_split`]: the copy completes while the first waits for its signal,
+    /// and reads the fill before the wait and not the one after it (the conformance case
+    /// event-signaller-of-a-wait, M3 Max, job m3-max-68673).
+    fn metal_wait_split() -> WaitSplit {
+        (true, vec![(1, 128), (0, 128)], vec![(1, 128), (3, 128)])
+    }
+
+    /// On `waiting`, a command buffer fills the first half of a tracked buffer with 1, waits for a
+    /// shared event's value 1, then fills the second half with 3; on `signalling`, one committed
+    /// after it copies the buffer and signals that value, and with `send` the host sends it
+    /// (`send_now`, as a host wait for it sends it). The submit thread, parked in a scheduled
+    /// handler, first looks at the two once both are committed and the second sent: `parked` runs
+    /// once it is parked, before either is recorded, and `busy`'s work opens once it is released.
+    /// Where the copy has not completed within ten seconds, the host sets the value, so both
+    /// finish and the case fails instead of stalling.
+    fn wait_split(
+        name: &str,
+        device: &Device,
+        waiting: &CommandQueue,
+        signalling: &CommandQueue,
+        parked: impl FnOnce(),
+        send: bool,
+        busy: Option<&Busy>,
+    ) -> WaitSplit {
+        let mut arena = Arena::new(device);
+        let (written, copied) = (arena.buffer(), arena.buffer());
+        let event = shared_event(device);
+        let parking = queue(device);
+        let park = Arc::new(std::sync::Barrier::new(2));
+        let parker = parking.command_buffer().expect("a command buffer");
+        let parks = Arc::clone(&park);
+        (parker.add_scheduled_handler(move |_| {
+            parks.wait();
+            parks.wait();
+        }))
+        .expect("a handler");
+        parker.commit().expect("a commit");
+        park.wait();
+        let mut release = Release::of(&park);
+        parked();
+        let waiter = waiting.command_buffer().expect("a command buffer");
+        let mut blit = waiter.blit_command_encoder().expect("an encoder");
+        (blit.fill_buffer(&written, 0..128, 1)).expect("a fill");
+        blit.end_encoding();
+        (waiter.encode_wait_for_event(event.as_event(), 1)).expect("a wait");
+        let mut blit = waiter.blit_command_encoder().expect("an encoder");
+        (blit.fill_buffer(&written, 128..256, 3)).expect("a fill");
+        blit.end_encoding();
+        waiter.commit().expect("a commit");
+        let signaller = signalling.command_buffer().expect("a command buffer");
+        let mut blit = signaller.blit_command_encoder().expect("an encoder");
+        (blit.copy_from_buffer_to_buffer(&written, 0, &copied, 0, 256)).expect("a copy");
+        blit.end_encoding();
+        (signaller.encode_signal_event(event.as_event(), 1)).expect("a signal");
+        signaller.commit().expect("a commit");
+        if send {
+            signalling.send_now(&signaller);
+        }
+        release.now();
+        if let Some(busy) = busy {
+            busy.open();
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while signaller.status() != CommandBufferStatus::Completed && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(1));
+        }
+        let ran = signaller.status() == CommandBufferStatus::Completed;
+        if !ran {
+            event.set_signaled_value(1);
+        }
+        for command_buffer in [&waiter, &signaller, &parker] {
+            finished(name, command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+        }
+        let runs = |buffer: &Buffer| {
+            let contents = buffer.contents().expect("a Shared buffer");
+            // SAFETY: the buffer is alive and 256 bytes long, and no command writes it now.
+            let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr(), 256) };
+            let mut runs: Vec<(u8, usize)> = Vec::new();
+            for &byte in bytes {
+                match runs.last_mut() {
+                    Some((value, count)) if *value == byte => *count += 1,
+                    _ => runs.push((byte, 1)),
+                }
+            }
+            runs
+        };
+        (ran, runs(&copied), runs(&written))
+    }
+
+    /// [`wait_split`] on two idle queues, the copy sent: Metal submits the first command buffer
+    /// at its commit, its queue having nothing ahead of it, so its hazard tracking orders the copy
+    /// after the fill before the wait.
     #[test]
     fn every_device_copies_an_idle_queues_fill_before_its_wait_into_a_later_sharer_it_sends() {
         each_device("command_wait_split_sharer", |name, _, device| {
-            let mut arena = Arena::new(&device);
-            let (written, copied) = (arena.buffer(), arena.buffer());
-            let event = shared_event(&device);
-            let (parking, waiting, signalling) = (queue(&device), queue(&device), queue(&device));
-            let park = Arc::new(std::sync::Barrier::new(2));
-            let parker = parking.command_buffer().expect("a command buffer");
-            let parked = Arc::clone(&park);
-            (parker.add_scheduled_handler(move |_| {
-                parked.wait();
-                parked.wait();
-            }))
-            .expect("a handler");
-            parker.commit().expect("a commit");
-            park.wait();
-            let mut release = Release::of(&park);
-            let waiter = waiting.command_buffer().expect("a command buffer");
-            let mut blit = waiter.blit_command_encoder().expect("an encoder");
-            (blit.fill_buffer(&written, 0..128, 1)).expect("a fill");
-            blit.end_encoding();
-            (waiter.encode_wait_for_event(event.as_event(), 1)).expect("a wait");
-            let mut blit = waiter.blit_command_encoder().expect("an encoder");
-            (blit.fill_buffer(&written, 128..256, 3)).expect("a fill");
-            blit.end_encoding();
-            waiter.commit().expect("a commit");
-            let signaller = signalling.command_buffer().expect("a command buffer");
-            let mut blit = signaller.blit_command_encoder().expect("an encoder");
-            (blit.copy_from_buffer_to_buffer(&written, 0, &copied, 0, 256)).expect("a copy");
-            blit.end_encoding();
-            (signaller.encode_signal_event(event.as_event(), 1)).expect("a signal");
-            signaller.commit().expect("a commit");
-            signalling.send_now(&signaller);
-            release.now();
-            let deadline = Instant::now() + Duration::from_secs(10);
-            while signaller.status() != CommandBufferStatus::Completed && Instant::now() < deadline
-            {
-                thread::sleep(Duration::from_millis(1));
-            }
-            let ran = signaller.status() == CommandBufferStatus::Completed;
-            if !ran {
-                event.set_signaled_value(1);
-            }
-            for command_buffer in [&waiter, &signaller, &parker] {
-                finished(name, command_buffer);
-                assert_eq!(command_buffer.error(), None, "{name}");
-            }
-            // Each buffer's bytes as runs of one value: (value, count).
-            let runs = |buffer: &Buffer| {
-                let contents = buffer.contents().expect("a Shared buffer");
-                // SAFETY: the buffer is alive and 256 bytes long, and no command writes it now.
-                let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr(), 256) };
-                let mut runs: Vec<(u8, usize)> = Vec::new();
-                for &byte in bytes {
-                    match runs.last_mut() {
-                        Some((value, count)) if *value == byte => *count += 1,
-                        _ => runs.push((byte, 1)),
-                    }
-                }
-                runs
-            };
-            assert!(
-                ran,
-                "{name}: the copy completes while the first waits for its signal"
-            );
+            let (waiting, signalling) = (queue(&device), queue(&device));
+            let seen = wait_split(name, &device, &waiting, &signalling, || {}, true, None);
             assert_eq!(
-                (runs(&copied), runs(&written)),
-                (vec![(1, 128), (0, 128)], vec![(1, 128), (3, 128)]),
-                "{name}: the copy reads the fill before the wait and not the one after it"
+                seen,
+                metal_wait_split(),
+                "{name}: (completed, copy, buffer)"
+            );
+        });
+    }
+
+    /// [`wait_split`] with a third queue's busy work holding the GPU and filling the device's
+    /// room ([`behind_busy`]), the copy sent: the first command buffer's queue has nothing ahead
+    /// of it, so the copy still waits for its fill before the wait, as on Metal.
+    #[test]
+    fn every_device_copies_an_idle_queues_fill_before_its_wait_behind_busy_work() {
+        each_device("command_wait_split_busy", |name, _, device| {
+            let (busy_queue, waiting, signalling) =
+                (queue(&device), queue(&device), queue(&device));
+            let mut seen = None;
+            behind_busy(name, &device, &busy_queue, |busy, _, _| {
+                let split = wait_split(
+                    name,
+                    &device,
+                    &waiting,
+                    &signalling,
+                    || {},
+                    true,
+                    Some(busy),
+                );
+                seen = Some(split);
+            });
+            assert_eq!(
+                seen,
+                Some(metal_wait_split()),
+                "{name}: (completed, copy, buffer)"
+            );
+        });
+    }
+
+    /// [`wait_split`] where the first command buffer's queue ran one command buffer before it,
+    /// held on the GPU by the busy gate ([`Busy::new`]) until the submit thread is parked, then
+    /// let complete before the first is committed, so the thread has not seen it complete; the
+    /// copy is not sent. The queue has nothing ahead of it, so the copy waits for its fill before
+    /// the wait, as on Metal.
+    #[test]
+    fn every_device_copies_a_fill_before_its_wait_on_a_queue_whose_last_work_completed() {
+        each_device("command_wait_split_settled", |name, _, device| {
+            let (waiting, signalling) = (queue(&device), queue(&device));
+            let busy = Busy::new(&device);
+            let earlier = waiting.command_buffer().expect("a command buffer");
+            (earlier.record_for_test(&[], |_, _| {})).expect("a command buffer's commands");
+            earlier.commit().expect("a commit");
+            let completed = || {
+                busy.open();
+                finished(name, &earlier);
+                assert_eq!(earlier.error(), None, "{name}");
+            };
+            let seen = wait_split(name, &device, &waiting, &signalling, completed, false, None);
+            assert_eq!(
+                seen,
+                metal_wait_split(),
+                "{name}: (completed, copy, buffer)"
             );
         });
     }
