@@ -943,6 +943,9 @@ fn an_earlier_versions_pipeline_data_is_removed_at_open() {
         assert!(store.put(&name(n), &[n as u8; 100]));
     }
     assert_eq!(state(&store).young, 2);
+    // Its removal thread's last look would also take the earlier version's directories made
+    // below, so it ends before they are made.
+    store.settle();
     drop(store);
     let earlier: Vec<PathBuf> = [1, 2]
         .iter()
