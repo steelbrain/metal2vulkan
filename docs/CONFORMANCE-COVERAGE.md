@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1325 |
 | distinct SDK items the Metal leg reaches, of any status | 808 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 8041 |
+| ledger rows (a case whose gap is recorded) | 8024 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -8020,38 +8020,21 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `norm-storage-fields-bgr10a2unorm` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatBGR10A2Unorm, so rt binds no such texture to a read_write… |
 | `norm-storage-fields-bgr10a2unorm` | The device's own answer (rule 2): this device's format queries offer no storage image of MTLPixelFormatBGR10A2Unorm, so rt binds no such texture to a read_write… |
 | `padded-blend-r10x6-add-float` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
-| `padded-blend-r10x6-add-float` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
-| `padded-blend-r10x6-dual-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `padded-blend-r10x6-dual-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `padded-blend-r10x6-premul-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
-| `padded-blend-r10x6-premul-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
-| `padded-blend-r10x6-srgb-add-float` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `padded-blend-r10x6-srgb-add-float` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `padded-blend-r10x6-srgb-dual-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
-| `padded-blend-r10x6-srgb-dual-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
-| `padded-blend-r10x6-srgb-premul-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `padded-blend-r10x6-srgb-premul-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `padded-blend-rg10x12-add-float` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
-| `padded-blend-rg10x12-add-float` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
-| `padded-blend-rg10x12-dual-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `padded-blend-rg10x12-dual-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `padded-blend-rg10x12-premul-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
-| `padded-blend-rg10x12-premul-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
-| `padded-blend-rg10x12-premul-red-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `padded-blend-rg10x12-premul-red-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `padded-blend-rg10x12-srgb-add-float` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
-| `padded-blend-rg10x12-srgb-add-float` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
-| `padded-blend-rg10x12-srgb-dual-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `padded-blend-rg10x12-srgb-dual-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `padded-blend-rg10x12-srgb-premul-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
-| `padded-blend-rg10x12-srgb-premul-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
-| `padded-blend-rgb10a2-srgb-add-float` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `padded-blend-rgb10a2-srgb-add-float` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `padded-blend-rgb10a2-srgb-dual-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
-| `padded-blend-rgb10a2-srgb-dual-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `padded-blend-rgb10a2-srgb-premul-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
-| `padded-blend-rgb10a2-srgb-premul-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
-| `padded-blend-rgb10a2-srgb-premul-rgb-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `padded-blend-rgb10a2-srgb-premul-rgb-half` | refused: no stream uses it yet (rt play-report census 11-19: 158 rt reports across the matrix streams, no render pipeline refused for framebuffer fetch). The tr… |
 | `pass-start-barrier-new-texture-chain` | rt's own gap, not the device's: the pass reads, at its own pixels, its target, a texture over a buffer, and where the device's linear image lies at the buffer's… |
 | `pass-start-barrier-new-texture-chain` | rt's own gap, not the device's: the pass reads, at its own pixels, its target, a texture over a buffer, and where the device's linear image lies at the buffer's… |
