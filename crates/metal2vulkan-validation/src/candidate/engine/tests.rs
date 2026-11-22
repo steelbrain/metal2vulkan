@@ -7,48 +7,8 @@ use crate::check::admission::NotSupported;
 use crate::requirement::ToolingRequirement;
 use metal2vulkan::device::{Device, DeviceDescription, DevicePolicy};
 use metal2vulkan::metal::DataType;
-use metal2vulkan_devtools::{llvm_assemble, AssembleError};
 
 mod argument_buffer_members;
-
-const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\ntarget triple = \"air64_v28-apple-macosx26.0.0\"\n\n";
-
-/// A kernel with one loop: `out[0] = 4` after four iterations.
-pub(crate) fn counting_kernel() -> String {
-    format!(
-        "{HEADER}define void @count(ptr addrspace(1) noundef \"air-buffer-no-alias\" %0) {{\n\
-entry:\n\
-  br label %loop\n\
-loop:\n\
-  %i = phi i32 [ 0, %entry ], [ %n, %loop ]\n\
-  %n = add i32 %i, 1\n\
-  %again = icmp ult i32 %n, 4\n\
-  br i1 %again, label %loop, label %done\n\
-done:\n\
-  store i32 %n, ptr addrspace(1) %0, align 4\n\
-  ret void\n\
-}}\n\n\
-!air.kernel = !{{!0}}\n!air.version = !{{!6}}\n!air.language_version = !{{!7}}\n\
-!0 = !{{ptr @count, !1, !2}}\n!1 = !{{}}\n!2 = !{{!3}}\n\
-!3 = !{{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"out\"}}\n\
-!6 = !{{i32 2, i32 8, i32 0}}\n!7 = !{{!\"Metal\", i32 4, i32 0, i32 0}}\n"
-    )
-}
-
-/// `llvm-as` of `text`, or `None` (skipped visibly) without the tool.
-pub(crate) fn assemble(text: &str) -> Option<Vec<u8>> {
-    let scratch = crate::ScratchDir::new("engine-test").unwrap();
-    let ll = scratch.path().join("k.ll");
-    std::fs::write(&ll, text).unwrap();
-    match llvm_assemble(&ll) {
-        Ok(bitcode) => Some(bitcode),
-        Err(AssembleError::Missing(why)) => {
-            eprintln!("SKIPPED: {why}");
-            None
-        }
-        Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected the kernel: {why}"),
-    }
-}
 
 fn device(stem: &str, policy: DevicePolicy) -> Device {
     let path = crate::engine::profiles_dir().join(format!("{stem}.json"));
@@ -778,31 +738,6 @@ fn texture_arrays_bind_each_element_at_its_slot() {
     let mut overflow = case.clone();
     overflow.texture_arrays[0].binding = u32::MAX;
     gap(&overflow, "overflows");
-}
-
-/// A kernel over `out` (`[[buffer(0)]]`) and a device buffer array of two `device uint *`
-/// (`[[buffer(1..3)]]`, a buffer table): `out[1] = tab[0][0] + tab[1][1]`.
-pub(crate) fn buffer_table_kernel() -> String {
-    format!(
-        "{HEADER}define void @table(ptr addrspace(1) noundef \"air-buffer-no-alias\" %0, ptr noundef %1) {{\n\
-entry:\n\
-  %e0 = load ptr addrspace(1), ptr %1, align 8\n\
-  %t1 = getelementptr inbounds ptr addrspace(1), ptr %1, i64 1\n\
-  %e1 = load ptr addrspace(1), ptr %t1, align 8\n\
-  %a = load i32, ptr addrspace(1) %e0, align 4\n\
-  %q = getelementptr inbounds i32, ptr addrspace(1) %e1, i64 1\n\
-  %b = load i32, ptr addrspace(1) %q, align 4\n\
-  %s = add i32 %a, %b\n\
-  %o = getelementptr inbounds i32, ptr addrspace(1) %0, i64 1\n\
-  store i32 %s, ptr addrspace(1) %o, align 4\n\
-  ret void\n\
-}}\n\n\
-!air.kernel = !{{!0}}\n!air.version = !{{!6}}\n!air.language_version = !{{!7}}\n\
-!0 = !{{ptr @table, !1, !2}}\n!1 = !{{}}\n!2 = !{{!3, !4}}\n\
-!3 = !{{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"out\"}}\n\
-!4 = !{{i32 1, !\"air.buffer\", !\"air.location_index\", i32 1, i32 2, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"tab\"}}\n\
-!6 = !{{i32 2, i32 8, i32 0}}\n!7 = !{{!\"Metal\", i32 4, i32 0, i32 0}}\n"
-    )
 }
 
 #[test]
