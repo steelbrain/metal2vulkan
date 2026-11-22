@@ -60,7 +60,6 @@ use crate::air::ir::{Call, InstId, Value, ValueId};
 use crate::air::Entry;
 use crate::budget::Meter;
 use crate::device::subgroup::OpBits;
-use crate::device::DeviceProfile;
 use crate::error::{Error, Feature, Unsupported};
 use crate::lower::access::copy::{self, Delta, Endpoint};
 use crate::lower::access::AccessPlan;
@@ -95,20 +94,19 @@ pub enum Cell {
     /// A float held in an `f32` container (`half` and `bfloat` widened).
     Float(FloatFmt),
     /// An 8-bit float carried in an `i8` lane (its bits zero-extended in a `u32`), of its
-    /// layout on the profile (the device's own 8-bit float where it has the format's,
-    /// `Fp8Layout::on`).
+    /// layout, decoded with integers on every device.
     Fp8(Fp8Layout),
 }
 
 impl Cell {
-    fn of(e: MatElem, p: &DeviceProfile) -> Option<Cell> {
+    fn of(e: MatElem) -> Option<Cell> {
         Some(match e {
             MatElem::F32 => Cell::Float(FloatFmt::F32),
             MatElem::F16 => Cell::Float(FloatFmt::Half),
             MatElem::BF16 => Cell::Float(FloatFmt::BFloat),
-            MatElem::F8E4M3 => Cell::Fp8(Fp8Layout::on(Fp8::E4M3, p)),
-            MatElem::F8E4M3Fn => Cell::Fp8(Fp8Layout::on(Fp8::E4M3Fn, p)),
-            MatElem::F8E5M2 => Cell::Fp8(Fp8Layout::on(Fp8::E5M2, p)),
+            MatElem::F8E4M3 => Cell::Fp8(Fp8Layout::of(Fp8::E4M3)),
+            MatElem::F8E4M3Fn => Cell::Fp8(Fp8Layout::of(Fp8::E4M3Fn)),
+            MatElem::F8E5M2 => Cell::Fp8(Fp8Layout::of(Fp8::E5M2)),
             MatElem::I8(_) | MatElem::I32 => return None,
         })
     }
@@ -289,7 +287,7 @@ fn check_matrix(cx: &SelectCx<'_>, v: Value, cell: Cell) -> Result<(), Error> {
 
 /// The float format of a load, store, fill, or result element.
 fn float_cell(cx: &SelectCx<'_>, e: MatElem) -> Result<FloatFmt, Error> {
-    match Cell::of(e, cx.profile) {
+    match Cell::of(e) {
         Some(Cell::Float(f)) => Ok(f),
         _ => Err(cx.invariant("a matrix element outside its signature")),
     }
@@ -333,7 +331,7 @@ pub(super) fn select(
             acc,
         } => {
             let result = float_cell(cx, result)?;
-            let cells = [lhs, rhs, acc].map(|e| Cell::of(e, cx.profile));
+            let cells = [lhs, rhs, acc].map(Cell::of);
             let [Some(a), Some(b), Some(c)] = cells else {
                 return Err(cx.invariant("a matrix element outside its signature"));
             };

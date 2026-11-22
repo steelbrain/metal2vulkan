@@ -863,12 +863,7 @@ fn numeric(op: ConvOp, from: Num, to: Num, x: u64) -> IResult<u64> {
     match op {
         ConvOp::UConvert => Ok(x & mask(tw)),
         ConvOp::SConvert => Ok(sext(x, fw) as u64 & mask(tw)),
-        // An 8-bit float widens exactly: every value of either encoding is one of every wider
-        // float.
-        ConvOp::FConvert => match from.kind {
-            Kind::Float8 { e5m2 } => float::from_f64(float::fp8_to_f64(x as u8, e5m2), tw),
-            _ => float::from_f64(float::to_f64(x, fw)?, tw),
-        },
+        ConvOp::FConvert => float::from_f64(float::to_f64(x, fw)?, tw),
         ConvOp::ConvertSToF => int_to_float(i128::from(sext(x, fw)), tw),
         ConvOp::ConvertUToF => int_to_float(i128::from(x), tw),
         ConvOp::ConvertFToU | ConvOp::ConvertFToS => {

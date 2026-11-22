@@ -1455,7 +1455,6 @@ codec_enum! {
         ExtrapolatedInterpolation,
         UnorderedFetchWithinDraw,
         NativeLogicOperation,
-        NativeFloat8,
         CappedLodBias,
         DeviceReconvergence,
         SnormMinimumKept,

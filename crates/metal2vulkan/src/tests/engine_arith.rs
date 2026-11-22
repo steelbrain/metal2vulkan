@@ -1168,13 +1168,11 @@ fn has(p: &DeviceProfile, n: Need) -> bool {
 }
 
 /// An 8-bit float's widening to `float` (`f8e4m3fn`, `f8e5m2`, a scalar and a two-lane vector)
-/// is the device's own conversion where the device has `shaderFloat8` (the RTX 50 profile: the
-/// module declares `Float8EXT`) and the integer decode elsewhere (lavapipe), the same value either
-/// way: `f8e4m3fn`'s largest and a subnormal, its NaN `0x7F`, an `f8e5m2` infinity and subnormal.
-/// Neither form records a note: Metal on Apple M3 does not compile these widenings, so no Metal
-/// answer differs from either.
+/// is the integer decode on every profile, one that lists `shaderFloat8` (the RTX 50 profile)
+/// included: the module declares no `Float8EXT`, and the values are `f8e4m3fn`'s largest and a
+/// subnormal, its NaN `0x7F`, an `f8e5m2` infinity and subnormal.
 #[test]
-fn fp8_widenings_are_the_devices_own_where_it_has_8_bit_floats() {
+fn fp8_widenings_are_the_integer_decode_on_every_device() {
     let mut ks: Vec<Kernel> = [
         ("fp8_e4m3fn_largest", "f8e4m3fn", 0x7Eu32, 448f32),
         ("fp8_e4m3fn_subnormal", "f8e4m3fn", 0x81, -(2f32.powi(-9))),
@@ -1217,23 +1215,16 @@ fn fp8_widenings_are_the_devices_own_where_it_has_8_bit_floats() {
     };
     let float8 =
         crate::device::requirements::SpirvCapability::of(crate::spv::Capability::Float8EXT);
-    for (stem, native) in [("nvidia-rtx50-linux", true), ("lavapipe", false)] {
+    for stem in ["nvidia-rtx50-linux", "lavapipe"] {
         let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
-        assert_eq!(p.fields().leaf.float8, native, "{stem}");
         for kk in &ks {
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            assert_eq!(
-                a.requirements.spirv_capabilities.contains(&float8),
-                native,
+            assert!(
+                !a.requirements.spirv_capabilities.contains(&float8),
                 "{what}: {:?}",
                 a.requirements.spirv_capabilities
-            );
-            assert!(
-                !a.precision.contains(&PrecisionNote::NativeFloat8),
-                "{what}: {:?}",
-                a.precision
             );
             let got = interpret(&bitcode, kk.name, &p);
             let want = kk.want.expect("a stored word");

@@ -467,9 +467,6 @@ pub fn reads_opaque_black_border(spec: &crate::case::SamplerSpec) -> bool {
 ///   attachment, whose raw codes no blend unit reads (`extended-range-blend-source`,
 ///   `extended-range-float-blend-source`: `S·Fs op D·Fd` in `float`, where Metal's compiler rounds
 ///   each step to `half`);
-/// - **8-bit floats**: the device's own 8-bit float widening a tensor's 8-bit float element
-///   (`native-float8`, where Metal reads an e4m3 `0x7F` as 480 and the device's OCP encoding reads
-///   a NaN);
 /// - **logic operations**: the device's `logicOp` on a 10-bit or signed normalized format's own
 ///   codes (`native-logic-operation`, where Metal operates on 10-bit codes widened to 16 bits, and
 ///   reads and stores a signed lowest code as the code above it);
@@ -530,7 +527,6 @@ pub const NATIVE_NOTES: &[crate::degradation::Degradation] = {
         D::FloatSampleFilter,
         D::ExtendedRangeBlendSource,
         D::ExtendedRangeFloatBlendSource,
-        D::NativeFloat8,
         D::NativeLogicOperation,
         D::DeviceRoundedResolve,
         D::DeviceAlphaCoverage,

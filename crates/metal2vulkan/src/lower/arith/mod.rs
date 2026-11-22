@@ -2358,21 +2358,6 @@ fn select_pack(
     })
 }
 
-/// Record that a tensor's 8-bit float (`Fp8::TensorE4M3`, `Fp8::TensorE5M2`), whose Metal answers
-/// are measured, widens through the device's own type (`layout.native`), whose answers differ
-/// from them where its encoding does (`PrecisionNote::NativeFloat8`). Another format's widening
-/// has no Metal answer to differ from: Metal on Apple M3 does not compile it.
-pub(crate) fn native_float8(
-    cx: &mut SelectCx<'_>,
-    fmt: crate::air::intrinsics::Fp8,
-    layout: narrow::Fp8Layout,
-) {
-    use crate::air::intrinsics::Fp8;
-    if layout.native.is_some() && matches!(fmt, Fp8::TensorE4M3 | Fp8::TensorE5M2) {
-        cx.precision.insert(PrecisionNote::NativeFloat8);
-    }
-}
-
 fn select_convert(
     cx: &mut SelectCx<'_>,
     inst: &Inst,
@@ -2412,8 +2397,7 @@ fn select_convert(
         });
     }
     if let Some(fmt) = c.src_fp8 {
-        let fp8 = narrow::Fp8Layout::on(fmt, cx.profile);
-        native_float8(cx, fmt, fp8);
+        let fp8 = narrow::Fp8Layout::of(fmt);
         let to_int = c.dst_kind != NumKind::Float && to.is_int();
         if from.bits() != 8 || !(to.is_float() || to_int) || from.lanes != to.lanes {
             return Err(cx.invariant("an 8-bit float air.convert whose types disagree"));

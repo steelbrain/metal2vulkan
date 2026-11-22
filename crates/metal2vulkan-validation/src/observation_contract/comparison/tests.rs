@@ -77,7 +77,6 @@ fn every_precision_note_has_its_table_row() {
         (N::RotatedBlendRounding, Allowance::Unbounded),
         (N::UnorderedFetchWithinDraw, Allowance::Unbounded),
         (N::NativeLogicOperation, Allowance::Unbounded),
-        (N::NativeFloat8, Allowance::Unbounded),
         (N::CappedLodBias, Allowance::Unbounded),
         (N::DeviceReconvergence, Allowance::Unbounded),
         (N::SnormMinimumKept, Allowance::Unbounded),

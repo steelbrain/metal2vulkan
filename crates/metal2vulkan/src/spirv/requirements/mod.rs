@@ -496,11 +496,6 @@ impl Deriver<'_> {
                     self.cap(Cap::Float64);
                     self.feat(VkFeature::ShaderFloat64);
                 }
-                Type::Float8 { .. } => {
-                    self.cap(Cap::Float8EXT);
-                    self.feat(VkFeature::ShaderFloat8);
-                    self.ext(SpirvExtension::ExtFloat8);
-                }
                 Type::RuntimeArray { stride: None, .. } => {
                     self.cap(Cap::RuntimeDescriptorArray);
                     self.feat(VkFeature::RuntimeDescriptorArray);

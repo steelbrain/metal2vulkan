@@ -24,8 +24,7 @@
 //!   `metal_fp8_e5m2_format`, measured over 32 x 32 x 32 on one simdgroup) is read as the float
 //!   of the same value, as Metal reads it: e4m3 has no infinity or NaN (`0x7F` is 480), and an
 //!   e5m2 NaN reads as the quiet NaN `0x7FC00000`. The body widens it by an `air.convert` of the
-//!   tensor's format (`Fp8::TensorE4M3`, `Fp8::TensorE5M2`), which a device with its own 8-bit
-//!   float type widens through that type.
+//!   tensor's format (`Fp8::TensorE4M3`, `Fp8::TensorE5M2`).
 //!
 //! A call this does not model stays a call. If one survives SCCP, [`refuse_left`] refuses the
 //! kernel as `Unsupported{Tensors, NotImplemented}`, naming what is not modeled: a shape or

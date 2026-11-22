@@ -9421,7 +9421,6 @@ variant	metal2vulkan-runtime::PrecisionNote::LoopedSampleOutputs	LoopedSampleOut
 variant	metal2vulkan-runtime::PrecisionNote::MultisamplePosition	MultisamplePosition
 variant	metal2vulkan-runtime::PrecisionNote::NativeDivision	NativeDivision
 variant	metal2vulkan-runtime::PrecisionNote::NativeDot	NativeDot
-variant	metal2vulkan-runtime::PrecisionNote::NativeFloat8	NativeFloat8
 variant	metal2vulkan-runtime::PrecisionNote::NativeFma	NativeFma
 variant	metal2vulkan-runtime::PrecisionNote::NativeHalfConversion	NativeHalfConversion
 variant	metal2vulkan-runtime::PrecisionNote::NativeHalfQuantize	NativeHalfQuantize
@@ -10951,7 +10950,6 @@ variant	metal2vulkan::pipeline::PrecisionNote::LoopedSampleOutputs	LoopedSampleO
 variant	metal2vulkan::pipeline::PrecisionNote::MultisamplePosition	MultisamplePosition
 variant	metal2vulkan::pipeline::PrecisionNote::NativeDivision	NativeDivision
 variant	metal2vulkan::pipeline::PrecisionNote::NativeDot	NativeDot
-variant	metal2vulkan::pipeline::PrecisionNote::NativeFloat8	NativeFloat8
 variant	metal2vulkan::pipeline::PrecisionNote::NativeFma	NativeFma
 variant	metal2vulkan::pipeline::PrecisionNote::NativeHalfConversion	NativeHalfConversion
 variant	metal2vulkan::pipeline::PrecisionNote::NativeHalfQuantize	NativeHalfQuantize

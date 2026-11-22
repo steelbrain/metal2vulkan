@@ -325,7 +325,6 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::DevicePackConversion
         | N::UnorderedFetchWithinDraw
         | N::NativeLogicOperation
-        | N::NativeFloat8
         | N::CappedLodBias
         | N::DeviceReconvergence
         | N::SimdgroupAccessOrder

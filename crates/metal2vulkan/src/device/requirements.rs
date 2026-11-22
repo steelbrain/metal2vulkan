@@ -367,8 +367,8 @@ pub enum VkFeature {
     // Appended.
     /// `VK_EXT_shader_float8`'s `shaderFloat8`: the SPIR-V capability `Float8EXT`, 8-bit floats of
     /// the encodings `Float8E4M3EXT` and `Float8E5M2EXT` (`SPV_EXT_float8`), which Vulkan requires
-    /// of every device that lists the extension. The lowering converts an 8-bit float to a wider
-    /// one through the device's own type where it has it (`lower::arith::narrow`'s `fp8_native`).
+    /// of every device that lists the extension. No module requires it: an 8-bit float widens by
+    /// integer arithmetic on its fields on every device.
     ShaderFloat8,
     // Appended.
     /// `pointPolygons` (a portability-subset member): `VK_POLYGON_MODE_POINT` with rasterization
@@ -507,9 +507,7 @@ pub enum VkExtension {
     ExtMultiDraw,
     // Appended.
     /// `VK_EXT_shader_float8` (never promoted): the 8-bit float types of `SPV_EXT_float8`, whose
-    /// `shaderFloat8` Vulkan requires of every device that lists it. The core enables it where the
-    /// device lists it, and there refuses a `matmul2d` of 8-bit floats, whose conversion through
-    /// the device's type is not built yet.
+    /// `shaderFloat8` Vulkan requires of every device that lists it. The core reads none of it.
     ExtShaderFloat8,
 }
 

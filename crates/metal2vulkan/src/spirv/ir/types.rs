@@ -167,12 +167,6 @@ pub enum Type {
     Float {
         width: u8,
     },
-    /// An 8-bit float of `encoding` (`OpTypeFloat 8` with its `FPEncoding`, `SPV_EXT_float8`):
-    /// `Float8E4M3EXT` (OCP's E4M3, finite: `S.1111.111` is NaN) or `Float8E5M2EXT` (OCP's E5M2,
-    /// IEEE-like). Only conversions and bitcasts read or make one.
-    Float8 {
-        encoding: crate::spv::FPEncoding,
-    },
     Vector {
         elem: TypeId,
         len: u8,
@@ -431,13 +425,9 @@ impl Types {
                 }
                 _ => ty_err(TypeRule::ScalarWidth),
             },
-            Type::Float8 { .. } => Ok(TypeFacts::plain([1; 3], Some(1))),
             Type::Vector { elem, len } => {
                 let e = self.get(*elem)?;
-                let scalar = matches!(
-                    e,
-                    Type::Bool | Type::Int { .. } | Type::Float { .. } | Type::Float8 { .. }
-                );
+                let scalar = matches!(e, Type::Bool | Type::Int { .. } | Type::Float { .. });
                 if !scalar || !(2..=4).contains(len) {
                     return ty_err(TypeRule::VectorShape);
                 }

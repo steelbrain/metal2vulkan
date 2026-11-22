@@ -169,8 +169,6 @@ pub enum Degradation {
     UnorderedFetchWithinDraw,
     /// `metal2vulkan-degrade-native-logic-operation`.
     NativeLogicOperation,
-    /// `metal2vulkan-degrade-native-float8`.
-    NativeFloat8,
     /// `metal2vulkan-degrade-device-depth-bias`.
     DeviceDepthBias,
     /// `metal2vulkan-degrade-swizzled-opaque-black-border`.
@@ -265,7 +263,6 @@ impl Degradation {
         Degradation::DeviceAlphaCoverage,
         Degradation::UnorderedFetchWithinDraw,
         Degradation::NativeLogicOperation,
-        Degradation::NativeFloat8,
         Degradation::DeviceDepthBias,
         Degradation::SwizzledOpaqueBlackBorder,
         Degradation::DeviceLineRasterization,
@@ -395,7 +392,6 @@ impl Degradation {
                 "metal2vulkan-degrade-unordered-fetch-within-draw"
             }
             Degradation::NativeLogicOperation => "metal2vulkan-degrade-native-logic-operation",
-            Degradation::NativeFloat8 => "metal2vulkan-degrade-native-float8",
             Degradation::DeviceDepthBias => "metal2vulkan-degrade-device-depth-bias",
             Degradation::SwizzledOpaqueBlackBorder => {
                 "metal2vulkan-degrade-swizzled-opaque-black-border"
@@ -485,7 +481,6 @@ impl Degradation {
             PrecisionNote::DeviceAlphaCoverage => Degradation::DeviceAlphaCoverage,
             PrecisionNote::UnorderedFetchWithinDraw => Degradation::UnorderedFetchWithinDraw,
             PrecisionNote::NativeLogicOperation => Degradation::NativeLogicOperation,
-            PrecisionNote::NativeFloat8 => Degradation::NativeFloat8,
             PrecisionNote::DeviceDepthBias => Degradation::DeviceDepthBias,
             PrecisionNote::SwizzledOpaqueBlackBorder => Degradation::SwizzledOpaqueBlackBorder,
             PrecisionNote::CappedLodBias => Degradation::CappedLodBias,

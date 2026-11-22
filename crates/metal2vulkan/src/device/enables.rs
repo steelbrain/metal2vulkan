@@ -375,9 +375,9 @@ fn facts(ext: VkExtension) -> ExtensionFacts {
         // The core reads it directly: a storage access without a format by the format's own bits
         // (`DeviceProfile::without_format_by_format_bits`).
         E::KhrFormatFeatureFlags2 => fact(true, Some(3), &[]),
-        // The core reads it directly: a `matmul2d` of 8-bit floats is refused where it is enabled
-        // (`lower::select`), the device's own conversion being the only form there.
-        E::ExtShaderFloat8 => fact(true, None, &[]),
+        // Described, never enabled: an 8-bit float widens by integer arithmetic on its fields on
+        // every device (`lower::arith::narrow::fp8_to_f32`), so the core reads none of it.
+        E::ExtShaderFloat8 => fact(false, None, &[]),
         E::KhrDynamicRenderingLocalRead | E::KhrMaintenance5 => {
             fact(true, Some(4), DYNAMIC_RENDERING_BELOW_1_3)
         }

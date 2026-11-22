@@ -102,14 +102,8 @@ pub(super) struct Ptr {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Kind {
     Bool,
-    Int {
-        signed: bool,
-    },
+    Int { signed: bool },
     Float,
-    /// An 8-bit float: OCP's E5M2 where `e5m2`, else OCP's E4M3 (`Type::Float8`).
-    Float8 {
-        e5m2: bool,
-    },
 }
 
 /// The shape of a scalar or vector type.
@@ -161,13 +155,6 @@ impl<'m> Tys<'m> {
             Type::Float { width } => Some(Num {
                 kind: Kind::Float,
                 width: *width,
-                n: 1,
-            }),
-            Type::Float8 { encoding } => Some(Num {
-                kind: Kind::Float8 {
-                    e5m2: *encoding == crate::spv::FPEncoding::Float8E5M2EXT,
-                },
-                width: 8,
                 n: 1,
             }),
             _ => None,

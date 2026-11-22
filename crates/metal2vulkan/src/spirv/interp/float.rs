@@ -16,33 +16,6 @@ pub(super) fn to_f64(bits: u64, width: u8) -> IResult<f64> {
     }
 }
 
-/// The value of the 8-bit float `b` of OCP's E5M2 (`e5m2`: IEEE-like, an all-ones exponent an
-/// infinity or a NaN) or E4M3 (finite: only `S.1111.111` is NaN), as `SPV_EXT_float8`'s
-/// `Float8E5M2EXT` and `Float8E4M3EXT` define them. A NaN is the quiet NaN of its sign.
-pub(super) fn fp8_to_f64(b: u8, e5m2: bool) -> f64 {
-    let (man, bias) = if e5m2 { (2, 15) } else { (3, 7) };
-    let sign = if b & 0x80 != 0 { -1.0 } else { 1.0 };
-    let e = i32::from((b & 0x7F) >> man);
-    let m = f64::from(b & ((1 << man) - 1));
-    let top = (1 << (7 - man)) - 1;
-    if e5m2 && e == top {
-        return if m == 0.0 {
-            sign * f64::INFINITY
-        } else {
-            f64::NAN.copysign(sign)
-        };
-    }
-    if !e5m2 && b & 0x7F == 0x7F {
-        return f64::NAN.copysign(sign);
-    }
-    let scale = f64::from(1u32 << man);
-    if e == 0 {
-        sign * m / scale * 2f64.powi(1 - bias)
-    } else {
-        sign * (1.0 + m / scale) * 2f64.powi(e - bias)
-    }
-}
-
 /// `x` rounded to nearest-even in a `width`-bit float, as bits.
 pub(super) fn from_f64(x: f64, width: u8) -> IResult<u64> {
     match width {

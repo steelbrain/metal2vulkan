@@ -632,10 +632,8 @@ fn fp8_bytes(l: Fp8Layout, seed: u32) -> Vec<u8> {
 }
 
 /// 8-bit float factors decode exactly and multiply as the logical matrices their
-/// `thread_elements()` place: by the integer decode, and on a device with its own 8-bit floats
-/// (`shaderFloat8`: the RTX 50 profile) through the device's type where it has the format's
-/// encoding (`f8e4m3fn`, `f8e5m2`: the module declares `Float8EXT`), not for the IEEE-like
-/// `f8e4m3`.
+/// `thread_elements()` place: by the integer decode on every profile, one that lists
+/// `shaderFloat8` (the RTX 50 profile) included, so no module declares `Float8EXT`.
 #[test]
 fn fp8_factors_multiply_exactly() {
     for (fmt, f) in FP8 {
@@ -665,7 +663,6 @@ fn fp8_factors_multiply_exactly() {
             .chain([(rtx50, None, SubgroupSize::W32, one)]);
         let float8 =
             crate::device::requirements::SpirvCapability::of(crate::spv::Capability::Float8EXT);
-        let mut native = 0;
         for (p, tier, lanes, locals) in runs {
             let (plan, m) = typed_module(&bc, &name, &p).unwrap_or_else(|e| panic!("{name}: {e}"));
             if let Some(tier) = tier {
@@ -673,14 +670,11 @@ fn fp8_factors_multiply_exactly() {
             }
             let a = compile(&bc, &name, &p).unwrap_or_else(|e| panic!("{name}: {e}"));
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{name}: L3: {e}"));
-            let declared = a.requirements.spirv_capabilities.contains(&float8);
-            assert_eq!(
-                declared,
-                p.fields().leaf.float8 && f != Fp8::E4M3,
+            assert!(
+                !a.requirements.spirv_capabilities.contains(&float8),
                 "{name}: {:?}",
                 a.requirements.spirv_capabilities
             );
-            native += usize::from(declared);
             for &n in locals {
                 let out = run_all(&plan, &m, n, lanes, &[input.clone(), vec![0xFF; 256]]);
                 let got = read_f32(&out[1]);
@@ -695,7 +689,6 @@ fn fp8_factors_multiply_exactly() {
                 }
             }
         }
-        assert_eq!(native, usize::from(f != Fp8::E4M3), "{name}");
     }
 }
 

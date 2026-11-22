@@ -688,9 +688,8 @@ fn load_wide(out: &mut Out<'_>, t: DataType, ptr: Value, m: &mut Meter) -> Resul
 /// the tensor's format ([`Fp8::TensorE4M3`], [`Fp8::TensorE5M2`]: Metal's reading, measured on the
 /// M3 Max, a subnormal kept, a signed zero kept; e4m3 has no infinity or NaN, `0x7F` and `0xFF`
 /// reading 480 and -480; e5m2's infinities are infinities and its NaNs the quiet NaN
-/// `0x7FC00000`). Lowering widens it as every 8-bit float conversion: through the device's own
-/// 8-bit float where the device has one of its encoding, else by integer arithmetic on the
-/// fields as Metal reads them.
+/// `0x7FC00000`). Lowering widens it as every 8-bit float conversion: by integer arithmetic on
+/// the fields as Metal reads them.
 fn fp8_wide(out: &mut Out<'_>, t: DataType, b: Value, m: &mut Meter) -> Result<Value, Error> {
     let (format, name) = match t {
         DataType::Fp8E4M3 => (Fp8::TensorE4M3, "air.convert.f.f32.f.f8e4m3.tensor"),
