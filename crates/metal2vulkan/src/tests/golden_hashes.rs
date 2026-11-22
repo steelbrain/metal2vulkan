@@ -124,14 +124,10 @@ enum Subject {
         vertex: &'static str,
         fragment: &'static str,
     },
-    /// Fragment `entry`, which reads the color attachments of a pipeline whose attachments are
-    /// `formats` (by index; they name the row, and the function compiles alike for any), linked
-    /// alone. Above one sample, compiled under `multisampled`: the per-sample form.
-    Fetch {
-        entry: &'static str,
-        formats: &'static [PixelFormat],
-        samples: u32,
-    },
+    /// Fragment `entry`, which reads the color attachments of a pipeline, linked alone (the
+    /// attachments' formats name the row, and the function compiles alike for any). Above one
+    /// sample, compiled under `multisampled`: the per-sample form.
+    Fetch { entry: &'static str, samples: u32 },
     /// The module does not decode: its refusal class in every column.
     Undecodable(String),
     /// The installed assembler rejects the fixture. Every committed fixture assembles with the
@@ -278,11 +274,7 @@ fn fetch_subject(
     };
     (
         format!("fetch {entry} as {formats:?}{at}"),
-        Subject::Fetch {
-            entry,
-            formats,
-            samples,
-        },
+        Subject::Fetch { entry, samples },
     )
 }
 
@@ -578,7 +570,7 @@ fn compiled(lib: &Library, subject: &Subject, dev: &Device) -> Result<Vec<Vec<u3
             let p = dev.compile_render_pipeline(&d, &b)?;
             Ok(p.stages.iter().map(|s| s.spirv.to_vec()).collect())
         }
-        Subject::Fetch { entry, samples, .. } => {
+        Subject::Fetch { entry, samples } => {
             let mut inputs = LoweringInputs::new();
             inputs.multisampled = *samples > 1;
             let f = FunctionDescriptor::new(lib.function(entry)?);

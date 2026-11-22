@@ -302,8 +302,6 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::DeviceAlphaCoverage
         | N::RotatedBlendRounding
         | N::HalfOutputPrecision
-        | N::ExtendedRangeBlendSource
-        | N::ExtendedRangeFloatBlendSource
         | N::AnisotropicFilter
         | N::DeviceAnisotropicFilter
         | N::DevicePointSize
