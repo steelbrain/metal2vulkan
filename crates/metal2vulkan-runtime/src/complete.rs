@@ -29,7 +29,8 @@ pub(crate) struct Done {
     pub(crate) progress: vk::Semaphore,
     /// The host signals it to wake the completion thread from a GPU wait.
     wake: vk::Semaphore,
-    /// The highest progress value the completion thread has seen reached.
+    /// The highest progress value the completion thread has seen reached, or, at a loss, that
+    /// the lost device's idle wait covered.
     completed: AtomicU64,
     /// For the device tests: the step of its round the completion thread last entered
     /// ([`Done::enter`], [`Done::stall`]).
@@ -187,7 +188,8 @@ impl Done {
         lock(&self.state)
     }
 
-    /// The highest progress value the completion thread has seen reached.
+    /// The highest progress value the completion thread has seen reached, or, at a loss, that
+    /// the lost device's idle wait covered.
     pub(crate) fn completed(&self) -> u64 {
         self.completed.load(Ordering::SeqCst)
     }
@@ -590,15 +592,24 @@ pub(crate) fn run(core: Arc<Core>) {
             for event in state.watched.drain(..) {
                 event.lose();
             }
-            if !state.flight.is_empty() {
-                // Nothing is pending once the device is idle, which a lost device reaches at once.
+            if let Some(last) = state.flight.back().map(|retiree| retiree.value) {
+                // Nothing is pending once the device is idle, which a lost device reaches at once:
+                // what was in flight before the idle wait no longer uses what it held, a lost
+                // device's wait answering as its success does for that. Its values are marked
+                // completed before it retires, as the GPU's are, so what waits for them goes
+                // (`memory::Wait`). One submitted during the wait stays in flight for the next
+                // round's own idle wait.
                 state.waiting = Waiting::Not;
                 drop(state);
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
                 done.enter("the lost device's idle wait (vkDeviceWaitIdle)".to_owned());
                 core.wait_idle();
                 state = done.lock();
-                retire.extend(state.flight.drain(..).map(Retiree::lost));
+                done.completed.fetch_max(last, Ordering::SeqCst);
+                let idle = state
+                    .flight
+                    .partition_point(|retiree| retiree.value <= last);
+                retire.extend(state.flight.drain(..idle).map(Retiree::lost));
             }
         } else {
             if let (Some(front), Some(back)) = (state.flight.front(), state.flight.back()) {

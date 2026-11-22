@@ -1899,17 +1899,18 @@ made, with no lock, and never rewritten for layouts.
   held, which those it ended join and which goes at once; the queue stays usable.
 - At a loss of the device (or a failed submission, which the runtime takes as one), the submit
   thread ends what it holds, the completion thread ends what is in flight once the device is idle
-  (at once on a lost device), host waits for pending signals end false, and every later commit
-  ends at once. `CommandBufferError::DeviceLost { in_flight }` tells the command buffers that had
-  passed `vkQueueSubmit2` from the rest. `Device::loss()` names the first loss's cause, a
-  `DeviceLoss` of the Vulkan call that failed and its `VkResult`, from before any command buffer
-  ends `DeviceLost`; a later loss does not change it. A loss that the consumer's own Vulkan call on
-  the device returns (an acquire, a present or another swapchain call) can come before any call of
-  the runtime's meets it: the consumer reports it with `Device::report_loss`, a `DeviceLoss` of
-  its call's name and result, which the runtime takes as given and which ends the device's work by
-  the same path at once, rather than at the runtime's next submission or wait; `Device::loss()`
-  then names the reported call, unless a loss came first. Teardown then completes, and a new
-  device can be made on the same instance.
+  (at once on a lost device), and what waited for that work goes as at its completion (memory given
+  back is freed, and an import's release runs), host waits for pending signals end false, and every
+  later commit ends at once. `CommandBufferError::DeviceLost { in_flight }` tells the command
+  buffers that had passed `vkQueueSubmit2` from the rest. `Device::loss()` names the first loss's
+  cause, a `DeviceLoss` of the Vulkan call that failed and its `VkResult`, from before any command
+  buffer ends `DeviceLost`; a later loss does not change it. A loss that the consumer's own Vulkan
+  call on the device returns (an acquire, a present or another swapchain call) can come before any
+  call of the runtime's meets it: the consumer reports it with `Device::report_loss`, a
+  `DeviceLoss` of its call's name and result, which the runtime takes as given and which ends the
+  device's work by the same path at once, rather than at the runtime's next submission or wait;
+  `Device::loss()` then names the reported call, unless a loss came first. Teardown then completes,
+  and a new device can be made on the same instance.
 
 ### Quiesce and exit
 
