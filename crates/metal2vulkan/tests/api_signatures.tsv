@@ -9392,6 +9392,7 @@ variant	metal2vulkan-runtime::PrecisionNote::TessellationTriangleOrder	Tessellat
 variant	metal2vulkan-runtime::PrecisionNote::TessellationWinding	TessellationWinding
 variant	metal2vulkan-runtime::PrecisionNote::UnmeasuredGroupSpeculation	UnmeasuredGroupSpeculation
 variant	metal2vulkan-runtime::PrecisionNote::UnorderedFetchWithinDraw	UnorderedFetchWithinDraw
+variant	metal2vulkan-runtime::PrecisionNote::VertexSimdgroupGrouping	VertexSimdgroupGrouping
 variant	metal2vulkan-runtime::PrecisionNote::ViewBaseTexelOffset	ViewBaseTexelOffset
 variant	metal2vulkan-runtime::RangeKind::Allocation	Allocation(AllocationId, MemoryClass)
 variant	metal2vulkan-runtime::RangeKind::Export	Export
@@ -10895,6 +10896,7 @@ variant	metal2vulkan::pipeline::PrecisionNote::TessellationTriangleOrder	Tessell
 variant	metal2vulkan::pipeline::PrecisionNote::TessellationWinding	TessellationWinding
 variant	metal2vulkan::pipeline::PrecisionNote::UnmeasuredGroupSpeculation	UnmeasuredGroupSpeculation
 variant	metal2vulkan::pipeline::PrecisionNote::UnorderedFetchWithinDraw	UnorderedFetchWithinDraw
+variant	metal2vulkan::pipeline::PrecisionNote::VertexSimdgroupGrouping	VertexSimdgroupGrouping
 variant	metal2vulkan::pipeline::PrecisionNote::ViewBaseTexelOffset	ViewBaseTexelOffset
 variant	metal2vulkan::pipeline::PushField::AlphaTestReference	AlphaTestReference
 variant	metal2vulkan::pipeline::PushField::AmplificationId	AmplificationId

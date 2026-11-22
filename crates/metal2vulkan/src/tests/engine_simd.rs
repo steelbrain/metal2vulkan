@@ -721,6 +721,47 @@ fn fragment_simdgroup_functions_record_the_grouping() {
     assert!(noted > 0, "no profile recorded the note");
 }
 
+/// A vertex function of simdgroup operations (`rvc_simd_vertex`: a sum, shuffles and a ballot) or
+/// of quad operations (`gsm2_vertex_quad_permutes`' broadcasts and shuffle-xors) records
+/// `PrecisionNote::VertexSimdgroupGrouping` on every committed profile that compiles it; a
+/// kernel's (`simd_ops`' sum) and a fragment function's (`fragment_discard_counts`' sums) record
+/// none.
+#[test]
+fn vertex_simdgroup_functions_record_the_grouping() {
+    let note = PrecisionNote::VertexSimdgroupGrouping;
+    let (Some(simd), Some(quads), Some(kernels), Some(counts)) = (
+        assemble("rvc_simd_vertex"),
+        assemble("gsm2_vertex_quad_permutes"),
+        assemble("simd_ops"),
+        assemble("fragment_discard_counts"),
+    ) else {
+        return;
+    };
+    let (mut noted, mut unnoted) = (0, 0);
+    for (name, p) in committed_profiles().expect("profiles") {
+        for (bc, entry) in [
+            (&simd, "simd_functions_in_a_vertex_function"),
+            (&quads, "quad_permutes_in_a_vertex_function"),
+        ] {
+            if let Ok(a) = compile(bc, entry, &p) {
+                assert!(a.precision.contains(&note), "{entry} on {name}");
+                noted += 1;
+            }
+        }
+        for (bc, entry) in [(&kernels, "simd_sum_k"), (&counts, "discard_counts")] {
+            if let Ok(a) = compile(bc, entry, &p) {
+                assert!(!a.precision.contains(&note), "{entry} on {name}");
+                unnoted += 1;
+            }
+        }
+    }
+    assert!(noted > 0, "no profile compiled a vertex function");
+    assert!(
+        unnoted > 0,
+        "no profile compiled a kernel or fragment function"
+    );
+}
+
 /// An operation over the group's active lanes records `PrecisionNote::QuadsSplitByClipping` in a
 /// fragment function alone (`fragment_discard_counts`' sums), where clipping may split a quad, on
 /// every committed profile that compiles it; a kernel's (`simd_ops`' sum, vote, ballot and first

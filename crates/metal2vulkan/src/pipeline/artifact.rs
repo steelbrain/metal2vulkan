@@ -2085,6 +2085,20 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
     DeviceOcclusionCount,
+    /// A vertex function runs a simdgroup or quad operation (a reduction, scan, vote, ballot,
+    /// shuffle, broadcast or AGX multiply-add), on every device. Metal's shading language defines
+    /// its SIMD-group and quad-group functions for kernel and fragment functions (MSL 4.1 sections
+    /// 6.10.2 and 6.10.3), and no vertex input names a lane (Table 5.2): in a vertex function the
+    /// groups are the device's own. The operation runs over the vertices the device packs into a
+    /// subgroup, in the device's lane order, so a sum, a vote or a shuffle can combine other
+    /// vertices than on the M3 Max, whose answers group 32 consecutive vertices. Vulkan promises
+    /// full subgroups only to stages with workgroups, and nothing pins which vertices share one:
+    /// measured on an Iris Xe (RPL-P, Mesa 26.2.6), whose vertex `SubgroupSize` is 32, each
+    /// subgroup of 64 points holds 8 of them, the even or the odd vertices of a run of 16, and the
+    /// other 24 lanes take no part.
+    ///
+    /// Validation derives no tolerance from it: a difference stays a noted difference for review.
+    VertexSimdgroupGrouping,
 }
 
 /// Which lowering strategies a module used, with their word costs.

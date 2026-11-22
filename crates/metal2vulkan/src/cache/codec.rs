@@ -1449,6 +1449,7 @@ codec_enum! {
         DeviceLineRasterization,
         DeviceFragmentRuns,
         DeviceOcclusionCount,
+        VertexSimdgroupGrouping,
     }
     BindingSource {
         Buffer(f0), Texture(f0), Sampler(f0), CombinedTextureSampler { texture, sampler },

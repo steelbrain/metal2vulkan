@@ -712,6 +712,10 @@ pub struct SlotRow {
 ///   rasterizer packs together, or a quad Apple's GPU may shade as several partial quads, a group
 ///   Metal allows, and its value is ordinary data later words use. No exact path exists on such a
 ///   device.
+/// - A vertex function's simdgroup or quad operation (`VertexSimdgroupGrouping`): the operation
+///   combines the vertices the device packs into a subgroup, a group Metal allows, and its value
+///   is ordinary data later words use. No exact path exists: nothing in Vulkan fills a vertex
+///   subgroup or fixes which vertices share one.
 /// - A half-float color channel under `textureWriteRoundingMode` 2 that blends with factors
 ///   other than one and zero (`BlendedWriteRounding`): the device's blend converts its result by
 ///   its own rounding where Metal rounds it to nearest even, and the stored half is ordinary data
@@ -739,13 +743,14 @@ pub struct SlotRow {
 /// denormal, a `half` rounding) belongs in a per-word judgement of a reading's differing words,
 /// beside the check of each against Apple's bound, never in this list: a row-level match would
 /// reopen every signed-off reading whose row merely records the note.
-pub const DEFERRED_NEAR_EQUIVALENTS: [PrecisionNote; 9] = [
+pub const DEFERRED_NEAR_EQUIVALENTS: [PrecisionNote; 10] = [
     PrecisionNote::RasterizationRateMap,
     PrecisionNote::SparseResidency,
     PrecisionNote::CubeGradientFootprint,
     PrecisionNote::QuadsCountedBeforeDiscard,
     PrecisionNote::BicubicFilterArithmetic,
     PrecisionNote::FragmentSimdgroupGrouping,
+    PrecisionNote::VertexSimdgroupGrouping,
     PrecisionNote::BlendedWriteRounding,
     PrecisionNote::CoverageReadsRoundedAlpha,
     PrecisionNote::RotatedBlendRounding,
@@ -834,6 +839,13 @@ fn near_equivalent_bound(note: PrecisionNote) -> &'static str {
              where Apple M3 Max shades some quads as several partial quads, each run holding the \
              others as helpers (3 of 16 quads at 8x8, 2 to 4 of 12 at 7x5, gsm2_helper_threads); \
              no exact path: no Vulkan device states or pins its packing"
+        }
+        PrecisionNote::VertexSimdgroupGrouping => {
+            "a vertex function's simdgroup or quad holds the vertices the device packs into a \
+             subgroup, where Apple M3 Max's answers group 32 consecutive vertices (MSL defines \
+             these functions for kernel and fragment functions); Iris Xe (Mesa 26.2.6) runs 8 of \
+             64 points a subgroup, the even or the odd vertices of a run of 16; no exact path: \
+             nothing in Vulkan fills a vertex subgroup or fixes which vertices share one"
         }
         PrecisionNote::BlendedWriteRounding => {
             "a half-float color channel under textureWriteRoundingMode 2 blended with factors \

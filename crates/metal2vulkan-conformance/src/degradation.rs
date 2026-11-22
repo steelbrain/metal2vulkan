@@ -175,6 +175,8 @@ pub enum Degradation {
     DeviceFragmentRuns,
     /// `metal2vulkan-degrade-device-occlusion-count`.
     DeviceOcclusionCount,
+    /// `metal2vulkan-degrade-vertex-simdgroup-grouping`.
+    VertexSimdgroupGrouping,
 }
 
 impl Degradation {
@@ -262,6 +264,7 @@ impl Degradation {
         Degradation::DeviceLineRasterization,
         Degradation::DeviceFragmentRuns,
         Degradation::DeviceOcclusionCount,
+        Degradation::VertexSimdgroupGrouping,
     ];
 
     /// The kind's code, `metal2vulkan-degrade-<kind>`.
@@ -389,6 +392,9 @@ impl Degradation {
             }
             Degradation::DeviceFragmentRuns => "metal2vulkan-degrade-device-fragment-runs",
             Degradation::DeviceOcclusionCount => "metal2vulkan-degrade-device-occlusion-count",
+            Degradation::VertexSimdgroupGrouping => {
+                "metal2vulkan-degrade-vertex-simdgroup-grouping"
+            }
         }
     }
 
@@ -479,6 +485,7 @@ impl Degradation {
             PrecisionNote::DeviceLineRasterization => Degradation::DeviceLineRasterization,
             PrecisionNote::DeviceFragmentRuns => Degradation::DeviceFragmentRuns,
             PrecisionNote::DeviceOcclusionCount => Degradation::DeviceOcclusionCount,
+            PrecisionNote::VertexSimdgroupGrouping => Degradation::VertexSimdgroupGrouping,
         }
     }
 }

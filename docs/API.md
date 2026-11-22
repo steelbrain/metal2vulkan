@@ -2197,6 +2197,16 @@ bound.
   drops, where an Apple GPU's simdgroup counts the dropped quads of its 8x4 pixel block; the
   device states one fragment subgroup size, so no required size widens it, and no exact form
   exists there.
+- `metal2vulkan-degrade-vertex-simdgroup-grouping` (precision).
+  `PrecisionNote::VertexSimdgroupGrouping`: A vertex function runs a simdgroup or quad operation
+  (a reduction, scan, vote, ballot, shuffle, broadcast or AGX multiply-add), on every device.
+  Metal's shading language defines its SIMD-group and quad-group functions for kernel and
+  fragment functions (MSL 4.1 sections 6.10.2 and 6.10.3); in a vertex function the groups are the
+  device's own. The operation runs over the vertices the device packs into a subgroup, in its
+  lane order, so a sum, a vote or a shuffle can combine other vertices than on the M3 Max, whose
+  answers group 32 consecutive vertices. Vulkan neither fills a vertex subgroup nor fixes which
+  vertices share one: an Iris Xe (Mesa 26.2.6) whose vertex subgroup size is 32 runs 8 of 64
+  points in each, the even or the odd vertices of a run of 16.
 - `metal2vulkan-degrade-blended-write-rounding` (precision). `PrecisionNote::BlendedWriteRounding`:
   A fragment function writes a float to a half-float color channel of a render pipeline under
   `TextureWriteRoundingMode::NearestEven` that blends with factors other than one and zero

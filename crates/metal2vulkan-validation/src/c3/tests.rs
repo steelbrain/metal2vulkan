@@ -1158,6 +1158,16 @@ fn a_fragment_simdgroup_grouping_row_is_deferred_and_never_a_reviewed_reading() 
     );
 }
 
+/// A vertex function's simdgroup or quad operation, which runs over the vertices the device packs
+/// into a subgroup (`VertexSimdgroupGrouping`), is deferred the same way.
+#[test]
+fn a_vertex_simdgroup_grouping_row_is_deferred_and_never_a_reviewed_reading() {
+    deferred_and_never_reviewed(
+        PrecisionNote::VertexSimdgroupGrouping,
+        "VertexSimdgroupGrouping:a vertex function's simdgroup",
+    );
+}
+
 /// A blended half-float color channel under `textureWriteRoundingMode` 2, which the device's
 /// blend rounds (`BlendedWriteRounding`), is deferred the same way.
 #[test]

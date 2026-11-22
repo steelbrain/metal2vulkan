@@ -213,6 +213,9 @@ impl UlpTable {
 ///   device's rasterizer packs together, not Apple's, which moves a sum, a ballot, or a shuffle by
 ///   whole pixels; and a quad of a function that discards holds every covered pixel where Apple's
 ///   GPU may run some as helpers, which moves a ballot of a helper query by whole lanes.
+/// - `VertexSimdgroupGrouping`: unbounded: a vertex function's simdgroup or quad holds the vertices
+///   the device packs into a subgroup, not Apple's, which moves a sum, a vote, or a shuffle by
+///   whole vertices.
 /// - `BlendedWriteRounding`: unbounded: a blended half-float channel under
 ///   `textureWriteRoundingMode` 2 stores the device's rounding of the blend's result, which no
 ///   Vulkan blend states, where Metal rounds it to nearest even.
@@ -336,7 +339,8 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::SwizzledOpaqueBlackBorder
         | N::DeviceLineRasterization
         | N::DeviceFragmentRuns
-        | N::DeviceOcclusionCount => Allowance::Unbounded,
+        | N::DeviceOcclusionCount
+        | N::VertexSimdgroupGrouping => Allowance::Unbounded,
     }
 }
 

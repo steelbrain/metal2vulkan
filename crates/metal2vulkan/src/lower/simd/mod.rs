@@ -411,6 +411,11 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         cx.precision
             .insert(PrecisionNote::FragmentSimdgroupGrouping);
     }
+    // A vertex function's simdgroups and quads are the vertices the device packs into a subgroup,
+    // so every operation over other lanes combines a group Metal allows, not the reference's.
+    if cx.stage == Stage::Vertex && cx.families.simd.observes_lanes {
+        cx.precision.insert(PrecisionNote::VertexSimdgroupGrouping);
+    }
     let plan = &cx.families.simd;
     if plan.groups {
         let model = &cx.profile.fields().subgroup;
