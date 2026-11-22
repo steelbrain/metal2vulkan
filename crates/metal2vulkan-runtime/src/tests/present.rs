@@ -996,7 +996,8 @@ mod on_device {
     /// scheduled with its first, two of its four submitted 50 ms on. The presenting command
     /// buffer's commit and both completions are waited for on another thread within `BOUND`
     /// each; past it the test ends its process, as a submit thread that spins holding the work
-    /// lock lets no handle drop. The present names no semaphore.
+    /// lock lets no handle drop. The present signals a binary semaphore of the test's, which the
+    /// stand-in present waits on once both have completed.
     fn presenting_by_room(form: &'static str) {
         use crate::tests::command::on_device::{word, Busy};
         use crate::tests::compute::on_device::step;
@@ -1043,7 +1044,8 @@ mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: an acquire: {error}"));
             let queue = device.new_command_queue(4).expect("a queue");
             let other = device.new_command_queue(4).expect("a queue");
-            let (x, y) = (arena.buffer(), arena.buffer());
+            let (x, y, out) = (arena.buffer(), arena.buffer(), arena.buffer());
+            let ready = semaphore(&device);
             let busy = Busy::new(&device);
             let retired: Arc<Mutex<Vec<&'static str>>> = Arc::default();
             let log = |command_buffer: &CommandBuffer, label: &'static str| {
@@ -1062,8 +1064,10 @@ mod on_device {
                 _ => pieces(&queue, &y),
             };
             log(&presenting, form);
-            // SAFETY: no semaphore is named, and the drawable is acquired.
-            unsafe { presenting.present_drawable(&drawable, vk::Semaphore::null()) }
+            // SAFETY: `ready` is a binary semaphore of the device, unsignalled with no signal or
+            // wait pending, which lives past the command buffer and only the stand-in present
+            // waits on; the drawable is acquired.
+            unsafe { presenting.present_drawable(&drawable, ready) }
                 .unwrap_or_else(|error| panic!("{name}: {form}: a present: {error}"));
             // The window: the room's head scheduled with its first piece (held,
             // `WorkState::step`), two of its four pieces on the device and, nothing
@@ -1118,11 +1122,16 @@ mod on_device {
                     "{name}: {form}: it retires behind the pieces of its queue"
                 );
             }
+            let shown = show(&device, stand_in.image, ready, &out);
+            assert_eq!(shown, Ok(()), "{name}: {form}: the stand-in present");
             drop(busy);
             drop(drawable);
-            // SAFETY: every submission that used the image has completed, and nothing uses it
-            // again.
-            unsafe { stand_in.destroy(&device) };
+            // SAFETY: every submission that used the image, and that signalled or waited on the
+            // semaphore, has completed, and nothing uses either again.
+            unsafe {
+                stand_in.destroy(&device);
+                device.raw().device.destroy_semaphore(ready, None);
+            }
         });
     }
 
