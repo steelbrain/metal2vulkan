@@ -74,6 +74,7 @@ mod over_aliases;
 mod over_causes;
 mod pass;
 mod patch;
+mod pieces;
 mod pixel_format_info;
 mod pixel_interlock;
 mod places;

@@ -1802,15 +1802,15 @@ pub(crate) mod on_device {
         }
     }
 
-    /// A write on a queue with nothing running is submitted at once, so a command buffer of
-    /// another queue committed after it reads the write, with no fence or event between them:
-    /// every queue's submissions go to the device's one `VkQueue`, each segment ending in a barrier
-    /// that reaches the commands after it. A third queue's busy work holds the GPU, so neither
-    /// runs before both are submitted, and puts as many submissions in flight across the device
-    /// as a queue keeps before it groups: the writer's queue groups on its own count alone.
-    /// Metal's hazard tracking orders the same pair of tracked buffers where the writer's queue
-    /// has nothing ahead of it, and not where its queue's own work is ahead of it (the README's
-    /// "Queues, command buffers and events").
+    /// A write on a queue with nothing running is submitted when the device has room, before a
+    /// command buffer of another idle queue committed after it, so that one reads the write, with
+    /// no fence or event between them: every queue's submissions go to the device's one
+    /// `VkQueue`, each segment ending in a barrier that reaches the commands after it, and of
+    /// idle queues the device's room goes in commit order (`WorkState::rank`). A third queue's
+    /// busy work holds the GPU and fills the device's room, so both wait, scheduled, and neither
+    /// runs before both are submitted. Metal's hazard tracking orders the same pair of tracked
+    /// buffers where the writer's queue has nothing ahead of it, and not where its queue's own
+    /// work is ahead of it (the README's "Queues, command buffers and events").
     #[test]
     fn every_device_submits_a_write_on_an_idle_queue_before_another_queues_later_read() {
         each_device("command_cross_queue_order", |name, _, device| {
@@ -1819,16 +1819,23 @@ pub(crate) mod on_device {
             let (busy_queue, writer_queue, reader_queue) =
                 (queue(&device), queue(&device), queue(&device));
             behind_busy(name, &device, &busy_queue, |busy, _, _| {
-                let sent = || device.counters().metrics().submissions;
-                let before = sent();
                 let writer = queue_fill(&writer_queue, &written, 0x5a5a_5a5a);
-                within(name, || sent() > before);
+                within(name, || writer.status() != CommandBufferStatus::Committed);
                 let reader = reader_queue.command_buffer().expect("a command buffer");
                 let mut blit = reader.blit_command_encoder().expect("an encoder");
                 (blit.copy_from_buffer_to_buffer(&written, 0, &read, 0, 256)).expect("a copy");
                 blit.end_encoding();
                 reader.commit().expect("a commit");
-                within(name, || sent() > before + 1);
+                within(name, || reader.status() != CommandBufferStatus::Committed);
+                let work = &device.core().work;
+                assert_eq!(
+                    (
+                        work.in_flight(writer.queue()),
+                        work.in_flight(reader.queue())
+                    ),
+                    ((0, true), (0, true)),
+                    "{name}: each held in a group for the device's room, nothing in flight"
+                );
                 busy.open();
                 finished(name, &reader);
                 finished(name, &writer);

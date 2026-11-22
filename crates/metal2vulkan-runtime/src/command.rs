@@ -37,11 +37,12 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 /// part waits for can be signalled by the part before it. Each segment's commands end with one
 /// barrier that makes their writes visible to every later command and to the host. Its compute
 /// work is cut into pieces too, before a dispatch that would take a piece's expected GPU run past
-/// 4 ms and where a compute or blit encoder opens after a full piece, never inside a render pass
+/// 4 ms, between the dispatches of a kernel with no measured rate yet and any other, and where a
+/// compute or blit encoder opens after a full piece, never before or inside a render pass
 /// (`crate::piece`): each piece is a submission of its own, and a command buffer of another queue
-/// committed meanwhile goes between two pieces unless it holds a buffer or texture the cut one
-/// holds. It is scheduled as its first piece is submitted where its later pieces wait for no
-/// event.
+/// committed meanwhile goes between two pieces unless it shares a buffer, a texture or a fence
+/// with the cut one. It is scheduled as its first piece is submitted where its later pieces wait
+/// for no event.
 ///
 /// Its GPU times come from two timestamps, written where its first commands begin and as the last
 /// command of its last segment, after the copies back of the images its commands wrote and its end

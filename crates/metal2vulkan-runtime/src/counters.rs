@@ -2633,11 +2633,12 @@ pub struct Metrics {
     /// as they began count here too, and their time in
     /// [`runtime_command_buffer_gpu_nanos`](Self::runtime_command_buffer_gpu_nanos) is lost.
     pub untimed_command_buffers: u64,
-    /// No Metal counterpart: the cuts that ended a piece of a command buffer, before a compute
-    /// dispatch that would take the piece's expected GPU run past 4 ms, or that follows one of a
-    /// kernel with no measured rate yet, or where a compute or blit encoder opens after a full
-    /// piece. Each piece is a submission of its own, so a command buffer of another queue
-    /// committed meanwhile goes between two pieces ([`CommandBuffer`](crate::CommandBuffer)).
+    /// No Metal counterpart: the cuts that ended a piece of a command buffer: before a compute
+    /// dispatch that would take the piece's expected GPU run past 4 ms; between the dispatches of
+    /// a kernel with no measured rate yet, which share a piece of their own, and any other; and
+    /// where a compute or blit encoder opens after a full piece. Each piece is a submission of
+    /// its own, so a command buffer of another queue committed meanwhile goes between two pieces
+    /// ([`CommandBuffer`](crate::CommandBuffer)).
     pub cuts: u64,
     /// Submissions of a queue's command buffers that went to the `VkQueue` while a cut command
     /// buffer of another queue had pieces not yet submitted: they run before those pieces.
