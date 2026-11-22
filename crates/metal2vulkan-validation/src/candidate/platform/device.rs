@@ -1329,7 +1329,8 @@ fn a_validated_instance_reports_every_repeated_message() {
                 &["DEFAULT_FEATURE_VALUES_FALSE"]
             ),
             profiles("debug_fail_on_error", bool32, &["0"]),
-            profiles("debug_reports", string, &[]),
+            profiles("debug_actions", string, &["DEBUG_ACTION_FILE_BIT"]),
+            profiles("debug_filename", string, &["/dev/null"]),
             profiles("emulate_portability", bool32, &["0"]),
             profiles(
                 "exclude_device_extensions",

@@ -1912,16 +1912,14 @@ fn run_on_context(prepared: &PreparedCase, worker: &CompileWorker) -> RunAttempt
     // The worker assembles a row that retains no bitcode (a public fixture), and a companion.
     let library = RowSource::of_row(&prepared.checked.primary.source);
     let linked = &prepared.linked;
-    // A case the runtime runs, run so in this process's default run: no profiles-layer
-    // restriction. Every kernel case the engine maps is one (`compute_case` dispatches it by
-    // threads). It records no artifact: the runtime keeps what it compiled to itself.
+    // A case the runtime runs, run so, restricted to this process's profile or not. Every
+    // kernel case the engine maps is one (`compute_case` dispatches it by threads). It records no
+    // artifact: the runtime keeps what it compiled to itself.
     if let Mapped::Compute(compute) = &prepared.mapped {
-        if super::requested_restriction().is_none() {
-            return run_on_runtime(prepared, compute);
-        }
+        return run_on_runtime(prepared, compute);
     }
     if let Mapped::Render(render) = &prepared.mapped {
-        if runs_render_through_runtime(render) && super::requested_restriction().is_none() {
+        if runs_render_through_runtime(render) {
             return run_render_on_runtime(prepared, render);
         }
     }

@@ -4,8 +4,10 @@
 //! ([`restrict_devices_to`], from its `--profiles-layer P` argument). A restricted context stacks
 //! the profiles layer below the validation layer, configured through `VK_EXT_layer_settings` with
 //! the committed file, so the device reports P and the validation layer checks against it; the ICD
-//! still executes as itself. Before its device is created the context checks, each failure a
-//! [`RestrictionError`]:
+//! still executes as itself. A run through the runtime, which makes its own instance, sets the same
+//! settings through the variables the layer reads ([`ProfilesSettings::environment`]) and makes the
+//! same checks (`runtime_restriction`). Before its device is created the context checks, each
+//! failure a [`RestrictionError`]:
 //!
 //! - the device as it is (read through the layer with its emulation off) has every capability P
 //!   states ([`exceeds`]): the layer reports P's value whether or not the device has it, so it
@@ -324,6 +326,10 @@ pub(super) enum ProfilesLayer<'a> {
     PassThrough,
 }
 
+/// The prefix of the variables the profiles layer's settings library reads, one per setting
+/// ([`ProfilesSettings::environment`]).
+pub(super) const PROFILES_VARIABLE_PREFIX: &str = "VK_KHRONOS_PROFILES_";
+
 /// One `VkLayerSettingEXT` value list, owned.
 enum SettingValues {
     Bool(vk::Bool32),
@@ -387,9 +393,11 @@ impl ProfilesSettings {
                     // member P states with the device's in both directions. With its failure path
                     // on, enumeration failed under `gate-lavapipe` on the device it was captured
                     // from, after warning, among others, that the stated `deviceType` and
-                    // `driverID` read as 0. So it neither fails nor reports.
+                    // `driverID` read as 0. So it neither fails nor reports: its reports go to
+                    // the null device, not to the standard output a device worker reports on.
                     (c"debug_fail_on_error", SettingValues::Bool(vk::FALSE)),
-                    (c"debug_reports", strings(&[])),
+                    (c"debug_actions", strings(&[c"DEBUG_ACTION_FILE_BIT"])),
+                    (c"debug_filename", strings(&[c"/dev/null"])),
                     portability,
                 ];
                 // An empty list is left out rather than passed as a setting with no values.
@@ -400,6 +408,31 @@ impl ProfilesSettings {
             }
         };
         Ok(ProfilesSettings { values })
+    }
+
+    /// The settings as the variables the layer's settings library reads when an instance is made
+    /// (`VK_KHRONOS_PROFILES_<SETTING>`): a flag as `true` or `false`, a list joined by commas.
+    /// Every setting holds at least one value, so no variable is empty, which the library would
+    /// read as unset.
+    pub(super) fn environment(&self) -> Vec<(String, String)> {
+        self.values
+            .iter()
+            .map(|(name, values)| {
+                let variable = format!(
+                    "{PROFILES_VARIABLE_PREFIX}{}",
+                    name.to_string_lossy().to_uppercase()
+                );
+                let value = match values {
+                    SettingValues::Bool(value) => (*value == vk::TRUE).to_string(),
+                    SettingValues::Strings { owned, .. } => owned
+                        .iter()
+                        .map(|value| value.to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join(","),
+                };
+                (variable, value)
+            })
+            .collect()
     }
 
     /// The settings, pointing into `self`.

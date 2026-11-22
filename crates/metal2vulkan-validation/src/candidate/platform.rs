@@ -19,6 +19,7 @@ mod runtime_depth;
 mod runtime_multisample;
 mod runtime_probe;
 mod runtime_render;
+mod runtime_restriction;
 mod runtime_textures;
 pub use acceptance::create_acceptance_pipeline;
 pub use compute::execute_engine;

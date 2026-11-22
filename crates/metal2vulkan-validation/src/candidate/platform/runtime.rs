@@ -1,7 +1,7 @@
 //! The engine compute executor through the runtime (`metal2vulkan-runtime`).
 //!
-//! Every kernel case the engine maps runs here outside a profiles-layer restriction
-//! (`engine::run_on_context`), as a consumer runs it, on the runtime's public API alone: its instance, the loader's first physical device of the
+//! Every kernel case the engine maps runs here (`engine::run_on_context`), as a consumer runs it,
+//! on the runtime's public API alone: its instance, the loader's first physical device of the
 //! requested kind (as the executor's own context selects one), a device with the default
 //! options, a library and a function from the row's AIR with the case's constants and linked
 //! functions, one compute pipeline state, one Shared buffer per bound buffer and per
@@ -17,7 +17,10 @@
 //! own variables enable before the instance is made: core and synchronization validation, every
 //! message reported, each error and warning written to the process's log, removed once read. A
 //! device that lists no active validation tool fails the run; so does any message in the log once
-//! the device is gone, as a message fails a row of the executor's own context.
+//! the device is gone, as a message fails a row of the executor's own context. A process
+//! restricted to a committed profile (`--profiles-layer P`) also stacks `VK_LAYER_KHRONOS_profiles`
+//! below it, through the loader's variable and the layer's own, and runs only on a device that
+//! reports exactly P (`runtime_restriction`).
 //!
 //! The pipeline's make (`new_compute_pipeline_state`) is held to the per-attempt ceilings: its
 //! peak live allocations to 500 MiB (`worker::alloc::bounded`: an allocation past it ends the
@@ -41,8 +44,9 @@
 //! whole block once the dispatch has retired (`GuardCount::escaped`). The buffer is all the memory
 //! bound to the target, so it holds no byte past its end (`GuardCount::past_end` 0).
 
+use super::runtime_restriction::{self, Layered};
 use super::{runtime_bounds, runtime_textures};
-use crate::candidate::device_facts::{active_tools, ActiveTool, RECORDED_LAYERS};
+use crate::candidate::device_facts::{ActiveTool, RECORDED_LAYERS};
 use crate::candidate::engine::argument_buffers::{self, FieldKey};
 use crate::candidate::engine::guards::{self, GuardCount, GuardReach, MIN_GUARD};
 use crate::candidate::engine::{
@@ -75,7 +79,7 @@ use std::time::{Duration, Instant};
 const EXECUTOR: &str = "runtime-compute";
 
 /// The validation layer.
-const VALIDATION_LAYER: &str = "VK_LAYER_KHRONOS_validation";
+pub(super) const VALIDATION_LAYER: &str = "VK_LAYER_KHRONOS_validation";
 
 /// How long the run waits for the runtime's device to tear down once its last handle is gone,
 /// before the validation log is read.
@@ -160,13 +164,22 @@ fn validate_process(log: &Path) {
 
 /// The attempt of `run` on the device of `device_type` for `executor`, every object of it gone
 /// before this returns, and the runtime's device torn down; a refusal names the device it opened.
-/// `Err` where no device of the kind opens under the layer.
+/// Under a profiles-layer restriction the device is restricted to the profile
+/// (`runtime_restriction`), and one that lacks what the profile states is a typed refusal before
+/// anything runs. `Err` where no device of the kind opens under the layers.
 pub(super) fn attempt_on(
     device_type: DeviceType,
     executor: &'static str,
     run: impl FnOnce(&rt::Device, &Identity, &serde_json::Value) -> Result<ComputeRun, ExecutorError>,
 ) -> Result<RunAttempt, String> {
-    opened(device_type, executor, |device, identity, environment| {
+    if device_type == DeviceType::Gpu {
+        crate::gpu::tripwire::refuse_if_tripped()?;
+    }
+    let layered = match runtime_restriction::layered(device_type, executor)? {
+        Ok(layered) => layered,
+        Err(refused) => return Ok(refused),
+    };
+    let attempt = |device: &rt::Device, identity: &Identity, environment: &serde_json::Value| {
         let result = run(device, identity, environment);
         let refused_on = matches!(result, Err(ExecutorError::NotSupported(_))).then(|| RefusedOn {
             environment: environment.clone(),
@@ -174,27 +187,24 @@ pub(super) fn attempt_on(
             artifact: None,
         });
         RunAttempt { result, refused_on }
-    })
+    };
+    layered.instance(|instance| opened(instance, device_type, executor, &layered, attempt))
 }
 
-/// `body` on the runtime's device of `device_type`, with the identity and environment a row of
-/// `executor` records of it, every object of it gone before this returns, and the device torn
-/// down. `Err` where no device of the kind opens under the layer.
+/// `body` on the runtime's device of `device_type` from `instance`, made under `layered`, with the
+/// identity and environment a row of `executor` records of it, every object of it gone before
+/// this returns, and the device torn down. `Err` where no device of the kind opens under the
+/// layers.
 fn opened<T>(
+    instance: &rt::Instance,
     device_type: DeviceType,
     executor: &'static str,
+    layered: &Layered,
     body: impl FnOnce(&rt::Device, &Identity, &serde_json::Value) -> T,
 ) -> Result<T, String> {
-    if device_type == DeviceType::Gpu {
-        crate::gpu::tripwire::refuse_if_tripped()?;
-    }
-    let instance =
-        rt::Instance::new(&[]).map_err(|error| format!("the runtime's instance: {error}"))?;
     let value = {
-        let (physical, identity) = select(&instance, device_type)?;
-        let (entry, vk_instance) = instance.raw();
-        // SAFETY: `physical` is one of the instance's physical devices, and the instance is live.
-        let tools = unsafe { active_tools(entry, vk_instance, physical.raw()) }?;
+        let (physical, identity) = select(instance, device_type, layered.profile())?;
+        let tools = runtime_restriction::tools_on(instance, &physical)?;
         if !tools.iter().any(|tool| tool.layer == VALIDATION_LAYER) {
             return Err(format!(
                 "{} lists no active validation tool: the loader found no {VALIDATION_LAYER}, and \
@@ -202,7 +212,8 @@ fn opened<T>(
                 identity.device
             ));
         }
-        let environment = environment(&identity, &tools, executor);
+        layered.checked(instance, &physical, &tools)?;
+        let environment = environment(&identity, &tools, executor, layered.record(&tools));
         let device = metal2vulkan_runtime::Device::new(&physical, rt::DeviceOptions::default())
             .map_err(|error| format!("the runtime's device on {}: {error}", identity.device))?;
         body(&device, &identity, &environment)
@@ -227,14 +238,17 @@ pub(super) struct Identity {
     driver_id: i32,
     driver_name: String,
     driver_info: String,
+    /// The committed profile the profiles layer restricts the device to, if any.
+    restricted_to: Option<String>,
 }
 
 /// The loader's first physical device of `device_type`'s kind, as the executor's own context
 /// selects one: a CPU implementation for a CPU run, a discrete, integrated or virtual GPU for a
-/// GPU run, never one for the other.
-fn select(
+/// GPU run, never one for the other; its identity records the profile `restricted_to`.
+pub(super) fn select(
     instance: &rt::Instance,
     device_type: DeviceType,
+    restricted_to: Option<&str>,
 ) -> Result<(rt::PhysicalDevice, Identity), String> {
     let (_, vk_instance) = instance.raw();
     let physical_devices = instance
@@ -275,6 +289,7 @@ fn select(
             driver_id: driver.driver_id.as_raw(),
             driver_name: text(driver.driver_name_as_c_str()),
             driver_info: text(driver.driver_info_as_c_str()),
+            restricted_to: restricted_to.map(str::to_owned),
         };
         return Ok((physical, identity));
     }
@@ -286,8 +301,13 @@ fn select(
 
 /// The environment of a row of `executor` on the device `identity` names, with the tools active
 /// on it: its identity as the executor's own context records it, the executor, the validation it
-/// ran under, and no profiles-layer restriction.
-fn environment(identity: &Identity, tools: &[ActiveTool], executor: &str) -> serde_json::Value {
+/// ran under, and the profiles layer's record (`runtime_restriction::Layered::record`).
+pub(super) fn environment(
+    identity: &Identity,
+    tools: &[ActiveTool],
+    executor: &str,
+    profiles_layer: serde_json::Value,
+) -> serde_json::Value {
     serde_json::json!({
         "device": identity.device,
         "device_id": identity.device_id,
@@ -303,7 +323,7 @@ fn environment(identity: &Identity, tools: &[ActiveTool], executor: &str) -> ser
         "executor": executor,
         "layers": RECORDED_LAYERS,
         "synchronization_validation": true,
-        "profiles_layer": null,
+        "profiles_layer": profiles_layer,
     })
 }
 
@@ -524,7 +544,7 @@ fn run(
 }
 
 /// The row of a run on the device `identity` names that read `output`, with `module`'s census:
-/// what the runtime answers (the module documentation), with no restriction.
+/// what the runtime answers (the module documentation), under the identity's restriction.
 pub(super) fn ran(
     identity: &Identity,
     environment: &serde_json::Value,
@@ -536,7 +556,7 @@ pub(super) fn ran(
         rate_map_pass: None,
         device: Some(execution_class(identity)),
         product: TRANSLATOR_FINGERPRINT.into(),
-        restricted_to: None,
+        restricted_to: identity.restricted_to.clone(),
         modules: vec![module],
         artifact: None,
     };
