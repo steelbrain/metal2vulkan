@@ -2207,6 +2207,33 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   an Intel UHD 630 under macOS 26.7.1 one of a queue at a lower priority number started about
   0.4 ms after its commit, mid-way through a running 60 ms command buffer, whose own run did not
   change (job m3-max-68129). The runtime starts it at the next piece's boundary.
+- The pieces cost host instructions on every command buffer, cut or not. Measured with the
+  compute harness on an RTX 3090 against the same runtime with no pieces (f979769faf), four runs
+  of each build in random order (job m3-max-68794), the thread that encodes and commits ran 1,239
+  more instructions a command buffer in `burst_2000` (2.5%; all threads together ran 513 fewer),
+  1,609 in `burst_160` (3.5%), 1,633 in `burst_160_shared` (2.7%), 1,843 in `frame_5cb` (2.8%)
+  and 4,566 in `burst_2000x5` (4.4%), whose command buffers open five compute encoders of one
+  dispatch each: about 830 more for each encoder past the first. The rows of one command buffer
+  a run (`waves`, `constant_private` and the two `sampling_distinct` rows) ran 952 to 1,166 more.
+  On an RX 7900 XTX (job m3-max-68607) the rise was 964 in `burst_2000` and 883 in `burst_160`;
+  with parts of the path put back to their form with no pieces (the step's scan for shared
+  resources, the room's ranking of what is ready, the scan as a group closes, the cut test where
+  an encoder opens, the rate kept for each segment as it retires), one or a few at a time, it was
+  848 to 1,014 and 550 to 745, and with all of them 710 and 465: the cost is spread over the
+  path, in no one part of it. On the 3090 no row's time moved by 3% or more beyond its runs'
+  spread: `burst_160`, `burst_160_shared`, `burst_2000`, `burst_2000x5` and
+  `frame_5cb_from_idle` moved 0.2% or less, `bind_2000` 2.6% and `waves` 2.9%; the runs of
+  `frame_5cb`, `waves`, `constant_private` and the two `sampling_distinct` rows spread past 3%
+  within one build, so those rows decide nothing.
+- On the Iris Xe (Mesa's ANV), in the harness row `two_queues`, a command buffer of a second
+  queue whose event wait the end of a command buffer of the first queue signals, committed right
+  after it, starts on the GPU 30.4 µs after the signaller's GPU end at the median, against 9.0 µs
+  with no pieces (jobs m3-max-68441, m3-max-68517, m3-max-68545 and m3-max-68608). Where the
+  waiter waits is not placed. In the same row, a command buffer of the second queue committed
+  every 16.667 ms beside the first queue's backlog of eight (three fills each, 22.5 ms on the GPU
+  at the median) completes 23.7 ms after its commit at the median, against 34.8 ms with no pieces
+  (jobs m3-max-68545 and m3-max-68608), and no other form that keeps Metal's order was found to
+  bring those late frames in.
 - On NVIDIA each submission pays the driver's latency per submission. The runtime submits each
   command buffer as soon as it can, so short command buffers committed back to back reach the GPU
   in several submissions: on an RTX 2080 (harness row `frame_5cb`: five short command buffers a
