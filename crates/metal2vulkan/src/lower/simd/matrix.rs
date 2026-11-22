@@ -39,8 +39,9 @@
 //!   in increasing `k` (the `agx2` schedule, shared with [`super::agx`]). On a subgroup the reads
 //!   are paired and the steps are a loop: one shuffle of a `vec2` carries a step's two `b` cells,
 //!   one carries the `a` cells of steps `2m` and `2m + 1` (one lane owns both), and the `dim / 2`
-//!   step pairs are the trips of a loop, so a driver compiles each shuffle once per multiply-add
-//!   (its compile's memory grows with every subgroup instruction). Every operand format is
+//!   step pairs are the trips of a loop with no unrolling hint, which each driver unrolls or not
+//!   as it compiles (its compile's memory grows with every subgroup instruction it compiles; with
+//!   `DontUnroll` RADV ran one real kernel's loop 12% slower). Every operand format is
 //!   converted exactly to `f32` first (`half` and `bfloat` are held widened; 8-bit floats decode
 //!   exactly). When every format is `half` each step rounds to `half` (the `f16matmad` form);
 //!   otherwise the sum accumulates in `f32` and rounds once to the result format.
@@ -80,7 +81,7 @@ use crate::spirv::builder::constructs::{ArmEnd, ArmFn, LoopFn, LoopSpec};
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::BResult;
 use crate::spirv::ids::Value as SValue;
-use crate::spirv::ir::{BinOp, GlslOp, MemAccess, Unrolling};
+use crate::spirv::ir::{BinOp, GlslOp, MemAccess};
 
 use super::check_operands;
 use super::group::{bin_k, lane, shuffle, Lane, Live};
@@ -731,10 +732,10 @@ fn owner_bits_of(fb: &mut FunctionBuilder<'_>, dim: u32, k: SValue) -> BResult<(
     }
 }
 
-/// The steps of a multiply-add on a subgroup: a loop (`DontUnroll`, as `spirv::roll` writes one)
-/// of `dim / 2` trips, trip `m` taking steps `2m` and `2m + 1`, the sums carried in `Function`
-/// variables. Each step reads the cells the written-out steps read and accumulates them in the
-/// same order.
+/// The steps of a multiply-add on a subgroup: a loop of `dim / 2` trips with no unrolling hint
+/// (the driver's own choice, the module docs), trip `m` taking steps `2m` and `2m + 1`, the sums
+/// carried in `Function` variables. Each step reads the cells the written-out steps read and
+/// accumulates them in the same order.
 fn paired_steps(
     fb: &mut FunctionBuilder<'_>,
     ln: &Lane,
@@ -782,11 +783,7 @@ fn paired_steps(
         fb.store(sums[0], acc[0], MemAccess::default())?;
         fb.store(sums[1], acc[1], MemAccess::default())
     });
-    let spec = LoopSpec {
-        exit_sel: None,
-        unrolling: Unrolling::DontUnroll,
-    };
-    fb.loop_(&mut (), spec, body)?;
+    fb.loop_(&mut (), LoopSpec::default(), body)?;
     Ok([
         fb.load(sums[0], MemAccess::default())?,
         fb.load(sums[1], MemAccess::default())?,
