@@ -1039,12 +1039,6 @@ pub(crate) mod on_device {
                 arena.buffer(),
             );
             let (queue, signaller_queue) = (queue(&device), self::queue(&device));
-            // Each queue's expected run 1 ms, the test's own input, so the device has room for the
-            // three submissions at once (`submit::room`).
-            for queue in [&queue, &signaller_queue] {
-                let probe = queue.command_buffer().expect("a command buffer");
-                probe.queue().set_run_for_test(BODY_RUN);
-            }
             let log = Log::default();
             let submitted = |command_buffer: &CommandBuffer| {
                 let before = device.counters().metrics().submissions;
@@ -1069,6 +1063,20 @@ pub(crate) mod on_device {
                 ("plain", &plain, (&a, &b), 1),
                 ("shared", shared.as_event(), (&c, &d), 3),
             ] {
+                // Each queue's expected run 1 ms, the test's own input, set as each round begins,
+                // so the device has room for the round's three submissions at once
+                // (`submit::room`) while Busy's gate holds every completion. The runs the round
+                // before measured would stand in its place (`QueueInner::ran`, rising at once to a
+                // longer run): past 2 ms, on a loaded device, `next` would have no room, and no
+                // completion would come to make it. Printed, the runs it replaces.
+                for queue in [&queue, &signaller_queue] {
+                    let probe = queue.command_buffer().expect("a command buffer");
+                    println!(
+                        "{name}: {label}: a queue's run before the round's input {:?} ns",
+                        probe.queue().expected_run()
+                    );
+                    probe.queue().set_run_for_test(BODY_RUN);
+                }
                 let busy = Busy::new(&device);
                 let signaller = signaller_queue.command_buffer().expect("a command buffer");
                 (signaller.encode_signal_event(event, 1)).expect("a signal");

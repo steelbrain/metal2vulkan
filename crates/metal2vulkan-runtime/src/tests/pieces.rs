@@ -532,8 +532,10 @@ mod on_device {
     /// committed to a queue right behind another queue's command buffer of about 20 ms of
     /// dispatches, uncut (its kernel's rate the test's own), submitted while the long one is on
     /// the device (its submission seen before the long one's GPU end, and its own end after it),
-    /// takes a rate under twice the rate it takes alone. The ratio is printed. A start written
-    /// before the long one ends would put its tail in the rate.
+    /// takes a rate whose run is shorter than the long one's run left as it was submitted: a pair
+    /// begun at its submission, or anywhere earlier in the long one's run, would hold at least that
+    /// much. The rate it takes alone and the ratio are printed: on a CPU device the run itself
+    /// moves with the host's load.
     #[test]
     fn every_device_rates_a_one_piece_command_buffer_without_the_run_ahead_of_it() {
         each_device("pieces_rate_behind", |name, _, device| {
@@ -616,10 +618,12 @@ mod on_device {
                 (end - start.min(end)) / 1000,
                 (end - sent_at) / 1000
             );
+            // One threadgroup: its run is its rate, in picoseconds.
             assert!(
-                behind_rate < alone.saturating_mul(2),
-                "{name}: the rate behind the long command buffer, {behind_rate} ps, against \
-                 {alone} ps alone"
+                behind_rate / 1000 < end - sent_at,
+                "{name}: the rate behind the long command buffer, {behind_rate} ps a threadgroup, \
+                 holds the {} us of the long one's run left as the short one was submitted",
+                (end - sent_at) / 1000
             );
         });
     }

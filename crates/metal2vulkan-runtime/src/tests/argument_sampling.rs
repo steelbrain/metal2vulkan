@@ -250,17 +250,22 @@ mod on_device {
     /// (`use_heap`), reaching them through the resource IDs its argument buffer holds. Their last
     /// handles drop after the commit, in three forms: while the command buffer waits on an event
     /// (committed, not submitted), while long work committed ahead of it on its queue runs, and
-    /// 20 ms into a pass of `SAMPLINGS` dispatches, while it samples them. The heap's range and
-    /// each form's GPU span beside the drop's host time are printed, so a fault's address and
-    /// time can be placed. A texture's going waits for the command buffers committed before its
-    /// release (`crate::memory::Wait`): each completes with no error, and its pass reads the
-    /// textures as they were.
+    /// 20 ms into a pass of about `PASS_RUN` of dispatches, while it samples them: as many as the
+    /// GPU span of the first form's one dispatch gives, at most `SAMPLINGS`, the drop asserted
+    /// before the pass's GPU end. The heap's range and each form's GPU span beside the drop's
+    /// host time are printed, so a fault's address and time can be placed. A texture's going
+    /// waits for the command buffers committed before its release (`crate::memory::Wait`): each
+    /// completes with no error, and its pass reads the textures as they were.
     #[cfg(any(m2v_cpu_icd, all(m2v_gpu, m2v_gpu_hazards)))]
     #[test]
     fn every_device_keeps_heap_textures_read_through_their_indices_past_their_release() {
-        /// The dispatches of the pass that samples while its textures drop: about 200 ms on an
-        /// RTX 3090.
+        /// The most dispatches of the pass that samples while its textures drop: about 200 ms on
+        /// an RTX 3090.
         const SAMPLINGS: u32 = 40_000;
+        /// The GPU run, in nanoseconds, that pass is sized to, from the GPU span of the first
+        /// form's one dispatch: on a CPU device under load the fixed `SAMPLINGS` ran past the
+        /// tests' patience.
+        const PASS_RUN: u64 = 200_000_000;
         use crate::tests::command::on_device::shared_event;
         use crate::tests::compute::on_device::step;
         use crate::tests::gpu_span::on_device::{dispatches_for, long, words, WORDS};
@@ -347,6 +352,7 @@ mod on_device {
             let count = dispatches_for(name, &queue, &ahead_state, &busy, 200_000_000);
             let event = shared_event(&device);
             let mut unlike = Vec::new();
+            let mut samplings = SAMPLINGS;
             for (round, form) in ["at an event wait", "behind long work", "while it runs"]
                 .into_iter()
                 .enumerate()
@@ -373,7 +379,7 @@ mod on_device {
                 encoder.set_buffer(Some(&out), 0, 1).expect("out");
                 (encoder.set_sampler_state(Some(&sampler), 0)).expect("the sampler");
                 (encoder.use_heap(heap.block)).expect("the heap");
-                for _ in 0..if round == 2 { SAMPLINGS } else { 1 } {
+                for _ in 0..if round == 2 { samplings } else { 1 } {
                     (encoder.dispatch_threadgroups([1, 1, 1], [SIDE, SIDE, 1]))
                         .unwrap_or_else(|error| panic!("{name}: {error}"));
                 }
@@ -408,6 +414,22 @@ mod on_device {
                     "{name}: {form}: dropped at {dropped}, the pass's GPU span {start}..{end}; \
                      loss {loss:?}, error {error:?}, read {read:?}"
                 );
+                if round == 0 && end > start {
+                    samplings = u32::try_from(PASS_RUN / (end - start))
+                        .map_or(SAMPLINGS, |count| count.clamp(1, SAMPLINGS));
+                    println!(
+                        "{name}: one sampling dispatch's GPU span {} ns: the pass while it runs \
+                         takes {samplings} dispatches",
+                        end - start
+                    );
+                }
+                if round == 2 && loss.is_none() && error.is_none() {
+                    assert!(
+                        dropped < end,
+                        "{name}: {form}: the textures dropped at {dropped}, after the pass's GPU \
+                         end {end}"
+                    );
+                }
                 if loss.is_some() || error.is_some() || read != want {
                     unlike.push(form);
                 }
