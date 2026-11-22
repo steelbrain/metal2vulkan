@@ -29,7 +29,9 @@ construction site wherever the site states it, and declared in the refusal's own
 last line `Basis: <value> (the evidence)`, wherever the claim is about Metal itself, which no site
 can state. `--check` requires one of every variant of the runtime's refusal enums: a refusal
 that asserts Metal stops an input cannot be added with nothing behind it, and one whose basis is
-not settled says `Basis: unknown (why)` rather than nothing.
+not settled says `Basis: unknown (why)` rather than nothing. A translator refusal's is its `Needs`'
+(`Needs::basis`'s arms), through the helper a site hands its feature to; `--check` fails on one
+with a site that is not settled.
 
 The same lines are the runtime's `basis()` of those enums, which it writes into `BASIS_RS`.
 
@@ -69,6 +71,7 @@ FLOOR_RS = CRATES / "metal2vulkan-runtime" / "src" / "floor.rs"
 # The runtime's error: each variant whose payload is one enum the runtime declares is a family
 # of typed refusals (`Refused(Refusal)`, `Limit(Limit)`, `Unsupported(Gap)`, and any added later).
 RT_ERROR_RS = CRATES / "metal2vulkan-runtime" / "src" / "error.rs"
+ERROR_RS = CRATES / "metal2vulkan" / "src" / "error" / "mod.rs"
 BASIS_RS = CRATES / "metal2vulkan-runtime" / "src" / "error" / "basis.rs"
 
 CONSTRUCTORS = {
@@ -199,15 +202,32 @@ def parse_basis(marker, payload=""):
     return value, cite, ""
 
 
+def kind_basis(text):
+    """{`Needs` variant: basis}, from the arms of `Needs::basis` in `text` (lexed)."""
+    m = re.search(r"\bimpl\s+Needs\s*\{", text)
+    body = text[m.end() : close_of(text, m.end() - 1, "{", "}")] if m else ""
+    f = re.search(r"\bfn\s+basis\b", body)
+    out = {}
+    arm = r"((?:\s*\|?\s*Needs::\w+(?:\s*\([^)]*\))?)+)\s*=>\s*\{?\s*RefusalBasis::(\w+)"
+    for a in re.finditer(arm, body[f.end() :] if f else ""):
+        value = re.sub(r"(?<!^)(?=[A-Z])", "-", a.group(2)).lower()
+        for v in re.findall(r"Needs::(\w+)", a.group(1)):
+            out[v] = value
+    return out
+
+
 # How each section's basis follows from the construction site, where it does. `None` is a section
-# whose basis no site states: each variant's doc comment declares it.
-def derived_basis(section, kinds):
+# whose basis no site states: each variant's doc comment declares it. `table` is `kind_basis`'s.
+def derived_basis(section, kinds, table):
     if section == "feature":
-        if not kinds:
+        bases = {table.get(k) for k in kinds}
+        if not kinds or None in bases:
             return ""
         # A site that refuses on every device because the lowering is not built settles the basis
         # whatever the other sites need of a device.
-        return "ours" if "NotImplemented" in kinds else "device"
+        if "ours" in bases:
+            return "ours"
+        return bases.pop() if len(bases) == 1 else ""
     if section == "bind":
         return "device"
     if section in ("limit", "budget"):
@@ -408,15 +428,76 @@ def is_pattern(text, start, end):
     return False
 
 
+# The front end's `Feature` converted to the translator's (`error/mod.rs`): a reference there is
+# the front end's refusal.
+FRONT_END_FROM = re.compile(r"impl\s+From<\s*crate::air::error::Feature\s*>\s+for\s+Feature\s*\{")
+
+
+def callee(text, pos):
+    """The function whose call's parentheses hold `pos`, innermost first, or None outside a call."""
+    depth = 0
+    for k in range(pos - 1, -1, -1):
+        c = text[k]
+        if c in ")]}":
+            depth += 1
+        elif c in "([{" and depth:
+            depth -= 1
+        elif c == "(":
+            m = re.search(r"([A-Za-z_][A-Za-z0-9_]*)\s*$", text[:k])
+            return m.group(1) if m else None
+        elif c in "{;":
+            return None
+    return None
+
+
+def follow(files, helpers, by_name, rel, pos, depth=0):
+    """The (kind, condition) pairs of the refusals a feature reference at `pos` of `rel` reaches,
+    or None: the front end's (it refuses only what it does not implement), a construction's whose
+    feature argument it is, a helper's it is handed to, its function's, or, in a function that
+    returns the feature, those its calls in the file reach.
+    """
+    tree, text, spans, ctors, computed, front = files[rel]
+    if tree == "air" or any(b <= pos <= e for b, e in front):
+        return {("NotImplemented", c) for c in conditions("NotImplemented", "")}
+    for b, e, kind, conds in ctors:
+        if b <= pos <= e:
+            return {(kind, c) for c in conds}
+    name = callee(text, pos)
+    homes = [rel] if (rel, name) in helpers else sorted(by_name.get(name, ()))
+    if len(homes) == 1:
+        return helpers[(homes[0], name)]
+    enc = enclosing(spans, pos)
+    if enc is None:
+        return None
+    built = {(k, c) for p, k, conds in computed if enc[0] <= p <= enc[1] for c in conds}
+    if built:
+        return built
+    calls = [m.start() for m in re.finditer(r"(?<![\w.])" + enc[2] + r"\s*\(", text)]
+    calls = [c for c in calls if not re.search(r"\bfn\s+$", text[max(0, c - 8) : c])]
+    if depth >= 4 or not calls:
+        return None
+    out = set()
+    for c in calls:
+        got = follow(files, helpers, by_name, rel, c, depth + 1)
+        if got is None:
+            return None
+        out |= got
+    return out
+
+
 def scan(rt_enums=()):
     """Rows keyed by (section, variant): conditions, sites.
 
     `rt_enums` are the runtime's refusal enums ([`rt_refusal_enums`]), each its own section.
     """
     rows = defaultdict(lambda: {"conds": set(), "kinds": set(), "sites": [], "indirect": []})
-    feature_refs = defaultdict(list)
+    feature_refs, ref_pos, files = defaultdict(list), defaultdict(list), {}
     for tree, rel, text in source_files():
         spans = fn_spans(text)
+        # For `follow`: each construction, those of a computed feature, the front end's `From`.
+        ctors, computed = [], []
+        front = [(m.end() - 1, close_of(text, m.end() - 1, "{", "}")) for m in FRONT_END_FROM.finditer(text)]
+        files[rel] = (tree, text, spans, ctors, computed, front)
 
         def site(pos):
             """A construction site: its file, its line, and the function that builds the refusal.
@@ -444,6 +525,9 @@ def scan(rt_enums=()):
             rows[key]["conds"] |= conditions(kind, needs_text)
             rows[key]["kinds"].add(kind)
             rows[key]["sites"].append(site(m.start()))
+            ctors.append((k, e, kind, conditions(kind, needs_text)))
+            if name is None:
+                computed.append((m.start(), kind, conditions(kind, needs_text)))
         # Unsupported { feature: .., needs: .. } literals.
         for m in re.finditer(r"\bUnsupported\s*\{", text):
             pre = text[max(0, m.start() - 12) : m.start()]
@@ -463,11 +547,15 @@ def scan(rt_enums=()):
             rows[("feature", name)]["conds"] |= conditions(kind, needs_text)
             rows[("feature", name)]["kinds"].add(kind)
             rows[("feature", name)]["sites"].append(site(m.start()))
+            ctors.append((m.end() - 1, e, kind, conditions(kind, needs_text)))
+            if fm is None:
+                computed.append((m.start(), kind, conditions(kind, needs_text)))
         # Indirect feature references (a feature handed to a helper that builds the refusal).
         for m in re.finditer(r"\bFeature::([A-Za-z0-9_]+)", text):
             if is_pattern(text, m.start(), m.end()):
                 continue
             feature_refs[m.group(1)].append(site(m.start()))
+            ref_pos[m.group(1)].append((rel, m.start()))
         if tree == "rt":
             # `Missing`: an item of the floor a device lacks, built where the floor decides.
             for m in re.finditer(r"(?<![A-Za-z0-9_])Missing::([A-Z][A-Za-z0-9_]*)", text):
@@ -495,7 +583,16 @@ def scan(rt_enums=()):
                 if is_pattern(text, m.start(), m.end()):
                     continue
                 rows[(section, m.group(1))]["sites"].append(site(m.start()))
-    return rows, feature_refs
+    # A helper: a function that builds a refusal of a computed feature, by file and by name.
+    helpers, by_name = defaultdict(set), defaultdict(set)
+    for rel, (_, _, spans, _, computed, _) in files.items():
+        for pos, kind, conds in computed:
+            enc = enclosing(spans, pos)
+            if enc:
+                helpers[(rel, enc[2])] |= {(kind, c) for c in conds}
+                by_name[enc[2]].add(rel)
+    followed = {n: [follow(files, helpers, by_name, rel, pos) for rel, pos in refs] for n, refs in ref_pos.items()}
+    return rows, feature_refs, followed
 
 
 def enum_arms(path, enum):
@@ -687,7 +784,8 @@ def head_sha():
 
 
 def build(rt_enums):
-    rows, feature_refs = scan([enum for _, enum, _ in rt_enums])
+    rows, feature_refs, followed = scan([enum for _, enum, _ in rt_enums])
+    table = kind_basis(lex(ERROR_RS.read_text()))
     reach = load_reach()
     fdocs = OrderedDict(enum_variants(CRATES / "metal2vulkan" / "src" / "error" / "mod.rs", "Feature"))
     for n, d in enum_variants(CRATES / "metal2vulkan-air" / "src" / "error.rs", "Feature"):
@@ -700,6 +798,12 @@ def build(rt_enums):
     for n, refs in feature_refs.items():
         if n in fdocs and not rows[("feature", n)]["sites"]:
             rows[("feature", n)]["indirect"] = refs
+            # Settled only where every reference reaches a refusal: one it cannot follow could
+            # be of any `Needs`.
+            if all(f is not None for f in followed[n]):
+                for f in followed[n]:
+                    rows[("feature", n)]["kinds"] |= {k for k, _ in f}
+                    rows[("feature", n)]["conds"] |= {c for _, c in f}
     tables = OrderedDict()
     missing_reach = []
     basis_faults = []
@@ -757,7 +861,7 @@ def build(rt_enums):
                     rm = ("?", "")
             prose, marker = split_basis(doc)
             if marker is None:
-                basis, cite = derived_basis(section, (r["kinds"] if r else set())), ""
+                basis, cite = derived_basis(section, (r["kinds"] if r else set()), table), ""
                 if section.startswith("rt:"):
                     basis_faults.append((section, name, "carries no `Basis:` line"))
             else:
@@ -836,7 +940,9 @@ def render(tables):
     )
     lines.append(
         "- **Basis**: where the belief that this input must be refused comes from. Derived from the "
-        "construction site where the site says it (`device`, `ours`), declared as a last `Basis:` "
+        "construction site where the site says it (`device`, `ours`; a translator refusal's from its "
+        "`Needs`, as `Needs::basis` answers it, through the helper a site hands its feature to, and "
+        "`ours` where any site is not implemented), declared as a last `Basis:` "
         "line in the refusal's own doc comment where the claim is about Metal itself, and `-` where "
         "neither says it yet:"
     )
@@ -1002,13 +1108,37 @@ def selftest():
         bad_news.append("basis_rs wrote one file for two `Basis:` lines")
     if not basis_rs([("Gap", arms)], {"Ours"})[1]:
         bad_news.append("basis_rs took a value `RefusalBasis` has no variant for")
+    # The `Needs` table, from `Needs::basis`'s arms in rustfmt's forms; and `--check`'s refusal of
+    # a variant with a site whose basis is not settled, but not of one nothing builds.
+    needs = (
+        "impl Needs {\n    pub fn basis(&self) -> RefusalBasis {\n        match self {\n"
+        "            Needs::AnyOf(_) | Needs::NotRepresentable => {\n                RefusalBasis::Device\n"
+        "            }\n            Needs::NotImplemented => RefusalBasis::Ours,\n"
+        "            Needs::MetalGpuFamily(_) => RefusalBasis::MetalDocumented,\n        }\n    }\n}\n"
+    )
+    table = kind_basis(needs)
+    want = {"AnyOf": "device", "NotRepresentable": "device", "NotImplemented": "ours", "MetalGpuFamily": "metal-documented"}
+    if table != want:
+        bad_news.append(f"kind_basis read {table!r}")
+    if [derived_basis("feature", k, want) for k in ({"AnyOf", "NotImplemented"}, {"AnyOf"}, {"computed"})] != ["ours", "device", ""]:
+        bad_news.append("derived_basis did not follow the `Needs` table")
+    row = lambda name, state, basis: {"name": name, "state": state, "basis": basis, "sites": "1"}
+    rows = [row("Followed", "indirect", "device"), row("Lost", "indirect", "-"), row("Unbuilt", "no site", "-")]
+    if unsettled({"feature": ("", rows)}) != [("Lost", "1")]:
+        bad_news.append(f"unsettled read {unsettled({'feature': ('', rows)})!r}, not the one lost row")
     for line in bad_news:
         print("selftest:", line, file=sys.stderr)
     if bad_news:
         print(f"{len(bad_news)} basis cases failed", file=sys.stderr)
         return 1
-    print(f"basis parse: {len(good)} markers read, {len(bad)} refused; basis.rs: 3 cases", file=sys.stderr)
+    print(f"basis parse: {len(good)} markers read, {len(bad)} refused; basis.rs: 3 cases; Needs: 3", file=sys.stderr)
     return 0
+
+
+def unsettled(tables):
+    """(variant, sites) of each translator refusal with a site whose basis is not settled."""
+    rows = tables["feature"][1] if "feature" in tables else []
+    return [(r["name"], r["sites"]) for r in rows if r["state"] != "no site" and r["basis"] == "-"]
 
 
 def main():
@@ -1036,7 +1166,7 @@ def main():
         return 0
     text = render(tables)
     enums = [(enum, enum_arms(file, enum)) for _, enum, file in rt_enums]
-    code, code_faults = basis_rs(enums, {name for name, _ in enum_variants(RT_ERROR_RS, "RefusalBasis")})
+    code, code_faults = basis_rs(enums, {name for name, _ in enum_variants(ERROR_RS, "RefusalBasis")})
     print("".join(f"{fault}\n" for fault in code_faults), end="", file=sys.stderr)
     if a.check:
         # Structural: the variants, what each blocks, where, and its reach. Sites and line
@@ -1058,6 +1188,11 @@ def main():
             return 1
         if missing:
             print(f"{len(missing)} variants without a reach mark (--missing-reach)", file=sys.stderr)
+            return 1
+        if unsettled(tables):
+            for name, sites in unsettled(tables):
+                print(f"feature::{name}: built at {sites}, with no basis this follows", file=sys.stderr)
+            print("a translator refusal whose helper is not followed: settle it in follow()", file=sys.stderr)
             return 1
         if faults:
             for s, n, why in faults[:20]:

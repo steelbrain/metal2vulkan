@@ -189,6 +189,7 @@ surface! {
         enum Retry N;
         struct Unsupported N;
         enum Needs N;
+        enum RefusalBasis N;
         enum Capability N;
         enum Feature N;
         enum SparseNeed N;

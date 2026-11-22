@@ -51,8 +51,7 @@
 //! as `Unsupported{SimdgroupMatrix16x16x16, NotImplemented}`: Metal makes them only on an Apple10
 //! GPU and later (an M3 Max refuses each at pipeline creation,
 //! `crates/metal2vulkan-conformance/probes/simd_matrix16.m`), so their fragment layout cannot be
-//! measured on the Apple9 GPUs at hand, and the runtime answers the refusal as Metal's own on a
-//! device that does not claim Apple10.
+//! measured on the Apple9 GPUs at hand.
 
 use std::borrow::Cow;
 

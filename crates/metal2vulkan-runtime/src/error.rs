@@ -87,26 +87,11 @@ pub enum Error {
     Quiesced,
 }
 
-/// Where the belief that a call must be refused comes from ([`Error::basis`]).
-///
-/// Metal has no counterpart: Metal's `NSError` carries no basis. Each variant of [`Refusal`],
-/// [`Limit`] and [`Gap`] declares its own as the last line of its doc comment, `Basis:` and the
-/// evidence, which `docs/REFUSALS.md` lists.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum RefusalBasis {
-    /// Metal itself refuses it, and Apple's own words say so: a quoted assertion, `NSError` or
-    /// validation message, a header, or Apple's documentation.
-    MetalDocumented,
-    /// Metal itself refuses the input, and a run of ours on a named device or release says so.
-    MetalMeasured,
-    /// This crate's own gap, cap or deadline, or the misuse of a runtime extension Metal has no
-    /// counterpart for.
-    Ours,
-    /// The mechanism is absent: from this Vulkan device, from its driver, or from every Vulkan
-    /// device.
-    Device,
-}
+/// Where the belief that a call must be refused comes from ([`Error::basis`]): the translator's
+/// type, which answers its own errors too. Each variant of [`Refusal`], [`Limit`] and [`Gap`]
+/// declares its own as the last line of its doc comment, `Basis:` and the evidence, which
+/// `docs/REFUSALS.md` lists.
+pub use metal2vulkan::error::RefusalBasis;
 
 /// A call Metal refuses, with what it was asked.
 #[non_exhaustive]
@@ -2124,8 +2109,8 @@ impl Error {
     ///   declares.
     /// - [`Error::BelowFloor`] and [`Error::NoDirectDriverLoading`]: [`RefusalBasis::Device`], as
     ///   the device lacks what the floor needs, or the loader the extension that loads drivers.
-    /// - [`Error::Translation`]: `None`, as a translator refusal's basis follows from where it is
-    ///   built, not from its type.
+    /// - [`Error::Translation`]: the translator error's own
+    ///   ([`metal2vulkan::error::Error::basis`]), a refusal's from what it needs of the device.
     /// - [`Error::Loader`], [`Error::Vulkan`], [`Error::Thread`] and [`Error::Fd`]: `None`, as
     ///   the platform or a Vulkan call failed, which refuses no Metal input.
     /// - [`Error::NoSuchBlock`], [`Error::StageUnfilled`] and [`Error::Quiesced`]: `None`, as the
@@ -2136,7 +2121,7 @@ impl Error {
             Error::Limit(limit) => Some(limit.basis()),
             Error::Unsupported(gap) => Some(gap.basis()),
             Error::BelowFloor(_) | Error::NoDirectDriverLoading => Some(RefusalBasis::Device),
-            Error::Translation { .. } => None,
+            Error::Translation { error, .. } => error.basis(),
             Error::Loader(_) | Error::Vulkan { .. } | Error::Thread(_) | Error::Fd(_) => None,
             Error::NoSuchBlock(_) | Error::StageUnfilled(_) | Error::Quiesced => None,
         }

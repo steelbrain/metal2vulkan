@@ -34,9 +34,7 @@
 // pipeline of the three forms and four flag pairs at its creation, in 1 to 42 ms, with
 // `AGXMetalG15X_M1` code 3, "simdgroup_matrix<T,16,16x16> operations are supported by
 // GPUFamily10 and later". No pipeline was made, so no relation was measured. The translator
-// refuses these products `Unsupported{SimdgroupMatrix16x16x16}`, and the runtime answers that as
-// Metal's own refusal (`Needs::MetalGpuFamily` of Apple10) on a device that does not claim
-// Apple10.
+// refuses these products `Unsupported{SimdgroupMatrix16x16x16, NotImplemented}` on every device.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include <math.h>

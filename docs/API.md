@@ -1663,6 +1663,12 @@ bound format needs a declared format.
 `BindError` from `plan` depends only on the pipeline, the device and the shape, so it
 memoizes beside the plan; one from instantiation does not.
 
+**Where a refusal comes from.** `error.basis()` (a `RefusalBasis`) says where the belief that the
+input must be refused comes from: a refusal's follows from its `needs` (`Device` for what a
+device lacks, `Ours` for `NotImplemented`); a cap, the deadline and a translator bug are `Ours`;
+malformed input, an invalid descriptor, a requested input and a cancellation are `None`. The
+runtime's `Error::basis` answers a translation error so.
+
 **Precision.** Where an output gives a near-equivalent of Metal's answer, its stage lists it in
 
 `precision_notes` (a `PrecisionNote`, each documenting its bound), and `reconvergence` says

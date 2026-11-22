@@ -129,6 +129,24 @@ impl Error {
             | Error::Internal(_) => Retry::Never,
         }
     }
+
+    /// Where the belief that the input must be refused comes from: a refusal's
+    /// ([`Needs::basis`]); [`RefusalBasis::Ours`] for a cap, the deadline or a translator bug
+    /// ([`Error::LimitExceeded`], [`Error::Budget`], [`Error::Internal`]); and `None` where no
+    /// valid input is refused: malformed input, an inconsistent descriptor, an input the call
+    /// did not supply, or the caller's cancellation.
+    pub fn basis(&self) -> Option<RefusalBasis> {
+        match self {
+            Error::Unsupported(refusal) => Some(refusal.needs.basis()),
+            Error::LimitExceeded(_) | Error::Budget(_) | Error::Internal(_) => {
+                Some(RefusalBasis::Ours)
+            }
+            Error::NeedsInput(_)
+            | Error::InvalidInput(_)
+            | Error::InvalidDescriptor(_)
+            | Error::Cancelled => None,
+        }
+    }
 }
 
 impl fmt::Display for Error {
@@ -470,6 +488,45 @@ pub enum Needs {
     MetalRefuses(&'static [&'static str]),
 }
 
+impl Needs {
+    /// Where the belief that the input must be refused comes from: the device's lack
+    /// ([`Needs::AnyOf`], [`Needs::DeviceCapability`]) or every Vulkan device's
+    /// ([`Needs::NotRepresentable`]), this translator's gap ([`Needs::NotImplemented`]), or Metal's
+    /// own refusal, in its GPU family's feature list ([`Needs::MetalGpuFamily`]) or measured on
+    /// the devices it names ([`Needs::MetalRefuses`]).
+    pub fn basis(&self) -> RefusalBasis {
+        match self {
+            Needs::AnyOf(_) | Needs::DeviceCapability(_) | Needs::NotRepresentable => {
+                RefusalBasis::Device
+            }
+            Needs::NotImplemented => RefusalBasis::Ours,
+            Needs::MetalGpuFamily(_) => RefusalBasis::MetalDocumented,
+            Needs::MetalRefuses(_) => RefusalBasis::MetalMeasured,
+        }
+    }
+}
+
+/// Where the belief that an input or a call must be refused comes from ([`Error::basis`]), by
+/// which a census of the refusals programs meet tells Metal's own refusals from a device's lack
+/// and this project's gaps. `docs/REFUSALS.md` lists each refusal's.
+///
+/// Metal has no counterpart: Metal's `NSError` carries no basis.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum RefusalBasis {
+    /// Metal itself refuses it, and Apple's own words say so: a quoted assertion, `NSError` or
+    /// validation message, a header, or Apple's documentation.
+    MetalDocumented,
+    /// Metal itself refuses the input, and a run of ours on a named device or release says so.
+    MetalMeasured,
+    /// The translator's or the runtime's own gap, cap or deadline, or the misuse of a runtime
+    /// extension Metal has no counterpart for.
+    Ours,
+    /// The mechanism is absent: from this Vulkan device, from its driver, or from every Vulkan
+    /// device.
+    Device,
+}
+
 /// One device capability a refusal can name.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -557,9 +614,9 @@ pub enum Feature {
     /// (`air.simdgroup_matrix_16x16x16_[widening_]multiply_accumulate`), in any stage. Metal makes
     /// a pipeline of one only on a GPU of the Apple10 family and later: an M3 Max under macOS
     /// 27.0.1 refuses every one ("simdgroup_matrix<T,16,16x16> operations are supported by
-    /// GPUFamily10 and later"), so the runtime answers it as Metal does on a device that does not
-    /// claim Apple10 ([`Needs::MetalGpuFamily`]). Its fragment layout, which only such a GPU can
-    /// show, is not measured.
+    /// GPUFamily10 and later"). The translation refuses it on every device
+    /// ([`Needs::NotImplemented`]): its fragment layout, which only such a GPU can show, is not
+    /// measured.
     SimdgroupMatrix16x16x16,
 
     // ---- Memory ----
@@ -938,15 +995,14 @@ pub enum Feature {
     /// the state of an indirect render command, which no record holds. (A render command's state
     /// setters, `render_command::set_cull_mode` and the rest, are `GpuEncodedIndirectCommands`, as
     /// every encoder operation is.) Metal's Apple10 family alone lists the feature, and Metal's
-    /// compiler refuses such a function on an Apple9 GPU, so the runtime answers it as that
-    /// compiler does on a device that does not claim Apple10 ([`Needs::MetalGpuFamily`]).
+    /// compiler refuses such a function on an Apple9 GPU. The translation refuses it on every
+    /// device ([`Needs::NotImplemented`]).
     IndirectRenderState,
     /// A fragment function's read of a Metal 3.1 program-scope built-in variable that Metal does
     /// not lower there: a global `thread_index_in_quadgroup` (`air.get_thread_index_in_quadgroup`),
     /// which Apple's compiler takes in a fragment function but whose render pipeline the M4 and
     /// the M3 Max refuse, while they run the same built-in as the fragment's parameter. The
-    /// translation refuses it `NotImplemented`; the runtime answers it as Metal does
-    /// ([`Needs::MetalRefuses`]).
+    /// translation refuses it on every device ([`Needs::NotImplemented`]).
     GlobalBuiltinInFragment,
     /// A private fixed-function property of Metal's pipeline descriptor (Apple SPI, OpenGL on
     /// Metal's) set to a value whose effect the translation has not built: the property it names

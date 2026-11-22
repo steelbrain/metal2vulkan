@@ -717,8 +717,7 @@ fn refused_kernels() -> Vec<(&'static str, String)> {
 /// Every kernel of the owned fixture `engine/simd_matrix16` (`float`, `half` and widening signed
 /// 8-bit products, each with the four transpose-flag pairs) is refused as
 /// `Unsupported{SimdgroupMatrix16x16x16, NotImplemented}` on every committed profile: Metal makes
-/// these products only on an Apple10 GPU and later, and the runtime answers the refusal as Metal's
-/// own on a device that does not claim Apple10.
+/// these products only on an Apple10 GPU and later, so their fragment layout is not measured.
 #[test]
 fn products_of_16x16x16_are_refused_as_their_own_feature() {
     let Some(bc) = assembled(

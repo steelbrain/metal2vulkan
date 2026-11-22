@@ -911,6 +911,7 @@ enum	metal2vulkan::error::MeshPipelineProblem	#[derive(Clone, Copy, Debug, Parti
 enum	metal2vulkan::error::MetalAnswer	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MetalAnswer
 enum	metal2vulkan::error::Needs	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Needs
 enum	metal2vulkan::error::PrivateRenderField	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum PrivateRenderField
+enum	metal2vulkan::error::RefusalBasis	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RefusalBasis
 enum	metal2vulkan::error::Retry	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Retry
 enum	metal2vulkan::error::RuntimeInput	#[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RuntimeInput
 enum	metal2vulkan::error::SparseNeed	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum SparseNeed
@@ -7124,6 +7125,7 @@ method	metal2vulkan::device::SubgroupModel::quad_instructions	pub fn quad_instru
 method	metal2vulkan::device::SubgroupModel::stage	pub fn stage(&self, stage: Stage) -> &StageSubgroup
 method	metal2vulkan::device::VkExtension::requires	pub fn requires(self, api: ApiVersion) -> Vec<VkExtension>
 method	metal2vulkan::error::DiagName::new	pub fn new(name: impl Into<Box<str>>) -> DiagName
+method	metal2vulkan::error::Error::basis	pub fn basis(&self) -> Option<RefusalBasis>
 method	metal2vulkan::error::Error::retry	pub fn retry(&self) -> Retry
 method	metal2vulkan::error::InputError::class	pub fn class(&self) -> ErrorClass
 method	metal2vulkan::error::InputError::new	pub fn new(kind: InputErrorKind, at: Location) -> InputError
@@ -7140,6 +7142,7 @@ method	metal2vulkan::error::Location::metadata	pub fn metadata(entry: Option<Dia
 method	metal2vulkan::error::Location::module	pub fn module() -> Location
 method	metal2vulkan::error::Location::render_pipeline	pub fn render_pipeline() -> Location
 method	metal2vulkan::error::Location::with_attachment	pub fn with_attachment(self, attachment: Attachment) -> Location
+method	metal2vulkan::error::Needs::basis	pub fn basis(&self) -> RefusalBasis
 method	metal2vulkan::error::Unsupported::at	pub fn at(mut self, location: Location) -> Unsupported
 method	metal2vulkan::error::Unsupported::device_capability	pub fn device_capability(feature: Feature, capability: &'static str) -> Unsupported
 method	metal2vulkan::error::Unsupported::metal_gpu_family	pub fn metal_gpu_family(feature: Feature, family: i64) -> Unsupported
@@ -10730,6 +10733,10 @@ variant	metal2vulkan::error::PrivateRenderField::LogicOperation	LogicOperation
 variant	metal2vulkan::error::PrivateRenderField::PointSmooth	PointSmooth
 variant	metal2vulkan::error::PrivateRenderField::SampleCoverage	SampleCoverage
 variant	metal2vulkan::error::PrivateRenderField::TextureWriteRounding	TextureWriteRounding
+variant	metal2vulkan::error::RefusalBasis::Device	Device
+variant	metal2vulkan::error::RefusalBasis::MetalDocumented	MetalDocumented
+variant	metal2vulkan::error::RefusalBasis::MetalMeasured	MetalMeasured
+variant	metal2vulkan::error::RefusalBasis::Ours	Ours
 variant	metal2vulkan::error::Retry::Later	Later
 variant	metal2vulkan::error::Retry::Never	Never
 variant	metal2vulkan::error::RuntimeInput::AlphaTest	AlphaTest

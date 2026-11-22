@@ -19,7 +19,7 @@ fn each_refusal_enum_answers_its_declared_basis() {
 }
 
 /// A refusal enum's variant answers its own; a device that lacks the floor's mechanism `Device`;
-/// a translator's refusal, a failed call and the consumer's own state none.
+/// a cancelled translation, a failed call and the consumer's own state none.
 #[test]
 fn an_error_answers_the_basis_of_what_it_carries() {
     let cases = [
@@ -34,4 +34,47 @@ fn an_error_answers_the_basis_of_what_it_carries() {
     for (error, basis) in cases {
         assert_eq!(error.basis(), basis, "{error}");
     }
+}
+
+/// A translator's refusal answers the basis of what it needs, whatever its feature; its cap, its
+/// deadline and its defect are ours; malformed input refuses no valid program.
+#[test]
+fn a_translation_error_answers_the_basis_of_what_it_needs() {
+    use metal2vulkan::device::VkFeature;
+    use metal2vulkan::error::{Capability, Feature, Limit, Needs, Unsupported};
+    let refusal = |needs| {
+        let mut refusal = Unsupported::not_implemented(Feature::Recursion);
+        refusal.needs = needs;
+        Error::translation(Translator::Unsupported(refusal))
+    };
+    let depth_clamp = vec![vec![Capability::Feature(VkFeature::DepthClamp)]];
+    let cases = [
+        (refusal(Needs::AnyOf(depth_clamp)), Some(Device)),
+        (
+            refusal(Needs::DeviceCapability("sparseBinding")),
+            Some(Device),
+        ),
+        (refusal(Needs::NotRepresentable), Some(Device)),
+        (refusal(Needs::NotImplemented), Some(Ours)),
+        (refusal(Needs::MetalGpuFamily(1010)), Some(MetalDocumented)),
+        (
+            refusal(Needs::MetalRefuses(&["Apple M3 Max, macOS 27.0.1"])),
+            Some(MetalMeasured),
+        ),
+        (
+            Error::translation(Translator::LimitExceeded(Limit::SpirvWords)),
+            Some(Ours),
+        ),
+    ];
+    for (error, basis) in cases {
+        assert_eq!(error.basis(), basis, "{error}");
+    }
+    let Err(malformed) = metal2vulkan::library::Library::parse(b"not a library") else {
+        panic!("bytes that are no library parsed");
+    };
+    assert!(
+        matches!(malformed, Translator::InvalidInput(_)),
+        "{malformed}"
+    );
+    assert_eq!(Error::translation(malformed).basis(), None);
 }
