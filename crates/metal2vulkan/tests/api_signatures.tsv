@@ -1487,6 +1487,7 @@ field	metal2vulkan-runtime::Metrics.consumer_allocation_nanos	pub consumer_alloc
 field	metal2vulkan-runtime::Metrics.consumer_allocations	pub consumer_allocations: u64
 field	metal2vulkan-runtime::Metrics.creations_before_seed	pub creations_before_seed: u64
 field	metal2vulkan-runtime::Metrics.dispatches_without_effects	pub dispatches_without_effects: u64
+field	metal2vulkan-runtime::Metrics.emulated_simdgroup_dispatches	pub emulated_simdgroup_dispatches: u64
 field	metal2vulkan-runtime::Metrics.event_holds	pub event_holds: [u64; STAGE_BUCKETS]
 field	metal2vulkan-runtime::Metrics.export_allocations	pub export_allocations: Timed
 field	metal2vulkan-runtime::Metrics.export_claims	pub export_claims: Timed

@@ -1142,7 +1142,7 @@ impl ComputeCommandEncoder {
             .ok_or(Error::Refused(Refusal::ThreadgroupSize { size, max }))
         };
         let ids = &state.numbered.ids;
-        match (direct, grid) {
+        let recorded = match (direct, grid) {
             (Some((threads, groups, ragged)), _) => {
                 // A count past the device's limit on an axis is split, and so is one whose slots
                 // of the private arena pass its budget (`crate::arena`): each piece starts at its
@@ -1212,8 +1212,12 @@ impl ComputeCommandEncoder {
                     &Launch::Indirect(buffer, offset),
                 )
             }
-            (None, Grid::Direct(_)) => Ok(()),
+            (None, Grid::Direct(_)) => return Ok(()),
+        };
+        if recorded.is_ok() && module == Module::Emulated {
+            recording(&mut self.building).count(Metric::EmulatedSimdgroupDispatches);
         }
+        recorded
     }
 
     /// Whether a dispatch of a kernel of `interface` reaches a bound buffer that has a device

@@ -212,6 +212,8 @@ pub(crate) enum Metric {
     DispatchesWithoutEffects,
     /// [`Metrics::private_arena_dispatches`].
     PrivateArenaDispatches,
+    /// [`Metrics::emulated_simdgroup_dispatches`].
+    EmulatedSimdgroupDispatches,
     /// [`Metrics::private_arena_pieces`].
     PrivateArenaPieces,
     /// [`Metrics::private_arena_blocks`].
@@ -300,6 +302,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::BlocksMade,
     Metric::DispatchesWithoutEffects,
     Metric::PrivateArenaDispatches,
+    Metric::EmulatedSimdgroupDispatches,
     Metric::PrivateArenaPieces,
     Metric::PrivateArenaBlocks,
     Metric::Translations,
@@ -641,6 +644,7 @@ struct Atomics {
     maker_yield_nanos: AtomicU64,
     dispatches_without_effects: AtomicU64,
     private_arena_dispatches: AtomicU64,
+    emulated_simdgroup_dispatches: AtomicU64,
     private_arena_pieces: AtomicU64,
     private_arena_blocks: AtomicU64,
     shared_long_reuses: AtomicU64,
@@ -832,6 +836,7 @@ impl Counters {
             Metric::BlocksMade => &a.blocks_made,
             Metric::DispatchesWithoutEffects => &a.dispatches_without_effects,
             Metric::PrivateArenaDispatches => &a.private_arena_dispatches,
+            Metric::EmulatedSimdgroupDispatches => &a.emulated_simdgroup_dispatches,
             Metric::PrivateArenaPieces => &a.private_arena_pieces,
             Metric::PrivateArenaBlocks => &a.private_arena_blocks,
             Metric::Translations => &a.translations,
@@ -1649,6 +1654,7 @@ impl Counters {
             allocation_map_refusals: a.allocation_map_refusals.load(Relaxed),
             dispatches_without_effects: a.dispatches_without_effects.load(Relaxed),
             private_arena_dispatches: a.private_arena_dispatches.load(Relaxed),
+            emulated_simdgroup_dispatches: a.emulated_simdgroup_dispatches.load(Relaxed),
             private_arena_pieces: a.private_arena_pieces.load(Relaxed),
             private_arena_blocks: a.private_arena_blocks.load(Relaxed),
             translations: a.translations.load(Relaxed),
@@ -2205,6 +2211,10 @@ pub struct Metrics {
     /// translator's floor (`crate::arena`). No Metal counterpart: Metal holds such a kernel's
     /// private memory itself.
     pub private_arena_dispatches: u64,
+    /// Dispatches that ran a kernel's emulated-SIMD-group module: a threadgroup not whole groups
+    /// of the width its own module runs, as 80 threads, or 32 on 64-lane subgroups. No Metal
+    /// counterpart: Metal runs any threadgroup size at its own SIMD width.
+    pub emulated_simdgroup_dispatches: u64,
     /// The `vkCmdDispatch`es those recorded: one each, and one more for each piece past the first
     /// of a dispatch whose slots passed the arena's budget.
     pub private_arena_pieces: u64,

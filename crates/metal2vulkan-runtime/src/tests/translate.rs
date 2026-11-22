@@ -1459,6 +1459,8 @@ mod on_device {
                 encoder.set_compute_pipeline_state(&state).expect("a state");
                 encoder.set_buffer(Some(&a), 0, 0).expect("a buffer");
                 encoder.set_buffer(Some(&out), 0, 1).expect("a buffer");
+                let emulated = || device.counters().metrics().emulated_simdgroup_dispatches;
+                let before = emulated();
                 encoder
                     .dispatch_threadgroups([GROUPS, 1, 1], [size, 1, 1])
                     .unwrap_or_else(|error| panic!("{name}: threadgroups of {size}: {error}"));
@@ -1466,6 +1468,13 @@ mod on_device {
                 command_buffer.commit().expect("a commit");
                 finished(name, &command_buffer);
                 assert_eq!(command_buffer.error(), None, "{name}");
+                let partial = (interface.multiples.iter()).any(|&width| size % width.max(1) != 0);
+                assert_eq!(
+                    emulated() - before,
+                    u64::from(partial),
+                    "{name}: threadgroups of {size}, whole groups of {:?}: emulated dispatches",
+                    interface.multiples
+                );
                 let mut want = Vec::new();
                 for t in 0..threads {
                     let first = t - t % size;

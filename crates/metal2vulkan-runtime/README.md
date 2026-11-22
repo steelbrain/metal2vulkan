@@ -208,7 +208,8 @@ the copies of textures over a buffer that no linear image holds are split by cau
 out a device address of, each counted at the first (`exported_blocks_addressed`, the exported
 block's rule in Textures below), 0 where none went out; the pipeline cache's replacements past its
 bound and its blob writes skipped past it (`pipeline_caches_replaced`,
-`pipeline_cache_writes_skipped`, The cache directory below);
+`pipeline_cache_writes_skipped`, The cache directory below); the dispatches that ran a kernel's
+emulated-SIMD-group module (`emulated_simdgroup_dispatches`, Compute pipeline states below);
 `gauges()` are live counts per kind of resource, every one zero after teardown, and
 `handles_out`, 1 while a handle of the device is out (Teardown). They are relaxed atomics, always
 on. What an encoder's commands count arrives when the encoder ends.
@@ -2590,7 +2591,8 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   80 or of 1 thread, or of 32 on a device of 64-lane subgroups) runs it at its own size, the last
   SIMD group partly filled, as Metal runs it. The state's creation lowers it, through the cache
   directory, whether or not a dispatch needs it. In a threadgroup of one thread the module's
-  exchanges pass no barrier.
+  exchanges pass no barrier. `Metrics::emulated_simdgroup_dispatches` counts the dispatches that
+  ran it.
 - The dispatch region (two `uvec4`) gives every direct dispatch's kernel Metal's grid: its first
   threadgroup (0, or a split piece's), the threadgroup size packed as
   `(x-1) | (y-1) << 10 | (z-1) << 20`, and Metal's threads per grid; an indirect dispatch pushes a
