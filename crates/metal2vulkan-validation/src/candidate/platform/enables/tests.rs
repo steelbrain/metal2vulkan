@@ -195,7 +195,7 @@ fn a_member_the_vocabulary_does_not_name_carries_its_registry_name() {
             }
         }
     }
-    assert_eq!(unnamed, 10, "members the vocabulary does not name");
+    assert_eq!(unnamed, 12, "members the vocabulary does not name");
     // Every one of them is a name some committed capture states: a misspelled name would read as
     // a device that does not support the member, on every device.
     let captures: Vec<Capture> = committed_profiles()
