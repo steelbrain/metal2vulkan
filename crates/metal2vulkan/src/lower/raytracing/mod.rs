@@ -104,11 +104,11 @@ use crate::lower::select::{decl_name, param_binding, FamilyPlans, Plan, SelectCx
 use crate::lower::strategy::FamilyStrategy;
 use crate::memory::provenance::primitive_data_root;
 use crate::memory::provenance::{OffsetRange, Root};
-use crate::memory::views::{self, View, ViewKind};
+use crate::memory::views::{self, View};
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::{
-    AccessSet, BufferForm, BufferKind, BufferSlot, DescriptorView, SlotInterface, Window,
+    AccessSet, BufferForm, BufferKind, BufferSlot, SlotInterface, Window,
 };
 use crate::pipeline::sym::{
     AccelerationStructureLevel, PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, Stage,
@@ -299,7 +299,7 @@ pub fn slot_interfaces(plan: &Plan) -> impl Iterator<Item = (SlotRef, SlotInterf
             SlotInterface::Buffer(BufferSlot {
                 access: AccessSet::READ,
                 window: Window::Whole,
-                form: BufferForm::Descriptor(DescriptorView::Storage),
+                form: BufferForm::Descriptor,
                 kind: BufferKind::IntersectionFunctionTable,
             }),
         )
@@ -314,7 +314,7 @@ pub fn declare(
 ) -> BResult<Declared> {
     let mut d = Declared::default();
     for &slot in &plan.families.raytracing.tables {
-        let view = views::declare(mb, table_slot(plan.stage, slot), ViewKind::Storage)?;
+        let view = views::declare(mb, table_slot(plan.stage, slot))?;
         d.tables.insert(slot, view);
     }
     for (slot, level) in &plan.families.raytracing.structures {

@@ -30,7 +30,7 @@ use crate::library::{FunctionConstantValues, Library};
 use crate::lower::select::LowerInputs;
 use crate::pipeline::compile::{compile_bitcode, compile_bitcode_linked, EntryRef, LinkedSource};
 use crate::pipeline::facts::RuntimeFact;
-use crate::pipeline::interface::{AccessSet, BufferForm, DescriptorView, SlotInterface, Window};
+use crate::pipeline::interface::{AccessSet, BufferForm, SlotInterface, Window};
 use crate::pipeline::sym::{
     AccelerationStructureLevel, Axis, PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef,
     SpecKey, Stage,
@@ -409,11 +409,7 @@ fn an_intersection_function_table_is_read_per_candidate() {
             Some(SlotInterface::Buffer(b)) => {
                 assert_eq!(b.access, AccessSet::READ, "{stem}");
                 assert_eq!(b.window, Window::Whole, "{stem}");
-                assert_eq!(
-                    b.form,
-                    BufferForm::Descriptor(DescriptorView::Storage),
-                    "{stem}"
-                );
+                assert_eq!(b.form, BufferForm::Descriptor, "{stem}");
             }
             other => panic!("{stem}: the table's slot is {other:?}"),
         }

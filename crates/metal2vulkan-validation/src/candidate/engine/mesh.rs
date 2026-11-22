@@ -17,9 +17,7 @@
 //! ([`mesh_shape`]).
 
 use super::graphics::{self, ColorTarget, RenderFunction, RenderOutput, StageResources};
-use super::{
-    function_constants, require_case_families, resources, views_told_apart, BufferAddress,
-};
+use super::{function_constants, lengths_classed, require_case_families, resources, BufferAddress};
 use crate::acceptance::{MeshFunction, PipelineRequest, RequestFunction};
 use crate::case::{AuthoredCase, MeshGrid, OutputSelection, Stage};
 use crate::check::admission::{ExecutorError, NotSupported};
@@ -243,8 +241,8 @@ impl MeshTemplate {
 /// The `BindShape` the runtime binds `mesh`'s draw with on a device that has device addresses
 /// exactly when `addressed` and the range limits `ranges`: its own stage's buffers at their
 /// synthetic guest addresses (and, when `addressed`, a host address), textures and samplers
-/// ([`graphics::stage_table`]); a partner binds none; telling the executor's view base alignment
-/// apart and classing lengths under `ranges` ([`views_told_apart`]), so its plan is the runtime's
+/// ([`graphics::stage_table`]); a partner binds none; classing lengths under `ranges`
+/// ([`lengths_classed`]), so its plan is the runtime's
 /// of the same binds. What the compile worker compiles the draw for
 /// (`variants::compile_mesh_for_shape`).
 /// A case whose own function takes an argument buffer is not built here (`NotImplemented`).
@@ -280,7 +278,7 @@ pub fn mesh_shape(
         let table = graphics::stage_table(function, bound).map_err(ExecutorError::Failed)?;
         state.stages.insert(stage, table);
     }
-    Ok(views_told_apart(state, ranges).shape())
+    Ok(lengths_classed(state, ranges).shape())
 }
 
 /// The compile request for `mesh`'s pipeline for the bind shape `shape`, and its libraries in

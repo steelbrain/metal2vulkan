@@ -108,7 +108,7 @@ fn check_descriptor_only(a: &FunctionArtifact, p: &DeviceProfile, what: &str) {
     for (slot, s) in &a.interface.slots {
         if let SlotInterface::Buffer(b) = s {
             assert!(
-                matches!(b.form, BufferForm::Descriptor(_)),
+                matches!(b.form, BufferForm::Descriptor),
                 "{what}: {slot:?} is {:?}",
                 b.form
             );

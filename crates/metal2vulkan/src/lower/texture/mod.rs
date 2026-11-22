@@ -1306,8 +1306,7 @@ pub fn declare(
                 kind: crate::pipeline::sym::ResourceKind::TileMap,
                 index: s.slot.index,
             };
-            let view =
-                crate::memory::views::declare_at(mb, sym, crate::memory::views::ViewKind::Storage)?;
+            let view = crate::memory::views::declare_at(mb, sym)?;
             d.tile_maps.insert(*index, view);
         }
         if s.swizzle {

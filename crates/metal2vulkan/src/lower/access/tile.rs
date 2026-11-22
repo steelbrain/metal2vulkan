@@ -1042,8 +1042,7 @@ pub fn declare(mb: &mut ModuleBuilder, access: &super::AccessPlan) -> BResult<Ti
             kind: ResourceKind::Synthetic(SyntheticBinding::TileMemory),
             index: 0,
         };
-        let view =
-            crate::memory::views::declare_at(mb, slot, crate::memory::views::ViewKind::Storage)?;
+        let view = crate::memory::views::declare_at(mb, slot)?;
         let u32_ = mb.ty(SType::Int {
             width: 32,
             signed: false,
@@ -1506,9 +1505,7 @@ fn memory_pass<'c>(cx: &mut EmitCx<'c>, fb: &mut FunctionBuilder<'_>, pass: Pass
         let next = fb.binary(BinOp::IAdd, k, n)?;
         fb.store(counter, next, MemAccess::default())?;
         let at = fb.binary(BinOp::IAdd, base, k)?;
-        let Some(stored) = crate::memory::views::word_ptr(fb, view, at)? else {
-            return Err(cx.fail("a tile memory buffer that is not a storage view"));
-        };
+        let stored = crate::memory::views::word_ptr(fb, view, at)?;
         let mut mem = ArenaMem(arena, WordOps::of(coherence));
         match pass {
             Pass::Load => {

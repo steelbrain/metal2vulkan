@@ -28,10 +28,8 @@ use crate::vk;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BindingPlan {
     /// The variant the shape requires: the storage-image choices, `BufferRangeLimit` device-address
-    /// slots, vertex buffers fixed-function input cannot fetch as bound, a vertex function's
-    /// dropped `Layer` output in a pass of one layer, and the read-only slots Profile F's per-stage
-    /// storage-buffer fallback must keep as storage views where the shape binds more than a uniform
-    /// view may reach. Empty on the common path; otherwise the consumer compiles the pipeline with
+    /// slots, vertex buffers fixed-function input cannot fetch as bound, and a vertex function's
+    /// dropped `Layer` output in a pass of one layer. Empty on the common path; otherwise the consumer compiles the pipeline with
     /// this variant (`Device::compile_render_variant` for a render pipeline) and plans that
     /// pipeline, whose plan for the same shape states the same key. The descriptors are those of
     /// the pipeline planned; a draw of a plan whose variant pulls a vertex buffer the pipeline
@@ -457,17 +455,13 @@ pub(crate) struct PlannedBuffer {
     pub access: AccessSet,
     /// `(set, binding)` of a descriptor-form slot.
     pub binding: Option<(u32, u32)>,
-    /// The descriptor base alignment: the view's `min*BufferOffsetAlignment`, at least 16
+    /// The descriptor base alignment: `minStorageBufferOffsetAlignment`, at least 16
     /// (`views::base_alignment`).
     pub alignment: u64,
-    /// The view's `max*BufferRange`.
+    /// `maxStorageBufferRange`.
     pub max_range: u64,
     /// What the shape binds at the slot.
     pub bound: BoundKind,
-    /// A `device` slot read through a uniform view: no written slot may be bound overlapping
-    /// its window (`RuntimeFact::UniformViewAliasing`).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub disjoint: bool,
 }
 
 /// What a shape binds at a buffer slot.
@@ -950,7 +944,6 @@ pub enum UseTarget {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AccessClass {
     Storage,
-    Uniform,
     Sampled,
     StorageImage,
     VertexInput,

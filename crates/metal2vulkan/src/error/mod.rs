@@ -1350,7 +1350,7 @@ pub enum DynamicLibraryProblem {
 /// A binder planning or instantiation error. A pipeline's `plan` sees only the pipeline, the
 /// device, and the `BindShape`, so a planning error is permanent for its `(PipelineKey,
 /// BindShape)` pair. An instantiation error can also depend on the dispatch or draw and on the
-/// bind state's per-draw values (`MissingStageInRegion`, `UniformViewAliased`, the patch-draw
+/// bind state's per-draw values (`MissingStageInRegion`, the patch-draw
 /// errors, a descriptor range or texel buffer beyond its limit, ...), so it is not permanent for
 /// the pair. `NeedsVariant` names the pipeline a dispatch or draw runs on instead.
 #[non_exhaustive]
@@ -1425,12 +1425,6 @@ pub enum BindError {
     /// stepping by thread position, or `[[grid_origin]]` or `[[grid_size]]`) and the encoder
     /// never set one (`setStageInRegion:`): what Metal reads then is not established.
     MissingStageInRegion,
-    /// A `device` buffer slot the pipeline reads through a uniform view (Profile F's per-stage
-    /// storage-buffer fallback, `RuntimeFact::UniformViewAliasing`) is bound where a buffer slot
-    /// the pipeline writes (`written`) may write: their Metal windows overlap. A uniform view need
-    /// not observe the dispatch's or draw's own writes, so nothing is bound. Depends on the
-    /// per-draw Metal addresses, not on the shape.
-    UniformViewAliased { slot: SlotRef, written: SlotRef },
     /// A draw Metal does not make with this pipeline: patches (`patches`) with a pipeline whose
     /// vertex function is not post-tessellation, or primitives with one whose vertex function is.
     InvalidDrawKind { patches: bool },

@@ -7,7 +7,7 @@
 //! has no acceleration structures and reports every ray query instruction unmodelled.
 
 use super::*;
-use crate::memory::views::{self, View, ViewKind};
+use crate::memory::views::{self, View};
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::spirv::builder::ModuleBuilder;
 use crate::spirv::interp::{self, Buffer, Config, Resources};
@@ -30,9 +30,7 @@ fn word(fb: &mut FunctionBuilder<'_>, view: View, i: u32) -> SValue {
 /// Store `x` (a `u32`) to word `i` of `view`.
 fn put(fb: &mut FunctionBuilder<'_>, view: View, i: u32, x: SValue) {
     let w = u32c(fb, i).expect("index");
-    let p = views::word_ptr(fb, view, w)
-        .expect("pointer")
-        .expect("storage");
+    let p = views::word_ptr(fb, view, w).expect("pointer");
     fb.store(p, x, MemAccess::default()).expect("store");
 }
 
@@ -44,8 +42,8 @@ fn bit(fb: &mut FunctionBuilder<'_>, c: SValue) -> SValue {
 /// A one-invocation compute module around `body`, reading buffer 0 and writing buffer 1.
 fn harness(body: impl FnOnce(&mut FunctionBuilder<'_>, View, View)) -> TypedModule {
     let mut mb = ModuleBuilder::new();
-    let input = views::declare_at(&mut mb, kslot(0), ViewKind::Storage).expect("input");
-    let out = views::declare_at(&mut mb, kslot(1), ViewKind::Storage).expect("out");
+    let input = views::declare_at(&mut mb, kslot(0)).expect("input");
+    let out = views::declare_at(&mut mb, kslot(1)).expect("out");
     let void = mb.ty(SType::Void).expect("void");
     let mut f = mb.function(void).expect("function");
     body(&mut f, input, out);

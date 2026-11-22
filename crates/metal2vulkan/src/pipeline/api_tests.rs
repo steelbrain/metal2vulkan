@@ -215,7 +215,6 @@ mod serde_round_trips {
             emulated_simdgroups: true,
             one_row: true,
             unit_axes: 6,
-            storage_view_slots: BTreeSet::from([buffer(3)]),
             srgb_textures: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 4)]),
             ycbcr_in_place: BTreeSet::from([slot(Stage::Kernel, SlotClass::Texture, 7)]),
             ycbcr_planes_sampled: BTreeMap::from([(
@@ -306,7 +305,6 @@ mod serde_round_trips {
                 d.index_buffer_index = 6;
                 d
             }),
-            storage_view_slots: BTreeSet::from([buffer(4)]),
             signed_color_attachments: BTreeSet::from([0, 6]),
             tile_attachments: Some(BTreeMap::from([
                 (0, metal::PixelFormat::RGBA16Float),
@@ -569,7 +567,7 @@ mod serde_round_trips {
             SlotInterface::Buffer(BufferSlot {
                 access: AccessSet::READ_WRITE,
                 window: Window::Bounded { start: -8, len: 24 },
-                form: BufferForm::Descriptor(DescriptorView::UniformVec4),
+                form: BufferForm::Descriptor,
                 kind: BufferKind::VisibleFunctionTable,
             }),
         );
@@ -847,13 +845,10 @@ mod bind_serde_round_trips {
             },
         );
         table.threadgroup_lengths.insert(0, 1024);
-        table.at_bind_views = 0b101;
         let mut stages = BTreeMap::new();
         stages.insert(Stage::Kernel, table);
         round_trip(&BindState {
             stages,
-            view_base_alignment: 64,
-            uniform_views_at_residual: true,
             used_resources: vec![UsedResource {
                 class: ResourceClass::Heap,
                 gpu_address: Some(0x2_0000_0000),

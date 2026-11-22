@@ -107,7 +107,7 @@ use crate::memory::arena::{Arena, ArenaMem};
 use crate::memory::contain::{self, Check};
 use crate::memory::leaf::{k32, WordOps};
 use crate::memory::provenance::{PrivForm, Repr};
-use crate::memory::views::{self, ViewKind};
+use crate::memory::views;
 use crate::pipeline::sym::{PushField, Stage};
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn, LoopFn, LoopSpec};
 use crate::spirv::builder::FunctionBuilder;
@@ -120,7 +120,7 @@ use crate::spirv::ir::{
 
 use super::emit::{prepare, Mem, Prepared, ViewMem};
 use super::local::{self, LocalAccess, LocalPtr};
-use super::{not_lowered, refuse, static_roots, view_kind, AccessPlan, BufferReach, Target};
+use super::{not_lowered, refuse, static_roots, AccessPlan, BufferReach, Target};
 use crate::error::LowerFamily;
 
 mod narrow;
@@ -683,9 +683,6 @@ pub fn select(
                 .slots
                 .get(t.slot)
                 .ok_or_else(|| cx.invariant("an atomic target names a missing slot"))?;
-            if view_kind(cx.profile, plan) != ViewKind::Storage {
-                return Err(cx.invariant("an atomic through a uniform view"));
-            }
             let slot = plan.slot;
             cx.push.insert(PushField::SlotBindOffset(slot));
             super::note_variable(cx, slot, fixed, false);
@@ -1081,9 +1078,7 @@ fn on_target(fb: &mut FunctionBuilder<'_>, p: Prepared, o: Op) -> BResult<Option
     let two = k32(fb, 2)?;
     let word = fb.binary(BinOp::ShiftRightLogical, p.off, two)?;
     let ptr = match (p.mem, o.typed) {
-        (Mem::View(ViewMem(view, ..)), None) => {
-            views::word_ptr(fb, view, word)?.ok_or_else(dangling)?
-        }
+        (Mem::View(ViewMem(view, ..)), None) => views::word_ptr(fb, view, word)?,
         (Mem::Psb(m), typed) => {
             let pointee = match typed {
                 Some(t) => t,

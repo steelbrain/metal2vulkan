@@ -297,7 +297,7 @@ fn lookup_module(int64: bool, form: Lookup) -> crate::spirv::ir::TypedModule {
     };
     let mut b = ModuleBuilder::new();
     let t = declare_table(&mut b, sym(0), int64).expect("table");
-    let io = views::declare_at(&mut b, sym(1), views::ViewKind::Storage).expect("io");
+    let io = views::declare_at(&mut b, sym(1)).expect("io");
     let search = define_lookup(&mut b, t, form).expect("search");
     let void = b.ty(Type::Void).expect("void");
     let mut f = b.function(void).expect("function");
@@ -311,9 +311,7 @@ fn lookup_module(int64: bool, form: Lookup) -> crate::spirv::ir::TypedModule {
             .expect("call")
             .expect("the search returns the element");
         let at = k32(&mut f, 2 * KEYS + i).expect("k");
-        let p = views::word_ptr(&mut f, io, at)
-            .expect("ptr")
-            .expect("a storage view is writable");
+        let p = views::word_ptr(&mut f, io, at).expect("ptr");
         f.store(p, e, MemAccess::default()).expect("store");
     }
     f.ret(None).expect("ret");

@@ -6,7 +6,7 @@ use crate::air::ir::InstId;
 use crate::lower::emit::EmitCx;
 use crate::memory::contain::{self, Check};
 use crate::memory::leaf::{self, k32, u32_op, Leaf, Units, WordMem, WordOps};
-use crate::memory::views::{self, UnitViews, View, ViewKind};
+use crate::memory::views::{self, UnitViews, View};
 use crate::pipeline::sym::PushField;
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn};
 use crate::spirv::builder::FunctionBuilder;
@@ -22,8 +22,7 @@ use super::{
 };
 
 /// The word memory of one descriptor view, loaded and stored with memory operands (a coherence,
-/// and `Volatile`; a uniform view's read-only words stay plain: no agent writes them while the
-/// dispatch runs). Sub-word stores are two relaxed device-scope word atomics, except where the
+/// and `Volatile`). Sub-word stores are two relaxed device-scope word atomics, except where the
 /// slot's narrow views hold the leaf's units; a 16-byte (8-byte) leaf at an offset proven a
 /// multiple of its size is one `uvec4` (`uvec2`) where the slot has that view.
 #[derive(Clone, Copy, Debug)]
@@ -55,11 +54,7 @@ impl WordMem for ViewMem {
         index: SValue,
     ) -> BResult<SValue> {
         let view = self.vec(lanes)?;
-        // A uniform view's read-only vectors are read plainly, as its words are.
-        let access = match view.class {
-            crate::spirv::ir::StorageClass::Uniform => MemAccess::default(),
-            _ => self.1.access(fb, MemAccess::default(), false)?,
-        };
+        let access = self.1.access(fb, MemAccess::default(), false)?;
         views::read_vec(fb, view, index, access)
     }
 
@@ -103,16 +98,16 @@ impl WordMem for ViewMem {
     }
 
     fn read(&mut self, fb: &mut FunctionBuilder<'_>, word: SValue) -> BResult<SValue> {
-        if self.1 == WordOps::default() || self.0.kind != ViewKind::Storage {
+        if self.1 == WordOps::default() {
             return views::read_word(fb, self.0, word);
         }
-        let p = storage_ptr(fb, self.0, word)?;
+        let p = views::word_ptr(fb, self.0, word)?;
         let access = self.1.access(fb, MemAccess::default(), false)?;
         fb.load(p, access)
     }
 
     fn write(&mut self, fb: &mut FunctionBuilder<'_>, word: SValue, value: SValue) -> BResult<()> {
-        let p = storage_ptr(fb, self.0, word)?;
+        let p = views::word_ptr(fb, self.0, word)?;
         let access = self.1.access(fb, MemAccess::default(), true)?;
         fb.store(p, value, access)
     }
@@ -124,23 +119,12 @@ impl WordMem for ViewMem {
         mask: SValue,
         bits: SValue,
     ) -> BResult<()> {
-        let p = storage_ptr(fb, self.0, word)?;
+        let p = views::word_ptr(fb, self.0, word)?;
         let keep = fb.unary(UnOp::Not, mask)?;
         let clear = fb.binary(BinOp::BitwiseOr, keep, bits)?;
         fb.atomic(AtomicOp::And, p, Scope::Device, Semantics::RELAXED, clear)?;
         fb.atomic(AtomicOp::Or, p, Scope::Device, Semantics::RELAXED, bits)?;
         Ok(())
-    }
-}
-
-/// A word pointer of a storage view. Stores through a uniform view are refused by selection, so a
-/// missing pointer is an internal invariant failure.
-fn storage_ptr(fb: &mut FunctionBuilder<'_>, view: View, word: SValue) -> BResult<SValue> {
-    match views::word_ptr(fb, view, word)? {
-        Some(p) => Ok(p),
-        None => Err(crate::spirv::error::BuildError::Dangling(
-            crate::spirv::error::Dangling::Global(view.global),
-        )),
     }
 }
 
@@ -377,32 +361,12 @@ pub(super) fn prepare(
         return Err(cx.fail("an access names an undeclared slot view"));
     };
     let residual = cx.push_field(fb, PushField::SlotBindOffset(choice.slot))?;
-    let shifted = u32_op(fb, BinOp::IAdd, residual, m)?;
-    // Where the binder starts a view's range at the bind offset (`RangeAtBindOffset`: a uniform
-    // view's, or a storage view's where the plan declares it), the residual is 0: the offset alone,
-    // a constant for a constant member, which a driver can push, and no push word read.
-    let off = match cx
-        .decl
-        .families
-        .access
-        .at_bind
-        .get(t.slot)
-        .copied()
-        .flatten()
-    {
-        Some(at_bind) => fb.select(at_bind, m, shifted)?,
-        None => shifted,
-    };
-    let inb = match (t.check, view.kind) {
-        (Check::None, _) => None,
-        (Check::InShader, ViewKind::Storage) => match views::storage_bytes(fb, view)? {
-            Some(size) => Some(contain::in_bounds(fb, off, size, u64::from(n))?),
-            None => return Err(cx.fail("a storage view without a size")),
-        },
-        (Check::InShader, ViewKind::UniformWords { .. } | ViewKind::UniformVec4 { .. }) => {
-            // Selection gives a uniform view only to an encoding without checks: the range bound
-            // behind it may be shorter than its declared size.
-            return Err(cx.fail("an in-shader check of a uniform view"));
+    let off = u32_op(fb, BinOp::IAdd, residual, m)?;
+    let inb = match t.check {
+        Check::None => None,
+        Check::InShader => {
+            let size = views::storage_bytes(fb, view)?;
+            Some(contain::in_bounds(fb, off, size, u64::from(n))?)
         }
     };
     let (off, guard_store) = match inb {

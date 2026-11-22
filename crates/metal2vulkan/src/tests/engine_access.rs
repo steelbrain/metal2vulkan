@@ -9,9 +9,8 @@
 //!   encoding no access traps, an in-bounds access is exact (a `half` NaN loaded a NaN where the
 //!   module reads a `half` by the device's widening, `PrecisionNote::NativeNanEncoding`), and an
 //!   out-of-bounds load is 0 and an out-of-bounds store changes nothing.
-//! - Slot forms: the `constant` fixture gets a uniform view (`u32[]` with standard layout,
-//!   `uvec4[]` without) with robust descriptors and a storage view in shader, where an allocation
-//!   shorter than the window is contained; several slots are storage views decorated `Aliased`, a
+//! - Slot forms: the `constant` fixture gets a storage view, where an allocation shorter than the
+//!   window is contained in shader; several slots are storage views decorated `Aliased`, a
 //!   pointer selected between two slots is dispatched by root, and a `Whole` window declares
 //!   `BufferRangeLimit`.
 //! - Device addresses (Profile A): a `BufferRangeLimit` variant and the per-stage
@@ -27,7 +26,7 @@
 //!
 //! `llvm-as` assembles the fixtures; without it the tests skip visibly.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -43,8 +42,8 @@ use crate::lower::select::{select, LowerInputs, Plan};
 use crate::lower::simd::WidestPin;
 use crate::memory::static_root::analyze_memory;
 use crate::pipeline::compile::{compile_bitcode, plan_bitcode, EntryRef};
-use crate::pipeline::facts::{RuntimeFact, UniformViewChoice};
-use crate::pipeline::interface::{BufferForm, DescriptorView, PushLoc, SlotInterface, Window};
+use crate::pipeline::facts::RuntimeFact;
+use crate::pipeline::interface::{BufferForm, PushLoc, SlotInterface, Window};
 use crate::pipeline::sym::{
     Axis, PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage, Symbol,
 };
@@ -53,9 +52,7 @@ use crate::pipeline::testing::{
     AssembleError,
 };
 use crate::spirv::interp::{run, Buffer, Config, InterpError, Resources};
-use crate::spirv::ir::{
-    ConstBits, ConstKind, GlobalKind, Inst, StorageClass, Type, TypedModule, ValueOrigin,
-};
+use crate::spirv::ir::{GlobalKind, TypedModule};
 use crate::spirv::verify::verify;
 
 /// Profiles with and without 64-bit integers and 8/16-bit storage.
@@ -65,9 +62,8 @@ fn policy() -> DevicePolicy {
     DevicePolicy::RESIDENT_TABLES
 }
 
-/// Committed profile `stem`, optionally with buffer robustness disabled (the in-shader encoding)
-/// and optionally without `uniformBufferStandardLayout`.
-fn profile_with(stem: &str, robust: bool, standard_layout: bool) -> DeviceProfile {
+/// Committed profile `stem`, optionally with buffer robustness disabled (the in-shader encoding).
+fn profile_with(stem: &str, robust: bool) -> DeviceProfile {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles")
         .join(format!("{stem}.json"));
@@ -76,10 +72,6 @@ fn profile_with(stem: &str, robust: bool, standard_layout: bool) -> DeviceProfil
     if !robust {
         desc.features.remove(&VkFeature::RobustBufferAccess);
         desc.features.remove(&VkFeature::RobustBufferAccess2);
-    }
-    if !standard_layout {
-        desc.features
-            .remove(&VkFeature::UniformBufferStandardLayout);
     }
     Device::from_queries(desc, policy())
         .expect("device")
@@ -179,7 +171,7 @@ fn encodings() -> Vec<(String, DeviceProfile)> {
         for robust in [true, false] {
             out.push((
                 format!("{stem} robust={robust}"),
-                profile_with(stem, robust, true),
+                profile_with(stem, robust),
             ));
         }
     }
@@ -256,352 +248,11 @@ fn a_byte_store_at_the_end_preserves_its_neighbours() {
     }
 }
 
-/// The `constant` fixture's slot is a uniform view (`u32[]` with `uniformBufferStandardLayout`,
-/// `uvec4[]` without) and reads the last byte exactly.
-#[test]
-fn a_bounded_constant_buffer_is_a_uniform_view() {
-    let Some(bc) = assemble_file("buffer_end_byte_load_constant") else {
-        return;
-    };
-    let data = [9u8, 8, 7, 6, 5, 0xC3];
-    for stem in PROFILES {
-        for standard in [true, false] {
-            // Robust descriptors only: the in-shader encoding uses a storage view.
-            let what = format!("{stem} standard={standard}");
-            let p = profile_with(stem, true, standard);
-            let a = compile(&bc, "buffer_end_byte_load_constant", &p)
-                .unwrap_or_else(|e| panic!("{what}: {e}"));
-            let form = match a.interface.slots.get(&sref(0)) {
-                Some(SlotInterface::Buffer(b)) => b.form,
-                other => panic!("{what}: {other:?}"),
-            };
-            let want = if standard {
-                DescriptorView::UniformWords
-            } else {
-                DescriptorView::UniformVec4
-            };
-            assert_eq!(form, BufferForm::Descriptor(want), "{what}");
-            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            let (plan, m) = typed_module(&bc, "buffer_end_byte_load_constant", &p).expect("module");
-            for r in [0u32, 4] {
-                // The uniform view spans `uniform_range(1, align)` bytes. The interpreter models
-                // no robustness, so this in-bounds run binds that much.
-                let mut ubo = bound(0, r, &data, 0x44);
-                ubo.bytes.resize(ubo.bytes.len().max(512), 0x44);
-                let res = Resources {
-                    buffers: vec![ubo, bound(1, 0, &[0; 4], 0)],
-                    push: push_bytes(&plan, &[(0, r)]),
-                    spec: Default::default(),
-                };
-                let out = run(&m, &Config::default(), res).expect("run");
-                assert_eq!(out.buffers[1][..4], [0xC3, 0, 0, 0], "{what} r={r}");
-            }
-        }
-    }
-}
-
-/// A uniform view's slot declares its `RangeAtBindOffset` specialization: where the binder states
-/// the range starts at the bind offset, the read takes the Metal offset alone, whatever the
-/// residual pushed (an alignment-checked binder pushes 0 there); elsewhere the residual plus the
-/// offset, as before. With `uniformBufferStandardLayout` (`u32[]`) and without (`uvec4[]`).
-#[test]
-fn a_uniform_view_read_at_its_bind_offset_drops_the_residual() {
-    let Some(bc) = assemble_file("buffer_end_byte_load_constant") else {
-        return;
-    };
-    let data = [9u8, 8, 7, 6, 5, 0xC3];
-    let key = SpecKey::RangeAtBindOffset(sref(0));
-    for stem in PROFILES {
-        for standard in [true, false] {
-            let what = format!("{stem} standard={standard}");
-            let p = profile_with(stem, true, standard);
-            let a = compile(&bc, "buffer_end_byte_load_constant", &p)
-                .unwrap_or_else(|e| panic!("{what}: {e}"));
-            assert!(a.interface.read_keys().contains(&key), "{what}");
-            let (plan, m) = typed_module(&bc, "buffer_end_byte_load_constant", &p).expect("module");
-            // The data at byte 0, a residual of 8 pushed: byte 5 when the range starts at the bind
-            // offset, byte 13 (the padding) when it does not.
-            for (at_bind, want) in [(1u64, 0xC3u8), (0, 0x44)] {
-                let mut ubo = bound(0, 0, &data, 0x44);
-                ubo.bytes.resize(512, 0x44);
-                let res = Resources {
-                    buffers: vec![ubo, bound(1, 0, &[0; 4], 0)],
-                    push: push_bytes(&plan, &[(0, 8)]),
-                    spec: [(key, at_bind)].into(),
-                };
-                let out = run(&m, &Config::default(), res).expect("run");
-                assert_eq!(
-                    out.buffers[1][..4],
-                    [want, 0, 0, 0],
-                    "{what} at_bind={at_bind}"
-                );
-            }
-        }
-    }
-}
-
-/// The Iris Xe RPL-P under ANV, a profile with `uniformBufferStandardLayout`.
-const AT_BIND_PROFILE: &str = "intel-irisxe-rplp-anv";
-
-/// Whether a function of `m` reads push member `field` with the specialization constant of `key`
-/// at `value`: whether a value the member's word reaches is read by an instruction other than one
-/// that computes its own result from its operands alone (`spirv::dead::removable`, a result the
-/// word reaches in turn), or a terminator. An `OpSelect` on the key's constant reaches only the
-/// arm the value takes, as a driver folds it once the constant is specialized; then every value
-/// the word reaches is dead, and the driver's dead-code removal drops the push read itself.
-fn reads_push_word(m: &TypedModule, field: PushField, (key, value): (SpecKey, bool)) -> bool {
-    let Some(member) = m.push_members().iter().find(|p| p.field == field) else {
-        return false;
-    };
-    let member = ConstBits(u64::from(member.index));
-    let push = m.globals().iter().find(|g| g.kind == GlobalKind::PushBlock);
-    let push = push.map(|g| g.value);
-    let cond = m.consts().iter().find_map(|(c, d)| match &d.kind {
-        ConstKind::Spec { key: k, .. } if *k == key => m.const_value(c).ok(),
-        _ => None,
-    });
-    let is_member = |v| match m.value(v).map(|d| d.origin) {
-        Ok(ValueOrigin::Const(c)) => m.consts().scalar_bits(c) == Some(member),
-        _ => false,
-    };
-    // The arm `inst` reads its reached operands through: a select on the key's constant reads
-    // only the arm it takes.
-    let reads = |inst: &Inst, reached: &BTreeSet<crate::spirv::ids::Value>| match inst {
-        Inst::Select { cond: c, t, f } if Some(*c) == cond => {
-            reached.contains(if value { t } else { f })
-        }
-        _ => {
-            let mut any = false;
-            inst.for_each_value(|v| any |= reached.contains(&v));
-            any
-        }
-    };
-    let mut reached = BTreeSet::new();
-    loop {
-        let before = reached.len();
-        for blk in m.blocks() {
-            for phi in &blk.phis {
-                if phi.incoming.iter().any(|(v, _)| reached.contains(v)) {
-                    reached.insert(phi.result);
-                }
-            }
-            for node in &blk.insts {
-                let Some(r) = node.result else { continue };
-                let reaches = match &node.inst {
-                    Inst::AccessChain { base, indices, .. } if Some(*base) == push => {
-                        indices.first().is_some_and(|&i| is_member(i))
-                    }
-                    inst => reads(inst, &reached),
-                };
-                if reaches {
-                    reached.insert(r);
-                }
-            }
-        }
-        if reached.len() == before {
-            break;
-        }
-    }
-    m.blocks().iter().any(|blk| {
-        let mut term = false;
-        blk.term.for_each_value(|v| term |= reached.contains(&v));
-        term || blk.insts.iter().any(|node| {
-            let pure = node.result.is_some_and(|r| reached.contains(&r))
-                && crate::spirv::dead::removable(&node.inst);
-            reads(&node.inst, &reached) && !pure
-        })
-    })
-}
-
-/// On every tested profile, Intel's ANV on two GPUs among them, no storage view declares
-/// `RangeAtBindOffset`: the key a binder sets stays absent, and every access reads the slot's
-/// `SlotBindOffset` residual.
-#[test]
-fn a_storage_view_reads_its_residual() {
-    let Some(bc) = assemble_file("buffer_end_byte_load") else {
-        return;
-    };
-    let key = SpecKey::RangeAtBindOffset(sref(0));
-    let field = PushField::SlotBindOffset(sref(0));
-    for stem in PROFILES
-        .into_iter()
-        .chain([AT_BIND_PROFILE, "intel-irisxe-anv"])
-    {
-        for robust in [true, false] {
-            let what = format!("{stem} robust={robust}");
-            let p = profile_with(stem, robust, true);
-            let a =
-                compile(&bc, "buffer_end_byte_load", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
-            assert!(!a.interface.read_keys().contains(&key), "{what}");
-            let (_, m) = typed_module(&bc, "buffer_end_byte_load", &p).expect("module");
-            assert!(reads_push_word(&m, field, (key, true)), "{what}");
-        }
-    }
-}
-
-/// A kernel's `constant` slot reads through a uniform view, and its layout binds nothing for it
-/// but that view: on Intel's Iris Xe RPL-P under ANV, with `uniformBufferStandardLayout`
-/// (`u32[]`) and without (`uvec4[]`), the slot's form is the
-/// plain uniform view, its `RangeAtBindOffset` key is read, and set 0 holds the slot's uniform
-/// binding and the written slot's storage binding alone, numbered densely; a plan of nothing
-/// bound writes those two, a uniform buffer and a storage buffer, and nothing else in set 0. On
-/// every other tested profile the plan writes the two slots alone as well.
-#[test]
-fn a_kernel_constant_slot_binds_its_uniform_view_alone() {
-    use crate::bind::{BindState, DescriptorWrite};
-    use crate::pipeline::layout::BindingSource;
-    use crate::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, StageSource};
-    let entry = "buffer_end_byte_load_constant";
-    let Some(bc) = assemble_file(entry) else {
-        return;
-    };
-    for (standard, view) in [
-        (true, DescriptorView::UniformWords),
-        (false, DescriptorView::UniformVec4),
-    ] {
-        let what = format!("standard={standard}");
-        let p = profile_with(AT_BIND_PROFILE, true, standard);
-        let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
-        let form = |index: u32| match a.interface.slots.get(&sref(index)) {
-            Some(SlotInterface::Buffer(b)) => b.form,
-            other => panic!("{what}: slot {index}: {other:?}"),
-        };
-        assert_eq!(form(0), BufferForm::Descriptor(view), "{what}");
-        assert_eq!(
-            form(1),
-            BufferForm::Descriptor(DescriptorView::Storage),
-            "{what}"
-        );
-        let key = SpecKey::RangeAtBindOffset(sref(0));
-        assert!(a.interface.read_keys().contains(&key), "{what}");
-        let (table, _) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-        let set0: BTreeMap<ResourceSlot, (u32, u32)> = (table.bindings.iter())
-            .filter(|(_, at)| at.0 == 0)
-            .map(|(s, at)| (*s, *at))
-            .collect();
-        assert_eq!(
-            set0,
-            BTreeMap::from([(kslot(0), (0, 0)), (kslot(1), (0, 1))]),
-            "{what}"
-        );
-    }
-    let library = crate::library::Library::from_air(&bc).expect("library");
-    for stem in [AT_BIND_PROFILE].into_iter().chain(PROFILES) {
-        let device = super::engine_argument_tables::device(stem);
-        let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
-            FunctionDescriptor::new(library.function(entry).expect("entry")),
-        ));
-        let pipeline = device
-            .compile_compute_pipeline(&descriptor, &crate::budget::Budget::standard())
-            .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let plan = pipeline
-            .plan(&device, &BindState::default().shape())
-            .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let source = |write: &DescriptorWrite| {
-            (pipeline.layout.sets.iter())
-                .filter(|set| set.set == write.set)
-                .flat_map(|set| &set.bindings)
-                .find(|b| b.binding == write.binding)
-                .map(|b| b.source)
-        };
-        let set0: BTreeMap<_, _> = (plan.descriptors.iter())
-            .filter(|write| write.set == 0)
-            .map(|write| (source(write), write.ty))
-            .collect();
-        let slots = BTreeSet::from([
-            Some(BindingSource::Buffer(sref(0))),
-            Some(BindingSource::Buffer(sref(1))),
-        ]);
-        assert_eq!(
-            set0.keys().cloned().collect::<BTreeSet<_>>(),
-            slots,
-            "{stem}"
-        );
-        if stem == AT_BIND_PROFILE {
-            assert_eq!(
-                set0.values().copied().collect::<Vec<_>>(),
-                [
-                    crate::vk::DescriptorType::UNIFORM_BUFFER,
-                    crate::vk::DescriptorType::STORAGE_BUFFER
-                ],
-                "{stem}"
-            );
-        }
-    }
-}
-
-/// A `constant` struct of 6 bytes whose first and last bytes are read: its window starts at 0.
-const CONSTANT_ENDS: &str = r#"define void @constant_ends(ptr addrspace(2) noundef "air-buffer-no-alias" %0, ptr addrspace(1) noundef "air-buffer-no-alias" %1) {
-entry:
-  %a = load i8, ptr addrspace(2) %0, align 1
-  %p = getelementptr inbounds i8, ptr addrspace(2) %0, i64 5
-  %b = load i8, ptr addrspace(2) %p, align 1
-  %x = zext i8 %a to i32
-  %y = zext i8 %b to i32
-  %s = shl i32 %y, 8
-  %v = or i32 %x, %s
-  store i32 %v, ptr addrspace(1) %1, align 4
-  ret void
-}
-!air.kernel = !{!9}
-!air.version = !{!17}
-!air.language_version = !{!18}
-!9 = !{ptr @constant_ends, !10, !11}
-!10 = !{}
-!11 = !{!12, !13}
-!12 = !{i32 0, !"air.buffer", !"air.buffer_size", i32 6, !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 6, !"air.arg_type_align_size", i32 1, !"air.arg_type_name", !"Six", !"air.arg_name", !"in"}
-!13 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}
-!17 = !{i32 2, i32 8, i32 0}
-!18 = !{!"Metal", i32 4, i32 0, i32 0}
-"#;
-
-/// A uniform view is sized for a descriptor base aligned to `max(minUniformBufferOffsetAlignment,
-/// 16)`. A window starting at byte 0 is bound from the multiple of that alignment at or below the
-/// bind offset, so its residual is any value below it: on `amd-780m-radv` (an alignment of 4)
-/// residuals 12 and 15 put the struct's last byte in words 4 and 5, past the 16 bytes an alignment
-/// of 4 alone would declare. The view covers them and reads both ends exactly, with
-/// `uniformBufferStandardLayout` (`u32[]`) and without (`uvec4[]`).
-#[test]
-fn a_uniform_view_covers_every_residual_of_a_sixteen_aligned_base() {
-    let Some(bc) = assemble_text("constant_ends", CONSTANT_ENDS) else {
-        return;
-    };
-    let data = [0x5Au8, 8, 7, 6, 5, 0xC3];
-    for stem in ["amd-780m-radv", "moltenvk-m3"] {
-        for standard in [true, false] {
-            let what = format!("{stem} standard={standard}");
-            let p = profile_with(stem, true, standard);
-            let a = compile(&bc, "constant_ends", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
-            let form = match a.interface.slots.get(&sref(0)) {
-                Some(SlotInterface::Buffer(b)) => b.form,
-                other => panic!("{what}: {other:?}"),
-            };
-            let want = if standard {
-                DescriptorView::UniformWords
-            } else {
-                DescriptorView::UniformVec4
-            };
-            assert_eq!(form, BufferForm::Descriptor(want), "{what}");
-            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            let (plan, m) = typed_module(&bc, "constant_ends", &p).expect("module");
-            for r in [0u32, 4, 12, 15] {
-                let res = Resources {
-                    buffers: vec![bound(0, r, &data, 0x44), bound(1, 0, &[0; 4], 0)],
-                    push: push_bytes(&plan, &[(0, r)]),
-                    spec: Default::default(),
-                };
-                let out = run(&m, &Config::default(), res).expect("run");
-                assert_eq!(out.buffers[1][..4], [0x5A, 0xC3, 0, 0], "{what} r={r}");
-            }
-        }
-    }
-}
-
-/// Without robust descriptors a `constant` slot is a storage view, contained against the range
-/// actually bound. The binder clamps that range to the padded allocation, so it can be shorter than
-/// the proven window: here a 16-byte allocation bound at offset 12 leaves 4 of the struct's 6
-/// bytes, and the constant-offset read of byte 5 lands past the bound range. It must not trap and
-/// must read 0; the same short allocation at offsets 0 and 4 reads byte 5 exactly.
+/// A `constant` slot is a storage view, and under the in-shader encoding it is contained against
+/// the range actually bound. The binder clamps that range to the padded allocation, so it can be
+/// shorter than the proven window: here a 16-byte allocation bound at offset 12 leaves 4 of the
+/// struct's 6 bytes, and the constant-offset read of byte 5 lands past the bound range. It must
+/// not trap and must read 0; the same short allocation at offsets 0 and 4 reads byte 5 exactly.
 #[test]
 fn a_constant_buffer_shorter_than_its_window_is_contained_in_shader() {
     let Some(bc) = assemble_file("buffer_end_byte_load_constant") else {
@@ -609,37 +260,31 @@ fn a_constant_buffer_shorter_than_its_window_is_contained_in_shader() {
     };
     let alloc: [u8; 16] = std::array::from_fn(|i| 0x10 + i as u8);
     for stem in PROFILES {
-        for standard in [true, false] {
-            let what = format!("{stem} standard={standard}");
-            let p = profile_with(stem, false, standard);
-            let a = compile(&bc, "buffer_end_byte_load_constant", &p)
-                .unwrap_or_else(|e| panic!("{what}: {e}"));
-            let form = match a.interface.slots.get(&sref(0)) {
-                Some(SlotInterface::Buffer(b)) => b.form,
-                other => panic!("{what}: {other:?}"),
+        let what = stem;
+        let p = profile_with(stem, false);
+        let a = compile(&bc, "buffer_end_byte_load_constant", &p)
+            .unwrap_or_else(|e| panic!("{what}: {e}"));
+        let form = match a.interface.slots.get(&sref(0)) {
+            Some(SlotInterface::Buffer(b)) => b.form,
+            other => panic!("{what}: {other:?}"),
+        };
+        assert_eq!(form, BufferForm::Descriptor, "{what}");
+        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+        let (plan, m) = typed_module(&bc, "buffer_end_byte_load_constant", &p).expect("module");
+        for (r, want) in [(0u32, alloc[5]), (4, alloc[9]), (12, 0)] {
+            let short = Buffer {
+                slot: Some(kslot(0)),
+                address: None,
+                bytes: alloc.to_vec(),
             };
-            assert_eq!(
-                form,
-                BufferForm::Descriptor(DescriptorView::Storage),
-                "{what}"
-            );
-            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            let (plan, m) = typed_module(&bc, "buffer_end_byte_load_constant", &p).expect("module");
-            for (r, want) in [(0u32, alloc[5]), (4, alloc[9]), (12, 0)] {
-                let short = Buffer {
-                    slot: Some(kslot(0)),
-                    address: None,
-                    bytes: alloc.to_vec(),
-                };
-                let res = Resources {
-                    buffers: vec![short, bound(1, 0, &[0xAA; 4], 0)],
-                    push: push_bytes(&plan, &[(0, r)]),
-                    spec: Default::default(),
-                };
-                let out = run(&m, &Config::default(), res)
-                    .unwrap_or_else(|e| panic!("{what} r={r}: {e:?}"));
-                assert_eq!(out.buffers[1][..4], [want, 0, 0, 0], "{what} r={r}");
-            }
+            let res = Resources {
+                buffers: vec![short, bound(1, 0, &[0xAA; 4], 0)],
+                push: push_bytes(&plan, &[(0, r)]),
+                spec: Default::default(),
+            };
+            let out =
+                run(&m, &Config::default(), res).unwrap_or_else(|e| panic!("{what} r={r}: {e:?}"));
+            assert_eq!(out.buffers[1][..4], [want, 0, 0, 0], "{what} r={r}");
         }
     }
 }
@@ -970,7 +615,7 @@ fn offsets(size: u64) -> Vec<u64> {
 fn every_leaf_path_is_exact_in_bounds_and_contained_out_of_bounds() {
     let size = 32u64;
     for stem in ["moltenvk-m3", "runtime-floor"] {
-        let p = profile_with(stem, false, true);
+        let p = profile_with(stem, false);
         for k in leaf_kernels() {
             let what = format!("{stem} {}", k.name);
             let Some(bc) = assemble_text(k.name, &leaf_kernel(&k)) else {
@@ -1155,7 +800,7 @@ fn an_unbounded_storage_slot_declares_its_range_limit() {
         return;
     };
     for stem in PROFILES {
-        let p = profile_with(stem, true, true);
+        let p = profile_with(stem, true);
         let a = compile(&bc, k.name, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
         assert!(
             a.facts
@@ -1165,7 +810,7 @@ fn an_unbounded_storage_slot_declares_its_range_limit() {
         match a.interface.slots.get(&sref(0)) {
             Some(SlotInterface::Buffer(b)) => {
                 assert_eq!(b.window, Window::Whole, "{stem}");
-                assert_eq!(b.form, BufferForm::Descriptor(DescriptorView::Storage));
+                assert_eq!(b.form, BufferForm::Descriptor);
             }
             other => panic!("{stem}: {other:?}"),
         }
@@ -1278,7 +923,7 @@ fn push_with_table(plan: &Plan) -> Vec<u8> {
 #[test]
 fn a_device_address_slot_is_exact_and_contained() {
     let size = 32u64;
-    let p = profile_with("moltenvk-m3", true, true);
+    let p = profile_with("moltenvk-m3", true);
     assert_eq!(p.fields().buffer_access, BufferAccess::Addressed);
     let mut inputs = LowerInputs::new();
     inputs.psb_slots.insert(sref(0));
@@ -1421,7 +1066,7 @@ fn a_device_address_slot_below_its_bind_offset_is_exact_and_contained() {
     let mut inputs = LowerInputs::new();
     inputs.psb_slots.insert(sref(0));
     for robust in [true, false] {
-        let p = profile_with("moltenvk-m3", robust, true);
+        let p = profile_with("moltenvk-m3", robust);
         let what = format!("robust={robust}");
         assert_eq!(p.fields().buffer_access, BufferAccess::Addressed);
         let a = compile_bitcode(
@@ -1528,7 +1173,7 @@ entry:\n\
     let Some(bc) = assemble_text("wide_window", &text) else {
         return;
     };
-    let p = profile_with("moltenvk-m3", true, true);
+    let p = profile_with("moltenvk-m3", true);
     let mut inputs = LowerInputs::new();
     inputs.psb_slots.insert(sref(0));
     let r = plan_bitcode(
@@ -1589,11 +1234,8 @@ entry:\n\
 
 /// On Profile A, when the per-stage storage-buffer limit is exceeded, the highest-index storage
 /// slot moves to its device address (a deterministic per-function choice), declares
-/// `DeviceAddresses`, and the function still validates. Profile F views a read-only slot as a
-/// uniform buffer instead: the `device` params word (its window bounds its range) before the
-/// `Whole` data slot, which stays a spare candidate; the view depends on the alias check. Without
-/// robust descriptors (the in-shader encoding), or when only written slots are left to move,
-/// Profile F refuses naming the limit.
+/// `DeviceAddresses`, and the function still validates. Profile F, which has no device addresses,
+/// refuses naming the limit.
 #[test]
 fn the_highest_storage_slots_fall_back_to_device_addresses() {
     let k = LeafKernel {
@@ -1625,70 +1267,27 @@ fn the_highest_storage_slots_fall_back_to_device_addresses() {
                 other => panic!("{stem}: {other:?}"),
             };
             assert_eq!(form(2), BufferForm::Psb, "{stem}");
-            assert_eq!(form(1), BufferForm::Descriptor(DescriptorView::Storage));
-            assert_eq!(form(0), BufferForm::Descriptor(DescriptorView::Storage));
+            assert_eq!(form(1), BufferForm::Descriptor);
+            assert_eq!(form(0), BufferForm::Descriptor);
             assert!(a
                 .facts
                 .contains(&RuntimeFact::DeviceAddresses { slot: sref(2) }));
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
         } else {
-            let a = r.unwrap_or_else(|e| panic!("{stem}: {e}"));
-            let form = |i| match a.interface.slots.get(&sref(i)) {
-                Some(SlotInterface::Buffer(b)) => b.form,
-                other => panic!("{stem}: {other:?}"),
-            };
-            assert_eq!(
-                form(2),
-                BufferForm::Descriptor(DescriptorView::UniformWords),
-                "{stem}"
-            );
-            assert_eq!(form(1), BufferForm::Descriptor(DescriptorView::Storage));
-            assert_eq!(form(0), BufferForm::Descriptor(DescriptorView::Storage));
-            assert!(a
-                .facts
-                .contains(&RuntimeFact::UniformViewAliasing { slot: sref(2) }));
-            assert!(a.facts.contains(&RuntimeFact::UniformViewRange {
-                slot: sref(0),
-                choice: UniformViewChoice::Spare,
-            }));
-            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
-            // No robust descriptors, or no read-only slot left to move: the limit is refused.
-            let mut strict = profile_desc(stem);
-            strict.limits.max_per_stage_descriptor_storage_buffers = 2;
-            strict.features.remove(&VkFeature::RobustBufferAccess);
-            strict.features.remove(&VkFeature::RobustBufferAccess2);
-            let mut written = profile_desc(stem);
-            written.limits.max_per_stage_descriptor_storage_buffers = 0;
-            for desc in [strict, written] {
-                let p = Device::from_queries(desc, policy())
-                    .expect("device")
-                    .profile()
-                    .clone();
-                match compile(&bc, k.name, &p) {
-                    Err(Error::Unsupported(u)) => {
-                        assert_eq!(u.feature, Feature::DescriptorCount, "{stem}")
-                    }
-                    other => panic!("{stem}: expected a refusal, got {other:?}"),
+            match r {
+                Err(Error::Unsupported(u)) => {
+                    assert_eq!(u.feature, Feature::DescriptorCount, "{stem}")
                 }
+                other => panic!("{stem}: expected a refusal, got {other:?}"),
             }
         }
     }
 }
 
-/// The description of committed profile `stem`.
-fn profile_desc(stem: &str) -> DeviceDescription {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles")
-        .join(format!("{stem}.json"));
-    let text = std::fs::read_to_string(path).expect("profile");
-    DeviceDescription::from_khronos_json(&text, None).expect("description")
-}
-
 /// A kernel with a loop reserves no status binding (its modules carry no execution bound), so the
 /// descriptor fallback counts the Metal slots alone. With three storage slots and a per-stage limit
 /// of two, moving one slot brings the storage count to two: the highest slot to a device address
-/// where the profile has them, else (Profile F) the uniform-view fallback moves only the bounded
-/// params word, and the `Whole` data slot stays a storage descriptor.
+/// where the profile has them; Profile F, which has none, refuses naming the limit.
 #[test]
 fn a_looping_kernel_reserves_no_status_binding_in_the_fallback() {
     let name = "fallback_loop";
@@ -1717,23 +1316,17 @@ fn a_looping_kernel_reserves_no_status_binding_in_the_fallback() {
             .profile()
             .clone();
         let r = compile(&bc, name, &p);
-        let a = r.unwrap_or_else(|e| panic!("{stem}: {e}"));
-        assert!(!a.facts.contains(&RuntimeFact::ExecutionStatus), "{stem}");
         if p.fields().buffer_access != BufferAccess::Addressed {
-            let form = |i| match a.interface.slots.get(&sref(i)) {
-                Some(SlotInterface::Buffer(b)) => b.form,
-                other => panic!("{stem}: {other:?}"),
-            };
-            let storage = BufferForm::Descriptor(DescriptorView::Storage);
-            assert_eq!(
-                form(2),
-                BufferForm::Descriptor(DescriptorView::UniformWords),
-                "{stem}"
-            );
-            assert_eq!((form(0), form(1)), (storage, storage), "{stem}: one move");
-            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+            match r {
+                Err(Error::Unsupported(u)) => {
+                    assert_eq!(u.feature, Feature::DescriptorCount, "{stem}")
+                }
+                other => panic!("{stem}: expected a refusal, got {other:?}"),
+            }
             continue;
         }
+        let a = r.unwrap_or_else(|e| panic!("{stem}: {e}"));
+        assert!(!a.facts.contains(&RuntimeFact::ExecutionStatus), "{stem}");
         let form = |i| match a.interface.slots.get(&sref(i)) {
             Some(SlotInterface::Buffer(b)) => b.form,
             other => panic!("{stem}: {other:?}"),
@@ -1741,10 +1334,10 @@ fn a_looping_kernel_reserves_no_status_binding_in_the_fallback() {
         assert_eq!(form(2), BufferForm::Psb, "{stem}");
         assert_eq!(
             form(1),
-            BufferForm::Descriptor(DescriptorView::Storage),
+            BufferForm::Descriptor,
             "{stem}: one move is enough"
         );
-        assert_eq!(form(0), BufferForm::Descriptor(DescriptorView::Storage));
+        assert_eq!(form(0), BufferForm::Descriptor);
         link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
     }
 }
@@ -1895,7 +1488,7 @@ fn the_word_cap_holds_on_the_emitted_words() {
     let Some(bc) = assemble_file("storage_texture_write") else {
         return;
     };
-    let p = profile_with("moltenvk-m3", true, true);
+    let p = profile_with("moltenvk-m3", true);
     let entry = EntryRef::Name("storage_texture_write");
     let consts = FunctionConstantValues::defaults();
     let inputs = LowerInputs::new();
@@ -2711,214 +2304,6 @@ fn a_float4_aligned_only_to_its_lanes_is_placed_at_its_address() {
                 .collect();
             let want: Vec<f32> = (0..8u32).flat_map(|p| [p as f32, 1.0, 2.0, 3.0]).collect();
             assert_eq!(got, want, "{what} r={r}");
-        }
-    }
-}
-
-/// A kernel reading the `float4` at byte 32 of a `constant` buffer (a `Bounded` window, so a
-/// uniform view under robust descriptors) into `out`.
-const CONSTANT_VEC4: &str = r#"define void @constant_vec4(ptr addrspace(2) noundef "air-buffer-no-alias" %0, ptr addrspace(1) noundef "air-buffer-no-alias" %1) {
-entry:
-  %p = getelementptr inbounds i8, ptr addrspace(2) %0, i64 32
-  %v = load <4 x float>, ptr addrspace(2) %p, align 16
-  store <4 x float> %v, ptr addrspace(1) %1, align 16
-  ret void
-}
-!air.kernel = !{!9}
-!air.version = !{!17}
-!air.language_version = !{!18}
-!9 = !{ptr @constant_vec4, !10, !11}
-!10 = !{}
-!11 = !{!12, !13}
-!12 = !{i32 0, !"air.buffer", !"air.buffer_size", i32 48, !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 48, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"Three", !"air.arg_name", !"in"}
-!13 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"float4", !"air.arg_name", !"out"}
-!17 = !{i32 2, i32 8, i32 0}
-!18 = !{!"Metal", i32 4, i32 0, i32 0}
-"#;
-
-/// Under robust descriptors a `constant` slot's 16-aligned `float4` is one `uvec4` of its uniform
-/// view: a `Uniform { uvec4[N] }` view beside the `u32[]` words with `uniformBufferStandardLayout`,
-/// the std140 `uvec4[]` word view itself without. It reads the vector's 16 bytes exactly at every
-/// residual the binder can give the window `[32, 48)` with a 16-aligned bind offset: the window's
-/// first byte at descriptor byte `0, 16, ..., A - 16` for the base alignment `A` (the residual
-/// wraps below the window).
-#[test]
-fn a_constant_vector_is_one_uvec4_of_its_uniform_view() {
-    let text = format!("{HEADER}{CONSTANT_VEC4}");
-    let Some(bc) = assemble_text("constant_vec4", &text) else {
-        return;
-    };
-    for stem in PROFILES {
-        for standard in [true, false] {
-            let what = format!("{stem} standard={standard}");
-            let p = profile_with(stem, true, standard);
-            let a = compile(&bc, "constant_vec4", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
-            let form = match a.interface.slots.get(&sref(0)) {
-                Some(SlotInterface::Buffer(b)) => b.form,
-                other => panic!("{what}: {other:?}"),
-            };
-            let want = if standard {
-                DescriptorView::UniformWords
-            } else {
-                DescriptorView::UniformVec4
-            };
-            assert_eq!(form, BufferForm::Descriptor(want), "{what}");
-            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            let (plan, m) = typed_module(&bc, "constant_vec4", &p).expect("module");
-            assert_eq!(
-                views_of(&m, 0),
-                if standard { 2 } else { 1 },
-                "{what}: views of in"
-            );
-            let data = pattern(512);
-            let base = p
-                .fields()
-                .limits
-                .min_uniform_buffer_offset_alignment
-                .max(16) as u32;
-            // Metal byte 32 is descriptor byte `r + 32`.
-            for at in (0..base).step_by(16) {
-                let r = at.wrapping_sub(32);
-                let at = at as usize;
-                let res = Resources {
-                    buffers: vec![
-                        Buffer {
-                            slot: Some(kslot(0)),
-                            address: None,
-                            bytes: data.clone(),
-                        },
-                        bound(1, 0, &[0; 16], 0),
-                    ],
-                    push: push_bytes(&plan, &[(0, r)]),
-                    spec: Default::default(),
-                };
-                let out = run(&m, &Config::default(), res)
-                    .unwrap_or_else(|e| panic!("{what} r={r:#x}: {e:?}"));
-                assert_eq!(out.buffers[1][..16], data[at..at + 16], "{what} r={r:#x}");
-            }
-        }
-    }
-}
-
-/// A kernel that sums, over `n` trips (the struct's first word), the struct's word 3 on an even
-/// trip and its word 5 on an odd one, each read under the trip's own branch, into `out`. Both
-/// words are at fixed offsets of a `constant` struct (a `Bounded` window, so a uniform view under
-/// robust descriptors) that nothing writes.
-const CONSTANT_LOOP: &str = r#"%struct.Params = type { i32, i32, i32, i32, i32, i32, i32, i32 }
-define void @constant_loop(ptr addrspace(2) noundef "air-buffer-no-alias" %0, ptr addrspace(1) noundef "air-buffer-no-alias" %1) {
-entry:
-  %n = load i32, ptr addrspace(2) %0, align 4
-  br label %head
-head:
-  %t = phi i32 [ 0, %entry ], [ %t1, %latch ]
-  %acc = phi i32 [ 0, %entry ], [ %acc1, %latch ]
-  %done = icmp uge i32 %t, %n
-  br i1 %done, label %exit, label %body
-body:
-  %bit = and i32 %t, 1
-  %odd = icmp ne i32 %bit, 0
-  br i1 %odd, label %odd_trip, label %even_trip
-odd_trip:
-  %p5 = getelementptr inbounds %struct.Params, ptr addrspace(2) %0, i64 0, i32 5
-  %v5 = load i32, ptr addrspace(2) %p5, align 4
-  br label %latch
-even_trip:
-  %p3 = getelementptr inbounds %struct.Params, ptr addrspace(2) %0, i64 0, i32 3
-  %v3 = load i32, ptr addrspace(2) %p3, align 4
-  br label %latch
-latch:
-  %v = phi i32 [ %v5, %odd_trip ], [ %v3, %even_trip ]
-  %acc1 = add i32 %acc, %v
-  %t1 = add i32 %t, 1
-  br label %head
-exit:
-  store i32 %acc, ptr addrspace(1) %1, align 4
-  ret void
-}
-!air.kernel = !{!9}
-!air.version = !{!17}
-!air.language_version = !{!18}
-!9 = !{ptr @constant_loop, !10, !11}
-!10 = !{}
-!11 = !{!12, !13}
-!12 = !{i32 0, !"air.buffer", !"air.buffer_size", i32 32, !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.arg_type_size", i32 32, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"Params", !"air.arg_name", !"in"}
-!13 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}
-!17 = !{i32 2, i32 8, i32 0}
-!18 = !{!"Metal", i32 4, i32 0, i32 0}
-"#;
-
-/// The loads through a `Uniform`-class pointer in the blocks of `m`'s loops: each loop's header
-/// and every block it reaches before its merge.
-fn uniform_loads_in_loops(m: &TypedModule) -> usize {
-    let mut body = std::collections::BTreeSet::new();
-    for l in m.loops() {
-        let mut stack = vec![l.header];
-        while let Some(b) = stack.pop() {
-            if b == l.merge || !body.insert(b) {
-                continue;
-            }
-            let mut term = m.blocks()[b.index()].term.clone();
-            term.for_each_target_mut(|t| stack.push(*t));
-        }
-    }
-    let uniform = |v: crate::spirv::ids::Value| {
-        let ty = m.values()[v.index()].ty;
-        matches!(
-            m.types().get(ty),
-            Ok(Type::Pointer {
-                class: StorageClass::Uniform,
-                ..
-            })
-        )
-    };
-    body.iter()
-        .flat_map(|b| &m.blocks()[b.index()].insts)
-        .filter(|n| matches!(n.inst, Inst::Load { ptr, .. } if uniform(ptr)))
-        .count()
-}
-
-/// Under robust descriptors the words of a `constant` struct that a loop reads at fixed offsets,
-/// each under a per-trip branch, are loaded once before the loop: the emitted loop holds no load
-/// of the struct's uniform view, and the sum is the loop's at every trip count.
-#[test]
-fn a_constant_struct_read_in_a_loop_is_loaded_before_it() {
-    let text = format!("{HEADER}{CONSTANT_LOOP}");
-    let Some(bc) = assemble_text("constant_loop", &text) else {
-        return;
-    };
-    for stem in PROFILES {
-        let p = profile_with(stem, true, true);
-        let a = compile(&bc, "constant_loop", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let form = match a.interface.slots.get(&sref(0)) {
-            Some(SlotInterface::Buffer(b)) => b.form,
-            other => panic!("{stem}: {other:?}"),
-        };
-        assert_eq!(
-            form,
-            BufferForm::Descriptor(DescriptorView::UniformWords),
-            "{stem}"
-        );
-        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
-        let (plan, m) = typed_module(&bc, "constant_loop", &p).expect("module");
-        assert!(!m.loops().is_empty(), "{stem}: the loop");
-        assert_eq!(
-            uniform_loads_in_loops(&m),
-            0,
-            "{stem}: loads of in in the loop"
-        );
-        let (even, odd) = (7u32, 1000u32);
-        for n in [0u32, 1, 2, 5, 8] {
-            let words = [n, 0xAA, 0xBB, even, 0xCC, odd, 0xDD, 0xEE];
-            let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-            let res = Resources {
-                buffers: vec![bound(0, 0, &bytes, 0), bound(1, 0, &[0; 4], 0)],
-                push: push_bytes(&plan, &[(0, 0), (1, 0)]),
-                spec: Default::default(),
-            };
-            let out =
-                run(&m, &Config::default(), res).unwrap_or_else(|e| panic!("{stem} n={n}: {e:?}"));
-            let want = n.div_ceil(2) * even + n / 2 * odd;
-            assert_eq!(out.buffers[1][..4], want.to_le_bytes(), "{stem} n={n}");
         }
     }
 }

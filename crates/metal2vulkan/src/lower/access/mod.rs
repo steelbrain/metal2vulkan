@@ -17,19 +17,10 @@
 //! profile's encoding (`memory::contain`): none with robust descriptors, else the normative check
 //! against the storage view's bound size (`OpArrayLength`, the padded range).
 //!
-//! **Slots** ([`finish_slots`]). An accessed slot is a descriptor view: with robust descriptors (or
-//! containment off), a uniform view for a read-only `constant` slot whose `Bounded` window's
-//! descriptor range fits `maxUniformBufferRange` (`u32[]` with `uniformBufferStandardLayout`, else
-//! `uvec4[]`); a storage view otherwise. The in-shader encoding never uses a uniform view: its
-//! declared size is the window's range, while the binder may bind a shorter range (the binder
-//! clamps it to the allocation), and a shader cannot query a uniform range. A storage slot whose
-//! range is not provably within `maxStorageBufferRange` declares `RuntimeFact::BufferRangeLimit`.
-//! On Profile F an exceeded per-stage storage-buffer limit views read-only slots as uniform buffers
-//! instead: sized to the window where it bounds the range, else to `maxUniformBufferRange`, with
-//! the range (`UniformViewRange`) and, for a `device` slot, the absence of aliasing writes
-//! (`UniformViewAliasing`) left to the binder. On Profile A a `BufferRangeLimit` variant
-//! (`LowerInputs.psb_slots`) and the per-stage descriptor-limit fallback move storage slots to
-//! their device addresses (`BufferForm::Psb`, the PSB leaf of `psb`, reached through the root
+//! **Slots** ([`finish_slots`]). An accessed slot is a storage view. A storage slot whose range is
+//! not provably within `maxStorageBufferRange` declares `RuntimeFact::BufferRangeLimit`. On
+//! Profile A a `BufferRangeLimit` variant (`LowerInputs.psb_slots`) and the per-stage
+//! descriptor-limit fallback move storage slots to their device addresses (`BufferForm::Psb`, the PSB leaf of `psb`, reached through the root
 //! table), which declare `RuntimeFact::DeviceAddresses`. The pulled vertex fetch's source buffers
 //! are slots under the same rules ([`pulled`]): one sharing a read-only buffer argument's Metal
 //! index is that argument's slot, widened to a `Whole` storage slot; any other is a read-only
@@ -85,8 +76,8 @@
 //! **Volatile accesses**. A volatile load or store is selected as the same instruction without
 //! `volatile` and then takes its volatile form (`volatile_form`): every word load and store it
 //! composes carries SPIR-V's `Volatile` (performed, once, never combined), in the function's memory
-//! model, whose coherence it keeps. Loads of read-only memories (uniform views, the constant blob,
-//! typed constant objects) stay plain, and a handle-array or buffer-table element load, which reads
+//! model, whose coherence it keeps. Loads of read-only memories (the constant blob, typed constant
+//! objects) stay plain, and a handle-array or buffer-table element load, which reads
 //! no memory at the access, is refused volatile.
 //!
 //! Not lowered yet (`Unsupported{Lowering(Access), NotImplemented}`): coherent accesses of
@@ -136,11 +127,9 @@ use crate::memory::contain::{self, Check};
 use crate::memory::leaf::{self, Coherence, Leaf, Units};
 use crate::memory::plan::SlotPlan;
 use crate::memory::provenance::{Repr, Root};
-use crate::memory::views::{self, View, ViewKind};
-use crate::pipeline::facts::{RuntimeFact, UniformViewChoice};
-use crate::pipeline::interface::{
-    AccessSet, BufferForm, DescriptorView, PushLoc, PushPlacement, Window,
-};
+use crate::memory::views::{self, View};
+use crate::pipeline::facts::RuntimeFact;
+use crate::pipeline::interface::{AccessSet, BufferForm, PushLoc, PushPlacement, Window};
 use crate::pipeline::sym::{PushField, SlotRef};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
@@ -515,7 +504,7 @@ impl AccessPlan {
     pub fn source_reach(&self, slot: SlotRef) -> BufferReach {
         match self.source_lowering(slot) {
             Some(SlotLowering::Psb { .. }) => BufferReach::ADDRESSES,
-            Some(SlotLowering::View(_)) => BufferReach::VIEWS,
+            Some(SlotLowering::View) => BufferReach::VIEWS,
             None => BufferReach::NONE,
         }
     }
@@ -689,8 +678,8 @@ pub fn spirv_type(mb: &mut ModuleBuilder, ty: &DemoteTy) -> BResult<Option<TypeI
 /// How an accessed slot is reached.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SlotLowering {
-    /// Through its descriptor view.
-    View(ViewKind),
+    /// Through its storage view.
+    View,
     /// Through its device address (`BufferForm::Psb`). `start` is the start of the slot's window
     /// relative to the bind offset (0 for `Window::Whole`): the `u32` pointer offset is recovered
     /// as the unique 64-bit displacement in `[start, start + 2³²)` congruent to it (`psb`).
@@ -764,8 +753,7 @@ pub struct AccessPlan {
     /// and writes the field.
     pub observed: BTreeSet<usize>,
     /// Memory-plan slots a volatile, coherent, or atomic access reaches: what they read may change
-    /// while the dispatch or draw runs, and an atomic needs a storage view's word pointer, so the
-    /// per-stage storage-buffer fallback never views them as uniform buffers.
+    /// while the dispatch or draw runs.
     pub ordered: BTreeSet<usize>,
     /// Memory-plan slots whose memory nothing in the module writes ([`unwritten_slots`]), read
     /// through a storage view or, under the identity domains, their device address: their views
@@ -905,24 +893,6 @@ pub struct Declared {
     /// The stage's view of the command buffer's `ExecutionStatus` buffer, where it binds the
     /// buffer ([`absent::declare`]).
     pub status: Option<View>,
-    /// The `RangeAtBindOffset` specialization of each slot read through a uniform view, by
-    /// memory-plan slot index: where it holds, an access reads the view at the Metal offset alone
-    /// ([`range_at_bind_offset`]).
-    pub at_bind: Vec<Option<SValue>>,
-}
-
-/// Slot `slot`'s `RangeAtBindOffset` specialization: a `bool`, false by default, fixed at pipeline
-/// creation, true where the binder starts the slot's descriptor range at its bind offset, so its
-/// `SlotBindOffset` residual is 0 and an access reads the Metal offset alone: a constant for a
-/// constant member, which a driver can push ahead of the shader.
-fn range_at_bind_offset(mb: &mut ModuleBuilder, slot: SlotRef) -> BResult<SValue> {
-    let b = mb.ty(SType::Bool)?;
-    let c = mb.spec(
-        crate::pipeline::sym::SpecKey::RangeAtBindOffset(slot),
-        b,
-        ConstBits(0),
-    )?;
-    mb.const_value(c)
 }
 
 /// The module's routines the access family's strategies call, each charged once to the census: the
@@ -1014,100 +984,6 @@ pub fn param_value(
     fb.module().const_value(c)
 }
 
-/// The view kind of a slot on profile `p`: a uniform view for a read-only `constant` slot with a
-/// `Bounded` window whose descriptor range fits `maxUniformBufferRange`, when the profile's
-/// containment encoding emits no check and the slot has no lane read; a storage view otherwise.
-///
-/// Under the in-shader encoding a uniform view could not be contained: the bound range may be
-/// shorter than the view's declared size (the binder clamps it to the padded allocation), a uniform
-/// block has no `OpArrayLength`, and the proven window bounds Metal-defined accesses only. A
-/// storage view's check reads the size actually bound.
-///
-/// A lane read ([`SlotPlan::lane_read`]) is a read whose address may differ between the lanes
-/// that run it together. A uniform buffer may serve one address at a time, so on every device the
-/// slot keeps its storage view, which reads the same bytes. Measured with a bare Vulkan program
-/// (256 workgroups of 64 invocations, each adding 64 or 1024 `uvec4` reads of a window of 1 to
-/// 32 KiB, each invocation reading its own word or walking the window): the storage buffer took
-/// 0.011 to 0.18 of the uniform buffer's time on NVIDIA's driver (RTX 3090, RTX 2080, RTX 5080
-/// Laptop GPU) and 0.96 to 1.00 of it on RADV (Radeon 780M, RX 7900 XTX). The choice is the
-/// slot's, so its reads at a uniform address take the storage view too: measured at 0.96 to 1.68
-/// times the uniform buffer's time (every lane reading one word of a 1 to 32 KiB window), and a
-/// storage view's loads are not moved out of their loops as a uniform view's are
-/// (`spirv::hoist`). Every stage takes the rule; compute was measured, the graphics stages are
-/// expected to read alike, not measured.
-pub fn view_kind(p: &DeviceProfile, s: &SlotPlan) -> ViewKind {
-    let limits = &p.fields().limits;
-    let uniform = match s.window {
-        Some(window)
-            if s.space == AddrSpace::Constant
-                && !s.access.write
-                && !s.atomic
-                && !s.lane_read
-                && contain::encoding(p) == Check::None =>
-        {
-            uniform_bytes(window, limits)
-        }
-        _ => None,
-    };
-    match uniform {
-        Some(bytes) => uniform_view(p, bytes),
-        None => ViewKind::Storage,
-    }
-}
-
-/// The uniform view of `bytes` bytes (a multiple of 16) on `p`: `u32[]` with
-/// `uniformBufferStandardLayout`, `uvec4[]` without.
-fn uniform_view(p: &DeviceProfile, bytes: u32) -> ViewKind {
-    if p.fields().descriptors.uniform_buffer_standard_layout {
-        ViewKind::UniformWords { words: bytes / 4 }
-    } else {
-        ViewKind::UniformVec4 { vecs: bytes / 16 }
-    }
-}
-
-/// Whether a uniform view's descriptor range is provably within `maxUniformBufferRange`: a
-/// `Bounded` window's range is at most `uniform_range(len, A)`, with `A` the descriptor base
-/// alignment `max(minUniformBufferOffsetAlignment, 16)`.
-fn uniform_range_fits(window: Window, limits: &Limits) -> bool {
-    uniform_bytes(window, limits).is_some()
-}
-
-/// The uniform range of a `Bounded` window that provably fits `maxUniformBufferRange`.
-fn uniform_bytes(window: Window, limits: &Limits) -> Option<u32> {
-    match window {
-        Window::Bounded { len, .. } => {
-            let align = views::base_alignment(limits.min_uniform_buffer_offset_alignment);
-            views::uniform_range(len, align)
-                .filter(|r| *r <= u64::from(limits.max_uniform_buffer_range))
-                .and_then(|r| u32::try_from(r).ok())
-        }
-        _ => None,
-    }
-}
-
-/// The uniform view the per-stage storage-buffer fallback gives a read-only slot with `window`:
-/// sized to the window's range where that provably fits `maxUniformBufferRange`, else the largest
-/// whole number of 16-byte vectors within it, which covers every range instantiation accepts
-/// (`BindError::DescriptorRangeExceeded` above the limit).
-fn fallback_view(p: &DeviceProfile, window: Window) -> ViewKind {
-    let limits = &p.fields().limits;
-    let bytes = uniform_bytes(window, limits).unwrap_or(limits.max_uniform_buffer_range & !15);
-    uniform_view(p, bytes)
-}
-
-/// The fallback's order among read-only storage slots, lowest first: a window whose uniform range
-/// provably fits, then a `constant` slot, then a `device` slot, which also needs instantiation's
-/// alias check. Within a rank the highest Metal index moves first, as the Profile A fallback does.
-fn fallback_rank(plan: &SlotPlan, window: Window, limits: &Limits) -> u8 {
-    if uniform_range_fits(window, limits) {
-        0
-    } else if plan.space == AddrSpace::Constant {
-        1
-    } else {
-        2
-    }
-}
-
 /// Whether a storage slot's descriptor range is provably within `maxStorageBufferRange`: a
 /// `Bounded` window's range is at most `round_up(len + align - 1, 16)`, with `align` the descriptor
 /// base alignment `max(minStorageBufferOffsetAlignment, 16)`.
@@ -1115,18 +991,10 @@ fn storage_range_fits(window: Window, limits: &Limits) -> bool {
     match window {
         Window::Bounded { len, .. } => {
             let align = views::base_alignment(limits.min_storage_buffer_offset_alignment);
-            views::uniform_range(len, align)
+            views::descriptor_range(len, align)
                 .is_some_and(|r| r <= u64::from(limits.max_storage_buffer_range))
         }
         _ => false,
-    }
-}
-
-fn descriptor_view(kind: ViewKind) -> DescriptorView {
-    match kind {
-        ViewKind::Storage => DescriptorView::Storage,
-        ViewKind::UniformWords { .. } => DescriptorView::UniformWords,
-        ViewKind::UniformVec4 { .. } => DescriptorView::UniformVec4,
     }
 }
 
@@ -1134,29 +1002,22 @@ fn descriptor_view(kind: ViewKind) -> DescriptorView {
 /// descriptors to `cx.descriptors`. Returns the form of each accessed slot, by memory-plan slot
 /// index (`None` for slots the function does not access).
 ///
-/// A slot is a descriptor view unless a `BufferRangeLimit` variant (`LowerInputs.psb_slots`)
+/// A slot is a storage view unless a `BufferRangeLimit` variant (`LowerInputs.psb_slots`)
 /// moves it to its device address, or, on Profile A, the per-stage descriptor limits are exceeded:
 /// then the highest-index storage slots move to device addresses, one at a time, until the
 /// storage-buffer and resource counts fit (a deterministic per-function choice). Every
 /// device-address slot declares `DeviceAddresses` and reads the root table
 /// (`PushField::RootTableAddress`) instead of its bind residual.
 ///
-/// On Profile F with robust descriptors (or containment off), an exceeded per-stage
-/// storage-buffer limit moves read-only storage slots to uniform views instead, one at a time in
-/// `fallback_rank` order, while a uniform buffer is left. Every candidate whose window does not
-/// bound its range declares `UniformViewRange` whether or not the fallback ran (so a plan can ask
-/// for the variant that keeps them all storage views), each slot the compile keeps a storage view
-/// declares it `Kept`, and a viewed `device` slot declares `UniformViewAliasing`.
-///
 /// A pulled source buffer ([`pulled`]) shares the accessed slot of its Metal index, widened to a
 /// `Whole` storage slot that the fetch reads too (a window outside the first 2³² bytes above the
 /// bind offset is refused), or is a read-only `Whole` storage slot of its own; either takes part
 /// in the rules above like any storage slot.
 ///
-/// Each step of either fallback moves one storage view, so the descriptors and push fields of the
+/// Each step of the fallback moves one storage view, so the descriptors and push fields of the
 /// slots' forms are kept in a census the step updates, and the order of the slots it moves is
-/// sorted once: the fallbacks take one pass over the slots, metered, where they recounted every
-/// slot per slot moved before. The working tables are charged while they run.
+/// sorted once: the fallback takes one pass over the slots, metered, where it recounted every slot
+/// per slot moved before. The working tables are charged while they run.
 pub fn finish_slots(
     cx: &mut SelectCx<'_>,
     m: &mut Meter,
@@ -1168,20 +1029,17 @@ pub fn finish_slots(
     result
 }
 
-/// The ledger bytes `place_slots` works in per memory-plan slot: its form and window, whether
-/// the fallback viewed it, and its places in the two fallbacks' orders.
+/// The ledger bytes `place_slots` works in per memory-plan slot: its form and window, and its
+/// place in the fallback's order.
 const SLOT_WORK_BYTES: usize = std::mem::size_of::<Option<SlotLowering>>()
     + std::mem::size_of::<Option<Window>>()
-    + 1
-    + std::mem::size_of::<(usize, u8, u32)>()
     + std::mem::size_of::<(u32, Moved)>();
 
 /// The descriptors and push fields of the slots' forms while [`finish_slots`] moves them: the
-/// storage and uniform buffer views, and the push fields with each
-/// device-address slot's `SlotBindOffset` replaced by the root table. A move updates it in place.
+/// storage views, and the push fields with each device-address slot's `SlotBindOffset` replaced by
+/// the root table. A move updates it in place.
 struct Census {
     storage: u32,
-    uniform: u32,
     fields: BTreeSet<PushField>,
     /// Under the identity domains a device-address slot reads its own address
     /// ([`address_field`]), not the root table.
@@ -1201,7 +1059,6 @@ impl Census {
     ) -> Result<Census, Error> {
         let mut c = Census {
             storage: 0,
-            uniform: 0,
             fields: push.clone(),
             identity,
             push_base,
@@ -1210,8 +1067,7 @@ impl Census {
         for (slot, l) in forms {
             m.tick(1)?;
             match l {
-                SlotLowering::View(ViewKind::Storage) => c.storage = c.storage.saturating_add(1),
-                SlotLowering::View(_) => c.uniform = c.uniform.saturating_add(1),
+                SlotLowering::View => c.storage = c.storage.saturating_add(1),
                 SlotLowering::Psb { .. } => {
                     c.fields.remove(&PushField::SlotBindOffset(slot));
                     match identity {
@@ -1237,21 +1093,9 @@ impl Census {
             // address, no descriptor.
             uniform_buffers: u32::from(
                 !self.identity && table::spills(stage, self.push_base, &self.fields),
-            )
-            .saturating_add(self.uniform),
+            ),
             storage_buffers: self.storage,
             ..DescriptorCounts::default()
-        }
-    }
-
-    /// A storage view became a view of `kind`.
-    fn viewed(&mut self, kind: ViewKind) {
-        self.storage = self.storage.saturating_sub(1);
-        match kind {
-            ViewKind::Storage => self.storage = self.storage.saturating_add(1),
-            ViewKind::UniformWords { .. } | ViewKind::UniformVec4 { .. } => {
-                self.uniform = self.uniform.saturating_add(1)
-            }
         }
     }
 
@@ -1379,24 +1223,16 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
             lowering.push(Some(psb_lowering(window)?));
             continue;
         }
-        // The fetch's unbounded read needs a storage view.
-        let kind = if shared {
-            ViewKind::Storage
-        } else {
-            view_kind(p, plan)
-        };
-        let mut l = SlotLowering::View(kind);
-        if kind == ViewKind::Storage {
-            if !storage_range_fits(window, limits) {
-                cx.facts
-                    .insert(RuntimeFact::BufferRangeLimit { slot: plan.slot });
+        let mut l = SlotLowering::View;
+        if !storage_range_fits(window, limits) {
+            cx.facts
+                .insert(RuntimeFact::BufferRangeLimit { slot: plan.slot });
+        }
+        if cx.inputs.psb_slots.contains(&plan.slot) {
+            if !addressed {
+                return Err(range_variant());
             }
-            if cx.inputs.psb_slots.contains(&plan.slot) {
-                if !addressed {
-                    return Err(range_variant());
-                }
-                l = psb_lowering(window)?;
-            }
+            l = psb_lowering(window)?;
         }
         lowering.push(Some(l));
     }
@@ -1420,7 +1256,7 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
             }
             psb_lowering(Window::Whole)?
         } else {
-            SlotLowering::View(ViewKind::Storage)
+            SlotLowering::View
         };
         own.push((s, l));
     }
@@ -1443,115 +1279,12 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
         forms,
         m,
     )?;
-    // Profile F's per-stage storage-buffer fallback: with robust descriptors (or containment off),
-    // while the storage-buffer count exceeds its limit and a uniform buffer is left, the first
-    // read-only storage slot in `fallback_rank` order becomes a uniform view. Slots the variant
-    // keeps (`LowerInputs::storage_view_slots`), a pulled fetch's source, and slots a volatile,
-    // coherent, or atomic access reaches stay storage views.
-    let inputs = cx.inputs;
-    let fallback = !addressed && contain::encoding(p) == Check::None;
-    let candidates: Vec<(usize, u8)> = if fallback {
-        memory
-            .slots
-            .iter()
-            .enumerate()
-            .filter_map(|(i, plan)| {
-                let window = windows.get(i).copied().flatten()?;
-                let storage = lowering.get(i).copied().flatten()
-                    == Some(SlotLowering::View(ViewKind::Storage));
-                let read_only = !plan.access.write && !plan.atomic;
-                let eligible = storage
-                    && read_only
-                    && !sources.contains(&plan.slot)
-                    && !cx.families.access.ordered.contains(&i);
-                eligible.then(|| (i, fallback_rank(plan, window, limits)))
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-    // The order the fallback views the candidates in: by rank, the highest Metal index first. The
-    // sort is stable, so equal keys keep memory-plan order, the first of which the fallback
-    // takes, as the search for the least key per step once did.
-    let mut order: Vec<(usize, u8, u32)> = Vec::new();
-    for &(i, rank) in &candidates {
-        m.tick(1)?;
-        if let Some(plan) = memory.slots.get(i) {
-            if !inputs.storage_view_slots.contains(&plan.slot) {
-                order.push((i, rank, plan.slot.index));
-            }
-        }
-    }
-    order.sort_by_key(|&(_, rank, index)| (rank, std::cmp::Reverse(index)));
-    let mut viewed = vec![false; memory.slots.len()];
-    for (i, _, _) in order {
-        m.tick(1)?;
-        let total = cx.descriptors.plus(&census.counts(stage));
-        if total.storage_buffers <= limits.max_per_stage_descriptor_storage_buffers
-            || total.uniform_buffers >= limits.max_per_stage_descriptor_uniform_buffers
-        {
-            break;
-        }
-        let Some(window) = windows.get(i).copied().flatten() else {
-            break;
-        };
-        let kind = fallback_view(p, window);
-        if let Some(l) = lowering.get_mut(i) {
-            *l = Some(SlotLowering::View(kind));
-            census.viewed(kind);
-        }
-        if let Some(v) = viewed.get_mut(i) {
-            *v = true;
-        }
-    }
-    // The fallback's facts, on every compile where it can run: each candidate whose window does
-    // not bound its uniform range states what this compile made of it (`Viewed`, or `Spare`
-    // whether or not the fallback ran), so a plan can name every slot a variant must keep a
-    // storage view, a variant that pulls a vertex layout included (it adds a storage buffer); a
-    // viewed `device` slot needs the alias check. Every slot the compile keeps states `Kept`,
-    // candidate or not, so the plan of the variant restates its key.
-    for &(i, _) in &candidates {
-        let (Some(plan), Some(window)) = (memory.slots.get(i), windows.get(i).copied().flatten())
-        else {
-            continue;
-        };
-        let slot = plan.slot;
-        if inputs.storage_view_slots.contains(&slot) {
-            continue;
-        }
-        let is_viewed = viewed.get(i).copied().unwrap_or(false);
-        if is_viewed {
-            // The slot is no storage view any more. A slot nothing reads (only compared) cannot
-            // observe a write, so it needs no alias check.
-            cx.facts.remove(&RuntimeFact::BufferRangeLimit { slot });
-            if plan.space != AddrSpace::Constant && plan.access.read {
-                cx.facts.insert(RuntimeFact::UniformViewAliasing { slot });
-            }
-        }
-        if !uniform_range_fits(window, limits) {
-            let choice = if is_viewed {
-                UniformViewChoice::Viewed
-            } else {
-                UniformViewChoice::Spare
-            };
-            cx.facts
-                .insert(RuntimeFact::UniformViewRange { slot, choice });
-        }
-    }
-    for plan in &memory.slots {
-        if inputs.storage_view_slots.contains(&plan.slot) {
-            cx.facts.insert(RuntimeFact::UniformViewRange {
-                slot: plan.slot,
-                choice: UniformViewChoice::Kept,
-            });
-        }
-    }
     if addressed {
         // The storage views the step may move, the highest Metal index first: the accessed slots
         // (by their chosen windows) in memory-plan order, then the source buffers of their own.
         // A stable sort read from its end takes the last of equal indices, as the search for the
         // greatest index per step once did.
-        let storage = SlotLowering::View(ViewKind::Storage);
+        let storage = SlotLowering::View;
         let mut order: Vec<(u32, Moved)> = Vec::new();
         for (i, (plan, (l, w))) in memory
             .slots
@@ -1626,7 +1359,7 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
             continue;
         };
         let form = match l {
-            SlotLowering::View(kind) => BufferForm::Descriptor(descriptor_view(*kind)),
+            SlotLowering::View => BufferForm::Descriptor,
             SlotLowering::Psb { .. } => {
                 addressed_slot(cx, plan.slot);
                 if let Some(align) = address_alignment(cx, plan) {
@@ -1765,7 +1498,7 @@ fn unwritten_slots(
         .filter(|&(i, (plan, l))| {
             let unwritten = !plan.access.write && !plan.wide.write && unaliased(plan.param);
             let read_only = match l {
-                Some(SlotLowering::View(ViewKind::Storage)) => unwritten,
+                Some(SlotLowering::View) => unwritten,
                 Some(SlotLowering::Psb { .. }) if identity => {
                     unwritten || plan.space == AddrSpace::Constant
                 }
@@ -2043,19 +1776,13 @@ pub fn declare(
     for (i, s) in plan.slots.iter().enumerate() {
         let lowering = plan.families.access.slots.get(i).copied().flatten();
         let view = match (s, lowering) {
-            (Some(c), Some(SlotLowering::View(kind))) => Some(views::declare(mb, c.slot, kind)?),
+            (Some(c), Some(SlotLowering::View)) => Some(views::declare(mb, c.slot)?),
             _ => None,
         };
         if let (Some(c), Some(_), true) = (s, view, plan.families.access.unwritten.contains(&i)) {
             mb.unwritten_buffer(views::binding_symbol(c.slot));
         }
         d.views.push(view);
-        d.at_bind.push(match (s, view.map(|v| v.kind)) {
-            (Some(c), Some(ViewKind::UniformWords { .. } | ViewKind::UniformVec4 { .. })) => {
-                Some(range_at_bind_offset(mb, c.slot)?)
-            }
-            _ => None,
-        });
         let units = plan
             .families
             .access
@@ -2064,7 +1791,7 @@ pub fn declare(
             .copied()
             .unwrap_or(Units::NONE);
         d.units.push(match (s, view) {
-            (Some(c), Some(view)) => views::UnitViews::declare(mb, c.slot, view, units)?,
+            (Some(c), Some(_)) => views::UnitViews::declare(mb, c.slot, units)?,
             _ => views::UnitViews::NONE,
         });
     }
@@ -2287,8 +2014,8 @@ fn blob_roots(
     Ok((targets, null, blob_check))
 }
 
-/// Give each of `targets` the profile's containment check and read its slot's `SlotBindOffset`;
-/// a written target is a storage view. Every static-root access places its targets here
+/// Give each of `targets` the profile's containment check and read its slot's `SlotBindOffset`.
+/// Every static-root access places its targets here
 /// ([`access_with_leaf`], `copy::endpoint`), each at a byte offset that is a translation-time
 /// constant only where `fixed` ([`note_variable`]).
 fn place_targets(
@@ -2305,9 +2032,6 @@ fn place_targets(
             .slots
             .get(t.slot)
             .ok_or_else(|| cx.invariant("a target names a missing slot"))?;
-        if write && view_kind(cx.profile, plan) != ViewKind::Storage {
-            return Err(cx.invariant("a write through a uniform view"));
-        }
         let slot = plan.slot;
         cx.push.insert(PushField::SlotBindOffset(slot));
         note_variable(cx, slot, fixed, !write);
@@ -2333,8 +2057,8 @@ fn leaf_reach(p: &DeviceProfile, leaf: &Leaf) -> u32 {
 }
 
 /// Give each slot of `targets` the unit views that read or write `leaf` (a store when `write`)
-/// in whole units ([`leaf::leaf_units`]): a storage slot the narrow views the profile can access
-/// and a `uvec2` view, and any slot a `uvec4` view.
+/// in whole units ([`leaf::leaf_units`]): the narrow views the profile can access, and the `uvec2`
+/// and `uvec4` views.
 fn note_units(
     cx: &mut SelectCx<'_>,
     targets: &[Target],
@@ -2346,21 +2070,8 @@ fn note_units(
         return Ok(());
     }
     for t in targets {
-        let plan = cx
-            .memory
-            .slots
-            .get(t.slot)
-            .ok_or_else(|| cx.invariant("a target names a missing slot"))?;
-        let units = match view_kind(cx.profile, plan) {
-            ViewKind::Storage => units,
-            // A uniform view has no narrow or `uvec2` view.
-            ViewKind::UniformWords { .. } | ViewKind::UniformVec4 { .. } => Units {
-                vec4: units.vec4,
-                ..Units::NONE
-            },
-        };
-        if units.is_empty() {
-            continue;
+        if cx.memory.slots.get(t.slot).is_none() {
+            return Err(cx.invariant("a target names a missing slot"));
         }
         let entry = cx
             .families
@@ -2616,8 +2327,7 @@ pub fn select(
 }
 
 /// Record the static slots a volatile, coherent, or atomic access `s` reaches
-/// (`AccessPlan::ordered`). An atomic's words are reached through a storage-view pointer, which a
-/// uniform view has none of, and an atomic load reads words other invocations may write.
+/// (`AccessPlan::ordered`): an atomic load reads words other invocations may write.
 fn note_ordered(cx: &mut SelectCx<'_>, s: &AccessStrategy) {
     if let AccessStrategy::Atomic(atomic::AtomicAccess {
         mem: atomic::AtomicMem::Buffer { targets, .. },

@@ -34,7 +34,7 @@
 
 use super::argument_buffers::{self, FieldKey};
 use super::{
-    function_constants, require_case_families, resources, select_range, views_told_apart,
+    function_constants, lengths_classed, require_case_families, resources, select_range,
     BufferAddress,
 };
 use crate::case::out_of_bounds::OutOfBoundsTarget;
@@ -1027,8 +1027,8 @@ pub fn synthetic_address(stage: ShaderStage, index: u32) -> BufferAddress {
 /// and a patch draw's factor buffer, its whole length at the shared offset and instance stride,
 /// with Metal's default scale (`executor_contract::tessellation`); and the draw's depth/stencil
 /// descriptor, the one the Metal oracle sets (`RenderCase::depth_stencil_state`), which a
-/// pipeline's shader-side stencil reads as push data; telling the executor's view base alignment
-/// apart and classing lengths under the device's range limits `ranges` ([`views_told_apart`]).
+/// pipeline's shader-side stencil reads as push data; classing lengths under the device's range
+/// limit `ranges` ([`lengths_classed`]).
 pub fn bind_state(
     case: &RenderCase,
     addresses: &BTreeMap<(ShaderStage, u32), BufferAddress>,
@@ -1094,7 +1094,7 @@ pub fn bind_state(
     }
     state.argument_samplers = argument_buffers::argument_samplers(case.argument_buffer_samplers())?;
     state.depth_stencil = case.depth_stencil_state.descriptor;
-    Ok(views_told_apart(state, ranges))
+    Ok(lengths_classed(state, ranges))
 }
 
 /// The bind table of `function`'s own resources: its buffers, each bound as `bound` binds a buffer

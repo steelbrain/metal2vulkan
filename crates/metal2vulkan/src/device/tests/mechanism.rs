@@ -2,7 +2,7 @@
 
 use super::profile::device;
 use crate::device::mechanism::mechanism;
-use crate::pipeline::facts::{Mechanism, RuntimeFact, UniformViewChoice};
+use crate::pipeline::facts::{Mechanism, RuntimeFact};
 use crate::pipeline::sym::{
     ImageAccess, ImageDim, ImageHandleClass, SampledType, SlotClass, SlotRef, Stage,
     StorageFormatClass,
@@ -62,19 +62,6 @@ fn every_fact() -> Vec<RuntimeFact> {
         },
         RuntimeFact::StageInRegion,
         RuntimeFact::StageInStride { layout: 2 },
-        RuntimeFact::UniformViewRange {
-            slot,
-            choice: UniformViewChoice::Viewed,
-        },
-        RuntimeFact::UniformViewRange {
-            slot,
-            choice: UniformViewChoice::Spare,
-        },
-        RuntimeFact::UniformViewRange {
-            slot,
-            choice: UniformViewChoice::Kept,
-        },
-        RuntimeFact::UniformViewAliasing { slot },
         RuntimeFact::TileFunction,
         RuntimeFact::TileAttachmentFormat {
             color: 1,
@@ -254,8 +241,8 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::RenderTargetArrayLength { .. } => 25,
         RuntimeFact::StageInRegion => 26,
         RuntimeFact::StageInStride { .. } => 27,
-        RuntimeFact::UniformViewRange { .. } => 28,
-        RuntimeFact::UniformViewAliasing { .. } => 29,
+        RuntimeFact::OneRow => 28,
+        RuntimeFact::RegionViewports => 29,
         RuntimeFact::TileFunction => 30,
         RuntimeFact::TileAttachmentFormat { .. } => 31,
         RuntimeFact::StorageTextureNumericType { .. } => 32,
@@ -306,8 +293,6 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::RowLockstep => 86,
         RuntimeFact::BorderTexels { .. } => 87,
         RuntimeFact::HeapResidency { .. } => 88,
-        RuntimeFact::OneRow => 89,
-        RuntimeFact::RegionViewports => 90,
         RuntimeFact::CallThreadgroups => 84,
         RuntimeFact::PartialThreadgroups => 81,
         RuntimeFact::TexelRows { .. } => 78,
@@ -324,7 +309,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..91).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..89).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -360,7 +345,6 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::TexelBufferRange { .. }
                 | RuntimeFact::SimdgroupEmulation { .. }
                 | RuntimeFact::PredicationVote
-                | RuntimeFact::UniformViewAliasing { .. }
                 | RuntimeFact::SparseTexture {
                     sparse_arm: false,
                     tile_map: false,
@@ -386,7 +370,6 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::StorageTextureNumericType { .. }
                 | RuntimeFact::EmulatedSimdgroups
                 | RuntimeFact::RenderTargetArrayLength { .. }
-                | RuntimeFact::UniformViewRange { .. }
                 | RuntimeFact::SrgbTexture { .. }
                 | RuntimeFact::CrossClassReads { .. }
                 | RuntimeFact::FlatGrid

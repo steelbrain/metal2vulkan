@@ -1,27 +1,13 @@
 //! Descriptor views of a static-root buffer slot.
 //!
-//! A descriptor-form slot has exactly one view, a word array over the slot's descriptor range:
+//! A descriptor-form slot has exactly one view, a word array over the slot's descriptor range: a
+//! `StorageBuffer` block `{ u32 words[]; }` (std430, `ArrayStride` 4). It is valid on every
+//! profile, reads and writes every leaf through word composition (`memory::leaf`), and its
+//! `OpArrayLength` is the bound range in words, so the padded byte size is available to the
+//! in-shader containment check. The serializer decorates it `Aliased`: two Metal buffer slots may
+//! be bound to the same memory.
 //!
-//! - [`ViewKind::Storage`]: a `StorageBuffer` block `{ u32 words[]; }` (std430, `ArrayStride`
-//!   4). It is valid on every profile, reads and writes every leaf through word composition
-//!   (`memory::leaf`), and its `OpArrayLength` is the bound range in words, so the padded byte
-//!   size is available to the in-shader containment check. The serializer decorates it `Aliased`:
-//!   two Metal buffer slots may be bound to the same memory.
-//! - [`ViewKind::UniformWords`]: a `Uniform` block `{ u32 words[N]; }` (std430 in `Uniform`, which
-//!   needs `uniformBufferStandardLayout`).
-//! - [`ViewKind::UniformVec4`]: a `Uniform` block `{ uvec4 vecs[N]; }` (std140, valid everywhere);
-//!   a word is one lane of a 4-vector.
-//!
-//! Uniform views exist only for read-only slots with a `Bounded` window whose descriptor range
-//! fits `maxUniformBufferRange` ([`uniform_range`]), and only on profiles whose containment
-//! encoding emits no check: their size is that range, a translation-time constant, because a
-//! `Uniform` block cannot end in a runtime array, while the range actually bound may be shorter
-//! (the binder clamps it to the allocation) and no in-shader check can read it. On every device a
-//! slot with a read whose address may differ between the lanes that run it together
-//! (`SlotPlan::lane_read`) keeps its storage view, and its reads at uniform addresses with it
-//! (`lower::access::view_kind` gives their measured cost).
-//!
-//! A storage slot may also have **narrow views** ([`NarrowView`]): `StorageBuffer { u16[] }` and `{
+//! A slot may also have **narrow views** ([`NarrowView`]): `StorageBuffer { u16[] }` and `{
 //! u8[] }` blocks at the slot's binding (`ModuleBuilder::resource_view`), declared only where the
 //! profile has the width's storage access and arithmetic type (`storageBuffer16BitAccess` and
 //! `shaderInt16`, `storageBuffer8BitAccess` and `shaderInt8`) and an access of the slot reads or
@@ -31,56 +17,40 @@
 //! alignment of 1 or 2 to the unit index, and the word view's `OpArrayLength` still contains every
 //! access.
 //!
-//! A storage or uniform slot may also have a **`uvec4` view** ([`VecView`]): `StorageBuffer {
-//! uvec4[] }` or `Uniform { uvec4[N] }` at the slot's binding, declared where an access of the slot
-//! moves a 16-byte leaf whose AIR alignment is at least 16 at an offset `residual + m` proven a
-//! multiple of 16 (`memory::leaf`'s placement: the residual's alignment is the bind offset's, and
-//! `m`'s is its structure's; a `UniformVec4` word view is its own). A storage slot may likewise
-//! have a **`uvec2` view**, `StorageBuffer { uvec2[] }`, where an access moves an 8-byte leaf whose
-//! AIR alignment is at least 8 at an offset proven a multiple of 8 (a uniform slot has none: a
-//! std140 array's stride is 16). The binder's 16-byte-aligned descriptor bases carry that alignment
-//! to the unit index `(residual + m) / 16` or `/ 8`, and such a leaf lies wholly inside or wholly
-//! outside a bound range (every range is a whole number of 16-byte units), so the word view's
-//! containment check of the leaf's bytes is the unit's. `u64[]` views are not declared.
+//! A slot may also have a **`uvec4` view** or a **`uvec2` view** ([`VecView`]): `StorageBuffer {
+//! uvec4[] }` or `StorageBuffer { uvec2[] }` at the slot's binding, declared where an access of
+//! the slot moves a 16-byte (8-byte) leaf whose AIR alignment is at least 16 (8) at an offset
+//! `residual + m` proven a multiple of 16 (8) (`memory::leaf`'s placement: the residual's alignment
+//! is the bind offset's, and `m`'s is its structure's). The binder's 16-byte-aligned descriptor
+//! bases carry that alignment to the unit index `(residual + m) / 16` or `/ 8`, and such a leaf
+//! lies wholly inside or wholly outside a bound range (every range is a whole number of 16-byte
+//! units), so the word view's containment check of the leaf's bytes is the unit's. `u64[]` views
+//! are not declared.
 
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, SlotRef};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{GlobalId, TypeId, Value};
-use crate::spirv::ir::{
-    natural_layout, BinOp, ConstBits, Constant, ConvOp, LayoutRule, MemAccess, StorageClass, Type,
-};
-
-/// The view kind of a descriptor-form slot (the plan's `DescriptorView` with its size).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum ViewKind {
-    /// `StorageBuffer { u32[] }`.
-    Storage,
-    /// `Uniform { u32[words] }` (std430; `uniformBufferStandardLayout`).
-    UniformWords { words: u32 },
-    /// `Uniform { uvec4[vecs] }` (std140).
-    UniformVec4 { vecs: u32 },
-}
+use crate::spirv::ir::{natural_layout, BinOp, ConvOp, LayoutRule, MemAccess, StorageClass, Type};
 
 /// A declared view.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct View {
     pub global: GlobalId,
-    pub kind: ViewKind,
     /// The `u32` type.
     pub u32_ty: TypeId,
 }
 
-/// The least alignment of a Metal buffer slot's descriptor base: the binder starts every storage
-/// and uniform view's range at a multiple of `max(min*BufferOffsetAlignment, 16)` bytes from the
-/// allocation's start ([`base_alignment`]), so with the allocation's first byte at a
-/// 16-byte-aligned Metal address, a descriptor byte is congruent to its Metal address modulo 16
-/// and a 16-byte leaf whose Metal address is a multiple of 16 is one `uvec4` element.
+/// The least alignment of a Metal buffer slot's descriptor base: the binder starts every view's
+/// range at a multiple of `max(minStorageBufferOffsetAlignment, 16)` bytes from the allocation's
+/// start ([`base_alignment`]), so with the allocation's first byte at a 16-byte-aligned Metal
+/// address, a descriptor byte is congruent to its Metal address modulo 16 and a 16-byte leaf whose
+/// Metal address is a multiple of 16 is one `uvec4` element.
 pub const BASE_ALIGNMENT: u64 = 16;
 
 /// The alignment of a Metal buffer slot's descriptor base for a view whose minimum offset
-/// alignment is `min_offset` (`minStorageBufferOffsetAlignment` or
-/// `minUniformBufferOffsetAlignment`): the larger of it and [`BASE_ALIGNMENT`].
+/// alignment is `min_offset` (`minStorageBufferOffsetAlignment`): the larger of it and
+/// [`BASE_ALIGNMENT`].
 pub fn base_alignment(min_offset: u64) -> u64 {
     min_offset.max(BASE_ALIGNMENT)
 }
@@ -95,7 +65,7 @@ pub fn base_alignment(min_offset: u64) -> u64 {
 /// The binder states the bound as `round_up(len + align - 4, 16)`, which assumes `bind_offset +
 /// start` is a multiple of 4; a window may start at any byte (a `char` at offset 5), so the bound
 /// here uses `align - 1`.
-pub fn uniform_range(len: u64, align: u64) -> Option<u64> {
+pub fn descriptor_range(len: u64, align: u64) -> Option<u64> {
     len.checked_add(align.max(4))?
         .checked_sub(1)?
         .checked_next_multiple_of(16)
@@ -118,69 +88,25 @@ pub fn binding_symbol(slot: SlotRef) -> ResourceSlot {
 }
 
 /// Declare the view of `slot` (its `Buffer` descriptor binding symbol).
-pub fn declare(mb: &mut ModuleBuilder, slot: SlotRef, kind: ViewKind) -> BResult<View> {
-    declare_at(mb, binding_symbol(slot), kind)
+pub fn declare(mb: &mut ModuleBuilder, slot: SlotRef) -> BResult<View> {
+    declare_at(mb, binding_symbol(slot))
 }
 
-/// Declare a word view of kind `kind` at binding symbol `sym` (a Metal buffer slot, or a
-/// synthetic binding such as the constant blob, `memory::blob`).
-pub fn declare_at(mb: &mut ModuleBuilder, sym: ResourceSlot, kind: ViewKind) -> BResult<View> {
+/// Declare a word view at binding symbol `sym` (a Metal buffer slot, or a synthetic binding such
+/// as the constant blob, `memory::blob`).
+pub fn declare_at(mb: &mut ModuleBuilder, sym: ResourceSlot) -> BResult<View> {
     let u32_ty = u32_type(mb)?;
-    let (class, rule, member) = match kind {
-        ViewKind::Storage => (
-            StorageClass::StorageBuffer,
-            LayoutRule::Std430,
-            mb.ty(Type::RuntimeArray {
-                elem: u32_ty,
-                stride: Some(4),
-            })?,
-        ),
-        ViewKind::UniformWords { words } => {
-            let len = mb.constant(Constant::Scalar {
-                ty: u32_ty,
-                bits: ConstBits(u64::from(words)),
-            })?;
-            (
-                StorageClass::Uniform,
-                LayoutRule::Std430,
-                mb.ty(Type::Array {
-                    elem: u32_ty,
-                    len,
-                    stride: Some(4),
-                })?,
-            )
-        }
-        ViewKind::UniformVec4 { vecs } => {
-            let v4 = mb.ty(Type::Vector {
-                elem: u32_ty,
-                len: 4,
-            })?;
-            let len = mb.constant(Constant::Scalar {
-                ty: u32_ty,
-                bits: ConstBits(u64::from(vecs)),
-            })?;
-            (
-                StorageClass::Uniform,
-                LayoutRule::Std140,
-                mb.ty(Type::Array {
-                    elem: v4,
-                    len,
-                    stride: Some(16),
-                })?,
-            )
-        }
-    };
-    let layout = natural_layout(mb.types(), rule, true, &[member])?;
+    let member = mb.ty(Type::RuntimeArray {
+        elem: u32_ty,
+        stride: Some(4),
+    })?;
+    let layout = natural_layout(mb.types(), LayoutRule::Std430, true, &[member])?;
     let block = mb.ty(Type::Struct {
         members: [member].into(),
         layout: Some(layout),
     })?;
-    let global = mb.resource(sym, class, block)?;
-    Ok(View {
-        global,
-        kind,
-        u32_ty,
-    })
+    let global = mb.resource(sym, StorageClass::StorageBuffer, block)?;
+    Ok(View { global, u32_ty })
 }
 
 fn k(fb: &mut FunctionBuilder<'_>, v: u32) -> BResult<Value> {
@@ -188,37 +114,19 @@ fn k(fb: &mut FunctionBuilder<'_>, v: u32) -> BResult<Value> {
     fb.module().const_value(c)
 }
 
-/// A pointer to word `word` (a `u32` index) of a storage view, or `None` for a uniform view.
-pub fn word_ptr(fb: &mut FunctionBuilder<'_>, view: View, word: Value) -> BResult<Option<Value>> {
-    match view.kind {
-        ViewKind::Storage => {
-            let base = fb.module().global_value(view.global)?;
-            let zero = k(fb, 0)?;
-            Ok(Some(fb.access_chain(base, &[zero, word])?))
-        }
-        ViewKind::UniformWords { .. } | ViewKind::UniformVec4 { .. } => Ok(None),
-    }
+/// A pointer to word `word` (a `u32` index) of `view`.
+pub fn word_ptr(fb: &mut FunctionBuilder<'_>, view: View, word: Value) -> BResult<Value> {
+    let base = fb.module().global_value(view.global)?;
+    let zero = k(fb, 0)?;
+    fb.access_chain(base, &[zero, word])
 }
 
 /// Load word `word` (a `u32` index) of `view`.
 pub fn read_word(fb: &mut FunctionBuilder<'_>, view: View, word: Value) -> BResult<Value> {
     let base = fb.module().global_value(view.global)?;
     let zero = k(fb, 0)?;
-    match view.kind {
-        ViewKind::Storage | ViewKind::UniformWords { .. } => {
-            let p = fb.access_chain(base, &[zero, word])?;
-            fb.load(p, MemAccess::default())
-        }
-        ViewKind::UniformVec4 { .. } => {
-            let two = k(fb, 2)?;
-            let three = k(fb, 3)?;
-            let vi = fb.binary(BinOp::ShiftRightLogical, word, two)?;
-            let lane = fb.binary(BinOp::BitwiseAnd, word, three)?;
-            let p = fb.access_chain(base, &[zero, vi])?;
-            let v = fb.load(p, MemAccess::default())?;
-            fb.vector_extract_dynamic(v, lane)
-        }
-    }
+    let p = fb.access_chain(base, &[zero, word])?;
+    fb.load(p, MemAccess::default())
 }
 
 /// A typed narrow view of a storage slot: `StorageBuffer { u<8·bytes>[] }` at the slot's binding,
@@ -234,18 +142,16 @@ pub struct NarrowView {
     pub u32_ty: TypeId,
 }
 
-/// A `uvec4` or `uvec2` view of a descriptor slot: `StorageBuffer { uvec4[] }`, `StorageBuffer {
-/// uvec2[] }` or `Uniform { uvec4[N] }` at the slot's binding beside its word view, or a
-/// `UniformVec4` word view itself. A unit is vector element `index` of member 0.
+/// A `uvec4` or `uvec2` view of a descriptor slot: `StorageBuffer { uvec4[] }` or `StorageBuffer {
+/// uvec2[] }` at the slot's binding beside its word view. A unit is vector element `index` of
+/// member 0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VecView {
     pub global: GlobalId,
-    /// The view's storage class: a uniform view's vectors are read-only, read plainly.
-    pub class: StorageClass,
 }
 
-/// The unit views of a descriptor slot beside its word view: a storage slot's narrow and `uvec2`
-/// views and a storage or uniform slot's `uvec4` view.
+/// The unit views of a descriptor slot beside its word view: its narrow, `uvec2` and `uvec4`
+/// views.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct UnitViews {
     pub u16: Option<NarrowView>,
@@ -291,57 +197,41 @@ impl UnitViews {
         }
     }
 
-    /// Declare the unit views of `units` for `slot`, whose word view [`declare`] declared as
-    /// `view`: a storage view's narrow, `uvec2` and `uvec4` views, a `UniformWords` view's `uvec4`
-    /// view; a `UniformVec4` view is its own `uvec4` view, declared or not. A
-    /// uniform slot has no narrow or `uvec2` view.
+    /// Declare the unit views of `units` for `slot`, whose word view [`declare`] declared.
     pub fn declare(
         mb: &mut ModuleBuilder,
         slot: SlotRef,
-        view: View,
         units: crate::memory::leaf::Units,
     ) -> BResult<UnitViews> {
-        let storage = view.kind == ViewKind::Storage;
         Ok(UnitViews {
-            u16: if storage && units.u16 {
+            u16: if units.u16 {
                 Some(declare_narrow(mb, slot, 2)?)
             } else {
                 None
             },
-            u8: if storage && units.u8 {
+            u8: if units.u8 {
                 Some(declare_narrow(mb, slot, 1)?)
             } else {
                 None
             },
-            vec2: if storage && units.vec2 {
-                Some(declare_vec(mb, slot, view, 2)?)
+            vec2: if units.vec2 {
+                Some(declare_vec(mb, slot, 2)?)
             } else {
                 None
             },
-            vec4: match view.kind {
-                ViewKind::UniformVec4 { .. } => Some(VecView {
-                    global: view.global,
-                    class: StorageClass::Uniform,
-                }),
-                _ if units.vec4 => Some(declare_vec(mb, slot, view, 4)?),
-                _ => None,
+            vec4: if units.vec4 {
+                Some(declare_vec(mb, slot, 4)?)
+            } else {
+                None
             },
         })
     }
 }
 
-/// Declare the `uvecN` view (`N = lanes`, 2 or 4) of `slot`, whose word view [`declare`] declared
-/// as `view`: `StorageBuffer { uvecN[] }` (std430, `ArrayStride` `4N`) beside a storage view, or
-/// `Uniform { uvec4[words / 4] }` (std140, valid without `uniformBufferStandardLayout`) beside a
-/// `UniformWords` view, whose size is a multiple of 16 bytes ([`uniform_range`]). The serializer
-/// decorates a storage one `Aliased` as every storage view of a Metal buffer. A uniform view has no
-/// `uvec2` view: a std140 array's stride is 16.
-pub fn declare_vec(
-    mb: &mut ModuleBuilder,
-    slot: SlotRef,
-    view: View,
-    lanes: u32,
-) -> BResult<VecView> {
+/// Declare the `uvecN` view (`N = lanes`, 2 or 4) of `slot`, whose word view [`declare`]
+/// declared: `StorageBuffer { uvecN[] }` (std430, `ArrayStride` `4N`). The serializer decorates it
+/// `Aliased` as every storage view of a Metal buffer.
+pub fn declare_vec(mb: &mut ModuleBuilder, slot: SlotRef, lanes: u32) -> BResult<VecView> {
     let sym = binding_symbol(slot);
     let u32_ty = u32_type(mb)?;
     let len = u8::try_from(lanes)
@@ -351,50 +241,17 @@ pub fn declare_vec(
             crate::spirv::error::GlobalRule::ResourceType,
         ))?;
     let vec = mb.ty(Type::Vector { elem: u32_ty, len })?;
-    let (class, rule, member) = match view.kind {
-        ViewKind::Storage => (
-            StorageClass::StorageBuffer,
-            LayoutRule::Std430,
-            mb.ty(Type::RuntimeArray {
-                elem: vec,
-                stride: Some(4 * lanes),
-            })?,
-        ),
-        ViewKind::UniformWords { words } if lanes == 4 => {
-            let len = mb.constant(Constant::Scalar {
-                ty: u32_ty,
-                bits: ConstBits(u64::from(words / 4)),
-            })?;
-            (
-                StorageClass::Uniform,
-                LayoutRule::Std140,
-                mb.ty(Type::Array {
-                    elem: vec,
-                    len,
-                    stride: Some(16),
-                })?,
-            )
-        }
-        // The word view is already one.
-        ViewKind::UniformVec4 { .. } if lanes == 4 => {
-            return Ok(VecView {
-                global: view.global,
-                class: StorageClass::Uniform,
-            })
-        }
-        ViewKind::UniformWords { .. } | ViewKind::UniformVec4 { .. } => {
-            return Err(crate::spirv::error::BuildError::Global(
-                crate::spirv::error::GlobalRule::ResourceType,
-            ))
-        }
-    };
-    let layout = natural_layout(mb.types(), rule, true, &[member])?;
+    let member = mb.ty(Type::RuntimeArray {
+        elem: vec,
+        stride: Some(4 * lanes),
+    })?;
+    let layout = natural_layout(mb.types(), LayoutRule::Std430, true, &[member])?;
     let block = mb.ty(Type::Struct {
         members: [member].into(),
         layout: Some(layout),
     })?;
-    let global = mb.resource_view(sym, class, block)?;
-    Ok(VecView { global, class })
+    let global = mb.resource_view(sym, StorageClass::StorageBuffer, block)?;
+    Ok(VecView { global })
 }
 
 /// Load vector unit `index` of `view` with memory operands `ops`.
@@ -498,19 +355,14 @@ pub fn write_unit(
     fb.store(p, x, ops)
 }
 
-/// The byte size of a storage view's bound range, as a `u32` (`OpArrayLength · 4`): the padded
-/// size. A range of `2^30` words or more wraps to a smaller size, which only makes a containment
-/// check stricter. `None` for a uniform view, which has no in-shader check.
-pub fn storage_bytes(fb: &mut FunctionBuilder<'_>, view: View) -> BResult<Option<Value>> {
-    match view.kind {
-        ViewKind::Storage => {
-            let base = fb.module().global_value(view.global)?;
-            let len = fb.array_length(base, 0)?;
-            let four = k(fb, 4)?;
-            Ok(Some(fb.binary(BinOp::IMul, len, four)?))
-        }
-        ViewKind::UniformWords { .. } | ViewKind::UniformVec4 { .. } => Ok(None),
-    }
+/// The byte size of a view's bound range, as a `u32` (`OpArrayLength · 4`): the padded size. A
+/// range of `2^30` words or more wraps to a smaller size, which only makes a containment check
+/// stricter.
+pub fn storage_bytes(fb: &mut FunctionBuilder<'_>, view: View) -> BResult<Value> {
+    let base = fb.module().global_value(view.global)?;
+    let len = fb.array_length(base, 0)?;
+    let four = k(fb, 4)?;
+    fb.binary(BinOp::IMul, len, four)
 }
 
 #[cfg(test)]
@@ -518,14 +370,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_uniform_range_covers_any_start_residue() {
+    fn the_descriptor_range_covers_any_start_residue() {
         // A 1-byte window at an odd start with 16-byte alignment: the residue can be 15, and the
         // word read ends at 16.
-        assert_eq!(uniform_range(1, 16), Some(16));
+        assert_eq!(descriptor_range(1, 16), Some(16));
         // The `- 4` form would give 16 here, but a window of 4 bytes starting at residue 15 reads
         // up to byte 19 (word 4): the range must be 32.
-        assert_eq!(uniform_range(4, 16), Some(32));
-        assert_eq!(uniform_range(6, 256), Some(272));
-        assert_eq!(uniform_range(u64::MAX, 16), None);
+        assert_eq!(descriptor_range(4, 16), Some(32));
+        assert_eq!(descriptor_range(6, 256), Some(272));
+        assert_eq!(descriptor_range(u64::MAX, 16), None);
     }
 }

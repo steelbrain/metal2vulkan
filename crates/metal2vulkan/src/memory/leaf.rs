@@ -83,7 +83,7 @@
 //!
 //! **Vector units**. A word memory may also load and store 16-byte units through a typed `uvec4`
 //! view and 8-byte units through a typed `uvec2` view ([`WordMem::read_vec`]; a descriptor slot's
-//! `{ uvec4[] }` and `{ uvec2[] }` views, or its uniform view's own vectors, `memory::views`).
+//! `{ uvec4[] }` and `{ uvec2[] }` views, `memory::views`).
 //! There a [`Path::Vec4`] leaf is one unit at index `off / 16` and a [`Path::Vec2`] leaf one at
 //! `off / 8`, its register value one bitcast of the vector (32-bit lanes, or 64-bit ones) or the
 //! composition of its words: one load or store where the aligned path moves four or two words. A

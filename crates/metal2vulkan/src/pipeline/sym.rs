@@ -663,17 +663,6 @@ pub enum SpecKey {
     /// device's sampler reads exactly the texel Metal's reads. A slot bound to a normalized sampler,
     /// or to none, takes false, so a normalized sampler's filter makes no pipeline of its own.
     NearestPixelSampler(SlotRef),
-    /// Boolean: the descriptor range bound at the buffer slot, which the function reads through a
-    /// uniform view, starts at the bind offset, so its `SlotBindOffset` residual is 0 (default
-    /// false): the slot holds inline bytes, which the consumer places at an aligned offset, or a
-    /// buffer at an offset that is a multiple of the view's descriptor base alignment
-    /// (`max(minUniformBufferOffsetAlignment, 16)`), under a window that starts in the range's
-    /// first aligned block. A slot bound to nothing takes true: its residual is 0. Where it holds,
-    /// the function reads the slot at the Metal offset alone, a constant for a constant member,
-    /// which a driver can load into registers ahead of the shader (Mesa's ANV does so only for a
-    /// uniform load at a constant offset); elsewhere at the residual plus the offset. Only a slot
-    /// read through a uniform view declares it.
-    RangeAtBindOffset(SlotRef),
     /// The word of the runtime sampler bound to the slot (`u32`: its whole
     /// [`SamplerWord`](crate::metal::sampler::SamplerWord), its address modes as the bound
     /// texture's map sends them), read by a specialized note's test alone

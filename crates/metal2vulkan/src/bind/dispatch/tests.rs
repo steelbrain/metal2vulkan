@@ -6,7 +6,7 @@ use super::*;
 use crate::bind::plan::{BoundKind, PlannedBuffer};
 use crate::bind::state::{BoundBuffer, ResourceClass, StageTable, UsedResource};
 use crate::pipeline::artifact::SpecConstant;
-use crate::pipeline::interface::{AccessSet, BufferForm, DescriptorView, PlacedField, Window};
+use crate::pipeline::interface::{AccessSet, BufferForm, PlacedField, Window};
 use crate::pipeline::sym::{SlotClass, SlotRef, Stage};
 
 /// `BindingPlan::instantiate_dispatch` of a compute plan of template `t` with no variant.
@@ -76,7 +76,7 @@ fn template() -> ComputeTemplate {
         buffers: vec![PlannedBuffer {
             slot: kslot(0),
             window: Window::Bounded { start: 0, len: 64 },
-            form: BufferForm::Descriptor(DescriptorView::Storage),
+            form: BufferForm::Descriptor,
             access: AccessSet::READ_WRITE,
             binding: Some((0, 0)),
             alignment: 64,
@@ -85,7 +85,6 @@ fn template() -> ComputeTemplate {
                 device_address: false,
                 length_class: crate::bind::state::length_class(4096),
             },
-            disjoint: false,
         }],
         spec: vec![
             spec(0, SpecKey::LocalSize(Axis::X)),

@@ -124,7 +124,6 @@ bind	TessellationFactorRange	rare	tessellation factors past one storage descript
 bind	PatchIndexRange	rare	patch indices past one storage descriptor
 bind	ControlPointIndexRange	rare	control-point indices past one storage descriptor
 bind	MissingStageInRegion	none	a stage-in region never set, which Metal leaves undefined
-bind	UniformViewAliased	rare	Profile F's uniform-view fallback aliased by a write
 bind	MissingDeviceAddress	rare	a slot reached through a pointer loaded from memory, bound with inline bytes or on a device without device addresses
 limit	InlinedInstructions	rare	very large shaders after inlining
 limit	OutputBlocks	rare	very large control flow

@@ -153,28 +153,6 @@ pub struct BindState {
     /// [`BindingPlan::heap_elements`]: crate::bind::BindingPlan::heap_elements
     #[cfg_attr(feature = "serde", serde(default))]
     pub heap_placement: HeapPlacement,
-    /// The descriptor base alignment of the device's uniform views, which the runtime sets: the one
-    /// alignment above the vertex fetch's that the bind offset class of a buffer at a slot of
-    /// [`StageTable::at_bind_views`] tells apart, as a uniform view's range starts at its bind
-    /// offset only at a multiple of it (`SpecKey::RangeAtBindOffset`). 0, the
-    /// default, tells none apart: every view is then read at its residual, exact on every device,
-    /// as it is under any other value the plan does not find its own.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub view_base_alignment: u32,
-    /// Whether the consumer reads every uniform view at its residual: it draws and dispatches
-    /// with each plan's key at every uniform view's `SpecKey::RangeAtBindOffset` 0, as the runtime
-    /// does on a device whose driver loads no uniform read at a constant offset ahead of the
-    /// shader. A uniform view's descriptor range then need not start at its bind offset, and
-    /// instantiation binds one that a run of bind offsets of the bound buffer shares (the buffer
-    /// from its start where it fits the view's maximum range), its `SlotBindOffset` residual the
-    /// rest: a command that moves only such a slot's offset binds the same descriptor, keeps its
-    /// set 0 and pushes only its residual. False, the default, starts each uniform view's range at
-    /// its bind offset aligned down to the view base alignment, which a key reading it at its bind
-    /// offset alone (`RangeAtBindOffset` 1) needs. Either reads the same bytes. Only the descriptor
-    /// ranges and residuals a command's instantiation writes depend on it, so it is not part of
-    /// the shape.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub uniform_views_at_residual: bool,
     /// The render encoder's viewport count (`setViewports:count:`): a vertex function's
     /// `[[viewport_array_index]]` at or past it draws through viewport 0, as Metal's does
     /// (`PushField::ViewportCount`). Metal's default is one viewport; 0, the default here, and 1
@@ -428,9 +406,8 @@ impl BindState {
     /// The projection of this state that can change a plan: per stage, which slots are bound and
     /// with what kind of resource, whether a buffer has a device address, its per-bind stride, its
     /// length class as the table's [`StageTable::buffer_ranges`] tell it apart and bind-offset
-    /// alignment class (the largest power of two up to 4 that divides the offset, or
-    /// [`view_base_alignment`](Self::view_base_alignment) where that divides it at a slot of
-    /// [`StageTable::at_bind_views`]), texture types and formats, sampler modes, threadgroup
+    /// alignment class (the largest power of two up to 4 that divides the offset), texture types
+    /// and formats, sampler modes, threadgroup
     /// lengths, the vertex amplification, the render target array length, whether a
     /// tessellation factor buffer is set, a tile dispatch's render area, the argument samplers'
     /// capacity class and shapes ([`ArgumentSamplersShape::of`]), and the tile threadgroup memory
@@ -441,7 +418,7 @@ impl BindState {
         let stages = self
             .stages
             .iter()
-            .map(|(stage, t)| (*stage, t.shape(self.view_base_alignment)))
+            .map(|(stage, t)| (*stage, t.shape()))
             .filter(|(_, s)| *s != StageShape::default())
             .collect();
         BindShape {
@@ -551,9 +528,9 @@ impl BindState {
         } = shape;
         let tables = self.stages.iter().filter(|(_, t)| !t.has_empty_shape());
         tables.clone().count() == stages.len()
-            && tables.zip(stages).all(|((stage, t), (of, s))| {
-                stage == of && t.has_shape(s, self.view_base_alignment)
-            })
+            && tables
+                .zip(stages)
+                .all(|((stage, t), (of, s))| stage == of && t.has_shape(s))
             && self.vertex_amplification == *vertex_amplification
             && self.imageblock_size == *imageblock_size
             && self.render_target_array_length == *render_target_array_length
@@ -766,18 +743,11 @@ impl ViewMapping {
 }
 
 impl StageTable {
-    /// The shape of this stage's tables ([`BindState::shape`]), the bind offsets of its buffers at
-    /// [`at_bind_views`](Self::at_bind_views) classed under the uniform views' base alignment
-    /// `view_base_alignment` ([`BindState::view_base_alignment`]) and their lengths under its
-    /// [`buffer_ranges`](Self::buffer_ranges).
-    pub fn shape(&self, view_base_alignment: u32) -> StageShape {
+    /// The shape of this stage's tables ([`BindState::shape`]), the lengths of its buffers classed
+    /// under its [`buffer_ranges`](Self::buffer_ranges).
+    pub fn shape(&self) -> StageShape {
         let ranges = self.buffer_ranges;
-        let buffer = |(i, b): (&u32, &BoundBuffer)| {
-            (
-                *i,
-                b.shape(self.class_alignment(*i, view_base_alignment), ranges),
-            )
-        };
+        let buffer = |(i, b): (&u32, &BoundBuffer)| (*i, b.shape(ranges));
         StageShape {
             buffers: self.buffers.iter().map(buffer).collect(),
             textures: self.textures.iter().map(|(i, t)| (*i, t.shape())).collect(),
@@ -794,9 +764,8 @@ impl StageTable {
             && self.threadgroup_lengths.is_empty()
     }
 
-    /// Whether `shape` is its shape ([`BindState::has_shape`]), under the uniform views' base
-    /// alignment `view_base_alignment`.
-    fn has_shape(&self, shape: &StageShape, view_base_alignment: u32) -> bool {
+    /// Whether `shape` is its shape ([`BindState::has_shape`]).
+    fn has_shape(&self, shape: &StageShape) -> bool {
         let StageShape {
             buffers,
             textures,
@@ -804,12 +773,7 @@ impl StageTable {
             threadgroup_lengths,
         } = shape;
         let ranges = self.buffer_ranges;
-        let buffer_shapes = (self.buffers.iter()).map(|(i, b)| {
-            (
-                *i,
-                b.shape(self.class_alignment(*i, view_base_alignment), ranges),
-            )
-        });
+        let buffer_shapes = (self.buffers.iter()).map(|(i, b)| (*i, b.shape(ranges)));
         let texture_shapes = self.textures.iter().map(|(i, t)| (*i, t.shape()));
         let sampler_shapes = self.samplers.iter().map(|(i, s)| (*i, s.shape()));
         buffer_shapes.eq(buffers.iter().map(|(i, b)| (*i, *b)))
@@ -817,24 +781,13 @@ impl StageTable {
             && sampler_shapes.eq(samplers.iter().map(|(i, s)| (*i, *s)))
             && self.threadgroup_lengths == *threadgroup_lengths
     }
-
-    /// The alignment above the vertex fetch's that the bind offset class of a buffer at index
-    /// `index` tells apart ([`BoundBuffer::shape`]): `view_base_alignment` at a slot of
-    /// [`at_bind_views`](Self::at_bind_views), else 0 (none).
-    pub fn class_alignment(&self, index: u32, view_base_alignment: u32) -> u32 {
-        if index < u64::BITS && (self.at_bind_views >> index) & 1 == 1 {
-            view_base_alignment
-        } else {
-            0
-        }
-    }
 }
 
 impl BoundBuffer {
-    /// The shape of this binding, its bind offset classed under the uniform views' base alignment
-    /// `view_base_alignment` (`BufferShape::Buffer`'s `offset_alignment`) and its length under the
-    /// buffer range limits `ranges` (its `length_class`, [`BufferRanges::length_class`]).
-    pub fn shape(&self, view_base_alignment: u32, ranges: BufferRanges) -> BufferShape {
+    /// The shape of this binding, its bind offset classed (`BufferShape::Buffer`'s
+    /// `offset_alignment`) and its length under the buffer range limits `ranges` (its
+    /// `length_class`, [`BufferRanges::length_class`]).
+    pub fn shape(&self, ranges: BufferRanges) -> BufferShape {
         match *self {
             BoundBuffer::Buffer {
                 length,
@@ -846,7 +799,7 @@ impl BoundBuffer {
                 attribute_stride,
                 device_address: device_address.is_some(),
                 length_class: ranges.length_class(length),
-                offset_alignment: offset_alignment(offset, view_base_alignment),
+                offset_alignment: offset_alignment(offset),
             },
             BoundBuffer::Bytes {
                 attribute_stride, ..
@@ -854,15 +807,9 @@ impl BoundBuffer {
         }
     }
 
-    /// Whether this binding and `other` have one shape under `view_base_alignment` and `ranges`,
-    /// as their [`shape`](Self::shape)s compare: a length or bind offset the two share is not
-    /// classed.
-    pub fn same_shape(
-        &self,
-        other: &BoundBuffer,
-        view_base_alignment: u32,
-        ranges: BufferRanges,
-    ) -> bool {
+    /// Whether this binding and `other` have one shape under `ranges`, as their
+    /// [`shape`](Self::shape)s compare: a length or bind offset the two share is not classed.
+    pub fn same_shape(&self, other: &BoundBuffer, ranges: BufferRanges) -> bool {
         match (*self, *other) {
             (
                 BoundBuffer::Buffer {
@@ -885,8 +832,7 @@ impl BoundBuffer {
                     && (length == other_length
                         || ranges.length_class(length) == ranges.length_class(other_length))
                     && (offset == other_offset
-                        || offset_alignment(offset, view_base_alignment)
-                            == offset_alignment(other_offset, view_base_alignment))
+                        || offset_alignment(offset) == offset_alignment(other_offset))
             }
             (
                 BoundBuffer::Bytes {
@@ -904,20 +850,12 @@ impl BoundBuffer {
 }
 
 /// The alignment class of bind offset `offset` (a buffer's,
-/// [`BufferShape::Buffer::offset_alignment`]): `view_base_alignment` where that divides it (the
-/// uniform views' descriptor base alignment, [`BindState::view_base_alignment`]: a view's range
-/// then starts at the offset, `SpecKey::RangeAtBindOffset`), else the largest power of two up to
+/// [`BufferShape::Buffer::offset_alignment`]): the largest power of two up to
 /// [`MAX_VERTEX_ALIGNMENT`](metal::vertex::MAX_VERTEX_ALIGNMENT) that divides it (whether
-/// fixed-function vertex input can fetch every attribute format at a buffer bound there). These
-/// are the only predicates a plan reads of a bind offset, so offsets moving between multiples of
-/// 4 that the base alignment does not divide, or between those it divides, keep one shape; a
-/// `view_base_alignment` of 4 or less (0, the default) tells only the vertex fetch's apart.
-pub fn offset_alignment(offset: u64, view_base_alignment: u32) -> u32 {
-    if view_base_alignment > metal::vertex::MAX_VERTEX_ALIGNMENT
-        && offset.is_multiple_of(u64::from(view_base_alignment))
-    {
-        return view_base_alignment;
-    }
+/// fixed-function vertex input can fetch every attribute format at a buffer bound there). It is
+/// the only predicate a plan reads of a bind offset, so offsets moving between multiples of 4
+/// keep one shape.
+pub fn offset_alignment(offset: u64) -> u32 {
     let mut a = metal::vertex::MAX_VERTEX_ALIGNMENT;
     while a > 1 && !offset.is_multiple_of(u64::from(a)) {
         a /= 2;
@@ -1043,18 +981,9 @@ pub struct StageTable {
     /// shape.
     #[cfg_attr(feature = "serde", serde(default))]
     pub acceleration_structures: BTreeMap<u32, BoundAccelerationStructure>,
-    /// The buffer slots (bit `i` for index `i`) whose bind offset class tells
-    /// [`BindState::view_base_alignment`] apart, which the runtime sets: the
-    /// slots its function reads through a uniform view, whose range a plan starts at the bind
-    /// offset where that alignment divides it (`SpecKey::RangeAtBindOffset`). No plan reads that
-    /// predicate of another slot, so its offsets moving among multiples of 4 keep one shape. A slot
-    /// left out (none, the default) reads its view at its residual, exact at every offset: a
-    /// runtime leaves out a slot it finds bound at moving offsets, so that its draws keep one shape.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub at_bind_views: u64,
-    /// The device's buffer range limits, which the runtime sets: its buffers' length classes are
-    /// told apart only as far as those limits tell them apart ([`BufferRanges::length_class`]),
-    /// all a plan reads of a buffer's length, so its buffers of lengths they do not tell apart
+    /// The device's buffer range limit, which the runtime sets: its buffers' length classes are
+    /// told apart only as far as that limit tells them apart ([`BufferRanges::length_class`]),
+    /// all a plan reads of a buffer's length, so its buffers of lengths it does not tell apart
     /// keep one shape. None (the default) tells every class apart.
     #[cfg_attr(feature = "serde", serde(default))]
     pub buffer_ranges: BufferRanges,
@@ -1409,47 +1338,41 @@ pub fn length_class(length: u64) -> u8 {
     (u128::BITS - padded.leading_zeros()) as u8
 }
 
-/// The range limits of a device's buffer views (`maxUniformBufferRange` and
-/// `maxStorageBufferRange`, [`BufferRanges::of`]), the only values a plan compares a bound
-/// buffer's length class with (whether every range of the buffer fits each), which the runtime
-/// sets on each stage table ([`StageTable::buffer_ranges`]). A buffer's shape tells apart only the
-/// classes those comparisons tell apart ([`BufferRanges::length_class`]), so buffers of lengths
-/// the device's limits do not tell apart bind one shape and take one plan, as a stream of
-/// dispatches over buffers of many sizes binds them. The default, both 0, tells every class apart.
+/// The range limit of a device's buffer views (`maxStorageBufferRange`, [`BufferRanges::of`]), the
+/// only value a plan compares a bound buffer's length class with (whether every range of the
+/// buffer fits it), which the runtime sets on each stage table ([`StageTable::buffer_ranges`]). A
+/// buffer's shape tells apart only the classes that comparison tells apart
+/// ([`BufferRanges::length_class`]), so buffers of lengths the device's limit does not tell apart
+/// bind one shape and take one plan, as a stream of dispatches over buffers of many sizes binds
+/// them. The default, 0, tells every class apart.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BufferRanges {
-    /// `maxUniformBufferRange`.
-    pub uniform: u32,
     /// `maxStorageBufferRange`.
     pub storage: u32,
 }
 
 impl BufferRanges {
-    /// The range limits of a device of `limits`.
+    /// The range limit of a device of `limits`.
     pub fn of(limits: &Limits) -> BufferRanges {
         BufferRanges {
-            uniform: limits.max_uniform_buffer_range,
             storage: limits.max_storage_buffer_range,
         }
     }
 
     /// The length class a buffer's shape states of an allocation of `length` bytes
     /// ([`BufferShape::Buffer`]'s `length_class`): its exact class rounded up to the greatest
-    /// class whose every range fits the least of the two limits it fits, so a plan's comparison of
-    /// the class with either limit answers as the exact class's does; a class past both limits is
-    /// its own. Rounded up, the class still bounds the padded length (`padded(length) <
-    /// 2^class`), so under limits other than its device's no plan reads a range past a limit
-    /// either: it may take only the form a longer buffer takes.
+    /// class whose every range fits the limit, where it fits, so a plan's comparison of the class
+    /// with the limit answers as the exact class's does; a class past the limit is its own.
+    /// Rounded up, the class still bounds the padded length (`padded(length) < 2^class`), so under
+    /// a limit other than its device's no plan reads a range past it either: it may take only the
+    /// form a longer buffer takes.
     pub fn length_class(&self, length: u64) -> u8 {
         let class = length_class(length);
-        let (uniform, storage) = (widest_class(self.uniform), widest_class(self.storage));
-        let (least, most) = (uniform.min(storage), uniform.max(storage));
-        if class <= least {
-            least
-        } else if class <= most {
-            most
+        let widest = widest_class(self.storage);
+        if class <= widest {
+            widest
         } else {
             class
         }
@@ -1773,8 +1696,6 @@ pub enum BufferShape {
         /// ([`BufferRanges::length_class`]), as [`BindState::shape`] computes it.
         length_class: u8,
         /// The alignment class of the bind offset, as [`BindState::shape`] computes it: the
-        /// uniform views' base alignment ([`BindState::view_base_alignment`]) where the slot
-        /// tells it apart ([`StageTable::at_bind_views`]) and it divides the offset, else the
         /// largest power of two up to 4 that divides it.
         offset_alignment: u32,
     },

@@ -38,16 +38,16 @@ use crate::pipeline::artifact::{
     SpecializedNote, StageModule, StrategyCensus, StrategyUse,
 };
 use crate::pipeline::descriptor::TessellationDescriptor;
-use crate::pipeline::facts::{Mechanism, RuntimeFact, UniformViewChoice};
+use crate::pipeline::facts::{Mechanism, RuntimeFact};
 use crate::pipeline::graphics::{
     BandPrimitive, BlendState, ColorAttachmentState, GraphicsState, InputAttachmentUse,
     LineBandState, TessellationState,
 };
 use crate::pipeline::interface::{
-    AccessSet, BufferForm, BufferKind, BufferSlot, CommandWrites, DescriptorView, LevelReads,
-    NumberedSampler, PatchDomain, PipelineInterface, PlacedField, PushLoc, PushPlacement,
-    SampledLevels, SamplerArray, SamplerSlot, SlotInterface, StageDescriptor, StageInterface,
-    StageSpec, TessellationStage, TextureAccess, TextureSlot, ThreadgroupArgument, Window,
+    AccessSet, BufferForm, BufferKind, BufferSlot, CommandWrites, LevelReads, NumberedSampler,
+    PatchDomain, PipelineInterface, PlacedField, PushLoc, PushPlacement, SampledLevels,
+    SamplerArray, SamplerSlot, SlotInterface, StageDescriptor, StageInterface, StageSpec,
+    TessellationStage, TextureAccess, TextureSlot, ThreadgroupArgument, Window,
 };
 use crate::pipeline::layout::{
     BindingSource, DescriptorBinding, DescriptorSetLayout, PipelineLayout, PushConstantRange,
@@ -865,7 +865,7 @@ codec_enum! {
         TgOffset(f0), TileThreadgroupLength, TileGridWidth, TextureSwizzle(f0),
         ObjectLocalSize(f0), ObjectFlatLocalSize, ObjectMultiRegion, SamplerMinLevel(f0),
         ConstantLanes(f0), BoundTexelFormat(f0), OffsetBaseAxes(f0), SamplerAnisotropy(f0),
-        RangeAtBindOffset(f0), NearestPixelSampler(f0), BoundSamplerWord(f0), StageInReach,
+        NearestPixelSampler(f0), BoundSamplerWord(f0), StageInReach,
         HeapRawTextures(f0), BorderTexels(f0), HeapNanFamilies(f0), DeepThreadgroup,
     }
     PushField {
@@ -1157,9 +1157,8 @@ codec_enum! {
     NumberedSampler { Constexpr(f0), Read, Write }
     PatchDomain { Triangle, Quad }
     Window { Bounded { start, len }, Whole }
-    BufferForm { Descriptor(f0), Psb }
+    BufferForm { Descriptor, Psb }
     BufferKind { Buffer, VisibleFunctionTable, IntersectionFunctionTable }
-    DescriptorView { Storage, UniformWords, UniformVec4 }
     PushLoc { Push { offset }, ArgumentTable { offset } }
     IoRole {
         Attribute { index }, Varying { user, interpolation },
@@ -1212,7 +1211,6 @@ codec_enum! {
         ImageblockSize { cell_bytes },
         RenderTargetArrayLength { layer_dropped }, StageInRegion,
         StageInStride { layout },
-        UniformViewRange { slot, choice }, UniformViewAliasing { slot },
         TileFunction, TileAttachmentFormat { color, format },
         StorageTextureNumericType { slot },
         OutOfBoundsAlpha { slot },
@@ -1273,7 +1271,6 @@ codec_enum! {
         GridTiles,
         PrivateArena { slot_bytes },
     }
-    UniformViewChoice { Viewed, Spare, Kept }
     Mechanism {
         Specialization, Variant, PushConstant, DynamicState, DynamicStateOrPushConstant,
         Builtin, PlanTimeCheck, BinderView, KeyProjection, RegionSelected,

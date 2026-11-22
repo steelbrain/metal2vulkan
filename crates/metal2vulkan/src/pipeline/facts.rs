@@ -1,4 +1,4 @@
-//! `RuntimeFact`, `Mechanism`, and `UniformViewChoice`.
+//! `RuntimeFact` and `Mechanism`.
 //!
 //! `RuntimeFact` is the single dependency vocabulary: `select` emits facts, the planner supplies
 //! their values, and `device::mechanism(fact, profile)` is a total function with one [`Mechanism`]
@@ -106,22 +106,6 @@ pub enum RuntimeFact {
     /// without one, as Metal reads it (`MTLAttributeStrideStatic` is its low 32 bits). A layout of a fixed stride reads its own, compiled in,
     /// whatever the bind's, and records nothing.
     StageInStride { layout: u32 },
-    /// A read-only slot that Profile F's per-stage storage-buffer fallback may read through a
-    /// uniform view, whose window does not bound its descriptor range within
-    /// `maxUniformBufferRange` (a `Whole` window, or a longer `Bounded` one): the view is exact
-    /// only where the range the shape binds fits. `choice` states what this compile made of it.
-    /// A plan whose shape does not prove the fit for a `Viewed` slot asks for the variant that
-    /// keeps every such slot a storage view (`VariantKey::storage_view_slots`); instantiation
-    /// refuses a range above the limit (`BindError::DescriptorRangeExceeded`).
-    UniformViewRange {
-        slot: SlotRef,
-        choice: UniformViewChoice,
-    },
-    /// A `device` slot read through a uniform view (Profile F's per-stage storage-buffer
-    /// fallback). A uniform view need not observe what the dispatch or draw itself writes, so no
-    /// buffer slot the pipeline writes may be bound overlapping its window: instantiation checks
-    /// the Metal addresses (`BindError::UniformViewAliased`).
-    UniformViewAliasing { slot: SlotRef },
     /// The kernel is a tile function (`Device::compile_tile_pipeline`): a dispatch covers the
     /// render pass's render area (`BindState::render_area`, `SpecKey::RenderAreaWidth` and
     /// `SpecKey::RenderAreaHeight`) in tiles of the imageblock size (`BindState::imageblock_size`),
@@ -701,8 +685,6 @@ impl RuntimeFact {
             RuntimeFact::RenderTargetArrayLength { .. } => "RenderTargetArrayLength",
             RuntimeFact::StageInRegion => "StageInRegion",
             RuntimeFact::StageInStride { .. } => "StageInStride",
-            RuntimeFact::UniformViewRange { .. } => "UniformViewRange",
-            RuntimeFact::UniformViewAliasing { .. } => "UniformViewAliasing",
             RuntimeFact::TileFunction => "TileFunction",
             RuntimeFact::TileAttachmentFormat { .. } => "TileAttachmentFormat",
             RuntimeFact::StorageTextureNumericType { .. } => "StorageTextureNumericType",
@@ -768,19 +750,6 @@ impl RuntimeFact {
             RuntimeFact::PrivateArena { .. } => "PrivateArena",
         }
     }
-}
-
-/// What one compile made of a slot of a `RuntimeFact::UniformViewRange`.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum UniformViewChoice {
-    /// A uniform view.
-    Viewed,
-    /// A storage view the fallback did not need to move.
-    Spare,
-    /// A storage view the compile's `LoweringInputs::storage_view_slots` keeps one.
-    Kept,
 }
 
 /// How a profile honors one runtime fact.

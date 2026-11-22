@@ -6,8 +6,8 @@
 //! rows:
 //!
 //! - **The form and mechanism** of each target are what its compiled module does with it, never
-//!   only what the case says ([`containment`]): a buffer is a storage or uniform buffer as its
-//!   descriptor view is, or a device address; a buffer slot the product reaches through a descriptor view is
+//!   only what the case says ([`containment`]): a buffer is a storage buffer through its
+//!   descriptor, or a device address; a buffer slot the product reaches through a descriptor view is
 //!   checked in the shader or left to the device's buffer robustness (the two encodings); a slot
 //!   reached by its device address and the threadgroup arena are checked in the shader in every
 //!   leg; a texel buffer and an image follow the product's texel containment
@@ -55,7 +55,7 @@ use metal2vulkan::device::{DevicePolicy, DeviceProfile, HandleDomain, PointerDom
 use metal2vulkan::library::CompiledFunction;
 use metal2vulkan::pipeline::VertexInputState;
 use metal2vulkan::pipeline::{AttributeFetch, StrategyCensus};
-use metal2vulkan::pipeline::{BufferForm, DescriptorView, SlotInterface};
+use metal2vulkan::pipeline::{BufferForm, SlotInterface};
 use metal2vulkan::pipeline::{SlotClass, SlotRef, Stage as SymStage};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -64,7 +64,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Medium {
-    /// A storage or uniform buffer descriptor view (`BufferForm::Descriptor`).
+    /// A storage buffer descriptor view (`BufferForm::Descriptor`).
     DescriptorView,
     /// The buffer's device address (`BufferForm::Psb`).
     DeviceAddress,
@@ -475,19 +475,18 @@ pub fn containment(
                         Check::Shader,
                         written,
                     ),
-                    BufferForm::Descriptor(view) => {
-                        let (form, check) = match view {
-                            DescriptorView::Storage if atomic => {
-                                (ContainmentForm::BufferAtomic, robust)
-                            }
-                            DescriptorView::Storage => (ContainmentForm::StorageBuffer, robust),
-                            DescriptorView::UniformWords | DescriptorView::UniformVec4 => {
-                                (ContainmentForm::UniformBuffer, robust)
-                            }
-                            _ => return unknown(),
-                        };
-                        made(form, Medium::DescriptorView, check, written)
-                    }
+                    BufferForm::Descriptor if atomic => made(
+                        ContainmentForm::BufferAtomic,
+                        Medium::DescriptorView,
+                        robust,
+                        written,
+                    ),
+                    BufferForm::Descriptor => made(
+                        ContainmentForm::StorageBuffer,
+                        Medium::DescriptorView,
+                        robust,
+                        written,
+                    ),
                     _ => unknown(),
                 }
             }
@@ -586,11 +585,9 @@ pub fn containment(
                             BufferForm::Psb => {
                                 made(target.form, Medium::DeviceAddress, Check::Shader, false)
                             }
-                            BufferForm::Descriptor(
-                                DescriptorView::Storage
-                                | DescriptorView::UniformWords
-                                | DescriptorView::UniformVec4,
-                            ) => made(target.form, Medium::DescriptorView, robust, false),
+                            BufferForm::Descriptor => {
+                                made(target.form, Medium::DescriptorView, robust, false)
+                            }
                             _ => unknown(),
                         },
                         _ => Err(format!(

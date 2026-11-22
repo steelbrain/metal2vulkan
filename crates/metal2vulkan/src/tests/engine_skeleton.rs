@@ -22,8 +22,7 @@ use crate::lower::select::LowerInputs;
 use crate::pipeline::compile::{compile_bitcode, EntryRef};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::{
-    AccessSet, BufferForm, DescriptorView, PushLoc, SlotInterface, StageDescriptor, StageSpec,
-    Window,
+    AccessSet, BufferForm, PushLoc, SlotInterface, StageDescriptor, StageSpec, Window,
 };
 use crate::pipeline::link::{LinkInputs, LinkTable};
 use crate::pipeline::relocate::relocate;
@@ -79,11 +78,7 @@ fn check_artifact(a: &FunctionArtifact, what: &str) {
     };
     assert_eq!(b.access, AccessSet::WRITE, "{what}");
     assert_eq!(b.window, Window::Bounded { start: 0, len: 4 }, "{what}");
-    assert_eq!(
-        b.form,
-        BufferForm::Descriptor(DescriptorView::Storage),
-        "{what}"
-    );
+    assert_eq!(b.form, BufferForm::Descriptor, "{what}");
     assert_eq!(i.slots.len(), 1, "{what}");
     let placed: Vec<(PushField, PushLoc)> =
         i.push.fields.iter().map(|f| (f.field, f.loc)).collect();

@@ -32,7 +32,7 @@ use crate::pipeline::descriptor::{
 };
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::{
-    AccessSet, BufferForm, BufferSlot, DescriptorView, PushLoc, SlotInterface, Window,
+    AccessSet, BufferForm, BufferSlot, PushLoc, SlotInterface, Window,
 };
 use crate::pipeline::link::vertex::vertex_fetch_projection;
 use crate::pipeline::link::{link, LinkInputs};
@@ -298,7 +298,7 @@ fn pulled_attributes_compile_and_state_their_inputs() {
                         a.interface.slots.get(&slot(b)),
                         Some(SlotInterface::Buffer(s)) if s.access == AccessSet::READ
                             && s.window == Window::Whole
-                            && s.form == BufferForm::Descriptor(DescriptorView::Storage)
+                            && s.form == BufferForm::Descriptor
                     ),
                     "{what} {b}: {:?}",
                     a.interface.slots.get(&slot(b))
@@ -525,7 +525,7 @@ fn a_source_buffer_shares_its_arguments_slot() {
             assert!(
                 s.is_some_and(|s| s.access == AccessSet::READ
                     && s.window == Window::Whole
-                    && s.form == BufferForm::Descriptor(DescriptorView::Storage)),
+                    && s.form == BufferForm::Descriptor),
                 "{what}: {s:?}"
             );
             assert_eq!(buffer_slot(&a, 0), None, "{what}: buffer 0 is not read");
@@ -623,11 +623,7 @@ fn the_descriptor_limit_fallback_moves_source_buffers() {
         assert_eq!(form(3), Some(BufferForm::Psb), "{stem}");
         assert_eq!(form(2), Some(BufferForm::Psb), "{stem}");
         for b in [0, 1] {
-            assert_eq!(
-                form(b),
-                Some(BufferForm::Descriptor(DescriptorView::Storage)),
-                "{stem} {b}"
-            );
+            assert_eq!(form(b), Some(BufferForm::Descriptor), "{stem} {b}");
         }
         let storage = a
             .interface
@@ -827,11 +823,7 @@ fn a_written_or_atomic_argument_shares_its_slot() {
                 assert_eq!(s.access, AccessSet::READ_WRITE, "{what}");
                 assert_eq!(s.window, Window::Whole, "{what}");
                 if how == "shared" {
-                    assert_eq!(
-                        s.form,
-                        BufferForm::Descriptor(DescriptorView::Storage),
-                        "{what}"
-                    );
+                    assert_eq!(s.form, BufferForm::Descriptor, "{what}");
                     assert_eq!(
                         bindings_of(&a, 1),
                         [vk::DescriptorType::STORAGE_BUFFER],

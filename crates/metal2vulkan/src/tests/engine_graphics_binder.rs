@@ -46,7 +46,7 @@ use crate::pipeline::descriptor::{
     ColorAttachmentDescriptor, VertexAttributeDescriptor, VertexBufferLayoutDescriptor,
     VertexDescriptor,
 };
-use crate::pipeline::interface::{AccessSet, BufferForm, DescriptorView, SlotInterface, Window};
+use crate::pipeline::interface::{AccessSet, BufferForm, SlotInterface, Window};
 use crate::pipeline::layout::BindingSource;
 use crate::pipeline::sym::{PushField, SlotClass, SlotRef, SpecKey, Stage};
 use crate::pipeline::testing::{engine_dir, llvm_assemble, AssembleError};
@@ -1123,7 +1123,7 @@ fn pulled_layouts_take_their_stride_and_share_argument_slots() {
             p.interface.slots.get(&scale),
             Some(SlotInterface::Buffer(b)) if b.access == AccessSet::READ
                 && b.window == Window::Whole
-                && b.form == BufferForm::Descriptor(DescriptorView::Storage)
+                && b.form == BufferForm::Descriptor
         ),
         "{:?}",
         p.interface.slots.get(&scale)

@@ -1288,7 +1288,7 @@ pub struct Table {
 /// has `shaderInt64`), else a word storage view.
 pub fn declare_table(mb: &mut ModuleBuilder, sym: ResourceSlot, int64: bool) -> BResult<Table> {
     if !int64 {
-        let v = views::declare_at(mb, sym, views::ViewKind::Storage)?;
+        let v = views::declare_at(mb, sym)?;
         return Ok(Table {
             global: v.global,
             u32_ty: v.u32_ty,
@@ -1540,7 +1540,6 @@ pub fn entry_field(
         None => {
             let words = View {
                 global: t.global,
-                kind: views::ViewKind::Storage,
                 u32_ty: t.u32_ty,
             };
             entry_word(fb, words, k, word)
@@ -1586,7 +1585,6 @@ pub fn lookup(
     let zero = k32(fb, 0)?;
     let words = View {
         global: t.global,
-        kind: views::ViewKind::Storage,
         u32_ty: t.u32_ty,
     };
     // The key, and the id of an entry, in the table's form.
@@ -1918,7 +1916,7 @@ mod tests {
         };
         let mut b = ModuleBuilder::new();
         let t = declare_table(&mut b, sym(0), int64)?;
-        let io = views::declare_at(&mut b, sym(1), views::ViewKind::Storage)?;
+        let io = views::declare_at(&mut b, sym(1))?;
         let search = define_lookup(&mut b, t, form)?;
         let void = b.ty(Type::Void)?;
         let mut f = b.function(void)?;
@@ -1933,7 +1931,7 @@ mod tests {
                 .expect("the search returns the element");
             for word in per_key(&mut f, t, e)? {
                 let to = k32(&mut f, at)?;
-                let p = views::word_ptr(&mut f, io, to)?.expect("a storage view is writable");
+                let p = views::word_ptr(&mut f, io, to)?;
                 f.store(p, word, MemAccess::default())?;
                 at += 1;
             }

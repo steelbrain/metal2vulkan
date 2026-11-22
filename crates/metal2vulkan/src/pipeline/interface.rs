@@ -264,52 +264,11 @@ pub enum Window {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum BufferForm {
-    /// Through a descriptor of this view kind.
-    Descriptor(DescriptorView),
+    /// Through its storage buffer descriptor.
+    Descriptor,
     /// Through a buffer device address (dynamic roots, per-stage limit fallback, or a
     /// `BufferRangeLimit` variant); the bound buffer needs a device address.
     Psb,
-}
-
-impl BufferForm {
-    /// Whether the form reads through a uniform view, a uniform buffer: the views whose range a
-    /// plan starts at the bind offset where the device's view base alignment divides it
-    /// (`SpecKey::RangeAtBindOffset`, `BindState::view_base_alignment`).
-    pub fn uniform_view(self) -> bool {
-        matches!(
-            self,
-            BufferForm::Descriptor(DescriptorView::UniformWords | DescriptorView::UniformVec4)
-        )
-    }
-
-    /// The minimum offset alignment and the maximum range, in bytes, of the form's view on a
-    /// device of `limits`: the uniform-buffer limits for a uniform view, the storage-buffer limits
-    /// otherwise.
-    pub(crate) fn view_limits(self, limits: &crate::device::Limits) -> (u64, u64) {
-        match self {
-            form if form.uniform_view() => (
-                limits.min_uniform_buffer_offset_alignment,
-                u64::from(limits.max_uniform_buffer_range),
-            ),
-            _ => (
-                limits.min_storage_buffer_offset_alignment,
-                u64::from(limits.max_storage_buffer_range),
-            ),
-        }
-    }
-}
-
-/// The descriptor view kind of a descriptor-form slot.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum DescriptorView {
-    /// A storage buffer.
-    Storage,
-    /// A uniform buffer viewed as `u32[]` (needs `uniformBufferStandardLayout`).
-    UniformWords,
-    /// A uniform buffer viewed as a `uvec4` array (std140-valid everywhere).
-    UniformVec4,
 }
 
 /// How a compiled function fetches one attribute it reads

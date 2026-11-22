@@ -4,7 +4,6 @@
 use super::*;
 use crate::bind::plan::{PlannedBuffer, ResourceTemplate};
 use crate::bind::state::{length_class, StageTable};
-use crate::pipeline::interface::DescriptorView;
 use std::cell::RefCell;
 
 thread_local! {
@@ -360,15 +359,11 @@ fn fixed_function_fetches_only_what_vulkan_can_bind() {
     let first = vertex_buffers()[0];
     assert!(fetchable(&first, &rules(None, true), 4, None));
     assert!(!fetchable(&first, &rules(None, true), 2, None));
-    // Classed up to 4, and the view base alignment where one is told apart and divides it.
+    // Classed up to 4.
     let offsets = [0, 1, 2, 3, 4, 6, 8, 12, 64, 192, 1 << 40, (1 << 40) + 2];
     assert_eq!(
-        offsets.map(|o| offset_alignment(o, 0)),
+        offsets.map(offset_alignment),
         [4, 1, 2, 1, 4, 2, 4, 4, 4, 4, 4, 2]
-    );
-    assert_eq!(
-        offsets.map(|o| offset_alignment(o, 64)),
-        [64, 1, 2, 1, 4, 2, 4, 4, 64, 64, 64, 2]
     );
 }
 
@@ -757,7 +752,7 @@ fn draws_bind_vertex_buffers_at_aligned_offsets_with_their_windows() {
         buffers: vec![PlannedBuffer {
             slot: vslot(1),
             window: Window::Bounded { start: 0, len: 16 },
-            form: BufferForm::Descriptor(DescriptorView::Storage),
+            form: BufferForm::Descriptor,
             access: AccessSet::READ,
             binding: Some((0, 0)),
             alignment: 16,
@@ -766,7 +761,6 @@ fn draws_bind_vertex_buffers_at_aligned_offsets_with_their_windows() {
                 device_address: false,
                 length_class: length_class(4096),
             },
-            disjoint: false,
         }],
         stages: Vec::new(),
         vertex_buffers: vertex_buffers(),

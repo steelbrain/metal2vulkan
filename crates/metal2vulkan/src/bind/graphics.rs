@@ -220,10 +220,9 @@ use crate::bind::plan::compute::{internal, not_implemented, spec_key, tile_memor
 use crate::bind::plan::resources::{separate_samplers, ResourcePlanner};
 use crate::bind::plan::slots::{
     address_map_variant, anisotropic_variant, bindings, bound_value, buffer_use, check_slots,
-    check_sparse_textures, cross_variant, cubic_variant, heap_raw, large_view_candidates,
-    mark_disjoint, plan_buffer, psb_variant, range_variant, record_noted, srgb_variant,
-    storage_view_variant, texel_buffer_parts_variant, used_uses, ycbcr_in_place_variant,
-    ycbcr_planes_sampled_variant,
+    check_sparse_textures, cross_variant, cubic_variant, heap_raw, plan_buffer, psb_variant,
+    range_variant, record_noted, srgb_variant, texel_buffer_parts_variant, used_uses,
+    ycbcr_in_place_variant, ycbcr_planes_sampled_variant,
 };
 use crate::bind::plan::{
     AccessClass, BindingPlan, BoundKind, ByteRange, DescriptorWrite, FactorTemplate, FieldLocation,
@@ -903,7 +902,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         let bound = stage_shape(slot.stage).and_then(|s| s.buffers.get(&slot.index));
         buffers.push(plan_buffer((*slot, b, bound), replayed, limits, &bindings)?);
     }
-    mark_disjoint(&mut buffers, &p.dependencies);
     let planned = |slot: SlotRef| buffers.iter().find(|b| b.slot == slot);
     // The layout stride of each pulled layout (one per Metal buffer index).
     let pulled_stride = |layout: u32| {
@@ -1617,7 +1615,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
     }
     let mut variant = resources.variant;
     variant.psb_slots = psb_variant(&p.dependencies, &buffers, profile);
-    variant.storage_view_slots = storage_view_variant(&p.dependencies, &buffers, profile);
     variant.cross_class = cross_variant(&p.dependencies, &p.interface.slots, shape);
     variant.srgb_textures = srgb_variant(profile, &p.dependencies, shape, &variant.cross_class);
     variant.ycbcr_in_place = ycbcr_in_place_variant(&p.dependencies, shape);
@@ -1636,20 +1633,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
         if !p.vertex_input.variant_pulled.contains(&layout) && range_variant(slot, bound, profile) {
             variant.psb_slots.insert(slot);
         }
-    }
-    // A layout the variant newly pulls adds a storage buffer to the vertex stage, whose fallback
-    // may then view any of its candidates as a uniform buffer: the key keeps every large one a
-    // storage view now, so the variant's plan states the same key.
-    if pulled_vertex_buffers
-        .iter()
-        .any(|l| !p.vertex_input.variant_pulled.contains(l))
-    {
-        variant.storage_view_slots.extend(large_view_candidates(
-            &p.dependencies,
-            &buffers,
-            profile,
-            Some(Stage::Vertex),
-        ));
     }
     variant.pulled_vertex_buffers = pulled_vertex_buffers;
     variant.amplification_draws = amplification_draws;
@@ -3154,7 +3137,7 @@ fn instantiate(
                 };
                 // The plan put a layout fixed function cannot fetch as bound into its variant,
                 // whose pipeline pulls it; this plan's pipeline is not that one.
-                if !fetchable(vb, &t.vertex_strides, offset_alignment(offset, 0), per_bind) {
+                if !fetchable(vb, &t.vertex_strides, offset_alignment(offset), per_bind) {
                     return Err(internal(format!(
                         "a draw of {:?} as the plan's pulled-vertex-buffer variant binds it; \
                          compile and plan the variant",

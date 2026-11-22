@@ -1166,8 +1166,6 @@ for dependency in &pipeline.dependencies {
   where it does not push set 0; the rest stay of their own types. Keep a binding of several
   variables static on MoltenVK 1.4.1: its SPIRV-Cross writes Metal that does not compile for a
   dynamic buffer an entry point uses through more than one variable.
-- A buffer slot's uniform view is a `Uniform` block (`DescriptorView::UniformWords`, or
-  `UniformVec4` without `uniformBufferStandardLayout`).
 - On MoltenVK, push set 0 (a push descriptor set layout) for a pipeline whose fragment stage writes
   a storage buffer of set 0 inside its interlock (an interlock execution mode, and a `StorageBuffer`
   variable of set 0 not decorated `NonWritable`): binding through Metal argument buffers, MoltenVK
@@ -1186,29 +1184,16 @@ for dependency in &pipeline.dependencies {
   `half` result also specializes one bit of it: whether the class converts its texels to `half` by
   rounding to nearest even alone (every class but those with 32-bit float channels, 16-bit
   normalized ones and YCbCr fields on the grid `8192`), so a slot bound to both kinds of format
-  takes two pipelines. Other bound values (a slot's
-  presence, a sampler's word, whether a uniform buffer's descriptor range starts at its bind offset)
-  are specialization constants. The last lets a driver load the constants ahead of the shader:
-  inline bytes take that form, and so does a buffer bound at a multiple of
-  `max(minUniformBufferOffsetAlignment, 16)` at a slot whose table tells that alignment apart
-  (`state.view_base_alignment`, and the slot's bit in its table's `at_bind_views`). A buffer bound at any other offset, or at a slot left out, takes the other form, a
-  pipeline of its own: leave out a slot bound at offsets that move, so that its draws keep one
-  shape and one pipeline (the runtime leaves out each slot of a state once it finds one bound at
-  an offset the alignment does not divide). A consumer that draws and dispatches every key with
-  its uniform views at their residuals (each uniform view's `RangeAtBindOffset` at 0, as the
-  runtime does on every device whose driver is not measured to load such reads ahead of the
-  shader) says so with
-  `state.uniform_views_at_residual = true`: its uniform views then bind ranges their bind offsets
-  share (below), as a bounded storage view's do. No storage view declares the key: it reads at its
-  residual, its range from the buffer's start, so the bytes before a bind offset stay reachable.
+  takes two pipelines. Other bound values (a slot's presence, a sampler's word) are
+  specialization constants. A buffer slot's storage view reads at its residual, its range from
+  the buffer's start, so the bytes before a bind offset stay reachable.
 - A bound buffer's length enters its shape only as a length class (`bind::length_class`), which a
-  plan compares with the device's `maxUniformBufferRange` and `maxStorageBufferRange` alone
-  (whether every range of the buffer fits each). Set each table's
-  `buffer_ranges = BufferRanges::of(limits)` and its shape tells apart only the classes those
-  limits tell apart (`BufferRanges::length_class`: a class rounded up to the greatest one that fits
-  the same limits), so commands over buffers of many sizes keep one shape and one plan: on a device
-  whose two limits are both 4 GiB, every buffer below 4 GiB. The default tells every class apart.
-  The runtime sets them on every table it reads.
+  plan compares with the device's `maxStorageBufferRange` alone (whether every range of the
+  buffer fits it). Set each table's `buffer_ranges = BufferRanges::of(limits)` and its shape tells
+  apart only the classes that limit tells apart (`BufferRanges::length_class`: a class rounded up
+  to the greatest one that fits the same limit), so commands over buffers of many sizes keep one
+  shape and one plan: on a device whose limit is 4 GiB, every buffer below 4 GiB. The default
+  tells every class apart. The runtime sets it on every table it reads.
 - A two-plane YCbCr texture whose planes a function may read in place states them in its facts
   (`TextureFacts::ycbcr_in_place`, a `YCbCrInPlace` of its planes). A slot whose function only samples it (nearest or linear, no comparison,
   anisotropy or `min_lod_clamp`), gathers it or reads its size (`RuntimeFact::YCbCrInPlace`) takes the
@@ -1392,11 +1377,10 @@ lies at or past the padded end, the range starts at the bind offset aligned down
 descriptor base alignment. An access that reaches back before the bind offset, inside the buffer,
 reads the buffer's bytes there, as Metal's does.
 
-A slot of a bounded window read at its residual -- a storage view's always, a uniform view's
-where the state says `uniform_views_at_residual` -- takes a range its bind offsets share in the
-same way: the buffer from 0 to its padded end where that fits the view's maximum range (a uniform
-view's is `maxUniformBufferRange` capped at 64 KiB, its texel form's `maxTexelBufferElements`
-texels) and 4 GiB, else the block of half that
+A slot of a bounded window read at its residual (a storage view's) takes a range its bind offsets
+share in the same way: the buffer from 0 to its padded end where that fits the view's maximum
+range (`maxStorageBufferRange`; a texel form's is `maxTexelBufferElements` texels) and 4 GiB,
+else the block of half that
 maximum (rounded down to a power of two) its window starts in, to the maximum past the block's
 start. A window of at most half the maximum starting in a block ends inside its block's range; a
 longer one, or one at or past the padded end, takes the range from its bind offset, as every

@@ -367,7 +367,6 @@ surface! {
         enum BufferKind N;
         struct BufferSlot N;
         struct CommandWrites E;
-        enum DescriptorView N;
         struct LevelReads N;
         enum NumberedSampler N;
         enum PatchDomain N;
@@ -405,7 +404,6 @@ surface! {
         struct RenderPipelineKeys N;
         enum Mechanism N;
         enum RuntimeFact N;
-        enum UniformViewChoice N;
         enum AccelerationStructureLevel N;
         struct AirUserKey E;
         enum Axis N;

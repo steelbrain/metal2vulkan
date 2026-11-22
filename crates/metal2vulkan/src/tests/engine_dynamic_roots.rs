@@ -340,7 +340,7 @@ fn a_loaded_pointer_is_exact_in_bounds_and_contained_elsewhere() {
                     index: s,
                 }) {
                     Some(SlotInterface::Buffer(b)) => {
-                        assert!(matches!(b.form, BufferForm::Descriptor(_)), "{what} {s}")
+                        assert!(matches!(b.form, BufferForm::Descriptor), "{what} {s}")
                     }
                     None if s == 1 && leaf.store.is_some() => {}
                     other => panic!("{what} slot {s}: {other:?}"),

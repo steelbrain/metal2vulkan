@@ -6,8 +6,8 @@ use crate::bind::state::{
     UsedResource,
 };
 use crate::device::profile::BufferAccess;
-use crate::pipeline::facts::{Mechanism, UniformViewChoice};
-use crate::pipeline::interface::{BufferKind, DescriptorView};
+use crate::pipeline::facts::Mechanism;
+use crate::pipeline::interface::BufferKind;
 use crate::pipeline::sym::Stage;
 use crate::spirv::testing::committed_profiles;
 
@@ -65,7 +65,6 @@ fn planned(index: u32, bound: BoundKind, form: BufferForm) -> PlannedBuffer {
         alignment: 16,
         max_range: 0,
         bound,
-        disjoint: false,
     }
 }
 
@@ -79,7 +78,7 @@ fn a_large_buffer_needs_the_device_address_variant_on_profile_a_only() {
         fact: RuntimeFact::BufferRangeLimit { slot: slot(n) },
         mechanism: Mechanism::Variant,
     });
-    let storage = BufferForm::Descriptor(DescriptorView::Storage);
+    let storage = BufferForm::Descriptor;
     let mut seen = [false; 2];
     let mut profiles = committed_profiles().expect("profiles");
     let f = crate::pipeline::testing::device_f(crate::device::DevicePolicy::RESIDENT_TABLES)
@@ -140,73 +139,6 @@ fn a_large_buffer_needs_the_device_address_variant_on_profile_a_only() {
         }
     }
     assert_eq!(seen, [true, true], "both profile kinds are checked");
-}
-
-/// A shape asks for the storage-view variant exactly when it binds, at a slot the pipeline views as
-/// a uniform buffer, a buffer whose length class does not prove the range fits
-/// `maxUniformBufferRange`; the key then names every such candidate (viewed, spare, or kept)
-/// and the slots the pipeline was compiled keeping, so the variant's plan restates it.
-#[test]
-fn a_large_viewed_slot_asks_for_every_large_candidate_to_stay_storage() {
-    let p = crate::pipeline::testing::profile(
-        "runtime-floor",
-        crate::device::DevicePolicy::RESIDENT_TABLES,
-    )
-    .expect("profile");
-    let max = u64::from(p.fields().limits.max_uniform_buffer_range);
-    let big = BoundKind::Buffer {
-        device_address: false,
-        length_class: length_class(max.saturating_add(1)),
-    };
-    let fits = BoundKind::Buffer {
-        device_address: false,
-        length_class: length_class(max - 16),
-    };
-    let dep = |n, choice| RuntimeDependency {
-        fact: RuntimeFact::UniformViewRange {
-            slot: slot(n),
-            choice,
-        },
-        mechanism: Mechanism::Variant,
-    };
-    let uniform = BufferForm::Descriptor(DescriptorView::UniformWords);
-    let storage = BufferForm::Descriptor(DescriptorView::Storage);
-    use UniformViewChoice::{Kept, Spare, Viewed};
-    // Slot 0 viewed, slot 1 spare, slot 2 viewed, slot 3 spare.
-    let base = [dep(0, Viewed), dep(1, Spare), dep(2, Viewed), dep(3, Spare)];
-    let bound = |b: [BoundKind; 4]| {
-        [
-            planned(0, b[0], uniform),
-            planned(1, b[1], storage),
-            planned(2, b[2], uniform),
-            planned(3, b[3], storage),
-        ]
-    };
-    // Small everywhere, or large only at spare slots, or at an unbound or inline slot: no variant.
-    let none = [BoundKind::Unbound, big, BoundKind::Bytes, big];
-    assert!(storage_view_variant(&base, &bound([fits, big, fits, big]), &p).is_empty());
-    assert!(storage_view_variant(&base, &bound(none), &p).is_empty());
-    // A large viewed slot: every large candidate.
-    let key = storage_view_variant(&base, &bound([big, big, fits, fits]), &p);
-    assert_eq!(key, [slot(0), slot(1)].into());
-    // The variant's own facts for the same shape: slots 0 and 1 kept, 2 still viewed, 3 now
-    // viewed; the plan restates the key.
-    let variant = [dep(0, Kept), dep(1, Kept), dep(2, Viewed), dep(3, Viewed)];
-    let buffers = [
-        planned(0, big, storage),
-        planned(1, big, storage),
-        planned(2, fits, uniform),
-        planned(3, fits, uniform),
-    ];
-    assert_eq!(storage_view_variant(&variant, &buffers, &p), key);
-    // A kept slot the shape binds small is still restated.
-    let buffers = [
-        planned(0, fits, storage),
-        planned(1, fits, storage),
-        planned(2, fits, uniform),
-        planned(3, fits, uniform),
-    ];
-    assert_eq!(storage_view_variant(&variant, &buffers, &p), key);
 }
 
 /// Used resources reach a plan's `uses` exactly when a function can reach them, with the guest's
@@ -350,15 +282,14 @@ fn used_resources_are_written_only_by_stages_that_write_memory() {
     );
 }
 
-/// Buffer range limits tell a buffer's length class apart as far as a plan reads it
-/// (`BufferRanges::length_class`), under 4 GiB limits (an RX 7900 XTX's), limits of 64 KiB and
-/// 128 MiB either way round, one limit of 16 KiB, and none (the default, every class its own):
-/// the class a buffer's shape states of each length answers `class_fits` against each limit as
-/// the exact class does (all a plan reads of it: `large_view_candidates`, `range_variant`), still
-/// bounds the padded length from above, and is the exact one under none; and instantiation's kind
-/// check (`instantiate::bound_buffer`) takes a binding of each length for the kind a plan of
-/// another length stored exactly where the two classes are one, which is only where their exact
-/// classes answer both limits alike.
+/// A buffer range limit tells a buffer's length class apart as far as a plan reads it
+/// (`BufferRanges::length_class`), under a 4 GiB limit (an RX 7900 XTX's), limits of 128 MiB,
+/// 64 KiB and 16 KiB, and none (the default, every class its own): the class a buffer's shape
+/// states of each length answers `class_fits` against the limit as the exact class does (all a
+/// plan reads of it: `range_variant`), still bounds the padded length from above, and is the exact
+/// one under none; and instantiation's kind check (`instantiate::bound_buffer`) takes a binding of
+/// each length for the kind a plan of another length stored exactly where the two classes are
+/// one, which is only where their exact classes answer the limit alike.
 #[test]
 fn length_classes_are_told_apart_as_far_as_a_plan_reads_them() {
     let mut lengths = vec![0u64, 1, 15, 16, 17, u64::MAX];
@@ -367,27 +298,13 @@ fn length_classes_are_told_apart_as_far_as_a_plan_reads_them() {
     }
     let limits = [
         BufferRanges::default(),
-        BufferRanges {
-            uniform: u32::MAX,
-            storage: u32::MAX,
-        },
-        BufferRanges {
-            uniform: 1 << 16,
-            storage: 1 << 27,
-        },
-        BufferRanges {
-            uniform: 1 << 27,
-            storage: 1 << 16,
-        },
-        BufferRanges {
-            uniform: 1 << 14,
-            storage: 1 << 14,
-        },
+        BufferRanges { storage: u32::MAX },
+        BufferRanges { storage: 1 << 27 },
+        BufferRanges { storage: 1 << 16 },
+        BufferRanges { storage: 1 << 14 },
     ];
     for ranges in limits {
-        let fits = |class| {
-            [ranges.uniform, ranges.storage].map(|limit| class_fits(class, u64::from(limit)))
-        };
+        let fits = |class| class_fits(class, u64::from(ranges.storage));
         let states: Vec<BindState> = (lengths.iter())
             .map(|&length| {
                 let mut table = StageTable {
@@ -439,7 +356,7 @@ fn length_classes_are_told_apart_as_far_as_a_plan_reads_them() {
             }
         }
     }
-    // Under 4 GiB limits every length up to 4 GiB is one class, past them each its own.
+    // Under a 4 GiB limit every length up to 4 GiB is one class, past it each its own.
     let ranges = limits[1];
     assert_eq!(ranges.length_class(1), ranges.length_class((1 << 32) - 16));
     assert_ne!(ranges.length_class(1), ranges.length_class(1 << 32));
@@ -457,7 +374,7 @@ fn the_bound_kind_carries_the_length_class() {
         attribute_stride: None,
     };
     assert_eq!(
-        BoundKind::of(Some(&b.shape(0, BufferRanges::default()))),
+        BoundKind::of(Some(&b.shape(BufferRanges::default()))),
         BoundKind::Buffer {
             device_address: true,
             length_class: 7
@@ -501,14 +418,13 @@ fn slots_beyond_the_metal_tables_are_refused() {
     assert!(check_slots(&shape).is_err());
 }
 
-/// On every committed profile a storage or uniform view's descriptor base is aligned to
-/// `max(min*BufferOffsetAlignment, 16)`, so whatever the bind offset and window, every byte of the
-/// range sits at a descriptor offset congruent to its allocation offset modulo 16: a 16-byte leaf
-/// whose Metal address is a multiple of 16 is one `uvec4` element of the view.
+/// On every committed profile a storage view's descriptor base is aligned to
+/// `max(minStorageBufferOffsetAlignment, 16)`, so whatever the bind offset and window, every byte
+/// of the range sits at a descriptor offset congruent to its allocation offset modulo 16: a 16-byte
+/// leaf whose Metal address is a multiple of 16 is one `uvec4` element of the view.
 #[test]
 fn descriptor_bases_are_sixteen_aligned_on_every_profile() {
-    let buffer = |index| BindingSource::Buffer(slot(index));
-    let bindings: BTreeMap<_, _> = [(buffer(0), (0, 0)), (buffer(1), (0, 1))].into();
+    let bindings: BTreeMap<_, _> = [(BindingSource::Buffer(slot(0)), (0, 0))].into();
     let shape = BufferShape::Buffer {
         device_address: false,
         length_class: length_class(4096),
@@ -517,134 +433,40 @@ fn descriptor_bases_are_sixteen_aligned_on_every_profile() {
     };
     for (stem, p) in committed_profiles().expect("profiles") {
         let limits = &p.fields().limits;
-        for (index, view, min) in [
-            (
-                0,
-                DescriptorView::Storage,
-                limits.min_storage_buffer_offset_alignment,
-            ),
-            (
-                1,
-                DescriptorView::UniformWords,
-                limits.min_uniform_buffer_offset_alignment,
-            ),
-        ] {
-            let b = BufferSlot {
-                access: AccessSet::READ,
-                window: Window::Whole,
-                form: BufferForm::Descriptor(view),
-                kind: BufferKind::Buffer,
-            };
-            let pb = plan_buffer((slot(index), &b, Some(&shape)), false, limits, &bindings)
-                .unwrap_or_else(|e| panic!("{stem} {view:?}: {e:?}"));
-            assert_eq!(pb.alignment, min.max(16), "{stem} {view:?}");
-            for bind_offset in (0..64).step_by(4) {
-                for window in [
-                    Window::Whole,
-                    Window::Bounded { start: 0, len: 64 },
-                    Window::Bounded { start: 4, len: 28 },
-                    Window::Bounded { start: 52, len: 16 },
-                    Window::Bounded { start: -8, len: 40 },
-                ] {
-                    let (range, residual) = crate::bind::instantiate::descriptor_range(
-                        bind_offset,
-                        4096,
-                        window,
-                        pb.alignment,
-                        u64::MAX,
-                    )
-                    .unwrap_or_else(|e| panic!("{stem} {view:?}: {e:?}"));
-                    assert_eq!(range.offset % 16, 0, "{stem} {view:?} {bind_offset}");
-                    // Byte `m` from the bind offset is byte `residual + m` of the range.
-                    assert_eq!(
-                        u64::from(residual) % 16,
-                        bind_offset % 16,
-                        "{stem} {view:?} {bind_offset} {window:?}"
-                    );
-                }
-            }
-        }
-    }
-}
-
-/// A uniform view's `RangeAtBindOffset` holds exactly where instantiation starts its range at the
-/// bind offset, its residual 0, on every committed profile, for a buffer bound anywhere before the
-/// end of its allocation under a window starting at or after the bind offset and inside the
-/// allocation (elsewhere it never holds where the residual is not 0; false reads correctly at any
-/// residual); and for inline bytes, at offset 0 of their upload. An unbound slot, whose residual
-/// is 0, takes false: the key's residual form, which a draw's key matches where it leaves the slot
-/// unbound.
-#[test]
-fn a_uniform_range_starts_at_the_bind_offset_where_the_specialization_says() {
-    const LENGTH: u64 = 4096;
-    for (stem, p) in committed_profiles().expect("profiles") {
-        let limits = &p.fields().limits;
-        let alignment =
-            crate::memory::views::base_alignment(limits.min_uniform_buffer_offset_alignment);
-        for window in [
-            Window::Whole,
-            Window::Bounded { start: 0, len: 64 },
-            Window::Bounded { start: 4, len: 28 },
-            Window::Bounded { start: 52, len: 16 },
-            Window::Bounded {
-                start: 192,
-                len: 16,
-            },
-            Window::Bounded { start: 255, len: 1 },
-            Window::Bounded { start: -8, len: 40 },
-        ] {
-            let b = BufferSlot {
-                access: AccessSet::READ,
-                window,
-                form: BufferForm::Descriptor(DescriptorView::UniformWords),
-                kind: BufferKind::Buffer,
-            };
-            let zero = |bind_offset: u64| {
-                let (_, residual) = crate::bind::instantiate::descriptor_range(
+        let min = limits.min_storage_buffer_offset_alignment;
+        let b = BufferSlot {
+            access: AccessSet::READ,
+            window: Window::Whole,
+            form: BufferForm::Descriptor,
+            kind: BufferKind::Buffer,
+        };
+        let pb = plan_buffer((slot(0), &b, Some(&shape)), false, limits, &bindings)
+            .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
+        assert_eq!(pb.alignment, min.max(16), "{stem}");
+        for bind_offset in (0..64).step_by(4) {
+            for window in [
+                Window::Whole,
+                Window::Bounded { start: 0, len: 64 },
+                Window::Bounded { start: 4, len: 28 },
+                Window::Bounded { start: 52, len: 16 },
+                Window::Bounded { start: -8, len: 40 },
+            ] {
+                let (range, residual) = crate::bind::instantiate::descriptor_range(
                     bind_offset,
-                    LENGTH,
+                    4096,
                     window,
-                    alignment,
+                    pb.alignment,
                     u64::MAX,
                 )
-                .unwrap_or_else(|e| panic!("{stem} {window:?} {bind_offset}: {e:?}"));
-                residual == 0
-            };
-            for bind_offset in (0..LENGTH).step_by(4) {
-                let shape = BoundBuffer::Buffer {
-                    gpu_address: 0x1_0000,
-                    length: LENGTH,
-                    offset: bind_offset,
-                    device_address: None,
-                    attribute_stride: None,
-                }
-                .shape(alignment as u32, BufferRanges::default());
-                let at = range_at_bind_offset(&b, Some(&shape), limits);
-                let what = format!("{stem} {window:?} {bind_offset}");
-                // A window starting below the bind offset, or past the allocation's end (whose
-                // range is widened down into it), may still start at the bind offset.
-                match window {
-                    Window::Bounded { start, .. }
-                        if start < 0 || bind_offset as i64 + start >= LENGTH as i64 =>
-                    {
-                        assert!(!at || zero(bind_offset), "{what}")
-                    }
-                    _ => assert_eq!(at, zero(bind_offset), "{what}"),
-                }
+                .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
+                assert_eq!(range.offset % 16, 0, "{stem} {bind_offset}");
+                // Byte `m` from the bind offset is byte `residual + m` of the range.
+                assert_eq!(
+                    u64::from(residual) % 16,
+                    bind_offset % 16,
+                    "{stem} {bind_offset} {window:?}"
+                );
             }
-            let bytes = BufferShape::Bytes {
-                attribute_stride: None,
-            };
-            let at = range_at_bind_offset(&b, Some(&bytes), limits);
-            assert_eq!(
-                at,
-                zero(0) && !matches!(window, Window::Bounded { start, .. } if start < 0),
-                "{stem} {window:?} bytes"
-            );
-            assert!(
-                !range_at_bind_offset(&b, None, limits),
-                "{stem} {window:?} unbound"
-            );
         }
     }
 }

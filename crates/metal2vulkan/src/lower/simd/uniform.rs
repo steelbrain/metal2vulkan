@@ -77,17 +77,6 @@
 //! divergent. A simdgroup's collective operations are divergent there, as for a workgroup: the
 //! vertices of one primitive may run in different simdgroups.
 //!
-//! **Active lanes** ([`Uniformity::among_active_lanes`]). A value that may differ between the
-//! active lanes of one execution of its instruction in a simdgroup, which is what the memory a
-//! read reaches is chosen by (`memory::plan`'s lane reads): the analysis among a simdgroup
-//! with no control divergence. No block turns divergent, so a phi is divergent only through its
-//! incoming values: the lanes that run a loop's header together hold its counter alike, whatever
-//! branch some lanes left by before the loop. A load is divergent only through its pointer (or as
-//! a volatile or atomic one), in any address space: the lanes that run it together read the same
-//! bytes at a uniform address; a thread's own memory is reached only through an alloca, which is
-//! divergent. What this misses errs toward uniform: a phi joining uniform values after a divergent
-//! branch, and a value a loop left on a per-lane condition computes, read after it.
-//!
 //! The analysis is one worklist over instructions and blocks, each of which turns divergent at
 //! most once; its memory is charged to the meter.
 
@@ -325,9 +314,6 @@ struct State<'a> {
     e: &'a Entry,
     body: &'a Body,
     among: Among,
-    /// Among the active lanes (the module docs, "Active lanes"): no control divergence, and a
-    /// load divergent only through its pointer.
-    active: bool,
     /// By parameter and by instruction: the divergent lanes (the module docs, "Lanes").
     args: Vec<u8>,
     insts: Vec<u8>,
@@ -522,7 +508,7 @@ impl State<'_> {
             } => {
                 *volatile
                     || atomic.is_some()
-                    || (!self.active && self.ptr_space(*ptr) != Some(AddrSpace::Constant))
+                    || self.ptr_space(*ptr) != Some(AddrSpace::Constant)
                     || self.value_divergent(*ptr)
             }
             InstKind::Alloca { .. } | InstKind::AtomicRmw { .. } | InstKind::CmpXchg { .. } => true,
@@ -588,14 +574,7 @@ impl Uniformity {
     /// The uniformity of the blocks of `e`'s entry body. The returned structure stays charged to
     /// `m` ([`Uniformity::ledger_bytes`]); the analysis' own tables are released.
     pub fn of(e: &Entry, body: &Body, m: &mut Meter) -> Result<Uniformity, Error> {
-        Uniformity::analyze(e, body, Among::Workgroup, Flow::Control(None), &[], 0, m)
-    }
-
-    /// The values of `e`'s entry body that may differ between the active lanes of one execution
-    /// of their instruction in a simdgroup (the module docs, "Active lanes"). Its blocks are all
-    /// uniform: control divergence is not followed. The returned structure stays charged to `m`.
-    pub fn among_active_lanes(e: &Entry, body: &Body, m: &mut Meter) -> Result<Uniformity, Error> {
-        Uniformity::analyze(e, body, Among::Simdgroup, Flow::Data, &[], 0, m)
+        Uniformity::analyze(e, body, Among::Workgroup, None, &[], 0, m)
     }
 
     /// [`of`](Self::of) for a dispatch whose threadgroups have one thread along the axes `unit`
@@ -606,7 +585,7 @@ impl Uniformity {
         unit: UnitAxes,
         m: &mut Meter,
     ) -> Result<Uniformity, Error> {
-        Uniformity::analyze(e, body, Among::Workgroup, Flow::Control(None), &[], unit, m)
+        Uniformity::analyze(e, body, Among::Workgroup, None, &[], unit, m)
     }
 
     /// The uniformity of the blocks and values of vertex function `e`'s entry body among the
@@ -619,15 +598,7 @@ impl Uniformity {
         uniform: &[u32],
         m: &mut Meter,
     ) -> Result<Uniformity, Error> {
-        Uniformity::analyze(
-            e,
-            body,
-            Among::Primitive,
-            Flow::Control(None),
-            uniform,
-            0,
-            m,
-        )
+        Uniformity::analyze(e, body, Among::Primitive, None, uniform, 0, m)
     }
 
     /// The uniformity of the blocks of `e`'s entry body among the invocations `among` relates,
@@ -642,14 +613,16 @@ impl Uniformity {
         loops: &LoopForest<BlockId>,
         m: &mut Meter,
     ) -> Result<Uniformity, Error> {
-        Uniformity::analyze(e, body, among, Flow::Control(Some(loops)), &[], 0, m)
+        Uniformity::analyze(e, body, among, Some(loops), &[], 0, m)
     }
 
+    /// The analysis among `among`, with the barrier contract where `contract` gives the loop
+    /// forest.
     fn analyze(
         e: &Entry,
         body: &Body,
         among: Among,
-        flow: Flow<'_>,
+        contract: Option<&LoopForest<BlockId>>,
         uniform: &[u32],
         unit: UnitAxes,
         m: &mut Meter,
@@ -683,23 +656,18 @@ impl Uniformity {
         // What the result keeps: the block, instruction, and argument flags.
         let kept = nb.saturating_add(n).saturating_add(e.ep.params.len());
         m.charge(scratch.saturating_add(kept))?;
-        let result = match flow {
-            Flow::Data => {
-                State::new(e, body, among, true, uniform, unit, m).and_then(|st| st.run(None, m))
-            }
-            Flow::Control(contract) => PostDomTree::compute(&e.cfg, m)
-                .map_err(Error::from)
-                .and_then(|pdom| {
-                    let r = State::new(e, body, among, false, uniform, unit, m)
-                        .and_then(|st| match contract {
-                            Some(loops) => st.pin(&pdom, loops, m),
-                            None => Ok(st),
-                        })
-                        .and_then(|st| st.run(Some(&pdom), m));
-                    m.release(pdom.ledger_bytes());
-                    r
-                }),
-        };
+        let result = PostDomTree::compute(&e.cfg, m)
+            .map_err(Error::from)
+            .and_then(|pdom| {
+                let r = State::new(e, body, among, uniform, unit, m)
+                    .and_then(|st| match contract {
+                        Some(loops) => st.pin(&pdom, loops, m),
+                        None => Ok(st),
+                    })
+                    .and_then(|st| st.run(&pdom, m));
+                m.release(pdom.ledger_bytes());
+                r
+            });
         m.release(scratch);
         match result {
             Ok(u) => {
@@ -716,22 +684,11 @@ impl Uniformity {
     }
 }
 
-/// What divergence an analysis follows.
-#[derive(Clone, Copy)]
-enum Flow<'l> {
-    /// Values and control: a block control dependent on a divergent branch is divergent, and so
-    /// is a phi entered from one; with the barrier contract when the loop forest is given.
-    Control(Option<&'l LoopForest<BlockId>>),
-    /// Values alone, among the active lanes (the module docs, "Active lanes").
-    Data,
-}
-
 impl<'a> State<'a> {
     fn new(
         e: &'a Entry,
         body: &'a Body,
         among: Among,
-        active: bool,
         uniform: &[u32],
         unit: UnitAxes,
         m: &mut Meter,
@@ -812,7 +769,6 @@ impl<'a> State<'a> {
             e,
             body,
             among,
-            active,
             args,
             insts: vec![0; n],
             blocks: vec![false; nb],
@@ -885,20 +841,13 @@ impl<'a> State<'a> {
         Ok(self)
     }
 
-    /// Run the worklist; without `pdom` no control divergence is followed (no block turns
-    /// divergent).
-    fn run(
-        mut self,
-        pdom: Option<&PostDomTree<BlockId>>,
-        m: &mut Meter,
-    ) -> Result<Uniformity, Error> {
+    /// Run the worklist.
+    fn run(mut self, pdom: &PostDomTree<BlockId>, m: &mut Meter) -> Result<Uniformity, Error> {
         let body = self.body;
         // A reachable block that reaches no exit has no post-dominator information.
-        if let Some(pdom) = pdom {
-            for (b, _) in body.blocks.iter() {
-                if self.e.cfg.is_reachable(b) && !pdom.is_reachable(b) {
-                    self.set_block(b);
-                }
+        for (b, _) in body.blocks.iter() {
+            if self.e.cfg.is_reachable(b) && !pdom.is_reachable(b) {
+                self.set_block(b);
             }
         }
         for (id, _) in body.insts.iter().rev() {
@@ -926,7 +875,7 @@ impl<'a> State<'a> {
                     if let Some(d) = self.insts.get_mut(i.index()) {
                         *d = new;
                     }
-                    if let (true, 0, Some(pdom)) = (branch, old, pdom) {
+                    if branch && old == 0 {
                         let a = BlockId::new(self.home.get(i.index()).copied().unwrap_or(0));
                         self.mark_region(a, pdom, m)?;
                     }
@@ -935,11 +884,8 @@ impl<'a> State<'a> {
                 }
                 Item::Block(b) => {
                     // Its branch is divergent wherever it leads, and its successors' phis are
-                    // entered from a divergent block. (A block turns divergent only where
-                    // control divergence is followed.)
-                    if let Some(pdom) = pdom {
-                        self.mark_region(b, pdom, m)?;
-                    }
+                    // entered from a divergent block.
+                    self.mark_region(b, pdom, m)?;
                     // Its simdgroup collectives' threads may hold different executions' results.
                     if self.among == Among::Simdgroup {
                         if let Some(block) = body.blocks.get(b) {

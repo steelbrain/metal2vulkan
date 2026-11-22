@@ -10,7 +10,7 @@
 //!   links functions, each linked function's list, name, specialized name, specialization, AIR
 //!   hash, and constant values. A stage without linked functions keeps the key it had before
 //!   linking existed, and one
-//!   compiled without `emulated_simdgroups`, `one_row`, `storage_view_slots`,
+//!   compiled without `emulated_simdgroups`, `one_row`,
 //!   `signed_color_attachments`, `multisampled` or `replay_bindings` the key it had before those
 //!   inputs existed. A stage that links dynamic libraries records each library
 //!   its imports are searched in, in order (install name and content hash), and the install name
@@ -202,11 +202,6 @@ pub fn function_key(
         h.bytes(b"stage-input").bytes(format!("{d:?}").as_bytes());
     }
     // Appended only when set, as above.
-    if !inputs.storage_view_slots.is_empty() {
-        h.bytes(b"storage-view-slots")
-            .bytes(format!("{:?}", inputs.storage_view_slots).as_bytes());
-    }
-    // Appended only when set, as above.
     if !inputs.signed_color_attachments.is_empty() {
         h.bytes(b"signed-color-attachments")
             .bytes(format!("{:?}", inputs.signed_color_attachments).as_bytes());
@@ -228,67 +223,67 @@ pub fn function_key(
     if inputs.merged_draws {
         h.bytes(b"merged-draws");
     }
-    // Appended only when set, as `storage_view_slots`.
+    // Appended only when set, as `signed_color_attachments`.
     if !inputs.srgb_textures.is_empty() {
         h.bytes(b"srgb-textures")
             .bytes(format!("{:?}", inputs.srgb_textures).as_bytes());
     }
-    // Appended only when set, as `storage_view_slots`.
+    // Appended only when set, as `signed_color_attachments`.
     if !inputs.ycbcr_in_place.is_empty() {
         h.bytes(b"ycbcr-in-place")
             .bytes(format!("{:?}", inputs.ycbcr_in_place).as_bytes());
     }
-    // Appended only when set, as `storage_view_slots`.
+    // Appended only when set, as `signed_color_attachments`.
     if !inputs.ycbcr_planes_sampled.is_empty() {
         h.bytes(b"ycbcr-planes-sampled")
             .bytes(format!("{:?}", inputs.ycbcr_planes_sampled).as_bytes());
     }
-    // Appended only when set, as `storage_view_slots`.
+    // Appended only when set, as `signed_color_attachments`.
     if !inputs.texel_rows.is_empty() {
         h.bytes(b"texel-rows")
             .bytes(format!("{:?}", inputs.texel_rows).as_bytes());
     }
-    // Appended only when set, as `storage_view_slots`.
+    // Appended only when set, as `signed_color_attachments`.
     if !inputs.texel_buffer_parts.is_empty() {
         h.bytes(b"texel-buffer-parts")
             .bytes(format!("{:?}", inputs.texel_buffer_parts).as_bytes());
     }
-    // Appended only when set, as `storage_view_slots`.
+    // Appended only when set, as `signed_color_attachments`.
     if !inputs.extended_range.is_empty() {
         h.bytes(b"extended-range")
             .bytes(format!("{:?}", inputs.extended_range).as_bytes());
     }
-    // Appended only when set, as `storage_view_slots`.
+    // Appended only when set, as `signed_color_attachments`.
     if !inputs.extended_range_colors.is_empty() {
         h.bytes(b"extended-range-colors")
             .bytes(format!("{:?}", inputs.extended_range_colors).as_bytes());
     }
-    // Appended only when set, as `storage_view_slots`.
+    // Appended only when set, as `signed_color_attachments`.
     if !inputs.word_colors.is_empty() {
         h.bytes(b"word-colors")
             .bytes(format!("{:?}", inputs.word_colors).as_bytes());
     }
-    // Appended only when set, as `storage_view_slots`.
+    // Appended only when set, as `signed_color_attachments`.
     if !inputs.rotated_colors.is_empty() {
         h.bytes(b"rotated-colors")
             .bytes(format!("{:?}", inputs.rotated_colors).as_bytes());
     }
-    // Appended only when set, as `storage_view_slots`.
+    // Appended only when set, as `signed_color_attachments`.
     if !inputs.alpha_in_red_colors.is_empty() {
         h.bytes(b"alpha-in-red-colors")
             .bytes(format!("{:?}", inputs.alpha_in_red_colors).as_bytes());
     }
-    // Appended only when set, as `storage_view_slots`.
+    // Appended only when set, as `signed_color_attachments`.
     if !inputs.rotated_factors.is_empty() {
         h.bytes(b"rotated-factors")
             .bytes(format!("{:?}", inputs.rotated_factors).as_bytes());
     }
-    // Appended only when set, as `storage_view_slots`.
+    // Appended only when set, as `signed_color_attachments`.
     if !inputs.rotated_blends.is_empty() {
         h.bytes(b"rotated-blends")
             .bytes(format!("{:?}", inputs.rotated_blends).as_bytes());
     }
-    // Appended only when set, as `storage_view_slots`.
+    // Appended only when set, as `signed_color_attachments`.
     if !inputs.swizzled_storage.is_empty() {
         h.bytes(b"swizzled-storage")
             .bytes(format!("{:?}", inputs.swizzled_storage).as_bytes());
@@ -427,13 +422,13 @@ pub fn function_key(
     if inputs.threadgroup_size_matches_tile_size {
         h.bytes(b"threadgroup-size-matches-tile-size");
     }
-    // Appended only when set, as `storage_view_slots`: a texture whose map is the identity keeps
+    // Appended only when set, as `signed_color_attachments`: a texture whose map is the identity keeps
     // every key.
     if !inputs.address_maps.is_empty() {
         h.bytes(b"address-maps")
             .bytes(format!("{:?}", inputs.address_maps).as_bytes());
     }
-    // Appended only when set, as `storage_view_slots`.
+    // Appended only when set, as `signed_color_attachments`.
     if !inputs.cubic_samplers.is_empty() {
         h.bytes(b"cubic-samplers")
             .bytes(format!("{:?}", inputs.cubic_samplers).as_bytes());
@@ -442,18 +437,18 @@ pub fn function_key(
     if inputs.texture_write_rounding != crate::metal::TextureWriteRoundingMode::TowardZero {
         h.bytes(b"texture-write-rounding-nearest-even");
     }
-    // Appended only when set, as `storage_view_slots`.
+    // Appended only when set, as `signed_color_attachments`.
     if !inputs.cross_class.is_empty() {
         h.bytes(b"cross-class")
             .bytes(format!("{:?}", inputs.cross_class).as_bytes());
     }
-    // Appended only when set, as `storage_view_slots`: a function bound to no anisotropic
+    // Appended only when set, as `signed_color_attachments`: a function bound to no anisotropic
     // sampler keeps every key.
     if !inputs.anisotropic_samplers.is_empty() {
         h.bytes(b"anisotropic-samplers")
             .bytes(format!("{:?}", inputs.anisotropic_samplers).as_bytes());
     }
-    // Appended only when set, as `storage_view_slots`: a kernel whose 1D images are bound as Apple's
+    // Appended only when set, as `signed_color_attachments`: a kernel whose 1D images are bound as Apple's
     // OpenCL binds them keeps its key.
     if !inputs.open_cl_lines.is_empty() {
         h.bytes(b"open-cl-lines")

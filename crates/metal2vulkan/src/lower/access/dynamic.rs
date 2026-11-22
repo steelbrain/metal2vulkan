@@ -632,9 +632,6 @@ fn static_access(
             .slots
             .get(t.slot)
             .ok_or_else(|| cx.invariant("a target names a missing slot"))?;
-        if write && super::view_kind(cx.profile, plan) != super::ViewKind::Storage {
-            return Err(cx.invariant("a pointer store through a uniform view"));
-        }
         let slot = plan.slot;
         cx.push.insert(PushField::SlotBindOffset(slot));
         super::note_variable(cx, slot, fixed, !write);

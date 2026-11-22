@@ -62,10 +62,9 @@
 use super::resources::{separate_samplers, ResourcePlanner};
 use super::slots::{
     address_map_variant, anisotropic_variant, bindings, bound_value, buffer_use, check_slots,
-    check_sparse_textures, cross_variant, cubic_variant, heap_raw, mark_disjoint,
-    open_cl_line_variant, plan_buffer, psb_variant, record_noted, srgb_variant,
-    storage_view_variant, texel_buffer_parts_variant, used_uses, ycbcr_in_place_variant,
-    ycbcr_planes_sampled_variant,
+    check_sparse_textures, cross_variant, cubic_variant, heap_raw, open_cl_line_variant,
+    plan_buffer, psb_variant, record_noted, srgb_variant, texel_buffer_parts_variant, used_uses,
+    ycbcr_in_place_variant, ycbcr_planes_sampled_variant,
 };
 use super::{
     BindingPlan, BoundKind, ComputeTemplate, DescriptorWrite, FieldLocation, LocalRules,
@@ -420,7 +419,6 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
             &bindings,
         )?);
     }
-    mark_disjoint(&mut buffers, &p.dependencies);
     let planned = |slot: SlotRef| buffers.iter().find(|b| b.slot == slot);
 
     // Push placement.
@@ -874,7 +872,6 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
     }
     let mut variant = resources.variant;
     variant.psb_slots = psb_variant(&p.dependencies, &buffers, device.profile());
-    variant.storage_view_slots = storage_view_variant(&p.dependencies, &buffers, device.profile());
     variant.cross_class = cross_variant(&p.dependencies, &p.interface.slots, shape);
     variant.srgb_textures = srgb_variant(
         device.profile(),

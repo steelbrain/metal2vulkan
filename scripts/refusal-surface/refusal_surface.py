@@ -91,7 +91,6 @@ BIND_REFUSALS = [
     "PatchIndexRange",
     "ControlPointIndexRange",
     "MissingStageInRegion",
-    "UniformViewAliased",
     "MissingDeviceAddress",
 ]
 

@@ -339,11 +339,7 @@ pub fn load_decl(
             if !checked {
                 return leaf::load(fb, &mut mem, leaf, off);
             }
-            let Some(size) = views::storage_bytes(fb, view)? else {
-                return Err(crate::spirv::error::BuildError::Dangling(
-                    crate::spirv::error::Dangling::Global(view.global),
-                ));
-            };
+            let size = views::storage_bytes(fb, view)?;
             contained(fb, &mut mem, leaf, off, size)
         }
         BlobDecl::Module(mut words) => {

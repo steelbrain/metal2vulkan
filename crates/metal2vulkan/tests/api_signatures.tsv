@@ -926,7 +926,6 @@ enum	metal2vulkan::pipeline::BindingSource	#[cfg_attr(feature = "serde", derive(
 enum	metal2vulkan::pipeline::BufferForm	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum BufferForm
 enum	metal2vulkan::pipeline::BufferKind	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum BufferKind
 enum	metal2vulkan::pipeline::ChannelWrite	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ChannelWrite
-enum	metal2vulkan::pipeline::DescriptorView	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum DescriptorView
 enum	metal2vulkan::pipeline::EntryRef	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum EntryRef<'a>
 enum	metal2vulkan::pipeline::FactorLane	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum FactorLane
 enum	metal2vulkan::pipeline::HandleClass	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum HandleClass
@@ -955,7 +954,6 @@ enum	metal2vulkan::pipeline::StorageFormatClass	#[cfg_attr(feature = "serde", de
 enum	metal2vulkan::pipeline::StorageImageClass	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum StorageImageClass
 enum	metal2vulkan::pipeline::Symbol	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum Symbol
 enum	metal2vulkan::pipeline::SyntheticBinding	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum SyntheticBinding
-enum	metal2vulkan::pipeline::UniformViewChoice	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum UniformViewChoice
 enum	metal2vulkan::pipeline::VertexFetch	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum VertexFetch
 enum	metal2vulkan::pipeline::VertexStride	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum VertexStride
 enum	metal2vulkan::pipeline::Window	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum Window
@@ -2098,11 +2096,9 @@ field	metal2vulkan::bind::BindState.stage_in_region	pub stage_in_region: Option<
 field	metal2vulkan::bind::BindState.stages	pub stages: BTreeMap<Stage, StageTable>
 field	metal2vulkan::bind::BindState.tessellation_factors	pub tessellation_factors: TessellationFactors
 field	metal2vulkan::bind::BindState.tile_threadgroup	pub tile_threadgroup: TileThreadgroupMemory
-field	metal2vulkan::bind::BindState.uniform_views_at_residual	pub uniform_views_at_residual: bool
 field	metal2vulkan::bind::BindState.used_in_token_order	pub used_in_token_order: bool
 field	metal2vulkan::bind::BindState.used_resources	pub used_resources: Vec<UsedResource>
 field	metal2vulkan::bind::BindState.vertex_amplification	pub vertex_amplification: VertexAmplification
-field	metal2vulkan::bind::BindState.view_base_alignment	pub view_base_alignment: u32
 field	metal2vulkan::bind::BindState.viewport_count	pub viewport_count: u32
 field	metal2vulkan::bind::BindState.zeroed_colors	pub zeroed_colors: BTreeMap<u32, metal::PixelFormat>
 field	metal2vulkan::bind::BindingPlan.compute	pub compute: Option<ComputeTemplate>
@@ -2127,7 +2123,6 @@ field	metal2vulkan::bind::BufferExtent.window	pub window: Window
 field	metal2vulkan::bind::BufferRange.offset	pub offset: u64
 field	metal2vulkan::bind::BufferRange.range	pub range: u64
 field	metal2vulkan::bind::BufferRanges.storage	pub storage: u32
-field	metal2vulkan::bind::BufferRanges.uniform	pub uniform: u32
 field	metal2vulkan::bind::ByteRange.len	pub len: u64
 field	metal2vulkan::bind::ByteRange.offset	pub offset: u64
 field	metal2vulkan::bind::DescriptorBytes.binding	pub binding: u32
@@ -2372,7 +2367,6 @@ field	metal2vulkan::bind::StageShape.samplers	pub samplers: BTreeMap<u32, BoundS
 field	metal2vulkan::bind::StageShape.textures	pub textures: BTreeMap<u32, TextureShape>
 field	metal2vulkan::bind::StageShape.threadgroup_lengths	pub threadgroup_lengths: BTreeMap<u32, u32>
 field	metal2vulkan::bind::StageTable.acceleration_structures	pub acceleration_structures: BTreeMap<u32, BoundAccelerationStructure>
-field	metal2vulkan::bind::StageTable.at_bind_views	pub at_bind_views: u64
 field	metal2vulkan::bind::StageTable.buffer_ranges	pub buffer_ranges: BufferRanges
 field	metal2vulkan::bind::StageTable.buffers	pub buffers: BTreeMap<u32, BoundBuffer>
 field	metal2vulkan::bind::StageTable.samplers	pub samplers: BTreeMap<u32, BoundSampler>
@@ -2494,7 +2488,6 @@ field	metal2vulkan::cache::VariantKey.replay_bindings	pub replay_bindings: bool
 field	metal2vulkan::cache::VariantKey.rotated_weights	pub rotated_weights: bool
 field	metal2vulkan::cache::VariantKey.srgb_textures	pub srgb_textures: BTreeSet<SlotRef>
 field	metal2vulkan::cache::VariantKey.storage_images	pub storage_images: BTreeMap<SlotRef, StorageImageChoice>
-field	metal2vulkan::cache::VariantKey.storage_view_slots	pub storage_view_slots: BTreeSet<SlotRef>
 field	metal2vulkan::cache::VariantKey.swizzled_storage	pub swizzled_storage: BTreeSet<SlotRef>
 field	metal2vulkan::cache::VariantKey.texel_buffer_parts	pub texel_buffer_parts: BTreeMap<SlotRef, u32>
 field	metal2vulkan::cache::VariantKey.texel_rows	pub texel_rows: BTreeSet<SlotRef>
@@ -3020,7 +3013,6 @@ field	metal2vulkan::pipeline::LoweringInputs.signed_color_attachments	pub signed
 field	metal2vulkan::pipeline::LoweringInputs.srgb_textures	pub srgb_textures: BTreeSet<SlotRef>
 field	metal2vulkan::pipeline::LoweringInputs.stage_input	pub stage_input: Option<StageInputDescriptor>
 field	metal2vulkan::pipeline::LoweringInputs.storage_images	pub storage_images: BTreeMap<SlotRef, StorageImageChoice>
-field	metal2vulkan::pipeline::LoweringInputs.storage_view_slots	pub storage_view_slots: BTreeSet<SlotRef>
 field	metal2vulkan::pipeline::LoweringInputs.swizzled_storage	pub swizzled_storage: BTreeSet<SlotRef>
 field	metal2vulkan::pipeline::LoweringInputs.texel_buffer_parts	pub texel_buffer_parts: BTreeMap<SlotRef, u32>
 field	metal2vulkan::pipeline::LoweringInputs.texel_rows	pub texel_rows: BTreeSet<SlotRef>
@@ -6782,8 +6774,8 @@ method	metal2vulkan::bind::BindingPlan::sampler_tables	pub fn sampler_tables(&se
 method	metal2vulkan::bind::BindingPlan::specialized_value	pub fn specialized_value(&self, key: SpecKey) -> Option<u64>
 method	metal2vulkan::bind::BindingPlan::unit_axes_variant	pub fn unit_axes_variant(&self, dispatch: &Dispatch) -> Result<Option<VariantKey>, BindError>
 method	metal2vulkan::bind::BoundAccelerationStructure::new	pub fn new(instance_count: u32) -> BoundAccelerationStructure
-method	metal2vulkan::bind::BoundBuffer::same_shape	pub fn same_shape(&self, other: &BoundBuffer, view_base_alignment: u32, ranges: BufferRanges) -> bool
-method	metal2vulkan::bind::BoundBuffer::shape	pub fn shape(&self, view_base_alignment: u32, ranges: BufferRanges) -> BufferShape
+method	metal2vulkan::bind::BoundBuffer::same_shape	pub fn same_shape(&self, other: &BoundBuffer, ranges: BufferRanges) -> bool
+method	metal2vulkan::bind::BoundBuffer::shape	pub fn shape(&self, ranges: BufferRanges) -> BufferShape
 method	metal2vulkan::bind::BoundSampler::new	pub fn new(desc: SamplerDescriptor) -> BoundSampler
 method	metal2vulkan::bind::BoundSampler::shape	pub fn shape(&self) -> BoundSamplerShape
 method	metal2vulkan::bind::BoundTexture::shape	pub fn shape(&self) -> TextureShape
@@ -6920,8 +6912,7 @@ method	metal2vulkan::bind::SparseTileMap::tile	pub fn tile(&self) -> [u32; 3]
 method	metal2vulkan::bind::SparseTileMap::to_bytes	pub fn to_bytes(&self) -> Vec<u8>
 method	metal2vulkan::bind::SparseTileMap::update	pub fn update(&mut self, mode: TileMapping, level: u32, slice: u32, origin: [u32; 3], size: [u32; 3]) -> Result<(), TileMapError>
 method	metal2vulkan::bind::StageInRegion::new	pub fn new(origin: [u32; 3], size: [u32; 3]) -> StageInRegion
-method	metal2vulkan::bind::StageTable::class_alignment	pub fn class_alignment(&self, index: u32, view_base_alignment: u32) -> u32
-method	metal2vulkan::bind::StageTable::shape	pub fn shape(&self, view_base_alignment: u32) -> StageShape
+method	metal2vulkan::bind::StageTable::shape	pub fn shape(&self) -> StageShape
 method	metal2vulkan::bind::StatusBits::contains	pub const fn contains(self, other: StatusBits) -> bool
 method	metal2vulkan::bind::StatusWord::byte_offset	pub const fn byte_offset(self) -> u32
 method	metal2vulkan::bind::StatusWord::index	pub const fn index(self) -> u32
@@ -7218,7 +7209,6 @@ method	metal2vulkan::pipeline::AliasView::new	pub fn new(image_format: vk::Forma
 method	metal2vulkan::pipeline::AmplificationDraws::new	pub fn new(layered: bool, viewports: bool) -> AmplificationDraws
 method	metal2vulkan::pipeline::BandPrimitive::patch_control_points	pub fn patch_control_points(self) -> u32
 method	metal2vulkan::pipeline::BlendState::reads_second_output	pub fn reads_second_output(&self) -> bool
-method	metal2vulkan::pipeline::BufferForm::uniform_view	pub fn uniform_view(self) -> bool
 method	metal2vulkan::pipeline::ColorAttachmentDescriptor::new	pub fn new(pixel_format: metal::PixelFormat) -> ColorAttachmentDescriptor
 method	metal2vulkan::pipeline::ColorAttachmentDescriptor::specialized	#[must_use] pub fn specialized(&self) -> ColorAttachmentDescriptor
 method	metal2vulkan::pipeline::ColorAttachmentState::new	pub fn new(format: vk::Format, write_mask: vk::ColorComponentFlags, blend: Option<BlendState>) -> ColorAttachmentState
@@ -9596,7 +9586,6 @@ variant	metal2vulkan::bind::AccessClass::Sampled	Sampled
 variant	metal2vulkan::bind::AccessClass::Storage	Storage
 variant	metal2vulkan::bind::AccessClass::StorageImage	StorageImage
 variant	metal2vulkan::bind::AccessClass::TexelRows	TexelRows
-variant	metal2vulkan::bind::AccessClass::Uniform	Uniform
 variant	metal2vulkan::bind::AccessClass::VertexInput	VertexInput
 variant	metal2vulkan::bind::AccessClass::YCbCrPlanes	YCbCrPlanes
 variant	metal2vulkan::bind::ArgumentLayoutError::ArrayOfArrays	ArrayOfArrays { id: u32 }
@@ -10353,7 +10342,6 @@ variant	metal2vulkan::error::BindError::SlotOutOfRange	SlotOutOfRange { slot: Sl
 variant	metal2vulkan::error::BindError::TessellationFactorRange	TessellationFactorRange { needed: u64, limit: u64 }
 variant	metal2vulkan::error::BindError::TexelBufferTooLarge	TexelBufferTooLarge { slot: SlotRef, elements: u64, limit: u64 }
 variant	metal2vulkan::error::BindError::UnboundVertexBuffer	UnboundVertexBuffer { slot: SlotRef }
-variant	metal2vulkan::error::BindError::UniformViewAliased	UniformViewAliased { slot: SlotRef, written: SlotRef }
 variant	metal2vulkan::error::BindError::Unsupported	Unsupported(Unsupported)
 variant	metal2vulkan::error::BitcodeError::BadDataLayout	BadDataLayout
 variant	metal2vulkan::error::BitcodeError::BadIdentification	BadIdentification
@@ -10784,7 +10772,7 @@ variant	metal2vulkan::pipeline::BindingSource::Texture	Texture(SlotRef)
 variant	metal2vulkan::pipeline::BindingSource::TileAttachment	TileAttachment(u32)
 variant	metal2vulkan::pipeline::BindingSource::TileMap	TileMap(SlotRef)
 variant	metal2vulkan::pipeline::BindingSource::YCbCrPlanes	YCbCrPlanes(SlotRef)
-variant	metal2vulkan::pipeline::BufferForm::Descriptor	Descriptor(DescriptorView)
+variant	metal2vulkan::pipeline::BufferForm::Descriptor	Descriptor
 variant	metal2vulkan::pipeline::BufferForm::Psb	Psb
 variant	metal2vulkan::pipeline::BufferKind::Buffer	Buffer
 variant	metal2vulkan::pipeline::BufferKind::IntersectionFunctionTable	IntersectionFunctionTable
@@ -10797,9 +10785,6 @@ variant	metal2vulkan::pipeline::ChannelWrite::HalfUnorm	HalfUnorm { bits: u8 }
 variant	metal2vulkan::pipeline::ChannelWrite::Snorm	Snorm { bits: u8, blended: bool }
 variant	metal2vulkan::pipeline::ChannelWrite::Srgb	Srgb
 variant	metal2vulkan::pipeline::ChannelWrite::Unorm	Unorm { bits: u8 }
-variant	metal2vulkan::pipeline::DescriptorView::Storage	Storage
-variant	metal2vulkan::pipeline::DescriptorView::UniformVec4	UniformVec4
-variant	metal2vulkan::pipeline::DescriptorView::UniformWords	UniformWords
 variant	metal2vulkan::pipeline::EntryRef::Index	Index(u32)
 variant	metal2vulkan::pipeline::EntryRef::Name	Name(&'a str)
 variant	metal2vulkan::pipeline::FactorLane::One	One
@@ -11074,8 +11059,6 @@ variant	metal2vulkan::pipeline::RuntimeFact::TileFunction	TileFunction
 variant	metal2vulkan::pipeline::RuntimeFact::TileImageblock	TileImageblock { data_size: u32, alignment: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::TileThreadgroup	TileThreadgroup { tile_sized: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::TileThreadgroupMemory	TileThreadgroupMemory { index: u32 }
-variant	metal2vulkan::pipeline::RuntimeFact::UniformViewAliasing	UniformViewAliasing { slot: SlotRef }
-variant	metal2vulkan::pipeline::RuntimeFact::UniformViewRange	UniformViewRange { slot: SlotRef, choice: UniformViewChoice }
 variant	metal2vulkan::pipeline::RuntimeFact::UnitAxes	UnitAxes { axes: u8, relief: u8 }
 variant	metal2vulkan::pipeline::RuntimeFact::VertexBufferStride	VertexBufferStride { layout: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::VertexFetch	VertexFetch { attr: u32 }
@@ -11115,7 +11098,6 @@ variant	metal2vulkan::pipeline::SpecKey::ObjectMultiRegion	ObjectMultiRegion
 variant	metal2vulkan::pipeline::SpecKey::OffsetBaseAxes	OffsetBaseAxes(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::OutOfBoundsAlpha	OutOfBoundsAlpha(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::Presence	Presence(SlotRef)
-variant	metal2vulkan::pipeline::SpecKey::RangeAtBindOffset	RangeAtBindOffset(SlotRef)
 variant	metal2vulkan::pipeline::SpecKey::RenderAreaHeight	RenderAreaHeight
 variant	metal2vulkan::pipeline::SpecKey::RenderAreaWidth	RenderAreaWidth
 variant	metal2vulkan::pipeline::SpecKey::SampleCount	SampleCount
@@ -11164,9 +11146,6 @@ variant	metal2vulkan::pipeline::SyntheticBinding::RootTable	RootTable
 variant	metal2vulkan::pipeline::SyntheticBinding::SamplerTable	SamplerTable
 variant	metal2vulkan::pipeline::SyntheticBinding::TessellationFactors	TessellationFactors
 variant	metal2vulkan::pipeline::SyntheticBinding::TileMemory	TileMemory
-variant	metal2vulkan::pipeline::UniformViewChoice::Kept	Kept
-variant	metal2vulkan::pipeline::UniformViewChoice::Spare	Spare
-variant	metal2vulkan::pipeline::UniformViewChoice::Viewed	Viewed
 variant	metal2vulkan::pipeline::VertexFetch::FixedFunction	FixedFunction
 variant	metal2vulkan::pipeline::VertexFetch::Pulled	Pulled { format: metal::VertexFormat, buffer_index: u32, offset: u32, step_function: metal::VertexStepFunction, step_rate: u32 }
 variant	metal2vulkan::pipeline::VertexFetch::SignedFixedFunction	SignedFixedFunction

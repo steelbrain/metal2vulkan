@@ -1,8 +1,8 @@
 //! Loads of uniform views that every trip of a loop reads alike, moved out of the loop.
 //!
-//! A kernel that reads its parameters from a `constant` buffer inside a loop often reads them again
-//! on every trip, inside the branches of the loop body, because nothing told its compiler the
-//! address cannot be read out of bounds. A driver's compiler keeps such a load where it stands
+//! A kernel that reads its parameters inside a loop often reads them again on every trip, inside
+//! the branches of the loop body, because nothing told its compiler the address cannot be read out
+//! of bounds. A driver's compiler keeps such a load where it stands
 //! too: it does not move a load out of a branch. On a 1x1 convolution kernel whose outer loop
 //! read 13 such words on each of its trips, the same module with those loads in the loop's
 //! preheader ran 13% faster at 120 trips and 3.8% at 24 on an RX 7900 XTX (RADV), and 3.6% faster
@@ -15,7 +15,7 @@
 //!
 //! - **A uniform view.** The load reads, through a chain of access indices, a module-scope
 //!   `Uniform` variable that is a descriptor resource whose type is a `Block` structure:
-//!   `memory::views` declares one only for a read-only buffer slot, and no shader writes a
+//!   `lower::access::table` declares one for the spilled push fields, and no shader writes a
 //!   `Uniform` block. The load is neither volatile nor `MakePointerVisible`.
 //! - **The same address on every trip.** Every operand of its address is defined outside the loop,
 //!   or by an instruction inside it that computes its value from its operands alone (arithmetic,

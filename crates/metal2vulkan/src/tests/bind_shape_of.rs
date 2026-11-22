@@ -25,9 +25,9 @@ fn buffer(length: u64, offset: u64) -> BoundBuffer {
     }
 }
 
-/// Buffer range limits of `uniform` and `storage` bytes.
-fn ranges(uniform: u32, storage: u32) -> BufferRanges {
-    BufferRanges { uniform, storage }
+/// A buffer range limit of `storage` bytes.
+fn ranges(storage: u32) -> BufferRanges {
+    BufferRanges { storage }
 }
 
 /// A 2D texture of `format`.
@@ -119,27 +119,13 @@ fn states() -> Vec<BindState> {
         with(|s| {
             vertex(s).buffers.insert(0, buffer(256, 2));
         }),
-        // Buffer range limits that tell the buffer's class apart, of the base's shape; limits of
-        // 4 GiB, which tell apart no class of either length, of one other shape twice.
-        with(|s| vertex(s).buffer_ranges = ranges(255, 255)),
-        with(|s| vertex(s).buffer_ranges = ranges(u32::MAX, u32::MAX)),
+        // A buffer range limit that tells the buffer's class apart, of the base's shape; a limit
+        // of 4 GiB, which tells apart no class of either length, of one other shape twice.
+        with(|s| vertex(s).buffer_ranges = ranges(255)),
+        with(|s| vertex(s).buffer_ranges = ranges(u32::MAX)),
         with(|s| {
-            vertex(s).buffer_ranges = ranges(u32::MAX, u32::MAX);
+            vertex(s).buffer_ranges = ranges(u32::MAX);
             vertex(s).buffers.insert(0, buffer(1 << 20, 0));
-        }),
-        // A view base alignment no slot tells apart, or a slot that tells apart none, or one
-        // that tells it apart at an offset it does not divide, all of the base's shape; one that
-        // tells it apart where it divides the offset, of another.
-        with(|s| s.view_base_alignment = 64),
-        with(|s| vertex(s).at_bind_views = 1),
-        with(|s| {
-            s.view_base_alignment = 64;
-            vertex(s).at_bind_views = 1;
-            vertex(s).buffers.insert(0, buffer(256, 16));
-        }),
-        with(|s| {
-            s.view_base_alignment = 64;
-            vertex(s).at_bind_views = 1;
         }),
         with(|s| {
             vertex(s).buffers.insert(
@@ -269,48 +255,40 @@ fn a_state_has_exactly_the_shape_it_makes() {
             );
         }
     }
-    // The states of the base's shape (the base, the four its comment names, the one of buffer
-    // range limits that tell its class apart, the three of a view base alignment told apart
-    // nowhere it divides an offset, and the base with another argument sampler of the same
-    // shape), the two of 4 GiB limits and the used resources' two of one shape: each against the
-    // others of its shape.
-    assert_eq!(same, 10 * 9 + 2 + 2, "pairs of one shape");
+    // The states of the base's shape (the base, the four its comment names, the one of a buffer
+    // range limit that tells its class apart, and the base with another argument sampler of the
+    // same shape), the two of a 4 GiB limit and the used resources' two of one shape: each
+    // against the others of its shape.
+    assert_eq!(same, 7 * 6 + 2 + 2, "pairs of one shape");
 }
 
-/// A buffer's bind offset cycling through the multiples of 16 up to 256 at a view base alignment
-/// of 64 keeps one shape where its slot tells no alignment past 4 apart (vertex data, or a view
-/// a runtime left out), and takes two where the slot tells it apart (a uniform view: 64 divides
-/// the offset or not): none past those two, and none new on a second cycle.
+/// A buffer's bind offset cycling through the multiples of 16 up to 256 keeps one shape: no
+/// alignment past 4 is told apart, and no shape is new on a second cycle.
 #[test]
 fn a_slot_s_offsets_moving_among_multiples_of_16_keep_their_shapes() {
-    for (views, shapes) in [(0, 1), (1, 2)] {
-        let mut seen = Vec::new();
-        for cycle in 0..2 {
-            for offset in (16..=256).step_by(16) {
-                let state = with(|s| {
-                    s.view_base_alignment = 64;
-                    vertex(s).at_bind_views = views;
-                    vertex(s).buffers.insert(0, buffer(4096, offset));
-                });
-                let shape = state.shape();
-                if !seen.contains(&shape) {
-                    assert_eq!(
-                        cycle, 0,
-                        "a new shape at offset {offset} on the second cycle"
-                    );
-                    seen.push(shape);
-                }
+    let mut seen = Vec::new();
+    for cycle in 0..2 {
+        for offset in (16..=256).step_by(16) {
+            let state = with(|s| {
+                vertex(s).buffers.insert(0, buffer(4096, offset));
+            });
+            let shape = state.shape();
+            if !seen.contains(&shape) {
+                assert_eq!(
+                    cycle, 0,
+                    "a new shape at offset {offset} on the second cycle"
+                );
+                seen.push(shape);
             }
         }
-        assert_eq!(seen.len(), shapes, "slots telling apart {views:#b}");
     }
+    assert_eq!(seen.len(), 1);
 }
 
-/// `BoundBuffer::same_shape` answers `a.shape(x, r) == b.shape(x, r)` for every pair of bindings
-/// over lengths of one length class and of others, bind offsets of one alignment class and of
-/// others, with and without a device address and a stride, and inline bytes, at view base
-/// alignments that tell no offset class past the vertex fetch's apart and one that does, under
-/// buffer range limits that tell every length class apart, some, and few.
+/// `BoundBuffer::same_shape` answers `a.shape(r) == b.shape(r)` for every pair of bindings over
+/// lengths of one length class and of others, bind offsets of one alignment class and of others,
+/// with and without a device address and a stride, and inline bytes, under buffer range limits
+/// that tell every length class apart, some, and few.
 #[test]
 fn a_buffer_binding_has_the_shape_of_another_exactly_where_their_shapes_compare_equal() {
     let mut bindings = Vec::new();
@@ -341,19 +319,14 @@ fn a_buffer_binding_has_the_shape_of_another_exactly_where_their_shapes_compare_
         }
     }
     let (mut alike, mut apart) = (0, 0);
-    let limits = [
-        ranges(0, 0),
-        ranges(1 << 16, 1 << 27),
-        ranges(u32::MAX, u32::MAX),
-    ];
-    for (alignment, r) in [0, 4, 64].into_iter().flat_map(|a| limits.map(|r| (a, r))) {
+    for r in [ranges(0), ranges(1 << 16), ranges(u32::MAX)] {
         for (at, binding) in bindings.iter().enumerate() {
             for (of, other) in bindings.iter().enumerate() {
-                let equal = binding.shape(alignment, r) == other.shape(alignment, r);
+                let equal = binding.shape(r) == other.shape(r);
                 assert_eq!(
-                    binding.same_shape(other, alignment, r),
+                    binding.same_shape(other, r),
                     equal,
-                    "binding {at} against binding {of} at alignment {alignment} under {r:?}"
+                    "binding {at} against binding {of} under {r:?}"
                 );
                 alike += usize::from(equal && at != of);
                 apart += usize::from(!equal);

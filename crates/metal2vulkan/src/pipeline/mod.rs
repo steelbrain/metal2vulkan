@@ -123,10 +123,10 @@ pub use graphics::{
 };
 pub use indirect_draws::IndirectDrawLayout;
 pub use interface::{
-    AccessSet, AttributeFetch, BufferForm, BufferKind, BufferSlot, CommandWrites, DescriptorView,
-    LevelReads, NumberedSampler, PatchDomain, PipelineInterface, PlacedField, PushLoc,
-    PushPlacement, SampledLevels, SamplerArray, SamplerLevels, SamplerSlot, SlotInterface,
-    TextureAccess, TextureSlot, ThreadgroupArgument, Window,
+    AccessSet, AttributeFetch, BufferForm, BufferKind, BufferSlot, CommandWrites, LevelReads,
+    NumberedSampler, PatchDomain, PipelineInterface, PlacedField, PushLoc, PushPlacement,
+    SampledLevels, SamplerArray, SamplerLevels, SamplerSlot, SlotInterface, TextureAccess,
+    TextureSlot, ThreadgroupArgument, Window,
 };
 pub use layout::{
     BindingSource, DescriptorBinding, DescriptorSetLayout, PipelineLayout, PushConstantRange,
@@ -146,7 +146,7 @@ pub use compile::{
     EntryDescriptor, EntryPlan, EntryRef, LinkedSource, StageEntries, StandaloneModule,
     COMPILED_STAGE_WEIGHT,
 };
-pub use facts::{Mechanism, RuntimeFact, UniformViewChoice};
+pub use facts::{Mechanism, RuntimeFact};
 // The `DispatchRegion` push field's bytes, which a consumer of the identity domains pushes with
 // each dispatch, the tile a kernel's grid tiles cover a grid with (`RuntimeFact::GridTiles`), and
 // the depth past which a threadgroup runs as one row (`SpecKey::DeepThreadgroup`).

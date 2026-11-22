@@ -211,10 +211,7 @@ fn variants_are_named_not_numbered() {
         }
     }
     // The same field bytes under another variant name.
-    assert_ne!(
-        BufferForm::Descriptor(DescriptorView::Storage).digest(),
-        BufferForm::Psb.digest()
-    );
+    assert_ne!(BufferForm::Descriptor.digest(), BufferForm::Psb.digest());
     assert_ne!(Stage::Vertex.digest(), Stage::Fragment.digest());
 }
 

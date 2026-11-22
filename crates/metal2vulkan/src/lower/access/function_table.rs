@@ -249,7 +249,7 @@ pub fn declare(mb: &mut ModuleBuilder, plan: &Plan) -> BResult<Option<FunctionTa
             words: DeclaredWords::Addressed(directory),
         }));
     }
-    let view = views::declare_at(mb, snapshot_symbol(plan.stage), views::ViewKind::Storage)?;
+    let view = views::declare_at(mb, snapshot_symbol(plan.stage))?;
     Ok(Some(FunctionTables {
         lookup,
         words: DeclaredWords::Snapshot(view),

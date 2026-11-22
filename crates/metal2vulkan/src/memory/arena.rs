@@ -519,7 +519,7 @@ fn declare_fragment(mb: &mut ModuleBuilder, shape: &TgShape, coord: usize) -> BR
         kind: ResourceKind::Synthetic(SyntheticBinding::TileMemory),
         index: 0,
     };
-    let view = crate::memory::views::declare_at(mb, slot, crate::memory::views::ViewKind::Storage)?;
+    let view = crate::memory::views::declare_at(mb, slot)?;
     let mut regions = Vec::with_capacity(shape.regions.len());
     for &(param, index) in &shape.regions {
         regions.push((param, tile_offset(mb, index)?));

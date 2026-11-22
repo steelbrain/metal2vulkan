@@ -4,7 +4,7 @@
 use super::*;
 use crate::budget::Budget;
 use crate::device::profile::DeviceProfile;
-use crate::memory::views::{declare_at, read_word, View, ViewKind};
+use crate::memory::views::{declare_at, read_word, View};
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::spirv::builder::constructs::{ArmEnd, LoopSpec};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
@@ -76,22 +76,38 @@ enum Shape {
     FromStorage,
 }
 
+/// A uniform view at `sym`: a `Uniform` block `{ u32 words[8]; }` (std430 in `Uniform`, under
+/// `uniformBufferStandardLayout`), read through `memory::views` as a storage view's words are.
+fn uniform_words(mb: &mut ModuleBuilder, sym: ResourceSlot) -> BResult<View> {
+    let u32_ty = mb.ty(Type::Int {
+        width: 32,
+        signed: false,
+    })?;
+    let len = mb.constant(Constant::Scalar {
+        ty: u32_ty,
+        bits: ConstBits(8),
+    })?;
+    let member = mb.ty(Type::Array {
+        elem: u32_ty,
+        len,
+        stride: Some(4),
+    })?;
+    let layout = natural_layout(mb.types(), LayoutRule::Std430, true, &[member])?;
+    let block = mb.ty(Type::Struct {
+        members: [member].into(),
+        layout: Some(layout),
+    })?;
+    let global = mb.resource(sym, StorageClass::Uniform, block)?;
+    Ok(View { global, u32_ty })
+}
+
 /// `p` the uniform view (slot 1) of 8 words, `in` and `out` storage buffers (slots 0 and 2):
 /// `n = in[0]`, `k = in[1]`, then `acc` summed over `n` trips as `shape` says, and `out[0] = acc`.
 fn kernel(shape: Shape) -> TypedModule {
-    kernel_of(shape, ViewKind::UniformWords { words: 8 })
-}
-
-/// [`kernel`], its uniform view `p` of the view kind `kind`, read through `memory::views`.
-fn kernel_of(shape: Shape, kind: ViewKind) -> TypedModule {
     let mut b = ModuleBuilder::new();
-    let input = declare_at(&mut b, slot(0), ViewKind::Storage)
-        .expect("in")
-        .global;
-    let p: View = declare_at(&mut b, slot(1), kind).expect("p");
-    let out = declare_at(&mut b, slot(2), ViewKind::Storage)
-        .expect("out")
-        .global;
+    let input = declare_at(&mut b, slot(0)).expect("in").global;
+    let p = uniform_words(&mut b, slot(1)).expect("p");
+    let out = declare_at(&mut b, slot(2)).expect("out").global;
     let void = b.ty(Type::Void).expect("void");
     let mut f = b.function(void).expect("function");
     let body = |f: &mut FunctionBuilder<'_>| -> BResult<()> {
@@ -327,7 +343,7 @@ fn loads_a_trip_or_a_buffer_write_may_change_stay() {
 
 /// No module holds a `Uniform` resource that is not a `Block` (what `BufferBlock` decorates in
 /// old SPIR-V: a writable buffer; the crate's grammar names no `BufferBlock`): the builder refuses
-/// one. The crate's own uniform view is a view.
+/// one. A `Uniform` block is a view.
 #[test]
 fn only_a_block_is_a_uniform_view() {
     let mut b = ModuleBuilder::new();

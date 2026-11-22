@@ -12,7 +12,7 @@ use crate::spv::ImageFormat;
 
 use super::{counted, Footprint, Kind, Site};
 use crate::bind::{SparseTileMap, TileMapping};
-use crate::memory::views::{View, ViewKind};
+use crate::memory::views::View;
 use crate::metal::TextureType;
 use crate::pipeline::sym::{CombinedSampler, ResourceKind, ResourceSlot, SamplerRef, Stage};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
@@ -108,7 +108,6 @@ fn kernel(fp: Footprint, dim: Dim, arrayed: bool) -> BResult<TypedModule> {
     let map = storage_buffer(&mut b, 2, u32_, 4)?;
     let map = View {
         global: map,
-        kind: ViewKind::Storage,
         u32_ty: u32_,
     };
     let id = b.builtin(crate::spv::BuiltIn::GlobalInvocationId, IoDir::Input, uvec3)?;

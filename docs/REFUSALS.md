@@ -27,7 +27,7 @@ Columns:
 | Kind | Variants | With a site | Reach system | Reach app | Reach rare | Reach none | Unassessed |
 |---|---|---|---|---|---|---|---|
 | Translator and front-end refusals | 118 | 118 | 6 | 26 | 66 | 20 | 0 |
-| Binder refusals at a device limit | 9 | 9 | 0 | 1 | 7 | 1 | 0 |
+| Binder refusals at a device limit | 8 | 8 | 0 | 1 | 6 | 1 | 0 |
 | Translation caps | 14 | 14 | 0 | 0 | 7 | 7 | 0 |
 | Rate maps the compile layer does not compile | 5 | 5 | 0 | 0 | 4 | 1 | 0 |
 | The translation deadline | 1 | 1 | 0 | 0 | 0 | 1 | 0 |
@@ -41,7 +41,7 @@ Columns:
 | Kind | `metal-measured` | `metal-documented` | `metal-takes` | `device` | `ours` | `unknown` | `delegated` | `-` |
 |---|---|---|---|---|---|---|---|---|
 | Translator and front-end refusals | 0 | 0 | 0 | 48 | 70 | 0 | 0 | 0 |
-| Binder refusals at a device limit | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
+| Binder refusals at a device limit | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | Translation caps | 0 | 0 | 0 | 0 | 14 | 0 | 0 | 0 |
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 5 | 0 | 0 | 0 |
 | The translation deadline | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
@@ -184,7 +184,6 @@ Columns:
 | `PatchIndexRange` | The patch indices a draw reads span more bytes (`needed`) than one storage-buffer descriptor can bind (`limit`, `maxStorageBufferRange`) | at the device's limit | `device` | 1: `crates/metal2vulkan/src/bind/graphics.rs (patch_binding)` | `rare`: patch indices past one storage descriptor |
 | `ControlPointIndexRange` | The control-point indices a draw reads span more bytes (`needed`) than one storage-buffer descriptor can bind (`limit`, `maxStorageBufferRange`) | at the device's limit | `device` | 1: `crates/metal2vulkan/src/bind/graphics.rs (patch_binding)` | `rare`: control-point indices past one storage descriptor |
 | `MissingStageInRegion` | The kernel reads the compute encoder's stage-in region (a `[[stage_in]]` attribute stepping by thread position, or `[[grid_origin]]` or... | at the device's limit | `device` | 1: `crates/metal2vulkan/src/bind/dispatch.rs (instantiate)` | `none`: a stage-in region never set, which Metal leaves undefined |
-| `UniformViewAliased` | A `device` buffer slot the pipeline reads through a uniform view (Profile F's per-stage storage-buffer fallback,... | at the device's limit | `device` | 1: `crates/metal2vulkan/src/bind/instantiate.rs (check_uniform_aliasing)` | `rare`: Profile F's uniform-view fallback aliased by a write |
 | `MissingDeviceAddress` | A device-address slot received a buffer without a device address | at the device's limit | `device` | 2: `crates/metal2vulkan/src/bind/plan/slots.rs (plan_buffer)`, `crates/metal2vulkan/src/bind/replay/draws.rs (parent_entries)` | `rare`: a slot reached through a pointer loaded from memory, bound with inline bytes or on a device without device addresses |
 
 ## 3. Translation caps (`Error::LimitExceeded(Limit)`)
@@ -511,7 +510,6 @@ Each refusal's sites, with the function that builds it.
 - `bind::PatchIndexRange`: `crates/metal2vulkan/src/bind/graphics.rs (patch_binding)`
 - `bind::ControlPointIndexRange`: `crates/metal2vulkan/src/bind/graphics.rs (patch_binding)`
 - `bind::MissingStageInRegion`: `crates/metal2vulkan/src/bind/dispatch.rs (instantiate)`
-- `bind::UniformViewAliased`: `crates/metal2vulkan/src/bind/instantiate.rs (check_uniform_aliasing)`
 - `bind::MissingDeviceAddress`: `crates/metal2vulkan/src/bind/plan/slots.rs (plan_buffer)`; `crates/metal2vulkan/src/bind/replay/draws.rs (parent_entries)`
 - `limit::InlinedInstructions`: `crates/metal2vulkan-air/src/canon/inline.rs (inline)`; `crates/metal2vulkan-air/src/canon/inline.rs (u32_of)`; `crates/metal2vulkan-air/src/canon/inline.rs (usize_of)`
 - `limit::OutputBlocks`: `crates/metal2vulkan/src/structurize/irreducible.rs (round)`; `crates/metal2vulkan/src/structurize/mod.rs (structure_loops)`; `crates/metal2vulkan/src/structurize/structurizer_properties/mod.rs (output_cap_is_checked_before_allocating)`; `crates/metal2vulkan/src/structurize/structurizer_properties/trees.rs (the_output_cap_is_checked_before_emission)`

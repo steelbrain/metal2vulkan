@@ -25,7 +25,7 @@
 use std::sync::Arc;
 
 use crate::memory::leaf::WordMem;
-use crate::memory::views::{self, View, ViewKind};
+use crate::memory::views::{self, View};
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage, SyntheticBinding};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::{BResult, BuildError, Dangling};
@@ -89,9 +89,7 @@ pub struct ModuleWords {
 /// Declare `stage`'s blob `blob` where it lives.
 pub fn declare(mb: &mut ModuleBuilder, stage: Stage, blob: &BlobUse) -> BResult<BlobDecl> {
     match blob.home {
-        BlobHome::Bound => {
-            views::declare_at(mb, symbol(stage), ViewKind::Storage).map(BlobDecl::Bound)
-        }
+        BlobHome::Bound => views::declare_at(mb, symbol(stage)).map(BlobDecl::Bound),
         BlobHome::Module => declare_module(mb, &blob.bytes).map(BlobDecl::Module),
     }
 }

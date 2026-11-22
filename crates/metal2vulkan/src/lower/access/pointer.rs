@@ -491,16 +491,6 @@ fn store_pointer(
     if in_blob {
         return Err(refuse());
     }
-    for t in &targets {
-        let plan = cx
-            .memory
-            .slots
-            .get(t.slot)
-            .ok_or_else(|| cx.invariant("a target names a missing slot"))?;
-        if super::view_kind(cx.profile, plan) != super::ViewKind::Storage {
-            return Err(cx.invariant("a pointer store through a uniform view"));
-        }
-    }
     let to = super::access_with_leaf(cx, ptr, None, leaf, targets, null, None)?;
     let words = !cx.profile.fields().leaf.int64;
     Ok(PointerValue::StorePointer {

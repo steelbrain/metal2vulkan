@@ -100,11 +100,6 @@ pub struct SlotPlan {
     pub window: Option<Window>,
     /// The slot's guest base address is observed.
     pub guest_base: bool,
-    /// Some read reaches the slot at an address that may differ between the lanes that run it
-    /// together (`Uniformity::among_active_lanes`), for a slot a uniform view could read
-    /// (`constant`, read-only, no atomic, a `Bounded` window): such a slot keeps its storage view
-    /// on every device (`lower::access::view_kind`). False on every other slot.
-    pub lane_read: bool,
 }
 
 /// An object in an arena.
@@ -778,7 +773,7 @@ impl Planner<'_> {
     fn plan(self, m: &mut Meter) -> Result<MemoryPlan, Error> {
         self.check_tables()?;
         let dynamic = self.any_dynamic_buffer_root();
-        let slots = self.lane_reads(self.slots(dynamic, m)?, m)?;
+        let slots = self.slots(dynamic, m)?;
         // The unshared type size the function's typed objects may still declare.
         let mut room = super::alloca::MAX_UNSHARED;
         let (const_globals, blob) = self.const_globals(&mut room, m)?;
@@ -1057,7 +1052,6 @@ impl Planner<'_> {
                         atomic: eu.atomic,
                         window: escaped_window(window::window(eu.extent, None, dynamic), eu),
                         guest_base: eu.escapes || eu.cross_compare,
-                        lane_read: false,
                     });
                 }
                 continue;
@@ -1084,57 +1078,8 @@ impl Planner<'_> {
                 atomic: u.atomic,
                 window: escaped_window(window::window(u.extent, arg.buffer_size, dynamic), &u),
                 guest_base: u.escapes || u.cross_compare,
-                lane_read: false,
             });
         }
-        Ok(slots)
-    }
-
-    /// `slots` with [`SlotPlan::lane_read`] marked: a slot a uniform view could read with an
-    /// indexed read ([`Provenance::indexed_constant_reads`]) whose pointer is not uniform among the
-    /// active lanes is a lane read's. The analysis runs once, only where such a slot has an indexed
-    /// read (a slot read at constant offsets alone, a struct's fields, has none), and its bytes are
-    /// released before return.
-    fn lane_reads(&self, mut slots: Vec<SlotPlan>, m: &mut Meter) -> Result<Vec<SlotPlan>, Error> {
-        let candidate = |s: &SlotPlan, r: Root| {
-            s.space == AddrSpace::Constant
-                && !s.access.write
-                && !s.atomic
-                && matches!(s.window, Some(Window::Bounded { .. }))
-                && r == match s.element {
-                    Some(element) => Root::BufferElement {
-                        param: s.param,
-                        element,
-                    },
-                    None => Root::Param(s.param),
-                }
-        };
-        let reads = &self.prov.indexed_constant_reads;
-        let mut any = false;
-        for &(r, _) in reads {
-            m.tick(1)?;
-            any |= slots.iter().any(|s| candidate(s, r));
-        }
-        if !any {
-            return Ok(slots);
-        }
-        let body = self
-            .e
-            .module
-            .func(self.e.func)
-            .and_then(|f| f.body.as_ref())
-            .ok_or_else(|| invariant("the entry function has no body"))?;
-        let u = crate::lower::simd::uniform::Uniformity::among_active_lanes(self.e, body, m)?;
-        for &(r, ptr) in reads {
-            m.tick(1)?;
-            if u.is_uniform_value(self.e, ptr) {
-                continue;
-            }
-            if let Some(s) = slots.iter_mut().find(|s| candidate(s, r)) {
-                s.lane_read = true;
-            }
-        }
-        m.release(u.ledger_bytes());
         Ok(slots)
     }
 

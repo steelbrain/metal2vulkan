@@ -12,14 +12,13 @@
 //!
 //! - **Shared.** When an accessed buffer slot of the function (a buffer argument or a
 //!   buffer-table element) has the source buffer's Metal index, the fetch reads through that
-//!   slot. Its window widens to `Whole`, and it is a storage slot (a uniform view's declared size
-//!   is a bounded range and has no `OpArrayLength` for the in-shader check) whose access is the
-//!   function's plus the fetch's read. The function may write it or reach it by atomics: the fetch
-//!   runs once, before any instruction of the body, so it reads what Metal's attribute holds, an
-//!   input the body's writes do not change. One shape has no sharing and is
-//!   `Unsupported{Lowering(StageIo), NotImplemented}` (`share`): a window that is not within the
-//!   first 2³² bytes at or above the bind offset, the reach of a `Whole` window (a `u32` Metal
-//!   displacement from the bind offset, through a view or a device address).
+//!   slot. Its window widens to `Whole`, and its access is the function's plus the fetch's read.
+//!   The function may write it or reach it by atomics: the fetch runs once, before any
+//!   instruction of the body, so it reads what Metal's attribute holds, an input the body's writes
+//!   do not change. One shape has no sharing and is `Unsupported{Lowering(StageIo),
+//!   NotImplemented}` (`share`): a window that is not within the first 2³² bytes at or above the
+//!   bind offset, the reach of a `Whole` window (a `u32` Metal displacement from the bind offset,
+//!   through a view or a device address).
 //! - **Own.** Otherwise the source buffer is a read-only `Whole` slot of its own.
 //!
 //! Either way it is a storage slot like any other: a `Whole` range is never provably within
@@ -40,7 +39,7 @@ use crate::lower::emit::EmitCx;
 use crate::lower::stage_io::fetch;
 use crate::memory::contain::{self, Check};
 use crate::memory::leaf::{self, k32, Leaf, WordMem};
-use crate::memory::views::{self, View, ViewKind};
+use crate::memory::views::{self, View};
 use crate::pipeline::interface::{
     AccessSet, BufferForm, BufferKind, BufferSlot, SlotInterface, Window,
 };
@@ -51,7 +50,7 @@ use crate::spirv::ids::Value as SValue;
 use crate::spirv::ir::BinOp;
 
 use super::psb::{self, PsbMem};
-use super::{descriptor_view, slot_root, AccessPlan, SlotLowering};
+use super::{slot_root, AccessPlan, SlotLowering};
 
 /// How the fetch reaches a pulled source buffer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -111,7 +110,7 @@ pub fn slot_interfaces(plan: &AccessPlan) -> impl Iterator<Item = (SlotRef, Slot
                 access: AccessSet::READ,
                 window: Window::Whole,
                 form: match l {
-                    SlotLowering::View(kind) => BufferForm::Descriptor(descriptor_view(kind)),
+                    SlotLowering::View => BufferForm::Descriptor,
                     SlotLowering::Psb { .. } => BufferForm::Psb,
                 },
                 kind: BufferKind::Buffer,
@@ -125,8 +124,8 @@ pub fn slot_interfaces(plan: &AccessPlan) -> impl Iterator<Item = (SlotRef, Slot
 pub(super) fn declare(mb: &mut ModuleBuilder, plan: &AccessPlan) -> BResult<Vec<(u32, View)>> {
     let mut out = Vec::new();
     for p in &plan.pulled {
-        if let Reach::Own(SlotLowering::View(kind)) = p.reach {
-            out.push((p.slot.index, views::declare(mb, p.slot, kind)?));
+        if let Reach::Own(SlotLowering::View) = p.reach {
+            out.push((p.slot.index, views::declare(mb, p.slot)?));
         }
     }
     Ok(out)
@@ -236,10 +235,10 @@ fn view_read_at(
 ) -> BResult<SourceRead> {
     let inb = match check {
         Check::None => None,
-        Check::InShader => match views::storage_bytes(fb, view)? {
-            Some(size) => Some(contain::in_bounds(fb, off, size, u64::from(n))?),
-            None => return Err(BuildError::Dangling(Dangling::Global(view.global))),
-        },
+        Check::InShader => {
+            let size = views::storage_bytes(fb, view)?;
+            Some(contain::in_bounds(fb, off, size, u64::from(n))?)
+        }
     };
     let off = match inb {
         Some(inb) => {
@@ -424,24 +423,8 @@ fn source(cx: &mut EmitCx<'_>, fb: &mut FunctionBuilder<'_>, buffer: u32) -> BRe
         None => return Err(cx.fail(format!("source buffer {slot:?} has no planned slot"))),
     };
     match (lowering, view) {
-        (Some(SlotLowering::View(ViewKind::Storage)), Some(view)) => {
+        (Some(SlotLowering::View), Some(view)) => {
             let residual = cx.push_field(fb, PushField::SlotBindOffset(slot))?;
-            // A shared slot whose view the binder starts at the bind offset
-            // (`RangeAtBindOffset`, where the plan declares it) has residual 0: the fetch reads
-            // no push word there, as the function's own accesses do (`emit::prepare`).
-            let at_bind = match reach {
-                Some(Reach::Shared { slot }) => {
-                    cx.decl.families.access.at_bind.get(slot).copied().flatten()
-                }
-                _ => None,
-            };
-            let residual = match at_bind {
-                Some(at_bind) => {
-                    let zero = k32(fb, 0)?;
-                    fb.select(at_bind, zero, residual)?
-                }
-                None => residual,
-            };
             Ok(Source::View { view, residual })
         }
         (Some(SlotLowering::Psb { .. }), _) if identity => {

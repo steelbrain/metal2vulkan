@@ -12,7 +12,7 @@ use crate::error::{BindError, Feature, Unsupported};
 use crate::memory::roots::{
     BIND_OFFSET, ENTRY_BYTES, GUEST, HOST, RESIDENT_COUNT, RESIDENT_FIRST, SINK_ROOT, SIZE,
 };
-use crate::pipeline::interface::{BufferForm, DescriptorView, PushLoc, Window};
+use crate::pipeline::interface::{BufferForm, PushLoc, Window};
 use crate::pipeline::sym::{PushField, SlotRef};
 use crate::vk;
 
@@ -377,27 +377,10 @@ pub(crate) enum RangeError {
     TooLarge { needed: u64 },
 }
 
-/// Whether [`descriptor_range`] starts the range of a slot with `window` at `bind_offset` for the
-/// descriptor base alignment `alignment` (`A`, at least 4 used), so its residual is 0, wherever
-/// the bind offset lies before the padded end of the allocation: the bind offset is a multiple of
-/// `A`, and the window is `Whole` or starts in `[0, A)` (`align_down(bind_offset + start, A)` is
-/// then the bind offset, and a range from an aligned bind offset inside the allocation is at least
-/// 16 bytes, so it is never widened down). At or past the end, where every byte the slot reaches
-/// lies outside the bound buffer, the range is widened down into the allocation and the residual
-/// is not 0. The plan specializes `SpecKey::RangeAtBindOffset` on it.
-pub(crate) fn starts_at_bind(bind_offset: u64, window: Window, alignment: u64) -> bool {
-    let a = alignment.max(4);
-    bind_offset.is_multiple_of(a)
-        && match window {
-            Window::Whole => true,
-            Window::Bounded { start, .. } => u64::try_from(start).is_ok_and(|s| s < a),
-        }
-}
-
 /// The descriptor range and the `SlotBindOffset` residual of a descriptor-form slot, in checked
 /// `i128` arithmetic, for an allocation of `length` bytes (padded to 16) bound at `bind_offset`,
 /// with the slot's proven `window`, the descriptor base `alignment` `A` (at least 4 is used; a
-/// Metal buffer slot's plan gives `max(min*BufferOffsetAlignment, 16)`, so a descriptor byte is
+/// Metal buffer slot's plan gives `max(minStorageBufferOffsetAlignment, 16)`, so a descriptor byte is
 /// congruent to its Metal address modulo 16), and the view's maximum range `max_range`.
 ///
 /// - `Bounded{start, len}`: from `align_down(max(0, bind_offset + start), A)` to
@@ -511,43 +494,30 @@ pub(crate) fn shared_range(
 }
 
 /// The descriptor range and the `SlotBindOffset` residual of planned buffer slot `pb` bound at
-/// `bind_offset` of an allocation of `length` bytes, where `views_at_residual` says the consumer
-/// reads every uniform view at its residual (`BindState::uniform_views_at_residual`). Its function
-/// reads byte `residual + m` of the range for the Metal offset `m`, the byte it read of the range
-/// from the bind offset, so a slot read at its residual binds a range its bind offsets share:
+/// `bind_offset` of an allocation of `length` bytes. Its function reads byte `residual + m` of the
+/// range for the Metal offset `m`, the byte it read of the range from the bind offset, so a slot
+/// binds a range its bind offsets share:
 ///
-/// - a storage view of a `Whole` window takes its range from the start of the bound buffer's
-///   space (offset 0) to the padded end, its residual the bind offset, so every bind offset of one
-///   buffer binds one descriptor and a draw or dispatch that moves only the offset keeps its set 0
-///   (a dynamic one's offset moves with the space alone); the bytes before the bind offset, which
-///   the window does not state, are reachable as Metal's own memory is. Where that range would
-///   exceed the view's `max_range` or reach past `2^32` (a `u32` residual and offset), or the bind
-///   offset lies at or past the padded end, it takes [`descriptor_range`]'s range;
-/// - a storage view of a `Bounded` window, which a function reads at its residual but at bind
-///   offset 0 (`SpecKey::RangeAtBindOffset`, where its profile declares the key, set only where
-///   [`starts_at_bind`] holds there, which leaves that range's residual 0), and a uniform view of
-///   one where `views_at_residual` (no function reads it at its bind offset alone), take
-///   [`shared_range`]'s, where it holds the window;
+/// - a `Whole` window takes its range from the start of the bound buffer's space (offset 0) to the
+///   padded end, its residual the bind offset, so every bind offset of one buffer binds one
+///   descriptor and a draw or dispatch that moves only the offset keeps its set 0 (a dynamic one's
+///   offset moves with the space alone); the bytes before the bind offset, which the window does
+///   not state, are reachable as Metal's own memory is. Where that range would exceed the view's
+///   `max_range` or reach past `2^32` (a `u32` residual and offset), or the bind offset lies at or
+///   past the padded end, it takes [`descriptor_range`]'s range;
+/// - a `Bounded` window takes [`shared_range`]'s, where it holds the window;
 /// - every other slot takes [`descriptor_range`]'s, which starts at the bind offset aligned down
-///   to the descriptor base alignment: a uniform view's key may read it at its bind offset alone,
-///   where its residual is 0.
+///   to the descriptor base alignment.
 pub(crate) fn planned_range(
     pb: &PlannedBuffer,
     bind_offset: u64,
     length: u64,
-    views_at_residual: bool,
 ) -> Result<(BufferRange, u32), RangeError> {
     let end = padded(length);
-    let storage = pb.form == BufferForm::Descriptor(DescriptorView::Storage);
-    let from_start = pb.window == Window::Whole
-        && storage
-        && bind_offset < end
-        && end <= pb.max_range
-        && end <= 1 << 32;
+    let from_start =
+        pb.window == Window::Whole && bind_offset < end && end <= pb.max_range && end <= 1 << 32;
     if !from_start {
-        let shared = (storage || (views_at_residual && pb.form.uniform_view()))
-            .then(|| shared_range(bind_offset, length, pb.window, pb.alignment, pb.max_range))
-            .flatten();
+        let shared = shared_range(bind_offset, length, pb.window, pb.alignment, pb.max_range);
         return match shared {
             Some(shared) => Ok(shared),
             None => descriptor_range(bind_offset, length, pb.window, pb.alignment, pb.max_range),
@@ -573,7 +543,7 @@ pub(crate) fn bound_buffer(
     // table's buffer ranges class it in the shape.
     let ranges = table.map(|t| t.buffer_ranges).unwrap_or_default();
     let kind = BoundKind::of_bound(b, ranges);
-    debug_assert_eq!(kind, BoundKind::of(b.map(|b| b.shape(0, ranges)).as_ref()));
+    debug_assert_eq!(kind, BoundKind::of(b.map(|b| b.shape(ranges)).as_ref()));
     if kind != expected {
         return Err(internal(format!(
             "the bind state's shape differs from the plan's at {slot:?}"
@@ -621,72 +591,16 @@ impl Residuals {
     }
 }
 
-/// The Metal addresses `[lo, hi)` a buffer bound at `gpu_address + offset` (an allocation of
-/// `length` bytes) can reach through `window`: a `Bounded` window from the bind offset, a `Whole`
-/// one from the bind offset to the end, clamped to the padded allocation, since an access outside
-/// it is not Metal-defined (containment keeps it in the bound range).
-fn metal_extent(window: Window, gpu_address: u64, offset: u64, length: u64) -> (i128, i128) {
-    let base = i128::from(gpu_address);
-    let end = base + i128::from(padded(length));
-    let bind = base + i128::from(offset);
-    let (lo, hi) = match window {
-        Window::Bounded { start, len } => {
-            let lo = bind + i128::from(start);
-            (lo, lo + i128::from(len))
-        }
-        _ => (bind, end),
-    };
-    (lo.max(base), hi.min(end))
-}
-
-/// Refuse a binding where a slot read through a `device` uniform view (`PlannedBuffer::disjoint`)
-/// can reach Metal addresses a written slot of the pipeline can reach: a uniform view need not
-/// observe the dispatch's or draw's own writes. Inline bytes are copies and alias nothing.
-fn check_uniform_aliasing(buffers: &[PlannedBuffer], state: &BindState) -> Result<(), BindError> {
-    let extent = |pb: &PlannedBuffer| -> Result<Option<(i128, i128)>, BindError> {
-        Ok(match bound_buffer(state, pb.slot, pb.bound)? {
-            Some(&BoundBuffer::Buffer {
-                length,
-                offset,
-                gpu_address,
-                ..
-            }) => Some(metal_extent(pb.window, gpu_address, offset, length)),
-            _ => None,
-        })
-    };
-    for pb in buffers.iter().filter(|b| b.disjoint) {
-        let Some((lo, hi)) = extent(pb)? else {
-            continue;
-        };
-        for w in buffers
-            .iter()
-            .filter(|b| b.access.write && b.slot != pb.slot)
-        {
-            if let Some((wlo, whi)) = extent(w)? {
-                if lo < whi && wlo < hi {
-                    return Err(BindError::UniformViewAliased {
-                        slot: pb.slot,
-                        written: w.slot,
-                    });
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
 /// Instantiate `buffers` for `state`: each descriptor-form slot's range, pushed onto
 /// `descriptor_ranges`, and residual (checked `i128`, `DescriptorRangeExceeded` above the view's
 /// limit, an empty allocation `Unsupported{BufferRange}`), each bound device-address slot's root
-/// entry, and each bound buffer's extent, pushed onto `extents`. A `device` slot's uniform view
-/// must not alias a written slot (`UniformViewAliased`).
+/// entry, and each bound buffer's extent, pushed onto `extents`.
 pub(crate) fn bind_buffers(
     buffers: &[PlannedBuffer],
     state: &BindState,
     descriptor_ranges: &mut Vec<DescriptorRange>,
     extents: &mut Vec<BufferExtent>,
 ) -> Result<BoundBuffers, BindError> {
-    check_uniform_aliasing(buffers, state)?;
     let mut out = BoundBuffers {
         residuals: Residuals::default(),
         statics: Vec::new(),
@@ -706,10 +620,9 @@ pub(crate) fn bind_buffers(
             None => continue,
         };
         match (pb.form, pb.binding) {
-            (BufferForm::Descriptor(_), Some((set, binding))) => {
-                let views = state.uniform_views_at_residual;
+            (BufferForm::Descriptor, Some((set, binding))) => {
                 let (range, residual) =
-                    planned_range(pb, bind_offset, length, views).map_err(|e| match e {
+                    planned_range(pb, bind_offset, length).map_err(|e| match e {
                         RangeError::TooLarge { needed } => BindError::DescriptorRangeExceeded {
                             slot: pb.slot,
                             needed,

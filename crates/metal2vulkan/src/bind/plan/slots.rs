@@ -14,7 +14,7 @@ use crate::device::{mechanism, DeviceProfile};
 use crate::error::{BindError, Capability, Feature, Unsupported};
 use crate::metal;
 use crate::pipeline::artifact::RuntimeDependency;
-use crate::pipeline::facts::{Mechanism, RuntimeFact, UniformViewChoice};
+use crate::pipeline::facts::{Mechanism, RuntimeFact};
 use crate::pipeline::interface::SlotInterface;
 use crate::pipeline::interface::{AccessSet, BufferForm, BufferSlot, Window};
 use crate::pipeline::layout::{BindingSource, PipelineLayout};
@@ -107,13 +107,13 @@ impl BoundKind {
 }
 
 /// The plan of buffer slot `slot` with interface `b` and what the shape binds there: its descriptor
-/// binding (descriptor forms), the view's descriptor base alignment and range limit, and a
+/// binding (the descriptor form), the storage view's descriptor base alignment and range limit, and a
 /// `MissingDeviceAddress` refusal for a device-address slot bound without an address: a buffer
 /// without one, or inline bytes, but in a pipeline compiled for a replay's bindings (`replayed`,
 /// `RuntimeFact::ReplayBindings`), which reads every buffer through the slot table the replay's
 /// preprocess writes, inline bytes the encoder bound at the consumer's upload of them
 /// (`DrawReplayPreprocess::inherited_bytes`). The base alignment is
-/// `max(min*BufferOffsetAlignment, 16)` (`views::base_alignment`): a descriptor byte is then
+/// `max(minStorageBufferOffsetAlignment, 16)` (`views::base_alignment`): a descriptor byte is then
 /// congruent to its Metal address modulo 16, which a `uvec4` view of the slot relies on.
 pub(crate) fn plan_buffer(
     (slot, b, shape): (SlotRef, &BufferSlot, Option<&BufferShape>),
@@ -122,10 +122,11 @@ pub(crate) fn plan_buffer(
     bindings: &BTreeMap<BindingSource, (u32, u32)>,
 ) -> Result<PlannedBuffer, BindError> {
     let bound = BoundKind::of(shape);
-    let (min_offset, max_range) = b.form.view_limits(limits);
-    let alignment = crate::memory::views::base_alignment(min_offset);
+    let alignment =
+        crate::memory::views::base_alignment(limits.min_storage_buffer_offset_alignment);
+    let max_range = u64::from(limits.max_storage_buffer_range);
     let binding = match b.form {
-        BufferForm::Descriptor(_) => Some(
+        BufferForm::Descriptor => Some(
             bindings
                 .get(&BindingSource::Buffer(slot))
                 .copied()
@@ -152,41 +153,7 @@ pub(crate) fn plan_buffer(
         alignment,
         max_range,
         bound,
-        disjoint: false,
     })
-}
-
-/// The `SpecKey::RangeAtBindOffset` of buffer slot `b`, bound as `shape` states: whether the
-/// descriptor range starts at its bind offset (`instantiate::starts_at_bind`, under the view's
-/// descriptor base alignment, as [`plan_buffer`] takes it): inline bytes, at offset 0 of the
-/// consumer's aligned upload; a buffer read through a uniform view, at an offset whose alignment
-/// class (`BufferShape::Buffer::offset_alignment`: `BindState::view_base_alignment` where the
-/// runtime tells it apart at the slot and it divides the offset, else a power of two up to 4) the
-/// base alignment divides. A slot bound to nothing has the residual 0
-/// (`instantiate::slot_field`), so either form reads the Metal offset alone of the same
-/// descriptor: it takes false, the form that reads at the residual, which keeps the key of a draw
-/// that leaves the slot unbound the key that reads every such slot at its residual. Only a uniform
-/// view declares the key (`lower::access`); a storage view's range starts at the buffer's start or
-/// its window's aligned first byte (`instantiate::planned_range`), read at its residual, so it
-/// takes false too.
-pub(crate) fn range_at_bind_offset(
-    b: &BufferSlot,
-    shape: Option<&BufferShape>,
-    limits: &Limits,
-) -> bool {
-    if !b.form.uniform_view() {
-        return false;
-    }
-    let (min, _) = b.form.view_limits(limits);
-    let offset = match shape {
-        Some(&BufferShape::Buffer {
-            offset_alignment, ..
-        }) => u64::from(offset_alignment),
-        Some(BufferShape::Bytes { .. }) => 0,
-        None => return false,
-    };
-    let alignment = crate::memory::views::base_alignment(min);
-    crate::bind::instantiate::starts_at_bind(offset, b.window, alignment)
 }
 
 /// The value of `key` for a draw or dispatch of `shape`, whose resources `resources` plans, where
@@ -222,14 +189,6 @@ pub(crate) fn bound_value(
         SpecKey::SparseTexture(slot) => sparse_texture(shape, slot),
         SpecKey::ConstantLanes(slot) => constant_lanes(shape, slot),
         SpecKey::OffsetBaseAxes(slot) => offset_base_axes(shape, slot),
-        SpecKey::RangeAtBindOffset(slot) => match resources.slots.get(&slot) {
-            Some(SlotInterface::Buffer(b)) => u64::from(range_at_bind_offset(
-                b,
-                bound_buffer(shape, slot),
-                &resources.profile.fields().limits,
-            )),
-            _ => 0,
-        },
         _ => return Ok(None),
     }))
 }
@@ -700,14 +659,6 @@ pub(crate) fn anisotropic_variant(
 }
 
 /// The texture `shape` binds at `slot`.
-/// What `shape` binds at buffer `slot`.
-fn bound_buffer(shape: &BindShape, slot: SlotRef) -> Option<&BufferShape> {
-    shape
-        .stages
-        .get(&slot.stage)
-        .and_then(|s| s.buffers.get(&slot.index))
-}
-
 fn bound_texture(shape: &BindShape, slot: SlotRef) -> Option<&TextureShape> {
     shape
         .stages
@@ -779,78 +730,6 @@ pub(crate) fn check_sparse_textures(
     Ok(())
 }
 
-/// Mark each planned buffer whose uniform view no written slot may alias
-/// (`RuntimeFact::UniformViewAliasing`): instantiation compares their Metal windows.
-pub(crate) fn mark_disjoint(buffers: &mut [PlannedBuffer], dependencies: &[RuntimeDependency]) {
-    for b in buffers {
-        b.disjoint = dependencies
-            .iter()
-            .any(|d| d.fact == RuntimeFact::UniformViewAliasing { slot: b.slot });
-    }
-}
-
-/// The read-only slots Profile F's per-stage storage-buffer fallback must keep as storage views
-/// for this shape (`VariantKey::storage_view_slots`): the slots the pipeline was compiled keeping
-/// (`Kept`), and, when a slot the pipeline views as a uniform buffer is large, every large
-/// candidate ([`large_view_candidates`]), so the fallback views none of them. The variant's
-/// compile keeps and restates every slot of the key, and views only candidates the shape proves
-/// small, so its plan for the same shape states the same key (a fixed point, in one compile).
-/// Otherwise the key is the pipeline's own.
-pub(crate) fn storage_view_variant(
-    dependencies: &[RuntimeDependency],
-    buffers: &[PlannedBuffer],
-    profile: &DeviceProfile,
-) -> std::collections::BTreeSet<SlotRef> {
-    let mut kept = std::collections::BTreeSet::new();
-    let large = large_view_candidates(dependencies, buffers, profile, None);
-    let mut viewed_large = false;
-    for d in dependencies {
-        let RuntimeFact::UniformViewRange { slot, choice } = d.fact else {
-            continue;
-        };
-        match choice {
-            UniformViewChoice::Kept => {
-                kept.insert(slot);
-            }
-            UniformViewChoice::Viewed => viewed_large |= large.contains(&slot),
-            _ => {}
-        }
-    }
-    if viewed_large {
-        kept.extend(large);
-    }
-    kept
-}
-
-/// The candidates of Profile F's per-stage storage-buffer fallback (`UniformViewRange` facts of
-/// any choice, of `stage` when given) at which the shape binds a buffer whose length class does
-/// not prove that a uniform view's range fits `maxUniformBufferRange`. A plan whose variant adds a
-/// storage buffer to a stage (a newly pulled vertex layout) names them all, since that variant's
-/// fallback may view any of them.
-pub(crate) fn large_view_candidates(
-    dependencies: &[RuntimeDependency],
-    buffers: &[PlannedBuffer],
-    profile: &DeviceProfile,
-    stage: Option<Stage>,
-) -> std::collections::BTreeSet<SlotRef> {
-    let max = u64::from(profile.fields().limits.max_uniform_buffer_range);
-    dependencies
-        .iter()
-        .filter_map(|d| match d.fact {
-            RuntimeFact::UniformViewRange { slot, .. } => Some(slot),
-            _ => None,
-        })
-        .filter(|slot| stage.is_none_or(|s| slot.stage == s))
-        .filter(|&slot| {
-            buffers.iter().any(|b| {
-                b.slot == slot
-                    && matches!(b.bound, BoundKind::Buffer { length_class, .. }
-                        if !class_fits(length_class, max))
-            })
-        })
-        .collect()
-}
-
 /// Whether every range of an allocation of length class `class` fits `max_range`: its padded
 /// length is below `2^class` (`BindShape` length class).
 pub(crate) fn class_fits(class: u8, max_range: u64) -> bool {
@@ -892,17 +771,13 @@ pub(crate) fn range_variant(slot: SlotRef, bound: BoundKind, profile: &DevicePro
         && matches!(bound, BoundKind::Buffer { length_class, .. } if !class_fits(length_class, storage))
 }
 
-/// The `uses` entry of a bound buffer slot: its proven access, `Uniform` for a uniform view and
-/// `Storage` otherwise, `stages`, and the window as a range when it starts at or after the bind
-/// offset.
+/// The `uses` entry of a bound buffer slot: its proven access, `Storage`, `stages`, and the window
+/// as a range when it starts at or after the bind offset.
 pub(crate) fn buffer_use(b: &PlannedBuffer, stages: vk::PipelineStageFlags2) -> ResourceUse {
     ResourceUse {
         resource: UseTarget::Slot(b.slot),
         access: b.access,
-        class: match b.form {
-            form if form.uniform_view() => AccessClass::Uniform,
-            _ => AccessClass::Storage,
-        },
+        class: AccessClass::Storage,
         stages,
         range: match b.window {
             Window::Bounded { start, len } if start >= 0 => Some(ByteRange {

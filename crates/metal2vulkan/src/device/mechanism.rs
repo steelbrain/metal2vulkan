@@ -79,11 +79,6 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         RuntimeFact::StageInRegion => Mechanism::PushConstant,
         // The binder writes the bound stride per dispatch.
         RuntimeFact::StageInStride { .. } => Mechanism::PushConstant,
-        // A shape that does not prove a uniform view's range fits asks for the variant that keeps
-        // the slot a storage view.
-        RuntimeFact::UniformViewRange { .. } => Mechanism::Variant,
-        // Instantiation compares the bound Metal addresses.
-        RuntimeFact::UniformViewAliasing { .. } => Mechanism::PlanTimeCheck,
         // The render area is specialized; the planner refuses a layered pass.
         RuntimeFact::TileFunction => Mechanism::Specialization,
         // Compiled in under the function's key; the tile pipeline checks its descriptor.

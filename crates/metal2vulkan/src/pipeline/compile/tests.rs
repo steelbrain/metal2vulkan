@@ -643,7 +643,6 @@ fn the_inputs_encoding_is_the_earlier_derived_debug() {
                 .replace(", emulated_simdgroups: false", "")
                 .replace(", one_row: false", "")
                 .replace(", stage_input: None", "")
-                .replace(", storage_view_slots: {}", "")
                 .replace(", signed_color_attachments: {}", "")
                 .replace(", tile_attachments: None", "")
                 .replace(", multisampled: false", "")

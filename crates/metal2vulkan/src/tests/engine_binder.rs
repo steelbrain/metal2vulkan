@@ -36,17 +36,14 @@ use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{BindError, Feature};
 use crate::library::Library;
-use crate::pipeline::interface::{BufferForm, DescriptorView, SlotInterface};
+use crate::pipeline::interface::{BufferForm, SlotInterface};
 use crate::pipeline::layout::BindingSource;
 use crate::pipeline::sym::{
     PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage,
 };
-use crate::pipeline::testing::{
-    engine_dir, llvm_assemble, typed_module, typed_module_with, AssembleError,
-};
+use crate::pipeline::testing::{engine_dir, llvm_assemble, typed_module, AssembleError};
 use crate::pipeline::{
-    ComputePipeline, ComputePipelineDescriptor, FunctionDescriptor, LoweringInputs, RuntimeFact,
-    StageSource, UniformViewChoice,
+    ComputePipeline, ComputePipelineDescriptor, FunctionDescriptor, LoweringInputs, StageSource,
 };
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources};
 use crate::spirv::ir::TypedModule;
@@ -1178,9 +1175,8 @@ fn compared_slots_get_their_guest_bases_and_inline_bytes_are_refused() {
 const LIMIT_ENTRY: &str = "descriptor_limit_uniform_views";
 
 /// A world for the fixture: `n` threads, and each read-only array holding `len[k]` words (at
-/// least `n`), bound at an offset (`c`'s, 532, is not a multiple of 16, so on the profiles these
-/// tests use its uniform view reads through the bind residual); `p = {scale 3, bias 0x5A5A}`.
-/// Returns it with the expected `out`.
+/// least `n`), bound at an offset (`c`'s, 532, is not a multiple of 16); `p = {scale 3, bias
+/// 0x5A5A}`. Returns it with the expected `out`.
 fn limit_world(n: usize, len: [usize; 4]) -> (World, Vec<u32>) {
     let arr = |seed: u32, words: usize, offset: u64| {
         let mut a = Alloc::new(offset as usize + words * 4, offset);
@@ -1234,10 +1230,6 @@ fn form(pipe: &ComputePipeline, index: u32) -> BufferForm {
     }
 }
 
-fn has_fact(pipe: &ComputePipeline, fact: RuntimeFact) -> bool {
-    pipe.dependencies.iter().any(|d| d.fact == fact)
-}
-
 /// The fixture compiled for `dev` under `inputs` (a `VariantKey`'s kernel inputs).
 fn limit_pipeline(
     dev: &Device,
@@ -1254,288 +1246,35 @@ fn limit_pipeline(
     )
 }
 
-/// On Profile F ([`no_addresses`]: four storage buffers per stage) the fixture's six
-/// buffer slots fit because the per-stage fallback views two read-only slots as uniform buffers:
-/// the `device` struct first (its window bounds its range), then the `constant` array (its `Whole`
-/// window leaves the range to the binder). The `device` view depends on the alias check, the
-/// `constant` array on its range, and every other read-only `Whole` slot is a spare candidate.
-/// Through the binder, on the interpreter, every profile computes Metal's `out`, the same bytes as
-/// a profile whose limits need no fallback.
+/// On Profile F ([`no_addresses`]: four storage buffers per stage, no device addresses) the
+/// fixture's six buffer slots exceed the stage's storage-buffer limit, and no slot can move to a
+/// device address: the compile refuses the kernel (`DescriptorCount`). On a profile whose limit
+/// holds them every slot is a storage view, and through the binder, on the interpreter, `out` is
+/// Metal's.
 #[test]
-fn profile_f_views_read_only_slots_as_uniform_buffers_over_the_storage_limit() {
+fn a_stage_past_the_storage_buffer_limit_without_device_addresses_is_refused() {
     let Some(bc) = fixture(LIMIT_ENTRY) else {
         return;
     };
-    let n = 64;
-    let uniform = BufferForm::Descriptor(DescriptorView::UniformWords);
-    let storage = BufferForm::Descriptor(DescriptorView::Storage);
-    for (stem, dev) in [
-        ("Profile F", device("runtime-floor", no_addresses)),
-        ("moltenvk-m3", device("moltenvk-m3", |_| {})),
-    ] {
-        let pipe = pipeline(&dev, &bc, LIMIT_ENTRY).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let small = dev
-            .profile()
-            .fields()
-            .limits
-            .max_per_stage_descriptor_storage_buffers
-            < 6;
-        if small {
-            for (index, want) in [
-                (0, storage),
-                (1, storage),
-                (2, uniform),
-                (3, uniform),
-                (4, storage),
-                (5, storage),
-            ] {
-                assert_eq!(form(&pipe, index), want, "{stem}: slot {index}");
-            }
-            assert!(has_fact(
-                &pipe,
-                RuntimeFact::UniformViewAliasing { slot: kslot(3) }
-            ));
-            assert!(!has_fact(
-                &pipe,
-                RuntimeFact::UniformViewAliasing { slot: kslot(2) }
-            ));
-            assert!(has_fact(
-                &pipe,
-                RuntimeFact::UniformViewRange {
-                    slot: kslot(2),
-                    choice: UniformViewChoice::Viewed,
-                }
-            ));
-            assert!(!has_fact(
-                &pipe,
-                RuntimeFact::BufferRangeLimit { slot: kslot(2) }
-            ));
-            for spare in [0, 1, 4] {
-                assert!(
-                    has_fact(
-                        &pipe,
-                        RuntimeFact::UniformViewRange {
-                            slot: kslot(spare),
-                            choice: UniformViewChoice::Spare,
-                        }
-                    ),
-                    "{stem}: slot {spare}"
-                );
-            }
-        } else {
-            assert!(
-                (0..6).all(|i| form(&pipe, i) == storage),
-                "{stem}: no fallback"
-            );
-        }
-        let (_, m) = typed_module(&bc, LIMIT_ENTRY, dev.profile()).expect("module");
-        let (mut w, want) = limit_world(n, [n; 4]);
-        let state = w.state();
-        let plan = pipe.plan(&dev, &state.shape()).expect("plan");
-        assert!(
-            plan.variant.is_empty(),
-            "{stem}: small buffers need no variant"
-        );
-        execute(&dev, &pipe, &m, &mut w, &limit_dispatch(n))
-            .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        assert_eq!(words(&w.buffers[&5].bytes), want, "{stem}");
-    }
-}
-
-/// A shape that binds a buffer larger than `maxUniformBufferRange` (16 KiB on Profile F) at the
-/// `constant` array, which the base pipeline views as a uniform buffer, asks for the variant that
-/// keeps it a storage view (`VariantKey::storage_view_slots`, from the length class); instantiating
-/// the base pipeline anyway is `DescriptorRangeExceeded`. The variant views the highest-index
-/// `device` array instead, states the same key for the same shape (a fixed point), and computes
-/// Metal's `out`. With every read-only array large, the variant keeps all four storage views, and
-/// its compile refuses the per-stage limit.
-#[test]
-fn a_large_buffer_at_a_uniform_view_asks_for_the_variant_that_keeps_it_storage() {
-    let Some(bc) = fixture(LIMIT_ENTRY) else {
-        return;
-    };
-    let n = 64;
     let dev = device("runtime-floor", no_addresses);
-    let base = limit_pipeline(&dev, &bc, &LoweringInputs::new()).expect("base");
-    // `c` holds 8192 words (32 KiB): its length class cannot prove a uniform range.
-    let (mut w, want) = limit_world(n, [n, n, 8192, n]);
-    let state = w.state();
-    let plan = base.plan(&dev, &state.shape()).expect("plan");
-    assert_eq!(
-        plan.variant.storage_view_slots,
-        std::collections::BTreeSet::from([kslot(2)])
-    );
-    match plan.instantiate_dispatch(&state, &limit_dispatch(n)) {
-        Err(BindError::DescriptorRangeExceeded { slot, limit, .. }) => {
-            assert_eq!((slot, limit), (kslot(2), 16384));
-        }
-        other => panic!("expected DescriptorRangeExceeded, got {other:?}"),
-    }
-    let inputs = plan.variant.lowering_inputs(Stage::Kernel);
-    let variant = limit_pipeline(&dev, &bc, &inputs).expect("variant");
-    let uniform = BufferForm::Descriptor(DescriptorView::UniformWords);
-    let storage = BufferForm::Descriptor(DescriptorView::Storage);
-    for (index, want) in [
-        (0, storage),
-        (1, storage),
-        (2, storage),
-        (3, uniform),
-        (4, uniform),
-        (5, storage),
-    ] {
-        assert_eq!(form(&variant, index), want, "variant slot {index}");
-    }
-    assert!(has_fact(
-        &variant,
-        RuntimeFact::UniformViewRange {
-            slot: kslot(2),
-            choice: UniformViewChoice::Kept,
-        }
-    ));
-    assert!(has_fact(
-        &variant,
-        RuntimeFact::UniformViewAliasing { slot: kslot(4) }
-    ));
-    let again = variant.plan(&dev, &state.shape()).expect("variant plan");
-    assert_eq!(again.variant, plan.variant, "a fixed point");
-    let (_, m) = typed_module_with(&bc, LIMIT_ENTRY, dev.profile(), &inputs).expect("module");
-    execute(&dev, &variant, &m, &mut w, &limit_dispatch(n)).expect("variant dispatch");
-    assert_eq!(words(&w.buffers[&5].bytes), want);
-
-    let (w, _) = limit_world(n, [8192; 4]);
-    let plan = base.plan(&dev, &w.state().shape()).expect("plan");
-    assert_eq!(
-        plan.variant.storage_view_slots,
-        std::collections::BTreeSet::from([kslot(0), kslot(1), kslot(2), kslot(4)])
-    );
-    match limit_pipeline(&dev, &bc, &plan.variant.lowering_inputs(Stage::Kernel)) {
+    match limit_pipeline(&dev, &bc, &LoweringInputs::new()) {
         Err(crate::error::Error::Unsupported(u)) => {
             assert_eq!(u.feature, Feature::DescriptorCount)
         }
         other => panic!("expected a DescriptorCount refusal, got {:?}", other.err()),
     }
-}
-
-/// A `device` slot read through a uniform view must not share Metal addresses with a slot the
-/// pipeline writes (a uniform view need not observe the dispatch's own writes): the struct `p`
-/// bound where `out` writes is `UniformViewAliased` at instantiation, while the `constant` array's
-/// view, which Metal's `constant` address space makes read-only, is not checked, and disjoint
-/// windows of one allocation are accepted.
-#[test]
-fn a_device_uniform_view_bound_where_the_pipeline_writes_is_refused() {
-    let Some(bc) = fixture(LIMIT_ENTRY) else {
-        return;
-    };
     let n = 64;
-    let dev = device("runtime-floor", no_addresses);
-    let pipe = pipeline(&dev, &bc, LIMIT_ENTRY).expect("Profile F");
-    let one = limit_dispatch(n);
-    // The world with `out` bound at bind offset `offset` of a 1 KiB allocation at Metal address
-    // `guest`: its `Whole` window reaches from the offset to the allocation's end.
-    let out_at = |guest: u64, offset: u64| {
-        let (mut w, _) = limit_world(n, [n; 4]);
-        let out = w.buffers.get_mut(&5).expect("out");
-        out.guest = guest;
-        out.offset = offset;
-        out.bytes = vec![0; 1024];
-        w
-    };
-    let (pg, cg) = {
-        let (w, _) = limit_world(n, [n; 4]);
-        (w.buffers[&3].guest, w.buffers[&2].guest)
-    };
-    // `out` in `p`'s allocation, over `p`'s window [256, 264).
-    let w = out_at(pg, 0);
-    let state = w.state();
-    let plan = pipe.plan(&dev, &state.shape()).expect("plan");
-    assert_eq!(
-        plan.instantiate_dispatch(&state, &one).err(),
-        Some(BindError::UniformViewAliased {
-            slot: kslot(3),
-            written: kslot(5),
-        })
+    let dev = device("moltenvk-m3", |_| {});
+    let pipe = pipeline(&dev, &bc, LIMIT_ENTRY).expect("moltenvk-m3");
+    assert!(
+        (0..6).all(|i| form(&pipe, i) == BufferForm::Descriptor),
+        "every slot a storage view"
     );
-    // `out` after `p`'s window in the same allocation: disjoint, accepted.
-    let mut w = out_at(pg, 264);
     let (_, m) = typed_module(&bc, LIMIT_ENTRY, dev.profile()).expect("module");
-    execute(&dev, &pipe, &m, &mut w, &one).expect("disjoint windows");
-    // `out` over the `constant` array: not checked.
-    let w = out_at(cg, 512);
+    let (mut w, want) = limit_world(n, [n; 4]);
     let state = w.state();
     let plan = pipe.plan(&dev, &state.shape()).expect("plan");
-    assert!(plan.instantiate_dispatch(&state, &one).is_ok());
-}
-
-/// An atomic needs a storage view (its words are reached through a storage-view pointer), so the
-/// fallback never views a slot an atomic reaches, even one only loaded atomically, whose 4-byte
-/// window a uniform view would otherwise take first: the highest-index `device` array is viewed
-/// instead. Through the binder, on the interpreter, `out` is Metal's.
-#[test]
-fn an_atomically_loaded_slot_stays_a_storage_view_under_the_fallback() {
-    const ENTRY: &str = "descriptor_limit_atomic_load";
-    let Some(bc) = fixture(LIMIT_ENTRY) else {
-        return;
-    };
-    let n = 64;
-    let limit = 40u32;
-    let uniform = BufferForm::Descriptor(DescriptorView::UniformWords);
-    let storage = BufferForm::Descriptor(DescriptorView::Storage);
-    for stem in ["Profile F"] {
-        let dev = device("runtime-floor", no_addresses);
-        let pipe = pipeline(&dev, &bc, ENTRY).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let small = dev
-            .profile()
-            .fields()
-            .limits
-            .max_per_stage_descriptor_storage_buffers
-            < 5;
-        for index in 0..5 {
-            let want = if small && index == 3 {
-                uniform
-            } else {
-                storage
-            };
-            assert_eq!(form(&pipe, index), want, "{stem}: slot {index}");
-        }
-        assert_eq!(
-            has_fact(&pipe, RuntimeFact::UniformViewAliasing { slot: kslot(3) }),
-            small,
-            "{stem}"
-        );
-        let arr = |seed: u32| {
-            let mut a = Alloc::new(n * 4, 0);
-            for i in 0..n {
-                let v = (i as u32).wrapping_mul(2654435761).wrapping_add(seed);
-                a.bytes[4 * i..][..4].copy_from_slice(&v.to_le_bytes());
-            }
-            a
-        };
-        let (a, b, d) = (arr(1), arr(2), arr(4));
-        let at = |x: &Alloc, i: usize| words(&x.bytes)[i];
-        let want: Vec<u32> = (0..n)
-            .map(|i| {
-                if (i as u32) < limit {
-                    at(&a, i).wrapping_add(at(&b, i))
-                } else {
-                    at(&d, i)
-                }
-            })
-            .collect();
-        let mut count = Alloc::new(4, 0);
-        count.bytes.copy_from_slice(&limit.to_le_bytes());
-        let mut w = World::new([
-            (0, a),
-            (1, b),
-            (2, count),
-            (3, d),
-            (4, Alloc::new(n * 4, 0)),
-        ]);
-        for (k, a) in w.buffers.iter_mut() {
-            a.guest = 0x10_0000_0000 + u64::from(*k) * 0x1_0000_0000;
-        }
-        let (_, m) = typed_module(&bc, ENTRY, dev.profile()).expect("module");
-        execute(&dev, &pipe, &m, &mut w, &limit_dispatch(n))
-            .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        assert_eq!(words(&w.buffers[&4].bytes), want, "{stem}");
-    }
+    assert!(plan.variant.is_empty(), "small buffers need no variant");
+    execute(&dev, &pipe, &m, &mut w, &limit_dispatch(n)).expect("dispatch");
+    assert_eq!(words(&w.buffers[&5].bytes), want);
 }

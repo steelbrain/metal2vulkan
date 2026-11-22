@@ -56,13 +56,6 @@ pub struct LoweringInputs {
     /// compiles as without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub stage_input: Option<StageInputDescriptor>,
-    /// Read-only slots that Profile F's per-stage storage-buffer fallback keeps as storage views
-    /// (`VariantKey::storage_view_slots`): the shape binds them where a uniform view's range may
-    /// exceed `maxUniformBufferRange`. The fallback views other read-only slots as uniform buffers
-    /// instead, and the function depends on `RuntimeFact::UniformViewRange` with
-    /// `UniformViewChoice::Kept` for each of them; a slot the fallback cannot consider is ignored.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub storage_view_slots: BTreeSet<SlotRef>,
     /// The color attachments a fragment function writes that its render pipeline gives a
     /// signed-integer pixel format (`MTLRenderPipelineColorAttachmentDescriptor.pixelFormat`). A
     /// 32-bit integer color output to one is declared `int`, because Vulkan writes a signed-integer

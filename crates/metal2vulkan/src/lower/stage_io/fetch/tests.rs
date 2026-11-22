@@ -9,7 +9,7 @@
 
 use super::*;
 use crate::lower::arith::legal::{f16_to_f64, f64_to_f16};
-use crate::memory::views::{self, ViewKind};
+use crate::memory::views;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot};
 use crate::spirv::builder::ModuleBuilder;
 use crate::spirv::interp::{self, Buffer, Config, Resources};
@@ -65,9 +65,9 @@ fn module_from(
     offset: u32,
 ) -> TypedModule {
     let mut mb = ModuleBuilder::new();
-    let data = views::declare_at(&mut mb, kslot(0), ViewKind::Storage).expect("data");
-    let params = views::declare_at(&mut mb, kslot(1), ViewKind::Storage).expect("params");
-    let out = views::declare_at(&mut mb, kslot(2), ViewKind::Storage).expect("out");
+    let data = views::declare_at(&mut mb, kslot(0)).expect("data");
+    let params = views::declare_at(&mut mb, kslot(1)).expect("params");
+    let out = views::declare_at(&mut mb, kslot(2)).expect("out");
     let void = mb.ty(Type::Void).expect("void");
     let mut f = mb.function(void).expect("function");
     let fb = &mut f;
@@ -122,7 +122,7 @@ fn module_from(
             x
         };
         let w = k32(fb, i).expect("k");
-        let ptr = views::word_ptr(fb, out, w).expect("ptr").expect("storage");
+        let ptr = views::word_ptr(fb, out, w).expect("ptr");
         fb.store(ptr, x, MemAccess::default()).expect("store");
     }
     f.ret(None).expect("ret");

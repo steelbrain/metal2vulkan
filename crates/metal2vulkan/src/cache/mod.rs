@@ -178,13 +178,6 @@ pub struct VariantKey {
     /// without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub unit_axes: u8,
-    /// Read-only slots that Profile F's per-stage storage-buffer fallback keeps as storage views:
-    /// the shape binds a buffer whose length class does not prove that a uniform view's range fits
-    /// `maxUniformBufferRange` at a slot the fallback views as a uniform buffer, so every such
-    /// candidate stays a storage view and the fallback views others (or the compile refuses the
-    /// per-stage limit). The plan of a pipeline compiled under it states it.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub storage_view_slots: BTreeSet<SlotRef>,
     /// Texture slots bound to an 8-bit sRGB texture the device cannot sample, which the runtime
     /// holds as the format's UNORM twin (`metal::format::srgb_raw_twin`), whose views read the
     /// codes (`c / 255`): every slot of a `RuntimeFact::SrgbTexture` the shape binds in such a
@@ -502,7 +495,6 @@ impl VariantKey {
             && !self.emulated_simdgroups
             && !self.one_row
             && self.unit_axes == 0
-            && self.storage_view_slots.is_empty()
             && self.srgb_textures.is_empty()
             && self.ycbcr_in_place.is_empty()
             && self.ycbcr_planes_sampled.is_empty()
@@ -597,12 +589,6 @@ impl VariantKey {
             .filter(|_| stage != crate::pipeline::sym::Stage::Kernel);
         out.region_viewports =
             self.region_viewports && stage == crate::pipeline::sym::Stage::Vertex;
-        out.storage_view_slots = self
-            .storage_view_slots
-            .iter()
-            .filter(|s| s.stage == stage)
-            .copied()
-            .collect();
         out.srgb_textures = self
             .srgb_textures
             .iter()

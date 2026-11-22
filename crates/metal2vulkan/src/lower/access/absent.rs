@@ -33,7 +33,7 @@ use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
 use crate::memory::leaf::k32;
 use crate::memory::roots::k64;
-use crate::memory::views::{self, View, ViewKind};
+use crate::memory::views::{self, View};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, Stage, SyntheticBinding};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
@@ -177,11 +177,7 @@ pub fn declare(
     plan: &super::AccessPlan,
 ) -> BResult<Option<View>> {
     match plan.status_binding {
-        Some(_) => Ok(Some(views::declare_at(
-            mb,
-            symbol(stage),
-            ViewKind::Storage,
-        )?)),
+        Some(_) => Ok(Some(views::declare_at(mb, symbol(stage))?)),
         None => Ok(None),
     }
 }
@@ -239,10 +235,7 @@ pub fn status_word(
 ) -> BResult<crate::spirv::ids::Value> {
     if let Some(view) = cx.decl.families.access.status {
         let word = k32(fb, w.byte_offset() / 4)?;
-        return match views::word_ptr(fb, view, word)? {
-            Some(ptr) => Ok(ptr),
-            None => Err(cx.fail("an ExecutionStatus view that is not a storage view")),
-        };
+        return views::word_ptr(fb, view, word);
     }
     let status = cx.push_field(fb, PushField::ExecutionStatusAddress)?;
     let address = match w.byte_offset() {
