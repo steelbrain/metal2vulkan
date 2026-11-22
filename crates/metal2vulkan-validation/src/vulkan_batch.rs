@@ -46,8 +46,8 @@
 //!   the executor's own writes.
 //! - **Report.** [`report`] reads the done-list, rows, and refusals back beside the committed cases
 //!   and Metal rows: [`family`] and [`scope`], the runs by [`Class`], and every run that
-//!   did not match with its detail (for a mismatch, the 32-bit words that differ from Metal's
-//!   output; for a refusal, the class of its recorded refusal).
+//!   did not match with its detail (for a mismatch or a noted difference, the 32-bit words that
+//!   differ from Metal's output; for a refusal, the class of its recorded refusal).
 
 use crate::candidate::engine::{engine_slot, ENGINE_EXECUTOR_ABI};
 use crate::candidate::exit_status;
@@ -107,6 +107,9 @@ pub enum Outcome {
     ReferenceGap,
     /// Exit 1 with a mismatching row.
     Mismatch,
+    /// Exit 1 with a noted-difference row: its bytes differ under precision notes that can explain
+    /// a difference (`CandidateStatus::NotedDifference`). Never a match.
+    NotedDifference,
     /// `not_supported{...}`: the product refused the case, the device does not enable what it
     /// needs, or the executor does not implement it.
     NotSupported,
@@ -128,11 +131,12 @@ pub enum Outcome {
     Failed,
 }
 
-const OUTCOMES: [Outcome; 12] = [
+const OUTCOMES: [Outcome; 13] = [
     Outcome::Match,
     Outcome::Qualified,
     Outcome::ReferenceGap,
     Outcome::Mismatch,
+    Outcome::NotedDifference,
     Outcome::NotSupported,
     Outcome::Refused,
     Outcome::DeviceCrash,
@@ -143,21 +147,24 @@ const OUTCOMES: [Outcome; 12] = [
     Outcome::Failed,
 ];
 
-/// The report's four classes of [`Outcome`].
+/// The report's five classes of [`Outcome`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Class {
     /// A match, or a Metal run that qualified.
     Match,
     Mismatch,
+    /// A noted difference, counted apart from a mismatch and never a match.
+    NotedDifference,
     /// The case did not run: a typed refusal.
     Refusal,
     /// The run did not finish as evidence: a crash, a timeout, or a tooling failure.
     Failure,
 }
 
-const CLASSES: [Class; 4] = [
+const CLASSES: [Class; 5] = [
     Class::Match,
     Class::Mismatch,
+    Class::NotedDifference,
     Class::Refusal,
     Class::Failure,
 ];
@@ -169,6 +176,7 @@ impl Outcome {
             Self::Qualified => "qualified",
             Self::ReferenceGap => "reference_gap",
             Self::Mismatch => "mismatch",
+            Self::NotedDifference => "noted_difference",
             Self::NotSupported => "not_supported",
             Self::Refused => "refused",
             Self::DeviceCrash => "device_crash",
@@ -190,6 +198,7 @@ impl Outcome {
         match self {
             Self::Match | Self::Qualified => Class::Match,
             Self::Mismatch => Class::Mismatch,
+            Self::NotedDifference => Class::NotedDifference,
             Self::NotSupported | Self::Refused | Self::ReferenceGap => Class::Refusal,
             Self::DeviceCrash
             | Self::NeedsMetal
@@ -206,6 +215,7 @@ impl Class {
         match self {
             Self::Match => "match",
             Self::Mismatch => "mismatch",
+            Self::NotedDifference => "noted_difference",
             Self::Refusal => "refusal",
             Self::Failure => "failure",
         }
@@ -272,15 +282,16 @@ impl Ended {
 }
 
 /// The outcome of a run that ended as `ended` with `row` (the status of the row it recorded in
-/// its slot, if any) and `refused` (whether it recorded a refusal there). Only a match or a
-/// mismatch records a row, and only one whose status agrees with the exit; only a typed refusal
-/// (`not_supported`) records a refusal, and it may not (one before a device opened records
-/// none): anything else is [`Outcome::Failed`].
+/// its slot, if any) and `refused` (whether it recorded a refusal there). Only a match, a mismatch
+/// or a noted difference records a row, and only one whose status agrees with the exit; only a
+/// typed refusal (`not_supported`) records a refusal, and it may not (one before a device opened
+/// records none): anything else is [`Outcome::Failed`].
 pub fn classify(ended: Ended, row: Option<CandidateStatus>, refused: bool) -> Outcome {
     match (ended, row, refused) {
         (Ended::TimedOut, _, _) => Outcome::Timeout,
         (Ended::Code(0), Some(CandidateStatus::Match), false) => Outcome::Match,
         (Ended::Code(1), Some(CandidateStatus::Mismatch), false) => Outcome::Mismatch,
+        (Ended::Code(1), Some(CandidateStatus::NotedDifference), false) => Outcome::NotedDifference,
         (Ended::Code(exit_status::NOT_SUPPORTED), None, _) => Outcome::NotSupported,
         (Ended::Code(exit_status::REFUSED), None, false) => Outcome::Refused,
         (Ended::Code(exit_status::DEVICE_CRASH), None, false) => Outcome::DeviceCrash,
@@ -1156,6 +1167,7 @@ fn execute_run(config: &BatchConfig, store: &Path, run: &Run) -> Result<Executed
             format!("{}: {}", ended.label(), last_error())
         }
         Outcome::Mismatch
+        | Outcome::NotedDifference
         | Outcome::ReferenceGap
         | Outcome::NotSupported
         | Outcome::Refused
@@ -1194,7 +1206,11 @@ fn execute_run(config: &BatchConfig, store: &Path, run: &Run) -> Result<Executed
         .filter(|_| {
             matches!(
                 outcome,
-                Outcome::Match | Outcome::Mismatch | Outcome::Qualified | Outcome::ReferenceGap
+                Outcome::Match
+                    | Outcome::Mismatch
+                    | Outcome::NotedDifference
+                    | Outcome::Qualified
+                    | Outcome::ReferenceGap
             )
         })
         .map(|(line, _)| line);
@@ -1382,7 +1398,7 @@ pub fn install(out: &Path, store: &CorpusStore) -> Result<Installed, String> {
     let mut last = HashMap::<(String, Pass), Evidence>::new();
     for run in output.done {
         let evidence = match run.outcome {
-            Outcome::Match | Outcome::Mismatch => Evidence::Row,
+            Outcome::Match | Outcome::Mismatch | Outcome::NotedDifference => Evidence::Row,
             Outcome::NotSupported => Evidence::Refusal,
             _ => continue,
         };
@@ -1480,13 +1496,16 @@ pub fn family(case: &AuthoredCase) -> String {
 /// `environment_id` (restricted to the profile `restricted_to`, if any: its rows and refusals are
 /// in that profile's slots). Lines:
 ///
-/// - `batch-report selected=N ran=N pending=N match=N mismatch=N refusal=N failure=N`, then
-///   the count of each refusal and failure [`Outcome`] (`not_supported=N ... failed=N`);
-/// - `batch-family family=F cases=N match=N mismatch=N refusal=N failure=N` per [`family`],
-///   and `batch-scope scope=S ...` the same per [`scope`];
+/// - `batch-report selected=N ran=N pending=N match=N mismatch=N noted_difference=N refusal=N
+///   failure=N`, then the count of each refusal and failure [`Outcome`] (`not_supported=N ...
+///   failed=N`);
+/// - `batch-family family=F cases=N match=N mismatch=N noted_difference=N refusal=N failure=N`
+///   per [`family`], and `batch-scope scope=S ...` the same per [`scope`];
 /// - `batch-run case=ID scope=S family=F outcome=O seconds=S name=NAME detail=D` for every
-///   run that did not match; a mismatch adds `comparison=C words=DIFFERING/TOTAL
-///   first=I:METAL/CANDIDATE` from its row and the case's current Metal row, and a typed refusal
+///   run that did not match; a mismatch or a noted difference adds `comparison=C` (the class, and
+///   for a noted difference its notes), `held_open_by=GAP` for a mismatch an answer gap holds
+///   open, and `words=DIFFERING/TOTAL first=I:METAL/CANDIDATE` from its row and the case's current
+///   Metal row, and a typed refusal
 ///   `refusal=CLASS` from its recorded refusal (`device`, `product`, `executor`), or
 ///   `refusal=unrecorded` for one before a device opened;
 /// - `batch-slowest case=ID pass=P seconds=S outcome=O` for the slowest run.
@@ -1565,12 +1584,16 @@ pub fn report(
         for class in CLASSES {
             line.push_str(&format!(" {}={}", class.label(), class_count(class)));
         }
-        // A match and a mismatch are their own classes; the other classes' outcomes follow (a
-        // Metal run's outcomes are no candidate run's).
+        // A match, a mismatch and a noted difference are their own classes; the other classes'
+        // outcomes follow (a Metal run's outcomes are no candidate run's).
         for outcome in OUTCOMES.into_iter().filter(|outcome| {
             !matches!(
                 outcome,
-                Outcome::Match | Outcome::Mismatch | Outcome::Qualified | Outcome::ReferenceGap
+                Outcome::Match
+                    | Outcome::Mismatch
+                    | Outcome::NotedDifference
+                    | Outcome::Qualified
+                    | Outcome::ReferenceGap
             )
         }) {
             line.push_str(&format!(
@@ -1607,12 +1630,15 @@ pub fn report(
                 case.name,
                 run.detail
             );
-            if run.outcome == Outcome::Mismatch {
+            if matches!(run.outcome, Outcome::Mismatch | Outcome::NotedDifference) {
                 match row_of.get(&(run.case_id.as_str(), slot.as_str())) {
                     Some(row) => {
                         let comparison = serde_json::to_string(&row.comparison)
                             .unwrap_or_else(|error| format!("?{error}"));
                         line.push_str(&format!(" comparison={comparison}"));
+                        if let Some(gap) = row.held_open_by {
+                            line.push_str(&format!(" held_open_by={}", gap.as_str()));
+                        }
                         if let Some(metal) = metal_of.get(run.case_id.as_str()) {
                             line.push_str(&format!(
                                 " {}",

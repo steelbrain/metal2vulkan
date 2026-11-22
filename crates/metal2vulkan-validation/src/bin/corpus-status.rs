@@ -77,7 +77,8 @@ fn run() -> Result<(), String> {
                      observation shards alone: per engine slot of each venue of the venue list\n\
                      (default validation/cutover/c3-venues.json), each case's verdict\n\
                      (match, reviewed, device_gap, out_of_scope_ray_tracing, reference_gap,\n\
-                     mismatch, refused, stale, missing). A case whose current Metal row is a\n\
+                     mismatch, a noted difference's too, refused, stale, missing). A case whose\n\
+                     current Metal row is a\n\
                      reference gap (the reference device lacks the Apple GPU family its pipeline\n\
                      needs) reads reference_gap, is printed (c3-reference-gap), and needs the\n\
                      reviewed list's reference_gaps entry signed off. A venue's\n\
@@ -218,9 +219,13 @@ fn run() -> Result<(), String> {
         );
     }
     // The engine slots (`ENV@engine`), the only candidate evidence (cutover X2b): a case
-    // the executor has not run yet is not a problem, a failed or stale row is.
-    let candidate_problem =
-        |state: EvidenceState| matches!(state, EvidenceState::Failed | EvidenceState::Stale);
+    // the executor has not run yet is not a problem, a failed, noted or stale row is.
+    let candidate_problem = |state: EvidenceState| {
+        matches!(
+            state,
+            EvidenceState::Failed | EvidenceState::NotedDifference | EvidenceState::Stale
+        )
+    };
     // A venue's records are held to its committed profile, and those of another build to this
     // build's artifacts.
     let keys = Venues::load(&Venues::committed_path())?.keys(CurrentArtifacts::load(&root)?)?;

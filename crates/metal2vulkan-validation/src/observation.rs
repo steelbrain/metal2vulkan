@@ -212,13 +212,35 @@ pub struct CandidateObservation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timing: Option<CaseTiming>,
     pub status: CandidateStatus,
+    /// The C3 answer gap that keeps a difference its notes could explain a mismatch: the C3
+    /// reviewed list holds the case under it and the case's structure meets it
+    /// (`candidate::engine::difference_status`). `None` for every other row.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub held_open_by: Option<crate::c3::AnswerGap>,
 }
 
+/// How a candidate's output compares with Metal's: a difference is never a match.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CandidateStatus {
     Match,
+    /// A difference no recorded note can explain (an exact class, or one past a bounded table),
+    /// an out-of-bounds target that escaped, or the difference of a case an answer gap holds open
+    /// ([`CandidateObservation::held_open_by`]): the user's decision of 2026-10-06 keeps an answer
+    /// gap's difference an open mismatch until an exact emulation exists.
     Mismatch,
+    /// The bytes differ under a class unbounded by precision notes
+    /// ([`ComparisonClass::Unbounded`]): the row's notes can explain a difference, which says
+    /// nothing of whether they explain this one. Never a match, and never accepted.
+    NotedDifference,
+}
+
+/// Whether a row whose output does not match Metal's may be a noted difference: its bytes differ,
+/// its class is unbounded by notes, and no out-of-bounds target escaped, which no note explains.
+pub fn may_be_noted(differs: bool, class: &ComparisonClass, run: Option<&OutOfBoundsRun>) -> bool {
+    differs
+        && matches!(class, ComparisonClass::Unbounded(_))
+        && !run.is_some_and(OutOfBoundsRun::escapes)
 }
 
 impl MetalObservation {
@@ -382,9 +404,15 @@ impl CandidateObservation {
         // target's guard. `dependency_matches` re-decides each from the Metal bytes.
         let tolerated = self.comparison.tolerates_differences()
             || run.is_some_and(OutOfBoundsRun::tolerates_differences);
+        // A difference that may be noted is a noted one, unless an answer gap holds it open.
+        let noted = may_be_noted(!hashes_match, &self.comparison, run);
         let contradicts = match self.status {
-            CandidateStatus::Match => !hashes_match && !tolerated,
-            CandidateStatus::Mismatch => hashes_match && !run.is_some_and(OutOfBoundsRun::escapes),
+            CandidateStatus::Match => (!hashes_match && !tolerated) || self.held_open_by.is_some(),
+            CandidateStatus::Mismatch => {
+                (hashes_match && !run.is_some_and(OutOfBoundsRun::escapes))
+                    || noted != self.held_open_by.is_some()
+            }
+            CandidateStatus::NotedDifference => !noted || self.held_open_by.is_some(),
         };
         if contradicts {
             return Err(format!(
@@ -785,6 +813,7 @@ mod tests {
             comparison: ComparisonClass::Exact,
             census: None,
             status: CandidateStatus::Match,
+            held_open_by: None,
         };
         let mut missing = serde_json::to_value(&candidate).unwrap();
         missing
@@ -871,6 +900,7 @@ mod tests {
             comparison: ComparisonClass::Exact,
             census: None,
             status: CandidateStatus::Match,
+            held_open_by: None,
         };
         assert!(row.validate_content().is_ok());
         row.output_b64 = "AgAAAA==".into();
@@ -912,6 +942,7 @@ mod tests {
                     artifact: None,
                 }),
                 status: CandidateStatus::Match,
+                held_open_by: None,
             };
         let validation = serde_json::json!({"layer": "VK_LAYER_KHRONOS_validation"});
         let profiles = serde_json::json!({"layer": "VK_LAYER_KHRONOS_profiles"});
@@ -984,6 +1015,7 @@ mod tests {
             comparison: ComparisonClass::Exact,
             census: None,
             status: CandidateStatus::Match,
+            held_open_by: None,
         };
         assert!(candidate.validate_content().is_ok());
         candidate.candidate_output_sha256 = "00".repeat(32);
@@ -1068,6 +1100,7 @@ mod tests {
             census: (comparison != ComparisonClass::Exact).then(|| census.clone()),
             comparison,
             status,
+            held_open_by: None,
         };
         let spv_sha256 = "33".repeat(32);
         let translator_fingerprint = "55".repeat(32);
@@ -1115,6 +1148,51 @@ mod tests {
         // A mismatch never has equal bytes.
         let equal = row(&golden, ComparisonClass::Exact, CandidateStatus::Mismatch);
         assert!(equal.validate_content().is_err());
+
+        // Under an unbounded class a difference is a noted difference, never a match, and a
+        // mismatch only where an answer gap holds it open; no other class or status is noted.
+        let unbounded = ComparisonClass::Unbounded([PrecisionNote::DeviceSampling].into());
+        let valid = |output: &[u8], comparison: &ComparisonClass, status, held| {
+            let mut row = row(output, comparison.clone(), status);
+            row.held_open_by = held;
+            row.validate_content().is_ok()
+        };
+        let gap = Some(crate::c3::AnswerGap::ClippedPrimitiveSplit);
+        assert!(valid(
+            &far,
+            &unbounded,
+            CandidateStatus::NotedDifference,
+            None
+        ));
+        assert!(valid(&far, &unbounded, CandidateStatus::Mismatch, gap));
+        assert!(!valid(&far, &unbounded, CandidateStatus::Match, None));
+        assert!(!valid(&far, &unbounded, CandidateStatus::Mismatch, None));
+        assert!(!valid(
+            &far,
+            &unbounded,
+            CandidateStatus::NotedDifference,
+            gap
+        ));
+        assert!(!valid(
+            &golden,
+            &unbounded,
+            CandidateStatus::NotedDifference,
+            None
+        ));
+        assert!(!valid(&golden, &unbounded, CandidateStatus::Match, gap));
+        let bounded = ComparisonClass::derive([PrecisionNote::F16FmaDoubleRounding], []);
+        assert!(!valid(
+            &far,
+            &bounded,
+            CandidateStatus::NotedDifference,
+            None
+        ));
+        assert!(!valid(
+            &far,
+            &ComparisonClass::Exact,
+            CandidateStatus::Mismatch,
+            gap
+        ));
     }
 
     /// A recorded timing reaches no digest, no fingerprint and no verdict.
@@ -1228,6 +1306,7 @@ mod tests {
             census: None,
             timing,
             status: CandidateStatus::Match,
+            held_open_by: None,
         };
         let golden = metal(Some(fast));
         let dependencies = CandidateDependencies {

@@ -6,8 +6,10 @@
 //! chooses a class. Byte equality is a match under every class; a class only ever widens what
 //! counts as a match on lanes of a structurally known float format ([`ObservationLanes`]), and
 //! only by a bound that follows from the note ([`allowance`]). A note whose effect on a stored
-//! value no table bounds makes the class [`ComparisonClass::Unbounded`]: a difference stays a
-//! mismatch, recorded with the notes that may explain it, and is never accepted.
+//! value no table bounds makes the class [`ComparisonClass::Unbounded`]. A difference is never a
+//! match: under such notes it is a noted difference, recorded with the notes that can explain it
+//! and counted apart (unless a C3 answer gap holds its case open), else a mismatch
+//! (`crate::observation::CandidateStatus`).
 //!
 //! The class is per observation, not per lane: every lane of the declared format gets the
 //! tolerance, including lanes the noted operation did not produce, and a tolerance says nothing
@@ -35,8 +37,8 @@ pub enum ComparisonClass {
     /// reassociation bound of the widest sum of that format the census records
     /// ([`reduction_table`]), together with the table of the other notes.
     ReductionOrderTolerant(UlpTable),
-    /// These notes accept a difference that no table bounds on the stored value: only byte
-    /// equality is a match.
+    /// These notes record a difference from Metal that no table bounds on the stored value: only
+    /// byte equality is a match.
     Unbounded(BTreeSet<PrecisionNote>),
 }
 

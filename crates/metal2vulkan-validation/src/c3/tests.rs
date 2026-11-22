@@ -248,6 +248,7 @@ fn row(
         } else {
             CandidateStatus::Mismatch
         },
+        held_open_by: None,
     }
 }
 
@@ -1116,6 +1117,7 @@ fn a_device_interpolation_row_stays_a_mismatch() {
             artifact: None,
         });
         row.comparison = ComparisonClass::Unbounded([note].into());
+        row.status = noted_if_different(row.status);
         assert!(row.class_holds());
         row
     };
@@ -1213,6 +1215,7 @@ fn deferred_and_never_reviewed(note: PrecisionNote, label: &str) {
             artifact: None,
         });
         row.comparison = ComparisonClass::Unbounded([note].into());
+        row.status = noted_if_different(row.status);
         assert!(row.class_holds());
         row
     };
@@ -1984,11 +1987,21 @@ fn a_reading_reviewed_in_one_venue_does_not_cover_another() {
     assert_eq!(verdict_of(slot(&report, RADV), &bounded), Verdict::Reviewed);
 }
 
+/// The status the executor records for a row of an unbounded class whose status was `status`
+/// under an exact one: a difference is a noted one.
+fn noted_if_different(status: CandidateStatus) -> CandidateStatus {
+    match status {
+        CandidateStatus::Match => CandidateStatus::Match,
+        _ => CandidateStatus::NotedDifference,
+    }
+}
+
 /// `row` recording, in its one executed module, the precision notes `notes` and the unbounded
 /// class they derive.
 fn unbounded_by(row: CandidateObservation, notes: &[PrecisionNote]) -> CandidateObservation {
     let mut row = noting(row, notes);
     row.comparison = ComparisonClass::Unbounded(notes.iter().copied().collect());
+    row.status = noted_if_different(row.status);
     assert!(row.class_holds());
     row
 }
@@ -2996,6 +3009,7 @@ fn a_deferred_near_equivalent_stays_open_with_its_reason() {
         artifact: None,
     });
     row.comparison = ComparisonClass::Unbounded([PrecisionNote::RasterizationRateMap].into());
+    row.status = noted_if_different(row.status);
     assert!(row.class_holds());
     let mut refused = case(2, "refused");
     refused.buffers[0].rasterization_rate_map = Some(RateMapLiteral {

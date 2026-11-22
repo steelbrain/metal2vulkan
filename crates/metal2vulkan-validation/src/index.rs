@@ -34,6 +34,9 @@ pub enum QueueState {
 pub enum EvidenceState {
     Current,
     Failed,
+    /// A current candidate row that differs from Metal under notes that can explain a difference
+    /// (`CandidateStatus::NotedDifference`): never current, and counted apart from a failure.
+    NotedDifference,
     Missing,
     Stale,
     /// A Metal slot whose row is a current reference gap: the reference device cannot run the case,
@@ -178,6 +181,7 @@ impl EvidenceState {
         match self {
             Self::Current => "current",
             Self::Failed => "failed",
+            Self::NotedDifference => "noted_difference",
             Self::Missing => "missing",
             Self::Stale => "stale",
             Self::ReferenceGap => "reference_gap",
@@ -2109,6 +2113,8 @@ fn candidate_state(
 fn summarize_existing_states(states: &[EvidenceState]) -> EvidenceState {
     if states.contains(&EvidenceState::Failed) {
         EvidenceState::Failed
+    } else if states.contains(&EvidenceState::NotedDifference) {
+        EvidenceState::NotedDifference
     } else if states.contains(&EvidenceState::Stale) {
         EvidenceState::Stale
     } else if states.is_empty() {
@@ -2304,7 +2310,8 @@ pub(crate) fn candidate_staleness(
 }
 
 /// The state of one candidate row of `case` under this build ([`candidate_staleness`]): `Current`
-/// when it matched and is current, `Failed` when it mismatched and is current, `Stale` otherwise.
+/// when it matched and is current, `Failed` when it mismatched and is current, `NotedDifference`
+/// when it is a current noted difference, `Stale` otherwise.
 /// `metals` are the case's current Metal rows.
 pub(crate) fn candidate_slot_state(
     case: &crate::case::AuthoredCase,
@@ -2318,6 +2325,7 @@ pub(crate) fn candidate_slot_state(
     match candidate.status {
         crate::observation::CandidateStatus::Match => EvidenceState::Current,
         crate::observation::CandidateStatus::Mismatch => EvidenceState::Failed,
+        crate::observation::CandidateStatus::NotedDifference => EvidenceState::NotedDifference,
     }
 }
 
@@ -2489,6 +2497,7 @@ mod tests {
             comparison: ComparisonClass::Exact,
             census: None,
             status: CandidateStatus::Match,
+            held_open_by: None,
         };
         (metal, candidate)
     }

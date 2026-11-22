@@ -50,9 +50,10 @@ byte location, read only, falling back to the source's shard wherever the index 
 stale, or wrong.\n\
 --batch-report prints DIR's build record against this build (batch-build), then, over\n\
 the cases --batch selects with the same --case-id list (other cases' runs are not counted), the\n\
-runs by class (match, mismatch, refusal, failure), then the same per family (batch-family: the\n\
-stage and first resource family) and per scope (batch-scope: public or private AIR), and every\n\
-run that did not match (batch-run, with its scope and family, and a refusal's recorded class).\n\
+runs by class (match, mismatch, noted_difference, refusal, failure), then the same per family\n\
+(batch-family: the stage and first resource family) and per scope (batch-scope: public or\n\
+private AIR), and every run that did not match (batch-run, with its scope and family, and a\n\
+refusal's recorded class).\n\
 A last line of done.tsv, rows.jsonl, or refusals.jsonl without its newline (an append cut\n\
 short) is dropped. --batch-install writes into the store at DIR, for each case, the\n\
 evidence of its last run that recorded any (its row, or its refusal) through the store's\n\
@@ -283,10 +284,12 @@ fn main(mode: &str, args: Vec<String>) -> Result<(), String> {
                     .sum()
             };
             println!(
-                "batch-summary ran={} match={} mismatch={} refusal={} failure={}",
-                of(Class::Match) + of(Class::Mismatch) + of(Class::Refusal) + of(Class::Failure),
+                "batch-summary ran={} match={} mismatch={} noted_difference={} refusal={} \
+                 failure={}",
+                finished.len(),
                 of(Class::Match),
                 of(Class::Mismatch),
+                of(Class::NotedDifference),
                 of(Class::Refusal),
                 of(Class::Failure)
             );

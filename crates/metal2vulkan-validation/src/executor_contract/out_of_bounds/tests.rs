@@ -601,6 +601,7 @@ fn candidate_row(
             artifact: None,
         }),
         status,
+        held_open_by: None,
     }
 }
 

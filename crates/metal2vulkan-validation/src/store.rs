@@ -1417,6 +1417,7 @@ mod tests {
             comparison: ComparisonClass::Exact,
             census: None,
             status: CandidateStatus::Match,
+            held_open_by: None,
         }
     }
 

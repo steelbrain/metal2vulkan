@@ -39,7 +39,7 @@
 //! `ExecutorError::DeviceCrash`.
 
 use crate::acceptance::{LinkedLibrary, PipelineRequest, RequestFunction};
-use crate::c3::{VenueProfile, Venues, VENUE_PROFILE};
+use crate::c3::{AnswerGap, ReviewedList, VenueProfile, Venues, VENUE_PROFILE};
 use crate::case::out_of_bounds::{OutOfBoundsResource, OutOfBoundsTarget};
 use crate::case::{
     ArgumentBufferSamplerResource, AuthoredCase, OutputSelection, SamplerResource, Stage,
@@ -51,6 +51,7 @@ use crate::check::interface::AirInterface;
 use crate::check::CheckedCase;
 use crate::companion::{Companion, Spelling};
 use crate::coverage::ExecutedCensus;
+use crate::cutover::List as _;
 use crate::engine::{bounded_detail, Outcome, RowSource};
 use crate::executor_contract::out_of_bounds::{self, OutOfBoundsRun, TargetRun};
 use crate::gpu::wait::wait_timeout;
@@ -60,8 +61,8 @@ use crate::library_module::ResolvedLinkedFunctions;
 use crate::literal::{LiteralDepthStencil, LiteralResources, LiteralTexture};
 use crate::metal::ORACLE_ABI;
 use crate::observation::{
-    CandidateDependencies, CandidateObservation, CandidateStatus, CaseTiming, MetalObservation,
-    RUNTIME_CRATE_FINGERPRINT, TRANSLATOR_FINGERPRINT,
+    may_be_noted, CandidateDependencies, CandidateObservation, CandidateStatus, CaseTiming,
+    MetalObservation, RUNTIME_CRATE_FINGERPRINT, TRANSLATOR_FINGERPRINT,
 };
 use crate::observation_contract::ComparisonClass;
 use crate::refusal::{Refusal, RefusalObservation};
@@ -110,7 +111,7 @@ pub mod variants;
 /// how it decides a match. A change no recorded row can observe (a case kind no earlier executor
 /// ran, or one it refused) needs no bump; its commit says why. The commit that bumps it says what
 /// changed; this comment keeps no history.
-pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v211";
+pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v212";
 
 /// One kernel case in the terms the binder takes: what this executor supports of an
 /// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures,
@@ -2083,16 +2084,22 @@ pub fn execute_prepared(
         .decode(&metal.output_b64)
         .map_err(|error| format!("decode the Metal observation's output: {error}"))?;
     // A case with out-of-bounds targets is judged by their containment property.
-    let status = if crate::executor_contract::out_of_bounds::matches(
+    let (status, held_open_by) = if crate::executor_contract::out_of_bounds::matches(
         case,
         &run.comparison,
         &golden,
         &run.output,
         run.census.out_of_bounds.as_ref(),
     ) {
-        CandidateStatus::Match
+        (CandidateStatus::Match, None)
     } else {
-        CandidateStatus::Mismatch
+        difference_status(
+            &checked,
+            candidate_output_sha256 != metal.metal_output_sha256,
+            &run.comparison,
+            run.census.out_of_bounds.as_ref(),
+            || ReviewedList::load(&ReviewedList::committed_path()),
+        )?
     };
     let observation = CandidateObservation {
         case_id: case.case_id.clone(),
@@ -2110,6 +2117,7 @@ pub fn execute_prepared(
         census: Some(run.census.clone()),
         timing: Some(run.timing),
         status,
+        held_open_by,
     };
     // The row contract first, so a refusal (such as a row under an unrequested profiles layer)
     // reports its own reason.
@@ -2127,6 +2135,32 @@ pub fn execute_prepared(
     }
     store.upsert_candidate(observation.clone())?;
     Ok(observation)
+}
+
+/// The status of a run of `checked` whose output does not match Metal's under its class
+/// `comparison` (`differs`: its bytes differ; `run`: its out-of-bounds facts), and the answer gap
+/// that holds it open: a noted difference where it may be one ([`may_be_noted`]), unless the C3
+/// reviewed list (`list`, read only then) holds the case under an answer gap its structure meets
+/// ([`AnswerGap::met_by`]), which keeps it a mismatch (the user's decision of 2026-10-06). Which
+/// venues' devices have the gap is C3's to judge; here the case's difference is a mismatch on every
+/// device, which hides none.
+pub fn difference_status(
+    checked: &CheckedCase,
+    differs: bool,
+    comparison: &ComparisonClass,
+    run: Option<&OutOfBoundsRun>,
+    list: impl FnOnce() -> Result<ReviewedList, String>,
+) -> Result<(CandidateStatus, Option<AnswerGap>), String> {
+    if !may_be_noted(differs, comparison, run) {
+        return Ok((CandidateStatus::Mismatch, None));
+    }
+    let case_id = &checked.primary.case.case_id;
+    Ok(
+        match list()?.holding_open(case_id, |gap| gap.met_by(checked)) {
+            Some(gap) => (CandidateStatus::Mismatch, Some(gap)),
+            None => (CandidateStatus::NotedDifference, None),
+        },
+    )
 }
 
 /// The bytes of `output` from the final buffer contents and the final texture contents, by Metal

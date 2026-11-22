@@ -551,6 +551,13 @@ cargo run -p metal2vulkan-validation --release --bin corpus-vulkan -- \
   case's facts, and no SPIR-V, status, subgroup shape, module containment or artifact. The comparison bounds `ReductionOrder` by the
   simdgroup float sums and products the case's AIR calls, the operations the translator's census
   names for that note.
+- **The verdict.** A row whose bytes equal Metal's, or differ within its comparison class's
+  bound, is a `Match`. A difference is never a match: under a class unbounded by precision notes
+  it is a `NotedDifference` (the notes can explain a difference; whether they explain this one is
+  not checked), counted in its own `noted_difference` column, and otherwise a `Mismatch`. A
+  difference of a case the C3 reviewed list holds under an answer gap its structure meets stays a
+  `Mismatch`, its row and batch line naming the gap (`held_open_by`): the user's decision of
+  2026-10-06 keeps answer gaps open until an exact emulation exists.
 - **Batches.** `--batch --out OUT` runs every selected case, one process per case, each killed
   whole after `--run-timeout`, resuming from `OUT/done.tsv`; `--batch-report` and
   `--batch-install STORE` read and install the results. A batch starts no GPU run while the
@@ -582,9 +589,10 @@ with its declared identity; each case is judged against its row.
 
 `corpus-status --c3` judges every venue's slot of every case: `match`, `reviewed`,
 `device_gap`, `out_of_scope_ray_tracing`, `reference_gap`, `mismatch`, `refused`, `stale` or
-`missing`. A row recorded on a device or driver its venue does not allow is rejected. A change that
-moves a venue's profile fingerprint without changing any artifact is handled by rekeying its
-records (`corpus-status --venue-keys`, then `--rekey-venues`); a change that moves artifacts needs a
+`missing`; a noted difference reads `mismatch` there, since C3 asks for a match. A row recorded
+on a device or driver its venue does not allow is rejected. A change that moves a venue's profile
+fingerprint without changing any artifact is handled by rekeying its records
+(`corpus-status --venue-keys`, then `--rekey-venues`); a change that moves artifacts needs a
 re-record on that venue.
 
 ### Command replay

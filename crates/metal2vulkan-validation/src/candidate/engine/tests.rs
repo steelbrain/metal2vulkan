@@ -98,6 +98,45 @@ fn the_status_starts_zero_and_stops_non_evidence() {
     assert!(status_verdict(&missed).is_err());
 }
 
+/// A difference under notes is a noted difference unless the C3 reviewed list holds its case under
+/// an answer gap the case's structure meets: then it stays a mismatch naming the gap. Judged over
+/// the committed list's every answer gap and its committed case, and a committed case it does not
+/// hold; a difference no note can explain is a mismatch for either.
+#[test]
+fn a_difference_under_notes_is_noted_unless_an_answer_gap_holds_its_case_open() {
+    let root = crate::source::corpus_root();
+    let store = CorpusStore::new(&root);
+    let list = ReviewedList::load(&ReviewedList::committed_path()).unwrap();
+    let noted = ComparisonClass::Unbounded(
+        [metal2vulkan::pipeline::PrecisionNote::ClippedCoverageSplit].into(),
+    );
+    let status = |case: &AuthoredCase, comparison: &ComparisonClass| {
+        let checked = crate::check::check_case(&root, case.clone())
+            .unwrap_or_else(|errors| panic!("{}: {errors:?}", case.name));
+        difference_status(&checked, true, comparison, None, || Ok(list.clone())).unwrap()
+    };
+    for entry in &list.answer_gaps {
+        let case = store.find_case(&entry.case_id).unwrap().unwrap();
+        let held = (CandidateStatus::Mismatch, Some(entry.gap));
+        assert_eq!(status(&case, &noted), held, "{}", case.name);
+        let unexplained = (CandidateStatus::Mismatch, None);
+        assert_eq!(status(&case, &ComparisonClass::Exact), unexplained);
+    }
+    assert!(list.answer_gaps.len() >= 5);
+    let unheld = store
+        .read_all_cases()
+        .unwrap()
+        .into_iter()
+        .find(|case| {
+            case.public_source.is_some() && list.holding_open(&case.case_id, |_| true).is_none()
+        })
+        .unwrap();
+    let difference = (CandidateStatus::NotedDifference, None);
+    assert_eq!(status(&unheld, &noted), difference);
+    let unexplained = (CandidateStatus::Mismatch, None);
+    assert_eq!(status(&unheld, &ComparisonClass::Exact), unexplained);
+}
+
 /// [`compute_case`] of a case whose entry declares no stage input: every case here but the
 /// stage-input ones, which map against their own interface.
 fn map_kernel(case: &AuthoredCase) -> Result<ComputeCase, NotSupported> {

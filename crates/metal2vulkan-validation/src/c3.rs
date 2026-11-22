@@ -16,10 +16,11 @@
 //! open, deferred until the exact path exists (the user's decision of 2026-10-03).
 //!
 //! The list ([`ReviewedList`], `validation/cutover/c3-reviewed.json`) is data a person reviewed.
-//! Only this report reads it; translation, classification, and the evidence census never do. It is
-//! read, checked, and written as C1's list is ([`List`]), and every entry carries the review both
-//! cutover lists share ([`Review`]: its evidence, the reviewer's note, and the user's
-//! [`SignOff`]). Beside its reference gaps and answer gaps, it holds readings:
+//! Only this report reads it, and the executor its answer gaps, which keep a case's difference a
+//! mismatch ([`ReviewedList::holding_open`]); translation, classification, and the evidence census
+//! never do. It is read, checked, and written as C1's list is ([`List`]), and every entry carries
+//! the review both cutover lists share ([`Review`]: its evidence, the reviewer's note, and the
+//! user's [`SignOff`]). Beside its reference gaps and answer gaps, it holds readings:
 //!
 //! - **Readings** ([`Reading`]): per case, the cause, the bound Metal states, and the reviewed
 //!   observations. Each observation names an engine slot, the candidate (`spv_sha256`), its
@@ -153,7 +154,7 @@ impl Cause {
     }
 
     /// Whether `row` shows this cause, for a cause a reading is keyed by
-    /// ([`Cause::keyed_by_cause`]): a [`Cause::FastMathRegrouping`] row mismatches Metal and its
+    /// ([`Cause::keyed_by_cause`]): a [`Cause::FastMathRegrouping`] row differs from Metal and its
     /// comparison is unbounded by `PrecisionNote::FastMathRewrites`, the product's record that a
     /// module it executed leaves an operation the AIR flags `reassoc` and `contract` to the
     /// device's grouping, or by `PrecisionNote::HalfOutputFastMathBlend`, its record that a
@@ -165,7 +166,7 @@ impl Cause {
         match self {
             Self::AppleReading => false,
             Self::FastMathRegrouping => {
-                row.status == CandidateStatus::Mismatch
+                row.status != CandidateStatus::Match
                     && matches!(
                         &row.comparison,
                         ComparisonClass::Unbounded(notes)
@@ -547,6 +548,20 @@ impl List for ReviewedList {
 }
 
 impl ReviewedList {
+    /// The answer gap the list holds `case_id`'s case under, among the gaps `reaches` says reach
+    /// it: C3's rule, with the venue's device and the case's structure, and the executor's
+    /// (`candidate::engine::difference_status`), with the case's structure alone.
+    pub fn holding_open(
+        &self,
+        case_id: &str,
+        reaches: impl Fn(AnswerGap) -> bool,
+    ) -> Option<AnswerGap> {
+        self.answer_gaps
+            .iter()
+            .find(|entry| entry.case_id == case_id && reaches(entry.gap))
+            .map(|entry| entry.gap)
+    }
+
     /// The reading that reviews `row`, if the list holds one: of the same case and, for a cause
     /// keyed by candidate, with an observation of the same slot, candidate, output, and Metal
     /// output; for a cause keyed by its cause, an engine row of any slot that shows the cause.
@@ -1281,13 +1296,12 @@ pub fn report(
     // and, for a gap the case's structure decides, the case meets it. A case whose structure is
     // unknown meets no such gap.
     let answer_gap = |case: &AuthoredCase, slot: &str| {
-        list.answer_gaps.iter().find(|entry| {
-            entry.case_id == case.case_id
-                && keys.has_gap(slot, entry.gap)
-                && (!entry.gap.decided_by_case()
+        list.holding_open(&case.case_id, |gap| {
+            keys.has_gap(slot, gap)
+                && (!gap.decided_by_case()
                     || facts
                         .answer_gaps(case)
-                        .is_some_and(|gaps| gaps.contains(&entry.gap)))
+                        .is_some_and(|gaps| gaps.contains(&gap)))
         })
     };
     let verdict = |case: &AuthoredCase, slot: &str| -> Option<Verdict> {
@@ -1319,12 +1333,13 @@ pub fn report(
         Some(
             match crate::index::candidate_slot_state(case, judging.as_slice(), row, keys) {
                 EvidenceState::Current => Verdict::Match,
-                EvidenceState::Failed
+                // A noted difference is no match: C3 reads it as a mismatch.
+                EvidenceState::Failed | EvidenceState::NotedDifference
                     if list.reviews(row).is_some() && deferred_note(row).is_none() =>
                 {
                     Verdict::Reviewed
                 }
-                EvidenceState::Failed => Verdict::Mismatch,
+                EvidenceState::Failed | EvidenceState::NotedDifference => Verdict::Mismatch,
                 // A candidate slot is never a reference gap; the case's gap is judged below.
                 EvidenceState::Stale | EvidenceState::Missing | EvidenceState::ReferenceGap => {
                     Verdict::Stale
@@ -1431,10 +1446,7 @@ pub fn report(
                         .get(&(case.case_id.as_str(), slot.as_str()))
                         .and_then(|row| deferred_note(row))
                         .map(OpenReason::NearEquivalent)
-                        .or_else(|| {
-                            answer_gap(case, slot.as_str())
-                                .map(|entry| OpenReason::AnswerGap(entry.gap))
-                        }),
+                        .or_else(|| answer_gap(case, slot.as_str()).map(OpenReason::AnswerGap)),
                     Verdict::Missing | Verdict::Refused => rate_map_refusal(case),
                     _ => None,
                 };
@@ -1477,7 +1489,9 @@ pub fn report(
                     !row_on_other_device(row)
                         && matches!(
                             crate::index::candidate_slot_state(case, judging.as_slice(), row, keys,),
-                            EvidenceState::Current | EvidenceState::Failed
+                            EvidenceState::Current
+                                | EvidenceState::Failed
+                                | EvidenceState::NotedDifference
                         )
                 }
                 _ => false,

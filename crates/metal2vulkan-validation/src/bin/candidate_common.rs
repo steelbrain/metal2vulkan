@@ -2,6 +2,7 @@ use metal2vulkan_validation::candidate::{engine, exit_status};
 use metal2vulkan_validation::check::admission::ExecutorError;
 use metal2vulkan_validation::gpu::wait::{parse_wait_timeout, set_wait_timeout};
 use metal2vulkan_validation::gpu::DeviceType;
+use metal2vulkan_validation::observation::CandidateStatus;
 use metal2vulkan_validation::source::corpus_root;
 use metal2vulkan_validation::store::CorpusStore;
 use metal2vulkan_validation::worker::alloc::CountingAllocator;
@@ -100,6 +101,8 @@ fn run() -> Result<(), ExecutorError> {
                      case it cannot run as not_supported{{...}} (exit 4). The device half runs\n\
                      in a child of this executable; a child a signal ends is\n\
                      device_crash{{SIGNAL}} (exit 5).\n\
+                     A row that differs from Metal's exits 1: Mismatch, or NotedDifference\n\
+                     where its bytes differ under precision notes that can explain a difference.\n\
                      --profiles-layer P: run on the device restricted to the committed\n\
                      profile validation/profiles/P.json through VK_LAYER_KHRONOS_profiles, after\n\
                      checking that the device has P and reports exactly P; the row records the layer\n\
@@ -141,16 +144,30 @@ fn run() -> Result<(), ExecutorError> {
         &CompileWorker::current()?,
     )?;
     println!(
-        "{:?} {} candidate_output_sha256={}",
-        observation.status, observation.case_id, observation.candidate_output_sha256
+        "{:?} {} candidate_output_sha256={}{}",
+        observation.status,
+        observation.case_id,
+        observation.candidate_output_sha256,
+        observation
+            .held_open_by
+            .map(|gap| format!(" held_open_by={}", gap.as_str()))
+            .unwrap_or_default()
     );
     if let Some(withheld) = observation.environment.get("withheld_validation_messages") {
         println!("withheld validation messages: {withheld}");
     }
-    if observation.status == metal2vulkan_validation::observation::CandidateStatus::Mismatch {
-        return Err("candidate output does not match the exact Metal observation".into());
+    match observation.status {
+        CandidateStatus::Match => Ok(()),
+        CandidateStatus::Mismatch => {
+            Err("candidate output does not match the exact Metal observation".into())
+        }
+        CandidateStatus::NotedDifference => Err(format!(
+            "candidate output differs from the Metal observation under the notes of {:?}, which \
+             can explain a difference: a noted difference, never a match",
+            observation.comparison
+        )
+        .into()),
     }
-    Ok(())
 }
 
 fn required(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {

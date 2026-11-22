@@ -9,6 +9,7 @@ use crate::hash::sha256_bytes;
 use crate::observation::{MetalStatus, ReferenceGap};
 use crate::observation_contract::ComparisonClass;
 use crate::refusal::Refusal;
+use metal2vulkan::pipeline::PrecisionNote;
 
 const METAL_ENV: &str = "metal-test";
 const ENV: &str = "lavapipe-test";
@@ -133,7 +134,24 @@ fn row(
         } else {
             CandidateStatus::Mismatch
         },
+        held_open_by: None,
     }
+}
+
+/// `row` under a class unbounded by `note`, with the status the executor gives it: a difference
+/// is a noted one unless the answer gap `held_open_by` keeps it a mismatch.
+fn under_note(
+    mut row: CandidateObservation,
+    note: PrecisionNote,
+    held_open_by: Option<crate::c3::AnswerGap>,
+) -> CandidateObservation {
+    row.comparison = ComparisonClass::Unbounded([note].into());
+    row.status = match held_open_by {
+        Some(_) => CandidateStatus::Mismatch,
+        None => CandidateStatus::NotedDifference,
+    };
+    row.held_open_by = held_open_by;
+    row
 }
 
 /// A refusal of `case` in the slot `environment_id`: a feature the device did not enable.
@@ -302,7 +320,7 @@ fn the_done_list_round_trips_and_drops_a_cut_line() {
 /// refusal or not (one before a device opened records none).
 #[test]
 fn an_outcome_reads_the_exit_and_the_row_together() {
-    use CandidateStatus::{Match, Mismatch};
+    use CandidateStatus::{Match, Mismatch, NotedDifference};
     for (ended, row, expected) in [
         (
             Ended::Code(exit_status::NOT_SUPPORTED),
@@ -330,6 +348,12 @@ fn an_outcome_reads_the_exit_and_the_row_together() {
     let cases = [
         (Ended::Code(0), Some(Match), Outcome::Match),
         (Ended::Code(1), Some(Mismatch), Outcome::Mismatch),
+        (
+            Ended::Code(1),
+            Some(NotedDifference),
+            Outcome::NotedDifference,
+        ),
+        (Ended::Code(0), Some(NotedDifference), Outcome::Failed),
         (
             Ended::Code(exit_status::NOT_SUPPORTED),
             None,
@@ -376,6 +400,7 @@ fn an_outcome_reads_the_exit_and_the_row_together() {
         assert_eq!(Outcome::parse(outcome.label()), Some(outcome));
     }
     assert_eq!(Outcome::NotSupported.class(), Class::Refusal);
+    assert_eq!(Outcome::NotedDifference.class(), Class::NotedDifference);
     assert_eq!(Outcome::DeviceCrash.class(), Class::Failure);
     assert_eq!(Outcome::VenueMismatch.class(), Class::Failure);
     assert_eq!(Outcome::VenueMismatch.label(), "venue_mismatch");
@@ -798,7 +823,7 @@ fn session_member_is_zombie(_pid: libc::pid_t) -> bool {
 /// has not run as pending.
 #[test]
 fn the_report_counts_by_family_and_class_and_names_each_non_match() {
-    let (matching, mismatching) = (case(1, "a"), case(2, "b"));
+    let (matching, mismatching, noted) = (case(1, "a"), case(2, "b"), case(5, "e"));
     let mut refused = case(3, "c");
     refused.public_source = Some("crates/metal2vulkan-validation/fixtures/public/c.ll".into());
     let mut vertex = case(4, "d");
@@ -811,9 +836,21 @@ fn the_report_counts_by_family_and_class_and_names_each_non_match() {
         metal(&mismatching, METAL_ENV, ORACLE_ABI, &golden),
         metal(&refused, METAL_ENV, ORACLE_ABI, &[0; 4]),
         metal(&vertex, METAL_ENV, ORACLE_ABI, &[0; 4]),
+        metal(&noted, METAL_ENV, ORACLE_ABI, &golden),
     ];
     let slot = engine_slot(ENV, None);
-    let rows = [row(&mismatching, &slot, &output, &golden)];
+    let gap = crate::c3::AnswerGap::ClippedPrimitiveSplit;
+    let held = under_note(
+        row(&mismatching, &slot, &output, &golden),
+        PrecisionNote::ClippedCoverageSplit,
+        Some(gap),
+    );
+    let differs = under_note(
+        row(&noted, &slot, &output, &golden),
+        PrecisionNote::DeviceSampling,
+        None,
+    );
+    let rows = [held.clone(), differs.clone()];
     let runs = [
         done(&matching, Pass::Engine, Outcome::Failed, 9.0, "first try"),
         done(&matching, Pass::Engine, Outcome::Match, 1.0, ""),
@@ -838,6 +875,13 @@ fn the_report_counts_by_family_and_class_and_names_each_non_match() {
             3.0,
             "device_crash{SIGSEGV}",
         ),
+        done(
+            &noted,
+            Pass::Engine,
+            Outcome::NotedDifference,
+            1.5,
+            "NotedDifference",
+        ),
     ];
     let lines = report(
         &qualified_cases(
@@ -846,6 +890,7 @@ fn the_report_counts_by_family_and_class_and_names_each_non_match() {
                 mismatching.clone(),
                 refused.clone(),
                 vertex.clone(),
+                noted.clone(),
             ],
             &metals,
             METAL_ENV,
@@ -862,25 +907,40 @@ fn the_report_counts_by_family_and_class_and_names_each_non_match() {
     );
     let expect = |line: &str| assert!(lines.iter().any(|l| l == line), "{line}\n{lines:#?}");
     expect(
-        "batch-report selected=4 ran=4 pending=0 match=1 mismatch=1 refusal=1 \
-         failure=1 not_supported=1 refused=0 device_crash=1 needs_metal=0 venue_mismatch=0 \
-         wait_timeout=0 timeout=0 failed=0",
+        "batch-report selected=5 ran=5 pending=0 match=1 mismatch=1 noted_difference=1 \
+         refusal=1 failure=1 not_supported=1 refused=0 device_crash=1 needs_metal=0 \
+         venue_mismatch=0 wait_timeout=0 timeout=0 failed=0",
     );
     expect(
-        "batch-family family=kernel.buffers cases=3 match=1 mismatch=1 refusal=1 \
-         failure=0",
+        "batch-family family=kernel.buffers cases=4 match=1 mismatch=1 noted_difference=1 \
+         refusal=1 failure=0",
     );
     expect(
-        "batch-family family=vertex.buffers cases=1 match=0 mismatch=0 refusal=0 \
+        "batch-family family=vertex.buffers cases=1 match=0 mismatch=0 noted_difference=0 \
+         refusal=0 failure=1",
+    );
+    expect(
+        "batch-scope scope=private cases=4 match=1 mismatch=1 noted_difference=1 refusal=0 \
          failure=1",
     );
-    expect("batch-scope scope=private cases=3 match=1 mismatch=1 refusal=0 failure=1");
-    expect("batch-scope scope=public cases=1 match=0 mismatch=0 refusal=1 failure=0");
+    expect(
+        "batch-scope scope=public cases=1 match=0 mismatch=0 noted_difference=0 refusal=1 \
+         failure=0",
+    );
+    let class = |row: &CandidateObservation| serde_json::to_string(&row.comparison).unwrap();
     expect(&format!(
         "batch-run case={} scope=private family=kernel.buffers outcome=mismatch \
-         seconds=2.000 name=b detail=Mismatch comparison=\"exact\" words=1/2 \
+         seconds=2.000 name=b detail=Mismatch comparison={} held_open_by=clipped_primitive_split \
+         words=1/2 first=1:00000002/00000003",
+        mismatching.case_id,
+        class(&held)
+    ));
+    expect(&format!(
+        "batch-run case={} scope=private family=kernel.buffers outcome=noted_difference \
+         seconds=1.500 name=e detail=NotedDifference comparison={} words=1/2 \
          first=1:00000002/00000003",
-        mismatching.case_id
+        noted.case_id,
+        class(&differs)
     ));
     expect(&format!(
         "batch-run case={} scope=public family=kernel.buffers \
@@ -987,7 +1047,11 @@ fn installed_evidence_is_each_slots_last_run() {
     let out = scratch.path().join("out");
     fs::create_dir_all(&out).unwrap();
     let stale = row(&first, &stated, &[9, 0, 0, 0], &[0; 4]);
-    let fresh = row(&first, &stated, &[0; 4], &[0; 4]);
+    let fresh = under_note(
+        row(&first, &stated, &[9, 0, 0, 0], &[0; 4]),
+        PrecisionNote::DeviceSampling,
+        None,
+    );
     let cut = row(&unlisted, &stated, &[0; 4], &[0; 4]);
     let replaced = row(&second, &stated, &[0; 4], &[0; 4]);
     let after_refusal = row(&third, &stated, &[0; 4], &[0; 4]);
@@ -1008,7 +1072,7 @@ fn installed_evidence_is_each_slots_last_run() {
     let runs = [
         done(&first, Pass::Engine, Outcome::Mismatch, 1.0, ""),
         done(&second, Pass::Engine, Outcome::Match, 1.0, ""),
-        done(&first, Pass::Engine, Outcome::Match, 1.0, ""),
+        done(&first, Pass::Engine, Outcome::NotedDifference, 1.0, ""),
         done(&third, Pass::Engine, Outcome::NotSupported, 1.0, ""),
         done(&second, Pass::Engine, Outcome::NotSupported, 1.0, ""),
         done(&third, Pass::Engine, Outcome::Match, 1.0, ""),
