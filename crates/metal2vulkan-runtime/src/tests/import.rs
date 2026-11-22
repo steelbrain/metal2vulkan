@@ -272,6 +272,72 @@ pub(crate) mod on_device {
         }
     }
 
+    /// A loss while an import's release waits for other work does not keep the release from
+    /// running: host memory imported into a Shared block nothing uses, given back while a fill of
+    /// another block is in flight behind busy work, so its release waits for the fill's
+    /// submission to complete. At the loss, once the busy work is let go, the device's idle wait
+    /// covers the fill: the fill ends DeviceLost in flight, and what waited for its progress value
+    /// goes, the release among it. The completion side's mark of that value is printed.
+    #[test]
+    fn every_device_runs_a_release_waiting_on_other_work_after_a_loss() {
+        let loss = DeviceLoss {
+            call: "vkQueuePresentKHR",
+            result: vk::Result::ERROR_DEVICE_LOST,
+            fault: None,
+        };
+        each_device("release_behind_other_work", |name, _, device| {
+            let Some(alignment) = (device.core().imports.host.as_ref()).map(|(_, at)| *at) else {
+                println!("release after a loss: {name}: imports no host memory; not run");
+                return;
+            };
+            let other = (device.take_block(MemoryClass::Shared, 4096)).expect("a Shared block");
+            let target = (device.new_buffer(other.id, 0, 4096, None)).expect("a buffer");
+            let busy = Busy::new(&device);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let filled = queue.command_buffer().expect("a command buffer");
+            let mut encoder = filled.blit_command_encoder().expect("an encoder");
+            encoder.fill_buffer(&target, 0..4096, 0x5a).expect("a fill");
+            encoder.end_encoding();
+            let before = device.counters().metrics().submissions;
+            filled.commit().expect("a commit");
+            within("the fill's submission", || {
+                device.counters().metrics().submissions > before
+            });
+            let len = (64u64 << 10).next_multiple_of(alignment);
+            let (pointer, mapping) = host_memory(len, alignment);
+            let (release, released) = releasing();
+            // SAFETY: the memory is the test's, mapped until it frees it after the release.
+            let (block, _) = unsafe { device.import_host_memory(pointer, len, release) }
+                .unwrap_or_else(|error| panic!("{name}: an import: {error}"));
+            drop(block);
+            thread::sleep(Duration::from_millis(20));
+            let waits = !released.load(Ordering::SeqCst);
+            assert!(waits, "{name}: the release waits for the fill");
+            let marked = device.core().done.completed();
+            device.report_loss(loss.clone());
+            busy.open();
+            wait_until(
+                &device,
+                "the release behind other work after a loss",
+                || released.load(Ordering::SeqCst),
+            );
+            finished(name, &filled);
+            assert_eq!(
+                filled.error(),
+                Some(CommandBufferError::DeviceLost { in_flight: true }),
+                "{name}"
+            );
+            println!(
+                "release after a loss: {name}: behind other work: the completion side's mark {} \
+                 before the loss, {} after; the release ran",
+                marked,
+                device.core().done.completed()
+            );
+            drop((busy, filled, queue, target, other, device));
+            free(mapping);
+        });
+    }
+
     /// Host memory is imported into a Shared block whose contents are the memory: a fill of its
     /// second half by the GPU reaches the host, the first half keeps the host's bytes, and the
     /// release runs once the last handle and buffer are gone and the memory is freed, with the
