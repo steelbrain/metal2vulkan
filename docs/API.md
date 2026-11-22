@@ -1199,7 +1199,8 @@ for dependency in &pipeline.dependencies {
   apart only the classes that limit tells apart (`BufferRanges::length_class`: a class rounded up
   to the greatest one that fits the same limit), so commands over buffers of many sizes keep one
   shape and one plan: on a device whose limit is 4 GiB, every buffer below 4 GiB. The default
-  tells every class apart. The runtime sets it on every table it reads.
+  tells every class apart. The runtime binds through no stage table; the validation executor sets
+  it on every table it builds, from its profile's limits.
 - A two-plane YCbCr texture whose planes a function may read in place states them in its facts
   (`TextureFacts::ycbcr_in_place`, a `YCbCrInPlace` of its planes). A slot whose function only samples it (nearest or linear, no comparison,
   anisotropy or `min_lod_clamp`), gathers it or reads its size (`RuntimeFact::YCbCrInPlace`) takes the
