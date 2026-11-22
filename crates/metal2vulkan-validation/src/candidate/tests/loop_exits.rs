@@ -112,11 +112,14 @@ fn run(entry: &str, bitcode: &[u8], n: u32, limits: [u32; 2]) -> (Vec<u32>, usiz
     (words(&run.output), stores)
 }
 
+/// What thread `t` of a kernel writes for `limits`.
+type Answer = fn([u32; 2], u32) -> u32;
+
 /// Each exit kernel's threads write what its source gives at every trip bound, on the module that
 /// ends its trips' values at each trip's top.
 #[test]
 fn loop_exits_read_the_values_their_own_trips_defined_on_the_device() {
-    let kernels: [(&str, &str, fn([u32; 2], u32) -> u32); 2] = [
+    let kernels: [(&str, &str, Answer); 2] = [
         ("trip_exits_k", TRIP_EXITS, |[n, _], t| {
             loop_kernels::trip_exits(n, t)
         }),
