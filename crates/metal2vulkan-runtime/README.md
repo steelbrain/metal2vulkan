@@ -3039,6 +3039,14 @@ cache is answered compile-required on both.
   on an RTX 3090 and Intel's Windows driver on a UHD 630 matched Metal in every lane of the same
   chains. Elsewhere a `half` `fma` is the device's `float` `Fma` on the operands, rounded to
   `half`, within one `half` ulp.
+- A compute or render pipeline state answers no `gpuResourceID`
+  (`MTLComputePipelineState.gpuResourceID`, `MTLRenderPipelineState.gpuResourceID`): neither type
+  has the call, so the runtime gives no word for a program to write into an argument buffer's
+  `compute_pipeline_state` or `render_pipeline_state` member, and the consumer answers the
+  property itself. A function that reads such a member is refused at its state's making
+  (`Error::Translation`): the only use of the member the translator admits is an indirect
+  command's pipeline setter, which is `Unsupported{GpuEncodedIndirectCommands, NotImplemented}`
+  (`tests::engine_indirect_commands`).
 
 ## Render pipeline states
 

@@ -5,7 +5,8 @@
 //! command's buffer setter, draw, mesh draw and render state setter) is refused under the
 //! resident-table domains on every committed profile and on Profile F,
 //! `Unsupported{GpuEncodedIndirectCommands, NotImplemented}` (the identity domains' forms are
-//! `tests::engine_identity_icb`'s). A kernel
+//! `tests::engine_identity_icb`'s), and a command's pipeline setter is refused under the identity
+//! domains too. A kernel
 //! whose argument buffer holds a `depth_stencil_state` compiles with it unread and is refused
 //! `NotImplemented(IndirectRenderState)` where it reads it.
 //!
@@ -14,8 +15,11 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::device::profile::DeviceProfile;
+use crate::device::DevicePolicy;
 use crate::error::{Error, Feature, Needs};
-use crate::pipeline::testing::{compile, device_f, llvm_assemble, AssembleError, PROFILE_F};
+use crate::pipeline::testing::{
+    compile, device_f, llvm_assemble, profile, AssembleError, PROFILE_F,
+};
 use crate::spirv::testing::committed_profiles;
 
 const DATALAYOUT: &str = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32";
@@ -48,7 +52,7 @@ fn assemble(name: &str, body: &str) -> Option<Vec<u8>> {
 /// The committed profiles and Profile F, by stem.
 fn profiles() -> Vec<(String, DeviceProfile)> {
     let mut all = committed_profiles().expect("profiles");
-    let f = device_f(crate::device::DevicePolicy::RESIDENT_TABLES).expect(PROFILE_F);
+    let f = device_f(DevicePolicy::RESIDENT_TABLES).expect(PROFILE_F);
     all.push((PROFILE_F.into(), f.profile().clone()));
     all
 }
@@ -232,5 +236,42 @@ entry:
             (Feature::IndirectRenderState, Needs::NotImplemented),
             "{stem}"
         );
+    }
+}
+
+/// Under the identity domains, the runtime's, a command's pipeline setter (`set_pipeline_state`
+/// of a compute or a render command, through a pipeline state the argument buffer holds) is
+/// `Unsupported{GpuEncodedIndirectCommands, NotImplemented}`, as every other use of that state's
+/// word is refused: no function the runtime makes reads a pipeline state an argument buffer holds,
+/// whose `gpuResourceID` the runtime does not answer.
+#[test]
+fn a_commands_pipeline_setter_is_refused_under_the_identity_domains() {
+    let render = COMPUTE_META.replace("compute_pipeline_state", "render_pipeline_state");
+    let setters = [
+        ("set_pipeline_state_compute_command", COMPUTE_META),
+        ("set_pipeline_state_render_command", render.as_str()),
+    ];
+    for (op, meta) in setters {
+        let kernel = encoder_kernel(
+            op,
+            ", ptr addrspace(1) %pso",
+            ", ptr addrspace(1)",
+            true,
+            meta,
+        );
+        let Some(bc) = assemble(op, &kernel) else {
+            return;
+        };
+        for stem in ["lavapipe", "moltenvk-m3"] {
+            let p = profile(stem, DevicePolicy::default()).unwrap_or_else(|e| panic!("{e}"));
+            match compile(&bc, "encode", &p) {
+                Err(Error::Unsupported(u)) => assert_eq!(
+                    (u.feature, u.needs),
+                    (Feature::GpuEncodedIndirectCommands, Needs::NotImplemented),
+                    "{op} on {stem}"
+                ),
+                other => panic!("{op} on {stem}: {other:?}"),
+            }
+        }
     }
 }

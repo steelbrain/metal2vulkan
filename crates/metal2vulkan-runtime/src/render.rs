@@ -100,7 +100,8 @@ use std::sync::{Arc, Mutex};
 /// A cheap handle: clones share one state. A command buffer that draws with it keeps it until it
 /// retires. States of one content (the functions, their constant values and linked functions, and
 /// the descriptor's fields that change the compile) share its translation and `VkPipeline`s, so a
-/// guest that makes one state many times compiles it once; each numbers its own samplers.
+/// guest that makes one state many times compiles it once; each numbers its own samplers. It
+/// answers no `gpuResourceID`, which Metal's state has (`MTLRenderPipelineState.gpuResourceID`).
 #[derive(Clone)]
 pub struct RenderPipelineState {
     pub(crate) inner: Arc<RenderInner>,

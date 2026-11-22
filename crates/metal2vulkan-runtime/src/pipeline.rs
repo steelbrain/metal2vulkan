@@ -94,7 +94,8 @@ pub(crate) const PUSH_STAGES: vk::ShaderStageFlags = vk::ShaderStageFlags::ALL;
 /// A cheap handle: clones share one state. A command buffer that dispatches with it keeps it until
 /// it retires. States of one content (the kernel, its constant values and linked functions, and
 /// the descriptor's fields that change the compile) share its translation and `VkPipeline`s;
-/// each numbers its own samplers.
+/// each numbers its own samplers. It answers no `gpuResourceID`, which Metal's state has
+/// (`MTLComputePipelineState.gpuResourceID`).
 #[derive(Clone)]
 pub struct ComputePipelineState {
     pub(crate) inner: Arc<PipelineInner>,
