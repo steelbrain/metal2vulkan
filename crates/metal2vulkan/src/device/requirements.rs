@@ -460,8 +460,7 @@ pub enum VkExtension {
     /// `VK_EXT_depth_clamp_control` (never promoted): [`VkFeature::DepthClampControl`].
     ExtDepthClampControl,
     /// `VK_EXT_sample_locations` (never promoted, no feature member): programmable sample
-    /// locations, as Metal's `setSamplePositions:count:` sets
-    /// ([`VkProperty::SampleLocationSampleCount`], [`VkProperty::VariableSampleLocations`]).
+    /// locations, as Metal's `setSamplePositions:count:` sets. The translator reads none of it.
     ExtSampleLocations,
     /// `VK_EXT_primitive_topology_list_restart` (never promoted):
     /// [`VkFeature::PrimitiveTopologyListRestart`] and
@@ -488,8 +487,7 @@ pub enum VkExtension {
     /// capabilities `StorageImageReadWithoutFormat` and `StorageImageWriteWithoutFormat` allow.
     KhrFormatFeatureFlags2,
     // Appended.
-    /// `VK_EXT_provoking_vertex` (never promoted): [`VkFeature::ProvokingVertexLast`] and
-    /// [`VkProperty::ProvokingVertexModePerPipeline`].
+    /// `VK_EXT_provoking_vertex` (never promoted): [`VkFeature::ProvokingVertexLast`].
     ExtProvokingVertex,
     /// `VK_EXT_post_depth_coverage` (never promoted, no feature member): a fragment shader's
     /// `SampleMask` input read after the early depth and stencil tests. The translator reads it
@@ -608,15 +606,6 @@ pub enum VkProperty {
     IndependentResolveNone,
     /// `independentResolve`: the depth and stencil aspects may resolve by different modes.
     IndependentResolve,
-    /// `variableSampleLocations` (`VkPhysicalDeviceSampleLocationsPropertiesEXT`, where
-    /// `VK_EXT_sample_locations` is listed): the sample locations may differ between pipelines
-    /// in a subpass. Metal's are the render pass's, so it states only what the device can do.
-    VariableSampleLocations,
-    /// `sampleLocationSampleCounts` (where `VK_EXT_sample_locations` is listed) has this sample
-    /// count: an attachment of it may take custom sample locations. Vulkan guarantees what
-    /// Metal's positions need of the rest: a 1x1 grid, 4 bits of sub-pixel precision, and the
-    /// coordinate range `[0, 0.9375]`, Metal's sixteenths of a pixel.
-    SampleLocationSampleCount(u32),
     /// A color attachment of this format takes this sample count
     /// (`FormatProperties::color_attachment_sample_counts`): a 2D, optimal-tiling image of the
     /// format with `COLOR_ATTACHMENT` usage has it among its `sampleCounts`. A device's
@@ -628,13 +617,6 @@ pub enum VkProperty {
     /// leaves a sample to the device's sampler requires it and records
     /// [`PrecisionNote::DeviceSampling`](crate::pipeline::PrecisionNote::DeviceSampling).
     DeviceSampling,
-    /// `provokingVertexModePerPipeline` (`VkPhysicalDeviceProvokingVertexPropertiesEXT`, where
-    /// `VK_EXT_provoking_vertex` is listed): the pipelines bound within one render pass instance
-    /// may have different provoking vertex modes. Without it "all pipelines bound within a render
-    /// pass instance must have the same provokingVertexMode" (the Vulkan specification's flat
-    /// shading), including "any pipeline already bound when beginning the render pass instance"
-    /// (`VUID-vkCmdBindPipeline-pipelineBindPoint-04881`).
-    ProvokingVertexModePerPipeline,
     /// `GLSL.std.450 InterpolateAtOffset` at offset `v` reads Metal's `interpolate_at_offset` at
     /// `v + 7/16`, measured from the pixel's upper-left corner: a device whose description reports
     /// a MoltenVK driver, whose SPIRV-Cross hands the instruction to Metal so at any release

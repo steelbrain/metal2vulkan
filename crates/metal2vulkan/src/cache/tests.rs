@@ -620,8 +620,6 @@ fn the_version_180_members_round_trip() {
     let mut properties = vec![
         VkProperty::IndependentResolveNone,
         VkProperty::IndependentResolve,
-        VkProperty::VariableSampleLocations,
-        VkProperty::SampleLocationSampleCount(4),
     ];
     for mode in ResolveMode::ALL {
         properties.push(VkProperty::DepthResolveMode(mode));

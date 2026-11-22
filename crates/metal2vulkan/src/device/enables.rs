@@ -311,8 +311,8 @@ exposures! {
 /// What the enable-set rules need to know about one extension.
 struct ExtensionFacts {
     /// The core enables it where it is available: it exposes a feature or format the core reads,
-    /// or the core reads it directly (stencil export, the runtime's sample locations), or it is
-    /// mandatory (the portability subset). Extensions that only name refusals are not.
+    /// or the core reads it directly (stencil export), or it is mandatory (the portability
+    /// subset). Extensions that only name refusals are not.
     consumed: bool,
     /// The core version that promoted everything the core reads from it (then enabling it
     /// there adds nothing).
@@ -348,7 +348,6 @@ fn facts(ext: VkExtension) -> ExtensionFacts {
         | E::KhrMaintenance8
         | E::ExtDepthClipEnable
         | E::ExtDepthClampControl
-        | E::ExtSampleLocations
         | E::ExtPrimitiveTopologyListRestart
         | E::ExtProvokingVertex
         | E::ExtLineRasterization
@@ -402,6 +401,8 @@ fn facts(ext: VkExtension) -> ExtensionFacts {
         // Described, never enabled: the coverage after the depth and stencil tests is refused on
         // every device (`Feature::PostDepthCoverage`), so the core reads none of it.
         E::ExtPostDepthCoverage => fact(false, None, &[]),
+        // Described, never enabled: the core reads none of its properties.
+        E::ExtSampleLocations => fact(false, None, &[]),
         E::KhrDynamicRendering => fact(false, Some(3), &[]),
         // Object and mesh functions. `VK_KHR_spirv_1_4` is core at the 1.2 floor.
         E::ExtMeshShader => fact(true, None, &[]),

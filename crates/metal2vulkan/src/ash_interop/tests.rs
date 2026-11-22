@@ -536,10 +536,6 @@ fn every_feature_has_a_source() {
             structure.as_raw()
         );
     }
-    assert!(dev
-        .property_chain
-        .borrow()
-        .contains(&avk::PhysicalDeviceSampleLocationsPropertiesEXT::STRUCTURE_TYPE.as_raw()));
     assert!(
         chain.contains(&avk::PhysicalDeviceDepthBiasControlFeaturesEXT::STRUCTURE_TYPE.as_raw())
     );

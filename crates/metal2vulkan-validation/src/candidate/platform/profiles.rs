@@ -954,11 +954,9 @@ fn limit_bound(name: &str) -> Option<Bound> {
         | "early_fragment_multisample_coverage_after_sample_counting"
         | "sub_pixel_precision_bits" => Bound::Execution,
         "min_texel_offset" | "min_texel_gather_offset" => Bound::AtLeast,
-        "supports_non_zero_first_instance"
-        | "independent_resolve_none"
-        | "independent_resolve"
-        | "variable_sample_locations"
-        | "provoking_vertex_mode_per_pipeline" => Bound::Implies,
+        "supports_non_zero_first_instance" | "independent_resolve_none" | "independent_resolve" => {
+            Bound::Implies
+        }
         "framebuffer_color_sample_counts"
         | "framebuffer_depth_sample_counts"
         | "framebuffer_integer_color_sample_counts"
@@ -966,8 +964,7 @@ fn limit_bound(name: &str) -> Option<Bound> {
         | "framebuffer_no_attachments_sample_counts"
         | "storage_image_sample_counts"
         | "supported_depth_resolve_modes"
-        | "supported_stencil_resolve_modes"
-        | "sample_location_sample_counts" => Bound::Flags,
+        | "supported_stencil_resolve_modes" => Bound::Flags,
         name if name.starts_with("max_") && name.ends_with("_bits") => Bound::FloatAtMost,
         name if name.starts_with("min_") && name.ends_with("_alignment") => Bound::AtLeast,
         name if name.starts_with("max_") => Bound::AtMost,

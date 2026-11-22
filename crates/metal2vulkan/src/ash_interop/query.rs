@@ -411,7 +411,6 @@ const EXT_LIST_RESTART: &[&str] = &["VK_EXT_primitive_topology_list_restart"];
 const EXT_PROVOKING_VERTEX: &[&str] = &["VK_EXT_provoking_vertex"];
 const EXT_LINE_RASTERIZATION: &[&str] = &["VK_EXT_line_rasterization", "VK_KHR_line_rasterization"];
 const EXT_MULTI_DRAW: &[&str] = &["VK_EXT_multi_draw"];
-const EXT_SAMPLE_LOCATIONS: &[&str] = &["VK_EXT_sample_locations"];
 const EXT_RAY_QUERY: &[&str] = &["VK_KHR_ray_query"];
 const EXT_ACCELERATION_STRUCTURE: &[&str] = &["VK_KHR_acceleration_structure"];
 const EXT_PORTABILITY_SUBSET: &[&str] = &["VK_KHR_portability_subset"];
@@ -857,9 +856,7 @@ struct PropertyChain {
     maintenance10: Maintenance10Properties,
     acceleration_structure: avk::PhysicalDeviceAccelerationStructurePropertiesKHR<'static>,
     generated_commands: GeneratedCommandsProperties,
-    sample_locations: avk::PhysicalDeviceSampleLocationsPropertiesEXT<'static>,
     mesh_shader: avk::PhysicalDeviceMeshShaderPropertiesEXT<'static>,
-    provoking_vertex: avk::PhysicalDeviceProvokingVertexPropertiesEXT<'static>,
     maintenance5: avk::PhysicalDeviceMaintenance5PropertiesKHR<'static>,
 }
 
@@ -876,9 +873,7 @@ struct PropertiesChained {
     maintenance10: bool,
     acceleration_structure: bool,
     generated_commands: bool,
-    sample_locations: bool,
     mesh_shader: bool,
-    provoking_vertex: bool,
     maintenance5: bool,
 }
 
@@ -897,9 +892,7 @@ impl PropertiesChained {
             maintenance10: x.ext(&["VK_KHR_maintenance10"]),
             acceleration_structure: x.ext(EXT_ACCELERATION_STRUCTURE),
             generated_commands: x.ext(EXT_GENERATED_COMMANDS),
-            sample_locations: x.ext(EXT_SAMPLE_LOCATIONS),
             mesh_shader: x.ext(EXT_MESH_SHADER),
-            provoking_vertex: x.ext(EXT_PROVOKING_VERTEX),
             maintenance5: x.promoted(EXT_MAINTENANCE5, Some(4)),
         }
     }
@@ -938,9 +931,7 @@ impl PropertyChain {
                 maintenance10,
                 acceleration_structure,
                 generated_commands,
-                sample_locations,
                 mesh_shader,
-                provoking_vertex,
                 maintenance5
             );
             // SAFETY: as in `FeatureChain::query`.
@@ -1320,15 +1311,6 @@ fn limits(l: &avk::PhysicalDeviceLimits, p: &PropertyChain, chained: &Properties
         ),
         independent_resolve_none: on(v12.independent_resolve_none),
         independent_resolve: on(v12.independent_resolve),
-        // Zero where `VK_EXT_sample_locations` is not listed (the structure is not chained).
-        sample_location_sample_counts: vk::SampleCountFlags::from_raw(
-            p.sample_locations.sample_location_sample_counts.as_raw(),
-        ),
-        variable_sample_locations: on(p.sample_locations.variable_sample_locations),
-        // `false` where `VK_EXT_provoking_vertex` is not listed (the structure is not chained).
-        provoking_vertex_mode_per_pipeline: on(p
-            .provoking_vertex
-            .provoking_vertex_mode_per_pipeline),
         // Zero where `VK_EXT_mesh_shader` is not listed (the structure is not chained).
         mesh: mesh_limits(&p.mesh_shader),
         max_point_size: crate::device::whole_point_size(l.point_size_range[1]),

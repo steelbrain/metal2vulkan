@@ -2699,15 +2699,12 @@ field	metal2vulkan::device::Limits.min_texel_offset	pub min_texel_offset: i32
 field	metal2vulkan::device::Limits.min_uniform_buffer_offset_alignment	pub min_uniform_buffer_offset_alignment: u64
 field	metal2vulkan::device::Limits.min_vertex_input_binding_stride_alignment	pub min_vertex_input_binding_stride_alignment: Option<u32>
 field	metal2vulkan::device::Limits.non_strict_wide_lines_use_parallelogram	pub non_strict_wide_lines_use_parallelogram: bool
-field	metal2vulkan::device::Limits.provoking_vertex_mode_per_pipeline	pub provoking_vertex_mode_per_pipeline: bool
-field	metal2vulkan::device::Limits.sample_location_sample_counts	pub sample_location_sample_counts: vk::SampleCountFlags
 field	metal2vulkan::device::Limits.storage_image_sample_counts	pub storage_image_sample_counts: vk::SampleCountFlags
 field	metal2vulkan::device::Limits.strict_lines	pub strict_lines: bool
 field	metal2vulkan::device::Limits.sub_pixel_precision_bits	pub sub_pixel_precision_bits: u32
 field	metal2vulkan::device::Limits.supported_depth_resolve_modes	pub supported_depth_resolve_modes: vk::ResolveModeFlags
 field	metal2vulkan::device::Limits.supported_stencil_resolve_modes	pub supported_stencil_resolve_modes: vk::ResolveModeFlags
 field	metal2vulkan::device::Limits.supports_non_zero_first_instance	pub supports_non_zero_first_instance: bool
-field	metal2vulkan::device::Limits.variable_sample_locations	pub variable_sample_locations: bool
 field	metal2vulkan::device::MeshLimits.max_mesh_multiview_view_count	pub max_mesh_multiview_view_count: u32
 field	metal2vulkan::device::MeshLimits.max_mesh_output_components	pub max_mesh_output_components: u32
 field	metal2vulkan::device::MeshLimits.max_mesh_output_layers	pub max_mesh_output_layers: u32
@@ -10356,18 +10353,15 @@ variant	metal2vulkan::device::VkProperty::IndependentResolve	IndependentResolve
 variant	metal2vulkan::device::VkProperty::IndependentResolveNone	IndependentResolveNone
 variant	metal2vulkan::device::VkProperty::InterpolateAtOffsetCentered	InterpolateAtOffsetCentered
 variant	metal2vulkan::device::VkProperty::InterpolateAtOffsetFromSevenSixteenths	InterpolateAtOffsetFromSevenSixteenths
-variant	metal2vulkan::device::VkProperty::ProvokingVertexModePerPipeline	ProvokingVertexModePerPipeline
 variant	metal2vulkan::device::VkProperty::RequiredSubgroupSizeStage	RequiredSubgroupSizeStage(Stage)
 variant	metal2vulkan::device::VkProperty::Rgba4OpaqueBlackSwizzled	Rgba4OpaqueBlackSwizzled
 variant	metal2vulkan::device::VkProperty::RoundingIndependence32BitOnly	RoundingIndependence32BitOnly
 variant	metal2vulkan::device::VkProperty::RoundingIndependenceAll	RoundingIndependenceAll
-variant	metal2vulkan::device::VkProperty::SampleLocationSampleCount	SampleLocationSampleCount(u32)
 variant	metal2vulkan::device::VkProperty::StencilResolveMode	StencilResolveMode(ResolveMode)
 variant	metal2vulkan::device::VkProperty::StorageImageSampleCount	StorageImageSampleCount(u32)
 variant	metal2vulkan::device::VkProperty::SubgroupOperation	SubgroupOperation(SubgroupOp)
 variant	metal2vulkan::device::VkProperty::SubgroupQuadOperationsInAllStages	SubgroupQuadOperationsInAllStages
 variant	metal2vulkan::device::VkProperty::SubgroupStage	SubgroupStage(Stage)
-variant	metal2vulkan::device::VkProperty::VariableSampleLocations	VariableSampleLocations
 variant	metal2vulkan::error::AbiError::BadSamplerState	BadSamplerState
 variant	metal2vulkan::error::AbiError::BadValue	BadValue
 variant	metal2vulkan::error::AbiError::ContainerMismatch	ContainerMismatch

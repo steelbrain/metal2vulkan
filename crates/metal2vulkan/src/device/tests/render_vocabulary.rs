@@ -203,8 +203,7 @@ fn render_features_follow_each_source() {
 /// The depth/stencil resolve properties and the two limits are stated by every committed profile
 /// (a device report its device's; the derived floor its version's, which
 /// the regeneration states where its source omits them), and the description derives exactly
-/// the stated modes and booleans. The sample-location properties are stated, and derived, exactly
-/// where the profile lists `VK_EXT_sample_locations`.
+/// the stated modes and booleans.
 #[test]
 fn render_properties_and_limits_follow_each_source() {
     let name = |mode: ResolveMode| match mode {
@@ -266,26 +265,6 @@ fn render_properties_and_limits_follow_each_source() {
                 "{stem}"
             );
         }
-        let listed = desc.extensions.contains(&VkExtension::ExtSampleLocations);
-        let counts = stated_flags(&json, "sampleLocationSampleCounts");
-        let variable = capability_values(&json, "variableSampleLocations");
-        assert_eq!(
-            !variable.is_empty(),
-            listed,
-            "{stem}: variableSampleLocations"
-        );
-        assert_eq!(
-            properties.contains(&VkProperty::VariableSampleLocations),
-            listed && variable.contains(&Value::Bool(true)),
-            "{stem}"
-        );
-        for count in (0..7).map(|shift| 1u32 << shift) {
-            assert_eq!(
-                properties.contains(&VkProperty::SampleLocationSampleCount(count)),
-                listed && counts.contains(&format!("VK_SAMPLE_COUNT_{count}_BIT")),
-                "{stem}: {count} samples"
-            );
-        }
     }
 }
 
@@ -335,8 +314,7 @@ fn each_stated_color_attachment_sample_count_derives_its_property() {
 
 /// A document that states neither the resolve modes nor `maxDrawIndexedIndexValue` reads its
 /// version's guarantees: sample zero for both aspects, and `2^24 - 1`, or `2^32 - 1` where it
-/// states `fullDrawIndexUint32`. The booleans and the sample-location properties it omits read
-/// as absent.
+/// states `fullDrawIndexUint32`. The booleans it omits read as absent.
 #[test]
 fn an_omitted_resolve_mode_or_index_value_reads_its_versions_guarantee() {
     let doc = |features: &str| {
@@ -359,48 +337,7 @@ fn an_omitted_resolve_mode_or_index_value_reads_its_versions_guarantee() {
     assert_eq!(l.max_draw_indexed_index_value, (1 << 24) - 1);
     assert_eq!(l.max_tessellation_patch_size, 0);
     assert!(!l.independent_resolve_none && !l.independent_resolve);
-    assert!(!l.variable_sample_locations);
-    assert_eq!(
-        l.sample_location_sample_counts,
-        vk::SampleCountFlags::default()
-    );
     let full =
         DeviceDescription::from_khronos_json(&doc(r#""fullDrawIndexUint32": true"#), None).unwrap();
     assert_eq!(full.limits.max_draw_indexed_index_value, u32::MAX);
-}
-
-/// `provokingVertexModePerPipeline` is read where `VK_EXT_provoking_vertex` is listed, and holds
-/// as the profile states it: every committed profile that lists the extension states it true
-/// (RADV, ANV, NVIDIA and lavapipe); MoltenVK lists no extension and has neither the
-/// feature nor the property.
-#[test]
-fn the_provoking_vertex_mode_per_pipeline_follows_each_source() {
-    let mut listed = 0;
-    for (stem, text) in committed_profiles() {
-        let json: Value = serde_json::from_str(&text).unwrap();
-        let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
-        let dev = Device::from_queries(desc.clone(), DevicePolicy::RESIDENT_TABLES).unwrap();
-        let properties = &dev.profile().fields().enabled.properties;
-        let exposed = desc.extensions.contains(&VkExtension::ExtProvokingVertex);
-        let stated = stated_true(
-            &json,
-            "VkPhysicalDeviceProvokingVertexPropertiesEXT",
-            "provokingVertexModePerPipeline",
-        );
-        assert_eq!(
-            desc.limits.provoking_vertex_mode_per_pipeline,
-            exposed && stated,
-            "{stem}"
-        );
-        assert_eq!(
-            properties.contains(&VkProperty::ProvokingVertexModePerPipeline),
-            exposed && stated,
-            "{stem}"
-        );
-        if stem.starts_with("moltenvk") {
-            assert!(!exposed, "{stem}");
-        }
-        listed += usize::from(exposed && stated);
-    }
-    assert!(listed >= 13, "{listed}");
 }

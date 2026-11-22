@@ -653,27 +653,6 @@ fn enabled_caps(desc: &DeviceDescription) -> EnabledCaps {
     if l.independent_resolve {
         properties.insert(VkProperty::IndependentResolve);
     }
-    // The provoking-vertex property holds only where the extension is listed (after
-    // `with_enabled`, enabled).
-    if desc.extensions.contains(&VkExtension::ExtProvokingVertex)
-        && l.provoking_vertex_mode_per_pipeline
-    {
-        properties.insert(VkProperty::ProvokingVertexModePerPipeline);
-    }
-    // The sample-location properties hold only where the extension is listed (after
-    // `with_enabled`, enabled): a device that has not enabled it sets no locations.
-    if desc.extensions.contains(&VkExtension::ExtSampleLocations) {
-        if l.variable_sample_locations {
-            properties.insert(VkProperty::VariableSampleLocations);
-        }
-        for count in (0..7).map(|shift| 1u32 << shift) {
-            if l.sample_location_sample_counts
-                .contains(vk::SampleCountFlags::from_raw(count))
-            {
-                properties.insert(VkProperty::SampleLocationSampleCount(count));
-            }
-        }
-    }
     EnabledCaps {
         features: desc.features.clone(),
         extensions: desc.extensions.clone(),

@@ -717,11 +717,6 @@ fn limits(p: &Props<'_>, api: ApiVersion, extensions: &BTreeSet<String>) -> Resu
         };
     // The acceleration-structure limits exist where `VK_KHR_acceleration_structure` is exposed;
     // an omitted one there is the required minimum, 16.
-    // The sample-location properties exist where `VK_EXT_sample_locations` is exposed; elsewhere
-    // no count takes custom locations.
-    let sample_locations = Route::Ext(&["VK_EXT_sample_locations"], None).exposed(api, extensions);
-    // The provoking-vertex property exists where `VK_EXT_provoking_vertex` is exposed.
-    let provoking_vertex = Route::Ext(&["VK_EXT_provoking_vertex"], None).exposed(api, extensions);
     // The parallelogram property exists where `VK_KHR_maintenance5` is exposed.
     let maintenance5 = Route::Ext(&["VK_KHR_maintenance5"], Some(4)).exposed(api, extensions);
     let accel = Route::Ext(&["VK_KHR_acceleration_structure"], None).exposed(api, extensions);
@@ -860,17 +855,6 @@ fn limits(p: &Props<'_>, api: ApiVersion, extensions: &BTreeSet<String>) -> Resu
         )?,
         independent_resolve_none: p.bool("independentResolveNone")?,
         independent_resolve: p.bool("independentResolve")?,
-        sample_location_sample_counts: if sample_locations {
-            p.flags_any(
-                &["sampleLocationSampleCounts"],
-                vk::SampleCountFlags::from_name,
-            )?
-        } else {
-            vk::SampleCountFlags::default()
-        },
-        variable_sample_locations: sample_locations && p.bool("variableSampleLocations")?,
-        provoking_vertex_mode_per_pipeline: provoking_vertex
-            && p.bool("provokingVertexModePerPipeline")?,
         mesh: if Route::Ext(&["VK_EXT_mesh_shader"], None).exposed(api, extensions) {
             mesh_limits(p)?
         } else {
