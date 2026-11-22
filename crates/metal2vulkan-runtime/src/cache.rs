@@ -143,9 +143,10 @@ use std::time::{Duration, SystemTime};
 /// lowerings fill.
 pub(crate) const DEFAULT_CAP: u64 = 128 << 20;
 /// The most bytes of data a device's `VkPipelineCache` holds when the reaper looks before it is
-/// replaced by a fresh one, and so the most its blob holds: 32 MiB, about five times the 6.25 MB
-/// of pipeline data a long recorded session made.
-pub(crate) const PIPELINE_CACHE_BOUND: u64 = 32 << 20;
+/// replaced by a fresh one, and so the most its blob holds: 128 MiB, past the 62.6 MB KosmicKrisp
+/// (the Mac host's driver) writes for a long recorded session's 448 pipelines, against 1.5-11.1 MB
+/// on NVIDIA's, RADV's and ANV's drivers for the same pipelines.
+pub(crate) const PIPELINE_CACHE_BOUND: u64 = 128 << 20;
 /// How long pipeline creation stays quiet, no creation running and none ending, before the
 /// reaper looks at the cache: 20 ms, in nanoseconds of [`host_time`].
 const QUIET_NANOS: u64 = 20_000_000;

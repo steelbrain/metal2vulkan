@@ -435,7 +435,7 @@ pub struct DeviceOptions {
     /// since none of its lookups reads their files; a device of an older one removes nothing of
     /// a newer one's. Beside them, one file per pipeline cache header (a kind of device and
     /// driver version; at most four such files, the oldest by last write removed) holds the data
-    /// of the `VkPipelineCache` every `VkPipeline` of the device is made through, at most 32 MiB:
+    /// of the `VkPipelineCache` every `VkPipeline` of the device is made through, at most 128 MiB:
     /// the device's cache takes it in off every guest thread, and it is
     /// replaced, never appended to, once pipeline creation has been quiet for 20 ms after the
     /// cache grew by more than an eighth, and at the device's drop where the cache changed. A
@@ -447,7 +447,7 @@ pub struct DeviceOptions {
     /// [`Metrics::translations_loaded`]: crate::Metrics::translations_loaded
     pub pipeline_cache_dir: Option<PathBuf>,
     /// The most bytes the lowerings in [`pipeline_cache_dir`](Self::pipeline_cache_dir) take;
-    /// `None` is 128 MiB. The pipeline cache's file, at most 32 MiB per kind of device, is beside
+    /// `None` is 128 MiB. The pipeline cache's file, at most 128 MiB per kind of device, is beside
     /// them. Half of the cap is what the directory is sure to keep: a lowering stays for at least
     /// half the cap, and at most the cap, of lowerings written or used after its last use, and
     /// one larger than half is not kept. Devices on one directory, in one process or several,

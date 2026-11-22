@@ -2788,7 +2788,7 @@ the lowerings from one device to the next:
 comes before it waits for (microseconds). Then, off every guest thread, it reads the blob, makes a
 cache from it and makes that the cache creations take; the empty one is destroyed once no creation
 holds it. So no creation waits for the blob's read or the driver's parse of it, which for a blob
-near 32 MiB take tens of milliseconds: a creation meanwhile goes through the empty cache
+of 32 MiB take tens of milliseconds: a creation meanwhile goes through the empty cache
 (`Metrics::creations_before_seed` counts them), and what those compiled is not in this run's blob: a
 later run compiles those pipelines again, once. A blob that does not check, whose data does not
 begin with the device's pipeline cache header (whole, the `pipelineCacheUUID` a new driver version
@@ -2808,13 +2808,20 @@ look alone (`Metrics::pipeline_cache_lock_waits` counts those waits,
 The device's drop writes the blob once more where the size changed at all. A crash between writes
 loses only the pipelines made since the last; no creation waits for a write.
 
-The cache holds at most 32 MiB when the reaper looks (about five times the 6.25 MB of pipeline data
-a long recorded session made): one past it is replaced by a fresh, empty cache that creations take
-from then on, and is destroyed once no creation holds it, each replacement counted in
-`Metrics::pipeline_caches_replaced`. The next write replaces the blob with the fresh cache's data,
-so the blob holds at most 32 MiB too, with no second file and no generations. A write of data past
-32 MiB, the teardown's of a cache that grew past it after the reaper's last look, is skipped and
-counted in `Metrics::pipeline_cache_writes_skipped`; the blob keeps what it held.
+The cache holds at most 128 MiB when the reaper looks: one long recorded session's 448 pipelines
+write 62.6 MB of data on KosmicKrisp (the Mac host's driver) and 1.5-11.1 MB on NVIDIA's, RADV's
+and ANV's drivers (m3-max-67847, 67727, 67726, 67729). One past it is replaced by a fresh, empty
+cache that creations take from then on, and is destroyed once no creation holds it, each
+replacement counted in `Metrics::pipeline_caches_replaced`. The next write replaces the blob with
+the fresh cache's data, so the blob holds at most 128 MiB too, with no second file and no
+generations; a directory keeps at most four blobs, one per kind of device or driver version, so
+the blobs take at most 512 MiB of disk. A write of data past 128 MiB, the teardown's of a cache
+that grew past it after the reaper's last look, is skipped and counted in
+`Metrics::pipeline_cache_writes_skipped`; the blob keeps what it held. Each write is the whole
+blob: a cold run with the bound lifted on KosmicKrisp wrote its blob 9 times, 271.9 MB in all, for
+a 62.6 MB blob (m3-max-68006). A full cache costs host memory from device start: on KosmicKrisp,
+seeding from a 59.6 MiB blob raised the process's footprint by 119.3 MiB before any make, about
+twice the blob (m3-max-67977), so a cache at the bound is expected to hold about 256 MiB there.
 `Gauges::pipeline_cache_bytes` is the cache's size at the reaper's last look, and is zero once the
 device is torn down. With no directory the cache is the same, made empty, and
 nothing is written.
@@ -2960,15 +2967,17 @@ cache is answered compile-required on both.
 
 ### Known gaps of pipeline states
 
-- One large app's pipelines can pass the pipeline cache's 32 MiB on KosmicKrisp (the Mac host's
-  driver), whose blob takes about 140 KB a pipeline against 3-25 KB on NVIDIA's, RADV's and ANV's
-  drivers for the same pipelines. Past the bound the cache is replaced by an empty one, so a launch
-  after the replacement makes those pipelines again. On an M3 Max (KosmicKrisp in Mesa 26.3.1),
-  re-making one recorded session's 448 pipelines in the same process took 1,669-2,370 ms from the
-  bounded cache, with 45-60 cache hits (m3-max-67741, m3-max-67789), against 80.4-81.0 ms with no
-  bound, with 448 hits (m3-max-67847). A launch on that host makes its set in 0.06 s from a full
-  blob, and in 0.83-2.03 s around a replacement. The bound stays: the full cache of those 448
-  pipelines holds about 119 MiB of host memory from device start.
+- One very large app's pipelines can pass the pipeline cache's 128 MiB on KosmicKrisp (the Mac
+  host's driver), whose blob takes about 140 KB a pipeline against 3-25 KB on NVIDIA's, RADV's and
+  ANV's drivers for the same pipelines, so about 960 pipelines fill it there. A guest boot's set
+  (32.3 MB of blob after one boot on that host) and one long recorded session's 448 pipelines
+  (62.6 MB) fit. Past the bound the cache is replaced by an empty one, so a launch after the
+  replacement makes those pipelines again. On an M3 Max (KosmicKrisp in Mesa 26.3.1), with the
+  bound at 32 MiB, re-making those 448 pipelines in the same process took 1,669-2,370 ms after a
+  replacement, with 45-60 cache hits (m3-max-67741, m3-max-67789), against 80.4-81.0 ms with no
+  replacement, with 448 hits (m3-max-67847); a launch there made its set in 0.06 s from a full blob,
+  and in 0.83-2.03 s around a replacement. The bound's host memory on that host: a full cache's
+  seed holds about twice its data from device start (above).
 - Ray tracing's bound acceleration structure is not built (ray tracing is out of scope,
   docs/REFUSALS.md's `RayTracing` row). The runtime makes no acceleration structure, no encoder
   binds one (`setAccelerationStructure:atBufferIndex:`), and nothing supplies the instance count

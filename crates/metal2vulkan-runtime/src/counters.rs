@@ -2327,7 +2327,7 @@ pub struct Metrics {
     /// counterpart: Metal's compiler service keeps its own cache.
     pub cache_writes_dropped: u64,
     /// The reaper's replacements of the device's `VkPipelineCache` by a fresh, empty one, at a
-    /// look that found the cache past its bound of 32 MiB: creations take the fresh one from then
+    /// look that found the cache past its bound of 128 MiB: creations take the fresh one from then
     /// on, so the pipelines the old one held compile again where made again. Metal has no
     /// counterpart: Metal's compiler service keeps its own cache.
     pub pipeline_caches_replaced: u64,
@@ -2335,7 +2335,7 @@ pub struct Metrics {
     /// in the device's map of contents first; the state takes the map's. No Metal counterpart.
     pub kernel_makes_dropped: u64,
     /// Writes of the pipeline cache's data over the device's blob skipped because the data was
-    /// past the bound of 32 MiB, as at the device's teardown where the cache grew past it after
+    /// past the bound of 128 MiB, as at the device's teardown where the cache grew past it after
     /// the reaper's last look: the blob keeps what it held, and a later device seeds from that.
     /// Metal has no counterpart.
     pub pipeline_cache_writes_skipped: u64,
@@ -2958,7 +2958,7 @@ pub struct Gauges {
     /// at most 64 MiB of entries and 32 MiB of decodes.
     pub stage_entry_bytes: u64,
     /// The size of the data in the device's `VkPipelineCache`, as `vkGetPipelineCacheData` gave
-    /// it when the reaper last looked, once creation was quiet: at most 32 MiB at a look, past
+    /// it when the reaper last looked, once creation was quiet: at most 128 MiB at a look, past
     /// which the reaper replaces the cache with a fresh one, and this falls to the fresh one's.
     pub pipeline_cache_bytes: u64,
     /// Shadows, on a device without the attachment feedback loop: one image for each image a
