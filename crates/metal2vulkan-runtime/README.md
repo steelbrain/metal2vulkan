@@ -3574,7 +3574,9 @@ cache is answered compile-required on both.
   without `RenderTarget` usage whose image has no attachment usage and that has no resolve image
   is a known gap (`RenderPassKind::ResolveUsage`): a depth or stencil texture, a colour texture of
   another type or of a format the device's optimal image does not render, a texture in place over
-  a dma-buf's import, and a view of a texture in place over a buffer. Refused as
+  a dma-buf's import, and a view of a texture in place over a buffer whose linear image takes no
+  attachment usage (where the linear image takes it, a view resolves in place, as its texture
+  does). Refused as
   Metal refuses it: a resolving action with no resolve texture (`Refusal::ResolveTexture`, also
   where an encoder sets it later) and an integer format's resolve (`Refusal::ResolveFormat`).
   `Metrics::resolves` counts the attachments passes resolved.
@@ -3978,9 +3980,9 @@ cache is answered compile-required on both.
   it does not, or where its subresource reaches past its own rows or its buffer, the pass resolves
   into the texture's resolve image and copies it into the buffer, above), and a depth or stencil
   texture does not, nor a texture in place over a dma-buf's import, nor a view of a texture in
-  place; the usage grows a 1920 x 1080 `RGBA8Unorm` optimal image of one level 1.0056 times on
-  the Radeon 780M and changes no linear image's layout, `RenderPassKind::ResolveUsage` has the
-  measures),
+  place whose linear image takes no attachment usage; the usage grows a 1920 x 1080 `RGBA8Unorm`
+  optimal image of one level 1.0056 times on the Radeon 780M and changes no linear image's layout,
+  `RenderPassKind::ResolveUsage` has the measures),
   a depth or stencil resolve the device's resolve modes do not offer (`ResolveFilter`: `Min` or
   `Max` where `supportedDepthResolveModes` lacks it, the stencil filter `DepthResolvedSample`,
   which no Vulkan resolve mode is, and two aspects paired where `independentResolve` or

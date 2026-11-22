@@ -4668,7 +4668,8 @@ pub(crate) trait TextureObject {
     /// none and that has no resolve image: a depth or stencil texture made without `RenderTarget`
     /// usage, a colour texture of a type but 2D, a 2D array, a cube or a cube array or whose format
     /// the device's optimal image does not render, a texture in place over a dma-buf's import, and
-    /// a view of a texture in place; [`Refusal::AttachmentPlace`] past a texture over a buffer's
+    /// a view of a texture in place whose linear image takes none; [`Refusal::AttachmentPlace`]
+    /// past a texture over a buffer's
     /// one level and slice; [`Error::Vulkan`] where its resolve image cannot be made; as
     /// [`attachment`] for the rest.
     ///

@@ -28,7 +28,8 @@
 //!   none, the pass resolves into the texture's resolve image and copies its texels into the
 //!   buffer, one copy of 1,440,000 bytes counted. The buffer reads the clear within one code and
 //!   keeps the bytes past each row's texels; a pass after it in the same command buffer reads the
-//!   clear through the texture; a second resolve into it makes no image and no allocation. A depth
+//!   clear through the texture; a second resolve into it makes no image and no allocation; a pass
+//!   of a smaller area copies its render area alone, the texels past it untouched. A depth
 //!   resolve into a `Depth32Float` texture of `ShaderRead` usage is the gap `ResolveUsage`.
 //! - Under a device cfg, on every device of the cfg's kind, whether it has
 //!   `shaderStorageImageMultisample` or not: a 4-sample `RGBA8Unorm` texture made for shader
@@ -726,12 +727,14 @@ mod on_device {
     /// are counted. The buffer's bytes read the clear within one code, and the bytes past each
     /// row's texels keep the host's. A pass after it in the same command buffer reads the texture
     /// at each pixel, its centre the clear within one code. A second resolve into the texture, in
-    /// a command buffer of its own, makes no image and no allocation.
+    /// a command buffer of its own, makes no image and no allocation. A pass of a 300 x 300 area
+    /// resolves Vulkan's 320 x 320 render area alone, the texels past it keeping the host's bytes.
     #[test]
     fn every_device_resolves_a_loaded_pass_into_a_shader_read_texture_over_a_buffer() {
         const WALK: u32 = 600;
         const ROW: u64 = WALK as u64 * 4;
         const TEXELS: u64 = WALK as u64 * WALK as u64 * 4;
+        const AREA: u32 = 300;
         let Some(library) = examples() else {
             return;
         };
@@ -941,6 +944,63 @@ mod on_device {
                         "resolve_over: {name}: {kind} pitch {pitch}: the second resolve made \
                          {made} images and {allocated} allocations, resolve images {images} to \
                          {live}; bytes copied {copied}, resolve copies {again}"
+                    );
+                    // A pass of a smaller area resolves and copies Vulkan's render area alone:
+                    // 300 x 300, rounded up to 320 (`pass::REACH`). The texels past it keep the
+                    // host's bytes.
+                    // SAFETY: the buffer's bytes, which no command uses now.
+                    unsafe { contents.as_ptr().write_bytes(0xee, len as usize) };
+                    if managed {
+                        (buffer.did_modify_range(0, len)).expect("a modified range");
+                    }
+                    let reach = AREA.next_multiple_of(crate::pass::REACH);
+                    let mut small = walk.clone();
+                    small.render_target_width = AREA;
+                    small.render_target_height = AREA;
+                    let command_buffer = queue.command_buffer().expect("a command buffer");
+                    let before = device.counters().metrics();
+                    let encoder = (command_buffer.render_command_encoder(&small))
+                        .unwrap_or_else(|e| panic!("{name}: {kind} at {pitch}: {e}"));
+                    encoder.end_encoding();
+                    if managed {
+                        let mut blit = command_buffer.blit_command_encoder().expect("a blit");
+                        (blit.synchronize_resource(Resource::Buffer(&buffer)))
+                            .unwrap_or_else(|error| panic!("{name}: {error}"));
+                        blit.end_encoding();
+                    }
+                    run(name, &command_buffer);
+                    let after = device.counters().metrics();
+                    let copy_bytes = after.resolve_copy_bytes - before.resolve_copy_bytes;
+                    let area_bytes = u64::from(reach) * u64::from(reach) * 4;
+                    assert_eq!(
+                        copy_bytes,
+                        u64::from(through) * area_bytes,
+                        "{name}: {kind} at {pitch}: {form}, the smaller pass's copy"
+                    );
+                    // SAFETY: the buffer's bytes, which no command uses now.
+                    let held =
+                        unsafe { std::slice::from_raw_parts(contents.as_ptr(), len as usize) };
+                    let (mut inside, mut outside) = (Vec::new(), 0);
+                    for (y, r) in held.chunks(pitch_bytes).enumerate() {
+                        for (x, texel) in r[..row].chunks(4).enumerate() {
+                            match x < reach as usize && y < reach as usize {
+                                true => inside.extend_from_slice(texel),
+                                false => outside += texel.iter().filter(|&&b| b != 0xee).count(),
+                            }
+                        }
+                    }
+                    let past = (held.chunks(pitch_bytes)).flat_map(|r| &r[row..]);
+                    let past = past.filter(|&&byte| byte != 0xee).count();
+                    cleared(name, &inside);
+                    assert_eq!(
+                        (outside, past),
+                        (0, 0),
+                        "{name}: {kind} at {pitch}: {form}, bytes past the {reach} x {reach} area"
+                    );
+                    println!(
+                        "resolve_over: {name}: {kind} pitch {pitch}: a {AREA} x {AREA} pass \
+                         resolved {reach} x {reach} texels; {outside} bytes of the texels past \
+                         them and {past} past the rows changed; resolve copy bytes {copy_bytes}"
                     );
                     drop((over, buffer, block));
                 }
