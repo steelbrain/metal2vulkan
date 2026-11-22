@@ -119,8 +119,8 @@ mod on_device {
     use crate::{
         AllocationId, AllocationInfo, Block, BlockId, BlockInfo, BlockMappings, Buffer,
         CommandBufferStatus, ComputePipelineState, Device, DeviceOptions, DispatchType, Error,
-        Gauges, Limit, MemoryClass, Metrics, PixelFormat, Refusal, TextureDescriptor, TextureType,
-        MAX_BUFFER_LENGTH,
+        ExportHandle, Gauges, Limit, MemoryClass, Metrics, PixelFormat, Refusal, TextureDescriptor,
+        TextureType, MAX_BUFFER_LENGTH,
     };
     use ash::vk;
     use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
@@ -1548,7 +1548,8 @@ mod on_device {
     /// A lost device's report places an address in the pool's allocation the idle rule freed: a
     /// Shared block of 64 MiB, an allocation of its own, given back with nothing in flight and
     /// freed at its idle age, is the one range that holds an address in it, freed with nothing in
-    /// flight and none waited for; a live block's allocation holds an address in it, live.
+    /// flight and none waited for; a live block's allocation holds an address in it, live; and an
+    /// exported block, where the device exports a handle, holds an address in it by its number.
     #[test]
     fn every_device_places_an_address_in_an_allocation_freed_at_its_idle_age() {
         const MIB: u64 = 1 << 20;
@@ -1602,6 +1603,19 @@ mod on_device {
                 "{name}: the live block's allocation, live: {held}"
             );
             device.release_block(live).expect("a release");
+            let exported = (ExportHandle::ALL.into_iter())
+                .find_map(|handle| device.new_exported_block(handle, MIB).ok());
+            if let Some((exported, _export)) = exported {
+                let buffer = (device.new_buffer(exported.id, 0, MIB, None)).expect("a buffer");
+                let place =
+                    (core.spans).place(&at(buffer.gpu_address() + 0x2000), crate::host_time());
+                let kind = crate::RangeKind::Export(exported.id);
+                assert!(
+                    matches!(place.holders.as_slice(), [range] if range.kind == kind),
+                    "{name}: the exported block, by its number: {place}"
+                );
+                println!("memory: {name}: {place}");
+            }
             drop(device);
             assert_each_unmapped_once(name, &hook);
             println!("memory: {name}: {freed}; {held}");

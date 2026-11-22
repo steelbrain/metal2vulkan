@@ -7144,7 +7144,7 @@ struct	metal2vulkan-runtime::AllocationId	#[derive(Clone, Copy, Debug, PartialEq
 struct	metal2vulkan-runtime::AllocationInfo	#[derive(Clone, Copy, Debug)] #[non_exhaustive] pub struct AllocationInfo
 struct	metal2vulkan-runtime::BlitCommandEncoder	pub struct BlitCommandEncoder
 struct	metal2vulkan-runtime::Block	#[derive(Clone)] pub struct Block
-struct	metal2vulkan-runtime::BlockId	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] pub struct BlockId(u32)
+struct	metal2vulkan-runtime::BlockId	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] pub struct BlockId(pub(crate) u32)
 struct	metal2vulkan-runtime::BlockInfo	#[derive(Clone, Copy, Debug)] #[non_exhaustive] pub struct BlockInfo
 struct	metal2vulkan-runtime::Buffer	#[derive(Clone)] pub struct Buffer
 struct	metal2vulkan-runtime::BufferLayout	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct BufferLayout
@@ -8944,7 +8944,7 @@ variant	metal2vulkan-runtime::PrecisionNote::UnorderedFetchWithinDraw	UnorderedF
 variant	metal2vulkan-runtime::PrecisionNote::VertexSimdgroupGrouping	VertexSimdgroupGrouping
 variant	metal2vulkan-runtime::PrecisionNote::ViewBaseTexelOffset	ViewBaseTexelOffset
 variant	metal2vulkan-runtime::RangeKind::Allocation	Allocation(AllocationId, MemoryClass)
-variant	metal2vulkan-runtime::RangeKind::Export	Export
+variant	metal2vulkan-runtime::RangeKind::Export	Export(BlockId)
 variant	metal2vulkan-runtime::RangeKind::Import	Import
 variant	metal2vulkan-runtime::RangeKind::Preprocess	Preprocess
 variant	metal2vulkan-runtime::RangeKind::RingBlock	RingBlock

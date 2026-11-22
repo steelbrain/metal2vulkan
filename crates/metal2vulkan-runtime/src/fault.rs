@@ -5,7 +5,7 @@
 
 use crate::command::DeviceLoss;
 use crate::device::{lock, Core};
-use crate::memory::{AllocationId, MemoryClass};
+use crate::memory::{AllocationId, BlockId, MemoryClass};
 use ash::vk;
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -111,8 +111,9 @@ pub enum RangeKind {
     Allocation(AllocationId, MemoryClass),
     /// An imported block's allocation of its own.
     Import,
-    /// An exported block's allocation of its own.
-    Export,
+    /// An exported block's allocation of its own, by the block's number
+    /// ([`BlockInfo::id`](crate::BlockInfo::id)).
+    Export(BlockId),
     /// An exported surface's buffer.
     Surface,
     /// An import over several dma-bufs: its sparse buffer, on Unix.
@@ -128,7 +129,7 @@ impl fmt::Display for RangeKind {
         match self {
             RangeKind::Allocation(id, class) => write!(f, "{class:?} pool allocation {}", id.get()),
             RangeKind::Import => f.write_str("import"),
-            RangeKind::Export => f.write_str("export"),
+            RangeKind::Export(block) => write!(f, "export block {}", block.get()),
             RangeKind::Surface => f.write_str("surface buffer"),
             RangeKind::Sparse => f.write_str("import over dma-bufs"),
             RangeKind::RingBlock => f.write_str("parameter ring block"),

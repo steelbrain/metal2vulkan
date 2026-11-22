@@ -197,7 +197,7 @@ impl MemoryClass {
 /// No Metal counterpart: a block's number. Numbers start at 1 and are never reused during the
 /// device's life: each take is a new number.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct BlockId(u32);
+pub struct BlockId(pub(crate) u32);
 
 impl BlockId {
     /// The number.
@@ -567,7 +567,7 @@ fn note(core: &Core, memory: &Memory) {
     let kind = match memory.own {
         None => return,
         Some(Own::Import { .. }) => RangeKind::Import,
-        Some(Own::Export { .. }) => RangeKind::Export,
+        Some(Own::Export { .. }) => RangeKind::Export(memory.id),
         Some(Own::Surface { .. }) => RangeKind::Surface,
         #[cfg(unix)]
         Some(Own::Sparse { .. }) => RangeKind::Sparse,
