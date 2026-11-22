@@ -767,8 +767,10 @@ fn sweep_new(
     } = sweep;
     let mut out = rows_output()?;
     let mut tally = Tally::default();
-    // Opened at the sweep's first kernel row, and finished once the last row is done.
-    let mut kernels = None;
+    let mut target = device.map(|kind| SweepDevice {
+        kind,
+        kernels: None,
+    });
     let mut attempt = |row: NewRow| -> Result<(), String> {
         if tally.rows >= options.limit {
             return Ok(());
@@ -777,8 +779,7 @@ fn sweep_new(
         mark_attempting(options, &row.key)?;
         tally.row_compile = None;
         let (status, detail, create_ms) = attempt_row(
-            device,
-            &mut kernels,
+            target.as_mut(),
             worker,
             compiler,
             projection,
@@ -870,7 +871,11 @@ fn sweep_new(
             })
         })?;
     }
-    if let Some(kernels) = kernels {
+    if let Some(SweepDevice {
+        kernels: Some(kernels),
+        ..
+    }) = target
+    {
         if let Err(error) = kernels.finish() {
             eprintln!("corpus-pipeline: the kernel rows' runtime device: {error}");
             tally.errors += 1;
@@ -975,13 +980,31 @@ fn rows_output() -> Result<Box<dyn Write>, String> {
     Ok(Box::new(std::io::stdout()))
 }
 
-/// Compile one row in a compile worker and create its pipeline (a kernel row's, made through the
-/// runtime from the row's AIR on the sweep's one runtime device, `kernels`, opened at the first
-/// kernel row): `(STATUS, detail, create_ms)`. With `keep`, the compiled row's stage modules are
-/// written there first ([`keep_modules`]).
+/// The device a sweep creates its rows' pipelines on: its kind, and the one runtime device its
+/// kernel rows are made on, opened at the first kernel row and finished after the last row.
+struct SweepDevice {
+    kind: DeviceType,
+    kernels: Option<RuntimeKernels>,
+}
+
+impl SweepDevice {
+    /// The sweep's runtime device for its kernel rows, opened here at the first.
+    fn kernels(&mut self) -> Result<&mut RuntimeKernels, AcceptanceError> {
+        let kernels = match self.kernels.take() {
+            Some(kernels) => kernels,
+            None => RuntimeKernels::open(self.kind)?,
+        };
+        Ok(self.kernels.insert(kernels))
+    }
+}
+
+/// Compile one row in a compile worker and create its pipeline on `device` (a kernel row's, made
+/// through the runtime from the row's AIR on the sweep's one runtime device,
+/// [`SweepDevice::kernels`]): `(STATUS, detail, create_ms)`. `device` is `None` for
+/// `--compile-only`. With `keep`, the compiled row's stage modules are written there first
+/// ([`keep_modules`]).
 fn attempt_row(
-    device: Option<DeviceType>,
-    kernels: &mut Option<RuntimeKernels>,
+    device: Option<&mut SweepDevice>,
     worker: &CompileWorker,
     compiler: &WorkerDevice,
     projection: Projection,
@@ -1078,7 +1101,7 @@ fn attempt_row(
     };
     let result = match (&*pipeline, &row.what) {
         (RowPipeline::Render { pipeline, .. }, _) => {
-            metal2vulkan_validation::candidate::create_acceptance_pipeline(device, pipeline)
+            metal2vulkan_validation::candidate::create_acceptance_pipeline(device.kind, pipeline)
         }
         (RowPipeline::Compute { .. }, RowWork::Function { input, .. }) => {
             let bitcode = match input.source.bitcode() {
@@ -1093,14 +1116,7 @@ fn attempt_row(
                 entry: &input.entry,
                 constants: &constants,
             };
-            let kernels = match kernels {
-                Some(kernels) => kernels,
-                None => match RuntimeKernels::open(device) {
-                    Ok(opened) => kernels.insert(opened),
-                    Err(error) => return tally.record(key, detail, Err(error)),
-                },
-            };
-            kernels.accept(&kernel)
+            device.kernels().and_then(|kernels| kernels.accept(&kernel))
         }
         (RowPipeline::Compute { .. }, RowWork::Draw { .. }) => {
             return Err(format!(
