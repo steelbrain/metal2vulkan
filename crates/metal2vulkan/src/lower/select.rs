@@ -1814,7 +1814,6 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
             | RuntimeFact::StorageTextureLevelViews { .. }
             | RuntimeFact::SparseTexture { .. }
             | RuntimeFact::SrgbTexture { .. }
-            | RuntimeFact::UlongAtomicView { .. }
             | RuntimeFact::OpenClLineTexture { .. }
             | RuntimeFact::SparseTextureWrites { .. }
             | RuntimeFact::TextureSwizzle { .. }

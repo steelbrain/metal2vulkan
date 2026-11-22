@@ -2972,9 +2972,10 @@ cache is answered compile-required on both.
 - A 64-bit texture atomic (`atomic_min` or `atomic_max` on a `ulong` texture), which Metal's
   feature set tables give the Apple8 family and later ("GPU devices in the Apple8 family support
   64-bit atomic minimum and maximum using ulong, on both buffers and textures, only on macOS"),
-  is lowered to a 64-bit image atomic, which needs `shaderImageInt64Atomics`. Device creation
-  enables no 64-bit image atomic, so a state over a function that calls one is
-  `Error::Translation` of `Unsupported{ImageAtomics}`, needing that feature, on every device.
+  is refused on every device: a state over a function that calls one is `Error::Translation` of
+  `Unsupported{ImageAtomics}`, not implemented. Its one exact form is a 64-bit image atomic
+  (`shaderImageInt64Atomics`), which device creation does not enable; no form over 32-bit
+  atomics is exact.
 - Every `VkPipeline` is made through the device's `VkPipelineCache` (The cache directory, above),
   which is empty on a host's first run. Cold, the driver's time for a recorded session's render
   pipelines made through it, against the same pipelines made past any cache (states-only plays):
@@ -4752,7 +4753,6 @@ enables that the translator names.
 |---|---|---|
 | `rasterizationOrderColorAttachmentAccess` | `VkPhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT` | a blend into an extended-range attachment, which the function would compute over its own read of the attachment, is refused (`FramebufferFetch`) |
 | `robustBufferAccess` | `VkPhysicalDeviceFeatures` | a buffer is reached by its device address, and an access through a descriptor view is checked in the shader |
-| `shaderImageInt64Atomics` | `VkPhysicalDeviceShaderImageAtomicInt64FeaturesEXT` | an atomic on a `ulong` texture is refused (`ImageAtomics`) |
 | `computeDerivativeGroupLinear` | `VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR` | a derivative in a kernel is refused (`ComputeDerivatives`) |
 | `descriptorBindingStorageBufferUpdateAfterBind` | `VkPhysicalDeviceVulkan12Features` | the translator's function table is a directory and a snapshot, never a heap array of storage buffers; the runtime supplies no function table (Known gaps of pipeline states) |
 | `shaderStorageBufferArrayNonUniformIndexing` | `VkPhysicalDeviceVulkan12Features` | as `descriptorBindingStorageBufferUpdateAfterBind` |

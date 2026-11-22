@@ -7094,7 +7094,6 @@ method	metal2vulkan::device::DeviceProfile::specialized_entry	pub fn specialized
 method	metal2vulkan::device::DeviceProfile::spirv_validation	pub fn spirv_validation(&self) -> SpirvValidation
 method	metal2vulkan::device::DeviceProfile::subgroups	pub fn subgroups(&self) -> &SubgroupModel
 method	metal2vulkan::device::DeviceProfile::supports_format	pub fn supports_format(&self, format: vk::Format, usage: FormatUsage) -> bool
-method	metal2vulkan::device::DeviceProfile::ulong_atomic_gaps	pub fn ulong_atomic_gaps(&self, buffer: bool) -> Vec<Capability>
 method	metal2vulkan::device::DeviceProfile::union_requirements	pub fn union_requirements(&self, a: &Requirements, b: &Requirements) -> Requirements
 method	metal2vulkan::device::DeviceProfile::vertex_entry_inputs	pub fn vertex_entry_inputs(&self, d: &EntryDescriptor<'_>, vertex: Option<&VertexDescriptor>, budget: &Budget) -> Result<LoweringInputs, Error>
 method	metal2vulkan::device::EnableSet::new	pub fn new() -> EnableSet
@@ -11131,7 +11130,6 @@ variant	metal2vulkan::pipeline::RuntimeFact::TileFunction	TileFunction
 variant	metal2vulkan::pipeline::RuntimeFact::TileImageblock	TileImageblock { data_size: u32, alignment: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::TileThreadgroup	TileThreadgroup { tile_sized: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::TileThreadgroupMemory	TileThreadgroupMemory { index: u32 }
-variant	metal2vulkan::pipeline::RuntimeFact::UlongAtomicView	UlongAtomicView { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::UniformViewAliasing	UniformViewAliasing { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::UniformViewRange	UniformViewRange { slot: SlotRef, choice: UniformViewChoice }
 variant	metal2vulkan::pipeline::RuntimeFact::UnitAxes	UnitAxes { axes: u8, relief: u8 }

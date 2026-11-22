@@ -40,7 +40,7 @@ Columns:
 
 | Kind | `metal-measured` | `metal-documented` | `metal-takes` | `device` | `ours` | `unknown` | `delegated` | `-` |
 |---|---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 0 | 0 | 0 | 49 | 70 | 0 | 0 | 0 |
+| Translator and front-end refusals | 0 | 0 | 0 | 48 | 71 | 0 | 0 | 0 |
 | Binder refusals at a device limit | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
 | Translation caps | 0 | 0 | 0 | 0 | 14 | 0 | 0 | 0 |
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 5 | 0 | 0 | 0 |
@@ -88,7 +88,7 @@ Columns:
 | `ZeroedThreadgroupMemory` | Threadgroup memory that reads zero until the program writes it, on `Device::from_queries`' profile | devices short of a Vulkan feature the site names | `device` | 1: `crates/metal2vulkan/src/lower/access/local.rs (zero_threadgroup)` | `rare`: threadgroup memory on a device without shaderZeroInitializeWorkgroupMemory, which Vulkan 1.3 requires |
 | `CoherentMemory` | `coherent(device)` accesses (Vulkan memory model) | devices short of a Vulkan feature the site names | `device` | 1: `crates/metal2vulkan/src/lower/sync/memory_model.rs (check)` | `rare`: coherent(device) accesses |
 | `Int64Atomics` | 64-bit atomics | devices short of a Vulkan feature the site names; devices without buffer device addresses (`addressed_needs`) | `device` | 2: `crates/metal2vulkan/src/lower/access/atomic.rs (select, 2 sites)` | `rare`: 64-bit atomics |
-| `ImageAtomics` | Image atomics beyond 32-bit integers | devices without a capability the site computes (`gaps`) | `device` | 1: `crates/metal2vulkan/src/lower/texture/slot.rs (atomic_format)` | `rare`: texture atomics beyond 32-bit integers |
+| `ImageAtomics` | Image atomics beyond 32-bit integers | every device (not implemented) | `ours` | 1: `crates/metal2vulkan/src/lower/texture/atomic.rs (select)` | `rare`: texture atomics beyond 32-bit integers |
 | `DescriptorCount` | Too many descriptors of one kind in a stage or pipeline | devices short of a device limit the site names; devices without VkLimit::MaxUniformBufferRange | `device` | 3: `crates/metal2vulkan/src/lower/access/mod.rs (accept_placement)`, `crates/metal2vulkan/src/lower/select.rs (finish)` (+1) | `app`: many textures or buffers in one stage on a smaller device |
 | `BufferRange` | A buffer window beyond the descriptor range limits | devices without buffer device addresses (`addressed_needs`); every device (no Vulkan mechanism) | `device` | 6: `crates/metal2vulkan/src/bind/graphics.rs (patch_binding, 3 sites)`, `crates/metal2vulkan/src/bind/instantiate.rs (bind_buffers)` (+2) | `app`: a buffer window past a device's descriptor range |
 | `Int64Arithmetic` | 64-bit integer arithmetic | devices without VkFeature::ShaderInt64 | `device` | 2: `crates/metal2vulkan/src/lower/arith/legal.rs (check_scalar)`, `crates/metal2vulkan/src/lower/select.rs (selector_form)` | `rare`: 64-bit integers on a device without shaderInt64 |
@@ -421,7 +421,7 @@ Each refusal's sites, with the function that builds it.
 - `feature::ZeroedThreadgroupMemory`: `crates/metal2vulkan/src/lower/access/local.rs (zero_threadgroup)`
 - `feature::CoherentMemory`: `crates/metal2vulkan/src/lower/sync/memory_model.rs (check)`
 - `feature::Int64Atomics`: `crates/metal2vulkan/src/lower/access/atomic.rs (select, 2 sites)`
-- `feature::ImageAtomics`: `crates/metal2vulkan/src/lower/texture/slot.rs (atomic_format)`
+- `feature::ImageAtomics`: `crates/metal2vulkan/src/lower/texture/atomic.rs (select)`
 - `feature::DescriptorCount`: `crates/metal2vulkan/src/lower/access/mod.rs (accept_placement)`; `crates/metal2vulkan/src/lower/select.rs (finish)`; `crates/metal2vulkan/src/pipeline/link.rs (limit_error)`
 - `feature::BufferRange`: `crates/metal2vulkan/src/bind/graphics.rs (patch_binding, 3 sites)`; `crates/metal2vulkan/src/bind/instantiate.rs (bind_buffers)`; `crates/metal2vulkan/src/lower/access/function_table.rs (select)`; `crates/metal2vulkan/src/lower/access/mod.rs (place_slots)`
 - `feature::Int64Arithmetic`: `crates/metal2vulkan/src/lower/arith/legal.rs (check_scalar)`; `crates/metal2vulkan/src/lower/select.rs (selector_form)`

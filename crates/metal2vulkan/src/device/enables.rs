@@ -336,7 +336,6 @@ fn facts(ext: VkExtension) -> ExtensionFacts {
         &[(E::KhrSynchronization2, Some(v(3)))];
     match ext {
         E::ExtRobustness2
-        | E::ExtShaderImageAtomicInt64
         | E::ExtShaderStencilExport
         | E::ExtFragmentShaderInterlock
         | E::ExtRasterizationOrderAttachmentAccess
@@ -401,6 +400,9 @@ fn facts(ext: VkExtension) -> ExtensionFacts {
         // Described, never enabled: the coverage after the depth and stencil tests is refused on
         // every device (`Feature::PostDepthCoverage`), so the core reads none of it.
         E::ExtPostDepthCoverage => fact(false, None, &[]),
+        // Described, never enabled: a `ulong` texture's atomics are refused on every device
+        // (`lower::texture::atomic`), so the core reads none of it.
+        E::ExtShaderImageAtomicInt64 => fact(false, None, &[]),
         // Described, never enabled: the core reads none of its properties.
         E::ExtSampleLocations => fact(false, None, &[]),
         E::KhrDynamicRendering => fact(false, Some(3), &[]),

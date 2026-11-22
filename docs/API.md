@@ -1341,8 +1341,9 @@ ask too (`plan.dispatch_variant(&dispatch)`, or `BindError::NeedsVariant` from i
 
 Textures follow Metal's texel rules: sparse textures report residency where the device can,
 `Depth32Float` texels are the device's depth image's (a value it clamps or a denormal it flushes is
-the device's, `PrecisionNote::DepthDenormals`), `ulong` textures and their atomics use
-64-bit images where the device has them, and `half` and sRGB reads give Metal's values or record
+the device's, `PrecisionNote::DepthDenormals`), a `ulong` texture is an `RG32` unsigned image
+whose two words the function joins and splits (its atomics are refused, `ImageAtomics`), and
+`half` and sRGB reads give Metal's values or record
 their bound (an sRGB texel is the device's own decode wherever the device samples its format,
 `srgb-texel-decode`). The
 rustdoc of `BindState`, `TextureFacts` and `BindingPlan` states each rule. A read's, sample's or

@@ -182,11 +182,10 @@ pub enum ToolingRequirement {
     /// A 64-bit texture atomic its module calls (`executor_contract::unsupported_air_requirements`):
     /// an `atomic_min` or `atomic_max` on a Metal `ulong` texture, an Apple8-family feature (Metal's
     /// feature set tables: "GPU devices in the Apple8 family support 64-bit atomic minimum and
-    /// maximum using ulong, on both buffers and textures, only on macOS"). The translator lowers it
-    /// to a 64-bit image atomic, which needs `shaderImageInt64Atomics`, and the runtime enables no
-    /// 64-bit image atomic on any device (its floor's features), so it refuses the pipeline on
-    /// every device as `Unsupported{ImageAtomics}` needing that feature
-    /// (`device_capability_missing`), a known gap its README states, which is its guard: the limit
+    /// maximum using ulong, on both buffers and textures, only on macOS"). The translator refuses
+    /// it on every device as `Unsupported{ImageAtomics}`, not implemented (its one exact form is a
+    /// 64-bit image atomic, `shaderImageInt64Atomics`, which the runtime enables on no device), a
+    /// known gap the runtime's README states, which is its guard: the limit
     /// is the runtime's ([`Limit::Runtime`]) and the engine's candidate does not run the case. The
     /// Metal oracle runs it, so a case of it stays Metal-qualified ([`Self::qualifies_on_metal`]).
     UlongTextureAtomic,

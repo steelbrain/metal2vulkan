@@ -129,36 +129,6 @@ impl DeviceProfile {
             .is_some_and(|usages| usages.contains(&usage))
     }
 
-    /// What this profile lacks for a `ulong` texture slot that a `ulong` atomic updates (`buffer`:
-    /// a texture buffer), in a fixed order: the 64-bit image atomics (`shaderImageInt64Atomics`),
-    /// the 64-bit integers its `R64ui` texels are (`shaderInt64`), and the `R64_UINT` format's
-    /// storage-atomic feature for the slot's view (`STORAGE_IMAGE_ATOMIC`, a texture buffer's
-    /// `STORAGE_TEXEL_BUFFER_ATOMIC`). Empty where it has them all. The lowering refuses such a
-    /// slot naming these, the binder lists an `R64_UINT` storage neutral on the same condition, and
-    /// the runtime answers a `RG32Uint` texture's atomics by it.
-    pub fn ulong_atomic_gaps(&self, buffer: bool) -> Vec<Capability> {
-        let leaf = &self.fields().leaf;
-        let mut gaps = Vec::new();
-        if !leaf.image_int64_atomics {
-            gaps.push(Capability::Feature(VkFeature::ShaderImageInt64Atomics));
-        }
-        if !leaf.int64 {
-            gaps.push(Capability::Feature(VkFeature::ShaderInt64));
-        }
-        let usage = if buffer {
-            FormatUsage::StorageTexelBufferAtomic
-        } else {
-            FormatUsage::StorageImageAtomic
-        };
-        if !self.supports_format(vk::Format::R64_UINT, usage) {
-            gaps.push(Capability::Format {
-                format: vk::Format::R64_UINT,
-                usage,
-            });
-        }
-        gaps
-    }
-
     /// A limit's value, in the unit [`Requirements::limits`] uses, and how requirements compare
     /// with it. Signed offset minima are reported as magnitudes (a requirement of 8 means
     /// "offsets down to -8"); float limits are reported rounded down to an integer.

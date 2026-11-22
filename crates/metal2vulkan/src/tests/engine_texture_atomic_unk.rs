@@ -29,7 +29,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::device::profile::DeviceProfile;
 use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
-use crate::error::{Error, Needs};
+use crate::error::{Error, Feature, Needs, Unsupported};
 use crate::library::FunctionArtifact;
 use crate::pipeline::testing::{
     compile, engine_dir, link_and_validate, llvm_assemble, AssembleError,
@@ -128,7 +128,8 @@ fn profiles() -> Vec<(String, DeviceProfile)> {
 }
 
 /// The artifact of `entry` on `p`, linked and past L3; `None` when `p` lacks a capability it
-/// needs (a typed device gap). Any other refusal fails the test.
+/// needs (a typed device gap), and for a `ulong` texture's atomics, which every device refuses.
+/// Any other refusal fails the test.
 fn artifact(
     bc: &[u8],
     entry: &str,
@@ -141,6 +142,10 @@ fn artifact(
             Some(a)
         }
         Err(Error::Unsupported(u)) if matches!(u.needs, Needs::AnyOf(_)) => None,
+        // A `ulong` texture's atomics, on every device.
+        Err(Error::Unsupported(u)) if u == Unsupported::not_implemented(Feature::ImageAtomics) => {
+            None
+        }
         Err(e) => panic!("{stem}: {entry}: {e}"),
     }
 }
@@ -481,8 +486,9 @@ fn legacy_atomics(text: &str) -> (String, usize, usize) {
 /// A 2D, 2D array or 3D texture atomic in the legacy form, without the offset position (the AIR
 /// macOS 26.6's Metal on x86-64 hands its device), compiles as the same atomic with a zero
 /// offset: the owned atomic fixtures (every operation, `uint` and `int`, 16-bit coordinates,
-/// compare-exchange, store, `ulong` `min` and `max`) with every offset dropped compile on the same
-/// profiles, with the same strategies and the same image atomics. Without the legacy form such a
+/// compare-exchange, store, and `ulong` `min` and `max`, which every profile refuses) with every
+/// offset dropped compile on the same profiles, with the same strategies and the same image
+/// atomics. Without the legacy form such a
 /// declaration matches no layout of its name and is refused `UnknownIntrinsic`.
 #[test]
 fn legacy_texture_atomics_without_the_offset_compile_alike() {

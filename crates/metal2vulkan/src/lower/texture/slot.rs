@@ -31,8 +31,7 @@ pub enum TexelClass {
     Sint,
     Uint,
     /// `ulong`: an `RG32Uint` texture, declared as an `RG32` unsigned image whose two words the
-    /// shader joins and splits, or, where a `ulong` atomic updates it, as the `R64ui` image the
-    /// binder views it as.
+    /// shader joins and splits.
     Uint64,
 }
 
@@ -179,13 +178,7 @@ impl ImageDecl {
                 width: 32,
                 signed: true,
             })?,
-            // A `ulong` slot is an `RG32` unsigned image, or one of 64-bit texels.
-            TexelClass::Uint64 if self.format == crate::spv::ImageFormat::R64ui => {
-                mb.ty(SType::Int {
-                    width: 64,
-                    signed: false,
-                })?
-            }
+            // A `ulong` slot is an `RG32` unsigned image.
             TexelClass::Uint | TexelClass::Uint64 => mb.ty(SType::Int {
                 width: 32,
                 signed: false,
@@ -977,12 +970,7 @@ fn ulong_format(
 /// storage-atomic feature (a texel buffer's storage-texel-buffer-atomic one). The slot's choice,
 /// when there is one, must be that format; without one, Metal's rule gives it (the binder's view of
 /// an `R32` texture, and the `R32` neutral of an unbound storage slot of that numeric type, have
-/// it).
-///
-/// A `ulong` slot is declared `R64ui`, which the binder views its `RG32Uint` texture as
-/// (`RuntimeFact::UlongAtomicView`), where the profile has what that needs
-/// (`DeviceProfile::ulong_atomic_gaps`); elsewhere it is `Unsupported{ImageAtomics}` naming every
-/// missing capability, never an `RG32` declaration, which no image atomic takes.
+/// it). A `ulong` texture's atomics are refused before (`atomic::select`).
 fn atomic_format(
     cx: &SelectCx<'_>,
     s: &SlotPlan,
@@ -992,14 +980,7 @@ fn atomic_format(
     let (format, vk_format) = match texel {
         TexelClass::Uint => (crate::spv::ImageFormat::R32ui, vk::Format::R32_UINT),
         TexelClass::Sint => (crate::spv::ImageFormat::R32i, vk::Format::R32_SINT),
-        TexelClass::Uint64 => {
-            let gaps = cx.profile.ulong_atomic_gaps(buffer);
-            if !gaps.is_empty() {
-                return Err(Unsupported::needs_any_of(Feature::ImageAtomics, vec![gaps]).into());
-            }
-            (crate::spv::ImageFormat::R64ui, vk::Format::R64_UINT)
-        }
-        TexelClass::Float => return Err(refuse()),
+        TexelClass::Uint64 | TexelClass::Float => return Err(refuse()),
     };
     if let Some(choice) = cx.inputs.storage_images.get(&s.slot) {
         if choice.vk_format != vk_format || choice.class != StorageImageClass::Identity {
@@ -1302,10 +1283,6 @@ fn declare_slot(
             .storage_images
             .get(&s.slot)
             .is_some_and(|c| c.x_channel);
-    if texel == TexelClass::Uint64 && format == crate::spv::ImageFormat::R64ui {
-        // The binder views the slot's `RG32Uint` texture as `R64_UINT`.
-        facts.push(RuntimeFact::UlongAtomicView { slot: s.slot });
-    }
     if cube_as_array {
         facts.push(RuntimeFact::ImageViewShape { slot: s.slot });
     }
@@ -1771,8 +1748,8 @@ impl SlotPlan {
 /// buffer's is a texel buffer's, uniform where the slot reads and storage where it writes, the
 /// element its resource ID holds in the texel-buffer arrays. `None` for a declaration the identity
 /// arrays hold no element of yet: a cube viewed as an array, level views, a texture buffer's parts
-/// or rows, planes, an extended-range or RGBX form, a `ulong` slot a `ulong` atomic updates (an
-/// `R64ui` image), or a storage image with another format or a conversion.
+/// or rows, planes, an extended-range or RGBX form, or a storage image with another format or a
+/// conversion.
 pub(crate) fn identity_class(decl: &ImageDecl) -> Option<ImageHandleClass> {
     let plain = !decl.cube_as_array
         && decl.level_views.is_none()

@@ -147,11 +147,10 @@ pub(crate) fn storage_neutral(ty: SampledType) -> vk::Format {
 }
 
 /// Whether a storage image of `format` serves a declaration of numeric type `ty`: the format's
-/// own numeric type, or, for `ulong`, `RG32_UINT`, and `R64_UINT` where a `ulong` atomic updates
-/// the slot.
+/// own numeric type, or, for `ulong`, `RG32_UINT`.
 fn serves(format: vk::Format, ty: SampledType) -> bool {
     match ty {
-        SampledType::Uint64 => matches!(format, vk::Format::R32G32_UINT | vk::Format::R64_UINT),
+        SampledType::Uint64 => format == vk::Format::R32G32_UINT,
         _ => numeric_type(format) == Some(ty),
     }
 }

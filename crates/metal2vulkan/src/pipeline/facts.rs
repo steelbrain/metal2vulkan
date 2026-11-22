@@ -227,13 +227,6 @@ pub enum RuntimeFact {
     /// Bound in any other format, or unbound, the slot leaves the variant, and the function reads
     /// the device's decode through the texture's own view.
     SrgbTexture { slot: SlotRef },
-    /// A `ulong` atomic (`atomic_{min,max}`) updates the `ulong` texture bound to the slot, so the
-    /// slot is declared as an `R64ui` storage image: the binder views the bound `RG32Uint` texture
-    /// as `R64_UINT`, each texel's low word in R and high word in G one little-endian 64-bit
-    /// integer. A texture is that view of an image the consumer created with `MUTABLE_FORMAT`, and
-    /// a texture buffer an `R64_UINT` texel view of its bytes; an unbound slot takes the `R64_UINT`
-    /// neutral. A `ulong` slot without the fact is an `RG32` image.
-    UlongAtomicView { slot: SlotRef },
     /// The vertex function writes `[[viewport_array_index]]`, which selects a viewport only below
     /// the render encoder's viewport count (`setViewports:count:`): Metal draws a primitive whose
     /// index is at or past the count through viewport 0, so the function stores `ViewportIndex`
@@ -767,7 +760,6 @@ impl RuntimeFact {
             }
             RuntimeFact::PredicationVote => "PredicationVote",
             RuntimeFact::SrgbTexture { .. } => "SrgbTexture",
-            RuntimeFact::UlongAtomicView { .. } => "UlongAtomicView",
             RuntimeFact::ViewportCount => "ViewportCount",
             RuntimeFact::AliasedImageblock { .. } => "AliasedImageblock",
             RuntimeFact::CallStackDepth { .. } => "CallStackDepth",

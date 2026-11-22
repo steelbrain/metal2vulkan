@@ -7,13 +7,10 @@
 //!   texture type and sampled type), the binding's descriptor type (sampled or storage, image or
 //!   texel buffer), and the pipeline's facts: a cube with `ImageViewShape` is the 2D-array view
 //!   the function declared, a combined binding's depth comparison is its symbol's, and a storage
-//!   binding's format is the variant's storage-image choice, `Unknown` without one, except a
-//!   `ulong` slot with `UlongAtomicView`, which is `R64_UINT`.
+//!   binding's format is the variant's storage-image choice, `Unknown` without one.
 //! - **Bound and compatible:** a texture view of the bound format through `metal::format`
 //!   (sampled: `vk_format` for `SampledImage`, with the emulation's component mapping; storage:
-//!   the `StorageImageChoice`'s view format; `R64_UINT` for a `ulong` slot with
-//!   `UlongAtomicView`, an alias of the `MUTABLE_FORMAT` image's `RG32_UINT` texels), a
-//!   texel-buffer view format, or the runtime sampler slot, whose `VkSampler` instantiation makes
+//!   the `StorageImageChoice`'s view format), a texel-buffer view format, or the runtime sampler slot, whose `VkSampler` instantiation makes
 //!   from the bound descriptor for the binding's use.
 //! - **Unbound, or bound but incompatible** with the declared type (another texture type, sample
 //!   count, or numeric type, a texture buffer for an image, a color texture under a depth
@@ -1089,9 +1086,6 @@ impl ResourcePlanner<'_> {
             ty,
             vk::DescriptorType::STORAGE_IMAGE | vk::DescriptorType::STORAGE_TEXEL_BUFFER
         );
-        // A slot a `ulong` atomic updates is declared `R64ui`: its texture is viewed as
-        // `R64_UINT`, whatever choice its format would otherwise make.
-        let ulong_atomic = storage && self.has_fact(RuntimeFact::UlongAtomicView { slot });
         let base = declared(&t, ty, cube_as_array, false, StorageFormatClass::Unknown)?;
         let compat = shape.filter(|s| compatible(s, &t, &base));
         // A texture whose writes Metal drops (a 4:2:2 texture, and a YCbCr one;
@@ -1144,7 +1138,7 @@ impl ResourcePlanner<'_> {
         } else {
             StorageUse::texture(t.access.read, t.access.write)
         };
-        let accessed = storage && (t.access.read || t.access.write) && !ulong_atomic;
+        let accessed = storage && (t.access.read || t.access.write);
         let choice = match compat {
             Some(
                 TextureShape::Texture { pixel_format, .. }
@@ -1201,9 +1195,7 @@ impl ResourcePlanner<'_> {
             }
         }
         let class = ImageHandleClass {
-            format: if ulong_atomic {
-                StorageFormatClass::Format(vk::Format::R64_UINT)
-            } else if storage {
+            format: if storage {
                 storage_class(variant.as_ref())
             } else {
                 StorageFormatClass::NotStorage
@@ -1257,8 +1249,6 @@ impl ResourcePlanner<'_> {
                     FormatUsage::UniformTexelBuffer
                 };
                 let view = match choice {
-                    // The `R64_UINT` view of a `ulong` slot's bytes.
-                    _ if ulong_atomic => Some(vk::Format::R64_UINT),
                     // The storage texel view reads the choice's view format (an alias of the
                     // bound format's bytes, or an `A8Unorm` texture buffer's bytes as `R8_UNORM`,
                     // Metal's alpha in red), which must itself support the usage.
@@ -1340,8 +1330,7 @@ impl ResourcePlanner<'_> {
                 // and plain Metal reads a swizzled texture's texels swizzled through a storage
                 // binding and writes them with the swizzle undone: the function does both under
                 // the variant, which takes the swizzle as the slot's `SpecKey::TextureSwizzle`,
-                // and the view takes none. A `ulong` atomic's slot reads and writes no texel, and
-                // keeps the consumer's refusal of the swizzled view. An extended-range texture's
+                // and the view takes none. An extended-range texture's
                 // sampled view holds its raw codes, which a swizzle in the view's component mapping
                 // would move before the function decodes them (a `One` reading the code 1, a border
                 // texel unswizzled), where plain Metal swizzles the decoded texel, border texels
@@ -1378,7 +1367,6 @@ impl ResourcePlanner<'_> {
                 let queried = storage && !t.access.read && !t.access.write && !swizzle.is_default();
                 let view = if storage {
                     let format = match choice {
-                        _ if ulong_atomic => vk::Format::R64_UINT,
                         Some(c) if c.alias.is_some() => c.vk_format,
                         // The `R8_UNORM` image an `A8Unorm` texture holds its alpha in.
                         Some(c) if c.class == StorageImageClass::AlphaInRed => c.vk_format,

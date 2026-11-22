@@ -2907,8 +2907,7 @@ pub(crate) fn spirv_image_format(format: vk::Format) -> Option<crate::spv::Image
 }
 
 /// Every Vulkan format a Metal pixel format (every candidate of every format) or vertex format
-/// can map to, and `R64_UINT`, the view of a `ulong` texture that a `ulong` atomic updates, sorted
-/// and without duplicates: `FormatSupport::queries()` (some are defined by an extension or a later
+/// can map to, sorted and without duplicates: `FormatSupport::queries()` (some are defined by an extension or a later
 /// core version; `FormatSupport::queries_for` filters them). Consumers call
 /// `FormatSupport::queries`; crate-private.
 pub(crate) fn queried_formats() -> Vec<vk::Format> {
@@ -2921,7 +2920,6 @@ pub(crate) fn queried_formats() -> Vec<vk::Format> {
         .flatten()
         .map(|c| c.format)
         .chain(crate::metal::vertex::vertex_formats_queried())
-        .chain([vk::Format::R64_UINT])
         .collect();
     set.into_iter().collect()
 }

@@ -326,23 +326,6 @@ fn split_words(fb: &mut FunctionBuilder<'_>, v: SValue, wide: bool) -> BResult<S
     fb.composite_construct(ty, &[lo, hi, zero, zero])
 }
 
-/// Whether `decl` is a `ulong` slot declared `R64ui` (a `ulong` atomic updates it): its image
-/// texels are 64-bit, one `ulong` each.
-fn r64(decl: &ImageDecl) -> bool {
-    decl.texel == TexelClass::Uint64 && decl.format == crate::spv::ImageFormat::R64ui
-}
-
-/// Metal's `ulong` texel `(R, 0, 0, 1)` of `R64` image texel `x`: the device's lanes past the
-/// first, inside the image and outside it, are never read.
-fn ulong_texel(fb: &mut FunctionBuilder<'_>, x: SValue) -> BResult<SValue> {
-    let v = fb.composite_extract(x, &[0])?;
-    let u64_ = u64_ty(fb)?;
-    let zero = splat(fb, u64_, 1, 0)?;
-    let one = splat(fb, u64_, 1, 1)?;
-    let ty = vec(fb, u64_, 4)?;
-    fb.composite_construct(ty, &[v, zero, zero, one])
-}
-
 /// A vector of `n` elements of `elem`, or `elem` itself for `n = 1`.
 fn vec(fb: &mut FunctionBuilder<'_>, elem: TypeId, n: u8) -> BResult<TypeId> {
     if n == 1 {
@@ -1112,9 +1095,6 @@ fn from_image(
     form: TexelForm,
     x: SValue,
 ) -> BResult<SValue> {
-    if r64(decl) {
-        return ulong_texel(fb, x);
-    }
     let x = match decl.class {
         StorageImageClass::Identity => x,
         StorageImageClass::SwizzleBgra => swizzle_bgra(fb, x)?,
@@ -1498,8 +1478,6 @@ pub fn to_image(
             fb.binary(BinOp::ShiftRightArithmetic, s, sixteen)?
         }
         TexelConv::I16 { .. } => v,
-        // An `R64` image stores lane 0 of the held `ulong` texel as it is.
-        TexelConv::U64Words { .. } if r64(decl) => v,
         TexelConv::U64Words { wide } => split_words(fb, v, wide)?,
     };
     let x = match decl.class {
@@ -1967,8 +1945,7 @@ pub(super) fn out_of_bounds_texel(
             })?,
             1,
         ),
-        // A `ulong` slot's image is `RG32` unsigned, or `R64` unsigned.
-        TexelClass::Uint64 if r64(decl) => (u64_ty(fb)?, 1),
+        // A `ulong` slot's image is `RG32` unsigned.
         TexelClass::Uint | TexelClass::Uint64 => (u32_ty(fb)?, 1),
     };
     let ty = vec(fb, elem, 4)?;

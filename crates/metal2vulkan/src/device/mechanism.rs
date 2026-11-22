@@ -29,8 +29,6 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         RuntimeFact::SamplerCoordinates { .. } => Mechanism::Specialization,
         RuntimeFact::SamplerReduction { .. } => Mechanism::PlanTimeCheck,
         RuntimeFact::ImageViewShape { .. } => Mechanism::BinderView,
-        // The binder views the slot's `RG32Uint` texture as `R64_UINT`.
-        RuntimeFact::UlongAtomicView { .. } => Mechanism::BinderView,
         RuntimeFact::VertexFetch { .. } => Mechanism::KeyProjection,
         RuntimeFact::VertexBufferStride { .. } => {
             if f.dynamic_vertex_stride {

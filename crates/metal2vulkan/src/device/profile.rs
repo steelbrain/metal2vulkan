@@ -504,7 +504,6 @@ pub struct LeafCaps {
     pub storage_buffer_16bit: bool,
     pub buffer_int64_atomics: bool,
     pub shared_int64_atomics: bool,
-    pub image_int64_atomics: bool,
     pub vertex_stores_and_atomics: bool,
     pub fragment_stores_and_atomics: bool,
     pub zero_initialize_workgroup_memory: bool,

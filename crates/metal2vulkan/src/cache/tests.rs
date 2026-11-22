@@ -400,58 +400,6 @@ fn the_anisotropic_sampler_fact_round_trips() {
     assert_eq!(decode::<RuntimeFact>(&encode(&fact)), Ok(fact));
 }
 
-/// The fact format version 157 added encodes and decodes, and the artifact of a function whose
-/// `ulong` slots a `ulong` atomic updates carries it through its bytes: a compiled function of the
-/// owned fixture `unk_ulong_atomics` on a device with 64-bit image atomics, and its pipeline,
-/// decode to themselves with the fact for the atomic slot and none for the slot only read and
-/// written.
-#[test]
-fn the_ulong_atomic_view_fact_round_trips() {
-    use crate::pipeline::facts::RuntimeFact;
-    let slot = |index| SlotRef {
-        stage: Stage::Kernel,
-        class: SlotClass::Texture,
-        index,
-    };
-    let fact = RuntimeFact::UlongAtomicView { slot: slot(5) };
-    assert_eq!(decode::<RuntimeFact>(&encode(&fact)), Ok(fact));
-    let Some(bc) = fixture("unk_ulong_atomics") else {
-        return;
-    };
-    let dev = device("amd-780m-radv");
-    let f = Library::from_air(&bc)
-        .expect("library")
-        .function("unk_ulong_atomic_rw")
-        .expect("function");
-    let compiled = dev
-        .compile_function(
-            &FunctionDescriptor::new(f),
-            &LoweringInputs::new(),
-            &Budget::standard(),
-        )
-        .expect("compile");
-    let facts = &compiled.artifact().facts;
-    assert!(facts.contains(&RuntimeFact::UlongAtomicView { slot: slot(0) }));
-    assert!(!facts.contains(&RuntimeFact::UlongAtomicView { slot: slot(1) }));
-    let bytes = compiled.to_bytes();
-    let back = CompiledFunction::from_bytes(&bytes, &dev).expect("decode");
-    assert_eq!(back.artifact(), compiled.artifact());
-    assert_eq!(back.to_bytes(), bytes);
-    let pipe = dev
-        .compile_compute_pipeline(
-            &ComputePipelineDescriptor::new(StageSource::Compiled(compiled)),
-            &Budget::standard(),
-        )
-        .expect("pipeline");
-    let bytes = pipe.to_bytes();
-    let back = ComputePipeline::from_bytes(&bytes, &dev).expect("decode");
-    assert_eq!(back.to_bytes(), bytes);
-    assert!(back
-        .dependencies
-        .iter()
-        .any(|d| d.fact == RuntimeFact::UlongAtomicView { slot: slot(0) }));
-}
-
 /// The members format version 178 appends encode and decode, and each decodes as itself:
 /// `VkFeature::Maintenance5` and the three framebuffer `VkLimit`s.
 #[test]
@@ -763,8 +711,8 @@ fn the_version_535_member_round_trips() {
 /// `SrgbTexture`, and `PrecisionNote::HalfTexelConversion`,
 /// `HalfSampleFilter`, `SrgbTexelDecode`, and `FloatSampleFilter`,
 /// `HandleClass::Sampler { compare, integer }` and
-/// `SyntheticBinding::SamplerTable`, and `RuntimeFact::UlongAtomicView`, each beside the others
-/// rather than only on its own side's fixtures.
+/// `SyntheticBinding::SamplerTable`, each beside the others rather than only on its own side's
+/// fixtures.
 #[test]
 fn the_merged_members_round_trip_in_one_render_pipeline() {
     use crate::pipeline::artifact::{PrecisionNote, RuntimeDependency, SpecConstant};
@@ -878,11 +826,6 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
     p.dependencies.push(RuntimeDependency {
         fact: RuntimeFact::SrgbTexture { slot: texture },
         mechanism: Mechanism::Variant,
-    });
-    let ulong_view = RuntimeFact::UlongAtomicView { slot: texture };
-    p.dependencies.push(RuntimeDependency {
-        fact: ulong_view,
-        mechanism: Mechanism::BinderView,
     });
     let bytes = encode(&p);
     let back = decode::<RenderPipeline>(&bytes).expect("decoded");

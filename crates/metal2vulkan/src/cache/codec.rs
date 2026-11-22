@@ -1232,7 +1232,6 @@ codec_enum! {
         SparseTexture { slot, sparse_arm, tile_map },
         AccelerationStructureInstanceCount { slot },
         PredicationVote, SrgbTexture { slot },
-        UlongAtomicView { slot },
         ViewportCount,
         AliasedImageblock { data_size },
         CallStackDepth { depth },

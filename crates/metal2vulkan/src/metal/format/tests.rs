@@ -1922,8 +1922,8 @@ fn queries_cover_candidates_and_neutrals() {
             assert!(c.iter().all(|c| set.contains(&c.format)), "{pf:?}");
         }
     }
-    // The view of a `ulong` slot a `ulong` atomic updates, which no Metal format maps to.
-    assert!(set.contains(&vk::Format::R64_UINT));
+    // No Metal format maps to `R64_UINT`, and nothing else queries it.
+    assert!(!set.contains(&vk::Format::R64_UINT));
 }
 
 #[test]

@@ -205,7 +205,6 @@ fn derive_fields(desc: &DeviceDescription, policy: &DevicePolicy) -> ProfileFiel
         storage_buffer_16bit: has(VkFeature::StorageBuffer16BitAccess),
         buffer_int64_atomics: has(VkFeature::ShaderBufferInt64Atomics),
         shared_int64_atomics: has(VkFeature::ShaderSharedInt64Atomics),
-        image_int64_atomics: has(VkFeature::ShaderImageInt64Atomics),
         vertex_stores_and_atomics: has(VkFeature::VertexPipelineStoresAndAtomics),
         fragment_stores_and_atomics: has(VkFeature::FragmentStoresAndAtomics),
         zero_initialize_workgroup_memory: has(VkFeature::ShaderZeroInitializeWorkgroupMemory),

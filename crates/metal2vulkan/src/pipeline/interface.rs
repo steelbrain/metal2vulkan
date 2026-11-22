@@ -143,7 +143,7 @@ pub struct TextureSlot {
     #[cfg_attr(feature = "serde", serde(default))]
     pub storage: bool,
     /// The slot's storage image is declared with a format: a slot a texture atomic updates
-    /// (`R32ui`, `R32i` or `R64ui`), or one declared in its bound texture's format. Its reads and
+    /// (`R32ui` or `R32i`), or one declared in its bound texture's format. Its reads and
     /// writes then take neither `VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT` nor
     /// `…_WRITE_WITHOUT_FORMAT_BIT` of the bound view's format, which Vulkan asks only of an access
     /// declared without one (`VUID-vkCmdDispatch-OpTypeImage-07027` to `-07030`). `false` for a

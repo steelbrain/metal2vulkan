@@ -28,11 +28,8 @@
 //! **`ulong`**. Metal's `atomic_{min,max}` of a `ulong` texture compare the texel's unsigned 64-bit
 //! value, the low word in R and the high word in G of the `RG32Uint` texture Metal binds, with lane
 //! 0 of the operand, and return nothing (measured on Apple M3 Max, 4096 contending threads exact).
-//! Each is `OpAtomicUMin` / `OpAtomicUMax` on the texel pointer of the slot declared `R64ui`
-//! (`slot::atomic_format`), which the binder views as `R64_UINT` (`RuntimeFact::UlongAtomicView`):
-//! the two words are one little-endian 64-bit integer. It needs `shaderImageInt64Atomics`,
-//! `shaderInt64`, and the `R64_UINT` format's storage-atomic feature; a profile without them
-//! refuses the slot (`Unsupported{ImageAtomics}`). No exact form exists there: a 64-bit
+//! Each is refused on every device (`Unsupported{ImageAtomics}`, not implemented): its one exact
+//! form is a 64-bit image atomic (`shaderImageInt64Atomics`), which no runtime enables. A 64-bit
 //! compare-and-update of an image texel is one atomic, which neither two 32-bit word atomics nor a
 //! lock (Vulkan promises no forward progress to a spinning invocation) can make, and an optimally
 //! tiled image has no memory a buffer atomic could reach.
@@ -79,13 +76,10 @@ pub struct TexAtomic {
     pub expected: Option<LocalAccess>,
     /// The texel is signed (`OpAtomicS{Min,Max}` on an `R32i` image).
     pub signed: bool,
-    /// Metal's `ulong` `atomic_{min,max}`: a 64-bit atomic on the slot's `R64ui` image, with no
-    /// result.
-    pub ulong: bool,
     /// Leave a texel outside the image alone (no robustness discards the access).
     pub guard: bool,
     /// The result's lowered type: a texel, of which only lane 0 is observed, or a
-    /// compare-exchange's `bool`; `None` for a store and a `ulong` atomic.
+    /// compare-exchange's `bool`; `None` for a store.
     pub result: Option<DemoteTy>,
     /// A load an exit of a loop holding it depends on (`access::atomic::spin`): it acquires image
     /// memory.
@@ -93,7 +87,7 @@ pub struct TexAtomic {
 }
 
 impl TexAtomic {
-    /// The census name: `texture.atomic_<op>[_ulong][_guarded]`, the operation as MSL spells it.
+    /// The census name: `texture.atomic_<op>[_guarded]`, the operation as MSL spells it.
     pub fn name(&self) -> String {
         let op = match self.op {
             AirOp::Add => "add",
@@ -109,9 +103,8 @@ impl TexAtomic {
             AirOp::Store => "store",
             AirOp::CmpXchgWeak => "compare_exchange",
         };
-        let wide = if self.ulong { "_ulong" } else { "" };
         let guarded = if self.guard { "_guarded" } else { "" };
-        format!("texture.atomic_{op}{wide}{guarded}")
+        format!("texture.atomic_{op}{guarded}")
     }
 
     /// The estimated words: the texel pointer, the atomic, the operand and result conversions, and
@@ -139,12 +132,15 @@ pub(super) fn select(
         // A heap storage class is formatless; an atomic needs an `R32` one.
         return Err(Unsupported::not_implemented(Feature::ArgumentBufferTextures).into());
     };
-    // Metal's texture atomics take 32-bit integer texels, and a `ulong` texel's `min` and `max`.
-    let ulong = match texel.0.conv {
-        TexelConv::I32 => false,
-        TexelConv::U64Words { .. } if matches!(op, AirOp::Min | AirOp::Max) => true,
+    // Metal's texture atomics take 32-bit integer texels, and a `ulong` texel's `min` and `max`,
+    // which no form is built for (the module's docs).
+    match texel.0.conv {
+        TexelConv::I32 => {}
+        TexelConv::U64Words { .. } if matches!(op, AirOp::Min | AirOp::Max) => {
+            return Err(Unsupported::not_implemented(Feature::ImageAtomics).into());
+        }
         _ => return Err(refuse()),
-    };
+    }
     let signed = texel.1 == TexelClass::Sint;
     // The positions whose only established value is zero.
     let zero_offset = ops.get(TexRole::Offset).is_none_or(|v| is_zero(cx, v));
@@ -174,7 +170,7 @@ pub(super) fn select(
     };
     let at_ = coord(cx, ops, shape)?;
     let guard = slot::write_guard(cx, shape.dim == ImageDim::Buffer);
-    let result = if op == AirOp::Store || ulong {
+    let result = if op == AirOp::Store {
         None
     } else {
         Some(cx.lowered_repr(Value::Inst(at), inst.ty)?)
@@ -192,7 +188,6 @@ pub(super) fn select(
         value,
         expected,
         signed,
-        ulong,
         guard,
         result,
         spin,
@@ -290,7 +285,7 @@ pub(super) fn emit(
     };
     let op = a.op;
     let signed = a.signed;
-    // Whether the operation has a result: a `ulong` one, like a store, has none.
+    // Whether the operation has a result: a store has none.
     let returns = a.result.is_some();
     // A volatile image's atomic under the Vulkan model is `Volatile`. A spin read acquires image
     // memory.

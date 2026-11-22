@@ -73,7 +73,7 @@ fn recommendations_are_closed_fixed_points_on_every_committed_profile() {
         // exposed features whose extensions' requirements are listed), except the buffer
         // update-after-bind features VUID 10247 forbids beside `robustBufferAccess`, and the
         // features of the extensions the core reads nothing of: `VK_EXT_depth_bias_control`,
-        // `VK_KHR_shader_fma` and `VK_EXT_shader_float8`.
+        // `VK_KHR_shader_fma`, `VK_EXT_shader_float8` and `VK_EXT_shader_image_atomic_int64`.
         let forbidden = |f: VkFeature| {
             !desc.robust_buffer_access_update_after_bind
                 && desc.has(VkFeature::RobustBufferAccess)
@@ -86,11 +86,13 @@ fn recommendations_are_closed_fixed_points_on_every_committed_profile() {
             VkFeature::ShaderFmaFloat16,
             VkFeature::ShaderFmaFloat32,
             VkFeature::ShaderFloat8,
+            VkFeature::ShaderImageInt64Atomics,
         ];
         for e in [
             VkExtension::ExtDepthBiasControl,
             VkExtension::KhrShaderFma,
             VkExtension::ExtShaderFloat8,
+            VkExtension::ExtShaderImageAtomicInt64,
         ] {
             assert!(!rec.extensions.contains(&e), "{stem}: {e:?}");
         }
