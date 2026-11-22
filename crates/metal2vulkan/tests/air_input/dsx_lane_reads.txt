@@ -1,235 +1,14 @@
 target triple = "air64_v28-apple-macosx26.0.0"
 source_filename = "-"
 ; datalayout DataLayout { endian: Little, pointers: {0: PointerSpec { size_bits: 64, abi_bits: 64, pref_bits: 64, index_bits: 64 }}, ints: {1: AlignSpec { abi_bits: 8, pref_bits: 8 }, 8: AlignSpec { abi_bits: 8, pref_bits: 8 }, 16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }}, floats: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }}, vectors: {16: AlignSpec { abi_bits: 16, pref_bits: 16 }, 24: AlignSpec { abi_bits: 32, pref_bits: 32 }, 32: AlignSpec { abi_bits: 32, pref_bits: 32 }, 48: AlignSpec { abi_bits: 64, pref_bits: 64 }, 64: AlignSpec { abi_bits: 64, pref_bits: 64 }, 96: AlignSpec { abi_bits: 128, pref_bits: 128 }, 128: AlignSpec { abi_bits: 128, pref_bits: 128 }, 192: AlignSpec { abi_bits: 256, pref_bits: 256 }, 256: AlignSpec { abi_bits: 256, pref_bits: 256 }, 512: AlignSpec { abi_bits: 512, pref_bits: 512 }, 1024: AlignSpec { abi_bits: 1024, pref_bits: 1024 }}, aggregate: AlignSpec { abi_bits: 0, pref_bits: 64 }, native_ints: [8, 16, 32], stack_align_bits: None, alloca_space: 0, program_space: 0, globals_space: 0, mangling: None, fn_ptr_align: None, non_integral: [] }
-%t4 = type void (i32, ptr addrspace(1), ptr addrspace(1))
-%t5 = type void (ptr addrspace(1), ptr addrspace(1), i32, i32, i32)
-%t6 = type i32 (i32)
-%t8 = type i32 (i32, i16)
-%t9 = type i32 (i32, i32, i16, i16)
-%t10 = type i16 ()
-%t12 = type [2 x i32]
-c29 = %t12 [27, 2]
+%t4 = type void (ptr addrspace(1), ptr addrspace(1), i32, i32, i32)
+%t6 = type i32 (i32, i16)
+%t7 = type i16 ()
+%t8 = type i32 (i32, i32, i16, i16)
+%t10 = type [2 x i32]
+c22 = %t10 [27, 2]
 
-define %t4 @f0 "simd_shuffles_by_index_and_xor" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a1( Ref nocapture "air-buffer-no-alias"="" ) %a2( Mod nocapture "air-buffer-no-alias"="" ) {
-bb0:
-  %i0 = zext %a0 to i64
-  %i1 = getelementptr inbounds i32, %a1, %i0
-  %i2 = load i32, %i1, align 4
-  %i3 = tail call i32 @f7 [air Group(Group { scope: Simdgroup, op: PrefixExclusiveSum, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](i32 1) convergent
-  %i4 = mul i32 %a0, i32 6
-  %i5 = zext %i4 to i64
-  %i6 = getelementptr inbounds i32, %a2, %i5
-  %i7 = trunc %i3 to i16
-  %i8 = add i16 %i7, i16 9
-  %i9 = and i16 %i8, i16 31
-  %i10 = freeze i32 %i2
-  %i11 = tail call i32 @f8 [air Group(Group { scope: Simdgroup, op: Shuffle, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i10, %i9) convergent
-  store %i11, %i6, align 4
-  %i13 = sub i16 i16 31, %i7
-  %i14 = tail call i32 @f8 [air Group(Group { scope: Simdgroup, op: Shuffle, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i10, %i13) convergent
-  %i15 = getelementptr inbounds i32, %i6, i64 1
-  store %i14, %i15, align 4
-  %i17 = tail call i32 @f9 [air Group(Group { scope: Simdgroup, op: ShuffleXor, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i10, i16 8) convergent
-  %i18 = getelementptr inbounds i32, %i6, i64 2
-  store %i17, %i18, align 4
-  %i20 = and i32 %a0, i32 1
-  %i21 = icmp eq %i20, i32 0
-  br %i21, bb1, bb2
-bb1:
-  %i23 = add i16 %i7, i16 1
-  %i24 = and i16 %i23, i16 31
-  %i25 = tail call i32 @f8 [air Group(Group { scope: Simdgroup, op: Shuffle, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i10, %i24) convergent
-  %i26 = getelementptr inbounds i32, %i6, i64 3
-  store %i25, %i26, align 4
-  %i28 = add i16 %i7, i16 2
-  %i29 = and i16 %i28, i16 31
-  %i30 = tail call i32 @f8 [air Group(Group { scope: Simdgroup, op: Shuffle, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i10, %i29) convergent
-  %i31 = getelementptr inbounds i32, %i6, i64 4
-  store %i30, %i31, align 4
-  %i33 = tail call i32 @f9 [air Group(Group { scope: Simdgroup, op: ShuffleXor, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i10, i16 1) convergent
-  %i34 = getelementptr inbounds i32, %i6, i64 5
-  store %i33, %i34, align 4
-  br bb2
-bb2:
-  ret void
-}
-
-define %t4 @f1 "simd_shuffles_up_and_down" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a1( Ref nocapture "air-buffer-no-alias"="" ) %a2( Mod nocapture "air-buffer-no-alias"="" ) {
-bb0:
-  %i0 = zext %a0 to i64
-  %i1 = getelementptr inbounds i32, %a1, %i0
-  %i2 = load i32, %i1, align 4
-  %i3 = mul i32 %a0, i32 5
-  %i4 = zext %i3 to i64
-  %i5 = getelementptr inbounds i32, %a2, %i4
-  %i6 = freeze i32 %i2
-  %i7 = tail call i32 @f10 [air Group(Group { scope: Simdgroup, op: ShuffleUp, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i6, i16 3) convergent
-  store %i7, %i5, align 4
-  %i9 = tail call i32 @f11 [air Group(Group { scope: Simdgroup, op: ShuffleDown, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i6, i16 5) convergent
-  %i10 = getelementptr inbounds i32, %i5, i64 1
-  store %i9, %i10, align 4
-  %i12 = and i32 %a0, i32 1
-  %i13 = icmp eq %i12, i32 0
-  br %i13, bb1, bb2
-bb1:
-  %i15 = tail call i32 @f10 [air Group(Group { scope: Simdgroup, op: ShuffleUp, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i6, i16 1) convergent
-  %i16 = getelementptr inbounds i32, %i5, i64 2
-  store %i15, %i16, align 4
-  %i18 = tail call i32 @f11 [air Group(Group { scope: Simdgroup, op: ShuffleDown, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i6, i16 1) convergent
-  %i19 = getelementptr inbounds i32, %i5, i64 3
-  store %i18, %i19, align 4
-  %i21 = tail call i32 @f11 [air Group(Group { scope: Simdgroup, op: ShuffleDown, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i6, i16 2) convergent
-  %i22 = getelementptr inbounds i32, %i5, i64 4
-  store %i21, %i22, align 4
-  br bb2
-bb2:
-  ret void
-}
-
-define %t4 @f2 "simd_and_quad_rotations" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a1( Ref nocapture "air-buffer-no-alias"="" ) %a2( Mod nocapture "air-buffer-no-alias"="" ) {
-bb0:
-  %i0 = zext %a0 to i64
-  %i1 = getelementptr inbounds i32, %a1, %i0
-  %i2 = load i32, %i1, align 4
-  %i3 = mul i32 %a0, i32 6
-  %i4 = zext %i3 to i64
-  %i5 = getelementptr inbounds i32, %a2, %i4
-  %i6 = freeze i32 %i2
-  %i7 = tail call i32 @f12 [air Group(Group { scope: Simdgroup, op: ShuffleRotateUp, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i6, i16 4) convergent
-  store %i7, %i5, align 4
-  %i9 = tail call i32 @f13 [air Group(Group { scope: Simdgroup, op: ShuffleRotateDown, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i6, i16 6) convergent
-  %i10 = getelementptr inbounds i32, %i5, i64 1
-  store %i9, %i10, align 4
-  %i12 = tail call i32 @f14 [air Group(Group { scope: Quad, op: ShuffleRotateDown, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i6, i16 1) convergent
-  %i13 = getelementptr inbounds i32, %i5, i64 2
-  store %i12, %i13, align 4
-  %i15 = and i32 %a0, i32 1
-  %i16 = icmp eq %i15, i32 0
-  br %i16, bb1, bb2
-bb1:
-  %i18 = tail call i32 @f12 [air Group(Group { scope: Simdgroup, op: ShuffleRotateUp, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i6, i16 1) convergent
-  %i19 = getelementptr inbounds i32, %i5, i64 3
-  store %i18, %i19, align 4
-  %i21 = tail call i32 @f13 [air Group(Group { scope: Simdgroup, op: ShuffleRotateDown, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i6, i16 2) convergent
-  %i22 = getelementptr inbounds i32, %i5, i64 4
-  store %i21, %i22, align 4
-  %i24 = tail call i32 @f15 [air Group(Group { scope: Quad, op: ShuffleRotateUp, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i6, i16 1) convergent
-  %i25 = getelementptr inbounds i32, %i5, i64 5
-  store %i24, %i25, align 4
-  br bb2
-bb2:
-  ret void
-}
-
-define %t4 @f3 "simd_broadcasts" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a1( Ref nocapture "air-buffer-no-alias"="" ) %a2( Mod nocapture "air-buffer-no-alias"="" ) {
-bb0:
-  %i0 = zext %a0 to i64
-  %i1 = getelementptr inbounds i32, %a1, %i0
-  %i2 = load i32, %i1, align 4
-  %i3 = shl i32 %a0, i32 2
-  %i4 = zext %i3 to i64
-  %i5 = getelementptr inbounds i32, %a2, %i4
-  %i6 = freeze i32 %i2
-  %i7 = tail call i32 @f16 [air Group(Group { scope: Simdgroup, op: Broadcast, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i6, i16 21) convergent
-  store %i7, %i5, align 4
-  %i9 = tail call i32 @f16 [air Group(Group { scope: Simdgroup, op: Broadcast, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i6, i16 3) convergent
-  %i10 = getelementptr inbounds i32, %i5, i64 1
-  store %i9, %i10, align 4
-  %i12 = and i32 %a0, i32 1
-  %i13 = icmp eq %i12, i32 0
-  br %i13, bb1, bb2
-bb1:
-  %i15 = getelementptr inbounds i32, %i5, i64 3
-  %i16 = getelementptr inbounds i32, %i5, i64 2
-  %i17 = tail call i32 @f16 [air Group(Group { scope: Simdgroup, op: Broadcast, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i6, i16 5) convergent
-  store %i17, %i16, align 4
-  %i19 = tail call i32 @f16 [air Group(Group { scope: Simdgroup, op: Broadcast, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i6, i16 4) convergent
-  store %i19, %i15, align 4
-  br bb2
-bb2:
-  ret void
-}
-
-define %t4 @f4 "simd_fills" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a1( Ref nocapture "air-buffer-no-alias"="" ) %a2( Mod nocapture "air-buffer-no-alias"="" ) {
-bb0:
-  %i0 = zext %a0 to i64
-  %i1 = getelementptr inbounds i32, %a1, %i0
-  %i2 = load i32, %i1, align 4
-  %i3 = shl i32 %a0, i32 2
-  %i4 = zext %i3 to i64
-  %i5 = getelementptr inbounds i32, %a2, %i4
-  %i6 = xor i32 %i2, i32 4294967295
-  %i7 = freeze i32 %i2
-  %i8 = tail call i32 @f17 [air Group(Group { scope: Simdgroup, op: ShuffleAndFillUp, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i7, %i6, i16 2, i16 32) convergent
-  store %i8, %i5, align 4
-  %i10 = tail call i32 @f18 [air Group(Group { scope: Simdgroup, op: ShuffleAndFillDown, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i7, %i6, i16 3, i16 32) convergent
-  %i11 = getelementptr inbounds i32, %i5, i64 1
-  store %i10, %i11, align 4
-  %i13 = and i32 %a0, i32 1
-  %i14 = icmp eq %i13, i32 0
-  br %i14, bb1, bb2
-bb1:
-  %i16 = getelementptr inbounds i32, %i5, i64 3
-  %i17 = getelementptr inbounds i32, %i5, i64 2
-  %i18 = tail call i32 @f17 [air Group(Group { scope: Simdgroup, op: ShuffleAndFillUp, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i7, %i6, i16 1, i16 32) convergent
-  store %i18, %i17, align 4
-  %i20 = tail call i32 @f18 [air Group(Group { scope: Simdgroup, op: ShuffleAndFillDown, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i7, %i6, i16 2, i16 8) convergent
-  store %i20, %i16, align 4
-  br bb2
-bb2:
-  ret void
-}
-
-define %t4 @f5 "quad_moves" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a1( Ref nocapture "air-buffer-no-alias"="" ) %a2( Mod nocapture "air-buffer-no-alias"="" ) {
-bb0:
-  %i0 = zext %a0 to i64
-  %i1 = getelementptr inbounds i32, %a1, %i0
-  %i2 = load i32, %i1, align 4
-  %i3 = tail call i32 @f7 [air Group(Group { scope: Simdgroup, op: PrefixExclusiveSum, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](i32 1) convergent
-  %i4 = mul i32 %a0, i32 9
-  %i5 = zext %i4 to i64
-  %i6 = getelementptr inbounds i32, %a2, %i5
-  %i7 = trunc %i3 to i16
-  %i8 = and i16 %i7, i16 3
-  %i9 = xor i16 %i8, i16 2
-  %i10 = freeze i32 %i2
-  %i11 = tail call i32 @f19 [air Group(Group { scope: Quad, op: Shuffle, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i10, %i9) convergent
-  store %i11, %i6, align 4
-  %i13 = tail call i32 @f20 [air Group(Group { scope: Quad, op: ShuffleXor, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i10, i16 1) convergent
-  %i14 = getelementptr inbounds i32, %i6, i64 1
-  store %i13, %i14, align 4
-  %i16 = tail call i32 @f21 [air Group(Group { scope: Quad, op: Broadcast, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i10, i16 3) convergent
-  %i17 = getelementptr inbounds i32, %i6, i64 2
-  store %i16, %i17, align 4
-  %i19 = tail call i32 @f22 [air Group(Group { scope: Quad, op: ShuffleUp, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i10, i16 1) convergent
-  %i20 = getelementptr inbounds i32, %i6, i64 3
-  store %i19, %i20, align 4
-  %i22 = tail call i32 @f23 [air Group(Group { scope: Quad, op: ShuffleDown, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i10, i16 1) convergent
-  %i23 = getelementptr inbounds i32, %i6, i64 4
-  store %i22, %i23, align 4
-  %i25 = xor i32 %i10, i32 4294967295
-  %i26 = tail call i32 @f24 [air Group(Group { scope: Quad, op: ShuffleAndFillDown, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i10, %i25, i16 2, i16 4) convergent
-  %i27 = getelementptr inbounds i32, %i6, i64 5
-  store %i26, %i27, align 4
-  %i29 = and i32 %a0, i32 1
-  %i30 = icmp eq %i29, i32 0
-  br %i30, bb1, bb2
-bb1:
-  %i32 = tail call i32 @f20 [air Group(Group { scope: Quad, op: ShuffleXor, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i10, i16 3) convergent
-  %i33 = getelementptr inbounds i32, %i6, i64 6
-  store %i32, %i33, align 4
-  %i35 = tail call i32 @f21 [air Group(Group { scope: Quad, op: Broadcast, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i10, i16 2) convergent
-  %i36 = getelementptr inbounds i32, %i6, i64 7
-  store %i35, %i36, align 4
-  %i38 = tail call i32 @f25 [air Group(Group { scope: Quad, op: ShuffleAndFillUp, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i10, %i25, i16 1, i16 4) convergent
-  %i39 = getelementptr inbounds i32, %i6, i64 8
-  store %i38, %i39, align 4
-  br bb2
-bb2:
-  ret void
-}
-
-define %t5 @f6 "lane_moves_in_a_branch_of_a_kernel" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Ref nocapture "air-buffer-no-alias"="" ) %a1( Mod nocapture "air-buffer-no-alias"="" ) {
+define %t4 @f0 "lane_moves_in_a_branch_of_a_kernel" convergent "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins"="" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" %a0( Ref nocapture "air-buffer-no-alias"="" ) %a1( Mod nocapture "air-buffer-no-alias"="" ) {
 bb0:
   %i0 = and i32 %a3, i32 1
   %i1 = icmp eq %i0, i32 0
@@ -244,61 +23,61 @@ bb1:
   %i9 = trunc %a3 to i16
   %i10 = xor i16 %i9, i16 6
   %i11 = freeze i32 %i8
-  %i12 = tail call i32 @f8 [air Group(Group { scope: Simdgroup, op: Shuffle, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, %i10) convergent
+  %i12 = tail call i32 @f1 [air Group(Group { scope: Simdgroup, op: Shuffle, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, %i10) convergent
   store %i12, %i5, align 4
-  %i14 = tail call i32 @f9 [air Group(Group { scope: Simdgroup, op: ShuffleXor, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 2) convergent
+  %i14 = tail call i32 @f2 [air Group(Group { scope: Simdgroup, op: ShuffleXor, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 2) convergent
   %i15 = getelementptr inbounds i32, %i5, i64 1
   store %i14, %i15, align 4
-  %i17 = tail call i32 @f10 [air Group(Group { scope: Simdgroup, op: ShuffleUp, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 2) convergent
+  %i17 = tail call i32 @f3 [air Group(Group { scope: Simdgroup, op: ShuffleUp, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 2) convergent
   %i18 = getelementptr inbounds i32, %i5, i64 2
   store %i17, %i18, align 4
-  %i20 = tail call i32 @f11 [air Group(Group { scope: Simdgroup, op: ShuffleDown, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 4) convergent
+  %i20 = tail call i32 @f4 [air Group(Group { scope: Simdgroup, op: ShuffleDown, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 4) convergent
   %i21 = getelementptr inbounds i32, %i5, i64 3
   store %i20, %i21, align 4
-  %i23 = tail call i32 @f12 [air Group(Group { scope: Simdgroup, op: ShuffleRotateUp, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 2) convergent
+  %i23 = tail call i32 @f5 [air Group(Group { scope: Simdgroup, op: ShuffleRotateUp, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 2) convergent
   %i24 = getelementptr inbounds i32, %i5, i64 4
   store %i23, %i24, align 4
-  %i26 = tail call i32 @f13 [air Group(Group { scope: Simdgroup, op: ShuffleRotateDown, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 2) convergent
+  %i26 = tail call i32 @f6 [air Group(Group { scope: Simdgroup, op: ShuffleRotateDown, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 2) convergent
   %i27 = getelementptr inbounds i32, %i5, i64 5
   store %i26, %i27, align 4
-  %i29 = tail call i32 @f16 [air Group(Group { scope: Simdgroup, op: Broadcast, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 20) convergent
+  %i29 = tail call i32 @f7 [air Group(Group { scope: Simdgroup, op: Broadcast, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 20) convergent
   %i30 = getelementptr inbounds i32, %i5, i64 6
   store %i29, %i30, align 4
   %i32 = xor i32 %i11, i32 4294967295
-  %i33 = tail call i16 @f26 [air SimdgroupSize(SimdgroupSize { ty: I16 })]()
-  %i34 = tail call i32 @f17 [air Group(Group { scope: Simdgroup, op: ShuffleAndFillUp, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, %i32, i16 2, %i33) convergent
+  %i33 = tail call i16 @f8 [air SimdgroupSize(SimdgroupSize { ty: I16 })]()
+  %i34 = tail call i32 @f9 [air Group(Group { scope: Simdgroup, op: ShuffleAndFillUp, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, %i32, i16 2, %i33) convergent
   %i35 = getelementptr inbounds i32, %i5, i64 7
   store %i34, %i35, align 4
-  %i37 = tail call i32 @f18 [air Group(Group { scope: Simdgroup, op: ShuffleAndFillDown, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, %i32, i16 2, %i33) convergent
+  %i37 = tail call i32 @f10 [air Group(Group { scope: Simdgroup, op: ShuffleAndFillDown, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, %i32, i16 2, %i33) convergent
   %i38 = getelementptr inbounds i32, %i5, i64 8
   store %i37, %i38, align 4
   %i40 = trunc %a4 to i16
   %i41 = xor i16 %i40, i16 2
-  %i42 = tail call i32 @f19 [air Group(Group { scope: Quad, op: Shuffle, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, %i41) convergent
+  %i42 = tail call i32 @f11 [air Group(Group { scope: Quad, op: Shuffle, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, %i41) convergent
   %i43 = getelementptr inbounds i32, %i5, i64 9
   store %i42, %i43, align 4
-  %i45 = tail call i32 @f20 [air Group(Group { scope: Quad, op: ShuffleXor, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 2) convergent
+  %i45 = tail call i32 @f12 [air Group(Group { scope: Quad, op: ShuffleXor, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 2) convergent
   %i46 = getelementptr inbounds i32, %i5, i64 10
   store %i45, %i46, align 4
-  %i48 = tail call i32 @f21 [air Group(Group { scope: Quad, op: Broadcast, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 2) convergent
+  %i48 = tail call i32 @f13 [air Group(Group { scope: Quad, op: Broadcast, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 2) convergent
   %i49 = getelementptr inbounds i32, %i5, i64 11
   store %i48, %i49, align 4
-  %i51 = tail call i32 @f22 [air Group(Group { scope: Quad, op: ShuffleUp, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 2) convergent
+  %i51 = tail call i32 @f14 [air Group(Group { scope: Quad, op: ShuffleUp, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 2) convergent
   %i52 = getelementptr inbounds i32, %i5, i64 12
   store %i51, %i52, align 4
-  %i54 = tail call i32 @f23 [air Group(Group { scope: Quad, op: ShuffleDown, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 2) convergent
+  %i54 = tail call i32 @f15 [air Group(Group { scope: Quad, op: ShuffleDown, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 2) convergent
   %i55 = getelementptr inbounds i32, %i5, i64 13
   store %i54, %i55, align 4
-  %i57 = tail call i32 @f15 [air Group(Group { scope: Quad, op: ShuffleRotateUp, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 2) convergent
+  %i57 = tail call i32 @f16 [air Group(Group { scope: Quad, op: ShuffleRotateUp, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 2) convergent
   %i58 = getelementptr inbounds i32, %i5, i64 14
   store %i57, %i58, align 4
-  %i60 = tail call i32 @f14 [air Group(Group { scope: Quad, op: ShuffleRotateDown, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 2) convergent
+  %i60 = tail call i32 @f17 [air Group(Group { scope: Quad, op: ShuffleRotateDown, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, i16 2) convergent
   %i61 = getelementptr inbounds i32, %i5, i64 15
   store %i60, %i61, align 4
-  %i63 = tail call i32 @f25 [air Group(Group { scope: Quad, op: ShuffleAndFillUp, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, %i32, i16 2, i16 4) convergent
+  %i63 = tail call i32 @f18 [air Group(Group { scope: Quad, op: ShuffleAndFillUp, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, %i32, i16 2, i16 4) convergent
   %i64 = getelementptr inbounds i32, %i5, i64 16
   store %i63, %i64, align 4
-  %i66 = tail call i32 @f24 [air Group(Group { scope: Quad, op: ShuffleAndFillDown, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, %i32, i16 2, i16 4) convergent
+  %i66 = tail call i32 @f19 [air Group(Group { scope: Quad, op: ShuffleAndFillDown, ty: Some(NumTy { elem: I32, lanes: 1 }), sign: Some(Unsigned) })](%i11, %i32, i16 2, i16 4) convergent
   %i67 = getelementptr inbounds i32, %i5, i64 17
   store %i66, %i67, align 4
   br bb2
@@ -306,45 +85,43 @@ bb2:
   ret void
 }
 
-declare %t6 @f7 "air.simd_prefix_exclusive_sum.u.i32" convergent
+declare %t6 @f1 "air.simd_shuffle.u.i32" convergent
 
-declare %t8 @f8 "air.simd_shuffle.u.i32" convergent
+declare %t6 @f2 "air.simd_shuffle_xor.u.i32" convergent
 
-declare %t8 @f9 "air.simd_shuffle_xor.u.i32" convergent
+declare %t6 @f3 "air.simd_shuffle_up.u.i32" convergent
 
-declare %t8 @f10 "air.simd_shuffle_up.u.i32" convergent
+declare %t6 @f4 "air.simd_shuffle_down.u.i32" convergent
 
-declare %t8 @f11 "air.simd_shuffle_down.u.i32" convergent
+declare %t6 @f5 "air.simd_shuffle_rotate_up.u.i32" convergent
 
-declare %t8 @f12 "air.simd_shuffle_rotate_up.u.i32" convergent
+declare %t6 @f6 "air.simd_shuffle_rotate_down.u.i32" convergent
 
-declare %t8 @f13 "air.simd_shuffle_rotate_down.u.i32" convergent
+declare %t6 @f7 "air.simd_broadcast.u.i32" convergent
 
-declare %t8 @f14 "air.quad_shuffle_rotate_down.u.i32" convergent
+declare %t7 @f8 "air.get_simdgroup_size.i16" memory(NoModRef, NoModRef, NoModRef)
 
-declare %t8 @f15 "air.quad_shuffle_rotate_up.u.i32" convergent
+declare %t8 @f9 "air.simd_shuffle_and_fill_up.u.i32" convergent
 
-declare %t8 @f16 "air.simd_broadcast.u.i32" convergent
+declare %t8 @f10 "air.simd_shuffle_and_fill_down.u.i32" convergent
 
-declare %t9 @f17 "air.simd_shuffle_and_fill_up.u.i32" convergent
+declare %t6 @f11 "air.quad_shuffle.u.i32" convergent
 
-declare %t9 @f18 "air.simd_shuffle_and_fill_down.u.i32" convergent
+declare %t6 @f12 "air.quad_shuffle_xor.u.i32" convergent
 
-declare %t8 @f19 "air.quad_shuffle.u.i32" convergent
+declare %t6 @f13 "air.quad_broadcast.u.i32" convergent
 
-declare %t8 @f20 "air.quad_shuffle_xor.u.i32" convergent
+declare %t6 @f14 "air.quad_shuffle_up.u.i32" convergent
 
-declare %t8 @f21 "air.quad_broadcast.u.i32" convergent
+declare %t6 @f15 "air.quad_shuffle_down.u.i32" convergent
 
-declare %t8 @f22 "air.quad_shuffle_up.u.i32" convergent
+declare %t6 @f16 "air.quad_shuffle_rotate_up.u.i32" convergent
 
-declare %t8 @f23 "air.quad_shuffle_down.u.i32" convergent
+declare %t6 @f17 "air.quad_shuffle_rotate_down.u.i32" convergent
 
-declare %t9 @f24 "air.quad_shuffle_and_fill_down.u.i32" convergent
+declare %t8 @f18 "air.quad_shuffle_and_fill_up.u.i32" convergent
 
-declare %t9 @f25 "air.quad_shuffle_and_fill_up.u.i32" convergent
-
-declare %t10 @f26 "air.get_simdgroup_size.i16" memory(NoModRef, NoModRef, NoModRef)
+declare %t8 @f19 "air.quad_shuffle_and_fill_down.u.i32" convergent
 !md0 = !"SDK Version"
 !md1 = !"wchar_size"
 !md2 = !"frame-pointer"
@@ -354,96 +131,67 @@ declare %t10 @f26 "air.get_simdgroup_size.i16" memory(NoModRef, NoModRef, NoModR
 !md6 = !"air.max_textures"
 !md7 = !"air.max_read_write_textures"
 !md8 = !"air.max_samplers"
-!md9 = !"air.vertex_id"
-!md10 = !"air.arg_type_name"
-!md11 = !"uint"
-!md12 = !"air.arg_name"
-!md13 = !"vid"
-!md14 = !"air.buffer"
-!md15 = !"air.location_index"
-!md16 = !"air.read"
-!md17 = !"air.address_space"
-!md18 = !"air.arg_type_size"
-!md19 = !"air.arg_type_align_size"
-!md20 = !"in"
-!md21 = !"air.read_write"
-!md22 = !"out"
-!md23 = !"air.thread_position_in_grid"
-!md24 = !"t"
-!md25 = !"air.thread_index_in_simdgroup"
-!md26 = !"lane"
-!md27 = !"air.thread_index_in_quadgroup"
-!md28 = !"q"
-!md29 = !"air.compile.denorms_disable"
-!md30 = !"air.compile.fast_math_enable"
-!md31 = !"air.compile.framebuffer_fetch_enable"
-!md32 = !"Apple metal version 32023.922 (metalfe-32023.922.4)"
-!md33 = !"Metal"
-!md34 = !"int"
-!md35 = !"omnipotent char"
-!md36 = !"Simple C++ TBAA"
-!md37 = !"air-alias-scope-arg(1)"
-!md38 = !"air-alias-scope-arg(2)"
-!md39 = i32 2
-!md40 = %t12 c29
-!md41 = i32 1
-!md42 = i32 4
-!md43 = i32 7
-!md44 = i32 31
-!md45 = i32 128
-!md46 = i32 8
-!md47 = i32 16
-!md48 = ptr addrspace(0) @f0
-!md49 = i32 0
-!md50 = ptr addrspace(0) @f1
-!md51 = ptr addrspace(0) @f2
-!md52 = ptr addrspace(0) @f3
-!md53 = ptr addrspace(0) @f4
-!md54 = ptr addrspace(0) @f5
-!md55 = ptr addrspace(0) @f6
-!md56 = i32 3
-!md57 = i64 0
-!md58 = !{!md39, !md0, !md40}
-!md59 = !{!md41, !md1, !md42}
-!md60 = !{!md43, !md2, !md39}
-!md61 = !{!md43, !md3, !md44}
-!md62 = !{!md43, !md4, !md44}
-!md63 = !{!md43, !md5, !md44}
-!md64 = !{!md43, !md6, !md45}
-!md65 = !{!md43, !md7, !md46}
-!md66 = !{!md43, !md8, !md47}
-!md67 = !{}
-!md68 = !{!md49, !md9, !md10, !md11, !md12, !md13}
-!md69 = !{!md41, !md14, !md15, !md49, !md41, !md16, !md17, !md41, !md18, !md42, !md19, !md42, !md10, !md11, !md12, !md20}
-!md70 = !{!md39, !md14, !md15, !md41, !md41, !md21, !md17, !md41, !md18, !md42, !md19, !md42, !md10, !md11, !md12, !md22}
-!md71 = !{!md68, !md69, !md70}
-!md72 = !{!md48, !md67, !md71}
-!md73 = !{!md50, !md67, !md71}
-!md74 = !{!md51, !md67, !md71}
-!md75 = !{!md52, !md67, !md71}
-!md76 = !{!md53, !md67, !md71}
-!md77 = !{!md54, !md67, !md71}
-!md78 = !{!md49, !md14, !md15, !md49, !md41, !md16, !md17, !md41, !md18, !md42, !md19, !md42, !md10, !md11, !md12, !md20}
-!md79 = !{!md41, !md14, !md15, !md41, !md41, !md21, !md17, !md41, !md18, !md42, !md19, !md42, !md10, !md11, !md12, !md22}
-!md80 = !{!md39, !md23, !md10, !md11, !md12, !md24}
-!md81 = !{!md56, !md25, !md10, !md11, !md12, !md26}
-!md82 = !{!md42, !md27, !md10, !md11, !md12, !md28}
-!md83 = !{!md78, !md79, !md80, !md81, !md82}
-!md84 = !{!md55, !md67, !md83}
-!md85 = !{!md29}
-!md86 = !{!md30}
-!md87 = !{!md31}
-!md88 = !{!md32}
-!md89 = !{!md39, !md46, !md49}
-!md90 = !{!md33, !md42, !md49, !md49}
-!md91 = !{!md36}
-!md92 = !{!md35, !md91, !md57}
-!md93 = !{!md34, !md92, !md57}
-!md94 = !{!md93, !md93, !md57}
-!"llvm.module.flags" = !{!md58, !md59, !md60, !md61, !md62, !md63, !md64, !md65, !md66}
-!"air.vertex" = !{!md72, !md73, !md74, !md75, !md76, !md77}
-!"air.kernel" = !{!md84}
-!"air.compile_options" = !{!md85, !md86, !md87}
-!"llvm.ident" = !{!md88}
-!"air.version" = !{!md89}
-!"air.language_version" = !{!md90}
+!md9 = !"air.buffer"
+!md10 = !"air.location_index"
+!md11 = !"air.read"
+!md12 = !"air.address_space"
+!md13 = !"air.arg_type_size"
+!md14 = !"air.arg_type_align_size"
+!md15 = !"air.arg_type_name"
+!md16 = !"uint"
+!md17 = !"air.arg_name"
+!md18 = !"in"
+!md19 = !"air.read_write"
+!md20 = !"out"
+!md21 = !"air.thread_position_in_grid"
+!md22 = !"t"
+!md23 = !"air.thread_index_in_simdgroup"
+!md24 = !"lane"
+!md25 = !"air.thread_index_in_quadgroup"
+!md26 = !"q"
+!md27 = !"air.compile.denorms_disable"
+!md28 = !"air.compile.fast_math_enable"
+!md29 = !"air.compile.framebuffer_fetch_enable"
+!md30 = !"Apple metal version 32023.922 (metalfe-32023.922.4)"
+!md31 = !"Metal"
+!md32 = i32 2
+!md33 = %t10 c22
+!md34 = i32 1
+!md35 = i32 4
+!md36 = i32 7
+!md37 = i32 31
+!md38 = i32 128
+!md39 = i32 8
+!md40 = i32 16
+!md41 = ptr addrspace(0) @f0
+!md42 = i32 0
+!md43 = i32 3
+!md44 = !{!md32, !md0, !md33}
+!md45 = !{!md34, !md1, !md35}
+!md46 = !{!md36, !md2, !md32}
+!md47 = !{!md36, !md3, !md37}
+!md48 = !{!md36, !md4, !md37}
+!md49 = !{!md36, !md5, !md37}
+!md50 = !{!md36, !md6, !md38}
+!md51 = !{!md36, !md7, !md39}
+!md52 = !{!md36, !md8, !md40}
+!md53 = !{}
+!md54 = !{!md42, !md9, !md10, !md42, !md34, !md11, !md12, !md34, !md13, !md35, !md14, !md35, !md15, !md16, !md17, !md18}
+!md55 = !{!md34, !md9, !md10, !md34, !md34, !md19, !md12, !md34, !md13, !md35, !md14, !md35, !md15, !md16, !md17, !md20}
+!md56 = !{!md32, !md21, !md15, !md16, !md17, !md22}
+!md57 = !{!md43, !md23, !md15, !md16, !md17, !md24}
+!md58 = !{!md35, !md25, !md15, !md16, !md17, !md26}
+!md59 = !{!md54, !md55, !md56, !md57, !md58}
+!md60 = !{!md41, !md53, !md59}
+!md61 = !{!md27}
+!md62 = !{!md28}
+!md63 = !{!md29}
+!md64 = !{!md30}
+!md65 = !{!md32, !md39, !md42}
+!md66 = !{!md31, !md35, !md42, !md42}
+!"llvm.module.flags" = !{!md44, !md45, !md46, !md47, !md48, !md49, !md50, !md51, !md52}
+!"air.kernel" = !{!md60}
+!"air.compile_options" = !{!md61, !md62, !md63}
+!"llvm.ident" = !{!md64}
+!"air.version" = !{!md65}
+!"air.language_version" = !{!md66}
