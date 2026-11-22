@@ -511,15 +511,13 @@ pub struct LeafCaps {
 }
 
 /// Image and sampler capabilities ([`DeviceProfile::images`]). Each field without its own note is
-/// the Vulkan feature of that name (`shaderStorageImageMultisample` for `storage_multisample`,
-/// ...), enabled.
+/// the Vulkan feature of that name (`imageCubeArray` for `cube_array`, ...), enabled.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct ImageCaps {
     pub storage_read_without_format: bool,
     pub storage_write_without_format: bool,
     pub storage_extended_formats: bool,
-    pub storage_multisample: bool,
     pub cube_array: bool,
     pub gather_extended: bool,
     /// The `Offset` image operand on `OpImageSample*` (`maintenance8`).

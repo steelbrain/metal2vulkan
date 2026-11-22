@@ -2606,7 +2606,6 @@ field	metal2vulkan::device::ImageCaps.robust_image_access2	pub robust_image_acce
 field	metal2vulkan::device::ImageCaps.sampler_anisotropy	pub sampler_anisotropy: bool
 field	metal2vulkan::device::ImageCaps.sampler_mirror_clamp_to_edge	pub sampler_mirror_clamp_to_edge: bool
 field	metal2vulkan::device::ImageCaps.storage_extended_formats	pub storage_extended_formats: bool
-field	metal2vulkan::device::ImageCaps.storage_multisample	pub storage_multisample: bool
 field	metal2vulkan::device::ImageCaps.storage_read_without_format	pub storage_read_without_format: bool
 field	metal2vulkan::device::ImageCaps.storage_write_without_format	pub storage_write_without_format: bool
 field	metal2vulkan::device::Limits.early_fragment_multisample_coverage_after_sample_counting	pub early_fragment_multisample_coverage_after_sample_counting: bool

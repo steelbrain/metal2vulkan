@@ -214,7 +214,6 @@ fn derive_fields(desc: &DeviceDescription, policy: &DevicePolicy) -> ProfileFiel
         storage_read_without_format: has(VkFeature::ShaderStorageImageReadWithoutFormat),
         storage_write_without_format: has(VkFeature::ShaderStorageImageWriteWithoutFormat),
         storage_extended_formats: has(VkFeature::ShaderStorageImageExtendedFormats),
-        storage_multisample: has(VkFeature::ShaderStorageImageMultisample),
         cube_array: has(VkFeature::ImageCubeArray),
         gather_extended: has(VkFeature::ShaderImageGatherExtended),
         dynamic_sample_offset: has(VkFeature::Maintenance8),

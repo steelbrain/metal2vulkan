@@ -85,9 +85,10 @@ fn heap_classes_are_the_declarable_images_and_every_sampler_use() {
                     "{stem}: cube array without imageCubeArray"
                 );
             }
-            if i.multisampled && i.access == ImageAccess::Storage {
-                assert!(images.storage_multisample, "{stem}: {i:?}");
-            }
+            assert!(
+                !(i.multisampled && i.access == ImageAccess::Storage),
+                "{stem}: {i:?}"
+            );
         }
         let n_images = classes.len() - 4;
         assert_eq!(n_images, image_classes(&p).len(), "{stem}: duplicates");

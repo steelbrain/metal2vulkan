@@ -45,8 +45,7 @@ pub enum NeutralResource {
 }
 
 /// Sample count of every multisampled neutral image: Vulkan requires 4 in
-/// `sampledImage{Color,Integer,Depth}SampleCounts` and, with `shaderStorageImageMultisample`,
-/// `storageImageSampleCounts`.
+/// `sampledImage{Color,Integer,Depth}SampleCounts`.
 const NEUTRAL_SAMPLES: u32 = 4;
 
 impl NeutralResource {
@@ -174,8 +173,8 @@ pub(crate) fn numeric_type(format: vk::Format) -> Option<SampledType> {
 /// Every image type the new core can declare on `profile` (heap classes and per-slot images): each
 /// dimension, arrayed-ness, and sample count SPIR-V allows, each numeric type, depth comparison for
 /// float 2D and cube images, sampled or storage with each storage format class the profile
-/// supports. Cube arrays need `imageCubeArray`, multisampled storage images
-/// `shaderStorageImageMultisample`.
+/// supports. Cube arrays need `imageCubeArray`; a multisampled image is sampled only (no form of a
+/// multisampled storage image is built).
 pub fn image_classes(profile: &DeviceProfile) -> Vec<ImageHandleClass> {
     let f = profile.fields();
     let types = [SampledType::Float, SampledType::Sint, SampledType::Uint];
@@ -222,7 +221,7 @@ pub fn image_classes(profile: &DeviceProfile) -> Vec<ImageHandleClass> {
                     StorageFormatClass::NotStorage,
                 ));
             }
-            if multisampled && !f.images.storage_multisample {
+            if multisampled {
                 continue;
             }
             out.push(class(

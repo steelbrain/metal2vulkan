@@ -40,7 +40,7 @@ Columns:
 
 | Kind | `metal-measured` | `metal-documented` | `metal-takes` | `device` | `ours` | `unknown` | `delegated` | `-` |
 |---|---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 0 | 0 | 0 | 50 | 69 | 0 | 0 | 0 |
+| Translator and front-end refusals | 0 | 0 | 0 | 49 | 70 | 0 | 0 | 0 |
 | Binder refusals at a device limit | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
 | Translation caps | 0 | 0 | 0 | 0 | 14 | 0 | 0 | 0 |
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 5 | 0 | 0 | 0 |
@@ -99,7 +99,7 @@ Columns:
 | `MinLodClamp` | `min_lod_clamp` without `shaderResourceMinLod` | devices without VkFeature::ShaderResourceMinLod; every device (not implemented) | `ours` | 2: `crates/metal2vulkan/src/lower/sampler/select.rs (min_lod)`, `crates/metal2vulkan/src/lower/sampler/select.rs (select_one)` | `rare`: min_lod_clamp on a device without shaderResourceMinLod |
 | `TexelOffset` | A texel offset the device cannot apply | devices short of a device limit the site names; every device (no Vulkan mechanism) | `device` | 2: `crates/metal2vulkan/src/lower/sampler/select.rs (in_device_range)`, `crates/metal2vulkan/src/lower/sampler/select.rs (offset)` | `app`: texel offsets a device cannot apply |
 | `GatherExtended` | Gather with non-constant offsets or components | devices without a capability the site computes (`missing`) | `device` | via a helper: 1: `crates/metal2vulkan/src/lower/sampler/select.rs (dynamic_offset)` | `rare`: gathers with dynamic offsets or components |
-| `StorageImageMultisample` | Multisampled storage images | devices short of a Vulkan feature the site names | `device` | via a helper: 1: `crates/metal2vulkan/src/lower/texture/slot.rs (declare_slot)` | `rare`: writable multisampled textures |
+| `StorageImageMultisample` | Multisampled storage images | every device (not implemented) | `ours` | 2: `crates/metal2vulkan/src/lower/texture/slot.rs (declare_heap)`, `crates/metal2vulkan/src/lower/texture/slot.rs (declare_slot)` | `rare`: writable multisampled textures |
 | `StorageTextureInVertexStage` | Storage images in the vertex stage | devices short of a Vulkan feature the site names | `device` | via a helper: 1: `crates/metal2vulkan/src/lower/texture/slot.rs (stage_stores)` | `rare`: writable textures in vertex functions |
 | `CubeArray` | Cube arrays | devices without VkFeature::ImageCubeArray | `device` | 2: `crates/metal2vulkan/src/lower/sampler/select.rs (select_one)`, `crates/metal2vulkan/src/lower/texture/slot.rs (declare_heap)` | `rare`: cube arrays on a device without imageCubeArray |
 | `SamplerAnisotropy` | Sampler anisotropy an argument buffer lists, on a device without `samplerAnisotropy` | devices without VkFeature::SamplerAnisotropy | `device` | 1: `crates/metal2vulkan/src/metal/sampler.rs (check_argument_sampler)` | `app`: anisotropic samplers an argument buffer lists, on a device without samplerAnisotropy |
@@ -432,7 +432,7 @@ Each refusal's sites, with the function that builds it.
 - `feature::MinLodClamp`: `crates/metal2vulkan/src/lower/sampler/select.rs (min_lod)`; `crates/metal2vulkan/src/lower/sampler/select.rs (select_one)`
 - `feature::TexelOffset`: `crates/metal2vulkan/src/lower/sampler/select.rs (in_device_range)`; `crates/metal2vulkan/src/lower/sampler/select.rs (offset)`
 - `feature::GatherExtended`: `crates/metal2vulkan/src/lower/sampler/select.rs (dynamic_offset)`
-- `feature::StorageImageMultisample`: `crates/metal2vulkan/src/lower/texture/slot.rs (declare_slot)`
+- `feature::StorageImageMultisample`: `crates/metal2vulkan/src/lower/texture/slot.rs (declare_heap)`; `crates/metal2vulkan/src/lower/texture/slot.rs (declare_slot)`
 - `feature::StorageTextureInVertexStage`: `crates/metal2vulkan/src/lower/texture/slot.rs (stage_stores)`
 - `feature::CubeArray`: `crates/metal2vulkan/src/lower/sampler/select.rs (select_one)`; `crates/metal2vulkan/src/lower/texture/slot.rs (declare_heap)`
 - `feature::SamplerAnisotropy`: `crates/metal2vulkan/src/metal/sampler.rs (check_argument_sampler)`

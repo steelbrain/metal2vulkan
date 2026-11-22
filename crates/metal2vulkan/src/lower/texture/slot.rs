@@ -475,6 +475,11 @@ fn declare_heap(
     if shape.depth && storage {
         return Err(refuse());
     }
+    // No form of a multisampled storage image is built (no runtime enables
+    // `shaderStorageImageMultisample`).
+    if storage && shape.ms {
+        return Err(Unsupported::not_implemented(Feature::StorageImageMultisample).into());
+    }
     if compare && !matches!(shape.dim, ImageDim::D2 | ImageDim::Cube) {
         return Err(cx.invariant("a compared depth heap group that is neither 2D nor cube"));
     }
@@ -530,10 +535,6 @@ fn declare_heap(
         need(
             !h.uses.write || images.storage_write_without_format,
             VkFeature::ShaderStorageImageWriteWithoutFormat,
-        );
-        need(
-            !shape.ms || images.storage_multisample,
-            VkFeature::ShaderStorageImageMultisample,
         );
     } else if buffer {
         need(
@@ -1246,11 +1247,10 @@ fn declare_slot(
         // Metal has no writable depth textures.
         return Err(refuse());
     }
-    if storage && shape.ms && !images.storage_multisample {
-        return Err(needs(
-            Feature::StorageImageMultisample,
-            VkFeature::ShaderStorageImageMultisample,
-        ));
+    // No form of a multisampled storage image is built (no runtime enables
+    // `shaderStorageImageMultisample`).
+    if storage && shape.ms {
+        return Err(Unsupported::not_implemented(Feature::StorageImageMultisample).into());
     }
     let cube = shape.dim == ImageDim::Cube;
     // A cube that is read or written, or whose faces are fetched, and every storage cube, is the
