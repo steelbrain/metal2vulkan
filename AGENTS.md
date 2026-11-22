@@ -63,7 +63,7 @@ order, and a lower one never overrides a higher one.
    and maximal reconvergence), unified memory (decided by
    Vulkan's physical device type alone: one copy of a Managed buffer on an integrated or CPU
    device, two elsewhere), the attachment feedback loop (a device without it reads a render
-   target through a counted copy of that target, recorded as a known gap), and run-time texel
+   target through a counted copy of that target, recorded as a known gap), run-time texel
    offsets (a device with the maintenance8 feature takes a run-time texel offset as the sampling
    or read instruction's own operand; a device without it branches over the offset's values, and
    that branch's compile time is recorded as a known gap), and the push window (the device's
