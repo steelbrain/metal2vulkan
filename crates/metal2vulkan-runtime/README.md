@@ -3024,6 +3024,19 @@ cache is answered compile-required on both.
   cache data, and where the helper passed the consumer's cap or time, it is refused
   (`Gap::StageSize`) where Metal makes it. A dispatch of it waits for the consumer's helper, where
   Metal compiles in the program's process.
+- On a host whose Vulkan driver is ANV, Mesa's Intel driver, a guest's kernels of entry weight
+  355,578 to 424,132 are refused (`Gap::StageSize`) where Metal makes them: their helper's compile
+  passes an 8 GiB cap. On the Iris Xe of RPL-P under the packaged Mesa 26.2.6, the helpers of the
+  two kernels measured passed 8 GiB 34 s and 51 s into their compiles (job m3-max-65470). A Mesa
+  26.2.6 build that adds count prints and a heap census let the lighter one run on: it was past
+  18 GiB resident and unfinished at 840 s (job m3-max-65511). The stock driver's time past 8 GiB is
+  not measured. Both costs are in Mesa's Intel compiler and grow with the product of two of the
+  kernel's sizes (source lines of Mesa 26.3.1). Its liveness analysis gives every block six bitsets
+  over all virtual registers (`src/intel/compiler/brw/brw_analysis_liveness.cpp`, lines 240-247):
+  4,972 MiB for the heavier kernel's first dead-code pass and 9,549 MiB for its next. Its register
+  allocator's interference graph holds a bit for each pair of nodes and doubles its node capacity
+  once spill nodes pass it (`src/util/register_allocate.c`, lines 504-508 and 633-639): 3,124 MiB
+  for the lighter kernel's 228,938 nodes, then 12,498 MiB.
 - A loop asks the driver nothing about unrolling unless its AIR does (`#pragma unroll`,
   `#pragma nounroll`) or the translator wrote the loop itself (`DontUnroll`), so the driver's
   choice decides, and it can differ from Metal's compiler's. RADV (Mesa 26.2.6) unrolls a
