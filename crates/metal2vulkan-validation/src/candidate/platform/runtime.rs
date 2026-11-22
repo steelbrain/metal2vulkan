@@ -136,14 +136,26 @@ pub(super) fn under_validation(on: impl FnOnce() -> Result<RunAttempt, String>) 
 /// What `on` returns, run under the validation layer, and the messages the layer logged while it
 /// ran, if any: one log per process, at one path, so the layer writes the run's messages there
 /// whether it reads its variables at each instance or once, a log of an earlier run gone first.
+/// The layer's variables are put back as they were once `on` returns, so an instance the process
+/// makes after it (`corpus-pipeline`'s own context for its next render row) reads none of them.
 pub(super) fn validated<T>(on: impl FnOnce() -> T) -> (T, Option<String>) {
     let log = std::env::temp_dir().join(format!(
         "metal2vulkan-validation-runtime-{}.log",
         std::process::id()
     ));
     let _ = std::fs::remove_file(&log);
+    let before: Vec<_> = VALIDATION_VARIABLES
+        .iter()
+        .map(|&name| (name, std::env::var_os(name)))
+        .collect();
     validate_process(&log);
     let value = on();
+    for (name, value) in before {
+        match value {
+            Some(value) => std::env::set_var(name, value),
+            None => std::env::remove_var(name),
+        }
+    }
     let messages = std::fs::read_to_string(&log);
     let _ = std::fs::remove_file(&log);
     let messages = messages.ok().filter(|messages| !messages.trim().is_empty());
@@ -155,20 +167,31 @@ pub(super) fn validated<T>(on: impl FnOnce() -> T) -> (T, Option<String>) {
 /// layer read them when an instance is made. A device worker makes one instance at a time, on
 /// this thread, and no other thread reads the environment.
 fn validate_process(log: &Path) {
-    for (name, value) in [
-        ("VK_INSTANCE_LAYERS", VALIDATION_LAYER),
-        ("VK_KHRONOS_VALIDATION_REPORT_FLAGS", "error,warn"),
-        (
-            "VK_KHRONOS_VALIDATION_DEBUG_ACTION",
-            "VK_DBG_LAYER_ACTION_LOG_MSG",
-        ),
-        ("VK_KHRONOS_VALIDATION_VALIDATE_SYNC", "true"),
-        ("VK_KHRONOS_VALIDATION_ENABLE_MESSAGE_LIMIT", "false"),
-    ] {
+    let values = [
+        VALIDATION_LAYER,
+        "error,warn",
+        "VK_DBG_LAYER_ACTION_LOG_MSG",
+        "true",
+        "false",
+    ];
+    for (name, value) in VALIDATION_VARIABLES.iter().zip(values) {
         std::env::set_var(name, value);
     }
-    std::env::set_var("VK_KHRONOS_VALIDATION_LOG_FILENAME", log);
+    std::env::set_var(VALIDATION_LOG_VARIABLE, log);
 }
+
+/// The variables [`validate_process`] sets, its log's last ([`VALIDATION_LOG_VARIABLE`]).
+const VALIDATION_VARIABLES: [&str; 6] = [
+    "VK_INSTANCE_LAYERS",
+    "VK_KHRONOS_VALIDATION_REPORT_FLAGS",
+    "VK_KHRONOS_VALIDATION_DEBUG_ACTION",
+    "VK_KHRONOS_VALIDATION_VALIDATE_SYNC",
+    "VK_KHRONOS_VALIDATION_ENABLE_MESSAGE_LIMIT",
+    VALIDATION_LOG_VARIABLE,
+];
+
+/// The variable naming the file the validation layer logs its messages to.
+const VALIDATION_LOG_VARIABLE: &str = "VK_KHRONOS_VALIDATION_LOG_FILENAME";
 
 /// The attempt of `run` on the device of `device_type` for `executor`, every object of it gone
 /// before this returns, and the runtime's device torn down; a refusal names the device it opened.

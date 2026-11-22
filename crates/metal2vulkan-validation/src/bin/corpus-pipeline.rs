@@ -763,8 +763,7 @@ fn sweep_new(
         fixtures,
         projection,
     } = sweep;
-    let stdout = std::io::stdout();
-    let mut out = stdout.lock();
+    let mut out = rows_output()?;
     let mut tally = Tally::default();
     let mut attempt = |row: NewRow| -> Result<(), String> {
         if tally.rows >= options.limit {
@@ -931,6 +930,38 @@ fn sweep_new(
         },
     );
     tally.verdict()
+}
+
+/// Where the sweep writes its result rows: the process's standard output, which nothing else
+/// writes to. Whatever else this process writes to its standard output descriptor goes to its
+/// standard error instead: the validation layer names its log file there for each instance a kernel
+/// row's runtime makes, which would otherwise land between two rows.
+fn rows_output() -> Result<Box<dyn Write>, String> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::FromRawFd;
+        // SAFETY: duplicates this process's own standard output descriptor, which stays open.
+        let rows = unsafe { libc::dup(libc::STDOUT_FILENO) };
+        if rows < 0 {
+            return Err(format!(
+                "duplicate the standard output: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        // SAFETY: points the standard output descriptor at the standard error; both stay open for
+        // the process's life, and nothing was written to the standard output yet.
+        if unsafe { libc::dup2(libc::STDERR_FILENO, libc::STDOUT_FILENO) } < 0 {
+            return Err(format!(
+                "point the standard output at the standard error: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        // SAFETY: `rows` is a descriptor this process just made and nothing else owns or closes.
+        let rows = unsafe { std::fs::File::from_raw_fd(rows) };
+        Ok(Box::new(std::io::LineWriter::new(rows)))
+    }
+    #[cfg(not(unix))]
+    Ok(Box::new(std::io::stdout()))
 }
 
 /// Compile one row in a compile worker and create its pipeline (a kernel row's, made through the
