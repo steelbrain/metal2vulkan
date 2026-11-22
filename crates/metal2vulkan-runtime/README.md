@@ -938,10 +938,13 @@ the Direct3D 11 texture's payload until it is freed.
   the optimal ones, and takes the program's own pitch: 7,680 bytes at 1920 wide, 9,984 at 2448
   wide (rows padded to 256) and 4,096 at 1024 wide, at an alignment of 256 and with no dedicated
   allocation (job m3-max-68787). With `DRM_FORMAT_MOD_LINEAR` tiling the query offers the
-  dma-buf image for every one of those usages, importable and not dedicated-only, and an image
-  made with that explicit pitch takes it; but its memory requirements require a dedicated
-  allocation, which no image at a texture's place inside a buffer's import has (job
-  m3-max-68847). The runtime asks the `LINEAR` tiling alone.
+  dma-buf image for every one of those usages, importable and not dedicated-only; an image made
+  with the program's pitch in its explicit plane layout takes that pitch, and its memory
+  requirements require a dedicated allocation (job m3-max-68847). An import of its own for each
+  such texture, dedicated to its image, was not tried and is not built. The copies it could
+  remove are 3.54 GB of the 40.49 GB a guest's run of the same compute benchmark copies over
+  its imports (job m3-max-68603), under 5% of each workload's time (above), so it stays a known
+  gap. The runtime asks the `LINEAR` tiling alone.
 - On the Iris Xe (ANV, Mesa 26.2.6) the dma-buf query offers a device-local-only type first, so
   its dma-bufs are refused with `Limit::ImportType`, and a consumer imports those pages by pointer.
   Its sparse buffers import no dma-buf either, so `Device::import_dma_bufs` refuses there, as it
