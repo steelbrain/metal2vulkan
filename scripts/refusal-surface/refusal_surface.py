@@ -227,7 +227,9 @@ def derived_basis(section, kinds, table):
         return bases.pop() if len(bases) == 1 else ""
     if section == "bind":
         return "device"
-    if section in ("limit", "budget"):
+    # A cap, the deadline, and a rate map outside the bounds where Apple's compile was measured
+    # (`UnpinnedCompile`: "the bounds are this crate's, not Metal's").
+    if section in ("limit", "budget", "ratemap"):
         return "ours"
     if section == "floor":
         return "device"

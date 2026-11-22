@@ -43,7 +43,7 @@ Columns:
 | Translator and front-end refusals | 0 | 0 | 0 | 51 | 68 | 0 | 0 | 0 |
 | Binder refusals at a device limit | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
 | Translation caps | 0 | 0 | 0 | 0 | 14 | 0 | 0 | 0 |
-| Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 5 |
+| Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 5 | 0 | 0 | 0 |
 | The translation deadline | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
 | Devices below the runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The runtime's `Refusal` | 22 | 26 | 0 | 0 | 35 | 0 | 0 | 0 |
@@ -211,11 +211,11 @@ Columns:
 
 | Variant | What it blocks | Where | Basis | Sites | Reach |
 |---|---|---|---|---|---|
-| `ScreenExtent` | A screen extent above 16384 | every device (this crate's bound: Apple's compile unmeasured or crashing there) | `-` | 1: `crates/metal2vulkan/src/bind/rate_map.rs (new)` | `rare`: a rate map whose screen is past 16384 a side |
-| `LayerCount` | More than two layers | every device (this crate's bound: Apple's compile unmeasured or crashing there) | `-` | 1: `crates/metal2vulkan/src/bind/rate_map.rs (new)` | `none`: a rate map of more than two layers, which Apple's compile crashes on |
-| `DenseSamples` | An axis with more quality samples than its screen extent plus one | every device (this crate's bound: Apple's compile unmeasured or crashing there) | `-` | 1: `crates/metal2vulkan/src/bind/rate_map.rs (new)` | `rare`: a rate map axis with more quality samples than screen pixels |
-| `SampleOutOfRange` | A sample outside `[0, 1]` (or `NaN`) on an axis of two or more samples | every device (this crate's bound: Apple's compile unmeasured or crashing there) | `-` | 1: `crates/metal2vulkan/src/bind/rate_map.rs (new)` | `rare`: a rate map quality sample outside [0, 1] among others |
-| `SampleCount` | An axis of more samples, not all equal, than the most measured on a map of its layer count, `max` | every device (this crate's bound: Apple's compile unmeasured or crashing there) | `-` | 1: `crates/metal2vulkan/src/bind/rate_map.rs (new)` | `rare`: a rate map axis of more distinct samples than measured (9 on one layer, 4 on two) |
+| `ScreenExtent` | A screen extent above 16384 | every device (this crate's bound: Apple's compile unmeasured or crashing there) | `ours` | 1: `crates/metal2vulkan/src/bind/rate_map.rs (new)` | `rare`: a rate map whose screen is past 16384 a side |
+| `LayerCount` | More than two layers | every device (this crate's bound: Apple's compile unmeasured or crashing there) | `ours` | 1: `crates/metal2vulkan/src/bind/rate_map.rs (new)` | `none`: a rate map of more than two layers, which Apple's compile crashes on |
+| `DenseSamples` | An axis with more quality samples than its screen extent plus one | every device (this crate's bound: Apple's compile unmeasured or crashing there) | `ours` | 1: `crates/metal2vulkan/src/bind/rate_map.rs (new)` | `rare`: a rate map axis with more quality samples than screen pixels |
+| `SampleOutOfRange` | A sample outside `[0, 1]` (or `NaN`) on an axis of two or more samples | every device (this crate's bound: Apple's compile unmeasured or crashing there) | `ours` | 1: `crates/metal2vulkan/src/bind/rate_map.rs (new)` | `rare`: a rate map quality sample outside [0, 1] among others |
+| `SampleCount` | An axis of more samples, not all equal, than the most measured on a map of its layer count, `max` | every device (this crate's bound: Apple's compile unmeasured or crashing there) | `ours` | 1: `crates/metal2vulkan/src/bind/rate_map.rs (new)` | `rare`: a rate map axis of more distinct samples than measured (9 on one layer, 4 on two) |
 
 ## 5. The translation deadline (`Error::Budget`)
 
