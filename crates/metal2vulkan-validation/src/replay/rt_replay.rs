@@ -2348,6 +2348,102 @@ fn a_surface_picture_fills_its_shapes_at_their_first_use() {
     assert_eq!(counts, [2, 1, 1, 1], "{executed:?}");
 }
 
+/// The surface picture of [`a_surface_picture_fills_its_shapes_at_their_first_use`] behind
+/// another queue's long work: queue #20's command buffer #24, 256 dispatches over 4 MiB, is
+/// committed first, so #8's making fill can run behind it on the device and the refill the
+/// kernel's commit owes be held behind both, where queue #2, idle, ranks first for the room
+/// (`metal2vulkan_runtime`'s submit thread), as Metal's hazard tracking allows: it orders a
+/// command buffer of another queue only against work already submitted. Whatever the order the
+/// device takes, the commit waits on the CPU for the refill, once (`surface_host_waits`), so the
+/// kernel reads the second picture.
+#[test]
+fn a_surface_picture_fills_before_its_use_behind_another_queues_long_work() {
+    let dir = ScratchDir::new("rt-replay-surface-behind").unwrap();
+    let first = [0x10, 0x20, 0x30, 0x40].repeat(4);
+    let second = [0x50, 0x60, 0x70, 0x80].repeat(4);
+    let path = written(&dir, |w| {
+        let functions = [("invert_texels", 2, 0), ("scale_and_offset", 2, 0)];
+        let library = w.blob(&library(&dir, &functions))?;
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        w.call("newCommandQueue", 1, 20, &[], &[])?;
+        w.call(
+            "newLibraryWithData:error:",
+            1,
+            3,
+            &[Value::Blob(library)],
+            &[],
+        )?;
+        let made = "newComputePipelineStateWithFunction:error:";
+        for (name, function, state) in [("invert_texels", 4, 5), ("scale_and_offset", 21, 22)] {
+            let kernel = [Value::Str(name.into())];
+            w.call("newFunctionWithName:", 3, function, &kernel, &[])?;
+            w.call(made, 1, state, &[Value::Object(function)], &[])?;
+        }
+        let long = [Value::Uint(4 << 20), Value::Uint(0)];
+        w.call("newBufferWithLength:options:", 1, 23, &long, &[])?;
+        w.call("newBufferWithLength:options:", 1, 26, &long, &[])?;
+        w.call("commandBuffer", 20, 24, &[], &[])?;
+        w.call("computeCommandEncoder", 24, 25, &[], &[])?;
+        w.call("setComputePipelineState:", 25, 0, &[Value::Object(22)], &[])?;
+        let scale = [Value::Bytes(vec![0; 4]), Value::Uint(4), Value::Uint(2)];
+        w.call("setBytes:length:atIndex:", 25, 0, &scale, &[])?;
+        for (buffer, at) in [(23, 0), (26, 1)] {
+            let bind = [Value::Object(buffer), Value::Uint(0), Value::Uint(at)];
+            w.call("setBuffer:offset:atIndex:", 25, 0, &bind, &[])?;
+        }
+        let size = |n| uints(&[("width", n), ("height", 1), ("depth", 1)]);
+        let dispatch = "dispatchThreadgroups:threadsPerThreadgroup:";
+        for _ in 0..256 {
+            w.call(dispatch, 25, 0, &[size(1 << 14), size(64)], &[])?;
+        }
+        w.call("endEncoding", 25, 0, &[], &[])?;
+        w.call("commit", 24, 0, &[], &[])?;
+        let pages = [Value::Uint(16), Value::Uint(0)];
+        w.call("newBufferWithLength:options:", 1, 6, &pages, &[])?;
+        let texture = |usage| {
+            uints(&[
+                ("textureType", 2),
+                ("pixelFormat", 70),
+                ("width", 2),
+                ("height", 2),
+                ("usage", usage),
+                ("storageMode", 0),
+            ])
+        };
+        let plane = Value::Map(vec![
+            ("plane".into(), Value::Uint(0)),
+            ("offset".into(), Value::Uint(0)),
+            ("bytesPerRow".into(), Value::Uint(8)),
+            ("planar".into(), Value::Bool(false)),
+            ("facts".into(), Value::Nil),
+        ]);
+        let surface = "newTextureWithDescriptor:iosurface:plane:";
+        w.call(surface, 6, 8, &[texture(1), plane], &[])?;
+        for picture in [&first, &second] {
+            let bytes = [Value::Uint(0), Value::Bytes(picture.clone())];
+            w.call("m2v.write", 6, 0, &bytes, &[])?;
+            w.call("m2v.externalWriteDone", 6, 0, &[], &[])?;
+        }
+        w.call("newTextureWithDescriptor:", 1, 10, &[texture(2)], &[])?;
+        invert(w, 11, 8, 10)?;
+        w.call(WAIT_COMPLETED, 24, 0, &[], &[])
+    });
+    let (report, lines, rows) = play_then("surface-behind", &path, |backend| {
+        let bytes = backend.read(10).unwrap();
+        let pitch = bytes.len() / 2;
+        [&bytes[..8], &bytes[pitch..pitch + 8]].concat()
+    });
+    let inverse: Vec<u8> = (second.chunks(4))
+        .flat_map(|t| [0xFF - t[0], 0xFF - t[1], 0xFF - t[2], t[3]])
+        .collect();
+    assert_eq!(rows, inverse, "{lines:?}");
+    let executed = &report.total.executed;
+    let counted = |key: &str| executed.get(key).copied().unwrap_or(0);
+    let counts = ["surface_refills", "surface_host_waits"].map(counted);
+    assert_eq!(counts, [1, 1], "{executed:?}");
+}
+
 /// Textures over plane 0 of one surface (#2), 2 by 2, none declaring shader write: #3,
 /// RGBA8Unorm, makes a plain shape, and #4, its sRGB sibling, is a view of it; then `last`, a
 /// texture of BGRA8Unorm over the plane or a view of #3 as BGRA8Unorm, is refused and counted:

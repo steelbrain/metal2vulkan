@@ -845,7 +845,11 @@ records as text, and
   buffer: the first command buffer whose encoders use a texture of the buffer fills every owing
   shape of the buffers it uses before its commit, by blits in a command buffer of the backend's
   own committed then, and a picture that another one lands over before any use is never copied
-  (`surface_pictures_filled`, `surface_pictures_unfilled`). Another call that names a receiver
+  (`surface_pictures_filled`, `surface_pictures_unfilled`). The next commit of the stream after a
+  command buffer of the backend's own (a fill at a making or at a use) waits on the CPU for it
+  first (`surface_host_waits`): the runtime, as Metal, orders a command buffer of another queue
+  only after work already submitted, and the backend's fill may be held behind its queue's
+  earlier work. Another call that names a receiver
   buffer as a buffer is refused, and a texture of a format that reads across a surface's two planes
   (a two-plane YCbCr or XR10 format) is skipped (`skipped_surfaces_across_planes`). The counts
   (`surface_textures`, `surface_shapes`, `surface_shapes_found`, `surface_order_shapes`,
@@ -853,8 +857,8 @@ records as text, and
   `surface_overlap_copies`, `surface_overlap_bytes`, `surface_straddled`,
   `surface_unordered_writes`, `surface_usage_writes`, `surface_declared_writes`,
   `surface_cpu_writes`, `surface_external_writes`, `surface_refills`, `surface_refill_bytes`,
-  `surface_refill_gpu_nanos`, `surface_pictures_filled`, `surface_pictures_unfilled`,
-  `surface_copies_in`, `surface_copies_out`, `surface_bytes`,
+  `surface_refill_gpu_nanos`, `surface_host_waits`, `surface_pictures_filled`,
+  `surface_pictures_unfilled`, `surface_copies_in`, `surface_copies_out`, `surface_bytes`,
   `surface_format_refusals`, `surface_plain_format_views`) are the player's work, among its
   executed counters; `surface_refill_gpu_nanos` is the GPU time of the refills' command buffers, counted in the frame whose end first sees each
   complete. The report's `surfaces` line gives them with the longest refill command buffer.

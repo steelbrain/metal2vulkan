@@ -244,6 +244,11 @@ pub(super) struct Surfaces {
     queue: Option<rt::CommandQueue>,
     /// The refills' command buffers not yet seen complete (`timed`).
     refilling: VecDeque<rt::CommandBuffer>,
+    /// The last command buffer committed to `queue` (a making's fill or a refill) that no commit
+    /// has waited for yet: the next commit whose encoders use a surface's texture waits for it on
+    /// the CPU first (`surface_fill_owed`), as nothing on the device orders a command buffer of
+    /// another queue after it.
+    unwaited: Option<rt::CommandBuffer>,
     /// A count of makings and lettings go, for the shapes' recency.
     tick: u64,
     counts: Counts,
@@ -289,6 +294,8 @@ struct Counts {
     /// The GPU time of the refills' command buffers seen complete, and the longest one's.
     refill_nanos: u64,
     refill_max_nanos: u64,
+    /// The commits that waited on the CPU for the backend's own fills (`unwaited`).
+    host_waits: u64,
     /// Copies from the guest's RAM into a shape, and copies back to the guest's RAM that read a
     /// buffer with shapes.
     copies_in: u64,
@@ -457,13 +464,14 @@ impl Surfaces {
     }
 
     /// The executed counters.
-    pub(super) fn counted(&self) -> [(&'static str, u64); 26] {
+    pub(super) fn counted(&self) -> [(&'static str, u64); 27] {
         let c = &self.counts;
         [
             ("surface_external_writes", c.external_writes),
             ("surface_refills", c.refills),
             ("surface_refill_bytes", c.refill_bytes),
             ("surface_refill_gpu_nanos", c.refill_nanos),
+            ("surface_host_waits", c.host_waits),
             ("surface_pictures_filled", c.pictures_filled),
             ("surface_pictures_unfilled", c.pictures_unfilled),
             ("surface_textures", c.views),
@@ -499,7 +507,8 @@ impl Surfaces {
              argument buffer with no use named unseen, not counted); {} dirty shapes written back ({} bytes); {} CPU writes, \
              {} external writes, {} of them filled at a use and {} landed over before any (and \
              {} not used yet), filling {} shapes ({} bytes, {} ns of GPU time, the longest \
-             command buffer {} ns), {} copies from the guest's RAM into a shape and {} back, {} \
+             command buffer {} ns), {} commits waiting on the CPU for those fills, {} copies \
+             from the guest's RAM into a shape and {} back, {} \
              bytes in all; {} refused for a format a plain shape does not view as, {} declaring \
              pixel-format-view usage over a plain shape; {} across planes skipped",
             c.views,
@@ -524,6 +533,7 @@ impl Surfaces {
             c.refill_bytes,
             c.refill_nanos,
             c.refill_max_nanos,
+            c.host_waits,
             c.copies_in,
             c.copies_out,
             c.bytes,
@@ -698,6 +708,7 @@ impl NewRuntime {
         (blit.copy_from_buffer(buffer, layout, shape.size(), &texture, ORIGIN))
             .map_err(failed(call))?;
         blit.end_encoding();
+        self.surfaces.unwaited = Some(command_buffer.clone());
         self.commit(&queue, command_buffer, 0)
             .map_err(failed(call))?;
         let surfaces = &mut self.surfaces;
@@ -803,11 +814,24 @@ impl NewRuntime {
 
     /// Before command buffer `call.receiver` commits: every owing shape of the receiver buffers
     /// its encoders used is filled from its buffer, by blits in a command buffer of the play's own
-    /// committed now, ahead of it.
+    /// committed now, and the last command buffer of the play's own queue (that fill or a
+    /// making's) is waited for on the CPU, once (`Surfaces::unwaited`, counted): the device orders
+    /// no command buffer of another queue after work held behind its own queue's, as Metal's
+    /// hazard tracking orders such a pair only against work already submitted.
     pub(super) fn surface_fill_owed(&mut self, call: &Call) -> Result<(), PlayError> {
-        let Some(used) = self.surfaces.used.remove(&call.receiver) else {
-            return Ok(());
-        };
+        if let Some(used) = self.surfaces.used.remove(&call.receiver) {
+            self.surface_refill(call, used)?;
+        }
+        if let Some(fill) = self.surfaces.unwaited.take() {
+            fill.wait_until_completed().map_err(failed(call))?;
+            self.surfaces.counts.host_waits += 1;
+        }
+        Ok(())
+    }
+
+    /// Every owing shape of the receiver buffers `used` filled from its buffer, by blits in a
+    /// command buffer of the play's own committed now, which the commit then waits for.
+    fn surface_refill(&mut self, call: &Call, used: HashSet<u64>) -> Result<(), PlayError> {
         let mut owing = Vec::new();
         for id in used {
             let shapes = (self.surfaces).shapes_of(id, |_, entry| entry.owed);
@@ -832,6 +856,7 @@ impl NewRuntime {
         }
         blit.end_encoding();
         self.surfaces.refilling.push_back(command_buffer.clone());
+        self.surfaces.unwaited = Some(command_buffer.clone());
         self.commit(&queue, command_buffer, 0)
             .map_err(failed(call))?;
         let surfaces = &mut self.surfaces;

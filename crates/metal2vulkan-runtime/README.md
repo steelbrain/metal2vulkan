@@ -1904,9 +1904,15 @@ made, with no lock, and never rewritten for layouts.
   updates, or either reaches memory outside its resources: then it goes after the last piece
   (`Metrics::shared_holds`), held only while the cut one's next piece is ready; where that piece
   waits for an event not yet met, it goes, as Metal's wait stops only its own queue, and the
-  signal may come from the queue it holds. Across queues, work goes to the device in any order,
-  except that a command buffer never goes ahead of an earlier-committed one it shares a tracked
-  resource or a fence with, and an event wait holds only its own queue. Two readers of one
+  signal may come from the queue it holds. Across queues, a command buffer that shares a tracked
+  resource with an earlier-committed one of another queue goes after it only once that one is
+  submitted, as Metal's hazard tracking orders such a pair against work already submitted, and no
+  more (the M3 Max rows below, jobs m3-max-52432 and m3-max-52415); a cut command buffer that has
+  begun counts as submitted until its next piece waits for an event. An event wait holds only its
+  own queue. A command buffer that waits on a fence goes after each command buffer of another
+  queue that updates it and is held in a group or for room, and after every ready piece of a cut
+  one; Metal's side of that is measured only by the probe under `Fence` below (jobs m3-max-52186
+  and m3-max-52188). Two readers of one
   resource share it here, so a read waits behind a cut command buffer that only reads what it
   reads, though no write orders them: an over-hold. The cut command buffer is scheduled as its first piece is submitted,
   where none of its later pieces waits for an event, and its GPU times run from its first piece's
@@ -2065,8 +2071,8 @@ made, with no lock, and never rewritten for layouts.
   buffers). A waiter with nothing for the GPU (an encoder that only waits) completes no sooner
   than the last submission that updates its fence, as Metal's does (job m3-max-52194); its GPU
   times are one time, as for any command buffer with nothing for the GPU, where Metal reports a
-  span over the update's run. Work with no fence between it is ordered as well, where Metal may
-  run it at once.
+  span over the update's run. Work with no fence or event between it is ordered only as the
+  queue rule above says.
 - `CommandQueue::abandon` ends every command buffer of the queue held at an event wait or not yet
   scheduled with `NotRun` and runs its handlers, as a Mac drops a dead process's held work, each
   retiring in the queue's order. Segments already submitted still complete, and so does a group
@@ -2119,6 +2125,11 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
 
 ### Known gaps
 
+- A program that relies on commit order between queues for a shared resource, with no event or
+  fence, can read the earlier contents on the runtime, where a Mac's timing usually hides it: work
+  held behind its own queue's can go to the device after another queue's later command buffer.
+  That is Metal's rule (the M3 Max rows in the queue rule above, jobs m3-max-52432 and
+  m3-max-52415).
 - A lost device is not recovered. After a loss, the device and everything made on it stay dead:
   its buffers, textures, heaps, pipeline states, queues and events, and every device address and
   resource ID it handed out. Every later commit ends `DeviceLost`. The consumer may make a new device
