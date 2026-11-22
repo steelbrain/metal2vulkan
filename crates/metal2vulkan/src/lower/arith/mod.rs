@@ -777,8 +777,9 @@ pub const FAST_DIVIDE: &str = "arith.fdiv.fast";
 /// `SignedZeroInfNanPreserve` for each required width the profile supports, and note
 /// `DeviceSignedZeroInfNan` for one it does not (the device's behavior is accepted and
 /// reported); then record `NativeFma` where a fused multiply-add takes the device's `Fma`
-/// ([`ArithPlan::native_fma`]).
-pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
+/// ([`ArithPlan::native_fma`]), and `NativeNanEncoding` where the entry reaches a signalling
+/// `float` NaN constant ([`nan::holds_signalling_float`]).
+pub fn finish(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<(), Error> {
     cx.families.arith.wide = legal::holds_wide(cx.profile);
     cx.families.arith.quantize = narrow::quantize_form(cx.profile);
     cx.families.arith.native_half = narrow::native_rounding(cx.families.arith.quantize).is_some();
@@ -806,6 +807,9 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     // Every family selected its fused multiply-adds by now (a cube position's at selection).
     if cx.families.arith.native_fma {
         cx.precision.insert(PrecisionNote::NativeFma);
+    }
+    if nan::holds_signalling_float(cx.entry, m)? {
+        cx.precision.insert(PrecisionNote::NativeNanEncoding);
     }
     Ok(())
 }

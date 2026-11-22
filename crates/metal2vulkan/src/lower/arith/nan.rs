@@ -20,14 +20,18 @@
 //! these classes.
 //!
 //! The module leaves every NaN's bits to the device, and records
-//! `PrecisionNote::NativeNanEncoding` where Metal answers a NaN: every answer these tables give.
+//! `PrecisionNote::NativeNanEncoding` where Metal answers a NaN: every answer these tables give,
+//! and a signalling `float` NaN the entry reaches as a constant ([`holds_signalling_float`]).
 //!
 //! [`is_nan`] tests a value for a NaN, by `OpIsNan` where the entry declares
 //! `SignedZeroInfNanPreserve` for the width, without which a device may assume that no operand is a
 //! NaN and fold the test, and on the bits elsewhere (`(bits & 0x7FFFFFFF) > 0x7F800000`), which no
 //! float mode reaches: the conversions and functions whose answer at a NaN is a number test so.
 
-use crate::air::ir::{BinOp as AirBin, CastOp, FastMath};
+use crate::air::ir::{BinOp as AirBin, CastOp, Const, FastMath, Type};
+use crate::air::Entry;
+use crate::budget::Meter;
+use crate::error::Error;
 use crate::lower::arith::legal::{FloatFmt, Form, Held};
 use crate::lower::arith::math::FloatFn;
 use crate::lower::arith::narrow::u32_form;
@@ -62,6 +66,33 @@ pub enum NanAnswer {
     /// bit (`pow(-NaN, 1)` is `0xffc00000`): precise `pow` on `float` (A1 case 116e052a, every
     /// lane; `fast::pow` answers the canonical NaN there).
     BaseToExponentOne,
+}
+
+/// Whether `bits`, a `float` constant's (zero-extended), are a signalling NaN: every exponent bit
+/// set, the quiet bit (the mantissa's top bit) clear, and the payload below it nonzero.
+pub fn signalling_f32(bits: u64) -> bool {
+    let b = bits as u32;
+    b & 0x7F80_0000 == 0x7F80_0000 && b & 0x0040_0000 == 0 && b & 0x003F_FFFF != 0
+}
+
+/// Whether `entry`'s module, which holds the constants its function reaches, holds a `float`
+/// constant whose bits are a signalling NaN ([`signalling_f32`]); a vector's lanes and an
+/// aggregate's members are constants of their own. Metal keeps such a NaN's bits: one the program
+/// wrote, and one that decides an operation whose other operands only the run knows
+/// (`canon::sccp`'s fold of an `fadd`, `fsub`, `fmul`, `fdiv` or fused multiply-add with a NaN
+/// operand, which is that operand). The device's move of it as a `float` may quiet it, which no
+/// Vulkan rule forbids, so its bits are the device's. A `half` constant moves as its bits
+/// (`narrow::constant_bits`) and a `double` is not measured.
+pub fn holds_signalling_float(entry: &Entry, m: &mut Meter) -> Result<bool, Error> {
+    let consts = entry.module.consts();
+    m.tick(u32::try_from(consts.len()).unwrap_or(u32::MAX))?;
+    let types = entry.module.types();
+    Ok(consts.iter().any(|(_, c)| {
+        matches!(
+            (&c.value, types.get(c.ty)),
+            (Const::Float(bits), Some(Type::Float)) if signalling_f32(*bits)
+        )
+    }))
 }
 
 /// How [`is_nan`] tests a value for a NaN.

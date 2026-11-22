@@ -2432,7 +2432,13 @@ bound.
   texel's bits) where they are not the bits it was read from (a `half` moved unchanged from its
   read keeps them, through a struct's member too), on every device, since the encode is
   the device's narrowing (its conversion with `shaderFloat16`, `PackHalf2x16` without): a NaN's
-  bits the device's, where Metal keeps a `half` NaN's sign and payload.
+  bits the device's, where Metal keeps a `half` NaN's sign and payload. And wherever the entry
+  reaches a `float` constant whose bits are a signalling NaN (every exponent bit set, the quiet bit
+  clear, a nonzero payload), whether the program wrote it or Metal's compiler left it deciding an
+  `fadd`, `fsub`, `fmul`, `fdiv` or fused multiply-add whose other operands only the run knows:
+  Metal keeps its bits, and the device's move of it as a `float` may quiet it (an RTX 3090 stores
+  `0x7fc00321` where Metal stores `0x7f800321`; the other cards in the runs so far kept the bits).
+  A `half` constant moves as its bits and records nothing; `double` is not measured.
 - `metal2vulkan-degrade-native-min-max` (precision). `PrecisionNote::NativeMinMax`: Native device
   maths: Metal's `fmin`, `fmax`, `min3`, `max3`, `clamp` or `saturate` (its `clamp(x, +0, 1)`) on
   `float` or `half` is the device's `GLSL.std.450` `NMin`, `NMax` or `NClamp`, and `median3`

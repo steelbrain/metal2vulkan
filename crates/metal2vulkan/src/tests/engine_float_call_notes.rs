@@ -486,3 +486,40 @@ fn precise_fmod_records_no_precision_note_and_the_roots_the_devices() {
         }
     }
 }
+
+/// A `float` constant whose bits are a signalling NaN keeps them on Metal, whether the program
+/// wrote it or it decides an operation whose other operands only the run knows
+/// (`canon::sccp`'s fold), and the device's move of it as a `float` may quiet it, so a module that
+/// stores one records `NativeNanEncoding` (`nan::holds_signalling_float`). A quiet NaN constant,
+/// and a `half` signalling NaN, which moves as its bits, record no such note.
+#[test]
+fn a_signalling_float_nan_constant_records_the_devices_nan_encoding() {
+    let store = |name: &str, ty: &str, bits: &str, align: u32| Kernel {
+        name: name.to_owned(),
+        body: format!(
+            "  store {ty} bitcast ({bits} to {ty}), ptr addrspace(1) %0, align {align}\n"
+        ),
+        decl: None,
+        op: Op::Copy,
+    };
+    let kernels = [
+        // 0x7f800321, 0x7fc00321 and 0x7c01.
+        store("snan", "float", "i32 2139096865", 4),
+        store("qnan", "float", "i32 2143290145", 4),
+        store("half_snan", "half", "i16 31745", 2),
+    ];
+    let Some(bc) = assemble("snan", 0, &module(&kernels)) else {
+        return;
+    };
+    for (stem, p) in first_profile() {
+        for (name, noted) in [("snan", true), ("qnan", false), ("half_snan", false)] {
+            let a = compile(&bc, name, &p).unwrap_or_else(|e| panic!("{name} on {stem}: {e}"));
+            assert_eq!(
+                a.precision.contains(&PrecisionNote::NativeNanEncoding),
+                noted,
+                "{name} on {stem}: {:?}",
+                a.precision
+            );
+        }
+    }
+}

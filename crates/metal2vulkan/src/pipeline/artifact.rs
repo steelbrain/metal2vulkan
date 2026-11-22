@@ -1626,7 +1626,10 @@ pub enum PrecisionNote {
     /// (an `OpFConvert` to 16 bits with `shaderFloat16`, `PackHalf2x16` without it), and a NaN
     /// narrows to a NaN whose bits are the device's, where Metal keeps a `half` NaN's sign and
     /// payload. Every other `half` widens to its value and narrows to its bits, but a denormal on a
-    /// device that may flush 16-bit ones ([`PrecisionNote::NativeHalfConversion`]). Validation
+    /// device that may flush 16-bit ones ([`PrecisionNote::NativeHalfConversion`]). And by every
+    /// module whose entry reaches a `float` constant whose bits are a signalling NaN, the
+    /// program's own or one Metal's compiler leaves where a NaN operand decides an operation:
+    /// Metal keeps its bits, and the device's move of it as a `float` may quiet it. Validation
     /// derives no tolerance from it.
     NativeNanEncoding,
     /// Native device maths: Metal's `fmin`, `fmax`, `min3`, `max3`, `clamp` or `saturate` (its

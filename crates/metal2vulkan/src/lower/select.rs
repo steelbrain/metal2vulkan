@@ -1653,7 +1653,7 @@ fn finish(
     tessellation::finish(&mut cx)?;
     sync::barrier::finish(&mut cx)?;
     sync::memory_model::finish(&mut cx)?;
-    arith::finish(&mut cx)?;
+    arith::finish(&mut cx, m)?;
 
     // An object function's partial threadgroups read its region, which a folded variant's slot
     // plan then reads from its record; so do a kernel's under its input.
