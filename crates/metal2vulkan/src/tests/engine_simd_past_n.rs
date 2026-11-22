@@ -1,24 +1,26 @@
-//! A simdgroup or quadgroup operation that moves a value from a lane past the threadgroup's
-//! thread count `N` reads all-zero bits, Metal's answer (amending the calling-lane rule).
+//! A simdgroup or quadgroup operation in a simdgroup whose lanes past the threadgroup's thread
+//! count `N` do not exist: a move from an active lane reads its value, and a move from a lane past
+//! `N` reads a value MSL leaves undefined (a thread reads only from an active thread, MSL 4.1
+//! section 6.10.2), which nothing here promises.
 //!
 //! The owned fixtures, compiled without fast math, run every operation in workgroup-uniform
 //! control flow on a threadgroup of `N` threads:
 //!
 //! - `engine/dsm2_shuffle_past_n` writes `simd_shuffle` (a source lane per lane),
 //!   `simd_shuffle_down` (delta 8), and `simd_shuffle_xor` (mask 16) of a distinct word per
-//!   thread. Metal's readings are zero for every source past `N`, whatever
-//!   the inputs, the threadgroup, or the dispatch's shape; [`the_model_is_metals_reading`] checks
-//!   [`model`] against two of them word for word.
+//!   thread. [`model`] gives every word whose source is an active lane, and
+//!   [`the_model_is_metals_reading`] checks those words against two of Metal's readings.
 //! - `engine/dsm2_shuffle_past_n_more` writes `simd_broadcast`, `simd_shuffle_rotate_down`,
 //!   both `simd_shuffle_and_fill` forms, `quad_shuffle_xor`, `quad_broadcast`,
 //!   `quad_shuffle_down`, `quad_shuffle_rotate_down`, and `float` and `half` shuffles: the same
-//!   rule, which [`model_more`] states and the fixture's cases ask Metal.
+//!   rule, which [`model_more`] states.
 //!
-//! Both run on the emulating profiles (lavapipe, vk12-floor) and on `moltenvk-m3`'s
+//! Both run on the emulating profiles (lavapipe, runtime-floor) and on `moltenvk-m3`'s
 //! emulated-simdgroups variant, which a dispatch with a partial simdgroup runs, at 6 to 48 threads,
-//! on the CPU interpreter at 8, 16, and 32 subgroup lanes in both scheduling orders; every word
-//! equals the model. `moltenvk-m3`'s `Direct` tier runs the whole-simdgroup control. No GPU is
-//! used.
+//! on the CPU interpreter at 8, 16, and 32 subgroup lanes in both scheduling orders: every run
+//! completes, every word is written, and every word the model gives equals it. `moltenvk-m3`'s
+//! `Direct` tier runs the whole-simdgroup control, where every source is active and the model
+//! gives every word. No GPU is used.
 //!
 //! `llvm-as` assembles the fixtures; a missing tool skips visibly.
 
@@ -91,44 +93,38 @@ fn inputs(n: u32, other: bool) -> Vec<u32> {
 }
 
 /// The word of the lane `lane` of thread `t`'s simdgroup, `x`, in a threadgroup of `n` threads,
-/// or all-zero bits for a lane past `n`.
-fn lane_word(x: &[u32], n: u32, t: u32, lane: u32) -> u32 {
+/// or `None` for a lane past `n`, whose read is not promised.
+fn lane_word(x: &[u32], n: u32, t: u32, lane: u32) -> Option<u32> {
     let u = (t & !31) + lane;
-    if u < n {
-        x[u as usize]
-    } else {
-        0
-    }
+    (u < n).then(|| x[u as usize])
 }
 
 /// `dsm2_shuffle_past_n`'s three words at thread `t` of a threadgroup of `n` threads over
-/// inputs `x`: Metal's reading.
-fn model(x: &[u32], n: u32, t: u32) -> [u32; 3] {
+/// inputs `x`: each word whose source is an active lane, `None` for the others.
+fn model(x: &[u32], n: u32, t: u32) -> [Option<u32>; 3] {
     let l = t & 31;
     let rd = |lane: u32| lane_word(x, n, t, lane);
     let src = sources();
     [
         rd(src[l as usize]),
         // A source past the simdgroup keeps the caller's value.
-        if l + 8 < 32 { rd(l + 8) } else { x[t as usize] },
+        if l + 8 < 32 {
+            rd(l + 8)
+        } else {
+            Some(x[t as usize])
+        },
         rd(l ^ 16),
     ]
 }
 
 /// `dsm2_shuffle_past_n_more`'s ten words at thread `t` of a threadgroup of `n` threads over
-/// inputs `x`, under [`model`]'s rule: a source past `n` reads zero bits, data and filling value
-/// alike.
-fn model_more(x: &[u32], n: u32, t: u32) -> [u32; 10] {
+/// inputs `x`, under [`model`]'s rule: a word read from a source past `n`, data or filling value,
+/// is `None`.
+fn model_more(x: &[u32], n: u32, t: u32) -> [Option<u32>; 10] {
     let l = t & 31;
     let (q, qb) = (l & 3, l & !3);
     let rd = |lane: u32| lane_word(x, n, t, lane);
-    let fill = |lane: u32| {
-        if (t & !31) + lane < n {
-            !rd(lane)
-        } else {
-            0
-        }
-    };
+    let fill = |lane: u32| rd(lane).map(|w| !w);
     let src = sources()[l as usize];
     [
         rd(20),
@@ -138,16 +134,20 @@ fn model_more(x: &[u32], n: u32, t: u32) -> [u32; 10] {
         rd(qb | (q ^ 2)),
         rd(qb | 3),
         // A source past the quad keeps the caller's value.
-        if q + 1 < 4 { rd(l + 1) } else { x[t as usize] },
+        if q + 1 < 4 {
+            rd(l + 1)
+        } else {
+            Some(x[t as usize])
+        },
         rd(qb | ((q + 1) & 3)),
         rd(src),
-        rd(src) >> 16,
+        rd(src).map(|w| w >> 16),
     ]
 }
 
-/// Our probe's Metal readings (apple-m3-max-macos26.7, both passes) of
-/// `dsm2-shuffle-past-the-thread-count-sixteen` (16 threads, input A) and
-/// `dsm2-shuffle-past-the-thread-count-eight` (8 threads, input A): thread `t`'s three words.
+/// Our probe's Metal readings (apple-m3-max-macos26.7, both passes) of a threadgroup of 16 and
+/// one of 8 threads over input A: thread `t`'s three words. A word whose source is past the thread
+/// count is not promised, and the model gives none for it.
 const SIXTEEN: [[u32; 3]; 16] = [
     [0x0000_0000, 0xa509_0909, 0x0000_0000],
     [0xa504_0404, 0xa50a_0a0a, 0x0000_0000],
@@ -179,16 +179,19 @@ const EIGHT: [[u32; 3]; 8] = [
 
 #[test]
 fn the_model_is_metals_reading() {
+    let mut promised = 0;
     for (n, rows) in [(16u32, &SIXTEEN[..]), (8, &EIGHT[..])] {
         let x = inputs(n, false);
         for (t, row) in rows.iter().enumerate() {
-            assert_eq!(model(&x, n, t as u32), *row, "{n} threads, thread {t}");
+            for (i, (want, metal)) in model(&x, n, t as u32).iter().zip(row).enumerate() {
+                if let Some(w) = want {
+                    assert_eq!(w, metal, "{n} threads, thread {t}, word {i}");
+                    promised += 1;
+                }
+            }
         }
     }
-    // The calling-lane rule once guessed gives other words: the even lanes' shuffle would read
-    // their own word.
-    let x = inputs(16, false);
-    assert_ne!(SIXTEEN[0][0], x[0]);
+    assert!(promised > 0, "no promised word");
 }
 
 /// The buffers after one workgroup of `n` threads ran `m` over `bufs` (bound at slots 0..),
@@ -264,7 +267,7 @@ fn words(b: &[u8]) -> Vec<u32> {
 type Compiled<'a> = &'a dyn Fn(&[u8], &str) -> (Plan, TypedModule);
 
 /// Run both fixtures at each threadgroup size of `sizes` under both inputs, at each subgroup
-/// width of `widths`, and check every word against the models.
+/// width of `widths`: every word is written, and every word the models give equals them.
 fn check_on(what: &str, sizes: &[u32], widths: &[SubgroupSize], compiled: Compiled<'_>) {
     for (stem, more) in [
         ("dsm2_shuffle_past_n", false),
@@ -285,18 +288,23 @@ fn check_on(what: &str, sizes: &[u32], widths: &[SubgroupSize], compiled: Compil
                     let out = words(&run_all(&plan, &m, n, lanes, &bufs)[2]);
                     for t in 0..n {
                         let got = &out[(per * t) as usize..(per * (t + 1)) as usize];
-                        let want: Vec<u32> = if more {
+                        let want: Vec<Option<u32>> = if more {
                             model_more(&x, n, t).to_vec()
                         } else {
                             model(&x, n, t).to_vec()
                         };
                         assert!(got.iter().all(|&w| w != POISON), "{what} {stem} written");
-                        assert_eq!(
-                            got,
-                            want,
-                            "{what} {stem}: {n} threads, input {}, {lanes:?}, thread {t}",
-                            if other { "B" } else { "A" }
-                        );
+                        for (i, (g, w)) in got.iter().zip(&want).enumerate() {
+                            if let Some(w) = w {
+                                assert_eq!(
+                                    g,
+                                    w,
+                                    "{what} {stem}: {n} threads, input {}, {lanes:?}, thread {t}, \
+                                     word {i}",
+                                    if other { "B" } else { "A" }
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -309,7 +317,7 @@ fn check_on(what: &str, sizes: &[u32], widths: &[SubgroupSize], compiled: Compil
 const SIZES: [u32; 6] = [6, 8, 16, 32, 42, 48];
 
 #[test]
-fn the_emulated_tier_reads_a_lane_past_the_thread_count_as_zero() {
+fn the_emulated_tier_reads_the_active_lanes_of_a_partial_simdgroup() {
     for stem in PROFILES {
         let p: DeviceProfile = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         check_on(stem, &SIZES, &WIDTHS, &|bc, entry| {
@@ -323,7 +331,7 @@ fn the_emulated_tier_reads_a_lane_past_the_thread_count_as_zero() {
 }
 
 #[test]
-fn the_emulated_variant_reads_a_lane_past_the_thread_count_as_zero() {
+fn the_emulated_variant_reads_the_active_lanes_of_a_partial_simdgroup() {
     let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let mut inputs = LoweringInputs::new();
     inputs.emulated_simdgroups = true;

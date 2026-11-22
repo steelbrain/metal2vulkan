@@ -9,15 +9,16 @@
 //! through the whole pipeline, pass L3 (`spirv-val` under each profile), and run on the CPU
 //! interpreter at 8, 16, 32, and 64 subgroup lanes in both scheduling orders. Every kernel's
 //! output is checked against an expectation derived from the thread index and the threadgroup
-//! size, including threadgroups whose last simdgroup or quad is partially occupied (a source lane
-//! outside the threadgroup reads zero bits, Metal's answer; `engine_simd_past_n` checks its
-//! readings). An operation outside workgroup-uniform control flow runs predicated: `engine/
+//! size, including threadgroups whose last simdgroup or quad is partially occupied, where a word
+//! read from a source lane outside the threadgroup is not promised (a thread reads only from an
+//! active thread, MSL 4.1 section 6.10.2), so the expectation gives none and only the run is
+//! checked. An operation outside workgroup-uniform control flow runs predicated: `engine/
 //! simd_divergent`, the divergent kernels of `simd_ops`, `a3_quad_votes_divergent`, and
 //! `a3_multi_level_break_tail` check that exactly the lanes that execute an operation take part in
 //! it, after early returns, in branch arms, in loops with per-thread trip counts, breaks,
 //! continues, and returns, and in the tail of a two-level break. A matrix multiply-add in a
-//! divergent block reads the cells of a lane that is not live as zero, Metal's answer
-//! (`engine_simd_partly_live` checks its readings), and a kernel whose threadgroup memory and
+//! divergent block compiles on every emulating profile (`engine_simd_partly_live` runs it), and a
+//! kernel whose threadgroup memory and
 //! scratch exceed `maxComputeSharedMemorySize` as `ThreadgroupMemorySize`, at compile or at plan
 //! time. On a profile whose kernels run their simdgroups on whole subgroups (`moltenvk-m3`), a
 //! dispatch with a partial simdgroup asks for the kernel's emulated-simdgroups variant, which gives
@@ -243,29 +244,25 @@ impl Group {
         (t & !3)..((t & !3) + 4).min(self.n)
     }
 
-    /// Source thread `src` when it is inside the threadgroup.
+    /// Source thread `src` when it is inside the threadgroup: the thread index a shuffle reads
+    /// from it. Past the thread count the read is not promised (`None`).
     fn get(self, src: u32) -> Option<u32> {
         (src < self.n).then_some(src)
-    }
-
-    /// The thread index `src` holds, as a shuffle reads it: zero bits past the threadgroup's
-    /// thread count, Metal's answer.
-    fn read(self, src: u32) -> u32 {
-        self.get(src).unwrap_or(0)
     }
 }
 
 /// The expected `out[t]` of each workgroup-uniform kernel of `simd_ops` and `simd_uniform` in a
-/// threadgroup of `g.n` threads (see the fixtures' MSL); `steps` is `loop_k`'s trip count.
-fn expected(kernel: &str, g: Group, t: u32, steps: u32) -> u32 {
+/// threadgroup of `g.n` threads (see the fixtures' MSL); `steps` is `loop_k`'s trip count. `None`
+/// where the word depends on a read of a lane that does not take part, which is not promised.
+fn expected(kernel: &str, g: Group, t: u32, steps: u32) -> Option<u32> {
     let l = Group::lane(t);
     let b = Group::base(t);
     let q = t & 3;
     let qb = t & !3;
-    match kernel {
+    Some(match kernel {
         // simd_ops
-        "simd_shuffle_k" => g.read(b + ((l * 7 + 3) & 31)),
-        "simd_broadcast_k" => g.read(b + 9),
+        "simd_shuffle_k" => g.get(b + ((l * 7 + 3) & 31))?,
+        "simd_broadcast_k" => g.get(b + 9)?,
         "simd_shuffle_up_k" => {
             if l >= 3 {
                 t - 3
@@ -275,27 +272,27 @@ fn expected(kernel: &str, g: Group, t: u32, steps: u32) -> u32 {
         }
         "simd_shuffle_down_k" => {
             if l + 5 < 32 {
-                g.read(t + 5)
+                g.get(t + 5)?
             } else {
                 t
             }
         }
-        "simd_shuffle_xor_k" => g.read(t ^ 13),
-        "simd_rotate_k" => g.read(b + ((l + 7) & 31)),
+        "simd_shuffle_xor_k" => g.get(t ^ 13)?,
+        "simd_rotate_k" => g.get(b + ((l + 7) & 31))?,
         "simd_fill_down_k" => {
             let s = l % 8;
-            let src = g.get(t - s + (s + 3) % 8);
+            let src = g.get(t - s + (s + 3) % 8)?;
             if s + 3 < 8 {
-                src.unwrap_or(0)
+                src
             } else {
-                src.map_or(0, |u| u + 1000)
+                src + 1000
             }
         }
         "simd_fill_up_k" => {
             if l >= 2 {
                 t - 2
             } else {
-                g.get(t - l + (l + 30) % 32).map_or(0, |u| u + 1000)
+                g.get(t - l + (l + 30) % 32)? + 1000
             }
         }
         "simd_sum_k" => {
@@ -316,17 +313,17 @@ fn expected(kernel: &str, g: Group, t: u32, steps: u32) -> u32 {
         "simd_xor_k" => g.simd(t).fold(0u32, |a, u| a ^ ((u * u) & 0xFFFF)),
         "quad_ops_k" => {
             let sum: u32 = g.quad(t).sum();
-            g.read(t ^ 1) + g.read(qb + 2) * 1000 + sum * 1_000_000
+            g.get(t ^ 1)? + g.get(qb + 2)? * 1000 + sum * 1_000_000
         }
         "quad_relative_k" => {
             let up = if q >= 1 { t - 1 } else { t };
-            let down = if q + 2 < 4 { g.read(t + 2) } else { t };
-            let rot = g.read(qb + ((q + 3) & 3));
+            let down = if q + 2 < 4 { g.get(t + 2)? } else { t };
+            let rot = g.get(qb + ((q + 3) & 3))?;
             up + down * 1000 + rot * 1_000_000
         }
         "quad_dynamic_k" => {
             let max = g.quad(t).max().unwrap_or(t);
-            g.read(t ^ ((t >> 2) & 3)) + max * 1000
+            g.get(t ^ ((t >> 2) & 3))? + max * 1000
         }
         // simd_uniform
         "vote_k" => {
@@ -353,24 +350,25 @@ fn expected(kernel: &str, g: Group, t: u32, steps: u32) -> u32 {
             let has9 = quad.clone().any(|u| u == 9);
             u32::from(t == qb) + mask * 2 + u32::from(!has9) * 64 + u32::from(has9) * 128 + qb * 256
         }
-        "vector_k" => g.get(t ^ 5).map_or(0, |s| {
+        "vector_k" => {
+            let s = g.get(t ^ 5)?;
             s | ((s + 1) << 8) | ((s ^ 0x55) << 16) | ((255 - s) << 24)
-        }),
+        }
         "half_vector_k" => {
-            let s = if l + 3 < 32 { g.read(t + 3) } else { t };
+            let s = if l + 3 < 32 { g.get(t + 3)? } else { t };
             (s & 63) | ((s >> 1) << 16)
         }
         "loop_k" => {
-            let mut v: Vec<u32> = (0..g.n).collect();
+            let mut v: Vec<Option<u32>> = (0..g.n).map(Some).collect();
             for i in 0..steps {
                 v = (0..g.n)
                     .map(|u| {
-                        let src = g.get(Group::base(u) + ((Group::lane(u) + 1) & 31));
-                        src.map_or(0, |s| v[s as usize]) + i
+                        let src = g.get(Group::base(u) + ((Group::lane(u) + 1) & 31))?;
+                        Some(v[src as usize]? + i)
                     })
                     .collect();
             }
-            v[t as usize]
+            v[t as usize]?
         }
         "barrier_k" => {
             let src = b | ((l + 1) & 31);
@@ -385,7 +383,7 @@ fn expected(kernel: &str, g: Group, t: u32, steps: u32) -> u32 {
         "simd_prefix_k" => {
             let active = |u: u32| !Group::lane(u).is_multiple_of(3);
             if !active(t) {
-                return 7;
+                return Some(7);
             }
             let lanes: Vec<u32> = g.simd(t).filter(|&u| active(u)).collect();
             let incl: u32 = lanes.iter().filter(|&&u| u <= t).sum();
@@ -406,7 +404,7 @@ fn expected(kernel: &str, g: Group, t: u32, steps: u32) -> u32 {
         "simd_vote_k" => {
             let active = |u: u32| Group::lane(u) != 6;
             if !active(t) {
-                return 0;
+                return Some(0);
             }
             let lanes: Vec<u32> = g.simd(t).filter(|&u| active(u)).collect();
             u32::from(lanes.iter().all(|&u| Group::lane(u) != 6))
@@ -415,7 +413,7 @@ fn expected(kernel: &str, g: Group, t: u32, steps: u32) -> u32 {
         }
         "simd_ballot_k" => {
             if l < 2 {
-                return 1;
+                return Some(1);
             }
             g.simd(t)
                 .filter(|&u| Group::lane(u) >= 2 && u % 3 == 0)
@@ -433,7 +431,7 @@ fn expected(kernel: &str, g: Group, t: u32, steps: u32) -> u32 {
         // thread 0 (its mask 0xF) and 159 on thread 8 (lane 9 in the mask and the `any`).
         "quad_ballot_k" => {
             if t % 7 == 2 {
-                return 99;
+                return Some(99);
             }
             let quad: Vec<u32> = g.quad(t).collect();
             let mask = quad.iter().fold(0u32, |a, &u| a | (1 << (u & 3)));
@@ -453,21 +451,21 @@ fn expected(kernel: &str, g: Group, t: u32, steps: u32) -> u32 {
         // simd_divergent. A thread that returned before its store leaves 0.
         "guard_k" => {
             if t >= LIMIT {
-                return 0;
+                return Some(0);
             }
             let s: u32 = g.simd(t).filter(|&u| u < LIMIT).sum();
             s + u32::from(t == b) * 100_000 + b * 1_000_000
         }
         "guard_shuffle_k" => {
             if t >= LIMIT {
-                return 0;
+                return Some(0);
             }
-            // The source lane when it is active; zero past the thread count and where it returned
-            // (Metal's answer for a lane that does not take part).
+            // The source lane when it is active; past the thread count and where it returned the
+            // read is not promised.
             let src = if l + 1 >= 32 {
                 t
             } else if t + 1 >= g.n || t + 1 >= LIMIT {
-                0
+                return None;
             } else {
                 t + 1
             };
@@ -485,7 +483,7 @@ fn expected(kernel: &str, g: Group, t: u32, steps: u32) -> u32 {
         }
         "nested_k" => {
             if t & 1 == 0 {
-                return 5;
+                return Some(5);
             }
             let min = g.simd(t).filter(|&u| u & 1 == 1).min().unwrap_or(0);
             let inner = if t & 3 == 3 {
@@ -520,7 +518,7 @@ fn expected(kernel: &str, g: Group, t: u32, steps: u32) -> u32 {
         }
         "guard_barrier_k" => {
             if t >= LIMIT {
-                return 0;
+                return Some(0);
             }
             let live = LIMIT.min(g.n);
             ((t + 1) % live) * 3 + g.simd(t).filter(|&u| u < LIMIT).count() as u32 * 1000
@@ -533,16 +531,15 @@ fn expected(kernel: &str, g: Group, t: u32, steps: u32) -> u32 {
         "quad_guard_k" => {
             let active = |u: u32| u % 5 != 3 && u < g.n;
             if !active(t) {
-                return 0;
+                return Some(0);
             }
             let quad: Vec<u32> = g.quad(t).filter(|&u| active(u)).collect();
             let sum: u32 = quad.iter().sum();
-            // Zero past the thread count and where the source is not live (Metal's answer for a
-            // lane that does not take part).
+            // Past the thread count and where the source is not live the read is not promised.
             let src = if t ^ 1 < g.n && active(t ^ 1) {
                 t ^ 1
             } else {
-                0
+                return None;
             };
             let first = quad.first().copied() == Some(t);
             let mask = quad.iter().fold(0u32, |a, &u| a | (1 << (u & 3)));
@@ -550,7 +547,7 @@ fn expected(kernel: &str, g: Group, t: u32, steps: u32) -> u32 {
         }
         "guard_simd_barrier_k" => {
             if t >= LIMIT {
-                return 0;
+                return Some(0);
             }
             let src = (t & !31) | ((t + 1) & 31);
             if src < LIMIT.min(g.n) {
@@ -575,7 +572,7 @@ fn expected(kernel: &str, g: Group, t: u32, steps: u32) -> u32 {
         // Every thread leaves at `i == 5` through its own exit, after six sums and five steps.
         "uniform_exit_k" => {
             let all = g.simd(t).count() as u32;
-            let xor = g.get(t ^ 1).map_or(0, |s| 2 * s + 3);
+            let xor = 2 * g.get(t ^ 1)? + 3;
             let odd = g.simd(t).filter(|&u| u & 1 == 1).count() as u32;
             6 * all + 5 * 1000 + xor + (t & 1) * odd * 100_000
         }
@@ -583,7 +580,7 @@ fn expected(kernel: &str, g: Group, t: u32, steps: u32) -> u32 {
         "a3_quad_votes_divergent" => {
             let active = |u: u32| u < g.n && (((u >> 2) & 15) >> (u & 3)) & 1 != 0;
             if !active(t) {
-                return 0xFF00_0000;
+                return Some(0xFF00_0000);
             }
             let quad: Vec<u32> = g.quad(t).filter(|&u| active(u)).collect();
             let mask = quad.iter().fold(0u32, |a, &u| a | (1 << (u & 3)));
@@ -601,7 +598,7 @@ fn expected(kernel: &str, g: Group, t: u32, steps: u32) -> u32 {
         // answers 2 on thread 8, the skipping lane 9's).
         "mask_quad_ballot_k" | "mask_quad_ballot_divergent_k" => {
             if kernel == "mask_quad_ballot_divergent_k" && t % 7 == 2 {
-                return 99;
+                return Some(99);
             }
             g.quad(t)
                 .filter(|&u| u % 3 == 0)
@@ -611,14 +608,14 @@ fn expected(kernel: &str, g: Group, t: u32, steps: u32) -> u32 {
             let divergent = kernel == "mask_simd_active_divergent_k";
             let active = |u: u32| !divergent || Group::lane(u) >= 3;
             if !active(t) {
-                return 1;
+                return Some(1);
             }
             g.simd(t)
                 .filter(|&u| active(u))
                 .fold(0u32, |a, u| a | (1 << Group::lane(u)))
         }
         other => panic!("no expectation for {other}"),
-    }
+    })
 }
 
 /// The workgroup-uniform kernels of `simd_ops`: every simdgroup and quad operation runs on every
@@ -733,8 +730,8 @@ fn check_emulated(stem: &str, kernel: &str, plan: &Plan, words: Option<u32>) {
     }
 }
 
-/// `kernel`'s module `m` (planned as `plan`) gives the expectation at every width and each of
-/// `locals`.
+/// `kernel`'s module `m` (planned as `plan`) runs at every width and each of `locals`, and gives
+/// every word the expectation promises.
 fn run_expected(stem: &str, kernel: &str, plan: &Plan, m: &TypedModule, locals: &[[u32; 3]]) {
     let steps = 5;
     let constant = match kernel {
@@ -755,8 +752,9 @@ fn run_expected(stem: &str, kernel: &str, plan: &Plan, m: &TypedModule, locals: 
             };
             let out = run_all(plan, m, local, lanes, constant);
             for (t, got) in out.iter().enumerate() {
-                let want = expected(kernel, g, t as u32, steps);
-                assert_eq!(*got, want, "{stem} {kernel} {local:?} {lanes:?} thread {t}");
+                if let Some(want) = expected(kernel, g, t as u32, steps) {
+                    assert_eq!(*got, want, "{stem} {kernel} {local:?} {lanes:?} thread {t}");
+                }
             }
         }
     }
@@ -1444,8 +1442,8 @@ fn a_multi_level_break_tail_runs_once_per_outer_iteration_emulated() {
 }
 
 /// A matrix multiply-add in a divergent block compiles and passes L3 on every profile that emulates
-/// the kernel's simdgroups, device addresses or none: a lane that is not live takes part with zero
-/// cells, which needs no runtime input.
+/// the kernel's simdgroups, device addresses or none: a lane that is not live is read through the
+/// calling lane, which needs no runtime input.
 #[test]
 fn a_divergent_matrix_multiply_add_compiles_on_every_emulating_profile() {
     let text = std::fs::read_to_string(engine_dir().join("simd_matrix.ll")).expect("read");

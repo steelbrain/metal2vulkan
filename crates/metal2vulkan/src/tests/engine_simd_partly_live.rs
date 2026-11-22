@@ -1,37 +1,37 @@
-//! A simdgroup multiply-add on emulated simdgroups whose lanes do not all take part.
+//! A simdgroup multiply-add on simdgroups whose lanes may not all take part.
 //!
 //! The owned fixtures `engine/dsm_*` run an 8x8 `simdgroup_multiply_accumulate`, in float and
 //! in half, in a block `lower::simd::uniform` cannot prove workgroup uniform (`dsm_uniform`: in
-//! workgroup-uniform control flow). Metal (Apple M3 Max,
-//! macOS 26.7) computes such a product deterministically across runs, processes, inputs, and
-//! dispatch shapes, with the cells of every lane that does not take part (not live, or past the
-//! threadgroup's thread count) read as zero, so an infinite cell meeting one makes NaN: that is
-//! [`metal`] below, and the literal readings of the authored cases and of our probe's
-//! uncommitted ones are checked against it. On every profile whose kernels emulate their
+//! workgroup-uniform control flow). Where the whole simdgroup takes part the product is the exact
+//! `c + a·b`, [`exact`] below, against which the literal readings of the authored cases and of our
+//! probe's uncommitted ones (Apple M3 Max, macOS 26.7) are checked. Where only part of it does
+//! (not live, or past the threadgroup's thread count), MSL makes the multiply-add undefined (MSL
+//! 4.1 section 2.4: a simdgroup matrix operation outside uniform control flow within the
+//! simdgroup), so its cells are not promised. On every profile whose kernels emulate their
 //! simdgroups (`lavapipe`, `runtime-floor`) each fixture compiles, passes L3, and runs on the CPU
-//! interpreter at 8, 16, and 32 subgroup lanes in both scheduling orders, giving that answer:
+//! interpreter at 8, 16, and 32 subgroup lanes in both scheduling orders:
 //!
 //! - whole simdgroups (a branch on the simdgroup index, or on a device word equal across the
 //!   simdgroup): the exact `c + a·b`;
 //! - part of a simdgroup live (lanes 0-15, the odd lanes; cells loaded before the branch, built
 //!   from plain loads, or loaded inside it), and a threadgroup below 32 threads, in divergent and
-//!   in uniform control flow: the product with the other lanes' cells zero;
+//!   in uniform control flow: the run completes and every running thread writes its cells;
 //! - the same for the AGX `f32matmad8x8` (hand-written AIR: MSL cannot spell it).
 //!
 //! `moltenvk-m3`'s emulated-simdgroups variant, which a dispatch with a partial simdgroup runs,
-//! gives the same answers.
+//! does the same.
 //!
 //! On the subgroup tiers (`moltenvk-m3`'s `Direct` at 32 lanes, a wave64 device's `Cluster32`
 //! at 64) a multiply-add in a block the uniformity analysis cannot prove uniform ballots its live
-//! lanes and reads a lane that does not take part as zero cells without a shuffle naming it: the
-//! interpreter traps a shuffle from an inactive lane, so these runs fail without it.
+//! lanes and reads a lane that does not take part through the calling lane, without a shuffle
+//! naming it: the interpreter traps a shuffle from an inactive lane, so these runs fail without it.
 //! `engine/dsm2_collective_branch` puts the multiply-add under a branch on a simdgroup
 //! collective's result after a loop whose exit differs by lane, which the workgroup analysis
 //! reads as divergent.
 //!
-//! The zero cell is `+0` (the owned no-fast-math fixtures `engine/dsm2_zero_sign*`): with a
-//! `-0` accumulator and every other term `-0`, Metal's results show the sign of a not-live lane's
-//! and an absent lane's zero, on the `a` side and the `b` side, and every tier gives those bits.
+//! The owned no-fast-math fixtures `engine/dsm2_zero_sign*` give a whole simdgroup's signed zeros
+//! exactly on every tier: with a `-0` accumulator and every other term `-0`, Metal's results show
+//! the signs of the exact sum.
 //!
 //! Lanes that do not run the multiply-add write nothing. No GPU is used.
 //!
@@ -121,12 +121,10 @@ enum Input {
     /// A with `a[0][4] = +inf` (lane 8's cell), whose step reads `b` row 4 (lanes 16-23's).
     Infinity,
     /// The signed-zero input of `dsm2_zero_sign`: `a` is +1 except -1 in rows 2-3, columns 4-7; `b`
-    /// rows 0-3 are -0 and rows 4-7 (lanes 16-31's cells) are `rows`; `c` is -0. Where lanes 16-31
-    /// do not take part, rows 0-1 read their zero `z` and rows 2-3 `-z`.
+    /// rows 0-3 are -0 and rows 4-7 (lanes 16-31's cells) are `rows`; `c` is -0.
     Signed { rows: f64 },
     /// The `a`-side signed-zero input: `a` is +1 in columns 0, 1, 4, 5 (the even lanes' cells) and
     /// -0 elsewhere, `b[k][j]` is -1 for `k` in {0, 1, 4, 5} and `j` in {6, 7}, else +1, `c` is -0.
-    /// Where the even lanes do not take part, columns 2-3 read their zero `z` and columns 6-7 `-z`.
     Odd,
 }
 
@@ -185,31 +183,20 @@ fn inputs(which: Input) -> [M8; 3] {
     [a, b, c]
 }
 
-/// Metal's cells for lane `l` of a simdgroup whose lanes `part` take part in the multiply-add:
-/// `c + a·b` with the `a` and `b` cells of every other lane `+0`, so an infinite cell whose step
-/// meets another lane's zero cell makes NaN.
-fn metal(m: &[M8; 3], part: Lanes<'_>, l: u32) -> [f64; 2] {
-    tile(m, part, l, 8, 0.0)
+/// The cells of lane `l` of a whole simdgroup's multiply-add: the exact `c + a·b`.
+fn exact(m: &[M8; 3], l: u32) -> [f64; 2] {
+    tile(m, l, 8)
 }
 
-/// [`metal`] over dimension `dim` (8, or 4: each of the tile's quadrants multiplied on its own,
-/// the AGX `matmad4x4`), with `zero` the cell of a lane that does not take part. Each cell
-/// accumulates from `c` in increasing `k`; the products here are exact, so a sum of signed
-/// zeros is `-0` exactly when every term is.
-fn tile(m: &[M8; 3], part: Lanes<'_>, l: u32, dim: usize, zero: f64) -> [f64; 2] {
+/// [`exact`] over dimension `dim` (8, or 4: each of the tile's quadrants multiplied on its own,
+/// the AGX `matmad4x4`). Each cell accumulates from `c` in increasing `k`; the products here are
+/// exact, so a sum of signed zeros is `-0` exactly when every term is.
+fn tile(m: &[M8; 3], l: u32, dim: usize) -> [f64; 2] {
     let [a, b, c] = m;
-    let mut ta = [[zero; 8]; 8];
-    let mut tb = [[zero; 8]; 8];
-    for o in (0..32).filter(|&o| part(o)) {
-        for j in 0..2 {
-            ta[row(o)][col(o) + j] = a[row(o)][col(o) + j];
-            tb[row(o)][col(o) + j] = b[row(o)][col(o) + j];
-        }
-    }
     let r = row(l);
     let cell = |q: usize| {
         let (r0, q0) = if dim == 4 { (r & 4, q & 4) } else { (0, 0) };
-        (0..dim).fold(c[r][q], |acc, k| acc + ta[r][q0 + k] * tb[r0 + k][q])
+        (0..dim).fold(c[r][q], |acc, k| acc + a[r][q0 + k] * b[r0 + k][q])
     };
     [cell(col(l)), cell(col(l) + 1)]
 }
@@ -226,39 +213,19 @@ fn canon(w: [u32; 4]) -> [u32; 4] {
     })
 }
 
-/// The literal readings our probes took on Metal (both passes byte-identical): `(case, input, part,
-/// lane, float cells)`. The half cells are the same values.
+/// The literal readings our probes took on Metal of whole simdgroups (both passes
+/// byte-identical): `(case, input, lane, float cells)`. The half cells are the same values.
 #[test]
 fn the_model_is_metals_reading() {
-    let half = |l: u32| l < 16;
-    let odd = |l: u32| l % 2 == 1;
-    let all = |_: u32| true;
-    let (inf, nan) = (f64::INFINITY, f64::NAN);
-    let readings: [(&str, Input, Lanes<'_>, u32, [f64; 2]); 14] = [
+    let inf = f64::INFINITY;
+    let readings: [(&str, Input, u32, [f64; 2]); 2] = [
         // 434ee829: a whole simdgroup.
-        ("434ee829", Input::A, &all, 0, [289.0, 291.0]),
-        // e2474ecb, ce3f96fb: lanes 0-15 live, inputs B and A alike.
-        ("e2474ecb", Input::B, &half, 0, [256.0, 257.0]),
-        ("ce3f96fb", Input::A, &half, 9, [262.0, 263.0]),
-        // 46c2ad06: the odd lanes, input B.
-        ("46c2ad06", Input::B, &odd, 1, [258.0, 259.0]),
-        ("46c2ad06", Input::B, &odd, 5, [389.0, 391.0]),
-        ("46c2ad06", Input::B, &odd, 17, [290.0, 291.0]),
-        ("46c2ad06", Input::B, &odd, 21, [325.0, 327.0]),
-        // 2b60dd21: a threadgroup of 16.
-        ("2b60dd21", Input::A, &half, 15, [286.0, 287.0]),
-        // b577c71f: a threadgroup of 48, simdgroup 0 whole.
-        ("b577c71f", Input::A, &all, 31, [349.0, 351.0]),
-        // Our probe's uncommitted cases: a whole simdgroup reads +inf; lanes 0-15 live, and
-        // a threadgroup of 16, read NaN where the infinite cell meets a zero one.
-        ("150d4c95", Input::Infinity, &all, 8, [inf, inf]),
-        ("a62e77f4", Input::Infinity, &half, 0, [nan, nan]),
-        ("a62e77f4", Input::Infinity, &half, 9, [nan, nan]),
-        ("a62e77f4", Input::Infinity, &half, 2, [264.0, 265.0]),
-        ("56e1b000", Input::Infinity, &half, 1, [nan, nan]),
+        ("434ee829", Input::A, 0, [289.0, 291.0]),
+        // Our probe's uncommitted case: a whole simdgroup reads +inf.
+        ("150d4c95", Input::Infinity, 8, [inf, inf]),
     ];
-    for (case, input, part, lane, want) in readings {
-        let got = metal(&inputs(input), part, lane);
+    for (case, input, lane, want) in readings {
+        let got = exact(&inputs(input), lane);
         assert_eq!(
             canon(written(got)),
             canon(written(want)),
@@ -417,7 +384,7 @@ fn written(x: [f64; 2]) -> [u32; 4] {
 /// and which threads run the multiply-add.
 type Dispatch<'a> = (&'a str, u32, Input, Option<[u32; 3]>, Lanes<'a>);
 
-/// Run each dispatch on each emulating profile and check every thread against [`metal`].
+/// Run each dispatch on each emulating profile and check every thread ([`check_on`]).
 fn check(dispatches: &[Dispatch<'_>]) {
     for stem in PROFILES {
         let p = emulating(stem);
@@ -471,7 +438,7 @@ fn on_tier(
 }
 
 /// Run each dispatch (a grid a multiple of the subgroup) on each subgroup tier and check every
-/// thread against [`metal`].
+/// thread ([`check_on`]).
 fn check_subgroups(dispatches: &[Dispatch<'_>]) {
     for (stem, p, tier, lanes) in subgroup_tiers() {
         let n = match lanes {
@@ -495,8 +462,9 @@ fn check_subgroups(dispatches: &[Dispatch<'_>]) {
 type Compiled<'a> = &'a dyn Fn(&[u8], &str) -> Option<(Plan, TypedModule)>;
 
 /// Run each dispatch on the module `compiled` gives, at each subgroup width of `widths`, and
-/// check every thread against [`metal`]: a thread that runs the multiply-add holds Metal's cells
-/// for the lanes of its simdgroup that run it, any other writes nothing.
+/// check every thread: one whose whole simdgroup runs the multiply-add holds the exact cells
+/// ([`exact`]), one whose simdgroup runs it in part writes cells that are not promised, and one
+/// that does not run it writes nothing.
 fn check_on(
     what: &str,
     dispatches: &[Dispatch<'_>],
@@ -512,21 +480,25 @@ fn check_on(
         for &lanes in widths {
             let out = run_all(&plan, &m, n, lanes, &dsm_buffers(&input, n, sel));
             for g in 0..n {
-                let base = g & !31;
-                let part = |l: u32| base + l < n && runs(base + l);
-                let want = if runs(g) {
-                    written(metal(&input, &part, g & 31))
+                let got = canon(cells(&out[2], n, g));
+                let at = format!("{what} {entry} n={n} {which:?} {lanes:?} thread {g}");
+                if !runs(g) {
+                    assert_eq!(got, [POISON; 4], "{at}");
+                } else if whole(n, runs, g) {
+                    assert_eq!(got, canon(written(exact(&input, g & 31))), "{at}");
                 } else {
-                    [POISON; 4]
-                };
-                assert_eq!(
-                    canon(cells(&out[2], n, g)),
-                    canon(want),
-                    "{what} {entry} n={n} {which:?} {lanes:?} thread {g}"
-                );
+                    assert!(got.iter().all(|&w| w != POISON), "{at}: written");
+                }
             }
         }
     }
+}
+
+/// Whether every lane of thread `g`'s simdgroup exists in a threadgroup of `n` threads and runs
+/// the multiply-add.
+fn whole(n: u32, runs: Lanes<'_>, g: u32) -> bool {
+    let base = g & !31;
+    (base..base + 32).all(|u| u < n && runs(u))
 }
 
 /// A multiply-add that only whole simdgroups run is the exact `c + a·b`: simdgroup 1 of 2 (a branch
@@ -549,11 +521,12 @@ fn whole_simdgroups_run_the_exact_multiply_add() {
     ]);
 }
 
-/// Where only some lanes of a simdgroup run the multiply-add, the other lanes' cells are zero,
-/// whether every lane loaded its cells before the branch, the cells are built from plain loads, or
-/// the running lanes load them inside it; in one and in two simdgroups, and with both inputs.
+/// Where only some lanes of a simdgroup run the multiply-add (every lane loaded its cells before
+/// the branch, the cells are built from plain loads, or the running lanes load them inside it; in
+/// one and in two simdgroups, and with both inputs), the run completes and each running lane
+/// writes its cells, which are not promised.
 #[test]
-fn a_partly_live_simdgroup_reads_the_other_lanes_as_zero() {
+fn a_partly_live_simdgroup_runs_its_multiply_add() {
     let half = |g: u32| g % 32 < 16;
     let odd = |g: u32| g % 2 == 1;
     check(&[
@@ -569,10 +542,10 @@ fn a_partly_live_simdgroup_reads_the_other_lanes_as_zero() {
 }
 
 /// In a threadgroup below 32 threads every thread of which runs the multiply-add (in a block the
-/// translator cannot prove uniform), the lanes past the thread count take part with zero cells; at
-/// 48 threads the first simdgroup is whole.
+/// translator cannot prove uniform), the run completes and each thread writes its cells, which are
+/// not promised; at 48 threads the first simdgroup is whole and exact, and at 32 every thread is.
 #[test]
-fn absent_lanes_take_part_with_zero_cells() {
+fn a_partial_simdgroup_runs_its_multiply_add() {
     let sel = Some([1, 1, 1]);
     check(&[
         ("dsm_whole_by_buffer", 16, Input::A, sel, &|_| true),
@@ -585,10 +558,10 @@ fn absent_lanes_take_part_with_zero_cells() {
     ]);
 }
 
-/// In workgroup-uniform control flow (not the calling lane's read): a threadgroup whose last
-/// simdgroup is partial takes the absent lanes' cells as zero, and a whole one is exact.
+/// In workgroup-uniform control flow: a threadgroup whose last simdgroup is partial runs and
+/// writes its cells, which are not promised, and a whole simdgroup is exact.
 #[test]
-fn uniform_flow_takes_absent_lanes_as_zero_cells() {
+fn uniform_flow_runs_a_partial_simdgroups_multiply_add() {
     let all: Lanes<'_> = &|_| true;
     check(&[
         ("dsm_uniform", 32, Input::A, None, all),
@@ -601,61 +574,26 @@ fn uniform_flow_takes_absent_lanes_as_zero_cells() {
     ]);
 }
 
-/// One Metal reading: the case, its input, the lanes that run the multiply-add, a lane, its
-/// float cells, and whether the case separates the zero's signs.
-type Reading<'a> = (&'a str, Input, Lanes<'a>, u32, [f64; 2], bool);
-
-/// Metal's readings of the owned no-fast-math cases (two passes, byte-identical), `(case, input,
-/// part, lane, float cells)`; the half cells are the same values. With a `-0` accumulator and every
-/// other term `-0`, a lane that does not take part shows its zero cell's sign: `+0`, not live or
-/// absent, on the `b` side (rows 0-1 read `z`, rows 2-3 `-z`) and on the `a` side (columns 2-3 read
-/// `z`, columns 6-7 `-z`). The cases marked `true` separate the signs: a `-0` zero cell would give
-/// the opposite bits.
+/// Metal's readings of the owned no-fast-math cases of whole simdgroups (two passes,
+/// byte-identical), `(case, input, lane, float cells)`; the half cells are the same values. With a
+/// `-0` accumulator and every other term `-0`, each cell shows the sign of the exact sum.
 #[test]
-fn the_zero_cell_is_plus_zero_in_metals_readings() {
-    let all = |_: u32| true;
-    let half = |l: u32| l < 16;
-    let odd = |l: u32| l % 2 == 1;
-    let eight = |l: u32| l < 8;
+fn a_whole_simdgroups_signed_zeros_are_metals_reading() {
     let minus = Input::Signed { rows: -0.0 };
     let plus = Input::Signed { rows: 0.0 };
     let (p, n) = (0.0, -0.0);
-    let readings: [Reading<'_>; 17] = [
-        // Whole simdgroups: the signed zeros of an exact multiply-add.
-        ("dd0e539e", minus, &all, 0, [n, n], false),
-        ("dd0e539e", minus, &all, 4, [p, p], false),
-        ("dd0e539e", minus, &all, 16, [n, n], false),
-        ("6bd772f3", plus, &all, 0, [p, p], false),
-        ("6bd772f3", plus, &all, 4, [n, n], false),
-        ("7b445bf4", Input::Odd, &all, 0, [4.0, 4.0], false),
-        ("7b445bf4", Input::Odd, &all, 9, [-4.0, -4.0], false),
-        // Lanes 0-15 live, whatever lanes 16-31 loaded: the b side's zero is +0.
-        ("4bd03887", minus, &half, 0, [p, p], true),
-        ("4bd03887", minus, &half, 4, [n, n], true),
-        ("b579838e", plus, &half, 0, [p, p], true),
-        ("b579838e", plus, &half, 4, [n, n], true),
-        // The odd lanes live: the a side's zero is +0.
-        ("702c2457", Input::Odd, &odd, 1, [p, p], true),
-        ("702c2457", Input::Odd, &odd, 9, [n, n], true),
-        // A threadgroup of 16 (divergent and uniform flow): the absent lanes' zero is +0.
-        ("041b4bad", minus, &half, 4, [n, n], true),
-        ("101f0995", minus, &half, 0, [p, p], true),
-        // A not-live zero times an absent zero, and two absent zeros: +0.
-        ("258dd494", minus, &eight, 4, [p, p], false),
-        ("df34a66f", minus, &eight, 4, [p, p], false),
+    let readings: [(&str, Input, u32, [f64; 2]); 7] = [
+        ("dd0e539e", minus, 0, [n, n]),
+        ("dd0e539e", minus, 4, [p, p]),
+        ("dd0e539e", minus, 16, [n, n]),
+        ("6bd772f3", plus, 0, [p, p]),
+        ("6bd772f3", plus, 4, [n, n]),
+        ("7b445bf4", Input::Odd, 0, [4.0, 4.0]),
+        ("7b445bf4", Input::Odd, 9, [-4.0, -4.0]),
     ];
-    for (case, input, part, lane, want, separates) in readings {
-        let m = inputs(input);
-        let got = tile(&m, part, lane, 8, 0.0);
+    for (case, input, lane, want) in readings {
+        let got = exact(&inputs(input), lane);
         assert_eq!(written(got), written(want), "{case} lane {lane}");
-        if separates {
-            let other = tile(&m, part, lane, 8, -0.0);
-            assert_ne!(
-                written(other),
-                written(want),
-                "{case} lane {lane} separates"
-            );
-        }
     }
 }
 
@@ -678,11 +616,11 @@ fn zero_sign_dispatches(n: u32) -> Vec<Dispatch<'static>> {
     ]
 }
 
-/// The zero-sign fixtures give Metal's bits on every emulating profile, at 32 threads and in
-/// threadgroups that leave the simdgroup partial (16, 8; 16 with lanes 0-7 live), in divergent and
-/// in uniform flow.
+/// The zero-sign fixtures on every emulating profile, at 32 threads and in threadgroups that leave
+/// the simdgroup partial (16, 8; 16 with lanes 0-7 live), in divergent and in uniform flow: a
+/// whole simdgroup gives Metal's bits, and a partial or partly live one runs and writes its cells.
 #[test]
-fn the_emulated_tier_gives_the_zero_signs_metal_does() {
+fn the_emulated_tier_runs_the_zero_sign_fixtures() {
     let minus = Input::Signed { rows: -0.0 };
     let plus = Input::Signed { rows: 0.0 };
     let all: Lanes<'_> = &|_| true;
@@ -697,24 +635,20 @@ fn the_emulated_tier_gives_the_zero_signs_metal_does() {
     check(&dispatches);
 }
 
-/// The zero-sign fixtures give Metal's bits on the subgroup tiers, whose threadgroups hold whole
-/// subgroups: lanes 0-15 live, the odd lanes live, and their whole-simdgroup controls.
+/// The zero-sign fixtures on the subgroup tiers, whose threadgroups hold whole subgroups: the
+/// whole-simdgroup controls give Metal's bits, and lanes 0-15 live and the odd lanes live run and
+/// write their cells.
 #[test]
-fn the_subgroup_tiers_give_the_zero_signs_metal_does() {
+fn the_subgroup_tiers_run_the_zero_sign_fixtures() {
     let mut dispatches = zero_sign_dispatches(32);
     dispatches.extend(zero_sign_dispatches(64));
     check_subgroups(&dispatches);
 }
 
-/// On the subgroup tiers a multiply-add some lanes of a simdgroup do not run (lanes 0-15, the odd
-/// lanes; cells loaded before the branch, built from plain loads, or loaded inside it) reads their
-/// cells as zero, with the ballot of the lanes that run it, and never shuffles from one of them
-/// (the interpreter traps that); whole simdgroups under a divergent branch, and a uniform block,
-/// are exact.
+/// On the subgroup tiers whole simdgroups under a divergent branch, and in a uniform block, run
+/// the exact multiply-add.
 #[test]
-fn the_subgroup_tiers_read_lanes_that_do_not_take_part_as_zero_cells() {
-    let half: Lanes<'_> = &|g| g % 32 < 16;
-    let odd: Lanes<'_> = &|g| g % 2 == 1;
+fn whole_simdgroups_run_the_exact_multiply_add_on_the_subgroup_tiers() {
     let all: Lanes<'_> = &|_| true;
     check_subgroups(&[
         ("dsm_whole_by_simdgroup", 64, Input::A, None, &|g| g >= 32),
@@ -722,6 +656,19 @@ fn the_subgroup_tiers_read_lanes_that_do_not_take_part_as_zero_cells() {
             g / 32 != 1
         }),
         ("dsm_whole_by_buffer", 32, Input::B, Some([1, 0, 1]), all),
+        ("dsm_uniform", 64, Input::A, None, all),
+    ]);
+}
+
+/// On the subgroup tiers a multiply-add some lanes of a simdgroup do not run (lanes 0-15, the odd
+/// lanes; cells loaded before the branch, built from plain loads, or loaded inside it) reads them
+/// through the ballot of the lanes that run it and never shuffles from one of them (the
+/// interpreter traps that): the run completes and each running lane writes its cells.
+#[test]
+fn the_subgroup_tiers_run_a_partly_live_multiply_add_without_naming_a_lane_that_takes_no_part() {
+    let half: Lanes<'_> = &|g| g % 32 < 16;
+    let odd: Lanes<'_> = &|g| g % 2 == 1;
+    check_subgroups(&[
         ("dsm_half_live_loaded", 32, Input::A, None, half),
         ("dsm_half_live_loaded", 64, Input::B, None, half),
         ("dsm_half_live_loaded", 64, Input::Infinity, None, half),
@@ -729,18 +676,17 @@ fn the_subgroup_tiers_read_lanes_that_do_not_take_part_as_zero_cells() {
         ("dsm_half_live_inside", 64, Input::A, None, half),
         ("dsm_odd_live_loaded", 32, Input::A, None, odd),
         ("dsm_odd_live_loaded", 64, Input::B, None, odd),
-        ("dsm_uniform", 64, Input::A, None, all),
     ]);
 }
 
 /// A multiply-add under a branch on a simdgroup collective's result, after a loop whose exit
 /// differs by lane (`engine/dsm2_collective_branch`: lane `L` leaves holding `simd_sum(1) =
 /// 32 - L`, and lanes 0-15 run the multiply-add). The decision reads the workgroup analysis, in
-/// which a collective's result is divergent, so the branch is divergent and every tier reads lanes
-/// 16-31 as zero cells; a reading that took the branch for uniform would shuffle from inactive
-/// lanes on the subgroup tiers.
+/// which a collective's result is divergent, so the branch is divergent and every tier runs it as
+/// a partly live multiply-add; a reading that took the branch for uniform would shuffle from
+/// inactive lanes on the subgroup tiers, which the interpreter traps.
 #[test]
-fn a_multiply_add_under_a_branch_on_a_collective_reads_the_lanes_that_left_as_zero() {
+fn a_multiply_add_under_a_branch_on_a_collective_is_divergent() {
     let half: Lanes<'_> = &|g| g % 32 < 16;
     let dispatches: [Dispatch<'_>; 2] = [
         ("dsm2_collective_branch", 32, Input::A, None, half),
@@ -800,10 +746,10 @@ fn only_divergent_multiply_adds_ballot_their_lanes() {
 }
 
 /// On `moltenvk-m3`, whose kernels run whole simdgroups on subgroups, a dispatch with a partial
-/// simdgroup runs the kernel's emulated-simdgroups variant, which gives Metal's answer in uniform
-/// and in divergent control flow.
+/// simdgroup runs the kernel's emulated-simdgroups variant, in uniform and in divergent control
+/// flow: a whole simdgroup is exact, and a partial or partly live one runs and writes its cells.
 #[test]
-fn the_emulated_variant_gives_metals_answer() {
+fn the_emulated_variant_runs_partial_simdgroups() {
     let p = emulating("moltenvk-m3");
     let mut inputs = LoweringInputs::new();
     inputs.emulated_simdgroups = true;
@@ -914,7 +860,7 @@ fn agx_kernels(small: u32) -> [(&'static str, &'static str, u32, Lanes<'static>)
 type CompiledAgx<'a> = &'a dyn Fn(&[u8], &str) -> (Plan, TypedModule);
 
 /// Run AGX kernel `name` (`dim`, the threads that run it `runs`, of `n`) compiled by
-/// `compiled` at each of `widths`, and check every thread against the rule ([`tile`]).
+/// `compiled` at each of `widths`, and check every thread as [`check_on`] does ([`tile`]).
 fn check_agx(
     what: &str,
     (name, cond, n, runs): (&str, &str, u32, Lanes<'_>),
@@ -945,15 +891,19 @@ fn check_agx(
         let got = words(&out[3]);
         for t in 0..n {
             let cell = [got[2 * t as usize], got[2 * t as usize + 1]];
-            let base = t & !31;
-            let part = |l: u32| base + l < n && runs(base + l);
-            let want = if runs(t) {
-                let x = tile(&input, &part, t & 31, dim as usize, 0.0);
-                [(x[0] as f32).to_bits(), (x[1] as f32).to_bits()]
+            let at = format!("{what} {stem} {lanes:?} thread {t}");
+            if !runs(t) {
+                assert_eq!(cell, [POISON; 2], "{at}");
+            } else if whole(n, runs, t) {
+                let x = tile(&input, t & 31, dim as usize);
+                assert_eq!(
+                    cell,
+                    [(x[0] as f32).to_bits(), (x[1] as f32).to_bits()],
+                    "{at}"
+                );
             } else {
-                [POISON; 2]
-            };
-            assert_eq!(cell, want, "{what} {stem} {lanes:?} thread {t}");
+                assert!(cell.iter().all(|&w| w != POISON), "{at}: written");
+            }
         }
     }
 }
@@ -961,8 +911,8 @@ fn check_agx(
 /// The rule for the AGX multiply-adds, which share the matrix one's lowering (Metal's AGX reading
 /// is unmeasured), on every emulating profile, for the 8x8 form and the 4x4 one (each quadrant on
 /// its own): run by simdgroup 1 of 2 (`t >= 32`) it is exact; run by lanes 0-15 or by the odd
-/// lanes, the other lanes' cells are zero; in a threadgroup of 16 every thread of which runs it, so
-/// are the absent lanes'.
+/// lanes, or in a threadgroup of 16 every thread of which runs it, the run completes and each
+/// running lane writes its cells.
 #[test]
 fn the_agx_multiply_adds_follow_the_matrix_one() {
     for stem in PROFILES {
@@ -976,8 +926,8 @@ fn the_agx_multiply_adds_follow_the_matrix_one() {
 }
 
 /// The same on the subgroup tiers, whose threadgroups hold whole subgroups (the all-threads kernel
-/// at 64): a lane that does not run the AGX multiply-add reads as zero cells through the ballot of
-/// the lanes that run it, in the 8x8 and the 4x4 form.
+/// at 64): a lane that does not run the AGX multiply-add is read through the ballot of the lanes
+/// that run it, in the 8x8 and the 4x4 form.
 #[test]
 fn the_subgroup_tiers_agx_multiply_adds_follow_the_matrix_one() {
     for (stem, p, tier, lanes) in subgroup_tiers() {
@@ -1126,16 +1076,15 @@ fn agx_vertex(name: &str, dim: u32) -> String {
 /// An AGX multiply-add outside a kernel always takes the ballot form, and on the `PartialFragment`
 /// tier (a vertex or fragment subgroup narrower than 32 lanes, here `runtime-floor` given 4-lane
 /// vertex and fragment subgroups with every non-clustered operation: [`narrow_graphics`]) the
-/// Metal lanes at or above the subgroup's size are permanently inactive: they read as
-/// `+0` cells, and neither the ballot's bit extract nor the shuffle names them (both are poison
-/// there; the interpreter traps them). Each vertex is a subgroup of its own on the interpreter, so
-/// every other owner lane is either not live (below the size) or beyond it (8- and 16-lane
-/// subgroups), and the vertex's cells are the product of its own cells alone.
+/// Metal lanes at or above the subgroup's size are permanently inactive: neither the ballot's bit
+/// extract nor the shuffle names them (both are poison there; the interpreter traps them). Each
+/// vertex is a subgroup of its own on the interpreter, so every other owner lane is either not
+/// live (below the size) or beyond it (8- and 16-lane subgroups): the run completes and each
+/// vertex writes its cells, which are not promised.
 #[test]
-fn a_narrow_subgroups_permanently_inactive_lanes_read_as_zero_cells() {
+fn a_narrow_subgroups_permanently_inactive_lanes_are_named_by_no_instruction() {
     let p = narrow_graphics();
     let input = inputs(Input::B);
-    let alone: Lanes<'_> = &|l| l == 0;
     for dim in [8, 4] {
         let name = format!("agx_vertex_{dim}x{dim}");
         let Some(bc) = assemble_text(&name, &agx_vertex(&name, dim)) else {
@@ -1172,8 +1121,6 @@ fn a_narrow_subgroups_permanently_inactive_lanes_read_as_zero_cells() {
             push,
             spec: BTreeMap::new(),
         };
-        let x = tile(&input, alone, 0, dim as usize, 0.0);
-        let want = [(x[0] as f32).to_bits(), (x[1] as f32).to_bits()];
         for lanes in [SubgroupSize::W8, SubgroupSize::W16] {
             for order in [Order::Forward, Order::Reverse] {
                 let cfg = Config {
@@ -1187,10 +1134,9 @@ fn a_narrow_subgroups_permanently_inactive_lanes_read_as_zero_cells() {
                     .buffers;
                 let got = words(&out[3]);
                 for v in 0..n as usize {
-                    assert_eq!(
-                        [got[2 * v], got[2 * v + 1]],
-                        want,
-                        "{name} {lanes:?} vertex {v}"
+                    assert!(
+                        [got[2 * v], got[2 * v + 1]].iter().all(|&w| w != POISON),
+                        "{name} {lanes:?} vertex {v}: written"
                     );
                 }
             }

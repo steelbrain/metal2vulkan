@@ -1362,16 +1362,16 @@ fn float_group_arithmetic_without_fast_flags_keeps_signed_zeros() {
     );
 }
 
-/// A vertex function's relative shuffles and fill read a lane past the draw's vertex count as
-/// all-zero bits, Metal's answer (`simd-shuffle-up-down-and-fill-up-in-a-vertex-function-
-/// with-a-partial-simdgroup`, M3 Max and M4), through the ballot of the live lanes, so no shuffle
-/// names an inactive invocation. Each vertex is a subgroup of its own on the interpreter, which
-/// traps a shuffle from an inactive lane: `gsm2_vertex_votes_shifts`' shifts keep their own value
-/// for the shuffle up by 3 at lane 0 and read zero for the shuffle down by 5 and the fill up by 2
-/// (from lanes 5 and 30), on RADV's `Cluster32` vertex stage, NVIDIA's `Direct` one, and MoltenVK's
-/// unlisted one (the lane at entry).
+/// A vertex function's relative shuffles and fill read a lane past the draw's vertex count through
+/// the ballot of the live lanes, so no shuffle names an inactive invocation. Each vertex is a
+/// subgroup of its own on the interpreter, which traps a shuffle from an inactive lane:
+/// `gsm2_vertex_votes_shifts`' shifts keep their own value for the shuffle up by 3 at lane 0, and
+/// the shuffle down by 5 and the fill up by 2 (from lanes 5 and 30, past the draw) run and write a
+/// word, which is not promised (a thread reads only from an active thread, MSL 4.1 section
+/// 6.10.2), on RADV's `Cluster32` vertex stage, NVIDIA's `Direct` one, and MoltenVK's unlisted one
+/// (the lane at entry).
 #[test]
-fn vertex_lane_reads_take_lanes_past_the_draw_as_zero() {
+fn vertex_lane_reads_past_the_draw_name_no_inactive_lane() {
     let Some(bc) = assemble("gsm2_vertex_votes_shifts") else {
         return;
     };
@@ -1428,10 +1428,10 @@ fn vertex_lane_reads_take_lanes_past_the_draw_as_zero() {
                 .map(|w| u32::from_le_bytes(*w))
                 .collect();
             for (v, x) in input.iter().enumerate() {
-                assert_eq!(
-                    got[3 * v..3 * v + 3],
-                    [x.to_bits(), 0, 0],
-                    "{stem} {order:?} vertex {v}"
+                assert_eq!(got[3 * v], x.to_bits(), "{stem} {order:?} vertex {v}");
+                assert!(
+                    got[3 * v + 1..3 * v + 3].iter().all(|&w| w != 0xABAB_ABAB),
+                    "{stem} {order:?} vertex {v}: written"
                 );
             }
         }
