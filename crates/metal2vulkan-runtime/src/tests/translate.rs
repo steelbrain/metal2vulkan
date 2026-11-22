@@ -1937,7 +1937,7 @@ mod on_device {
             let translator = device.translator();
             let budget = Budget::standard();
             let entries = StageEntries::new();
-            let (mut compared, mut skipped) = (0, unread.clone());
+            let (mut compared, mut skipped, mut alone) = (0, unread.clone(), Vec::new());
             for (file, library) in &libraries {
                 for info in library.functions() {
                     if info.stage != FunctionStage::Kernel {
@@ -1979,14 +1979,23 @@ mod on_device {
                         if !observes {
                             return Ok(None);
                         }
-                        let plain = linked(&plain).map_err(|error| format!("plain: {error}"))?;
-                        let variant =
-                            linked(&partial).map_err(|error| format!("variant: {error}"))?;
-                        Ok(Some((plain, variant)))
+                        Ok(Some((linked(&plain), linked(&partial))))
                     })();
                     let (plain, variant) = match modules {
-                        Ok(Some(modules)) => modules,
+                        Ok(Some((Ok(plain), Ok(variant)))) => (plain, variant),
                         Ok(None) => continue,
+                        Ok(Some((Err(plain), Ok(_)))) => {
+                            alone.push(format!("{what}: plain: {plain}"));
+                            continue;
+                        }
+                        Ok(Some((Ok(_), Err(variant)))) => {
+                            skipped.push(format!("{what}: variant: {variant}"));
+                            continue;
+                        }
+                        Ok(Some((Err(plain), Err(_)))) => {
+                            skipped.push(format!("{what}: plain: {plain}"));
+                            continue;
+                        }
                         Err(why) => {
                             skipped.push(format!("{what}: {why}"));
                             continue;
@@ -2011,9 +2020,14 @@ mod on_device {
             for why in &skipped {
                 println!("{name}: not compared: {why}");
             }
+            for why in &alone {
+                println!("{name}: the variant alone lowers: {why}");
+            }
             println!(
                 "{name}: {compared} observing kernels answer the same on their variant as on \
-                 their plain module; {} not compared",
+                 their plain module; {} whose plain module alone the translator refuses; {} not \
+                 compared",
+                alone.len(),
                 skipped.len()
             );
             assert!(compared > 0, "{name}: no observing kernel compared");
