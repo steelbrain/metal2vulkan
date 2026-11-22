@@ -457,8 +457,8 @@ mod on_device {
     /// Behind a cut command buffer whose later pieces wait for room, a command buffer of its
     /// queue that holds nothing for the GPU, or one ended before it went (enqueued, its queue
     /// abandoned, then committed), is not held for room (`WorkState::hold`): it retires behind
-    /// the pieces, after them, as the room comes. The window is shown open first: two of the
-    /// four pieces submitted, the head held for room (`Metrics::held_for_room`). Its commit and
+    /// the pieces, after them, as the room comes. The window is shown open first: the head
+    /// scheduled with its first piece, two of its four pieces submitted 50 ms on. Its commit and
     /// both completions are waited for on another thread, within `BOUND` each; past it the test
     /// ends its process, as a submit thread that spins holding the work lock lets no handle drop.
     #[test]
@@ -480,16 +480,13 @@ mod on_device {
                     }))
                     .expect("a completed handler");
                 };
-                let (from, before) = (sent(&device, &queue), device.counters().metrics());
+                let from = sent(&device, &queue);
                 state.inner.compiled.rate.set_for_test(RATE);
                 let pieces = queue.command_buffer().expect("a command buffer");
                 steps(&pieces, &state, &x, 4).end_encoding();
                 log(&pieces, "pieces");
                 pieces.commit().expect("a commit");
                 within(name, || order(&device, &pieces).len() == from + 2);
-                within(name, || {
-                    device.counters().metrics().held_for_room > before.held_for_room
-                });
                 let behind = queue.command_buffer().expect("a command buffer");
                 log(&behind, form);
                 if form == "ended" {
@@ -497,10 +494,16 @@ mod on_device {
                     behind.enqueue().expect("an enqueue");
                     queue.abandon();
                 }
-                println!(
-                    "{name}: {form}: committed behind {} of 4 pieces submitted, held for room {}",
-                    order(&device, &pieces).len() - from,
-                    device.counters().metrics().held_for_room - before.held_for_room
+                // The window: the head scheduled with its first piece (held, `WorkState::step`),
+                // two of its four pieces on the device and, nothing completing behind the gate,
+                // the third waiting for room a while on.
+                thread::sleep(Duration::from_millis(50));
+                let window = (pieces.status(), order(&device, &pieces).len() - from);
+                println!("{name}: {form}: committed behind the head at {window:?} of 4 pieces");
+                assert_eq!(
+                    window,
+                    (CommandBufferStatus::Scheduled, 2),
+                    "{name}: {form}: the head scheduled, its third piece waiting for room"
                 );
                 let (tell, told) = mpsc::channel();
                 let watcher = {

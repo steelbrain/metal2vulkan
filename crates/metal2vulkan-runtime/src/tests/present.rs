@@ -980,8 +980,8 @@ mod on_device {
     /// later pieces wait for room, one that only presents the drawable retires after the pieces
     /// ("behind"); and a cut command buffer that presents, its first piece waiting for the room
     /// another queue's pieces hold, goes as the room comes ("cut"). Behind the busy gate the
-    /// window is shown open first: two of the four pieces holding the room submitted, their head
-    /// held for room (`Metrics::held_for_room`). The presenting command buffer's commit and both
+    /// window is shown open first: the head of the pieces holding the room scheduled with its
+    /// first, two of its four submitted 50 ms on. The presenting command buffer's commit and both
     /// completions are waited for on another thread within `BOUND` each; past it the test ends
     /// its process, as a submit thread that spins holding the work lock lets no handle drop. The
     /// presents name no semaphore.
@@ -997,7 +997,6 @@ mod on_device {
         const RATE: u64 = 3_000_000_000;
         each_device("present_hold", |name, _, device| {
             (device.grant_indices(IndexClass::Texture, 4096, 2)).expect("a grant");
-            let counters = device.counters();
             let state = step(&device);
             let mut arena = Arena::new(&device);
             let info = swapchain(USAGE);
@@ -1044,14 +1043,10 @@ mod on_device {
                     }))
                     .expect("a completed handler");
                 };
-                let before = counters.metrics();
                 let room = pieces(if form == "behind" { &queue } else { &other }, &x);
                 log(&room, "pieces");
                 room.commit().expect("a commit");
                 within(name, || own(&room) == 2);
-                within(name, || {
-                    counters.metrics().held_for_room > before.held_for_room
-                });
                 let presenting = match form {
                     "behind" => queue.command_buffer().expect("a command buffer"),
                     _ => pieces(&queue, &y),
@@ -1060,10 +1055,18 @@ mod on_device {
                 // SAFETY: no semaphore is named, and the drawable is acquired.
                 unsafe { presenting.present_drawable(&drawable, vk::Semaphore::null()) }
                     .unwrap_or_else(|error| panic!("{name}: {form}: a present: {error}"));
+                // The window: the room's head scheduled with its first piece (held,
+                // `WorkState::step`), two of its four pieces on the device and, nothing
+                // completing behind the gate, the third waiting for room a while on.
+                thread::sleep(Duration::from_millis(50));
+                let window = (room.status(), own(&room));
                 println!(
-                    "{name}: {form}: committed with {} of 4 pieces submitted, held for room {}",
-                    own(&room),
-                    counters.metrics().held_for_room - before.held_for_room
+                    "{name}: {form}: committed with the room's head at {window:?} of 4 pieces"
+                );
+                assert_eq!(
+                    window,
+                    (CommandBufferStatus::Scheduled, 2),
+                    "{name}: {form}: the room's head scheduled, its third piece waiting for room"
                 );
                 let (tell, told) = mpsc::channel();
                 let watcher = {
