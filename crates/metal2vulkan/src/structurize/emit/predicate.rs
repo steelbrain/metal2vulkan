@@ -107,7 +107,7 @@ impl Facts {
 /// The facts of the tree of `cx` ([`facts_of`]).
 fn facts<E: CodeEmitter>(cx: &mut Cx<'_, E>) -> Result<Facts, Error> {
     let c = &*cx.c;
-    facts_of(cx.tree, |b| c.syncs(b), cx.meter)
+    facts_of(cx.tree, |b| c.syncs(b), cx.poll.meter)
 }
 
 /// The facts of `tree` (children precede parents in the arena) whose blocks synchronize where
@@ -284,9 +284,9 @@ pub(super) fn walk_root<E: CodeEmitter>(
             // Every invocation that returned in a divergent position ends here.
             cx.c.on_return(None, fb)?;
         }
-        cx.poll(fb)
+        cx.poll.charge(fb)
     })();
-    cx.meter.release(facts.bytes());
+    cx.poll.meter.release(facts.bytes());
     r.map_err(Error::from)
 }
 
@@ -527,12 +527,12 @@ fn code<E: CodeEmitter>(
         return Err(BuildError::Control(ControlRule::NoCurrentBlock));
     }
     if st.live {
-        cx.c.block(b, fb)?;
+        cx.c.block(b, fb, &mut cx.poll)?;
     } else {
         let l = w.load(fb, w.live)?;
-        cx.c.block_live(b, Some(l), fb)?;
+        cx.c.block_live(b, Some(l), fb, &mut cx.poll)?;
     }
-    cx.poll(fb)?;
+    cx.poll.charge(fb)?;
     Ok(st)
 }
 

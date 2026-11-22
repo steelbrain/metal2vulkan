@@ -57,6 +57,32 @@ impl<'m> FunctionBuilder<'m> {
         self.cursor
     }
 
+    /// The module's [`ModuleBuilder::footprint`], and the capacity its containers that grow with
+    /// the code reserve while `ahead` more entries go in each: the value table, one entry per
+    /// result of the module; the block table, one draft per block; and the open block's
+    /// instruction storage. Each doubles when full, so the emitters charge this at their poll
+    /// points to put a doubling on the ledger before it is reserved, whenever fewer than `ahead`
+    /// results, blocks or instructions come before the next poll.
+    pub fn footprint_ahead(&self, ahead: usize) -> usize {
+        /// The bytes `v` reserves while `ahead` more elements are pushed one at a time.
+        fn reserved<T>(v: &Vec<T>, ahead: usize) -> usize {
+            let needed = v.len().saturating_add(ahead);
+            let mut cap = v.capacity();
+            while cap < needed {
+                cap = cap.saturating_mul(2).max(4);
+            }
+            (cap - v.capacity()).saturating_mul(std::mem::size_of::<T>())
+        }
+        let open = self
+            .cursor
+            .and_then(|b| self.m.blocks.get(b.index()))
+            .map_or(0, |bd| reserved(&bd.insts, ahead));
+        self.m.footprint()
+            + reserved(&self.m.values, ahead)
+            + reserved(&self.m.blocks, ahead)
+            + open
+    }
+
     /// The function's entry block, which dominates every block of the function.
     pub fn entry_block(&self) -> Option<BlockId> {
         self.m

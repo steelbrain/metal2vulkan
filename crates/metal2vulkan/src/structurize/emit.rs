@@ -57,7 +57,14 @@ pub trait CodeEmitter {
     /// loads of the demoted values it uses and phi variables it reads (once, at its top), the
     /// stores of the demoted values it defines, and the parallel copy into the incoming variables
     /// of its successors' phis. It may open builder-closed constructs and must leave a block open.
-    fn block(&mut self, b: BlockId, fb: &mut FunctionBuilder<'_>) -> BResult<()>;
+    /// It counts each instruction of `b` it emits on `poll` ([`Poll::count`]), so a long block's
+    /// code is charged while it grows.
+    fn block(
+        &mut self,
+        b: BlockId,
+        fb: &mut FunctionBuilder<'_>,
+        poll: &mut Poll<'_>,
+    ) -> BResult<()>;
     /// The `bool` value of branch condition `v`, in the open block.
     fn cond(&mut self, v: ValueId, fb: &mut FunctionBuilder<'_>) -> BResult<Value>;
     /// A 32-bit integer for switch selector `v`, in the open block: for every case literal `l` of
@@ -109,8 +116,9 @@ pub trait CodeEmitter {
         b: BlockId,
         _live: Option<Value>,
         fb: &mut FunctionBuilder<'_>,
+        poll: &mut Poll<'_>,
     ) -> BResult<()> {
-        self.block(b, fb)
+        self.block(b, fb, poll)
     }
 
     /// Whether `live` holds for some invocation of the workgroup: a workgroup-uniform `bool`,
@@ -237,9 +245,11 @@ fn check_tree(s: &Structured, meter: &mut Meter) -> Result<(), Error> {
 }
 
 /// P8: emit `s` into `fb`, whose entry block is open and empty, through `c`. On success no block
-/// is open; the caller finishes the function. The builder's growth is charged to `meter` after
-/// each block's code, so an oversized module is refused while it grows, and returned when the
-/// walk ends: the caller owns the builder and charges what it holds. A refusal from the pre-pass
+/// is open; the caller finishes the function. The builder's growth past what the caller has
+/// charged (its footprint when `emit` is called) is charged to `meter` once the variables are
+/// allocated, after each block's code and inside it ([`Poll`]), so an oversized module is refused
+/// while it grows, and returned when the walk ends: the caller owns the builder and charges what
+/// it holds. A refusal from the pre-pass
 /// (`Limit:: ConstructNesting`, `Unsupported`) leaves `fb` untouched; a builder error aborts the
 /// function (the builder is not rolled back).
 pub fn emit(
@@ -249,6 +259,7 @@ pub fn emit(
     meter: &mut Meter,
 ) -> Result<StructVars, Error> {
     check_tree(s, meter)?;
+    let start = fb.module().footprint();
     let vars = allocate(s, fb, c)?;
     // A walk that is not predicated runs each invocation's trips of a loop as the source does, so
     // no trip reads a value an earlier one left in a demoted value's or a phi's variable where
@@ -261,33 +272,27 @@ pub fn emit(
     }
     c.bind(&vars)?;
     let u32_ty = u32_type(fb.module())?;
-    // The builder's growth during this walk is charged after each block's code and returned when
-    // the walk ends: the builder is the caller's, who charges what it holds.
-    let start = fb.module().footprint();
-    let growth = Growth::from_charged(start);
+    // The builder's growth during this walk, its variables first, is charged as it grows and
+    // returned when the walk ends: the builder is the caller's, who charges what it holds.
     let mut cx = Cx {
         tree: &s.tree,
         c,
         vars: &vars,
         u32_ty,
-        meter,
-        growth,
-        fault: None,
+        poll: Poll {
+            meter,
+            growth: Growth::from_charged(start),
+            since: 0,
+            fault: None,
+        },
     };
-    if let Some(p) = vars.pending {
-        let zero = cx.konst(fb, 0)?;
-        let ptr = fb.var_ptr(p)?;
-        fb.store(ptr, zero, MemAccess::default())?;
-    }
-    let walked = if cx.c.predicated() {
-        predicate::walk_root(&mut cx, fb)
-    } else {
-        list(&mut cx, fb, s.tree.root(), None)
-            .and_then(|()| cx.poll(fb))
-            .map_err(Error::from)
-    };
-    cx.meter.release(cx.growth.charged() - start);
-    if let Some(fault) = cx.fault {
+    let walked = cx
+        .poll
+        .charge(fb)
+        .map_err(Error::from)
+        .and_then(|()| walk(&mut cx, fb, s));
+    cx.poll.meter.release(cx.poll.growth.charged() - start);
+    if let Some(fault) = cx.poll.fault {
         return Err(fault);
     }
     walked?;
@@ -295,6 +300,26 @@ pub fn emit(
         return Err(BuildError::Control(ControlRule::UnterminatedBlock(open)).into());
     }
     Ok(vars)
+}
+
+/// The walk of `s`'s tree, from the store of `pending`'s initial value.
+fn walk<E: CodeEmitter>(
+    cx: &mut Cx<'_, E>,
+    fb: &mut FunctionBuilder<'_>,
+    s: &Structured,
+) -> Result<(), Error> {
+    if let Some(p) = cx.vars.pending {
+        let zero = cx.konst(fb, 0)?;
+        let ptr = fb.var_ptr(p)?;
+        fb.store(ptr, zero, MemAccess::default())?;
+    }
+    if cx.c.predicated() {
+        predicate::walk_root(cx, fb)
+    } else {
+        list(cx, fb, s.tree.root(), None)
+            .and_then(|()| cx.poll.charge(fb))
+            .map_err(Error::from)
+    }
 }
 
 fn u32_type(m: &mut ModuleBuilder) -> BResult<TypeId> {
@@ -357,24 +382,61 @@ struct Cx<'e, E> {
     c: &'e mut E,
     vars: &'e StructVars,
     u32_ty: TypeId,
-    meter: &'e mut Meter,
+    poll: Poll<'e>,
+}
+
+/// The instructions of blocks' code [`Poll::count`] lets pass between two charges.
+pub const POLL_INSTRUCTIONS: u32 = 16;
+
+/// The results, blocks and open-block instructions a poll charges ahead of the builder
+/// ([`FunctionBuilder::footprint_ahead`]): 256 of each for each instruction [`Poll::count`] lets
+/// pass. The value and block tables hold one entry per result and per block of the module, so
+/// their doublings are the largest growth the builder makes at once (the value table from 16 to
+/// 32 MiB past a million results); charged ahead, each is on the ledger before it is reserved.
+/// Code that makes more between two polls doubles a table there, and the next poll charges it.
+pub const AHEAD: usize = 256 * POLL_INSTRUCTIONS as usize;
+
+/// The builder's growth during a walk, charged to the attempt's meter at the walk's poll points
+/// (once its variables are allocated, after each block's code, and every [`POLL_INSTRUCTIONS`]
+/// instructions the emitter writes inside blocks, [`CodeEmitter::block`]) with what the next
+/// [`AHEAD`] results, blocks and instructions reserve. The ledger keeps the high-water mark
+/// ([`Growth`]): what was charged ahead and not reserved stays charged until the builder grows
+/// into it.
+pub struct Poll<'m> {
+    meter: &'m mut Meter,
     /// The builder bytes charged so far.
     growth: Growth,
+    /// The instructions counted since the last charge.
+    since: u32,
     /// A meter refusal met inside the walk, which returns a builder error; `emit` reports this
     /// instead.
     fault: Option<Error>,
 }
 
-impl<E> Cx<'_, E> {
-    /// Charge the builder's growth since the last poll to the meter.
-    fn poll(&mut self, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
-        let footprint = fb.module().footprint();
+impl Poll<'_> {
+    /// Count one instruction of a block's code the emitter wrote, and charge at every
+    /// [`POLL_INSTRUCTIONS`]th.
+    pub fn count(&mut self, fb: &FunctionBuilder<'_>) -> BResult<()> {
+        self.since += 1;
+        if self.since < POLL_INSTRUCTIONS {
+            return Ok(());
+        }
+        self.charge(fb)
+    }
+
+    /// Charge the builder's growth since the last poll, and what the next [`AHEAD`] results,
+    /// blocks and instructions reserve, to the meter.
+    fn charge(&mut self, fb: &FunctionBuilder<'_>) -> BResult<()> {
+        self.since = 0;
+        let footprint = fb.footprint_ahead(AHEAD);
         self.growth.charge_to(footprint, self.meter).map_err(|e| {
             self.fault.get_or_insert(e.into());
             BuildError::Control(ControlRule::NoCurrentBlock)
         })
     }
+}
 
+impl<E> Cx<'_, E> {
     fn stmt(&self, id: StmtId) -> BResult<&Stmt> {
         self.tree
             .stmt(id)
@@ -498,8 +560,8 @@ fn simple<E: CodeEmitter>(
 ) -> BResult<()> {
     match st {
         Stmt::Code(b) => {
-            cx.c.block(*b, fb)?;
-            cx.poll(fb)?;
+            cx.c.block(*b, fb, &mut cx.poll)?;
+            cx.poll.charge(fb)?;
         }
         Stmt::SetSel { sel, value } => {
             let ptr = cx.sel_ptr(fb, *sel)?;

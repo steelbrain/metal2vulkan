@@ -22,7 +22,7 @@ mod convergence;
 
 use std::collections::BTreeMap;
 
-use super::{emit, CodeEmitter, StructVars};
+use super::{emit, CodeEmitter, Poll, StructVars};
 use crate::air::ir::{BlockId, ValueId};
 use crate::budget::{Budget, Meter, CONSTRUCT_NESTING};
 use crate::device::profile::DeviceProfile;
@@ -122,7 +122,12 @@ impl CodeEmitter for TestEmitter<'_> {
         Ok(())
     }
 
-    fn block(&mut self, b: BlockId, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
+    fn block(
+        &mut self,
+        b: BlockId,
+        fb: &mut FunctionBuilder<'_>,
+        _poll: &mut Poll<'_>,
+    ) -> BResult<()> {
         let vars = self.vars.as_ref().expect("bound");
         let loads: Vec<VarId> = self.preds[b.raw() as usize]
             .iter()

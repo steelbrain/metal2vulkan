@@ -59,7 +59,7 @@ use crate::spirv::ir::{
     BinOp, ConstBits, Constant, ConvOp, ExecMode, ExecModel, MemAccess, PushMember, Type,
     TypedModule, ValueOrigin,
 };
-use crate::structurize::emit::{CodeEmitter, StructVars};
+use crate::structurize::emit::{CodeEmitter, Poll, StructVars};
 use crate::structurize::promote::promote_single_store;
 
 fn invariant(detail: impl Into<String>) -> Error {
@@ -1110,6 +1110,7 @@ impl<'a> Emitter<'a> {
         first: bool,
         last: bool,
         vars: &StructVars,
+        poll: &mut Poll<'_>,
     ) -> BResult<()> {
         let phis = first
             && self
@@ -1132,6 +1133,7 @@ impl<'a> Emitter<'a> {
                 for (id, v) in seg {
                     em.ensure_operands(fb, id)?;
                     em.inst(fb, id, v, vars)?;
+                    poll.count(fb)?;
                 }
                 if last {
                     em.copies(b, fb, vars, true)?;
@@ -1292,7 +1294,12 @@ impl CodeEmitter for Emitter<'_> {
         Ok(())
     }
 
-    fn block(&mut self, b: crate::air::ir::BlockId, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
+    fn block(
+        &mut self,
+        b: crate::air::ir::BlockId,
+        fb: &mut FunctionBuilder<'_>,
+        poll: &mut Poll<'_>,
+    ) -> BResult<()> {
         let vars = self.vars()?;
         if self.cx.entry_block.is_none() {
             self.cx.entry_block = fb.entry_block();
@@ -1327,6 +1334,7 @@ impl CodeEmitter for Emitter<'_> {
                 return Err(self.cx.fail(format!("{id:?} is out of range")));
             };
             self.inst(fb, id, v, &vars)?;
+            poll.count(fb)?;
         }
         self.copies(b, fb, &vars, false)
     }
@@ -1379,9 +1387,10 @@ impl CodeEmitter for Emitter<'_> {
         b: crate::air::ir::BlockId,
         live: Option<SValue>,
         fb: &mut FunctionBuilder<'_>,
+        poll: &mut Poll<'_>,
     ) -> BResult<()> {
         let Some(live) = live else {
-            return self.block(b, fb);
+            return self.block(b, fb, poll);
         };
         let vars = self.vars()?;
         if self.cx.entry_block.is_none() {
@@ -1418,12 +1427,13 @@ impl CodeEmitter for Emitter<'_> {
                 seg.push((id, v));
                 continue;
             }
-            self.segment(b, fb, live, &seg, first, false, &vars)?;
+            self.segment(b, fb, live, &seg, first, false, &vars, poll)?;
             seg.clear();
             first = false;
             self.sync_inst(fb, id, v, live, uniform, &vars)?;
+            poll.count(fb)?;
         }
-        self.segment(b, fb, live, &seg, first, true, &vars)
+        self.segment(b, fb, live, &seg, first, true, &vars, poll)
     }
 
     fn vote(&mut self, live: SValue, fb: &mut FunctionBuilder<'_>) -> BResult<SValue> {
@@ -1537,8 +1547,9 @@ pub fn emit_module(e: &Entry, plan: &Plan, m: &mut Meter) -> Result<Emitted, Err
     let mut mb = ModuleBuilder::new();
     let emitted = (|| -> Result<(TypedModule, Vec<Offer>, BTreeSet<SlotRef>, usize), Error> {
         let decl = declare(&mut mb, plan)?;
-        // The builder is charged as it grows: the declarations here, the walk's growth by
-        // `structurize::emit` after each block, and what the walk left once it returns.
+        // The builder is charged as it grows: the declarations here, the entry hooks' code
+        // before the walk, the walk's growth by `structurize::emit` as it emits, and what the
+        // walk left once it returns.
         let mut held = Growth::default();
         held.charge_to(mb.footprint(), m)?;
         let mut em = Emitter::new(e, body, plan, &decl);
@@ -1571,6 +1582,10 @@ pub fn emit_module(e: &Entry, plan: &Plan, m: &mut Meter) -> Result<Emitted, Err
                 .and_then(|()| fragment::emit_entry(&mut em.cx, &mut fb))
                 .and_then(|()| em.cx.end_hooks(&fb))
                 .map_err(Error::from)
+                .and_then(|()| {
+                    held.charge_to(fb.module().footprint(), m)
+                        .map_err(Error::from)
+                })
                 .and_then(|()| crate::structurize::emit::emit(&structured, &mut fb, &mut em, m));
             match r {
                 Ok(_) => fb.finish().map_err(Error::from),

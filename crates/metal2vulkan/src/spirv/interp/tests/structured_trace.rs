@@ -36,7 +36,7 @@ use crate::error::{Error, Feature};
 use crate::spirv::ids::{DemoteTy, FuncId, ScalarTy, VarId};
 use crate::spirv::ir::AtomicOp;
 use crate::spirv::testing::{check_valid, committed_profiles};
-use crate::structurize::emit::{emit, CodeEmitter, StructVars};
+use crate::structurize::emit::{emit, CodeEmitter, Poll, StructVars};
 use crate::structurize::promote::promote_single_store;
 use crate::structurize::testkit::generate::{self, Rng};
 use crate::structurize::testkit::hash::{key, Hash, EXEC_MUL, MIX};
@@ -461,7 +461,12 @@ impl CodeEmitter for TraceEmitter<'_> {
         Ok(())
     }
 
-    fn block(&mut self, b: AirBlock, fb: &mut FunctionBuilder<'_>) -> BResult<()> {
+    fn block(
+        &mut self,
+        b: AirBlock,
+        fb: &mut FunctionBuilder<'_>,
+        _poll: &mut Poll<'_>,
+    ) -> BResult<()> {
         let g = self.glob;
         if self.predicated {
             let ballot = self.live_ballot(b, None, fb)?;
@@ -510,9 +515,10 @@ impl CodeEmitter for TraceEmitter<'_> {
         b: AirBlock,
         live: Option<Value>,
         fb: &mut FunctionBuilder<'_>,
+        poll: &mut Poll<'_>,
     ) -> BResult<()> {
         let Some(l) = live else {
-            return self.block(b, fb);
+            return self.block(b, fb, poll);
         };
         let ballot = self.live_ballot(b, Some(l), fb)?;
         fb.if_(
