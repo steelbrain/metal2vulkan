@@ -1399,7 +1399,6 @@ field	metal2vulkan-runtime::Metrics.consumer_allocation_max_nanos	pub consumer_a
 field	metal2vulkan-runtime::Metrics.consumer_allocation_nanos	pub consumer_allocation_nanos: u64
 field	metal2vulkan-runtime::Metrics.consumer_allocations	pub consumer_allocations: u64
 field	metal2vulkan-runtime::Metrics.creations_before_seed	pub creations_before_seed: u64
-field	metal2vulkan-runtime::Metrics.cuts	pub cuts: u64
 field	metal2vulkan-runtime::Metrics.dispatches_without_effects	pub dispatches_without_effects: u64
 field	metal2vulkan-runtime::Metrics.emulated_simdgroup_dispatches	pub emulated_simdgroup_dispatches: u64
 field	metal2vulkan-runtime::Metrics.event_holds	pub event_holds: [u64; STAGE_BUCKETS]
@@ -1493,7 +1492,6 @@ field	metal2vulkan-runtime::Metrics.over_copy_bytes_surface	pub over_copy_bytes_
 field	metal2vulkan-runtime::Metrics.overlapping_copies_refused	pub overlapping_copies_refused: u64
 field	metal2vulkan-runtime::Metrics.partial_variant_whole_grids	pub partial_variant_whole_grids: u64
 field	metal2vulkan-runtime::Metrics.passes	pub passes: u64
-field	metal2vulkan-runtime::Metrics.pieces_passed	pub pieces_passed: u64
 field	metal2vulkan-runtime::Metrics.pipeline_cache_lock_wait_max_nanos	pub pipeline_cache_lock_wait_max_nanos: u64
 field	metal2vulkan-runtime::Metrics.pipeline_cache_lock_wait_nanos	pub pipeline_cache_lock_wait_nanos: u64
 field	metal2vulkan-runtime::Metrics.pipeline_cache_lock_waits	pub pipeline_cache_lock_waits: u64
@@ -1530,7 +1528,6 @@ field	metal2vulkan-runtime::Metrics.sampler_element_writes	pub sampler_element_w
 field	metal2vulkan-runtime::Metrics.scheduled_to_gpu_start	pub scheduled_to_gpu_start: [u64; STAGE_BUCKETS]
 field	metal2vulkan-runtime::Metrics.scheduled_to_gpu_start_behind_nanos	pub scheduled_to_gpu_start_behind_nanos: u64
 field	metal2vulkan-runtime::Metrics.scheduled_to_gpu_start_nanos	pub scheduled_to_gpu_start_nanos: u64
-field	metal2vulkan-runtime::Metrics.shared_holds	pub shared_holds: u64
 field	metal2vulkan-runtime::Metrics.shared_long_reuses	pub shared_long_reuses: u64
 field	metal2vulkan-runtime::Metrics.shared_remade_after_frees	pub shared_remade_after_frees: u64
 field	metal2vulkan-runtime::Metrics.shared_take_allocations	pub shared_take_allocations: SiteAllocations
