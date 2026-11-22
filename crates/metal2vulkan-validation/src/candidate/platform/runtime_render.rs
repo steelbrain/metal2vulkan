@@ -630,8 +630,10 @@ impl Targets {
     /// multisampled stencil aspect cleared to its one value; with no attachment, the oracle's (`metal::platform`) 1x1 area at
     /// the case's samples (`renderTargetWidth`, `renderTargetHeight`, `defaultRasterSampleCount`).
     fn pass(&self, case: &RenderCase) -> rt::RenderPassDescriptor {
-        let mut pass = rt::RenderPassDescriptor::default();
-        pass.render_target_array_length = case.render_target_array_length;
+        let mut pass = rt::RenderPassDescriptor {
+            render_target_array_length: case.render_target_array_length,
+            ..Default::default()
+        };
         if self.textures.is_empty() && self.depth_stencil.is_none() {
             pass.render_target_width = 1;
             pass.render_target_height = 1;
