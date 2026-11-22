@@ -303,9 +303,9 @@ pub struct SimdPlan {
     /// The fragment entry declares `RequireFullQuadsKHR`, so every quad starts with its four
     /// invocations and the helpers take part in the group operations, as Metal's do.
     pub full_quads: bool,
-    /// A fragment's `[[thread_index_in_quadgroup]]` on a profile without the fragment quad tier:
-    /// the stage interface's `FragCoord` object the lane is derived from ([`select_param`]). `None`
-    /// where the lane is the subgroup lane's low two bits.
+    /// A fragment's `[[thread_index_in_quadgroup]]` on a profile without fragment subgroups that
+    /// hold whole quads: the stage interface's `FragCoord` object the lane is derived from
+    /// ([`select_param`]). `None` where the lane is the subgroup lane's low two bits.
     pub quad_lane_coord: Option<usize>,
     /// A fragment's `[[thread_index_in_simdgroup]]` is the lane of the device's grouping
     /// ([`select_param`]): the function records `PrecisionNote::FragmentSimdgroupGrouping`, and
@@ -710,9 +710,9 @@ pub(super) fn partly_live_at(cx: &EmitCx<'_>, at: InstId) -> bool {
 ///
 /// - `[[thread_index_in_quadgroup]]`. Vulkan's quad scope is four adjacent subgroup lanes from a
 ///   multiple of 4, which in a fragment shader are the 2x2 pixels in Metal's order (top left, top
-///   right, bottom left, bottom right; the quad operations' model), so where the profile has the
-///   fragment quad tier the value is `SubgroupLocalInvocationId & 3`, and the class is raised with
-///   the quad class. Where it has none (no fragment subgroups, none with quad operations, or one
+///   right, bottom left, bottom right; the quad operations' model), so where the profile has
+///   fragment subgroups that hold whole quads the value is `SubgroupLocalInvocationId & 3`, and the
+///   class is raised with the basic class alone. Where it has none (no fragment subgroups, or ones
 ///   narrower than a quad), the lane is the pixel's place in its aligned 2x2 block, `(x & 1) + 2 *
 ///   (y & 1)` of the pixel `FragCoord` lies in, and raises no class. That is what Metal gives: our
 ///   probe read the lane of every written pixel equal to it on the M3 Max, single-sampled,
@@ -763,13 +763,19 @@ pub fn select_param(cx: &mut SelectCx<'_>, b: &crate::air::abi::ParamBinding) ->
             OpBits::BASIC
         }
         _ => {
-            let quad = SimdClass::CrossLane(OpBits::QUAD);
-            if subgroup::tier(&quad, Stage::Fragment, &cx.profile.fields().subgroup).is_err() {
+            // A quad is four adjacent subgroup lanes from a multiple of 4 wherever the stage has
+            // subgroups (Vulkan 9.27.9), so the lane needs subgroups holding whole quads, of the
+            // basic class alone.
+            let model = &cx.profile.fields().subgroup;
+            let lane = subgroup::tier(&SimdClass::LaneArithmetic, Stage::Fragment, model);
+            let whole =
+                lane != Ok(Tier::PartialFragment) || model.fragment.api_size.is_multiple_of(4);
+            if lane.is_err() || !whole {
                 let coord = crate::lower::stage_io::frag_coord(cx);
                 cx.families.simd.quad_lane_coord = Some(coord);
                 return Ok(());
             }
-            OpBits::QUAD
+            OpBits::BASIC
         }
     };
     cx.simd = raise(cx.simd, ops);
@@ -782,8 +788,8 @@ pub fn select_param(cx: &mut SelectCx<'_>, b: &crate::air::abi::ParamBinding) ->
 
 /// The value of a fragment lane parameter ([`select_param`]), a `u32`: the simdgroup width 32;
 /// the simdgroup lane, the subgroup's Metal lane; or the quad lane, the subgroup lane's low two
-/// bits, or, without the fragment quad tier, `(x & 1) | ((y & 1) << 1)` of the pixel `FragCoord`
-/// lies in.
+/// bits, or, without fragment subgroups that hold whole quads, `(x & 1) | ((y & 1) << 1)` of the
+/// pixel `FragCoord` lies in.
 pub fn param_value(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,

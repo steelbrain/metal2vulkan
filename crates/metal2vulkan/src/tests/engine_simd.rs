@@ -1153,11 +1153,12 @@ fn quad_ballots_and_simd_active_masks_run_in_every_subgroup_tier() {
 }
 
 /// A fragment's `[[thread_index_in_quadgroup]]` is its subgroup lane's low two bits where the
-/// profile has the fragment quad tier (Vulkan's quad scope: four adjacent lanes from a multiple of
-/// 4, in a fragment shader the 2x2 pixels in Metal's order), and the pixel's place in its aligned
-/// 2x2 block, read from `FragCoord`, where it has none. On every committed profile the function
-/// compiles and passes L3: through `SubgroupLocalInvocationId` exactly where a fragment quad
-/// operation's tier exists, and elsewhere through `FragCoord` with no subgroup capability.
+/// profile has fragment subgroups that hold whole quads (Vulkan's quad scope: four adjacent lanes
+/// from a multiple of 4, in a fragment shader the 2x2 pixels in Metal's order), and the pixel's
+/// place in its aligned 2x2 block, read from `FragCoord`, where it has none. On every committed
+/// profile the function compiles and passes L3: through `SubgroupLocalInvocationId` exactly where
+/// the fragment stage's lane has a tier, and elsewhere through `FragCoord` with no subgroup
+/// capability.
 #[test]
 fn a_fragment_quad_lane_is_its_subgroup_lane_or_its_place_in_the_pixel_quad() {
     let Some(bc) = assemble("simd_masks") else {
@@ -1166,7 +1167,7 @@ fn a_fragment_quad_lane_is_its_subgroup_lane_or_its_place_in_the_pixel_quad() {
     let (mut by_lane, mut by_position) = (0, 0);
     for (stem, p) in committed_profiles().expect("profiles") {
         let quad = subgroup::tier(
-            &SimdClass::CrossLane(OpBits::QUAD),
+            &SimdClass::LaneArithmetic,
             Stage::Fragment,
             &p.fields().subgroup,
         );
@@ -1195,6 +1196,39 @@ fn a_fragment_quad_lane_is_its_subgroup_lane_or_its_place_in_the_pixel_quad() {
         }
     }
     assert!(by_lane > 0 && by_position > 0, "{by_lane} {by_position}");
+}
+
+/// A fragment's `[[thread_index_in_quadgroup]]` asks for fragment subgroups and not the quad
+/// class: Vulkan's quad scope is four adjacent subgroup lanes from a multiple of 4 wherever the
+/// stage has subgroups (9.27.9), whatever operation classes it lists. On MoltenVK's description
+/// without the quad class, `quad_lane_f` reads `SubgroupLocalInvocationId` and declares no quad
+/// capability; with the fragment stage cleared from `subgroupSupportedStages`, it reads the pixel's
+/// place in its 2x2 block from `FragCoord` and declares no subgroup capability.
+#[test]
+fn a_fragment_quad_lane_needs_fragment_subgroups_and_no_quad_class() {
+    let Some(bc) = assemble("simd_masks") else {
+        return;
+    };
+    let text = |p: &DeviceProfile| {
+        let a = compile(&bc, "quad_lane_f", p).expect("compile");
+        let (_, words) = link_and_validate(&a, p).expect("valid");
+        spirv_dis(&words)
+    };
+    let lane = text(&moltenvk_without_quads());
+    assert!(lane.contains("SubgroupLocalInvocationId"), "the lane");
+    assert!(!lane.contains("GroupNonUniformQuad"), "no quad class");
+    let mut desc = crate::pipeline::testing::description("moltenvk-m3").expect("description");
+    desc.subgroup.supported_stages = crate::vk::ShaderStageFlags::COMPUTE;
+    let p = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
+        .expect("device")
+        .profile()
+        .clone();
+    let parity = text(&p);
+    assert!(parity.contains("OpShiftLeftLogical"), "the row's bit");
+    assert!(
+        !parity.contains("SubgroupLocalInvocationId") && !parity.contains("GroupNonUniform"),
+        "no subgroup"
+    );
 }
 
 /// The owned fixture `gsm2_fragment_lanes`. A fragment's `[[thread_index_in_simdgroup]]`, read as a
