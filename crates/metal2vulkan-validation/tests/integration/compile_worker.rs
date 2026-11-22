@@ -9,8 +9,7 @@ use metal2vulkan::pipeline::ComputePipeline;
 use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
 use metal2vulkan_validation::acceptance::{
     compile_draw_in_worker, compile_pipeline, compile_row_in_worker, retained, row,
-    AcceptancePipeline, PipelineRequest, Projection, RequestFunction, RowCompile, RowPipeline,
-    RowStage,
+    AcceptancePipeline, PipelineRequest, RequestFunction, RowCompile, RowPipeline, RowStage,
 };
 use metal2vulkan_validation::engine::{load_description, RowSource};
 use metal2vulkan_validation::worker::compile::{
@@ -168,7 +167,6 @@ fn a_vertex_function_and_a_refusal_cross_the_worker_boundary() {
         let request = PipelineRequest::Row {
             entry: entry.into(),
             stage,
-            projection: Projection::Derived,
             constants: FunctionConstantValues::defaults(),
         };
         let AcceptancePipeline::Render(expected) =
@@ -182,7 +180,6 @@ fn a_vertex_function_and_a_refusal_cross_the_worker_boundary() {
             &retained(&bitcode),
             entry,
             stage,
-            Projection::Derived,
             &FunctionConstantValues::defaults(),
         );
         let RowCompile::Compiled(pipeline) = compiled else {

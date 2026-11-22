@@ -42,8 +42,7 @@ use metal2vulkan::library::{FunctionConstantValues, Library};
 use metal2vulkan::pipeline::Stage;
 use metal2vulkan::pipeline::{
     ComputePipeline, ComputePipelineDescriptor, FunctionDescriptor, LinkedFunction,
-    LinkedFunctions, PrecisionNote, RenderPipeline, RenderPipelineDescriptor, StageModule,
-    StageSource,
+    LinkedFunctions, PrecisionNote, RenderPipeline, StageModule, StageSource,
 };
 use metal2vulkan::vk;
 use metal2vulkan::Budget;
