@@ -249,63 +249,63 @@ define void @lane_moves_in_a_branch_of_a_kernel(ptr addrspace(1) noundef readonl
   %13 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %12
   %14 = load i32, ptr addrspace(1) %13, align 4, !tbaa !33, !alias.scope !67, !noalias !70
   %15 = trunc i32 %3 to i16
-  %16 = xor i16 %15, 3
+  %16 = xor i16 %15, 6
   %17 = freeze i32 %14
   %18 = tail call i32 @air.simd_shuffle.u.i32(i32 %17, i16 %16) #3
   store i32 %18, ptr addrspace(1) %11, align 4, !tbaa !33, !alias.scope !70, !noalias !67
-  %19 = tail call i32 @air.simd_shuffle_xor.u.i32(i32 %17, i16 1) #3
+  %19 = tail call i32 @air.simd_shuffle_xor.u.i32(i32 %17, i16 2) #3
   %20 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 1
   store i32 %19, ptr addrspace(1) %20, align 4, !tbaa !33, !alias.scope !70, !noalias !67
-  %21 = tail call i32 @air.simd_shuffle_up.u.i32(i32 %17, i16 1) #3
+  %21 = tail call i32 @air.simd_shuffle_up.u.i32(i32 %17, i16 2) #3
   %22 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 2
   store i32 %21, ptr addrspace(1) %22, align 4, !tbaa !33, !alias.scope !70, !noalias !67
-  %23 = tail call i32 @air.simd_shuffle_down.u.i32(i32 %17, i16 3) #3
+  %23 = tail call i32 @air.simd_shuffle_down.u.i32(i32 %17, i16 4) #3
   %24 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 3
   store i32 %23, ptr addrspace(1) %24, align 4, !tbaa !33, !alias.scope !70, !noalias !67
-  %25 = tail call i32 @air.simd_shuffle_rotate_up.u.i32(i32 %17, i16 1) #3
+  %25 = tail call i32 @air.simd_shuffle_rotate_up.u.i32(i32 %17, i16 2) #3
   %26 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 4
   store i32 %25, ptr addrspace(1) %26, align 4, !tbaa !33, !alias.scope !70, !noalias !67
   %27 = tail call i32 @air.simd_shuffle_rotate_down.u.i32(i32 %17, i16 2) #3
   %28 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 5
   store i32 %27, ptr addrspace(1) %28, align 4, !tbaa !33, !alias.scope !70, !noalias !67
-  %29 = tail call i32 @air.simd_broadcast.u.i32(i32 %17, i16 21) #3
+  %29 = tail call i32 @air.simd_broadcast.u.i32(i32 %17, i16 20) #3
   %30 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 6
   store i32 %29, ptr addrspace(1) %30, align 4, !tbaa !33, !alias.scope !70, !noalias !67
   %31 = xor i32 %17, -1
   %32 = tail call i16 @air.get_simdgroup_size.i16() #4
-  %33 = tail call i32 @air.simd_shuffle_and_fill_up.u.i32(i32 %17, i32 %31, i16 1, i16 %32) #3
+  %33 = tail call i32 @air.simd_shuffle_and_fill_up.u.i32(i32 %17, i32 %31, i16 2, i16 %32) #3
   %34 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 7
   store i32 %33, ptr addrspace(1) %34, align 4, !tbaa !33, !alias.scope !70, !noalias !67
   %35 = tail call i32 @air.simd_shuffle_and_fill_down.u.i32(i32 %17, i32 %31, i16 2, i16 %32) #3
   %36 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 8
   store i32 %35, ptr addrspace(1) %36, align 4, !tbaa !33, !alias.scope !70, !noalias !67
   %37 = trunc i32 %4 to i16
-  %38 = xor i16 %37, 1
+  %38 = xor i16 %37, 2
   %39 = tail call i32 @air.quad_shuffle.u.i32(i32 %17, i16 %38) #3
   %40 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 9
   store i32 %39, ptr addrspace(1) %40, align 4, !tbaa !33, !alias.scope !70, !noalias !67
   %41 = tail call i32 @air.quad_shuffle_xor.u.i32(i32 %17, i16 2) #3
   %42 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 10
   store i32 %41, ptr addrspace(1) %42, align 4, !tbaa !33, !alias.scope !70, !noalias !67
-  %43 = tail call i32 @air.quad_broadcast.u.i32(i32 %17, i16 1) #3
+  %43 = tail call i32 @air.quad_broadcast.u.i32(i32 %17, i16 2) #3
   %44 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 11
   store i32 %43, ptr addrspace(1) %44, align 4, !tbaa !33, !alias.scope !70, !noalias !67
-  %45 = tail call i32 @air.quad_shuffle_up.u.i32(i32 %17, i16 1) #3
+  %45 = tail call i32 @air.quad_shuffle_up.u.i32(i32 %17, i16 2) #3
   %46 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 12
   store i32 %45, ptr addrspace(1) %46, align 4, !tbaa !33, !alias.scope !70, !noalias !67
   %47 = tail call i32 @air.quad_shuffle_down.u.i32(i32 %17, i16 2) #3
   %48 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 13
   store i32 %47, ptr addrspace(1) %48, align 4, !tbaa !33, !alias.scope !70, !noalias !67
-  %49 = tail call i32 @air.quad_shuffle_rotate_up.u.i32(i32 %17, i16 1) #3
+  %49 = tail call i32 @air.quad_shuffle_rotate_up.u.i32(i32 %17, i16 2) #3
   %50 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 14
   store i32 %49, ptr addrspace(1) %50, align 4, !tbaa !33, !alias.scope !70, !noalias !67
   %51 = tail call i32 @air.quad_shuffle_rotate_down.u.i32(i32 %17, i16 2) #3
   %52 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 15
   store i32 %51, ptr addrspace(1) %52, align 4, !tbaa !33, !alias.scope !70, !noalias !67
-  %53 = tail call i32 @air.quad_shuffle_and_fill_up.u.i32(i32 %17, i32 %31, i16 1, i16 4) #3
+  %53 = tail call i32 @air.quad_shuffle_and_fill_up.u.i32(i32 %17, i32 %31, i16 2, i16 4) #3
   %54 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 16
   store i32 %53, ptr addrspace(1) %54, align 4, !tbaa !33, !alias.scope !70, !noalias !67
-  %55 = tail call i32 @air.quad_shuffle_and_fill_down.u.i32(i32 %17, i32 %31, i16 1, i16 4) #3
+  %55 = tail call i32 @air.quad_shuffle_and_fill_down.u.i32(i32 %17, i32 %31, i16 2, i16 4) #3
   %56 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 17
   store i32 %55, ptr addrspace(1) %56, align 4, !tbaa !33, !alias.scope !70, !noalias !67
   br label %57
@@ -388,7 +388,7 @@ attributes #4 = { nounwind willreturn memory(none) }
 !air.version = !{!31}
 !air.language_version = !{!32}
 
-!0 = !{i32 2, !"SDK Version", [2 x i32] [i32 27, i32 0]}
+!0 = !{i32 2, !"SDK Version", [2 x i32] [i32 27, i32 2]}
 !1 = !{i32 1, !"wchar_size", i32 4}
 !2 = !{i32 7, !"frame-pointer", i32 2}
 !3 = !{i32 7, !"air.max_device_buffers", i32 31}
@@ -418,7 +418,7 @@ attributes #4 = { nounwind willreturn memory(none) }
 !27 = !{!"air.compile.denorms_disable"}
 !28 = !{!"air.compile.fast_math_enable"}
 !29 = !{!"air.compile.framebuffer_fetch_enable"}
-!30 = !{!"Apple metal version 32023.921 (metalfe-32023.921.6)"}
+!30 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
 !31 = !{i32 2, i32 8, i32 0}
 !32 = !{!"Metal", i32 4, i32 0, i32 0}
 !33 = !{!34, !34, i64 0}
