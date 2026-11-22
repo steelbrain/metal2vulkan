@@ -177,10 +177,13 @@ fn a_read_write_texture_sees_its_own_fenced_write() {
     }
 }
 
-/// Cube and cube-array reads by face and layer, and their size queries.
+/// Cube and cube-array reads by face and layer, and their size queries (`texture_ops.ll`'s
+/// `cube_faces`), through the runtime: the translator refuses a cube texture argument the kernel
+/// reads by face under the identity domains, the runtime's (`Unsupported{IdentityDomains}`,
+/// `NotImplemented`), so the run is refused before it runs.
 #[cfg(target_os = "linux")]
 #[test]
-fn cube_and_cube_array_faces_read_the_authored_layers() {
+fn cube_and_cube_array_face_reads_are_refused_under_the_identity_domains() {
     let face = |layer: u32| [layer as f32, layer as f32 + 0.5, 0.0, 1.0];
     let faces = |count: u32| -> Vec<f32> { (0..count).flat_map(face).collect() };
     let case = kernel(
@@ -205,12 +208,17 @@ fn cube_and_cube_array_faces_read_the_authored_layers() {
         [1, 1, 1],
         buffer_output(48),
     );
-    let run = run(&case, &fixture("texture_ops.ll")).unwrap();
-    // Face 3 of the cube; face 4 of the second cube (layer 10); width, cubes, levels.
-    let mut expected = face(3).to_vec();
-    expected.extend(face(10));
-    expected.extend([1.0, 2.0, 1.0, 0.0]);
-    assert_eq!(run.output, floats(&expected));
+    match run(&case, &fixture("texture_ops.ll")) {
+        Err(ExecutorError::NotSupported(crate::check::admission::NotSupported::Product {
+            outcome:
+                crate::engine::Outcome::Unsupported {
+                    reason: crate::engine::UnsupportedReason::NotImplemented,
+                    feature,
+                },
+            ..
+        })) => assert_eq!(feature, "IdentityDomains"),
+        other => panic!("expected the identity domains' refusal: {other:?}"),
+    }
 }
 
 /// A mipmapped texture of `texture_type`, `format`, and level 0 extent `dimensions` with

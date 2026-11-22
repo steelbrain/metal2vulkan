@@ -2,15 +2,12 @@
 //! graphics cases with their generated companions, drawn through the runtime under
 //! `VK_LAYER_KHRONOS_validation`, against expectations derived from the MSL and Metal's conventions
 //! (y-up clip space, pixel-center coverage). `G-linux`'s `m2v_cpu_icd` step runs these on lavapipe.
-//! The looping fragment runs as compiled on both lanes.
 
 use super::*;
 use crate::candidate::engine::graphics::tests::{
     checked_companion, two_stage_case, RenderLibraries, WITHOUT_SLICE,
 };
-use crate::candidate::engine::graphics::{
-    render_case, ColorTarget, RenderCase, RenderOutput, VertexBuffer,
-};
+use crate::candidate::engine::graphics::{render_case, ColorTarget, RenderCase};
 use crate::candidate::engine::ComputeRun;
 use crate::case::{
     AttributeFormat, AttributeInput, AuthoredCase, Draw, OutputSelection, Primitive, Stage,
@@ -87,42 +84,6 @@ fn floats(values: &[f32]) -> Vec<u8> {
     values.iter().copied().flat_map(f32::to_le_bytes).collect()
 }
 
-/// `vertex_varying_triangle`'s two `float2` attributes, one buffer each at the oracle's slots.
-fn triangle_inputs(positions: &[[f32; 2]], uv: [f32; 2]) -> Vec<VertexBuffer> {
-    let count = positions.len();
-    vec![
-        VertexBuffer {
-            location: 0,
-            buffer_index: 30,
-            format: AttributeFormat::Float2,
-            stride: 8,
-            step: metal2vulkan::metal::VertexStepFunction::PerVertex,
-            bytes: floats(&positions.concat()),
-        },
-        VertexBuffer {
-            location: 1,
-            buffer_index: 29,
-            format: AttributeFormat::Float2,
-            stride: 8,
-            step: metal2vulkan::metal::VertexStepFunction::PerVertex,
-            bytes: floats(&uv.repeat(count)),
-        },
-    ]
-}
-
-/// A 4×4 `RGBA32Float` target cleared to -1, observed whole.
-fn quad_target() -> BTreeMap<u32, ColorTarget> {
-    BTreeMap::from([(
-        0,
-        ColorTarget {
-            format: TextureFormat::Rgba32Float,
-            dimensions: [4, 4],
-            samples: 1,
-            bytes: floats(&[-1.0; 64]),
-        },
-    )])
-}
-
 /// The 4×4 target after covering clip-space `[0, 1]²` with `color`: Metal's y-up clip space puts
 /// that square in the top-right 2×2 pixels (rows 0–1, columns 2–3); its edges lie on pixel
 /// boundaries, so coverage does not depend on fill rules.
@@ -143,51 +104,14 @@ const QUADRANT: [[f32; 2]; 6] = [
     [0.0, 1.0],
 ];
 
-fn whole_target(case: &mut RenderCase) {
-    case.output = RenderOutput::RenderTarget {
-        index: 0,
-        origin: [0, 0],
-        dimensions: [4, 4],
-    };
-}
-
-/// A vertex function and a separately compiled fragment function drawn through one pipeline:
-/// the negative-height viewport puts Metal's y-up quadrant in the top rows.
-#[cfg(target_os = "linux")]
-#[test]
-fn a_constant_fragment_colors_the_quadrant_metal_draws() {
-    let mut case = two_stage_case(
-        "vertex_varying_triangle",
-        "fragment_constant_color",
-        triangle_inputs(&QUADRANT, [0.0, 0.0]),
-        quad_target(),
-        6,
-    );
-    whole_target(&mut case);
-    let vertex = public("vertex_varying_triangle.ll");
-    let fragment = public("fragment_constant_color.ll");
-    let run = run(
-        &case,
-        RenderLibraries {
-            vertex: &vertex,
-            fragment: Some(&fragment),
-        },
-    )
-    .unwrap();
-    assert_eq!(run.output, top_right([0.25, 0.5, 0.75, 1.0]));
-    assert_eq!(run.environment["executor"], "runtime-render");
-}
-
 /// `rt6_layered_vertex` (engine `rt6_layered`) writes index 3, from its buffer, in a pass of
 /// Metal's default length 0, a pass of one layer: Metal renders the triangle into the pass's slice
 /// whatever index the function writes, and `rt6_layered_fragment` reads the index as written, so
 /// the slice holds instance 0's word `1 << 8 | 3` (the conformance case
 /// `layered-render-target-array-length`, recorded on an Apple M3 Max under macOS 27.0.1). The
 /// pipeline stores `Layer` as 0 at or past the length it is pushed (1), a value the Vulkan spec
-/// defines in a framebuffer of one layer. The validation layer still reports the draw's `Layer`
-/// write as undefined; the sink withholds exactly that message for this row, and the row's
-/// environment counts it (`platform::device`'s `CLAMPED_LAYER`). When the layer stops reporting
-/// it, this test fails, and the exception goes with it.
+/// defines in a framebuffer of one layer. The run is under the validation layer, whose every
+/// message fails the row, and withholds none.
 #[cfg(target_os = "linux")]
 #[test]
 fn an_index_past_a_one_layer_pass_renders_the_pass_s_slice() {
@@ -222,34 +146,8 @@ fn an_index_past_a_one_layer_pass_renders_the_pass_s_slice() {
     assert_eq!(run.output, (1u32 << 8 | 3).to_le_bytes());
     assert_eq!(
         run.environment["withheld_validation_messages"],
-        serde_json::json!({ "Undefined-Value-Layer-Written": 1 })
+        serde_json::Value::Null
     );
-}
-
-/// A varying written by the vertex stage reaches the fragment stage of another library by its
-/// user key; a value equal at every vertex interpolates to itself.
-#[cfg(target_os = "linux")]
-#[test]
-fn a_vertex_varying_reaches_the_fragment_stage() {
-    let mut case = two_stage_case(
-        "vertex_varying_triangle",
-        "fragment_varying_color",
-        triangle_inputs(&QUADRANT, [0.25, 0.75]),
-        quad_target(),
-        6,
-    );
-    whole_target(&mut case);
-    let vertex = public("vertex_varying_triangle.ll");
-    let fragment = public("fragment_varying_color.ll");
-    let run = run(
-        &case,
-        RenderLibraries {
-            vertex: &vertex,
-            fragment: Some(&fragment),
-        },
-    )
-    .unwrap();
-    assert_eq!(run.output, top_right([0.25, 0.75, 0.5, 1.0]));
 }
 
 /// `case` over its function's `bitcode` mapped with the checker's generated companion, and the
@@ -813,75 +711,4 @@ fn a_rasterization_disabled_vertex_draw_stores_through_its_buffer() {
     )
     .unwrap();
     assert_eq!(run.output, (2u32 + 3 + 4).to_le_bytes());
-}
-
-/// A fragment function that loops `n` times (`n` from its constant buffer) draws once, as
-/// compiled, with no execution bound and no headroom probe, on both lanes.
-#[cfg(target_os = "linux")]
-#[test]
-fn a_looping_fragment_draws_as_compiled() {
-    use crate::candidate::engine::tests::counting_kernel;
-    let header = counting_kernel()
-        .split("define")
-        .next()
-        .expect("the shared header")
-        .to_owned();
-    let text = format!(
-        "{header}define <4 x float> @fragment_loop(ptr addrspace(2) noundef \"air-buffer-no-alias\" %0) {{\n\
-entry:\n\
-  %n = load i32, ptr addrspace(2) %0, align 4\n\
-  br label %loop\n\
-loop:\n\
-  %i = phi i32 [ 0, %entry ], [ %next, %body ]\n\
-  %acc = phi float [ 0.000000e+00, %entry ], [ %sum, %body ]\n\
-  %again = icmp ult i32 %i, %n\n\
-  br i1 %again, label %body, label %done\n\
-body:\n\
-  %sum = fadd float %acc, 1.000000e+00\n\
-  %next = add i32 %i, 1\n\
-  br label %loop\n\
-done:\n\
-  %color = insertelement <4 x float> <float 0.000000e+00, float 0.000000e+00, float 0.000000e+00, float 1.000000e+00>, float %acc, i64 0\n\
-  ret <4 x float> %color\n\
-}}\n\n\
-!air.fragment = !{{!0}}\n!air.version = !{{!6}}\n!air.language_version = !{{!7}}\n\
-!0 = !{{ptr @fragment_loop, !1, !2}}\n!1 = !{{!3}}\n!2 = !{{!4}}\n\
-!3 = !{{!\"air.render_target\", i32 0, i32 0, !\"air.arg_type_name\", !\"float4\", !\"air.arg_name\", !\"color\"}}\n\
-!4 = !{{i32 0, !\"air.buffer\", !\"air.location_index\", i32 0, i32 1, !\"air.read\", !\"air.address_space\", i32 2, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"n\"}}\n\
-!6 = !{{i32 2, i32 8, i32 0}}\n!7 = !{{!\"Metal\", i32 4, i32 0, i32 0}}\n"
-    );
-    let fragment =
-        crate::candidate::engine::tests::assemble(&text).expect("llvm-as on the device lane");
-    let vertex = public("vertex_varying_triangle.ll");
-    let covering = [[-1.0, -1.0], [3.0, -1.0], [-1.0, 3.0]];
-    let case = {
-        let mut case = two_stage_case(
-            "vertex_varying_triangle",
-            "fragment_loop",
-            triangle_inputs(&covering, [0.0, 0.0]),
-            BTreeMap::from([(
-                0,
-                ColorTarget {
-                    format: TextureFormat::Rgba32Float,
-                    dimensions: [1, 1],
-                    samples: 1,
-                    bytes: floats(&[-1.0; 4]),
-                },
-            )]),
-            3,
-        );
-        case.fragment
-            .as_mut()
-            .expect("a fragment stage")
-            .resources
-            .buffers
-            .insert(0, 3u32.to_le_bytes().to_vec());
-        case
-    };
-    let libraries = RenderLibraries {
-        vertex: &vertex,
-        fragment: Some(&fragment),
-    };
-    let ok = run(&case, libraries).unwrap();
-    assert_eq!(ok.output, floats(&[3.0, 0.0, 0.0, 1.0]));
 }

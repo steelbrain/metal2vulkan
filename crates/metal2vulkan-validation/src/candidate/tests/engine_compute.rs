@@ -219,13 +219,14 @@ fn an_argument_buffer_pointer_reaches_its_pointee() {
 
 /// The public loaded-pointer case's buffer (`ob2_loaded_pointer`) through the runtime: an argument
 /// buffer holds the address of a 16-byte buffer, which the kernel stores past (words 4 to 63)
-/// through the pointer it loads. The buffer is a guarded target; the in-shader check skips every
-/// store, so the buffer keeps its words and the census counts no changed guard or padding byte.
+/// through the pointer it loads. Under the identity domains, the runtime's, a loaded pointer is
+/// used as given and no check bounds its accesses (docs/API.md, section 1), so the run refuses the
+/// target before it runs: `Uncontained`, naming the loaded-pointer form.
 #[cfg(target_os = "linux")]
 #[test]
-fn a_loaded_pointers_buffer_written_past_its_end_is_guarded() {
+fn a_loaded_pointers_buffer_written_past_its_end_is_refused_uncontained() {
     use crate::case::out_of_bounds::{ContainmentForm, OutOfBoundsResource, OutOfBoundsTarget};
-    use crate::executor_contract::out_of_bounds::{Check, Medium};
+    use crate::check::admission::NotSupported;
     let bitcode = llvm_assemble(&engine_dir().join("ob2_loaded_pointer.ll")).unwrap();
     let words = |words: &[u32]| -> Vec<u8> { words.iter().flat_map(|w| w.to_le_bytes()).collect() };
     let idx = [0u32, 1, 2, 3, 4, 5, 17, 63, 4, 6, 9, 12, 30, 44, 50, 63];
@@ -257,23 +258,16 @@ fn a_loaded_pointers_buffer_written_past_its_end_is_guarded() {
         offset: 0,
         length: 16,
     };
-    let run = run_through_runtime(&stores, &bitcode).unwrap();
-    assert_eq!(run.output, words(&own));
-    let targets = run
-        .census
-        .out_of_bounds
-        .expect("an out-of-bounds case's census records its targets")
-        .targets;
-    let [ran] = targets.as_slice() else {
-        panic!("{targets:?}");
-    };
-    assert_eq!(ran.resource, target);
-    assert_eq!(ran.form, ContainmentForm::LoadedPointer);
-    assert_eq!(
-        (ran.mechanism.medium, ran.mechanism.check),
-        (Medium::DeviceAddress, Check::Shader)
-    );
-    assert_eq!((ran.escaped, ran.past_end), (Some(0), Some(0)), "{ran:?}");
+    match run_through_runtime(&stores, &bitcode) {
+        Err(ExecutorError::NotSupported(NotSupported::Uncontained { unchecked, variant })) => {
+            assert_eq!(
+                unchecked,
+                std::collections::BTreeSet::from([ContainmentForm::LoadedPointer])
+            );
+            assert_eq!(variant, None);
+        }
+        other => panic!("expected the loaded pointer refused uncontained: {other:?}"),
+    }
 }
 
 /// The public storage-buffer case (`ob1_storage_buffer`) through the runtime: eight threads load
