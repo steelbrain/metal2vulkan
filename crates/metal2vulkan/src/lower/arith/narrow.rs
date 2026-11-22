@@ -1446,7 +1446,6 @@ pub fn computes_in_16_bits(m: &TypedModule) -> bool {
             Inst::Binary { op, .. } => {
                 matches!(op, BinOp::FAdd | BinOp::FSub | BinOp::FMul | BinOp::FDiv)
             }
-            Inst::Fma { .. } => true,
             Inst::Glsl { op, .. } => matches!(op, GlslOp::Fma | GlslOp::Sqrt),
             _ => false,
         };

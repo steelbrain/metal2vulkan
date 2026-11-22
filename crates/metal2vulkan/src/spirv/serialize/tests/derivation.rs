@@ -8,8 +8,8 @@ use crate::device::requirements::{Requirements, SpirvCapability, VkExtension, Vk
 use crate::pipeline::sym::ResourceKind;
 use crate::spirv::builder::ModuleBuilder;
 use crate::spirv::ir::{
-    natural_layout, AtomicOp, ConvOp, ExecModel, ImageOperands, IoDir, LayoutRule, MemAccess,
-    MemoryOrder, Scope, Semantics, StorageClass, Type, TypedModule,
+    natural_layout, AtomicOp, ExecModel, ImageOperands, IoDir, LayoutRule, MemAccess, MemoryOrder,
+    Scope, Semantics, StorageClass, Type, TypedModule,
 };
 use crate::spirv::requirements::{uses_physical_storage_buffer, uses_vulkan_memory_model};
 use crate::spirv::testing::{spirv_val_with, TargetEnv, ValOptions};

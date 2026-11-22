@@ -63,12 +63,12 @@ use crate::pipeline::sym::Stage;
 use crate::spirv::error::{BResult, BuildError, Dangling, GlobalRule, TypeRule};
 use crate::spirv::ids::{FuncId, GlobalId, TypeId, Value};
 use crate::spirv::ir::{
-    AtomicOp, DerivOp, Dim, ExecMode, ExecModel, GlobalKind, GlslOp, GroupInst, GroupOperation,
-    ImageOperands, ImageType, ImageUsage, Inst, IoDir, LayoutRule, RayQueryInst, Scope, ScopeId,
-    Semantics, SemanticsId, Shape, StorageClass, Terminator, TexelMemory, Type, ValueOrigin,
+    Block, Consts, EntryPoint, Function, GlobalVar, MemAccess, Types, ValueDef,
 };
 use crate::spirv::ir::{
-    Block, Consts, EntryPoint, Function, GlobalVar, MemAccess, Types, ValueDef,
+    DerivOp, Dim, ExecMode, ExecModel, GlobalKind, GlslOp, GroupInst, GroupOperation,
+    ImageOperands, ImageType, ImageUsage, Inst, IoDir, LayoutRule, RayQueryInst, Scope, ScopeId,
+    Semantics, SemanticsId, Shape, StorageClass, Terminator, TexelMemory, Type, ValueOrigin,
 };
 
 /// `SkipTrianglesKHR | SkipAABBsKHR`.
@@ -1013,11 +1013,7 @@ impl Deriver<'_> {
                 self.atomic(*ptr)?;
             }
             Inst::Atomic {
-                op,
-                ptr,
-                scope,
-                sem,
-                ..
+                ptr, scope, sem, ..
             } => {
                 self.scope(*scope);
                 self.semantics(*sem);

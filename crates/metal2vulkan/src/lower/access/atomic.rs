@@ -809,7 +809,7 @@ fn private_new(
             fb.select(equal, x, old)?
         }
         AtomicKind::Cas(op) => cas_new(fb, op, word, old, x)?,
-        AtomicKind::Rmw(_) | AtomicKind::Load => return Err(dangling()),
+        AtomicKind::Load => return Err(dangling()),
     })
 }
 
