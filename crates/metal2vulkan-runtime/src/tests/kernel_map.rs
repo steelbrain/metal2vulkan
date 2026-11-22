@@ -123,7 +123,8 @@ mod on_device {
     /// Two states of one content share one translation, one shader module and one `VkPipeline`
     /// per variant: `a1_bool_from_float`, which tiles its grid (one lowering, and its tiles'
     /// `VkPipeline` made with the first state alone), and `icb_replay_grid_template`, which
-    /// observes its threadgroups (two lowerings, with the first state alone). The map holds one
+    /// observes its threadgroups (one lowering, its partial-threadgroups variant, with the first
+    /// state alone). The map holds one
     /// entry each, and a kernel lives while a state or the map holds it. A make kept under a key
     /// the map holds already answers the map's kernel, and counts in
     /// `Metrics::kernel_makes_dropped`.
@@ -146,7 +147,7 @@ mod on_device {
         each_device("kernel_map_shared", |name, _, device| {
             let counters = device.counters();
             for (kernel, descriptor, lowerings, pipelines) in
-                [("tiled", &tiled, 1, 1), ("observing", &observing, 2, 0)]
+                [("tiled", &tiled, 1, 1), ("observing", &observing, 1, 0)]
             {
                 let before = counters.metrics();
                 let first = state(name, &device, descriptor);

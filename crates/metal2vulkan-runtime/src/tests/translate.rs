@@ -415,8 +415,9 @@ mod on_device {
     }
 
     /// `icb_replay_grid_template`, which observes its threadgroup partition (threadgroup memory,
-    /// a barrier, and every builtin of the partition), translated at creation, plainly and as its
-    /// partial-threadgroups variant: every dispatch, a whole `dispatchThreads` grid, a ragged one,
+    /// a barrier, and every builtin of the partition), translated at creation as its
+    /// partial-threadgroups variant alone, whose walk takes no vote word, so the state keeps no
+    /// plain module: every dispatch, a whole `dispatchThreads` grid, a ragged one,
     /// threadgroup counts or an indirect one, runs the variant at the call's size, with no
     /// translation at any dispatch, and a
     /// threadgroup count past the device's limit on an axis
@@ -504,8 +505,8 @@ mod on_device {
             );
             assert_eq!(
                 created.translations - made.translations,
-                2,
-                "{name}: the plain module and the partial-threadgroups variant at creation"
+                1,
+                "{name}: the partial-threadgroups variant alone at creation"
             );
             let queue = device.new_command_queue(4).expect("a queue");
             let command_buffer = queue.command_buffer().expect("a command buffer");
@@ -1739,8 +1740,9 @@ mod on_device {
     }
 
     /// A device on a cache directory a device before it used lowers nothing at creation, and asks
-    /// the translator nothing: the tiling kernel's lowering and the observing kernel's plain one
-    /// and partial-threadgroups variant are read from the directory, each once, so no stage entry
+    /// the translator nothing: the tiling kernel's lowering and the observing kernel's
+    /// partial-threadgroups variant, its state's only module, are read from the directory, each
+    /// once, so no stage entry
     /// is decoded, and the tile's `VkPipeline` is made through a pipeline cache started from the
     /// device's blob.
     /// The first device's writes (`Metrics::cache_bytes_written`) are at least the files' bytes,
@@ -1772,8 +1774,8 @@ mod on_device {
                 ];
                 let metrics = counters.metrics();
                 let counted = (metrics.translations, metrics.translations_loaded);
-                // The tiling kernel's lowering, the observing kernel's plain one and its variant.
-                let want = [(3, 0), (0, 3)][round];
+                // The tiling kernel's lowering and the observing kernel's variant.
+                let want = [(2, 0), (0, 2)][round];
                 assert_eq!(counted, want, "{name}: device {round} on the directory");
                 if round == 1 {
                     let decoded = device.core().entries.held();
@@ -1804,7 +1806,7 @@ mod on_device {
                 }
             }
             let _ = std::fs::remove_dir_all(&dir);
-            println!("{name}: 3 lowerings and the blob written, nothing by a second device");
+            println!("{name}: 2 lowerings and the blob written, nothing by a second device");
         }
     }
 
@@ -3111,8 +3113,9 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
     /// The harness fixture's `row_barrier` holds no threadgroup memory and observes its
     /// threadgroup partition through `threadgroup_barrier(mem_flags::mem_device)`: each thread
     /// stores `((y << 16) | x) + 1` to its cell, then, past the barrier, copies the word of its
-    /// column in row `y ^ 1` where that row is in the grid. The state lowers both modules and makes
-    /// no pipeline, and its grids run at their own size on the partial-threadgroups variant: 512 x
+    /// column in row `y ^ 1` where that row is in the grid. The state lowers its
+    /// partial-threadgroups variant alone, whose walk takes no vote word, and makes no pipeline,
+    /// and its grids run at their own size on that variant: 512 x
     /// 4 in 32 x 2, whole, makes its pipeline by a first-use wait with no translation, 512 x 3 in
     /// 32 x 2, ragged, finds it made, and 96 x 5 in 32 x 4 makes its own; the whole grid counts in
     /// `Metrics::partial_variant_whole_grids`. A state of the descriptor with
@@ -3140,8 +3143,8 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
                     created.pipelines_created - made.pipelines_created,
                     created.translations - made.translations,
                 ),
-                (0, 2),
-                "{name}: no pipeline made with the state, and both modules lowered"
+                (0, 1),
+                "{name}: no pipeline made with the state, and the variant alone lowered"
             );
             let queue = device.new_command_queue(4).expect("a queue");
             let run = |state: &ComputePipelineState, grid: [u32; 3], size: [u32; 3]| {
@@ -3210,7 +3213,7 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
                     made.pipelines_created - before.pipelines_created,
                     made.translations - before.translations,
                 ),
-                (1, 2),
+                (1, 1),
                 "{name}: the required size's state: its whole and ragged grids' pipeline"
             );
             run(&sized, [512, 4, 1], [32, 2, 1]);

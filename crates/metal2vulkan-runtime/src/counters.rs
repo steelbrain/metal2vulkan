@@ -2266,8 +2266,11 @@ pub struct Metrics {
     /// walk's vote word with it. No Metal counterpart: Metal compiles one function.
     pub partial_variant_whole_grids: u64,
     /// Functions the translator lowered, each a module of a pipeline content the device did not
-    /// hold compiled: of a compute content, one for a kernel that does not observe its threadgroup
-    /// partition and two for one that does; of a render content, one for each of its functions
+    /// hold compiled: of a compute content, one for a kernel, its partial-threadgroups variant,
+    /// and a second, its plain module, for a kernel that observes its threadgroup partition whose
+    /// variant's vote word can take its threadgroup memory past the device's limit (or whose
+    /// variant is refused), and the emulated-SIMD-group variant of a kernel whose tier runs only
+    /// whole SIMD groups; of a render content, one for each of its functions
     /// that the cache directory did not hold. A state of a content the device holds lowers
     /// nothing.
     pub translations: u64,
