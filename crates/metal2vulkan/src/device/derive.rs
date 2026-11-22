@@ -226,9 +226,6 @@ fn derive_fields(desc: &DeviceDescription, policy: &DevicePolicy) -> ProfileFiel
         update_after_bind_storage_image: has(
             VkFeature::DescriptorBindingStorageImageUpdateAfterBind,
         ),
-        update_after_bind_storage_buffer: has(
-            VkFeature::DescriptorBindingStorageBufferUpdateAfterBind,
-        ),
         update_after_bind_uniform_texel_buffer: has(
             VkFeature::DescriptorBindingUniformTexelBufferUpdateAfterBind,
         ),
@@ -238,7 +235,6 @@ fn derive_fields(desc: &DeviceDescription, policy: &DevicePolicy) -> ProfileFiel
         update_unused_while_pending: has(VkFeature::DescriptorBindingUpdateUnusedWhilePending),
         non_uniform_sampled_image: has(VkFeature::ShaderSampledImageArrayNonUniformIndexing),
         non_uniform_storage_image: has(VkFeature::ShaderStorageImageArrayNonUniformIndexing),
-        non_uniform_storage_buffer: has(VkFeature::ShaderStorageBufferArrayNonUniformIndexing),
         non_uniform_uniform_texel_buffer: has(
             VkFeature::ShaderUniformTexelBufferArrayNonUniformIndexing,
         ),

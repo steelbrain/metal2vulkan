@@ -1203,16 +1203,12 @@ fn limits(l: &avk::PhysicalDeviceLimits, p: &PropertyChain, chained: &Properties
             .max_descriptor_set_update_after_bind_sampled_images,
         max_descriptor_set_update_after_bind_storage_images: v12
             .max_descriptor_set_update_after_bind_storage_images,
-        max_descriptor_set_update_after_bind_storage_buffers: v12
-            .max_descriptor_set_update_after_bind_storage_buffers,
         max_per_stage_descriptor_update_after_bind_samplers: v12
             .max_per_stage_descriptor_update_after_bind_samplers,
         max_per_stage_descriptor_update_after_bind_sampled_images: v12
             .max_per_stage_descriptor_update_after_bind_sampled_images,
         max_per_stage_descriptor_update_after_bind_storage_images: v12
             .max_per_stage_descriptor_update_after_bind_storage_images,
-        max_per_stage_descriptor_update_after_bind_storage_buffers: v12
-            .max_per_stage_descriptor_update_after_bind_storage_buffers,
         max_per_stage_update_after_bind_resources: v12.max_per_stage_update_after_bind_resources,
         max_storage_buffer_range: l.max_storage_buffer_range,
         max_uniform_buffer_range: l.max_uniform_buffer_range,

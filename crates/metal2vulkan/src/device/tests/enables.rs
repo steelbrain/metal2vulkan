@@ -188,8 +188,7 @@ fn recommendations_keep_robust_buffer_access_and_vuid_10247() {
 /// `vkCreateDevice`). Its recommendation keeps the rule, so the
 /// stated robustness can be created; adding the buffer update-after-bind features to the restricted
 /// description changes only the profile's update-after-bind facts, which only the set-1 arrays that
-/// need them read (the function tables', the texel-buffer classes'): every other field is the
-/// same.
+/// need them read (the texel-buffer classes'): every other field is the same.
 #[test]
 fn a_recommendation_keeps_vuid_10247() {
     let mut desc = profile("runtime-floor");
@@ -214,10 +213,8 @@ fn a_recommendation_keeps_vuid_10247() {
     let both = Device::from_queries(with_buffers, DevicePolicy::RESIDENT_TABLES).unwrap();
     assert_eq!(both.required_enables(), rec);
     let mut fields = both.profile().fields().clone();
-    assert!(fields.descriptors.update_after_bind_storage_buffer);
     assert!(fields.descriptors.update_after_bind_uniform_texel_buffer);
     assert!(fields.descriptors.update_after_bind_storage_texel_buffer);
-    fields.descriptors.update_after_bind_storage_buffer = false;
     fields.descriptors.update_after_bind_uniform_texel_buffer = false;
     fields.descriptors.update_after_bind_storage_texel_buffer = false;
     for f in BUFFER_UPDATE_AFTER_BIND {

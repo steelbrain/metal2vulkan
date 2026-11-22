@@ -2500,7 +2500,6 @@ field	metal2vulkan::device::ApiVersion.major	pub major: u32
 field	metal2vulkan::device::ApiVersion.minor	pub minor: u32
 field	metal2vulkan::device::DescriptorCaps.buffer_device_address	pub buffer_device_address: bool
 field	metal2vulkan::device::DescriptorCaps.non_uniform_sampled_image	pub non_uniform_sampled_image: bool
-field	metal2vulkan::device::DescriptorCaps.non_uniform_storage_buffer	pub non_uniform_storage_buffer: bool
 field	metal2vulkan::device::DescriptorCaps.non_uniform_storage_image	pub non_uniform_storage_image: bool
 field	metal2vulkan::device::DescriptorCaps.non_uniform_storage_texel_buffer	pub non_uniform_storage_texel_buffer: bool
 field	metal2vulkan::device::DescriptorCaps.non_uniform_uniform_texel_buffer	pub non_uniform_uniform_texel_buffer: bool
@@ -2510,7 +2509,6 @@ field	metal2vulkan::device::DescriptorCaps.runtime_descriptor_array	pub runtime_
 field	metal2vulkan::device::DescriptorCaps.scalar_block_layout	pub scalar_block_layout: bool
 field	metal2vulkan::device::DescriptorCaps.uniform_buffer_standard_layout	pub uniform_buffer_standard_layout: bool
 field	metal2vulkan::device::DescriptorCaps.update_after_bind_sampled_image	pub update_after_bind_sampled_image: bool
-field	metal2vulkan::device::DescriptorCaps.update_after_bind_storage_buffer	pub update_after_bind_storage_buffer: bool
 field	metal2vulkan::device::DescriptorCaps.update_after_bind_storage_image	pub update_after_bind_storage_image: bool
 field	metal2vulkan::device::DescriptorCaps.update_after_bind_storage_texel_buffer	pub update_after_bind_storage_texel_buffer: bool
 field	metal2vulkan::device::DescriptorCaps.update_after_bind_uniform_texel_buffer	pub update_after_bind_uniform_texel_buffer: bool
@@ -2616,7 +2614,6 @@ field	metal2vulkan::device::Limits.max_descriptor_set_storage_images	pub max_des
 field	metal2vulkan::device::Limits.max_descriptor_set_uniform_buffers	pub max_descriptor_set_uniform_buffers: u32
 field	metal2vulkan::device::Limits.max_descriptor_set_update_after_bind_sampled_images	pub max_descriptor_set_update_after_bind_sampled_images: u32
 field	metal2vulkan::device::Limits.max_descriptor_set_update_after_bind_samplers	pub max_descriptor_set_update_after_bind_samplers: u32
-field	metal2vulkan::device::Limits.max_descriptor_set_update_after_bind_storage_buffers	pub max_descriptor_set_update_after_bind_storage_buffers: u32
 field	metal2vulkan::device::Limits.max_descriptor_set_update_after_bind_storage_images	pub max_descriptor_set_update_after_bind_storage_images: u32
 field	metal2vulkan::device::Limits.max_draw_indexed_index_value	pub max_draw_indexed_index_value: u32
 field	metal2vulkan::device::Limits.max_fragment_combined_output_resources	pub max_fragment_combined_output_resources: u32
@@ -2646,7 +2643,6 @@ field	metal2vulkan::device::Limits.max_per_stage_descriptor_storage_images	pub m
 field	metal2vulkan::device::Limits.max_per_stage_descriptor_uniform_buffers	pub max_per_stage_descriptor_uniform_buffers: u32
 field	metal2vulkan::device::Limits.max_per_stage_descriptor_update_after_bind_sampled_images	pub max_per_stage_descriptor_update_after_bind_sampled_images: u32
 field	metal2vulkan::device::Limits.max_per_stage_descriptor_update_after_bind_samplers	pub max_per_stage_descriptor_update_after_bind_samplers: u32
-field	metal2vulkan::device::Limits.max_per_stage_descriptor_update_after_bind_storage_buffers	pub max_per_stage_descriptor_update_after_bind_storage_buffers: u32
 field	metal2vulkan::device::Limits.max_per_stage_descriptor_update_after_bind_storage_images	pub max_per_stage_descriptor_update_after_bind_storage_images: u32
 field	metal2vulkan::device::Limits.max_per_stage_resources	pub max_per_stage_resources: u32
 field	metal2vulkan::device::Limits.max_per_stage_update_after_bind_resources	pub max_per_stage_update_after_bind_resources: u32
@@ -10192,7 +10188,6 @@ variant	metal2vulkan::device::VkLimit::MaxDescriptorSetStorageImages	MaxDescript
 variant	metal2vulkan::device::VkLimit::MaxDescriptorSetUniformBuffers	MaxDescriptorSetUniformBuffers
 variant	metal2vulkan::device::VkLimit::MaxDescriptorSetUpdateAfterBindSampledImages	MaxDescriptorSetUpdateAfterBindSampledImages
 variant	metal2vulkan::device::VkLimit::MaxDescriptorSetUpdateAfterBindSamplers	MaxDescriptorSetUpdateAfterBindSamplers
-variant	metal2vulkan::device::VkLimit::MaxDescriptorSetUpdateAfterBindStorageBuffers	MaxDescriptorSetUpdateAfterBindStorageBuffers
 variant	metal2vulkan::device::VkLimit::MaxDescriptorSetUpdateAfterBindStorageImages	MaxDescriptorSetUpdateAfterBindStorageImages
 variant	metal2vulkan::device::VkLimit::MaxDrawIndexedIndexValue	MaxDrawIndexedIndexValue
 variant	metal2vulkan::device::VkLimit::MaxFragmentCombinedOutputResources	MaxFragmentCombinedOutputResources
@@ -10232,7 +10227,6 @@ variant	metal2vulkan::device::VkLimit::MaxPerStageDescriptorStorageImages	MaxPer
 variant	metal2vulkan::device::VkLimit::MaxPerStageDescriptorUniformBuffers	MaxPerStageDescriptorUniformBuffers
 variant	metal2vulkan::device::VkLimit::MaxPerStageDescriptorUpdateAfterBindSampledImages	MaxPerStageDescriptorUpdateAfterBindSampledImages
 variant	metal2vulkan::device::VkLimit::MaxPerStageDescriptorUpdateAfterBindSamplers	MaxPerStageDescriptorUpdateAfterBindSamplers
-variant	metal2vulkan::device::VkLimit::MaxPerStageDescriptorUpdateAfterBindStorageBuffers	MaxPerStageDescriptorUpdateAfterBindStorageBuffers
 variant	metal2vulkan::device::VkLimit::MaxPerStageDescriptorUpdateAfterBindStorageImages	MaxPerStageDescriptorUpdateAfterBindStorageImages
 variant	metal2vulkan::device::VkLimit::MaxPerStageResources	MaxPerStageResources
 variant	metal2vulkan::device::VkLimit::MaxPerStageUpdateAfterBindResources	MaxPerStageUpdateAfterBindResources

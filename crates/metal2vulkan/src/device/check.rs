@@ -199,9 +199,6 @@ impl DeviceProfile {
             VkLimit::MaxDescriptorSetUpdateAfterBindStorageImages => {
                 up(l.max_descriptor_set_update_after_bind_storage_images)
             }
-            VkLimit::MaxDescriptorSetUpdateAfterBindStorageBuffers => {
-                up(l.max_descriptor_set_update_after_bind_storage_buffers)
-            }
             VkLimit::MaxPerStageDescriptorUpdateAfterBindSamplers => {
                 up(l.max_per_stage_descriptor_update_after_bind_samplers)
             }
@@ -210,9 +207,6 @@ impl DeviceProfile {
             }
             VkLimit::MaxPerStageDescriptorUpdateAfterBindStorageImages => {
                 up(l.max_per_stage_descriptor_update_after_bind_storage_images)
-            }
-            VkLimit::MaxPerStageDescriptorUpdateAfterBindStorageBuffers => {
-                up(l.max_per_stage_descriptor_update_after_bind_storage_buffers)
             }
             VkLimit::MaxPerStageUpdateAfterBindResources => {
                 up(l.max_per_stage_update_after_bind_resources)

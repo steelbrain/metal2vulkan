@@ -755,16 +755,12 @@ fn limits(p: &Props<'_>, api: ApiVersion, extensions: &BTreeSet<String>) -> Resu
             .u32("maxDescriptorSetUpdateAfterBindSampledImages")?,
         max_descriptor_set_update_after_bind_storage_images: p
             .u32("maxDescriptorSetUpdateAfterBindStorageImages")?,
-        max_descriptor_set_update_after_bind_storage_buffers: p
-            .u32("maxDescriptorSetUpdateAfterBindStorageBuffers")?,
         max_per_stage_descriptor_update_after_bind_samplers: p
             .u32("maxPerStageDescriptorUpdateAfterBindSamplers")?,
         max_per_stage_descriptor_update_after_bind_sampled_images: p
             .u32("maxPerStageDescriptorUpdateAfterBindSampledImages")?,
         max_per_stage_descriptor_update_after_bind_storage_images: p
             .u32("maxPerStageDescriptorUpdateAfterBindStorageImages")?,
-        max_per_stage_descriptor_update_after_bind_storage_buffers: p
-            .u32("maxPerStageDescriptorUpdateAfterBindStorageBuffers")?,
         max_per_stage_update_after_bind_resources: p.u32("maxPerStageUpdateAfterBindResources")?,
         max_storage_buffer_range: p.u32("maxStorageBufferRange")?,
         max_uniform_buffer_range: p.u32("maxUniformBufferRange")?,

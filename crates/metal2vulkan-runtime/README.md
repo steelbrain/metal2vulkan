@@ -4766,8 +4766,6 @@ enables that the translator names.
 | Feature | Structure | Without it |
 |---|---|---|
 | `computeDerivativeGroupLinear` | `VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR` | a derivative in a kernel is refused (`ComputeDerivatives`) |
-| `descriptorBindingStorageBufferUpdateAfterBind` | `VkPhysicalDeviceVulkan12Features` | the translator's function table is a directory and a snapshot, never a heap array of storage buffers; the runtime supplies no function table (Known gaps of pipeline states) |
-| `shaderStorageBufferArrayNonUniformIndexing` | `VkPhysicalDeviceVulkan12Features` | as `descriptorBindingStorageBufferUpdateAfterBind` |
 
 The test `tests::feature_enables` holds this to the code: on every committed device profile, and
 under `--cfg m2v_cpu_icd` on the machine's CPU device, it derives the translator's profile with and
