@@ -2969,6 +2969,13 @@ subgroup mode is planned again keeping that mode pinned: the re-plan takes the p
 it weighs less than the emulated one by the stage weight; otherwise the emulated one goes on. The
 one taken compiles in the process where it is under the bound, and in the helper where it is not.
 
+A fill's memory follows the threadgroup size its pipeline is made at, as the workgroup size is part
+of what the driver compiles. On the Iris Xe of RPL-P (ANV, Mesa 26.2.6) one emulated module of
+weight 46,491 took 794 MiB in 18.5 s at 1 thread a threadgroup and 2,630 MiB in 57.7 s at 32, the
+state's execution width; at 1,024, its `max_total_threads_per_threadgroup`, the helper passed the
+consumer's 3,072 MiB cap after 46 s and the pipeline was refused (job m3-max-68473, twice of two).
+So a kernel whose fill fits at its execution width can be refused at a larger threadgroup.
+
 Render stages have a bound of their own, 99,109, as no helper compiles a render stage: a render
 pipeline with a stage past it is refused (Known gaps of render pipeline states), and one at or
 under it compiles in the process that runs the program with no cap, past the kernels' bound too.
