@@ -404,13 +404,15 @@ impl CandidateObservation {
         // target's guard. `dependency_matches` re-decides each from the Metal bytes.
         let tolerated = self.comparison.tolerates_differences()
             || run.is_some_and(OutOfBoundsRun::tolerates_differences);
-        // A difference that may be noted is a noted one, unless an answer gap holds it open.
+        // A noted difference is one that may be noted, and only such a difference is held open by
+        // an answer gap. A mismatch under notes without a gap is a row of an executor before the
+        // noted status, stale by its executor ABI.
         let noted = may_be_noted(!hashes_match, &self.comparison, run);
         let contradicts = match self.status {
             CandidateStatus::Match => (!hashes_match && !tolerated) || self.held_open_by.is_some(),
             CandidateStatus::Mismatch => {
                 (hashes_match && !run.is_some_and(OutOfBoundsRun::escapes))
-                    || noted != self.held_open_by.is_some()
+                    || (self.held_open_by.is_some() && !noted)
             }
             CandidateStatus::NotedDifference => !noted || self.held_open_by.is_some(),
         };
@@ -1150,7 +1152,8 @@ mod tests {
         assert!(equal.validate_content().is_err());
 
         // Under an unbounded class a difference is a noted difference, never a match, and a
-        // mismatch only where an answer gap holds it open; no other class or status is noted.
+        // mismatch where an answer gap holds it open (or in a row of an executor before the noted
+        // status); no other class or status is noted.
         let unbounded = ComparisonClass::Unbounded([PrecisionNote::DeviceSampling].into());
         let valid = |output: &[u8], comparison: &ComparisonClass, status, held| {
             let mut row = row(output, comparison.clone(), status);
@@ -1166,7 +1169,7 @@ mod tests {
         ));
         assert!(valid(&far, &unbounded, CandidateStatus::Mismatch, gap));
         assert!(!valid(&far, &unbounded, CandidateStatus::Match, None));
-        assert!(!valid(&far, &unbounded, CandidateStatus::Mismatch, None));
+        assert!(valid(&far, &unbounded, CandidateStatus::Mismatch, None));
         assert!(!valid(
             &far,
             &unbounded,

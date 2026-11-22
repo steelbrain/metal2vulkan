@@ -1014,8 +1014,8 @@ fn a_report_narrowed_to_requested_cases_counts_only_them() {
     assert!(
         lines.iter().any(|line| line
             == "batch-report selected=1 ran=1 pending=0 match=1 mismatch=0 \
-                refusal=0 failure=0 not_supported=0 refused=0 device_crash=0 needs_metal=0 \
-                venue_mismatch=0 wait_timeout=0 timeout=0 failed=0"),
+                noted_difference=0 refusal=0 failure=0 not_supported=0 refused=0 device_crash=0 \
+                needs_metal=0 venue_mismatch=0 wait_timeout=0 timeout=0 failed=0"),
         "{lines:#?}"
     );
     assert!(

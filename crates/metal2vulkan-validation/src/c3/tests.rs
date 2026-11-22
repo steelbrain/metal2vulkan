@@ -3073,6 +3073,7 @@ fn a_deferred_near_equivalent_stays_open_with_its_reason() {
     let mut plain = input.clone();
     plain.vulkan[0].census = None;
     plain.vulkan[0].comparison = ComparisonClass::Exact;
+    plain.vulkan[0].status = CandidateStatus::Mismatch;
     let mut list = list;
     list.readings[0].observations = vec![reviewed(&plain.vulkan[0], &METAL)];
     let report = report_of(

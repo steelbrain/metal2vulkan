@@ -100,8 +100,9 @@ fn the_status_starts_zero_and_stops_non_evidence() {
 
 /// A difference under notes is a noted difference unless the C3 reviewed list holds its case under
 /// an answer gap the case's structure meets: then it stays a mismatch naming the gap. Judged over
-/// the committed list's every answer gap and its committed case, and a committed case it does not
-/// hold; a difference no note can explain is a mismatch for either.
+/// the committed list's every answer gap over a public fixture and its committed case, and a
+/// committed public case it does not hold; a difference no note can explain is a mismatch for
+/// either.
 #[test]
 fn a_difference_under_notes_is_noted_unless_an_answer_gap_holds_its_case_open() {
     let root = crate::source::corpus_root();
@@ -115,14 +116,19 @@ fn a_difference_under_notes_is_noted_unless_an_answer_gap_holds_its_case_open() 
             .unwrap_or_else(|errors| panic!("{}: {errors:?}", case.name));
         difference_status(&checked, true, comparison, None, || Ok(list.clone())).unwrap()
     };
+    let mut public = 0;
     for entry in &list.answer_gaps {
         let case = store.find_case(&entry.case_id).unwrap().unwrap();
+        if case.public_source.is_none() {
+            continue;
+        }
         let held = (CandidateStatus::Mismatch, Some(entry.gap));
         assert_eq!(status(&case, &noted), held, "{}", case.name);
         let unexplained = (CandidateStatus::Mismatch, None);
         assert_eq!(status(&case, &ComparisonClass::Exact), unexplained);
+        public += 1;
     }
-    assert!(list.answer_gaps.len() >= 5);
+    assert!(public >= 5, "{public}");
     let unheld = store
         .read_all_cases()
         .unwrap()
