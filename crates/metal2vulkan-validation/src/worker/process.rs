@@ -577,8 +577,7 @@ mod tests {
     use std::process::Stdio;
 
     /// A member reaped while the group is sampled is gone, not a monitoring failure: on Linux the
-    /// `/proc/<pid>/status` a sampler opened before the reap reads `ESRCH` (a drm-shim sweep
-    /// stopped a compile on it).
+    /// `/proc/<pid>/status` a sampler opened before the reap reads `ESRCH`.
     #[cfg(unix)]
     #[test]
     fn a_member_reaped_while_sampled_is_gone() {

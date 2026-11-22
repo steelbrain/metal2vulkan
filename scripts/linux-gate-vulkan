@@ -5,7 +5,7 @@
 #   scripts/linux-gate-vulkan <command> [args...]
 #
 # Reads what scripts/linux-gate passes: M2V_GATE_ICD (lavapipe), M2V_GATE_PROFILE (a
-# crates/metal2vulkan-validation/profiles stem, or empty), and for the drm-shim recipe M2V_DRM_SHIM_ICD_GLOB.
+# crates/metal2vulkan-validation/profiles stem, or empty).
 #
 # - The selected ICD becomes the only one the loader sees (VK_DRIVER_FILES).
 # - With a profile P, VK_LAYER_KHRONOS_profiles is stacked between VK_LAYER_KHRONOS_validation and
@@ -129,10 +129,4 @@ PY
     echo "linux-gate: VK_LAYER_KHRONOS_profiles with $name from $file" >&2
 fi
 
-if [ -n "${M2V_DRM_SHIM_ICD_GLOB:-}" ]; then
-    shims=($M2V_DRM_SHIM_ICD_GLOB)
-    [ "${#shims[@]}" -eq 1 ] && [ -f "${shims[0]}" ] ||
-        { echo "linux-gate: expected one ICD at $M2V_DRM_SHIM_ICD_GLOB" >&2; exit 69; }
-    export M2V_DRM_SHIM_ICD=${shims[0]}
-fi
 exec "$@"

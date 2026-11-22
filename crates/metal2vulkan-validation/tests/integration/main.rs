@@ -27,7 +27,6 @@ mod committed_public_cases_check;
 mod committed_shards_keep_the_store_layout;
 mod compile_worker;
 mod device_worker;
-mod drm_shim;
 mod engine_linked_cases;
 mod fast_trig_within_apples_bound;
 mod fixtures_assemble_with_the_pinned_llvm;

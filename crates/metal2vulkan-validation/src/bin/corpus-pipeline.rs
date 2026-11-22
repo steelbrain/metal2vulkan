@@ -149,8 +149,8 @@ fn usage() -> String {
      so N processes sweep disjoint parts; --after then names a row of that part.\n\
      --profiles-layer P (on a device, naming --profile's P) restricts the device to\n\
      P through VK_LAYER_KHRONOS_profiles, after checking that it has P and reports exactly P\n\
-     (validation spec 4.1.2's profile-restricted pipeline creation). A drm-shim gpu device requires scripts/drm-shim-exec inside the drm-shim\n\
-     container; cpu matches only a CPU Vulkan implementation."
+     (validation spec 4.1.2's profile-restricted pipeline creation). --device-type gpu opens a\n\
+     hardware or virtual GPU; cpu matches only a CPU Vulkan implementation."
         .to_string()
 }
 
