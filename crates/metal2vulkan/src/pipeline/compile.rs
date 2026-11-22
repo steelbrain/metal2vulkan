@@ -2934,6 +2934,17 @@ fn analyze_one(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Anal
     } = ordered_entry(r, p, m)?;
     color_inputs_attached(&spec, r.inputs)?;
     let inputs = lower_inputs(&spec, r.inputs, p, m)?;
+    // A partial threadgroups variant runs a direct `dispatchThreads` on subgroups, whose
+    // invocations past the grid it walks: none of the other forms, and no emulated simdgroups. It
+    // is refused first, so the variant asked with another form is refused as itself.
+    if inputs.partial_threadgroups
+        && (inputs.flat_grid
+            || inputs.folded_groups
+            || inputs.replay_bindings
+            || inputs.emulated_simdgroups)
+    {
+        return Err(Unsupported::not_implemented(Feature::PartialThreadgroups).into());
+    }
     // A flat variant runs its grid in threadgroups of its own: only a kernel that does not observe
     // its partition computes the same there; one of the call's threadgroups, also a kernel that
     // observes it through its simdgroups alone.
@@ -2953,16 +2964,6 @@ fn analyze_one(r: &Request<'_>, p: &DeviceProfile, m: &mut Meter) -> Result<Anal
         || inputs.call_threadgroups && (!inputs.flat_grid || inputs.replay_bindings)
     {
         return Err(Unsupported::not_implemented(Feature::GpuEncodedIndirectCommands).into());
-    }
-    // A partial threadgroups variant runs a direct `dispatchThreads` on subgroups, whose
-    // invocations past the grid it walks: none of the other forms, and no emulated simdgroups.
-    if inputs.partial_threadgroups
-        && (inputs.flat_grid
-            || inputs.folded_groups
-            || inputs.replay_bindings
-            || inputs.emulated_simdgroups)
-    {
-        return Err(Unsupported::not_implemented(Feature::PartialThreadgroups).into());
     }
     let linked: Vec<LinkedKey<'_>> = r.linked.iter().map(|s| s.key).collect();
     let key = key::function_key(
