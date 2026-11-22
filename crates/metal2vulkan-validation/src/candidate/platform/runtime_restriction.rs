@@ -149,7 +149,7 @@ pub(super) fn layered(
     }
     let none = BTreeSet::new();
     let presenting = ProfilesSettings::new(ProfilesLayer::Restrict(restriction, &none))?;
-    let presented = under(&presenting, || {
+    let presented = under(&presenting, || -> Result<Vec<String>, String> {
         let instance = made()?;
         let (physical, _) = select(&instance, device_type, None)?;
         let (_, vk_instance) = instance.raw();
@@ -161,7 +161,7 @@ pub(super) fn layered(
             .iter()
             .filter_map(|extension| extension.extension_name_as_c_str().ok())
             .map(|name| name.to_string_lossy().into_owned())
-            .collect::<Vec<String>>())
+            .collect())
     })?;
     let hidden = restriction.hidden(presented.iter().map(String::as_str));
     let restricted = Restricted {
