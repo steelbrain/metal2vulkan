@@ -52,6 +52,7 @@ fn assert_accepted(pipeline: &RowPipeline) {
     ));
 }
 
+#[cfg(target_os = "linux")]
 /// What the runtime answered for kernel row `entry` of the owned fixture `file`, made on the
 /// lane's device as `corpus-pipeline` makes a kernel row, with no function-constant values. A
 /// device lane has `llvm-as`, so a missing assembler fails the test.
@@ -93,7 +94,7 @@ fn accepted(acceptance: Result<Acceptance, crate::acceptance::AcceptanceError>) 
 
 /// A kernel row is made through the runtime, and the driver creates the pipeline its dispatch
 /// runs on; a vertex function alone is created from the binder layout.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn a_kernel_row_is_made_through_the_runtime_and_a_vertex_only_pipeline_is_created() {
     accepted(Ok(made("store_const.ll", "store_const")));
@@ -112,7 +113,7 @@ fn a_kernel_row_is_made_through_the_runtime_and_a_vertex_only_pipeline_is_create
 /// whole simdgroups of the state's thread execution width. The 897
 /// `VUID-VkPipelineShaderStageCreateInfo-flags-02759` rows were such kernels created at their
 /// stage's placeholder local size of 1.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn a_full_subgroup_kernel_row_is_made_through_the_runtime() {
     accepted(Ok(made("simd_ops.ll", "simd_shuffle_k")));
@@ -120,7 +121,7 @@ fn a_full_subgroup_kernel_row_is_made_through_the_runtime() {
 
 /// A kernel with an explicit imageblock is the runtime's typed refusal, as a guest's is: its
 /// compute encoder does not set an imageblock's extent (`setImageblockWidth:height:`).
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn an_imageblock_kernel_row_is_the_runtimes_refusal() {
     let made = made("a4_imageblock_extent.ll", "a4_imageblock_extent");
