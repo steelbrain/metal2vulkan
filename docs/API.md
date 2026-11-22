@@ -1004,6 +1004,10 @@ stages are task and mesh shaders, which need `VK_EXT_mesh_shader` with `meshShad
 pipeline and each of its object and mesh functions (`Unsupported{MeshShading}`, naming what it
 lacks).
 
+The mesh lowering is only compiled and validated: no mesh draw it makes has been compared with
+Metal on a GPU, and the runtime makes no mesh pipeline (its README's known gaps of render pipeline
+states). What follows is what the lowering emits.
+
 A grid Metal draws nothing for (an axis past `bind::METAL_MESH_GRID_AXIS`, or more than
 `bind::METAL_MESH_GRID_TOTAL` threadgroups, measured on the M3 Max) draws nothing in every form:
 a direct draw's command is zeroed, an object function's wrapper launches nothing for such a grid,
@@ -1022,9 +1026,9 @@ the consumer uploads (the record, and its pieces' commands where `draw` is indir
 draw's arguments pass (`MeshArgumentsForm::FoldedObject`) writes the record, the pieces and their
 commands, which `draw` (`DrawMeshTasksIndirectCount`) reads. Metal's threads per grid wrap to 32
 bits along each axis, as its builtins report them; a direct draw runs only the threadgroups those
-threads fill, rounded up, an indirect one every threadgroup (`bind::metal_object_grid`). Every
-device runs a grid of up to `bind::METAL_OBJECT_GRID_TOTAL` (2^29) threadgroups, the most Metal's GPU
-ran within its watchdog's 5 seconds. A larger one, which Metal's GPU discards, draws nothing and
+threads fill, rounded up, an indirect one every threadgroup (`bind::metal_object_grid`). The
+lowering takes a grid of up to `bind::METAL_OBJECT_GRID_TOTAL` (2^29) threadgroups on every device,
+the most Metal's GPU ran within its watchdog's 5 seconds. A larger one, which Metal's GPU discards, draws nothing and
 fails its command buffer with Metal's error (the runtime's `CommandBufferError::GpuRecoveryVictim`):
 a direct draw says so in `DrawCommands::discards_command_buffer`, and the consumer fails the command
 buffer from the draw's encoder on, as Metal does; an indirect draw's arguments pass sets

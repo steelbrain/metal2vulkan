@@ -137,7 +137,8 @@ without rasterization and its case observes the empty output (`"output": {"kind"
 does not draw one: an object or mesh case requires `mesh_render_pipeline`, which no candidate
 runs, so its Metal observation stands with its Vulkan side unsupported. The authored compile
 census still compiles its mesh render pipeline, as the candidate would build it, on each
-profile. An object case's
+profile: a `compiled` cell of an object or mesh case says the pipeline compiles, not that it draws
+as Metal does. An object case's
 `threadgroup_memory` sets its arguments' lengths through `setObjectThreadgroupMemoryLength:atIndex:`.
 
 Dynamic Metal `threadgroup` arguments are declared through `threadgroup_memory` binding/length

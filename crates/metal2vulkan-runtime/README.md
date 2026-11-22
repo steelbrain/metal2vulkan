@@ -3437,8 +3437,9 @@ cache is answered compile-required on both.
   binding and no mesh draw (`drawMeshThreadgroups:`, `drawMeshThreads:` and the indirect form), so
   no type here names them and the consumer refuses them itself. `new_render_pipeline_state` takes
   a vertex function: an object or mesh function in its place is the translator's refusal
-  (`Error::Translation`). The translator compiles mesh pipelines (docs/API.md, "Mesh pipelines");
-  rt makes no `VkPipeline` of one. No replay stream or live session has used one; harvested guest
+  (`Error::Translation`). The translator's mesh lowering (docs/API.md, "Mesh pipelines") is only
+  compiled and validated: it has never been compared with Metal on a GPU, and rt makes no
+  `VkPipeline` of it. No replay stream or live session has used one; harvested guest
   functions declare them, and validation's committed object and mesh cases qualify on Metal alone
   (its `mesh_render_pipeline` requirement).
 - On a Vulkan driver built on Metal (Mesa's KosmicKrisp on the Mac), a fragment function that
