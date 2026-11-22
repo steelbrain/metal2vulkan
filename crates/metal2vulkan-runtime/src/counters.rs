@@ -2259,10 +2259,11 @@ pub struct Metrics {
     /// time a dispatch needed more than the last block held, or no command buffer kept it. A
     /// dispatch that reaches the last block takes none.
     pub private_arena_blocks: u64,
-    /// Direct dispatches of a whole grid, `dispatchThreads` of whole threadgroups or
-    /// `dispatchThreadgroups`, that ran a kernel's partial-threadgroups variant: a kernel that
-    /// observes its threadgroup partition runs every direct dispatch on that one module where the
-    /// variant takes the threadgroup. No Metal counterpart: Metal compiles one function.
+    /// Dispatches of whole threadgroups, `dispatchThreads` of a whole grid, `dispatchThreadgroups`
+    /// or `dispatchThreadgroupsWithIndirectBuffer`, that ran a kernel's partial-threadgroups
+    /// variant: a kernel that observes its threadgroup partition runs every dispatch on that one
+    /// module where the variant takes the threadgroup. No Metal counterpart: Metal compiles one
+    /// function.
     pub partial_variant_whole_grids: u64,
     /// Functions the translator lowered, each a module of a pipeline content the device did not
     /// hold compiled: of a compute content, one for a kernel that does not observe its threadgroup

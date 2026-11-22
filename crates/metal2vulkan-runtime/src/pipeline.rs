@@ -12,11 +12,11 @@
 //! grid and the threadgroup size pick (`encoder::image_tile`) over a deeper one, on one
 //! `VkPipeline` per tile made at its first dispatch. An indirect
 //! dispatch runs at its own threadgroup size. A kernel that observes its partition is lowered
-//! plainly, and as its partial-threadgroups variant with the state: every direct dispatch, a
-//! whole grid, threadgroups or a `dispatchThreads` grid that is not a whole number of
-//! threadgroups, runs the variant at its own threadgroup size, a whole grid unflagged; its
-//! indirect dispatches, and the direct ones where the content has no variant or the variant does
-//! not take the threadgroup, run the plain module.
+//! plainly, and as its partial-threadgroups variant with the state: every dispatch, a whole
+//! grid, threadgroups, an indirect dispatch or a `dispatchThreads` grid that is not a whole number
+//! of threadgroups, runs the variant at its own threadgroup size, all but the last unflagged; the
+//! dispatches where the content has no variant or the variant does not take the threadgroup run
+//! the plain module.
 //! Each `VkPipeline` is keyed by its module, threadgroup size and threadgroup memory lengths.
 //!
 //! What a state compiles is its content ([`KernelKey`]), never the state: the translator's key
@@ -164,10 +164,10 @@ pub(crate) struct Compiled {
     core: Arc<Core>,
     /// Its number ([`CONTENTS`]).
     id: u64,
-    /// The module of indirect dispatches, and for a kernel that observes its threadgroup partition
-    /// of direct ones its partial-threadgroups variant does not run; for a kernel that does not
-    /// observe it, of every dispatch. Its interface numbers the state's samplers and answers
-    /// Metal's state.
+    /// For a kernel that observes its threadgroup partition, the module of the dispatches its
+    /// partial-threadgroups variant does not run; for a kernel that does not observe it, the module
+    /// of indirect dispatches, and of every dispatch where it is the only one. Its interface
+    /// numbers the state's samplers and answers Metal's state.
     pub(crate) whole: Kernel,
     /// How a direct dispatch runs.
     pub(crate) form: Form,
@@ -388,9 +388,9 @@ pub(crate) enum Form {
     /// `encoder::image_tile` over a deeper one, a tile deeper than `DEEP_THREADGROUP` as one row
     /// ([`Constant::Deep`]).
     Square,
-    /// The kernel observes its partition: a dispatch runs at its own threadgroup size, every
-    /// direct one on the partial-threadgroups variant, lowered with the state where the content
-    /// has a function to lower it from (`encoder::decide`).
+    /// The kernel observes its partition: a dispatch runs at its own threadgroup size, every one,
+    /// direct or indirect, on the partial-threadgroups variant, lowered with the state where the
+    /// content has a function to lower it from (`encoder::decide`).
     Sized { partial: Option<Box<Lowered>> },
 }
 
@@ -810,8 +810,8 @@ impl crate::Device {
     /// kernel that does not observe its threadgroup partition as its partial-threadgroups
     /// variant, whose 256-wide tile's `VkPipeline`, or an image-only kernel's 16x16 workgroups'
     /// one, is made here too, and one that does as its plain module and its partial-threadgroups
-    /// variant, with the one `VkPipeline` its direct dispatches run, whole grids and ragged ones,
-    /// at the descriptor's `requiredThreadsPerThreadgroup` where it sets one, or else at
+    /// variant, with the one `VkPipeline` its dispatches run, whole grids, ragged and indirect
+    /// ones, at the descriptor's `requiredThreadsPerThreadgroup` where it sets one, or else at
     /// `[N, 1, 1]` where the state declares a bound of threads (the descriptor's
     /// `maxTotalThreadsPerThreadgroup`, or the
     /// kernel's `[[max_total_threads_per_threadgroup(n)]]`), `N` the state's
@@ -1054,12 +1054,12 @@ impl Compiled {
         // where the state declares a bound of threads, `N` its `maxTotalThreadsPerThreadgroup`.
         // The bound is declared by the descriptor's `maxTotalThreadsPerThreadgroup`, or by the
         // kernel's `[[max_total_threads_per_threadgroup(n)]]`, which alone brings Metal's answer
-        // below its 1024; the device's own limit is no declared bound. The `VkPipeline` its direct
+        // below its 1024; the device's own limit is no declared bound. The `VkPipeline` its
         // dispatches of that size run is made, where the module takes no threadgroup memory length
-        // from the encoder: the partial-threadgroups variant's, which runs whole grids and ragged
-        // ones alike, or the whole module's where the content has no such variant. A make that
-        // fails here is made again by the dispatch that needs it, which reports its own error; a
-        // make refused for the stage bound refuses the state's, which the consumer's helper then
+        // from the encoder: the partial-threadgroups variant's, which runs whole grids, ragged and
+        // indirect ones alike, or the whole module's where the content has no such variant. A make
+        // that fails here is made again by the dispatch that needs it, which reports its own error;
+        // a make refused for the stage bound refuses the state's, which the consumer's helper then
         // fills.
         let interface = &compiled.whole.interface;
         let declared = descriptor.max_total_threads_per_threadgroup.is_some()

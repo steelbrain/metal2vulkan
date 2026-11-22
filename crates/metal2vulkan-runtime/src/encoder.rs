@@ -333,14 +333,16 @@ pub(crate) struct Choice {
 
 /// How a state of `form` runs a dispatch of threadgroup size `size`, direct over `direct` or
 /// indirect, the same on every device:
-/// - indirect: the whole module at its own size;
+/// - indirect: the whole module at its own size ([`decide`] runs an observing kernel's on its
+///   partial-threadgroups variant);
 /// - an image-only kernel ([`Form::Square`]): the whole module at `MultiRegion` 0 in workgroups
 ///   of [`SQUARE`] over a grid one deep, and of its [`image_tile`] over a deeper one, the region
 ///   carrying them, flagged where they do not divide the grid;
 /// - a tiling kernel ([`Form::Tiled`]): its tiles, workgroups of `GRID_TILE_THREADS`, each one
 ///   `grid_tile` tile of the grid, which its region carries;
 /// - an observing kernel ([`Form::Sized`]): its own size, a ragged grid on its
-///   partial-threadgroups variant ([`decide`] runs its whole grids there too).
+///   partial-threadgroups variant ([`decide`] runs its whole grids and indirect dispatches there
+///   too).
 ///
 /// A size deeper than `DEEP_THREADGROUP` runs as one row of its threads
 /// ([`Constant::Deep`](crate::pipeline::Constant::Deep)), so every workgroup is within the
@@ -1286,10 +1288,12 @@ pub(crate) fn size_checked(interface: &Interface, size: [u32; 3]) -> Result<(), 
 /// [`ComputePipelineState::prepare_dispatch`]: [`choose`]'s choice, then its module, an
 /// observer's partial-threadgroups variant for a ragged grid, and the emulated variant for a
 /// threadgroup that is not whole groups of a module that runs only whole ones (the
-/// partial-threadgroups variant has none), each lowered with the state. An observer's direct
-/// dispatch of a whole grid, or of threadgroups, that its whole module would run runs on the
+/// partial-threadgroups variant has none), each lowered with the state. An observer's dispatch of
+/// a whole grid, of threadgroups, or indirect, that its whole module would run runs on the
 /// partial-threadgroups variant instead, unflagged, where the variant is lowered and takes the
-/// threadgroup: one module, and one `VkPipeline` a size, runs every direct dispatch of it.
+/// threadgroup: one module, and one `VkPipeline` a size, runs every dispatch of it. An indirect
+/// dispatch states no grid in its region, so the variant runs it in the single-region form, every
+/// invocation live, as the translator's dispatch regions say (`lower::dispatch`).
 pub(crate) fn decide(
     compiled: &Compiled,
     direct: Option<Direct>,
@@ -1314,11 +1318,7 @@ pub(crate) fn decide(
             .copied()
     };
     let observes = matches!(compiled.form, Form::Sized { .. });
-    if observes
-        && choice.module == Module::Whole
-        && choice.direct.is_some()
-        && short(&compiled.whole).is_none()
-    {
+    if observes && choice.module == Module::Whole && short(&compiled.whole).is_none() {
         if let Ok(partial) = compiled.variant_kernel(Which::Partial, partial_threadgroups) {
             if short(partial).is_none() {
                 let choice = Choice {

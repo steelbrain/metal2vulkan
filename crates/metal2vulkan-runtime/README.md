@@ -2567,12 +2567,13 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   other dispatch, on the same pipeline, branches past that test. An indirect dispatch runs at its
   own threadgroup size, unflagged. A kernel that observes its partition is
   lowered plainly and as its partial-threadgroups variant, which the state's creation lowers too,
-  through the cache directory: every direct dispatch, a whole `dispatch_threads` grid,
-  `dispatch_threadgroups` or a grid that is not a whole number of threadgroups, runs the variant at
-  its own size, a whole grid's regions unflagged, so one `VkPipeline` of a size runs them all
-  (`Metrics::partial_variant_whole_grids` counts the whole grids). Its indirect dispatches run the
-  plain module, and so does a direct dispatch where the variant is refused, or where the
-  threadgroup is not whole SIMD groups of a kernel that runs only whole ones (below). The translator gives a kernel no order of the
+  through the cache directory: every dispatch, a whole `dispatch_threads` grid,
+  `dispatch_threadgroups`, `dispatch_threadgroups_with_indirect_buffer` or a grid that is not a
+  whole number of threadgroups, runs the variant at its own size, every region but a ragged grid's
+  unflagged, so one `VkPipeline` of a size runs them all (`Metrics::partial_variant_whole_grids`
+  counts the dispatches of whole threadgroups). A dispatch runs the plain module where the variant
+  is refused, or where the threadgroup is not whole SIMD groups of a kernel that runs only whole
+  ones (below). The translator gives a kernel no order of the
   accesses Apple's SIMD-group lockstep orders (docs/API.md, accepted differences), so only the
   kernel's own barriers, fences, atomics of threadgroup or SIMD-group scope, SIMD-group and quad
   functions, threadgroup memory and builtins of the partition observe it.
@@ -3057,7 +3058,7 @@ cache is answered compile-required on both.
   of one stream and 312 of the other). The 50th, of tile 1x1x256, runs as one row, so a device
   that holds 64 makes the same 50.
 - A kernel's variants are lowered with its state, whether or not a dispatch needs them: an
-  observing kernel's partial-threadgroups variant, which its direct dispatches run, and the
+  observing kernel's partial-threadgroups variant, which its dispatches run, and the
   emulated-SIMD-group variant of a kernel whose
   tier runs only whole SIMD groups, which only a threadgroup that is not whole subgroups runs. So
   a state's creation lowers up to three functions where Metal compiles one, each through the

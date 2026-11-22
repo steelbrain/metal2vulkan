@@ -413,9 +413,9 @@ mod on_device {
 
     /// `icb_replay_grid_template`, which observes its threadgroup partition (threadgroup memory,
     /// a barrier, and every builtin of the partition), translated at creation, plainly and as its
-    /// partial-threadgroups variant: every direct dispatch, a whole `dispatchThreads` grid, a
-    /// ragged one or threadgroup counts, runs the variant at the call's size, and an indirect one
-    /// the plain module, with no translation at any dispatch, and a
+    /// partial-threadgroups variant: every dispatch, a whole `dispatchThreads` grid, a ragged one,
+    /// threadgroup counts or an indirect one, runs the variant at the call's size, with no
+    /// translation at any dispatch, and a
     /// threadgroup count past the device's limit on an axis
     /// runs split, each piece reading Metal's whole grid. Threadgroups deeper than 64, 1 by 1 by
     /// 320 and 2 by 3 by 100, run as one row of their threads on every device, whole, ragged and
@@ -546,8 +546,8 @@ mod on_device {
                 "{name}: no translation at a dispatch, the first ragged grid's included"
             );
             // One pipeline for each module and size the runs take: a ragged grid the variant; a
-            // threadgroup of whole SIMD groups of the device's tier the variant where direct and
-            // the plain module where indirect; any other the emulated variant.
+            // threadgroup of whole SIMD groups of the device's tier the variant, direct or
+            // indirect; any other the emulated variant.
             let simd = &state.inner.compiled.whole.interface.multiples;
             let whole_simd = |size: [u32; 3]| {
                 let threads = size.iter().product::<u32>();
@@ -559,11 +559,10 @@ mod on_device {
             for &(grid, size, how) in &runs {
                 let ragged = how == How::Threads
                     && (0..3).any(|axis| !grid[axis].is_multiple_of(size[axis]));
-                let module = match (how, ragged, whole_simd(size)) {
-                    (_, true, _) => "variant",
-                    (_, false, false) => "emulated",
-                    (How::Indirect, false, true) => "plain",
-                    (How::Threads | How::Groups, false, true) => {
+                let module = match (ragged, whole_simd(size)) {
+                    (true, _) => "variant",
+                    (false, false) => "emulated",
+                    (false, true) => {
                         on_variant += 1;
                         "variant"
                     }
@@ -578,7 +577,7 @@ mod on_device {
             assert_eq!(
                 after.partial_variant_whole_grids - created.partial_variant_whole_grids,
                 on_variant,
-                "{name}: whole grids on the partial-threadgroups variant"
+                "{name}: whole threadgroups, direct and indirect, on the partial-threadgroups variant"
             );
             println!(
                 "{name}: observing kernel checked over {} runs{}; creation {creation} ns, one lowering {lowering} ns; precision notes {}",
@@ -658,9 +657,9 @@ mod on_device {
     /// an observing kernel, then finds made: for a whole `dispatchThreads` grid, a
     /// `dispatchThreadgroups` grid and an indirect dispatch, each prepared with the dispatch's own
     /// arguments, the call makes exactly one pipeline and lowers nothing, and the dispatch adds no
-    /// first-use wait and makes nothing; a ragged grid of the whole grid's size finds the whole
-    /// grid's made, since every direct dispatch runs the partial-threadgroups variant, lowered with
-    /// the state. A `dispatchThreadgroups` grid whose threads saturate on an axis, prepared alone,
+    /// first-use wait and makes nothing; a ragged grid and an indirect dispatch of the whole grid's
+    /// size find the whole grid's made, since every dispatch runs the partial-threadgroups variant,
+    /// lowered with the state. A `dispatchThreadgroups` grid whose threads saturate on an axis, prepared alone,
     /// makes what a small grid of the same call and size then runs with no wait, and a
     /// `dispatchThreads` grid of exactly `u32::MAX` threads on that size, which does not divide
     /// it, finds that made. A second call with the same arguments makes nothing. A call for what the dispatch records nothing for (a grid with no
@@ -700,6 +699,7 @@ mod on_device {
                     ([10, 3, 1], How::Threads),
                     0,
                 ),
+                (Dispatch::Indirect, [4, 2, 1], ([2, 2, 1], How::Indirect), 0),
                 (
                     Dispatch::Threadgroups([3, 2, 1]),
                     [2, 2, 1],
@@ -935,9 +935,9 @@ mod on_device {
     /// dispatches run: over a table of dispatches of `icb_replay_grid_template`, an observing
     /// kernel with a threadgroup memory argument, two keys are equal exactly when the entries run
     /// one module at one size and threadgroup memory length. Direct grids that differ only in their
-    /// extent, their call or whether they are whole threadgroups share a key, all on the
-    /// partial-threadgroups variant; an indirect dispatch, on the whole module, another; and a
-    /// different threadgroup size or length gives another. `prepare_dispatch` on
+    /// extent, their call or whether they are whole threadgroups, and an indirect dispatch, share a
+    /// key, all on the partial-threadgroups variant; a different threadgroup size or length gives
+    /// another. `prepare_dispatch` on
     /// each entry in turn makes one pipeline for each key not met before and none for one met. A
     /// second state of the same content answers the same keys and finds their pipelines made; a
     /// state of another content (the same function with a required threadgroup size) answers
@@ -965,28 +965,28 @@ mod on_device {
             // Each entry: the dispatch, its size, its threadgroup memory length, and the pipeline
             // it runs.
             let table = [
-                (Dispatch::Threads([8, 4, 1]), size, length(size), "direct"),
-                (Dispatch::Threads([16, 8, 1]), size, length(size), "direct"),
+                (Dispatch::Threads([8, 4, 1]), size, length(size), "size"),
+                (Dispatch::Threads([16, 8, 1]), size, length(size), "size"),
                 (
                     Dispatch::Threadgroups([3, 2, 1]),
                     size,
                     length(size),
-                    "direct",
+                    "size",
                 ),
-                (Dispatch::Indirect, size, length(size), "indirect"),
-                (Dispatch::Threads([10, 3, 1]), size, length(size), "direct"),
-                (Dispatch::Threads([9, 5, 1]), size, length(size), "direct"),
+                (Dispatch::Indirect, size, length(size), "size"),
+                (Dispatch::Threads([10, 3, 1]), size, length(size), "size"),
+                (Dispatch::Threads([9, 5, 1]), size, length(size), "size"),
                 (
                     Dispatch::Threadgroups([3, 2, 1]),
                     small,
                     length(small),
-                    "direct, small",
+                    "small",
                 ),
                 (
                     Dispatch::Threads([8, 4, 1]),
                     size,
                     2 * length(size),
-                    "direct, longer",
+                    "longer",
                 ),
             ];
             let first = state(name, &device, &descriptor);
