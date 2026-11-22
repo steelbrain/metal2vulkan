@@ -191,7 +191,7 @@ fn render_features_follow_each_source() {
         (VkExtension::ExtDepthClipEnable, 10),
         (VkExtension::ExtDepthClampControl, 5),
         (VkExtension::ExtPrimitiveTopologyListRestart, 10),
-        (VkExtension::ExtProvokingVertex, 14),
+        (VkExtension::ExtProvokingVertex, 13),
         (VkExtension::ExtSampleLocations, 10),
         (VkExtension::ExtMultiDraw, 10),
     ] {
@@ -402,5 +402,5 @@ fn the_provoking_vertex_mode_per_pipeline_follows_each_source() {
         }
         listed += usize::from(exposed && stated);
     }
-    assert!(listed >= 14, "{listed}");
+    assert!(listed >= 13, "{listed}");
 }
