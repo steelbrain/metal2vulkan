@@ -1232,10 +1232,7 @@ pub(super) fn wide_at(
         None => {
             let v = leaf::load(fb, &mut mem, leaf, low)?;
             Ok(Some(match inb {
-                Some(inb) => {
-                    let z = leaf::zero(fb, leaf)?;
-                    fb.select(inb, v, z)?
-                }
+                Some(inb) => leaf::contained(fb, leaf, inb, v)?,
                 None => v,
             }))
         }

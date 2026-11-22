@@ -1131,6 +1131,34 @@ pub fn from_bits(fb: &mut FunctionBuilder<'_>, f: Form, h: Value) -> BResult<Val
     Ok(x)
 }
 
+/// `select(c, x, zero)` of narrow value `x` of form `f` and the zero of its type, a contained
+/// load's value. Where `x` was decoded from bits ([`from_bits`], through a struct member the
+/// module built), those bits are selected alike, zero's where `c` fails, and noted for the result
+/// as [`from_bits`] notes them: a later [`to_bits`] returns them, so a `half` loaded under the
+/// containment check and stored unchanged keeps its bits, a NaN's payload included, as one loaded
+/// unchecked does. Any other value is selected alone.
+pub fn select_zero(
+    fb: &mut FunctionBuilder<'_>,
+    f: Form,
+    c: Value,
+    x: Value,
+    zero: Value,
+) -> BResult<Value> {
+    let mut at = x;
+    while let Some(member) = fb.member_source(at) {
+        at = member;
+    }
+    let decoded = narrow_fmt(f).and_then(|fmt| Some((fmt, fb.decoded_from(fmt, at)?)));
+    let Some((fmt, (bits, dirty))) = decoded else {
+        return fb.select(c, x, zero);
+    };
+    let none = splat(fb, u32_form(f), 0)?;
+    let b = fb.select(c, bits, none)?;
+    let y = fb.select(c, x, zero)?;
+    fb.note_bits(fmt, y, b, dirty, true);
+    Ok(y)
+}
+
 /// [`from_bits`] of the `half` lanes of form `f` that `words` hold as memory holds them, from half
 /// `first` (0 or 1) of the first word on: lane `k` is the low 16 bits of word `(first + k) / 2`
 /// where `first + k` is even, else its high 16 bits; `h` is the same lanes' bits as [`from_bits`]

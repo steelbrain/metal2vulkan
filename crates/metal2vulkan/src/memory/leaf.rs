@@ -1572,3 +1572,29 @@ pub fn zero(fb: &mut FunctionBuilder<'_>, leaf: &Leaf) -> BResult<Value> {
     let c = fb.module().constant(Constant::Null { ty })?;
     fb.module().const_value(c)
 }
+
+/// The contained load of `leaf`: its loaded value `v` where `inb` holds, else its [`zero`]. A
+/// narrow float keeps the bits it was decoded from ([`narrow::select_zero`]), each chunk its own
+/// for a chunked leaf, so a store of the contained value writes the loaded bits.
+pub fn contained(
+    fb: &mut FunctionBuilder<'_>,
+    leaf: &Leaf,
+    inb: Value,
+    v: Value,
+) -> BResult<Value> {
+    let narrow_float = matches!(
+        leaf.form.float_fmt(),
+        Some(FloatFmt::Half | FloatFmt::BFloat)
+    );
+    if narrow_float && leaf.chunked() {
+        let mut parts = Vec::new();
+        for (i, (chunk, _)) in (0u32..).zip(leaf.chunks()) {
+            let part = fb.composite_extract(v, &[i])?;
+            parts.push(contained(fb, &chunk, inb, part)?);
+        }
+        let ty = chunked_ty(fb, leaf.form)?;
+        return fb.composite_construct(ty, &parts);
+    }
+    let z = zero(fb, leaf)?;
+    narrow::select_zero(fb, leaf.form, inb, v, z)
+}

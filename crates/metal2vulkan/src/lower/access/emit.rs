@@ -391,10 +391,7 @@ fn load_one(fb: &mut FunctionBuilder<'_>, leaf: &Leaf, p: Prepared) -> BResult<S
     match p.inb {
         None => Ok(v),
         Some(_) if p.reads_zero => Ok(v),
-        Some(inb) => {
-            let z = leaf::zero(fb, leaf)?;
-            fb.select(inb, v, z)
-        }
+        Some(inb) => leaf::contained(fb, leaf, inb, v),
     }
 }
 
