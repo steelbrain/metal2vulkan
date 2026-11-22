@@ -889,7 +889,7 @@ fn kill_is_fragment_only_and_entry_only_under_interlock() {
     // The entry itself may kill under interlock.
     build(
         ExecModel::Fragment,
-        vec![ExecMode::SampleInterlockOrdered],
+        vec![ExecMode::PixelInterlockOrdered],
         |f, _| f.kill(KillForm::Kill).expect("kill"),
     )
     .expect("module");

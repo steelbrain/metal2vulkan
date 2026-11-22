@@ -2584,7 +2584,6 @@ field	metal2vulkan::device::FragmentCaps.output_layer	pub output_layer: bool
 field	metal2vulkan::device::FragmentCaps.output_viewport_index	pub output_viewport_index: bool
 field	metal2vulkan::device::FragmentCaps.pixel_interlock	pub pixel_interlock: bool
 field	metal2vulkan::device::FragmentCaps.rasterization_order_color_access	pub rasterization_order_color_access: bool
-field	metal2vulkan::device::FragmentCaps.sample_interlock	pub sample_interlock: bool
 field	metal2vulkan::device::FragmentCaps.sample_rate_shading	pub sample_rate_shading: bool
 field	metal2vulkan::device::FragmentCaps.stencil_export	pub stencil_export: bool
 field	metal2vulkan::device::FragmentCaps.terminate_invocation	pub terminate_invocation: bool

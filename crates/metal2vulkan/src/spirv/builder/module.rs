@@ -1426,7 +1426,7 @@ fn mode_contract(m: ExecMode) -> (u8, Option<u8>, &'static [ExecModel]) {
         ExecMode::DepthReplacing => (2, None, FRAG),
         ExecMode::DepthGreater | ExecMode::DepthLess => (3, None, FRAG),
         ExecMode::StencilRefReplacing => (4, None, FRAG),
-        ExecMode::PixelInterlockOrdered | ExecMode::SampleInterlockOrdered => (5, None, FRAG),
+        ExecMode::PixelInterlockOrdered => (5, None, FRAG),
         ExecMode::LocalSize { .. } => (6, None, WORKGROUPS),
         ExecMode::DerivativeGroupLinear => (7, None, COMP),
         ExecMode::SignedZeroInfNanPreserve { width } => (9, Some(width), ALL),

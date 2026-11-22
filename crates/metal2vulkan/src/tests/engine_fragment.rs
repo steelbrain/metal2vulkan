@@ -1126,10 +1126,7 @@ fn a_group_of_color_outputs_alone_needs_no_interlock() {
         let (_, m) = typed_module(&bc, "rog_output", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
         let entry = m.entry();
         assert!(
-            !entry.modes.iter().any(|mode| matches!(
-                mode,
-                ExecMode::PixelInterlockOrdered | ExecMode::SampleInterlockOrdered
-            )),
+            !entry.modes.iter().any(|mode| mode.is_interlock()),
             "{what}: {:?}",
             entry.modes
         );
@@ -1152,23 +1149,22 @@ fn a_group_of_color_outputs_alone_needs_no_interlock() {
     assert!(without > 0, "no profile without pixel interlock");
 }
 
-/// With only sample interlock, a function that runs at sample rate is ordered per sample (Metal's
-/// own ordering at sample rate), and a pixel-rate one is refused.
+/// A device with the sample interlock and not the pixel interlock refuses a raster order group,
+/// one of a function that runs at sample rate included: the translator takes the pixel interlock
+/// alone.
 #[test]
-fn sample_interlock_orders_only_sample_rate_functions() {
+fn without_the_pixel_interlock_a_sample_rate_group_is_refused() {
     let Some(bc) = fixture("fragment_rog") else {
         return;
     };
     let p = moltenvk_without(&[VkFeature::FragmentShaderPixelInterlock]);
-    assert!(p.fields().fragment.sample_interlock);
-    let (_, m) = typed_module(&bc, "rog_sample", &p).expect("rog_sample");
-    check_interlocked(&m, ExecMode::SampleInterlockOrdered, "rog_sample");
-    let a = compile(&bc, "rog_sample", &p).expect("rog_sample");
-    link_and_validate(&a, &p).expect("L3");
-    assert_eq!(
-        refusal(&bc, "rog_buffer", &p),
-        (Feature::RasterOrderGroups, pixel_interlock())
-    );
+    for entry in ["rog_sample", "rog_buffer"] {
+        assert_eq!(
+            refusal(&bc, entry, &p),
+            (Feature::RasterOrderGroups, pixel_interlock()),
+            "{entry}"
+        );
+    }
 }
 
 /// A loop in a raster order group runs inside the interlocked body, which the entry calls once

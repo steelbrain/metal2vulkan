@@ -224,10 +224,7 @@ fn interpolation_functions() {
 
 #[test]
 fn fragment_interlock() {
-    for mode in [
-        ExecMode::PixelInterlockOrdered,
-        ExecMode::SampleInterlockOrdered,
-    ] {
+    for mode in [ExecMode::PixelInterlockOrdered] {
         let m = fragment(vec![mode], |f, _, _| {
             f.begin_interlock().expect("begin");
             f.end_interlock().expect("end");

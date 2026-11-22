@@ -851,11 +851,6 @@ impl Deriver<'_> {
                     self.ext(SpirvExtension::ExtFragmentShaderInterlock);
                     self.feat(VkFeature::FragmentShaderPixelInterlock);
                 }
-                ExecMode::SampleInterlockOrdered => {
-                    self.cap(Cap::FragmentShaderSampleInterlockEXT);
-                    self.ext(SpirvExtension::ExtFragmentShaderInterlock);
-                    self.feat(VkFeature::FragmentShaderSampleInterlock);
-                }
                 ExecMode::StencilRefReplacing => {
                     self.cap(Cap::StencilExportEXT);
                     self.ext(SpirvExtension::ExtShaderStencilExport);

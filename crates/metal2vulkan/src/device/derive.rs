@@ -264,7 +264,6 @@ fn derive_fields(desc: &DeviceDescription, policy: &DevicePolicy) -> ProfileFiel
         demote_to_helper: has(VkFeature::ShaderDemoteToHelperInvocation),
         terminate_invocation: has(VkFeature::ShaderTerminateInvocation),
         pixel_interlock: has(VkFeature::FragmentShaderPixelInterlock),
-        sample_interlock: has(VkFeature::FragmentShaderSampleInterlock),
         barycentric: has(VkFeature::FragmentShaderBarycentric),
         stencil_export: ext(VkExtension::ExtShaderStencilExport),
         sample_rate_shading: has(VkFeature::SampleRateShading),

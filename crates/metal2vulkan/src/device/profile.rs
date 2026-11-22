@@ -575,7 +575,6 @@ pub struct FragmentCaps {
     pub demote_to_helper: bool,
     pub terminate_invocation: bool,
     pub pixel_interlock: bool,
-    pub sample_interlock: bool,
     pub barycentric: bool,
     pub stencil_export: bool,
     pub sample_rate_shading: bool,

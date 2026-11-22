@@ -987,7 +987,6 @@ impl Ser<'_> {
             ExecMode::DepthLess => plain(w, M::DepthLess, &[]),
             ExecMode::StencilRefReplacing => plain(w, M::StencilRefReplacingEXT, &[]),
             ExecMode::PixelInterlockOrdered => plain(w, M::PixelInterlockOrderedEXT, &[]),
-            ExecMode::SampleInterlockOrdered => plain(w, M::SampleInterlockOrderedEXT, &[]),
             ExecMode::LocalSize { x, y, z } => plain(w, M::LocalSize, &[x, y, z]),
             ExecMode::DerivativeGroupLinear => plain(w, M::DerivativeGroupLinearKHR, &[]),
             ExecMode::SignedZeroInfNanPreserve { width } => {

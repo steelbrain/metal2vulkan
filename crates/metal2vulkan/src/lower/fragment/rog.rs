@@ -46,12 +46,8 @@
 //!
 //! **Mode** ([`mode`]). `PixelInterlockOrderedEXT` where the profile has
 //! `fragmentShaderPixelInterlock`: it orders every invocation covering the pixel, which covers
-//! Metal's pixel- and sample-rate ordering. `SampleInterlockOrderedEXT` orders only invocations
-//! covering the same sample, which equals Metal's ordering only when the module itself runs at
-//! sample rate (it reads `SampleId` or has a sample-interpolated input); a pixel-rate module on a
-//! multisampled target would leave two fragments covering disjoint samples of one pixel unordered,
-//! so there it is not used. Otherwise the function is refused
-//! `Unsupported{RasterOrderGroups, AnyOf[[FragmentShaderPixelInterlock], ...]}`.
+//! Metal's pixel- and sample-rate ordering. Otherwise the function is refused
+//! `Unsupported{RasterOrderGroups, AnyOf[[FragmentShaderPixelInterlock]]}`.
 
 use std::collections::BTreeSet;
 
@@ -59,9 +55,8 @@ use crate::air::abi::{MemberKind, OutputRole, ParamRole, StructRef};
 use crate::device::requirements::VkFeature;
 use crate::error::{Capability, Error, Feature, Unsupported};
 use crate::lower::select::SelectCx;
-use crate::lower::stage_io::IoObject;
 use crate::pipeline::sym::Stage;
-use crate::spirv::ir::{ExecMode, IoDir, Sampling};
+use crate::spirv::ir::ExecMode;
 
 /// The raster order group a parameter role names, if any.
 fn role_group(role: &ParamRole) -> Option<u32> {
@@ -155,19 +150,6 @@ pub(super) fn declared(cx: &SelectCx<'_>) -> bool {
     false
 }
 
-/// Whether the planned stage interface makes the module run at sample rate: it reads `SampleId`
-/// or declares a sample-interpolated input.
-fn sample_rate(objects: &[IoObject]) -> bool {
-    objects.iter().any(|o| match o {
-        IoObject::Builtin { builtin, dir, .. } => {
-            *builtin == crate::spv::BuiltIn::SampleId && *dir == IoDir::Input
-        }
-        IoObject::User { dir, deco, .. } => {
-            *dir == IoDir::Input && deco.sampling == Sampling::Sample
-        }
-    })
-}
-
 /// The interlock mode of a function in a raster order group, or its refusal. Called once the
 /// stage interface is planned (`fragment::finish`).
 pub(super) fn mode(cx: &SelectCx<'_>) -> Result<ExecMode, Error> {
@@ -175,24 +157,14 @@ pub(super) fn mode(cx: &SelectCx<'_>) -> Result<ExecMode, Error> {
         // Metal orders raster order groups between fragments only.
         return Err(Unsupported::not_implemented(Feature::RasterOrderGroups).into());
     }
-    let f = cx.profile.fields().fragment;
-    let per_sample = sample_rate(&cx.families.stage_io.objects);
-    if f.pixel_interlock {
+    if cx.profile.fields().fragment.pixel_interlock {
         return Ok(ExecMode::PixelInterlockOrdered);
     }
-    if f.sample_interlock && per_sample {
-        return Ok(ExecMode::SampleInterlockOrdered);
-    }
-    let pixel = vec![Capability::Feature(VkFeature::FragmentShaderPixelInterlock)];
-    let alternatives = if per_sample {
-        vec![
-            pixel,
-            vec![Capability::Feature(
-                VkFeature::FragmentShaderSampleInterlock,
-            )],
-        ]
-    } else {
-        vec![pixel]
-    };
-    Err(Unsupported::needs_any_of(Feature::RasterOrderGroups, alternatives).into())
+    Err(Unsupported::needs_any_of(
+        Feature::RasterOrderGroups,
+        vec![vec![Capability::Feature(
+            VkFeature::FragmentShaderPixelInterlock,
+        )]],
+    )
+    .into())
 }

@@ -255,13 +255,10 @@ fn unsupported_features(profile: &DeviceProfile) -> Vec<Unsupported> {
             vec![profile.addressed_needs()],
         ));
     }
-    if !f.fragment.pixel_interlock && !f.fragment.sample_interlock {
+    if !f.fragment.pixel_interlock {
         out.push(Unsupported::needs_any_of(
             Feature::RasterOrderGroups,
-            vec![
-                vec![feature(VkFeature::FragmentShaderPixelInterlock)],
-                vec![feature(VkFeature::FragmentShaderSampleInterlock)],
-            ],
+            vec![vec![feature(VkFeature::FragmentShaderPixelInterlock)]],
         ));
     }
     // Framebuffer fetch refuses on no device: ordered by rasterization-order access, or without

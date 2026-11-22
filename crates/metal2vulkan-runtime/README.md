@@ -4750,7 +4750,6 @@ enables that the translator names.
 | `shaderImageInt64Atomics` | `VkPhysicalDeviceShaderImageAtomicInt64FeaturesEXT` | an atomic on a `ulong` texture is refused (`ImageAtomics`) |
 | `shaderStorageImageMultisample` | `VkPhysicalDeviceFeatures` | a multisampled texture read or written as a storage image is refused (`StorageImageMultisample`) |
 | `computeDerivativeGroupLinear` | `VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR` | a derivative in a kernel is refused (`ComputeDerivatives`) |
-| `fragmentShaderSampleInterlock` | `VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT` | a raster order group of a function run per sample takes the pixel interlock (Pixel interlock), and is refused where the device has none (`RasterOrderGroups`); taking the sample interlock where a device has it would be a second form chosen by a query, outside the nine the runtime allows |
 | `descriptorBindingStorageBufferUpdateAfterBind` | `VkPhysicalDeviceVulkan12Features` | the translator's function table is a directory and a snapshot, never a heap array of storage buffers; the runtime supplies no function table (Known gaps of pipeline states) |
 | `shaderStorageBufferArrayNonUniformIndexing` | `VkPhysicalDeviceVulkan12Features` | as `descriptorBindingStorageBufferUpdateAfterBind` |
 

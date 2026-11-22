@@ -1319,7 +1319,6 @@ pub enum ExecMode {
     DepthLess,
     StencilRefReplacing,
     PixelInterlockOrdered,
-    SampleInterlockOrdered,
     LocalSize {
         x: u32,
         y: u32,
@@ -1378,10 +1377,7 @@ pub enum ExecMode {
 impl ExecMode {
     /// Whether this mode declares fragment shader interlock.
     pub fn is_interlock(self) -> bool {
-        matches!(
-            self,
-            ExecMode::PixelInterlockOrdered | ExecMode::SampleInterlockOrdered
-        )
+        matches!(self, ExecMode::PixelInterlockOrdered)
     }
 }
 
