@@ -34,7 +34,10 @@
 //! [`MultisampleStencilResolveFilter`]'s, where the device's resolve modes offer them. Either
 //! action stores the multisample texels too, as a `DontCare` store does: a rendering the encoder
 //! ends early and begins again resolves again as it ends, and its last resolve holds the pass's
-//! whole result.
+//! whole result. A texture in place over a buffer whose linear image takes no attachment usage is
+//! resolved into through its resolve image (`Resolve::copy`): the pass moves the image from
+//! undefined, resolves into it, moves it to the transfer source layout as it ends, and the
+//! encoder's end copies Vulkan's render area of it into the buffer's bytes at the texture's pitch.
 //!
 //! A surface plane that renders as a linear colour attachment alone ([`Attachment::linear`]:
 //! `VK_NV_linear_color_attachment`'s `LINEAR` image, `crate::surface`) renders only in a pass whose
@@ -45,7 +48,7 @@
 use crate::buffer::{Buffer, BufferObject};
 use crate::device::Core;
 use crate::error::{Error, Gap, LinearPlanePassKind, Refusal, RenderPassKind};
-use crate::texture::{Attachment, Texture, TextureObject};
+use crate::texture::{Attachment, ResolveCopy, Texture, TextureObject};
 use ash::vk;
 use metal2vulkan::metal::format::{self as formats, FormatEmulation};
 use metal2vulkan::metal::PixelFormat;
@@ -223,10 +226,15 @@ pub struct RenderPassColorAttachmentDescriptor {
     /// attachment's pixel format and one sample, and its level the attachment level's width and
     /// height; another is [`Gap::RenderPass`] of [`RenderPassKind::Resolve`]. Metal resolves into
     /// a texture of any usage, and so does the runtime into a colour texture whose format the
-    /// device's optimal image renders, and into one in place over a buffer whose format the
-    /// device's linear tiling renders; into one made without `RenderTarget` usage whose image has
-    /// no attachment usage, such as a texture in place over a buffer whose linear tiling does not
-    /// render its format, it is [`Gap::RenderPass`] of [`RenderPassKind::ResolveUsage`].
+    /// device's optimal image renders, into one in place over a buffer whose format the device's
+    /// linear tiling renders, and into one in place over a buffer of the runtime's own memory
+    /// whose linear image does not render, through the texture's resolve image, which the pass's
+    /// end copies into the buffer (a copy Metal does not make, [`Metrics::resolve_copies`]); into
+    /// one made without `RenderTarget` usage whose image has no attachment usage and that has no
+    /// resolve image, such as a texture in place over a dma-buf's import, it is
+    /// [`Gap::RenderPass`] of [`RenderPassKind::ResolveUsage`].
+    ///
+    /// [`Metrics::resolve_copies`]: crate::Metrics::resolve_copies
     pub resolve_texture: Option<Texture>,
     /// `resolveLevel`: the resolve texture's mipmap level resolved into.
     pub resolve_level: u32,
@@ -450,12 +458,26 @@ pub(crate) struct Resolve {
     /// whose home is shader-read-only, which the pass moves there and back.
     pub(crate) layout: vk::ImageLayout,
     pub(crate) mode: vk::ResolveModeFlags,
+    /// Where it resolves into the texture's resolve image, in place of a linear image that takes
+    /// no attachment usage: the copy of the image into the buffer's bytes, which the pass's end
+    /// records, cut to its render area (`Texture::resolve_attachment`).
+    pub(crate) copy: Option<ResolveCopy>,
 }
 
 impl Resolve {
     /// Whether the pass moves its image out of home and back.
     pub(crate) fn moves(&self) -> bool {
         self.layout != self.attachment.home
+    }
+
+    /// The layout the pass moves its image away from: its home, or undefined for a resolve image
+    /// (`copy`), which keeps nothing between passes: each resolves every texel of its render
+    /// area into it, and copies those alone.
+    pub(crate) fn from(&self) -> vk::ImageLayout {
+        match self.copy {
+            Some(_) => vk::ImageLayout::UNDEFINED,
+            None => self.attachment.home,
+        }
     }
 
     /// The barrier that moves its level and layers, every aspect, from `old` to `new`, after
@@ -1070,7 +1092,7 @@ struct ResolveInto<'a> {
 /// width and height; [`Gap::RenderPass`] of [`RenderPassKind::TextureType`] for a depth plane
 /// but 0; what the resolve texture's resolve attachment returns, [`Gap::RenderPass`] of
 /// [`RenderPassKind::ResolveUsage`] for a resolve texture whose image has no attachment usage
-/// among it.
+/// and that has no resolve image among it.
 fn resolve(
     core: &Arc<Core>,
     texture: &Texture,
@@ -1089,15 +1111,19 @@ fn resolve(
     {
         return gap(RenderPassKind::Resolve);
     }
-    let view = (into.texture).resolve_attachment(into.level, into.slice, attachment.layers)?;
+    let (view, copy) =
+        (into.texture).resolve_attachment(into.level, into.slice, attachment.layers)?;
     if into.depth_plane != 0 {
         return gap(RenderPassKind::TextureType);
     }
     if view.extent != attachment.extent || view.format != attachment.format {
         return gap(RenderPassKind::Resolve);
     }
+    // A resolve image's home is the layout its copy reads it in.
     let layout = match view.home {
-        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL => vk::ImageLayout::ATTACHMENT_OPTIMAL,
+        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL | vk::ImageLayout::TRANSFER_SRC_OPTIMAL => {
+            vk::ImageLayout::ATTACHMENT_OPTIMAL
+        }
         home => home,
     };
     Ok(Resolve {
@@ -1105,6 +1131,7 @@ fn resolve(
         attachment: view,
         layout,
         mode,
+        copy,
     })
 }
 

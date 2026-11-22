@@ -77,6 +77,15 @@ pub(crate) enum Free {
     },
     /// A dropped texture's view of its image's shadow.
     ShadowView(vk::ImageView),
+    /// A dropped texture's resolve image (`crate::texture`'s `Resolved`), its attachment view
+    /// and its memory of `bytes`, freed as a texture's are; the resolve images gauges fall with
+    /// it.
+    Resolved {
+        view: vk::ImageView,
+        image: vk::Image,
+        backing: Backing,
+        bytes: u64,
+    },
     /// A dropped texture's attachment views; the attachment views gauge falls with each.
     AttachmentViews(Vec<vk::ImageView>),
     /// A device sampler no sampler state holds; the device samplers gauge falls with it.
@@ -231,6 +240,22 @@ pub(crate) fn free(core: &Core, object: Free) {
         // SAFETY: no pending work uses it: every command buffer that read through it held its
         // texture until it retired, and its element of set 1 is null or another texture's.
         Free::ShadowView(view) => unsafe { device.destroy_image_view(view, None) },
+        Free::Resolved {
+            view,
+            image,
+            backing,
+            bytes,
+        } => {
+            // SAFETY: no pending work uses them: every command buffer whose pass resolved into
+            // the image held its texture until it retired.
+            unsafe {
+                device.destroy_image_view(view, None);
+                device.destroy_image(image, None);
+                free_backing(core, backing);
+            }
+            core.counters.fall(Gauge::ResolveImages);
+            core.counters.fall_by(Gauge::ResolveImageBytes, bytes);
+        }
         Free::AttachmentViews(views) => {
             // SAFETY: no pending work uses them: every command buffer whose pass rendered into
             // the texture held it until it retired.

@@ -343,6 +343,38 @@ struct Named {
     form: Form,
 }
 
+impl Named {
+    /// Of a texture over a buffer of `d` and `unit`: the `VkBuffer` of the bytes shaders reach
+    /// (the block's, or a Managed buffer's device copy's), and the copy between them and an image
+    /// of the texture's whole level at its pitch; `None` where the pitch is past a `u32` of texels.
+    fn region(
+        &self,
+        unit: CopyUnit,
+        d: &TextureDescriptor,
+    ) -> Option<(vk::Buffer, vk::BufferImageCopy)> {
+        let place = self.places[0];
+        let (buffer, at) = self.buffer.device_range();
+        let region = vk::BufferImageCopy {
+            buffer_offset: at + place.offset,
+            buffer_row_length: u32::try_from(place.bytes_per_row / u64::from(unit.bytes)).ok()?,
+            buffer_image_height: 0,
+            image_subresource: vk::ImageSubresourceLayers {
+                aspect_mask: unit.aspect,
+                mip_level: 0,
+                base_array_layer: 0,
+                layer_count: 1,
+            },
+            image_offset: vk::Offset3D::default(),
+            image_extent: vk::Extent3D {
+                width: d.width,
+                height: d.height,
+                depth: 1,
+            },
+        };
+        Some((buffer, region))
+    }
+}
+
 /// How a texture's image holds its named bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Form {
@@ -414,6 +446,11 @@ pub(crate) struct Image {
     shadowing: Option<Box<Shadowing>>,
     /// The image is another's shadow: its drop lowers the shadow gauges, not the textures gauge.
     shadow: bool,
+    /// A linear image in place over a buffer of the runtime's own memory that takes no attachment
+    /// usage, of a texture whose plan's optimal image does (`Plan::resolves`): what the image a
+    /// pass resolves into in its place is made of, and that image once a pass made it
+    /// (`TextureObject::resolve_attachment`). `None` for every other image.
+    resolving: Option<Box<Resolving>>,
     /// Every aspect of the image's format, which a change of layout names.
     aspects: vk::ImageAspectFlags,
     /// The image's format and usage, and the formats it lists for views of another format (empty
@@ -483,6 +520,48 @@ struct Shadowing {
     /// The texture's descriptor and shape, and its plan with the shadow's usage and no view.
     made: (TextureDescriptor, Shape, Plan),
     shadow: Mutex<Option<Arc<Image>>>,
+}
+
+/// What the image a pass resolves into in place of a linear image that takes no attachment usage
+/// is made of, and that image once made (`Image`'s `resolving`).
+struct Resolving {
+    /// The texture's descriptor and shape, and its plan's optimal image with no view of its own.
+    made: (TextureDescriptor, Shape, Plan),
+    image: Mutex<Option<Resolved>>,
+}
+
+/// The one-sample image a pass resolves into in place of a texture's linear image, and its
+/// attachment view: made at the first pass that resolves into the texture, kept for every later
+/// one, and freed with the texture. The resolve images gauges count it.
+struct Resolved {
+    core: Arc<Core>,
+    image: vk::Image,
+    backing: Backing,
+    bytes: u64,
+    view: vk::ImageView,
+}
+
+impl Drop for Resolved {
+    fn drop(&mut self) {
+        let free = Free::Resolved {
+            view: self.view,
+            image: self.image,
+            backing: self.backing,
+            bytes: self.bytes,
+        };
+        self.core.pool.release(&self.core, free);
+    }
+}
+
+/// A pass's resolve into a texture's resolve image (`Resolved`): the copy of what it resolved
+/// into the bytes shaders reach of the buffer the texture lies over, at the texture's pitch.
+pub(crate) struct ResolveCopy {
+    /// The `VkBuffer` of those bytes: the block's, or a Managed buffer's device copy's.
+    pub(crate) buffer: vk::Buffer,
+    /// The copy of the texture's whole level, which the pass cuts to its render area.
+    pub(crate) region: vk::BufferImageCopy,
+    /// A texel's bytes.
+    pub(crate) texel: u64,
 }
 
 /// What holds the memory an image lies in that is not its own.
@@ -777,6 +856,7 @@ impl Image {
             attachment_reads: false,
             shadowing: None,
             shadow: true,
+            resolving: None,
             aspects: self.aspects,
             format: plan.format,
             usage: plan.usage,
@@ -1319,6 +1399,7 @@ impl Device {
             attachment_reads: false,
             shadowing: None,
             shadow: false,
+            resolving: None,
             aspects: plan.aspects,
             format: plan.format,
             usage: swapchain.image_usage,
@@ -1549,6 +1630,15 @@ impl Device {
                 shadow: Mutex::new(None),
             })
         });
+        // In place in the runtime's own memory with no attachment usage, where the plan's optimal
+        // image takes it, a pass resolves into such an image and copies it into the bytes.
+        let own = laid_over && matches!(laid, Some(Laid::Own));
+        let resolving = (own && !resolved && plan.resolves).then(|| {
+            Box::new(Resolving {
+                made: (d, shape, plan.resolved()),
+                image: Mutex::new(None),
+            })
+        });
         let image = Arc::new(Image {
             core: Arc::clone(core),
             image,
@@ -1560,6 +1650,7 @@ impl Device {
             attachment_reads,
             shadowing,
             shadow: false,
+            resolving,
             aspects: plan.aspects,
             format: plan.format,
             // A linear image in place takes the attachment usage for its resolves where they stay
@@ -1782,6 +1873,20 @@ impl Plan {
             storage: false,
             attachment_reads: false,
             resolves: false,
+            linear_resolves: false,
+            view_formats: self.view_formats.clone(),
+            ..*self
+        }
+    }
+
+    /// The plan of the image a pass resolves into in place of a linear image that takes no
+    /// attachment usage (`Image`'s `resolving`): the plan's optimal image, which its image format
+    /// query makes with the attachment usage (`resolves`), with no view of its own.
+    fn resolved(&self) -> Plan {
+        Plan {
+            sampled: None,
+            storage: false,
+            attachment_reads: false,
             linear_resolves: false,
             view_formats: self.view_formats.clone(),
             ..*self
@@ -4552,30 +4657,114 @@ pub(crate) trait TextureObject {
     /// views them, of any usage, as Metal resolves into a texture of any usage: where its image
     /// has an attachment usage, which `RenderTarget` usage gives it and a one-sample colour
     /// texture takes where its format renders (`Plan::resolves`), its linear image in place over
-    /// a buffer of the runtime's own memory included (`Plan::linear_resolves`).
+    /// a buffer of the runtime's own memory included (`Plan::linear_resolves`). A texture in place
+    /// over a buffer of the runtime's own memory whose linear image takes none (its linear tiling
+    /// does not render its format, or its subresource reaches past its own rows or its buffer),
+    /// where its plan's optimal image does, resolves into its resolve image (`Resolved`, made at
+    /// its first resolve) with the copy the pass's end makes of it into the buffer's bytes, a copy
+    /// Metal does not make.
     ///
     /// Err: [`Gap::RenderPass`] of [`RenderPassKind::ResolveUsage`] for a texture whose image has
-    /// none: a depth or stencil texture made without `RenderTarget` usage, a colour texture of a
-    /// type but 2D, a 2D array, a cube or a cube array or whose format the device's optimal image
-    /// does not render, and a texture in place over a buffer whose linear image takes none: over
-    /// a dma-buf's import, of a format the device's linear tiling does not render or whose
-    /// linear image its query does not make with the usage, or whose subresource reaches past its
-    /// own rows or its buffer; as [`attachment`] for the rest.
+    /// none and that has no resolve image: a depth or stencil texture made without `RenderTarget`
+    /// usage, a colour texture of a type but 2D, a 2D array, a cube or a cube array or whose format
+    /// the device's optimal image does not render, a texture in place over a dma-buf's import, and
+    /// a view of a texture in place; [`Refusal::AttachmentPlace`] past a texture over a buffer's
+    /// one level and slice; [`Error::Vulkan`] where its resolve image cannot be made; as
+    /// [`attachment`] for the rest.
     ///
     /// [`attachment`]: TextureObject::attachment
-    fn resolve_attachment(&self, level: u32, slice: u32, layers: u32) -> Result<Attachment, Error> {
+    fn resolve_attachment(
+        &self,
+        level: u32,
+        slice: u32,
+        layers: u32,
+    ) -> Result<(Attachment, Option<ResolveCopy>), Error> {
         let renders =
             vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT;
-        if !self
-            .object()
-            .image_of()
-            .is_some_and(|image| image.usage.intersects(renders))
-        {
-            return Err(Error::Unsupported(Gap::RenderPass {
-                kind: RenderPassKind::ResolveUsage,
-            }));
+        let object = self.object();
+        let image = object.image_of();
+        if image.is_some_and(|image| image.usage.intersects(renders)) {
+            return Ok((self.attachment_view(level, slice, layers)?, None));
         }
-        self.attachment_view(level, slice, layers)
+        let gap = || {
+            Error::Unsupported(Gap::RenderPass {
+                kind: RenderPassKind::ResolveUsage,
+            })
+        };
+        let resolving = image.and_then(|image| image.resolving.as_deref());
+        let (Some(resolving), None, Some(named), Some(unit)) =
+            (resolving, &object.view, &object.named, object.unit)
+        else {
+            return Err(gap());
+        };
+        let (d, shape, plan) = &resolving.made;
+        let (buffer, region) = named.region(unit, d).ok_or_else(gap)?;
+        // As `attachment_view` refuses a place past the texture's one level and slice.
+        if level != 0 || slice != 0 || layers != 1 {
+            let slice = if level != 0 || slice != 0 {
+                slice
+            } else {
+                layers - 1
+            };
+            return Err(Error::Refused(Refusal::AttachmentPlace { level, slice }));
+        }
+        let core = &object.core;
+        let mut kept = lock(&resolving.image);
+        let (view, image) = match &*kept {
+            Some(made) => (made.view, made.image),
+            None => {
+                // SAFETY: the device is live, and the texture's plan checked the image's usage
+                // against its image format query for the shape (`Plan::resolves`).
+                let (image, backing, bytes, _, _) =
+                    unsafe { make(core, d, shape, plan, Bind::Pooled) }
+                        .map_err(|unmade| unmade.error(d))?;
+                core.counters.rise(Gauge::ResolveImages);
+                core.counters.rise_by(Gauge::ResolveImageBytes, bytes);
+                let mut made = Resolved {
+                    core: Arc::clone(core),
+                    image,
+                    backing,
+                    bytes,
+                    view: vk::ImageView::null(),
+                };
+                let range = vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    base_mip_level: 0,
+                    level_count: 1,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                };
+                let identity = vk::ComponentMapping::default();
+                let kind = vk::ImageViewType::TYPE_2D;
+                // SAFETY: the image is bound, 2D of one level and layer, of the plan's format,
+                // with the attachment usage; a refusal frees it as `made` drops.
+                made.view =
+                    unsafe { image_view(core, image, kind, plan.format, identity, range, None) }?;
+                let made = kept.insert(made);
+                (made.view, made.image)
+            }
+        };
+        let attachment = Attachment {
+            view,
+            image,
+            level: 0,
+            layer: 0,
+            layers: 1,
+            aspects: vk::ImageAspectFlags::COLOR,
+            // Where each pass leaves it, for its copy (`pass::Resolve::from`).
+            home: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            extent: [d.width, d.height],
+            format: plan.format,
+            samples: vk::SampleCountFlags::TYPE_1,
+            linear: false,
+        };
+        let texel = u64::from(unit.bytes);
+        let copy = ResolveCopy {
+            buffer,
+            region,
+            texel,
+        };
+        Ok((attachment, Some(copy)))
     }
 
     /// `level` and the `layers` slices from `slice` of the texture as a render pass attachment,
@@ -4915,25 +5104,8 @@ pub(crate) trait TextureObject {
         let unit = inner.unit?;
         let place = named.places[0];
         let d = &inner.descriptor;
-        let (buffer, at) = named.buffer.device_range();
+        let (buffer, region) = named.region(unit, d)?;
         let (block, device_copy) = named.buffer.held();
-        let region = vk::BufferImageCopy {
-            buffer_offset: at + place.offset,
-            buffer_row_length: u32::try_from(place.bytes_per_row / u64::from(unit.bytes)).ok()?,
-            buffer_image_height: 0,
-            image_subresource: vk::ImageSubresourceLayers {
-                aspect_mask: unit.aspect,
-                mip_level: 0,
-                base_array_layer: 0,
-                layer_count: 1,
-            },
-            image_offset: vk::Offset3D::default(),
-            image_extent: vk::Extent3D {
-                width: d.width,
-                height: d.height,
-                depth: 1,
-            },
-        };
         let end = place.offset
             + u64::from(d.height - 1) * place.bytes_per_row
             + u64::from(d.width) * u64::from(unit.bytes);
@@ -5603,6 +5775,7 @@ impl Device {
             attachment_reads: looped || shadowing.is_some(),
             shadowing,
             shadow: false,
+            resolving: None,
             aspects: plan.aspects,
             format: made.format,
             usage: made.usage,

@@ -1789,17 +1789,22 @@ pub enum RenderPassKind {
     /// (VUID-VkRenderingInfo-pDepthAttachment-06086).
     Resolve,
     /// A resolve into a texture made without `RenderTarget` usage (and not of Metal's unknown
-    /// usage) whose image has no attachment usage: a depth or stencil texture; a colour texture of
-    /// a type but 2D, a 2D array, a cube or a cube array, or whose format the device's optimal
-    /// image does not render, by its format features or its image format query at the texture's
-    /// extent; or a texture in place over a buffer whose linear image takes none: over a dma-buf's
-    /// import; of a format the device's linear tiling does not render, by its linear features or
-    /// its image format query at the texture's extent (on the RTX 3090 and KosmicKrisp, every
-    /// format); or whose
-    /// subresource reaches past its own rows or its buffer, as a resolve "may read and write back
-    /// any memory locations within the image subresource bound for that attachment" (Vulkan's
-    /// multisample resolve operations). Such a texture stays in place, and is never copied to
-    /// gain the usage.
+    /// usage) whose image has no attachment usage and that has no resolve image: a depth or
+    /// stencil texture; a colour texture of a type but 2D, a 2D array, a cube or a cube array, or
+    /// whose format the device's optimal image does not render, by its format features or its
+    /// image format query at the texture's extent; a texture in place over a dma-buf's import (an
+    /// imported surface's memory, whose bytes reach its image through the import's acquire); and
+    /// a view of a texture in place over a buffer. A texture in place over a buffer of the
+    /// runtime's own memory whose linear image takes none (of a format the device's linear tiling
+    /// does not render, by its linear features or its image format query at the texture's extent,
+    /// measured on the RTX 3090 and KosmicKrisp for every format; or whose subresource reaches
+    /// past its own rows or its buffer, as a resolve "may read and write back any memory locations
+    /// within the image subresource bound for that attachment", Vulkan's multisample resolve
+    /// operations) stays in place and is resolved into: the pass resolves into the texture's
+    /// resolve image, a one-sample optimal image of its plan made at the first such pass and
+    /// freed with it, and its end copies the render area into the buffer's bytes at the texture's
+    /// pitch, the bytes past each row's texels untouched (`Metrics::resolve_copies`, a copy Metal
+    /// does not make).
     /// Metal resolves into a texture of any usage: probe `resolve_texture_usage.m` in the
     /// conformance crate (an Apple M3 Max, macOS 27.0.1, job m3-max-59768) resolved a 4-sample
     /// `BGRA8Unorm_sRGB` attachment into a texture of `ShaderRead` usage and of `ShaderRead |

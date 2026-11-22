@@ -848,7 +848,7 @@ fn begin(
         away.extend(
             (pass.resolves())
                 .filter(|r| r.moves())
-                .map(|r| r.barrier(r.attachment.home, r.layout)),
+                .map(|r| r.barrier(r.from(), r.layout)),
         );
     }
     let device = &core.device;
@@ -3451,6 +3451,34 @@ impl RenderCommandEncoder {
                 );
             }
             building.count(Metric::Barriers);
+        }
+        // A resolve into a resolve image copies its render area into the buffer's bytes, at the
+        // texture's pitch, after the barrier that moved the image home; the barrier that orders
+        // the copy before later commands, and their reads of the bytes through the texture's
+        // linear image, is owed.
+        let [width, height] = self.pass.reach;
+        let copies = (self.pass.resolving.then(|| self.pass.resolves()))
+            .into_iter()
+            .flatten()
+            .filter_map(|r| Some((r.attachment.image, r.copy.as_ref()?)));
+        for (image, copy) in copies {
+            let region = vk::BufferImageCopy {
+                image_extent: vk::Extent3D {
+                    width,
+                    height,
+                    depth: 1,
+                },
+                ..copy.region
+            };
+            let source = vk::ImageLayout::TRANSFER_SRC_OPTIMAL;
+            // SAFETY: the command buffer records outside any rendering and keeps the texture, and
+            // so the image and the buffer, until it retires; the image is in its home layout, and
+            // the region lies in the level and in the buffer, at a whole texel.
+            unsafe {
+                device.cmd_copy_image_to_buffer(self.command, image, source, copy.buffer, &[region])
+            };
+            (core.counters).resolve_copied(u64::from(width) * u64::from(height) * copy.texel);
+            building.owe_pass();
         }
         self.command_buffer.close_encoder(building);
     }

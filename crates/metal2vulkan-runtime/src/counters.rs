@@ -438,6 +438,10 @@ pub(crate) enum Gauge {
     Shadows,
     /// [`Gauges::shadow_bytes`].
     ShadowBytes,
+    /// [`Gauges::resolve_images`].
+    ResolveImages,
+    /// [`Gauges::resolve_image_bytes`].
+    ResolveImageBytes,
     /// [`Gauges::textures_copied_over`].
     TexturesCopiedOver,
     /// [`Gauges::timestamp_pools`].
@@ -684,6 +688,8 @@ struct Atomics {
     over_by_cause: [[AtomicU64; 2]; OVER_CAUSES],
     attachment_read_copies: AtomicU64,
     attachment_read_copy_bytes: AtomicU64,
+    resolve_copies: AtomicU64,
+    resolve_copy_bytes: AtomicU64,
     attachment_loop_reads: AtomicU64,
     allocations_freed: AtomicU64,
     submissions_during_frees: AtomicU64,
@@ -766,6 +772,8 @@ struct Atomics {
     pipeline_cache_bytes: AtomicU64,
     shadows: AtomicU64,
     shadow_bytes: AtomicU64,
+    resolve_images: AtomicU64,
+    resolve_image_bytes: AtomicU64,
     textures_copied_over: AtomicU64,
     timestamp_pools: AtomicU64,
     occlusion_pools: AtomicU64,
@@ -1302,6 +1310,16 @@ impl Counters {
         a.bytes_copied.fetch_add(bytes, Relaxed);
     }
 
+    /// A copy of what a pass resolved into a resolve image, of `bytes`
+    /// ([`Metrics::resolve_copies`], [`Metrics::resolve_copy_bytes`]), which counts in
+    /// [`Metrics::bytes_copied`] too.
+    pub(crate) fn resolve_copied(&self, bytes: u64) {
+        let a = &self.atomics;
+        a.resolve_copies.fetch_add(1, Relaxed);
+        a.resolve_copy_bytes.fetch_add(bytes, Relaxed);
+        a.bytes_copied.fetch_add(bytes, Relaxed);
+    }
+
     /// `bytes` more of a new buffer zeroed ([`Metrics::bytes_zeroed`]).
     pub(crate) fn zeroed(&self, bytes: u64) {
         self.atomics.bytes_zeroed.fetch_add(bytes, Relaxed);
@@ -1495,6 +1513,8 @@ impl Counters {
             Gauge::PipelineCacheBytes => &a.pipeline_cache_bytes,
             Gauge::Shadows => &a.shadows,
             Gauge::ShadowBytes => &a.shadow_bytes,
+            Gauge::ResolveImages => &a.resolve_images,
+            Gauge::ResolveImageBytes => &a.resolve_image_bytes,
             Gauge::TexturesCopiedOver => &a.textures_copied_over,
             Gauge::TimestampPools => &a.timestamp_pools,
             Gauge::OcclusionPools => &a.occlusion_pools,
@@ -1714,6 +1734,8 @@ impl Counters {
             over_copy_bytes_image_memory: over(OverCause::ImageMemory)[1],
             attachment_read_copies: a.attachment_read_copies.load(Relaxed),
             attachment_read_copy_bytes: a.attachment_read_copy_bytes.load(Relaxed),
+            resolve_copies: a.resolve_copies.load(Relaxed),
+            resolve_copy_bytes: a.resolve_copy_bytes.load(Relaxed),
             attachment_loop_reads: a.attachment_loop_reads.load(Relaxed),
             allocations_freed: a.allocations_freed.load(Relaxed),
             submissions_during_frees: a.submissions_during_frees.load(Relaxed),
@@ -1828,6 +1850,8 @@ impl Counters {
             pipeline_cache_bytes: a.pipeline_cache_bytes.load(Relaxed),
             shadows: a.shadows.load(Relaxed),
             shadow_bytes: a.shadow_bytes.load(Relaxed),
+            resolve_images: a.resolve_images.load(Relaxed),
+            resolve_image_bytes: a.resolve_image_bytes.load(Relaxed),
             textures_copied_over: a.textures_copied_over.load(Relaxed),
             timestamp_pools: a.timestamp_pools.load(Relaxed),
             occlusion_pools: a.occlusion_pools.load(Relaxed),
@@ -2014,8 +2038,9 @@ pub struct Metrics {
     pub barriers: u64,
     /// Bytes the runtime copied for a call: `replace_region` and `get_bytes` staging, the copies
     /// between a texture over a buffer and its image of its own
-    /// ([`over_copy_bytes`](Self::over_copy_bytes)), and the copies of attachments' images into their
-    /// shadows ([`attachment_read_copy_bytes`](Self::attachment_read_copy_bytes)). A blit's own
+    /// ([`over_copy_bytes`](Self::over_copy_bytes)), the copies of attachments' images into their
+    /// shadows ([`attachment_read_copy_bytes`](Self::attachment_read_copy_bytes)), and the copies of
+    /// resolve images into buffers ([`resolve_copy_bytes`](Self::resolve_copy_bytes)). A blit's own
     /// copy, and a synchronize's, is the program's and is not counted.
     pub bytes_copied: u64,
     /// Bytes of new buffers zeroed: [`Device::new_buffer`](crate::Device::new_buffer)'s from its
@@ -2346,6 +2371,13 @@ pub struct Metrics {
     pub attachment_read_copies: u64,
     /// The bytes of those copies, which count in [`bytes_copied`](Self::bytes_copied) too.
     pub attachment_read_copy_bytes: u64,
+    /// Copies of what a pass resolved into a texture's resolve image, which Metal does not make:
+    /// one for each resolve into a texture in place over a buffer whose linear image takes no
+    /// attachment usage, of the pass's render area into the buffer's bytes at the texture's pitch
+    /// as the pass ends. The images are [`Gauges::resolve_images`].
+    pub resolve_copies: u64,
+    /// The bytes of those copies, which count in [`bytes_copied`](Self::bytes_copied) too.
+    pub resolve_copy_bytes: u64,
     /// Draws that read an attachment of their own pass through the attachment feedback loop, a
     /// fragment function's colour read (`[[color(n)]]`) or a texture argument over the
     /// attachment: each with the image in the feedback layout, after the barrier that moved it
@@ -2922,6 +2954,12 @@ pub struct Gauges {
     pub shadows: u64,
     /// The bytes of the shadows' memory.
     pub shadow_bytes: u64,
+    /// Resolve images: one for each texture in place over a buffer whose linear image takes no
+    /// attachment usage that a pass resolved into, made at the first such pass and freed with
+    /// the texture ([`Metrics::resolve_copies`]).
+    pub resolve_images: u64,
+    /// The bytes of the resolve images' memory.
+    pub resolve_image_bytes: u64,
     /// Textures over a buffer the runtime holds in an image of their own, where the device's
     /// linear image does not take the texture or the buffer's bytes are imported
     /// ([`Buffer::new_texture`](crate::Buffer::new_texture)): the copies between them and their

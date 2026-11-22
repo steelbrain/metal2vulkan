@@ -24,11 +24,12 @@
 //!   600 such pass into a `ShaderRead` texture over a Managed and over a Shared buffer, at tight
 //!   rows, at its row rounded up to the device's linear alignment (where it lies in place on
 //!   every device) and at 2,560 bytes: in place, its linear image took the attachment usage where
-//!   the device's linear tiling renders the format, and the pass copies nothing (a Managed
-//!   buffer's synchronize aside); the buffer reads the clear within one code and keeps the bytes
-//!   past each row's texels. Where the linear tiling does not render the format, a resolve into
-//!   such a texture in place is the gap `ResolveUsage`, and so is a depth resolve into a
-//!   `Depth32Float` texture of `ShaderRead` usage.
+//!   the device's linear tiling renders the format, and the pass copies nothing; where it took
+//!   none, the pass resolves into the texture's resolve image and copies its texels into the
+//!   buffer, one copy of 1,440,000 bytes counted. The buffer reads the clear within one code and
+//!   keeps the bytes past each row's texels; a pass after it in the same command buffer reads the
+//!   clear through the texture; a second resolve into it makes no image and no allocation. A depth
+//!   resolve into a `Depth32Float` texture of `ShaderRead` usage is the gap `ResolveUsage`.
 //! - Under a device cfg, on every device of the cfg's kind, whether it has
 //!   `shaderStorageImageMultisample` or not: a 4-sample `RGBA8Unorm` texture made for shader
 //!   reads, shader writes and rendering, as Metal makes one, has no storage usage in its image and
@@ -720,13 +721,20 @@ mod on_device {
     /// 2,400 bytes apart (tight), its row rounded up to the device's linear alignment, and 2,560.
     /// At the rounded row the texture lies in place on every device. In place, its linear image
     /// took the attachment usage where the device's linear tiling renders its format, and the
-    /// pass copies nothing; copied, the copies are counted. The buffer's bytes read the clear
-    /// within one code, and the bytes past each row's texels keep the host's. Where the linear
-    /// tiling does not render the format, a resolve into the texture in place is `ResolveUsage`.
+    /// pass copies nothing; where it took none, the pass resolves into the texture's resolve
+    /// image and copies its 600 x 600 texels into the buffer, one copy counted; copied, the copies
+    /// are counted. The buffer's bytes read the clear within one code, and the bytes past each
+    /// row's texels keep the host's. A pass after it in the same command buffer reads the texture
+    /// at each pixel, its centre the clear within one code. A second resolve into the texture, in
+    /// a command buffer of its own, makes no image and no allocation.
     #[test]
     fn every_device_resolves_a_loaded_pass_into_a_shader_read_texture_over_a_buffer() {
         const WALK: u32 = 600;
         const ROW: u64 = WALK as u64 * 4;
+        const TEXELS: u64 = WALK as u64 * WALK as u64 * 4;
+        let Some(library) = examples() else {
+            return;
+        };
         each_device("resolve_over", |name, _, device| {
             let format = PixelFormat::BGRA8UnormSRGB;
             let color = four_of(name, &device, format, WALK)
@@ -749,6 +757,35 @@ mod on_device {
             let mut first = attached(LoadAction::Clear);
             first.color_attachments[0].clear_color = CLEAR;
             first.color_attachments[0].store_action = StoreAction::Store;
+            // The pass after the resolve: each pixel of a target the texture's texel there.
+            let reading = state(
+                name,
+                &device,
+                &descriptor(&library, "own_pixel_fragment", format),
+            );
+            let mut buffers = Buffers::new(&device);
+            let positions = buffers.of(&device, &floats(&[-1.0, -1.0, 3.0, -1.0, -1.0, 3.0]));
+            let colors = buffers.of(&device, &floats(&[0.0; 12]));
+            let seen = one(
+                name,
+                &device,
+                format,
+                TextureUsage::RENDER_TARGET,
+                StorageMode::Shared,
+                WALK,
+            );
+            let read = |command_buffer: &crate::CommandBuffer, over: &Texture| {
+                let done =
+                    |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+                let mut encoder = (command_buffer.render_command_encoder(&pass(&seen, None)))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                done(encoder.set_render_pipeline_state(&reading));
+                done(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+                done(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+                done(encoder.set_fragment_texture(Some(over), 0));
+                done(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
+                encoder.end_encoding();
+            };
             let align = (device.minimum_linear_texture_alignment(format))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let rounded = ROW.next_multiple_of(align);
@@ -791,57 +828,59 @@ mod on_device {
                         .object()
                         .image_usage()
                         .contains(vk::ImageUsageFlags::COLOR_ATTACHMENT);
-                    let (linear, _) = device.core().format_features(TextureObject::format(&over));
-                    let tiling = linear.contains(vk::FormatFeatureFlags2::COLOR_ATTACHMENT);
-                    let form = match in_place {
-                        true => "in place",
-                        false => "copied",
+                    assert!(
+                        renders || in_place,
+                        "{name}: {kind} at {pitch}: copied, the attachment usage"
+                    );
+                    // In place with no attachment usage: through its resolve image.
+                    let through = in_place && !renders;
+                    let form = match (in_place, through) {
+                        (true, false) => "in place",
+                        (true, true) => "in place, through its resolve image",
+                        (false, _) => "copied",
                     };
                     let mut walk = attached(LoadAction::Load);
                     walk.color_attachments[0].store_action = StoreAction::MultisampleResolve;
                     walk.color_attachments[0].resolve_texture = Some(over.clone());
+                    let resolve = |command_buffer: &crate::CommandBuffer| {
+                        let encoder = (command_buffer.render_command_encoder(&walk))
+                            .unwrap_or_else(|e| panic!("{name}: {kind} at {pitch}: {e}"));
+                        encoder.end_encoding();
+                        read(command_buffer, &over);
+                        if managed {
+                            let mut blit = command_buffer.blit_command_encoder().expect("a blit");
+                            (blit.synchronize_resource(Resource::Buffer(&buffer)))
+                                .unwrap_or_else(|error| panic!("{name}: {error}"));
+                            blit.end_encoding();
+                        }
+                        run(name, command_buffer);
+                    };
                     let command_buffer = queue.command_buffer().expect("a command buffer");
                     let encoder = (command_buffer.render_command_encoder(&first))
                         .unwrap_or_else(|error| panic!("{name}: {error}"));
                     encoder.end_encoding();
-                    if in_place && !tiling {
-                        assert!(!renders, "{name}: {kind} at {pitch}: no attachment usage");
-                        assert_eq!(
-                            (command_buffer.render_command_encoder(&walk).err())
-                                .map(|e| e.to_string()),
-                            Some(gap(RenderPassKind::ResolveUsage).to_string()),
-                            "{name}: {kind} at {pitch}: in place, its tiling renders no {format:?}"
-                        );
-                        run(name, &command_buffer);
-                        println!(
-                            "resolve_over: {name}: {kind} pitch {pitch}: in place, its linear \
-                             tiling renders no {format:?}: ResolveUsage"
-                        );
-                        continue;
-                    }
-                    assert!(
-                        renders,
-                        "{name}: {kind} at {pitch}: {form}, the attachment usage"
-                    );
                     let before = device.counters().metrics();
-                    let encoder = (command_buffer.render_command_encoder(&walk))
-                        .unwrap_or_else(|error| panic!("{name}: {kind} at {pitch}: {error}"));
-                    encoder.end_encoding();
-                    if managed {
-                        let mut blit = command_buffer.blit_command_encoder().expect("a blit");
-                        (blit.synchronize_resource(Resource::Buffer(&buffer)))
-                            .unwrap_or_else(|error| panic!("{name}: {error}"));
-                        blit.end_encoding();
-                    }
-                    run(name, &command_buffer);
+                    resolve(&command_buffer);
                     let after = device.counters().metrics();
                     assert_eq!(after.resolves - before.resolves, 1, "{name}: one resolve");
                     let copied = after.bytes_copied - before.bytes_copied;
-                    // A Managed buffer's synchronize copies its device copy, where it has one.
-                    let synchronized = managed && !device.has_unified_memory();
+                    let copies = after.resolve_copies - before.resolve_copies;
+                    let copy_bytes = after.resolve_copy_bytes - before.resolve_copy_bytes;
+                    assert_eq!(
+                        (copies, copy_bytes),
+                        (u64::from(through), u64::from(through) * TEXELS),
+                        "{name}: {kind} at {pitch}: {form}, the resolve copies"
+                    );
                     assert!(
-                        ((copied == 0 || synchronized) && in_place) || (copied > 0 && !in_place),
+                        (in_place && copied == copy_bytes) || (!in_place && copied > 0),
                         "{name}: {kind} at {pitch}: {form}, {copied} bytes copied"
+                    );
+                    // Its resolve image is the one image the first resolve makes.
+                    let made = after.image_creates.count - before.image_creates.count;
+                    assert_eq!(
+                        made,
+                        u64::from(through),
+                        "{name}: {kind} at {pitch}: images"
                     );
                     // SAFETY: the buffer's bytes, which no command uses now.
                     let held =
@@ -860,20 +899,53 @@ mod on_device {
                     let fnv = (texels.iter()).fold(0xcbf2_9ce4_8422_2325u64, |hash, &byte| {
                         (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
                     });
+                    // Metal's centre texel, (299, 300), as the pass after the resolve read it.
+                    let centre = (300 * WALK as usize + 299) * 4;
+                    let read_back = read_at(&seen, WALK, 4, 0, 0);
+                    let centre = &read_back[centre..centre + 4];
+                    cleared(name, centre);
                     println!(
                         "resolve_over: {name}: {kind} pitch {pitch}: {form}, resolved; texels fnv \
                          {fnv:016x} (0,0)={:02x}{:02x}{:02x}{:02x}; {changed} of {} bytes past \
-                         the texels changed; bytes copied {copied}",
+                         the texels changed; bytes copied {copied}, resolve copies {copies}, \
+                         images made {made}; the next pass read (299,300)={:02x}{:02x}{:02x}{:02x}",
                         texels[0],
                         texels[1],
                         texels[2],
                         texels[3],
-                        (pitch - ROW) * u64::from(WALK)
+                        (pitch - ROW) * u64::from(WALK),
+                        centre[0],
+                        centre[1],
+                        centre[2],
+                        centre[3]
+                    );
+                    // A second resolve into it makes no image and no allocation, and the resolve
+                    // images do not grow (an earlier row's may go as the reaper frees it).
+                    let images = device.counters().gauges().resolve_images;
+                    let command_buffer = queue.command_buffer().expect("a command buffer");
+                    let before = device.counters().metrics();
+                    resolve(&command_buffer);
+                    let after = device.counters().metrics();
+                    let made = after.image_creates.count - before.image_creates.count;
+                    let allocated = after.consumer_allocations - before.consumer_allocations;
+                    let again = after.resolve_copies - before.resolve_copies;
+                    let copied = after.bytes_copied - before.bytes_copied;
+                    let live = device.counters().gauges().resolve_images;
+                    assert!(
+                        made == 0 && allocated == 0 && live <= images,
+                        "{name}: {kind} at {pitch}: {form}, the second resolve made {made} \
+                         images and {allocated} allocations, resolve images {images} to {live}"
+                    );
+                    assert_eq!(again, u64::from(through), "{name}: {kind} at {pitch}");
+                    println!(
+                        "resolve_over: {name}: {kind} pitch {pitch}: the second resolve made \
+                         {made} images and {allocated} allocations, resolve images {images} to \
+                         {live}; bytes copied {copied}, resolve copies {again}"
                     );
                     drop((over, buffer, block));
                 }
             }
-            drop((color, depth));
+            drop((color, depth, seen));
         });
     }
 }

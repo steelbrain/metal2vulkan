@@ -211,7 +211,8 @@ bound and its blob writes skipped past it (`pipeline_caches_replaced`,
 `pipeline_cache_writes_skipped`, The cache directory below); the dispatches that ran a kernel's
 emulated-SIMD-group module (`emulated_simdgroup_dispatches`, Compute pipeline states below); the
 compiled contents a state's make dropped because an equal one landed in the device's map first
-(`kernel_makes_dropped`);
+(`kernel_makes_dropped`); the copies of resolve images into the buffers their textures lie over
+(`resolve_copies` and `resolve_copy_bytes`, Render encoders below);
 `gauges()` are live counts per kind of resource, every one zero after teardown, and
 `handles_out`, 1 while a handle of the device is out (Teardown). They are relaxed atomics, always
 on. What an encoder's commands count arrives when the encoder ends.
@@ -3555,19 +3556,25 @@ cache is answered compile-required on both.
   takes the attachment usage on every device where its format renders, whatever Metal's usage.
   So does the linear image of a texture in place over a buffer of the runtime's own memory, where
   the device's linear tiling renders its format and its image format query makes the image with
-  the usage, which left its layout as it was on every venue counted. A resolve into a texture made
-  without `RenderTarget` usage whose image has no attachment usage is a known gap
-  (`RenderPassKind::ResolveUsage`): a depth or stencil texture, a colour texture of another type
-  or of a format the device's optimal image does not render, and a texture in place over a buffer
-  whose linear image takes none. On the RTX 3090 and on KosmicKrisp that is every texture in place
-  over a buffer, as their linear tiling features hold the attachment for no format (and a pitch of
-  the row rounded up to the alignment answer, 128 and 16, lies in place). Elsewhere it is one over
-  a dma-buf's import, one of a format the device's linear tiling does not render, and one whose
-  subresource reaches past its own rows or its buffer, as a resolve "may read and write back any
-  memory locations within the image subresource bound for that attachment" (Vulkan's multisample
-  resolve operations): on every venue counted, a buffer that ends at the texture's last texel
-  where its rows are padded.
-  Such a texture stays in place, never copied to gain the usage. Refused as
+  the usage, which left its layout as it was on every venue counted. Where such a texture's linear
+  image takes none, the texture stays in place and the resolve is a counted copy, a known gap: the
+  pass resolves into the texture's resolve image, a one-sample optimal image of its format and
+  size made at the first pass that resolves into it and freed with it (`Gauges::resolve_images`
+  and `resolve_image_bytes`), and the pass's end copies the render area's texels into the buffer
+  at the texture's pitch, leaving the bytes past each row's texels as they were. That is one copy
+  per resolve, 1,440,000 bytes for a 600 x 600 `BGRA8Unorm_sRGB` pass, and none on the texture's
+  later uses (`Metrics::resolve_copies` and `resolve_copy_bytes`, in `bytes_copied` too); Metal
+  makes no such copy. A linear image takes no attachment usage where the device's format query
+  offers no linear image of the format with it (measured on the RTX 3090 and on KosmicKrisp, for
+  every format, where a pitch of the row rounded up to the alignment answer, 128 and 16, lies in
+  place), and where its subresource reaches past its own rows or its buffer, as a resolve "may
+  read and write back any memory locations within the image subresource bound for that
+  attachment" (Vulkan's multisample resolve operations; measured on every venue counted where a
+  buffer ends at the texture's last texel and its rows are padded). A resolve into a texture made
+  without `RenderTarget` usage whose image has no attachment usage and that has no resolve image
+  is a known gap (`RenderPassKind::ResolveUsage`): a depth or stencil texture, a colour texture of
+  another type or of a format the device's optimal image does not render, a texture in place over
+  a dma-buf's import, and a view of a texture in place over a buffer. Refused as
   Metal refuses it: a resolving action with no resolve texture (`Refusal::ResolveTexture`, also
   where an encoder sets it later) and an integer format's resolve (`Refusal::ResolveFormat`).
   `Metrics::resolves` counts the attachments passes resolved.
@@ -3967,12 +3974,13 @@ cache is answered compile-required on both.
   resolves into a texture of any usage; Vulkan only into a view with the attachment usage,
   `VUID-VkRenderingInfo-colorAttachmentCount-09476`, which a one-sample colour texture of an
   optimal image takes where its format renders, and a texture's linear image in place over a
-  buffer of the runtime's own memory where the device's linear tiling renders its format, and a
-  depth or stencil texture does not, nor a texture in place on the RTX 3090 or KosmicKrisp, whose
-  linear tiling features hold the attachment for no format, over a dma-buf's import, or whose
-  subresource reaches past its own rows or its buffer, which a resolve may write back whole; the
-  usage grows a 1920 x 1080 `RGBA8Unorm` optimal image of one level 1.0056 times on the Radeon
-  780M and changes no linear image's layout, `RenderPassKind::ResolveUsage` has the measures),
+  buffer of the runtime's own memory where the device's linear tiling renders its format (where
+  it does not, or where its subresource reaches past its own rows or its buffer, the pass resolves
+  into the texture's resolve image and copies it into the buffer, above), and a depth or stencil
+  texture does not, nor a texture in place over a dma-buf's import, nor a view of a texture in
+  place; the usage grows a 1920 x 1080 `RGBA8Unorm` optimal image of one level 1.0056 times on
+  the Radeon 780M and changes no linear image's layout, `RenderPassKind::ResolveUsage` has the
+  measures),
   a depth or stencil resolve the device's resolve modes do not offer (`ResolveFilter`: `Min` or
   `Max` where `supportedDepthResolveModes` lacks it, the stencil filter `DepthResolvedSample`,
   which no Vulkan resolve mode is, and two aspects paired where `independentResolve` or

@@ -1418,6 +1418,8 @@ field	metal2vulkan-runtime::Gauges.private_unit_used_bytes	pub private_unit_used
 field	metal2vulkan-runtime::Gauges.private_units	pub private_units: u64
 field	metal2vulkan-runtime::Gauges.releases_waiting	pub releases_waiting: u64
 field	metal2vulkan-runtime::Gauges.render_contents	pub render_contents: u64
+field	metal2vulkan-runtime::Gauges.resolve_image_bytes	pub resolve_image_bytes: u64
+field	metal2vulkan-runtime::Gauges.resolve_images	pub resolve_images: u64
 field	metal2vulkan-runtime::Gauges.samplers	pub samplers: u64
 field	metal2vulkan-runtime::Gauges.shadow_bytes	pub shadow_bytes: u64
 field	metal2vulkan-runtime::Gauges.shadows	pub shadows: u64
@@ -1597,6 +1599,8 @@ field	metal2vulkan-runtime::Metrics.render_makes_past_kernel_bound	pub render_ma
 field	metal2vulkan-runtime::Metrics.render_records_read	pub render_records_read: u64
 field	metal2vulkan-runtime::Metrics.render_records_stale	pub render_records_stale: u64
 field	metal2vulkan-runtime::Metrics.render_weight_past_kernel_bound_max	pub render_weight_past_kernel_bound_max: u64
+field	metal2vulkan-runtime::Metrics.resolve_copies	pub resolve_copies: u64
+field	metal2vulkan-runtime::Metrics.resolve_copy_bytes	pub resolve_copy_bytes: u64
 field	metal2vulkan-runtime::Metrics.resolves	pub resolves: u64
 field	metal2vulkan-runtime::Metrics.ring_block_allocations	pub ring_block_allocations: SiteAllocations
 field	metal2vulkan-runtime::Metrics.ring_writes	pub ring_writes: u64
