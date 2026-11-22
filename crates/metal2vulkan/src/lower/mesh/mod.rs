@@ -430,7 +430,7 @@ pub fn check_payload(cx: &SelectCx<'_>, size: u64) -> Result<(), Error> {
 /// without running anything else of it. A tile function, a kernel that reads a stage-input region,
 /// one with compute derivatives (whose quads a returned lane would leave partial) and one with a
 /// cooperative imageblock slice write (`texture::cooperative`, whose cells every invocation of the
-/// workgroup shares) are refused the kernel's input, `Unsupported{GpuEncodedIndirectCommands, NotImplemented}`. Called before
+/// workgroup shares) are refused the kernel's input, `Unsupported{PartialThreadgroups, NotImplemented}`. Called before
 /// the push fields are placed.
 pub fn plan_partial_groups(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     match cx.stage {
@@ -441,9 +441,7 @@ pub fn plan_partial_groups(cx: &mut SelectCx<'_>) -> Result<(), Error> {
                 || cx.families.barrier.compute_derivatives
                 || !cx.families.texture.cooperative.is_empty()
             {
-                return Err(
-                    Unsupported::not_implemented(Feature::GpuEncodedIndirectCommands).into(),
-                );
+                return Err(Unsupported::not_implemented(Feature::PartialThreadgroups).into());
             }
         }
         _ => return Ok(()),

@@ -422,9 +422,8 @@ pub struct LoweringInputs {
     /// invocation shares, emulated simdgroups (the input
     /// `emulated_simdgroups` or a kernel whose lockstep order needs them), `flat_grid`,
     /// `folded_groups`, `replay_bindings`, and a body whose uniform barriers' vote word its
-    /// workgroup memory cannot hold, are `Unsupported{GpuEncodedIndirectCommands,
-    /// NotImplemented}`: their dispatches keep the exact split. Any other function compiles as
-    /// without it.
+    /// workgroup memory cannot hold, are `Unsupported{PartialThreadgroups, NotImplemented}`: their
+    /// dispatches keep the exact split. Any other function compiles as without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub partial_threadgroups: bool,
     /// Texture slots bound in one of Apple's extended-range formats

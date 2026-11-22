@@ -26,7 +26,7 @@ Columns:
 
 | Kind | Variants | With a site | Reach system | Reach app | Reach rare | Reach none | Unassessed |
 |---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 118 | 118 | 6 | 26 | 66 | 20 | 0 |
+| Translator and front-end refusals | 119 | 119 | 6 | 27 | 66 | 20 | 0 |
 | Binder refusals at a device limit | 8 | 8 | 0 | 1 | 6 | 1 | 0 |
 | Translation caps | 14 | 14 | 0 | 0 | 7 | 7 | 0 |
 | Rate maps the compile layer does not compile | 5 | 5 | 0 | 0 | 4 | 1 | 0 |
@@ -40,7 +40,7 @@ Columns:
 
 | Kind | `metal-measured` | `metal-documented` | `metal-takes` | `device` | `ours` | `unknown` | `delegated` | `-` |
 |---|---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 0 | 0 | 0 | 48 | 70 | 0 | 0 | 0 |
+| Translator and front-end refusals | 0 | 0 | 0 | 48 | 71 | 0 | 0 | 0 |
 | Binder refusals at a device limit | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | Translation caps | 0 | 0 | 0 | 0 | 14 | 0 | 0 | 0 |
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 5 | 0 | 0 | 0 |
@@ -70,6 +70,7 @@ Columns:
 | `Linking` | Linkage signatures / stitching / dynamic libraries | every device (not implemented) | `ours` | 3: `crates/metal2vulkan-air/src/canon/link.rs (not_implemented)`, `crates/metal2vulkan-air/src/canon/mod.rs (post_check)` (+1) | `rare`: dynamic libraries and linked functions |
 | `SimdWidth` | Simdgroup width 32 is not achievable for this usage, stage, and device | devices without a capability the site computes (`subgroup::width_needs(cx.stage, model.stage(cx.stage))`); devices without a capability the site computes (`width_needs(stage, st)`) | `device` | 2: `crates/metal2vulkan/src/device/subgroup.rs (subgroup_tier)`, `crates/metal2vulkan/src/lower/simd/mod.rs (finish)` | `app`: simdgroup functions on a device whose subgroups cannot run 32 wide for the use |
 | `LocalSize` | A local size beyond a device limit on this axis (`None` | every device (no Vulkan mechanism) | `device` | 1: `crates/metal2vulkan/src/bind/dispatch.rs (regions)` | `app`: a threadgroup size past a smaller device's limit |
+| `PartialThreadgroups` | A kernel's partial-threadgroups variant (`LoweringInputs::partial_threadgroups`) that the lowering cannot make | every device (not implemented) | `ours` | 4: `crates/metal2vulkan/src/lower/mesh/mod.rs (plan_partial_groups)`, `crates/metal2vulkan/src/lower/select.rs (finish)` (+2) | `app`: a dispatchThreads grid that is not whole threadgroups, of a kernel whose partial-threadgroups variant cannot be made |
 | `IrreducibleConvergent` | An irreducible region containing a convergent instruction | every device (no Vulkan mechanism) | `device` | 1: `crates/metal2vulkan/src/structurize/irreducible.rs (refuse_tangled)` | `rare`: irreducible loops around barriers or simd operations |
 | `ComputeDerivativesWithSimd` | Compute derivatives in a flattened simd tier | every device (no Vulkan mechanism) | `device` | 1: `crates/metal2vulkan/src/lower/dispatch.rs (plan_kernel)` | `rare`: derivatives in a kernel |
 | `ComputeDerivatives` | Derivatives outside fragment without compute-derivative support | devices without VkFeature::ComputeDerivativeGroupLinear; every device (no Vulkan mechanism); every device (not implemented) | `ours` | 4: `crates/metal2vulkan/src/bind/dispatch.rs (check_local)`, `crates/metal2vulkan/src/lower/sync/barrier.rs (select_derivative, 3 sites)` | `rare`: derivatives in a kernel |
@@ -134,7 +135,7 @@ Columns:
 | `RayTracing` |  | devices without a capability the site computes (`missing`); every device (no Vulkan mechanism); every device (not implemented) | `ours` | 10: `crates/metal2vulkan/src/lower/raytracing/mod.rs (instance_count)`, `crates/metal2vulkan/src/lower/raytracing/mod.rs (intersect, 5 sites)` (+4) | `rare`: ray tracing (out of scope by ruling) |
 | `Tensors` |  | every device (not implemented) | `ours` | 2: `crates/metal2vulkan-air/src/canon/matmul2d/synth.rs (refuse)`, `crates/metal2vulkan/src/lower/select.rs (route_air)` | `rare`: shader tensors |
 | `RasterizationRateMap` |  | devices without VkFeature::MultiViewport; devices without VkFeature::ShaderDrawParameters; devices without VkFeature::ShaderOutputViewportIndex; every device (not implemented) | `ours` | 2: `crates/metal2vulkan/src/lower/stage_io/plan.rs (region_viewport, 2 sites)` | `rare`: rasterization rate maps |
-| `GpuEncodedIndirectCommands` |  | devices short of a Vulkan feature the site names; devices without buffer device addresses (`addressed_needs`); every device (no Vulkan mechanism); every device (not implemented) | `ours` | 17: `crates/metal2vulkan/src/lower/access/icb.rs (needs, 2 sites)`, `crates/metal2vulkan/src/lower/access/icb.rs (select, 2 sites)` (+9) | `rare`: indirect command buffers encoded by a kernel |
+| `GpuEncodedIndirectCommands` |  | devices short of a Vulkan feature the site names; devices without buffer device addresses (`addressed_needs`); every device (no Vulkan mechanism); every device (not implemented) | `ours` | 14: `crates/metal2vulkan/src/lower/access/icb.rs (needs, 2 sites)`, `crates/metal2vulkan/src/lower/access/icb.rs (select, 2 sites)` (+7) | `rare`: indirect command buffers encoded by a kernel |
 | `VulkanVersion` | The device's Vulkan version is below the 1.2 floor | devices without ApiVersion::V1_2 | `device` | 2: `crates/metal2vulkan/src/ash_interop/query.rs (query)`, `crates/metal2vulkan/src/device/derive.rs (from_queries)` | `none`: a device below Vulkan 1.2 |
 | `PushWindow` | The device's `maxPushConstantsSize` is below the 256 bytes of the push window every stage is lowered for | devices without VkLimit::MaxPushConstantsSize | `device` | 1: `crates/metal2vulkan/src/device/derive.rs (from_queries)` | `none`: a device whose maxPushConstantsSize is below 256 bytes |
 | `IdentityDomains` | The identity pointer and handle domains (`PointerDomain::Identity`, `HandleDomain::Identity`) | devices without a capability the site computes (`all`); every device (not implemented) | `ours` | 7: `crates/metal2vulkan/src/device/derive.rs (identity_domains)`, `crates/metal2vulkan/src/lower/sampler/anisotropic.rs (select)` (+5) | `none`: the identity domains, which the runtime alone takes and which lower only kernels over buffer slots, textures in slots or argument buffers, and runtime samplers, so far |
@@ -402,6 +403,7 @@ Each refusal's sites, with the function that builds it.
 - `feature::Linking`: `crates/metal2vulkan-air/src/canon/link.rs (not_implemented)`; `crates/metal2vulkan-air/src/canon/mod.rs (post_check)`; `crates/metal2vulkan-air/src/canon/mod.rs (specialize_dynamic)`
 - `feature::SimdWidth`: `crates/metal2vulkan/src/device/subgroup.rs (subgroup_tier)`; `crates/metal2vulkan/src/lower/simd/mod.rs (finish)`
 - `feature::LocalSize`: `crates/metal2vulkan/src/bind/dispatch.rs (regions)`
+- `feature::PartialThreadgroups`: `crates/metal2vulkan/src/lower/mesh/mod.rs (plan_partial_groups)`; `crates/metal2vulkan/src/lower/select.rs (finish)`; `crates/metal2vulkan/src/lower/simd/divergent.rs (barriers)`; `crates/metal2vulkan/src/pipeline/compile.rs (analyze_one)`
 - `feature::IrreducibleConvergent`: `crates/metal2vulkan/src/structurize/irreducible.rs (refuse_tangled)`
 - `feature::ComputeDerivativesWithSimd`: `crates/metal2vulkan/src/lower/dispatch.rs (plan_kernel)`
 - `feature::ComputeDerivatives`: `crates/metal2vulkan/src/bind/dispatch.rs (check_local)`; `crates/metal2vulkan/src/lower/sync/barrier.rs (select_derivative, 3 sites)`
@@ -466,7 +468,7 @@ Each refusal's sites, with the function that builds it.
 - `feature::RayTracing`: `crates/metal2vulkan/src/lower/raytracing/mod.rs (instance_count)`; `crates/metal2vulkan/src/lower/raytracing/mod.rs (intersect, 5 sites)`; `crates/metal2vulkan/src/lower/raytracing/mod.rs (primitive_data_read)`; `crates/metal2vulkan/src/lower/raytracing/mod.rs (select_param)`; `crates/metal2vulkan/src/lower/raytracing/mod.rs (slot_of)`; `crates/metal2vulkan/src/lower/select.rs (route_air)`
 - `feature::Tensors`: `crates/metal2vulkan-air/src/canon/matmul2d/synth.rs (refuse)`; `crates/metal2vulkan/src/lower/select.rs (route_air)`
 - `feature::RasterizationRateMap`: `crates/metal2vulkan/src/lower/stage_io/plan.rs (region_viewport, 2 sites)`
-- `feature::GpuEncodedIndirectCommands`: `crates/metal2vulkan/src/lower/access/icb.rs (needs, 2 sites)`; `crates/metal2vulkan/src/lower/access/icb.rs (select, 2 sites)`; `crates/metal2vulkan/src/lower/access/mod.rs (plan_replay, 3 sites)`; `crates/metal2vulkan/src/lower/access/object.rs (select)`; `crates/metal2vulkan/src/lower/mesh/mod.rs (plan_partial_groups)`; `crates/metal2vulkan/src/lower/select.rs (finish, 2 sites)`; `crates/metal2vulkan/src/lower/simd/divergent.rs (barriers)`; `crates/metal2vulkan/src/lower/stage_io/plan.rs (indirect_range)`; `crates/metal2vulkan/src/lower/stage_io/plan.rs (merged)`; `crates/metal2vulkan/src/lower/stage_io/plan.rs (param)`; `crates/metal2vulkan/src/pipeline/compile.rs (analyze_one, 2 sites)`
+- `feature::GpuEncodedIndirectCommands`: `crates/metal2vulkan/src/lower/access/icb.rs (needs, 2 sites)`; `crates/metal2vulkan/src/lower/access/icb.rs (select, 2 sites)`; `crates/metal2vulkan/src/lower/access/mod.rs (plan_replay, 3 sites)`; `crates/metal2vulkan/src/lower/access/object.rs (select)`; `crates/metal2vulkan/src/lower/select.rs (finish)`; `crates/metal2vulkan/src/lower/stage_io/plan.rs (indirect_range)`; `crates/metal2vulkan/src/lower/stage_io/plan.rs (merged)`; `crates/metal2vulkan/src/lower/stage_io/plan.rs (param)`; `crates/metal2vulkan/src/pipeline/compile.rs (analyze_one, 2 sites)`
 - `feature::VulkanVersion`: `crates/metal2vulkan/src/ash_interop/query.rs (query)`; `crates/metal2vulkan/src/device/derive.rs (from_queries)`
 - `feature::PushWindow`: `crates/metal2vulkan/src/device/derive.rs (from_queries)`
 - `feature::IdentityDomains`: `crates/metal2vulkan/src/device/derive.rs (identity_domains)`; `crates/metal2vulkan/src/lower/sampler/anisotropic.rs (select)`; `crates/metal2vulkan/src/lower/sampler/mod.rs (finish)`; `crates/metal2vulkan/src/lower/select.rs (identity_admits)`; `crates/metal2vulkan/src/lower/sync/barrier.rs (require_seq_cst)`; `crates/metal2vulkan/src/lower/texture/slot.rs (storage_format)`; `crates/metal2vulkan/src/pipeline/link.rs (identity_set)`

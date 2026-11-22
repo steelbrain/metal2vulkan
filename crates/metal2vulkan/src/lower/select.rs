@@ -1719,7 +1719,7 @@ fn finish(
     // (`simd::divergent::barriers`); the emulated tier's exchanges are not walked so, and its
     // dispatches keep their exact split.
     if cx.inputs.partial_threadgroups && stage == Stage::Kernel && tier == Tier::Emulated {
-        return Err(Unsupported::not_implemented(Feature::GpuEncodedIndirectCommands).into());
+        return Err(Unsupported::not_implemented(Feature::PartialThreadgroups).into());
     }
     if tier == Tier::Emulated {
         match simd::workgroup::check(

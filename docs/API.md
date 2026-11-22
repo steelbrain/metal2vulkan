@@ -1414,7 +1414,7 @@ which `LoweringInputs::partial_threadgroups` compiles) runs such a grid as the t
 threads fill at the dispatch's threadgroup size instead, the last along an axis Metal's partial
 threadgroup, so every remainder takes the same `VkPipeline`; a kernel the variant cannot run
 exactly (a tile function, a stage-input region, compute derivatives, emulated simdgroups) is
-refused it, `Unsupported{GpuEncodedIndirectCommands, NotImplemented}`, and keeps the edges. On
+refused it, `Unsupported{PartialThreadgroups, NotImplemented}`, and keeps the edges. On
 the identity domains the variant of a kernel that does not
 observe its threadgroup partition (`KernelFacts::partition_oblivious`) runs its grid in tiles
 instead (`RuntimeFact::GridTiles`): its plans run a direct dispatch's threads in

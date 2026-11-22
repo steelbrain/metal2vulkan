@@ -9982,6 +9982,7 @@ variant	metal2vulkan::error::Feature::Lowering	Lowering(LowerFamily)
 variant	metal2vulkan::error::Feature::MeshShading	MeshShading
 variant	metal2vulkan::error::Feature::MinLodClamp	MinLodClamp
 variant	metal2vulkan::error::Feature::ModuleRecord	ModuleRecord { code: u32 }
+variant	metal2vulkan::error::Feature::PartialThreadgroups	PartialThreadgroups
 variant	metal2vulkan::error::Feature::PixelCoverageAtSampleRate	PixelCoverageAtSampleRate
 variant	metal2vulkan::error::Feature::PixelSamplerCompare	PixelSamplerCompare
 variant	metal2vulkan::error::Feature::PointerCompare	PointerCompare

@@ -972,7 +972,7 @@ impl Compiled {
                         match lower(&inputs) {
                             Ok(variant) => Found::Lowered(variant),
                             Err(TranslationError::Unsupported(refused))
-                                if refused.feature == Feature::GpuEncodedIndirectCommands =>
+                                if refused.feature == Feature::PartialThreadgroups =>
                             {
                                 cache::keep_refusal(&core, &variant_key);
                                 Found::Refused

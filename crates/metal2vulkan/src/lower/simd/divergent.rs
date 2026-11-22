@@ -259,7 +259,7 @@ pub const VOTE_BYTES: u32 = 4;
 /// barriers are uniform and whose word does not fit runs no partial threadgroup instead
 /// (`MeshPlan::partial_groups` cleared, so the binder refuses such a draw), and a kernel's
 /// partial-threadgroups variant (`LoweringInputs::partial_threadgroups`) is refused,
-/// `Unsupported{GpuEncodedIndirectCommands, NotImplemented}`.
+/// `Unsupported{PartialThreadgroups, NotImplemented}`.
 pub fn barriers(
     cx: &mut SelectCx<'_>,
     strategy: &[Option<Strategy>],
@@ -334,9 +334,7 @@ pub fn barriers(
             // dispatches keep their exact split.
             Err(Error::Unsupported(_)) if !divergent => {
                 if cx.stage == Stage::Kernel {
-                    return Err(
-                        Unsupported::not_implemented(Feature::GpuEncodedIndirectCommands).into(),
-                    );
+                    return Err(Unsupported::not_implemented(Feature::PartialThreadgroups).into());
                 }
                 cx.families.mesh.partial_groups = false;
                 return Ok(());

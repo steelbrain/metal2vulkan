@@ -18,6 +18,7 @@ feature	InlineAsm	none	inline assembly other than the empty asm("") decode drops
 feature	Linking	rare	dynamic libraries and linked functions
 feature	SimdWidth	app	simdgroup functions on a device whose subgroups cannot run 32 wide for the use
 feature	LocalSize	app	a threadgroup size past a smaller device's limit
+feature	PartialThreadgroups	app	a dispatchThreads grid that is not whole threadgroups, of a kernel whose partial-threadgroups variant cannot be made
 feature	IrreducibleConvergent	rare	irreducible loops around barriers or simd operations
 feature	ComputeDerivativesWithSimd	rare	derivatives in a kernel
 feature	ComputeDerivatives	rare	derivatives in a kernel

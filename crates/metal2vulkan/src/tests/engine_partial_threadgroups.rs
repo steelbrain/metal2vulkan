@@ -17,7 +17,7 @@
 //! threadgroup word and its simdgroup's sum over the live lanes alone. The variant's module passes
 //! `spirv-val` and holds no workgroup barrier in a block its own uniformity does not prove
 //! uniform; where its simdgroups are emulated it is refused
-//! (`Unsupported{GpuEncodedIndirectCommands, NotImplemented}`), so the split stays. No GPU is used.
+//! (`Unsupported{PartialThreadgroups, NotImplemented}`), so the split stays. No GPU is used.
 //!
 //! `llvm-as` assembles the kernels; a missing tool skips visibly.
 
@@ -343,7 +343,7 @@ fn check(
         let inputs = key.lowering_inputs(Stage::Kernel);
         let (pipe, m) = match pipeline(&dev, bc, entry, &inputs) {
             Ok(p) => p,
-            Err(Error::Unsupported(u)) if u.feature == Feature::GpuEncodedIndirectCommands => {
+            Err(Error::Unsupported(u)) if u.feature == Feature::PartialThreadgroups => {
                 return false;
             }
             Err(e) => panic!("{stem} {entry}: the partial variant: {e}"),
@@ -561,7 +561,7 @@ fn partial_threadgroups_are_refused_with_another_form() {
         form(&mut inputs);
         match pipeline(&dev, &bc, "neighbour", &inputs) {
             Err(Error::Unsupported(u)) => {
-                assert_eq!(u.feature, Feature::GpuEncodedIndirectCommands, "form {n}");
+                assert_eq!(u.feature, Feature::PartialThreadgroups, "form {n}");
             }
             other => panic!("form {n}: {:?}", other.map(|_| ())),
         }

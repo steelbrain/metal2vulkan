@@ -537,6 +537,15 @@ pub enum Feature {
     LocalSize {
         axis: Option<Axis>,
     },
+    /// A kernel's partial-threadgroups variant (`LoweringInputs::partial_threadgroups`) that the
+    /// lowering cannot make: a tile function, a kernel that reads a stage-input region, one with
+    /// compute derivatives or a cooperative imageblock slice write; a kernel whose simdgroups run
+    /// on the emulated tier (its profile's subgroups, its lockstep order or its large body's
+    /// pinned width give it that tier), whose exchanges are not walked past the grid; a body whose
+    /// uniform barriers need a vote word that the stage's workgroup memory cannot hold beside its
+    /// static arena; or the input beside `flat_grid`, `folded_groups`, `replay_bindings` or
+    /// `emulated_simdgroups`. The kernel's dispatches keep the plain module's exact split.
+    PartialThreadgroups,
     /// An irreducible region containing a convergent instruction.
     IrreducibleConvergent,
     /// Compute derivatives in a flattened simd tier.
