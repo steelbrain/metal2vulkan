@@ -43,11 +43,6 @@ fn withheld(colors: u32) -> Device {
 
 /// `withheld(colors)` without `more` either.
 fn withholding(colors: u32, more: &[VkFeature]) -> Device {
-    withholding_under(colors, more, DevicePolicy::RESIDENT_TABLES)
-}
-
-/// `withholding(colors, more)` under `policy`.
-fn withholding_under(colors: u32, more: &[VkFeature], policy: DevicePolicy) -> Device {
     let mut desc = description("lavapipe").expect("lavapipe");
     for f in [
         VkFeature::GeometryShader,
@@ -63,15 +58,15 @@ fn withholding_under(colors: u32, more: &[VkFeature], policy: DevicePolicy) -> D
     }
     desc.limits.max_color_attachments = colors;
     desc.limits.max_fragment_output_attachments = colors;
-    Device::from_queries(desc, policy).expect("device")
+    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 fn device(stem: &str) -> Device {
-    device_under(stem, DevicePolicy::RESIDENT_TABLES)
-}
-
-fn device_under(stem: &str, policy: DevicePolicy) -> Device {
-    Device::from_queries(description(stem).expect("profile"), policy).expect("device")
+    Device::from_queries(
+        description(stem).expect("profile"),
+        DevicePolicy::RESIDENT_TABLES,
+    )
+    .expect("device")
 }
 
 fn function(bc: &[u8], name: &str) -> FunctionDescriptor {
@@ -496,41 +491,26 @@ fn an_indexed_draw_runs_the_de_indexed_variant() {
     assert_eq!(plan.variant.primitive_id_indices, None);
 }
 
-/// A vertex function whose attribute fixed-function input fetches in its base pipeline under the
-/// identity domains (`pi_attrib`'s `float2` at stride 8) reaches link in the de-indexed and private
-/// list forms, whose compile pulls every attribute (`pipeline::link::vertex`'s item 8): the
-/// variant the base plan asks for (outside the identity domains, where the base pulls it already)
-/// links, its vertex input binds no layout and pulls the attribute, under either domain, its plan
-/// states the same variant, and every module is valid.
+/// A vertex function with a `[[stage_in]]` attribute (`pi_attrib`'s `float2` at stride 8) reaches
+/// link in the de-indexed and private list forms (`pipeline::link::vertex`'s item 8): the variant
+/// the base plan asks for links, its vertex input binds no layout and pulls the attribute, its
+/// plan states the same variant, and every module is valid. Its base pulls the attribute too, as
+/// every attribute is outside the identity domains, which refuse the fixture's primitive-ID
+/// fragment.
 #[test]
-fn a_fixed_function_attribute_links_in_the_de_indexed_and_list_forms() {
+fn a_stage_in_attribute_links_pulled_in_the_de_indexed_and_list_forms() {
     use crate::metal::{IndexType, PrimitiveType};
     let Some(bc) = fixture() else { return };
     let mut d = pipeline(&bc, "pi_attrib", Some("pi_ids"), 1);
     d.vertex_descriptor = Some(attribute_descriptor());
-    let identity = DevicePolicy::default();
-    for (dev, fixed, form) in [
-        (
-            withheld(8),
-            withholding_under(8, &[], identity),
-            "de-indexed",
-        ),
-        (withheld(8), withholding_under(8, &[], identity), "listed"),
-        (
-            device("lavapipe"),
-            device_under("lavapipe", identity),
-            "listed",
-        ),
+    for (dev, form) in [
+        (withheld(8), "de-indexed"),
+        (withheld(8), "listed"),
+        (device("lavapipe"), "listed"),
     ] {
         let base = compile(&dev, &d).expect("base");
         assert!(base.vertex_input.bindings.is_empty(), "{form}: the base");
         assert_eq!(base.vertex_input.pulled.len(), 1, "{form}: the base");
-        let fixed_base = compile(&fixed, &d).expect("base under the identity domains");
-        assert_eq!(
-            fixed_base.vertex_input.bindings.len(),
-            1,
-            "{form}: the base fetch under the identity domains"
-        );
         let mut state = bound();
         state.primitive_type = Some(PrimitiveType::Triangle);
         match form {
@@ -551,12 +531,6 @@ fn a_fixed_function_attribute_links_in_the_de_indexed_and_list_forms() {
         assert_eq!(p.vertex_input.pulled.len(), 1, "{form}");
         let plan = p.plan(&dev, &state.shape()).expect("variant plan");
         assert_eq!(plan.variant, key, "{form}");
-        let p = fixed
-            .compile_render_variant(&d, &key, &Budget::standard())
-            .unwrap_or_else(|e| panic!("{form}: the variant under the identity domains: {e}"));
-        validate(&p, &fixed);
-        assert!(p.vertex_input.bindings.is_empty(), "{form}");
-        assert_eq!(p.vertex_input.pulled.len(), 1, "{form}");
     }
 }
 

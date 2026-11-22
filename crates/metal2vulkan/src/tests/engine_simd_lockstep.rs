@@ -2467,10 +2467,10 @@ fn a_kernel_past_the_stage_bound_gets_one_answer_through_either_path() {
 
 /// The owned stage-bound fixture (`validation/fixtures/public/stage_bound/stage_bound_matrix`: 512
 /// simdgroup matrix multiply-accumulates beside a lockstep pair in divergent flow) under the
-/// measured stage bounds (`StageBounds::MEASURED`). On the Iris Xe, whose subgroup size range
-/// offers the widest mode's pin and which has maximal reconvergence, the kernel emulates its
-/// simdgroups, a module past the compiled bound, and is planned again keeping the pin, a module
-/// under it. The same description without maximal reconvergence emulates its simdgroups for the
+/// measured stage bounds (`StageBounds::MEASURED`). On the Iris Xe under the identity domains,
+/// whose subgroup size range offers the widest mode's pin and which has maximal reconvergence, the
+/// kernel emulates its simdgroups, a module past the compiled bound, and is planned again keeping
+/// the pin, a module under it. The same description without maximal reconvergence emulates its simdgroups for the
 /// lockstep pair, so it has no pin to keep: it is made as it weighs, past the bound, its stats
 /// naming the emulated module's weight, under any driver (Intel's Windows driver too).
 #[test]
@@ -2502,7 +2502,9 @@ fn the_stage_bound_fixture_keeps_the_pin_or_states_its_weight() {
         .join("../metal2vulkan-validation/profiles/intel-irisxe-rplp-anv.json");
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let queries = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).unwrap();
+    // The runtime's domains, whose kernels the bound keeps in the process: on the resident tables
+    // the in-shader containment of every access weighs the pinned plan past the bound.
+    let queries = Device::from_queries(desc, DevicePolicy::default()).unwrap();
     {
         let p = queries.profile();
         assert!(p.fields().subgroup.maximal_reconvergence);

@@ -3506,12 +3506,11 @@ fn a_merged_fragment_reads_its_argument_buffer_through_its_command_s_table() {
 /// slot table at the stage's own `RootTableAddress`, and needs no `SlotGuestBase`
 /// (`icb_render_replay_template`); its plan states the variant. A vertex function that fetches
 /// a `[[stage_in]]` attribute (`icb_render_stride_template`) in fixed function, as it does under
-/// the identity domains, is refused: fixed-function input reads no slot table. A draw replay names
-/// its layout among those the draw pulls (`bind::draw_replay_vertex_layouts`,
-/// `BindShape::far_vertex_buffers`) with no buffer bound there: the base plan asks for the
-/// pulled-vertex-buffer variant, whose replay variant
-/// compiles, one draw per command and merged, binds no layout and pulls the attribute, whose
-/// read reaches the slot table; every stage passes L3, and its plan states its key.
+/// the identity domains, is refused: fixed-function input reads no slot table. Outside them the
+/// attribute is pulled, so a draw replay names no layout to pull
+/// (`bind::draw_replay_vertex_layouts`), and its replay variant compiles, one draw per command and
+/// merged, binds no layout and pulls the attribute, whose read reaches the slot table; every stage
+/// passes L3, and its plan states its key.
 #[test]
 fn a_replayed_draw_reads_its_buffers_through_the_slot_table() {
     use crate::cache::VariantKey;
@@ -3579,9 +3578,10 @@ fn a_replayed_draw_reads_its_buffers_through_the_slot_table() {
         RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(vertex)));
     d.rasterization_enabled = false;
     d.vertex_descriptor = Some(vertex_descriptor(&[(0, metal::VertexFormat::UInt)]));
-    let base = idev
+    let fetched = idev
         .compile_render_variant(&d, &VariantKey::new(), &Budget::standard())
         .expect("fetched");
+    assert_eq!(fetched.vertex_input.bindings.len(), 1);
     let refused = idev
         .compile_render_variant(&d, &key, &Budget::standard())
         .expect_err("a fetch under replay bindings");
@@ -3589,29 +3589,20 @@ fn a_replayed_draw_reads_its_buffers_through_the_slot_table() {
         format!("{refused:?}").contains("GpuEncodedIndirectCommands"),
         "{refused:?}"
     );
-    // The replay names the base's layouts in the shape, no buffer bound at them: the base plan
-    // asks for the pulled-vertex-buffer variant, whose replay forms' plans state themselves.
+    let base = dev
+        .compile_render_variant(&d, &VariantKey::new(), &Budget::standard())
+        .expect("pulled");
     let layouts = crate::bind::draw_replay_vertex_layouts(&base.vertex_input).expect("layouts");
-    assert_eq!(layouts, std::collections::BTreeSet::from([0]));
-    let shape = crate::bind::BindShape {
-        far_vertex_buffers: layouts.clone(),
-        ..Default::default()
-    };
-    let plan = base
-        .plan(&idev, &shape)
-        .expect("the base plan, no buffer bound");
-    assert_eq!(plan.variant.pulled_vertex_buffers, layouts);
+    assert!(layouts.is_empty(), "{layouts:?}");
     for merged in [false, true] {
-        let mut pulled = plan.variant.clone();
-        pulled.replay_bindings = true;
-        pulled.merged_draws = merged;
-        let p = idev
-            .compile_render_variant(&d, &pulled, &Budget::standard())
+        let mut replay = key.clone();
+        replay.merged_draws = merged;
+        let p = dev
+            .compile_render_variant(&d, &replay, &Budget::standard())
             .unwrap_or_else(|e| panic!("merged {merged}: {e}"));
         let input = &p.vertex_input;
         assert!(input.bindings.is_empty(), "merged {merged}");
         assert_eq!(input.pulled.len(), 1, "merged {merged}");
-        assert_eq!(input.variant_pulled, layouts);
         // The pulled layout's buffer is read through its root entry, as every other slot.
         let slots = forms(&p);
         assert!(
@@ -3619,10 +3610,12 @@ fn a_replayed_draw_reads_its_buffers_through_the_slot_table() {
             "merged {merged}: {slots:?}"
         );
         for stage in &p.stages {
-            l3(&stage.spirv, &p.requirements, &idev);
+            l3(&stage.spirv, &p.requirements, &dev);
         }
-        let replayed = p.plan(&idev, &shape).expect("the variant's plan");
-        assert_eq!(replayed.variant, pulled, "merged {merged}");
+        let replayed = p
+            .plan(&dev, &crate::bind::BindShape::default())
+            .expect("the variant's plan");
+        assert_eq!(replayed.variant, replay, "merged {merged}");
         assert!(replayed.vertex_buffers.is_empty(), "merged {merged}");
     }
 }
