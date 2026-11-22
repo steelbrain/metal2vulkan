@@ -106,7 +106,8 @@ mod on_device {
     }
 
     /// The state of the harness's kernel `name`, its numbered samplers given `ids`, after checking
-    /// they are `numbered`.
+    /// they are `numbered`, its main pipeline then finished, as a consumer finishes it once it has
+    /// answered.
     fn state(
         device: &Device,
         library: &Library,
@@ -118,10 +119,12 @@ mod on_device {
         let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
             FunctionDescriptor::new(function),
         ));
-        device.new_compute_pipeline_state(&descriptor, |samplers| {
+        let state = device.new_compute_pipeline_state(&descriptor, |samplers| {
             assert!(numbered(samplers), "{name}: {samplers:?}");
             Ok(ids)
-        })
+        })?;
+        state.finish_pipeline()?;
+        Ok(state)
     }
 
     /// Texel `(x, y)` of the source: its channels, in sixteenths a half holds exactly.
@@ -995,7 +998,7 @@ mod on_device {
             assert_eq!(
                 created.pipelines_created - made.pipelines_created,
                 1,
-                "{name}: the square workgroups' pipeline, made with the state"
+                "{name}: the square workgroups' pipeline, made by finish_pipeline"
             );
             let queue = device.new_command_queue(4).expect("a queue");
             let runs = [

@@ -530,9 +530,12 @@ impl crate::ComputeDevice for Device {
     ) -> Result<rt::ComputePipelineState> {
         let function = plan::with_private(function.clone(), private);
         let descriptor = rt::ComputePipelineDescriptor::new(rt::StageSource::Function(function));
-        (self.device)
+        let state = (self.device)
             .new_compute_pipeline_state(&descriptor, |samplers| self.sampler_ids(samplers))
-            .map_err(error)
+            .map_err(error)?;
+        // The whole make, as a consumer makes a state: the creation, then its main pipeline.
+        state.finish_pipeline().map_err(error)?;
+        Ok(state)
     }
 
     fn new_render_pipeline_state(
@@ -547,9 +550,12 @@ impl crate::ComputeDevice for Device {
         descriptor.fragment = Some(rt::StageSource::Function(fragment.clone()));
         descriptor.color_attachments[0] = Some(rt::ColorAttachmentDescriptor::new(color));
         descriptor.raster_sample_count = samples;
-        (self.device)
+        let state = (self.device)
             .new_render_pipeline_state(&descriptor, |samplers| self.sampler_ids(samplers))
-            .map_err(error)
+            .map_err(error)?;
+        // The whole make, as a consumer makes a state: the creation, then its main pipelines.
+        state.finish_pipeline().map_err(error)?;
+        Ok(state)
     }
 
     fn new_command_queue(&self) -> Result<rt::CommandQueue> {

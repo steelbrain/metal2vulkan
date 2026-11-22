@@ -17,16 +17,17 @@
 //!     2,000 more each with a vertex buffer and a fragment texture set before it, add no locked
 //!     instruction.
 //!   - a draw of lines makes its content's line `VkPipeline` once, a first-use wait, and draws
-//!     its row; a state whose descriptor names the line class makes it with the state, and its
-//!     first draw of lines makes nothing and waits for nothing.
+//!     its row; a state whose descriptor names the line class makes it at its
+//!     finish_pipeline, and its first draw of lines makes nothing and waits for nothing.
 //!   - lines draw at width 1 alone: at width 2 a draw of lines or a line strip is
 //!     `DrawKind::LineWidth` and a triangle draws; at 1 again, and in a later encoder, lines draw.
 //!   - points (the owned fixture `engine/rt6_render_state.ll`'s `rt6_point`, of
 //!     `[[point_size]]` 4) cover the pixels whose centres their square holds, the content's
 //!     point `VkPipeline` made at its first draw of points, a first-use wait; a state whose
-//!     descriptor names the point class makes that pipeline with the state, and its points of a
-//!     function without `[[point_size]]` are 1 pixel each; under another class such points
-//!     rasterize nothing, and a triangle drawn after them draws through the encoder's scissor.
+//!     descriptor names the point class makes that pipeline at its finish_pipeline, and its
+//!     points of a function without `[[point_size]]` are 1 pixel each; under another class
+//!     such points rasterize nothing, and a triangle drawn after them draws through the
+//!     encoder's scissor.
 //!   - a stencil state that replaces the stencil marks what a draw covers, and one that tests it
 //!     keeps a later draw to those pixels.
 //!   - a pass clears, loads and stores a shader-read `Depth32Float` depth attachment that its
@@ -180,7 +181,20 @@ pub(crate) mod on_device {
         d
     }
 
+    /// The state of `d` on `device`, its main pipelines then finished, as a consumer finishes
+    /// them once it has answered.
     pub(crate) fn state(
+        name: &str,
+        device: &Device,
+        d: &RenderPipelineDescriptor,
+    ) -> RenderPipelineState {
+        let state = unfinished(name, device, d);
+        (state.finish_pipeline()).unwrap_or_else(|error| panic!("{name}: finished: {error}"));
+        state
+    }
+
+    /// The state of `d` on `device`, its main pipelines not made yet.
+    pub(crate) fn unfinished(
         name: &str,
         device: &Device,
         d: &RenderPipelineDescriptor,
@@ -699,8 +713,8 @@ pub(crate) mod on_device {
     }
 
     /// A state whose descriptor names the line class (`inputPrimitiveTopology`) makes its line
-    /// pipeline with the state, beside the triangle one: its first draw of lines makes nothing and
-    /// waits for nothing, and draws its row.
+    /// pipeline as a main one, its `finish_pipeline` making it beside the triangle one: its
+    /// first draw of lines makes nothing and waits for nothing, and draws its row.
     #[test]
     fn every_device_makes_a_line_class_state_s_line_pipeline_at_its_make() {
         use metal2vulkan::metal::PrimitiveTopologyClass;
@@ -718,7 +732,7 @@ pub(crate) mod on_device {
             assert_eq!(
                 created.pipelines_created - made.pipelines_created,
                 2,
-                "{name}: the triangle and the line pipelines, made with the state"
+                "{name}: the triangle and the line pipelines, made by finish_pipeline"
             );
             // A line across row 2's centres, Metal's y up.
             let y = 1.0 - 2.5 / 4.0;
@@ -755,7 +769,137 @@ pub(crate) mod on_device {
                 let i = ((2 * SIDE + x) * 4) as usize;
                 assert_eq!(texels[i..i + 4], rgba8(GREEN), "{name}: ({x}, 2)");
             }
-            println!("{name}: the line class's pipeline made with the state; its lines drew");
+            println!("{name}: the line class's pipeline made by finish_pipeline; its lines drew");
+        });
+    }
+
+    /// A render state answers before its main pipeline is made: its creation makes no
+    /// `VkPipeline` and answers what Metal's state answers, every answer the same after the finish
+    /// as before it. Its `finish_pipeline` makes the
+    /// triangle class's after the answer, counted as finished, a second call makes nothing, and a
+    /// draw then waits for nothing. A state of another content that is never finished draws the
+    /// same texels: its first draw makes the pipeline, a first-use wait on an unfinished
+    /// pipeline, and a `finish_pipeline` after it makes nothing.
+    #[test]
+    fn every_device_answers_a_render_state_before_its_main_pipeline_is_made() {
+        let Some(library) = examples() else {
+            return;
+        };
+        let d = descriptor(&library, "colored_fragment", PixelFormat::RGBA8Unorm);
+        // Another content drawing the same: blending at its default factors keeps the source.
+        let mut blended = d.clone();
+        if let Some(color) = &mut blended.color_attachments[0] {
+            color.blending_enabled = true;
+        }
+        let want = texels(|_, y| if y < 4 { GREEN } else { BLACK });
+        each_device("render_answered_early", |name, _, device| {
+            let counters = device.counters();
+            let mut buffers = Buffers::new(&device);
+            let (positions, colors) = vertices(&device, &mut buffers);
+            let queue = device.new_command_queue(4).expect("a queue");
+            // The texels of the fixture's top half drawn green by `state` into a new target.
+            let drawn = |state: &RenderPipelineState| {
+                let color = target(
+                    &device,
+                    PixelFormat::RGBA8Unorm,
+                    TextureUsage::RENDER_TARGET,
+                );
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                    .unwrap_or_else(|error| panic!("{name}: {error}"));
+                let draw =
+                    |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+                draw(encoder.set_render_pipeline_state(state));
+                draw(encoder.set_vertex_buffer(Some(&positions), 0, 0));
+                draw(encoder.set_vertex_buffer(Some(&colors), 0, 1));
+                draw(encoder.draw_primitives(PrimitiveType::Triangle, 0, 3, 1, 0));
+                encoder.end_encoding();
+                run(name, &command_buffer);
+                read(&color, 4)
+            };
+            // The pipelines made, finished, failed to finish and waited for unfinished.
+            let moved = |before: &crate::Metrics, after: &crate::Metrics| {
+                (
+                    after.pipelines_created - before.pipelines_created,
+                    after.finished_pipelines - before.finished_pipelines,
+                    after.failed_finishes - before.failed_finishes,
+                    after.first_use_unfinished_waits - before.first_use_unfinished_waits,
+                )
+            };
+            // Every answer of the state.
+            let answers = |state: &RenderPipelineState| {
+                (
+                    state.precision_notes(),
+                    state.texture_accesses(crate::Stage::Vertex),
+                    state.texture_accesses(crate::Stage::Fragment),
+                    state.imageblock_sample_length().ok(),
+                    state
+                        .imageblock_memory_length_for_dimensions([8, 4, 3])
+                        .ok(),
+                    state.support_indirect_command_buffers(),
+                )
+            };
+
+            let before = counters.metrics();
+            let state = unfinished(name, &device, &d);
+            let answered = counters.metrics();
+            assert_eq!(
+                moved(&before, &answered),
+                (0, 0, 0, 0),
+                "{name}: no pipeline at the answer"
+            );
+            let early = answers(&state);
+            assert_eq!(
+                state.imageblock_sample_length().ok(),
+                Some(4),
+                "{name}: Metal's answer"
+            );
+            state.finish_pipeline().expect("finished");
+            assert_eq!(
+                answers(&state),
+                early,
+                "{name}: every answer is the same before the finish and after it"
+            );
+            let finished_at = counters.metrics();
+            assert_eq!(
+                moved(&answered, &finished_at),
+                (1, 1, 0, 0),
+                "{name}: the triangle class's pipeline, made after the answer"
+            );
+            assert!(
+                finished_at.finished_pipeline_nanos > answered.finished_pipeline_nanos,
+                "{name}: the finish's time"
+            );
+            state.finish_pipeline().expect("finished again");
+            assert_eq!(drawn(&state), want, "{name}: the finished state's texels");
+            let after = counters.metrics();
+            assert_eq!(
+                (moved(&finished_at, &after), after.first_use_waits),
+                ((0, 0, 0, 0), finished_at.first_use_waits),
+                "{name}: a second finish and a draw make nothing and wait for nothing"
+            );
+
+            let before = counters.metrics();
+            let never = unfinished(name, &device, &blended);
+            assert_eq!(drawn(&never), want, "{name}: the unfinished state's texels");
+            let drawn_at = counters.metrics();
+            assert_eq!(
+                moved(&before, &drawn_at),
+                (1, 0, 0, 1),
+                "{name}: the draw made the unfinished pipeline and waited for it"
+            );
+            never.finish_pipeline().expect("finished after the draw");
+            assert_eq!(
+                moved(&drawn_at, &counters.metrics()),
+                (0, 0, 0, 0),
+                "{name}: a finish after the draw makes nothing"
+            );
+            println!(
+                "{name}: answered with no pipeline made; finished after the answer in {} ns; an \
+                 unfinished state's draw made its pipeline in {} ns",
+                finished_at.finished_pipeline_nanos - answered.finished_pipeline_nanos,
+                drawn_at.first_use_unfinished_wait_nanos - before.first_use_unfinished_wait_nanos,
+            );
         });
     }
 
@@ -859,10 +1003,10 @@ pub(crate) mod on_device {
     /// Points of `[[point_size]]` 4 (`rt6_point`, one at the target's centre) cover the 4 by 4
     /// pixels whose centres their square holds; the first draw of points makes the content's
     /// point pipeline, a first-use wait, and a second makes nothing. A state whose descriptor
-    /// names the point class makes its point pipeline with the state, and draws a point of a
-    /// function without `[[point_size]]` (`colored_vertex`) 1 pixel wide, its first draw making
-    /// and waiting for nothing. Under no class such points rasterize nothing, as Metal's, and a
-    /// triangle drawn after them in the encoder draws through its scissor again.
+    /// names the point class makes its point pipeline at its finish_pipeline, and draws a point
+    /// of a function without `[[point_size]]` (`colored_vertex`) 1 pixel wide, its first draw
+    /// making and waiting for nothing. Under no class such points rasterize nothing, as
+    /// Metal's, and a triangle drawn after them in the encoder draws through its scissor again.
     #[test]
     fn every_device_draws_points_at_their_size_and_a_point_class_s_at_1() {
         use metal2vulkan::metal::PrimitiveTopologyClass;

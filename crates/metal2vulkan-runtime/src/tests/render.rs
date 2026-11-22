@@ -86,9 +86,10 @@ mod on_device {
         d
     }
 
+    /// The state of `d` on `device`, its main pipelines then finished, as a consumer finishes
+    /// them once it has answered.
     fn state(name: &str, device: &Device, d: &RenderPipelineDescriptor) -> RenderPipelineState {
-        (device.new_render_pipeline_state(d, crate::tests::no_constexpr_samplers))
-            .unwrap_or_else(|error| panic!("{name}: {error}"))
+        crate::tests::draw::on_device::state(name, device, d)
     }
 
     /// Whether two states share their compiled content.

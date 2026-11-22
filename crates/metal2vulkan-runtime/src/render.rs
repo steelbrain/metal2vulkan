@@ -26,8 +26,8 @@
 //! baked, and a layout whose stride is set per bind (`MTLBufferLayoutStrideDynamic`), which the
 //! replay streams' never are, is refused. A draw under the depth clip mode `Clamp` or the triangle
 //! fill mode `Lines` takes a `VkPipeline` of its class made for that raster state, by the first
-//! such draw of the content, which waits for it, as a draw of a class not made with the content
-//! does: Metal sets both per encoder and compiles nothing for them. The fill mode is a triangle's
+//! such draw of the content, which waits for it, as a draw of a class not made yet does: Metal
+//! sets both per encoder and compiles nothing for them. The fill mode is a triangle's
 //! alone, in Metal and in Vulkan, so the line and point classes take the clip mode alone.
 //!
 //! What a draw supplies is the content's [`Draws`]: each function's slots with their accesses,
@@ -38,12 +38,15 @@
 //!
 //! A descriptor names no topology class unless it sets `inputPrimitiveTopology`, and the replay
 //! streams' never do, while nearly every content draws only triangles (527 of the 537 contents
-//! gb and b2 draw). So the triangle class's `VkPipeline` is made with the state, where Metal
-//! compiles, and so is the line or the point class's where the descriptor names that class;
-//! otherwise each comes with the draws, made by the first draw of lines or of points, as only a
-//! draw gives the class (one `VkPipeline` for several classes would need a dynamic topology across
-//! classes, which Vulkan 1.3 does not give). The cost: a content drawn only as lines or points
-//! makes a triangle `VkPipeline` it never uses (8 contents of the 537).
+//! gb and b2 draw). So the triangle class's `VkPipeline` is the content's main one, which Metal
+//! compiles with the state, and so is the line or the point class's where the descriptor names
+//! that class; otherwise each comes with the draws, made by the first draw of lines or of points,
+//! as only a draw gives the class (one `VkPipeline` for several classes would need a dynamic
+//! topology across classes, which Vulkan 1.3 does not give). The cost: a content drawn only as
+//! lines or points makes a triangle `VkPipeline` it never uses (8 contents of the 537). The state's
+//! make does everything up to the driver's create of the main ones and answers; the consumer's
+//! [`RenderPipelineState::finish_pipeline`] call makes them after, on a thread of its own, or else
+//! the first draw that needs each, which waits for it ([`Main`]).
 //!
 //! A point's size is the `PointSize` the vertex module writes: the function's `[[point_size]]`,
 //! at most Metal's 511 pixels, or 1.0 for a function without one, which the device draws with
@@ -59,7 +62,7 @@
 //! which a draw of lines records (`RenderCommandEncoder::LINE_NOTE`).
 //!
 //! A content whose vertex function is post-tessellation draws patches alone, so its one
-//! `VkPipeline` is the patch class's, made with the state: the translator's synthesized vertex and
+//! `VkPipeline` is the patch class's, its main one: the translator's synthesized vertex and
 //! control stages, the function as the evaluation stage, and a `PATCH_LIST` of one control point
 //! per patch. Its control stage reads each patch's factors through their address, which a draw
 //! pushes ([`FieldValue::TessellationFactors`]); the evaluation stage reaches its control points'
@@ -68,7 +71,7 @@
 //! the replay streams' states never use, are refused ([`RenderPipelineKind::Tessellation`]).
 
 use crate::cache::{self, Lowerings};
-use crate::counters::{FirstUse, Gauge, Metric};
+use crate::counters::{Counters, FirstUse, Gauge, Metric};
 use crate::device::{lock, Core};
 use crate::error::{Error, Gap, Refusal, RenderPipelineKind, StageGap};
 use crate::hazard::Access;
@@ -93,7 +96,7 @@ use metal2vulkan::pipeline::{
 };
 use metal2vulkan::Budget;
 use std::ffi::CString;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError};
 
 /// `MTLRenderPipelineState`.
 ///
@@ -214,13 +217,18 @@ pub(crate) struct RenderCompiled {
     stages: Vec<Module>,
     /// The fixed-function state every `VkPipeline` of the content takes.
     fixed: Fixed,
-    /// The `VkPipeline` made with the content: the triangle class's, or a post-tessellation vertex
+    /// The content's main `VkPipeline`: the triangle class's, or a post-tessellation vertex
     /// function's patch class's, its only class, at the default [`Raster`].
-    primary: vk::Pipeline,
-    /// The content's other `VkPipeline`s, each by its class's list topology and its raster state:
-    /// the line or the point class's at the default raster state, made with the content where its
-    /// descriptor names that class, and every other, made by the first draw that takes it. At most
-    /// 7: the triangle or patch class's three other raster states, and two of each other class.
+    primary: Main,
+    /// The line or the point class's `VkPipeline` at the default raster state, by its list
+    /// topology, a main one too, where the descriptor names that class
+    /// (`inputPrimitiveTopology`).
+    named: Option<(vk::PrimitiveTopology, Main)>,
+    /// The content's other `VkPipeline`s, each by its class's list topology and its raster state,
+    /// each made by the first draw that takes it: the line and the point class's at the default
+    /// raster state where the descriptor names neither, and those under other raster states. At
+    /// most 7: the triangle or patch class's three other raster states, and two of each other
+    /// class.
     later: Mutex<Vec<(vk::PrimitiveTopology, Raster, vk::Pipeline)>>,
     /// Whether a draw of points rasterizes them: the vertex function writes `[[point_size]]`, or
     /// the descriptor names the point class, under which Metal draws a point of a function that
@@ -261,6 +269,100 @@ pub(crate) struct Raster {
     pub(crate) clamp: bool,
     /// `MTLTriangleFillModeLines`: `polygonMode` `LINE`.
     pub(crate) lines: bool,
+}
+
+/// One of a content's main `VkPipeline`s ([`RenderCompiled::primary`],
+/// [`RenderCompiled::named`]): made by a state's [`RenderPipelineState::finish_pipeline`] call,
+/// or by the first draw that needs it, which waits for a make in flight. It is made by one thread
+/// at a time; a make that failed keeps nothing, and the next call or draw makes it again.
+#[derive(Default)]
+pub(crate) struct Main {
+    /// The pipeline once made, which a draw reads with no lock.
+    made: OnceLock<vk::Pipeline>,
+    /// Whether a thread is making it.
+    making: Mutex<bool>,
+    /// Signalled when a make ends, made or failed: a draw waiting for it looks again.
+    ended: Condvar,
+}
+
+/// A make of a [`Main`] in flight: when it ends, made or not, panicking included, the cell is no
+/// longer being made, and the draws waiting for it wake.
+struct Making<'a>(&'a Main);
+
+impl Drop for Making<'_> {
+    fn drop(&mut self) {
+        *lock(&self.0.making) = false;
+        self.0.ended.notify_all();
+    }
+}
+
+impl Main {
+    /// The pipeline, where it is made.
+    fn get(&self) -> Option<vk::Pipeline> {
+        self.made.get().copied()
+    }
+
+    /// Makes the pipeline with `make` on the calling thread, where it is neither made nor being
+    /// made: its nanoseconds where this made it, none where it did not need to, or the make's
+    /// error, which keeps nothing.
+    pub(crate) fn make_ahead(
+        &self,
+        make: impl FnOnce() -> Result<vk::Pipeline, Error>,
+    ) -> Result<Option<u64>, Error> {
+        if self.made.get().is_some() {
+            return Ok(None);
+        }
+        let mut making = lock(&self.making);
+        if *making || self.made.get().is_some() {
+            return Ok(None);
+        }
+        *making = true;
+        drop(making);
+        let began = host_time();
+        self.make(make)?;
+        Ok(Some(host_time().saturating_sub(began)))
+    }
+
+    /// The pipeline: read with no lock where it is made; else waited for where another thread is
+    /// making it, and made with `make` on the calling thread where none is or that make failed. A
+    /// call that did not find it made is a first-use wait ([`FirstUse::Unfinished`]).
+    pub(crate) fn pipeline(
+        &self,
+        counters: &Counters,
+        make: impl FnOnce() -> Result<vk::Pipeline, Error>,
+    ) -> Result<vk::Pipeline, Error> {
+        if let Some(pipeline) = self.get() {
+            return Ok(pipeline);
+        }
+        let began = host_time();
+        let mut making = lock(&self.making);
+        while *making {
+            making = (self.ended.wait(making)).unwrap_or_else(PoisonError::into_inner);
+        }
+        let made = self.get();
+        if made.is_none() {
+            *making = true;
+        }
+        drop(making);
+        let pipeline = match made {
+            Some(pipeline) => pipeline,
+            None => self.make(make)?,
+        };
+        counters.first_use_wait(FirstUse::Unfinished, host_time().saturating_sub(began));
+        Ok(pipeline)
+    }
+
+    /// Runs `make`, the cell marked as being made by the caller, and keeps what it made.
+    fn make(
+        &self,
+        make: impl FnOnce() -> Result<vk::Pipeline, Error>,
+    ) -> Result<vk::Pipeline, Error> {
+        let _making = Making(self);
+        let pipeline = make()?;
+        // Only the thread that marked the cell sets it, and it was empty when marked.
+        let _ = self.made.set(pipeline);
+        Ok(pipeline)
+    }
 }
 
 /// The next content's [`RenderCompiled::id`].
@@ -364,17 +466,19 @@ impl crate::Device {
     /// contents used, compute and render together) costs the translator's key of the descriptor,
     /// which reads no function, and a lookup. For a
     /// content the device does not hold, the translator lowers each function on the calling
-    /// thread, which waits for it, within its 20-second budget per lowering, and the content's
-    /// triangle-class `VkPipeline` is made here. Where the device has a cache directory
-    /// ([`DeviceOptions::pipeline_cache_dir`]), a lowering a device made before is read from it in
-    /// place of lowering again, and each `VkPipeline` is made through the pipeline data kept for
-    /// it there; a content a device made before is read by its record there, kept under the
-    /// translator's key of the descriptor, which names its two lowerings, so its functions are
-    /// neither decoded nor specialized
-    /// ([`Metrics::render_records_read`](crate::Metrics::render_records_read)). The line class's
-    /// `VkPipeline` is made here too where the descriptor's `inputPrimitiveTopology` names that
-    /// class, and otherwise comes with the draws. The `completionHandler:` forms are not built (no
-    /// replay stream calls them).
+    /// thread, which waits for it, within its 20-second budget per lowering, and its shader
+    /// modules are made here. The call answers before the driver's create of the content's main
+    /// `VkPipeline`s, the triangle class's, and the line or the point class's where the
+    /// descriptor's `inputPrimitiveTopology` names that class, which the consumer's
+    /// [`finish_pipeline`](RenderPipelineState::finish_pipeline) call makes after it, on a thread
+    /// of its own, or else the first draw that needs each; any other class's comes with the draws.
+    /// Where the device has a cache directory ([`DeviceOptions::pipeline_cache_dir`]), a lowering
+    /// a device made before is read from it in place of lowering again, and each `VkPipeline` is
+    /// made through the pipeline data kept for it there; a content a device made before is read
+    /// by its record there, kept under the translator's key of the descriptor, which names its two
+    /// lowerings, so its functions are neither decoded nor specialized
+    /// ([`Metrics::render_records_read`](crate::Metrics::render_records_read)). The
+    /// `completionHandler:` forms are not built (no replay stream calls them).
     ///
     /// [`DeviceOptions::pipeline_cache_dir`]: crate::DeviceOptions::pipeline_cache_dir
     ///
@@ -401,7 +505,8 @@ impl crate::Device {
     /// [`Refusal::PointSizeTopology`] for a vertex function that writes `[[point_size]]` under
     /// the line or the triangle class; [`Refusal::SamplerIds`] where `sampler_ids` answers another
     /// count; [`Refusal::IndicesNotGranted`] for a constexpr sampler's index;
-    /// [`Limit::DeviceSamplers`](crate::Limit::DeviceSamplers); [`Error::Vulkan`].
+    /// [`Limit::DeviceSamplers`](crate::Limit::DeviceSamplers); [`Error::Vulkan`] where a shader
+    /// module cannot be made.
     pub fn new_render_pipeline_state(
         &self,
         descriptor: &RenderPipelineDescriptor,
@@ -996,7 +1101,7 @@ fn recorded(
 
 impl RenderCompiled {
     /// The translation of `lowered`, a descriptor whose `Function` stages are lowered
-    /// ([`lower_stages`], [`recorded`]), with its triangle-class `VkPipeline`.
+    /// ([`lower_stages`], [`recorded`]), with its shader modules and no `VkPipeline` made.
     fn of(
         core: &Arc<Core>,
         lowered: &RenderPipelineDescriptor,
@@ -1103,11 +1208,19 @@ impl RenderCompiled {
         // sample is its colors alone.
         let colors = (lowered.color_attachments).map(|color| color.map(|c| c.pixel_format));
         let imageblock_sample = metal2vulkan::metal::format::imageblock_sample_length(&colors);
-        let mut compiled = RenderCompiled {
+        // A descriptor that names the line or the point class (`inputPrimitiveTopology`) gives
+        // that class's key: its `VkPipeline` is a main one too, made as the primary class's is.
+        let named = match (draws.patches, lowered.input_primitive_topology) {
+            (false, PrimitiveTopologyClass::Line) => Some(vk::PrimitiveTopology::LINE_LIST),
+            (false, PrimitiveTopologyClass::Point) => Some(vk::PrimitiveTopology::POINT_LIST),
+            _ => None,
+        };
+        Ok(RenderCompiled {
             core: Arc::clone(core),
             stages,
             fixed: Fixed::of(&pipeline),
-            primary: vk::Pipeline::null(),
+            primary: Main::default(),
+            named: named.map(|list| (list, Main::default())),
             later: Mutex::new(Vec::new()),
             rasterizes_points: pipeline.graphics.writes_point_size
                 || lowered.input_primitive_topology == PrimitiveTopologyClass::Point,
@@ -1119,25 +1232,34 @@ impl RenderCompiled {
             samples,
             indirect: lowered.support_indirect_command_buffers,
             id: CONTENT_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-        };
-        // Made whole before the `VkPipeline`, so dropping it releases what was made.
-        let class = match compiled.draws.patches {
-            true => vk::PrimitiveTopology::PATCH_LIST,
-            false => vk::PrimitiveTopology::TRIANGLE_LIST,
-        };
-        compiled.primary = compiled.make(class, Raster::default())?;
-        // A descriptor that names the line or the point class (`inputPrimitiveTopology`) gives
-        // that class's key: its `VkPipeline` is made here too, and its draws wait for none.
-        let named = match lowered.input_primitive_topology {
-            PrimitiveTopologyClass::Line => Some(vk::PrimitiveTopology::LINE_LIST),
-            PrimitiveTopologyClass::Point => Some(vk::PrimitiveTopology::POINT_LIST),
-            _ => None,
-        };
-        if let (false, Some(list)) = (compiled.draws.patches, named) {
-            let made = compiled.make(list, Raster::default())?;
-            lock(&compiled.later).push((list, Raster::default(), made));
+        })
+    }
+
+    /// Makes the content's main `VkPipeline`s on the calling thread where they are neither made
+    /// nor being made ([`RenderPipelineState::finish_pipeline`]): the primary class's, then the
+    /// named class's, each counted as made, both tried where the first fails. Err: the first
+    /// make's error, the call counted as failed.
+    fn finish(&self) -> Result<(), Error> {
+        let primary = (
+            self.class(vk::PrimitiveTopology::TRIANGLE_LIST),
+            &self.primary,
+        );
+        let named = (self.named.as_ref()).map(|(list, named)| (*list, named));
+        let mut failed = None;
+        for (class, main) in std::iter::once(primary).chain(named) {
+            match main.make_ahead(|| self.make(class, Raster::default())) {
+                Ok(Some(nanos)) => self.core.counters.finished(nanos),
+                Ok(None) => {}
+                Err(error) => failed = failed.or(Some(error)),
+            }
         }
-        Ok(compiled)
+        match failed {
+            Some(error) => {
+                self.core.counters.finish_failed();
+                Err(error)
+            }
+            None => Ok(()),
+        }
     }
 
     /// The list topology of `topology`'s class, which its `VkPipeline` is made with: a
@@ -1167,9 +1289,10 @@ impl RenderCompiled {
     /// The `VkPipeline` of the content for draws of `topology`'s class, a point, line or triangle
     /// one, or for a post-tessellation vertex function's content the patch one, which the encoder
     /// draws alone with it, under `raster`, whose fill mode a line or point class does not take:
-    /// one the content was not made with is made by its first draw, which waits for it, a
-    /// first-use wait ([`Metrics::first_use_waits`](crate::Metrics::first_use_waits)), counted as
-    /// the line or point class's at the default raster state and as a raster state's otherwise.
+    /// one not made yet is made by its first draw, which waits for it, or for the make in flight
+    /// of a main one, a first-use wait ([`Metrics::first_use_waits`](crate::Metrics::first_use_waits)),
+    /// counted as a main pipeline's before its `finish_pipeline` made it, as the line or point
+    /// class's at the default raster state, and as a raster state's otherwise.
     ///
     /// Err: [`Error::Vulkan`] where the pipeline cannot be made.
     pub(crate) fn pipeline(
@@ -1184,8 +1307,14 @@ impl RenderCompiled {
             clamp: raster.clamp,
             lines: raster.lines && polygons,
         };
+        let counters = &self.core.counters;
         if polygons && raster == Raster::default() {
-            return Ok(self.primary);
+            return (self.primary).pipeline(counters, || self.make(class, raster));
+        }
+        if let Some((list, named)) = &self.named {
+            if (*list, raster) == (class, Raster::default()) {
+                return named.pipeline(counters, || self.make(class, raster));
+            }
         }
         let mut later = lock(&self.later);
         if let Some(&(.., made)) = (later.iter()).find(|&&(c, r, _)| (c, r) == (class, raster)) {
@@ -1350,6 +1479,38 @@ fn release(core: &Core, stages: &[Module]) {
 }
 
 impl RenderPipelineState {
+    /// No Metal counterpart: makes the state's main `VkPipeline`s on the calling thread, through
+    /// the device's pipeline cache, once the state's creation has answered. Metal compiles a
+    /// render state when the state is made. Here the creation does everything up to the driver's
+    /// create (the lowerings, every refusal and Metal's own errors, the shader modules and the
+    /// samplers' numbering) and answers, and this call runs the driver's create, so a consumer
+    /// can answer the program before the driver's compile ends and let that compile overlap the
+    /// program's own work. The runtime starts no thread for it: the consumer calls it on a thread
+    /// of its own after it has answered.
+    ///
+    /// The main pipelines are the triangle class's (a post-tessellation vertex function's patch
+    /// class's, its only class) and, where the descriptor's `inputPrimitiveTopology` names the
+    /// line or the point class, that class's, each at the default depth clip and fill modes. Each
+    /// is made where it is neither made nor being made, so a second call makes nothing. A draw
+    /// that needs one first waits for the make in flight, or makes it itself where none is: a
+    /// first-use wait
+    /// ([`Metrics::first_use_unfinished_waits`](crate::Metrics::first_use_unfinished_waits)),
+    /// after which it records what it records with the pipeline made here. So a state this is
+    /// never called for draws as one it was called for, its first draw making the pipeline.
+    ///
+    /// Counted as [`Metrics::finished_pipelines`](crate::Metrics::finished_pipelines), with their
+    /// time.
+    ///
+    /// Err: [`Error::Vulkan`] where a driver's create failed, which Metal would have answered at
+    /// the creation (Vulkan lets it fail for exhausted host or device memory, or with
+    /// `VK_ERROR_UNKNOWN` or `VK_ERROR_VALIDATION_FAILED`), counted in
+    /// [`Metrics::failed_finishes`](crate::Metrics::failed_finishes), the other main pipeline
+    /// still made: the failed one is not kept, the first draw that needs it makes it again, and
+    /// that draw answers the driver's error where that make fails too.
+    pub fn finish_pipeline(&self) -> Result<(), Error> {
+        self.inner.compiled.finish()
+    }
+
     /// No Metal counterpart: the translator's notes of where this pipeline's answers may differ
     /// from Metal's, of its modules ([`PrecisionNote`]), and
     /// [`PrecisionNote::SwizzledOpaqueBlackBorder`] where a function samples through a constexpr
@@ -1444,12 +1605,12 @@ impl Drop for RenderCompiled {
         // No state holds it, so no command buffer that used it is left: each kept its state until
         // it retired.
         self.core.counters.fall(Gauge::RenderContents);
+        // Only what was made: a main pipeline no call or draw made, or whose make failed, is none.
+        let named = (self.named.iter()).filter_map(|(_, named)| named.get());
         let later = self.later.get_mut().unwrap_or_else(|e| e.into_inner());
         let later = later.iter().map(|&(.., pipeline)| pipeline);
-        for pipeline in std::iter::once(self.primary).chain(later) {
-            if pipeline != vk::Pipeline::null() {
-                (self.core.reaper).give(Job::Free(Free::Pipeline(pipeline)));
-            }
+        for pipeline in (self.primary.get().into_iter()).chain(named).chain(later) {
+            (self.core.reaper).give(Job::Free(Free::Pipeline(pipeline)));
         }
         release(&self.core, &self.stages);
     }

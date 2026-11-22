@@ -1722,14 +1722,17 @@ impl NewRuntime {
     }
 
     /// A compute pipeline state of `kernel`, its numbered constexpr samplers at indices of their
-    /// own, the same words at one index.
+    /// own, the same words at one index, its main pipeline then finished, as a consumer finishes
+    /// it once it has answered.
     fn compute_pipeline_state(
         &mut self,
         descriptor: &rt::ComputePipelineDescriptor,
     ) -> Result<rt::ComputePipelineState, rt::Error> {
-        self.numbered(|device, ids| {
+        let state = self.numbered(|device, ids| {
             device.new_compute_pipeline_state(descriptor, |samplers| ids(samplers))
-        })
+        })?;
+        state.finish_pipeline()?;
+        Ok(state)
     }
 
     /// The pipeline state `make` makes on the device with `ids`, which gives each numbered
@@ -3052,6 +3055,12 @@ impl Backend for NewRuntime {
             ),
             ("made_ahead_variants", metrics.made_ahead_variants),
             ("made_ahead_variant_nanos", metrics.made_ahead_variant_nanos),
+            (
+                "first_use_unfinished_waits",
+                metrics.first_use_unfinished_waits,
+            ),
+            ("finished_pipelines", metrics.finished_pipelines),
+            ("failed_finishes", metrics.failed_finishes),
             (
                 "partial_variant_whole_grids",
                 metrics.partial_variant_whole_grids,

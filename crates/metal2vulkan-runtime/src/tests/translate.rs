@@ -1,6 +1,6 @@
 //! Translated kernels, under a device cfg on every device of the cfg's kind. A kernel that does not
 //! observe its threadgroup partition runs every direct dispatch in tiles of 256 threads on the one
-//! `VkPipeline` made with its state, and an indirect dispatch at its own threadgroup size; a
+//! `VkPipeline` its finish_pipeline makes, and an indirect dispatch at its own threadgroup size; a
 //! precise one answers the same words in a tile as at the app's shape. A kernel that does observe it runs whole grids at
 //! their own size, a `dispatchThreads` grid that is not a whole number of threadgroups on its
 //! partial-threadgroups variant, and a threadgroup count past the device's limit split; one whose
@@ -76,9 +76,22 @@ mod on_device {
         )))
     }
 
-    /// The state of `descriptor` on `device`, printing what the translator gave where it is
-    /// refused: the plain module, and for a `Function` kernel its partial-threadgroups variant.
+    /// The state of `descriptor` on `device`, its main pipeline then finished, as a consumer
+    /// finishes it once it has answered; printing what the translator gave where it is refused:
+    /// the plain module, and for a `Function` kernel its partial-threadgroups variant.
     fn state(
+        name: &str,
+        device: &Device,
+        descriptor: &ComputePipelineDescriptor,
+    ) -> ComputePipelineState {
+        let state = unfinished(name, device, descriptor);
+        (state.finish_pipeline()).unwrap_or_else(|error| panic!("{name}: finished: {error}"));
+        state
+    }
+
+    /// The state of `descriptor` on `device`, its main pipeline not made yet, printing what the
+    /// translator gave where it is refused, as [`state`] does.
+    fn unfinished(
         name: &str,
         device: &Device,
         descriptor: &ComputePipelineDescriptor,
@@ -301,7 +314,7 @@ mod on_device {
             assert_eq!(
                 created.pipelines_created - made.pipelines_created,
                 1,
-                "{name}: the tiles' pipeline, made with the state"
+                "{name}: the tiles' pipeline, made by finish_pipeline"
             );
             assert_eq!(created.first_use_waits, made.first_use_waits, "{name}");
             let queue = device.new_command_queue(4).expect("a queue");
@@ -808,10 +821,11 @@ mod on_device {
     }
 
     /// Each make of a kernel's `VkPipeline` is kept in the device's counters with its key and who
-    /// started it: a tiling kernel's tiles by the state's creation, a size `prepare_dispatch` was
-    /// given by that call, and a size only a dispatch gives by the dispatch, a first-use wait
-    /// counted on the make. Each key is the one `dispatch_variant` answers for the dispatch, and
-    /// the first-use waits the dispatch added are the waits its make counts.
+    /// started it: a tiling kernel's tiles by its state's `finish_pipeline`, a size
+    /// `prepare_dispatch` was given by that call, and a size only a dispatch gives by the
+    /// dispatch, a first-use wait counted on the make. Each key is the one `dispatch_variant`
+    /// answers for the dispatch, and the first-use waits the dispatch added are the waits its make
+    /// counts.
     #[test]
     fn every_device_keeps_each_variant_make_with_its_key_and_who_started_it() {
         use crate::{Counters, Dispatch, VariantMake, VariantStart};
@@ -843,7 +857,7 @@ mod on_device {
                 .map(|(variant, _)| variant);
             assert_eq!(
                 (Some(make.variant), make.start, make.waits, make.first_wait),
-                (key, VariantStart::State, 0, 0),
+                (key, VariantStart::Finish, 0, 0),
                 "{name}: the state's tiles"
             );
 
@@ -894,6 +908,256 @@ mod on_device {
                 "{name}: the wait began before the make: {make:?}"
             );
             println!("{name}: variant makes kept: the state's, prepare_dispatch's, a first use's");
+        });
+    }
+
+    /// A state answers before its main pipeline is made: its creation makes no `VkPipeline` and
+    /// answers what Metal's state answers, the tiles' key answered not made; every answer but
+    /// that one bit is the same after the finish as before it. Its
+    /// `finish_pipeline` makes that pipeline after the answer, counted as finished and kept as a
+    /// make the call started, a second call makes nothing, and a dispatch then waits for nothing.
+    /// A state of another content that is never finished is dispatched all the same: the dispatch
+    /// makes its main pipeline, a first-use wait on an unfinished pipeline, and a
+    /// `finish_pipeline` after it makes nothing.
+    #[test]
+    fn every_device_answers_a_state_before_its_main_pipeline_is_made() {
+        use crate::{Dispatch, Metrics, VariantStart};
+
+        let Some(descriptor) = descriptor("a1_bool_from_float") else {
+            return;
+        };
+        // Another content of the same kernel: a required size is part of a content's key.
+        let mut required = descriptor.clone();
+        required.required_threads_per_threadgroup = Some([GROUP, 1, 1]);
+        each_device("compute_answered_early", |name, _, device| {
+            let counters = device.counters();
+            let mut buffers = Buffers::new(&device, 64 * 1024);
+            let slots: Vec<Buffer> = (0..3).map(|_| buffers.buffer(8 * 1024)).collect();
+            let queue = device.new_command_queue(4).expect("a queue");
+            let dispatch = |state: &ComputePipelineState| {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(state).expect("a state");
+                for (index, slot) in (0..).zip(&slots) {
+                    encoder.set_buffer(Some(slot), 0, index).expect("a buffer");
+                }
+                encoder
+                    .dispatch_threads([WIDE, 1, 1], [GROUP, 1, 1])
+                    .expect("a dispatch");
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+            };
+            // The pipelines made, finished, failed to finish and waited for unfinished.
+            let moved = |before: &Metrics, after: &Metrics| {
+                (
+                    after.pipelines_created - before.pipelines_created,
+                    after.finished_pipelines - before.finished_pipelines,
+                    after.failed_finishes - before.failed_finishes,
+                    after.first_use_unfinished_waits - before.first_use_unfinished_waits,
+                )
+            };
+            let tiles = |state: &ComputePipelineState| {
+                state.dispatch_variant(Dispatch::Threads([WIDE, 1, 1]), [GROUP, 1, 1], &[])
+            };
+            // Every answer of the state, `dispatch_variant`'s key among them but not whether its
+            // pipeline is made.
+            let answers = |state: &ComputePipelineState| {
+                (
+                    state.max_total_threads_per_threadgroup(),
+                    state.static_threadgroup_memory_length(),
+                    state.thread_execution_width(),
+                    state
+                        .imageblock_memory_length_for_dimensions([8, 4, 3])
+                        .ok(),
+                    state.required_threads_per_threadgroup(),
+                    state.support_indirect_command_buffers(),
+                    state.texture_accesses(),
+                    state.buffer_accesses(),
+                    state.precision_notes(),
+                    tiles(state).map(|(key, _)| key),
+                )
+            };
+
+            let before = counters.metrics();
+            let state = unfinished(name, &device, &descriptor);
+            let answered = counters.metrics();
+            assert_eq!(
+                moved(&before, &answered),
+                (0, 0, 0, 0),
+                "{name}: no pipeline at the answer"
+            );
+            let early = answers(&state);
+            assert_eq!(state.thread_execution_width(), 32, "{name}: Metal's answer");
+            assert!(state.max_total_threads_per_threadgroup() > 0, "{name}");
+            let (key, made) = tiles(&state).expect("the tiles' key");
+            assert!(
+                !made,
+                "{name}: the tiles' pipeline is not made at the answer"
+            );
+            state.finish_pipeline().expect("finished");
+            assert_eq!(
+                answers(&state),
+                early,
+                "{name}: every answer is the same before the finish and after it"
+            );
+            let finished_at = counters.metrics();
+            assert_eq!(
+                moved(&answered, &finished_at),
+                (1, 1, 0, 0),
+                "{name}: the main pipeline, made after the answer"
+            );
+            assert!(
+                finished_at.finished_pipeline_nanos > answered.finished_pipeline_nanos,
+                "{name}: the finish's time"
+            );
+            let make = *(counters.variant_makes(0).last()).expect("a make kept");
+            assert_eq!(
+                (make.variant, make.start, make.made, make.waits),
+                (key, VariantStart::Finish, true, 0),
+                "{name}: the finish's make"
+            );
+            assert_eq!(tiles(&state), Some((key, true)), "{name}: made");
+            state.finish_pipeline().expect("finished again");
+            dispatch(&state);
+            assert_eq!(
+                moved(&finished_at, &counters.metrics()),
+                (0, 0, 0, 0),
+                "{name}: a second finish and a dispatch make nothing"
+            );
+            assert_eq!(
+                counters.metrics().first_use_waits,
+                finished_at.first_use_waits,
+                "{name}: the dispatch waited for nothing"
+            );
+
+            let before = counters.metrics();
+            let never = unfinished(name, &device, &required);
+            dispatch(&never);
+            let dispatched = counters.metrics();
+            assert_eq!(
+                moved(&before, &dispatched),
+                (1, 0, 0, 1),
+                "{name}: the dispatch made the unfinished pipeline and waited for it"
+            );
+            assert!(
+                dispatched.first_use_unfinished_wait_nanos > before.first_use_unfinished_wait_nanos,
+                "{name}: the wait's time"
+            );
+            never
+                .finish_pipeline()
+                .expect("finished after the dispatch");
+            assert_eq!(
+                moved(&dispatched, &counters.metrics()),
+                (0, 0, 0, 0),
+                "{name}: a finish after the dispatch makes nothing"
+            );
+            println!(
+                "{name}: answered with no pipeline made; finished after the answer in {} ns; \
+                 an unfinished state's dispatch made its pipeline in {} ns",
+                finished_at.finished_pipeline_nanos - answered.finished_pipeline_nanos,
+                dispatched.first_use_unfinished_wait_nanos - before.first_use_unfinished_wait_nanos,
+            );
+        });
+    }
+
+    /// A state's main pipeline is made once, whichever of its `finish_pipeline` and a
+    /// `prepare_dispatch` call for its key comes first: a preparation after the finish makes no
+    /// second `VkPipeline`, a finish after a preparation that made it makes nothing, and the two
+    /// called at once on threads of their own make one between them, the later returning at once
+    /// while the earlier makes it. So a consumer that reads `dispatch_variant`'s `made` false and
+    /// prepares costs no second driver create.
+    #[test]
+    fn every_device_makes_a_state_s_main_pipeline_once_across_its_finish_and_a_preparation() {
+        use crate::{Dispatch, Metrics};
+        use std::sync::Barrier;
+        use std::thread;
+
+        let Some(descriptor) = descriptor("a1_bool_from_float") else {
+            return;
+        };
+        // Contents of one kernel, a required size being part of a content's key, so that each
+        // order starts from a state whose main pipeline no other state made.
+        let sized = |size: u32| {
+            let mut sized = descriptor.clone();
+            sized.required_threads_per_threadgroup = Some([size, 1, 1]);
+            sized
+        };
+        let (prepared_first, at_once) = (sized(GROUP), sized(GROUP / 2));
+        each_device("compute_finish_and_prepare", |name, _, device| {
+            let counters = device.counters();
+            // The pipelines made, and the makes the finish and the preparation counted.
+            let moved = |before: &Metrics, after: &Metrics| {
+                (
+                    after.pipelines_created - before.pipelines_created,
+                    after.finished_pipelines - before.finished_pipelines,
+                    after.made_ahead_variants - before.made_ahead_variants,
+                )
+            };
+            // A preparation of a direct dispatch, which runs the tiles, the main pipeline.
+            let prepare = |state: &ComputePipelineState, size: u32| {
+                (state.prepare_dispatch(Dispatch::Threads([WIDE, 1, 1]), [size, 1, 1], &[]))
+                    .expect("prepared");
+            };
+
+            let state = unfinished(name, &device, &descriptor);
+            state.finish_pipeline().expect("finished");
+            let finished_at = counters.metrics();
+            prepare(&state, GROUP);
+            assert_eq!(
+                moved(&finished_at, &counters.metrics()),
+                (0, 0, 0),
+                "{name}: a preparation after the finish makes nothing"
+            );
+
+            let state = unfinished(name, &device, &prepared_first);
+            let before = counters.metrics();
+            prepare(&state, GROUP);
+            let prepared = counters.metrics();
+            assert_eq!(
+                moved(&before, &prepared),
+                (1, 0, 1),
+                "{name}: the preparation made the main pipeline"
+            );
+            state.finish_pipeline().expect("finished");
+            assert_eq!(
+                moved(&prepared, &counters.metrics()),
+                (0, 0, 0),
+                "{name}: a finish after the preparation makes nothing"
+            );
+
+            let state = unfinished(name, &device, &at_once);
+            let before = counters.metrics();
+            let start = Barrier::new(2);
+            thread::scope(|scope| {
+                let finishing = scope.spawn(|| {
+                    start.wait();
+                    state.finish_pipeline()
+                });
+                start.wait();
+                prepare(&state, GROUP / 2);
+                (finishing.join())
+                    .expect("the finishing thread")
+                    .expect("finished");
+            });
+            let (created, finished, ahead) = moved(&before, &counters.metrics());
+            assert_eq!(
+                (created, finished + ahead),
+                (1, 1),
+                "{name}: one make between a finish and a preparation at once"
+            );
+            println!(
+                "{name}: one main pipeline each: finish then prepare, prepare then finish, and \
+                 both at once (made by the {})",
+                if finished == 1 {
+                    "finish"
+                } else {
+                    "preparation"
+                }
+            );
         });
     }
 
@@ -3046,7 +3310,7 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
             assert_eq!(
                 created.pipelines_created - made.pipelines_created,
                 1,
-                "{name}: the tiles' pipeline, made with the state"
+                "{name}: the tiles' pipeline, made by finish_pipeline"
             );
             assert_eq!(
                 created.first_use_waits, made.first_use_waits,
@@ -3119,7 +3383,7 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
             );
             println!(
                 "{name}: row cells checked in 32 x 2, 64 x 8, 512 x 1, 64 x 4, 48 x 1 and 16 x 4 on \
-                 the tiles' pipeline, made with the state"
+                 the tiles' pipeline, made by finish_pipeline"
             );
         });
     }
@@ -3158,7 +3422,7 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
                     created.translations - made.translations,
                 ),
                 (0, 1),
-                "{name}: no pipeline made with the state, and the variant alone lowered"
+                "{name}: no pipeline made by finish_pipeline, and the variant alone lowered"
             );
             let queue = device.new_command_queue(4).expect("a queue");
             let run = |state: &ComputePipelineState, grid: [u32; 3], size: [u32; 3]| {
@@ -3269,7 +3533,7 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
             println!(
                 "{name}: row barrier reads checked in 512 x 4 and 512 x 3 in 32 x 2 and 96 x 5 in \
                  32 x 4, at their own size on the partial variant; declared bound 64: whole and \
-                 ragged grids' pipeline made with the state"
+                 ragged grids' pipeline made by finish_pipeline"
             );
         });
     }
@@ -3306,7 +3570,7 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
             assert_eq!(
                 created.pipelines_created - made.pipelines_created,
                 1,
-                "{name}: the whole and ragged grids' pipeline, made with the state"
+                "{name}: the whole and ragged grids' pipeline, made by finish_pipeline"
             );
             let queue = device.new_command_queue(4).expect("a queue");
             for threads in [128, 100] {
@@ -3343,7 +3607,7 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
                  whole one on the partial variant"
             );
             println!(
-                "{name}: declared bound 64: 128 x 1 and 100 x 1 in 64 x 1 made with the state, \
+                "{name}: declared bound 64: 128 x 1 and 100 x 1 in 64 x 1 made by finish_pipeline, \
                  both on the partial variant"
             );
         });
@@ -3928,7 +4192,7 @@ $REGION_META!4 = !{i32 $OUT, !"air.buffer", !"air.location_index", i32 0, i32 1,
                     assert_eq!(
                         made.pipelines_created - before.pipelines_created,
                         1,
-                        "{name}: {kernel}: the plain module's pipeline, made with the state"
+                        "{name}: {kernel}: the plain module's pipeline, made by finish_pipeline"
                     );
                 }
                 let queue = device.new_command_queue(4).expect("a queue");

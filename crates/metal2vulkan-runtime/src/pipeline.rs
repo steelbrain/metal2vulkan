@@ -37,20 +37,24 @@
 //! size, whose last SIMD group may be partly filled, as Metal runs it; that variant is lowered
 //! with the state too.
 //!
-//! What a state's make is given is made at the make, as Metal compiles a state when it is made:
-//! every module ([`Lowered`] holds each variant's: a shader module, or a module past the stage
-//! bound's words), and each `VkPipeline` whose key the descriptor holds (a tiling kernel's
-//! tiles, an image-only kernel's square workgroups, and an observing kernel's at the
+//! What a state's make is given is made at the make, as Metal compiles a state when it is made,
+//! up to the driver's create: every module ([`Lowered`] holds each variant's: a shader module, or
+//! a module past the stage bound's words), with every refusal. The make then answers, and the
+//! one `VkPipeline` whose key the descriptor holds, the content's main pipeline (a tiling
+//! kernel's tiles, an image-only kernel's square workgroups, and an observing kernel's at the
 //! descriptor's `requiredThreadsPerThreadgroup`, or, with none, at `[N, 1, 1]` for the bound `N`
-//! of threads its state declares). Nothing the runtime records
-//! depends on when a compile finishes: an encoding call whose `VkPipeline` is not made yet makes
-//! it and waits for it, then records, so there is one recorded form. Each such wait is a
+//! of threads its state declares), is made by the consumer's
+//! [`ComputePipelineState::finish_pipeline`] call on a thread of its own, so the driver's
+//! compile overlaps the program's work; a kernel past the stage bound makes it at the make, so
+//! that the stage bound's refusal is the make's. Nothing the runtime records depends on when a
+//! compile finishes: an encoding call whose `VkPipeline` is not made yet makes it, or waits for
+//! the make in flight, then records, so there is one recorded form. Each such wait is a
 //! first-use wait, counted with its time
 //! ([`Metrics::first_use_waits`](crate::Metrics::first_use_waits)). No translation runs after the
 //! make. Each make of a `VkPipeline` is kept in the device's counters as it ends
-//! ([`Counters::variant_makes`]): its key, who started it (the state's make, a
-//! [`ComputePipelineState::prepare_dispatch`] call or a first use) and the first-use waits that
-//! waited for it.
+//! ([`Counters::variant_makes`]): its key, who started it (a `finish_pipeline` call, the state's
+//! make, a [`ComputePipelineState::prepare_dispatch`] call or a first use) and the first-use
+//! waits that waited for it.
 
 use crate::arrays::BINDINGS;
 use crate::cache;
@@ -183,6 +187,10 @@ pub(crate) struct Compiled {
     notes: Vec<PrecisionNote>,
     /// What Metal's state answers of the content, beside its threads.
     answers: Answers,
+    /// The key of the content's main pipeline ([`Compiled::main_key`]), which a state's
+    /// [`ComputePipelineState::finish_pipeline`] makes, or its creation for a kernel past the
+    /// stage bound; none where its descriptor holds no key of a `VkPipeline`.
+    main: Option<DispatchVariant>,
 }
 
 /// What Metal's compute state answers of a content beside its threads, from its whole module's
@@ -831,23 +839,27 @@ impl crate::Device {
     /// content the device does not hold, the translator compiles the kernel on the calling
     /// thread, which waits for it, within the translator's 20-second budget per lowering: a
     /// kernel that does not observe its threadgroup partition as its partial-threadgroups
-    /// variant, whose 256-wide tile's `VkPipeline`, or an image-only kernel's 16x16 workgroups'
-    /// one, is made here too, and one that does as its partial-threadgroups variant, which its
-    /// dispatches run, and its plain module too only where the variant's predicated walk takes a
-    /// vote word of threadgroup memory the plain module does not and the kernel takes a
-    /// threadgroup memory length from the encoder, or its own memory with the word is past the
-    /// device's `maxComputeSharedMemorySize`. It is made with the one `VkPipeline` its
-    /// dispatches run, whole grids, ragged and indirect ones (the plain module's where the
+    /// variant, whose main pipeline is its 256-wide tile's `VkPipeline`, or an image-only
+    /// kernel's 16x16 workgroups' one, and one that does as its partial-threadgroups variant,
+    /// which its dispatches run, and its plain module too only where the variant's predicated
+    /// walk takes a vote word of threadgroup memory the plain module does not and the kernel
+    /// takes a threadgroup memory length from the encoder, or its own memory with the word is
+    /// past the device's `maxComputeSharedMemorySize`. Its main pipeline is the one `VkPipeline`
+    /// its dispatches run, whole grids, ragged and indirect ones (the plain module's where the
     /// variant's threadgroup memory, the vote word with it, is past the device's), at the
     /// descriptor's `requiredThreadsPerThreadgroup` where it sets one, or else at `[N, 1, 1]`
     /// where the state declares a bound of threads (the descriptor's
     /// `maxTotalThreadsPerThreadgroup`, or the kernel's
     /// `[[max_total_threads_per_threadgroup(n)]]`), `N` the state's
-    /// `maxTotalThreadsPerThreadgroup`, and the kernel takes no threadgroup memory length from
+    /// `maxTotalThreadsPerThreadgroup`, where the kernel takes no threadgroup memory length from
     /// the encoder. A kernel whose tier runs only whole SIMD groups has its
     /// emulated-SIMD-group variant lowered here too. The translator answers whether the kernel
     /// observes its partition without lowering, where the cache directory holds no lowering of
-    /// the variant to answer it. Where the device has a cache directory
+    /// the variant to answer it. The call makes every shader module and answers before the
+    /// driver's create of the main pipeline, which the consumer's
+    /// [`finish_pipeline`](ComputePipelineState::finish_pipeline) call makes after it, on a
+    /// thread of its own, or else the first dispatch that runs it; a kernel past the stage bound
+    /// makes its main pipeline here (Err below). Where the device has a cache directory
     /// ([`DeviceOptions::pipeline_cache_dir`]), a lowering a device made before is read from it
     /// in place of lowering again, and every `VkPipeline` is made through the pipeline cache it
     /// keeps there. The content's other `VkPipeline`s, of a threadgroup size and threadgroup
@@ -880,7 +892,11 @@ impl crate::Device {
     /// `supportIndirectCommandBuffers`; [`Gap::KernelInput`] for a kernel that
     /// reads what the compute encoder does not supply yet; [`Refusal::SamplerIds`] where
     /// `sampler_ids` answers another count; [`Refusal::IndicesNotGranted`] for a constexpr
-    /// sampler's index; [`Limit::DeviceSamplers`](crate::Limit::DeviceSamplers); [`Error::Vulkan`].
+    /// sampler's index; [`Limit::DeviceSamplers`](crate::Limit::DeviceSamplers);
+    /// [`Error::StageUnfilled`], whose request the consumer's helper fills before it makes the
+    /// state again ([`Device::fill_stage`](crate::Device::fill_stage)), or [`Gap::StageSize`], for
+    /// the main pipeline of a kernel past the stage bound; [`Error::Vulkan`] where a shader module
+    /// cannot be made.
     pub fn new_compute_pipeline_state(
         &self,
         descriptor: &ComputePipelineDescriptor,
@@ -1105,55 +1121,57 @@ impl Compiled {
             required_threads_per_threadgroup: required.unwrap_or([0; 3]),
             ..answers
         };
-        let compiled = Compiled::new(core, whole, form, emulated, (notes, answers));
-        // A tiling kernel's grids one deep run on one `VkPipeline`, made with the state: its
-        // tiles', or an image-only kernel's square workgroups'.
-        let first = match &compiled.form {
-            Form::Tiled => Some((&compiled.whole, Module::Tiles, [GRID_TILE_THREADS, 1, 1])),
-            Form::Square => Some((&compiled.whole, Module::Whole, SQUARE)),
-            Form::Sized { .. } => None,
-        };
-        if let Some((kernel, module, size)) = first {
-            let lengths = Lengths::zeros(kernel.interface.threadgroups.len());
-            let variant = compiled.dispatch_key(module, size, lengths);
-            let more = lock(&kernel.variants.more);
-            kernel.make_pending(&compiled.core, more, variant, VariantStart::State, None)?;
-        }
-        // An observing kernel at the size its state gives: the descriptor's
-        // `requiredThreadsPerThreadgroup`, the size its dispatches give, or, with none, `[N, 1, 1]`
-        // where the state declares a bound of threads, `N` its `maxTotalThreadsPerThreadgroup`.
-        // The bound is declared by the descriptor's `maxTotalThreadsPerThreadgroup`, or by the
-        // kernel's `[[max_total_threads_per_threadgroup(n)]]`, which alone brings Metal's answer
-        // below its 1024; the device's own limit is no declared bound. The `VkPipeline` its
-        // dispatches of that size run is made, where the module takes no threadgroup memory length
-        // from the encoder: the partial-threadgroups variant's, which runs whole grids, ragged and
-        // indirect ones alike, or the whole module's where the content has no such variant or the
-        // variant's threadgroup memory, a predicated walk's vote word with it, is past the
-        // device's (`encoder::decide`). A make that fails here is made again by the dispatch that
-        // needs it, which reports its own error; a make refused for the stage bound refuses the
-        // state's, which the consumer's helper then fills.
-        let interface = &compiled.whole.interface;
-        let declared = descriptor.max_total_threads_per_threadgroup.is_some()
-            || interface.metal_max_total_threads < METAL_MAX_THREADS;
-        let bound = declared.then_some([interface.max_total_threads, 1, 1]);
-        if let (Form::Sized { .. }, Some(size)) = (&compiled.form, required.or(bound)) {
-            let found = compiled.dispatched(Dispatch::Threadgroups([1; 3]), size, &[]);
-            if let Some((kernel, module, local, lengths)) = found {
-                if kernel.interface.threadgroups.is_empty() {
-                    let variant = compiled.dispatch_key(module, local, lengths);
-                    let made = kernel.make_ahead(&compiled.core, variant, VariantStart::State);
-                    match made {
-                        Err(error) if past_stage_bound(&error) => return Err(error),
-                        Ok(_) | Err(_) => {}
-                    }
-                }
+        let mut compiled = Compiled::new(core, whole, form, emulated, (notes, answers));
+        compiled.main = compiled.main_key(descriptor);
+        // A kernel past the stage bound makes its main pipeline here, so that a make the stage
+        // bound refuses refuses the state's, which the consumer's helper then fills. Every other
+        // error of the make is the dispatch's that makes it again, as a failed
+        // `finish_pipeline`'s is.
+        let main = compiled.main_kernel();
+        if let Some((kernel, variant)) = main.filter(|(kernel, _)| kernel.is_heavy()) {
+            match kernel.make_ahead(&compiled.core, variant, VariantStart::State) {
+                Err(error) if past_stage_bound(&error) => return Err(error),
+                Ok(_) | Err(_) => {}
             }
         }
         Ok(compiled)
     }
 
+    /// The key of the content's main pipeline, the one `VkPipeline` whose key its descriptor
+    /// holds, where it has one: a tiling kernel's tiles, or an image-only kernel's square
+    /// workgroups, which its grids one deep run; for an observing kernel, the one its dispatches
+    /// at the size its state gives run: the descriptor's `requiredThreadsPerThreadgroup`, the
+    /// size its dispatches give, or, with none, `[N, 1, 1]` where the state declares a bound of
+    /// threads, `N` its `maxTotalThreadsPerThreadgroup`. The bound is declared by the
+    /// descriptor's `maxTotalThreadsPerThreadgroup`, or by the kernel's
+    /// `[[max_total_threads_per_threadgroup(n)]]`, which alone brings Metal's answer below its
+    /// 1024; the device's own limit is no declared bound. Its dispatches of that size run the
+    /// partial-threadgroups variant's, which runs whole grids, ragged and indirect ones alike, or
+    /// the whole module's where the content has no such variant or the variant's threadgroup
+    /// memory, a predicated walk's vote word with it, is past the device's (`encoder::decide`);
+    /// none where the module takes a threadgroup memory length from the encoder.
+    fn main_key(&self, descriptor: &ComputePipelineDescriptor) -> Option<DispatchVariant> {
+        let (module, size) = match &self.form {
+            Form::Tiled => (Module::Tiles, [GRID_TILE_THREADS, 1, 1]),
+            Form::Square => (Module::Whole, SQUARE),
+            Form::Sized { .. } => {
+                let interface = &self.whole.interface;
+                let declared = descriptor.max_total_threads_per_threadgroup.is_some()
+                    || interface.metal_max_total_threads < METAL_MAX_THREADS;
+                let bound = declared.then_some([interface.max_total_threads, 1, 1]);
+                let size = descriptor.required_threads_per_threadgroup.or(bound)?;
+                let dispatch = Dispatch::Threadgroups([1; 3]);
+                let (kernel, module, local, lengths) = self.dispatched(dispatch, size, &[])?;
+                return (kernel.interface.threadgroups.is_empty())
+                    .then(|| self.dispatch_key(module, local, lengths));
+            }
+        };
+        let lengths = Lengths::zeros(self.whole.interface.threadgroups.len());
+        Some(self.dispatch_key(module, size, lengths))
+    }
+
     /// The content of `whole`, its form, emulated variant, notes and Metal's answers, counted
-    /// live.
+    /// live, with no main pipeline.
     fn new(
         core: Arc<Core>,
         whole: Kernel,
@@ -1170,6 +1188,7 @@ impl Compiled {
             emulated,
             notes,
             answers,
+            main: None,
         }
     }
 }
@@ -1765,13 +1784,65 @@ pub(crate) fn access(used: AccessSet) -> Access {
 }
 
 impl ComputePipelineState {
+    /// No Metal counterpart: makes the state's main `VkPipeline` on the calling thread, through
+    /// the device's pipeline cache, once the state's creation has answered. Metal compiles a
+    /// compute state whole when the state is made. Here the creation does everything up to the
+    /// driver's create (every lowering, every refusal and Metal's own errors, the shader modules
+    /// and the samplers' numbering) and answers, and this call runs the driver's create, so a
+    /// consumer can answer the program before the driver's compile ends and let that compile
+    /// overlap the program's own work. The runtime starts no thread for it: the consumer calls it
+    /// on a thread of its own after it has answered.
+    ///
+    /// The main pipeline is the one whose key the descriptor holds: a tiling kernel's tiles', an
+    /// image-only kernel's square workgroups', or an observing kernel's at the descriptor's
+    /// `requiredThreadsPerThreadgroup` or its declared bound of threads where the kernel takes no
+    /// threadgroup memory length from the encoder
+    /// ([`new_compute_pipeline_state`](crate::Device::new_compute_pipeline_state)). A state with
+    /// none makes nothing here. A kernel past the stage bound makes its main pipeline at the
+    /// creation, so that the stage bound's refusal is the creation's, and makes nothing here.
+    ///
+    /// It returns at once where the pipeline is made, or another thread is making it, so a
+    /// second call makes nothing. A dispatch that needs the pipeline first waits for the make in
+    /// flight, or makes it itself where none is: a first-use wait
+    /// ([`Metrics::first_use_unfinished_waits`](crate::Metrics::first_use_unfinished_waits)),
+    /// after which it records what it records with the pipeline made here. So a state this is
+    /// never called for runs as one it was called for, its first dispatch making the pipeline.
+    ///
+    /// Counted as [`Metrics::finished_pipelines`](crate::Metrics::finished_pipelines), with their
+    /// time.
+    ///
+    /// Err: [`Error::Vulkan`] where the driver's create failed, which Metal would have answered
+    /// at the creation (Vulkan lets it fail for exhausted host or device memory, or with
+    /// `VK_ERROR_UNKNOWN` or `VK_ERROR_VALIDATION_FAILED`), counted in
+    /// [`Metrics::failed_finishes`](crate::Metrics::failed_finishes): the pipeline is not kept,
+    /// the first dispatch that needs it makes it again, and that dispatch answers the driver's
+    /// error where that make fails too.
+    pub fn finish_pipeline(&self) -> Result<(), Error> {
+        let compiled = &self.inner.compiled;
+        let core = &compiled.core;
+        let main = compiled.main_kernel();
+        let Some((kernel, variant)) = main.filter(|(kernel, _)| !kernel.is_heavy()) else {
+            return Ok(());
+        };
+        match kernel.make_ahead(core, variant, VariantStart::Finish) {
+            Ok(Some(nanos)) => core.counters.finished(nanos),
+            Ok(None) => {}
+            Err(error) => {
+                core.counters.finish_failed();
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
     /// Makes ahead, on the calling thread, what a dispatch of this state makes at its first use,
     /// so that the dispatch finds it made. Metal has no counterpart: this is a hook for a
     /// consumer's pre-pass. Metal compiles a compute state whole when the state is made, and so
-    /// does the state's make here, every variant included; but a kernel's `VkPipeline` depends
-    /// on the threadgroup size and the threadgroup memory lengths, which arrive with the
-    /// dispatch. A consumer that reads a command buffer's dispatches before it encodes them may
-    /// call this for each, in their order, on threads of its own; the runtime starts none.
+    /// does the state's make here, every variant included, with its main pipeline made by
+    /// [`finish_pipeline`](Self::finish_pipeline); but a kernel's `VkPipeline` depends on the
+    /// threadgroup size and the threadgroup memory lengths, which arrive with the dispatch. A
+    /// consumer that reads a command buffer's dispatches before it encodes them may call this for
+    /// each, in their order, on threads of its own; the runtime starts none.
     ///
     /// `dispatch` and `threads_per_threadgroup` are the dispatch's own arguments, as the program
     /// passed them to [`dispatch_threads`](crate::ComputeCommandEncoder::dispatch_threads),
@@ -1832,7 +1903,9 @@ impl ComputePipelineState {
     /// read from the kernel's first eight variants with no lock, and past them under the short
     /// lock of the kernel's list, which no make holds while the driver compiles. It may answer
     /// false for a key whose make ends after the read, and never answers true for a key not
-    /// made.
+    /// made. That bit is no answer of Metal's and moves as makes end: a state's main pipeline
+    /// reads false until its [`finish_pipeline`](Self::finish_pipeline), a `prepare_dispatch`
+    /// call or a dispatch has made it. The key does not move.
     ///
     /// None where the dispatch would refuse its threadgroup size, its variant or its threadgroup
     /// memory, or records nothing (a grid with no threads, a kernel that writes no memory): where
@@ -2046,6 +2119,47 @@ impl Compiled {
         }
     }
 
+    /// The kernel whose module a dispatch of `module` runs, where the content has it made: the
+    /// content's own for its whole module and its tiles, else its variant's.
+    fn kernel_of(&self, module: Module) -> Option<&Kernel> {
+        let which = match module {
+            Module::Whole | Module::Tiles => return Some(&self.whole),
+            Module::Partial => Which::Partial,
+            Module::Emulated => Which::Emulated,
+        };
+        if let (
+            Which::Partial,
+            Form::Sized {
+                partial: Partial::Alone,
+            },
+        ) = (which, &self.form)
+        {
+            return Some(&self.whole);
+        }
+        match self.variant(which)? {
+            Lowered::Made(kernel, _) => Some(&**kernel),
+            Lowered::Refused
+            | Lowered::Translation(_)
+            | Lowered::Unsupplied(_)
+            | Lowered::Failed(_) => None,
+        }
+    }
+
+    /// The content's main pipeline's kernel and key, where it has one ([`Compiled::main`]).
+    fn main_kernel(&self) -> Option<(&Kernel, DispatchVariant)> {
+        let variant = self.main?;
+        Some((self.kernel_of(variant.module)?, variant))
+    }
+
+    /// Where a first use of `variant` waits ([`FirstUse`]): the content's main pipeline's
+    /// ([`FirstUse::Unfinished`]), or a variant's no state of the content has run.
+    pub(crate) fn first_use(&self, variant: DispatchVariant) -> FirstUse {
+        match self.main == Some(variant) {
+            true => FirstUse::Unfinished,
+            false => FirstUse::Variant,
+        }
+    }
+
     /// The key of the dispatches that run `module` at workgroup size `local` with threadgroup
     /// memory `lengths`: its [`DispatchVariant`].
     pub(crate) fn dispatch_key(
@@ -2160,15 +2274,23 @@ impl Kernel {
         matches!(self.code, Code::Module(_))
     }
 
+    /// Whether the kernel is past the stage bound: each of its `VkPipeline`s is made from its
+    /// helper's cache data alone ([`Code::Heavy`]).
+    fn is_heavy(&self) -> bool {
+        matches!(self.code, Code::Heavy(_))
+    }
+
     /// The `VkPipeline` of `variant`, made now where it is not yet: the calling thread waits for
-    /// it, a first-use wait, so what is recorded never depends on when a compile finishes. Where
-    /// another thread is making it, the call waits for that make, also a first-use wait counted in
-    /// that make's [`VariantMake::waits`], and makes it itself where that one failed. One of the
-    /// kernel's first [`VARIANT_CELLS`] variants is found with no lock.
+    /// it, a first-use wait at `site` ([`Compiled::first_use`]), so what is recorded never
+    /// depends on when a compile finishes. Where another thread is making it, the call waits for
+    /// that make, also a first-use wait counted in that make's [`VariantMake::waits`], and makes
+    /// it itself where that one failed. One of the kernel's first [`VARIANT_CELLS`] variants is
+    /// found with no lock.
     pub(crate) fn pipeline(
         &self,
         core: &Core,
         variant: DispatchVariant,
+        site: FirstUse,
     ) -> Result<vk::Pipeline, Error> {
         let variants = &self.variants;
         let key = variant.key();
@@ -2176,10 +2298,8 @@ impl Kernel {
             return Ok(pipeline);
         }
         let began = host_time();
-        let waited = |core: &Core| {
-            core.counters
-                .first_use_wait(FirstUse::Variant, host_time().saturating_sub(began))
-        };
+        let waited =
+            |core: &Core| (core.counters).first_use_wait(site, host_time().saturating_sub(began));
         let mut more = lock(&variants.more);
         let mut waits = false;
         loop {

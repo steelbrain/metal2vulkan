@@ -56,15 +56,19 @@ mod on_device {
         }
     }
 
+    /// The state of `f`, its main pipeline then finished, as a consumer finishes it once it has
+    /// answered.
     fn pipeline(name: &str, device: &Device, library: &Library, f: &str) -> ComputePipelineState {
         let source = StageSource::Function(FunctionDescriptor::new(
             library.function(f).expect("the function"),
         ));
-        (device.new_compute_pipeline_state(
+        let state = (device.new_compute_pipeline_state(
             &ComputePipelineDescriptor::new(source),
             crate::tests::no_constexpr_samplers,
         ))
-        .unwrap_or_else(|error| panic!("{name}: {f}: {error}"))
+        .unwrap_or_else(|error| panic!("{name}: {f}: {error}"));
+        (state.finish_pipeline()).unwrap_or_else(|error| panic!("{name}: {f}: {error}"));
+        state
     }
 
     /// The form `state` runs a direct dispatch in.
@@ -351,10 +355,10 @@ mod on_device {
 
     /// `ComputePipelineState::dispatch_variant` keys the dispatches of `tiles_mark`, a tiling
     /// kernel, by the `VkPipeline` each runs: every direct dispatch, whatever its grid, its call
-    /// and its threadgroup size, runs the kernel's tiles, the pipeline made with the state, so
-    /// they share one key and prepared they make nothing; an indirect dispatch runs the whole
-    /// module at its own size, without tiles, one key and one pipeline for each size. The state's
-    /// creation and the preparations make one pipeline for each key.
+    /// and its threadgroup size, runs the kernel's tiles, the main pipeline its finish_pipeline
+    /// makes, so they share one key and prepared they make nothing; an indirect dispatch runs
+    /// the whole module at its own size, without tiles, one key and one pipeline for each size.
+    /// The state's finish_pipeline and the preparations make one pipeline for each key.
     #[test]
     fn every_device_keys_a_tiling_kernel_s_dispatches_by_the_pipeline_they_run() {
         use crate::Dispatch;
@@ -402,7 +406,7 @@ mod on_device {
                     after.made_ahead_variants - made.made_ahead_variants,
                 ),
                 (pipelines.len() as u64, pipelines.len() as u64 - 1),
-                "{name}: one pipeline for each key, the tiles' made with the state"
+                "{name}: one pipeline for each key, the tiles' made by finish_pipeline"
             );
             println!(
                 "dispatch tiles variant: {name}: {} dispatches, {} keys",
@@ -417,7 +421,7 @@ mod on_device {
     /// runs, the whole module at that size, though Metal requires every dispatch of the state to
     /// give it. The indirect dispatch's pipeline is made at its first use: here the
     /// `prepare_dispatch` call, which makes one. This pins the gap as it is; a make that makes the
-    /// indirect pipeline with the state turns its first `made` true and fails here.
+    /// indirect pipeline with the main one turns its first `made` true and fails here.
     #[test]
     fn every_device_makes_a_tiling_kernel_s_indirect_pipeline_at_its_required_size_at_first_use() {
         use crate::Dispatch;
@@ -435,6 +439,7 @@ mod on_device {
             let state = (device
                 .new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers))
             .unwrap_or_else(|error| panic!("{name}: {error}"));
+            state.finish_pipeline().expect("finished");
             assert_eq!(form(&state), "tiled", "{name}: the form");
             let made = |dispatch: Dispatch| {
                 (state.dispatch_variant(dispatch, REQUIRED, &[]))
@@ -443,11 +448,11 @@ mod on_device {
             };
             assert!(
                 made(Dispatch::Threadgroups([9, 5, 1])),
-                "{name}: the tiles' pipeline, made with the state"
+                "{name}: the tiles' pipeline, made by finish_pipeline"
             );
             assert!(
                 !made(Dispatch::Indirect),
-                "{name}: the indirect dispatch's pipeline, made with the state"
+                "{name}: the indirect dispatch's pipeline, not made by finish_pipeline"
             );
             let counters = device.counters();
             let before = counters.metrics();
@@ -459,7 +464,7 @@ mod on_device {
             );
             assert!(made(Dispatch::Indirect), "{name}: made");
             println!(
-                "dispatch tiles required: {name}: tiles made with the state, the indirect \
+                "dispatch tiles required: {name}: tiles made by finish_pipeline, the indirect \
                  dispatch's at {REQUIRED:?} at its first use"
             );
         });

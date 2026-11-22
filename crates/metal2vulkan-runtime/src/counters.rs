@@ -128,7 +128,13 @@ pub(crate) enum FirstUse {
     /// A render content's pipeline for the depth clip mode `Clamp` or the triangle fill mode
     /// `Lines`, at its first draw under them ([`Metrics::first_use_raster_waits`]).
     Raster,
+    /// A state's main pipeline, which its `finish_pipeline` makes, met by a dispatch or a draw
+    /// before that make ended ([`Metrics::first_use_unfinished_waits`]).
+    Unfinished,
 }
+
+/// The number of [`FirstUse`] sites.
+const FIRST_USE_SITES: usize = FirstUse::Unfinished as usize + 1;
 
 /// The variant makes [`Counters::variant_makes`] keeps: the last this many to end.
 pub(crate) const VARIANT_MAKES: usize = 256;
@@ -137,9 +143,15 @@ pub(crate) const VARIANT_MAKES: usize = 256;
 /// [`DispatchVariant`] ([`VariantMake::start`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum VariantStart {
-    /// The state's creation, at a size it knows: a tiling kernel's tiles, an image-only kernel's
-    /// square workgroups, or an observing kernel's `requiredThreadsPerThreadgroup`.
+    /// The state's creation: the main pipeline of a kernel past the stage bound, which the
+    /// creation makes so that the stage bound's refusal is the creation's
+    /// ([`ComputePipelineState::finish_pipeline`](crate::ComputePipelineState::finish_pipeline)).
     State,
+    /// A [`finish_pipeline`](crate::ComputePipelineState::finish_pipeline) call: the state's main
+    /// pipeline, at a size its creation knows (a tiling kernel's tiles, an image-only kernel's
+    /// square workgroups, or an observing kernel's `requiredThreadsPerThreadgroup` or declared
+    /// bound of threads).
+    Finish,
     /// A [`prepare_dispatch`](crate::ComputePipelineState::prepare_dispatch) call, ahead of the
     /// dispatches that run it.
     Ahead,
@@ -631,9 +643,13 @@ struct Atomics {
     first_use_wait_nanos: AtomicU64,
     first_use_wait_max_nanos: AtomicU64,
     /// Each [`FirstUse`] site's waits, at its index: their count, total and longest nanoseconds.
-    first_use_sites: [[AtomicU64; 3]; 4],
+    first_use_sites: [[AtomicU64; 3]; FIRST_USE_SITES],
     /// The makes ahead of a dispatch: their count and total nanoseconds.
     made_ahead: [AtomicU64; 2],
+    /// The pipelines `finish_pipeline` calls made: their count and total nanoseconds.
+    finished: [AtomicU64; 2],
+    /// [`Metrics::failed_finishes`].
+    failed_finishes: AtomicU64,
     /// [`Counters::variant_makes`].
     variant_makes: Mutex<VariantMakes>,
     blocks_made: AtomicU64,
@@ -924,6 +940,19 @@ impl Counters {
         let [count, total] = &self.atomics.made_ahead;
         count.fetch_add(1, Relaxed);
         total.fetch_add(nanos, Relaxed);
+    }
+
+    /// One more pipeline a `finish_pipeline` call made, for `nanos` nanoseconds
+    /// ([`Metrics::finished_pipelines`]).
+    pub(crate) fn finished(&self, nanos: u64) {
+        let [count, total] = &self.atomics.finished;
+        count.fetch_add(1, Relaxed);
+        total.fetch_add(nanos, Relaxed);
+    }
+
+    /// One more `finish_pipeline` call whose make failed ([`Metrics::failed_finishes`]).
+    pub(crate) fn finish_failed(&self) {
+        self.atomics.failed_finishes.fetch_add(1, Relaxed);
     }
 
     /// One more ended variant make, `make` of its number: kept, and the oldest kept dropped past
@@ -1570,14 +1599,16 @@ impl Counters {
         };
         let first_use =
             |site: FirstUse| (a.first_use_sites[site as usize].each_ref()).map(|n| n.load(Relaxed));
-        let [variant, lines, points, raster] = [
+        let [variant, lines, points, raster, unfinished] = [
             FirstUse::Variant,
             FirstUse::Lines,
             FirstUse::Points,
             FirstUse::Raster,
+            FirstUse::Unfinished,
         ]
         .map(first_use);
         let made_ahead = (a.made_ahead.each_ref()).map(|n| n.load(Relaxed));
+        let finished = (a.finished.each_ref()).map(|n| n.load(Relaxed));
         let part = |part: Part| {
             let [count, bytes, total, _, over_1, over_5, over_20] = &a.parts[part as usize];
             let longest =
@@ -1655,8 +1686,14 @@ impl Counters {
             first_use_raster_waits: raster[0],
             first_use_raster_wait_nanos: raster[1],
             first_use_raster_wait_max_nanos: raster[2],
+            first_use_unfinished_waits: unfinished[0],
+            first_use_unfinished_wait_nanos: unfinished[1],
+            first_use_unfinished_wait_max_nanos: unfinished[2],
             made_ahead_variants: made_ahead[0],
             made_ahead_variant_nanos: made_ahead[1],
+            finished_pipelines: finished[0],
+            finished_pipeline_nanos: finished[1],
+            failed_finishes: a.failed_finishes.load(Relaxed),
             blocks_made: a.blocks_made.load(Relaxed),
             block_bytes_made: a.block_bytes_made.load(Relaxed),
             consumer_allocations: a.consumer_allocations.load(Relaxed),
@@ -2077,8 +2114,10 @@ pub struct Metrics {
     /// counted in [`barriers`](Self::barriers).
     pub texture_clear_barriers: u64,
     /// `VkPipeline`s created, each counted as its `vkCreateComputePipelines` or
-    /// `vkCreateGraphicsPipelines` call returns it: one a state's creation makes for a content the
-    /// device does not hold, or one a first use makes
+    /// `vkCreateGraphicsPipelines` call returns it: a state's main pipeline, which its
+    /// `finish_pipeline` makes for a content the device does not hold
+    /// ([`finished_pipelines`](Self::finished_pipelines)), or its creation for a kernel past the
+    /// stage bound, one a `prepare_dispatch` call makes, or one a first use makes
     /// ([`first_use_waits`](Self::first_use_waits)). A state of a content the device holds makes
     /// none, a call still inside the driver is not counted yet, and one that failed is not counted.
     pub pipelines_created: u64,
@@ -2090,8 +2129,10 @@ pub struct Metrics {
     /// First-use waits: encoding calls that waited while the `VkPipeline` they needed was made,
     /// for a workgroup size (a threadgroup size, or the tile of an image-only kernel's grid more
     /// than one deep) or threadgroup memory lengths no state of the kernel's content had run with
-    /// before, or for a render content's first draw of lines or of points, or under the depth
-    /// clip mode `Clamp` or the triangle fill mode `Lines`.
+    /// before, for a render content's first draw of lines or of points, or under the depth
+    /// clip mode `Clamp` or the triangle fill mode `Lines`, or for a state's main pipeline
+    /// before its `finish_pipeline` had made it
+    /// ([`first_use_unfinished_waits`](Self::first_use_unfinished_waits)).
     pub first_use_waits: u64,
     /// The nanoseconds of [`host_time`](crate::host_time) the first-use waits took, in total.
     pub first_use_wait_nanos: u64,
@@ -2133,12 +2174,44 @@ pub struct Metrics {
     /// The longest of the [`first_use_raster_waits`](Self::first_use_raster_waits), in
     /// nanoseconds; a maximum since the device was made.
     pub first_use_raster_wait_max_nanos: u64,
+    /// Of the [`first_use_waits`](Self::first_use_waits), those for a state's main pipeline (the
+    /// one its `finish_pipeline` makes:
+    /// [`ComputePipelineState::finish_pipeline`](crate::ComputePipelineState::finish_pipeline),
+    /// [`RenderPipelineState::finish_pipeline`](crate::RenderPipelineState::finish_pipeline)),
+    /// met by a dispatch or a draw before a make of it had ended: one that waited for a
+    /// `finish_pipeline` call still in the driver, or that made the pipeline itself where no call
+    /// had made it, or where the call's make had failed.
+    pub first_use_unfinished_waits: u64,
+    /// The nanoseconds of the [`first_use_unfinished_waits`](Self::first_use_unfinished_waits),
+    /// in total.
+    pub first_use_unfinished_wait_nanos: u64,
+    /// The longest of the [`first_use_unfinished_waits`](Self::first_use_unfinished_waits), in
+    /// nanoseconds; a maximum since the device was made.
+    pub first_use_unfinished_wait_max_nanos: u64,
     /// The compute kernels' pipelines that
     /// [`prepare_dispatch`](crate::ComputePipelineState::prepare_dispatch) made on its caller's
     /// thread, ahead of the dispatches that run them (`vkCreateComputePipelines`).
     pub made_ahead_variants: u64,
     /// The nanoseconds of the [`made_ahead_variants`](Self::made_ahead_variants), in total.
     pub made_ahead_variant_nanos: u64,
+    /// The states' main pipelines that `finish_pipeline` calls made on their callers' threads,
+    /// after the state's creation answered
+    /// ([`ComputePipelineState::finish_pipeline`](crate::ComputePipelineState::finish_pipeline),
+    /// [`RenderPipelineState::finish_pipeline`](crate::RenderPipelineState::finish_pipeline)):
+    /// the driver's side of a state's make, which a consumer reads beside the creation's own time
+    /// (the translation's is [`translation_nanos`](Self::translation_nanos)).
+    pub finished_pipelines: u64,
+    /// The nanoseconds of [`host_time`](crate::host_time) the
+    /// [`finished_pipelines`](Self::finished_pipelines) took, in total, each from its entry as
+    /// being made to its end, its `vkCreateComputePipelines` or `vkCreateGraphicsPipelines` call
+    /// within it.
+    pub finished_pipeline_nanos: u64,
+    /// `finish_pipeline` calls whose make failed: a driver's create that failed after the state's
+    /// creation answered. The pipeline is not kept; the first dispatch or draw that needs it makes
+    /// it again, a first-use wait
+    /// ([`first_use_unfinished_waits`](Self::first_use_unfinished_waits)), and reports the
+    /// driver's error where that make fails too.
+    pub failed_finishes: u64,
     /// `VkDeviceMemory` allocations made: the allocations blocks are ranges of (the texture
     /// blocks among them), the zero source and the parameter ring's blocks.
     pub blocks_made: u64,

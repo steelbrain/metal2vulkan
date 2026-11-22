@@ -93,14 +93,18 @@ mod on_device {
         ComputePipelineDescriptor::new(StageSource::Function(function))
     }
 
+    /// The state of `descriptor` on `device`, its main pipeline then finished, as a consumer
+    /// finishes it once it has answered.
     fn state(
         name: &str,
         device: &Device,
         descriptor: &ComputePipelineDescriptor,
     ) -> ComputePipelineState {
-        device
+        let state = device
             .new_compute_pipeline_state(descriptor, crate::tests::no_constexpr_samplers)
-            .unwrap_or_else(|error| panic!("{name}: {error}"))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        (state.finish_pipeline()).unwrap_or_else(|error| panic!("{name}: finished: {error}"));
+        state
     }
 
     /// Whether two states share their compiled kernel.

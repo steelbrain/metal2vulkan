@@ -291,9 +291,11 @@ impl NewRuntime {
             )))
         })?;
         let mark = makes::Mark::new(&self.device, self.prepass.as_ref());
+        // Its main pipelines finished, as a consumer finishes them once it has answered.
         let made = self.numbered(|device, ids| {
             device.new_render_pipeline_state(&descriptor, |samplers| ids(samplers))
         });
+        let made = made.and_then(|state| state.finish_pipeline().map(|()| state));
         match made {
             Ok(state) => {
                 let (device, prepass) = (&self.device, self.prepass.as_ref());
