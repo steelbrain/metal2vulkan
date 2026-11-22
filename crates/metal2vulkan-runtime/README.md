@@ -1873,8 +1873,12 @@ made, with no lock, and never rewritten for layouts.
   command buffers behind it, while the segments before it run, so the host can see a signal the
   command buffer makes before its wait. Other queues go on. Each queue groups on its own count:
   a command buffer of a queue with nothing running is submitted at once, ahead of every command
-  buffer committed after it on any queue, while one its queue holds, in a group or for room, may
-  be passed by another queue's command buffer committed after it, which only a fence or an event
+  buffer committed after it on any queue, its part before an event wait included (of the groups
+  that go at once, the one committed first goes first: on an M3 Max, a copy on another queue,
+  committed after a command buffer that fills, waits for the event the copy then signals, and
+  fills again, read the first fill and not the second, job m3-max-68673), while one its queue
+  holds, in a group or for room, may be passed by another queue's command buffer committed after
+  it, which only a fence or an event
   then orders after it. Metal's hazard tracking orders such a pair against work already submitted, and no
   more. Recorded on an M3 Max with macOS 27.0.1, with tracked buffers and no fence, a blit fill on
   one queue and a copy of what it filled on another, committed after it, five runs each: where the

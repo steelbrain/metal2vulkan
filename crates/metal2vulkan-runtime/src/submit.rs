@@ -2004,6 +2004,26 @@ impl WorkState {
     fn unheld(&self) -> Option<usize> {
         (self.fifos.iter()).position(|fifo| fifo.goes(self.stop))
     }
+
+    /// The FIFO, other than the one at `index`, whose group goes now ([`Fifo::goes`]) and whose
+    /// first command buffer was committed first, before every command buffer the group at `index`
+    /// holds ([`Fifo::first_committed`]): it goes before that group. So a group that goes at a
+    /// signal, as a host wait sends it, or at the end of a pass goes no sooner than another
+    /// queue's group that goes now and was committed before it, the part of a command buffer
+    /// before its event wait included: Metal submits a command buffer committed to a queue with
+    /// nothing ahead of it at its commit, and its hazard tracking orders after that part a command
+    /// buffer of another queue, committed later, that shares a tracked resource with it (the
+    /// runtime README's M3 Max rows, and the conformance case event-signaller-of-a-wait). Both go
+    /// now either way: neither waits for anything more.
+    fn goes_before(&self, index: usize) -> Option<usize> {
+        let before = self.fifos[index].first_committed();
+        (0..self.fifos.len())
+            .filter(|&other| other != index && self.fifos[other].goes(self.stop))
+            .map(|other| (other, self.fifos[other].first_committed()))
+            .filter(|&(_, first)| first < before)
+            .min_by_key(|&(_, first)| first)
+            .map(|(other, _)| other)
+    }
 }
 
 impl Batch {
@@ -2042,6 +2062,17 @@ impl Fifo {
         self.group.as_ref().is_some_and(|group| {
             stop || self.send_through >= group.first || room(&self.in_flight, group.run)
         })
+    }
+
+    /// The place in the commit order of the first command buffer its group holds: the first that
+    /// finished in it, else its head, whose segments it holds; `u64::MAX` with no group.
+    fn first_committed(&self) -> u64 {
+        let Some(group) = &self.group else {
+            return u64::MAX;
+        };
+        let finished = (group.finished.first()).map(|(_, pending, _)| pending.seq);
+        let partial = self.head().filter(|_| group.partial).map(|head| head.seq);
+        finished.or(partial).unwrap_or(u64::MAX)
     }
 
     /// Ends `entry` with `error` (its own, where it has one): behind the group held, which it
@@ -2242,9 +2273,17 @@ fn pass<'a>(core: &'a Core, mut state: MutexGuard<'a, WorkState>) -> MutexGuard<
     let mut joined: Vec<Joined> = Vec::new();
     let mut ended: Vec<Ended> = Vec::new();
     let mut sent = false;
+    // The group that goes once the groups committed before it that go now have gone
+    // (`WorkState::goes_before`), before anything more is staged: nothing staged after it
+    // passes it, so no waiter goes ahead of a signal it staged.
+    let mut then: Option<usize> = None;
     loop {
         let now = times::host_time();
-        let index = match state.step(now, &core.counters, &mut joined, &mut ended) {
+        let step = match then.take() {
+            Some(index) => Step::Goes(index),
+            None => state.step(now, &core.counters, &mut joined, &mut ended),
+        };
+        let index = match step {
             Step::Idle => match state.unheld() {
                 Some(index) => index,
                 None => {
@@ -2258,6 +2297,13 @@ fn pass<'a>(core: &'a Core, mut state: MutexGuard<'a, WorkState>) -> MutexGuard<
             },
             Step::Staged => continue,
             Step::Goes(index) => index,
+        };
+        let index = match state.goes_before(index) {
+            Some(before) => {
+                then = Some(index);
+                before
+            }
+            None => index,
         };
         let Some((value, uploads, batch)) = state.close(index, core, &work.released) else {
             continue;
