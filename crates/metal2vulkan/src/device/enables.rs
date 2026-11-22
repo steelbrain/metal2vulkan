@@ -347,7 +347,6 @@ fn facts(ext: VkExtension) -> ExtensionFacts {
         | E::KhrComputeShaderDerivatives
         | E::KhrWorkgroupMemoryExplicitLayout
         | E::KhrMaintenance8
-        | E::KhrShaderFma
         | E::ExtDepthClipEnable
         | E::ExtDepthClampControl
         | E::ExtSampleLocations
@@ -397,6 +396,9 @@ fn facts(ext: VkExtension) -> ExtensionFacts {
         // Described, never enabled: a depth comparison records `RestrictedDepthRange` on every
         // device (`lower::texture::depth_comparison`), and Vulkan clamps a fragment depth itself.
         E::ExtDepthRangeUnrestricted => fact(false, None, &[]),
+        // Described, never enabled: a float fma is the device's `Fma` on every device
+        // (`lower::arith::fma`), so the core reads none of its features.
+        E::KhrShaderFma => fact(false, None, &[]),
         E::KhrDynamicRendering => fact(false, Some(3), &[]),
         // Object and mesh functions. `VK_KHR_spirv_1_4` is core at the 1.2 floor.
         E::ExtMeshShader => fact(true, None, &[]),
