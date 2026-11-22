@@ -2565,9 +2565,13 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   `NONUNIFORM`), and an invocation past the grid returns before the kernel's body: only there does
   a thread compare its position with the grid's last thread, inside one branch on the flag. Every
   other dispatch, on the same pipeline, branches past that test. An indirect dispatch runs at its
-  own threadgroup size, unflagged. A kernel that observes its partition is
-  lowered plainly and as its partial-threadgroups variant, which the state's creation lowers too,
-  through the cache directory: every dispatch, a whole `dispatch_threads` grid,
+  own threadgroup size, unflagged. A kernel that observes its partition is lowered as its
+  partial-threadgroups variant at the state's creation, through the cache directory, and plainly
+  too only where the variant's predicated walk adds a 4-byte vote word of threadgroup memory (a
+  barrier in a loop; the plain module holds none) and the kernel takes a threadgroup memory length
+  from the encoder, or its own memory with the word passes the device's
+  `maxComputeSharedMemorySize`, or where the variant is refused: every dispatch, a whole
+  `dispatch_threads` grid,
   `dispatch_threadgroups`, `dispatch_threadgroups_with_indirect_buffer` or a grid that is not a
   whole number of threadgroups, runs the variant at its own size, every region but a ragged grid's
   unflagged, so one `VkPipeline` of a size runs them all (`Metrics::partial_variant_whole_grids`

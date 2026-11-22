@@ -166,13 +166,14 @@ mod on_device {
             .is_some_and(|lowered| matches!(lowered, Lowered::Made(..)))
     }
 
-    /// How many modules `state`'s make made: its whole one, and each variant it lowered with it.
+    /// How many modules `state`'s make made: its whole one, and each variant it lowered beside
+    /// it.
     fn modules_made(state: &ComputePipelineState) -> usize {
-        use crate::pipeline::{Form, Lowered};
+        use crate::pipeline::{Form, Lowered, Partial};
 
         let partial = match &state.inner.compiled.form {
             Form::Sized {
-                partial: Some(lowered),
+                partial: Partial::Beside(lowered),
             } => matches!(**lowered, Lowered::Made(..)),
             _ => false,
         };
@@ -1805,6 +1806,216 @@ mod on_device {
             let _ = std::fs::remove_dir_all(&dir);
             println!("{name}: 3 lowerings and the blob written, nothing by a second device");
         }
+    }
+
+    /// What a state of a kernel module answers, and what a dispatch checks of it, beside the
+    /// dispatch's own module: for [`every_device_s_observers_answer_the_same_on_their_variant`].
+    #[derive(Debug, PartialEq)]
+    struct ModuleAnswers {
+        /// Metal's `maxTotalThreadsPerThreadgroup`, `threadExecutionWidth` and
+        /// `staticThreadgroupMemoryLength`, and its own maximum.
+        metal: metal2vulkan::pipeline::ComputePipelineMetalInfo,
+        imageblock: Option<bool>,
+        notes: Vec<PrecisionNote>,
+        numbered: Vec<metal2vulkan::pipeline::NumberedSampler>,
+        constexprs: Vec<(usize, metal2vulkan::pipeline::CombinedSampler)>,
+        buffers: Vec<(u32, crate::hazard::Access)>,
+        textures: Vec<(u32, crate::hazard::Access)>,
+        storage_reads: Vec<u32>,
+        formatless: Vec<u32>,
+        unbound: [bool; 3],
+        has_effects: bool,
+        stage_in_region: bool,
+        private_arena: Option<u32>,
+        threadgroups: Vec<u32>,
+        threads: [u32; 2],
+        multiples: Vec<u32>,
+        required_subgroup_size: Option<u32>,
+        alignments: Vec<RuntimeFact>,
+    }
+
+    impl ModuleAnswers {
+        /// The answers of `pipeline`, whose lowering declares an imageblock as `imageblock`
+        /// says; Err: what the module reads that the encoder does not supply.
+        fn of(
+            pipeline: &metal2vulkan::pipeline::ComputePipeline,
+            imageblock: Option<bool>,
+        ) -> Result<ModuleAnswers, crate::KernelInputKind> {
+            let interface = crate::pipeline::interface(pipeline, None)?;
+            let mut notes = pipeline.stage.precision_notes.clone();
+            notes.sort_unstable();
+            notes.dedup();
+            let mut alignments: Vec<RuntimeFact> = (pipeline.dependencies.iter())
+                .map(|dependency| dependency.fact)
+                .filter(|fact| matches!(fact, RuntimeFact::AddressAlignment { .. }))
+                .collect();
+            alignments.sort_unstable();
+            Ok(ModuleAnswers {
+                metal: pipeline.metal_info,
+                imageblock,
+                notes,
+                numbered: interface.numbered,
+                constexprs: interface.constexprs,
+                buffers: interface.buffers,
+                textures: interface.textures,
+                storage_reads: interface.storage_reads,
+                formatless: interface.formatless,
+                unbound: [
+                    interface.reads_unbound,
+                    interface.writes_unbound,
+                    interface.unbound_storage,
+                ],
+                has_effects: interface.has_effects,
+                stage_in_region: interface.stage_in_region,
+                private_arena: interface.private_arena,
+                threadgroups: interface.threadgroups,
+                threads: [
+                    interface.max_total_threads,
+                    interface.metal_max_total_threads,
+                ],
+                multiples: interface.multiples,
+                required_subgroup_size: interface.required_subgroup_size,
+                alignments,
+            })
+        }
+    }
+
+    /// Every authored kernel of the public fixtures (`fixtures/public` and the directories under
+    /// it: the engine's, which the conformance suite's cases run, and the harness's among them)
+    /// that observes its threadgroup partition on the device, lowered plainly and as its
+    /// partial-threadgroups variant by the device's translator. Where the translator gives both,
+    /// the variant answers what the plain module does ([`ModuleAnswers`]): Metal's
+    /// `maxTotalThreadsPerThreadgroup`, `threadExecutionWidth` and `staticThreadgroupMemoryLength`
+    /// and its own maximum, the imageblock answer, the precision notes, the samplers' numbering
+    /// and constexpr uses, the buffer and texture accesses, whether the kernel writes memory,
+    /// reads the stage-in region or takes a private arena, its storage reads, formatless slots and
+    /// unbound accesses, its threadgroup arguments, SIMD-group multiples and subgroup size, and the
+    /// buffer alignments it takes. So a state whose only module is the variant
+    /// (`Partial::Alone`) answers as one of its plain module. Prints how many kernels it
+    /// compared, and each one it could not, with why.
+    #[test]
+    fn every_device_s_observers_answer_the_same_on_their_variant() {
+        use metal2vulkan::library::FunctionStage;
+        use metal2vulkan::pipeline::ComputePipeline;
+
+        // Every `.ll` under the public fixtures that declares a kernel, in path order.
+        let mut files = Vec::new();
+        let mut dirs = vec![metal2vulkan_devtools::fixtures_dir()];
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(&dir).expect("the fixtures") {
+                let path = entry.expect("a fixture").path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.extension().is_some_and(|extension| extension == "ll") {
+                    files.push(path);
+                }
+            }
+        }
+        files.sort();
+        let mut libraries = Vec::new();
+        let mut unread = Vec::new();
+        for path in files {
+            let text = std::fs::read_to_string(&path).expect("a fixture's text");
+            if !text.contains("!air.kernel") {
+                continue;
+            }
+            let file = path.strip_prefix(metal2vulkan_devtools::fixtures_dir());
+            let file = file.unwrap_or(&path).display().to_string();
+            match llvm_assemble(&path).map(|bitcode| Library::from_air(&bitcode)) {
+                Ok(Ok(library)) => libraries.push((file, library)),
+                Ok(Err(error)) => unread.push(format!("{file}: {error}")),
+                Err(AssembleError::Missing(why)) => {
+                    eprintln!("SKIPPED: {why}");
+                    return;
+                }
+                Err(error) => unread.push(format!("{file}: {error:?}")),
+            }
+        }
+        each_device("compute_variant_answers", |name, _, device| {
+            let translator = device.translator();
+            let budget = Budget::standard();
+            let entries = StageEntries::new();
+            let (mut compared, mut skipped) = (0, unread.clone());
+            for (file, library) in &libraries {
+                for info in library.functions() {
+                    if info.stage != FunctionStage::Kernel {
+                        continue;
+                    }
+                    let what = format!("{file}: {}", info.name);
+                    let function = library.function(info.name).expect("a listed function");
+                    let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+                        FunctionDescriptor::new(function),
+                    ));
+                    let StageSource::Function(function) = &descriptor.kernel else {
+                        unreachable!("a Function descriptor");
+                    };
+                    let linked = |inputs| -> Result<(ComputePipeline, Option<bool>), String> {
+                        let lowered = translator
+                            .compile_function_from_entries(function, inputs, &budget, &entries)
+                            .map_err(|error| error.to_string())?;
+                        let imageblock =
+                            crate::pipeline::declares_imageblock(&descriptor, &lowered, &budget);
+                        let mut linked = descriptor.clone();
+                        linked.kernel = StageSource::Compiled(lowered);
+                        let pipeline = (translator.compile_compute_pipeline(&linked, &budget))
+                            .map_err(|error| error.to_string())?;
+                        Ok((pipeline, imageblock))
+                    };
+                    let modules = (|| {
+                        let plain = translator
+                            .kernel_inputs_read(
+                                function,
+                                &descriptor.lowering_inputs(),
+                                &budget,
+                                &entries,
+                            )
+                            .map_err(|error| format!("inputs: {error}"))?;
+                        let partial = plain.kernel_variant(KernelVariant::PartialThreadgroups);
+                        let observes = translator
+                            .kernel_observes_partition(function, &partial, &budget, &entries)
+                            .map_err(|error| format!("partition: {error}"))?;
+                        if !observes {
+                            return Ok(None);
+                        }
+                        let plain = linked(&plain).map_err(|error| format!("plain: {error}"))?;
+                        let variant =
+                            linked(&partial).map_err(|error| format!("variant: {error}"))?;
+                        Ok(Some((plain, variant)))
+                    })();
+                    let (plain, variant) = match modules {
+                        Ok(Some(modules)) => modules,
+                        Ok(None) => continue,
+                        Err(why) => {
+                            skipped.push(format!("{what}: {why}"));
+                            continue;
+                        }
+                    };
+                    let of = |(pipeline, imageblock): &(ComputePipeline, Option<bool>)| {
+                        ModuleAnswers::of(pipeline, *imageblock)
+                    };
+                    match (of(&plain), of(&variant)) {
+                        (Ok(plain), Ok(variant)) => {
+                            assert_eq!(variant, plain, "{name}: {what}: the variant's answers");
+                            compared += 1;
+                        }
+                        (plain, variant) => skipped.push(format!(
+                            "{what}: unsupplied: plain {:?}, variant {:?}",
+                            plain.err(),
+                            variant.err()
+                        )),
+                    }
+                }
+            }
+            for why in &skipped {
+                println!("{name}: not compared: {why}");
+            }
+            println!(
+                "{name}: {compared} observing kernels answer the same on their variant as on \
+                 their plain module; {} not compared",
+                skipped.len()
+            );
+            assert!(compared > 0, "{name}: no observing kernel compared");
+        });
     }
 
     /// Each module a kernel's state lowers is the translator's public lowering of its variant on

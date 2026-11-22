@@ -11,7 +11,7 @@
 
 use crate::encoder::{choose, image_tile, Choice, Direct, Dispatch, Module};
 use crate::floor::{WORKGROUP_INVOCATIONS, WORKGROUP_SIZE};
-use crate::pipeline::{Form, SQUARE};
+use crate::pipeline::{Form, Partial, SQUARE};
 use metal2vulkan::pipeline::{grid_tile, DEEP_THREADGROUP, GRID_TILE_THREADS};
 
 /// A `dispatchThreads` grid of `threads` in threadgroups of `size`.
@@ -168,12 +168,20 @@ fn a_tiling_kernel_runs_every_grid_in_its_regions_tiles() {
 /// an indirect dispatch of any kernel runs its whole module at its own size.
 #[test]
 fn an_observing_kernel_and_an_indirect_dispatch_run_at_their_own_size() {
-    let sized = Form::Sized { partial: None };
+    let sized = Form::Sized {
+        partial: Partial::Absent,
+    };
     let whole = choose(&sized, Some(threads_of([64, 64, 1], [8, 8, 1])), [8, 8, 1]);
     assert_eq!((whole.module, whole.local), (Module::Whole, [8, 8, 1]));
     let ragged = choose(&sized, Some(threads_of([60, 64, 1], [8, 8, 1])), [8, 8, 1]);
     assert_eq!(ragged.module, Module::Partial);
-    for form in [Form::Tiled, Form::Square, Form::Sized { partial: None }] {
+    for form in [
+        Form::Tiled,
+        Form::Square,
+        Form::Sized {
+            partial: Partial::Absent,
+        },
+    ] {
         let indirect = choose(&form, None, [4, 2, 1]);
         assert_eq!(
             indirect,
@@ -212,14 +220,32 @@ fn a_threadgroup_deeper_than_the_floor_runs_as_one_row() {
     let size = [1, 1, 320];
     for threads in [[4, 16, 320], [64, 64, 1], [1, 1, 1024]] {
         let direct = Some(threads_of(threads, size));
-        for form in [Form::Tiled, Form::Square, Form::Sized { partial: None }] {
+        for form in [
+            Form::Tiled,
+            Form::Square,
+            Form::Sized {
+                partial: Partial::Absent,
+            },
+        ] {
             let choice = choose(&form, direct, size);
             assert!(within(choice.local), "{threads:?}: {:?}", choice.local);
         }
-        let sized = choose(&Form::Sized { partial: None }, direct, size);
+        let sized = choose(
+            &Form::Sized {
+                partial: Partial::Absent,
+            },
+            direct,
+            size,
+        );
         assert_eq!(workgroup(sized.local), [320, 1, 1], "{threads:?}");
     }
-    let indirect = choose(&Form::Sized { partial: None }, None, size);
+    let indirect = choose(
+        &Form::Sized {
+            partial: Partial::Absent,
+        },
+        None,
+        size,
+    );
     assert_eq!(workgroup(indirect.local), [320, 1, 1]);
     let column = [1, 1, 1024];
     assert_eq!(grid_tile(column), [1, 1, 256]);
@@ -240,7 +266,9 @@ fn a_threadgroup_deeper_than_the_floor_runs_as_one_row() {
 /// at its own size.
 #[test]
 fn a_prepared_dispatch_takes_the_grid_its_call_forms() {
-    let sized = Form::Sized { partial: None };
+    let sized = Form::Sized {
+        partial: Partial::Absent,
+    };
     let size = [2, 1, 1];
     let saturated = Dispatch::Threadgroups([u32::MAX, 3, 1]).direct(size);
     let want = Direct {

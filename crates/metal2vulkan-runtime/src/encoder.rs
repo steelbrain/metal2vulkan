@@ -1295,9 +1295,10 @@ pub(crate) fn size_checked(interface: &Interface, size: [u32; 3]) -> Result<(), 
 /// partial-threadgroups variant instead, unflagged, where the variant is lowered and takes the
 /// threadgroup and its threadgroup memory (the lengths `set` with the variant's own, a predicated
 /// walk's vote word included, within `max`): one module, and one `VkPipeline` a size, runs every
-/// dispatch of it the variant takes. An indirect dispatch states no grid in its region, so the
-/// variant runs it in the single-region form, every invocation live, as the translator's dispatch
-/// regions say (`lower::dispatch`).
+/// dispatch of it the variant takes. The variant is the state's module itself where its make
+/// lowered no plain module beside it (`pipeline::Partial::Alone`). An indirect dispatch states no
+/// grid in its region, so the variant runs it in the single-region form, every invocation live,
+/// as the translator's dispatch regions say (`lower::dispatch`).
 pub(crate) fn decide<'a>(
     compiled: &'a Compiled,
     direct: Option<Direct>,

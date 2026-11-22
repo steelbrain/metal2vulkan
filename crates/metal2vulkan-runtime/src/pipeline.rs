@@ -164,10 +164,11 @@ pub(crate) struct Compiled {
     core: Arc<Core>,
     /// Its number ([`CONTENTS`]).
     id: u64,
-    /// For a kernel that observes its threadgroup partition, the module of the dispatches its
-    /// partial-threadgroups variant does not run; for a kernel that does not observe it, the module
-    /// of indirect dispatches, and of every dispatch where it is the only one. Its interface
-    /// numbers the state's samplers and answers Metal's state.
+    /// For a kernel that observes its threadgroup partition, its partial-threadgroups variant
+    /// ([`Partial::Alone`]), or the plain module where the state keeps one beside the variant
+    /// ([`keeps_plain`]), which runs the dispatches the variant does not; for a kernel that does
+    /// not observe it, the module of indirect dispatches, and of every dispatch where it is the
+    /// only one. Its interface numbers the state's samplers and answers Metal's state.
     pub(crate) whole: Kernel,
     /// How a direct dispatch runs.
     pub(crate) form: Form,
@@ -211,7 +212,7 @@ impl Answers {
 /// Whether the kernel `function`, compiled for `descriptor`, declares an imageblock: what the
 /// compile kept of its reflection answers, decoding nothing; `None` where it kept none (a binding
 /// whose answer is unmeasured).
-fn declares_imageblock(
+pub(crate) fn declares_imageblock(
     descriptor: &ComputePipelineDescriptor,
     function: &CompiledFunction,
     budget: &Budget,
@@ -389,10 +390,20 @@ pub(crate) enum Form {
     /// ([`Constant::Deep`]).
     Square,
     /// The kernel observes its partition: a dispatch runs at its own threadgroup size, every one,
-    /// direct or indirect, on the partial-threadgroups variant, lowered with the state where the
-    /// content has a function to lower it from, wherever the variant takes the dispatch's
-    /// threadgroup and threadgroup memory (`encoder::decide`).
-    Sized { partial: Option<Box<Lowered>> },
+    /// direct or indirect, on the partial-threadgroups variant (`partial`), wherever the variant
+    /// takes the dispatch's threadgroup and threadgroup memory (`encoder::decide`).
+    Sized { partial: Partial },
+}
+
+/// An observing kernel's partial-threadgroups variant ([`Form::Sized`]).
+pub(crate) enum Partial {
+    /// The variant is the content's module, [`Compiled::whole`]: the make lowers no plain module
+    /// beside it ([`keeps_plain`]).
+    Alone,
+    /// The variant, lowered with the state beside the plain module, which is the content's.
+    Beside(Box<Lowered>),
+    /// The content has no function to lower the variant from.
+    Absent,
 }
 
 /// One translated module of a state, its interface, and the `VkPipeline`s made of it so far.
@@ -810,12 +821,16 @@ impl crate::Device {
     /// thread, which waits for it, within the translator's 20-second budget per lowering: a
     /// kernel that does not observe its threadgroup partition as its partial-threadgroups
     /// variant, whose 256-wide tile's `VkPipeline`, or an image-only kernel's 16x16 workgroups'
-    /// one, is made here too, and one that does as its plain module and its partial-threadgroups
-    /// variant, with the one `VkPipeline` its dispatches run, whole grids, ragged and indirect
-    /// ones (the plain module's where the variant's threadgroup memory, a predicated walk's vote
-    /// word with it, is past the device's), at the descriptor's `requiredThreadsPerThreadgroup`
-    /// where it sets one, or else at `[N, 1, 1]` where the state declares a bound of threads (the
-    /// descriptor's `maxTotalThreadsPerThreadgroup`, or the kernel's
+    /// one, is made here too, and one that does as its partial-threadgroups variant, which its
+    /// dispatches run, and its plain module too only where the variant's predicated walk takes a
+    /// vote word of threadgroup memory the plain module does not and the kernel takes a
+    /// threadgroup memory length from the encoder, or its own memory with the word is past the
+    /// device's `maxComputeSharedMemorySize`. It is made with the one `VkPipeline` its
+    /// dispatches run, whole grids, ragged and indirect ones (the plain module's where the
+    /// variant's threadgroup memory, the vote word with it, is past the device's), at the
+    /// descriptor's `requiredThreadsPerThreadgroup` where it sets one, or else at `[N, 1, 1]`
+    /// where the state declares a bound of threads (the descriptor's
+    /// `maxTotalThreadsPerThreadgroup`, or the kernel's
     /// `[[max_total_threads_per_threadgroup(n)]]`), `N` the state's
     /// `maxTotalThreadsPerThreadgroup`, and the kernel takes no threadgroup memory length from
     /// the encoder. A kernel whose tier runs only whole SIMD groups has its
@@ -902,6 +917,7 @@ impl Compiled {
         let core = Arc::clone(core);
         let budget = Budget::standard();
         let translator = &core.translator;
+        let required = descriptor.required_threads_per_threadgroup;
         let compiled = |function: CompiledFunction| {
             let mut compiled = descriptor.clone();
             compiled.kernel = StageSource::Compiled(function);
@@ -909,7 +925,7 @@ impl Compiled {
                 translator.compile_compute_pipeline(&compiled, &budget)
             })
         };
-        let (whole, partial, image_only, source, answers) = match &descriptor.kernel {
+        let (whole, notes, partial, image_only, source, answers) = match &descriptor.kernel {
             StageSource::Function(function) => {
                 let entries = &core.entries;
                 let plain = translating(&core, || {
@@ -930,11 +946,11 @@ impl Compiled {
                     |inputs: &LoweringInputs| lower(&core, function, inputs, &budget, entries);
                 // The partial-threadgroups variant: what the cache directory holds, else lowered
                 // where the kernel does not observe its partition; where the translator answers
-                // that it observes it, it is lowered below, after the plain module it numbers its
-                // samplers from. The translator's refusal of the variant (emulated simdgroups, a
-                // vote word its workgroup memory cannot hold) is kept like a lowering, and so is
-                // its answer that the kernel observes it, which a device on the directory then
-                // reads in place of asking.
+                // that it observes it, it is lowered below, before the plain module the state
+                // keeps beside it where it keeps one. The translator's refusal of the variant
+                // (emulated simdgroups, a vote word its workgroup memory cannot hold) is kept like
+                // a lowering, and so is its answer that the kernel observes it, which a device on
+                // the directory then reads in place of asking.
                 let variant_key = *translator.function_compile_key(function, &inputs).digest();
                 let variant = if core.caches.refused(&variant_key) {
                     core.counters.count(Metric::TranslationsLoaded);
@@ -972,19 +988,53 @@ impl Compiled {
                         let image_only = variant.is_image_only();
                         let imageblock = declares_imageblock(descriptor, &variant, &budget);
                         let pipeline = compiled(variant).map_err(Error::translation)?;
-                        let partial = (!grid_tiles(&pipeline)).then_some(None);
+                        let partial = (!grid_tiles(&pipeline)).then_some(Partial::Absent);
                         let answers = Answers::of(&pipeline, imageblock);
-                        (pipeline, partial, image_only, Some(source), answers)
+                        let (whole, notes) = made(&core, pipeline, required)?;
+                        (whole, notes, partial, image_only, Some(source), answers)
                     }
-                    // The kernel observes its partition, or its variant is refused: its plain
-                    // module, and the variant for the grids that need it.
+                    // The kernel observes its partition, or its variant is refused: the variant,
+                    // which alone is the content's module where it is made and the state keeps no
+                    // plain module beside it (`keeps_plain`), else the plain module, and the
+                    // variant beside it for the grids that need it.
                     variant => {
-                        let plain = lower(&plain).map_err(Error::translation)?;
-                        let imageblock = declares_imageblock(descriptor, &plain, &budget);
-                        let plain = compiled(plain).map_err(Error::translation)?;
-                        let answers = Answers::of(&plain, imageblock);
-                        let partial = Some((function, inputs, variant));
-                        (plain, Some(partial), false, Some(source), answers)
+                        let max = core.limits.max_shared_memory;
+                        let variant = link_variant(&core, descriptor, function, &inputs, variant)
+                            .map(|(lowered, pipeline)| {
+                                let imageblock = declares_imageblock(descriptor, &lowered, &budget);
+                                let answers = Answers::of(&pipeline, imageblock);
+                                (made_variant(&core, pipeline, required), answers)
+                            });
+                        match variant {
+                            Ok((Lowered::Made(variant, notes), answers))
+                                if !keeps_plain(&variant.interface, max) =>
+                            {
+                                let partial = Some(Partial::Alone);
+                                (*variant, notes, partial, false, Some(source), answers)
+                            }
+                            variant => {
+                                let mut variant =
+                                    variant.map_or_else(|lowered| lowered, |made| made.0);
+                                let plain = (|| {
+                                    let plain = lower(&plain).map_err(Error::translation)?;
+                                    let imageblock =
+                                        declares_imageblock(descriptor, &plain, &budget);
+                                    let plain = compiled(plain).map_err(Error::translation)?;
+                                    let answers = Answers::of(&plain, imageblock);
+                                    Ok::<_, Error>((made(&core, plain, required)?, answers))
+                                })();
+                                let ((whole, notes), answers) = match plain {
+                                    Ok(plain) => plain,
+                                    Err(error) => {
+                                        variant.release(&core);
+                                        return Err(error);
+                                    }
+                                };
+                                let variant = beside(&core, variant, &whole.interface);
+                                let partial = Some(Partial::Beside(Box::new(variant)));
+                                (whole, notes, partial, false, Some(source), answers)
+                            }
+                        }
                     }
                 }
             }
@@ -1000,28 +1050,35 @@ impl Compiled {
                 // (`ForeignCompiledFunction` otherwise), on which a non-observer's partial
                 // variant states `GridTiles`: a module without it observes its partition or is
                 // the plain module, and runs at its own size.
-                let partial = (!grid_tiles(&pipeline)).then_some(None);
+                let partial = (!grid_tiles(&pipeline)).then_some(Partial::Absent);
                 let imageblock = declares_imageblock(descriptor, function, &budget);
                 let answers = Answers::of(&pipeline, imageblock);
-                (pipeline, partial, function.is_image_only(), None, answers)
+                let (whole, notes) = made(&core, pipeline, required)?;
+                (
+                    whole,
+                    notes,
+                    partial,
+                    function.is_image_only(),
+                    None,
+                    answers,
+                )
             }
         };
-        let required = descriptor.required_threads_per_threadgroup;
-        let mut notes = whole.stage.precision_notes.clone();
-        let whole = Kernel::new(&core, whole, required)?;
-        // The variants, lowered now: an observing kernel's partial-threadgroups one where it has
-        // a function to lower it from, and the emulated-SIMD-group one of a module that runs only
-        // whole SIMD groups. They sample no constexpr sampler the whole module does not
-        // (`covers`).
-        let lowered = |function, inputs: &LoweringInputs, found| {
-            lower_variant(&core, descriptor, function, inputs, found, &whole.interface)
-        };
-        let partial = partial.map(|partial| {
-            partial.map(|(function, inputs, found)| Box::new(lowered(function, &inputs, found)))
-        });
+        let mut notes = notes;
+        // The emulated-SIMD-group variant, lowered now, of a module that runs only whole SIMD
+        // groups. It samples no constexpr sampler the whole module does not (`covers`).
         let emulated = source
             .filter(|_| !whole.interface.multiples.is_empty())
-            .map(|(function, inputs)| lowered(function, &inputs, Found::Unlowered));
+            .map(|(function, inputs)| {
+                lower_variant(
+                    &core,
+                    descriptor,
+                    function,
+                    &inputs,
+                    Found::Unlowered,
+                    &whole.interface,
+                )
+            });
         let profile = core.translator.profile();
         notes.extend(constexpr_notes(profile, &whole.interface.constexprs));
         notes.sort_unstable();
@@ -1136,8 +1193,9 @@ enum Found {
     Lowered(CompiledFunction),
     /// The translator refused it, at this make or on a device on the cache directory before.
     Refused,
-    /// Not lowered yet: the emulated-SIMD-group variant, or an observing kernel's
-    /// partial-threadgroups one, which is lowered once its plain module is.
+    /// Not lowered yet: the emulated-SIMD-group variant, which is lowered once the content's
+    /// module is, or an observing kernel's partial-threadgroups one, lowered before the plain
+    /// module its state keeps beside it where it keeps one ([`keeps_plain`]).
     Unlowered,
 }
 
@@ -1154,48 +1212,97 @@ fn lower_variant(
     found: Found,
     whole: &Interface,
 ) -> Lowered {
+    let required = descriptor.required_threads_per_threadgroup;
+    match link_variant(core, descriptor, function, inputs, found) {
+        Ok((_, pipeline)) => beside(core, made_variant(core, pipeline, required), whole),
+        Err(lowered) => lowered,
+    }
+}
+
+/// [`lower_variant`]'s lowering and compile: the variant's lowering and its pipeline. Err: the
+/// translator's refusal ([`Lowered::Refused`]) or failure ([`Lowered::Translation`]).
+fn link_variant(
+    core: &Core,
+    descriptor: &ComputePipelineDescriptor,
+    function: &FunctionDescriptor,
+    inputs: &LoweringInputs,
+    found: Found,
+) -> Result<(CompiledFunction, ComputePipeline), Lowered> {
     let translator = &core.translator;
     let budget = Budget::standard();
     let compiled = match found {
         Found::Lowered(compiled) => compiled,
-        Found::Refused => return Lowered::Refused,
+        Found::Refused => return Err(Lowered::Refused),
         Found::Unlowered => {
             let key = *translator.function_compile_key(function, inputs).digest();
             if core.caches.refused(&key) {
                 core.counters.count(Metric::TranslationsLoaded);
-                return Lowered::Refused;
+                return Err(Lowered::Refused);
             }
             match lower(core, function, inputs, &budget, &core.entries) {
                 Ok(compiled) => compiled,
                 Err(TranslationError::Unsupported(_)) => {
                     cache::keep_refusal(core, &key);
-                    return Lowered::Refused;
+                    return Err(Lowered::Refused);
                 }
-                Err(error) => return Lowered::Translation(error),
+                Err(error) => return Err(Lowered::Translation(error)),
             }
         }
     };
     let mut descriptor = descriptor.clone();
-    descriptor.kernel = StageSource::Compiled(compiled);
-    let pipeline = match translating(core, || {
+    descriptor.kernel = StageSource::Compiled(compiled.clone());
+    match translating(core, || {
         translator.compile_compute_pipeline(&descriptor, &budget)
     }) {
-        Ok(pipeline) => pipeline,
-        Err(TranslationError::Unsupported(_)) => return Lowered::Refused,
-        Err(error) => return Lowered::Translation(error),
-    };
+        Ok(pipeline) => Ok((compiled, pipeline)),
+        Err(TranslationError::Unsupported(_)) => Err(Lowered::Refused),
+        Err(error) => Err(Lowered::Translation(error)),
+    }
+}
+
+/// A variant's `pipeline` as a module of the device, with the translator's notes of it, at a
+/// state of `required` threads per threadgroup where it has one.
+fn made_variant(core: &Core, pipeline: ComputePipeline, required: Option<[u32; 3]>) -> Lowered {
     let notes = pipeline.stage.precision_notes.clone();
-    match Kernel::new(core, pipeline, descriptor.required_threads_per_threadgroup) {
-        // A module that samples a constexpr sampler in a use the state does not hold reads what
-        // the encoder does not supply.
-        Ok(mut kernel) if !covers(whole, &kernel.interface) => {
-            kernel.release(core);
-            Lowered::Unsupplied(KernelInputKind::ConstexprSampler)
-        }
+    match Kernel::new(core, pipeline, required) {
         Ok(kernel) => Lowered::Made(Box::new(kernel), notes),
         Err(Unmade::Unsupplied(kind)) => Lowered::Unsupplied(kind),
         Err(Unmade::Failed(result)) => Lowered::Failed(result),
     }
+}
+
+/// The variant `lowered` beside the content's module `whole`: a module that samples a constexpr
+/// sampler in a use the state does not hold reads what the encoder does not supply.
+fn beside(core: &Core, lowered: Lowered, whole: &Interface) -> Lowered {
+    match lowered {
+        Lowered::Made(mut kernel, _) if !covers(whole, &kernel.interface) => {
+            kernel.release(core);
+            Lowered::Unsupplied(KernelInputKind::ConstexprSampler)
+        }
+        lowered => lowered,
+    }
+}
+
+/// The content's module of `pipeline`, at a state of `required` threads per threadgroup where it
+/// has one, and the translator's notes of it.
+fn made(
+    core: &Core,
+    pipeline: ComputePipeline,
+    required: Option<[u32; 3]>,
+) -> Result<(Kernel, Vec<PrecisionNote>), Error> {
+    let notes = pipeline.stage.precision_notes.clone();
+    Ok((Kernel::new(core, pipeline, required)?, notes))
+}
+
+/// Whether an observing kernel's state keeps its plain module beside its partial-threadgroups
+/// variant, whose module's interface is `variant`: where the variant's predicated walk takes a
+/// vote word of threadgroup memory the plain module does not ([`Memory::vote`]), and the kernel
+/// takes a threadgroup memory length from the encoder or its own memory with the word is past the
+/// device's `max` bytes, so that a dispatch the plain module takes may find the variant past the
+/// limit (`encoder::decide`). Every other dispatch either module takes, the variant takes.
+fn keeps_plain(variant: &Interface, max: u32) -> bool {
+    variant.memory.vote != 0
+        && (!variant.threadgroups.is_empty() || variant.memory.bytes(&[], 0) > u64::from(max))
 }
 
 /// The lowering of `FunctionCompileKey` digest `key` a device kept in the cache directory, where
@@ -1274,7 +1381,7 @@ fn past_stage_bound(error: &Error) -> bool {
 
 /// The runtime's view of the translator's kernel, or what the kernel reads that the compute
 /// encoder does not supply ([`Gap::KernelInput`] of that kind), the first this finds.
-fn interface(
+pub(crate) fn interface(
     pipeline: &ComputePipeline,
     required_size: Option<[u32; 3]>,
 ) -> Result<Interface, KernelInputKind> {
@@ -1862,7 +1969,9 @@ impl ComputePipelineState {
             heavy: None,
             variants: Variants::default(),
         };
-        let form = Form::Sized { partial: None };
+        let form = Form::Sized {
+            partial: Partial::Absent,
+        };
         let answers = Answers::default();
         let compiled = Compiled::new(core, whole, form, None, (Vec::new(), answers));
         Ok(ComputePipelineState {
@@ -1890,12 +1999,18 @@ impl Compiled {
     fn variant(&self, which: Which) -> Option<&Lowered> {
         match (which, &self.form) {
             (Which::Emulated, _) => self.emulated.as_ref(),
-            (Which::Partial, Form::Sized { partial }) => partial.as_deref(),
-            (Which::Partial, Form::Tiled | Form::Square) => None,
+            (
+                Which::Partial,
+                Form::Sized {
+                    partial: Partial::Beside(lowered),
+                },
+            ) => Some(lowered),
+            (Which::Partial, Form::Sized { .. } | Form::Tiled | Form::Square) => None,
         }
     }
 
-    /// The module of the content's `which` variant, lowered with the state.
+    /// The module of the content's `which` variant, lowered with the state: [`Compiled::whole`]
+    /// for a partial-threadgroups variant that is the content's module ([`Partial::Alone`]).
     ///
     /// Err: `refused` where the content has no such variant or the translator refused it
     /// ([`Lowered::Refused`]); [`Error::Translation`] where its lowering or compile failed
@@ -1906,6 +2021,15 @@ impl Compiled {
         which: Which,
         refused: impl FnOnce() -> Error,
     ) -> Result<&Kernel, Error> {
+        if let (
+            Which::Partial,
+            Form::Sized {
+                partial: Partial::Alone,
+            },
+        ) = (which, &self.form)
+        {
+            return Ok(&self.whole);
+        }
         match self.variant(which) {
             Some(lowered) => lowered.kernel(refused),
             None => Err(refused()),
@@ -1955,6 +2079,13 @@ impl Compiled {
 }
 
 impl Lowered {
+    /// Releases the module, where there is one.
+    fn release(&mut self, core: &Core) {
+        if let Lowered::Made(kernel, _) = self {
+            kernel.release(core);
+        }
+    }
+
     /// The module, or the error a need of the variant reports: `refused` for the translator's
     /// refusal alone, so no other failure reads as the variant's gap.
     pub(crate) fn kernel(&self, refused: impl FnOnce() -> Error) -> Result<&Kernel, Error> {
@@ -2215,13 +2346,13 @@ impl Drop for Compiled {
         self.core.counters.fall(Gauge::Kernels);
         self.whole.release(&self.core);
         let partial = match &mut self.form {
-            Form::Sized { partial } => partial.as_deref_mut(),
-            Form::Tiled | Form::Square => None,
+            Form::Sized {
+                partial: Partial::Beside(lowered),
+            } => Some(&mut **lowered),
+            Form::Sized { .. } | Form::Tiled | Form::Square => None,
         };
         for lowered in [self.emulated.as_mut(), partial].into_iter().flatten() {
-            if let Lowered::Made(kernel, _) = lowered {
-                kernel.release(&self.core);
-            }
+            lowered.release(&self.core);
         }
     }
 }
