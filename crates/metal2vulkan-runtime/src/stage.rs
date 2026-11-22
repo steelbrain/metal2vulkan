@@ -34,7 +34,9 @@
 //! header, so a new driver version asks again. A [`StageBreach::Memory`] entry also holds the
 //! memory ceiling of the consumer's helper it was kept under
 //! ([`DeviceOptions::stage_memory_ceiling`]), 0 where it holds the breach's byte alone: on a
-//! device given a higher ceiling it is a miss, and removed.
+//! device given a higher ceiling it is a miss, and removed. A [`StageBreach::Ended`] entry, a
+//! helper that ended before its reply with no end of the consumer's, holds the [`HELPER_VERSION`]
+//! it was kept under: under a later version it is a miss, and removed.
 //!
 //! **The wire.** [`Device::fill_stage`] writes one request frame to the helper and reads one reply
 //! frame back: each the magic `m2vstage`, the wire version, the payload's length and its checksum,
@@ -87,6 +89,12 @@ const DONE: u32 = 0;
 const COMPILE: u32 = 1;
 const NO_DEVICE: u32 = 2;
 const ENABLES: u32 = 3;
+/// The version of the helper's own code ([`serve_stage`] and what it runs in this module: `serve`,
+/// `compile`, `read_request`), which a [`StageBreach::Ended`] entry holds: one kept under a lower
+/// version is a miss and removed, so a fix of ours to a helper that ended asks the helper again.
+/// Bump it with every change to that code that changes what the helper does; a driver's fix needs
+/// none, as the stage key holds the driver's header.
+pub(crate) const HELPER_VERSION: u32 = 1;
 
 /// No Metal counterpart: what ended a helper's compile of a kernel past the stage bound, kept as
 /// the pipeline's entry ([`Device::record_stage_breach`], [`Device::fill_stage`]) so its makes are
@@ -105,14 +113,21 @@ pub enum StageBreach {
     /// The driver answered compile-required for the helper's cache data
     /// (`VK_PIPELINE_COMPILE_REQUIRED`): it would compile again in this process.
     CompileRequired,
+    /// No Metal counterpart, as Metal compiles in its own compiler service: the helper ended
+    /// before its whole reply ([`StageFill::Ended`]) and the consumer did not end it (no cap, no
+    /// time limit, no cancel), as a helper whose driver faults in the compile does. Kept with the
+    /// version of the runtime's helper code it ended under: a later runtime whose helper code
+    /// changed asks the helper again.
+    Ended,
 }
 
 impl StageBreach {
-    const ALL: [StageBreach; 4] = [
+    const ALL: [StageBreach; 5] = [
         StageBreach::Memory,
         StageBreach::Time,
         StageBreach::Compile,
         StageBreach::CompileRequired,
+        StageBreach::Ended,
     ];
 
     fn byte(self) -> u8 {
@@ -121,6 +136,7 @@ impl StageBreach {
             StageBreach::Time => 1,
             StageBreach::Compile => 2,
             StageBreach::CompileRequired => 3,
+            StageBreach::Ended => 4,
         }
     }
 }
@@ -143,8 +159,10 @@ pub struct StageSpans {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StageFill {
     /// The helper's reply did not come whole: it ended, was killed (a cap, a time limit, a
-    /// cancel) or closed its pipes first. Nothing is kept; the consumer keeps a cap's or a time
-    /// limit's end with [`Device::record_stage_breach`].
+    /// cancel) or closed its pipes first. Nothing is kept; the consumer keeps the end with
+    /// [`Device::record_stage_breach`]: a cap's as [`StageBreach::Memory`], a time limit's as
+    /// [`StageBreach::Time`], and the helper's own end, one the consumer did not cause, as
+    /// [`StageBreach::Ended`]. A cancel keeps nothing.
     Ended,
     /// The helper speaks another wire version: a helper of another build of the runtime.
     Version,
@@ -505,14 +523,22 @@ impl Device {
 
     /// No Metal counterpart: keeps `breach` as the entry of `request`'s pipeline, so its makes are
     /// refused ([`Gap::StageSize`]) with no helper asked again, until the driver's version changes:
-    /// what the consumer ended its helper for ([`StageBreach::Memory`], [`StageBreach::Time`]).
-    /// A memory breach is kept with the device's [`DeviceOptions::stage_memory_ceiling`], and a
-    /// device given a higher ceiling asks the helper again. A directory that takes no entry keeps
+    /// what the consumer ended its helper for ([`StageBreach::Memory`], [`StageBreach::Time`]),
+    /// or the helper's own end before its reply ([`StageBreach::Ended`]), the first such end being
+    /// the answer. A memory breach is kept with the device's
+    /// [`DeviceOptions::stage_memory_ceiling`], and a device given a higher ceiling asks the
+    /// helper again; an ended one is kept with the version of this runtime's helper code, and a
+    /// runtime whose helper code changed asks again. A directory that takes no entry keeps
     /// nothing.
     pub fn record_stage_breach(&self, request: &StageRequest, breach: StageBreach) {
         let core = self.core();
         if let Some(dir) = core.caches.dir() {
-            let entry = Entry::Breach(breach, core.stage_memory_ceiling);
+            let kept = match breach {
+                StageBreach::Memory => core.stage_memory_ceiling,
+                StageBreach::Ended => u64::from(HELPER_VERSION),
+                _ => 0,
+            };
+            let entry = Entry::Breach(breach, kept);
             keep_entry(&dir.join(STAGES), &request.0.key, &entry, STAGE_BOUNDS);
         }
     }
@@ -671,15 +697,17 @@ unsafe fn compile(core: &Core, request: &Request) -> Result<(Vec<u8>, u64), vk::
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Entry {
     Data(Vec<u8>),
-    /// A breach, with the memory ceiling ([`DeviceOptions::stage_memory_ceiling`]) a
-    /// [`StageBreach::Memory`] was kept under: written after the breach's byte for a memory breach
-    /// alone, and read as 0 where no ceiling follows the byte.
+    /// A breach, with what it was kept under: for a [`StageBreach::Memory`], the memory ceiling
+    /// ([`DeviceOptions::stage_memory_ceiling`]), 8 bytes after the breach's byte, read as 0 where
+    /// none follow it; for a [`StageBreach::Ended`], the [`HELPER_VERSION`], 4 bytes after it; 0
+    /// and nothing after the byte for the others.
     Breach(StageBreach, u64),
 }
 
 /// The entry of key `key` in `dir`, where it checks for a device of `header` given the memory
-/// ceiling `ceiling`, touched as used; a file that does not check, or a memory breach kept under a
-/// ceiling below `ceiling`, is a miss and removed (the module docs).
+/// ceiling `ceiling`, touched as used; a file that does not check, a memory breach kept under a
+/// ceiling below `ceiling`, or an ended one kept under a helper version below [`HELPER_VERSION`],
+/// is a miss and removed (the module docs).
 pub(crate) fn read_entry(
     dir: &Path,
     key: &[u8; 32],
@@ -697,13 +725,20 @@ pub(crate) fn read_entry(
             (BREACH, [byte, kept @ ..]) => {
                 let breach =
                     (StageBreach::ALL.into_iter()).find(|breach| breach.byte() == *byte)?;
-                let memory = breach == StageBreach::Memory;
-                let kept = match kept {
-                    [] => 0,
-                    kept if memory => u64::from_le_bytes(kept.try_into().ok()?),
+                let (kept, holds) = match (breach, kept) {
+                    (StageBreach::Memory, []) => (0, ceiling == 0),
+                    (StageBreach::Memory, kept) => {
+                        let kept = u64::from_le_bytes(kept.try_into().ok()?);
+                        (kept, kept >= ceiling)
+                    }
+                    (StageBreach::Ended, kept) => {
+                        let kept = u32::from_le_bytes(kept.try_into().ok()?);
+                        (u64::from(kept), kept >= HELPER_VERSION)
+                    }
+                    (_, []) => (0, true),
                     _ => return None,
                 };
-                (!memory || kept >= ceiling).then_some(Entry::Breach(breach, kept))
+                holds.then_some(Entry::Breach(breach, kept))
             }
             _ => None,
         }
@@ -729,10 +764,12 @@ pub(crate) fn keep_entry(dir: &Path, key: &[u8; 32], entry: &Entry, bounds: Stag
             body.push(DATA);
             body.extend_from_slice(data);
         }
-        Entry::Breach(breach, ceiling) => {
+        Entry::Breach(breach, kept) => {
             body.extend([BREACH, breach.byte()]);
-            if *breach == StageBreach::Memory {
-                body.extend(ceiling.to_le_bytes());
+            match breach {
+                StageBreach::Memory => body.extend(kept.to_le_bytes()),
+                StageBreach::Ended => body.extend(u32::try_from(*kept).unwrap_or(0).to_le_bytes()),
+                _ => {}
             }
         }
     }

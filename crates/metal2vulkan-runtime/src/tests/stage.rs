@@ -1,10 +1,11 @@
 //! Kernels past the stage bound: the `stages/` directory holds at most its bounds, the most
 //! recently used kept; an entry cut short, of another key or another driver's header is a miss and
-//! removed; a memory breach holds up to the memory ceiling it was kept under; the wire reads its
-//! own version alone; and on a device, a kernel past the bound is refused until its helper fills
-//! its entry, then made from that entry alone, leaving the device's own pipeline cache as it was
-//! and its content holding no shader module, and a breach refuses it with no helper asked again,
-//! a memory breach on a device given its ceiling or a lower one.
+//! removed; a memory breach holds up to the memory ceiling it was kept under, and a helper's own
+//! end down to the helper version it was kept under; the wire reads its own version alone; and on
+//! a device, a kernel past the bound is refused until its helper fills its entry, then made from
+//! that entry alone, leaving the device's own pipeline cache as it was and its content holding no
+//! shader module, and a breach refuses it with no helper asked again, a memory breach on a device
+//! given its ceiling or a lower one, and a helper that ended before its reply once kept.
 
 use crate::stage::{keep_entry, read_entry, read_frame, write_frame, Entry, Framing, StageBounds};
 use crate::StageBreach;
@@ -227,6 +228,81 @@ fn a_memory_breach_holds_to_its_ceiling_and_is_a_miss_above_it() {
     assert!(keep_entry(dir, &key(20), &Entry::Data(data(64)), bounds));
     let read = read_entry(dir, &key(20), &HEADER, u64::MAX);
     assert_eq!(read, Some(Entry::Data(data(64))));
+}
+
+/// The helper version this file last saw the helper's code at, with that code's digest
+/// ([`helper_code`]). A change to the helper's code fails
+/// [`an_ended_breach_holds_to_its_helper_version_and_is_a_miss_below_it`] until
+/// `HELPER_VERSION` is bumped and the pair here is the new one.
+const HELPER_CODE: (u32, &str) = (
+    1,
+    "e07cb0488c4727ba561f38bd47ba8e978ddffececb964a5762d5e6b7384ef0d6",
+);
+
+/// The helper's own code as stage.rs holds it: `serve_stage` through `compile`, and
+/// `read_request`, each line trimmed, blank and comment lines left out.
+fn helper_code() -> String {
+    use sha2::{Digest, Sha256};
+    let source = include_str!("../stage.rs");
+    let span = |from: &str, to: &str| {
+        let start = source
+            .find(from)
+            .unwrap_or_else(|| panic!("stage.rs: {from}"));
+        let end = source[start..]
+            .find(to)
+            .unwrap_or_else(|| panic!("stage.rs: {to}"));
+        &source[start..start + end]
+    };
+    let code = [
+        span("pub fn serve_stage(", "\n/// What an entry holds."),
+        span("fn read_request(", "\n}\n"),
+    ];
+    let lines: Vec<&str> = (code.iter().flat_map(|text| text.lines()))
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with("//"))
+        .collect();
+    let digest = Sha256::digest(lines.join("\n").as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// A helper's own end kept as a breach holds the helper version it was kept under, 4 bytes after
+/// its byte, under every memory ceiling; one kept under a lower version, or with no version or
+/// another length after its byte, is a miss and removed. The helper's code is the code the
+/// version was last bumped for, so a fix of it that misses the bump fails here.
+#[test]
+fn an_ended_breach_holds_to_its_helper_version_and_is_a_miss_below_it() {
+    let scratch = Scratch::new("stage-ended");
+    let dir = &scratch.0;
+    let bounds = crate::stage::STAGE_BOUNDS;
+    let path = |at: u8| dir.join(crate::cache::hex(&key(at)));
+    let version = crate::stage::HELPER_VERSION;
+    let ended = Entry::Breach(StageBreach::Ended, u64::from(version));
+    assert!(keep_entry(dir, &key(1), &ended, bounds));
+    let len = fs::metadata(path(1)).expect("the entry").len();
+    assert_eq!(
+        len, 62,
+        "the frame, the key, the breach and its helper version"
+    );
+    for ceiling in [0, 8 << 30, u64::MAX] {
+        let read = read_entry(dir, &key(1), &HEADER, ceiling);
+        assert_eq!(read.as_ref(), Some(&ended), "at {ceiling}");
+    }
+    let lower = (version - 1).to_le_bytes();
+    for kept in [
+        &[1, 4, lower[0], lower[1], lower[2], lower[3]][..],
+        &[1, 4],
+        &[1, 4, 1],
+    ] {
+        write_raw(dir, 2, kept);
+        assert_eq!(read_entry(dir, &key(2), &HEADER, 0), None, "{kept:?}");
+        assert!(!path(2).exists(), "{kept:?} is removed");
+    }
+    let code = helper_code();
+    assert_eq!(
+        (version, code.as_str()),
+        HELPER_CODE,
+        "the helper's code changed since HELPER_VERSION was bumped: bump it and record the new pair"
+    );
 }
 
 /// A frame reads back whole; one of another wire version is refused as such; one cut short or
@@ -453,6 +529,66 @@ mod on_device {
                 spans.device_nanos / 1_000_000,
                 spans.compile_nanos / 1_000_000
             );
+        }
+    }
+
+    /// A helper that ends before its reply, as one whose driver faults in the compile does, gives
+    /// the fill [`crate::StageFill::Ended`]; the consumer keeps that end as
+    /// [`StageBreach::Ended`], and the next make, and a later device's on the same directory, is
+    /// refused ([`Gap::StageSize`]) with no helper asked again and no fill counted.
+    #[test]
+    fn a_helper_that_ends_before_its_reply_is_kept_as_an_ended_breach() {
+        let Some(descriptor) = tiled() else {
+            return;
+        };
+        crate::stage::TEST_BOUND.store(1, Relaxed);
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        let make = |device: &Device| {
+            device.new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers)
+        };
+        let refused_as_ended = |name: &str, device: &Device| {
+            let refused = make(device).err();
+            assert!(
+                matches!(
+                    refused,
+                    Some(Error::Unsupported(Gap::StageSize {
+                        cause: StageGap::Breach(StageBreach::Ended),
+                        ..
+                    }))
+                ),
+                "{name}: {refused:?}"
+            );
+        };
+        for (name, physical) in &devices {
+            let scratch = Scratch::new("stage-ended-device");
+            let device = on(name, physical, Some(&scratch.0), 0);
+            if !crate::tests::keeps_a_blob(name, &device) {
+                continue;
+            }
+            let request = match make(&device) {
+                Err(Error::StageUnfilled(request)) => request,
+                other => panic!("{name}: {:?}", other.err()),
+            };
+            // The helper reads the request whole and ends with no reply.
+            let (mut helper_in, to_helper) = std::io::pipe().expect("a pipe");
+            let (from_helper, helper_out) = std::io::pipe().expect("a pipe");
+            let filled = std::thread::scope(|scope| {
+                scope.spawn(move || {
+                    std::io::copy(&mut helper_in, &mut std::io::sink()).expect("the request");
+                    drop(helper_out);
+                });
+                device.fill_stage(&request, to_helper, from_helper)
+            });
+            assert_eq!(filled.err(), Some(crate::StageFill::Ended), "{name}");
+            device.record_stage_breach(&request, StageBreach::Ended);
+            refused_as_ended(name, &device);
+            drop(device);
+            let device = on(name, physical, Some(&scratch.0), 0);
+            refused_as_ended(name, &device);
+            assert_eq!(device.counters().metrics().stage_fills, 0, "{name}");
+            println!("{name}: a helper's own end before its reply kept, the make refused twice");
         }
     }
 

@@ -8625,6 +8625,7 @@ variant	metal2vulkan-runtime::Stage::Object	Object
 variant	metal2vulkan-runtime::Stage::Vertex	Vertex
 variant	metal2vulkan-runtime::StageBreach::Compile	Compile
 variant	metal2vulkan-runtime::StageBreach::CompileRequired	CompileRequired
+variant	metal2vulkan-runtime::StageBreach::Ended	Ended
 variant	metal2vulkan-runtime::StageBreach::Memory	Memory
 variant	metal2vulkan-runtime::StageBreach::Time	Time
 variant	metal2vulkan-runtime::StageFill::Compile	Compile(vk::Result)

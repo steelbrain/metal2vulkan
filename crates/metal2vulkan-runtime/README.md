@@ -3055,6 +3055,16 @@ partial-threadgroup one with a required subgroup size of 32; on the Iris Xe it i
 So on the RTX 3090 and the RX 7900 XTX these kernels are made at 1,024 threads a threadgroup within
 the cap, and on the Iris Xe none of them is made at either width.
 
+The Iris Xe's end of b89e2e87392d4527 at 1,024 is a fault in ANV's compiler: a read at a null
+base plus 0x40 inside a recursive function of `libvulkan_intel.so`, under the helper's
+`vkCreateComputePipelines` (Mesa 26.2.6), at 1,289 MiB after 45 to 47 s, read with a debugger in
+two asks (job m3-max-68793). Job m3-max-68748 ended the same fill eight times, its first after
+48.8 s and seven re-asks after 1.2 to 1.3 s each; the five ends read (both asks of m3-max-68793,
+and the first and two re-asks of m3-max-68748 from their cores, job m3-max-68824) fault at
+`libvulkan_intel.so + 0xc863` with the same stack: the re-asks read the driver's own cache
+(inferred: same fault offset, 1.2 s against 46 s; not shown by a file listing). Such an end is
+kept as `StageBreach::Ended` (below).
+
 Render stages have a bound of their own, 99,109, as no helper compiles a render stage: a render
 pipeline with a stage past it is refused (Known gaps of render pipeline states), and one at or
 under it compiles in the process that runs the program with no cap, past the kernels' bound too.
@@ -3090,10 +3100,12 @@ heaviest such stage's weight.
   `deviceUUID`, `driverUUID`, pipeline cache header and enables, so the helper opens the same
   device with the same features; a helper whose device differs is answered `StageFill::NoDevice`
   or `StageFill::Enables`, and one of another build of the runtime `StageFill::Version`.
-- rt starts, caps, times and kills no process. A consumer that ends its helper for its memory cap
-  or its time limit keeps that with `Device::record_stage_breach` (`StageBreach::Memory`,
-  `StageBreach::Time`); a compile the driver failed is kept as `StageBreach::Compile` by
-  `fill_stage`. A breach is an entry of the same directory, and refuses the pipeline's makes
+- rt starts, caps, times and kills no process, and asks no helper again. A consumer that ends its
+  helper for its memory cap or its time limit keeps that with `Device::record_stage_breach`
+  (`StageBreach::Memory`, `StageBreach::Time`), and one whose helper ended before its reply
+  (`StageFill::Ended`) with no end of the consumer's, as a helper whose driver faults in the
+  compile does, keeps that as `StageBreach::Ended`: the first such end is the answer. A compile
+  the driver failed is kept as `StageBreach::Compile` by `fill_stage`. A breach is an entry of the same directory, and refuses the pipeline's makes
   (`Gap::StageSize`, `StageGap::Breach`) with no helper asked again. So does cache data the driver
   answers compile-required for (`StageBreach::CompileRequired`): it is not filled a second time.
   The stage key holds the driver's pipeline cache header, so a new driver version asks again.
@@ -3107,6 +3119,10 @@ heaviest such stage's weight.
   below, it refuses as before. A memory breach entry that holds the breach's byte alone, with no
   ceiling after it, counts as kept under 0. Time, compile and compile-required breaches hold no
   ceiling.
+- An ended breach holds the version of rt's helper code it was kept under (4 bytes), which rises
+  with each change to what `serve_stage` does. Under a later version its entry is a miss and is
+  removed, and the make is refused with `Error::StageUnfilled` again, so a fix of rt's helper asks
+  the helper again; a driver's fix asks again through the driver's header in the key.
 - The entries are files of the cache directory only: nothing of an entry stays in memory past
   the call that reads or writes it. Each holds its key again under a magic, its length and its
   checksum; one that does not check, names another key or holds data that does not begin with the
