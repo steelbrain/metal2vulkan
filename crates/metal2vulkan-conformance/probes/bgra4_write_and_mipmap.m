@@ -1,27 +1,29 @@
-// `MTLPixelFormatBGRA4Unorm` (raw 44, a private format): the three Metal answers the runtime
-// holds no measurement of, and the controls that make each reading trustworthy. Nothing here is
-// drawn or read outside a texture's own bytes, so no step can fault the GPU.
+// `MTLPixelFormatBGRA4Unorm` (raw 44, a private format): three of its Metal answers, and the
+// controls that make each reading trustworthy. Nothing here is drawn or read outside a texture's
+// own bytes, so no step can fault the GPU.
 //
-// The format has an exact Vulkan image (`A4R4G4B4_UNORM_PACK16`, bit for bit), but three of its
-// answers were never asked of Metal, and each one gates a piece of the runtime:
+// The format has an exact Vulkan image (`A4R4G4B4_UNORM_PACK16`, bit for bit). What the runtime
+// does with each of the three answers:
 //
-//   1. **The colour-attachment write conversion** (`metal::format::write_conversion`, today
-//      `WriteConversion::Unmeasured`). The other four packed 16-bit unorm formats were measured to
-//      round a `float` output to a `half` first and then as a unorm channel
-//      (`ChannelWrite::HalfUnorm`), but this format was never drawn into, so a fragment function
-//      writing it stores what the device computes rather than Metal's code. Six committed profiles
-//      render the format directly (RADV x2, lavapipe x2, ANV x2), so the rule is reachable there.
-//   2. **`generateMipmapsForTexture:`** (absent from `mipmap_answers.txt`). Its four 4-bit fields
-//      from bit 0 are `ABGR4Unorm`'s, in a channel order neither Metal's filter nor
-//      `bind::mipmap_filter`'s rule reads -- but that is an argument about our kernel, not a
-//      measurement of Metal, which is why the refusal stands until this runs.
-//   3. **The word-view render fallback** (`metal::format::word`, which has no entry for it).
-//      `A4R4G4B4_UNORM_PACK16` carries no `COLOR_ATTACHMENT` and no `BLIT_DST` on `moltenvk-m3` or
-//      `nvidia-rtx5080-laptop`, while `R16_UINT` carries `COLOR_ATTACHMENT` on both, so without the fallback a render target of this format is refused on Metal's own
-//      device. Taking it, though, turns `framebuffer_fetch::renders_through_words` true on
-//      MoltenVK -- an `any` over `PixelFormat::ALL` -- which turns the `ProgrammableBlending`
-//      family row into `RowState::Gap`, and `RowState::blocks()` means MoltenVK would then claim
-//      no Apple family at all. Leg C settles whether that gap is ours or Metal's.
+//   1. **The colour-attachment write conversion.** `metal::format::write_conversion` holds each
+//      of the four channels as `ChannelWrite::HalfUnorm { bits: 4 }`, the `WRITE` leg's reading.
+//      A device that renders the format's own image converts a fragment function's output itself,
+//      and the function records the static `PrecisionNote::DeviceColorConversion`
+//      (`lower::stage_io::color_write`).
+//   2. **`generateMipmapsForTexture:`.** The runtime's `BlitCommandEncoder::generate_mipmaps`
+//      takes the format as it takes every float colour format: one `vkCmdBlitImage` a level with
+//      the device's linear filter over the texture's own image, under the static
+//      `PrecisionNote::DeviceFilteredMipmaps`, and `Gap::MipmapFilter` where the device's optimal
+//      image of the format has no blit source, blit destination or linear filter. Nothing refuses
+//      the format's mipmaps, and nothing reads the `MIP` leg's levels.
+//   3. **The word-view render fallback.** `metal::format::WordAttachment::layout` holds the
+//      format's word as red at bit 8, green at 4, blue at 0 and alpha at 12, the `WRITE` leg's
+//      `hot` words. A device that samples `A4R4G4B4_UNORM_PACK16` but does not render it renders
+//      the attachment through an `R16_UINT` view of the texture, the fragment function writing the
+//      word Metal stores (`metal::format::word`). Through that view a blend other than factors
+//      one and zero is not built, and a colour input of the attachment is
+//      `NotImplemented(Format)` (`lower::fragment::color`), where the `FETCH` and `BLEND` legs
+//      measured Metal taking both.
 //
 // **The legs.**
 //
@@ -64,30 +66,6 @@
 //     cannot be reproduced, and its fields are the same four 4-bit fields, so the same bytes are
 //     the right inputs.
 //
-// **What each reading licenses.**
-//
-//   * `WRITE ... EXPLAINS half-unorm/nearest-even` for all four channels of `BGRA4Unorm`, with both
-//     controls reproducing their recorded rules, licenses `write_conversion` returning
-//     `Rules([ChannelWrite::HalfUnorm { bits: 4 }; 4])`, and the `hot` words license
-//     `WordAttachment::layout` as red at bit 8, green at 4, blue at 0 and alpha at 12. Any other
-//     rule, or a field at another bit, is the measurement and the code follows it.
-//   * `MIP` lines that reproduce the controls' 27.0.1 column license adding a `BGRA4Unorm` block to
-//     `mipmap_answers.txt` and dropping the format from `mipmap_plan::not_implemented`; they also
-//     license `bind::mipmap_filter` computing it (`layout.rs`: `P::ABGR4Unorm | P::BGRA4Unorm =>
-//     (2, uniform(4, 4, widened(4, 8)))`, plus the `half` set, plus `unlike_an_m3`), which is what
-//     makes the path work on MoltenVK at all, since no blit chain can run there without `BLIT_DST`.
-//     Its macOS 26.7 passes cannot be measured on this Mac, so `unlike_an_m3` stays true below the
-//     first level under `MipmapRule::AppleM3MaxPasses` -- an announcement, not a refusal.
-//   * `FETCH BGRA4Unorm REFUSED-BY-METAL` means the runtime's refusal of a fetch of a word
-//     attachment matches Metal, so the format must not count toward
-//     `framebuffer_fetch::renders_through_words`, MoltenVK's `ProgrammableBlending` row stays
-//     `Exact`, and the word-view fallback can be taken. `FETCH BGRA4Unorm TAKEN-BY-METAL` means the
-//     gap is ours, and the fallback waits on a packed-16 word fetch in
-//     `lower::fragment::fetch` rather than being bought at the price of every Apple family on
-//     MoltenVK.
-//   * `BLEND ... REFUSED-BY-METAL` would likewise mean the word view's "no blend but one and zero"
-//     refusal matches Metal rather than being a gap.
-//
 // clang -O2 -fobjc-arc -framework Metal -framework Foundation \
 //     -o bgra4_write_and_mipmap bgra4_write_and_mipmap.m
 //
@@ -108,7 +86,7 @@
 //     `ABGR4Unorm`'s 27.0.1 answer byte for byte.
 //   * `FETCH BGRA4Unorm TAKEN-BY-METAL`, rotating all 16 words exactly through the measured
 //     layout, and `BLEND BGRA4Unorm source-over TAKEN-BY-METAL`. So the word view's refusals
-//     would be our gap, and the fallback was NOT taken.
+//     of both are our gap, not Metal's.
 //
 // One defect in that run, fixed here: the `RGBA8Unorm` fetch control read a 4-byte texel back with
 // `bytesPerRow` 8, which raised two AGX assertions and zeroed its texel lines. Its pipeline
