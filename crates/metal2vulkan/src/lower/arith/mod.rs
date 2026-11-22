@@ -46,8 +46,8 @@
 //! input within the device's floating-point environment: signed zeros, infinities, and NaNs are
 //! preserved by `SignedZeroInfNanPreserve` where an operation without `nnan`/`ninf`/`nsz` requires
 //! it and the profile supports it (else `PrecisionNote::DeviceSignedZeroInfNan`), while denormal
-//! flushing and the rounding mode are the device default (`f32` denormals noted
-//! `PrecisionNote::DeviceDenormals` where the device is not measured to read them as Metal does,
+//! flushing and the rounding mode are the device default (an operation that leaves `f32`
+//! denormals to the device records the static `PrecisionNote::DeviceDenormals` on every device,
 //! [`denormal`]; the rounding mode decides the inexact `FConvert` narrowings and integer-to-float
 //! conversions, which Vulkan leaves to the device without `RoundingModeRTE`), but in an entry that
 //! rounds to `half` under the float controls ([`narrow::controlled_modes`]), which declares
@@ -1045,15 +1045,13 @@ fn device_float_notes(f: Form, denormals: bool, nans: bool) -> impl Iterator<Ite
 
 /// The precision notes the lowering of the float binary operator `op` with fast-math flags `fmf`
 /// on operands of format `fmt` records for the operator itself on profile `p`: a division or
-/// remainder is the device's arithmetic, and a `float` operator leaves its denormals to the device
-/// where it is not measured to read them as Metal does (Metal flushes `f32` denormals,
-/// [`leave_denormals`]); a `float` remainder also leaves the NaN encoding to it, where `+ - *`
-/// answer Metal's `0x7fc00000`. Metal's precise division ([`divide::precise`]: an `fdiv` on
-/// `float` without `arcp`, or on `half`) is the device's `OpFDiv` (`NativeDivision`), whose
-/// denormals no device is measured to read as Metal does. Metal's fast division (an `fdiv` on
-/// `float` with `arcp`) is the device's `OpFDiv(x, y)` too; where the profile's `float` functions
-/// are Metal's, the quotient of an entry Metal compiles with fast math is Metal's own fast
-/// division, and the notes hold only outside one. LLVM's `frem` on `float` without every
+/// remainder is the device's arithmetic, and a `float` operator leaves its denormals to the device,
+/// noted `DeviceDenormals` on every device (Metal flushes `f32` denormals, [`leave_denormals`]); a
+/// `float` remainder also leaves the NaN encoding to it, where `+ - *` answer Metal's
+/// `0x7fc00000`. Metal's precise division ([`divide::precise`]: an `fdiv` on `float` without
+/// `arcp`, or on `half`) is the device's `OpFDiv` (`NativeDivision`), its denormals the device's.
+/// Metal's fast division (an `fdiv` on `float` with `arcp`) is the device's `OpFDiv(x, y)` too
+/// (`DeviceArithmetic`, `NativeDivision`, `DeviceDenormals`). LLVM's `frem` on `float` without every
 /// fast-math flag is the device's `OpFRem`, `x - y · trunc(x / y)` at its precision, as Metal
 /// computes it of its precise quotient. Beside these, an addition, subtraction, or multiply whose
 /// flags let the device fuse or regroup it with an operand's definition records
@@ -2037,11 +2035,10 @@ fn native_fma(fma: fma::Fma) -> BTreeSet<PrecisionNote> {
 /// fast-math flags `fmf`, on operands of form `f`, on a profile with float facts `facts`
 /// ([`FloatFacts`]); `None` where the form refuses the function (it is not a float, or a `double`
 /// the function does not take). A Metal NaN the call answers is the device's, noted
-/// `NativeNanEncoding` where the device is not measured to answer it (as [`with_nan`] records it),
-/// and Metal's minimum and maximum functions are the device's, noted `NativeMinMax`
-/// ([`native_min_max`]); the `f32` denormals the device reads where the
-/// table covers the call but the profile lacks the deviation are noted `DeviceDenormals`
-/// ([`coverage_left`]).
+/// `NativeNanEncoding` (as [`with_nan`] records it), and Metal's minimum and maximum functions are
+/// the device's, noted `NativeMinMax` ([`native_min_max`]); the `f32` denormals the device reads
+/// where Metal's table covers the call are noted `DeviceDenormals` ([`coverage_left`]). Each is a
+/// static note of the call's lowering, never decided by a measurement of the device.
 fn float_call(
     op: FloatFn,
     fast: bool,
@@ -2059,8 +2056,7 @@ fn float_call(
             native.insert(PrecisionNote::NativeMinMax);
         }
     }
-    // The `f32` denormals the device reads where it is not measured to read them as Metal does
-    // ([`leave_denormals`]).
+    // The `f32` denormals the device reads, which Metal's table covers ([`leave_denormals`]).
     if coverage_left(call.how, f) {
         native.insert(PrecisionNote::DeviceDenormals);
     }
@@ -2137,7 +2133,7 @@ fn float_call_of(
     // `air.fast_fmod` on `float` is Metal's composition around a fused multiply-add, of the
     // device's quotient; the fast-math table is single precision, so a narrow call keeps `fmod`.
     // Metal reads a denormal operand as the zero of its sign and answers no denormal, in both
-    // modes; the device's reading is noted where the profile lacks the deviation
+    // modes; the device's reading is noted where the multiply-add is the device's own instruction
     // ([`coverage_left`]).
     if fast && op == FloatFn::Fmod && f.float_fmt() == Some(FloatFmt::F32) {
         if let Some(fma) = fma::Fma::by(routes, f) {

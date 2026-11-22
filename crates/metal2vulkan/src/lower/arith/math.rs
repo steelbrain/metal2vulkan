@@ -1173,8 +1173,7 @@ impl FloatFn {
     /// its instruction's
     /// ([`FloatFn::native_instruction`]), the device's picks, `median3` and, on `float` and
     /// `half`, `fmin`, `fmax`, `min3`, `max3`, and `clamp`, which return an operand (two NaNs'
-    /// answer is `PrecisionNote::NativeMinMax`'s where the device is not measured to pick
-    /// Metal's), and `ldexp` on `float`, whose lowering on the bits answers a NaN operand itself,
+    /// answer is the device's pick, noted `PrecisionNote::NativeMinMax`), and `ldexp` on `float`, whose lowering on the bits answers a NaN operand itself,
     /// bit for bit, as Metal does ([`ldexp_bits`]; `nan::NanAnswer::Operand`) on every device.
     pub fn metal_nans(self, fmt: FloatFmt) -> bool {
         use FloatFn as F;
@@ -1711,8 +1710,8 @@ impl PowrOperands {
 /// (`inf * 0`). Devices answer `0` or `1` there (`GLSL.std.450 Pow` leaves `x < 0` and `x = 0,
 /// y <= 0` undefined), so the NaN is a capability the device lacks, not an answer it gives
 /// otherwise. The operands are classed once ([`PowrOperands`]), by the device's comparisons: an
-/// `f32` denormal is a zero, or below zero, as the device reads it (`PrecisionNote::DeviceDenormals`
-/// where it is not measured to read it as Metal does). `float` and `half`; `bfloat` keeps `r`
+/// `f32` denormal is a zero, or below zero, as the device reads it (`PrecisionNote::DeviceDenormals`,
+/// the call's static note). `float` and `half`; `bfloat` keeps `r`
 /// (not measured).
 pub(super) fn powr_nan(
     fb: &mut FunctionBuilder<'_>,
@@ -2094,8 +2093,8 @@ fn log10(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
 /// - `pow(x, ±0)` is `1` for every `x`, even a NaN.
 ///
 /// Zeros and signs are the device's comparisons: an `f32` denormal is a zero, or below zero, as
-/// the device reads it (`PrecisionNote::DeviceDenormals` where it is not measured to read it as
-/// Metal does). Every other operand, `pow(x, 1)` included, is the device's `Pow`.
+/// the device reads it (`PrecisionNote::DeviceDenormals`, the call's static note). Every other
+/// operand, `pow(x, 1)` included, is the device's `Pow`.
 pub(super) fn pow_special(
     fb: &mut FunctionBuilder<'_>,
     f: Form,
@@ -2151,8 +2150,8 @@ pub(super) fn pow_special(
 }
 
 /// Whether lanes of `v` (floats of form `f`) are zeros by the device's comparison, either sign:
-/// an `f32` denormal is one where the device reads it as zero (`PrecisionNote::DeviceDenormals`
-/// where it is not measured to read it as Metal does).
+/// an `f32` denormal is one where the device reads it as zero (`PrecisionNote::DeviceDenormals`,
+/// the calling function's static note).
 fn is_zero(fb: &mut FunctionBuilder<'_>, f: Form, v: Value) -> BResult<Value> {
     let zero = wide_splat(fb, f, 0.0)?;
     bin(fb, BinOp::FOrdEqual, v, zero)
@@ -2160,7 +2159,7 @@ fn is_zero(fb: &mut FunctionBuilder<'_>, f: Form, v: Value) -> BResult<Value> {
 
 /// A NaN of the device's arithmetic from operands `a` and `b`, at least one of them a NaN: their
 /// sum, whose NaN propagation (sign and payload) is the device's own
-/// (`PrecisionNote::NativeNanEncoding` where it is not measured to be Metal's).
+/// (`PrecisionNote::NativeNanEncoding`, the calling function's static note).
 fn device_nan(fb: &mut FunctionBuilder<'_>, a: Value, b: Value) -> BResult<Value> {
     fb.binary_with(BinOp::FAdd, a, b, Contraction::Forbidden)
 }
@@ -2196,7 +2195,7 @@ fn sign_set(fb: &mut FunctionBuilder<'_>, f: Form, v: Value) -> BResult<Value> {
 /// answers: `0x40490fdb`, `0x3fc90fdb`, `0x3f490fdb`, `0x4016cbe4`; `half` `0x4248`, `0x3e48`,
 /// `0x3a48`, `0x40b6`, which the final rounding gives from the `f32` constants). A zero is told by
 /// the device's comparison, so an `f32` denormal operand is a zero where the device reads it so
-/// (`PrecisionNote::DeviceDenormals` where it is not measured to read it as Metal does), and the
+/// (`PrecisionNote::DeviceDenormals`, the call's static note), and the
 /// generic answer, a denormal among them, is the device's `Atan2`.
 pub(super) fn atan2_special(
     fb: &mut FunctionBuilder<'_>,

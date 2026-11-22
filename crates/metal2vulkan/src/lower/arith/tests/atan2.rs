@@ -6,7 +6,7 @@
 //! value decides must equal Metal's answer bit for bit (a NaN any NaN, its bits the device's), and
 //! every other lane must be the generic value (or the stand-in's), so the special values read
 //! neither. An `f32` denormal operand is a value, as the interpreter reads it, where Metal reads a
-//! zero (`PrecisionNote::DeviceDenormals` off a device measured to read it as Metal does).
+//! zero (`PrecisionNote::DeviceDenormals`, the static note of both functions on `float`).
 
 use super::*;
 
@@ -513,8 +513,8 @@ fn kept_reciprocal_infinite(y: u32, x: u32) -> Option<u32> {
 /// included: the correctly rounded quotient with every flag, and without it `y` times the device's
 /// reciprocal. Beyond `2^126` that reciprocal is an `f32` denormal, which the interpreter keeps
 /// and Metal flushes: there a finite `y` takes the stand-in of the product and an infinite one
-/// `±π/2` turned, where Metal answers a signed zero and NaN (`PrecisionNote::DeviceDenormals` off
-/// a device measured to flush as Metal does). Operands beyond the grid check the scaled division
+/// `±π/2` turned, where Metal answers a signed zero and NaN (`PrecisionNote::DeviceDenormals`, the
+/// call's static note). Operands beyond the grid check the scaled division
 /// near `2^126` and `FLT_MAX`, and the reciprocal there. The lanes with a denormal operand, which
 /// Metal reads as a zero, are the device's reading and left out.
 #[test]
