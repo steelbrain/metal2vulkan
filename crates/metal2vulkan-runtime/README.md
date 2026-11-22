@@ -209,7 +209,9 @@ out a device address of, each counted at the first (`exported_blocks_addressed`,
 block's rule in Textures below), 0 where none went out; the pipeline cache's replacements past its
 bound and its blob writes skipped past it (`pipeline_caches_replaced`,
 `pipeline_cache_writes_skipped`, The cache directory below); the dispatches that ran a kernel's
-emulated-SIMD-group module (`emulated_simdgroup_dispatches`, Compute pipeline states below);
+emulated-SIMD-group module (`emulated_simdgroup_dispatches`, Compute pipeline states below); the
+compiled contents a state's make dropped because an equal one landed in the device's map first
+(`kernel_makes_dropped`);
 `gauges()` are live counts per kind of resource, every one zero after teardown, and
 `handles_out`, 1 while a handle of the device is out (Teardown). They are relaxed atomics, always
 on. What an encoder's commands count arrives when the encoder ends.

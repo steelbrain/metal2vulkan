@@ -5,7 +5,8 @@
 //!   twice.
 //! - Under a device cfg, on every device of the cfg's kind: two states of one content share one
 //!   translation, one shader module and one `VkPipeline` per variant, for a kernel that tiles its
-//!   grid and for one that observes its threadgroups; states of other constant values, or of
+//!   grid and for one that observes its threadgroups, and a make whose equal landed in the map
+//!   first is dropped and counted; states of other constant values, or of
 //!   other linked functions, do not share; filled past a cap of 2, the map holds 2, a forgotten
 //!   kernel lives while a state holds it and goes once that state does, and a content forgotten
 //!   compiles again; every gauge reads 0 once the device is gone.
@@ -47,6 +48,7 @@ fn the_map_holds_its_cap_and_forgets_the_least_recently_used() {
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
+    use crate::kernel_map::KernelKey;
     use crate::tests::command::on_device::each_device;
     use crate::{
         ComputePipelineDescriptor, ComputePipelineState, Device, FunctionDescriptor, Library,
@@ -122,7 +124,9 @@ mod on_device {
     /// per variant: `a1_bool_from_float`, which tiles its grid (one lowering, and its tiles'
     /// `VkPipeline` made with the first state alone), and `icb_replay_grid_template`, which
     /// observes its threadgroups (two lowerings, with the first state alone). The map holds one
-    /// entry each, and a kernel lives while a state or the map holds it.
+    /// entry each, and a kernel lives while a state or the map holds it. A make kept under a key
+    /// the map holds already answers the map's kernel, and counts in
+    /// `Metrics::kernel_makes_dropped`.
     #[test]
     fn every_device_shares_one_compiled_kernel_between_states_of_one_content() {
         let (Some(tiled), Some(observing)) = (
@@ -181,6 +185,21 @@ mod on_device {
                 // The map holds it still, beside this test's handle.
                 assert_eq!(Arc::strong_count(&compiled), 2, "{name}: {kernel}");
             }
+            // A make whose equal landed first: the observing kernel's content kept under the
+            // tiled kernel's key, which the map holds.
+            let core = device.core();
+            let key = |descriptor: &ComputePipelineDescriptor| KernelKey {
+                pipeline: core.translator.compute_pipeline_key(descriptor),
+                required: descriptor.required_threads_per_threadgroup,
+            };
+            let held = (core.kernels.find(&key(&tiled))).expect("the tiled kernel");
+            let ours = (core.kernels.find(&key(&observing))).expect("the observing kernel");
+            let dropped = counters.metrics().kernel_makes_dropped;
+            let kept = core.kernels.keep(key(&tiled), ours, &core.counters);
+            assert!(
+                Arc::ptr_eq(&kept, &held) && counters.metrics().kernel_makes_dropped == dropped + 1,
+                "{name}: a make whose equal landed first, dropped and counted"
+            );
             let gauges = counters.gauges();
             assert_eq!(
                 (gauges.kernels, gauges.kernel_entries),

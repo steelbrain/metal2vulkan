@@ -6,7 +6,7 @@
 //! have let it go. The translator's keys name their kind (`compute` or `render`), so a key of
 //! one kind never meets a content of the other.
 
-use crate::counters::{Counters, Gauge};
+use crate::counters::{Counters, Gauge, Metric};
 use crate::device::lock;
 use crate::pipeline::Compiled;
 use crate::render::RenderCompiled;
@@ -37,6 +37,16 @@ pub(crate) struct KernelKey {
 pub(crate) enum Content {
     Kernel(Arc<Compiled>),
     Render(Arc<RenderCompiled>),
+}
+
+impl Content {
+    /// The address of what it holds, which names it.
+    fn at(&self) -> *const () {
+        match self {
+            Content::Kernel(compiled) => Arc::as_ptr(compiled).cast(),
+            Content::Render(compiled) => Arc::as_ptr(compiled).cast(),
+        }
+    }
 }
 
 /// The device's map of compiled contents.
@@ -99,7 +109,11 @@ impl KernelMap {
     fn keep_content(&self, key: KernelKey, content: Content, counters: &Counters) -> Content {
         // What the map lets go is dropped after its lock, as a content's end gives the reaper
         // work.
+        let ours = content.at();
         let (kept, gone) = lock(&self.map).keep(key, content);
+        if kept.at() != ours {
+            counters.count(Metric::KernelMakesDropped);
+        }
         // A new entry beside the others is one more; one in place of the oldest, or the entry
         // held already, leaves as many.
         if gone.is_none() {
