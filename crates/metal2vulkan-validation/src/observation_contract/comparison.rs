@@ -286,7 +286,6 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::DeviceSampleLevel
         | N::Fp8Value
         | N::MultisamplePosition
-        | N::RasterizationRateMap
         | N::BicubicFilterArithmetic
         | N::SparseResidency
         | N::RestrictedDepthRange
