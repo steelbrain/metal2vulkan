@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1325 |
 | distinct SDK items the Metal leg reaches, of any status | 808 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7943 |
+| ledger rows (a case whose gap is recorded) | 7953 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -10007,4 +10007,14 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pixel-samplers-rgba16f-nearest-zero` | The device's own answer (rule 1): `norm` differs from Metal's (`arg`, `const` and `slot` read Metal's answer). The device's nearest filter at the normalized coo… |
 | `pixel-samplers-rgba16f-nearest-zero` | The device's own answer (rule 1): `norm` differs from Metal's (`arg`, `const` and `slot` read Metal's answer). The device's nearest filter at the normalized coo… |
 | `stage-in-region-clamps` | refused: no stream uses it yet (four-case census, m3-max-62954..62957: 35 streams, no setStageInRegionWithIndirectBuffer:indirectBufferOffset:). rt refuses the … |
+| `attribute-format-fetches` | The device's own answer (rule 1): a NaN of a `half` or `RG11B10` stage-in attribute widened by the shader's fetch on the device keeps its payload where Metal re… |
+| `attribute-format-fetches` | The device's own answer (rule 1): a NaN of a `half` or `RG11B10` stage-in attribute widened by the shader's fetch on the device keeps its payload where Metal re… |
+| `attribute-format-fetches` | The device's own answer (rule 1): a NaN of a `half` or `RG11B10` stage-in attribute widened by the shader's fetch on the device keeps its payload where Metal re… |
+| `attribute-format-fetches` | The device's own answer (rule 1): a NaN of a `half` or `RG11B10` stage-in attribute widened by the shader's fetch on the device keeps its payload where Metal re… |
+| `attribute-format-fetches` | The device's own answer (rule 1): a NaN of a `half` or `RG11B10` stage-in attribute widened by the shader's fetch on the device keeps its payload where Metal re… |
+| `attribute-format-fetches` | A conversion answer (rule 1) under its static note: the pulled fetch's own product of the code and its maximum's reciprocal, rounded once, which the note's reco… |
+| `attribute-format-fetches` | A conversion answer (rule 1) under its static note: the pulled fetch's own product of the code and its maximum's reciprocal, rounded once, which the note's reco… |
+| `attribute-format-fetches` | A conversion answer (rule 1) under its static note: the pulled fetch's own product of the code and its maximum's reciprocal, rounded once, which the note's reco… |
+| `attribute-format-fetches` | A conversion answer (rule 1) under its static note: the pulled fetch's own product of the code and its maximum's reciprocal, rounded once, which the note's reco… |
+| `attribute-format-fetches` | A conversion answer (rule 1) under its static note: the pulled fetch's own product of the code and its maximum's reciprocal, rounded once, which the note's reco… |
 

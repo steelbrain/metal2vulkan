@@ -821,6 +821,14 @@ impl Case for StageInUnread {
         MetalSource::Run
     }
 
+    fn allowances(&self) -> Vec<crate::allowance::Allowance> {
+        // One declaration, which loosens no value: `stage_in_fetch_wide` stores at an index of the
+        // grid's width, which the translator does not find disjoint between two threads of one
+        // SIMD-group, so the runtime's pipelines note SIMD-group access pairs on every device
+        // (`crate::replay::simdgroup_access_order_notice`).
+        vec![crate::replay::simdgroup_access_order_notice()]
+    }
+
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
         let fixture = Self::fixture();
         let mut shaders = Vec::new();

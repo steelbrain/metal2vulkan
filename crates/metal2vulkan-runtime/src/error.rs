@@ -1722,9 +1722,9 @@ pub enum StageInKind {
     /// encoder does not have.
     DynamicStride,
     /// An attribute the kernel reads through a layout of an indexed step
-    /// (`MTLStepFunctionThreadPositionInGridXIndexed` or `...YIndexed`) at a step rate other than
-    /// 1. Metal's counterpart is the compute pipeline state's make of that
-    /// `stageInputDescriptor`.
+    /// (`MTLStepFunctionThreadPositionInGridXIndexed` or `...YIndexed`) at a step rate past 1, whose
+    /// Metal answer is not measured. Metal's counterpart is the compute pipeline state's make of
+    /// that `stageInputDescriptor`.
     IndexedStepRate,
 }
 
