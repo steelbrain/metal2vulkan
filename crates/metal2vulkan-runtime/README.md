@@ -2245,6 +2245,28 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   606 and 666 ms inside the calls; the score did not move beyond the base runs' own spread
   (80,706 and 80,730 with the pieces, 75,949 and 80,946 without; jobs m3-max-68865,
   m3-max-68889, m3-max-68789 and m3-max-68954).
+- On an RX 7900 XTX (RADV, Mesa 26.2.6) the same guest's compute benchmark scores 3.7% lower
+  on the mean with the pieces (118,115 against 122,618 over eight runs), and the cause is not
+  found. Two pairs were alternated in each of two builds:
+  - with the pieces at f21db0934c, against the runtime with no pieces at f979769faf: 115,608
+    and 121,011 against 121,802 and 124,665 (jobs m3-max-68746, m3-max-68756, m3-max-68738 and
+    m3-max-68783);
+  - with the pieces at fa77a9035b plus counters, against 2953064a1c: 118,494 and 117,345 against
+    124,568 and 119,436 (jobs m3-max-68959, m3-max-68974, m3-max-68955 and m3-max-68969). Every
+    run with the pieces scored under every run without, and the means are 3.35% apart, where the
+    runs without spread 4.1% and those with 1.0%.
+
+  What was read over the last pair:
+  - The submissions, the held starts, the GPU's busy time and the pass's wall time are level. The
+    time inside the calls is 84 ms more over a 118 s pass.
+  - One of the guest's workloads takes more GPU time in every run with the pieces than in every
+    run without: 7.0% more in the last pair, and 10.5% over all eight runs. That workload is cut 1
+    to 6 times a run, with 0 to 2 command buffers held for room.
+  - The other workloads' GPU times are mixed.
+
+  The pieces are kept. On the Iris Xe, the slowest card tested, they bring the image step's
+  frames over 16.7 ms from 6 and 17 to 0 warm, and from 7 to 2 cold. Its benchmark score and the
+  RTX 3090's are level.
 - On the Iris Xe (Mesa's ANV), in the harness row `two_queues`, a command buffer of a second
   queue whose event wait the end of a command buffer of the first queue signals, committed right
   after it, starts on the GPU 30.4 µs after the signaller's GPU end at the median, against 9.0 µs
