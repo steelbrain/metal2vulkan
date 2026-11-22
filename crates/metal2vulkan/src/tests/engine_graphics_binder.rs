@@ -218,15 +218,14 @@ fn a_render_pipeline_writes_no_color_it_has_no_attachment_for() {
     }
 }
 
-/// A vertex + fragment pipeline plans every binding, binds its vertex buffer, and maps each Metal
-/// draw to the Vulkan draw of the same arguments.
+/// A vertex + fragment pipeline plans every binding (its vertex buffer pulled, so read through
+/// its storage view) and maps each Metal draw to the Vulkan draw of the same arguments.
 #[test]
 fn a_render_pipeline_plans_and_draws() {
     let Some(bc) = fixture("stage_io") else {
         return;
     };
     let mut planned = 0;
-    let mut narrowed = 0;
     for stem in ["moltenvk-m3", "lavapipe", "amd-780m-radv"] {
         let dev = device(stem);
         let p = render_pipeline(&dev, &bc).unwrap_or_else(|e| panic!("{stem}: {e}"));
@@ -241,8 +240,7 @@ fn a_render_pipeline_plans_and_draws() {
                 assert_eq!(d.source, WriteSource::Buffer { slot: s }, "{stem}");
             }
         }
-        assert_eq!(plan.vertex_buffers.len(), p.vertex_input.bindings.len());
-        assert_eq!(plan.vertex_buffers[0].buffer_index, 0);
+        assert!(plan.vertex_buffers.is_empty(), "{stem}");
 
         let draw = DrawCall::Primitives {
             vertex_start: 3,
@@ -260,11 +258,9 @@ fn a_render_pipeline_plans_and_draws() {
                 first_instance: 5
             }
         );
-        assert_eq!(cmds.buffer_offsets, vec![(0, 48)], "{stem}");
         assert!(!cmds.indirect_needs_arguments);
         assert!(cmds.uses.is_empty(), "{stem}");
-        // The vertex buffer's extent is the bytes vertices 3..=8 fetch, unless a pulled attribute
-        // reads the same buffer through its whole storage view.
+        // The pulled attributes read the vertex buffer through its whole storage view.
         let vb = slot(Stage::Vertex, SlotClass::Buffer, 0);
         let extent = |cmds: &crate::bind::DrawCommands| {
             cmds.extents
@@ -273,56 +269,10 @@ fn a_render_pipeline_plans_and_draws() {
                 .map(|e| e.window)
                 .expect("vertex extent")
         };
-        let reads = p.vertex_input.attributes.iter().map(|a| {
-            let size = a.format.block().expect("block").size;
-            (i64::from(a.offset), i64::from(a.offset + size))
-        });
-        let lo = reads.clone().map(|r| r.0).min().expect("attributes");
-        let hi = reads.map(|r| r.1).max().expect("attributes");
-        if p.vertex_input.pulled.iter().any(|a| a.buffer_index == 0) {
-            assert_eq!(extent(&cmds), Window::Whole, "{stem}");
-        } else {
-            narrowed += 1;
-            assert_eq!(
-                extent(&cmds),
-                Window::Bounded {
-                    start: 3 * 24 + lo,
-                    len: (5 * 24 + hi - lo) as u64
-                },
-                "{stem}"
-            );
-        }
-        // A bind offset the attributes' alignment does not divide (a `float3` attribute needs 4
-        // bytes) is the plan's pulled variant, and a draw of this plan with it is internal.
-        let unaligned = with_vertex_buffer(&state, buffer(24 * 64, 50, None));
-        assert_eq!(
-            p.plan(&dev, &unaligned.shape())
-                .expect("plan")
-                .variant
-                .pulled_vertex_buffers,
-            BTreeSet::from([0]),
-            "{stem}"
-        );
-        assert!(
-            matches!(
-                plan.instantiate_draw(&unaligned, &draw),
-                Err(BindError::Internal(_))
-            ),
-            "{stem}"
-        );
-        // A layout the device cannot fetch for the draw (`BindShape::far_vertex_buffers`) is the
-        // plan's pulled variant too; one the pipeline fetches in no fixed-function binding is
-        // left as it is.
+        assert_eq!(extent(&cmds), Window::Whole, "{stem}");
+        // A layout the device cannot fetch for the draw (`BindShape::far_vertex_buffers`) that
+        // the pipeline fetches in no fixed-function binding is left as it is.
         let mut far = state.clone();
-        far.far_vertex_buffers = BTreeSet::from([0]);
-        assert_eq!(
-            p.plan(&dev, &far.shape())
-                .expect("plan")
-                .variant
-                .pulled_vertex_buffers,
-            BTreeSet::from([0]),
-            "{stem}"
-        );
         far.far_vertex_buffers = BTreeSet::from([7]);
         assert!(
             p.plan(&dev, &far.shape()).expect("plan").variant.is_empty(),
@@ -390,21 +340,7 @@ fn a_render_pipeline_plans_and_draws() {
         );
         planned += 1;
 
-        // An unbound fixed-function vertex buffer is refused; an unbound buffer argument gets the
-        // zero buffer.
-        let mut unbound = state.clone();
-        unbound
-            .stages
-            .get_mut(&Stage::Vertex)
-            .expect("vertex")
-            .buffers
-            .remove(&0);
-        assert_eq!(
-            p.plan(&dev, &unbound.shape()),
-            Err(BindError::UnboundVertexBuffer {
-                slot: slot(Stage::Vertex, SlotClass::Buffer, 0)
-            })
-        );
+        // An unbound buffer argument gets the zero buffer.
         let mut neutral = state.clone();
         neutral
             .stages
@@ -424,10 +360,6 @@ fn a_render_pipeline_plans_and_draws() {
         ));
     }
     assert_eq!(planned, 3);
-    assert!(
-        narrowed > 0,
-        "no profile fetches the vertex buffer fixed function only"
-    );
 }
 
 /// A device without `drawIndirectFirstInstance` (as the Vulkan 1.2 floors are; here lavapipe's
@@ -597,143 +529,15 @@ fn an_indexed_indirect_draw_reads_its_arguments_where_nothing_bounds_its_indices
     );
 }
 
-/// A vertex buffer bound at an offset its attributes' alignment does not divide is pulled in the
-/// plan's variant. `compile_render_variant` compiles it (another pipeline key, the layout's
-/// attributes pulled and recorded in `variant_pulled`), and its plan for the same shape states the
-/// same key; it keeps stating it for an aligned shape, since the pipeline pulls the layout for any
-/// bind. The variant's keys (`render_variant_key`) give its stages as a consumer lowers them: the
-/// vertex function under its inputs, then the fragment function under its inputs, whose push fields
-/// start at the vertex function's end (`CompiledFunction::fragment_push_base`), which together make
-/// the variant's pipeline. The variant's draw binds no vertex buffer: the layout's buffer is
-/// one storage binding the fetch reads from the bind offset at the static stride.
-#[test]
-fn an_unbindable_vertex_buffer_is_pulled_in_the_variant() {
-    let Some(bc) = fixture("stage_io") else {
-        return;
-    };
-    let draw = DrawCall::Primitives {
-        vertex_start: 3,
-        vertex_count: 6,
-        instance_count: 2,
-        base_instance: 5,
-    };
-    for stem in ["moltenvk-m3", "lavapipe", "amd-780m-radv"] {
-        let dev = device(stem);
-        let d = render_descriptor(&bc);
-        let p = dev
-            .compile_render_pipeline(&d, &Budget::standard())
-            .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let aligned = render_state(16);
-        assert!(p.vertex_input.variant_pulled.is_empty(), "{stem}");
-        assert!(
-            p.plan(&dev, &aligned.shape())
-                .expect("plan")
-                .variant
-                .is_empty(),
-            "{stem}"
-        );
-        let unaligned = with_vertex_buffer(&aligned, buffer(24 * 64, 50, None));
-        let plan = p.plan(&dev, &unaligned.shape()).expect("plan");
-        assert_eq!(
-            plan.variant.pulled_vertex_buffers,
-            BTreeSet::from([0]),
-            "{stem}"
-        );
-        let v = dev
-            .compile_render_variant(&d, &plan.variant, &Budget::standard())
-            .unwrap_or_else(|e| panic!("{stem} variant: {e}"));
-        let keys = dev
-            .render_variant_key(
-                &d,
-                &plan.variant,
-                &Budget::standard(),
-                &crate::pipeline::StageEntries::new(),
-            )
-            .expect("variant keys");
-        assert_eq!(keys.pipeline, v.key, "{stem}");
-        let lowered = |source: &StageSource, inputs: &crate::pipeline::LoweringInputs| {
-            let StageSource::Function(f) = source else {
-                panic!("{stem}: a function stage");
-            };
-            dev.compile_function(f, inputs, &Budget::standard())
-                .unwrap_or_else(|e| panic!("{stem}: {e}"))
-        };
-        let vertex = lowered(
-            &d.vertex,
-            keys.vertex_inputs.as_ref().expect("vertex inputs"),
-        );
-        let fragment_inputs = keys.fragment_inputs.clone().expect("fragment inputs");
-        assert_eq!(
-            fragment_inputs.push_base,
-            vertex.fragment_push_base(),
-            "{stem}"
-        );
-        let fragment = lowered(d.fragment.as_ref().expect("fragment"), &fragment_inputs);
-        let mut e = d.clone();
-        e.vertex = StageSource::Compiled(vertex);
-        e.fragment = Some(StageSource::Compiled(fragment));
-        let made = dev
-            .compile_render_variant(&e, &plan.variant, &Budget::standard())
-            .unwrap_or_else(|e| panic!("{stem} lowered variant: {e}"));
-        assert_eq!(made.key, v.key, "{stem}");
-        assert_ne!(v.key, p.key, "{stem}");
-        assert_eq!(v.vertex_input.variant_pulled, BTreeSet::from([0]), "{stem}");
-        assert!(
-            v.vertex_input.bindings.iter().all(|b| b.buffer_index != 0),
-            "{stem}: layout 0 is not fixed function"
-        );
-        let pulled: BTreeSet<u32> = v.vertex_input.pulled.iter().map(|a| a.attribute).collect();
-        assert_eq!(pulled, BTreeSet::from([0, 1, 4, 7]), "{stem}");
-        let vplan = v.plan(&dev, &unaligned.shape()).expect("variant plan");
-        assert_eq!(vplan.variant, plan.variant, "{stem}: a fixed point");
-        assert_eq!(
-            v.plan(&dev, &aligned.shape()).expect("plan").variant,
-            plan.variant,
-            "{stem}: the variant keeps pulling"
-        );
-        assert!(vplan.vertex_buffers.is_empty(), "{stem}");
-        let vb = slot(Stage::Vertex, SlotClass::Buffer, 0);
-        let binding = v
-            .layout
-            .sets
-            .iter()
-            .flat_map(|s| &s.bindings)
-            .find(|b| b.source == BindingSource::Buffer(vb))
-            .unwrap_or_else(|| panic!("{stem}: no binding of the source buffer"));
-        assert_eq!(binding.ty, vk::DescriptorType::STORAGE_BUFFER, "{stem}");
-        let cmds = vplan.instantiate_draw(&unaligned, &draw).expect("draw");
-        assert!(cmds.buffer_offsets.is_empty(), "{stem}");
-        assert_eq!(
-            vertex_push(&vplan, &cmds, PushField::VertexBufferStride(0)),
-            24,
-            "{stem}"
-        );
-        let range = cmds
-            .descriptor_ranges
-            .iter()
-            .find(|r| (r.set, r.binding) == (0, binding.binding))
-            .expect("source buffer range");
-        assert!(range.range.offset <= 50, "{stem}: {range:?}");
-        // The default pipeline's plan does not draw the unaligned state.
-        assert!(
-            matches!(
-                plan.instantiate_draw(&unaligned, &draw),
-                Err(BindError::Internal(_))
-            ),
-            "{stem}"
-        );
-    }
-}
-
 /// A pulled source buffer bound to an allocation too large for `maxStorageBufferRange` is a
-/// device-address slot in the variant. Planning the default pipeline for an unaligned, large vertex
-/// buffer names both the pulled layout and its device-address slot at once, so the variant's own
-/// plan states the same key. That plan writes no descriptor for the source buffer: the vertex stage
-/// reads its root table, whose entry `2 + 0` is the bound buffer (its host and guest addresses,
-/// padded size, and bind offset), and a bind without a device address is refused. On a profile
-/// without device addresses (`lavapipe` without `bufferDeviceAddress`, below the runtime's floor;
-/// the runtime floor's profile states no `Depth32Float` attachment) the variant only pulls, and
-/// the draw's descriptor range exceeds the limit.
+/// device-address slot in the variant. Planning the default pipeline, which pulls every attribute,
+/// for an unaligned, large vertex buffer names the source buffer's device-address slot alone, so
+/// the variant's own plan states the same key. That plan writes no descriptor for the source
+/// buffer: the vertex stage reads its root table, whose entry `2 + 0` is the bound buffer (its host
+/// and guest addresses, padded size, and bind offset), and a bind without a device address is
+/// refused. On a profile without device addresses (`lavapipe` without `bufferDeviceAddress`, below
+/// the runtime's floor; the runtime floor's profile states no `Depth32Float` attachment) the
+/// variant is the default pipeline, and the draw's descriptor range exceeds the limit.
 #[test]
 fn a_render_plan_reads_pulled_source_buffers_by_device_address() {
     let Some(bc) = fixture("stage_io") else {
@@ -779,7 +583,7 @@ fn a_render_plan_reads_pulled_source_buffers_by_device_address() {
         );
         let plan = p.plan(&dev, &state.shape()).expect("plan");
         let vb = slot(Stage::Vertex, SlotClass::Buffer, 0);
-        assert_eq!(plan.variant.pulled_vertex_buffers, BTreeSet::from([0]));
+        assert!(plan.variant.pulled_vertex_buffers.is_empty(), "{stem}");
         let psb = dev.profile().fields().descriptors.buffer_device_address
             && dev.profile().fields().leaf.int64;
         assert_eq!(
@@ -861,112 +665,6 @@ fn a_render_plan_reads_pulled_source_buffers_by_device_address() {
     assert_eq!((addressed, viewed), (2, 1));
 }
 
-/// A per-bind stride (`MTLBufferLayoutStrideDynamic`) becomes the vertex buffer's dynamic stride;
-/// a buffer bound without one reads at stride 0, as plain Metal's encoder does.
-#[test]
-fn a_per_bind_stride_comes_from_the_bind() {
-    let Some(bc) = fixture("stage_io") else {
-        return;
-    };
-    let dev = device("moltenvk-m3");
-    let lib = Library::from_air(&bc).expect("library");
-    let v = lib.function("stage_io_vertex").expect("vertex");
-    let mut d = RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(v)));
-    let mut vd = vertex_descriptor();
-    vd.layouts
-        .insert(0, VertexBufferLayoutDescriptor::new(None));
-    d.vertex_descriptor = Some(vd);
-    d.rasterization_enabled = false;
-    let p = match dev.compile_render_pipeline(&d, &Budget::standard()) {
-        Ok(p) => p,
-        Err(e) => panic!("per-bind stride pipeline: {e}"),
-    };
-    let state = render_state(0);
-    // Stride 0: the draw's dynamic stride, or the pulled variant where fixed function cannot
-    // fetch an element's 24 bytes at stride 0.
-    let unstrided = p.plan(&dev, &state.shape()).expect("plan without a stride");
-    if unstrided.variant.pulled_vertex_buffers.is_empty() {
-        let cmds = unstrided
-            .instantiate_draw(
-                &state,
-                &DrawCall::Primitives {
-                    vertex_start: 0,
-                    vertex_count: 3,
-                    instance_count: 1,
-                    base_instance: 0,
-                },
-            )
-            .expect("draw without a stride");
-        assert_eq!(cmds.vertex_strides, vec![(0, 0)]);
-    } else {
-        assert_eq!(unstrided.variant.pulled_vertex_buffers, BTreeSet::from([0]));
-    }
-    let mut strided = state.clone();
-    strided
-        .stages
-        .get_mut(&Stage::Vertex)
-        .expect("vertex")
-        .buffers
-        .insert(0, buffer(24 * 64, 0, Some(32)));
-    let plan = p.plan(&dev, &strided.shape()).expect("plan");
-    assert!(plan.vertex_buffers[0].per_bind_stride);
-    let cmds = plan
-        .instantiate_draw(
-            &strided,
-            &DrawCall::Primitives {
-                vertex_start: 0,
-                vertex_count: 3,
-                instance_count: 1,
-                base_instance: 0,
-            },
-        )
-        .expect("draw");
-    assert_eq!(cmds.vertex_strides, vec![(0, 32)]);
-    // A per-bind stride must be a multiple of every attribute's alignment (`float3`: 4), as
-    // dynamic state cover an element's 24 bytes, and stay within `maxVertexInputBindingStride`.
-    let draw = DrawCall::Primitives {
-        vertex_start: 0,
-        vertex_count: 3,
-        instance_count: 1,
-        base_instance: 0,
-    };
-    let with_stride = |stride| {
-        let mut s = strided.clone();
-        s.stages
-            .get_mut(&Stage::Vertex)
-            .expect("vertex")
-            .buffers
-            .insert(0, buffer(24 * 64, 0, Some(stride)));
-        plan.instantiate_draw(&s, &draw)
-    };
-    // Another stride Vulkan's rules refuse is the plan's pulled variant; this plan's draw of it is
-    // internal.
-    let pulled = |stride| {
-        let s = with_vertex_buffer(&strided, buffer(24 * 64, 0, Some(stride)));
-        p.plan(&dev, &s.shape())
-            .expect("plan")
-            .variant
-            .pulled_vertex_buffers
-            == BTreeSet::from([0])
-    };
-    assert!(with_stride(24).is_ok());
-    assert!(!pulled(24));
-    assert!(matches!(with_stride(26), Err(BindError::Internal(_))));
-    assert!(pulled(26));
-    if p.graphics
-        .dynamic_states
-        .contains(&vk::DynamicState::VERTEX_INPUT_BINDING_STRIDE)
-    {
-        assert!(pulled(20));
-    }
-    let max = dev
-        .profile()
-        .fields()
-        .limits
-        .max_vertex_input_binding_stride;
-    assert!(pulled(max.next_multiple_of(4) + 4));
-}
-
 fn with_vertex_buffer(state: &BindState, b: BoundBuffer) -> BindState {
     let mut s = state.clone();
     s.stages
@@ -1017,7 +715,8 @@ fn stage_push(
 }
 
 /// Pulled attributes (signed formats into the `uint` attributes) from layout 1, the `scale`
-/// argument's index, with a static stride, and from layout 2 with a per-bind stride. Buffer 1 is
+/// argument's index, with a static stride, and from layout 2 with a per-bind stride, beside layout
+/// 0's, pulled at its static stride as every attribute is outside the identity domains. Buffer 1 is
 /// one binding (the argument's slot, widened to a `Whole` storage view); the static stride fills
 /// its push field without a per-bind stride, and the per-bind one is the bind's `attributeStride`,
 /// 0 without one (as for fixed function).
@@ -1054,7 +753,12 @@ fn pulled_layouts_take_their_stride_and_share_argument_slots() {
         .collect();
     assert_eq!(
         strides,
-        [(2, VertexStride::PerBind), (1, VertexStride::Static(4))]
+        [
+            (0, VertexStride::Static(24)),
+            (0, VertexStride::Static(24)),
+            (2, VertexStride::PerBind),
+            (1, VertexStride::Static(4))
+        ]
     );
     let scale = slot(Stage::Vertex, SlotClass::Buffer, 1);
     assert!(

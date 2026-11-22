@@ -17,9 +17,10 @@
 //!   read as `float` -- is noted where the render pipeline links, on its vertex stage
 //!   (`PrecisionNote::DeviceVertexConversion`, `PrecisionNote::DeviceNanEncoding`), so no note
 //!   keys a translation (`a_pipeline_notes_what_the_device_converts_from_one_translation`).
-//! - **one module per pulled format.** A format the fixed-function path cannot fetch is decoded in
-//!   the shader, and each decode is its own code. Of the 45-format sweep only `FloatRGB9E5` is
-//!   pulled on the suite's venue, as on every device (`metal::vertex::attribute_fetch`).
+//! - **one module per pulled format.** Outside the identity domains every attribute is decoded in
+//!   the shader, and each decode is its own code: the 45-format sweep is 45 modules. Under them a
+//!   format the fixed-function path cannot fetch is refused: of the 45, `FloatRGB9E5`, on every
+//!   device (`metal::vertex::attribute_fetch`).
 //! - **the step function: nothing, where the device fetches it.** Under the identity domains
 //!   Metal's constant step is a Vulkan vertex-rate binding of stride 0
 //!   (`metal::vertex::attribute_fetch`, `link::vertex::binding_stride`), which is
@@ -35,6 +36,7 @@ use std::sync::Arc;
 
 use crate::budget::SPIRV_WORDS;
 use crate::device::{DevicePolicy, DeviceProfile};
+use crate::error::{Error, Feature};
 use crate::library::{FunctionArtifact, FunctionConstantValues};
 use crate::metal::{VertexFormat, VertexStepFunction};
 use crate::pipeline::artifact::PrecisionNote;
@@ -75,6 +77,11 @@ fn fixture() -> Option<Vec<u8>> {
 
 fn prof() -> DeviceProfile {
     profile(PROFILE, DevicePolicy::RESIDENT_TABLES).expect("committed profile")
+}
+
+/// The venue's profile under the identity domains, the runtime's.
+fn identity() -> DeviceProfile {
+    profile(PROFILE, DevicePolicy::default()).expect("committed profile")
 }
 
 /// Every format of the SDK table a float-class attribute can read, as `cases::vertex_formats`
@@ -121,6 +128,18 @@ fn desc(
     d
 }
 
+/// The projection of attribute 0 for `format` at slot `at` under `step`, or its refusal.
+fn try_projection(
+    p: &DeviceProfile,
+    format: VertexFormat,
+    at: usize,
+    stride: u32,
+    step: VertexStepFunction,
+) -> Result<VertexFetchProjection, Error> {
+    let attributes = BTreeMap::from([(0, IoNumeric::Float)]);
+    vertex_fetch_projection(Some(&desc(format, at, stride, step)), &attributes, p)
+}
+
 /// The projection of attribute 0 for `format` at slot `at` under `step`.
 fn projection(
     p: &DeviceProfile,
@@ -129,9 +148,7 @@ fn projection(
     stride: u32,
     step: VertexStepFunction,
 ) -> VertexFetchProjection {
-    let attributes = BTreeMap::from([(0, IoNumeric::Float)]);
-    vertex_fetch_projection(Some(&desc(format, at, stride, step)), &attributes, p)
-        .expect("the sweeps' descriptors are valid")
+    try_projection(p, format, at, stride, step).expect("the sweeps' descriptors are valid")
 }
 
 /// The artifact of `entry` compiled under `proj`.
@@ -161,13 +178,15 @@ fn words(bc: &[u8], p: &DeviceProfile, entry: &str, proj: &VertexFetchProjection
 }
 
 /// One sweep's counts: its creations, the distinct projections they compile under (so the
-/// translations), the distinct modules (so the driver's shader conversions), and the formats the
-/// shader pulls.
+/// translations), the distinct modules (so the driver's shader conversions), the formats the
+/// shader pulls, and the formats whose projection is refused as a format the device does not
+/// fetch.
 struct Counted {
     creations: usize,
     projections: usize,
     modules: usize,
     pulled: Vec<&'static str>,
+    refused: Vec<&'static str>,
 }
 
 fn count(bc: &[u8], p: &DeviceProfile, entry: &str, step: VertexStepFunction) -> Counted {
@@ -176,8 +195,16 @@ fn count(bc: &[u8], p: &DeviceProfile, entry: &str, step: VertexStepFunction) ->
     let mut projections = BTreeSet::new();
     let mut modules = BTreeSet::new();
     let mut pulled = Vec::new();
+    let mut refused = Vec::new();
     for (at, &format) in formats.iter().enumerate() {
-        let proj = projection(p, format, at, stride, step);
+        let proj = match try_projection(p, format, at, stride, step) {
+            Ok(proj) => proj,
+            Err(Error::Unsupported(u)) if u.feature == Feature::Format => {
+                refused.push(format.name());
+                continue;
+            }
+            Err(e) => panic!("{format:?}: {e}"),
+        };
         if matches!(proj.attributes[&0], VertexFetch::Pulled { .. }) {
             pulled.push(format.name());
         }
@@ -189,47 +216,64 @@ fn count(bc: &[u8], p: &DeviceProfile, entry: &str, step: VertexStepFunction) ->
         projections: projections.len(),
         modules: modules.len(),
         pulled,
+        refused,
     }
 }
 
-/// `vertex-format-float4`'s own sweep under the default: the device fetches 44 of the 45 formats
-/// in fixed function, which share **one** module of one translation, and the shader pulls
-/// `FloatRGB9E5`, as on every device: two modules for the whole sweep.
+/// `vertex-format-float4`'s own sweep under the identity domains: the device fetches 44 of the 45
+/// formats in fixed function, which share **one** module of one translation, and `FloatRGB9E5`,
+/// which no fixed-function input fetches, is refused, as on every device. Outside them every
+/// format is pulled: one module a creation.
 #[test]
-fn a_float_read_compiles_two_modules_for_the_whole_sweep() {
+fn a_float_read_compiles_one_module_for_the_fetched_formats() {
     let Some(bc) = fixture() else { return };
-    let got = count(&bc, &prof(), TO_FLOAT4, VertexStepFunction::PerVertex);
+    let got = count(&bc, &identity(), TO_FLOAT4, VertexStepFunction::PerVertex);
     assert_eq!(got.creations, 45, "the swept formats");
     assert_eq!(
-        got.pulled,
-        vec!["MTLVertexFormatFloatRGB9E5"],
-        "the formats of the sweep pulled on {PROFILE} under the default"
+        (got.pulled.len(), got.refused),
+        (0, vec!["MTLVertexFormatFloatRGB9E5"]),
+        "the formats of the sweep pulled and refused on {PROFILE} under the identity domains"
     );
     assert_eq!(
         (got.projections, got.modules),
-        (2, 2),
+        (1, 1),
         "projections and modules of {} creations",
         got.creations
+    );
+    let got = count(&bc, &prof(), TO_FLOAT4, VertexStepFunction::PerVertex);
+    assert_eq!(
+        (got.pulled.len(), got.projections, got.modules),
+        (45, 45, 45),
+        "pulled formats, projections and modules outside the identity domains"
     );
 }
 
-/// The same sweep read as a `half4`: two modules of two translations too.
+/// The same sweep read as a `half4`: one module of one translation too, and one a creation
+/// outside the identity domains.
 #[test]
-fn a_half_read_compiles_two_modules_for_the_whole_sweep() {
+fn a_half_read_compiles_one_module_for_the_fetched_formats() {
     let Some(bc) = fixture() else { return };
-    let got = count(&bc, &prof(), TO_HALF4, VertexStepFunction::PerVertex);
+    let got = count(&bc, &identity(), TO_HALF4, VertexStepFunction::PerVertex);
     assert_eq!(got.creations, 45, "the swept formats");
     assert_eq!(
-        (got.projections, got.modules),
-        (2, 2),
-        "projections and modules of {} creations",
+        (got.refused.len(), got.projections, got.modules),
+        (1, 1, 1),
+        "refusals, projections and modules of {} creations",
         got.creations
+    );
+    let got = count(&bc, &prof(), TO_HALF4, VertexStepFunction::PerVertex);
+    assert_eq!(
+        (got.projections, got.modules),
+        (45, 45),
+        "projections and modules outside the identity domains"
     );
 }
 
 /// A render pipeline notes what the device's fixed-function vertex input converts, from its own
 /// vertex descriptor, on its vertex stage, while one translation of the function serves every
-/// format the device fetches. Over `vertex-format-float4`'s and `-half4`'s sweeps, a normalized
+/// format the device fetches (under the identity domains, where the sweep's attributes are fixed
+/// function and a format the device does not fetch is refused). Over `vertex-format-float4`'s and
+/// `-half4`'s sweeps, a normalized
 /// format's pipeline records `PrecisionNote::DeviceVertexConversion` whatever width the function
 /// reads it at, on `moltenvk-m3`, lavapipe and RADV alike. A narrow float's records
 /// `PrecisionNote::DeviceNanEncoding` where the function reads it as a 32-bit `float` (a `half`
@@ -253,7 +297,7 @@ fn a_pipeline_notes_what_the_device_converts_from_one_translation() {
     for stem in [PROFILE, "lavapipe", "amd-780m-radv"] {
         let dev = Device::from_queries(
             description(stem).expect("committed description"),
-            DevicePolicy::RESIDENT_TABLES,
+            DevicePolicy::default(),
         )
         .expect("device");
         for entry in [TO_FLOAT4, TO_HALF4] {
@@ -266,18 +310,13 @@ fn a_pipeline_notes_what_the_device_converts_from_one_translation() {
                 let mut d = RenderPipelineDescriptor::new(StageSource::Function(function.clone()));
                 d.rasterization_enabled = false;
                 d.vertex_descriptor = Some(desc(format, at, stride, VertexStepFunction::PerVertex));
-                let pipeline = dev
-                    .compile_render_pipeline(&d, &Budget::standard())
-                    .unwrap_or_else(|e| panic!("{what}: {e}"));
+                let pipeline = match dev.compile_render_pipeline(&d, &Budget::standard()) {
+                    Ok(pipeline) => pipeline,
+                    Err(Error::Unsupported(u)) if u.feature == Feature::Format => continue,
+                    Err(e) => panic!("{what}: {e}"),
+                };
                 let notes = &pipeline.stages[0].precision_notes;
-                if !pipeline.vertex_input.pulled.is_empty() {
-                    // A format the device cannot fetch: the module's decode is its own.
-                    assert!(
-                        !notes.contains(&PrecisionNote::DeviceVertexConversion),
-                        "{what}: a pulled attribute's decode is not the device's: {notes:?}"
-                    );
-                    continue;
-                }
+                assert!(pipeline.vertex_input.pulled.is_empty(), "{what}");
                 fixed += 1;
                 let e = encoding(format).expect("encoding");
                 let conversion = e.is_normalized();
@@ -331,15 +370,17 @@ fn a_pipeline_notes_what_the_device_converts_from_one_translation() {
     }
 }
 
-/// `integer-vertex-attributes`' own sweep: sixteen unnormalized 8- and 16-bit integer formats,
-/// two entry points and two step functions. Metal's constant step is a fetch no fixed-function
-/// vertex input expresses, so each of its 32 creations decodes its own format in the shader, while
-/// all sixteen formats of a per-vertex creation share one module an entry. Two source functions,
-/// 34 modules.
+/// `integer-vertex-attributes`' own sweep on its venue: sixteen unnormalized 8- and 16-bit integer
+/// formats, two entry points and two step functions. Outside the identity domains each of the 64
+/// creations decodes its own format in the shader: 64 modules. Under them all sixteen formats of a
+/// per-vertex creation share one module an entry, and the constant step's binding, of stride 0,
+/// is refused by the portability subset's stride rule. On a native driver the whole sweep is two
+/// modules
+/// (`the_integer_attribute_sweep_compiles_two_modules_where_the_constant_step_is_fixed_function`).
 #[test]
-fn the_integer_attribute_sweep_compiles_thirty_four_modules_of_two_functions() {
+fn the_integer_attribute_sweep_compiles_one_module_a_creation_outside_the_identity_domains() {
     let Some(bc) = fixture() else { return };
-    let p = prof();
+    let (p, identity) = (prof(), identity());
     const FORMATS: [VertexFormat; 16] = [
         VertexFormat::UChar,
         VertexFormat::UChar2,
@@ -361,33 +402,48 @@ fn the_integer_attribute_sweep_compiles_thirty_four_modules_of_two_functions() {
     let stride = SLOT * FORMATS.len() as u32;
     let mut projections = BTreeSet::new();
     let mut modules = BTreeSet::new();
-    let mut creations = 0;
-    let mut per_vertex_pulled = 0;
+    let (mut creations, mut pulled) = (0, 0);
+    let (mut fixed, mut refused) = (BTreeSet::new(), 0);
     for entry in [TO_FLOAT4, TO_HALF4] {
         for step in [VertexStepFunction::PerVertex, VertexStepFunction::Constant] {
             for (at, &format) in FORMATS.iter().enumerate() {
                 creations += 1;
                 let proj = projection(&p, format, at, stride, step);
-                if step == VertexStepFunction::PerVertex
-                    && matches!(proj.attributes[&0], VertexFetch::Pulled { .. })
-                {
-                    per_vertex_pulled += 1;
+                if matches!(proj.attributes[&0], VertexFetch::Pulled { .. }) {
+                    pulled += 1;
                 }
                 modules.insert(words(&bc, &p, entry, &proj));
                 projections.insert((entry, proj));
+                match try_projection(&identity, format, at, stride, step) {
+                    Ok(proj) if step == VertexStepFunction::PerVertex => {
+                        fixed.insert(words(&bc, &identity, entry, &proj));
+                    }
+                    Err(Error::Unsupported(u))
+                        if step == VertexStepFunction::Constant
+                            && u.feature == Feature::VertexInputLayout =>
+                    {
+                        refused += 1
+                    }
+                    Ok(_) => panic!("{format:?} {step:?}: fetched under the identity domains"),
+                    Err(e) => panic!("{format:?} {step:?}: {e}"),
+                }
             }
         }
     }
     assert_eq!(creations, 64, "the sweep's pipelines");
     assert_eq!(
-        per_vertex_pulled, 0,
-        "every unnormalized integer format is fetched in fixed function per vertex"
+        pulled, 64,
+        "every format is pulled outside the identity domains"
     );
-    // One module an entry for all sixteen per-vertex formats, and one per constant-step format.
     assert_eq!(
         (projections.len(), modules.len()),
-        (2 + 2 * FORMATS.len(), 2 + 2 * FORMATS.len()),
+        (64, 64),
         "projections and modules of {creations} creations"
+    );
+    assert_eq!(
+        (fixed.len(), refused),
+        (2, 32),
+        "per-vertex modules and constant-step refusals under the identity domains"
     );
 }
 

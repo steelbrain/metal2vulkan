@@ -345,10 +345,11 @@ fn feature_dependent_entries_name_their_capability() {
     );
 }
 
-/// The vertex fetch projection: fixed function where the format and step have an exact Vulkan form,
-/// pulled otherwise (a constant step always), with the source buffer, offset, and step in the key.
-/// A pulled attribute compiles to an in-shader fetch; one whose source buffer is also a buffer
-/// argument of the function reads through that argument's slot, bound once.
+/// The vertex fetch projection: under the identity domains fixed function where the format and
+/// step have an exact Vulkan form (a constant step at a stride of 0, here on a native driver);
+/// outside them pulled, with the source buffer, offset, and step in the key. A pulled attribute
+/// compiles to an in-shader fetch; one whose source buffer is also a buffer argument of the
+/// function reads through that argument's slot, bound once.
 #[test]
 fn the_vertex_fetch_projection_selects_fixed_function_or_pulled() {
     let Some(bc) = fixture() else { return };
@@ -367,8 +368,23 @@ fn the_vertex_fetch_projection_selects_fixed_function_or_pulled() {
         .insert(1, VertexAttributeDescriptor::new(VertexFormat::Half2, 4, 2));
     // The function reads both as `float` (the one projection takes the declared classes).
     let floats = BTreeMap::from([(0, IoNumeric::Float), (1, IoNumeric::Float)]);
+    // A native driver's: the portability subset's stride rule refuses the binding's stride of 0.
+    let identity = profile("amd-780m-radv", DevicePolicy::default()).expect("committed profile");
+    let fixed = vertex_fetch_projection(Some(&desc), &floats, &identity).expect("projection");
+    for a in [0, 1] {
+        assert_eq!(fixed.attributes[&a], VertexFetch::FixedFunction, "{a}");
+    }
     let proj = vertex_fetch_projection(Some(&desc), &floats, &p).expect("projection");
-    assert_eq!(proj.attributes[&0], VertexFetch::FixedFunction);
+    assert_eq!(
+        proj.attributes[&0],
+        VertexFetch::Pulled {
+            format: VertexFormat::Float3,
+            buffer_index: 0,
+            offset: 0,
+            step_function: VertexStepFunction::PerVertex,
+            step_rate: 1,
+        }
+    );
     assert_eq!(
         proj.attributes[&1],
         VertexFetch::Pulled {
@@ -406,9 +422,9 @@ fn the_vertex_fetch_projection_selects_fixed_function_or_pulled() {
     fixed.attributes.insert(0, VertexFetch::FixedFunction);
     let a = run(fixed).expect("fixed-function projection");
     validate(&a, &alone(&a, &p), &p);
-    let a = run(proj).expect("pulled attribute");
+    let a = run(proj).expect("pulled attributes");
     let pulled: Vec<u32> = a.interface.io.pulled.iter().map(|x| x.index).collect();
-    assert_eq!(pulled, [1]);
+    assert_eq!(pulled, [0, 1]);
     validate(&a, &alone(&a, &p), &p);
 
     // Buffer 1 is also the function's `scale` argument: one widened slot.

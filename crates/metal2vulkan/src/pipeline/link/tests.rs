@@ -33,6 +33,18 @@ pub(super) fn profile(stem: &str) -> DeviceProfile {
     crate::pipeline::testing::profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile")
 }
 
+/// Committed profile `stem` under the identity domains, the runtime's: the only domains where a
+/// vertex attribute is fetched in fixed function (outside them every attribute is pulled).
+pub(super) fn identity_profile(stem: &str) -> DeviceProfile {
+    crate::pipeline::testing::profile(stem, DevicePolicy::default()).expect("profile")
+}
+
+/// Whether `r` is the identity domains' refusal of an attribute fixed-function input cannot
+/// fetch as laid out (`Feature::VertexInputLayout`).
+pub(super) fn layout_refused<T>(r: &Result<T, Error>) -> bool {
+    matches!(r, Err(Error::Unsupported(u)) if u.feature == crate::error::Feature::VertexInputLayout)
+}
+
 /// The key of user varying `name`.
 pub(super) fn key(name: &str) -> VaryingKey {
     VaryingKey::user(name.as_bytes())
@@ -1103,7 +1115,8 @@ pub(super) fn io_stage(stage: Stage, io: StageIo) -> FunctionArtifact {
 /// function numbers its inputs in declaration order.
 #[test]
 fn locations_follow_the_stage_io_contract() {
-    let p = profile("moltenvk-m3");
+    // The identity domains, where the attributes are fixed function and so take locations.
+    let p = identity_profile("moltenvk-m3");
     let f4 = io_ty(IoNumeric::Float, 4);
     let u1 = io_ty(IoNumeric::Uint, 1);
     let vs = io_stage(

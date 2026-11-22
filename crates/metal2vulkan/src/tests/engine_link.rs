@@ -57,6 +57,12 @@ fn prof(stem: &str) -> DeviceProfile {
     profile(stem, DevicePolicy::RESIDENT_TABLES).expect("committed profile")
 }
 
+/// Committed profile `stem` under the identity domains, the runtime's: the only domains where a
+/// vertex attribute is fetched in fixed function (outside them every attribute is pulled).
+fn identity_prof(stem: &str) -> DeviceProfile {
+    profile(stem, DevicePolicy::default()).expect("committed profile")
+}
+
 /// Committed profile `stem` without buffer robustness: its containment is checked in the shader.
 fn without_robustness(stem: &str) -> DeviceProfile {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -166,15 +172,16 @@ fn validate_all(l: &Linked, stages: &[&FunctionArtifact], p: &DeviceProfile) -> 
 }
 
 /// The fixture's vertex and fragment entries link as one render pipeline on every profile with
-/// the formats: dense attribute locations in `VertexInputState`, fragment inputs at their vertex
-/// outputs' locations, colors at their attachments, and L3 on both relocated modules.
+/// the formats, under the identity domains (where the attributes are fixed function): dense
+/// attribute locations in `VertexInputState`, fragment inputs at their vertex outputs' locations,
+/// colors at their attachments, and L3 on both relocated modules.
 #[test]
 fn a_vertex_fragment_pipeline_links_end_to_end() {
     let Some(bc) = assemble("stage_io.ll") else {
         return;
     };
     for stem in PROFILES {
-        let p = prof(stem);
+        let p = identity_prof(stem);
         assert!(
             p.supports_format(vk::Format::R32G32B32_SFLOAT, FormatUsage::VertexBuffer),
             "{stem} lists vertex formats"
@@ -604,13 +611,20 @@ fn a_device_address_slot_needs_pointer_translation() {
     assert!(addressed > 0, "some committed profile has device addresses");
 }
 
-/// The fixture's vertex function compiles fixed function for the descriptor's attributes.
+/// The fixture's vertex function compiles fixed function for the descriptor's attributes under
+/// the identity domains, and pulls every one outside them.
 #[test]
 fn the_projection_of_the_fixture_is_fixed_function() {
     let Some(bc) = assemble("stage_io.ll") else {
         return;
     };
-    let p = prof("moltenvk-m3");
+    let tables = vertex_under(&bc, &vertex_descriptor(), &prof("moltenvk-m3")).expect("vertex");
+    let pulled = tables.interface.io.attributes();
+    assert_eq!(pulled.len(), 4);
+    assert!(pulled
+        .values()
+        .all(|(_, f)| matches!(f, VertexFetch::Pulled { .. })));
+    let p = identity_prof("moltenvk-m3");
     let v = vertex_under(&bc, &vertex_descriptor(), &p).expect("vertex");
     let attrs = v.interface.io.attributes();
     assert_eq!(attrs.len(), 4);

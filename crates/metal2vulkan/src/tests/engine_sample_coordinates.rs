@@ -797,6 +797,9 @@ fn coordinates_pass_through(words: &[u32]) -> (bool, bool) {
             | O::CompositeInsert
             | O::VectorShuffle
             | O::CopyObject => ids(i).into_iter().all(|v| moves(v, defs, ids)),
+            // The in-shader check's `select(inb, v, 0)` moves either value; its condition is no
+            // value of the coordinate's.
+            O::Select => ids(i).into_iter().skip(1).all(|v| moves(v, defs, ids)),
             _ => false,
         }
     }

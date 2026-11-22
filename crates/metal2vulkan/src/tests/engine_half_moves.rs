@@ -297,7 +297,7 @@ fn every_half_pattern_moves_as_its_bits() {
     let mut runs: Vec<(&str, String, Arc<[u32]>)> = Vec::new();
     let mut modules: BTreeMap<Arc<[u32]>, Compiled> = BTreeMap::new();
     {
-        let (policy_name, policy) = ("default", DevicePolicy::RESIDENT_TABLES);
+        let (policy_name, policy) = ("resident tables", DevicePolicy::RESIDENT_TABLES);
         for (stem, p) in committed_profiles_with(policy).expect("profiles") {
             let Some((words, compiled)) = compile_once(&stem, &p, &bc, policy_name) else {
                 continue;

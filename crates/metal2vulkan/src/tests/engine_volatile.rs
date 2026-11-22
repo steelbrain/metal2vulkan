@@ -920,9 +920,8 @@ const DEVICE_ARGUMENT_METADATA: (&str, &str) = (
 /// A volatile load of a heap texture handle (an argument-buffer member) is its plain lookup with
 /// the resource id's words volatile: where the plain kernel compiles, the volatile one compiles
 /// with the same loads and passes L3; where the plain kernel is refused (no descriptor indexing),
-/// the volatile one is refused alike. A `device` argument buffer's two id words carry `Volatile`; a
-/// `constant` one is read through its uniform view, whose read-only words stay plain, so its module
-/// is the twin's.
+/// the volatile one is refused alike. The two id words carry `Volatile` in a `device` argument
+/// buffer and a `constant` one alike: each is read through its storage view.
 #[test]
 fn a_volatile_heap_texture_handle_load_is_its_lookup() {
     let entry = "argument_buffer_read";
@@ -933,7 +932,7 @@ fn a_volatile_heap_texture_handle_load_is_its_lookup() {
             &[][..],
             None,
             "%6 = load ptr addrspace(1), ptr addrspace(2) %5, align 8",
-            Volatiles::none(),
+            Volatiles::of(&[(SB, 2)], &[]),
         ),
         (
             "device",

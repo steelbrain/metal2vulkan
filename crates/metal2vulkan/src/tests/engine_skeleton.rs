@@ -161,10 +161,10 @@ fn store_const_passes_the_pipeline_on_every_m1_profile() {
     }
 }
 
-/// Without robust buffer access the store sits in the in-shader bounds check (a selection around
-/// it); with it, the store is bare. Both validate.
+/// The store sits in the in-shader bounds check (a selection around it), without robust buffer
+/// access and with it stated alike. Both validate.
 #[test]
-fn containment_without_robustness_guards_the_store() {
+fn containment_guards_the_store_whatever_robustness_is_stated() {
     let Some(bitcode) = store_const() else { return };
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles/runtime-floor.json");
@@ -180,13 +180,22 @@ fn containment_without_robustness_guards_the_store() {
     let ops = opcodes(&words);
     assert!(ops.contains(&(crate::spv::Op::ArrayLength as u32)));
     assert!(ops.contains(&(crate::spv::Op::SelectionMerge as u32)));
+    // The same guarded store where the description states buffer robustness: no robustness is
+    // left an access to.
     let robust = profile("runtime-floor", DevicePolicy::RESIDENT_TABLES).expect("profile");
-    let bare = compile(&bitcode, "store_const", &robust).expect("compile");
-    let (_, words) = link_and_validate(&bare, &robust).unwrap_or_else(|e| panic!("{e}"));
-    assert!(
-        !opcodes(&words).contains(&(crate::spv::Op::SelectionMerge as u32)),
-        "no selection with robustness"
-    );
+    let stated = compile(&bitcode, "store_const", &robust).expect("compile");
+    assert!(stated
+        .strategies
+        .entries
+        .contains_key("access.store.checked"));
+    let (_, words) = link_and_validate(&stated, &robust).unwrap_or_else(|e| panic!("{e}"));
+    let stated_ops = opcodes(&words);
+    for op in [crate::spv::Op::ArrayLength, crate::spv::Op::SelectionMerge] {
+        assert!(
+            stated_ops.contains(&(op as u32)),
+            "{op:?} with robustness stated"
+        );
+    }
 }
 
 /// Compilation is deterministic: equal artifacts (key, words, relocations, interface) and equal

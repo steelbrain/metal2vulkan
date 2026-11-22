@@ -1278,6 +1278,26 @@ const OP_FUNCTION_CALL: u16 = 57;
 const OP_ULESS_THAN_EQUAL: u16 = 178;
 const DECORATION_NON_UNIFORM: u32 = 5300;
 
+/// The `op`s of the function the module's calls reach, the module's one search of the handle
+/// table: what the search emits, apart from the accesses' own in-shader checks.
+fn count_in_search(a: &FunctionArtifact, op: u16) -> usize {
+    const OP_FUNCTION_END: u16 = 56;
+    let w = &a.module.words;
+    let all = insts(w);
+    let callee = (all.iter())
+        .find(|(o, _)| *o == OP_FUNCTION_CALL)
+        .map(|(_, i)| w[i + 3])
+        .expect("a call of the search");
+    let start = (all.iter())
+        .position(|(o, i)| *o == OP_FUNCTION && w[i + 2] == callee)
+        .expect("the search");
+    all[start..]
+        .iter()
+        .take_while(|(o, _)| *o != OP_FUNCTION_END)
+        .filter(|(o, _)| *o == op)
+        .count()
+}
+
 /// The `NonUniform` decorations of a module.
 fn non_uniform(a: &FunctionArtifact) -> usize {
     let words = &a.module.words;
@@ -1362,9 +1382,9 @@ fn an_argument_buffer_texture_is_a_heap_lookup() {
                 assert_eq!(uses(&a, "access.handle.lookup"), 1, "{stem}");
                 assert_eq!(uses(&a, heap_read(&p)), 1, "{stem}");
                 assert!(a.interface.needs_handle_translation, "{stem}");
-                // The search reads the table's length once; the element's chain and its load
-                // are non-uniform.
-                assert_eq!(count(&a, OP_ARRAY_LENGTH), 1, "{stem}");
+                // The search reads the table's length once (each in-shader check of an access
+                // reads its view's own); the element's chain and its load are non-uniform.
+                assert_eq!(count_in_search(&a, OP_ARRAY_LENGTH), 1, "{stem}");
                 assert!(count(&a, OP_ACCESS_CHAIN) >= 1, "{stem}");
                 // and the twin's, which the read's raw arm loads, and the `Sint` and `Uint`
                 // classes' the read's siblings load.
@@ -1667,7 +1687,9 @@ declare i32 @air.get_width_texture_2d(ptr addrspace(1), i32)
                 // `OpULessThanEqual` each: of the `u64` ids with `shaderInt64`, else of the low
                 // words) and its read of the table's length are emitted once. The module was
                 // about 3,500 words with a search per load; it is within 1,700 with `u64` ids
-                // (1,678 on MoltenVK) and 2,300 with word ids, the bounds below.
+                // (1,678 on MoltenVK with the device bounding its accesses) and 2,300 with word
+                // ids, the bounds below, plus 200 for the in-shader checks of the argument
+                // buffer's two id words and of the output's store.
                 // The write's normalized channels are the device's conversion, noted.
                 assert!(
                     a.precision
@@ -1676,8 +1698,8 @@ declare i32 @air.get_width_texture_2d(ptr addrspace(1), i32)
                 );
                 assert_eq!(count(&a, OP_FUNCTION), 2, "{stem}");
                 assert_eq!(count(&a, OP_FUNCTION_CALL), 2, "{stem}");
-                assert_eq!(count(&a, OP_ULESS_THAN_EQUAL), 16, "{stem}");
-                assert_eq!(count(&a, OP_ARRAY_LENGTH), 1, "{stem}");
+                assert_eq!(count_in_search(&a, OP_ULESS_THAN_EQUAL), 16, "{stem}");
+                assert_eq!(count_in_search(&a, OP_ARRAY_LENGTH), 1, "{stem}");
                 // And an `A8Unorm` member's alpha moved into red where the device holds such a
                 // texture so (`metal::format::alpha_in_red`): the class index's read and the
                 // conversion.
@@ -1701,7 +1723,9 @@ declare i32 @air.get_width_texture_2d(ptr addrspace(1), i32)
                     "{stem}"
                 );
                 let converted = if conversions.is_empty() { 0 } else { 700 };
-                let bound = alpha + converted + if p.fields().leaf.int64 { 1_700 } else { 2_300 };
+                let checks = 200;
+                let bound =
+                    alpha + converted + checks + if p.fields().leaf.int64 { 1_700 } else { 2_300 };
                 assert!(
                     a.module.words.len() <= bound,
                     "{stem}: {} words over {bound} (alpha in red {a8}, {} conversions)",
@@ -4576,7 +4600,9 @@ fn an_argument_sampler_array_has_the_heap_sampler_capacity() {
 /// A sample through an argument buffer's sampler tests the sampler's entry for a cubic filter
 /// (`RuntimeFact::CubicArgumentSampler`) in a kernel on every profile with the heap, marking the
 /// status by address where the device addresses buffers and through the kernel's binding of it
-/// elsewhere (Profile F, `runtime-floor` without device addresses, below the runtime's floor); a
+/// elsewhere (Profile F, `runtime-floor` without device addresses, below the runtime's floor, here
+/// with room for the binding beside the kernel's storage buffers: at its own limit the binding
+/// gives way, [`the_cubic_tests_binding_gives_way_to_the_storage_buffer_limit`]); a
 /// fragment function's never does, whose store would cost it the device's
 /// hidden-surface removal, so the planner refuses a listed cubic sampler beside it.
 #[test]
@@ -4586,7 +4612,9 @@ fn only_non_fragment_stages_test_argument_samplers_for_a_cubic_filter() {
     };
     let (mut compiled, mut bound) = (0, 0);
     let mut profiles = committed_profiles().expect("profiles");
-    let f = crate::pipeline::testing::device_f(DevicePolicy::RESIDENT_TABLES).expect("Profile F");
+    let mut f = crate::pipeline::testing::description_f().expect("Profile F");
+    f.limits.max_per_stage_descriptor_storage_buffers = 32;
+    let f = Device::from_queries(f, DevicePolicy::RESIDENT_TABLES).expect("Profile F");
     profiles.push((PROFILE_F.to_string(), f.profile().clone()));
     for (stem, p) in profiles {
         let (Ok(kernel), Ok(fragment)) = (
@@ -4617,11 +4645,11 @@ fn tests_cubic(a: &FunctionArtifact) -> bool {
 }
 
 /// Where the cubic test's binding of the status would take a kernel past its storage buffers (a
-/// device that does not address buffers, Profile F with its limit lowered step by step), the
-/// kernel gives the binding back: it compiles without the test, as a fragment
-/// function does, so the planner refuses a listed cubic sampler beside it. Every compile stays
-/// within the limit, and at the full kernel's own count of storage buffers the kernel keeps the
-/// binding.
+/// device that does not address buffers, Profile F with its limit lowered step by step from room
+/// for the binding), the kernel gives the binding back: it compiles without the test, as a
+/// fragment function does, so the planner refuses a listed cubic sampler beside it. Every compile
+/// stays within the limit, and at the full kernel's own count of storage buffers the kernel keeps
+/// the binding.
 #[test]
 fn the_cubic_tests_binding_gives_way_to_the_storage_buffer_limit() {
     let Some(bc) = argument_samplers_fixture() else {
@@ -4630,13 +4658,11 @@ fn the_cubic_tests_binding_gives_way_to_the_storage_buffer_limit() {
     let stem = PROFILE_F;
     let with_storage = |limit: u32| {
         let mut desc = crate::pipeline::testing::description_f().expect("Profile F");
-        if limit < u32::MAX {
-            desc.limits.max_per_stage_descriptor_storage_buffers = limit;
-        }
+        desc.limits.max_per_stage_descriptor_storage_buffers = limit;
         let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("profile");
         dev.profile().clone()
     };
-    let full = with_storage(u32::MAX);
+    let full = with_storage(32);
     assert!(has_sampled_heap(&full), "{stem}");
     let kernel = compile(&bc, "argument_sampler_sample", &full).expect("kernel");
     assert_eq!(status_reach(&kernel), StatusReach::Binding);

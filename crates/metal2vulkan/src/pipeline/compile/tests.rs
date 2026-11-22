@@ -2519,8 +2519,10 @@ fn linked_functions_decode_once_per_module_and_defer_their_errors() {
 /// `vertexAttributeAccessBeyondStride` for a fixed-function attribute ending past its stride.
 /// The Khronos reader takes them from MoltenVK's capture (which withholds `samplerMipLodBias`);
 /// a device without the subset neither lists nor needs them. Where the subset withholds one, the
-/// requirements never name it (the blend under an empty mask is dropped, a static stride's
-/// attribute pulled, a per-bind stride left to the binder), so they stay within the profile.
+/// requirements never name it (the blend under an empty mask is dropped, a per-bind stride left
+/// to the binder), so they stay within the profile, and a static stride's attribute past its
+/// stride is refused (`VertexInputLayout`). The pipelines compile under the identity domains, the
+/// runtime's, the only ones where an attribute is fetched in fixed function.
 #[test]
 fn a_render_pipeline_requires_the_portability_features_it_uses() {
     use crate::device::requirements::{VkExtension, VkFeature};
@@ -2552,8 +2554,7 @@ fn a_render_pipeline_requires_the_portability_features_it_uses() {
     };
     // Every pipeline that compiles requires only what its device enabled.
     let compile = |desc: &DeviceDescription, d: &RenderPipelineDescriptor| {
-        let dev =
-            Device::from_queries(desc.clone(), DevicePolicy::RESIDENT_TABLES).expect("device");
+        let dev = Device::from_queries(desc.clone(), DevicePolicy::default()).expect("device");
         dev.compile_render_pipeline(d, &Budget::standard())
             .map(|p| {
                 assert_eq!(dev.profile().check(&p.requirements), Ok(()));
@@ -2595,8 +2596,10 @@ fn a_render_pipeline_requires_the_portability_features_it_uses() {
     assert!(features.contains(&beyond) && fixed(&vi));
     let (features, vi) = compile(&lavapipe, &d).expect("lavapipe");
     assert!(!features.contains(&beyond) && fixed(&vi));
-    let (features, vi) = compile(&without(beyond), &d).expect("withheld");
-    assert!(!features.contains(&beyond) && !fixed(&vi));
+    assert!(matches!(
+        compile(&without(beyond), &d),
+        Err(Error::Unsupported(u)) if u.feature == Feature::VertexInputLayout
+    ));
 
     // A per-bind stride is the bind's: the pipeline relies on the feature where the device has
     // it, and where the subset withholds it the binder pulls a stride below the attribute's end,
@@ -3502,10 +3505,11 @@ fn a_merged_fragment_reads_its_argument_buffer_through_its_command_s_table() {
 /// every buffer its vertex function reaches through its root entry (`BufferForm::Psb`), from the
 /// slot table at the stage's own `RootTableAddress`, and needs no `SlotGuestBase`
 /// (`icb_render_replay_template`); its plan states the variant. A vertex function that fetches
-/// a `[[stage_in]]` attribute (`icb_render_stride_template`) in fixed function is refused:
-/// fixed-function input reads no slot table. A draw replay names its layout among those the draw
-/// pulls (`bind::draw_replay_vertex_layouts`, `BindShape::far_vertex_buffers`) with no buffer
-/// bound there: the base plan asks for the pulled-vertex-buffer variant, whose replay variant
+/// a `[[stage_in]]` attribute (`icb_render_stride_template`) in fixed function, as it does under
+/// the identity domains, is refused: fixed-function input reads no slot table. A draw replay names
+/// its layout among those the draw pulls (`bind::draw_replay_vertex_layouts`,
+/// `BindShape::far_vertex_buffers`) with no buffer bound there: the base plan asks for the
+/// pulled-vertex-buffer variant, whose replay variant
 /// compiles, one draw per command and merged, binds no layout and pulls the attribute, whose
 /// read reaches the slot table; every stage passes L3, and its plan states its key.
 #[test]
@@ -3560,6 +3564,10 @@ fn a_replayed_draw_reads_its_buffers_through_the_slot_table() {
         .expect("plan");
     assert!(plan.variant.replay_bindings);
 
+    // A fixed-function fetch is the identity domains' alone (the runtime's): outside them every
+    // attribute is pulled.
+    let idev =
+        Device::from_queries(description("moltenvk-m3"), DevicePolicy::default()).expect("device");
     let Some(bc) = fixture("icb_render_stride_template") else {
         return;
     };
@@ -3571,10 +3579,10 @@ fn a_replayed_draw_reads_its_buffers_through_the_slot_table() {
         RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(vertex)));
     d.rasterization_enabled = false;
     d.vertex_descriptor = Some(vertex_descriptor(&[(0, metal::VertexFormat::UInt)]));
-    let base = dev
+    let base = idev
         .compile_render_variant(&d, &VariantKey::new(), &Budget::standard())
         .expect("fetched");
-    let refused = dev
+    let refused = idev
         .compile_render_variant(&d, &key, &Budget::standard())
         .expect_err("a fetch under replay bindings");
     assert!(
@@ -3590,14 +3598,14 @@ fn a_replayed_draw_reads_its_buffers_through_the_slot_table() {
         ..Default::default()
     };
     let plan = base
-        .plan(&dev, &shape)
+        .plan(&idev, &shape)
         .expect("the base plan, no buffer bound");
     assert_eq!(plan.variant.pulled_vertex_buffers, layouts);
     for merged in [false, true] {
         let mut pulled = plan.variant.clone();
         pulled.replay_bindings = true;
         pulled.merged_draws = merged;
-        let p = dev
+        let p = idev
             .compile_render_variant(&d, &pulled, &Budget::standard())
             .unwrap_or_else(|e| panic!("merged {merged}: {e}"));
         let input = &p.vertex_input;
@@ -3611,9 +3619,9 @@ fn a_replayed_draw_reads_its_buffers_through_the_slot_table() {
             "merged {merged}: {slots:?}"
         );
         for stage in &p.stages {
-            l3(&stage.spirv, &p.requirements, &dev);
+            l3(&stage.spirv, &p.requirements, &idev);
         }
-        let replayed = p.plan(&dev, &shape).expect("the variant's plan");
+        let replayed = p.plan(&idev, &shape).expect("the variant's plan");
         assert_eq!(replayed.variant, pulled, "merged {merged}");
         assert!(replayed.vertex_buffers.is_empty(), "merged {merged}");
     }

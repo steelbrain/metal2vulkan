@@ -779,12 +779,12 @@ declare i32 @air.atomic.global.add.u.i32(ptr addrspace(1), i32, i32, i32, i1)
 !5 = !{i32 2, !"air.thread_index_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}
 "#;
 
-/// A slot a typed atomic reaches is read by device address and checked in the shader on every
-/// profile (robust buffer access does not cover it), while another slot is a descriptor view under
-/// the profile's encoding, so the census names each access by the form it takes: the `u64` add
-/// `access.atomic.buffer.rmw.psb.checked` with robust descriptors and without them, the `u32` add
-/// through the view `access.atomic.buffer.rmw` or `.checked` as the profile's encoding says, and a
-/// load whose pointer may be either `access.load.switch.psb_and_view.checked`.
+/// A slot a typed atomic reaches is read by device address, while another slot is a descriptor
+/// view, both checked in the shader on every profile whatever buffer robustness it describes, so
+/// the census names each access by the form it takes: the `u64` add
+/// `access.atomic.buffer.rmw.psb.checked`, the `u32` add through the view
+/// `access.atomic.buffer.rmw.checked`, and a load whose pointer may be either
+/// `access.load.switch.psb_and_view.checked`, with robustness described and without it alike.
 #[test]
 fn a_device_address_access_is_named_apart_from_a_descriptor_access() {
     let Some(bc) = assemble("addressed_and_viewed", ADDRESSED_AND_VIEWED) else {
@@ -822,37 +822,19 @@ fn a_device_address_access_is_named_apart_from_a_descriptor_access() {
         [true, false],
         "the typed slot alone is a device address"
     );
-    expect(
-        &robust_names,
-        &[
-            "access.atomic.buffer.rmw.psb.checked",
-            "access.atomic.buffer.rmw",
-            "access.load.switch.psb_and_view.checked",
-            "access.store",
-        ],
-        "lavapipe",
-    );
+    let want = [
+        "access.atomic.buffer.rmw.psb.checked",
+        "access.atomic.buffer.rmw.checked",
+        "access.load.switch.psb_and_view.checked",
+        "access.store.checked",
+    ];
+    expect(&robust_names, &want, "lavapipe");
     let checked = unrobust("lavapipe");
     l3(&bc, entry, &checked, "lavapipe without robustness");
     let (_, checked_names) = names(&checked);
-    expect(
-        &checked_names,
-        &[
-            "access.atomic.buffer.rmw.psb.checked",
-            "access.atomic.buffer.rmw.checked",
-            "access.load.switch.psb_and_view.checked",
-            "access.store.checked",
-        ],
-        "lavapipe without robustness",
-    );
-    // The device-address access is one name in both encodings; the descriptor access is not.
-    assert_eq!(
-        robust_names
-            .intersection(&checked_names)
-            .filter(|name| name.starts_with("access.atomic.buffer"))
-            .collect::<Vec<_>>(),
-        ["access.atomic.buffer.rmw.psb.checked"]
-    );
+    expect(&checked_names, &want, "lavapipe without robustness");
+    // One form whatever buffer robustness the description states.
+    assert_eq!(robust_names, checked_names);
 }
 
 const ADDRESSED_COPIES: &str = r#"define void @addressed_copies(ptr addrspace(1) %wide, ptr addrspace(1) %words, i32 %t) {

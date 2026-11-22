@@ -565,7 +565,7 @@ fn reads_through_runtime_samplers_address_by_their_word() {
 /// The earlier clamp-to-edge reads ([`EDGE_READS`]) under the measured rules: a level past the
 /// texture's, or a layer past its layers, reads zero in every lane, not the out-of-bounds texel;
 /// a sample index outside is out of bounds as a plain read's; a texture buffer's index outside
-/// reads its first texel through the constexpr sampler.
+/// reads its first texel through the constexpr sampler, checked in the shader on every profile.
 #[test]
 fn a_clamp_to_edge_read_clamps_its_coordinate_into_the_texture() {
     let Some(bc) = assemble_text("edge_reads", EDGE_READS) else {
@@ -705,7 +705,7 @@ fn a_clamp_to_edge_read_clamps_its_coordinate_into_the_texture() {
             ([int(i32::MIN), 0, 0, 0], at(0, [0, 0, 0])),
         ],
     };
-    assert_eq!(buffer.check(&bc), [Class::Device, Class::Shader]);
+    assert_eq!(buffer.check(&bc), [Class::Shader]);
 }
 
 /// Every read through a sampler translates, links and passes `spirv-val` where it translates:

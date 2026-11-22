@@ -447,8 +447,8 @@ fn unestablished_conversions_are_refused() {
 }
 
 /// An unnormalized 8- or 16-bit integer format read into the fixture's `float3` and `half2`
-/// attributes is fixed function in its scaled form where the profile fetches that, and pulled
-/// (converted in the shader) where the profile has no buffer robustness; both compile and pass
+/// attributes is fixed function in its scaled form where the identity domains' profile fetches
+/// that, and pulled (converted in the shader) outside the identity domains; both compile and pass
 /// L3 on every profile.
 #[test]
 fn integer_formats_feed_float_attributes() {
@@ -465,40 +465,48 @@ fn integer_formats_feed_float_attributes() {
         desc.attributes
             .insert(attr, VertexAttributeDescriptor::new(format, offset, 0));
     }
+    use crate::device::requirements::FormatUsage;
+    let scaled = [
+        (0, vk::Format::R16G16B16_USCALED),
+        (1, vk::Format::R8G8_SSCALED),
+    ];
+    // Outside the identity domains every attribute is pulled and converts in the shader.
+    let mut pulled_all = VertexFetchProjection::new();
+    for (attr, d) in &desc.attributes {
+        pulled_all.attributes.insert(
+            *attr,
+            VertexFetch::pulled(d, &desc.layouts[&d.buffer_index]),
+        );
+    }
     for (stem, p) in profiles_both_encodings() {
         let proj = vertex_fetch_projection(Some(&desc), &classes(), &p)
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let robust = !stem.ends_with("without robustness");
-        for (attr, scaled) in [
-            (0, vk::Format::R16G16B16_USCALED),
-            (1, vk::Format::R8G8_SSCALED),
-        ] {
-            let fixed = robust
-                && p.supports_format(
-                    scaled,
-                    crate::device::requirements::FormatUsage::VertexBuffer,
-                );
-            let entry = VertexFetch::FixedFunction;
-            assert_eq!(
-                proj.attributes[&attr] == entry,
-                fixed,
-                "{stem} {attr}: {:?}",
-                proj.attributes[&attr]
-            );
-        }
+        assert_eq!(proj.attributes, pulled_all.attributes, "{stem}");
         let a = compile_with(&bc, &p, proj).unwrap_or_else(|e| panic!("{stem}: {e}"));
         validate(&a, &p);
-        // Every attribute pulled converts in the shader.
-        let mut pulled_all = VertexFetchProjection::new();
-        for (attr, d) in &desc.attributes {
-            pulled_all.attributes.insert(
-                *attr,
-                VertexFetch::pulled(d, &desc.layouts[&d.buffer_index]),
-            );
-        }
-        let a = compile_with(&bc, &p, pulled_all).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        validate(&a, &p);
         assert_eq!(indices(&a.interface.io.pulled), [0, 1, 4, 7], "{stem}");
+    }
+    // Under them the scaled forms are fixed function where the device fetches them, and the
+    // projection is refused, typed, where it does not.
+    for stem in PROFILES {
+        let p = profile(stem, DevicePolicy::default()).expect("committed profile");
+        let fetched = scaled
+            .iter()
+            .all(|&(_, f)| p.supports_format(f, FormatUsage::VertexBuffer));
+        match vertex_fetch_projection(Some(&desc), &classes(), &p) {
+            Ok(proj) => {
+                assert!(fetched, "{stem}");
+                for (attr, _) in scaled {
+                    assert_eq!(proj.attributes[&attr], VertexFetch::FixedFunction, "{stem}");
+                }
+                let a = compile_with(&bc, &p, proj).unwrap_or_else(|e| panic!("{stem}: {e}"));
+                validate(&a, &p);
+            }
+            Err(Error::Unsupported(u)) => {
+                assert!(!fetched && u.feature == Feature::Format, "{stem}: {u}")
+            }
+            Err(e) => panic!("{stem}: {e}"),
+        }
     }
 }
 
@@ -1064,9 +1072,9 @@ fn compile_inputs_of(
 /// `UShort2` among them read as `float2`; nine varyings of mixed interpolation beside the
 /// position; a `BGRA8Unorm_sRGB` target blended source-over beside `Depth32Float_Stencil8`),
 /// makes on every committed profile with the depth and stencil format, and passes L3 (a profile
-/// without the format refuses it, typed). Its `UShort2` attribute is fixed function in
-/// `R16G16_USCALED` on the shipped profiles, and wherever else fixed-function input takes it;
-/// elsewhere it is pulled.
+/// without the format refuses it, typed). Under the identity domains its `UShort2` attribute is
+/// fixed function in `R16G16_USCALED` on the shipped profiles, and wherever else fixed-function
+/// input takes it; a profile without the format refuses it, typed. Outside them it is pulled.
 #[test]
 fn a_label_pipeline_reads_its_integer_attribute_as_float() {
     use crate::budget::Budget;
@@ -1135,14 +1143,30 @@ fn a_label_pipeline_reads_its_integer_attribute_as_float() {
         })
         .collect();
     stems.sort();
-    let mut fixed = Vec::new();
-    for stem in &stems {
+    let device = |stem: &str, policy| {
         let text = std::fs::read_to_string(dir.join(format!("{stem}.json"))).expect("profile");
         let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
+        Device::from_queries(desc, policy).expect("device")
+    };
+    let resident = device("lavapipe", DevicePolicy::RESIDENT_TABLES)
+        .compile_render_pipeline(&d, &Budget::standard())
+        .expect("lavapipe");
+    assert!(
+        resident
+            .vertex_input
+            .pulled
+            .iter()
+            .any(|a| a.attribute == 2),
+        "{:?}",
+        resident.vertex_input
+    );
+    let mut fixed = Vec::new();
+    for stem in &stems {
+        let dev = device(stem, DevicePolicy::default());
         let p = match dev.compile_render_pipeline(&d, &Budget::standard()) {
             Ok(p) => p,
-            // A device without the depth and stencil format (roadmap-2022).
+            // A device without the depth and stencil format (roadmap-2022), or without the
+            // attribute's scaled format.
             Err(Error::Unsupported(u)) if u.feature == Feature::Format => {
                 assert!(!shipped.contains(&stem.as_str()), "{stem}: {u}");
                 eprintln!("{stem}: {u}");
@@ -1154,17 +1178,10 @@ fn a_label_pipeline_reads_its_integer_attribute_as_float() {
             check_words_valid(&s.spirv, &p.requirements, dev.profile())
                 .unwrap_or_else(|e| panic!("{stem} L3: {e}"));
         }
-        match p.vertex_input.attributes.iter().find(|a| a.offset == 12) {
-            Some(a) => {
-                assert_eq!(a.format, vk::Format::R16G16_USCALED, "{stem}");
-                fixed.push(stem.as_str());
-            }
-            None => assert!(
-                p.vertex_input.pulled.iter().any(|a| a.attribute == 2),
-                "{stem}: {:?}",
-                p.vertex_input
-            ),
-        }
+        let a = p.vertex_input.attributes.iter().find(|a| a.offset == 12);
+        let a = a.unwrap_or_else(|| panic!("{stem}: {:?}", p.vertex_input));
+        assert_eq!(a.format, vk::Format::R16G16_USCALED, "{stem}");
+        fixed.push(stem.as_str());
     }
     for stem in shipped {
         assert!(fixed.contains(&stem), "{stem} pulls it: {fixed:?}");
@@ -1189,7 +1206,9 @@ fn a_label_pipeline_reads_its_integer_attribute_as_float() {
 /// infinite word passes through, and a `Float4` attribute keeps every word, NaNs included, as
 /// Metal's fetch of a 32-bit float does. The module is the same for every format and records
 /// nothing of it: the render pipeline's link notes a narrow float's NaN on its vertex stage
-/// (`link::vertex::fixed_function_notes`).
+/// (`link::vertex::fixed_function_notes`). The projection is the identity domains' (outside them
+/// every attribute is pulled); the module is compiled with it on the profile's resident tables,
+/// whose output slot the interpreter binds by its descriptor.
 #[test]
 fn a_fixed_function_vertex_attribute_keeps_the_words_the_device_delivers() {
     use crate::pipeline::artifact::PrecisionNote;
@@ -1226,6 +1245,7 @@ fn a_fixed_function_vertex_attribute_keeps_the_words_the_device_delivers() {
         if !p.fields().leaf.vertex_stores_and_atomics {
             continue;
         }
+        let identity = profile(stem, DevicePolicy::default()).expect("committed profile");
         for format in [
             VertexFormat::Half4,
             VertexFormat::FloatRG11B10,
@@ -1237,14 +1257,15 @@ fn a_fixed_function_vertex_attribute_keeps_the_words_the_device_delivers() {
             d.attributes
                 .insert(0, VertexAttributeDescriptor::new(format, 0, 0));
             let what = format!("{stem} {format:?}");
-            let proj =
-                vertex_fetch_projection(Some(&d), &BTreeMap::from([(0, IoNumeric::Float)]), &p)
-                    .unwrap_or_else(|e| panic!("{what}: {e}"));
-            // A format the device's vertex input cannot fetch is pulled and is the pulled
-            // fetch's own test.
-            if proj.attributes[&0] != VertexFetch::FixedFunction {
-                continue;
-            }
+            let classes = BTreeMap::from([(0, IoNumeric::Float)]);
+            let proj = match vertex_fetch_projection(Some(&d), &classes, &identity) {
+                Ok(proj) => proj,
+                // A format the device's vertex input cannot fetch is refused under the identity
+                // domains, and pulled (the pulled fetch's own test) outside them.
+                Err(Error::Unsupported(u)) if u.feature == Feature::Format => continue,
+                Err(e) => panic!("{what}: {e}"),
+            };
+            assert_eq!(proj.attributes[&0], VertexFetch::FixedFunction, "{what}");
             let i = inputs(proj);
             let a = compile_inputs_of(&bc, "int_attribute_to_float4", &p, &i)
                 .unwrap_or_else(|e| panic!("{what}: {e}"));

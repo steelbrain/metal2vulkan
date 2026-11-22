@@ -348,7 +348,9 @@ fn thread_elements_are_the_distributed_cells() {
     }
 }
 
-/// Products in every `half`/`float` mix and of `bfloat` factors, from and to device blocks.
+/// Products in every `half`/`float` mix and of `bfloat` factors, from and to device blocks. The
+/// kernel's five buffers pass the floor's four storage buffers a stage where it binds them (no
+/// device addresses, below the runtime's floor), which refuses it (`DescriptorCount`).
 #[test]
 fn mixed_products_compute_the_matrix_product() {
     let Some(bc) = owned() else { return };
@@ -361,7 +363,14 @@ fn mixed_products_compute_the_matrix_product() {
     let mut want_h = flat(&mad(&h, &h, &h));
     want_h.extend(flat(&mad(&f, &h, &h)));
     for (p, tier, lanes, locals) in tiers() {
-        let (plan, m) = typed_module(&bc, entry, &p).unwrap_or_else(|e| panic!("{entry}: {e}"));
+        let limit = p.fields().limits.max_per_stage_descriptor_storage_buffers;
+        let (plan, m) = match typed_module(&bc, entry, &p) {
+            Ok(module) => module,
+            Err(Error::Unsupported(u)) if u.feature == Feature::DescriptorCount && limit < 5 => {
+                continue
+            }
+            Err(e) => panic!("{entry}: {e}"),
+        };
         check_plan(&plan, tier, entry);
         for &n in locals {
             let out = run_all(

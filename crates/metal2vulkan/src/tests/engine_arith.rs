@@ -1378,9 +1378,10 @@ fn no_module_holds_a_signed_remainder_opcode() {
 }
 
 /// A funnel shift or rotate by a constant amount shifts by two constants: no module holds the
-/// run-time form's `OpUMod` of the amount or `OpISub` of the shift paired with it, on any profile,
-/// and the kernel computes LLVM's answer on the interpreter: `fshl(a, a, 13)` (a rotate),
-/// `fshr(a, b, 37)` (37 mod 32 = 5) and `fshl(a, b, 32)` (0: `a`).
+/// run-time form's `OpUMod` of the amount or `OpISub` of the shift paired with it, on any profile
+/// (a twin kernel of the same loads and store, with no funnel shift, holds as many `OpISub`s: the
+/// in-shader checks' own), and the kernel computes LLVM's answer on the interpreter:
+/// `fshl(a, a, 13)` (a rotate), `fshr(a, b, 37)` (37 mod 32 = 5) and `fshl(a, b, 32)` (0: `a`).
 #[test]
 fn a_funnel_shift_by_a_constant_shifts_by_constants() {
     const NAME: &str = "funnel_by_constants";
@@ -1395,19 +1396,23 @@ fn a_funnel_shift_by_a_constant_shifts_by_constants() {
         oi("a", a),
         oi("b", b)
     );
-    let Some(bitcode) = assemble("funnel", &module(&[k(NAME, body, want)])) else {
+    const TWIN: &str = "funnel_twin";
+    let twin = format!("{}{}  %r = xor i32 %a, %b\n", oi("a", a), oi("b", b));
+    let kernels = [k(NAME, body, want), k(TWIN, twin, a ^ b)];
+    let Some(bitcode) = assemble("funnel", &module(&kernels)) else {
         return;
     };
     for stem in PROFILES {
         let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         let art = compile(&bitcode, NAME, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let twin = compile(&bitcode, TWIN, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
         let words = &art.module.words;
         assert_eq!(
             (
                 count_op(words, crate::spv::Op::UMod),
                 count_op(words, crate::spv::Op::ISub)
             ),
-            (0, 0),
+            (0, count_op(&twin.module.words, crate::spv::Op::ISub)),
             "{stem}"
         );
         assert_eq!(interpret(&bitcode, NAME, &p), want, "{stem}");

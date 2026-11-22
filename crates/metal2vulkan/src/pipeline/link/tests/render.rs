@@ -428,19 +428,16 @@ fn render_with(d: VertexDescriptor) -> LinkInputs {
 
 /// Fixed-function attributes sit at dense locations in attribute order, bindings are dense in
 /// buffer order with their rate and stride, and every committed profile agrees with the
-/// projection.
+/// projection: under the identity domains every attribute is fixed function where the profile's
+/// format table lists its format for vertex buffers (and the projection is refused elsewhere);
+/// outside them every attribute is pulled.
 #[test]
 fn vertex_input_follows_the_projection_on_every_committed_profile() {
-    let profiles = crate::spirv::testing::committed_profiles().expect("profiles");
+    let profiles =
+        crate::spirv::testing::committed_profiles_with(DevicePolicy::default()).expect("profiles");
     assert!(!profiles.is_empty());
     for (stem, p) in &profiles {
         let d = descriptor();
-        let vs = vertex_stage(p, &d, &[0, 1, 4]);
-        let va = artifact(vs, None);
-        let l = link(&[&va], &render_with(d), p).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let vi = &l.vertex_input;
-        // Every attribute is fixed function exactly where the profile's format table lists its
-        // format for vertex buffers, and pulled elsewhere.
         let fixed =
             |f| p.supports_format(f, crate::device::requirements::FormatUsage::VertexBuffer);
         let want = [
@@ -448,6 +445,15 @@ fn vertex_input_follows_the_projection_on_every_committed_profile() {
             (1, 0, vk::Format::R32G32_SFLOAT, 16),
             (4, 3, vk::Format::R32_SFLOAT, 0),
         ];
+        if !want.iter().all(|w| fixed(w.2)) {
+            let proj = vertex::vertex_fetch_projection(Some(&d), &floats(&[0, 1, 4]), p);
+            assert!(proj.is_err(), "{stem}: {proj:?}");
+            continue;
+        }
+        let vs = vertex_stage(p, &d, &[0, 1, 4]);
+        let va = artifact(vs, None);
+        let l = link(&[&va], &render_with(d), p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let vi = &l.vertex_input;
         let mut binds_want = Vec::new();
         let mut locs_want = Vec::new();
         let mut pulled_want = Vec::new();
@@ -500,14 +506,25 @@ fn vertex_input_follows_the_projection_on_every_committed_profile() {
             "{stem}"
         );
     }
+    // Outside the identity domains every attribute is pulled: no binding, no location.
+    for (stem, p) in &crate::spirv::testing::committed_profiles().expect("profiles") {
+        let d = descriptor();
+        let va = artifact(vertex_stage(p, &d, &[0, 1, 4]), None);
+        let l = link(&[&va], &render_with(d), p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let vi = &l.vertex_input;
+        assert!(vi.attributes.is_empty() && vi.bindings.is_empty(), "{stem}");
+        let pulled: Vec<u32> = vi.pulled.iter().map(|a| a.attribute).collect();
+        assert_eq!(pulled, [0, 1, 4], "{stem}");
+    }
 }
 
-/// Constant step functions, attributes beyond the device's attribute or binding limits, and
-/// attributes whose format class differs from the declared type are pulled; a stage compiled
-/// under another projection is refused.
+/// A constant step function is pulled outside the identity domains, as every attribute is there.
+/// Under them an attribute set past the device's attribute or binding limit is refused
+/// (`VertexInputLayout`, naming the limit), and outside them a pulled attribute links with its
+/// layout's step; a stage compiled under another projection is refused.
 #[test]
-fn limits_pull_attributes_and_a_foreign_projection_is_refused() {
-    let mut p = profile("moltenvk-m3");
+fn limits_refuse_attributes_and_a_foreign_projection_is_refused() {
+    let p = profile("moltenvk-m3");
     let mut d = descriptor();
     d.layouts.get_mut(&3).expect("layout 3").step_function = VertexStepFunction::Constant;
     let used = floats(&[0, 1, 4]);
@@ -523,25 +540,36 @@ fn limits_pull_attributes_and_a_foreign_projection_is_refused() {
         }
     );
     let d = descriptor();
-    p.edit(|x| x.limits.max_vertex_input_attributes = 2);
-    let proj = vertex::vertex_fetch_projection(Some(&d), &used, &p).expect("projection");
-    assert!(matches!(proj.attributes[&4], VertexFetch::Pulled { .. }));
-    assert!(matches!(proj.attributes[&1], VertexFetch::FixedFunction));
-    let mut p = profile("moltenvk-m3");
-    p.edit(|x| x.limits.max_vertex_input_bindings = 1);
-    let proj = vertex::vertex_fetch_projection(Some(&d), &used, &p).expect("projection");
-    assert!(matches!(proj.attributes[&4], VertexFetch::Pulled { .. }));
-    assert!(matches!(proj.attributes[&0], VertexFetch::FixedFunction));
-    // Linking the pulled attribute lists it as pulled with its layout's step.
+    let fixed = |p: &DeviceProfile| {
+        vertex::vertex_fetch_projection(Some(&d), &used, p).map(|proj| {
+            proj.attributes
+                .values()
+                .all(|f| matches!(f, VertexFetch::FixedFunction))
+        })
+    };
+    let refused = |p: &DeviceProfile, limit: &str| {
+        let got = vertex::vertex_fetch_projection(Some(&d), &used, p);
+        layout_refused(&got) && format!("{got:?}").contains(limit)
+    };
+    let mut ip = identity_profile("moltenvk-m3");
+    assert_eq!(fixed(&ip), Ok(true));
+    ip.edit(|x| x.limits.max_vertex_input_attributes = 2);
+    assert!(refused(&ip, "MaxVertexInputAttributes"));
+    let mut ip = identity_profile("moltenvk-m3");
+    ip.edit(|x| x.limits.max_vertex_input_bindings = 1);
+    assert!(refused(&ip, "MaxVertexInputBindings"));
+    // Linking the pulled attributes lists them as pulled with their layouts' steps.
     let vs = vertex_stage(&p, &d, &[0, 4]);
     let va = artifact(vs, None);
     let l = link(&[&va], &render_with(d.clone()), &p).expect("link");
-    assert_eq!(l.vertex_input.pulled.len(), 1);
-    assert_eq!(l.vertex_input.pulled[0].attribute, 4);
-    assert_eq!(l.vertex_input.pulled[0].buffer_index, 3);
-    assert_eq!(l.vertex_input.bindings.len(), 1);
-    // The same stage against a device where attribute 4 is fixed function: refused.
-    let full = profile("moltenvk-m3");
+    let pulled: Vec<(u32, u32)> = (l.vertex_input.pulled.iter())
+        .map(|a| (a.attribute, a.buffer_index))
+        .collect();
+    assert_eq!(pulled, [(0, 0), (4, 3)]);
+    assert!(l.vertex_input.bindings.is_empty());
+    // A stage pulling attribute 4 against a device where it is fixed function: refused.
+    let va = artifact(vertex_stage(&p, &d, &[4]), None);
+    let full = identity_profile("moltenvk-m3");
     assert_eq!(
         link(&[&va], &render_with(d.clone()), &full).unwrap_err(),
         Error::InvalidDescriptor(DescriptorError::VertexAttribute { attribute: 4 })
@@ -570,7 +598,7 @@ fn limits_pull_attributes_and_a_foreign_projection_is_refused() {
 /// reach the binding -- here it is set per bind (`MTLBufferLayoutStrideDynamic`) and the binding
 /// is static all the same, because a fetch of one element has no use for a stride. Outside the
 /// identity domains the attribute is pulled
-/// (`limits_pull_attributes_and_a_foreign_projection_is_refused`).
+/// (`limits_refuse_attributes_and_a_foreign_projection_is_refused`).
 #[test]
 fn a_constant_step_links_to_a_vertex_binding_of_zero_stride() {
     let p = crate::pipeline::testing::profile("nvidia-rtx5080-laptop", DevicePolicy::default())
@@ -605,23 +633,25 @@ fn a_constant_step_links_to_a_vertex_binding_of_zero_stride() {
         .contains(&vk::DynamicState::VERTEX_INPUT_BINDING_STRIDE));
 }
 
-/// An attribute is fixed function when fixed-function input delivers the class the shader
-/// declares (`float` for float, normalized, and packed formats, `uint` for unsigned-integer
-/// ones), and so is an unnormalized 8- or 16-bit integer format read into a `float` attribute,
-/// in its scaled form; signed-integer formats into `uint` are pulled and sign-extended. A 32-bit
-/// integer format into `float` is an invalid descriptor, as on Metal, and a float-class format into
-/// `uint` is refused by the one projection.
+/// Under the identity domains an attribute is fixed function when fixed-function input delivers
+/// the class the shader declares (`float` for float, normalized, and packed formats, `uint` for
+/// unsigned-integer ones), and so is an unnormalized 8- or 16-bit integer format read into a
+/// `float` attribute, in its scaled form; a signed-integer format into `uint` is fetched in fixed
+/// function into an `int` variable. Outside them each of those is pulled (a signed one
+/// sign-extended in the shader). A 32-bit integer format into `float` is an invalid descriptor,
+/// as on Metal, and a float-class format into `uint` is refused by the one projection, in either.
 #[test]
 fn the_format_class_must_match_the_declared_type() {
     use crate::error::{Feature, LowerFamily, Needs};
     #[derive(Debug)]
     enum Want {
         Fixed,
-        Pulled,
+        Signed,
         Refused,
         Invalid,
     }
-    let p = profile("moltenvk-m3");
+    let tables = profile("moltenvk-m3");
+    let p = identity_profile("moltenvk-m3");
     let mut d = VertexDescriptor::new();
     d.layouts
         .insert(0, VertexBufferLayoutDescriptor::new(Some(64)));
@@ -638,8 +668,8 @@ fn the_format_class_must_match_the_declared_type() {
         (VertexFormat::Char2, IoNumeric::Float, Want::Fixed),
         (VertexFormat::UShort2, IoNumeric::Float, Want::Fixed),
         (VertexFormat::Short4, IoNumeric::Float, Want::Fixed),
-        (VertexFormat::Char4, IoNumeric::Uint, Want::Pulled),
-        (VertexFormat::Int, IoNumeric::Uint, Want::Pulled),
+        (VertexFormat::Char4, IoNumeric::Uint, Want::Signed),
+        (VertexFormat::Int, IoNumeric::Uint, Want::Signed),
         (VertexFormat::UInt, IoNumeric::Float, Want::Invalid),
         (VertexFormat::Int3, IoNumeric::Float, Want::Invalid),
         (VertexFormat::Float2, IoNumeric::Uint, Want::Refused),
@@ -653,7 +683,16 @@ fn the_format_class_must_match_the_declared_type() {
         let i = i as u32;
         d.attributes
             .insert(i, VertexAttributeDescriptor::new(format, 0, 0));
-        let got = vertex::vertex_fetch_projection(Some(&d), &BTreeMap::from([(i, numeric)]), &p);
+        let used = BTreeMap::from([(i, numeric)]);
+        let got = vertex::vertex_fetch_projection(Some(&d), &used, &p);
+        if matches!(want, Want::Fixed | Want::Signed) {
+            let proj = vertex::vertex_fetch_projection(Some(&d), &used, &tables);
+            let fetch = proj.map(|proj| proj.attributes[&i]);
+            assert!(
+                matches!(fetch, Ok(VertexFetch::Pulled { format: f, .. }) if f == format),
+                "{format:?} as {numeric:?} outside the identity domains: {fetch:?}"
+            );
+        }
         match (want, got) {
             (Want::Fixed, Ok(proj)) => {
                 assert_eq!(
@@ -662,10 +701,10 @@ fn the_format_class_must_match_the_declared_type() {
                     "{format:?}"
                 )
             }
-            (Want::Pulled, Ok(proj)) => assert!(
-                matches!(proj.attributes[&i], VertexFetch::Pulled { format: f, .. } if f == format),
-                "{format:?} as {numeric:?}: {:?}",
-                proj.attributes[&i]
+            (Want::Signed, Ok(proj)) => assert_eq!(
+                proj.attributes[&i],
+                VertexFetch::SignedFixedFunction,
+                "{format:?} as {numeric:?}"
             ),
             (Want::Refused, Err(Error::Unsupported(u))) => {
                 assert_eq!(u.feature, Feature::Lowering(LowerFamily::StageIo));
@@ -682,11 +721,13 @@ fn the_format_class_must_match_the_declared_type() {
 
 /// Metal allows any byte offset and stride on Apple5 and later; Vulkan's fixed-function
 /// attribute address must be a multiple of the component size (the whole size of a packed
-/// format). An attribute whose offset or static stride is not is pulled; a per-bind stride is the
-/// binder's runtime fact and does not decide the projection.
+/// format). Under the identity domains an attribute whose offset or static stride is not is
+/// refused (`VertexInputLayout`); outside them every attribute is pulled (the pulled fetch reads
+/// bytes). A per-bind stride is the binder's runtime fact and does not decide the projection.
 #[test]
-fn unaligned_attributes_are_pulled() {
-    let p = profile("moltenvk-m3");
+fn unaligned_attributes_are_refused_under_the_identity_domains() {
+    let tables = profile("moltenvk-m3");
+    let p = identity_profile("moltenvk-m3");
     let cases = [
         // (format, offset, stride, aligned)
         (VertexFormat::Float3, 0, Some(12), true),
@@ -728,24 +769,35 @@ fn unaligned_attributes_are_pulled() {
         ) {
             assert!(base, "{format:?}");
         }
-        let proj = vertex::vertex_fetch_projection(Some(&d), &BTreeMap::from([(0, numeric)]), &p)
-            .expect("projection");
-        assert_eq!(
-            proj.attributes[&0] == VertexFetch::FixedFunction,
-            aligned && base,
-            "{format:?} at {offset} stride {stride:?}: {:?}",
-            proj.attributes[&0]
+        let used = BTreeMap::from([(0, numeric)]);
+        let got = vertex::vertex_fetch_projection(Some(&d), &used, &p);
+        let what = format!("{format:?} at {offset} stride {stride:?}: {got:?}");
+        match (aligned, base) {
+            // The format's own refusal.
+            (_, false) => assert!(got.is_err(), "{what}"),
+            (true, true) => assert_eq!(
+                got.map(|proj| proj.attributes[&0]),
+                Ok(VertexFetch::FixedFunction),
+                "{what}"
+            ),
+            (false, true) => assert!(layout_refused(&got), "{what}"),
+        }
+        let proj = vertex::vertex_fetch_projection(Some(&d), &used, &tables).expect("projection");
+        assert!(
+            matches!(proj.attributes[&0], VertexFetch::Pulled { .. }),
+            "{format:?} outside the identity domains"
         );
     }
 }
 
 /// On a portability-subset device a static stride must be a multiple of
 /// `minVertexInputBindingStrideAlignment` and at least as large
-/// (`VUID-VkVertexInputBindingDescription-stride-04456`); a layout that is not is pulled.
-/// MoltenVK's committed capture reports 1, so there only a zero stride is pulled; a device
+/// (`VUID-VkVertexInputBindingDescription-stride-04456`): under the identity domains a layout
+/// that is not is refused (`VertexInputLayout`), and outside them every attribute is pulled.
+/// MoltenVK's committed capture reports 1, so there only a zero stride is refused; a device
 /// without the rule keeps a zero stride fixed function.
 #[test]
-fn portability_stride_alignment_pulls_static_strides() {
+fn portability_stride_alignment_refuses_static_strides() {
     let fetch = |p: &DeviceProfile, stride: u32| {
         let mut d = VertexDescriptor::new();
         d.layouts
@@ -755,11 +807,10 @@ fn portability_stride_alignment_pulls_static_strides() {
             VertexAttributeDescriptor::new(VertexFormat::UChar4, 0, 0),
         );
         vertex::vertex_fetch_projection(Some(&d), &BTreeMap::from([(0, IoNumeric::Uint)]), p)
-            .expect("projection")
-            .attributes[&0]
+            .map(|proj| proj.attributes[&0])
     };
-    let fixed = VertexFetch::FixedFunction;
-    let mvk = profile("moltenvk-m3");
+    let fixed = Ok(VertexFetch::FixedFunction);
+    let mvk = identity_profile("moltenvk-m3");
     assert_eq!(
         mvk.fields()
             .limits
@@ -768,24 +819,29 @@ fn portability_stride_alignment_pulls_static_strides() {
     );
     assert_eq!(fetch(&mvk, 4), fixed);
     assert_eq!(fetch(&mvk, 5), fixed);
-    assert_ne!(fetch(&mvk, 0), fixed);
+    assert!(layout_refused(&fetch(&mvk, 0)));
     let mut four = mvk.clone();
     four.edit(|x| x.limits.min_vertex_input_binding_stride_alignment = Some(4));
     assert_eq!(fetch(&four, 8), fixed);
-    assert_ne!(fetch(&four, 6), fixed);
-    assert_ne!(fetch(&four, 2), fixed);
-    let lavapipe = profile("lavapipe");
+    assert!(layout_refused(&fetch(&four, 6)));
+    assert!(layout_refused(&fetch(&four, 2)));
+    let lavapipe = identity_profile("lavapipe");
     assert_eq!(fetch(&lavapipe, 0), fixed);
     assert_eq!(fetch(&lavapipe, 6), fixed);
+    assert!(matches!(
+        fetch(&profile("moltenvk-m3"), 4),
+        Ok(VertexFetch::Pulled { .. })
+    ));
 }
 
 /// On a portability-subset device without `vertexAttributeAccessBeyondStride` an attribute must
 /// end within its binding's stride
-/// (`VUID-VkVertexInputAttributeDescription-vertexAttributeAccessBeyondStride-04457`): one whose
-/// static stride it passes is pulled. MoltenVK's capture has the feature, which keeps it fixed
-/// function, as does a device without the subset.
+/// (`VUID-VkVertexInputAttributeDescription-vertexAttributeAccessBeyondStride-04457`): under the
+/// identity domains one whose static stride it passes is refused (`VertexInputLayout`), and
+/// outside them every attribute is pulled. MoltenVK's capture has the feature, which keeps it
+/// fixed function, as does a device without the subset.
 #[test]
-fn the_portability_subset_can_pull_attributes_past_their_stride() {
+fn the_portability_subset_refuses_attributes_past_their_stride() {
     let fetch = |p: &DeviceProfile, stride: u32| {
         let mut d = VertexDescriptor::new();
         d.layouts
@@ -795,22 +851,24 @@ fn the_portability_subset_can_pull_attributes_past_their_stride() {
             0,
             VertexAttributeDescriptor::new(VertexFormat::Float4, 8, 0),
         );
-        vertex::vertex_fetch_projection(Some(&d), &floats(&[0]), p)
-            .expect("projection")
-            .attributes[&0]
+        vertex::vertex_fetch_projection(Some(&d), &floats(&[0]), p).map(|proj| proj.attributes[&0])
     };
-    let fixed = VertexFetch::FixedFunction;
+    let fixed = Ok(VertexFetch::FixedFunction);
     let beyond = VkFeature::VertexAttributeAccessBeyondStride;
-    let mvk = profile("moltenvk-m3");
+    let mvk = identity_profile("moltenvk-m3");
     assert!(mvk.fields().enabled.features.contains(&beyond));
     assert_eq!(fetch(&mvk, 16), fixed);
     let mut withheld = mvk.clone();
     withheld.edit(|x| {
         x.enabled.features.remove(&beyond);
     });
-    assert_ne!(fetch(&withheld, 16), fixed);
+    assert!(layout_refused(&fetch(&withheld, 16)));
     assert_eq!(fetch(&withheld, 24), fixed);
-    assert_eq!(fetch(&profile("lavapipe"), 16), fixed);
+    assert_eq!(fetch(&identity_profile("lavapipe"), 16), fixed);
+    assert!(matches!(
+        fetch(&profile("moltenvk-m3"), 16),
+        Ok(VertexFetch::Pulled { .. })
+    ));
 }
 
 /// A constant-alpha RGB blend factor (Metal's `BlendAlpha`, `OneMinusBlendAlpha`) is refused at
@@ -941,9 +999,10 @@ fn the_constant_alpha_drop_follows_the_descriptor_checks() {
 
 /// Under dynamic strides (a fixed-function per-bind layout on a profile with extended dynamic
 /// state) every binding's stride is passed per bind, and a nonzero static stride must cover the
-/// attributes its binding fetches (`VUID-vkCmdBindVertexBuffers2-pStrides-06209`): an attribute
-/// ending past it is pulled, one within it and a zero stride stay fixed function. Without dynamic
-/// strides the static stride is pipeline state and nothing is pulled.
+/// attributes its binding fetches (`VUID-vkCmdBindVertexBuffers2-pStrides-06209`): under the
+/// identity domains an attribute ending past it is refused (`VertexInputLayout`), one within it
+/// and a zero stride stay fixed function. Without dynamic strides the static stride is pipeline
+/// state and nothing is refused. Outside the identity domains every attribute is pulled.
 #[test]
 fn static_strides_under_dynamic_strides_cover_their_attributes() {
     let project = |p: &DeviceProfile, stride: u32| {
@@ -960,28 +1019,29 @@ fn static_strides_under_dynamic_strides_cover_their_attributes() {
             .insert(1, VertexAttributeDescriptor::new(VertexFormat::Float, 8, 0));
         d.attributes
             .insert(2, VertexAttributeDescriptor::new(VertexFormat::Float, 0, 1));
-        vertex::vertex_fetch_projection(Some(&d), &floats(&[0, 1, 2]), p).expect("projection")
+        vertex::vertex_fetch_projection(Some(&d), &floats(&[0, 1, 2]), p)
     };
-    let fixed = |proj: &crate::pipeline::lower_inputs::VertexFetchProjection| {
+    let fixed = |p: &DeviceProfile, stride: u32| {
+        let proj = project(p, stride).expect("projection");
         proj.attributes
             .iter()
             .filter(|(_, f)| matches!(f, VertexFetch::FixedFunction))
             .map(|(a, _)| *a)
             .collect::<Vec<u32>>()
     };
-    let lavapipe = profile("lavapipe");
+    let lavapipe = identity_profile("lavapipe");
     assert!(lavapipe.fields().dynamic_vertex_stride);
-    assert_eq!(fixed(&project(&lavapipe, 12)), [0, 1, 2]);
-    assert_eq!(fixed(&project(&lavapipe, 0)), [0, 1, 2]);
-    assert_eq!(
-        fixed(&project(&lavapipe, 8)),
-        [0, 2],
+    assert_eq!(fixed(&lavapipe, 12), [0, 1, 2]);
+    assert_eq!(fixed(&lavapipe, 0), [0, 1, 2]);
+    assert!(
+        layout_refused(&project(&lavapipe, 8)),
         "the float at 8 ends past 8"
     );
-    assert_eq!(fixed(&project(&lavapipe, 4)), [2], "both end past 4");
+    assert!(layout_refused(&project(&lavapipe, 4)), "both end past 4");
     let mut static_only = lavapipe.clone();
     static_only.edit(|x| x.dynamic_vertex_stride = false);
-    assert_eq!(fixed(&project(&static_only, 4)), [0, 1, 2]);
+    assert_eq!(fixed(&static_only, 4), [0, 1, 2]);
+    assert_eq!(fixed(&profile("lavapipe"), 12), [0u32; 0]);
 }
 
 /// Color attachments, depth, samples, input attachments, and dynamic states map through the
