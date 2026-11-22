@@ -58,11 +58,9 @@ order, and a lower one never overrides a higher one.
    limit and memory-type queries. Product code holds no vendor, device or driver ID, and no
    runtime policy switch. A test enforces this for `metal2vulkan-runtime`. One form means one form per
    Vulkan capability: where the floor cannot require a feature, that feature's query may choose a
-   second form, for nine only: 16-bit floats, storage-image reads without a format, 64-bit
+   second form, for eight only: 16-bit floats, storage-image reads without a format, 64-bit
    atomics, 64-bit floats, SIMD groups (the subgroup size range with its stages and operations,
-   and maximal reconvergence), driver-zeroed memory (a device with the zero-initialize feature
-   allocates its memory zeroed and a block says so at its take, so zeros the driver wrote are
-   not written again; a device without it writes every zero itself), unified memory (decided by
+   and maximal reconvergence), unified memory (decided by
    Vulkan's physical device type alone: one copy of a Managed buffer on an integrated or CPU
    device, two elsewhere), the attachment feedback loop (a device without it reads a render
    target through a counted copy of that target, recorded as a known gap), and run-time texel
