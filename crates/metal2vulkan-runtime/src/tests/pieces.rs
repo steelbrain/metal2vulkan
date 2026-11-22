@@ -5,7 +5,8 @@
 //! does not depend on how fast the device runs. Behind the busy gate (`Busy::new`) nothing
 //! submitted completes until the test opens it, so the device holds the two pieces its room
 //! takes and the rest wait: a command buffer of another queue goes between two pieces, one that
-//! shares a resource or a fence with a cut command buffer goes after its last, the queue's own
+//! shares a resource or a fence with a cut command buffer goes after its last (unless it signals
+//! the event a later piece waits for, when it runs beside it, as Metal's does), the queue's own
 //! next waits for every piece, a cut command buffer is scheduled at its first piece and kept by an
 //! abandon, and an idle queue's commit waits for no more than the two pieces on the device
 //! behind five queues' backlogs. Without the gate: the cuts counted, a kernel of unknown rate in
@@ -26,6 +27,8 @@ mod on_device {
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     /// A kernel's rate of 3 ms a threadgroup, in picoseconds: one dispatch of one threadgroup
     /// fits a piece of 4 ms (`GROUP_RUN`), two do not, and the device's room takes two such
@@ -258,6 +261,54 @@ mod on_device {
                 (order(&device, &waiter)[from..].to_vec(), word(&filled)),
                 (vec![false, false, false, false, true], 0x0909_0909),
                 "{name}: A's four pieces, then B's wait and fill"
+            );
+        });
+    }
+
+    /// A command buffer of another queue that shares a buffer with a cut command buffer
+    /// committed before it, and signals the event a later piece of that command buffer waits
+    /// for, runs: Metal runs it beside the cut one, whose wait its signal then meets. Where it
+    /// has not completed within ten seconds, the host signals the event, so both finish and the
+    /// case fails instead of stalling.
+    #[test]
+    fn every_device_runs_the_signaller_of_a_cut_command_buffers_wait_though_it_shares() {
+        each_device("pieces_shared_signaller", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let (written, read, filled) = (arena.buffer(), arena.buffer(), arena.buffer());
+            let state = step(&device);
+            let event = shared_event(&device);
+            let (a, b) = (queue(&device), queue(&device));
+            state.inner.compiled.rate.set_for_test(RATE);
+            let waiter = a.command_buffer().expect("a command buffer");
+            steps(&waiter, &state, &written, 2).end_encoding();
+            (waiter.encode_wait_for_event(event.as_event(), 1)).expect("a wait");
+            fill(&waiter, &filled, 5);
+            waiter.commit().expect("a commit");
+            let signaller = b.command_buffer().expect("a command buffer");
+            let mut blit = signaller.blit_command_encoder().expect("an encoder");
+            (blit.copy_from_buffer_to_buffer(&written, 0, &read, 0, 256)).expect("a copy");
+            blit.end_encoding();
+            (signaller.encode_signal_event(event.as_event(), 1)).expect("a signal");
+            signaller.commit().expect("a commit");
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while signaller.status() != CommandBufferStatus::Completed && Instant::now() < deadline
+            {
+                thread::sleep(Duration::from_millis(1));
+            }
+            let ran = signaller.status() == CommandBufferStatus::Completed;
+            if !ran {
+                event.set_signaled_value(1);
+            }
+            completed(name, &waiter);
+            completed(name, &signaller);
+            assert!(
+                ran,
+                "{name}: the signaller completes while the cut command buffer waits for its signal"
+            );
+            assert_eq!(
+                (word(&written), word(&filled)),
+                (stepped(2), 5),
+                "{name}: the steps and the fill land"
             );
         });
     }
