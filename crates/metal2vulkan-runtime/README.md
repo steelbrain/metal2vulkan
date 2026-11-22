@@ -1894,7 +1894,10 @@ made, with no lock, and never rewritten for layouts.
   at once as it is staged, and so does a presenting command buffer's last (see "Presenting"); so a
   command buffer that signals an event, in any segment, is staged only once the device has room
   for it, as one held for room behind it is, and a wait for its signal waits with it, while a
-  presenting one has its queue go at once, through to it. So of a chain of command buffers, each
+  presenting one has its queue go at once, through to it, and so does one with nothing for the
+  GPU or one ended before it went, except behind a cut command buffer, whose pieces go at the
+  room's pace: such a one goes after its last piece, as the room comes, and a cut one that
+  presents waits for room at each piece as any cut one does. So of a chain of command buffers, each
   waiting for the signal of the one before it, the links past the device's room go as earlier
   ones complete. The
   driver runs a submission's command buffers as one kernel job, which a job timeout ends as a whole

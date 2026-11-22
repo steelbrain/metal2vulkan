@@ -312,6 +312,20 @@ struct Entry {
     held: Option<u64>,
 }
 
+impl Entry {
+    /// Whether, met behind a head that waits for room, it has its queue sent through to it
+    /// rather than held ([`WorkState::hold`]): committed and ended before it went, holding
+    /// nothing for the GPU that no copy-in waits for, or presenting a drawable, which is
+    /// scheduled once submitted.
+    fn sent_through(&self, captured: &capture::Captured) -> bool {
+        self.pending.as_ref().is_some_and(|pending| {
+            self.error.is_some()
+                || (pending.gpu.is_empty() && !captured.waits_for(pending.seq))
+                || pending.gpu.presents()
+        })
+    }
+}
+
 /// Commands recorded into one command buffer apart from any command buffer of the guest's (zero
 /// fills, texture copies, and new textures' moves to their home layouts), the calls made before
 /// one commit and after the one before it: submitted ahead of everything in the first submission
@@ -1618,7 +1632,8 @@ impl WorkState {
     /// no longer waits, the earliest held: it was scheduled before anything that comes next.
     /// Else, of the committed heads that are ended or whose next segment is ready, and of the
     /// first command buffers not yet scheduled behind heads that wait, ended or with every
-    /// segment's waits met, the earliest committed.
+    /// segment's waits met, the earliest committed; where the head that waits is cut, none
+    /// [`hold`](Self::hold) would send its queue through to ([`Entry::sent_through`]).
     fn next_ready(&self) -> Option<(usize, bool)> {
         let mut held: Option<(u64, usize)> = None;
         let mut best: Option<(usize, bool, u64)> = None;
@@ -1635,6 +1650,19 @@ impl WorkState {
                 true => fifo.entries.iter().find(|entry| entry.held.is_none()),
                 false => fifo.entries.front(),
             };
+            // A cut head's every piece waits for room, never sent through (`waits_for_room`), so
+            // an entry `hold` would send the queue through to, the head or one behind it, is not
+            // picked while it waits: `hold` would leave it as it was, picked again at once, the
+            // work lock held, for as long as the room stays full. It goes in the queue's order as
+            // the room comes.
+            let head = fifo.entries.front().and_then(|head| head.pending.as_ref());
+            let captured = &self.changes.captured;
+            if waits
+                && head.is_some_and(|head| head.gpu.cut)
+                && entry.is_some_and(|entry| entry.sent_through(captured))
+            {
+                continue;
+            }
             let Some(Entry {
                 pending: Some(pending),
                 error,
@@ -1804,14 +1832,13 @@ impl WorkState {
         let Some(entry) = fifo.entries.iter_mut().find(|entry| entry.held.is_none()) else {
             return;
         };
-        let Some(pending) = entry.pending.as_mut() else {
-            return;
-        };
-        let empty = pending.gpu.is_empty() && !captured.waits_for(pending.seq);
-        if entry.error.is_some() || empty || pending.gpu.presents() {
+        if entry.sent_through(captured) {
             fifo.send_through = fifo.send_through.max(entry.place);
             return;
         }
+        let Some(pending) = entry.pending.as_mut() else {
+            return;
+        };
         let scheduled = std::mem::take(&mut pending.handlers.scheduled);
         entry.cb.scheduled(now, !scheduled.is_empty());
         if !scheduled.is_empty() {
