@@ -250,6 +250,10 @@ pub(crate) struct WorkState {
     span_sleepers: u32,
     /// The command buffers scheduled while held for room so far ([`WorkState::hold`]).
     holds: u64,
+    /// For the device tests: the progress value of the last submission when the first loss came
+    /// ([`Work::stall`]).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    lost_at: u64,
 }
 
 struct Fifo {
@@ -569,6 +573,8 @@ impl Work {
                 loss: None,
                 span_sleepers: 0,
                 holds: 0,
+                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                lost_at: 0,
             }),
             changed: Condvar::new(),
             spans: Condvar::new(),
@@ -594,7 +600,9 @@ impl Work {
     /// out: across its queues, the command buffers enqueued or committed and not wholly
     /// submitted, those committed, the heads held for an event's value, the groups staged and
     /// not submitted, and the submissions not seen complete, with the progress value of the
-    /// last. Its lock is tried for a second: one held longer is named, not waited for.
+    /// last; and the device's first loss as it is recorded (its call, result and fault), with the
+    /// last submission's progress value when it came. Its lock is tried for a second: one held
+    /// longer is named, not waited for.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn stall(&self) -> String {
         use std::sync::TryLockError;
@@ -623,13 +631,19 @@ impl Work {
             .count();
         let staged = fifos.iter().filter(|fifo| fifo.group.is_some()).count();
         let in_flight: usize = fifos.iter().map(|fifo| fifo.in_flight.len()).sum();
+        let loss = match &state.loss {
+            None => "not lost".to_owned(),
+            Some(loss) => format!(
+                "lost at the last submission's progress {}: {loss:?}",
+                state.lost_at
+            ),
+        };
         format!(
             "the submit side: {} queues, {entries} command buffers not wholly submitted ({committed} \
              committed), {held} heads held for an event's value, {staged} groups staged, \
-             {in_flight} submissions not seen complete, the last at progress {}, lost {}",
+             {in_flight} submissions not seen complete, the last at progress {}; {loss}",
             fifos.len(),
             state.progress,
-            state.lost()
         )
     }
 
@@ -1260,6 +1274,10 @@ impl Work {
     /// a later one's dropped.
     pub(crate) fn lose(&self, loss: DeviceLoss) {
         let mut state = self.lock();
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        if state.loss.is_none() {
+            state.lost_at = state.progress;
+        }
         state.loss.get_or_insert(loss);
         state.dirty = true;
         self.wake();

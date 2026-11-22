@@ -31,6 +31,10 @@ pub(crate) struct Done {
     wake: vk::Semaphore,
     /// The highest progress value the completion thread has seen reached.
     completed: AtomicU64,
+    /// For the device tests: the step of its round the completion thread last entered
+    /// ([`Done::enter`], [`Done::stall`]).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    step: Mutex<String>,
 }
 
 struct DoneState {
@@ -161,6 +165,8 @@ impl Done {
             progress,
             wake,
             completed: AtomicU64::new(0),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            step: Mutex::new("none yet".to_owned()),
         })
     }
 
@@ -186,12 +192,20 @@ impl Done {
         self.completed.load(Ordering::SeqCst)
     }
 
+    /// For the device tests: the completion thread enters `step` of its round, which a timed-out
+    /// wait names ([`Done::stall`]) where the thread is not in a wait of its own.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn enter(&self, step: String) {
+        *lock(&self.step) = step;
+    }
+
     /// For the device tests: what the completion side holds, read at once, for a wait that timed
     /// out. The command buffers in flight (submitted and not retired) among its retirees; the
     /// oldest retiree's progress value, the progress semaphore's counter, and whether a wait of
     /// timeout 0 on that value reports it reached (the oldest's fence: signalled or not); and
     /// where the completion thread waits, with the values of its GPU wait and the wake
-    /// semaphore's counter. Its lock is tried for a second: one held longer is named, not waited
+    /// semaphore's counter, or, in no wait of its own, the step of its round it last entered
+    /// ([`Done::enter`]). Its lock is tried for a second: one held longer is named, not waited
     /// for.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn stall(&self, device: &ash::Device) -> String {
@@ -241,9 +255,10 @@ impl Done {
             }
         };
         let waiting = match state.waiting {
-            Waiting::Not => "in no wait of its own: in a round (reading the progress, retiring, \
-                             running handlers or listeners) or a lost device's idle wait"
-                .to_owned(),
+            Waiting::Not => format!(
+                "in no wait of its own: in a round, its step last entered {}",
+                lock(&self.step)
+            ),
             Waiting::Host => "on the host, for a change of the completion side's state".to_owned(),
             Waiting::Gpu { progress } => format!(
                 "on the GPU, for any of the values {:?} ({} the progress semaphore's first, then \
@@ -412,6 +427,17 @@ impl Retiree {
     /// timestamps read where it completed (`times::retire_own`), which it answers where both
     /// read.
     fn retire(self, core: &Core, completion: Completion<'_>) -> Option<(u64, u64)> {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        core.done.enter(format!(
+            "retiring {} of progress {}{}",
+            match self.item {
+                Item::Command { .. } => "a command buffer",
+                Item::Upload(_) => "an upload",
+                Item::CopyIn(_) => "a copy-in",
+            },
+            self.value,
+            if self.lost { ", lost" } else { "" }
+        ));
         let end = match self.lost {
             true => OwnEnd::Lost,
             false => OwnEnd::Completed,
@@ -568,6 +594,8 @@ pub(crate) fn run(core: Arc<Core>) {
                 // Nothing is pending once the device is idle, which a lost device reaches at once.
                 state.waiting = Waiting::Not;
                 drop(state);
+                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                done.enter("the lost device's idle wait (vkDeviceWaitIdle)".to_owned());
                 core.wait_idle();
                 state = done.lock();
                 retire.extend(state.flight.drain(..).map(Retiree::lost));
@@ -641,12 +669,18 @@ pub(crate) fn run(core: Arc<Core>) {
             state.waiting = Waiting::Not;
             drop(state);
             if let Some(loss) = newly_lost {
+                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                done.enter(format!("the loss's fault report and work.lose ({loss:?})"));
                 core.work.lose(fault::report(&core, loss));
             }
             // `completed` was raised before the submit thread's mark is read (`Work::completed`):
             // what it holds goes as the completion left room. The round sees no completion until
             // it ends, so held work waits for its end.
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            done.enter("work.completed".to_owned());
             core.work.completed();
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            done.enter("pool.retired".to_owned());
             core.pool.retired();
             // Handlers and listeners run with no lock held.
             // Each completed command buffer's timestamps are placed on the host clock by the
@@ -656,6 +690,8 @@ pub(crate) fn run(core: Arc<Core>) {
             // where it calibrates.
             let seen = seen_at.unwrap_or_else(times::host_time);
             let read = times::host_time();
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            done.enter(format!("reading {} retirees' timestamps", retire.len()));
             let stamps: Vec<Option<(u64, u64)>> =
                 retire.iter().map(|retiree| retiree.stamps(&core)).collect();
             let stamped = times::host_time();
@@ -665,6 +701,8 @@ pub(crate) fn run(core: Arc<Core>) {
                     stamped.saturating_sub(last.host()) >= times::CALIBRATION_PERIOD
                 })
             {
+                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                done.enter("reading the GPU clock's calibration".to_owned());
                 calibration = Calibration::read(&core).or(calibration);
                 calibrated = times::host_time();
             }
@@ -712,9 +750,15 @@ pub(crate) fn run(core: Arc<Core>) {
                 }
             }
             for (listener, value) in fire {
+                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                done.enter(format!("a listener of the value {value}"));
                 listener(value);
             }
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            done.enter("dropping the round's fired events".to_owned());
             drop(fired);
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            done.enter("taking the completion side's lock at the round's end".to_owned());
             state = done.lock();
             continue;
         }

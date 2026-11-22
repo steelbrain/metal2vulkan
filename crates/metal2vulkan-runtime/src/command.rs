@@ -1699,9 +1699,22 @@ pub(crate) fn retire(
         counters.handler_steps(span, round.steps(end, retiring, handled));
     }
     let handle = CommandBuffer { inner };
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    let (scheduled, completed, mut at) = (handlers.scheduled.len(), handlers.completed.len(), 0);
     for handler in handlers.scheduled.into_iter().chain(handlers.completed) {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        {
+            at += 1;
+            core.done.enter(format!(
+                "retiring a command buffer: its handler {at} of {scheduled} scheduled and \
+                 {completed} completed ones"
+            ));
+        }
         handler(&handle);
     }
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    core.done
+        .enter("retiring a command buffer: marking it finished".to_owned());
     let mut state = lock(&handle.inner.state);
     state.finished = true;
     handle.inner.changed.notify_all();

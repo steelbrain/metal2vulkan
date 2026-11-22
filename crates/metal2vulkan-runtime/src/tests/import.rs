@@ -183,6 +183,7 @@ pub(crate) mod on_device {
                 thread::sleep(Duration::from_millis(1));
             };
             assert!(submitting.contains(held), "{name}: {submitting}");
+            assert!(submitting.ends_with("; not lost"), "{name}: {submitting}");
             let completing = core.done.stall(&core.device);
             assert!(
                 completing.starts_with("in flight 0 command buffers"),
