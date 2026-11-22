@@ -6636,6 +6636,7 @@ method	metal2vulkan::device::DeviceProfile::interpolation_function_needs	pub fn 
 method	metal2vulkan::device::DeviceProfile::limits	pub fn limits(&self) -> &Limits
 method	metal2vulkan::device::DeviceProfile::link_standalone	pub fn link_standalone(&self, f: &CompiledFunction) -> Result<StandaloneModule, Error>
 method	metal2vulkan::device::DeviceProfile::plan_entry	pub fn plan_entry(&self, d: &EntryDescriptor<'_>, inputs: &LoweringInputs, budget: &Budget) -> (Result<EntryPlan, Error>, CompileReport)
+method	metal2vulkan::device::DeviceProfile::push_window	pub fn push_window(&self) -> u32
 method	metal2vulkan::device::DeviceProfile::simd_tier	pub fn simd_tier(&self, class: &SimdClass, stage: Stage) -> Result<Tier, Unsupported>
 method	metal2vulkan::device::DeviceProfile::specialized_entry	pub fn specialized_entry(&self, d: &EntryDescriptor<'_>, inputs: &LoweringInputs, budget: &Budget) -> Result<Entry, Error>
 method	metal2vulkan::device::DeviceProfile::spirv_validation	pub fn spirv_validation(&self) -> SpirvValidation

@@ -79,9 +79,10 @@ let device = Device::from_queries(description, DevicePolicy::default())?;
 
 `Device::from_queries` needs no Vulkan device: it derives the profile from the description's
 queries alone, reading no vendor, device or driver identity. It refuses a device below Vulkan 1.2,
-one whose `maxPushConstantsSize` is below the 256-byte push window every stage is lowered for
-(`Unsupported{PushWindow}`, a `Limit` of `MaxPushConstantsSize`), and an inconsistent description
-or policy. A
+a description whose `maxPushConstantsSize` is below 128 bytes, Vulkan's least and the least push
+window a stage is lowered for (`Unsupported{PushWindow}`, a `Limit` of `MaxPushConstantsSize`),
+and an inconsistent description or policy. The push window is the device's `maxPushConstantsSize`
+up to 256 bytes (`DeviceProfile::push_window`, section 5). A
 `Device` is cheap to clone; every compile and plan takes it.
 
 The guide's examples are quoted from `examples/api_preview.rs`. Its tour device takes
@@ -149,17 +150,21 @@ and so do the command line, the compile worker and every validation tool. It hol
   `PushField::ArgumentTableAddress`, which the window always holds. The function reads the block
   16 bytes at a time at multiples of 16 (its size, `argument_table_size`, is a multiple of 16) and
   never writes it, so the consumer places it at a multiple of 16 and leaves it unchanged while
-  the command reads it. A kernel's window is 256 bytes, as the runtime's floor requires that much
-  `maxPushConstantsSize`: a dispatch region and 24 buffer addresses below its tail. A render
-  pipeline's two functions share one 256-byte range: the vertex function's window is `[0, 248)`,
-  and the fragment function's runs from the vertex function's end to 256. A post-tessellation
-  vertex function's window is `[24, 248)`, and its fragment function's starts at 24 or past: the
+  the command reads it. Every stage's window is `W` bytes, the device's `maxPushConstantsSize` up
+  to 256 (`DeviceProfile::push_window`; at least 128, Vulkan's least), the one value a consumer's
+  pipeline layout holds as its push range; the profile's fingerprint holds the limit, so devices
+  of two windows share no artifact. A kernel's window is `[0, W)`: a dispatch region and 24 buffer
+  addresses below its tail at 256 bytes, 8 at 128. A render
+  pipeline's two functions share one range `[0, W)`: the vertex function's window is
+  `[0, W - 8)`, `[0, 248)` at 256 bytes and `[0, 120)` at 128, and the fragment function's runs
+  from the vertex function's end to `W`. A post-tessellation
+  vertex function's window is `[24, W - 8)`, and its fragment function's starts at 24 or past: the
   pipeline's control stage pushes its fields (8 to 24 bytes) at 0, so the pair's fields, which
   spill where they pass their windows, never take its bytes. A
   vertex function is lowered without knowing its fragment function, so it leaves the last 8
   bytes, where a fragment function whose fields spill always pushes its block's address; that
-  costs only a vertex function whose own fields pass 248 bytes, which spills where it would have
-  filled them. The fields only a checked access reads
+  costs only a vertex function whose own fields pass `W - 8` bytes, which spills where it would
+  have filled them. The fields only a checked access reads
   (`PushField::ZeroAddress` and each `PushField::SlotBounds`) come last in the order, so they
   are the first to move to the block. Each function's push ends with its tail, 24 bytes or more above its other pushed fields: its highest
   `PushField::SlotBounds` or `PushField::ZeroAddress`, moved there, or where it pushes neither, the

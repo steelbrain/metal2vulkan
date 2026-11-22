@@ -223,6 +223,23 @@ pub(crate) mod on_device {
         open_each_device(test, &instance, options, body);
     }
 
+    /// What a test opens each device with ([`each_device_with`]).
+    pub(crate) type Options = fn() -> DeviceOptions;
+
+    /// The options of a device whose translator reads a `maxPushConstantsSize` of 128, Vulkan's
+    /// least, in place of the device's own (`DeviceOptions::described`): its push window and its
+    /// pipeline layout's push range are 128 bytes. No lab device reports under 256, so a test runs
+    /// the 128-byte window on each device this way.
+    pub(crate) fn push_window_128() -> DeviceOptions {
+        DeviceOptions {
+            described: Some(|mut description| {
+                description.limits.max_push_constants_size = 128;
+                description
+            }),
+            ..DeviceOptions::default()
+        }
+    }
+
     /// [`each_device`] on `instance`.
     pub(crate) fn on_each_device(
         test: &str,

@@ -739,9 +739,9 @@ pub enum Feature {
     // ---- Device ----
     /// The device's Vulkan version is below the 1.2 floor.
     VulkanVersion,
-    /// The device's `maxPushConstantsSize` is below the 256 bytes of the push window every stage
-    /// is lowered for: a compute stage's dispatch region and buffer addresses, a render
-    /// pipeline's two stages together.
+    /// The description's `maxPushConstantsSize` is below 128 bytes, Vulkan's least and the least
+    /// push window a stage is lowered for: a compute stage's dispatch region and buffer addresses,
+    /// a render pipeline's two stages together.
     PushWindow,
     /// The identity pointer and handle domains (`PointerDomain::Identity`,
     /// `HandleDomain::Identity`): on a device without `bufferDeviceAddress` and `shaderInt64`,

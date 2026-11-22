@@ -247,11 +247,6 @@ pub(crate) const SAMPLERS: u32 = 4000;
 /// Sampler arrays: one per use of a sampler (plain, depth comparison, integer texture).
 pub(crate) const SAMPLER_ARRAYS: u32 = 3;
 
-/// Bytes of push constants: a dispatch region and 28 buffer addresses (the translator's push
-/// window on `Device::from_queries`' profile), which every captured device reports, so no query
-/// decides it.
-pub(crate) const PUSH_CONSTANT_BYTES: u32 = 256;
-
 /// Threads in one compute workgroup: Metal's most threads per threadgroup.
 pub(crate) const WORKGROUP_INVOCATIONS: u32 = 1024;
 
@@ -1553,7 +1548,7 @@ fn second_elements_fit(device: &Queried) -> bool {
 
 /// Each limit the floor sets: its Vulkan name, the device's value, and the least value the runtime
 /// uses.
-pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 18] {
+pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 17] {
     let limits = &device.limits;
     let descriptors = &device.vulkan12;
     // A uniform texel buffer counts as a sampled image, and a storage one as a storage image.
@@ -1603,11 +1598,6 @@ pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 18] {
             "maxUpdateAfterBindDescriptorsInAllPools",
             descriptors.max_update_after_bind_descriptors_in_all_pools,
             4 * TEXTURES + SAMPLER_ARRAYS * SAMPLERS,
-        ),
-        (
-            "maxPushConstantsSize",
-            limits.max_push_constants_size,
-            PUSH_CONSTANT_BYTES,
         ),
         (
             "maxComputeWorkGroupInvocations",

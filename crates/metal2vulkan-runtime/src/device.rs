@@ -18,7 +18,7 @@ use crate::instance::{Instance, PhysicalDevice};
 use crate::kernel_map::KernelMap;
 use crate::memory::{self, BlockId, BlockMappings, Memory, MemoryClass, Pool};
 use crate::pass::ResolveModes;
-use crate::pipeline::{PUSH_BYTES, PUSH_STAGES};
+use crate::pipeline::PUSH_STAGES;
 use crate::places::Places;
 use crate::reaper::{self, Job, Reaper};
 use crate::record::Recorders;
@@ -342,7 +342,7 @@ pub(crate) struct Core {
     /// The occlusion query pools command buffers take their visibility results' queries from.
     pub(crate) occlusion: OcclusionPools,
     /// The one pipeline layout of every pipeline: the empty set 0, set 1, and the push window
-    /// over every stage.
+    /// over every stage, the translator's `DeviceProfile::push_window` bytes.
     pub(crate) layout: vk::PipelineLayout,
     /// Set 1: the texture and sampler arrays, and the grants of their indices.
     pub(crate) arrays: Arrays,
@@ -684,9 +684,11 @@ impl Device {
             (options.pipeline_cache_cap).unwrap_or(cache::DEFAULT_CAP),
             &counters,
         );
-        // SAFETY: the device was made from `raw` with `capabilities.features`, and the family is
-        // its queues' family.
-        let made = unsafe { objects(&device, &capabilities, &counters) };
+        // The translator's window: the device's `maxPushConstantsSize` up to 256 bytes.
+        let window = translator.profile().push_window();
+        // SAFETY: the device was made from `raw` with `capabilities.features`, the family is its
+        // queues' family, and its push limit holds the window.
+        let made = unsafe { objects(&device, &capabilities, &counters, window) };
         let (memory_types, done, arrays, layout) = match made {
             Ok(made) => made,
             Err(error) => {
@@ -1439,15 +1441,17 @@ unsafe fn consumer_features(
 }
 
 /// The memory types the floor chooses on a new device, the completion thread's semaphores, set 1's
-/// arrays and the pipeline layout.
+/// arrays and the pipeline layout, whose one push range is `window` bytes.
 ///
 /// # Safety
 ///
-/// `device` was made with `capabilities.features`.
+/// `device` was made with `capabilities.features`, and its `maxPushConstantsSize` is at least
+/// `window`.
 unsafe fn objects(
     device: &ash::Device,
     capabilities: &floor::Capabilities,
     counters: &Counters,
+    window: u32,
 ) -> Result<(floor::MemoryTypes, Done, Arrays, vk::PipelineLayout), Error> {
     // SAFETY: the caller's contract.
     let memory_types =
@@ -1466,14 +1470,14 @@ unsafe fn objects(
         let push = [vk::PushConstantRange {
             stage_flags: PUSH_STAGES,
             offset: 0,
-            size: PUSH_BYTES,
+            size: window,
         }];
         let sets = arrays.set_layouts();
         let info = vk::PipelineLayoutCreateInfo::default()
             .set_layouts(&sets)
             .push_constant_ranges(&push);
-        // SAFETY: the device is live, and the floor holds `PUSH_BYTES` of push constants and set
-        // 1's update-after-bind descriptors in one stage.
+        // SAFETY: the device is live, it holds `window` bytes of push constants (the caller's
+        // contract), and the floor holds set 1's update-after-bind descriptors in one stage.
         match unsafe { device.create_pipeline_layout(&info, None) } {
             Ok(layout) => Ok((done, arrays, layout)),
             Err(result) => {

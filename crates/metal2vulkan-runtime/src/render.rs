@@ -79,7 +79,7 @@ use crate::kernel_map::KernelKey;
 use crate::pass::Pass;
 use crate::pipeline::{
     access, loaded, lower, made_through_cache, number_samplers, of_the_device, texture_access,
-    translating, FieldValue, Numbered, PUSH_BYTES,
+    translating, FieldValue, Numbered,
 };
 use crate::reaper::{Free, Job};
 use crate::ring::CHUNK;
@@ -595,11 +595,13 @@ fn draw_input() -> Error {
 ///
 /// Err: [`Gap::RenderPipeline`] of [`RenderPipelineKind::DrawInput`] for a pipeline that reads
 /// what a draw does not supply: a function table, a table the binder builds, a parameter block
-/// longer than a ring chunk, a push field or bind-time fact the encoder does not fill, or an
+/// longer than a ring chunk, push bytes past the device's push `window`
+/// (`DeviceProfile::push_window`), a push field or bind-time fact the encoder does not fill, or an
 /// unnormalized constexpr sampler.
 fn draws(
     pipeline: &RenderPipeline,
     nonzero_first_instance: bool,
+    window: u32,
 ) -> Result<(Draws, Numbering), Error> {
     let translated = &pipeline.interface;
     if translated.needs_pointer_translation
@@ -837,7 +839,7 @@ fn draws(
             _ => return Err(draw_input()),
         }
     }
-    if push_len > PUSH_BYTES {
+    if push_len > window {
         return Err(draw_input());
     }
     let bindings = (pipeline.vertex_input.bindings.iter())
@@ -1143,7 +1145,8 @@ impl RenderCompiled {
             .profile()
             .limits()
             .supports_non_zero_first_instance;
-        let (draws, (numbered, constexprs)) = draws(&pipeline, nonzero_first_instance)?;
+        let window = translator.profile().push_window();
+        let (draws, (numbered, constexprs)) = draws(&pipeline, nonzero_first_instance, window)?;
         let samples = lowered.raster_sample_count;
         let mut stages = Vec::new();
         let mut notes: Vec<_> = constexpr_notes(translator.profile(), &constexprs).collect();

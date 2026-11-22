@@ -131,7 +131,7 @@ pub(super) fn at_the_floor() -> Queried {
             .max_sampler_allocation_count(4000)
             .max_color_attachments(8)
             .max_fragment_output_attachments(8)
-            .max_push_constants_size(256)
+            .max_push_constants_size(128)
             .max_compute_work_group_invocations(1024)
             .max_compute_work_group_size([1024, 1024, 64])
             .timestamp_compute_and_graphics(true)
@@ -782,7 +782,7 @@ fn each_missing_feature_is_named() {
 #[test]
 fn each_low_limit_is_named() {
     type Lower = fn(&mut Queried);
-    let cases: [(Lower, &str, u32); 19] = [
+    let cases: [(Lower, &str, u32); 18] = [
         (
             |d| {
                 d.vulkan12
@@ -842,11 +842,6 @@ fn each_low_limit_is_named() {
             |d| d.vulkan12.max_update_after_bind_descriptors_in_all_pools = 4 * 65_536 + 11_999,
             "maxUpdateAfterBindDescriptorsInAllPools",
             4 * 65_536 + 12_000,
-        ),
-        (
-            |d| d.limits.max_push_constants_size = 255,
-            "maxPushConstantsSize",
-            256,
         ),
         (
             |d| d.limits.max_compute_work_group_invocations = 1023,
@@ -1114,7 +1109,7 @@ fn every_missing_item_is_named_at_once() {
     device.extensions.clear();
     device.features.vulkan13.dynamic_rendering = vk::FALSE;
     device.features.core.shader_int64 = vk::FALSE;
-    device.limits.max_push_constants_size = 64;
+    device.limits.max_color_attachments = 4;
     device.families[0].queue_flags = vk::QueueFlags::COMPUTE;
     device.memory = memory(&[DEVICE_LOCAL, SHARED_MEMORY]);
     let Err(below) = decide(&device) else {
@@ -1130,9 +1125,9 @@ fn every_missing_item_is_named_at_once() {
             feature("VkPhysicalDeviceFeatures", "shaderInt64"),
             feature("VkPhysicalDeviceVulkan13Features", "dynamicRendering"),
             Missing::Limit {
-                name: "maxPushConstantsSize",
-                device: 64,
-                needed: 256,
+                name: "maxColorAttachments",
+                device: 4,
+                needed: 8,
             },
             Missing::QueueFamily,
             Missing::MemoryType {
@@ -1144,7 +1139,7 @@ fn every_missing_item_is_named_at_once() {
         below.to_string(),
         "the device is below the runtime's floor: it lacks VK_KHR_swapchain; \
          VK_EXT_robustness2; VK_EXT_calibrated_timestamps; VK_EXT_line_rasterization; VkPhysicalDeviceFeatures.shaderInt64; VkPhysicalDeviceVulkan13Features.dynamicRendering; \
-         maxPushConstantsSize 64, below 256; a queue family with graphics and compute; a memory \
+         maxColorAttachments 4, below 8; a queue family with graphics and compute; a memory \
          type with VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | \
          VK_MEMORY_PROPERTY_HOST_COHERENT_BIT for buffers"
     );

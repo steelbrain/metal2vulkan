@@ -8,7 +8,9 @@
 //!   and an output) pushes all 21 addresses with no block, below its tail word; one of 31 slots,
 //!   Metal's most, pushes its parameter block's address (`ArgumentTableAddress`) and 27 slot
 //!   addresses below the tail word at 248, and reads the other 4 from the block at their placed
-//!   offsets, with no descriptor; each passes L3 and computes its answer on the CPU interpreter.
+//!   offsets, with no descriptor. In the window of 128 bytes (`runtime-floor`) one of 12 slots
+//!   pushes all 12, and ones of 21 and 31 push the block's address and 11 below the word at 120.
+//!   Each passes L3 and computes its answer on the CPU interpreter.
 //! - A kernel that reads grid builtins (`grid`, generated) declares `MultiRegion`, default 0, and
 //!   reads Metal's grid from its pushed `DispatchRegion` and its base from every region: at 0 a
 //!   whole dispatch, one split in two pieces at a base, and an indirect one (a zero grid, its grid
@@ -2512,31 +2514,44 @@ fn many_placed(
     (first, pushed, spilled, plan.push.argument_table_size)
 }
 
-/// On `Device::from_queries`' profile a kernel's push window is 256 bytes:
-/// the same kernel's 21 slot addresses are all pushed, with no block, below its tail word 24 bytes
-/// above them (`PushPlacement::tail_word`). A kernel's 31, Metal's most buffer slots, would end
-/// past the floor with the word: its block's address and 27 slot addresses end at 224, the word is
-/// at 248, and the other 4 are read from the block. Each computes its answer.
+/// On `Device::from_queries`' profile a kernel's push window is the device's, 256 bytes on
+/// `PROFILES`: the same kernel's 21 slot addresses are all pushed, with no block, below its tail
+/// word 24 bytes above them (`PushPlacement::tail_word`). A kernel's 31, Metal's most buffer slots,
+/// would end past the window with the word: its block's address and 27 slot addresses end at 224,
+/// the word is at 248, and the other 4 are read from the block. In `runtime-floor`'s window of 128
+/// bytes a kernel's 12 are all pushed, and of its 21 and its 31 the block's address and 11 end at
+/// 96, the word is at 120, and the others are read from the block. Each computes its answer.
 #[test]
-fn the_floor_window_pushes_a_kernel_s_slot_addresses_below_its_tail_word() {
-    for (reads, in_window) in [(READS, READS as usize + 1), (30, 27)] {
-        let Some(bc) = assemble_text("many", &many_of(reads)) else {
-            return;
-        };
-        for stem in PROFILES {
-            let desc =
-                crate::pipeline::testing::description(stem).unwrap_or_else(|e| panic!("{e}"));
-            let device = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
-            let (first, pushed, spilled, table) = many_placed(stem, device.profile(), &bc, reads);
-            let what = format!("{stem}, {} slots", reads + 1);
-            assert_eq!(pushed.len(), in_window, "{what}");
-            assert_eq!(spilled.len(), (reads + 1) as usize - in_window, "{what}");
-            assert_eq!(table, if spilled.is_empty() { 0 } else { 32 }, "{what}");
-            assert_eq!(
-                first.map(|(f, _)| f) == Some(PushField::ArgumentTableAddress),
-                !spilled.is_empty(),
-                "{what}"
-            );
+fn the_window_pushes_a_kernel_s_slot_addresses_below_its_tail_word() {
+    let wide: [(u32, usize); 2] = [(READS, READS as usize + 1), (30, 27)];
+    let least: [(u32, usize); 3] = [(11, 12), (READS, 11), (30, 11)];
+    let windows: [(&[&str], u32, &[(u32, usize)]); 2] =
+        [(&PROFILES, 256, &wide), (&["runtime-floor"], 128, &least)];
+    for (stems, window, cases) in windows {
+        for &(reads, in_window) in cases {
+            let Some(bc) = assemble_text("many", &many_of(reads)) else {
+                return;
+            };
+            for &stem in stems {
+                let desc =
+                    crate::pipeline::testing::description(stem).unwrap_or_else(|e| panic!("{e}"));
+                let device =
+                    Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
+                assert_eq!(device.profile().push_window(), window, "{stem}");
+                let (first, pushed, spilled, table) =
+                    many_placed(stem, device.profile(), &bc, reads);
+                let what = format!("{stem}, window {window}, {} slots", reads + 1);
+                assert_eq!(pushed.len(), in_window, "{what}");
+                assert_eq!(spilled.len(), (reads + 1) as usize - in_window, "{what}");
+                let block = (8 * spilled.len() as u32).next_multiple_of(16);
+                assert_eq!(table, block, "{what}");
+                assert_eq!(
+                    first.map(|(f, _)| f) == Some(PushField::ArgumentTableAddress),
+                    !spilled.is_empty(),
+                    "{what}"
+                );
+                println!("{what}: {in_window} pushed, {} in the block", spilled.len());
+            }
         }
     }
 }

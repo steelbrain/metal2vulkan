@@ -1675,8 +1675,9 @@ pub enum KernelInputKind {
     /// address for it. Metal's counterpart is the kernel's arguments, which Metal binds however
     /// many there are.
     ArgumentBlock,
-    /// Arguments whose pushed words are past the push-constant bytes of the runtime's floor.
-    /// Metal's counterpart is the kernel's arguments, which Metal binds however many there are.
+    /// Arguments whose pushed words are past the device's push window
+    /// (`DeviceProfile::push_window`, its `maxPushConstantsSize` up to 256 bytes). Metal's
+    /// counterpart is the kernel's arguments, which Metal binds however many there are.
     PushBytes,
     /// A specialization constant the runtime does not set: an explicit imageblock's width or
     /// height, a sampler state's fields, a constant that is not 4 bytes, the threadgroup memory

@@ -159,7 +159,8 @@ fn runtime_floor_is_vulkan_1_3_core_and_the_runtime_s_floor() {
     assert_eq!(d.driver_id, None);
     assert_eq!(d.limits.max_compute_shared_memory_size, 16384);
     assert_eq!(d.limits.max_compute_work_group_size, [1024, 1024, 64]);
-    assert_eq!(d.limits.max_push_constants_size, 256);
+    // Vulkan 1.3's least: the runtime's floor asks no push limit.
+    assert_eq!(d.limits.max_push_constants_size, 128);
     assert_eq!(d.limits.min_storage_buffer_offset_alignment, 256);
 }
 
@@ -196,10 +197,8 @@ fn rgba4_opaque_black_swizzled_follows_exposure() {
         r#""a""#,
         &format!(r#""a": {{"extensions": {{"VK_KHR_maintenance10": 1}}, {props}}}"#),
     );
-    let mut d = DeviceDescription::from_khronos_json(&with, None).unwrap();
+    let d = DeviceDescription::from_khronos_json(&with, None).unwrap();
     assert!(d.rgba4_opaque_black_swizzled);
-    // The push window the floor needs, which a Vulkan 1.2 document leaves at 128.
-    d.limits.max_push_constants_size = 256;
     let dev = crate::device::Device::from_queries(d, crate::device::DevicePolicy::RESIDENT_TABLES)
         .unwrap();
     assert!(dev

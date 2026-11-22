@@ -2102,12 +2102,14 @@ mod on_device {
 
     impl ModuleAnswers {
         /// The answers of `pipeline`, whose lowering declares an imageblock as `imageblock`
-        /// says; Err: what the module reads that the encoder does not supply.
+        /// says, on a device whose push window is `window` bytes; Err: what the module reads
+        /// that the encoder does not supply.
         fn of(
             pipeline: &metal2vulkan::pipeline::ComputePipeline,
             imageblock: Option<bool>,
+            window: u32,
         ) -> Result<ModuleAnswers, crate::KernelInputKind> {
-            let interface = crate::pipeline::interface(pipeline, None)?;
+            let interface = crate::pipeline::interface(pipeline, None, window)?;
             let mut notes = pipeline.stage.precision_notes.clone();
             notes.sort_unstable();
             notes.dedup();
@@ -2266,7 +2268,7 @@ mod on_device {
                         }
                     };
                     let of = |(pipeline, imageblock): &(ComputePipeline, Option<bool>)| {
-                        ModuleAnswers::of(pipeline, *imageblock)
+                        ModuleAnswers::of(pipeline, *imageblock, translator.profile().push_window())
                     };
                     match (of(&plain), of(&variant)) {
                         (Ok(plain), Ok(variant)) => {

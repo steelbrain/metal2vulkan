@@ -167,7 +167,8 @@ fn a_fragment_primitive_id_is_refused() {
 }
 
 /// The control stage's push range takes the first 4-aligned gap of its size no stage's range
-/// covers, within `maxPushConstantsSize`.
+/// covers, within `maxPushConstantsSize`: on a device of 256 bytes (`lavapipe`) and on one of 128
+/// (`runtime-floor`), Vulkan's least.
 #[test]
 fn the_control_push_range_takes_the_first_free_gap() {
     let range = |offset, size| PushConstantRange {
@@ -175,34 +176,38 @@ fn the_control_push_range_takes_the_first_free_gap() {
         offset,
         size,
     };
-    let p = profile("runtime-floor");
-    let control_offset = |ranges: &[PushConstantRange]| {
-        push_offset(ranges, (control::PUSH_BYTES, 4), Feature::Tessellation, &p)
-    };
-    assert_eq!(control_offset(&[]).expect("empty"), 0);
-    assert_eq!(control_offset(&[range(0, 16)]).expect("after"), 16);
-    assert_eq!(
-        control_offset(&[range(0, 56), range(64, 8)]).expect("after fragment"),
-        72
-    );
-    assert_eq!(
-        control_offset(&[range(0, 40), range(64, 8)]).expect("gap"),
-        40
-    );
-    assert_eq!(
-        control_offset(&[range(0, 48), range(64, 8)]).expect("too small a gap"),
-        72
-    );
-    // 256 bytes: a vertex window of 64 and a fragment range to 248 leave no 24-byte gap.
-    match control_offset(&[range(0, 64), range(64, 184)]) {
-        Err(Error::Unsupported(u)) => assert_eq!(
-            u.needs,
-            Needs::AnyOf(vec![vec![Capability::Limit {
-                limit: VkLimit::MaxPushConstantsSize,
-                required: 272,
-                available: 256,
-            }]])
-        ),
-        other => panic!("{other:?}"),
+    for (stem, bytes) in [("lavapipe", 256), ("runtime-floor", 128)] {
+        let p = profile(stem);
+        assert_eq!(p.limits().max_push_constants_size, bytes, "{stem}");
+        let control_offset = |ranges: &[PushConstantRange]| {
+            push_offset(ranges, (control::PUSH_BYTES, 4), Feature::Tessellation, &p)
+        };
+        assert_eq!(control_offset(&[]).expect("empty"), 0);
+        assert_eq!(control_offset(&[range(0, 16)]).expect("after"), 16);
+        assert_eq!(
+            control_offset(&[range(0, 56), range(64, 8)]).expect("after fragment"),
+            72
+        );
+        assert_eq!(
+            control_offset(&[range(0, 40), range(64, 8)]).expect("gap"),
+            40
+        );
+        assert_eq!(
+            control_offset(&[range(0, 48), range(64, 8)]).expect("too small a gap"),
+            72
+        );
+        // A vertex window of 64 and a fragment range to `bytes - 8` leave no 24-byte gap.
+        match control_offset(&[range(0, 64), range(64, bytes - 72)]) {
+            Err(Error::Unsupported(u)) => assert_eq!(
+                u.needs,
+                Needs::AnyOf(vec![vec![Capability::Limit {
+                    limit: VkLimit::MaxPushConstantsSize,
+                    required: u64::from(bytes) + 16,
+                    available: u64::from(bytes),
+                }]]),
+                "{stem}"
+            ),
+            other => panic!("{stem}: {other:?}"),
+        }
     }
 }

@@ -782,8 +782,9 @@ pub struct LoweringInputs {
     /// other stage compiles as without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub unit_axes: u8,
-    /// Where a fragment function's push fields start on `Device::from_queries`' profile
-    ///, whose render pipeline pushes one range `[0, 256)` for both stages:
+    /// Where a fragment function's push fields start on `Device::from_queries`' profile, whose
+    /// render pipeline pushes one range `[0, W)` for both stages, `W` the device's push window
+    /// ([`DeviceProfile::push_window`](crate::device::DeviceProfile::push_window), 256 or 128):
     /// its vertex function's fields first, from 0 (from 24 for a post-tessellation function, past
     /// the control stage's range), then the fragment function's from this offset, the vertex
     /// function's push end
@@ -792,10 +793,10 @@ pub struct LoweringInputs {
     /// function it compiled, and `Device::render_pipeline_key` hands it out in the fragment
     /// function's inputs from the vertex function's plan; a fragment compiled on its own for such a
     /// pipeline compiles under the same offset, and link refuses a fragment whose fields start below the vertex function's push
-    /// end. A fragment function whose fields do not fit in `[push_base, 256)` pushes its parameter
+    /// end. A fragment function whose fields do not fit in `[push_base, W)` pushes its parameter
     /// block's address at `push_base` rounded up to 8 (the address's alignment) and spills the
     /// rest into the block, as a kernel spills past its window; the vertex function's window ends
-    /// at 248, so the address always fits. On any other profile, and for any other function, it is
+    /// at `W - 8`, so the address always fits. On any other profile, and for any other function, it is
     /// 0.
     #[cfg_attr(feature = "serde", serde(default))]
     pub push_base: u32,

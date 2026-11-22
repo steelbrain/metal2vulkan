@@ -1676,11 +1676,11 @@ fn finish(
     }
 
     stage_io::finish_merged(&mut cx)?;
-    let placement = push::place(stage, push::base(&cx), &cx.push);
+    let placement = push::place(stage, push::base(&cx), p.push_window(), &cx.push);
     access::accept_placement(&cx, &placement)?;
     // On the floor every stage that pushes more than one short field ends with its tail, a hole
     // above the others, so every load a driver widens from them stays inside its upload.
-    push::check_floor(&placement)
+    push::check_floor(&placement, p.push_window())
         .map_err(|detail| Error::Internal(InternalError::new(InternalKind::Invariant, detail)))?;
 
     // A kernel compiled for dispatches with a partial simdgroup emulates its simdgroups whatever

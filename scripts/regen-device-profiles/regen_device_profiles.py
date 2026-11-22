@@ -150,7 +150,6 @@ RUNTIME_FLOOR = {
     "properties": {
         "VkPhysicalDeviceProperties": {"limits": {
             "maxSamplerAllocationCount": 4000,
-            "maxPushConstantsSize": 256,
             "maxComputeWorkGroupInvocations": 1024,
             "maxComputeWorkGroupSize": [1024, 1024, 64],
             "timestampComputeAndGraphics": True,

@@ -2420,7 +2420,8 @@ pub struct Metrics {
     /// [`DeviceOptions::pipeline_cache_dir`]: crate::DeviceOptions::pipeline_cache_dir
     pub cache_bytes_written: u64,
     /// Writes into the parameter ring: a dispatch's parameter block, its fields past the push
-    /// window (a kernel with more than 28 buffers), and each `set_bytes` copy, a render
+    /// window (`DeviceProfile::push_window`: a kernel with more than 24 buffer addresses beside
+    /// its dispatch region at 256 bytes, more than 8 at 128), and each `set_bytes` copy, a render
     /// encoder's too.
     pub ring_writes: u64,
     /// `vkCmdPushConstants` recorded: a draw's or a dispatch's push bytes, where the command

@@ -2321,8 +2321,10 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   most 16) is refused (`Refusal::BufferOffsetAlignment`) before anything is recorded, as Metal's
   API validation refuses the bind offset. Plain Metal runs such a dispatch at addresses of its
   own; `docs/API.md` section 10 says which.
-- Parameters: fields in the push window, `[0, 256)` on every device, are pushed: the dispatch
-  region and up to 24 buffer addresses below the kernel's tail (`docs/API.md` section 5), each
+- Parameters: fields in the push window, `[0, W)`, are pushed, `W` the device's
+  `maxPushConstantsSize` up to 256 bytes (`DeviceProfile::push_window`: 256 on every lab device,
+  128 on a device that reports Vulkan's least): the dispatch region and up to 24 buffer addresses
+  below the kernel's tail at 256 bytes, 8 at 128 (`docs/API.md` section 5), each
   kernel pushing only the bytes it reads. The tail placement's price, against the build before
   it: `wide_bindings` is 4.6% slower on an RTX 3090 and 6.9% slower on an Iris Xe and 9.3% faster
   on a Radeon 780M; `dispatch_chain` 3.0% slower on the RTX 3090; `bind_2000` 25.4% slower in
@@ -3342,9 +3344,10 @@ cache is answered compile-required on both.
   `Gauges::kernel_entries` the map's entries, compute and render together. Two descriptors that
   differ only in a field their compile does not read are two contents, each compiled.
 - A render pipeline's two functions push their values (each buffer's address, each constexpr
-  sampler's index) in one range of the floor's 256 bytes, dense by link: the vertex function's
+  sampler's index) in one range of the device's push window (`W` bytes, 256 or 128, as for a
+  kernel above), dense by link: the vertex function's
   from 0 (from 24 for a post-tessellation function, whose control stage pushes the factors'
-  address at 0), ending by 248, the fragment function's from the vertex function's end, each value at
+  address at 0), ending by `W - 8` (248 or 120), the fragment function's from the vertex function's end, each value at
   the next offset aligned to it (a framebuffer fetch's element index, four bytes, before the
   eight-byte values, where the four bytes below one are free), so only the values the pair uses
   take space. Compute and render pipelines share the device's one pipeline layout and its one
@@ -4317,9 +4320,10 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
   ms of GPU time with its executions against 4.372 ms with the same draws direct, the executions
   1.5% under.
 - A command's buffer slots reach its functions through the push bytes alone, so each slot a
-  command binds needs its word in the state's 256 push bytes, which the vertex and fragment
+  command binds needs its word in the state's push window, `W` bytes (256, or 128 on a device
+  whose `maxPushConstantsSize` is 128), which the vertex and fragment
   functions and all their other fields share. The translator places the vertex function's fields
-  from byte 0 to byte 248 (the last 8 bytes are kept for the fragment function's parameter block
+  from byte 0 to byte `W - 8` (the last 8 bytes are kept for the fragment function's parameter block
   address), in a fixed order:
   1. its parameter block's address (8 bytes), where any of its fields spill;
   2. any other leading address (8 bytes, so each costs one slot word);
@@ -4334,23 +4338,35 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
   only where it pushes nothing past them but one 4-byte word or one bounds field. Anything more
   makes it spill, the block address joins, and it pushes 24: a slot read at a variable offset adds
   its bounds and the zero range's address after the slot words, so 25 no longer fit. The fragment
-  function's fields run from where the vertex function's end to byte 256, in the same order and with
+  function's fields run from where the vertex function's end to byte `W`, in the same order and with
   the same tail, except that a lone field of 8 bytes or less takes no tail. From code: a fragment
   function whose only field is one slot word fits beside a vertex function of 24 or 25 words. Its
-  room past one slot is not measured. An execution whose command binds a slot whose word sits in a
+  room past one slot is not measured.
+- On a device whose push window is 128 bytes (its `maxPushConstantsSize` is 128), the vertex
+  function's fields end by byte 120, so a command reaches 9 vertex slots ((120 - 16 - 28) / 8,
+  rounded down) where the vertex function pushes nothing past them but one 4-byte word or one
+  bounds field, and 8 where its fields spill, against 25 and 24 at 256 bytes (from code: the
+  translator's `lower::push` test `an_indirect_draw_s_vertex_function_pushes_25_or_9_slot_words`).
+  A fragment function whose only field is one slot word fits beside a vertex function of 8 or 9
+  words. A state whose vertex function reads more slots than that is refused at its execution
+  (`IndirectCommandsKind::DrawInput`), where at 256 bytes it executes. No lab card reports under
+  256: this form runs on lavapipe with its translator told of 128 bytes (the runtime's tests'
+  `push_window_128`), and on no card. An execution whose command binds a slot whose word sits in a
   parameter block is refused (`IndirectCommandsKind::DrawInput`). Measured on an RTX 3090 and a
   Radeon RX 7900 XTX (the consumer's jobs m3-max-63155, 63163 and 63164, the runtime at 173861f4f7):
   a vertex function reading N buffer slots with a fragment function reading 1 draws for N up to 24,
   and is refused as `DrawInput` for N from 25 to 29; with 28 slots read, commands that bind up to 24
-  vertex slots draw. The token count binds first only on lavapipe (13 slot words, below).
+  vertex slots draw. The token count binds first only on lavapipe in a window of 256 bytes (13 slot
+  words, below).
 - Each slot word a command holds is a push constant token of its own, on every device, where a run
   of words at consecutive offsets could share one: on NVIDIA's driver (620.70.06, an RTX 2080) a
   24-byte push constant token in an execution of 96 commands or more carried command 31's bytes in
   every later command, and three 8-byte tokens of the same bytes carried each command's own (a
   standalone program, which draws right either way on RADV and lavapipe). The cost:
   - A command takes at most `maxIndirectCommandsTokenCount` less 3 slot words, refused past that
-    (`IndirectCommandsKind::Tokens`). That binds before the push bytes only on lavapipe, at 13. On
-    NVIDIA's driver (29) and RADV (125), the push bytes above run out first.
+    (`IndirectCommandsKind::Tokens`). That binds before the push bytes only on lavapipe in a window
+    of 256 bytes, at 13. On NVIDIA's driver (29) and RADV (125), and in a window of 128 bytes on
+    every device, the push bytes above run out first.
   - That program's part of 64 commands of three vertex words and one fragment word takes 69,888
     preprocess bytes on the 2080, against 57,600 with the vertex words in one token (21% more);
     567,808 against 557,568 on lavapipe; and 19,712 either way on the XTX.
@@ -4380,9 +4396,10 @@ vertex and fragment buffers (`inheritBuffers` false), at most 31 of each stage.
   `maxIndirectSequenceCount` (`Capacity`), a compute state for indirect command buffers
   (`ComputeCommands`), an execution with a state made without `supportIndirectCommandBuffers`
   (`UnflaggedState`), one whose slots take more tokens than `maxIndirectCommandsTokenCount`
-  (`Tokens`, which only lavapipe's 16 reach before the push bytes run out), and one whose functions
+  (`Tokens`, which only lavapipe's 16 reach before the push bytes run out, in a window of 256
+  bytes), and one whose functions
   read what a command cannot carry: a slot the command holds outside the push bytes (at most 24
-  vertex slots once the vertex function spills, above), a fixed-function vertex binding, or a
+  vertex slots once the vertex function spills, 8 in a window of 128 bytes, above), a fixed-function vertex binding, or a
   vertex layout that must draw from base instance 0 (`DrawInput`).
 - Commands draw with the executing encoder's render states whatever the descriptor's other
   `inherit*` properties say. Not built: commands the CPU encodes (`indirectRenderCommandAtIndex:`),
@@ -4731,7 +4748,11 @@ Metal's eight color attachments on every device; Vulkan 1.3 requires 4 of it, an
 `maxFragmentOutputAttachments` holds a fragment function's output to each of them; Vulkan 1.3 and
 1.4 require 4 of it, and Roadmap 2026 8.
 A Boolean limit's minimum is 1,
-`VK_TRUE`; `timestampValidBits` is the queue family's.
+`VK_TRUE`; `timestampValidBits` is the queue family's. No `maxPushConstantsSize` is asked: the
+push window, and the pipeline layout's one push range, is the device's `maxPushConstantsSize` up to
+256 bytes (`metal2vulkan::device::DeviceProfile::push_window`), at least Vulkan's least, 128, and a
+function's fields past it go to a parameter block whose address the window holds. On a device
+below 256 an indirect command reaches fewer vertex slots (Known gaps of indirect command buffers).
 
 | Limit | Minimum | Used for |
 |---|---|---|
@@ -4744,7 +4765,6 @@ A Boolean limit's minimum is 1,
 | `maxSamplerAllocationCount` | `4000` | Vulkan's minimum: live samplers |
 | `maxPerStageUpdateAfterBindResources` | `262144` | the four texture and texture-buffer arrays in one stage; a fragment stage needs its `maxColorAttachments` more |
 | `maxUpdateAfterBindDescriptorsInAllPools` | `274144` | all seven arrays |
-| `maxPushConstantsSize` | `256` | per-command values: a compute kernel's dispatch region and 24 buffer addresses below its tail, anything larger in a block whose address is pushed; a render pipeline's vertex and fragment functions' values in the same 256 bytes, dense by link, anything larger in a block whose address is pushed |
 | `maxComputeWorkGroupInvocations` | `1024` | Metal's most threads per threadgroup |
 | `maxComputeWorkGroupSize[0]` | `1024` | a threadgroup's width |
 | `maxComputeWorkGroupSize[1]` | `1024` | a threadgroup's height |

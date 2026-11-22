@@ -134,43 +134,48 @@ entry:
 !5 = !{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"gid"}
 "#;
 
-/// A device whose `maxPushConstantsSize` is below the 256 bytes of the push window every stage is
-/// lowered for is below the floor: `Unsupported{PushWindow}`, needing `MaxPushConstantsSize` 256.
-/// The descriptions below it are committed apart (`validation/profiles/below-floor/`, this test's
-/// input alone): `vk12-floor`, the Vulkan 1.2 minimum, with 128. Every committed profile is above
-/// it.
+/// The push window is the device's `maxPushConstantsSize` up to 256 bytes
+/// (`DeviceProfile::push_window`), and at least 128, Vulkan's least: the Vulkan 1.2 minimum
+/// (`validation/profiles/below-floor/vk12-floor`, this test's input alone) derives at its 128,
+/// with a window of 128, and the same description at 64, which no Vulkan device reports, is
+/// refused: `Unsupported{PushWindow}`, needing `MaxPushConstantsSize` 128. Every committed
+/// profile derives, its window its limit up to 256: `runtime-floor` at Vulkan 1.3's least, 128,
+/// and every profile of a device at 256 (`moltenvk-m3`'s 4,096 included).
 #[test]
-fn a_push_window_below_256_bytes_is_below_the_floor() {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles/below-floor");
-    let mut below: Vec<String> = std::fs::read_dir(&dir)
-        .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
-        .map(|e| e.expect("directory entry").path())
-        .filter(|p| p.extension().is_some_and(|x| x == "json"))
-        .map(|p| p.file_stem().unwrap().to_string_lossy().into_owned())
-        .collect();
-    below.sort();
-    assert_eq!(below, ["vk12-floor"]);
-    for stem in &below {
-        let text = std::fs::read_to_string(dir.join(format!("{stem}.json"))).expect("readable");
-        let description = DeviceDescription::from_khronos_json(&text, None).expect("parses");
-        match Device::from_queries(description, DevicePolicy::RESIDENT_TABLES) {
-            Err(Error::Unsupported(u)) => {
-                assert_eq!(u.feature, Feature::PushWindow, "{stem}");
-                let limit = Capability::Limit {
-                    limit: VkLimit::MaxPushConstantsSize,
-                    required: 256,
-                    available: 128,
-                };
-                assert_eq!(u.needs, Needs::AnyOf(vec![vec![limit]]), "{stem}");
-            }
-            other => panic!("{stem}: {other:?}"),
+fn the_push_window_is_the_device_s_limit_up_to_256_bytes() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../metal2vulkan-validation/profiles/below-floor/vk12-floor.json");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let least = DeviceDescription::from_khronos_json(&text, None).expect("parses");
+    assert_eq!(least.limits.max_push_constants_size, 128);
+    let mut below = least.clone();
+    below.limits.max_push_constants_size = 64;
+    match Device::from_queries(least, DevicePolicy::RESIDENT_TABLES) {
+        Ok(device) => assert_eq!(device.profile().push_window(), 128),
+        Err(e) => panic!("vk12-floor: {e}"),
+    }
+    match Device::from_queries(below, DevicePolicy::RESIDENT_TABLES) {
+        Err(Error::Unsupported(u)) => {
+            assert_eq!(u.feature, Feature::PushWindow);
+            let limit = Capability::Limit {
+                limit: VkLimit::MaxPushConstantsSize,
+                required: 128,
+                available: 64,
+            };
+            assert_eq!(u.needs, Needs::AnyOf(vec![vec![limit]]));
         }
+        other => panic!("{other:?}"),
     }
     for (stem, _) in committed_profiles() {
-        if let Err(e) = Device::from_queries(profile(&stem), DevicePolicy::RESIDENT_TABLES) {
-            panic!("{stem} is committed but below the floor: {e}");
-        }
+        let description = profile(&stem);
+        let limit = description.limits.max_push_constants_size;
+        let device = Device::from_queries(description, DevicePolicy::RESIDENT_TABLES)
+            .unwrap_or_else(|e| panic!("{stem} is committed but refused: {e}"));
+        let window = device.profile().push_window();
+        assert_eq!(window, limit.min(256), "{stem}");
+        let expected = if stem == "runtime-floor" { 128 } else { 256 };
+        assert_eq!(window, expected, "{stem}: limit {limit}");
+        println!("{stem}: maxPushConstantsSize {limit}, push window {window}");
     }
 }
 

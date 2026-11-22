@@ -1,25 +1,29 @@
-//! The push window, under a device cfg on every device of the cfg's kind. Each kernel reads its
-//! grid position and its buffers at a run-time offset, so it pushes a dispatch region, each
-//! buffer's address, and the containment check's fields: the zero range's address and each
-//! buffer's bounds (its bytes before the bind offset and its length, 8 bytes), which come last in
-//! the order, so they are the first to go to a parameter block. A kernel of 12 buffers (232
-//! bytes) pushes them all and writes nothing into the parameter ring, and its dispatches after
-//! the first push nothing, their bytes held. One of 24 buffers pushes its block's address, the
-//! region, 22 buffers' addresses and the zero tail word 24 bytes above them (`docs/API.md` section
-//! 5), and the other 2 addresses, the zero range's and the 24 bounds go to a block; one of 30
-//! pushes the same 22 addresses, and the other 8, the zero range's and the 30 bounds go to a
-//! block. Each of those two writes one block a dispatch, whose new address each dispatch pushes.
-//! All answer the fold of their inputs.
+//! The push window, under a device cfg on every device of the cfg's kind, at the device's own
+//! window (256 bytes on every lab device) and at 128 bytes, Vulkan's least, with the device's
+//! translator told so (`push_window_128`). Each kernel reads its grid position and its buffers at
+//! a run-time offset, so it pushes a dispatch region, each buffer's address, and the containment
+//! check's fields: the zero range's address and each buffer's bounds (its bytes before the bind
+//! offset and its length, 8 bytes), which come last in the order, so they are the first to go to
+//! a parameter block. In a window of 256 bytes a kernel of 12 buffers (232 bytes) pushes them all
+//! and writes nothing into the parameter ring, and its dispatches after the first push nothing,
+//! their bytes held. One of 24 buffers pushes its block's address, the region, 22 buffers'
+//! addresses and the zero tail word 24 bytes above them (`docs/API.md` section 5), and the other 2
+//! addresses, the zero range's and the 24 bounds go to a block; one of 30 pushes the same 22
+//! addresses, and the other 8, the zero range's and the 30 bounds go to a block. In a window of
+//! 128 bytes a kernel of 4 buffers (104 bytes) pushes them all; ones of 12 and 30 push 6
+//! addresses, and the other 6 and 24, the zero range's and the bounds go to a block. Each kernel
+//! with a block writes one block a dispatch, whose new address each dispatch pushes. All answer
+//! the fold of their inputs.
 //!
 //! `llvm-as` assembles the kernels; without it the test skips visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::pipeline::{FieldValue, Place};
-    use crate::tests::command::on_device::{each_device, finished};
+    use crate::tests::command::on_device::{each_device_with, finished, push_window_128, Options};
     use crate::{
-        ComputePipelineDescriptor, DispatchType, FunctionDescriptor, Library, MemoryClass,
-        StageSource,
+        ComputePipelineDescriptor, DeviceOptions, DispatchType, FunctionDescriptor, Library,
+        MemoryClass, StageSource,
     };
     use metal2vulkan_devtools::{llvm_assemble_text, AssembleError};
 
@@ -82,133 +86,156 @@ define void @wide({}) {{\nentry:\n{body}  %out = getelementptr inbounds i32, ptr
         (k + 1).wrapping_mul(0x9e37_79b9) ^ gid.wrapping_mul(0x85eb_ca6b)
     }
 
-    /// The kernel of 12 buffers writes nothing into the ring, and pushes once for its three
-    /// dispatches of the same bindings; the kernels of 24 and 30 push 22 addresses below their
-    /// tail and have the other 2 and 8 in their block with every check field; each of those
+    /// A kernel's buffers, its addresses and check fields in the block, its blocks a dispatch, and
+    /// its pushes over the dispatches.
+    type Case = (u32, (usize, usize), u64, u64);
+
+    /// The cases in a push window of `window` bytes.
+    fn cases(window: u32) -> [Case; 3] {
+        match window {
+            256 => [
+                (12, (0, 0), 0, 1),
+                (24, (2, 25), 1, DISPATCHES),
+                (30, (8, 31), 1, DISPATCHES),
+            ],
+            128 => [
+                (4, (0, 0), 0, 1),
+                (12, (6, 13), 1, DISPATCHES),
+                (30, (24, 31), 1, DISPATCHES),
+            ],
+            other => panic!("no cases for a push window of {other} bytes"),
+        }
+    }
+
+    /// In a window of 256 bytes the kernel of 12 buffers writes nothing into the ring, and pushes
+    /// once for its three dispatches of the same bindings; the kernels of 24 and 30 push 22
+    /// addresses below their tail and have the other 2 and 8 in their block with every check
+    /// field. In a window of 128 bytes the kernel of 4 buffers does what the 12 do at 256, and the
+    /// kernels of 12 and 30 push 6 and have the other 6 and 24 in their block. Each with a block
     /// writes one block a dispatch, whose new address each dispatch pushes. Each answers the fold
     /// of its inputs.
     #[test]
-    fn every_device_pushes_12_buffers_and_rings_24_and_30() {
-        // Each kernel's buffers, its addresses and check fields in the block, its blocks a
-        // dispatch, and its pushes over the dispatches.
-        for (buffers, (addresses, checks), blocks, pushes) in [
-            (12u32, (0usize, 0usize), 0u64, 1u64),
-            (24, (2, 25), 1, DISPATCHES),
-            (30, (8, 31), 1, DISPATCHES),
-        ] {
-            let bitcode = match llvm_assemble_text(&kernel(buffers)) {
-                Ok(bitcode) => bitcode,
-                Err(AssembleError::Missing(why)) => {
-                    eprintln!("SKIPPED: {why}");
-                    return;
+    fn every_device_pushes_the_buffers_its_window_holds_and_rings_the_rest() {
+        if let Err(AssembleError::Missing(why)) = llvm_assemble_text(&kernel(2)) {
+            eprintln!("SKIPPED: {why}");
+            return;
+        }
+        let arms: [(&str, Options); 2] = [
+            ("push_window", DeviceOptions::default),
+            ("push_window_128", push_window_128),
+        ];
+        for (test, options) in arms {
+            each_device_with(test, options, |name, _, device| {
+                let window = device.translator().profile().push_window();
+                println!("{name}: {test}: the push window is {window} bytes");
+                for case in cases(window) {
+                    wide(name, &device, window, case);
                 }
-                Err(error) => panic!("wide: {error:?}"),
-            };
-            let library = Library::from_air(&bitcode).expect("the library");
-            let function = library.function("wide").expect("the kernel");
-            let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
-                FunctionDescriptor::new(function),
-            ));
-            let len = u64::from(THREADS * 4);
-            each_device(&format!("push_window_{buffers}"), |name, _, device| {
-                let what = format!("{name}, {buffers} buffers");
-                let state = device
-                    .new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers)
-                    .unwrap_or_else(|error| panic!("{what}: {error}"));
-                // The fields in the block: addresses, and the check's (the zero range's address
-                // and the bounds); nothing else goes there.
-                let mut ringed = (0, 0);
-                for field in &state.inner.compiled.whole.interface.fields {
-                    match (field.place, &field.value) {
-                        (Place::Push(_), _) => {}
-                        (Place::Block(_), FieldValue::BufferAddress { .. }) => ringed.0 += 1,
-                        (
-                            Place::Block(_),
-                            FieldValue::BufferBounds(_) | FieldValue::ZeroAddress,
-                        ) => ringed.1 += 1,
-                        (Place::Block(_), _) => panic!("{what}: another field in the block"),
-                    }
-                }
-                assert_eq!(
-                    ringed,
-                    (addresses, checks),
-                    "{what}: addresses and check fields in the block"
-                );
-                let block = device
-                    .take_block(MemoryClass::Shared, u64::from(buffers) * len)
-                    .expect("a Shared block");
-                let bound: Vec<_> = (0..u64::from(buffers))
-                    .map(|k| {
-                        device
-                            .new_buffer(block.id, k * len, len, Some(0))
-                            .expect("a buffer")
-                    })
-                    .collect();
-                for (k, buffer) in bound.iter().enumerate().take(buffers as usize - 1) {
-                    let bytes: Vec<u8> = (0..THREADS)
-                        .flat_map(|gid| word(k as u32, gid).to_le_bytes())
-                        .collect();
-                    let contents = buffer.contents().expect("a Shared buffer");
-                    // SAFETY: the bytes lie in the buffer, which is alive, and no GPU work uses it.
-                    unsafe {
-                        std::ptr::copy_nonoverlapping(
-                            bytes.as_ptr(),
-                            contents.as_ptr(),
-                            bytes.len(),
-                        )
-                    };
-                }
-                let queue = device.new_command_queue(4).expect("a queue");
-                let command_buffer = queue.command_buffer().expect("a command buffer");
-                let before = device.counters().metrics();
-                let mut encoder = command_buffer
-                    .compute_command_encoder(DispatchType::Serial)
-                    .expect("an encoder");
-                encoder.set_compute_pipeline_state(&state).expect("a state");
-                for (k, buffer) in bound.iter().enumerate() {
-                    encoder
-                        .set_buffer(Some(buffer), 0, k as u32)
-                        .expect("a buffer");
-                }
-                for _ in 0..DISPATCHES {
-                    encoder
-                        .dispatch_threads([THREADS, 1, 1], [THREADS, 1, 1])
-                        .expect("a dispatch");
-                }
-                encoder.end_encoding();
-                command_buffer.commit().expect("a commit");
-                finished(name, &command_buffer);
-                let after = device.counters().metrics();
-                let writes = after.ring_writes - before.ring_writes;
-                assert_eq!(command_buffer.error(), None, "{what}");
-                assert_eq!(writes, blocks * DISPATCHES, "{what}: ring writes");
-                let pushed = after.pushes - before.pushes;
-                let held = after.pushes_held - before.pushes_held;
-                assert_eq!(
-                    (pushed, held),
-                    (pushes, DISPATCHES - pushes),
-                    "{what}: pushes, held"
-                );
-                let inputs = buffers - 1;
-                let contents = bound[inputs as usize].contents().expect("a Shared buffer");
-                for gid in 0..THREADS {
-                    let want = (1..inputs).fold(word(0, gid), |s, k| {
-                        s.wrapping_mul(3).wrapping_add(word(k, gid))
-                    });
-                    // SAFETY: the word lies in the buffer, which is alive, and its work completed.
-                    let got = unsafe {
-                        contents
-                            .as_ptr()
-                            .cast::<u32>()
-                            .add(gid as usize)
-                            .read_unaligned()
-                    };
-                    assert_eq!(got, want, "{what}: thread {gid}");
-                }
-                println!(
-                    "{what}: {writes} ring writes and {pushed} pushes over {DISPATCHES} dispatches"
-                );
             });
         }
+    }
+
+    /// Kernel `wide` of `buffers` buffers on `device`, its push window `window` bytes: its
+    /// addresses and check fields in the block, its blocks a dispatch and its pushes over the
+    /// dispatches are as the case gives, and it answers the fold of its inputs.
+    fn wide(name: &str, device: &crate::Device, window: u32, case: Case) {
+        let (buffers, (addresses, checks), blocks, pushes) = case;
+        let bitcode = llvm_assemble_text(&kernel(buffers)).expect("wide");
+        let library = Library::from_air(&bitcode).expect("the library");
+        let function = library.function("wide").expect("the kernel");
+        let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+            FunctionDescriptor::new(function),
+        ));
+        let len = u64::from(THREADS * 4);
+        let what = format!("{name}, window {window}, {buffers} buffers");
+        let state = device
+            .new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers)
+            .unwrap_or_else(|error| panic!("{what}: {error}"));
+        // The fields in the block: addresses, and the check's (the zero range's address
+        // and the bounds); nothing else goes there.
+        let mut ringed = (0, 0);
+        for field in &state.inner.compiled.whole.interface.fields {
+            match (field.place, &field.value) {
+                (Place::Push(_), _) => {}
+                (Place::Block(_), FieldValue::BufferAddress { .. }) => ringed.0 += 1,
+                (Place::Block(_), FieldValue::BufferBounds(_) | FieldValue::ZeroAddress) => {
+                    ringed.1 += 1
+                }
+                (Place::Block(_), _) => panic!("{what}: another field in the block"),
+            }
+        }
+        assert_eq!(
+            ringed,
+            (addresses, checks),
+            "{what}: addresses and check fields in the block"
+        );
+        let block = device
+            .take_block(MemoryClass::Shared, u64::from(buffers) * len)
+            .expect("a Shared block");
+        let bound: Vec<_> = (0..u64::from(buffers))
+            .map(|k| {
+                device
+                    .new_buffer(block.id, k * len, len, Some(0))
+                    .expect("a buffer")
+            })
+            .collect();
+        for (k, buffer) in bound.iter().enumerate().take(buffers as usize - 1) {
+            let bytes: Vec<u8> = (0..THREADS)
+                .flat_map(|gid| word(k as u32, gid).to_le_bytes())
+                .collect();
+            let contents = buffer.contents().expect("a Shared buffer");
+            // SAFETY: the bytes lie in the buffer, which is alive, and no GPU work uses it.
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), contents.as_ptr(), bytes.len())
+            };
+        }
+        let queue = device.new_command_queue(4).expect("a queue");
+        let command_buffer = queue.command_buffer().expect("a command buffer");
+        let before = device.counters().metrics();
+        let mut encoder = command_buffer
+            .compute_command_encoder(DispatchType::Serial)
+            .expect("an encoder");
+        encoder.set_compute_pipeline_state(&state).expect("a state");
+        for (k, buffer) in bound.iter().enumerate() {
+            encoder
+                .set_buffer(Some(buffer), 0, k as u32)
+                .expect("a buffer");
+        }
+        for _ in 0..DISPATCHES {
+            encoder
+                .dispatch_threads([THREADS, 1, 1], [THREADS, 1, 1])
+                .expect("a dispatch");
+        }
+        encoder.end_encoding();
+        command_buffer.commit().expect("a commit");
+        finished(name, &command_buffer);
+        let after = device.counters().metrics();
+        let writes = after.ring_writes - before.ring_writes;
+        assert_eq!(command_buffer.error(), None, "{what}");
+        assert_eq!(writes, blocks * DISPATCHES, "{what}: ring writes");
+        let pushed = after.pushes - before.pushes;
+        let held = after.pushes_held - before.pushes_held;
+        assert_eq!(
+            (pushed, held),
+            (pushes, DISPATCHES - pushes),
+            "{what}: pushes, held"
+        );
+        let inputs = buffers - 1;
+        let contents = bound[inputs as usize].contents().expect("a Shared buffer");
+        for gid in 0..THREADS {
+            let want = (1..inputs).fold(word(0, gid), |s, k| {
+                s.wrapping_mul(3).wrapping_add(word(k, gid))
+            });
+            // SAFETY: the word lies in the buffer, which is alive, and its work completed.
+            let got = unsafe {
+                contents
+                    .as_ptr()
+                    .cast::<u32>()
+                    .add(gid as usize)
+                    .read_unaligned()
+            };
+            assert_eq!(got, want, "{what}: thread {gid}");
+        }
+        println!("{what}: {writes} ring writes and {pushed} pushes over {DISPATCHES} dispatches");
     }
 }

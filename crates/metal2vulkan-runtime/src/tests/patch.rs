@@ -30,15 +30,17 @@
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::blit::on_device::settled;
-    use crate::tests::command::on_device::each_device;
+    use crate::tests::command::on_device::{
+        each_device, each_device_with, push_window_128, Options,
+    };
     use crate::tests::draw::on_device::{
         descriptor, examples, floats, library, pass, read, run, state, target, texels, vertices,
         Buffers, BLACK, BLUE, GREEN, SIDE,
     };
     use crate::{
-        Buffer, ColorAttachmentDescriptor, Device, DrawKind, Error, FunctionDescriptor, Gap,
-        Library, PixelFormat, PrimitiveType, Refusal, RenderPipelineDescriptor, RenderPipelineKind,
-        StageSource, TextureUsage,
+        Buffer, ColorAttachmentDescriptor, Device, DeviceOptions, DrawKind, Error,
+        FunctionDescriptor, Gap, Library, PixelFormat, PrimitiveType, Refusal,
+        RenderPipelineDescriptor, RenderPipelineKind, StageSource, TextureUsage,
     };
     use metal2vulkan::error::Feature;
     use metal2vulkan::metal::{
@@ -126,11 +128,18 @@ attributes #0 = { mustprogress nofree nosync nounwind willreturn memory(read) }
 !17 = !{!"Metal", i32 4, i32 0, i32 0}
 BUFFER_META"#;
 
-    /// The buffer arguments of each of [`wide_fragment`]'s functions: the narrowest pushes
-    /// every field; behind a post-tessellation function whose window started at 0, 19 would end
-    /// the pair's fields at 252, where the factors' 8-byte address no longer fits above them; the
-    /// widest spills.
-    const FRAGMENT_WIDTHS: [u32; 4] = [4, 12, 19, 24];
+    /// The buffer arguments of each of [`wide_fragment`]'s functions in a push window of
+    /// `window` bytes: the narrowest pushes every field. At 256 bytes, behind a post-tessellation
+    /// function whose window started at 0, 19 would end the pair's fields at 252, where the
+    /// factors' 8-byte address no longer fits above them, and the widest spills; at 128 bytes
+    /// every wider one spills.
+    fn fragment_widths(window: u32) -> [u32; 4] {
+        match window {
+            256 => [4, 12, 19, 24],
+            128 => [1, 2, 3, 12],
+            other => panic!("no fragment widths for a push window of {other} bytes"),
+        }
+    }
 
     /// A fragment function that writes its `user(locn0)` colour plus `width` `float4` buffer
     /// arguments at indices 0 and on, each read at element 0, a read checked against the
@@ -594,12 +603,14 @@ BUFFER_META"#;
         });
     }
 
-    /// A patch state whose fragment function's fields fill the floor's push range behind the
+    /// A patch state whose fragment function's fields fill the device's push range behind the
     /// post-tessellation function's ([`wide_fragment`]) is made, as Metal makes it, and draws its
-    /// patches: the control stage pushes the factors' address at 0, below the post-tessellation
-    /// function's window, and the fragment function's fields past the range go to its block. A
-    /// pair's fields reach past 248 bytes, where no range of the factors' address is left above
-    /// them, and the widest fragment function's spill. Every state is made before any draw.
+    /// patches, at the device's own push window and at 128 bytes (`push_window_128`): the control
+    /// stage pushes the factors' address at 0, below the post-tessellation function's window, and
+    /// the fragment function's fields past the range go to its block. The narrowest fragment
+    /// function pushes every field. At 256 bytes a pair's fields reach past 248, where no range of
+    /// the factors' address is left above them, and the widest fragment function's spill; at 128
+    /// every wider one spills. Every state is made before any draw.
     /// Buffer `k` holds `2^(k / 4) / 255` in channel `k % 4` and the tints are 0, so the first
     /// patch's colour holds every bit of the buffers a function reads only where each buffer's
     /// address and bounds reach it; the second patch is culled.
@@ -611,7 +622,7 @@ BUFFER_META"#;
             return;
         };
         let mut fragments = Vec::new();
-        for width in FRAGMENT_WIDTHS {
+        for width in [1, 2, 3, 4, 12, 19, 24] {
             match llvm_assemble_text(&wide_fragment(width)) {
                 Ok(bitcode) => fragments.push((
                     width,
@@ -624,86 +635,107 @@ BUFFER_META"#;
                 Err(error) => panic!("the wide fragment {width}: {error:?}"),
             }
         }
-        each_device("draw_patches_full_range", |name, _, device| {
-            let states: Vec<_> = (fragments.iter())
-                .map(|(width, library)| {
-                    let mut d = patches(&libraries);
-                    d.fragment = Some(StageSource::Function(FunctionDescriptor::new(
-                        library
-                            .function("tess_wide_fragment")
-                            .expect("the function"),
-                    )));
-                    (
-                        *width,
-                        state(&format!("{name}: {width} buffers"), &device, &d),
-                    )
-                })
-                .collect();
-            let (mut widest, mut spilled) = (0, false);
-            for (width, state) in &states {
-                let draws = &state.inner.compiled.draws;
-                assert!(
-                    (draws.fields.iter()).any(|(place, _, value)| matches!(
-                        (place, value),
-                        (DrawPlace::Push(0), FieldValue::TessellationFactors)
-                    )),
-                    "{name}: {width} buffers: the factors' address at 0"
-                );
-                widest = widest.max(draws.push_len);
-                spilled |= draws.blocks[crate::render::FRAGMENT].is_some();
-                let mut buffers = Buffers::new(&device);
-                let (points, _, factors) = patch_buffers(&device, &mut buffers);
-                let tints = buffers.of(&device, &[0; 32]);
-                let summed: Vec<Buffer> = (0..*width)
-                    .map(|k| {
-                        let mut value = [0.0; 4];
-                        value[(k % 4) as usize] = f32::from(1u8 << (k / 4)) / 255.0;
-                        buffers.of(&device, &floats(&value))
+        let arms: [(&str, Options); 2] = [
+            ("draw_patches_full_range", DeviceOptions::default),
+            ("draw_patches_full_range_128", push_window_128),
+        ];
+        for (test, options) in arms {
+            each_device_with(test, options, |name, _, device| {
+                let window = device.translator().profile().push_window();
+                let widths = fragment_widths(window);
+                println!("{name}: {test}: the push window is {window} bytes");
+                let states: Vec<_> = (fragments.iter())
+                    .filter(|(width, _)| widths.contains(width))
+                    .map(|(width, library)| {
+                        let mut d = patches(&libraries);
+                        d.fragment = Some(StageSource::Function(FunctionDescriptor::new(
+                            library
+                                .function("tess_wide_fragment")
+                                .expect("the function"),
+                        )));
+                        (
+                            *width,
+                            state(&format!("{name}: {width} buffers"), &device, &d),
+                        )
                     })
                     .collect();
-                let color = target(
-                    &device,
-                    PixelFormat::RGBA8Unorm,
-                    TextureUsage::RENDER_TARGET,
-                );
-                let queue = device.new_command_queue(4).expect("a queue");
-                let command_buffer = queue.command_buffer().expect("a command buffer");
-                let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
-                    .unwrap_or_else(|error| panic!("{name}: {error}"));
-                let draw =
-                    |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
-                draw(encoder.set_render_pipeline_state(state));
-                draw(encoder.set_vertex_buffer(Some(&points), 0, 0));
-                draw(encoder.set_vertex_buffer(Some(&tints), 0, 1));
-                for (k, buffer) in summed.iter().enumerate() {
-                    draw(encoder.set_fragment_buffer(Some(buffer), 0, k as u32));
-                }
-                draw(encoder.set_tessellation_factor_buffer(Some(&factors), 8, 0));
-                draw(encoder.draw_patches(3, 0, 2, None, 1, 0));
-                encoder.end_encoding();
-                run(name, &command_buffer);
-                let mut sums = [0u8; 4];
-                for k in 0..*width {
-                    sums[(k % 4) as usize] += 1 << (k / 4);
-                }
-                let black = [0, 0, 0, 255];
-                let want: Vec<u8> = (0..SIDE * SIDE)
-                    .flat_map(|at| if at / SIDE < 4 { sums } else { black })
-                    .collect();
-                assert_eq!(read(&color, 4), want, "{name}: {width} buffers: the texels");
-                println!(
-                    "{name}: {width} fragment buffers, a push range of {} bytes, the fragment \
+                let (mut widest, mut spills) = (0, Vec::new());
+                for (width, state) in &states {
+                    let draws = &state.inner.compiled.draws;
+                    assert!(
+                        (draws.fields.iter()).any(|(place, _, value)| matches!(
+                            (place, value),
+                            (DrawPlace::Push(0), FieldValue::TessellationFactors)
+                        )),
+                        "{name}: {width} buffers: the factors' address at 0"
+                    );
+                    widest = widest.max(draws.push_len);
+                    spills.push(draws.blocks[crate::render::FRAGMENT].is_some());
+                    let mut buffers = Buffers::new(&device);
+                    let (points, _, factors) = patch_buffers(&device, &mut buffers);
+                    let tints = buffers.of(&device, &[0; 32]);
+                    let summed: Vec<Buffer> = (0..*width)
+                        .map(|k| {
+                            let mut value = [0.0; 4];
+                            value[(k % 4) as usize] = f32::from(1u8 << (k / 4)) / 255.0;
+                            buffers.of(&device, &floats(&value))
+                        })
+                        .collect();
+                    let color = target(
+                        &device,
+                        PixelFormat::RGBA8Unorm,
+                        TextureUsage::RENDER_TARGET,
+                    );
+                    let queue = device.new_command_queue(4).expect("a queue");
+                    let command_buffer = queue.command_buffer().expect("a command buffer");
+                    let mut encoder = (command_buffer.render_command_encoder(&pass(&color, None)))
+                        .unwrap_or_else(|error| panic!("{name}: {error}"));
+                    let draw = |result: Result<(), Error>| {
+                        result.unwrap_or_else(|e| panic!("{name}: {e}"))
+                    };
+                    draw(encoder.set_render_pipeline_state(state));
+                    draw(encoder.set_vertex_buffer(Some(&points), 0, 0));
+                    draw(encoder.set_vertex_buffer(Some(&tints), 0, 1));
+                    for (k, buffer) in summed.iter().enumerate() {
+                        draw(encoder.set_fragment_buffer(Some(buffer), 0, k as u32));
+                    }
+                    draw(encoder.set_tessellation_factor_buffer(Some(&factors), 8, 0));
+                    draw(encoder.draw_patches(3, 0, 2, None, 1, 0));
+                    encoder.end_encoding();
+                    run(name, &command_buffer);
+                    let mut sums = [0u8; 4];
+                    for k in 0..*width {
+                        sums[(k % 4) as usize] += 1 << (k / 4);
+                    }
+                    let black = [0, 0, 0, 255];
+                    let want: Vec<u8> = (0..SIDE * SIDE)
+                        .flat_map(|at| if at / SIDE < 4 { sums } else { black })
+                        .collect();
+                    assert_eq!(read(&color, 4), want, "{name}: {width} buffers: the texels");
+                    println!(
+                        "{name}: {width} fragment buffers, a push range of {} bytes, the fragment \
                      function's block {:?}",
-                    draws.push_len,
-                    draws.blocks[crate::render::FRAGMENT]
-                );
-            }
-            assert!(
-                widest > 248,
-                "{name}: the widest pair's fields end at {widest}, not past 248"
-            );
-            assert!(spilled, "{name}: no fragment function's fields spill");
-        });
+                        draws.push_len,
+                        draws.blocks[crate::render::FRAGMENT]
+                    );
+                }
+                assert_eq!(spills.first(), Some(&false), "{name}: the narrowest spills");
+                match window {
+                    256 => {
+                        assert!(
+                            widest > 248,
+                            "{name}: the widest pair's fields end at {widest}, not past 248"
+                        );
+                        assert_eq!(spills.last(), Some(&true), "{name}: the widest pushes all");
+                    }
+                    _ => assert_eq!(
+                        spills,
+                        widths.map(|width| width > 1).to_vec(),
+                        "{name}: the fragment functions whose fields spill, by width"
+                    ),
+                }
+            });
+        }
     }
 
     /// What Metal refuses is refused, and what the runtime does not build is a gap.

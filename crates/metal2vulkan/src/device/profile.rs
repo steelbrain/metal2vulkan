@@ -106,6 +106,16 @@ impl DeviceProfile {
         &self.fields.limits
     }
 
+    /// The bytes of every stage's push window on the device: its `maxPushConstantsSize`, up to
+    /// 256, and at least 128, Vulkan's least, below which `Device::from_queries` refuses the
+    /// description. A function pushes its fields in its window and puts those past it in a
+    /// parameter block whose address the window holds (`docs/API.md` section 5); a consumer's
+    /// pipeline layout holds one push range of this many bytes. The profile's fingerprint holds
+    /// the limit, so devices of two windows share no artifact.
+    pub fn push_window(&self) -> u32 {
+        (self.fields.limits.max_push_constants_size).min(crate::lower::push::MOST_BYTES)
+    }
+
     /// The fragment-stage and fixed-function capabilities the profile enables.
     pub fn fragment(&self) -> &FragmentCaps {
         &self.fields.fragment

@@ -15,7 +15,7 @@ use crate::memory::BlockId;
 use crate::over::{self, Reached, Span};
 use crate::pipeline::{
     address_word, Compiled, ComputePipelineState, FieldValue, Form, Interface, Kernel, Place,
-    Which, PUSH_BYTES, PUSH_STAGES, SQUARE,
+    Which, PUSH_STAGES, SQUARE,
 };
 use crate::record::Reach;
 use crate::ring::CHUNK;
@@ -1581,6 +1581,12 @@ impl ComputeCommandEncoder {
     pub(crate) fn pushed(&self) -> &[u8] {
         &self.parameters.push
     }
+
+    /// The parameter block's bytes the encoder's last dispatch filled, which `tests::bicubic`
+    /// reads the words of its fields past the push window from.
+    pub(crate) fn blocked(&self) -> &[u8] {
+        &self.parameters.block
+    }
 }
 
 /// A dispatch's parameters: the push window's bytes, and the ring block's with where its address
@@ -1751,7 +1757,7 @@ impl Building {
             parameters.push[at..at + 8].copy_from_slice(&address.to_le_bytes());
         }
         let push = &parameters.push[..];
-        debug_assert!(push.len() <= PUSH_BYTES as usize);
+        debug_assert!(push.len() <= core.translator.profile().push_window() as usize);
         let command = self.command(Reach::Dispatches {
             indirect: matches!(launch, Launch::Indirect(..)),
         })?;

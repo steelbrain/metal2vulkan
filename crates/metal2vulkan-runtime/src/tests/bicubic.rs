@@ -1,12 +1,13 @@
 //! A kernel that samples 2D textures through a bicubic constexpr sampler at normalized
 //! coordinates (the owned fixture `engine/bcu_formats`, ten slots, the last two with `half`
-//! results), under a device cfg on every device of the cfg's kind. Each dispatch pushes, for each
+//! results), under a device cfg on every device of the cfg's kind. Each dispatch passes, for each
 //! slot, how Metal's bicubic filter treats the format bound there, which selects the filter's arm
 //! at run time: the linear inner taps for `R32Float`, a clamp to [0, 1] for `RGBA8Unorm`,
 //! `RGBA16Unorm` and `R8Unorm`, a clamp to [-1, 1] for `RGBA8Snorm`, and no clamp for
-//! `RGBA16Float`. Each format is bound at every slot over six dispatches; a slot bound to nothing
-//! pushes the unbound word. A dispatch whose slot holds an `RGBA8Unorm_sRGB` texture is refused,
-//! naming the slot and the format. The command buffer is never committed.
+//! `RGBA16Float`. A slot's word is pushed, or in the dispatch's parameter block where the push
+//! window has no room for it. Each format is bound at every slot over six dispatches; a slot
+//! bound to nothing passes the unbound word. A dispatch whose slot holds an `RGBA8Unorm_sRGB`
+//! texture is refused, naming the slot and the format. The command buffer is never committed.
 //!
 //! `llvm-as` assembles the kernel; without it the test skips visibly.
 
@@ -85,17 +86,11 @@ mod on_device {
                     Ok(vec![CONSTEXPR])
                 })
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            // Each slot's field, in the push window.
+            // Each slot's field, in the push window or the parameter block.
             let mut at = [None; SLOTS];
             for field in &state.inner.compiled.whole.interface.fields {
                 if let FieldValue::BicubicTexels(slot) = field.value {
-                    let Place::Push(offset) = field.place else {
-                        panic!("{name}: slot {slot}'s field in a parameter block");
-                    };
-                    assert!(
-                        at[slot as usize].replace(offset as usize).is_none(),
-                        "{name}"
-                    );
+                    assert!(at[slot as usize].replace(field.place).is_none(), "{name}");
                 }
             }
             let at = at.map(|at| at.unwrap_or_else(|| panic!("{name}: a slot with no field")));
@@ -130,9 +125,13 @@ mod on_device {
                     call(encoder.set_texture(texture, slot as u32));
                 }
                 call(encoder.dispatch_threads([4, 1, 1], [4, 1, 1]));
-                let push = encoder.pushed().to_vec();
+                let (push, block) = (encoder.pushed().to_vec(), encoder.blocked().to_vec());
                 for (slot, k) in (0..SLOTS).zip(d..) {
-                    let word = u32::from_le_bytes(push[at[slot]..at[slot] + 4].try_into().unwrap());
+                    let (bytes, at) = match at[slot] {
+                        Place::Push(at) => (&push, at as usize),
+                        Place::Block(at) => (&block, at as usize),
+                    };
+                    let word = u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
                     if (d, slot) == (0, SLOTS - 1) {
                         assert_eq!(word, BICUBIC_TEXELS_UNBOUND, "{name}: slot {slot}, unbound");
                         continue;

@@ -13,6 +13,7 @@ use crate::device::derive::vk_stage;
 use crate::device::subgroup::SubgroupRequirement;
 use crate::device::DevicePolicy;
 use crate::library::FunctionCompileKey;
+use crate::lower::push::MOST_BYTES as MOST;
 use crate::pipeline::artifact::{Reconvergence, StrategyCensus};
 use crate::pipeline::interface::{StageDescriptor, StageSpec};
 use crate::pipeline::stage_io::{
@@ -131,7 +132,7 @@ pub(super) fn iface(
         stage,
         slots: BTreeMap::new(),
         threadgroup: Vec::new(),
-        push: crate::lower::push::place(stage, 0, &BTreeSet::new()),
+        push: crate::lower::push::place(stage, 0, MOST, &BTreeSet::new()),
         descriptors,
         spec,
         needs_pointer_translation: false,
@@ -606,12 +607,14 @@ fn push_ranges_are_the_stage_windows() {
         })
     };
     let mut vs = iface(Stage::Vertex, Vec::new(), Vec::new());
-    vs.push = crate::lower::push::place(Stage::Vertex, 0, &BTreeSet::from([sb(Stage::Vertex)]));
+    vs.push =
+        crate::lower::push::place(Stage::Vertex, 0, MOST, &BTreeSet::from([sb(Stage::Vertex)]));
     assert_eq!(vs.push.push_range, Some((0, 4)));
     let mut fs = iface(Stage::Fragment, Vec::new(), Vec::new());
     fs.push = crate::lower::push::place(
         Stage::Fragment,
         4,
+        MOST,
         &BTreeSet::from([PushField::RootTableAddress, sb(Stage::Fragment)]),
     );
     let (start, size) = fs.push.push_range.expect("fragment fields");

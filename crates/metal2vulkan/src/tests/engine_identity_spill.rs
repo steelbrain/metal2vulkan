@@ -1,22 +1,25 @@
-//! A render pipeline's functions spill past their shares of the floor's push range under the
+//! A render pipeline's functions spill past their shares of the device's push range under the
 //! identity domains, as a kernel spills past its window.
 //!
-//! Owned synthetic functions: the vertex function `vmany` sums word `vid` of each of its 24
-//! `device` buffers into word `vid` of buffer 24, and the fragment function `fmany` returns the sum
-//! of word `x` of its two buffers, `x` its position's. Every access is at a run-time offset, so each
-//! slot pushes its address and its bounds, and each function the zero range's address.
+//! Owned synthetic functions: the vertex function `vmany` sums word `vid` of each of its `n`
+//! `device` buffers into word `vid` of buffer `n`, and the fragment function `fmany` returns the
+//! sum of word `x` of its two buffers, `x` its position's. Every access is at a run-time offset, so
+//! each slot pushes its address and its bounds, and each function the zero range's address. `n` is
+//! 24 on a device whose push window is 256 bytes and 9 on one of 128 ([`inputs`]): the most whose
+//! addresses the vertex function's window holds beside its block's address and the zero range's.
 //!
 //! - On every committed profile `Device::from_queries` derives under the identity domains, the
-//!   vertex function's fields pass its window, `[0, 248)`: it pushes its parameter block's address
-//!   first, then every slot's address, and only the check's fields (`ZeroAddress`, the bounds)
-//!   from the first that does not fit go to the block. Its module passes L3.
-//! - The pair compiles on each such profile: the vertex function's fields end at 248, and the
+//!   vertex function's fields pass its window, `[0, W - 8)` (`W` the device's window): it pushes its
+//!   parameter block's address first, then every slot's address, and only the check's fields
+//!   (`ZeroAddress`, the bounds) from the first that does not fit go to the block. Its module
+//!   passes L3.
+//! - The pair compiles on each such profile: the vertex function's fields end at `W - 8`, and the
 //!   fragment function, from there, pushes its block's address in the range's last 8 bytes and
 //!   reads the rest, its slots' addresses too, from the block. Both modules pass L3.
-//! - On the CPU interpreter, four vertices with each buffer four words long sum Metal's words
-//!   where every slot's pushed buffer is 16 bytes long; with the odd slots' pushed as 12 bytes
-//!   long, in the window and in the block alike, vertex 3 reads zero from each of those slots. No access
-//!   traps.
+//! - On the CPU interpreter, at 256 bytes (`lavapipe`) and at 128 (`runtime-floor`), four vertices
+//!   with each buffer four words long sum Metal's words where every slot's pushed buffer is 16
+//!   bytes long; with the odd slots' pushed as 12 bytes long, in the window and in the block alike,
+//!   vertex 3 reads zero from each of those slots. No access traps.
 //!
 //! `llvm-as` assembles the functions; without it the tests skip visibly.
 
@@ -36,8 +39,16 @@ use crate::pipeline::testing::{compile_kept, description, link_and_validate, Ass
 use crate::spirv::interp::{run, Buffer, Config, Resources};
 use crate::spirv::testing::{check_words_valid, spirv_dis};
 
-/// The vertex function's input buffers; its output is buffer `INPUTS`.
-const INPUTS: u32 = 24;
+/// The vertex function's input buffers on a device whose push window is `bytes`: 24 at 256 and 9
+/// at 128, so its window holds its block's address and every slot's address, and the check's
+/// fields spill. Its output is buffer `inputs(bytes)`.
+fn inputs(bytes: u32) -> u32 {
+    match bytes {
+        256 => 24,
+        128 => 9,
+        other => panic!("no fixture for a push window of {other} bytes"),
+    }
+}
 /// Vertices drawn, and words in each buffer.
 const VERTICES: u32 = 4;
 /// Where the interpreter holds buffer `i` (`BUFFERS + i * STRIDE`), the parameter block and the
@@ -47,8 +58,8 @@ const STRIDE: u64 = 0x1000;
 const BLOCK: u64 = 0x5_0000_0000;
 const ZERO: u64 = 0x6_0000_0000;
 
-fn functions() -> String {
-    let n = INPUTS as usize;
+fn functions(inputs: u32) -> String {
+    let n = inputs as usize;
     let mut params: Vec<String> = (0..n)
         .map(|i| format!("ptr addrspace(1) noundef \"air-buffer-no-alias\" %b{i}"))
         .collect();
@@ -147,8 +158,8 @@ entry:
     )
 }
 
-fn assemble() -> Option<Vec<u8>> {
-    match metal2vulkan_devtools::llvm_assemble_text(&functions()) {
+fn assemble(inputs: u32) -> Option<Vec<u8>> {
+    match metal2vulkan_devtools::llvm_assemble_text(&functions(inputs)) {
         Ok(b) => Some(b),
         Err(AssembleError::Missing(why)) => {
             eprintln!("SKIPPED: {why}");
@@ -203,14 +214,19 @@ fn assert_spills(what: &str, p: &PushPlacement, start: u32, addresses: bool) {
 
 #[test]
 fn a_vertex_function_past_its_share_spills_the_checks_fields_into_its_block() {
-    let Some(bc) = assemble() else {
-        return;
-    };
     for (stem, p) in identity_profiles() {
+        let window = p.push_window();
+        let Some(bc) = assemble(inputs(window)) else {
+            return;
+        };
         let (a, plan, _) = compile_kept(&bc, "vmany", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
         assert_spills(&stem, &plan.push, 0, true);
         let end = plan.push.push_range.map_or(0, |(o, s)| o + s);
-        assert!(end <= 248, "{stem}: the vertex window ends at {end}");
+        assert!(
+            end <= window - 8,
+            "{stem}: the vertex window of {window} ends at {end}"
+        );
+        println!("{stem}: push window {window}, the vertex function's fields end at {end}");
         link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
         let text = spirv_dis(&a.module.words);
         if text.starts_with('<') {
@@ -323,19 +339,20 @@ fn pointer_lines(text: &str) -> String {
 
 #[test]
 fn a_render_pair_past_the_floor_spills_both_functions() {
-    let Some(bc) = assemble() else {
-        return;
-    };
-    let library = Library::from_air(&bc).expect("the library");
-    let function = |name| {
-        StageSource::Function(FunctionDescriptor::new(
-            library.function(name).expect("the function"),
-        ))
-    };
-    let mut d = RenderPipelineDescriptor::new(function("vmany"));
-    d.fragment = Some(function("fmany"));
-    d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
-    for (stem, _) in identity_profiles() {
+    for (stem, profile) in identity_profiles() {
+        let window = profile.push_window();
+        let Some(bc) = assemble(inputs(window)) else {
+            return;
+        };
+        let library = Library::from_air(&bc).expect("the library");
+        let function = |name| {
+            StageSource::Function(FunctionDescriptor::new(
+                library.function(name).expect("the function"),
+            ))
+        };
+        let mut d = RenderPipelineDescriptor::new(function("vmany"));
+        d.fragment = Some(function("fmany"));
+        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
         let desc = description(&stem).unwrap_or_else(|e| panic!("{e}"));
         let device = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
         let p = (device.compile_render_pipeline(&d, &Budget::standard()))
@@ -348,13 +365,16 @@ fn a_render_pair_past_the_floor_spills_both_functions() {
             (Stage::Vertex, Stage::Fragment)
         );
         assert_spills(&format!("{stem} vertex"), vertex, 0, true);
-        // The vertex function fills its window to 248: the fragment function's block address
-        // takes the range's last 8 bytes, and its slots' addresses go to its block too.
+        // The vertex function fills its window to `window - 8`: the fragment function's block
+        // address takes the range's last 8 bytes, and its slots' addresses go to its block too.
         let base = vertex.push_range.map_or(0, |(o, s)| o + s);
-        assert_eq!(base, 248, "{stem}");
+        assert_eq!(base, window - 8, "{stem}");
         assert_spills(&format!("{stem} fragment"), fragment, base, false);
         let end = fragment.push_range.map_or(0, |(o, s)| o + s);
-        assert!(end <= 256, "{stem}: the range ends at {end}");
+        assert!(end <= window, "{stem}: the range ends at {end}");
+        println!(
+            "{stem}: push window {window}, the vertex function ends at {base}, the pair at {end}"
+        );
         for stage in &p.stages {
             check_words_valid(&stage.spirv, &p.requirements, device.profile())
                 .unwrap_or_else(|e| panic!("{stem}: {:?}: {e}", stage.stage));
@@ -367,16 +387,17 @@ fn word(i: u32, v: u32) -> u32 {
     (i + 1) * 100 + v
 }
 
-/// One draw of `VERTICES` vertices of `vmany` on the lavapipe profile, each input slot's pushed
-/// buffer `length(i)` bytes long: the output buffer's words.
-fn draw(length: impl Fn(u32) -> usize) -> Vec<u32> {
-    let Some(bc) = assemble() else {
-        return Vec::new();
-    };
+/// One draw of `VERTICES` vertices of `vmany` on committed profile `stem`, each input slot's
+/// pushed buffer `length(i)` bytes long: the output buffer's words.
+fn draw(stem: &str, length: impl Fn(u32) -> usize) -> Vec<u32> {
     let (stem, p) = identity_profiles()
         .into_iter()
-        .find(|(stem, _)| stem == "lavapipe")
-        .expect("lavapipe");
+        .find(|(name, _)| name == stem)
+        .unwrap_or_else(|| panic!("{stem}"));
+    let n = inputs(p.push_window());
+    let Some(bc) = assemble(n) else {
+        return Vec::new();
+    };
     let (_, plan, module) = compile_kept(&bc, "vmany", &p).unwrap_or_else(|e| panic!("{e}"));
     let bytes = 4 * VERTICES as usize;
     let mut push = vec![0u8; plan.push.push_range.map_or(0, |(o, s)| (o + s) as usize)];
@@ -392,7 +413,7 @@ fn draw(length: impl Fn(u32) -> usize) -> Vec<u32> {
                 let at = BUFFERS + u64::from(s.index) * STRIDE;
                 to[o..o + 8].copy_from_slice(&slot_word(at).to_le_bytes());
             }
-            PushField::SlotBounds(s) if s.index < INPUTS => {
+            PushField::SlotBounds(s) if s.index < n => {
                 to[o..o + 8].copy_from_slice(&bounds_word(length(s.index), 0))
             }
             PushField::SlotBounds(_) => to[o..o + 8].copy_from_slice(&bounds_word(bytes, 0)),
@@ -405,7 +426,7 @@ fn draw(length: impl Fn(u32) -> usize) -> Vec<u32> {
         address: Some(address),
         bytes,
     };
-    let mut buffers: Vec<Buffer> = (0..INPUTS)
+    let mut buffers: Vec<Buffer> = (0..n)
         .map(|i| {
             let words = (0..VERTICES)
                 .flat_map(|v| word(i, v).to_le_bytes())
@@ -413,7 +434,7 @@ fn draw(length: impl Fn(u32) -> usize) -> Vec<u32> {
             buffer(BUFFERS + u64::from(i) * STRIDE, words)
         })
         .collect();
-    buffers.push(buffer(BUFFERS + u64::from(INPUTS) * STRIDE, vec![0; bytes]));
+    buffers.push(buffer(BUFFERS + u64::from(n) * STRIDE, vec![0; bytes]));
     buffers.push(buffer(BLOCK, block));
     buffers.push(buffer(ZERO, vec![0; 16]));
     let res = Resources {
@@ -427,27 +448,31 @@ fn draw(length: impl Fn(u32) -> usize) -> Vec<u32> {
     };
     let got = run(&module, &cfg, res).unwrap_or_else(|e| panic!("{stem}: {e}"));
     assert_eq!(
-        got.buffers[INPUTS as usize + 2],
+        got.buffers[n as usize + 2],
         vec![0; 16],
         "{stem}: the zero range"
     );
-    (got.buffers[INPUTS as usize].chunks(4))
+    (got.buffers[n as usize].chunks(4))
         .map(|w| u32::from_le_bytes(w.try_into().expect("a word")))
         .collect()
 }
 
 #[test]
 fn spilled_bounds_check_their_slot_as_pushed_ones_do() {
-    let all = |v: u32| (0..INPUTS).map(|i| word(i, v)).sum::<u32>();
-    let whole = draw(|_| 4 * VERTICES as usize);
-    if whole.is_empty() {
-        return;
+    for (stem, window) in [("lavapipe", 256), ("runtime-floor", 128)] {
+        let n = inputs(window);
+        let all = |v: u32| (0..n).map(|i| word(i, v)).sum::<u32>();
+        let whole = draw(stem, |_| 4 * VERTICES as usize);
+        if whole.is_empty() {
+            return;
+        }
+        assert_eq!(whole, (0..VERTICES).map(all).collect::<Vec<_>>(), "{stem}");
+        // The odd slots one word short: vertex 3 reads zero from each of them.
+        let short = draw(stem, |i| 4 * (VERTICES as usize - (i as usize % 2)));
+        let even = |v: u32| (0..n).step_by(2).map(|i| word(i, v)).sum::<u32>();
+        let mut want: Vec<u32> = (0..VERTICES - 1).map(all).collect();
+        want.push(even(VERTICES - 1));
+        assert_eq!(short, want, "{stem}");
+        println!("{stem}: push window {window}, {n} inputs, each vertex's sum");
     }
-    assert_eq!(whole, (0..VERTICES).map(all).collect::<Vec<_>>());
-    // The odd slots one word short: vertex 3 reads zero from each of them.
-    let short = draw(|i| 4 * (VERTICES as usize - (i as usize % 2)));
-    let even = |v: u32| (0..INPUTS).step_by(2).map(|i| word(i, v)).sum::<u32>();
-    let mut want: Vec<u32> = (0..VERTICES - 1).map(all).collect();
-    want.push(even(VERTICES - 1));
-    assert_eq!(short, want);
 }

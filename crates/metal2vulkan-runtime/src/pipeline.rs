@@ -88,12 +88,6 @@ use std::ffi::CString;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 
-/// The push window: the parameters a kernel reads from push constants, `[0, 256)` on every device,
-/// the floor's `maxPushConstantsSize` and the translator's window on `Device::from_queries`'
-/// profile: a dispatch region and 28 buffer addresses. Fields past it go to a block in the
-/// parameter ring, whose address is a field in the window.
-pub(crate) const PUSH_BYTES: u32 = crate::floor::PUSH_CONSTANT_BYTES;
-
 /// The stages of the layout's one push range, which every `vkCmdPushConstants` names: a
 /// dispatch's and a draw's pushes are of one range over the compute, vertex and fragment stages.
 pub(crate) const PUSH_STAGES: vk::ShaderStageFlags = vk::ShaderStageFlags::ALL;
@@ -1410,10 +1404,12 @@ fn past_stage_bound(error: &Error) -> bool {
 }
 
 /// The runtime's view of the translator's kernel, or what the kernel reads that the compute
-/// encoder does not supply ([`Gap::KernelInput`] of that kind), the first this finds.
+/// encoder does not supply ([`Gap::KernelInput`] of that kind), the first this finds, on a device
+/// whose push window is `window` bytes (`DeviceProfile::push_window`).
 pub(crate) fn interface(
     pipeline: &ComputePipeline,
     required_size: Option<[u32; 3]>,
+    window: u32,
 ) -> Result<Interface, KernelInputKind> {
     let translated = &pipeline.interface;
     let stage = &pipeline.stage;
@@ -1631,7 +1627,7 @@ pub(crate) fn interface(
         (1.., Some(at)) if u64::from(block_len) <= CHUNK => at,
         _ => return Err(KernelInputKind::ArgumentBlock),
     };
-    if push_len > PUSH_BYTES {
+    if push_len > window {
         return Err(KernelInputKind::PushBytes);
     }
     // The threadgroup memory arguments are the lengths the module specializes on, each by its
@@ -2234,7 +2230,8 @@ impl Kernel {
         pipeline: ComputePipeline,
         required_size: Option<[u32; 3]>,
     ) -> Result<Kernel, Unmade> {
-        let interface = interface(&pipeline, required_size).map_err(Unmade::Unsupplied)?;
+        let window = core.translator.profile().push_window();
+        let interface = interface(&pipeline, required_size, window).map_err(Unmade::Unsupplied)?;
         let stage = pipeline.stage;
         let heavy = Heavy::of(&stage);
         // The translator's entry points hold no NUL; one that did would name no entry point.

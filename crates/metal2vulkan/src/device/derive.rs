@@ -55,9 +55,10 @@ impl Device {
     /// ([`DeviceDescription::from_khronos_json`]) or built field by field
     /// ([`DeviceDescription::new`]) makes a device with no `VkDevice` behind it.
     ///
-    /// Refuses a device below Vulkan 1.2 (`Unsupported{VulkanVersion}`), a device whose
-    /// `maxPushConstantsSize` is below the 256 bytes of the push window every stage is lowered for
-    /// (`Unsupported{PushWindow}`, a `Limit` of `MaxPushConstantsSize`), a description that lists
+    /// Refuses a device below Vulkan 1.2 (`Unsupported{VulkanVersion}`), a description whose
+    /// `maxPushConstantsSize` is below 128 bytes, Vulkan's least, the least push window a stage is
+    /// lowered for (`Unsupported{PushWindow}`, a `Limit` of `MaxPushConstantsSize`; the window is
+    /// the limit up to 256 bytes, [`DeviceProfile::push_window`]), a description that lists
     /// a feature neither its version nor its listed extensions expose or a feature without the
     /// feature Vulkan requires enabled with it (`InvalidDescriptor`, the invariants
     /// `device::enables` states), a policy that turns containment off while guest isolation
@@ -82,12 +83,12 @@ impl Device {
             .into());
         }
         let push = desc.limits.max_push_constants_size;
-        if push < crate::lower::push::FLOOR_BYTES {
+        if push < crate::lower::push::LEAST_BYTES {
             return Err(Unsupported::needs(
                 Feature::PushWindow,
                 Capability::Limit {
                     limit: VkLimit::MaxPushConstantsSize,
-                    required: u64::from(crate::lower::push::FLOOR_BYTES),
+                    required: u64::from(crate::lower::push::LEAST_BYTES),
                     available: u64::from(push),
                 },
             )

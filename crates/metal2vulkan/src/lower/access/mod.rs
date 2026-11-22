@@ -1037,8 +1037,8 @@ struct Census {
     identity: bool,
     /// A device-address slot reads its own address ([`slot_address_field`]).
     own_addresses: bool,
-    /// The stage's push base, which decides where the fields spill.
-    push_base: u32,
+    /// The stage's push base and the device's window bytes, which decide where the fields spill.
+    push_window: (u32, u32),
 }
 
 impl Census {
@@ -1046,7 +1046,7 @@ impl Census {
     /// pointer reads the root table.
     fn new(
         push: &BTreeSet<PushField>,
-        (dynamic, identity, own_addresses, push_base): (bool, bool, bool, u32),
+        (dynamic, identity, own_addresses, push_window): (bool, bool, bool, (u32, u32)),
         forms: impl Iterator<Item = (SlotRef, SlotLowering)>,
         m: &mut Meter,
     ) -> Result<Census, Error> {
@@ -1055,7 +1055,7 @@ impl Census {
             fields: push.clone(),
             identity,
             own_addresses,
-            push_base,
+            push_window,
         };
         if dynamic {
             c.fields.insert(PushField::RootTableAddress);
@@ -1080,7 +1080,7 @@ impl Census {
             // Under the identity domains the spilled fields are a parameter block at a pushed
             // address, no descriptor.
             uniform_buffers: u32::from(
-                !self.identity && table::spills(stage, self.push_base, &self.fields),
+                !self.identity && table::spills(stage, self.push_window, &self.fields),
             ),
             storage_buffers: self.storage,
             ..DescriptorCounts::default()
@@ -1274,7 +1274,7 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
             cx.families.access.dynamic.used,
             identity(p),
             own_addresses,
-            crate::lower::push::base(cx),
+            (crate::lower::push::base(cx), p.push_window()),
         ),
         forms,
         m,
@@ -1401,11 +1401,11 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
     }
     let counts = census.counts(stage);
     cx.descriptors = cx.descriptors.plus(&counts);
-    cx.families.access.argument_table =
-        table::spills(stage, crate::lower::push::base(cx), &cx.push);
+    let window = (crate::lower::push::base(cx), p.push_window());
+    cx.families.access.argument_table = table::spills(stage, window, &cx.push);
     // Under the identity domains a function whose fields spill, of any stage, reads them from a
     // parameter block whose address its window holds first: a render pipeline's stages too, in
-    // their shares of the floor's one range (`push::VERTEX_FLOOR_END`).
+    // their shares of the device's one range (`push::vertex_end`).
     if cx.families.access.argument_table && identity(p) {
         cx.push.insert(PushField::ArgumentTableAddress);
     }

@@ -40,7 +40,9 @@
 //!     reads past the end of the buffer its command named reads the bytes past it, each drawing
 //!     as the same draw direct, through the buffer bound at that offset, draws.
 //!   - a state whose fourteen slots apart take 17 tokens is `IndirectCommandsKind::Tokens` on a
-//!     device that takes fewer (lavapipe's 16), and executes on one that takes as many.
+//!     device that takes fewer (lavapipe's 16), and executes on one that takes as many, in a push
+//!     window of 256 bytes; in one of 128 (`push_window_128`), whose vertex function pushes 9 slot
+//!     words at most, it is `IndirectCommandsKind::DrawInput` on every device.
 //!   - the device's caches hold at most their capacities past them: 16 templates, 256 execution
 //!     shapes and 64 command layouts.
 //!   - the preprocess pool: regions held past 64 MiB in use all go back, the idle bytes at most
@@ -156,16 +158,18 @@ fn an_executions_tokens_are_a_token_per_slot_word() {
 mod on_device {
     use crate::indirect::{Tokens, IDLE_BYTES, LAYOUTS, PART_BYTES, SHAPES, TEMPLATES};
     use crate::render::Raster;
-    use crate::tests::command::on_device::each_device;
+    use crate::tests::command::on_device::{
+        each_device, each_device_with, push_window_128, Options,
+    };
     use crate::tests::draw::on_device::{library, pass, read, run, state, target, Buffers};
     use crate::{
         Buffer, ColorAttachmentDescriptor, ComputePipelineDescriptor, ComputePipelineState,
-        CullMode, Device, DispatchType, DrawKind, Error, FunctionDescriptor, Gap, HostBytes,
-        IndexBuffer, IndexClass, IndexType, IndirectCommandBuffer, IndirectCommandBufferDescriptor,
-        IndirectCommandType, IndirectCommandsKind, Library, MemoryClass, PixelFormat,
-        PrimitiveType, Refusal, Region, RenderCommandEncoder, RenderPipelineDescriptor,
-        RenderPipelineKind, RenderPipelineState, Resource, ResourceUsage, StageSource,
-        TextureDescriptor, TextureType, TextureUsage, VisibilityResultMode,
+        CullMode, Device, DeviceOptions, DispatchType, DrawKind, Error, FunctionDescriptor, Gap,
+        HostBytes, IndexBuffer, IndexClass, IndexType, IndirectCommandBuffer,
+        IndirectCommandBufferDescriptor, IndirectCommandType, IndirectCommandsKind, Library,
+        MemoryClass, PixelFormat, PrimitiveType, Refusal, Region, RenderCommandEncoder,
+        RenderPipelineDescriptor, RenderPipelineKind, RenderPipelineState, Resource, ResourceUsage,
+        StageSource, TextureDescriptor, TextureType, TextureUsage, VisibilityResultMode,
     };
     use ash::vk;
     use metal2vulkan::metal::VertexFormat;
@@ -1152,34 +1156,54 @@ mod on_device {
         let Some(extras) = library(&engine_dir().join("icb_indexed_extras.ll")) else {
             return;
         };
-        each_device("icb_tokens", |name, _, device| {
-            let Some(commands) = commands(name, &device, &descriptor(27, 0), 1) else {
-                return;
-            };
-            let wide = flagged(
-                name,
-                &device,
-                &extras,
-                ("icb_extras_wide_vertex", "icb_extras_fragment"),
-            );
-            let tokens = (device.core().indirect.as_ref())
-                .expect("the extension")
-                .limits
-                .tokens;
-            drawn(name, &device, &wide, |e| {
-                match (e.execute_commands_in_buffer(&commands, 0..1), tokens < 17) {
-                    (
-                        Err(Error::Unsupported(Gap::IndirectCommandBuffers {
-                            kind: IndirectCommandsKind::Tokens,
-                        })),
-                        true,
-                    )
-                    | (Ok(()), false) => {}
-                    (other, _) => panic!("{name}: 17 tokens on a device of {tokens}: {other:?}"),
-                }
+        let arms: [(&str, Options); 2] = [
+            ("icb_tokens", DeviceOptions::default),
+            ("icb_tokens_128", push_window_128),
+        ];
+        for (test, options) in arms {
+            each_device_with(test, options, |name, _, device| {
+                let Some(commands) = commands(name, &device, &descriptor(27, 0), 1) else {
+                    return;
+                };
+                let wide = flagged(
+                    name,
+                    &device,
+                    &extras,
+                    ("icb_extras_wide_vertex", "icb_extras_fragment"),
+                );
+                let tokens = (device.core().indirect.as_ref())
+                    .expect("the extension")
+                    .limits
+                    .tokens;
+                // The slot words the vertex function's window holds beside the execution range,
+                // the sequence and the part's first command, below its tail word: 25 at 256
+                // bytes, 9 at 128.
+                let window = device.translator().profile().push_window();
+                let words = (window - 8 - 16 - 28) / 8;
+                let want = match (words >= 14, tokens < 17) {
+                    (false, _) => Some(IndirectCommandsKind::DrawInput),
+                    (true, true) => Some(IndirectCommandsKind::Tokens),
+                    (true, false) => None,
+                };
+                drawn(name, &device, &wide, |e| {
+                    match (e.execute_commands_in_buffer(&commands, 0..1), want) {
+                        (
+                            Err(Error::Unsupported(Gap::IndirectCommandBuffers { kind })),
+                            Some(want),
+                        ) if kind == want => {}
+                        (Ok(()), None) => {}
+                        (other, _) => panic!(
+                            "{name}: 17 tokens on a device of {tokens}, a window of {window}: \
+                             {other:?}, not {want:?}"
+                        ),
+                    }
+                });
+                println!(
+                    "{name}: {test}: a state of 17 tokens on a device that takes {tokens}, \
+                     the push window {window} bytes, {words} slot words"
+                );
             });
-            println!("{name}: a state of 17 tokens on a device that takes {tokens}");
-        });
+        }
     }
 
     /// A state made for indirect command buffers fetches its vertex function's `[[stage_in]]`
@@ -1362,7 +1386,7 @@ mod on_device {
                     .pipeline(vk::PrimitiveTopology::TRIANGLE_LIST, Raster::default()),
             );
             let layout = IndirectDrawLayout::new(31, 31).expect("a layout");
-            let room = crate::pipeline::PUSH_BYTES / 8 - 1;
+            let room = core.translator.profile().push_window() / 8 - 1;
             let words = room.min(indirect.limits.tokens.saturating_sub(3));
             let slots = (0..31)
                 .map(|slot| layout.vertex_slot(slot))

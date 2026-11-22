@@ -191,7 +191,7 @@ impl<'a> From<&'a MeshPipelineDescriptor> for FragmentPass<'a> {
             sample_mask: None,
             alpha_test: None,
             depth_compare_clamp_mask: 0,
-            push_base: crate::lower::push::window(crate::pipeline::sym::Stage::Mesh, 0).1,
+            push_base: crate::lower::push::MESH_END,
         }
     }
 }

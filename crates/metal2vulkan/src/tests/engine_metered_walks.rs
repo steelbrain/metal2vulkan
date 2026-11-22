@@ -226,7 +226,7 @@ fn reads_body(accesses: u32) -> String {
 /// once, so the slots are placed in work linear in their number. A table is at most
 /// [`LARGEST_TABLE`] buffers (Metal's 31 buffer entries), so the moves are bounded by Metal's
 /// table: tables of 15 and 30 buffers beside `out` on `lavapipe` held to 30 storage buffers per
-/// stage (`roadmap-2022`'s, whose 128 push bytes are below the floor's 256) translate, pass L3, and
+/// stage (`roadmap-2022`'s) translate, pass L3, and
 /// charge under 2.2 times the work units for twice the buffers. Previously
 /// each move recounted every slot and placed every push field, unmetered, so the units are the same
 /// there; the measured times (at 2^12 and 2^13 buffers, a table no Metal function binds) were

@@ -85,7 +85,7 @@ feature	Tensors	rare	shader tensors
 feature	RasterizationRateMap	rare	rasterization rate maps
 feature	GpuEncodedIndirectCommands	rare	indirect command buffers encoded by a kernel
 feature	VulkanVersion	none	a device below Vulkan 1.2
-feature	PushWindow	none	a device whose maxPushConstantsSize is below 256 bytes
+feature	PushWindow	none	a description whose maxPushConstantsSize is below 128 bytes, less than Vulkan lets a device report
 feature	IdentityDomains	none	the identity domains, which the runtime alone takes and which lower only kernels over buffer slots, textures in slots or argument buffers, and runtime samplers, so far
 feature	Constant	none	LLVM constant forms AIR does not emit
 feature	Attribute	none	LLVM ABI attributes AIR does not use

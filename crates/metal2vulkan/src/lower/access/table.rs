@@ -36,9 +36,10 @@ pub struct Table {
     pub fields: Vec<PushField>,
 }
 
-/// Whether `stage`'s placement of `fields` spills into the `ArgumentTable` (`push::spills`).
-pub fn spills(stage: Stage, base: u32, fields: &BTreeSet<PushField>) -> bool {
-    push::spills(stage, base, fields)
+/// Whether `stage`'s placement of `fields` spills into the `ArgumentTable` (`push::spills`), from
+/// its push base in a device window of `bytes`.
+pub fn spills(stage: Stage, (base, bytes): (u32, u32), fields: &BTreeSet<PushField>) -> bool {
+    push::spills(stage, base, bytes, fields)
 }
 
 /// The binding symbol of `stage`'s `ArgumentTable`.
