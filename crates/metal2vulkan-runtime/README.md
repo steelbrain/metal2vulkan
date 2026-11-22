@@ -1889,7 +1889,12 @@ made, with no lock, and never rewritten for layouts.
   buffers. The held work goes when a completion leaves room (the completion thread wakes the
   submit thread as it retires; no commit or
   wait is needed), when the host is to wait for one of them (`wait_until_completed`, or
-  `CommandQueue::send_now`, the hint for a wait the runtime does not see), or at teardown. Waiting
+  `CommandQueue::send_now`, the hint for a wait the runtime does not see), or at teardown. What a
+  host wait sends does not go past a command buffer of another queue committed before it, to a
+  queue with nothing queued or running, not yet submitted, with a part ready, that holds a buffer
+  or texture it holds (or where either reaches memory outside its resources): it waits for the
+  device's room, whose order sends that one first, as Metal submitted that one at its commit and
+  orders it after (job m3-max-68673). Waiting
   for a place in the queue sends nothing. A segment that signals an event ends its group, which goes
   at once as it is staged, and so does a presenting command buffer's last (see "Presenting"); so a
   command buffer that signals an event, in any segment, is staged only once the device has room

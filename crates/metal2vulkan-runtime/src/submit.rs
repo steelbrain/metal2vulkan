@@ -1729,7 +1729,7 @@ impl WorkState {
                     true => segment.work.run,
                     false => run.unwrap_or(u64::MAX),
                 };
-                let through = fifo.send_through >= head.place && !cut;
+                let through = fifo.send_through >= head.place && !cut && !self.sends_past(index);
                 signals && !(self.stop || through || self.has_room(index, run))
             }
         }
@@ -1793,7 +1793,9 @@ impl WorkState {
     fn goes(&self, index: usize) -> bool {
         let fifo = &self.fifos[index];
         fifo.group.as_ref().is_some_and(|group| {
-            self.stop || fifo.send_through >= group.first || self.has_room(index, group.run)
+            self.stop
+                || (fifo.send_through >= group.first && !self.sends_past(index))
+                || self.has_room(index, group.run)
         })
     }
 
@@ -2231,6 +2233,36 @@ impl WorkState {
             .min_by_key(|&index| rank(index))
     }
 
+    /// Whether the FIFO at `index`, sent through by a host wait ([`Work::send`]), sends a command
+    /// buffer, in its group held or as its head, committed after the first command buffer not yet
+    /// submitted of another queue committed to it idle ([`Fifo::idle_first`]), that holds a buffer
+    /// or texture that one holds, by the ids the hazards track them by, or where either reaches
+    /// memory outside its resources. Metal submits such a one at its commit and its hazard
+    /// tracking orders the later after it, so the FIFO then goes through only once that one is
+    /// submitted: until then it waits for the device's room, whose order ([`rank`](Self::rank))
+    /// sends that one first. Nothing else the host wait sends waits for it.
+    fn sends_past(&self, index: usize) -> bool {
+        let fifo = &self.fifos[index];
+        let head = (fifo.entries.front())
+            .filter(|entry| entry.place <= fifo.send_through)
+            .and_then(|entry| entry.pending.as_ref());
+        let sent = || {
+            let grouped = (fifo.group.iter())
+                .flat_map(|group| group.finished.iter().map(|(_, pending, _)| pending));
+            grouped.chain(head)
+        };
+        (self.fifos.iter().enumerate()).any(|(other, holder)| {
+            let Some(first) = holder.idle_first().filter(|_| other != index) else {
+                return false;
+            };
+            let ids = first.gpu.kept.tracked();
+            sent().any(|pending| {
+                pending.seq > first.seq
+                    && (first.gpu.unbound || pending.gpu.unbound || pending.gpu.kept.meets(&ids))
+            })
+        })
+    }
+
     /// The FIFO, other than the one at `index`, whose group goes now ([`goes`](Self::goes)) and
     /// whose first command buffer was committed first, before every command buffer the group at
     /// `index` holds ([`Fifo::first_committed`]): it goes before that group. So a group that goes
@@ -2278,6 +2310,28 @@ impl Fifo {
     /// Its head's pending part, where its head is committed.
     fn head(&self) -> Option<&Pending> {
         (self.entries.front()).and_then(|entry| entry.pending.as_ref())
+    }
+
+    /// Its first command buffer not yet submitted with a part ready for the device, where the
+    /// queue has submitted nothing since a commit found it idle (its turn 0): staged in its group,
+    /// or its next segment's waits met. Metal submits a command buffer committed to a queue with
+    /// nothing ahead of it at its commit (the runtime README's M3 Max rows). One that has ended,
+    /// holds nothing for the GPU, or waits for an event not yet met has no part ready: Metal's wait
+    /// stops only its own queue.
+    fn idle_first(&self) -> Option<&Pending> {
+        if self.turn != 0 {
+            return None;
+        }
+        match &self.group {
+            Some(group) => (group.finished.first().map(|(_, pending, _)| pending))
+                .or_else(|| self.head().filter(|_| group.partial)),
+            None => {
+                let entry = self.entries.front().filter(|entry| entry.error.is_none())?;
+                let head = entry.pending.as_ref()?;
+                let next = head.gpu.segments.get(head.next);
+                (!head.gpu.is_empty() && next.is_some_and(ready)).then_some(head)
+            }
+        }
     }
 
     /// The place in the commit order of the first command buffer its group holds: the first that
