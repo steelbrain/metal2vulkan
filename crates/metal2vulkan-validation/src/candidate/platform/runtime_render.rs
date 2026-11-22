@@ -371,6 +371,9 @@ impl Stages {
                     true => draw.member_usages,
                     false => &no_member_usages,
                 },
+                // A draw with a contained out-of-bounds target is not drawn here (`run`): its
+                // stages' resources lie between no guards.
+                out_of_bounds: &[],
             };
             let bound =
                 runtime_textures::make(device, device_type, &wanted, indices, runtime_error)?;

@@ -1,7 +1,7 @@
 //! The guards a candidate keeps around a case's out-of-bounds targets: where each guarded target
 //! ([`out_of_bounds::guarded`]) lies, how far its guard reaches, what a run changed there, and how
-//! those counts join the run's out-of-bounds facts, for the executor's own context (`platform`,
-//! each target in an allocation of its own).
+//! those counts join the run's out-of-bounds facts, for the executor's own context and the runs
+//! through the runtime (`platform`, each target in an allocation of its own).
 
 use super::ComputeCase;
 use crate::case::out_of_bounds::{OutOfBoundsResource, OutOfBoundsTarget};
@@ -50,6 +50,19 @@ pub fn guard_reach(case: &ComputeCase, index: u32) -> Option<GuardReach> {
         &case.out_of_bounds,
         OutOfBoundsResource::Buffer { binding: index },
     )
+}
+
+/// The guard reach of the texture buffer at Metal index `index` when `targets` declares it a
+/// guarded out-of-bounds target ([`out_of_bounds::guarded`]: one of the texel buffer form).
+pub fn texel_guard_reach(targets: &[OutOfBoundsTarget], index: u32) -> Option<GuardReach> {
+    targets.iter().find_map(|target| {
+        (target.resource == OutOfBoundsResource::Texture { binding: index }
+            && out_of_bounds::guarded(target))
+        .then_some(GuardReach {
+            before: target.reach_before,
+            after: target.reach_after,
+        })
+    })
 }
 
 /// The guard reach of the argument-buffer buffer at `(owner, field offset)` when `case` declares

@@ -680,6 +680,73 @@ fn a_bound_texture_buffer_reads_and_writes_its_texels_through_the_runtime() {
     assert_eq!(run.output, words(&written));
 }
 
+/// The public `ob1_texel_buffer` case through the runtime, its two texture buffers declared
+/// out-of-bounds targets of the texel buffer form, as the committed case declares them: each is a
+/// guarded target (`out_of_bounds::guarded`), made over a buffer between guards of its declared
+/// reach (`platform::runtime_textures`), whose guard the run reads back. Reads past `src` (up to
+/// texel 1000) are zero, writes past `dst` (up to texel 4096) are dropped, and no guard byte
+/// changes, so the run's facts state both guards untouched, which a match of equal bytes needs.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_texture_buffer_accessed_past_its_end_is_contained_through_the_runtime() {
+    use crate::case::out_of_bounds::{ContainmentForm, OutOfBoundsResource, OutOfBoundsTarget};
+    use crate::case::{ResourceRole, TextureFormat, TextureType};
+    use crate::executor_contract::out_of_bounds::Medium;
+    let bitcode = llvm_assemble(&engine_dir().join("ob1_texel_buffer.ll")).unwrap();
+    let words =
+        |values: &[u32]| -> Vec<u8> { values.iter().copied().flat_map(u32::to_le_bytes).collect() };
+    let texels = |binding, role, values: &[u32]| crate::literal::LiteralTexture {
+        binding,
+        role,
+        texture_type: TextureType::Buffer,
+        format: TextureFormat::R32Uint,
+        dimensions: [4, 1, 1],
+        sample_count: 1,
+        bytes: words(values),
+        sparse: None,
+        mip_levels: 1,
+    };
+    let index = [0, 1, 2, 3, 4, 5, 64, 1000, 3, 2, 1, 0, 4, 8, 100, 4096];
+    let threads = Dispatch::Threads {
+        threads: [8, 1, 1],
+        threads_per_group: [8, 1, 1],
+    };
+    let mut past = case("ob1_texel_buffer", words(&index), threads);
+    past.buffers.insert(1, vec![0xab; 32]);
+    past.textures = BTreeMap::from([
+        (0, texels(0, ResourceRole::Input, &[11, 22, 33, 44])),
+        (1, texels(1, ResourceRole::Output, &[0xabab_abab; 4])),
+    ]);
+    let target = |binding, reach_after| OutOfBoundsTarget {
+        resource: OutOfBoundsResource::Texture { binding },
+        form: ContainmentForm::TexelBuffer,
+        reach_before: 0,
+        reach_after,
+    };
+    past.out_of_bounds = vec![target(0, 4000), target(1, 16384)];
+    past.output = ComputeOutput::Buffer {
+        binding: 1,
+        offset: 0,
+        length: 32,
+    };
+    let run = run_through_runtime(&past, &bitcode).unwrap();
+    assert_eq!(run.output, words(&[11, 22, 33, 44, 0, 0, 0, 0]));
+    let targets = run
+        .census
+        .out_of_bounds
+        .expect("an out-of-bounds case's census records its targets")
+        .targets;
+    assert_eq!(targets.len(), 2, "{targets:?}");
+    for ran in &targets {
+        assert_eq!(
+            (ran.form, ran.mechanism.medium),
+            (ContainmentForm::TexelBuffer, Medium::TexelBuffer),
+            "{ran:?}"
+        );
+        assert_eq!((ran.escaped, ran.past_end), (Some(0), Some(0)), "{ran:?}");
+    }
+}
+
 /// A texture buffer an argument buffer holds reads as a 2D texture it holds does, through the
 /// runtime: `rlm_runtime_limits`'s `rlm_member_texture_buffer` reads texel `t` of the texture
 /// buffer at field 0 of buffer 0 into `out[t]`, and `rlm_member_texture` texel `(t, 0)` of the 2D

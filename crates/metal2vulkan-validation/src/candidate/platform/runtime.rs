@@ -33,12 +33,13 @@
 //! same operations does.
 //!
 //! An out-of-bounds case's facts are the modules' the state may dispatch, read before the state is
-//! made (`runtime_bounds`). Each guarded target (`out_of_bounds::guarded`: a buffer, or an argument
-//! buffer's) is a buffer at a 256-byte boundary of a Shared block of its own, between a front
-//! guard of the target's declared reach before it and a back guard of its reach after, each at
-//! least `guards::MIN_GUARD` bytes, filled with `GUARD_FILL` and read back through a buffer over
-//! the whole block once the dispatch has retired (`GuardCount::escaped`). The buffer is all the
-//! memory bound to the target, so it holds no byte past its end (`GuardCount::past_end` 0).
+//! made (`runtime_bounds`). Each guarded target (`out_of_bounds::guarded`: a buffer, an argument
+//! buffer's, or a texture buffer, whose texture is made over the buffer at offset 0) is a buffer
+//! at a 256-byte boundary of a Shared block of its own, between a front guard of the target's
+//! declared reach before it and a back guard of its reach after, each at least
+//! `guards::MIN_GUARD` bytes, filled with `GUARD_FILL` and read back through a buffer over the
+//! whole block once the dispatch has retired (`GuardCount::escaped`). The buffer is all the memory
+//! bound to the target, so it holds no byte past its end (`GuardCount::past_end` 0).
 
 use super::{runtime_bounds, runtime_textures};
 use crate::candidate::device_facts::{active_tools, ActiveTool, RECORDED_LAYERS};
@@ -493,6 +494,9 @@ fn run(
                 field_offset: field,
             };
             Some((resource, placed.escaped()?))
+        }))
+        .chain(bound.texel_guards.iter().filter_map(|(&binding, placed)| {
+            Some((OutOfBoundsResource::Texture { binding }, placed.escaped()?))
         }))
         .collect();
     let mut run = ran(

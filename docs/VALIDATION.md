@@ -491,9 +491,9 @@ cargo run -p metal2vulkan-validation --release --bin corpus-vulkan -- \
   the address the pointer holds, which nothing checks (the runtime's README states it), so such a
   case is refused as `not_supported{uncontained:unchecked loaded_pointer}`, and an argument
   buffer's texture array is the descriptor arrays its resource ids' masked indices read
-  (`resource-id:shader`), a read past it a texel of a bound texture or zero. Each buffer target sits
-  between guards of its declared reach in a Shared block of its own, read back after the
-  dispatch. A multisampled texture, which neither Metal nor the runtime uploads, is Private and
+  (`resource-id:shader`), a read past it a texel of a bound texture or zero. Each buffer target,
+  and the buffer a texture-buffer target is made over, sits between guards of its declared reach
+  in a Shared block of its own, read back after the dispatch. A multisampled texture, which neither Metal nor the runtime uploads, is Private and
   filled by a draw per slice of the owned `sample_fill` pair, its fragment run once per sample
   writing that sample's texel from a buffer, a color one through an unsigned-integer view of its
   texel size so its bits cross unconverted, a depth one under an always-passing depth test that

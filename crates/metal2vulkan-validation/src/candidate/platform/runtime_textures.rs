@@ -9,9 +9,10 @@
 //! level's slices written from the case's bytes before the work (`replaceRegion:`, level 0
 //! first), but for a texture buffer, a texture over a Shared buffer of the case's bytes
 //! (`newTextureWithDescriptor:offset:bytesPerRow:` at offset 0, one row of every byte, as the
-//! oracle makes it), and a 32-bit float depth's, which the run renders (`runtime_depth`), with the
-//! texture made for rendering too, and a multisampled texture's, Private as Metal keeps one, which
-//! the run renders sample by sample (`runtime_multisample`), made for rendering and for views of
+//! oracle makes it), that buffer between guards where the texture buffer is a guarded
+//! out-of-bounds target (`super::runtime::Placed::within`), and a 32-bit float depth's, which the
+//! run renders (`runtime_depth`), with the texture made for rendering too, and a multisampled
+//! texture's, Private as Metal keeps one, which the run renders sample by sample (`runtime_multisample`), made for rendering and for views of
 //! another pixel format too. Each sampler is the oracle's descriptor of it (`engine::resources::sampler_descriptor`,
 //! `argument_sampler_descriptor`), at an index of the run's sampler grant counted down from its
 //! top, so it never meets the constexpr samplers the pipeline numbers up from the bottom. A
@@ -23,7 +24,9 @@ use super::runtime::Placed;
 use super::runtime_depth;
 use super::runtime_multisample;
 use crate::candidate::engine::argument_buffers::FieldKey;
+use crate::candidate::engine::guards::{self, GuardReach};
 use crate::candidate::engine::{resources, ComputeCase, RuntimeKernel};
+use crate::case::out_of_bounds::OutOfBoundsTarget;
 use crate::case::{ArgumentBufferSamplerResource, SamplerResource, TextureFormat, TextureType};
 use crate::check::admission::ExecutorError;
 use crate::executor_contract::multisample::{sample_read, SampleRead};
@@ -41,6 +44,10 @@ pub(super) struct Bound {
     pub(super) samplers: BTreeMap<u32, rt::SamplerState>,
     pub(super) members: BTreeMap<FieldKey, rt::Texture>,
     member_samplers: BTreeMap<FieldKey, rt::SamplerState>,
+    /// The buffer each bound texture buffer that is a guarded out-of-bounds target lies in,
+    /// between its guards, by the Metal index it binds at: what the run reads its guards back
+    /// from (`Placed::escaped`).
+    pub(super) texel_guards: BTreeMap<u32, Placed>,
     _grant: Option<rt::IndexGrant>,
 }
 
@@ -60,7 +67,8 @@ impl Bound {
 }
 
 /// What one function of a run binds of textures and samplers, bound and in argument buffers,
-/// with the usage it declares of each texture.
+/// with the usage it declares of each texture, and the out-of-bounds targets whose texture buffers
+/// lie between guards.
 pub(super) struct Wanted<'a> {
     pub(super) textures: &'a BTreeMap<u32, LiteralTexture>,
     pub(super) samplers: &'a BTreeMap<u32, SamplerResource>,
@@ -68,6 +76,7 @@ pub(super) struct Wanted<'a> {
     pub(super) member_samplers: &'a BTreeMap<FieldKey, ArgumentBufferSamplerResource>,
     pub(super) texture_usages: &'a BTreeMap<u32, TextureUsage>,
     pub(super) member_usages: &'a BTreeMap<FieldKey, TextureUsage>,
+    pub(super) out_of_bounds: &'a [OutOfBoundsTarget],
 }
 
 impl<'a> Wanted<'a> {
@@ -80,6 +89,7 @@ impl<'a> Wanted<'a> {
             member_samplers: &case.argument_buffer_samplers,
             texture_usages: kernel.texture_usages,
             member_usages: kernel.member_usages,
+            out_of_bounds: &case.out_of_bounds,
         }
     }
 }
@@ -165,6 +175,7 @@ pub(super) fn make(
     let (grant, mut at) = texture_indices(device, indices, count, &error)?;
     let mut fills = Fills::default();
     let mut textures = BTreeMap::new();
+    let mut texel_guards = BTreeMap::new();
     for (&binding, texture) in wanted.textures.iter() {
         let index = next_index(&mut at)?;
         let usage = wanted
@@ -174,10 +185,20 @@ pub(super) fn make(
             .ok_or_else(|| {
                 ExecutorError::Failed(format!("texture {binding} has no declared usage"))
             })?;
-        textures.insert(
-            binding,
-            made_texture(device, texture, usage, index, &mut at, &error, &mut fills)?,
-        );
+        let reach = guards::texel_guard_reach(wanted.out_of_bounds, binding);
+        let (made, guarded) = made_texture(
+            device,
+            texture,
+            usage,
+            (index, reach),
+            &mut at,
+            &error,
+            &mut fills,
+        )?;
+        textures.insert(binding, made);
+        if let Some(placed) = guarded {
+            texel_guards.insert(binding, placed);
+        }
     }
     let mut members = BTreeMap::new();
     for (&key, texture) in wanted.members.iter() {
@@ -188,7 +209,15 @@ pub(super) fn make(
                 key.0, key.1
             ))
         })?;
-        let made = made_texture(device, texture, usage, index, &mut at, &error, &mut fills)?;
+        let (made, _) = made_texture(
+            device,
+            texture,
+            usage,
+            (index, None),
+            &mut at,
+            &error,
+            &mut fills,
+        )?;
         members.insert(key, made);
     }
     if !fills.depths.is_empty() {
@@ -215,6 +244,7 @@ pub(super) fn make(
         samplers,
         members,
         member_samplers,
+        texel_guards,
         _grant: grant,
     })
 }
@@ -234,18 +264,19 @@ fn next_index(at: &mut std::ops::Range<u32>) -> Result<u32, ExecutorError> {
 }
 
 /// `texture` made with `usage` at `index`, every level's slices written from its bytes; a texture
-/// buffer over a buffer of its bytes, which the texture holds; a 32-bit float depth's and a
+/// buffer over a buffer of its bytes, which the texture holds, between guards of `reach` where it
+/// is a guarded out-of-bounds target, that buffer returned beside it; a 32-bit float depth's and a
 /// multisampled texture's are pushed to `fills` instead, which the run renders, a multisampled
 /// color one through its view at the next of `views`.
 fn made_texture(
     device: &rt::Device,
     texture: &LiteralTexture,
     usage: rt::TextureUsage,
-    index: u32,
+    (index, reach): (u32, Option<GuardReach>),
     views: &mut std::ops::Range<u32>,
     error: &impl Fn(&str, rt::Error) -> ExecutorError,
     fills: &mut Fills,
-) -> Result<rt::Texture, ExecutorError> {
+) -> Result<(rt::Texture, Option<Placed>), ExecutorError> {
     let what = format!("texture {}", texture.binding);
     let layout = texture.layout().map_err(ExecutorError::Failed)?;
     let mut descriptor = rt::TextureDescriptor::new(
@@ -275,12 +306,13 @@ fn made_texture(
         false => rt::StorageMode::Shared,
     };
     if texture.texture_type == TextureType::Buffer {
-        let placed = Placed::new(device, &what, &texture.bytes)?;
+        let placed = Placed::within(device, &what, &texture.bytes, reach)?;
         let row = texture.bytes.len() as u64;
-        return placed
+        let made = placed
             .buffer
             .new_texture(&descriptor, Some(index), 0, row)
-            .map_err(|e| error(&what, e));
+            .map_err(|e| error(&what, e))?;
+        return Ok((made, reach.map(|_| placed)));
     }
     let made = device
         .new_texture(&descriptor, Some(index))
@@ -314,7 +346,7 @@ fn made_texture(
                 texels: texels.to_vec(),
             });
         }
-        return Ok(made);
+        return Ok((made, None));
     }
     for level in 0..texture.mip_levels {
         let (dimensions, bytes) = texture.level(level).map_err(ExecutorError::Failed)?;
@@ -362,7 +394,7 @@ fn made_texture(
             .map_err(|e| error(&format!("{what} level {level}"), e))?;
         }
     }
-    Ok(made)
+    Ok((made, None))
 }
 
 /// The packing of one slice of a region of `size` texels of a texture, as the case's literal and
