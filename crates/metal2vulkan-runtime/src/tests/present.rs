@@ -975,18 +975,29 @@ mod on_device {
         });
     }
 
-    /// A command buffer that presents is never held for room (`WorkState::hold`), and the submit
-    /// thread does not come back to it for ever: behind a cut command buffer of its queue whose
-    /// later pieces wait for room, one that only presents the drawable retires after the pieces
-    /// ("behind"); and a cut command buffer that presents, its first piece waiting for the room
-    /// another queue's pieces hold, goes as the room comes ("cut"). Behind the busy gate the
-    /// window is shown open first: the head of the pieces holding the room scheduled with its
-    /// first, two of its four submitted 50 ms on. The presenting command buffer's commit and both
-    /// completions are waited for on another thread within `BOUND` each; past it the test ends
-    /// its process, as a submit thread that spins holding the work lock lets no handle drop. The
-    /// presents name no semaphore.
+    /// Behind a cut command buffer of its queue whose later pieces wait for room, a command
+    /// buffer that only presents the drawable is never held for room (`WorkState::hold`): it
+    /// retires after the pieces, as the room comes (`presenting_by_room`).
     #[test]
     fn every_device_retires_a_presenting_command_buffer_behind_pieces_waiting_for_room() {
+        presenting_by_room("behind");
+    }
+
+    /// A cut command buffer that presents, its first piece waiting for the room another queue's
+    /// pieces hold, is never held for room (`WorkState::hold`): it goes as the room comes
+    /// (`presenting_by_room`).
+    #[test]
+    fn every_device_sends_a_cut_presenting_command_buffer_as_the_room_comes() {
+        presenting_by_room("cut");
+    }
+
+    /// The two tests above, by `form`, "behind" or "cut", each in its own process. Behind the
+    /// busy gate the window is shown open first: the head of the pieces holding the room
+    /// scheduled with its first, two of its four submitted 50 ms on. The presenting command
+    /// buffer's commit and both completions are waited for on another thread within `BOUND`
+    /// each; past it the test ends its process, as a submit thread that spins holding the work
+    /// lock lets no handle drop. The present names no semaphore.
+    fn presenting_by_room(form: &'static str) {
         use crate::tests::command::on_device::{word, Busy};
         use crate::tests::compute::on_device::step;
         use crate::{CommandQueue, DispatchType};
@@ -995,7 +1006,7 @@ mod on_device {
         /// A kernel's rate of 3 ms a threadgroup, in picoseconds, the test's own input: each
         /// dispatch is a piece, and the device's room holds two (`tests::pieces`).
         const RATE: u64 = 3_000_000_000;
-        each_device("present_hold", |name, _, device| {
+        each_device(&format!("present_hold_{form}"), |name, _, device| {
             (device.grant_indices(IndexClass::Texture, 4096, 2)).expect("a grant");
             let state = step(&device);
             let mut arena = Arena::new(&device);
@@ -1026,92 +1037,88 @@ mod on_device {
                 let sent = device.core().work.submitted_by(of.queue());
                 sent.into_iter().filter(|&own| own).count()
             };
-            for form in ["behind", "cut"] {
-                // SAFETY: the stand-in is the test's, in the present layout (or undefined before
-                // the first form), and nothing reads it.
-                unsafe { drawable.drawable_acquired() }
-                    .unwrap_or_else(|error| panic!("{name}: an acquire: {error}"));
-                let queue = device.new_command_queue(4).expect("a queue");
-                let other = device.new_command_queue(4).expect("a queue");
-                let (x, y) = (arena.buffer(), arena.buffer());
-                let busy = Busy::new(&device);
-                let retired: Arc<Mutex<Vec<&'static str>>> = Arc::default();
-                let log = |command_buffer: &CommandBuffer, label: &'static str| {
-                    let retired = Arc::clone(&retired);
-                    (command_buffer.add_completed_handler(move |_| {
-                        retired.lock().expect("the log").push(label);
-                    }))
-                    .expect("a completed handler");
-                };
-                let room = pieces(if form == "behind" { &queue } else { &other }, &x);
-                log(&room, "pieces");
-                room.commit().expect("a commit");
-                within(name, || own(&room) == 2);
-                let presenting = match form {
-                    "behind" => queue.command_buffer().expect("a command buffer"),
-                    _ => pieces(&queue, &y),
-                };
-                log(&presenting, form);
-                // SAFETY: no semaphore is named, and the drawable is acquired.
-                unsafe { presenting.present_drawable(&drawable, vk::Semaphore::null()) }
-                    .unwrap_or_else(|error| panic!("{name}: {form}: a present: {error}"));
-                // The window: the room's head scheduled with its first piece (held,
-                // `WorkState::step`), two of its four pieces on the device and, nothing
-                // completing behind the gate, the third waiting for room a while on.
-                thread::sleep(Duration::from_millis(50));
-                let window = (room.status(), own(&room));
-                println!(
-                    "{name}: {form}: committed with the room's head at {window:?} of 4 pieces"
-                );
-                assert_eq!(
-                    window,
-                    (CommandBufferStatus::Scheduled, 2),
-                    "{name}: {form}: the room's head scheduled, its third piece waiting for room"
-                );
-                let (tell, told) = mpsc::channel();
-                let watcher = {
-                    let (room, presenting) = (room.clone(), presenting.clone());
-                    thread::spawn(move || {
-                        let committed = presenting.commit();
-                        let _ = tell.send(format!("committed {committed:?}"));
-                        let done = [&room, &presenting].map(|cb| cb.wait_until_completed());
-                        let _ = tell.send(format!("completed {done:?}"));
-                    })
-                };
-                for wait in ["its commit", "both completions"] {
-                    match told.recv_timeout(BOUND) {
-                        Ok(line) => println!("{name}: {form}: {line}"),
-                        Err(_) => {
-                            eprintln!(
-                                "{name}: {form}: {wait} not within {BOUND:?}: the submit thread \
+            // SAFETY: the stand-in is the test's, in the undefined layout, and nothing reads
+            // it.
+            unsafe { drawable.drawable_acquired() }
+                .unwrap_or_else(|error| panic!("{name}: an acquire: {error}"));
+            let queue = device.new_command_queue(4).expect("a queue");
+            let other = device.new_command_queue(4).expect("a queue");
+            let (x, y) = (arena.buffer(), arena.buffer());
+            let busy = Busy::new(&device);
+            let retired: Arc<Mutex<Vec<&'static str>>> = Arc::default();
+            let log = |command_buffer: &CommandBuffer, label: &'static str| {
+                let retired = Arc::clone(&retired);
+                (command_buffer.add_completed_handler(move |_| {
+                    retired.lock().expect("the log").push(label);
+                }))
+                .expect("a completed handler");
+            };
+            let room = pieces(if form == "behind" { &queue } else { &other }, &x);
+            log(&room, "pieces");
+            room.commit().expect("a commit");
+            within(name, || own(&room) == 2);
+            let presenting = match form {
+                "behind" => queue.command_buffer().expect("a command buffer"),
+                _ => pieces(&queue, &y),
+            };
+            log(&presenting, form);
+            // SAFETY: no semaphore is named, and the drawable is acquired.
+            unsafe { presenting.present_drawable(&drawable, vk::Semaphore::null()) }
+                .unwrap_or_else(|error| panic!("{name}: {form}: a present: {error}"));
+            // The window: the room's head scheduled with its first piece (held,
+            // `WorkState::step`), two of its four pieces on the device and, nothing
+            // completing behind the gate, the third waiting for room a while on.
+            thread::sleep(Duration::from_millis(50));
+            let window = (room.status(), own(&room));
+            println!("{name}: {form}: committed with the room's head at {window:?} of 4 pieces");
+            assert_eq!(
+                window,
+                (CommandBufferStatus::Scheduled, 2),
+                "{name}: {form}: the room's head scheduled, its third piece waiting for room"
+            );
+            let (tell, told) = mpsc::channel();
+            let watcher = {
+                let (room, presenting) = (room.clone(), presenting.clone());
+                thread::spawn(move || {
+                    let committed = presenting.commit();
+                    let _ = tell.send(format!("committed {committed:?}"));
+                    let done = [&room, &presenting].map(|cb| cb.wait_until_completed());
+                    let _ = tell.send(format!("completed {done:?}"));
+                })
+            };
+            for wait in ["its commit", "both completions"] {
+                match told.recv_timeout(BOUND) {
+                    Ok(line) => println!("{name}: {form}: {line}"),
+                    Err(_) => {
+                        eprintln!(
+                            "{name}: {form}: {wait} not within {BOUND:?}: the submit thread \
                                  holds the work lock behind a head waiting for room"
-                            );
-                            std::process::exit(101);
-                        }
-                    }
-                    if wait == "its commit" {
-                        busy.open();
+                        );
+                        std::process::exit(101);
                     }
                 }
-                watcher.join().expect("the watcher");
-                let errors = (room.error(), presenting.error());
-                assert_eq!(errors, (None, None), "{name}: {form}: both completed");
-                within(name, || retired.lock().expect("the log").len() == 2);
-                let steps = (word(&x), (form == "cut").then(|| word(&y)));
-                assert_eq!(
-                    steps,
-                    (15, (form == "cut").then_some(15)),
-                    "{name}: {form}: every step ran"
-                );
-                if form == "behind" {
-                    assert_eq!(
-                        *retired.lock().expect("the log"),
-                        ["pieces", form],
-                        "{name}: {form}: it retires behind the pieces of its queue"
-                    );
+                if wait == "its commit" {
+                    busy.open();
                 }
-                drop(busy);
             }
+            watcher.join().expect("the watcher");
+            let errors = (room.error(), presenting.error());
+            assert_eq!(errors, (None, None), "{name}: {form}: both completed");
+            within(name, || retired.lock().expect("the log").len() == 2);
+            let steps = (word(&x), (form == "cut").then(|| word(&y)));
+            assert_eq!(
+                steps,
+                (15, (form == "cut").then_some(15)),
+                "{name}: {form}: every step ran"
+            );
+            if form == "behind" {
+                assert_eq!(
+                    *retired.lock().expect("the log"),
+                    ["pieces", form],
+                    "{name}: {form}: it retires behind the pieces of its queue"
+                );
+            }
+            drop(busy);
             drop(drawable);
             // SAFETY: every submission that used the image has completed, and nothing uses it
             // again.
