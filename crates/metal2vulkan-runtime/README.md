@@ -3065,6 +3065,12 @@ cache is answered compile-required on both.
   cache directory. For the observing kernel the device tests run, a grid template over
   threadgroup memory, one lowering took 0.61 to 0.63 ms on an RX 7900 XTX in a release build; a
   larger kernel's lowering takes longer.
+- An observing kernel's whole grids, threadgroup dispatches and indirect dispatches run its
+  partial-threadgroups variant, the module its ragged grids run, so that one `VkPipeline` a size
+  runs them all: a whole grid there is measured 3.5% slower a dispatch on an RX 7900 XTX (4.22
+  against 4.08 µs over the 34,904 whole grids of one recorded stream's 12 bounded observers, job
+  m3-max-67284) and 2.7% faster on an Iris Xe (m3-max-67285), and is not timed per dispatch on
+  NVIDIA; the consumer reopens it.
 - On Intel's Windows driver (101.2145) for the UHD 630, the driver's compile of a tiling kernel's
   `VkPipeline`, made with the state, took medians of 6,680 to 6,853 µs for the harness's
   `create_state` kernel, in three processes of 40 compiles each with no driver cache hit. The
