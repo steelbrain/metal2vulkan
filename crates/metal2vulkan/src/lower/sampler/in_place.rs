@@ -6,7 +6,7 @@
 //! code at its place, the four nearest chroma pairs (column `⌊x / 2⌋` and the one after it for an
 //! odd `x`, before it for an even one, each clamped to the plane, rows alike) weighted 9/3/3/1 and
 //! rounded to a code, `C = (S + 8) >> 4`, each code the byte or the high 10 bits of its 16-bit
-//! word; then the conversion of the surface's range and matrix (`bind::ycbcr_read`): every
+//! word; then the conversion of the surface's range and matrix (`bind::ycbcr_convert`): every
 //! channel `v / 2048` exactly, alpha 1. An element of the texel buffer holds two luma codes or one
 //! chroma pair, so a tap fetches five elements. The texture's size, its planes' first elements
 //! and rows, and its conversion are the slot's push field (`PushField::YCbCrInPlace`), read once

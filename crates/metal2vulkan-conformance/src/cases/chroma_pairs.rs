@@ -6,8 +6,8 @@
 //! kernel's `read()` — is a public call. So nothing here is carried: record mode runs both families
 //! on Metal and the recordings hold Metal's own answers, taken on this M3 Max.
 //!
-//! The model itself **was** measured: `bind/chroma_decode`
-//! records a probe on an Apple M3 Max under macOS 27.0.1 that found every `float` and `half`
+//! The model itself **was** measured: a probe on an Apple M3 Max under macOS 27.0.1 found every
+//! `float` and `half`
 //! `read()`, nearest, linear and bicubic sample, and gather of both formats bit for bit the one of
 //! an `RGBA8Unorm` texture holding the decoded codes, over 16 x 4 texels of random bytes. So
 //! Metal's `read()` of these formats is a defined operation, not a guess, and the model's rule

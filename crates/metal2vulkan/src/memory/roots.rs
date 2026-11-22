@@ -201,64 +201,6 @@ pub fn entry_field(
     )
 }
 
-/// The resident set a replay preprocess's resident root table at `table` names
-/// (`bind::ReplayPreprocess::resident`, `bind::DrawReplayPreprocess::resident`): its first root
-/// `R0` and count `N`, from the sink entry, which a consumer points anywhere, the set's address
-/// (`table + 32·R0`, modulo 2⁶⁴), and the address of its entries' unpadded extents, a `u64`
-/// each, right after the set, then one zero (the binder lays its own set out so).
-#[derive(Clone, Copy)]
-pub struct ResidentView {
-    pub first: Value,
-    pub count: Value,
-    pub set: Value,
-    pub extents: Value,
-}
-
-/// [`ResidentView`] of the resident root table at `table`.
-pub fn resident_view(fb: &mut FunctionBuilder<'_>, table: Value) -> BResult<ResidentView> {
-    let e = entries(fb, table)?;
-    let sink = k64(fb, SINK_ROOT)?;
-    let first = field_of(fb, e, sink, RESIDENT_FIRST)?;
-    let count = field_of(fb, e, sink, RESIDENT_COUNT)?;
-    let stride = k64(fb, ENTRY_BYTES)?;
-    let skip = fb.binary(BinOp::IMul, first, stride)?;
-    let set = fb.binary(BinOp::IAdd, table, skip)?;
-    let bytes = fb.binary(BinOp::IMul, count, stride)?;
-    let extents = fb.binary(BinOp::IAdd, set, bytes)?;
-    Ok(ResidentView {
-        first,
-        count,
-        set,
-        extents,
-    })
-}
-
-/// The unpadded extent of root `root` of `view`'s set, which a search of it found where `found`
-/// holds; where it does not, the first entry's (or the zero after an empty set's), a read that
-/// stays in the set's bytes and that the caller's test of `found` discards.
-pub fn extent_of(
-    fb: &mut FunctionBuilder<'_>,
-    view: &ResidentView,
-    root: Value,
-    found: Value,
-) -> BResult<Value> {
-    let index = fb.binary(BinOp::ISub, root, view.first)?;
-    let zero = k64(fb, 0)?;
-    let index = fb.select(found, index, zero)?;
-    let eight = k64(fb, 8)?;
-    let rel = fb.binary(BinOp::IMul, index, eight)?;
-    let addr = fb.binary(BinOp::IAdd, view.extents, rel)?;
-    let u64_ = u64_ty(fb)?;
-    let p = fb.device_place(addr, u64_)?;
-    fb.load(
-        p,
-        MemAccess {
-            aligned: Some(8),
-            ..MemAccess::default()
-        },
-    )
-}
-
 /// Define the module's resident-set search: a function `fn(table: u64, guest: u64) -> wide`
 /// (`wide` a `u64vec4`), the wide pointer `(root, at, host, size)` of `guest` through the root
 /// table at `table` ([`resolve_wide`]). Every search of the module calls it, so its words are paid
@@ -322,20 +264,6 @@ pub fn resolve_wide(
     let host = fb.select(s.hit, host, zero)?;
     let size = fb.select(s.hit, s.size, zero)?;
     Ok([s.root, s.off, host, size])
-}
-
-/// The wide pointer `(root, offset)` (two `u64`s) of guest address `guest` (a `u64`) through the
-/// resident set of the root table at `table` (the module docs' search). The search walks the
-/// set's entries from its first, `R0` entries from the table; an empty set starts at the null
-/// root, whose entry the final test reads (no step runs) and whose fields `(guest 0, size 0)`
-/// give the miss `(0, i)` whether or not that test hits.
-pub fn resolve(
-    fb: &mut FunctionBuilder<'_>,
-    table: Value,
-    guest: Value,
-) -> BResult<(Value, Value)> {
-    let s = search(fb, table, guest)?;
-    Ok((s.root, s.off))
 }
 
 /// A finished search ([`search`]).

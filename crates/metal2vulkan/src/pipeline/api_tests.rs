@@ -861,7 +861,13 @@ mod bind_serde_round_trips {
             }],
             used_in_token_order: true,
             resident_apart: true,
-            vertex_amplification: VertexAmplification::new(2, vec![ViewMapping::new(0, 3)]),
+            vertex_amplification: VertexAmplification::new(
+                2,
+                vec![ViewMapping {
+                    viewport_array_index_offset: 0,
+                    render_target_array_index_offset: 3,
+                }],
+            ),
             imageblock_size: ImageblockSize::new(16, 8),
             render_target_array_length: 6,
             stage_in_region: Some(StageInRegion::new([1, 2, 3], [4, 5, 6])),
@@ -889,7 +895,11 @@ mod bind_serde_round_trips {
             },
             heap_placement: HeapPlacement::ResourceId,
             viewport_count: 3,
-            function_tables: vec![crate::bind::ArgumentFunctionTable::new(0x7ab1_0001, 9)],
+            function_tables: vec![crate::bind::ArgumentFunctionTable {
+                resource_id: 0x7ab1_0001,
+                size: 9,
+                address: 0,
+            }],
             tile_threadgroup: tile_threadgroup(),
             zeroed_colors: BTreeMap::from([(1, metal::PixelFormat::R32Uint)]),
             dropped_colors: BTreeSet::from([4]),
@@ -900,7 +910,11 @@ mod bind_serde_round_trips {
                 crate::pipeline::BandPrimitive::Triangles,
                 [8.0, -8.0, 1.75, -1.0],
             )),
-            resident_ranges: vec![crate::bind::ResidentRange::new(0x9_0000, 0x3_0000, 100)],
+            resident_ranges: vec![crate::bind::ResidentRange {
+                host: 0x9_0000,
+                guest: 0x3_0000,
+                length: 100,
+            }],
             blend_color: [0.25, -0.5, 1.5, 0.75],
             alpha_test_reference: Some(0.375),
             primitive_type: Some(metal::PrimitiveType::TriangleStrip),
@@ -953,7 +967,11 @@ mod bind_serde_round_trips {
                 3,
             )]),
             function_tables: crate::bind::FunctionTablesShape::of(&[
-                crate::bind::ArgumentFunctionTable::new(3, 0),
+                crate::bind::ArgumentFunctionTable {
+                    resource_id: 3,
+                    size: 0,
+                    address: 0,
+                },
             ]),
             tile_threadgroup: tile_threadgroup(),
             zeroed_colors: BTreeMap::from([(1, metal::PixelFormat::R32Uint)]),
@@ -972,11 +990,14 @@ mod bind_serde_round_trips {
 
     /// A tile threadgroup memory of 96 bytes with two arguments.
     fn tile_threadgroup() -> crate::bind::TileThreadgroupMemory {
-        let mut memory = crate::bind::TileThreadgroupMemory::new(96);
+        let mut memory = crate::bind::TileThreadgroupMemory {
+            length: 96,
+            arguments: BTreeMap::new(),
+        };
         for (index, length, offset) in [(0, 32, 0), (3, 64, 32)] {
             memory.arguments.insert(
                 index,
-                crate::bind::TileThreadgroupArgument::new(length, offset),
+                crate::bind::TileThreadgroupArgument { length, offset },
             );
         }
         memory
@@ -1106,11 +1127,17 @@ mod bind_serde_round_trips {
             }],
         });
         round_trip(&Dispatch::ThreadgroupsIndirect {
-            indirect: IndirectRef::new(2, 0),
+            indirect: IndirectRef {
+                token: 2,
+                offset: 0,
+            },
             threads_per_group: [32, 1, 1],
         });
         round_trip(&DrawCall::Indirect {
-            indirect: IndirectRef::new(4, 0),
+            indirect: IndirectRef {
+                token: 4,
+                offset: 0,
+            },
             indexed: Some((vk::IndexType::UINT16, IndexBufferRef::new(5, 256), 64)),
         });
         round_trip(&DrawCall::Patches {
@@ -1125,7 +1152,10 @@ mod bind_serde_round_trips {
         round_trip(&DrawCall::PatchesIndirect {
             control_points: 3,
             patch_index: Some((IndexBufferRef::new(6, 64), 8)),
-            indirect: IndirectRef::new(4, 16),
+            indirect: IndirectRef {
+                token: 4,
+                offset: 16,
+            },
             control_point_index: None,
         });
         round_trip(&WriteSource::TessellationFactors);

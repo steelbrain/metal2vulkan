@@ -239,7 +239,7 @@ fn accesses(m: &TypedModule) -> Accesses {
 
 /// Whether the module declares the Vulkan memory model.
 fn vulkan_model(m: &TypedModule) -> bool {
-    m.requirements()
+    crate::spirv::testing::requirements(m)
         .spirv_capabilities
         .iter()
         .any(|c| format!("{c:?}") == "VulkanMemoryModel")

@@ -270,8 +270,8 @@ fn open_answer<T: Codec>(
 
 impl crate::reflection::LinkedUseAnswers {
     /// The versioned, self-checking encoding of the answers of the render descriptor of `key`
-    /// ([`Device::render_descriptor_key`]) on `device`: the frame of an artifact, its key the
-    /// descriptor's and its profile `device`'s.
+    /// ([`Device::queried_render_descriptor_key`]) on `device`: the frame of an artifact, its key
+    /// the descriptor's and its profile `device`'s.
     pub fn to_bytes(&self, key: &PipelineKey, device: &Device) -> Vec<u8> {
         seal_answer(Kind::LinkedUseAnswers, self, key, device)
     }
@@ -290,7 +290,7 @@ impl crate::reflection::LinkedUseAnswers {
 
 impl crate::reflection::RenderPipelineReflection {
     /// The versioned, self-checking encoding of the reflection of the render descriptor of `key`
-    /// ([`Device::render_descriptor_key`]) on `device`, as
+    /// ([`Device::queried_render_descriptor_key`]) on `device`, as
     /// [`LinkedUseAnswers::to_bytes`](crate::reflection::LinkedUseAnswers::to_bytes) frames its
     /// answers.
     pub fn to_bytes(&self, key: &PipelineKey, device: &Device) -> Vec<u8> {

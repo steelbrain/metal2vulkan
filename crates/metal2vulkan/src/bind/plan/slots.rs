@@ -111,8 +111,8 @@ impl BoundKind {
 /// `MissingDeviceAddress` refusal for a device-address slot bound without an address: a buffer
 /// without one, or inline bytes, but in a pipeline compiled for a replay's bindings (`replayed`,
 /// `RuntimeFact::ReplayBindings`), which reads every buffer through the slot table the replay's
-/// preprocess writes, inline bytes the encoder bound at the consumer's upload of them
-/// (`DrawReplayPreprocess::inherited_bytes`). The base alignment is
+/// preprocess writes, inline bytes the encoder bound at the consumer's upload of them. The base
+/// alignment is
 /// `max(minStorageBufferOffsetAlignment, 16)` (`views::base_alignment`): a descriptor byte is then
 /// congruent to its Metal address modulo 16, which a `uvec4` view of the slot relies on.
 pub(crate) fn plan_buffer(
@@ -247,7 +247,7 @@ pub(crate) fn record_noted<'a>(
 /// The `SpecKey::HeapRawTextures` of `stage` for `shape`: of the heap members of `shape` that reach
 /// `stage` (`bind::heap`'s members: a texture the command makes resident, its render stages through
 /// `reach`, or binds at a texture slot of the stage), the bit `bind::heap::HELD` where one is a
-/// texture a heap holds by its raw texels alone (`bind::heap::heap_raw_form`), which the stage's
+/// texture a heap holds by its raw texels alone (`lower::texture::heap_raw_form`), which the stage's
 /// `float` read, sample or gather decodes by the device's arithmetic, and the bit
 /// `bind::heap::FILTERED` where one such is of a form whose sample the function filters (not a
 /// bfloat one). Both the notes' value and the stage's constant, whose `HELD` bit gates its raw arms

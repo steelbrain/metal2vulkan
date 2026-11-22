@@ -4,7 +4,7 @@
 //! (`pipeline::table` has the word layout), so the binder binds a table like any other buffer:
 //! `setVisibleFunctionTable:atBufferIndex:` is a [`BoundBuffer::Buffer`] at that index of the
 //! stage's table ([`StageTable::buffers`]), over a buffer the consumer owns for the
-//! `MTLVisibleFunctionTable` and fills with [`FunctionTableWords`]. The shader reads its words
+//! `MTLVisibleFunctionTable` and fills with the table's words. The shader reads its words
 //! through the buffer slot only, never through the guest address, so the bound buffer's
 //! `gpu_address` is not read for it. `setVisibleFunctionTable:nil` binds nothing: the slot gets
 //! the plan's zero-filled neutral, whose word 0 makes `is_null_visible_function_table` true.
@@ -15,103 +15,11 @@
 //! [`BoundBuffer::Buffer`]: crate::bind::BoundBuffer::Buffer
 //! [`StageTable::buffers`]: crate::bind::StageTable::buffers
 
-use crate::air::canon::function_table::{FIRST_ENTRY_WORD, PRESENT_WORD, SIZE_WORD};
+use crate::air::canon::function_table::FIRST_ENTRY_WORD;
+#[cfg(test)]
+use crate::air::canon::function_table::{PRESENT_WORD, SIZE_WORD};
+#[cfg(test)]
 use crate::pipeline::table::FunctionHandle;
-
-/// The words of one visible-function table's buffer: bound, its size, and its entries.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct FunctionTableWords {
-    words: Vec<u32>,
-}
-
-impl FunctionTableWords {
-    /// A bound table of `size` null entries (`newVisibleFunctionTableWithDescriptor:`).
-    pub fn new(size: u32) -> FunctionTableWords {
-        let len = FIRST_ENTRY_WORD as usize + size as usize;
-        let mut words = vec![FunctionHandle::NULL_WORD; len];
-        if let Some(w) = words.get_mut(PRESENT_WORD as usize) {
-            *w = 1;
-        }
-        if let Some(w) = words.get_mut(SIZE_WORD as usize) {
-            *w = size;
-        }
-        FunctionTableWords { words }
-    }
-
-    /// The table's size.
-    pub fn size(&self) -> u32 {
-        self.words.get(SIZE_WORD as usize).copied().unwrap_or(0)
-    }
-
-    /// Set entry `index` to `function`, or to null (`setFunction:atIndex:`). An index past the
-    /// table's size is refused (`false`, nothing written), as Metal's validation refuses it.
-    pub fn set(&mut self, index: u32, function: Option<FunctionHandle>) -> bool {
-        if index >= self.size() {
-            return false;
-        }
-        let at = FIRST_ENTRY_WORD as usize + index as usize;
-        match self.words.get_mut(at) {
-            Some(w) => {
-                *w = Self::entry_word(function);
-                true
-            }
-            None => false,
-        }
-    }
-
-    /// Set entry `index` to Metal's opaque triangle intersection function
-    /// (`setOpaqueTriangleIntersectionFunctionWithSignature:atIndex:` of an intersection function
-    /// table): [`FunctionHandle::RESERVED_WORD`], which no function handle has. An index past the
-    /// table's size is refused (`false`, nothing written).
-    pub fn set_opaque_triangle(&mut self, index: u32) -> bool {
-        if index >= self.size() {
-            return false;
-        }
-        let at = FIRST_ENTRY_WORD as usize + index as usize;
-        match self.words.get_mut(at) {
-            Some(w) => {
-                *w = FunctionHandle::RESERVED_WORD;
-                true
-            }
-            None => false,
-        }
-    }
-
-    /// The words, in buffer order.
-    pub fn words(&self) -> &[u32] {
-        &self.words
-    }
-
-    /// The buffer's bytes (little-endian words): what the consumer uploads.
-    pub fn to_bytes(&self) -> Vec<u8> {
-        self.words.iter().flat_map(|w| w.to_le_bytes()).collect()
-    }
-
-    /// The length in bytes of the buffer of a table of `size` entries.
-    pub fn byte_len(size: u32) -> u64 {
-        (u64::from(FIRST_ENTRY_WORD) + u64::from(size)) * 4
-    }
-
-    /// The words before the entries of a table of `size` entries: bound, then its size. A
-    /// consumer that keeps the words in its own memory writes these, then each entry's
-    /// [`entry_word`](Self::entry_word) at [`entry_offset`](Self::entry_offset).
-    pub fn header(size: u32) -> [u32; FIRST_ENTRY_WORD as usize] {
-        let mut words = [0; FIRST_ENTRY_WORD as usize];
-        words[PRESENT_WORD as usize] = 1;
-        words[SIZE_WORD as usize] = size;
-        words
-    }
-
-    /// The offset in bytes of entry `index` in a table's buffer.
-    pub fn entry_offset(index: u32) -> u64 {
-        Self::byte_len(index)
-    }
-
-    /// The word of an entry holding `function`, or of a null entry.
-    pub fn entry_word(function: Option<FunctionHandle>) -> u32 {
-        function.map_or(FunctionHandle::NULL_WORD, FunctionHandle::word)
-    }
-}
 
 /// The function-table snapshot: the words of a command's listed tables
 /// (`BindState::function_tables`) in one read-only storage buffer, which the consumer writes as the
@@ -119,8 +27,8 @@ impl FunctionTableWords {
 /// ([`WriteSource::FunctionTableSnapshot`](crate::bind::WriteSource::FunctionTableSnapshot)).
 ///
 /// Word 0 is the null table's record: a word count of 0. Listed table `i`'s record follows the
-/// records before it: its word count (its buffer's words, [`FunctionTableWords::byte_len`] of
-/// its size over 4), then those words. The stage's function-table directory gives each listed
+/// records before it: its word count (its buffer's words: the table's header words and one
+/// entry word for each of its size), then those words. The stage's function-table directory gives each listed
 /// nonzero id the offset of its record's first word, and the null id and every id the directory
 /// misses the null table's, 0: a read of word `w` of a table reads its record's word `1 + w`
 /// below the record's count, and 0 at or past it.
@@ -153,14 +61,16 @@ impl FunctionTableSnapshot {
     }
 
     /// The snapshot's length in bytes.
-    pub fn byte_len(&self) -> u64 {
+    #[cfg(test)]
+    pub(crate) fn byte_len(&self) -> u64 {
         u64::from(self.words) * 4
     }
 
     /// The snapshot's bytes (little-endian words), of the listed tables' buffers `tables` in the
     /// list's order, each as [`FunctionTableWords::to_bytes`] gives it. `None` when `tables` is
     /// not one buffer of its size's length for each listed table.
-    pub fn bytes<'a>(&self, tables: impl IntoIterator<Item = &'a [u8]>) -> Option<Vec<u8>> {
+    #[cfg(test)]
+    pub(crate) fn bytes<'a>(&self, tables: impl IntoIterator<Item = &'a [u8]>) -> Option<Vec<u8>> {
         let len = usize::try_from(self.byte_len()).ok()?;
         let mut out = Vec::with_capacity(len);
         out.extend(0u32.to_le_bytes());
@@ -179,6 +89,103 @@ impl FunctionTableSnapshot {
             Some(_) => None,
             None => Some(out),
         }
+    }
+}
+
+/// The words of one visible-function table's buffer: bound, its size, and its entries.
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct FunctionTableWords {
+    words: Vec<u32>,
+}
+
+#[cfg(test)]
+impl FunctionTableWords {
+    /// A bound table of `size` null entries (`newVisibleFunctionTableWithDescriptor:`).
+    pub(crate) fn new(size: u32) -> FunctionTableWords {
+        let len = FIRST_ENTRY_WORD as usize + size as usize;
+        let mut words = vec![FunctionHandle::NULL_WORD; len];
+        if let Some(w) = words.get_mut(PRESENT_WORD as usize) {
+            *w = 1;
+        }
+        if let Some(w) = words.get_mut(SIZE_WORD as usize) {
+            *w = size;
+        }
+        FunctionTableWords { words }
+    }
+
+    /// The table's size.
+    pub(crate) fn size(&self) -> u32 {
+        self.words.get(SIZE_WORD as usize).copied().unwrap_or(0)
+    }
+
+    /// Set entry `index` to `function`, or to null (`setFunction:atIndex:`). An index past the
+    /// table's size is refused (`false`, nothing written), as Metal's validation refuses it.
+    pub(crate) fn set(&mut self, index: u32, function: Option<FunctionHandle>) -> bool {
+        if index >= self.size() {
+            return false;
+        }
+        let at = FIRST_ENTRY_WORD as usize + index as usize;
+        match self.words.get_mut(at) {
+            Some(w) => {
+                *w = Self::entry_word(function);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Set entry `index` to Metal's opaque triangle intersection function
+    /// (`setOpaqueTriangleIntersectionFunctionWithSignature:atIndex:` of an intersection function
+    /// table): [`FunctionHandle::RESERVED_WORD`], which no function handle has. An index past the
+    /// table's size is refused (`false`, nothing written).
+    pub(crate) fn set_opaque_triangle(&mut self, index: u32) -> bool {
+        if index >= self.size() {
+            return false;
+        }
+        let at = FIRST_ENTRY_WORD as usize + index as usize;
+        match self.words.get_mut(at) {
+            Some(w) => {
+                *w = FunctionHandle::RESERVED_WORD;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The words, in buffer order.
+    pub(crate) fn words(&self) -> &[u32] {
+        &self.words
+    }
+
+    /// The buffer's bytes (little-endian words): what the consumer uploads.
+    pub(crate) fn to_bytes(&self) -> Vec<u8> {
+        self.words.iter().flat_map(|w| w.to_le_bytes()).collect()
+    }
+
+    /// The length in bytes of the buffer of a table of `size` entries.
+    pub(crate) fn byte_len(size: u32) -> u64 {
+        (u64::from(FIRST_ENTRY_WORD) + u64::from(size)) * 4
+    }
+
+    /// The words before the entries of a table of `size` entries: bound, then its size. A
+    /// consumer that keeps the words in its own memory writes these, then each entry's
+    /// [`entry_word`](Self::entry_word) at [`entry_offset`](Self::entry_offset).
+    pub(crate) fn header(size: u32) -> [u32; FIRST_ENTRY_WORD as usize] {
+        let mut words = [0; FIRST_ENTRY_WORD as usize];
+        words[PRESENT_WORD as usize] = 1;
+        words[SIZE_WORD as usize] = size;
+        words
+    }
+
+    /// The offset in bytes of entry `index` in a table's buffer.
+    pub(crate) fn entry_offset(index: u32) -> u64 {
+        Self::byte_len(index)
+    }
+
+    /// The word of an entry holding `function`, or of a null entry.
+    pub(crate) fn entry_word(function: Option<FunctionHandle>) -> u32 {
+        function.map_or(FunctionHandle::NULL_WORD, FunctionHandle::word)
     }
 }
 

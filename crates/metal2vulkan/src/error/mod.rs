@@ -1443,11 +1443,6 @@ pub enum BindError {
     /// A tile function's render area (`BindState::render_area`) has a width or height of 0: the
     /// encoder's render pass was never set, so the dispatch has no tile to run.
     InvalidRenderArea { width: u32, height: u32 },
-    /// The binder sets up no device replay of GPU-encoded compute commands for this execution,
-    /// variant set, or plan: `reason` says why. Nothing is recorded.
-    InvalidReplay {
-        reason: crate::bind::replay::ReplayRefusal,
-    },
     /// A patch draw's patch index buffer is bound at an offset that is not a multiple of 4, which
     /// Metal requires (a Metal probe on an M4: "patchIndexBufferOffset(2) must be a multiple of 4
     /// bytes").

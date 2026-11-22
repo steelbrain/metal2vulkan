@@ -28,7 +28,7 @@ fn has(r: &Requirements, caps: &[Capability], features: &[VkFeature]) {
 }
 
 fn checked(m: TypedModule) -> Requirements {
-    let r = m.requirements().clone();
+    let r = m.requirements.clone();
     assert_spirv_valid(m);
     r
 }
@@ -164,7 +164,7 @@ fn dynamic_offset_module(gather: bool) -> TypedModule {
 fn a_dynamic_sample_offset_needs_maintenance8() {
     let words = {
         let m = dynamic_offset_module(false);
-        let r = m.requirements().clone();
+        let r = m.requirements.clone();
         has(
             &r,
             &[Capability::ImageGatherExtended],

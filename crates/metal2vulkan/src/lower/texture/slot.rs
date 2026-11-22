@@ -1385,7 +1385,7 @@ fn parts_reads(cx: &SelectCx<'_>, s: &SlotPlan) -> bool {
 }
 
 /// Whether a slot of `shape` can have a tile map: a single-sample 2D, 2D array, or 3D color texture
-/// (`bind::SparseTileMap`), the sparse types the case model measures.
+/// (`pipeline::tile_map`), the sparse types the case model measures.
 fn tiled_shape(shape: ImageShape) -> bool {
     !shape.ms
         && !shape.depth

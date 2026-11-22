@@ -17,7 +17,6 @@
 
 use std::collections::BTreeMap;
 
-use crate::bind::TexelRows;
 use crate::device::profile::DeviceProfile;
 use crate::device::DevicePolicy;
 use crate::lower::select::{LowerInputs, Plan};
@@ -41,8 +40,12 @@ const TEXTURE: SlotRef = SlotRef {
 /// The texture's width and height, its rows' texels apart in the view, and the view's texel
 /// that is its first: rows of 5 texels 7 apart, after 3 texels of the view.
 const SIZE: [u32; 2] = [5, 4];
-const ROW: u64 = 7;
-const FIRST: u64 = 3;
+const ROW: u32 = 7;
+const FIRST: u32 = 3;
+/// The rows' push words (`TexelRows::words`): the size, the row and the first texel.
+const ROWS: [u32; 4] = [SIZE[0], SIZE[1], ROW, FIRST];
+/// The texels the view holds, from its first through the texture's last.
+const ELEMENTS: u32 = FIRST + ROW * (SIZE[1] - 1) + SIZE[0];
 
 /// The grid: past the texture's width and height, so its edges are crossed.
 const GRID: [u32; 2] = [8, 6];
@@ -71,10 +74,6 @@ fn rows_inputs() -> LowerInputs {
     inputs
 }
 
-fn rows() -> TexelRows {
-    TexelRows::new(SIZE, ROW, FIRST).expect("rows")
-}
-
 /// The view's texel `i` before any write: a value of its own in each lane, as `float` bits.
 fn view_texel(i: u32) -> [u32; 4] {
     std::array::from_fn(|lane| (i as f32 * 4.0 + lane as f32 + 0.25).to_bits())
@@ -84,8 +83,7 @@ fn view_texel(i: u32) -> [u32; 4] {
 fn texture_indices() -> Vec<((u32, u32), u32)> {
     let [w, h] = SIZE;
     (0..h)
-        .flat_map(|y| (0..w).map(move |x| ((x, y), (FIRST + u64::from(y) * ROW + u64::from(x)))))
-        .map(|(at, i)| (at, i as u32))
+        .flat_map(|y| (0..w).map(move |x| ((x, y), FIRST + y * ROW + x)))
         .collect()
 }
 
@@ -117,7 +115,7 @@ fn rows_binding(m: &TypedModule, usage: ImageUsage) -> ResourceSlot {
 
 /// The view, `elements` texels of [`view_texel`], bound at `slot`.
 fn view(slot: ResourceSlot) -> Image {
-    let n = rows().elements() as u32;
+    let n = ELEMENTS;
     let mut image = Image::new(slot, [n, 1, 1], 1, 1, 1);
     for x in 0..n {
         let i = image.index(0, 0, 0, [x, 0, 0]).expect("element");
@@ -141,7 +139,7 @@ fn resources(plan: &Plan, init: &[Vec<u8>]) -> Resources {
     for f in &plan.push.fields {
         if let (PushField::TexelRows(TEXTURE), PushLoc::Push { offset }) = (f.field, f.loc) {
             let at = offset as usize;
-            for (i, w) in rows().words().into_iter().enumerate() {
+            for (i, w) in ROWS.into_iter().enumerate() {
                 push[at + 4 * i..at + 4 * i + 4].copy_from_slice(&w.to_le_bytes());
             }
             written = true;
@@ -281,7 +279,7 @@ fn a_write_stores_its_texel_by_row_and_nothing_else() {
     }
     let res = resources(&plan, &[input, columns()]);
     let (_, image) = run(&m, &res, &view(slot));
-    let mut want: Vec<[u32; 4]> = (0..rows().elements() as u32).map(view_texel).collect();
+    let mut want: Vec<[u32; 4]> = (0..ELEMENTS).map(view_texel).collect();
     for ((x, y), i) in texture_indices() {
         want[i as usize] = value(x, y);
     }
@@ -298,7 +296,7 @@ fn a_read_write_kernel_asks_the_rows_size() {
     let slot = rows_binding(&m, ImageUsage::Storage);
     let res = resources(&plan, &[]);
     let (_, image) = run(&m, &res, &view(slot));
-    let mut want: Vec<[u32; 4]> = (0..rows().elements() as u32).map(view_texel).collect();
+    let mut want: Vec<[u32; 4]> = (0..ELEMENTS).map(view_texel).collect();
     for (_, i) in texture_indices() {
         let t = view_texel(i).map(f32::from_bits);
         want[i as usize] = [

@@ -11,8 +11,7 @@
 //! every record against the descriptor) before [`CommandBuffer::records`] reads a range back as
 //! [`CommandRecord`]s. [`CommandRecord::resolve_bindings`] picks each command's pipeline and
 //! buffers from itself or from the executing encoder, and [`BufferBinding::resolve_buffer`] finds
-//! the [`RegisteredBuffer`] whose interval holds a buffer's address. The device replay (`replay_preprocess`)
-//! reads the same records on the GPU. Storage may hold a written flag per command past the
+//! the [`RegisteredBuffer`] whose interval holds a buffer's address. Storage may hold a written flag per command past the
 //! records ([`written_flag_offset`]), which the consumer's writes of a record set, so a reset need
 //! touch only the flagged records.
 

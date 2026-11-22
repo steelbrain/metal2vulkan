@@ -230,7 +230,7 @@ pub fn texels(pf: PixelFormat) -> Option<BicubicTexels> {
         P::RGBX16Float => (T::HALF, RGB),
         // A 4:2:2 format reads as an `RGBA8Unorm` texture of its decoded codes, alpha 1 (our probe
         // on an Apple M3 Max under macOS 27.0.1: reads, nearest, linear and bicubic samples and
-        // gathers bit for bit, `bind::ChromaDecode`): `RGBX8Unorm`'s treatment.
+        // gathers bit for bit): `RGBX8Unorm`'s treatment.
         P::GBGR422 | P::BGRG422 => (exact8u, RGB),
         // A BC, PVRTC, ETC2, EAC or ASTC sRGB form's texels are 8-bit sRGB codes once decoded,
         // which Metal filters as an 8-bit sRGB format's; an RGB one's alpha 1.

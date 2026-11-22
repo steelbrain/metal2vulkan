@@ -10,7 +10,6 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::bind::{SparseTileMap, TileMapping};
 use crate::device::profile::DeviceProfile;
 use crate::device::DevicePolicy;
 use crate::error::{Error, Feature, LowerFamily, Unsupported};
@@ -21,6 +20,7 @@ use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey,
 use crate::pipeline::testing::{
     compile, link_and_validate, llvm_assemble, profile, typed_module, AssembleError,
 };
+use crate::pipeline::tile_map;
 use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Order, Resources};
 use crate::spirv::ir::TypedModule;
 use crate::spirv::testing::committed_profiles;
@@ -599,19 +599,8 @@ fn residency_of_status_words_is_lowered() {
                     imgs[0].texels[0] = [0xDEAD_BEEF; 4];
                     imgs[1].texels[3] = [0xDEAD_BEEF; 4];
                     for (index, unmapped) in [(0u32, [0, 0, 0]), (1, [1, 1, 0])] {
-                        let mut map = SparseTileMap::new(
-                            crate::metal::TextureType::Type2D,
-                            [2, 2, 1],
-                            1,
-                            1,
-                            [1; 3],
-                            1,
-                        )
-                        .expect("tile map");
-                        map.update(TileMapping::Map, 0, 0, [0; 3], [2, 2, 1])
-                            .expect("map");
-                        map.update(TileMapping::Unmap, 0, 0, unmapped, [1; 3])
-                            .expect("unmap");
+                        let map =
+                            tile_map::one_level_map([2, 2, 1], 1, [1; 3], |_, t| t != unmapped);
                         res.buffers.push(Buffer {
                             slot: Some(ResourceSlot {
                                 stage: Stage::Kernel,
@@ -619,7 +608,7 @@ fn residency_of_status_words_is_lowered() {
                                 index,
                             }),
                             address: None,
-                            bytes: map.to_bytes(),
+                            bytes: map,
                         });
                     }
                     imgs
@@ -740,17 +729,7 @@ fn a_read_outside_a_sparse_texture_is_resident() {
                 // with column x = 1 unmapped.
                 img.texels[1] = [0xDEAD_BEEF; 4];
                 img.texels[3] = [0xDEAD_BEEF; 4];
-                let mut map = SparseTileMap::new(
-                    crate::metal::TextureType::Type2D,
-                    [2, 2, 1],
-                    1,
-                    1,
-                    [1; 3],
-                    1,
-                )
-                .expect("tile map");
-                map.update(TileMapping::Map, 0, 0, [0; 3], [1, 2, 1])
-                    .expect("map");
+                let map = tile_map::one_level_map([2, 2, 1], 1, [1; 3], |_, [x, _, _]| x == 0);
                 res.buffers.push(Buffer {
                     slot: Some(ResourceSlot {
                         stage: Stage::Kernel,
@@ -758,7 +737,7 @@ fn a_read_outside_a_sparse_texture_is_resident() {
                         index: 0,
                     }),
                     address: None,
-                    bytes: map.to_bytes(),
+                    bytes: map,
                 });
                 if !checked {
                     img.robust = Some([0; 4]);
@@ -1435,19 +1414,7 @@ fn a_functions_writes_to_a_sparse_texture_are_dropped() {
             // The tile-map arm: the image's unmapped texel the device's value, which the module
             // must not read, and a map of one-texel tiles.
             t.texels[3] = [0xDEAD_BEEF; 4];
-            let mut map = SparseTileMap::new(
-                crate::metal::TextureType::Type2D,
-                [2, 2, 1],
-                1,
-                1,
-                [1; 3],
-                1,
-            )
-            .expect("tile map");
-            map.update(TileMapping::Map, 0, 0, [0; 3], [2, 2, 1])
-                .expect("map");
-            map.update(TileMapping::Unmap, 0, 0, [1, 1, 0], [1; 3])
-                .expect("unmap");
+            let map = tile_map::one_level_map([2, 2, 1], 1, [1; 3], |_, t| t != [1, 1, 0]);
             res.buffers.push(Buffer {
                 slot: Some(ResourceSlot {
                     stage: Stage::Kernel,
@@ -1455,7 +1422,7 @@ fn a_functions_writes_to_a_sparse_texture_are_dropped() {
                     index: 0,
                 }),
                 address: None,
-                bytes: map.to_bytes(),
+                bytes: map,
             });
         }
         let before = t.texels.clone();

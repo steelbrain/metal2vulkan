@@ -107,8 +107,8 @@ pub struct AuthoredCase {
     pub out_of_bounds: Option<out_of_bounds::OutOfBounds>,
     /// The render pass's rasterization-rate map (`MTLRenderPassDescriptor.rasterizationRateMap`),
     /// in a rasterizing render case: the Metal oracle renders the pass through Metal's compile of
-    /// the map, with the viewport the map's screen. A Vulkan candidate carries the pass on the
-    /// product's region path (`metal2vulkan::bind::RateMapRegions`): every map of the case is the
+    /// the map, with the viewport the map's screen. A Vulkan candidate carries the pass region by
+    /// region: every map of the case is the
     /// product's compile of it, and the pass is drawn region by region into the compile's physical
     /// size, Metal's pass over the identity and a near-equivalent over any other map. Part of the
     /// semantic identity.

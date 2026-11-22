@@ -552,7 +552,7 @@ fn fragment_builtin_enablers_and_barycentrics() {
         let main = f.finish().expect("finish");
         b.entry(ExecModel::Fragment, main, vec![]).expect("entry");
         let m = b.finalize().expect("finalize");
-        let caps = &m.requirements().spirv_capabilities;
+        let caps = &m.requirements.spirv_capabilities;
         for cap in [primitive, layer, viewport, Cap::FragmentBarycentricKHR] {
             assert!(
                 caps.contains(&SpirvCapability::of(cap)),

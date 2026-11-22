@@ -1195,48 +1195,12 @@ fn one_entry_set_specializes_a_sweeps_stages_once() {
     assert_eq!(apart, 16, "two stages specialized for each of the eight");
 }
 
-/// The old runtime's render descriptor key keeps its value: one known descriptor's key, pinned.
-/// The old runtime keeps answers under it in its cache directory, so a change of value is a
-/// change to the old runtime.
-///
-/// The key hashes the stages' AIR bytes, so the descriptor's functions come from a committed
-/// `.air` fixture, the same bytes on every host. An `.ll` fixture is assembled by the host's
-/// `llvm-as`, whose bitcode differs between LLVM releases (23.1.1, 23.1.4 and 23.1.5 each write
-/// other bytes of `stage_io.ll`), which made the pinned value depend on the host that ran it.
-#[test]
-fn the_old_render_descriptor_key_keeps_its_value() {
-    let path = engine_dir().join("fbl_fetch_dual.air");
-    let bc = std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    let bytes: String = sha256(&bc).iter().map(|b| format!("{b:02x}")).collect();
-    assert_eq!(
-        bytes, "c77a9c963c06df07997811c3b73ded8a1dfdb40a79ae300f7d285ac01f89cbdd",
-        "the fixture's bytes, which the key hashes, changed: pin the key the new bytes give"
-    );
-    let lib = Library::from_air(&bc).expect("library");
-    let mut d = RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(
-        lib.function("fbd_vertex").expect("vertex"),
-    )));
-    d.fragment = Some(StageSource::Function(FunctionDescriptor::new(
-        lib.function("fbd_dual_float").expect("fragment"),
-    )));
-    d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(
-        metal::PixelFormat::RGBA8Unorm,
-    ));
-    let key = device("moltenvk-m3").render_descriptor_key(&d);
-    let hex: String = key.digest().iter().map(|b| format!("{b:02x}")).collect();
-    assert_eq!(
-        hex, "ed9de2605383ba4540fdb4df1cd101800462f9e5c70bb694248038cc53af4cec",
-        "the old runtime's key of the descriptor"
-    );
-}
-
 /// The key on `Device::from_queries`' path is the same for an equal descriptor and on another
 /// device of the same profile, and differs from the descriptor's where one field group of it
 /// changes: the stages, the vertex descriptor, a colour attachment's every field, the depth and
 /// stencil formats, the sample and rasterization state, the topology class and amplification,
 /// tessellation, indirect command buffers, the call-stack depths, binary functions, buffer
-/// mutability, the rounding mode, each private field group, and the profile; and the old
-/// runtime's key tells each change apart too.
+/// mutability, the rounding mode, each private field group, and the profile.
 #[test]
 fn a_queried_render_descriptor_key_covers_each_field_group() {
     let Some(bc) = fixture("stage_io") else {
@@ -1264,11 +1228,6 @@ fn a_queried_render_descriptor_key_covers_each_field_group() {
         device("runtime-floor").queried_render_descriptor_key(&d),
         key,
         "the profile"
-    );
-    assert_ne!(
-        dev.render_descriptor_key(&d),
-        key,
-        "the old runtime's values"
     );
     let with_layout = |e: &mut RenderPipelineDescriptor, stride| {
         let mut v = VertexDescriptor::new();
@@ -1476,93 +1435,8 @@ fn a_queried_render_descriptor_key_covers_each_field_group() {
         change(&mut e);
         let k = dev.queried_render_descriptor_key(&e);
         assert!(!seen.contains(&k), "{what} changes the key");
-        assert_ne!(
-            dev.render_descriptor_key(&e),
-            dev.render_descriptor_key(&d),
-            "{what}: the old key tells it apart too"
-        );
         seen.push(k);
     }
-}
-
-/// A render descriptor's key is the same for an equal descriptor and on another device of the
-/// same profile, and differs where a field, a stage, a private field, or the profile does: a
-/// consumer keeping answers under it never takes another descriptor's.
-#[test]
-fn a_render_descriptor_key_covers_its_fields() {
-    let Some(bc) = fixture("stage_io") else {
-        return;
-    };
-    let lib = Library::from_air(&bc).expect("library");
-    let vertex = lib.function("stage_io_vertex_position").expect("vertex");
-    let fragment = lib
-        .function("stage_io_fragment_primitive")
-        .expect("fragment");
-    let dev = device("moltenvk-m3");
-    let mut d = RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(
-        vertex.clone(),
-    )));
-    d.fragment = Some(StageSource::Function(FunctionDescriptor::new(
-        fragment.clone(),
-    )));
-    d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(
-        metal::PixelFormat::RGBA8Unorm,
-    ));
-    let key = dev.render_descriptor_key(&d);
-    assert_eq!(dev.render_descriptor_key(&d.clone()), key);
-    assert_eq!(device("moltenvk-m3").render_descriptor_key(&d), key);
-    assert_ne!(
-        device("runtime-floor").render_descriptor_key(&d),
-        key,
-        "the profile"
-    );
-    type Change = fn(&mut RenderPipelineDescriptor, &crate::library::Function);
-    let changes: [(&str, Change); 11] = [
-        ("no fragment", |e, _| e.fragment = None),
-        ("the fragment's function", |e, v| {
-            e.fragment = Some(StageSource::Function(FunctionDescriptor::new(v.clone())));
-        }),
-        ("constants", |e, _| {
-            if let StageSource::Function(f) = &mut e.vertex {
-                f.constants = has_tint(true);
-            }
-        }),
-        ("depth", |e, _| {
-            e.depth_format = Some(metal::PixelFormat::Depth32Float);
-        }),
-        ("a color format", |e, _| {
-            e.color_attachments[0] = Some(ColorAttachmentDescriptor::new(
-                metal::PixelFormat::BGRA8Unorm,
-            ));
-        }),
-        ("rasterization", |e, _| e.rasterization_enabled = false),
-        ("indirect command buffers", |e, _| {
-            e.support_indirect_command_buffers = true;
-        }),
-        ("a buffer's mutability", |e, _| {
-            e.vertex_buffers.insert(0, metal::Mutability::Immutable);
-        }),
-        ("coverage 0.0", |e, _| {
-            e.private.sample_coverage = 0.0;
-        }),
-        ("a private flag", |e, _| e.private.two_side_enabled = true),
-        ("OpenGL mode", |e, _| e.private.open_gl_mode_enabled = true),
-    ];
-    let mut seen = vec![key];
-    for (what, change) in changes {
-        let mut e = d.clone();
-        change(&mut e, &vertex);
-        let k = dev.render_descriptor_key(&e);
-        assert!(!seen.contains(&k), "{what} changes the key");
-        seen.push(k);
-    }
-    // Coverage 0.0 and -0.0 are different descriptors.
-    let mut e = d.clone();
-    e.private.sample_coverage = -0.0;
-    assert!(
-        !seen.contains(&dev.render_descriptor_key(&e)),
-        "coverage -0.0"
-    );
 }
 
 /// A render pipeline requires `extendedDynamicState` exactly when its graphics state makes a state
@@ -3475,7 +3349,9 @@ fn a_merged_fragment_reads_its_argument_buffer_through_its_command_s_table() {
         let base = dev
             .compile_render_variant(&d, &VariantKey::new(), &Budget::standard())
             .unwrap_or_else(|e| panic!("{stem}: base: {e}"));
-        let layouts = crate::bind::draw_replay_vertex_layouts(&base.vertex_input).expect("layouts");
+        let layouts = (base.vertex_input.bindings.iter())
+            .map(|b| b.buffer_index)
+            .collect();
         let shape = crate::bind::BindShape {
             far_vertex_buffers: layouts,
             ..Default::default()
@@ -3507,10 +3383,9 @@ fn a_merged_fragment_reads_its_argument_buffer_through_its_command_s_table() {
 /// (`icb_render_replay_template`); its plan states the variant. A vertex function that fetches
 /// a `[[stage_in]]` attribute (`icb_render_stride_template`) in fixed function, as it does under
 /// the identity domains, is refused: fixed-function input reads no slot table. Outside them the
-/// attribute is pulled, so a draw replay names no layout to pull
-/// (`bind::draw_replay_vertex_layouts`), and its replay variant compiles, one draw per command and
-/// merged, binds no layout and pulls the attribute, whose read reaches the slot table; every stage
-/// passes L3, and its plan states its key.
+/// attribute is pulled, so the draw binds no fixed-function layout, and its replay variant
+/// compiles, one draw per command and merged, binds no layout and pulls the attribute, whose read
+/// reaches the slot table; every stage passes L3, and its plan states its key.
 #[test]
 fn a_replayed_draw_reads_its_buffers_through_the_slot_table() {
     use crate::cache::VariantKey;
@@ -3592,8 +3467,11 @@ fn a_replayed_draw_reads_its_buffers_through_the_slot_table() {
     let base = dev
         .compile_render_variant(&d, &VariantKey::new(), &Budget::standard())
         .expect("pulled");
-    let layouts = crate::bind::draw_replay_vertex_layouts(&base.vertex_input).expect("layouts");
-    assert!(layouts.is_empty(), "{layouts:?}");
+    assert!(
+        base.vertex_input.bindings.is_empty(),
+        "{:?}",
+        base.vertex_input.bindings
+    );
     for merged in [false, true] {
         let mut replay = key.clone();
         replay.merged_draws = merged;

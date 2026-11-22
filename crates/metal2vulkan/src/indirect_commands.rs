@@ -80,7 +80,7 @@ pub const RECORDS_ID_LIMIT: u64 = 1 << 31;
 /// holds the ID, as Metal's `gpuResourceID` and `setIndirectCommandBuffer:atIndex:` give it (small
 /// integers from 1, measured on an M3 Max and an M4, or the IDs a reservation leaves next, up to
 /// 2^31 - 1 on an M3 Max). Records of more than 2^31 bytes run past the next IDs' starts, and the
-/// resident set keeps each records range whole (`ResidentSet`). So a consumer that makes an
+/// resident set keeps each records range whole. So a consumer that makes an
 /// indirect command buffer with ID `id` makes its record buffer resident at `records_address(id)`,
 /// a range no Metal buffer reaches (each lies below 2^63). The null ID 0 gives an address no
 /// records start at. No translated function reaches the records through it: every encoder
@@ -92,47 +92,14 @@ pub const fn records_address(id: u64) -> u64 {
 /// The byte offsets of the header's and a record's fields, which the CPU's encoder writes and the
 /// device replay reads (`bind::replay`).
 pub(crate) mod layout {
-    use super::{
-        BufferStage, BINDING_COUNT, BUFFER_STAGES, BUFFER_WORDS, HEADER_WORDS, THREADGROUP_COUNT,
-        THREADGROUP_WORD,
-    };
+    use super::{THREADGROUP_COUNT, THREADGROUP_WORD};
 
-    /// The header's command capacity (`u32`).
-    pub(crate) const CAPACITY: u64 = 0;
-    /// The header's sticky encoding-fault flag (`u32`, written atomically).
-    pub(crate) const FAULT: u64 = 4;
-    /// The header's descriptor policy bits (`u32`).
-    pub(crate) const POLICY: u64 = 8;
-    /// The header's packed binding counts (`u32`, one byte per count): a compute descriptor's
-    /// kernel buffers in byte 0 and threadgroup lengths in byte 3; a render descriptor's object,
-    /// vertex, fragment and mesh buffers in bytes 0 to 3.
-    pub(crate) const COUNTS: u64 = 12;
-    /// Bytes of one record.
-    pub(crate) const RECORD: u64 = super::COMMAND_BYTES as u64;
-    /// A record's action tag (`u32`).
-    pub(crate) const ACTION: u64 = 0;
-    /// A record's barrier flag (`u32`).
-    pub(crate) const BARRIER: u64 = 4;
-    /// A record's pipeline token (`u64`).
-    pub(crate) const PIPELINE: u64 = 8;
     /// A record's six action arguments (`u32` each): a dispatch's grid and local size, or a
     /// draw's primitive type, vertex start, vertex count, instance count, and base instance.
     pub(crate) const ARGUMENTS: u64 = 16;
-    /// Bytes of one buffer binding: its address (`u64`), then its attribute stride (`u64`).
-    pub(crate) const BINDING: u64 = (BUFFER_WORDS * 4) as u64;
-    /// A buffer binding's attribute stride, within the binding.
-    pub(crate) const STRIDE: u64 = 8;
     /// A record's threadgroup-memory lengths (`u32` each).
     pub(crate) const THREADGROUP: u64 = (THREADGROUP_WORD * 4) as u64;
 
-    /// The first buffer binding of `stage` in a record.
-    pub(crate) const fn buffers(stage: BufferStage) -> u64 {
-        ((HEADER_WORDS + stage.index() * BINDING_COUNT * BUFFER_WORDS) * 4) as u64
-    }
-
-    /// Every buffer binding of a record, all four stages' words (`BINDING` bytes each, from
-    /// `buffers(BufferStage::Kernel)`).
-    pub(crate) const ALL_BINDINGS: u64 = (BUFFER_STAGES * BINDING_COUNT) as u64;
     /// A record's stage-in region (`u32` each, after the six action arguments): origin x, y and
     /// z, then size x, y and z; all zero when the command sets none.
     pub(crate) const STAGE_IN: u64 = ARGUMENTS + 24;

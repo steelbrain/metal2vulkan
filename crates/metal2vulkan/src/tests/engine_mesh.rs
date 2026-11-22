@@ -955,7 +955,10 @@ fn object_draws(dev: &crate::device::Device, p: &crate::pipeline::RenderPipeline
         "{what}: {fold:?}"
     );
     let indirect = DrawCall::MeshThreadgroupsIndirect {
-        indirect: crate::bind::IndirectRef::new(1, 0),
+        indirect: crate::bind::IndirectRef {
+            token: 1,
+            offset: 0,
+        },
         threads_per_object_group: [4, 1, 1],
         threads_per_mesh_group: [8, 1, 1],
     };

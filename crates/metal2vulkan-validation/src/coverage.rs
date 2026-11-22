@@ -408,7 +408,7 @@ pub struct ExecutedCensus {
 
 /// How a candidate drew a rate-mapped render pass: region by region (the option (a), on every
 /// device), into the product's compile of the map, each draw recorded once per region, with the
-/// plan's near-equivalent (`RateMapRegions::precision`), which the row's comparison class carries.
+/// plan's near-equivalent, which the row's comparison class carries.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RateMapPassRun {
@@ -416,9 +416,9 @@ pub struct RateMapPassRun {
     pub screen_size: [u32; 2],
     /// The physical size of the product's compile of the map: the extent the pass draws into.
     pub compiled_physical_size: [u32; 2],
-    /// The regions each draw of the pass was recorded in (`RateMapRegions::regions`).
+    /// The regions each draw of the pass was recorded in.
     pub regions: u32,
-    /// The pass's precision notes (`RateMapRegions::precision`): with the modules', what the
+    /// The pass's precision notes: with the modules', what the
     /// row's comparison class is derived from.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub precision: BTreeSet<PrecisionNote>,

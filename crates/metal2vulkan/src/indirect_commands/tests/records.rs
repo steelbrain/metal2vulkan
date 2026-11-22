@@ -341,14 +341,9 @@ fn indexed_and_patch_draws_round_trip_in_the_stage_in_words() {
 
 /// Mesh draws of threadgroups (tag 7) and of threads (tag 8) round-trip, their grid and the
 /// threads of an object and of a mesh threadgroup in the stage-in region's words, which they leave
-/// unset; a stage-in region beside one is refused, writing nothing. A render record's mesh
-/// buffers take the words of a compute record's kernel buffers.
+/// unset; a stage-in region beside one is refused, writing nothing.
 #[test]
 fn mesh_draws_round_trip_in_the_stage_in_words() {
-    assert_eq!(
-        layout::buffers(BufferStage::Mesh),
-        layout::buffers(BufferStage::Kernel)
-    );
     assert_eq!(BufferStage::of(true)[0], BufferStage::Mesh);
     let groups = Action::DrawMeshThreadgroups {
         threadgroups: [3, 2, u32::MAX],

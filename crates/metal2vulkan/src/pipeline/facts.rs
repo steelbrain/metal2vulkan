@@ -171,7 +171,7 @@ pub enum RuntimeFact {
     /// `tile_map` (on every device): where the slot's type has a tile map (a single-sample 2D, 2D
     /// array or 3D color texture) and each observed access names its texels, the module answers a
     /// sparse texture from the slot's tile map instead (`ResourceKind::TileMap`,
-    /// `bind::SparseTileMap`), selected by the same `SpecKey::SparseTexture`: each access is the
+    /// `pipeline::tile_map`), selected by the same `SpecKey::SparseTexture`: each access is the
     /// plain one, its residency the bits of the tiles it reads (for a sample or gather, the texels
     /// Metal's footprint rule counts), and a read of a texel that is not resident Metal's unmapped
     /// value, the out-of-bounds texel. At most one of `sparse_arm` and `tile_map` holds:
@@ -265,7 +265,7 @@ pub enum RuntimeFact {
     /// `m` of axes under which fewer of its synchronizations' blocks are divergent once its
     /// threads' positions along them are taken as uniform: a dispatch whose threadgroups have one
     /// thread along exactly the axes `m` may run the kernel's unit-axes variant
-    /// (`VariantKey::unit_axes`, `BindingPlan::unit_axes_variant`). Where `axes` is not 0, the
+    /// (`VariantKey::unit_axes`). Where `axes` is not 0, the
     /// kernel was compiled under that variant (`LoweringInputs::unit_axes`), `relief` is 0, its
     /// plans state the variant, and a dispatch with more than one thread along one of `axes` asks
     /// for the variant without it.
@@ -342,7 +342,7 @@ pub enum RuntimeFact {
     /// The vertex or fragment function was compiled under `VariantKey::replay_bindings`
     /// (`LoweringInputs::replay_bindings`): every buffer it reads is in the slot table at its
     /// stage's `PushField::RootTableAddress`, which a draw replay's preprocess writes per
-    /// replayed command (`bind::draw_replay_preprocess`). Its plans state the variant.
+    /// replayed command. Its plans state the variant.
     ReplayBindings,
     /// The vertex function was compiled under `VariantKey::merged_draws`
     /// (`LoweringInputs::merged_draws`): it runs a merged draw replay's corners, reading its
@@ -436,7 +436,7 @@ pub enum RuntimeFact {
     CubicArgumentSampler { stage: Stage },
     /// The `stage` function samples, gathers, or queries a level of a heap texture of a sampled
     /// float class of one sample, where for a texture a heap holds by its raw texels alone
-    /// (`bind::heap_raw_form`) it reads the class's neutral (zero, or the neutral's level) where
+    /// (`lower::texture::heap_raw_form`) it reads the class's neutral (zero, or the neutral's level) where
     /// Metal samples the texture. The function emulates Metal's sample or gather of such a
     /// texture from its raw texels where the access is a 2D texture's sample or gather of a
     /// `float` or `half` result (a `half` gather of a bfloat form alone) without comparison,

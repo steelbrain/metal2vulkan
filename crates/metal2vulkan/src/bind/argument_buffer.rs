@@ -107,20 +107,6 @@ pub struct ArgumentMember {
     pub layout: Option<Arc<ArgumentBufferLayout>>,
 }
 
-/// Where one argument index lands ([`ArgumentBufferLayout::argument`]).
-#[non_exhaustive]
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ArgumentPlace {
-    pub ty: ArgumentType,
-    /// Byte offset in the argument buffer.
-    pub offset: u64,
-    /// Bytes the argument holds.
-    pub size: u64,
-    /// The layout of the argument buffer a [`ArgumentType::Buffer`] points to, when its pointee
-    /// holds arguments.
-    pub nested: Option<Arc<ArgumentBufferLayout>>,
-}
-
 /// The layout of one argument buffer: its length, alignment and members (the module docs).
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -343,15 +329,29 @@ impl ArgumentBufferLayout {
         })
     }
 
+    /// One past the highest argument index the layout's members take (0 for none): a struct of
+    /// this layout's index span.
+    pub fn id_span(&self) -> u32 {
+        self.members
+            .iter()
+            .map(|m| {
+                m.id.saturating_add(m.count.saturating_mul(m.ids_per_element.max(1)))
+            })
+            .max()
+            .unwrap_or(0)
+    }
+
     /// Where argument `index` lands: in the last member whose indices hold it, inside a struct
     /// member's element as that element's layout says. `None` when no member holds it.
-    pub fn argument(&self, index: u32) -> Option<ArgumentPlace> {
+    #[cfg(test)]
+    pub(crate) fn argument(&self, index: u32) -> Option<ArgumentPlace> {
         self.place(index, 0)
     }
 
     /// [`argument`](Self::argument) for a layout whose byte 0 is at `base`. A struct element
     /// that does not hold the index leaves it to the members before; the recursion is as deep as
     /// the layout's struct nesting, which the build capped.
+    #[cfg(test)]
     fn place(&self, index: u32, base: u64) -> Option<ArgumentPlace> {
         self.members.iter().rev().find_map(|m| {
             let rel = index.checked_sub(m.id)?;
@@ -373,18 +373,6 @@ impl ArgumentBufferLayout {
                 }),
             }
         })
-    }
-
-    /// One past the highest argument index the layout's members take (0 for none): a struct of
-    /// this layout's index span.
-    pub fn id_span(&self) -> u32 {
-        self.members
-            .iter()
-            .map(|m| {
-                m.id.saturating_add(m.count.saturating_mul(m.ids_per_element.max(1)))
-            })
-            .max()
-            .unwrap_or(0)
     }
 }
 
@@ -638,4 +626,19 @@ pub(crate) fn entry_layout(
         Err(Ok(error)) => EntryLayout::Done(Err(error)),
         Err(Err(NeedsSpecialization)) => EntryLayout::Specialize,
     }
+}
+
+/// Where one argument index lands ([`ArgumentBufferLayout::argument`]).
+#[cfg(test)]
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ArgumentPlace {
+    pub ty: ArgumentType,
+    /// Byte offset in the argument buffer.
+    pub offset: u64,
+    /// Bytes the argument holds.
+    pub size: u64,
+    /// The layout of the argument buffer a [`ArgumentType::Buffer`] points to, when its pointee
+    /// holds arguments.
+    pub nested: Option<Arc<ArgumentBufferLayout>>,
 }

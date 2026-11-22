@@ -131,7 +131,7 @@ fn direct_formats_round_trip() {
             let pvrtc = crate::bind::PvrtcDecode::of(pf).is_some();
             assert!(
                 pvrtc
-                    || crate::bind::ChromaDecode::of(pf).is_some()
+                    || matches!(pf, PixelFormat::GBGR422 | PixelFormat::BGRG422)
                     || crate::bind::AstcDecode::of(pf).is_some(),
                 "{pf:?}"
             );

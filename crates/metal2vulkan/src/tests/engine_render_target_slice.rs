@@ -182,8 +182,19 @@ fn every_pass_runs_the_vertex_function_that_writes_its_layer() {
                     .unwrap_or_else(|e| panic!("{what} {length}: {e:?}"));
             }
             let mut amplified = pass(1);
-            amplified.vertex_amplification =
-                VertexAmplification::new(2, vec![ViewMapping::new(0, 0), ViewMapping::new(0, 1)]);
+            amplified.vertex_amplification = VertexAmplification::new(
+                2,
+                vec![
+                    ViewMapping {
+                        viewport_array_index_offset: 0,
+                        render_target_array_index_offset: 0,
+                    },
+                    ViewMapping {
+                        viewport_array_index_offset: 0,
+                        render_target_array_index_offset: 1,
+                    },
+                ],
+            );
             let plan = written
                 .plan(&dev, &amplified.shape())
                 .unwrap_or_else(|e| panic!("{what}: {e:?}"));

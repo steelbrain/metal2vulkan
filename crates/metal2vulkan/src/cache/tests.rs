@@ -1147,7 +1147,16 @@ fn the_amplification_draws_variant_round_trips() {
         render_target_array_length: 2,
         vertex_amplification: VertexAmplification::new(
             2,
-            vec![ViewMapping::new(1, 1), ViewMapping::new(0, 0)],
+            vec![
+                ViewMapping {
+                    viewport_array_index_offset: 1,
+                    render_target_array_index_offset: 1,
+                },
+                ViewMapping {
+                    viewport_array_index_offset: 0,
+                    render_target_array_index_offset: 0,
+                },
+            ],
         ),
         ..Default::default()
     };
@@ -1855,7 +1864,7 @@ fn a_descriptors_answers_and_reflection_round_trip_under_its_key() {
         metal::PixelFormat::RGBA8Unorm,
     ));
     let reflection = d.reflection(&Budget::standard()).expect("reflection");
-    let key = dev.render_descriptor_key(&d);
+    let key = dev.queried_render_descriptor_key(&d);
     let bytes = reflection.to_bytes(&key, &dev);
     assert_eq!(
         crate::reflection::RenderPipelineReflection::from_bytes_for_key(&bytes, &key, &dev),

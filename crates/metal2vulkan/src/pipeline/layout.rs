@@ -121,7 +121,7 @@ pub enum BindingSource {
     /// A tile function's color attachment of this color index, bound as a storage image.
     TileAttachment(u32),
     /// The tile map of the sparse texture bound at a Metal `[[texture(n)]]` slot, a read-only
-    /// storage buffer (`pipeline::tile_map`, `bind::SparseTileMap`).
+    /// storage buffer (`pipeline::tile_map`).
     TileMap(SlotRef),
     /// The image half of a texture slot and a sampler a stage samples through separate
     /// descriptors: the texture as a sampled image of its own type (a cube is a cube view), with

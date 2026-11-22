@@ -69,12 +69,11 @@
 //! **Unit axes**. A kernel walked predicated whose threads' positions alone steer some of its
 //! synchronizations, along some axes, states which masks of axes relieve it
 //! (`LocalRules::unit_relief`, `RuntimeFact::UnitAxes`). A dispatch whose threadgroups have one thread along such
-//! a mask's axes, Metal's `threads_per_threadgroup` 1 there and every region's local size too, is
-//! offered the kernel's unit-axes variant ([`BindingPlan::unit_axes_variant`],
-//! `VariantKey::unit_axes`), where the plan's own variant runs it: the plan's still does, and
-//! gives the same answers. The variant's plan runs every dispatch of threadgroups of one thread
-//! along its axes, and a dispatch of more is `BindError::NeedsVariant` for the variant without
-//! them.
+//! a mask's axes, Metal's `threads_per_threadgroup` 1 there and every region's local size too,
+//! may run on the kernel's unit-axes variant (`VariantKey::unit_axes`); the plan's own variant
+//! runs it too, and gives the same answers. The variant's plan runs every dispatch of threadgroups
+//! of one thread along its axes, and a dispatch of more is `BindError::NeedsVariant` for the
+//! variant without them.
 //!
 //! **Push bytes.** Each region's push write covers the stage's whole push range, so every
 //! statically used push byte is written (VUID-vkCmdDispatch-maintenance4-08602): the
@@ -105,22 +104,20 @@ use crate::bind::plan::compute::{internal, not_implemented, spec_key_into};
 use crate::bind::plan::{
     AccessClass, BindingPlan, ByteRange, ComputeTemplate, LocalRules, ResourceUse, UseTarget,
 };
-use crate::bind::replay::ReplayRefusal;
 use crate::bind::resident::{stage_root_table, table_entries};
 use crate::bind::state::{BindState, BoundBuffer, StageInRegion};
 use crate::cache::{SpecializationKey, VariantKey};
 use crate::device::requirements::VkLimit;
 use crate::error::{BindError, Capability, Feature, LowerFamily, Unsupported};
-use crate::indirect_commands::BINDING_COUNT;
 use crate::lower::dispatch::{
     grid_tile, nonuniform_region_bytes, pack_nominal, region_bytes, DEEP_THREADGROUP,
     GRID_TILE_THREADS,
 };
 use crate::metal::vertex::vertex_bytes;
 use crate::metal::{StepFunction, VertexFormat};
-use crate::pipeline::interface::{AccessSet, BufferForm, PushLoc};
+use crate::pipeline::interface::{AccessSet, PushLoc};
 use crate::pipeline::stage_io::StageInFetch;
-use crate::pipeline::sym::{Axis, PushField, SlotClass, SpecKey, Stage};
+use crate::pipeline::sym::{Axis, PushField, SpecKey, Stage};
 use crate::vk;
 
 /// The most regions one dispatch is split into. Every committed profile's
@@ -238,7 +235,7 @@ pub enum IndirectArgs {
     /// Metal's arguments, directly (`vkCmdDispatchIndirect` from this buffer and offset).
     Buffer(IndirectRef),
     /// The device replay's arguments for the replayed command and this variant, which its
-    /// preprocess wrote (`ReplayLayout::argument_offset` in the replay's scratch).
+    /// preprocess wrote in the replay's scratch.
     Replay,
 }
 
@@ -560,11 +557,6 @@ impl Regions {
             true => 0,
             false => self.pieces[axis].widest(),
         }
-    }
-
-    /// Every region with `MultiRegion` 1: it reads its record.
-    fn read_records(&mut self) {
-        self.multi = true;
     }
 }
 
@@ -976,8 +968,8 @@ impl BindingPlan {
     /// (`regions`, a private reader that spreads the count a grid needs over the axes the device
     /// admits); the record is [`DispatchCommands::region_record`], which the consumer writes. Any
     /// other dispatch of a flat variant, and every dispatch of a folded variant
-    /// ([`VariantKey::folded_groups`]), whose records only a device replay's preprocess writes
-    /// ([`BindingPlan::instantiate_replay`]), is `Unsupported{GpuEncodedIndirectCommands,
+    /// ([`VariantKey::folded_groups`]), whose records only a device replay's preprocess writes,
+    /// is `Unsupported{GpuEncodedIndirectCommands,
     /// NotImplemented}`.
     ///
     /// The plan of a partial-threadgroups variant ([`VariantKey::partial_threadgroups`]) runs a
@@ -1041,51 +1033,6 @@ impl BindingPlan {
         instantiate(t, planned, (state, dispatch), records, commands)
     }
 
-    /// The commands of one registered variant of a device replay
-    /// ([`replay_preprocess`](crate::bind::replay_preprocess)): one region of `threads_per_group`
-    /// threads per threadgroup whose group count is the replay's arguments
-    /// ([`IndirectArgs::Replay`]), and no root table: every dispatch of the variant reads the slot
-    /// table the preprocess wrote for its command, whose address fills its
-    /// `PushHole::RootTableAddress` (`ReplayLayout::table_offset`). The region takes its grid,
-    /// first threadgroup, and nominal threadgroup size from the region record the preprocess wrote
-    /// for the dispatch's command and region (`MultiRegion` 1), whose address fills its
-    /// `PushHole::ReplayRegionAddress` (`ReplayLayout::region_offset`), so one variant runs the
-    /// interior, an edge, or a group-count chunk of any command. `state` binds no kernel buffer
-    /// (the records do, `ReplayRefusal::KernelBufferBound` otherwise) and binds what the commands
-    /// share: the threadgroup lengths of the variant and the resident set. A plan of a pipeline not
-    /// compiled as a replay variant (`LoweringInputs::replay_bindings`), whose slots a record
-    /// cannot supply, is `ReplayRefusal::NotReplayVariant`; a threadgroup size the plan's simd tier
-    /// cannot run is `BindError::NeedsVariant`, as for any dispatch.
-    pub fn instantiate_replay(
-        &self,
-        state: &BindState,
-        threads_per_group: [u32; 3],
-    ) -> Result<DispatchCommands, BindError> {
-        let t = self.compute_template("instantiate_replay")?;
-        check_replay(t, state)?;
-        let dispatch = Dispatch::ThreadgroupsIndirect {
-            indirect: IndirectRef::new(0, 0),
-            threads_per_group,
-        };
-        let mut planned = regions(&t.local, &dispatch, Ragged::of(&self.variant))?;
-        if planned.emulated {
-            return Err(BindError::NeedsVariant {
-                variant: Box::new(self.emulated_variant()),
-            });
-        }
-        // Every region record states the dispatch's region.
-        planned.regions.read_records();
-        let mut commands = DispatchCommands::none();
-        instantiate(
-            t,
-            planned,
-            (state, &dispatch),
-            Records::Replay,
-            &mut commands,
-        )?;
-        Ok(commands)
-    }
-
     /// The variant of the pipeline a compute dispatch runs on: the plan's
     /// [`variant`](BindingPlan::variant), with `emulated_simdgroups` when a threadgroup of the
     /// dispatch has a partial simdgroup the kernel's flattened simd tier cannot run (its
@@ -1123,32 +1070,6 @@ impl BindingPlan {
         })
     }
 
-    /// The unit-axes variant (`VariantKey::unit_axes`) a compute dispatch may run on in place of
-    /// the plan's own: its variant with `unit_axes` the axes along which every threadgroup of the
-    /// dispatch has one thread, where the plan's pipeline is walked predicated and a variant of
-    /// exactly those axes relieves the walk (`RuntimeFact::UnitAxes`'s `relief`) and the plan's
-    /// own variant runs the dispatch ([`dispatch_variant`](Self::dispatch_variant)). `None` where
-    /// it does not, where the dispatch has no such axis, or where the plan is a unit-axes
-    /// variant's. A pure function of the plan and the dispatch, so a consumer can make the variant
-    /// before any dispatch runs on it, and run the dispatch on the plan's own pipeline until it
-    /// is made: the two give the same answers, Metal's, since every thread's position along such
-    /// an axis is 0 in its threadgroup and its threadgroup's in the grid.
-    pub fn unit_axes_variant(&self, dispatch: &Dispatch) -> Result<Option<VariantKey>, BindError> {
-        let t = self.compute_template("unit_axes_variant")?;
-        if t.local.unit_relief == 0 || self.variant.unit_axes != 0 {
-            return Ok(None);
-        }
-        let planned = regions(&t.local, dispatch, Ragged::of(&self.variant))?;
-        let axes = unit_axes(&planned);
-        if axes == 0 || t.local.unit_relief >> (axes - 1) & 1 == 0 {
-            return Ok(None);
-        }
-        if self.dispatch_variant(dispatch)? != self.variant {
-            return Ok(None);
-        }
-        Ok(Some(self.unit_axes_key(axes)))
-    }
-
     /// The plan's variant with `unit_axes` `axes`.
     fn unit_axes_key(&self, axes: u8) -> VariantKey {
         let mut v = self.variant.clone();
@@ -1175,38 +1096,14 @@ impl BindingPlan {
             .as_ref()
             .ok_or_else(|| internal(format!("{call} of a plan that is not a compute plan")))
     }
-
-    /// The specialization [`instantiate_replay`](BindingPlan::instantiate_replay) gives the one
-    /// region of a replay variant of `threads_per_group` threads: what the generated-commands path
-    /// compares a consumer's variant against.
-    pub(crate) fn replay_specialization(
-        &self,
-        threads_per_group: [u32; 3],
-    ) -> Result<SpecializationKey, BindError> {
-        let t = self.compute_template("replay_specialization")?;
-        // A replay variant reads no stage-in region (`check_replay`), so no key bounds a fetch.
-        Ok(region_specialization(t, threads_per_group, true, true))
-    }
 }
 
-/// The specialization of a region of `local` threads of `t`: the template's fixed constants, the
-/// local size, whether the region reads its record (`MultiRegion`), whether a stage-in element it
-/// fetches may lie past the first `2^32` bytes from its bind offset (`StageInReach`,
+/// The specialization of a region of `local` threads of `t`, written over `key` in the storage
+/// its lists hold ([`spec_key_into`]): the template's fixed constants, the local size, whether the
+/// region reads its record (`MultiRegion`, `multi`), whether a stage-in element it fetches may lie
+/// past the first `2^32` bytes from its bind offset (`StageInReach`, `reach`,
 /// [`stage_in_reach`]), and whether it runs as one row (`DeepThreadgroup`, deeper than
 /// [`DEEP_THREADGROUP`]).
-fn region_specialization(
-    t: &ComputeTemplate,
-    local: [u32; 3],
-    multi: bool,
-    reach: bool,
-) -> SpecializationKey {
-    let mut key = SpecializationKey::new();
-    region_specialization_into(t, (local, multi, reach), &mut key);
-    key
-}
-
-/// [`region_specialization`]'s key of a region of `local` threads, `multi` and `reach`, written
-/// over `key` in the storage its lists hold ([`spec_key_into`]).
 ///
 /// The template's fixed constants are the plan's value of every other constant of the layout, in
 /// the layout's order, each a function of its key alone (`plan::compute`): each is taken where the
@@ -1324,40 +1221,6 @@ fn stage_in_reach(
         };
         u64::from(element) * u64::from(stride) + end > 1 << 32
     })
-}
-
-/// Whether `t` is a device-replay variant's template that `state` can instantiate: every buffer
-/// slot is one of the 32 kernel buffers a record binds, read through its root entry; no field a
-/// record cannot supply (a descriptor slot's residual, a slot's `SlotGuestBase`, the stage-in
-/// region or a stage-in stride); and no kernel buffer bound by `state`.
-fn check_replay(t: &ComputeTemplate, state: &BindState) -> Result<(), BindError> {
-    let refused = |reason| BindError::InvalidReplay { reason };
-    let slots = t.buffers.iter().all(|b| {
-        b.form == BufferForm::Psb
-            && b.slot.stage == Stage::Kernel
-            && b.slot.class == SlotClass::Buffer
-            && (b.slot.index as usize) < BINDING_COUNT
-    });
-    let fields = t.fields.iter().all(|f| {
-        !matches!(
-            f.field,
-            PushField::SlotBindOffset(_)
-                | PushField::SlotGuestBase(_)
-                | PushField::StageInRegion
-                | PushField::StageInStride(_)
-        )
-    });
-    if !slots || !fields || t.stage_in_region {
-        return Err(refused(ReplayRefusal::NotReplayVariant));
-    }
-    if state
-        .stages
-        .get(&Stage::Kernel)
-        .is_some_and(|k| !k.buffers.is_empty())
-    {
-        return Err(refused(ReplayRefusal::KernelBufferBound));
-    }
-    Ok(())
 }
 
 /// What writes a dispatch's region records and group counts.

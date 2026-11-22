@@ -423,7 +423,7 @@ pub const FLAG_TEXEL_CLASS: u32 = 0xfff << 16;
 /// format lacks `VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT`, which such a read needs
 /// (`VUID-vkCmdDispatch-OpTypeImage-07028`). A storage read through its handle reads the null
 /// element instead, as a nil texture's read does ([`Lookup::Flagged`]'s `unreadable`); its writes
-/// store as before. Set only on such a device (`bind::heap::handle_entry_flags`). A handle carries
+/// store as before. Set only on such a device (`bind::heap::storage_unreadable`). A handle carries
 /// it in place, in [`HANDLE_STORAGE_UNREADABLE`].
 pub const FLAG_STORAGE_UNREADABLE: u32 = 1 << 28;
 /// The bit of a heap handle that carries its entry's [`FLAG_STORAGE_UNREADABLE`], in place, in a

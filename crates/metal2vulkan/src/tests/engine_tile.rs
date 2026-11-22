@@ -791,11 +791,14 @@ fn a_tile_pipeline_places_its_threadgroup_arguments() {
         s.stages.insert(Stage::Kernel, StageTable::default());
         s.imageblock_size = ImageblockSize::new(16, 16);
         s.render_area = [40, 24];
-        let mut memory = TileThreadgroupMemory::new(length);
+        let mut memory = TileThreadgroupMemory {
+            length,
+            arguments: std::collections::BTreeMap::new(),
+        };
         for &(index, length, offset) in arguments {
             memory
                 .arguments
-                .insert(index, TileThreadgroupArgument::new(length, offset));
+                .insert(index, TileThreadgroupArgument { length, offset });
         }
         s.tile_threadgroup = memory;
         s

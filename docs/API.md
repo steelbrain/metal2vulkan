@@ -25,7 +25,7 @@ differences from Metal. The runtime's own guide is [its README](../crates/metal2
   The exceptions are exhaustive on purpose: keys and Vulkan structs (`SlotRef`, `ResourceSlot`,
   `ApiVersion`, ...), and the enums a consumer must interpret completely to bind and draw
   correctly (`StageSource`, `PushHole`, `HeapSource`, `ImageSource`, `SamplerSource`,
-  `UseTarget`, `SlotClass`, `VertexStride`, `TileMapping`, `DrawCommand`, `PrecisionNote`, and Metal's `PrimitiveType`, `IndexType`, `CullMode`, `Winding`
+  `UseTarget`, `SlotClass`, `VertexStride`, `DrawCommand`, `PrecisionNote`, and Metal's `PrimitiveType`, `IndexType`, `CullMode`, `Winding`
   and `TextureType`), where a new variant breaks your build on purpose.
 - **Semver** covers this surface from 0.2.0 (still `0.x`: a breaking change bumps the minor
   version).
@@ -485,10 +485,10 @@ exit. A kernel whose threads' positions alone make such a block differ, along so
 them are taken as uniform. In a threadgroup of one thread along an axis, Metal's
 `threads_per_threadgroup` is 1 there, so every thread's `thread_position_in_threadgroup` on that
 axis is 0 and its `thread_position_in_grid` is its threadgroup's position, partial threadgroups
-included. `BindingPlan::unit_axes_variant(&dispatch)` offers a dispatch of such threadgroups,
-where its axes are among the masks of `relief`, the kernel's unit-axes variant
-(`VariantKey::unit_axes`, which `LoweringInputs::unit_axes` compiles): the same kernel with those
-positions uniform, walked without the predication they caused, giving the same answers. Its plan
+included. A dispatch of such threadgroups, where its axes are among the masks of `relief`, may
+run on the kernel's unit-axes variant (`VariantKey::unit_axes`, which `LoweringInputs::unit_axes`
+compiles): the same kernel with those positions uniform, walked without the predication they
+caused, giving the same answers. Its plan
 states `UnitAxes { axes, relief: 0 }` and sends a dispatch with more than one thread along one of
 its axes back to the variant without them (`BindError::NeedsVariant`). A kernel has at most seven
 such variants per variant it runs on, one per mask. On the Iris Xe, an authored kernel of four shuffles each way and a
@@ -1014,9 +1014,9 @@ A grid Metal draws nothing for (an axis past `bind::METAL_MESH_GRID_AXIS`, or mo
 `bind::METAL_MESH_GRID_TOTAL` threadgroups, measured on the M3 Max) draws nothing in every form:
 a direct draw's command is zeroed, an object function's wrapper launches nothing for such a grid,
 and an indirect draw reads its counts on the GPU. An indirect draw's
-`DrawCommands::mesh_arguments` is a pass to record before the render pass
-(`bind::mesh_arguments_module`, one invocation): it writes the draw's counts into the consumer's
-scratch (`MeshArguments::scratch_bytes`), which the draw reads in place of Metal's arguments.
+`DrawCommands::mesh_arguments` is the form of a pass to record before the render pass (one
+invocation) that writes the draw's counts into the consumer's scratch, which the draw reads in
+place of Metal's arguments; the translator builds no module for that pass.
 
 An object grid runs at any count Metal runs, past the task stage's limits too, on a device with
 device addresses, `shaderInt64`, `multiDrawIndirect` and `drawIndirectCount` (every committed
@@ -1130,10 +1130,9 @@ for dependency in &pipeline.dependencies {
   a storage texel buffer array declared without a format where it writes it, each needing the
   texel buffer kind's non-uniform indexing and update-after-bind features (a storage one also
   `shaderStorageImageWriteWithoutFormat`, and where it is read `shaderStorageImageReadWithoutFormat`
-  or, without it, the formats' own read bits, section 10). `bind::heap_element` answers
-  `HeapElement::TexelBuffer` for a texture buffer such a class holds, the format of its texel
-  buffer view; a planned heap's members are textures with images, so only a heap set the consumer
-  keeps for every command (each live texture at its resource ID) holds texture buffers. Push constants carry the values the
+  or, without it, the formats' own read bits, section 10). A planned heap's members are
+  textures with images, so only a heap set the consumer keeps for every command (each live
+  texture at its resource ID) holds texture buffers. Push constants carry the values the
   binder writes per command. A stage that writes the command buffer's `ExecutionStatus` (a
   `seq_cst` fence, an argument buffer's cubic sampler) reaches it by device address, a push hole, where the device addresses buffers
   (`bufferDeviceAddress` and `shaderInt64`), and through a set-0 storage buffer of its own
@@ -1239,9 +1238,9 @@ for dependency in &pipeline.dependencies {
 - A texture buffer of more texels than the device's `maxTexelBufferElements` (Metal makes them up
   to 2^28 texels on every Mac; one texel buffer view holds 2^27 on ANV and lavapipe and 2^26 on
   MoltenVK) is bound through views of its parts. State with its binding the views its texels take
-  (`BoundTexture::Buffer::parts`, `bind::texel_buffer_parts(limits, texels)`: 1 within the limit,
-  which binds one view as before and keeps the pipeline and its key). Each part but the last holds
-  `bind::part_texels(limits)` texels, the limit rounded down to a multiple of
+  (`BoundTexture::Buffer::parts`: 1 within the limit, which binds one view as before and keeps
+  the pipeline and its key, else `⌈texels / P⌉` parts of `P` texels). Each part but the last holds
+  `P = bind::part_texels(limits)` texels, the limit rounded down to a multiple of
   `minTexelBufferOffsetAlignment`, so every part starts on that alignment where the texture buffer
   does; the last holds the rest. A slot whose function only reads (not through a sampler), writes,
   updates by an atomic or asks the width of the texture buffer, on a device that indexes an array
@@ -1309,9 +1308,7 @@ assert!(plan.variant.is_empty(), "this shape needs no other variant");
 
 `state.shape()` keeps only what can change a plan (which slots are bound with what kind of
 resource, formats, level counts, sampler modes, alignment classes). A plan is a pure function of the
-pipeline, the device and the shape: memoize it on `(PipelineKey, BindShape)`. A consumer that keeps
-the shapes it planned can find a state's among them without making it: `state.has_shape(&shape)`
-answers `state.shape() == shape`, compared in place.
+pipeline, the device and the shape: memoize it on `(PipelineKey, BindShape)`.
 
 The plan holds one `DescriptorWrite` per layout binding element (the resource at a slot, a buffer
 the binder synthesizes, or a neutral resource where nothing compatible is bound), the vertex
@@ -1320,7 +1317,7 @@ every live sampler state and visible-function table the command can reach throug
 (`argument_samplers`, function tables), and the resources it uses (`used_resources`). A consumer
 that lists those in token order says so (`used_in_token_order`), and one that points every root
 table at a resident set it uploads apart, holding them and the ranges it lists
-(`resident_ranges`), says that (`resident_apart`, with `ResidentSet`): a command's
+(`resident_ranges`), says that (`resident_apart`): a command's
 instantiation then costs its own bindings and heap members, not every resource the state lists.
 
 A plan whose `variant` is not empty asks for another variant of the pipeline (a storage texture's
@@ -1404,8 +1401,7 @@ A plan that reads handles (a texture's or sampler state's resource ID, a visible
 writes heap tables among its descriptor bytes, after the stage tables: its handle tables, sampler
 tables and function-table directories. Their bytes grow with the resources the state lists as
 used and the textures its slots bind that a handle names, and they depend on nothing else of the
-state but its argument samplers, function tables and heap placement. `heap_elements` is a
-function of the same inputs and the heap's capacity.
+state but its argument samplers, function tables and heap placement.
 
 A dispatch is one or more regions (a grid that is not whole threadgroups adds edge regions), each
 with its group count, specialization and push constants: create one `VkPipeline` per distinct
@@ -1478,8 +1474,7 @@ What you record from `DispatchCommands` or `DrawCommands`:
   exactly its `descriptor_ranges` entry. Upload `descriptor_bytes` (argument and handle tables) and
   the resident root tables where present. A handle table maps each resident resource's
   `gpuResourceID` to its heap element; a consumer that keeps one heap for every command buffer can
-  bind one table of every texture ID instead (`bind::handle_entry`, `bind::heap_element`,
-  `bind::handle_entry_flags`), as the runtime does.
+  bind one table of every texture ID instead (`bind::handle_entry`), as the runtime does.
 - **Push constants.** Write `push_constants`, and fill each of the `push_holes` with the device
   address it names: the uploaded root table, the command buffer's `ExecutionStatus` buffer, an
   indirect command buffer's records.
@@ -1509,25 +1504,15 @@ resident-table domains a function's encoder operations are refused,
 `Unsupported{GpuEncodedIndirectCommands, NotImplemented}`; under the identity domains a function
 writes the render commands section 1 names, into the records `pipeline::IndirectDrawLayout`
 states, and is refused the same way for any other operation.
-The binder replays records into dispatches and draws: on the host, or on the device through a
-preprocessing kernel (`replay_preprocess`), and through `VK_EXT_device_generated_commands` where
-the device has it (`replay_preprocess_generated`). Draws of primitives under the encoder's
-pipeline replay on the device through `draw_replay_preprocess`: one indirect draw per command
-and primitive type the execution names, the pipeline compiled as its replay variant
-(`VariantKey::replay_bindings`), whose vertex and fragment functions read each command's buffers
-from the slot tables the preprocess writes. The variant pulls every layout fixed-function vertex
-input would fetch (`draw_replay_vertex_layouts`, named in the shape's `far_vertex_buffers`: the
-pulled-vertex-buffer variant, no buffer bound there), so each attribute reads its command's buffer
-at the command's own vertex and instance; a layout whose stride is set per bind keeps an
-execution off the device (`DrawReplayRule::VertexAttributes`), since each command binds its own
-stride. Draws of one list type or points whose fragment function
-reads no buffer and no `[[primitive_id]]` may instead merge into one draw (`DrawReplay::merged`):
-two merge passes (`draw_merge_module`) write each command's first vertex in the merged draw, and
-the vertex function, compiled as its merged variant (`VariantKey::merged_draws`), finds its
-command by that prefix and runs the command's vertex, instance and buffers, in the commands'
-order. A buffer's records start at `bind::indirect_commands::records_address` of its ID, outside
-every Metal address; records may run past later IDs' starts, and a resident set
-(`bind::ResidentSet`) keeps each records range whole. Storage may hold a written flag per command,
+The translator replays no records. For a consumer that replays them, a render pipeline compiles
+as its replay variant (`VariantKey::replay_bindings`), whose vertex and fragment functions read
+each command's buffers from slot tables in memory, and as its merged variant
+(`VariantKey::merged_draws`), whose vertex function finds its command in one merged draw by a
+prefix of the commands' first vertices (`bind::DRAW_ARGUMENT_BYTES`,
+`bind::DRAW_INDEX_ENTRY_BYTES`, `bind::MERGED_REST_FIRST`) and runs the command's vertex,
+instance and buffers, in the commands' order. A buffer's records start at
+`bind::indirect_commands::records_address` of its ID, outside every Metal address; records may
+run past later IDs' starts, and a resident set keeps each records range whole. Storage may hold a written flag per command,
 a `u32` a command past the records (`bind::indirect_commands::written_flag_offset`): a consumer
 whose own writes of the records set the flags may reset only the flagged records of a run of
 commands, clearing each flag with its record.
@@ -1570,7 +1555,8 @@ assert_eq!(linked, pipeline);
   `reconvergence()`, `required_subgroup_size()`, `requires_full_subgroups()`, `module_stats()`
   (section 3) and `writes_memory()` (stores or atomics, which a render pipeline drawn in more than
   one color group refuses).
-  `compile_function_with_report` also returns a `CompileReport` of what the compile cost.
+  `DeviceProfile::compile_entry` (a bare module's entry) also returns a `CompileReport` of what
+  the compile cost.
 - A render pipeline's stages compile under inputs that a decode of its functions learns.
   `render_pipeline_key` returns `RenderPipelineKeys`: each stage's function key, and the inputs to
   compile a missing stage under. So does a compute pipeline's kernel:
@@ -2562,8 +2548,8 @@ bound.
   spanning 1.6 codes), an sRGB twin's decoded value within half a `2^-13` step of Metal's table
   (`R10Unorm_X6_sRGB`'s and `RGB10A2Unorm_sRGB`'s colour 1.64 steps) beyond the `Pow`'s bound, a
   `half` result within one `half` ulp. A texture a heap holds by its raw texels alone
-  (`BGR10_XR`, `BGRA10_XR`, `R10Unorm_X6`, `RG10Unorm_X12` and the bfloat formats:
-  `bind::heap_raw_form`), whose `float` read, sample or gather through an argument buffer the
+  (`BGR10_XR`, `BGRA10_XR`, `R10Unorm_X6`, `RG10Unorm_X12` and the bfloat formats), whose
+  `float` read, sample or gather through an argument buffer the
   function decodes the same way: such a stage records the note as a specialized note, holding
   where a texture its handles can name is one (`SpecKey::HeapRawTextures`, which the binding plan
   gives from the textures the command makes resident or binds), so a reading of the module alone

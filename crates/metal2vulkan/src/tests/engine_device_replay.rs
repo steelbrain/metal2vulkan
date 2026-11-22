@@ -1,42 +1,19 @@
-//! The device replay of GPU-encoded compute commands end to end on the CPU interpreter. No device
-//! is opened.
-//!
-//! K14b's template (`icb_replay_template`: each thread stages `params[0] * (tid + 1)` in
-//! threadgroup memory, waits for its group, and writes its staged word plus `params[1]` to
-//! `out[tid]`) compiles as a replay variant (`LoweringInputs::replay_bindings`) through the public
-//! API on every committed profile with device addresses, plans with the resident set and its
-//! threadgroup length and no kernel buffer, and instantiates with
-//! `BindingPlan::instantiate_replay`. The preprocess runs over host-encoded records (a dispatch of
-//! threadgroups, an empty command, a dispatch of threads, each dispatch binding its buffers at
-//! interior offsets), and each command's dispatch runs the variant with its arguments and its
-//! slot table, as the consumer records them. The output is what Metal computes for each command,
-//! and the status is clean. On the profiles without device addresses the variant's compile names
-//! what they lack; a plan of the template compiled without the input, or a bind state that binds
-//! a kernel buffer, is refused.
+//! The flat and folded compute variants end to end on the CPU interpreter. No device is opened.
 //!
 //! `icb_replay_grid_template` observes every grid builtin of its region (its threadgroup's size and
 //! position, the nominal size, the grid in threadgroups and threads) and its neighbour in
-//! threadgroup memory. Ragged thread grids, and group counts past a device's limit (a description
-//! limited to 3 x 2 x 64), replay on the device exactly as the host replay of the same records runs
-//! them (the template compiled plainly, each command's own dispatch over the regions) and as a
-//! model of the source computes them; a command with more regions than the execution records is the
-//! typed `REGIONS` fault, beside a command that still runs.
+//! threadgroup memory; `host_replay` runs a command list of it as the consumer records each
+//! command's own dispatch, and a model of the source computes what Metal does.
 //!
 //! A kernel that reads only `thread_position_in_grid` and `threads_per_grid` (`flat`) compiles as a
-//! flat variant (`LoweringInputs::flat_grid`), which every command of its pipeline selects: thread
-//! and threadgroup grids, ragged or not, of any threadgroup size and lengths, run each grid thread
-//! once with Metal's position and grid, in threadgroups of the variant's size spread over the
-//! device's group-count limits; a threadgroup Metal runs nothing for runs nothing and reports
-//! nothing, and a grid no group count holds is the typed `GROUP_COUNT` fault. A kernel that
-//! observes its partition is refused under the input. Outside a replay (`VariantKey::flat_grid`),
-//! the flat variant binds as any kernel does and runs each command as one indirect dispatch at its
-//! flat group counts, reading its grid from the region record at its `ReplayRegionAddress`, as
-//! Metal computes it.
+//! flat variant (`LoweringInputs::flat_grid`, `VariantKey::flat_grid`), which binds as any kernel
+//! does and reads its grid from the region record at its `ReplayRegionAddress`: a direct
+//! `dispatchThreads:` of its plan, ragged or not, is one region that runs each grid thread once, as
+//! Metal computes it. A kernel that observes its partition is refused under the input.
 //!
 //! The grid template, which observes its partition, compiles as a folded variant
-//! (`VariantKey::folded_groups`) and runs each threadgroup command as one indirect dispatch of
-//! its threadgroup size at its group counts folded within the device's limits (its own, and
-//! 3 x 2 x 64), each threadgroup at Metal's position, as Metal computes it.
+//! (`VariantKey::folded_groups`), which states its key; a direct or indirect dispatch of its plan
+//! is refused.
 //!
 //! `llvm-as` assembles the fixture; without it the tests skip visibly.
 
@@ -45,26 +22,17 @@ use std::num::NonZeroU64;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::bind::replay::{
-    replay_preprocess_generated, typed_module as preprocess_module, GeneratedLayout,
-    GeneratedRefusal, GeneratedVariant, MAX_REPLAY_REGIONS, MAX_SEGMENT_COMMANDS,
-};
-use crate::bind::status::ReplayFaults;
 use crate::bind::{
-    replay_preprocess, BindState, BoundBuffer, Dispatch, ExecutionStatus, IndirectArgs,
-    IndirectRef, PushHole, ReplayExecution, ReplayRefusal, ReplayVariant, ResourceClass, RootTable,
-    StageTable, StatusReport, UsedResource, WriteSource,
+    BindState, BoundBuffer, Dispatch, ExecutionStatus, IndirectRef, PushHole, ResourceClass,
+    RootTable, StageTable, UsedResource, WriteSource,
 };
 use crate::budget::Budget;
 use crate::cache::VariantKey;
 use crate::device::profile::BufferAccess;
 use crate::device::requirements::VkFeature;
-use crate::device::{Device, DeviceDescription, DevicePolicy, GeneratedCommandsProperties};
+use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{BindError, Error, Feature, Needs};
-use crate::indirect_commands::{
-    layout, Action, BufferBinding, BufferStage, CommandRecord, BINDING_COUNT,
-    COMMAND_BUFFER_HEADER_BYTES, COMMAND_BYTES,
-};
+use crate::indirect_commands::{Action, BufferBinding, BufferStage, CommandRecord};
 use crate::library::Library;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::layout::BindingSource;
@@ -77,13 +45,9 @@ use crate::spirv::interp::{run, Buffer, Config, Order, Resources};
 use crate::spirv::ir::TypedModule;
 use crate::spirv::testing::refuses_threadgroup_memory;
 
-const ENTRY: &str = "icb_replay_template";
-
 const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\ntarget triple = \"air64_v28-apple-macosx26.0.0\"\n\n";
 
 /// Device addresses of the consumer's objects.
-const SCRATCH: u64 = 0x0000_0030_0000_0000;
-const RECORDS: u64 = 0x0000_0031_0000_0000;
 const STATUS: u64 = 0x0000_0012_0000_0000;
 const SINK: u64 = 0x0000_0011_0000_0000;
 
@@ -93,20 +57,8 @@ const OUT: (u64, u64) = (0x0000_0001_0001_0000, 0x0000_0021_0000_0000);
 const BYTES: usize = 512;
 
 const TOKEN: u64 = 0x0123_4567_89ab_cdef;
-const LOCAL: [u32; 3] = [8, 1, 1];
 /// The template's threadgroup length: one word per thread of a group.
 const LENGTH: u32 = 32;
-
-fn fixture() -> Option<Vec<u8>> {
-    match llvm_assemble(&engine_dir().join(format!("{ENTRY}.ll"))) {
-        Ok(b) => Some(b),
-        Err(AssembleError::Missing(why)) => {
-            eprintln!("SKIPPED: {why}");
-            None
-        }
-        Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected {ENTRY}.ll: {why}"),
-    }
-}
 
 /// `text` (an AIR module body) assembled, with the AIR target header.
 fn assemble(name: &str, text: &str) -> Option<Vec<u8>> {
@@ -247,51 +199,6 @@ fn words(bytes: &[u8]) -> Vec<u32> {
         .collect()
 }
 
-/// The consumer's memory: the scratch, the records, the two allocations, and the status.
-struct Memory {
-    scratch: Vec<u8>,
-    records: Vec<u8>,
-    params: Vec<u8>,
-    out: Vec<u8>,
-    status: [u8; ExecutionStatus::BYTES],
-}
-
-impl Memory {
-    /// Every buffer the interpreter reaches by address, in a fixed order, with `extra` first.
-    fn buffers(&self, extra: Vec<Buffer>) -> Vec<Buffer> {
-        let at = |address, bytes: &[u8]| Buffer {
-            slot: None,
-            address: Some(address),
-            bytes: bytes.to_vec(),
-        };
-        let mut out = extra;
-        out.extend([
-            at(SCRATCH, &self.scratch),
-            at(RECORDS, &self.records),
-            at(PARAMS.1, &self.params),
-            at(OUT.1, &self.out),
-            at(STATUS, &self.status),
-            at(SINK, &[0; 64]),
-        ]);
-        out
-    }
-
-    /// Take back what a run left in the buffers of [`Memory::buffers`] after `extra` of them.
-    fn take(&mut self, mut out: Vec<Vec<u8>>, extra: usize) {
-        let mut rest = out.split_off(extra).into_iter();
-        let mut next = || rest.next().expect("a buffer");
-        self.scratch = next();
-        assert_eq!(next(), self.records, "the records are only read");
-        assert_eq!(next(), self.params, "the parameters are only read");
-        self.out = next();
-        self.status = next().try_into().expect("status");
-    }
-
-    fn report(&self) -> StatusReport {
-        ExecutionStatus::decode(&self.status)
-    }
-}
-
 /// Run `m` with `res`'s push and spec over `workgroups` in both scheduling orders; the buffers.
 fn run_both(m: &TypedModule, workgroups: [u32; 3], res: Resources) -> Vec<Vec<u8>> {
     let mut outs = Vec::new();
@@ -322,506 +229,6 @@ fn symbol(source: BindingSource) -> ResourceSlot {
         },
         other => panic!("a compute binding {other:?}"),
     }
-}
-
-/// One device replay of `commands` (a header, then their records) over the variant of `entry`
-/// (in `bc`) for `LOCAL` and threadgroup length 0 `length` (0: none), with the parameters
-/// allocation holding `params`, on `dev`: the preprocess, then per command, region, and variant
-/// the variant's dispatch over its arguments with the command's slot table and the region's
-/// record, as the consumer records them. The memory it leaves, and the dispatches it made.
-fn replay_run(
-    stem: &str,
-    dev: &Device,
-    bc: &[u8],
-    entry: &str,
-    length: u32,
-    commands: &[CommandRecord],
-    params: Vec<u8>,
-) -> (Memory, usize) {
-    let count = commands.len() as u32;
-    replay_variants_run(
-        stem,
-        (dev, bc, entry),
-        (length, &[LOCAL], None),
-        commands,
-        (ReplayExecution::new(count, 0, count), Route::Arguments),
-        params,
-    )
-}
-
-/// Which of the device replay's paths a run takes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Route {
-    /// K14c's: per command, region, and variant an indirect dispatch from the arguments.
-    Arguments,
-    /// The generated-commands path: per possible segment an execution of the sequences its count
-    /// states, each binding its variant, pushing its bytes, and dispatching its count.
-    Generated,
-}
-
-/// Whether `dev` runs the generated-commands path: its description states
-/// `VK_EXT_device_generated_commands` with compute pipeline binding.
-fn generates(dev: &Device) -> bool {
-    dev.generated_commands().is_some_and(|g| {
-        g.pipeline_binding_stages
-            .contains(crate::vk::ShaderStageFlags::COMPUTE)
-    })
-}
-
-/// [`replay_run`] over a variant of `entry` for each threadgroup size of `locals`, in that order,
-/// all with threadgroup length 0 `length`, replaying `execution`; with `flat`, flat variants
-/// for a state of that many threads per threadgroup at most.
-fn replay_variants_run(
-    stem: &str,
-    (dev, bc, entry): (&Device, &[u8], &str),
-    (length, locals, flat): (u32, &[[u32; 3]], Option<u32>),
-    commands: &[CommandRecord],
-    (execution, path): (ReplayExecution, Route),
-    params: Vec<u8>,
-) -> (Memory, usize) {
-    let mut inputs = replay_inputs();
-    inputs.flat_grid = flat.is_some();
-    let pipe = pipeline(dev, bc, entry, &inputs).unwrap_or_else(|e| panic!("{stem}: {e}"));
-    let (_, m) = typed_module_with(bc, entry, dev.profile(), &inputs)
-        .unwrap_or_else(|e| panic!("{stem}: {e}"));
-    let state = shared_state(length);
-    let plan = pipe
-        .plan(dev, &state.shape())
-        .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
-    assert!(
-        plan.diagnostics.is_empty(),
-        "{stem}: {:?}",
-        plan.diagnostics
-    );
-    let mut lengths = [0; 31];
-    lengths[0] = length;
-    let mut variants = Vec::new();
-    let mut instantiated = Vec::new();
-    for &local in locals {
-        let cmds = plan
-            .instantiate_replay(&state, local)
-            .unwrap_or_else(|e| panic!("{stem}: {local:?}: {e:?}"));
-        assert_eq!(cmds.regions.len(), 1, "{stem}");
-        assert_eq!(
-            cmds.regions[0].indirect,
-            Some(IndirectArgs::Replay),
-            "{stem}"
-        );
-        assert!(cmds.root_table.is_none(), "{stem}");
-        let token = NonZeroU64::new(TOKEN).expect("token");
-        variants.push(match flat {
-            Some(max) => ReplayVariant::flat(token, local, max),
-            None => ReplayVariant::new(token, local, lengths),
-        });
-        instantiated.push(cmds);
-    }
-
-    // The header as the runtime writes it (`CommandDescriptor::encode_header`): the capacity, and
-    // the packed binding counts, which the replay reads the kernel bindings below
-    // (`layout::COUNTS`), here every kernel binding.
-    let mut records = vec![0u8; COMMAND_BUFFER_HEADER_BYTES];
-    records[..4].copy_from_slice(&execution.capacity.to_le_bytes());
-    let counts = layout::COUNTS as usize;
-    records[counts..counts + 4].copy_from_slice(&(BINDING_COUNT as u32).to_le_bytes());
-    for c in commands {
-        let mut bytes = vec![0u8; COMMAND_BYTES];
-        c.encode_into(&mut bytes).expect("record");
-        records.extend_from_slice(&bytes);
-    }
-    let pre = match path {
-        Route::Arguments => replay_preprocess(dev, &state, &execution, &variants),
-        Route::Generated => {
-            let generated: Vec<GeneratedVariant<'_>> = instantiated
-                .iter()
-                .map(|cmds| GeneratedVariant::new(&pipe, &plan, cmds))
-                .collect();
-            replay_preprocess_generated(dev, &state, &execution, &variants, &generated)
-        }
-    }
-    .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
-    let layout = pre.layout;
-
-    // The consumer's uploads.
-    let mut scratch = vec![0u8; layout.bytes as usize];
-    let mut put = |at: u64, bytes: &[u8]| {
-        scratch[at as usize..at as usize + bytes.len()].copy_from_slice(bytes);
-    };
-    put(layout.params_offset(), &pre.params);
-    let mut resident = pre.resident.bytes.clone();
-    let sink = RootTable::SINK_HOST_OFFSET as usize;
-    resident[sink..sink + 8].copy_from_slice(&SINK.to_le_bytes());
-    put(layout.resident_offset, &resident);
-    put(layout.extents_offset, &pre.extents);
-    put(layout.variants_offset, &pre.variants);
-    put(layout.parent_offset, &pre.parent);
-    if let (Some(g), Some(replay)) = (layout.generated, &pre.generated) {
-        put(g.templates_offset, &replay.templates);
-    }
-    let mut mem = Memory {
-        scratch,
-        records,
-        params,
-        out: vec![0; BYTES],
-        status: ExecutionStatus::initial(),
-    };
-
-    // The preprocess.
-    let mut push = pre.push_constants.clone();
-    for hole in &pre.push_holes {
-        let (offset, address) = match *hole {
-            PushHole::RootTableAddress { offset, .. } => (offset, SCRATCH + layout.resident_offset),
-            PushHole::ExecutionStatusAddress { offset, .. } => (offset, STATUS),
-            PushHole::CommandRecordsAddress { offset, .. } => (offset, RECORDS),
-            other => panic!("{other:?}"),
-        };
-        push[offset as usize..offset as usize + 8].copy_from_slice(&address.to_le_bytes());
-    }
-    let limits = dev.profile().fields().limits.max_compute_work_group_count;
-    let prep = preprocess_module(limits).expect("preprocess module");
-    let res = Resources {
-        buffers: mem.buffers(Vec::new()),
-        push,
-        spec: BTreeMap::new(),
-    };
-    let out = run_both(&prep, pre.group_count, res);
-    mem.take(out, 0);
-
-    // The dispatches: per command, region, and variant, the variant over its arguments with the
-    // command's slot table and the region's record.
-    let layout_bindings: BTreeMap<(u32, u32), BindingSource> = pipe
-        .layout
-        .sets
-        .iter()
-        .flat_map(|s| {
-            s.bindings
-                .iter()
-                .map(move |b| ((s.set, b.binding), b.source))
-        })
-        .collect();
-    let ids: BTreeMap<u32, SpecKey> = pipe
-        .stage
-        .specialization
-        .constants
-        .iter()
-        .map(|c| (c.id, c.key))
-        .collect();
-    // What runs, in order: per dispatch its variant, push bytes, and group count.
-    let mut jobs: Vec<(usize, Vec<u8>, [u32; 3])> = Vec::new();
-    match (path, layout.generated) {
-        (Route::Arguments, None) => {
-            for s in 0..layout.slots {
-                for r in 0..layout.regions {
-                    for (v, cmds) in instantiated.iter().enumerate() {
-                        let at = layout.argument_offset(s, r, v as u32) as usize;
-                        let args: [u32; 3] = words(&mem.scratch[at..at + 12])
-                            .try_into()
-                            .expect("arguments");
-                        let region = &cmds.regions[0];
-                        let mut push = Vec::new();
-                        if let Some(w) = region.push_constants.first() {
-                            push = vec![0u8; (w.offset as usize) + w.bytes.len()];
-                            push[w.offset as usize..].copy_from_slice(&w.bytes);
-                        }
-                        for hole in &cmds.push_holes {
-                            let (offset, address) = match *hole {
-                                PushHole::RootTableAddress { offset, .. } => {
-                                    (offset, SCRATCH + layout.table_offset(s))
-                                }
-                                PushHole::ReplayRegionAddress { offset, .. } => {
-                                    (offset, SCRATCH + layout.region_offset(s, r))
-                                }
-                                PushHole::ExecutionStatusAddress { offset, .. } => (offset, STATUS),
-                                other => panic!("{other:?}"),
-                            };
-                            push[offset as usize..offset as usize + 8]
-                                .copy_from_slice(&address.to_le_bytes());
-                        }
-                        jobs.push((v, push, args));
-                    }
-                }
-            }
-        }
-        (Route::Generated, Some(g)) => {
-            // Per possible segment, the sequences its count states, from its first.
-            for s in 0..layout.slots {
-                let at = g.count_offset(s) as usize;
-                let count = words(&mem.scratch[at..at + 4])[0];
-                assert!(count <= g.max_sequences(s), "{stem}: command {s}: {count}");
-                for q in 0..u64::from(count) {
-                    let seq = (g.sequence_offset(s, 0) + q * u64::from(g.stride)) as usize;
-                    let index = words(&mem.scratch[seq..seq + 4])[0] as usize;
-                    let push = seq + GeneratedLayout::PUSH_OFFSET as usize;
-                    let push = mem.scratch[push..push + g.push_bytes as usize].to_vec();
-                    let d = seq + g.dispatch_offset() as usize;
-                    let args: [u32; 3] =
-                        words(&mem.scratch[d..d + 12]).try_into().expect("dispatch");
-                    assert!(index < instantiated.len(), "{stem}: index {index}");
-                    jobs.push((index, push, args));
-                }
-            }
-        }
-        other => panic!("{stem}: {path:?} with {other:?}"),
-    }
-    let mut dispatched = 0;
-    for (v, push, args) in jobs {
-        let cmds = &instantiated[v];
-        if args.contains(&0) {
-            continue;
-        }
-        dispatched += 1;
-        let region = &cmds.regions[0];
-        let mut spec = BTreeMap::new();
-        for e in &region.specialization.entries {
-            let at = e.offset as usize;
-            let mut x = [0u8; 8];
-            x[..e.size as usize]
-                .copy_from_slice(&region.specialization.data[at..at + e.size as usize]);
-            spec.insert(ids[&e.constant_id], u64::from_le_bytes(x));
-        }
-        let mut descriptors = Vec::new();
-        for w in &plan.descriptors {
-            let bytes = match &w.source {
-                WriteSource::Neutral(_) => vec![0; 4096],
-                WriteSource::ArgumentTable { .. } => cmds
-                    .descriptor_bytes
-                    .iter()
-                    .find(|d| (d.set, d.binding) == (w.set, w.binding))
-                    .expect("argument table bytes")
-                    .bytes
-                    .clone(),
-                other => panic!("{stem}: a replay variant's write {other:?}"),
-            };
-            descriptors.push(Buffer {
-                slot: Some(symbol(layout_bindings[&(w.set, w.binding)])),
-                address: None,
-                bytes,
-            });
-        }
-        let extra = descriptors.len();
-        let res = Resources {
-            buffers: mem.buffers(descriptors),
-            push,
-            spec,
-        };
-        let out = run_both(&m, args, res);
-        mem.take(out, extra);
-    }
-    (mem, dispatched)
-}
-
-/// On every profile with device addresses, the device replay of the template's commands computes
-/// what Metal computes for each, through the preprocess's arguments and slot tables.
-#[test]
-fn replayed_commands_compute_what_metal_computes() {
-    let Some(bc) = fixture() else {
-        return;
-    };
-    let mut ran = 0;
-    for (stem, dev) in devices() {
-        if dev.profile().fields().buffer_access != BufferAccess::Addressed {
-            continue;
-        }
-        ran += 1;
-        // Three commands: threadgroups with the parameters at 256 and the output at 0, an empty
-        // command, and threads with the parameters at 0 and the output at 256.
-        let commands = [
-            record(
-                Action::DispatchThreadgroups {
-                    grid: [8, 1, 1],
-                    local_size: LOCAL,
-                },
-                PARAMS.0 + 256,
-                OUT.0,
-            ),
-            CommandRecord::default(),
-            record(
-                Action::DispatchThreads {
-                    grid: [64, 1, 1],
-                    local_size: LOCAL,
-                },
-                PARAMS.0,
-                OUT.0 + 256,
-            ),
-        ];
-        let mut params = vec![0u8; BYTES];
-        for (at, w) in [(0, 3u32), (4, 100), (256, 5), (260, 7)] {
-            params[at..at + 4].copy_from_slice(&w.to_le_bytes());
-        }
-        let (mem, dispatched) = replay_run(&stem, &dev, &bc, ENTRY, LENGTH, &commands, params);
-        assert_eq!(
-            dispatched, 2,
-            "{stem}: the empty command dispatches nothing"
-        );
-        // What Metal computes: `out[tid] = params[0] * (tid + 1) + params[1]`, per command.
-        let expected: Vec<u32> = (0..64u32)
-            .map(|tid| 5 * (tid + 1) + 7)
-            .chain((0..64).map(|tid| 3 * (tid + 1) + 100))
-            .collect();
-        assert_eq!(words(&mem.out), expected, "{stem}");
-        let report = mem.report();
-        assert!(
-            !report.replay_fault && !report.resident_miss,
-            "{stem}: {report:?}"
-        );
-    }
-    assert!(ran > 0, "no profile with device addresses");
-}
-
-/// `compare(b0, b1)`: each thread `t` writes `b0 == b1 + 16` and `b0 < b1 + 16` (as `uint`s) to
-/// `b0[2t]` and `b0[2t + 1]`: pointer compares of two buffer slots, which read each slot's Metal
-/// address.
-const COMPARE: &str = r#"define void @compare(ptr addrspace(1) noundef "air-buffer-no-alias" %b0, ptr addrspace(1) noundef "air-buffer-no-alias" %b1, i32 %t) {
-entry:
-  %p = getelementptr inbounds i8, ptr addrspace(1) %b1, i64 16
-  %eq = icmp eq ptr addrspace(1) %b0, %p
-  %lt = icmp ult ptr addrspace(1) %b0, %p
-  %e = zext i1 %eq to i32
-  %l = zext i1 %lt to i32
-  %t64 = zext i32 %t to i64
-  %i = shl i64 %t64, 1
-  %o0 = getelementptr inbounds i32, ptr addrspace(1) %b0, i64 %i
-  store i32 %e, ptr addrspace(1) %o0, align 4
-  %o1 = getelementptr inbounds i32, ptr addrspace(1) %o0, i64 1
-  store i32 %l, ptr addrspace(1) %o1, align 4
-  ret void
-}
-
-!air.kernel = !{!0}
-!air.version = !{!20}
-!air.language_version = !{!21}
-!0 = !{ptr @compare, !1, !2}
-!1 = !{}
-!2 = !{!3, !4, !5}
-!3 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b0"}
-!4 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"b1"}
-!5 = !{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}
-!20 = !{i32 2, i32 8, i32 0}
-!21 = !{!"Metal", i32 4, i32 0, i32 0}
-"#;
-
-/// A replay variant reads a slot's Metal address from the slot table the preprocess wrote (its
-/// entry's `guest + bind_offset`), so pointer compares of two buffers see each command's own
-/// addresses.
-#[test]
-fn a_replayed_pointer_compare_reads_each_commands_addresses() {
-    let Some(bc) = assemble("compare", COMPARE) else {
-        return;
-    };
-    let mut ran = 0;
-    for (stem, dev) in devices() {
-        if dev.profile().fields().buffer_access != BufferAccess::Addressed {
-            continue;
-        }
-        ran += 1;
-        // Compiled plainly, the compares read `SlotGuestBase` push fields; as a replay variant,
-        // the root table instead.
-        let guest_base = |inputs: &LoweringInputs| {
-            let (plan, _) = typed_module_with(&bc, "compare", dev.profile(), inputs)
-                .unwrap_or_else(|e| panic!("{stem}: {e}"));
-            let fields: Vec<PushField> = plan.push.fields.iter().map(|f| f.field).collect();
-            (
-                fields
-                    .iter()
-                    .any(|f| matches!(f, PushField::SlotGuestBase(_))),
-                fields.contains(&PushField::RootTableAddress),
-            )
-        };
-        assert!(guest_base(&LoweringInputs::new()).0, "{stem}");
-        assert_eq!(guest_base(&replay_inputs()), (false, true), "{stem}");
-        // `b0` at 64 and `b1 + 16` at 64: equal; `b0` at 128 below `b1 + 16` at 272; `b0` at
-        // 192 above `b1 + 16` in the parameters allocation (`PARAMS` is below `OUT`).
-        let dispatch = |b0: u64, b1: u64| {
-            let mut r = record(
-                Action::DispatchThreadgroups {
-                    grid: [1, 1, 1],
-                    local_size: LOCAL,
-                },
-                b0,
-                b1,
-            );
-            r.threadgroup_memory_lengths[0] = 0;
-            r
-        };
-        let commands = [
-            dispatch(OUT.0 + 64, OUT.0 + 48),
-            dispatch(OUT.0 + 128, OUT.0 + 256),
-            dispatch(OUT.0 + 192, PARAMS.0),
-        ];
-        let (mem, dispatched) =
-            replay_run(&stem, &dev, &bc, "compare", 0, &commands, vec![0; BYTES]);
-        assert_eq!(dispatched, 3, "{stem}");
-        let out = words(&mem.out);
-        for (command, at, eq, lt) in [(0, 16, 1, 0), (1, 32, 0, 1), (2, 48, 0, 0)] {
-            for t in 0..LOCAL[0] as usize {
-                assert_eq!(
-                    [out[at + 2 * t], out[at + 2 * t + 1]],
-                    [eq, lt],
-                    "{stem}: command {command}, thread {t}"
-                );
-            }
-        }
-        assert!(!mem.report().replay_fault, "{stem}");
-    }
-    assert!(ran > 0, "no profile with device addresses");
-}
-
-/// The variant needs device addresses; the binder replays only a replay variant's plan, and only
-/// with no kernel buffer bound.
-#[test]
-fn what_cannot_replay_is_refused_by_name() {
-    let Some(bc) = fixture() else {
-        return;
-    };
-    let mut unaddressed = 0;
-    for (stem, dev) in devices_and_unaddressed() {
-        if dev.profile().fields().buffer_access != BufferAccess::Addressed {
-            match pipeline(&dev, &bc, ENTRY, &replay_inputs()) {
-                Err(e) if refuses_threadgroup_memory(&e, dev.profile()) => {}
-                Err(Error::Unsupported(u)) => {
-                    assert_eq!(u.feature, Feature::GpuEncodedIndirectCommands, "{stem}");
-                    unaddressed += 1;
-                }
-                other => panic!("{stem}: {:?}", other.map(|_| ())),
-            }
-            continue;
-        }
-        let state = shared_state(LENGTH);
-        let plain = pipeline(&dev, &bc, ENTRY, &LoweringInputs::new()).expect("pipeline");
-        let plan = plain.plan(&dev, &state.shape()).expect("plan");
-        assert_eq!(
-            plan.instantiate_replay(&state, LOCAL),
-            Err(BindError::InvalidReplay {
-                reason: ReplayRefusal::NotReplayVariant
-            }),
-            "{stem}"
-        );
-        let replay = pipeline(&dev, &bc, ENTRY, &replay_inputs()).expect("pipeline");
-        let mut bound = shared_state(LENGTH);
-        bound
-            .stages
-            .get_mut(&Stage::Kernel)
-            .expect("kernel")
-            .buffers
-            .insert(
-                1,
-                BoundBuffer::Buffer {
-                    length: BYTES as u64,
-                    offset: 0,
-                    gpu_address: OUT.0,
-                    device_address: Some(OUT.1),
-                    attribute_stride: None,
-                },
-            );
-        let plan = replay.plan(&dev, &bound.shape()).expect("plan");
-        assert_eq!(
-            plan.instantiate_replay(&bound, LOCAL),
-            Err(BindError::InvalidReplay {
-                reason: ReplayRefusal::KernelBufferBound
-            }),
-            "{stem}"
-        );
-    }
-    assert!(unaddressed > 0, "no device without device addresses");
 }
 
 /// The template that observes its regions: each thread adds a weighted sum of its grid builtins and
@@ -871,76 +278,6 @@ fn window(c: &CommandRecord, slot: usize) -> ((u64, u64), u64) {
     (allocation, address - allocation.0)
 }
 
-/// What Metal computes for the grid template's `commands` over the parameters `params`: per
-/// threadgroup of each dispatch (an edge threadgroup of a thread grid has the remaining threads),
-/// each thread's sum into its slot of the command's output window, as the source states it.
-fn metal_grid(commands: &[CommandRecord], params: &[u8]) -> Vec<u8> {
-    let params = words(params);
-    let mut out = vec![0u32; BYTES / 4];
-    for c in commands {
-        let (groups, local, threads) = match c.action {
-            Action::Empty => continue,
-            Action::DispatchThreadgroups { grid, local_size } => (
-                grid,
-                local_size,
-                std::array::from_fn(|i| grid[i] * local_size[i]),
-            ),
-            Action::DispatchThreads { grid, local_size } => (
-                std::array::from_fn(|i| grid[i].div_ceil(local_size[i])),
-                local_size,
-                grid,
-            ),
-            other => panic!("{other:?}"),
-        };
-        let p = window(c, 0).1 as usize / 4;
-        let o = window(c, 1).1 as usize / 4;
-        let (base, modulus) = (params[p], params[p + 1]);
-        for gz in 0..groups[2] {
-            for gy in 0..groups[1] {
-                for gx in 0..groups[0] {
-                    let g = [gx, gy, gz];
-                    let size: [u32; 3] =
-                        std::array::from_fn(|i| local[i].min(threads[i] - g[i] * local[i]));
-                    let n = size[0] * size[1] * size[2];
-                    for lz in 0..size[2] {
-                        for ly in 0..size[1] {
-                            for lx in 0..size[0] {
-                                let l = [lx, ly, lz];
-                                let lin = lx + ly * size[0] + lz * size[0] * size[1];
-                                let neighbour = (lin + 1) % n;
-                                let tid: [u32; 3] = std::array::from_fn(|i| g[i] * local[i] + l[i]);
-                                let terms = [
-                                    (3, size[0]),
-                                    (5, size[1]),
-                                    (7, local[0]),
-                                    (11, local[1]),
-                                    (13, g[0]),
-                                    (17, g[1]),
-                                    (19, groups[0]),
-                                    (23, groups[1]),
-                                    (29, threads[0]),
-                                    (31, threads[1]),
-                                    (37, lx),
-                                    (41, ly),
-                                    (43, neighbour),
-                                ];
-                                let v = terms
-                                    .iter()
-                                    .fold(base, |v, &(k, x)| v.wrapping_add(x.wrapping_mul(k)));
-                                let index =
-                                    tid[0] + tid[1] * threads[0] + tid[2] * threads[0] * threads[1];
-                                let at = o + (index % modulus) as usize;
-                                out[at] = out[at].wrapping_add(v);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    out.iter().flat_map(|w| w.to_le_bytes()).collect()
-}
-
 /// The bind state of command `c`'s own dispatch: its kernel buffers bound in their allocations,
 /// its threadgroup lengths, and the two resident allocations; and each bound slot's allocation
 /// (its guest address).
@@ -970,37 +307,22 @@ fn command_state(c: &CommandRecord) -> (BindState, BTreeMap<u32, u64>) {
     (state, slots)
 }
 
-/// How [`host_replay`] compiles `entry` and dispatches each command.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Run {
-    /// Compiled plainly, each command its own direct dispatch.
-    Plain,
-    /// A flat variant dispatched directly: each `dispatchThreads:` command in one region of its
-    /// own threadgroup size, reading the record `instantiate_dispatch` states.
-    FlatDirect,
-}
-
-/// The host replay of `commands` (K14b) over `entry` of `bc` compiled plainly, on `dev`, with the
-/// parameters allocation holding `params`: each command its own dispatch, binding its kernel
-/// buffers in their allocations and its threadgroup lengths, over the regions
-/// `instantiate_dispatch` plans, in order. The output allocation it leaves.
-///
-/// With [`Run::FlatDirect`], `entry` compiles as a flat variant (`VariantKey::flat_grid`) and each
+/// The host replay of `commands` over `entry` of `bc` compiled as a flat variant
+/// (`VariantKey::flat_grid`), on `dev`, with the parameters allocation holding `params`: each
 /// `dispatchThreads:` command runs as the one direct region `instantiate_dispatch` plans, of the
-/// command's own threadgroup size, reading the record the plan states
-/// (`DispatchCommands::region_record`).
+/// command's own threadgroup size, binding its kernel buffers in their allocations and its
+/// threadgroup lengths and reading the record the plan states (`DispatchCommands::region_record`),
+/// in order. The output allocation it leaves.
 fn host_replay(
     stem: &str,
     (dev, bc, entry): (&Device, &[u8], &str),
-    run: Run,
     commands: &[CommandRecord],
     params: &[u8],
 ) -> Vec<u8> {
     const ROOT: u64 = 0x0000_0040_0000_0000;
     const REGION: u64 = 0x0000_0041_0000_0000;
-    let flat_grid = run == Run::FlatDirect;
     let mut key = VariantKey::new();
-    key.flat_grid = flat_grid;
+    key.flat_grid = true;
     let inputs = key.lowering_inputs(Stage::Kernel);
     let pipe = pipeline(dev, bc, entry, &inputs).unwrap_or_else(|e| panic!("{stem}: {e}"));
     let (_, m) = typed_module_with(bc, entry, dev.profile(), &inputs)
@@ -1040,15 +362,13 @@ fn host_replay(
         };
         // A direct dispatch on a flat variant keeps its own counts and reads the record the plan
         // states.
-        if flat_grid {
-            let volume = dispatch
-                .threads_per_group()
-                .iter()
-                .map(|&l| u64::from(l))
-                .product::<u64>();
-            if volume == 0 || volume > u64::from(FLAT_MAX) {
-                continue;
-            }
+        let volume = dispatch
+            .threads_per_group()
+            .iter()
+            .map(|&l| u64::from(l))
+            .product::<u64>();
+        if volume == 0 || volume > u64::from(FLAT_MAX) {
+            continue;
         }
         let (state, slots) = command_state(c);
         let plan = pipe
@@ -1062,19 +382,16 @@ fn host_replay(
         let record = cmds
             .region_record
             .map_or_else(Vec::new, |bytes| bytes.to_vec());
-        if flat_grid {
-            assert_eq!(
-                cmds.regions.len(),
-                1,
-                "{stem}: a flat dispatch is one region"
-            );
-        }
+        assert_eq!(
+            cmds.regions.len(),
+            1,
+            "{stem}: a flat dispatch is one region"
+        );
         for region in &cmds.regions {
             assert_eq!(region.indirect, None, "{stem}");
-            assert_eq!(
+            assert!(
                 cmds.region_record.is_some(),
-                run == Run::FlatDirect,
-                "{stem}: only a direct dispatch on a flat variant states its own record"
+                "{stem}: a direct dispatch on a flat variant states its own record"
             );
             // Each buffer the region reaches, and the allocation and offset its bytes return to.
             let mut buffers = Vec::new();
@@ -1148,7 +465,7 @@ fn host_replay(
                 let (offset, address) = match *hole {
                     PushHole::RootTableAddress { offset, .. } => (offset, ROOT),
                     PushHole::ExecutionStatusAddress { offset, .. } => (offset, STATUS),
-                    PushHole::ReplayRegionAddress { offset, .. } if flat_grid => (offset, REGION),
+                    PushHole::ReplayRegionAddress { offset, .. } => (offset, REGION),
                     other => panic!("{stem}: {other:?}"),
                 };
                 push[offset as usize..offset as usize + 8].copy_from_slice(&address.to_le_bytes());
@@ -1187,412 +504,6 @@ fn host_replay(
         "{stem}: the parameters are only read"
     );
     memory.remove(&OUT.0).expect("output")
-}
-
-/// The device replay of the grid template's `commands` over a variant per threadgroup size of
-/// `locals`, recording `regions` regions per command, on `dev`, by `path`.
-fn grid_replay(
-    stem: &str,
-    (dev, bc, path): (&Device, &[u8], Route),
-    locals: &[[u32; 3]],
-    commands: &[CommandRecord],
-    (regions, params): (u32, Vec<u8>),
-) -> (Memory, usize) {
-    let count = commands.len() as u32;
-    let mut execution = ReplayExecution::new(count, 0, count);
-    execution.regions = regions;
-    replay_variants_run(
-        stem,
-        (dev, bc, GRID),
-        (GRID_LENGTH, locals, None),
-        commands,
-        (execution, path),
-        params,
-    )
-}
-
-/// The paths `dev` runs: K14c's, and the generated-commands path where it states it.
-fn paths(dev: &Device) -> Vec<Route> {
-    let mut out = vec![Route::Arguments];
-    if generates(dev) {
-        out.push(Route::Generated);
-    }
-    out
-}
-
-/// On every profile with device addresses, ragged thread grids replay on the device as the host
-/// replay runs them and as Metal computes them: each edge region on the variant of its size, with
-/// the command's grid, nominal threadgroup size, and threadgroup positions.
-#[test]
-fn a_ragged_thread_grid_replays_as_the_host_replay_runs_it() {
-    let Some(bc) = grid_fixture() else {
-        return;
-    };
-    // Three ragged grids in threadgroups of 4 x 2 (two shapes of edge each, one with no whole
-    // threadgroup along x), a uniform dispatch of threadgroups, and an empty command. The first
-    // and the last dispatch share an output window.
-    let local = [4, 2, 1];
-    let commands = [
-        grid_record(
-            Action::DispatchThreads {
-                grid: [10, 3, 1],
-                local_size: local,
-            },
-            0,
-            0,
-        ),
-        grid_record(
-            Action::DispatchThreadgroups {
-                grid: [2, 2, 1],
-                local_size: local,
-            },
-            8,
-            128,
-        ),
-        CommandRecord::default(),
-        grid_record(
-            Action::DispatchThreads {
-                grid: [3, 5, 1],
-                local_size: local,
-            },
-            16,
-            0,
-        ),
-    ];
-    let params = grid_params(&[(0, 1000, 24), (2, 7, 32), (4, 0x8000_0000, 24)]);
-    // The command's size, and each edge's.
-    let locals = [
-        [4, 2, 1],
-        [2, 2, 1],
-        [4, 1, 1],
-        [2, 1, 1],
-        [3, 2, 1],
-        [3, 1, 1],
-    ];
-    let metal = metal_grid(&commands, &params);
-    let (mut ran, mut generated) = (0, 0);
-    for (stem, dev) in devices() {
-        if dev.profile().fields().buffer_access != BufferAccess::Addressed {
-            continue;
-        }
-        ran += 1;
-        let host = host_replay(&stem, (&dev, &bc, GRID), Run::Plain, &commands, &params);
-        assert_eq!(words(&host), words(&metal), "{stem}: the host replay");
-        for path in paths(&dev) {
-            let (mem, dispatched) = grid_replay(
-                &stem,
-                (&dev, &bc, path),
-                &locals,
-                &commands,
-                (MAX_REPLAY_REGIONS, params.clone()),
-            );
-            // 4 + 1 + 0 + 2 regions.
-            assert_eq!(dispatched, 7, "{stem} {path:?}");
-            assert_eq!(
-                words(&mem.out),
-                words(&host),
-                "{stem} {path:?}: the device replay"
-            );
-            let report = mem.report();
-            assert!(
-                !report.replay_fault && !report.resident_miss,
-                "{stem} {path:?}: {report:?}"
-            );
-            generated += usize::from(path == Route::Generated);
-        }
-    }
-    assert!(ran > 0, "no profile with device addresses");
-    assert!(generated > 0, "no profile states compute pipeline binding");
-}
-
-/// On a device whose group counts are limited to 3 x 2 x 64, group counts past the limit replay as
-/// the host replay runs them (the chunks, and a thread grid's edge after them) and as Metal
-/// computes them; a command with more regions than the execution records is the typed `REGIONS`
-/// fault and the execution dispatches nothing.
-#[test]
-fn a_group_count_past_the_limit_replays_as_the_host_replay_runs_it() {
-    let Some(bc) = grid_fixture() else {
-        return;
-    };
-    let commands = [
-        // 3 x 2 chunks of at most 3 x 2 threadgroups.
-        grid_record(
-            Action::DispatchThreadgroups {
-                grid: [7, 3, 1],
-                local_size: [2, 1, 1],
-            },
-            0,
-            0,
-        ),
-        // Four whole threadgroups in two chunks, and an edge of one thread.
-        grid_record(
-            Action::DispatchThreads {
-                grid: [9, 1, 1],
-                local_size: [2, 1, 1],
-            },
-            8,
-            256,
-        ),
-    ];
-    let params = grid_params(&[(0, 5, 40), (2, 9, 16)]);
-    let locals = [[2, 1, 1], [1, 1, 1]];
-    let metal = metal_grid(&commands, &params);
-    let (mut ran, mut generated) = (0, 0);
-    for (stem, dev) in devices_with(|d| d.limits.max_compute_work_group_count = [3, 2, 64]) {
-        if dev.profile().fields().buffer_access != BufferAccess::Addressed {
-            continue;
-        }
-        ran += 1;
-        let host = host_replay(&stem, (&dev, &bc, GRID), Run::Plain, &commands, &params);
-        assert_eq!(words(&host), words(&metal), "{stem}: the host replay");
-        for path in paths(&dev) {
-            let (mem, dispatched) = grid_replay(
-                &stem,
-                (&dev, &bc, path),
-                &locals,
-                &commands,
-                (MAX_REPLAY_REGIONS, params.clone()),
-            );
-            assert_eq!(dispatched, 6 + 3, "{stem} {path:?}");
-            assert_eq!(
-                words(&mem.out),
-                words(&host),
-                "{stem} {path:?}: the device replay"
-            );
-            let report = mem.report();
-            assert!(
-                !report.replay_fault && !report.resident_miss,
-                "{stem} {path:?}: {report:?}"
-            );
-
-            // Recording five regions per command, the first command's six do not fit: it
-            // dispatches nothing, and the second still runs.
-            let (mem, dispatched) = grid_replay(
-                &stem,
-                (&dev, &bc, path),
-                &locals,
-                &commands,
-                (5, params.clone()),
-            );
-            assert_eq!(
-                dispatched, 3,
-                "{stem} {path:?}: the faulted command dispatches nothing"
-            );
-            assert_eq!(
-                words(&mem.out),
-                words(&metal_grid(&commands[1..], &params)),
-                "{stem} {path:?}"
-            );
-            let report = mem.report();
-            assert!(report.replay_fault, "{stem} {path:?}: {report:?}");
-            assert_eq!(
-                report.replay_faults,
-                ReplayFaults::REGIONS,
-                "{stem} {path:?}"
-            );
-            generated += usize::from(path == Route::Generated);
-        }
-    }
-    assert!(ran > 0, "no profile with device addresses");
-    assert!(generated > 0, "no profile states compute pipeline binding");
-}
-
-/// `gate-lavapipe`'s description as a device, its generated-commands facts changed by `tweak`.
-fn gate_lavapipe(tweak: impl Fn(&mut Option<GeneratedCommandsProperties>)) -> Device {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles/gate-lavapipe.json");
-    let text = std::fs::read_to_string(path).expect("profile");
-    let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    tweak(&mut desc.generated_commands);
-    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
-}
-
-/// The limit `set` changes on a description that states the facts.
-fn limited(
-    set: fn(&mut GeneratedCommandsProperties),
-) -> impl Fn(&mut Option<GeneratedCommandsProperties>) {
-    move |g| set(g.as_mut().expect("gate-lavapipe states generated commands"))
-}
-
-/// The generated-commands path runs where a committed profile states
-/// `VK_EXT_device_generated_commands` with compute pipeline binding, and is held to every limit
-/// the description states: a device that states none, binds no compute pipeline, or holds fewer
-/// pipelines, tokens, token bytes, stride, or sequences than the replay needs is the typed
-/// refusal naming it (K14c's path remains), and a sequence count below eight commands' regions
-/// shortens the executions. Variants that bind other descriptors cannot share one execution.
-#[test]
-fn the_generated_commands_path_holds_to_what_the_device_states() {
-    let Some(bc) = grid_fixture() else {
-        return;
-    };
-    let generating: Vec<String> = devices()
-        .into_iter()
-        .filter(|(_, d)| generates(d))
-        .map(|(stem, _)| stem)
-        .collect();
-    assert_eq!(
-        generating,
-        [
-            "amd-780m-hawkpoint-radv",
-            "amd-780m-radv",
-            "amd-rdna2-apu-radv",
-            "gate-lavapipe",
-            "gate-lavapipe-x86_64",
-            "intel-arl-anv",
-            "nvidia-rtx50-linux",
-            "nvidia-rtx5080-laptop"
-        ]
-    );
-    let dev = gate_lavapipe(|_| {});
-    let facts = *dev.generated_commands().expect("facts");
-    assert_eq!(
-        (
-            facts.max_indirect_sequence_count,
-            facts.max_indirect_commands_token_count,
-            facts.max_indirect_commands_token_offset,
-            facts.max_indirect_commands_indirect_stride,
-            facts.max_indirect_pipeline_count,
-        ),
-        (1_048_576, 16, 2047, 2048, 4096),
-        "gate-lavapipe's committed facts"
-    );
-
-    let inputs = replay_inputs();
-    let pipe = pipeline(&dev, &bc, GRID, &inputs).expect("pipeline");
-    let state = shared_state(GRID_LENGTH);
-    let plan = pipe.plan(&dev, &state.shape()).expect("plan");
-    let locals = [[4, 2, 1], [2, 2, 1]];
-    let mut lengths = [0; 31];
-    lengths[0] = GRID_LENGTH;
-    let variants: Vec<ReplayVariant> = locals
-        .iter()
-        .map(|&l| ReplayVariant::new(NonZeroU64::new(TOKEN).expect("token"), l, lengths))
-        .collect();
-    let cmds: Vec<_> = locals
-        .iter()
-        .map(|&l| plan.instantiate_replay(&state, l).expect("instantiate"))
-        .collect();
-    let generated: Vec<GeneratedVariant<'_>> = cmds
-        .iter()
-        .map(|c| GeneratedVariant::new(&pipe, &plan, c))
-        .collect();
-    let execution = ReplayExecution::new(4, 0, 4);
-    let run = |dev: &Device, generated: &[GeneratedVariant<'_>]| {
-        replay_preprocess_generated(dev, &state, &execution, &variants, generated)
-    };
-    let refusal = |dev: &Device, generated: &[GeneratedVariant<'_>]| match run(dev, generated) {
-        Err(BindError::InvalidReplay {
-            reason: ReplayRefusal::GeneratedCommands { reason },
-        }) => reason,
-        other => panic!("{other:?}"),
-    };
-
-    let pre = run(&dev, &generated).expect("the generated-commands path");
-    let g = pre.layout.generated.expect("its layout");
-    assert_eq!(g.segment_commands, MAX_SEGMENT_COMMANDS);
-    assert_eq!(g.stride, GeneratedLayout::PUSH_OFFSET + g.push_bytes + 12);
-    let replay = pre.generated.expect("its templates");
-    assert_eq!(
-        replay.templates.len(),
-        2 * (16 + g.push_bytes as usize),
-        "a template per variant"
-    );
-    let range = &replay.pipeline_layout.push_constants;
-    assert_eq!(range.len(), 1);
-    assert_eq!((range[0].offset, range[0].size), (0, g.push_bytes));
-    assert_eq!(replay.pipeline_layout.sets, pipe.layout.sets);
-    assert_eq!(pre.layout.arguments_offset, pre.layout.bytes, "no argument");
-
-    // Fewer sequences than eight commands' regions shorten the executions.
-    let short = gate_lavapipe(limited(|g| g.max_indirect_sequence_count = 16));
-    let pre = run(&short, &generated).expect("shorter executions");
-    assert_eq!(pre.layout.generated.expect("layout").segment_commands, 2);
-
-    let push = g.push_bytes;
-    for (name, dev, expected) in [
-        (
-            "no facts",
-            gate_lavapipe(|g| *g = None),
-            GeneratedRefusal::NotEnabled,
-        ),
-        (
-            "no compute binding",
-            gate_lavapipe(limited(|g| {
-                g.pipeline_binding_stages = crate::vk::ShaderStageFlags::FRAGMENT
-            })),
-            GeneratedRefusal::NoComputePipelineBinding,
-        ),
-        (
-            "one pipeline",
-            gate_lavapipe(limited(|g| g.max_indirect_pipeline_count = 1)),
-            GeneratedRefusal::PipelineCount {
-                variants: 2,
-                limit: 1,
-            },
-        ),
-        (
-            "two tokens",
-            gate_lavapipe(limited(|g| g.max_indirect_commands_token_count = 2)),
-            GeneratedRefusal::TokenCount { limit: 2 },
-        ),
-        (
-            "a token offset of 8",
-            gate_lavapipe(limited(|g| g.max_indirect_commands_token_offset = 8)),
-            GeneratedRefusal::TokenOffset {
-                offset: 4 + push,
-                limit: 8,
-            },
-        ),
-        (
-            "a stride of 16",
-            gate_lavapipe(limited(|g| g.max_indirect_commands_indirect_stride = 16)),
-            GeneratedRefusal::Stride {
-                stride: 16 + push,
-                limit: 16,
-            },
-        ),
-        (
-            "four sequences",
-            gate_lavapipe(limited(|g| g.max_indirect_sequence_count = 4)),
-            GeneratedRefusal::SequenceCount {
-                sequences: MAX_REPLAY_REGIONS,
-                limit: 4,
-            },
-        ),
-    ] {
-        assert_eq!(refusal(&dev, &generated), expected, "{name}");
-    }
-    // lavapipe's older profile states the extension but no stage.
-    let (_, lavapipe) = devices()
-        .into_iter()
-        .find(|(stem, _)| stem == "lavapipe")
-        .expect("lavapipe");
-    assert!(lavapipe.generated_commands().is_some());
-    assert_eq!(
-        refusal(&lavapipe, &generated),
-        GeneratedRefusal::NoComputePipelineBinding
-    );
-    assert_eq!(
-        refusal(&dev, &generated[..1]),
-        GeneratedRefusal::Variants {
-            registered: 2,
-            generated: 1
-        }
-    );
-    // Each generated variant must be the registered one's size: swapped, index 0 runs 2 x 2 x 1
-    // threads where the registered variant 0 is 4 x 2 x 1.
-    assert_eq!(
-        refusal(&dev, &[generated[1], generated[0]]),
-        GeneratedRefusal::Unmatched { index: 0 }
-    );
-    // A variant whose pipeline layout differs binds other descriptors.
-    let mut other = pipe.clone();
-    other.layout.sets.push(Default::default());
-    let mixed = [generated[0], GeneratedVariant::new(&other, &plan, &cmds[1])];
-    assert_eq!(
-        refusal(&dev, &mixed),
-        GeneratedRefusal::Descriptors { index: 1 }
-    );
 }
 
 /// `flat(b0, b1, p, g)`: each thread adds `b0[0] + 3 p.x + 5 p.y + 7 p.z + 11 g.x + 13 g.y +
@@ -1702,26 +613,6 @@ fn metal_flat(commands: &[CommandRecord], params: &[u8]) -> Vec<u8> {
     out.iter().flat_map(|w| w.to_le_bytes()).collect()
 }
 
-/// The device replay of the flat kernel's `commands` over one flat variant of `local` threads, on
-/// `dev`, by `path`.
-fn flat_replay(
-    stem: &str,
-    (dev, bc, path): (&Device, &[u8], Route),
-    local: [u32; 3],
-    commands: &[CommandRecord],
-    params: Vec<u8>,
-) -> (Memory, usize) {
-    let count = commands.len() as u32;
-    replay_variants_run(
-        stem,
-        (dev, bc, "flat"),
-        (0, &[local], Some(FLAT_MAX)),
-        commands,
-        (ReplayExecution::new(count, 0, count), path),
-        params,
-    )
-}
-
 /// A flat-kernel command: `action` with its base word at `params` and its output window at
 /// `out` (byte offsets into the two allocations), with the template record's 32-byte length,
 /// which the flat variant ignores.
@@ -1783,48 +674,6 @@ fn flat_commands() -> (Vec<CommandRecord>, Vec<u8>) {
     (commands, params)
 }
 
-/// On every profile with device addresses, one flat variant runs every command of its pipeline as
-/// Metal runs it: ragged thread grids and threadgroup grids of threadgroup sizes other than its
-/// own, each thread once; a threadgroup with a zero axis or above the state's maximum runs nothing
-/// and reports nothing.
-#[test]
-fn a_flat_variant_runs_every_grid_of_its_pipeline() {
-    let Some(bc) = assemble("flat", FLAT) else {
-        return;
-    };
-    let (commands, params) = flat_commands();
-    let metal = metal_flat(&commands, &params);
-    let (mut ran, mut generated) = (0, 0);
-    for (stem, dev) in devices() {
-        if dev.profile().fields().buffer_access != BufferAccess::Addressed {
-            continue;
-        }
-        ran += 1;
-        for path in paths(&dev) {
-            let (mem, dispatched) = flat_replay(
-                &stem,
-                (&dev, &bc, path),
-                [8, 1, 1],
-                &commands,
-                params.clone(),
-            );
-            assert_eq!(
-                dispatched, 3,
-                "{stem} {path:?}: one dispatch per running command"
-            );
-            assert_eq!(words(&mem.out), words(&metal), "{stem} {path:?}");
-            let report = mem.report();
-            assert!(
-                !report.replay_fault && !report.resident_miss,
-                "{stem} {path:?}: {report:?}"
-            );
-            generated += usize::from(path == Route::Generated);
-        }
-    }
-    assert!(ran > 0, "no profile with device addresses");
-    assert!(generated > 0, "no profile states compute pipeline binding");
-}
-
 /// Outside a replay, on every profile with device addresses, the flat variant binds as any kernel
 /// does: a direct `dispatchThreads:` of a flat plan is one region of its own threadgroup size, at
 /// group counts that cover the grid, reading the record the plan states; a direct
@@ -1876,7 +725,10 @@ fn a_flat_variant_dispatches_outside_a_replay() {
             threads_per_group: [8, 1, 1],
         };
         let indirect = Dispatch::ThreadgroupsIndirect {
-            indirect: IndirectRef::new(0, 0),
+            indirect: IndirectRef {
+                token: 0,
+                offset: 0,
+            },
             threads_per_group: [8, 1, 1],
         };
         for refused in [groups, indirect] {
@@ -1950,96 +802,10 @@ fn a_direct_ragged_dispatch_on_a_flat_variant_runs_each_grid_thread_once() {
             continue;
         }
         ran += 1;
-        let out = host_replay(
-            &stem,
-            (&dev, &bc, "flat"),
-            Run::FlatDirect,
-            &commands,
-            &params,
-        );
+        let out = host_replay(&stem, (&dev, &bc, "flat"), &commands, &params);
         assert_eq!(words(&out), words(&metal), "{stem}");
     }
     assert!(ran > 0, "no profile with device addresses");
-}
-
-/// On a device whose group counts are limited to 3 x 2 x 64, a flat dispatch spreads its
-/// threadgroups over `x`, then `y`, then `z`, and its invocations past the grid return early; a
-/// grid no group count holds, a threadgroup grid above `2^32 - 1` threads on an axis, and a grid of
-/// more than `2^64 - 1` threads are the typed `GROUP_COUNT` fault, beside a command that still
-/// runs.
-#[test]
-fn a_flat_grid_spreads_over_the_group_count_limits() {
-    let Some(bc) = assemble("flat", FLAT) else {
-        return;
-    };
-    let running = flat_record(
-        Action::DispatchThreads {
-            grid: [7, 2, 3],
-            local_size: [7, 1, 1],
-        },
-        0,
-        0,
-    );
-    let too_large = [
-        // 500 threadgroups of 4: 3 x 2 x 84 past the limit of 64 along z.
-        Action::DispatchThreads {
-            grid: [2000, 1, 1],
-            local_size: [1, 1, 1],
-        },
-        Action::DispatchThreadgroups {
-            grid: [1 << 31, 1, 1],
-            local_size: [2, 1, 1],
-        },
-        Action::DispatchThreads {
-            grid: [u32::MAX, u32::MAX, 2],
-            local_size: [1, 1, 1],
-        },
-    ];
-    let mut params = vec![0u8; BYTES];
-    params[..4].copy_from_slice(&5u32.to_le_bytes());
-    let metal = metal_flat(std::slice::from_ref(&running), &params);
-    let (mut ran, mut generated) = (0, 0);
-    for (stem, dev) in devices_with(|d| d.limits.max_compute_work_group_count = [3, 2, 64]) {
-        if dev.profile().fields().buffer_access != BufferAccess::Addressed {
-            continue;
-        }
-        ran += 1;
-        for path in paths(&dev) {
-            // 42 threads in 11 threadgroups of 4: a dispatch of 3 x 2 x 2.
-            let (mem, dispatched) = flat_replay(
-                &stem,
-                (&dev, &bc, path),
-                [4, 1, 1],
-                std::slice::from_ref(&running),
-                params.clone(),
-            );
-            assert_eq!(dispatched, 1, "{stem} {path:?}");
-            assert_eq!(words(&mem.out), words(&metal), "{stem} {path:?}");
-            assert!(!mem.report().replay_fault, "{stem} {path:?}");
-            for action in too_large {
-                let commands = [running.clone(), flat_record(action, 0, 256)];
-                let (mem, dispatched) = flat_replay(
-                    &stem,
-                    (&dev, &bc, path),
-                    [4, 1, 1],
-                    &commands,
-                    params.clone(),
-                );
-                assert_eq!(dispatched, 1, "{stem} {path:?} {action:?}");
-                assert_eq!(words(&mem.out), words(&metal), "{stem} {path:?} {action:?}");
-                let report = mem.report();
-                assert!(report.replay_fault, "{stem} {path:?} {action:?}");
-                assert_eq!(
-                    report.replay_faults,
-                    ReplayFaults::GROUP_COUNT,
-                    "{stem} {path:?} {action:?}"
-                );
-            }
-            generated += usize::from(path == Route::Generated);
-        }
-    }
-    assert!(ran > 0, "no profile with device addresses");
-    assert!(generated > 0, "no profile states compute pipeline binding");
 }
 
 /// A kernel that observes its threadgroup partition (the grid template reads its threadgroup's size
@@ -2378,7 +1144,10 @@ fn a_folded_variant_states_its_key_and_runs_only_indirect_threadgroups() {
             threads_per_group: [2, 1, 1],
         };
         let indirect = Dispatch::ThreadgroupsIndirect {
-            indirect: IndirectRef::new(0, 0),
+            indirect: IndirectRef {
+                token: 0,
+                offset: 0,
+            },
             threads_per_group: [2, 1, 1],
         };
         for refused in [direct, indirect] {

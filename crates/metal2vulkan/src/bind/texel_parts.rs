@@ -5,7 +5,7 @@
 //! view holds at most the device's `maxTexelBufferElements` texels
 //! (`VUID-VkBufferViewCreateInfo-range-00930`): 2^27 on ANV and lavapipe, 2^26 on MoltenVK. The
 //! consumer states with a texture buffer's binding how many parts its texels take
-//! ([`texel_buffer_parts`], `BoundTexture::Buffer::parts`), which its shape carries
+//! (`BoundTexture::Buffer::parts`: its texels over [`part_texels`], rounded up), which its shape carries
 //! (`TextureShape::Buffer::parts`): one for every texture buffer within the limit, which binds one
 //! view as it always has.
 //!
@@ -41,20 +41,6 @@ pub fn part_texels(limits: &Limits) -> u64 {
     max - max % alignment
 }
 
-/// The texel buffer views the texels of a texture buffer of `texels` texels
-/// (`⌊length / bytes per texel⌋`) take on a device of `limits`, which a consumer states with its
-/// binding (`BoundTexture::Buffer::parts`): 1 within the device's `maxTexelBufferElements`, which
-/// one view holds, else `⌈texels / P⌉` parts of [`part_texels`] `P` each (saturated at
-/// `u32::MAX`). A slot whose function only reads, writes, updates by an atomic or asks the width
-/// of such a texture buffer binds an array of views of its parts (`VariantKey::texel_buffer_parts`).
-pub fn texel_buffer_parts(limits: &Limits, texels: u64) -> u32 {
-    let part = part_texels(limits);
-    if texels <= u64::from(limits.max_texel_buffer_elements) || part == 0 {
-        return 1;
-    }
-    u32::try_from(texels.div_ceil(part)).unwrap_or(u32::MAX)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -67,33 +53,17 @@ mod tests {
         }
     }
 
-    /// A texture buffer within the limit takes one part, at the limit too; past it, parts of the
-    /// limit's texels, the last holding the rest: 2^28 texels take two parts of 2^27 on lavapipe's
-    /// limits and four of 2^26 on MoltenVK's.
+    /// A part holds the limit's texels: 2^27 on lavapipe's limits.
     #[test]
     fn parts_hold_the_limit_s_texels_each() {
-        let lavapipe = limits(1 << 27, 16);
-        assert_eq!(part_texels(&lavapipe), 1 << 27);
-        assert_eq!(texel_buffer_parts(&lavapipe, 1), 1);
-        assert_eq!(texel_buffer_parts(&lavapipe, 1 << 27), 1);
-        assert_eq!(texel_buffer_parts(&lavapipe, (1 << 27) + 1), 2);
-        assert_eq!(texel_buffer_parts(&lavapipe, 1 << 28), 2);
-        assert_eq!(texel_buffer_parts(&limits(1 << 26, 256), 1 << 28), 4);
-        assert_eq!(texel_buffer_parts(&limits(1 << 28, 16), 1 << 28), 1);
+        assert_eq!(part_texels(&limits(1 << 27, 16)), 1 << 27);
     }
 
     /// A limit off the offset alignment: each part holds the limit rounded down to it, so the next
-    /// starts on it.
+    /// starts on it; a limit below the alignment holds no aligned part.
     #[test]
     fn parts_start_on_the_offset_alignment() {
-        let odd = limits(1000, 64);
-        assert_eq!(part_texels(&odd), 960);
-        assert_eq!(texel_buffer_parts(&odd, 1000), 1);
-        assert_eq!(texel_buffer_parts(&odd, 1001), 2);
-        assert_eq!(texel_buffer_parts(&odd, 1920), 2);
-        assert_eq!(texel_buffer_parts(&odd, 1921), 3);
-        // A limit below the alignment holds no aligned part: one view, which the limit bounds.
+        assert_eq!(part_texels(&limits(1000, 64)), 960);
         assert_eq!(part_texels(&limits(32, 64)), 0);
-        assert_eq!(texel_buffer_parts(&limits(32, 64), 100), 1);
     }
 }

@@ -71,15 +71,14 @@ pub struct GraphicsState {
     pub tessellation: Option<TessellationState>,
     /// The vertex function (a post-tessellation vertex function included) writes memory
     /// (`StageInterface::writes_memory`): each run of the pipeline's vertex stage repeats its
-    /// side effects. A rate-mapped pass drawn region by region records each draw once per region,
-    /// so [`RateMapRegions::admits`](crate::bind::RateMapRegions::admits) refuses such a pipeline
-    /// in a pass of more than one region.
+    /// side effects, so a rate-mapped pass drawn region by region, which records each draw once
+    /// per region, cannot draw such a pipeline in more than one region.
     #[cfg_attr(feature = "serde", serde(default))]
     pub vertex_writes_memory: bool,
     /// The vertex function (a post-tessellation vertex function included) writes `ViewportIndex`
     /// (`[[viewport_array_index]]`): each primitive selects its viewport and scissor from the
-    /// encoder's arrays. A rate-mapped pass drawn region by region sets one viewport per region, so
-    /// [`RateMapRegions::admits`](crate::bind::RateMapRegions::admits) refuses such a pipeline.
+    /// encoder's arrays, so a rate-mapped pass drawn region by region, which sets one viewport per
+    /// region, cannot draw such a pipeline.
     /// Set too on a device without `multiViewport`, where the function stores no `ViewportIndex`
     /// (every index selects viewport 0 of a draw's one, as Metal's does at or past the count):
     /// there a draw of the pipeline while the encoder holds more than one viewport cannot select

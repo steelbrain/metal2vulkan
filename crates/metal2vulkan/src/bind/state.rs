@@ -35,9 +35,8 @@ pub struct BindState {
     /// The consumer lists `used_resources` in token order: each entry's token at least the one
     /// before it, so a token's entries lie together. A heap member then finds its entries by
     /// search, at the logarithm of their count (a debug build asserts the order), rather than
-    /// every command's instantiation reading every entry, and a comparison with a shape
-    /// ([`has_shape`](Self::has_shape)) reads the list in place, making none of its shape. Not
-    /// part of the shape; `false` (the default): listed in any order.
+    /// every command's instantiation reading every entry. Not part of the shape; `false` (the
+    /// default): listed in any order.
     #[cfg_attr(feature = "serde", serde(default))]
     pub used_in_token_order: bool,
     /// The render encoder's vertex amplification (`setVertexAmplificationCount:viewMappings:`);
@@ -129,8 +128,8 @@ pub struct BindState {
     /// The Metal vertex buffer indices of the layouts the draw fetches in fixed function that the
     /// device's fixed-function input cannot fetch for it: the runtime names those a draw may fetch
     /// past `2^32` bytes of their bind offset, on a driver whose fixed-function vertex input takes
-    /// that displacement modulo `2^32`, and every one of a draw replay's state
-    /// (`draw_replay_vertex_layouts`), whose commands bind their own buffers. The plan pulls them
+    /// that displacement modulo `2^32`, and every fixed-function binding's of a draw replay's
+    /// state, whose commands bind their own buffers. The plan pulls them
     /// in the pulled-vertex-buffer variant (`VariantKey::pulled_vertex_buffers`), as it pulls a
     /// layout bound at an offset or stride fixed-function input cannot fetch, and needs no buffer
     /// bound at them; a layout the pipeline does not fetch in fixed function is left as it is.
@@ -148,9 +147,7 @@ pub struct BindState {
     pub region_viewports: bool,
     /// Where the heap arrays (set 1) hold the command's heap members and argument samplers
     /// ([`HeapPlacement`]). Only the instantiated tables and the elements the consumer writes
-    /// ([`BindingPlan::heap_elements`]) depend on it, so it is not part of the shape.
-    ///
-    /// [`BindingPlan::heap_elements`]: crate::bind::BindingPlan::heap_elements
+    /// depend on it, so it is not part of the shape.
     #[cfg_attr(feature = "serde", serde(default))]
     pub heap_placement: HeapPlacement,
     /// The render encoder's viewport count (`setViewports:count:`): a vertex function's
@@ -228,11 +225,10 @@ pub struct BindState {
     #[cfg_attr(feature = "serde", serde(default))]
     pub resident_ranges: Vec<ResidentRange>,
     /// The consumer points every root table of the command at a resident set it uploads apart
-    /// (a [`ResidentSet`](crate::bind::ResidentSet), its address and entry count written over the
-    /// table's own fields) that holds every
+    /// (its address and entry count written over the table's own fields) that holds every
     /// allocation of `used_resources` (each `Buffer` and `Heap` entry with both addresses) and of
     /// `resident_ranges`, at their padded lengths, as a root table's own set would, and every
-    /// range the table lists ([`RootTable::resident_ranges`](crate::bind::RootTable::resident_ranges)).
+    /// range the table's entries hold.
     /// A root table's own resident set then holds the command's bound buffers alone, and lists
     /// only those: a command's instantiation costs its bindings, not every resource made
     /// resident. A table never pointed so resolves only its bound buffers. Only the root tables
@@ -321,28 +317,11 @@ pub struct ArgumentFunctionTable {
     /// after it ([`FunctionTableSnapshot`](crate::bind::FunctionTableSnapshot)).
     #[cfg_attr(feature = "serde", serde(default))]
     pub size: u32,
-    /// The device address of the table's words (`FunctionTableWords`), which a pipeline compiled
+    /// The device address of the table's words (`bind::table`), which a pipeline compiled
     /// to read tables through their addresses reads (`VariantKey::addressed_function_tables`);
     /// 0 where the consumer has none, which such a pipeline's dispatch refuses.
     #[cfg_attr(feature = "serde", serde(default))]
     pub address: u64,
-}
-
-impl ArgumentFunctionTable {
-    /// The table of `size` entries whose `gpuResourceID` is `resource_id`, without a device
-    /// address.
-    pub fn new(resource_id: u64, size: u32) -> ArgumentFunctionTable {
-        ArgumentFunctionTable {
-            resource_id,
-            size,
-            address: 0,
-        }
-    }
-
-    /// The same table, its words at device address `address`.
-    pub fn at_address(self, address: u64) -> ArgumentFunctionTable {
-        ArgumentFunctionTable { address, ..self }
-    }
 }
 
 /// A render encoder's tessellation factor state: `setTessellationFactorBuffer:offset:
@@ -446,112 +425,6 @@ impl BindState {
         }
     }
 
-    /// Whether `shape` is this state's shape: `self.shape() == *shape`, answered without making
-    /// the shape, so a consumer that keeps the shapes it made can find a state's among them
-    /// without allocating. Its used resources' shape alone is made, where it lists any in no
-    /// token order ([`used_in_token_order`](Self::used_in_token_order)) and every other field
-    /// matches. A list in token order is compared in place, making nothing.
-    pub fn has_shape(&self, shape: &BindShape) -> bool {
-        self.is_shape(shape, &mut None)
-    }
-
-    /// Whether `shape` is this state's shape ([`has_shape`](Self::has_shape)), its used
-    /// resources' compared in place where they are listed in token order, else their shape taken
-    /// from `made`, or made into it where it is needed first.
-    fn is_shape(&self, shape: &BindShape, made: &mut Option<BTreeMap<u32, UsedShape>>) -> bool {
-        // Last: the one field compared through a shape made of it.
-        self.has_shape_beside_used(shape)
-            && match (self.used_resources.is_empty(), self.used_in_token_order) {
-                (true, _) => shape.used.is_empty(),
-                (false, true) => self.used_in_order_are(&shape.used),
-                (false, false) => *made.get_or_insert_with(|| self.used_shape()) == shape.used,
-            }
-    }
-
-    /// Whether `used`, a shape's used resources, is [`used_shape`](Self::used_shape)'s answer for
-    /// `used_resources` listed in token order: each token's entries, which lie together, unioned
-    /// as `used_shape` unions them and compared with the shape's entry of that token, in place.
-    fn used_in_order_are(&self, used: &BTreeMap<u32, UsedShape>) -> bool {
-        let listed = &self.used_resources;
-        debug_assert!(
-            listed.windows(2).all(|w| w[0].token <= w[1].token),
-            "used resources listed in token order are not"
-        );
-        let mut shapes = used.iter();
-        let mut listed = listed.iter().peekable();
-        while let Some(first) = listed.next() {
-            let mut made = UsedShape {
-                class: UsedClass::of(first.class),
-                usage: first.usage,
-                stages: first.stages,
-            };
-            while let Some(again) = listed.next_if(|u| u.token == first.token) {
-                made.usage |= again.usage;
-                made.stages |= again.stages;
-            }
-            match shapes.next() {
-                Some((token, shape)) if *token == first.token && *shape == made => {}
-                Some(_) | None => return false,
-            }
-        }
-        shapes.next().is_none()
-    }
-
-    /// Whether `shape` is this state's shape but for its used resources' ([`BindShape::used`]),
-    /// which are not looked at: every other field compared as [`has_shape`](Self::has_shape)
-    /// compares it. A consumer that keeps the shapes a state took while its used resources stayed
-    /// as they are finds the state's among them so: the answer costs the state's slots and
-    /// fields, not the resources it lists as used.
-    pub fn has_shape_beside_used(&self, shape: &BindShape) -> bool {
-        let BindShape {
-            stages,
-            used: _,
-            vertex_amplification,
-            imageblock_size,
-            render_target_array_length,
-            tessellation_factor_buffer,
-            render_area,
-            argument_samplers,
-            function_tables,
-            tile_threadgroup,
-            zeroed_colors,
-            dropped_colors,
-            kept_imageblock_bytes,
-            depth_clamp_range,
-            rotated_weights,
-            line_band,
-            primitive_id_indices,
-            quad_primitive_ids,
-            private_list,
-            far_vertex_buffers,
-            region_viewports,
-        } = shape;
-        let tables = self.stages.iter().filter(|(_, t)| !t.has_empty_shape());
-        tables.clone().count() == stages.len()
-            && tables
-                .zip(stages)
-                .all(|((stage, t), (of, s))| stage == of && t.has_shape(s))
-            && self.vertex_amplification == *vertex_amplification
-            && self.imageblock_size == *imageblock_size
-            && self.render_target_array_length == *render_target_array_length
-            && self.tessellation_factors.buffer.is_some() == *tessellation_factor_buffer
-            && self.render_area == *render_area
-            && argument_samplers.is_of(&self.argument_samplers)
-            && FunctionTablesShape::of(&self.function_tables) == *function_tables
-            && self.tile_threadgroup == *tile_threadgroup
-            && self.zeroed_colors == *zeroed_colors
-            && self.dropped_colors == *dropped_colors
-            && self.kept_imageblock_bytes == *kept_imageblock_bytes
-            && self.depth_clamp_range.is_some() == *depth_clamp_range
-            && self.rotated_weights == *rotated_weights
-            && self.line_band.map(|(primitive, _)| primitive) == *line_band
-            && self.primitive_id_indices == *primitive_id_indices
-            && self.quad_primitive_ids == *quad_primitive_ids
-            && self.private_list == *private_list
-            && self.far_vertex_buffers == *far_vertex_buffers
-            && self.region_viewports == *region_viewports
-    }
-
     /// `used_resources` by token ([`BindShape::used`]): one token names one resource, and listing
     /// it twice unions its usage and stages.
     fn used_shape(&self) -> BTreeMap<u32, UsedShape> {
@@ -602,17 +475,6 @@ pub struct TileThreadgroupMemory {
     pub arguments: BTreeMap<u32, TileThreadgroupArgument>,
 }
 
-impl TileThreadgroupMemory {
-    /// The tile memory of a pass whose `threadgroupMemoryLength` is `length`, with no argument
-    /// set.
-    pub fn new(length: u32) -> TileThreadgroupMemory {
-        TileThreadgroupMemory {
-            length,
-            arguments: BTreeMap::new(),
-        }
-    }
-}
-
 /// One tile threadgroup argument (`setThreadgroupMemoryLength:offset:atIndex:`): `length` bytes at
 /// byte `offset` of the tile's threadgroup memory.
 ///
@@ -626,13 +488,6 @@ impl TileThreadgroupMemory {
 pub struct TileThreadgroupArgument {
     pub length: u32,
     pub offset: u32,
-}
-
-impl TileThreadgroupArgument {
-    /// `length` bytes at `offset`.
-    pub fn new(length: u32, offset: u32) -> TileThreadgroupArgument {
-        TileThreadgroupArgument { length, offset }
-    }
 }
 
 /// A compute encoder's stage-in region (`setStageInRegion:`, `MTLRegion`), in threads.
@@ -732,16 +587,6 @@ pub struct ViewMapping {
     pub render_target_array_index_offset: u32,
 }
 
-impl ViewMapping {
-    /// The mapping of `viewportArrayIndexOffset` and `renderTargetArrayIndexOffset`.
-    pub fn new(viewport_array_index_offset: u32, render_target_array_index_offset: u32) -> Self {
-        ViewMapping {
-            viewport_array_index_offset,
-            render_target_array_index_offset,
-        }
-    }
-}
-
 impl StageTable {
     /// The shape of this stage's tables ([`BindState::shape`]), the lengths of its buffers classed
     /// under its [`buffer_ranges`](Self::buffer_ranges).
@@ -754,32 +599,6 @@ impl StageTable {
             samplers: self.samplers.iter().map(|(i, s)| (*i, s.shape())).collect(),
             threadgroup_lengths: self.threadgroup_lengths.clone(),
         }
-    }
-
-    /// Whether its shape is the empty one, which [`BindState::shape`] leaves out.
-    fn has_empty_shape(&self) -> bool {
-        self.buffers.is_empty()
-            && self.textures.is_empty()
-            && self.samplers.is_empty()
-            && self.threadgroup_lengths.is_empty()
-    }
-
-    /// Whether `shape` is its shape ([`BindState::has_shape`]).
-    fn has_shape(&self, shape: &StageShape) -> bool {
-        let StageShape {
-            buffers,
-            textures,
-            samplers,
-            threadgroup_lengths,
-        } = shape;
-        let ranges = self.buffer_ranges;
-        let buffer_shapes = (self.buffers.iter()).map(|(i, b)| (*i, b.shape(ranges)));
-        let texture_shapes = self.textures.iter().map(|(i, t)| (*i, t.shape()));
-        let sampler_shapes = self.samplers.iter().map(|(i, s)| (*i, s.shape()));
-        buffer_shapes.eq(buffers.iter().map(|(i, b)| (*i, *b)))
-            && texture_shapes.eq(textures.iter().map(|(i, t)| (*i, *t)))
-            && sampler_shapes.eq(samplers.iter().map(|(i, s)| (*i, *s)))
-            && self.threadgroup_lengths == *threadgroup_lengths
     }
 }
 
@@ -804,47 +623,6 @@ impl BoundBuffer {
             BoundBuffer::Bytes {
                 attribute_stride, ..
             } => BufferShape::Bytes { attribute_stride },
-        }
-    }
-
-    /// Whether this binding and `other` have one shape under `ranges`, as their
-    /// [`shape`](Self::shape)s compare: a length or bind offset the two share is not classed.
-    pub fn same_shape(&self, other: &BoundBuffer, ranges: BufferRanges) -> bool {
-        match (*self, *other) {
-            (
-                BoundBuffer::Buffer {
-                    length,
-                    offset,
-                    device_address,
-                    attribute_stride,
-                    ..
-                },
-                BoundBuffer::Buffer {
-                    length: other_length,
-                    offset: other_offset,
-                    device_address: other_address,
-                    attribute_stride: other_stride,
-                    ..
-                },
-            ) => {
-                attribute_stride == other_stride
-                    && device_address.is_some() == other_address.is_some()
-                    && (length == other_length
-                        || ranges.length_class(length) == ranges.length_class(other_length))
-                    && (offset == other_offset
-                        || offset_alignment(offset) == offset_alignment(other_offset))
-            }
-            (
-                BoundBuffer::Bytes {
-                    attribute_stride, ..
-                },
-                BoundBuffer::Bytes {
-                    attribute_stride: other_stride,
-                    ..
-                },
-            ) => attribute_stride == other_stride,
-            (BoundBuffer::Buffer { .. }, BoundBuffer::Bytes { .. })
-            | (BoundBuffer::Bytes { .. }, BoundBuffer::Buffer { .. }) => false,
         }
     }
 }
@@ -1004,13 +782,6 @@ pub struct BoundAccelerationStructure {
     pub instance_count: u32,
 }
 
-impl BoundAccelerationStructure {
-    /// A structure of `instance_count` instances.
-    pub fn new(instance_count: u32) -> BoundAccelerationStructure {
-        BoundAccelerationStructure { instance_count }
-    }
-}
-
 /// What is bound at a buffer slot.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1065,9 +836,8 @@ pub enum BoundTexture {
         /// `MTLTexture.swizzle`: the source of each channel a function's reads of it return.
         #[cfg_attr(feature = "serde", serde(default))]
         swizzle: metal::TextureSwizzleChannels,
-        /// The texel buffer views its texels take on the device
-        /// ([`texel_buffer_parts`](crate::bind::texel_buffer_parts) of its texels): 1 within the
-        /// device's `maxTexelBufferElements`, else its parts (`bind::texel_parts`), which a slot
+        /// The texel buffer views its texels take on the device: 1 within the device's
+        /// `maxTexelBufferElements`, else its parts (`bind::texel_parts`), which a slot
         /// whose function reads them so binds through its parts variant
         /// (`VariantKey::texel_buffer_parts`).
         #[cfg_attr(feature = "serde", serde(default = "one_part"))]
@@ -1511,36 +1281,6 @@ impl ArgumentSamplersShape {
             shapes: samplers.iter().map(|s| s.desc.shape()).collect(),
         }
     }
-
-    /// Whether it is the shape of `samplers` (`ArgumentSamplersShape::of(samplers) == *self`),
-    /// answered without making that shape for up to [`SHAPES_AT_ONCE`](Self::SHAPES_AT_ONCE)
-    /// samplers: each sampler's shape is among `shapes`, and each of `shapes` is some sampler's.
-    /// More are answered by making it. The class is compared first, and a list of none (a state
-    /// that binds no argument buffer's samplers, every draw's of most programs) is the shape of
-    /// no sampler at once, with no sampler's shape worked out.
-    fn is_of(&self, samplers: &[ArgumentSampler]) -> bool {
-        if self.class != capacity_class(samplers.len()) {
-            return false;
-        }
-        if samplers.is_empty() {
-            return self.shapes.is_empty();
-        }
-        if samplers.len() > Self::SHAPES_AT_ONCE {
-            return Self::of(samplers) == *self;
-        }
-        let mut seen = [None; Self::SHAPES_AT_ONCE];
-        for (shape, sampler) in seen.iter_mut().zip(samplers) {
-            *shape = Some(sampler.desc.shape());
-        }
-        let seen = &seen[..samplers.len()];
-        seen.iter()
-            .flatten()
-            .all(|shape| self.shapes.contains(shape))
-            && self.shapes.iter().all(|shape| seen.contains(&Some(*shape)))
-    }
-
-    /// The most samplers [`is_of`](Self::is_of) answers for without making their shape.
-    const SHAPES_AT_ONCE: usize = 64;
 
     /// The entries of the class (the null entry included): `MIN_ENTRIES << class`.
     pub fn entries(&self) -> u64 {

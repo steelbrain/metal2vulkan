@@ -150,7 +150,7 @@ fn ray_queries_validate_with_runtime_flags() {
         trace(f, a, out, flags);
     });
     let m = finish_compute(b, main);
-    let r = m.requirements().clone();
+    let r = m.requirements.clone();
     assert!(r
         .spirv_capabilities
         .contains(&SpirvCapability::of(crate::spv::Capability::RayQueryKHR)));
@@ -189,7 +189,7 @@ fn constant_flags_without_skips_need_no_primitive_culling() {
     });
     let m = finish_compute(b, main);
     assert!(!m
-        .requirements()
+        .requirements
         .spirv_capabilities
         .contains(&SpirvCapability::of(
             crate::spv::Capability::RayTraversalPrimitiveCullingKHR

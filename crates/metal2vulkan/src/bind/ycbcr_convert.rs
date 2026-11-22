@@ -42,7 +42,7 @@
 //!   `x4..`) `L = 9576 ((Y << u) - 64)`, full range (`420f`, `xf..`)
 //!   `L = 256 ⌊(32768 Y + ⌊m / 2⌋) / m⌋` with `m = 2^b - 1`. Red, green and blue are each
 //!   `v / 2048`, where `v = clamp((L + kb Cb' + kr Cr' + 2048) >> 12, 0, 2048)` (an arithmetic
-//!   shift) with the channel's `(kb, kr)` of the range and matrix ([`ycbcr_read`]); alpha is 1.
+//!   shift) with the channel's `(kb, kr)` of the range and matrix; alpha is 1.
 //!   Every value lies on the grid of `1 / 2048`, which a half float holds exactly.
 //! - **sRGB** ([`YCbCrOutput::Srgb`], the `_sRGB` twins `YCBCR8_420_2P_sRGB` over `420v` and `420f`
 //!   and `YCBCR10_420_2P_sRGB` over `x420`, `xf20`, `x422` and `xf44`, as textures and as views of
@@ -56,7 +56,7 @@
 //!   hold every step (above `1/4`).
 //!
 //! A consumer that holds such a texture as its texels computes them from the planes' bytes by
-//! these rules: [`ycbcr_read`] of a texel's codes, [`ycbcr_texel`] of 8-bit ones.
+//! these rules.
 
 use crate::metal::format::ChromaSubsampling;
 
@@ -147,6 +147,7 @@ impl YCbCrCodes {
     }
 
     /// The codes a unit holds: 3 packed, 1 otherwise.
+    #[cfg(test)]
     fn per_unit(&self) -> u32 {
         match self.packed {
             true => 3,
@@ -156,15 +157,30 @@ impl YCbCrCodes {
 
     /// The units that hold `n` codes from a row's start: `⌈n / 3⌉` packed, `n` otherwise. A
     /// plane's row of `n` codes is that many units of [`bytes`](Self::bytes) bytes.
-    pub fn units(&self, n: u64) -> u64 {
+    #[cfg(test)]
+    pub(crate) fn units(&self, n: u64) -> u64 {
         n.div_ceil(u64::from(self.per_unit()))
     }
 }
 
+/// The `(kb, kr)` of red, green and blue for `range` and `matrix`, in the units of the module
+/// docs' conversion (measured, the module docs).
+pub(crate) fn coefficients(range: YCbCrRange, matrix: YCbCrMatrix) -> [(i32, i32); 3] {
+    match (range, matrix) {
+        (YCbCrRange::Video, YCbCrMatrix::Bt601) => [(-9, 13123), (-3218, -6686), (16591, 9)],
+        (YCbCrRange::Video, YCbCrMatrix::Bt709) => [(-1, 14743), (-1753, -4383), (17373, 1)],
+        (YCbCrRange::Full, YCbCrMatrix::Bt601) => [(-8, 11483), (-2816, -5850), (14518, 8)],
+        (YCbCrRange::Full, YCbCrMatrix::Bt709) => [(-1, 12900), (-1534, -3835), (15201, 1)],
+        (YCbCrRange::Video, YCbCrMatrix::Bt2020) => [(0, 13806), (-1540, -5349), (17614, -1)],
+        (YCbCrRange::Full, YCbCrMatrix::Bt2020) => [(0, 12080), (-1348, -4680), (15412, -1)],
+    }
+}
+
 /// Where a texture's two planes lie in its surface's bytes, and how they convert.
+#[cfg(test)]
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct YCbCrPlanes {
+pub(crate) struct YCbCrPlanes {
     /// The texture's width and height, in luma texels.
     pub size: [u32; 2],
     /// The luma plane's first byte, and the bytes from one of its rows to the next.
@@ -177,11 +193,12 @@ pub struct YCbCrPlanes {
     pub codes: YCbCrCodes,
 }
 
+#[cfg(test)]
 impl YCbCrPlanes {
     /// The planes of a texture of `size` texels whose luma plane starts at byte `luma[0]` with
     /// rows `luma[1]` bytes apart, and whose chroma plane at `chroma[0]` with rows `chroma[1]`
     /// apart, holding `codes`.
-    pub fn new(
+    pub(crate) fn new(
         size: [u32; 2],
         luma: [u32; 2],
         chroma: [u32; 2],
@@ -200,7 +217,7 @@ impl YCbCrPlanes {
 
     /// The chroma plane's texels across and down: `⌈w / 2⌉ x ⌈h / 2⌉` for 4:2:0 codes,
     /// `⌈w / 2⌉ x h` for 4:2:2 ones and `w x h` for 4:4:4 ones.
-    pub fn chroma_size(&self) -> [u32; 2] {
+    pub(crate) fn chroma_size(&self) -> [u32; 2] {
         let halved = self.codes.subsampling.halved();
         [0, 1].map(|axis| match halved[axis] {
             true => self.size[axis].div_ceil(2),
@@ -209,20 +226,8 @@ impl YCbCrPlanes {
     }
 }
 
-/// The `(kb, kr)` of red, green and blue for `range` and `matrix`, in the units of the module
-/// docs' conversion (measured, the module docs).
-pub(crate) fn coefficients(range: YCbCrRange, matrix: YCbCrMatrix) -> [(i32, i32); 3] {
-    match (range, matrix) {
-        (YCbCrRange::Video, YCbCrMatrix::Bt601) => [(-9, 13123), (-3218, -6686), (16591, 9)],
-        (YCbCrRange::Video, YCbCrMatrix::Bt709) => [(-1, 14743), (-1753, -4383), (17373, 1)],
-        (YCbCrRange::Full, YCbCrMatrix::Bt601) => [(-8, 11483), (-2816, -5850), (14518, 8)],
-        (YCbCrRange::Full, YCbCrMatrix::Bt709) => [(-1, 12900), (-1534, -3835), (15201, 1)],
-        (YCbCrRange::Video, YCbCrMatrix::Bt2020) => [(0, 13806), (-1540, -5349), (17614, -1)],
-        (YCbCrRange::Full, YCbCrMatrix::Bt2020) => [(0, 12080), (-1348, -4680), (15412, -1)],
-    }
-}
-
 /// The luma term of the conversion for the code `y` of `bits` bits (the module docs).
+#[cfg(test)]
 fn luma_term(range: YCbCrRange, bits: u32, y: u32) -> i32 {
     let max = (1u32 << bits) - 1;
     match range {
@@ -233,6 +238,7 @@ fn luma_term(range: YCbCrRange, bits: u32, y: u32) -> i32 {
 
 /// The sRGB curve's knots on the grid of `1 / 8192` (the module docs): `K[j]`, the step nearest
 /// `8192 · srgb(16 j / 8192)`, for `j` from 0 to 512 (`the_srgb_knots_are_the_curves`).
+#[cfg(test)]
 const SRGB_KNOTS: [u16; 513] = [
     0, 1, 2, 4, 5, 6, 7, 9, 10, 11, 12, 14, 15, 16, 17, 19, 20, 21, 22, 24, 25, 26, 27, 29, 30, 31,
     33, 34, 36, 37, 39, 41, 42, 44, 46, 47, 49, 51, 53, 55, 57, 59, 61, 63, 65, 68, 70, 72, 74, 77,
@@ -268,6 +274,7 @@ const SRGB_KNOTS: [u16; 513] = [
 
 /// The step of `1 / 8192` Metal reads for the converted sum's step `q` (at most 8192) of an sRGB
 /// format (the module docs): the knots joined by straight lines, rounded to nearest even.
+#[cfg(test)]
 fn srgb_step(q: u32) -> u16 {
     let i = (q >> 4).min(511) as usize;
     let f = q - 16 * i as u32;
@@ -279,7 +286,14 @@ fn srgb_step(q: u32) -> u16 {
 /// Metal's red, green and blue of a texel of luma code `y` whose chroma rounded to the 8-bit
 /// codes `cb` and `cr` (the module docs), each `v` of the value `v / 2048`: [`ycbcr_read`] of
 /// 8-bit codes read converted.
-pub fn ycbcr_texel(range: YCbCrRange, matrix: YCbCrMatrix, y: u8, cb: u8, cr: u8) -> [u16; 3] {
+#[cfg(test)]
+pub(crate) fn ycbcr_texel(
+    range: YCbCrRange,
+    matrix: YCbCrMatrix,
+    y: u8,
+    cb: u8,
+    cr: u8,
+) -> [u16; 3] {
     let codes = YCbCrCodes {
         bits: 8,
         bytes: 1,
@@ -294,7 +308,8 @@ pub fn ycbcr_texel(range: YCbCrRange, matrix: YCbCrMatrix, y: u8, cb: u8, cr: u8
 /// rounded to the codes `cb` and `cr` (the module docs): each `v` of the value `v / 2048` for
 /// codes read converted, by `range` and `matrix`, and of `v / 8192` for codes read through the
 /// sRGB curve; the codes `cr`, `y` and `cb` of `code / (2^bits - 1)` for codes read as codes.
-pub fn ycbcr_read(
+#[cfg(test)]
+pub(crate) fn ycbcr_read(
     codes: YCbCrCodes,
     (range, matrix): (YCbCrRange, YCbCrMatrix),
     [y, cb, cr]: [u16; 3],

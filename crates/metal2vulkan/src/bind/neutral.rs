@@ -10,8 +10,8 @@
 //! are listed only where the profile's format table supports it.
 
 use crate::device::profile::DeviceProfile;
+#[cfg(test)]
 use crate::device::requirements::FormatUsage;
-use crate::device::Device;
 use crate::pipeline::sym::{
     ImageAccess, ImageDim, ImageHandleClass, SampledType, StorageFormatClass,
 };
@@ -169,12 +169,24 @@ pub(crate) fn numeric_type(format: vk::Format) -> Option<SampledType> {
     }
 }
 
+/// Bytes of the `ZeroBuffer` neutral on `profile`: large enough for any uniform-buffer view
+/// (`maxUniformBufferRange`, capped at 64 KiB), a multiple of 16.
+pub fn zero_buffer_bytes(profile: &DeviceProfile) -> u32 {
+    let range = profile
+        .fields()
+        .limits
+        .max_uniform_buffer_range
+        .min(1 << 16);
+    (range & !15).max(16)
+}
+
 /// Every image type the new core can declare on `profile` (heap classes and per-slot images): each
 /// dimension, arrayed-ness, and sample count SPIR-V allows, each numeric type, depth comparison for
 /// float 2D and cube images, sampled or storage with each storage format class the profile
 /// supports. Cube arrays need `imageCubeArray`; a multisampled image is sampled only (no form of a
 /// multisampled storage image is built).
-pub fn image_classes(profile: &DeviceProfile) -> Vec<ImageHandleClass> {
+#[cfg(test)]
+pub(crate) fn image_classes(profile: &DeviceProfile) -> Vec<ImageHandleClass> {
     let f = profile.fields();
     let types = [SampledType::Float, SampledType::Sint, SampledType::Uint];
     let shapes = [
@@ -243,19 +255,6 @@ pub fn image_classes(profile: &DeviceProfile) -> Vec<ImageHandleClass> {
         }
     }
     out
-}
-
-impl Device {}
-
-/// Bytes of the `ZeroBuffer` neutral on `profile`: large enough for any uniform-buffer view
-/// (`maxUniformBufferRange`, capped at 64 KiB), a multiple of 16.
-pub fn zero_buffer_bytes(profile: &DeviceProfile) -> u32 {
-    let range = profile
-        .fields()
-        .limits
-        .max_uniform_buffer_range
-        .min(1 << 16);
-    (range & !15).max(16)
 }
 
 #[cfg(test)]

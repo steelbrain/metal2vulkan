@@ -71,13 +71,13 @@ pub enum PushHole {
         stages: vk::ShaderStageFlags,
         offset: u32,
     },
-    /// The device address of the region record a device-replay variant's dispatch reads:
-    /// `ReplayLayout::region_offset` of the dispatch's command and region in the replay's scratch,
-    /// as a `u64` at `offset` of the variant's push bytes. A flat variant's dispatch outside a
+    /// The device address of the region record a device-replay variant's dispatch reads: the
+    /// dispatch's command and region's in the replay's scratch, as a `u64` at `offset` of the
+    /// variant's push bytes. A flat variant's dispatch outside a
     /// replay (`BindingPlan::instantiate_dispatch`) reads the record its preprocess wrote beside
     /// the group counts. A mesh draw of a folded object function (`TASK_EXT`) reads its scratch's
     /// region record: the arguments pass's (`DrawCommands::mesh_arguments`) or the uploaded fold's
-    /// (`DrawCommands::object_fold`), at [`MeshArguments::OBJECT_RECORD`](crate::bind::MeshArguments::OBJECT_RECORD), a multiple of 16.
+    /// (`DrawCommands::object_fold`), at the scratch's first byte.
     ReplayRegionAddress {
         stages: vk::ShaderStageFlags,
         offset: u32,
@@ -94,8 +94,7 @@ pub enum PushHole {
         stages: vk::ShaderStageFlags,
         offset: u32,
     },
-    /// The device address of a merged draw replay's header (`MergedLayout::header_offset` in the
-    /// replay's scratch), as a `u64` at `offset` of a merged variant's vertex push bytes
+    /// The device address of a merged draw replay's header in the replay's scratch, as a `u64` at `offset` of a merged variant's vertex push bytes
     /// (`VariantKey::merged_draws`, `PushField::MergedDrawAddress`).
     MergedDrawAddress {
         stages: vk::ShaderStageFlags,
@@ -111,13 +110,6 @@ pub struct IndirectRef {
     /// The consumer's id for the buffer.
     pub token: u32,
     pub offset: u64,
-}
-
-impl IndirectRef {
-    /// The arguments at `offset` in the consumer's buffer `token`.
-    pub fn new(token: u32, offset: u64) -> IndirectRef {
-        IndirectRef { token, offset }
-    }
 }
 
 /// A consumer-owned index buffer.
@@ -203,9 +195,8 @@ pub struct DescriptorRange {
 /// and fills `PushHole::RootTableAddress` with that address.
 ///
 /// `R0` counts 32-byte entries from the table's own address, modulo `2^64`, so a consumer may
-/// point the table at a resident set it uploaded elsewhere ([`ResidentSet`]): the table and the set
-/// 32-byte-aligned, and the set holding at least the table's own ranges
-/// ([`RootTable::resident_ranges`]), it writes the set's address and its entry count over the
+/// point the table at a resident set it uploaded elsewhere: the table and the set
+/// 32-byte-aligned, and the set holding at least the table's own ranges, it writes the set's address and its entry count over the
 /// sink entry's `guest` and `size` fields.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -217,26 +208,6 @@ pub struct RootTable {
 impl RootTable {
     /// Byte offset of the sink entry's `host` field, which the consumer fills.
     pub const SINK_HOST_OFFSET: u32 = (SINK_ROOT * ENTRY_BYTES + HOST) as u32;
-
-    /// The table's resident set, `R0 .. R0 + N` as the binder wrote it, each at its padded size.
-    pub fn resident_ranges(&self) -> Vec<ResidentRange> {
-        let field = |root: u64, field: u64| {
-            let at = (root * ENTRY_BYTES + field) as usize;
-            self.bytes
-                .get(at..at + 8)
-                .and_then(|bytes| bytes.try_into().ok())
-                .map_or(0, u64::from_le_bytes)
-        };
-        let first = field(SINK_ROOT, RESIDENT_FIRST);
-        let count = field(SINK_ROOT, RESIDENT_COUNT);
-        (first..first.saturating_add(count))
-            .map(|root| ResidentRange {
-                host: field(root, HOST),
-                guest: field(root, GUEST),
-                length: field(root, SIZE),
-            })
-            .collect()
-    }
 
     /// The table with `statics` (entry `2 + n` for each `(n, entry)`, every `n < first - 2`) and
     /// the resident set `resident` (already coalesced,
@@ -273,94 +244,6 @@ pub struct ResidentRange {
     pub guest: u64,
     /// Its length in bytes, which a set pads to a multiple of 16.
     pub length: u64,
-}
-
-impl ResidentRange {
-    /// The allocation of `length` bytes at device address `host` and Metal address `guest`.
-    pub fn new(host: u64, guest: u64, length: u64) -> ResidentRange {
-        ResidentRange {
-            host,
-            guest,
-            length,
-        }
-    }
-}
-
-/// A resident set a consumer uploads apart from the root tables that search it: its allocations
-/// coalesced as a root table's are (sorted by Metal address, one inside another dropped, a partial
-/// overlap trimmed of its head, an empty one dropped; indirect command buffers' records, from
-/// `RECORDS_ADDRESS_BASE`, kept whole, one for each start), each at its padded size, as entries in
-/// a root table's layout. The consumer uploads [`bytes`]( Self::bytes) at a 32-byte-aligned device
-/// address and points root tables there.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ResidentSet {
-    entries: Vec<RootEntry>,
-}
-
-/// `ranges` as a set's entries, at their padded sizes.
-fn entries(ranges: impl IntoIterator<Item = ResidentRange>) -> Vec<RootEntry> {
-    ranges
-        .into_iter()
-        .map(|range| RootEntry {
-            host: range.host,
-            guest: range.guest,
-            size: padded(range.length),
-            bind_offset: 0,
-        })
-        .collect()
-}
-
-impl ResidentSet {
-    /// The coalesced set of `ranges`, of any count (Refused with `BindError::ResidentSetTooLarge`
-    /// past 2^16 entries before).
-    pub fn new(ranges: impl IntoIterator<Item = ResidentRange>) -> ResidentSet {
-        ResidentSet {
-            entries: crate::bind::resident::resident_set(entries(ranges)),
-        }
-    }
-
-    /// Its entries' count, `N`.
-    pub fn len(&self) -> u64 {
-        self.entries.len() as u64
-    }
-
-    /// Whether it has no entry.
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
-    /// Its entries, 32 bytes each, in a root table's layout.
-    pub fn bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(self.entries.len() * ENTRY_BYTES as usize);
-        for e in &self.entries {
-            for value in [e.host, e.guest, e.size, 0] {
-                bytes.extend_from_slice(&value.to_le_bytes());
-            }
-        }
-        bytes
-    }
-
-    /// Whether a search of the set resolves every address of `range` (at its padded length) as
-    /// a root table holding `range` alone does: one entry holds the whole range, at the same
-    /// device address for its first byte.
-    pub fn holds(&self, range: &ResidentRange) -> bool {
-        let below = self.entries.partition_point(|e| e.guest <= range.guest);
-        let Some(e) = below.checked_sub(1).and_then(|at| self.entries.get(at)) else {
-            return range.length == 0;
-        };
-        let into = range.guest - e.guest;
-        let end = u128::from(into) + u128::from(padded(range.length));
-        end <= u128::from(e.size) && e.host.wrapping_add(into) == range.host
-    }
-
-    /// The set of its entries and `ranges`, coalesced.
-    pub fn with(&self, ranges: impl IntoIterator<Item = ResidentRange>) -> ResidentSet {
-        let own = self
-            .entries
-            .iter()
-            .map(|e| ResidentRange::new(e.host, e.guest, e.size));
-        ResidentSet::new(own.chain(ranges))
-    }
 }
 
 /// `n` rounded up to a multiple of 16 (the allocation padding contract).

@@ -15,10 +15,9 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::bind::heap::tier_read_gaps;
+use crate::bind::heap::{storage_unreadable, tier_read_gaps};
 use crate::bind::{
-    handle_entry, handle_entry_flags, heap_element, BindState, HeapElement, ResourceClass,
-    TextureFacts, UsedResource, WriteSource,
+    handle_entry, BindState, ResourceClass, TextureFacts, UsedResource, WriteSource,
 };
 use crate::budget::Budget;
 use crate::device::metal::read_write_tier_formats;
@@ -302,14 +301,12 @@ fn a_flagged_member_reads_the_null_element() {
 }
 
 /// On every committed profile that reads storage without a format by the formats' bits alone,
-/// each of Metal's read-write tier formats on the profile is held in its storage class for its
-/// writes, and where its view cannot be read so (flagged), a function reading the class is refused
-/// for it ([`tier_read_gaps`]): no tier format reads zero. On the Iris Xe none is flagged; the
-/// non-tier formats its view cannot read are held for their writes, flagged; on lavapipe, which has
-/// the feature, nothing is flagged.
+/// where a view of one of Metal's read-write tier formats on the profile cannot be read so
+/// (flagged), a function reading its storage class is refused for it ([`tier_read_gaps`]): no tier
+/// format reads zero. On the Iris Xe none is flagged; the non-tier formats its view cannot read
+/// are flagged; on lavapipe, which has the feature, nothing is flagged.
 #[test]
 fn only_a_view_the_device_cannot_read_is_flagged() {
-    let layout = vk::ImageLayout::GENERAL;
     let mut bits_alone = 0;
     for (stem, profile) in crate::spirv::testing::committed_profiles().expect("profiles") {
         let profile = &profile;
@@ -324,11 +321,7 @@ fn only_a_view_the_device_cannot_read_is_flagged() {
                 sampled_type: crate::metal::format::sampled_type(pf).expect("type"),
                 ..storage_class()
             };
-            match heap_element(profile, &HandleClass::Image(class), &facts, layout) {
-                Ok(HeapElement::View(_)) => {}
-                other => panic!("{stem}: {pf:?}: {other:?}"),
-            }
-            let flagged = handle_entry_flags(profile, &facts) & FLAG_STORAGE_UNREADABLE != 0;
+            let flagged = storage_unreadable(profile, &facts.shape());
             let gaps = tier_read_gaps(profile, &class);
             assert!(!flagged || !gaps.is_empty(), "{stem}: {pf:?} reads zero");
             if stem == IRIS {
@@ -344,29 +337,9 @@ fn only_a_view_the_device_cannot_read_is_flagged() {
     let iris = device(IRIS);
     let lavapipe = device("lavapipe");
     for pf in IRIS_UNREADABLE {
-        let facts = read_write(pf);
-        let class = ImageHandleClass {
-            sampled_type: crate::metal::format::sampled_type(pf).expect("type"),
-            ..storage_class()
-        };
-        // Held for its writes.
-        assert!(
-            matches!(
-                heap_element(iris.profile(), &HandleClass::Image(class), &facts, layout),
-                Ok(HeapElement::View(_))
-            ),
-            "{pf:?}"
-        );
-        assert_eq!(
-            handle_entry_flags(iris.profile(), &facts) & FLAG_STORAGE_UNREADABLE,
-            FLAG_STORAGE_UNREADABLE,
-            "{pf:?}"
-        );
-        assert_eq!(
-            handle_entry_flags(lavapipe.profile(), &facts) & FLAG_STORAGE_UNREADABLE,
-            0,
-            "{pf:?}"
-        );
+        let shape = read_write(pf).shape();
+        assert!(storage_unreadable(iris.profile(), &shape), "{pf:?}");
+        assert!(!storage_unreadable(lavapipe.profile(), &shape), "{pf:?}");
     }
 }
 
@@ -432,27 +405,18 @@ fn a_plan_flags_its_unreadable_members() {
 
 /// A function that reads a storage class one of Metal's read-write tier formats is held in through
 /// a view the device cannot read without a format is refused, naming the view's bit, and the member
-/// is held for its writes: on the Iris Xe with `R16G16B16A16_SFLOAT`'s `STORAGE_READ_WITHOUT_FORMAT`
+/// is flagged unreadable: on the Iris Xe with `R16G16B16A16_SFLOAT`'s `STORAGE_READ_WITHOUT_FORMAT`
 /// bit cleared (a synthetic profile), the kernel is `Unsupported` naming that bit alone (the
-/// class's neutral, `R32_SFLOAT`, keeps its own), and the device-wide heap's `RGBA16Float` element
-/// is its view, flagged. The committed profile compiles the kernel and holds the member unflagged.
+/// class's neutral, `R32_SFLOAT`, keeps its own), and an `RGBA16Float` member is flagged. The
+/// committed profile compiles the kernel and leaves the member unflagged.
 #[test]
 fn a_tier_format_without_its_read_bit_is_refused() {
     let Some(bc) = kernel() else {
         return;
     };
-    let layout = vk::ImageLayout::GENERAL;
-    let facts = read_write(PixelFormat::RGBA16Float);
-    let class = HandleClass::Image(storage_class());
+    let shape = read_write(PixelFormat::RGBA16Float).shape();
     let iris = device(IRIS);
-    assert!(matches!(
-        heap_element(iris.profile(), &class, &facts, layout),
-        Ok(HeapElement::View(_))
-    ));
-    assert_eq!(
-        handle_entry_flags(iris.profile(), &facts) & FLAG_STORAGE_UNREADABLE,
-        0
-    );
+    assert!(!storage_unreadable(iris.profile(), &shape));
     pipeline(&iris, &bc).expect("the committed profile");
     let mut desc = description(IRIS);
     let format = vk::Format::R16G16B16A16_SFLOAT;
@@ -477,12 +441,5 @@ fn a_tier_format_without_its_read_bit_is_refused() {
         }
         other => panic!("the kernel: {:?}", other.map(|_| ())),
     }
-    assert!(matches!(
-        heap_element(cleared.profile(), &class, &facts, layout),
-        Ok(HeapElement::View(_))
-    ));
-    assert_eq!(
-        handle_entry_flags(cleared.profile(), &facts) & FLAG_STORAGE_UNREADABLE,
-        FLAG_STORAGE_UNREADABLE
-    );
+    assert!(storage_unreadable(cleared.profile(), &shape));
 }

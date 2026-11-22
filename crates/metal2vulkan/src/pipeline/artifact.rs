@@ -606,7 +606,7 @@ pub enum PrecisionNote {
     /// function table: a nil (unbound) table accepts every triangle candidate, an entry at or past
     /// the table's size is ignored like an entry never set (the candidate stays uncommitted), and
     /// the user instance id of an instance built from a default descriptor, which has no `userID`,
-    /// is 0 because the consumer passes 0 (`bind::MetalInstance::user_id`), a choice: what Metal
+    /// is 0 because the consumer passes 0, a choice: what Metal
     /// reads there is unmeasured.
     DeviceRayIntersection,
     /// Float arithmetic whose AIR lets a compiler rewrite it with a neighbouring operation: an
@@ -699,8 +699,8 @@ pub enum PrecisionNote {
     /// `[[point_coord]]` and a centroid varying at the sample and `[[position]]`'s z and w at the
     /// pixel, where they equal Metal's to the last bit or two.
     MultisamplePosition,
-    /// A render pass drawn by regions over a rasterization-rate map that is not the identity
-    /// (`bind::RateMapRegions::precision`): its regions' lines are this crate's tiles' exact lines,
+    /// A render pass drawn by regions over a rasterization-rate map that is not the identity: its
+    /// regions' lines are this crate's tiles' exact lines,
     /// where Apple's are its fixed-point ones, so a fragment's evaluated point lies within the
     /// bound of Metal's. A module that decodes a map records none: its decoder is Apple's GPU
     /// arithmetic over Metal's parameter data, bit for bit (it once recorded this note, when the

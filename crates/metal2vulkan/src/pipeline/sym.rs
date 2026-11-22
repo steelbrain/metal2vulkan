@@ -674,7 +674,7 @@ pub enum SpecKey {
     /// holds. A slot bound to no sampler takes 0.
     BoundSamplerWord(SlotRef),
     /// Two bits: 1 where a texture the stage's handles can name is one a heap holds by its raw
-    /// texels alone (`bind::heap::heap_raw_form`: an unswizzled, not sparse texture of one sample
+    /// texels alone (`lower::texture::heap_raw_form`: an unswizzled, not sparse texture of one sample
     /// of a form of `ExtendedRange::HEAP_READ`, whose texels the function's `float` read, sample or
     /// gather decodes by the device's arithmetic, `PrecisionNote::DevicePackConversion`), and 2
     /// where one such is of a form whose linear sample the function filters by the device's

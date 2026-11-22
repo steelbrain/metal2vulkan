@@ -22,7 +22,7 @@
 //! MSL specification or measured. An index `i` at or past the table's size is likewise taken as
 //! undefined (inferred: Metal documents no bound check): the translation reads word `2 + i`
 //! whatever it is, so what it reads past the table's words is the buffer's (robust buffer access
-//! decides it). The consumer encodes a table's words with `bind::table::FunctionTableWords`.
+//! decides it). The consumer encodes a table's words as `bind::table`'s module docs state.
 
 use crate::pipeline::compile::key::LinkedKey;
 use crate::pipeline::descriptor::{LinkedFunction, LinkedFunctions, LinkedList};

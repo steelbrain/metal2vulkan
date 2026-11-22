@@ -37,10 +37,7 @@ use crate::pipeline::artifact::{
     ComputePipeline, ComputePipelineMetalInfo, PrecisionNote, RenderPipeline, RuntimeDependency,
     StageModule,
 };
-use crate::pipeline::compile::key::{
-    function_key, mesh_descriptor_key, pipeline_key, queried_render_descriptor_key,
-    render_descriptor_key,
-};
+use crate::pipeline::compile::key::{function_key, pipeline_key, queried_render_descriptor_key};
 use crate::pipeline::compile::{
     compile_stage, compile_stage_from, dynamic_order, guarded, kernel_observes_partition,
     linked_keys, primitive_id_varying_on, reads_primitive_id_varying, stage_inputs,
@@ -60,7 +57,7 @@ use crate::pipeline::sym::{Stage, VaryingKey};
 use crate::spirv::serialize::ENTRY_NAME;
 use crate::vk;
 
-/// What one compile cost against its [`Budget`] ([`Device::compile_function_with_report`]): the
+/// What one compile cost against its [`Budget`] ([`DeviceProfile::compile_entry`]): the
 /// two bounds the budget sets besides its deadline, as the compile's meter counted them up to its
 /// end or its refusal.
 #[non_exhaustive]
@@ -126,38 +123,17 @@ impl Device {
         )
     }
 
-    /// The key of render pipeline descriptor `d` on this device, without decoding: a digest of
-    /// every field of `d`, each `Function` stage by its [`Device::function_compile_key`] under the
-    /// default lowering inputs (its AIR hash, entry name, constants, linked functions and dynamic
-    /// libraries), each `Compiled` stage by its key, with this device's profile fingerprint and
-    /// [`SEMANTICS_VERSION`](crate::cache::SEMANTICS_VERSION). Everything a creation asks of `d`
-    /// before its compile on this device ([`Device::render_variant_key`] under one variant, the
-    /// descriptor's linked-use answers, its reflection) is a function of this key: a consumer
-    /// may keep those answers under it. The crate keeps none.
-    pub fn render_descriptor_key(&self, d: &RenderPipelineDescriptor) -> crate::cache::PipelineKey {
-        let stage = |s: &StageSource| match s {
-            StageSource::Function(f) => (
-                0,
-                *self
-                    .function_compile_key(f, &LoweringInputs::default())
-                    .digest(),
-            ),
-            StageSource::Compiled(c) => (1, *c.key().digest()),
-        };
-        render_descriptor_key(&self.profile_fingerprint(), d, stage)
-    }
-
     /// The key of render pipeline descriptor `d` on this device for the runtime on
-    /// [`Device::from_queries`]: every field of `d`, each `Function` stage by its
-    /// [`Device::function_compile_key`] under the default lowering inputs, each `Compiled` stage
-    /// by its key, with this device's profile fingerprint and
-    /// [`SEMANTICS_VERSION`](crate::cache::SEMANTICS_VERSION), as
-    /// [`Device::render_descriptor_key`] keys it, the fields written as fixed-width words rather
-    /// than in their `Debug` form, so a seen descriptor's key costs no formatting. Two descriptors
-    /// have one key exactly where `render_descriptor_key` gives them one, so everything a creation
-    /// asks of `d` before its compile is a function of this key too. The two keys' values differ:
-    /// `render_descriptor_key` is the old runtime's, which keeps answers under its values, and goes
-    /// at the cutover. The crate keeps no cache.
+    /// [`Device::from_queries`], without decoding: every field of `d`, each `Function` stage by its
+    /// [`Device::function_compile_key`] under the default lowering inputs (its AIR hash, entry
+    /// name, constants, linked functions and dynamic libraries), each `Compiled` stage by its key,
+    /// with this device's profile fingerprint and
+    /// [`SEMANTICS_VERSION`](crate::cache::SEMANTICS_VERSION), the fields written as fixed-width
+    /// words rather than in their `Debug` form, so a seen descriptor's key costs no formatting.
+    /// Everything a creation asks of `d` before its compile on this device
+    /// ([`Device::render_variant_key`] under one variant, the descriptor's linked-use answers, its
+    /// reflection) is a function of this key: a consumer may keep those answers under it. The
+    /// crate keeps no cache.
     pub fn queried_render_descriptor_key(
         &self,
         d: &RenderPipelineDescriptor,
@@ -174,31 +150,6 @@ impl Device {
         queried_render_descriptor_key(&self.profile_fingerprint(), d, stage)
     }
 
-    /// The key of mesh render pipeline descriptor `d` on this device, without decoding, as
-    /// [`Device::render_descriptor_key`] keys a render descriptor: a digest of every field of `d`,
-    /// each `Function` stage by its [`Device::function_compile_key`] under the default lowering
-    /// inputs, each `Compiled` stage by its key, with this device's profile fingerprint and
-    /// [`SEMANTICS_VERSION`](crate::cache::SEMANTICS_VERSION).
-    ///
-    /// The descriptor's [`reflection`](MeshPipelineDescriptor::reflection) and
-    /// [`slot_writes`](MeshPipelineDescriptor::slot_writes) are a function of this key, so a
-    /// consumer may keep either under it and ask for it once however many states it makes of the
-    /// descriptor. Both read the three stages alone, so the key is wider than they need; it is
-    /// every field so that it means this descriptor on this device, as the render form does. The
-    /// crate keeps no cache.
-    pub fn mesh_descriptor_key(&self, d: &MeshPipelineDescriptor) -> crate::cache::PipelineKey {
-        let stage = |s: &StageSource| match s {
-            StageSource::Function(f) => (
-                0,
-                *self
-                    .function_compile_key(f, &LoweringInputs::default())
-                    .digest(),
-            ),
-            StageSource::Compiled(c) => (1, *c.key().digest()),
-        };
-        mesh_descriptor_key(&self.profile_fingerprint(), d, stage)
-    }
-
     /// Compile `f` under `inp` for this device. The result is keyed by
     /// [`Device::function_compile_key`]; the crate keeps no cache.
     pub fn compile_function(
@@ -207,19 +158,8 @@ impl Device {
         inp: &LoweringInputs,
         b: &Budget,
     ) -> Result<CompiledFunction, Error> {
-        self.compile_function_with_report(f, inp, b).0
-    }
-
-    /// [`Device::compile_function`], and what the compile cost against `b`
-    /// ([`CompileReport`]), whether it compiled or not.
-    pub fn compile_function_with_report(
-        &self,
-        f: &FunctionDescriptor,
-        inp: &LoweringInputs,
-        b: &Budget,
-    ) -> (Result<CompiledFunction, Error>, CompileReport) {
         let mut m = Meter::new(b);
-        let compiled = guarded(|| {
+        guarded(|| {
             compile_stage(
                 &f.function,
                 &f.constants,
@@ -228,8 +168,7 @@ impl Device {
                 InputsFrom::Given(inp),
                 &mut m,
             )
-        });
-        (compiled, CompileReport::of(&m))
+        })
     }
 
     /// [`Device::compile_function`], reading the stage's specialized entry from `entries`: the

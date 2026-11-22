@@ -56,6 +56,7 @@ use std::sync::OnceLock;
 
 use crate::lower::arith::srgb::SRGB_DECODE_STEPS;
 use crate::metal::PixelFormat;
+#[cfg(test)]
 use crate::vk::Format;
 
 mod hdr;
@@ -187,17 +188,6 @@ impl AstcDecode {
         [self.width, self.height]
     }
 
-    /// The Vulkan format of the twin's texels of `texels` ([`form`](Self::form)'s):
-    /// `R8G8B8A8_UNORM` (an sRGB format's viewed as `R8G8B8A8_SRGB` too, where its linear samples
-    /// are the device's filter), `R16G16B16A16_SFLOAT` or `R32G32B32A32_SFLOAT`.
-    pub fn texel_format(self, texels: AstcTexels) -> Format {
-        match self.form(texels) {
-            AstcTexels::Unorm8 => Format::R8G8B8A8_UNORM,
-            AstcTexels::Half => Format::R16G16B16A16_SFLOAT,
-            AstcTexels::Float => Format::R32G32B32A32_SFLOAT,
-        }
-    }
-
     /// The bytes of a twin's texel of `texels` ([`form`](Self::form)'s): 4, 8 or 16.
     pub fn texel_bytes(self, texels: AstcTexels) -> u32 {
         match self.form(texels) {
@@ -205,20 +195,6 @@ impl AstcDecode {
             AstcTexels::Half => 8,
             AstcTexels::Float => 16,
         }
-    }
-
-    /// The block's texels, each channel's 16-bit interpolation result `C` (red, green, blue,
-    /// alpha), or for an HDR format its half-precision value's bits, row-major; `None` for an
-    /// error block (whose texels read magenta, or NaN for an HDR format).
-    pub fn block_values(self, block: &[u8; 16]) -> Option<Vec<[u16; 4]>> {
-        self.block_values_why(block).ok()
-    }
-
-    /// [`block_values`](Self::block_values), with why a block is an error block.
-    pub(crate) fn block_values_why(self, block: &[u8; 16]) -> Result<Vec<[u16; 4]>, Illegal> {
-        let mut out = [[0; 4]; MOST_TEXELS];
-        decode_block(self, u128::from_le_bytes(*block), &mut out)?;
-        Ok(out[..(self.width * self.height) as usize].to_vec())
     }
 
     /// The `float` channels Metal reads of a texel whose 16-bit interpolation results (an HDR
@@ -317,6 +293,34 @@ impl AstcDecode {
                 }
             }
         }
+    }
+
+    /// The Vulkan format of the twin's texels of `texels` ([`form`](Self::form)'s):
+    /// `R8G8B8A8_UNORM` (an sRGB format's viewed as `R8G8B8A8_SRGB` too, where its linear samples
+    /// are the device's filter), `R16G16B16A16_SFLOAT` or `R32G32B32A32_SFLOAT`.
+    #[cfg(test)]
+    pub(crate) fn texel_format(self, texels: AstcTexels) -> Format {
+        match self.form(texels) {
+            AstcTexels::Unorm8 => Format::R8G8B8A8_UNORM,
+            AstcTexels::Half => Format::R16G16B16A16_SFLOAT,
+            AstcTexels::Float => Format::R32G32B32A32_SFLOAT,
+        }
+    }
+
+    /// The block's texels, each channel's 16-bit interpolation result `C` (red, green, blue,
+    /// alpha), or for an HDR format its half-precision value's bits, row-major; `None` for an
+    /// error block (whose texels read magenta, or NaN for an HDR format).
+    #[cfg(test)]
+    pub(crate) fn block_values(self, block: &[u8; 16]) -> Option<Vec<[u16; 4]>> {
+        self.block_values_why(block).ok()
+    }
+
+    /// [`block_values`](Self::block_values), with why a block is an error block.
+    #[cfg(test)]
+    pub(crate) fn block_values_why(self, block: &[u8; 16]) -> Result<Vec<[u16; 4]>, Illegal> {
+        let mut out = [[0; 4]; MOST_TEXELS];
+        decode_block(self, u128::from_le_bytes(*block), &mut out)?;
+        Ok(out[..(self.width * self.height) as usize].to_vec())
     }
 }
 

@@ -522,7 +522,7 @@ pub fn texel_format(pf: PixelFormat) -> TexelFormat {
             | P::RGBX8Unorm
             | P::RGBX8Snorm
             // Read, sampled (nearest, linear and bicubic, `float` and `half`) and gathered as an
-            // `RGBX8Unorm` texture of their decoded codes (an Apple M3 Max, `bind::ChromaDecode`).
+            // `RGBX8Unorm` texture of their decoded codes (an Apple M3 Max).
             | P::GBGR422
             | P::BGRG422
     );
@@ -868,7 +868,7 @@ mod tests {
     }
 
     /// A 4:2:2 format reads, samples and gathers as an `RGBA8Unorm` texture of its decoded codes
-    /// with alpha 1 (our probe on an Apple M3 Max under macOS 27.0.1, `bind::ChromaDecode`):
+    /// with alpha 1 (our probe on an Apple M3 Max under macOS 27.0.1):
     /// `RGBX8Unorm`'s class, its border texels too.
     #[test]
     fn four_two_two_formats_convert_as_rgbx8_unorm() {

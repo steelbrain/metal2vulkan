@@ -36,45 +36,28 @@
 //! through the binding [`WriteSource::ExecutionStatus`] names where it does not. An indirect
 //! dispatch reads its group counts from Metal's buffer itself ([`IndirectArgs::Buffer`]).
 //! A pass's visibility results are its queries' results copied to their
-//! offsets, a `Boolean` one the device's own nonzero value where a sample passed. Compute commands
-//! a kernel encodes into an indirect command buffer replay on the device where it has device
-//! addresses: the [`replay_preprocess`] of an execution ([`ReplayExecution`]) over registered
-//! [`ReplayVariant`]s, recorded with [`replay_preprocess_module`], writes each command's arguments
-//! and slot table for the variants' dispatches ([`BindingPlan::instantiate_replay`]);
-//! [`ReplayFaults`] reports the commands it refused. Where the device states
-//! `VK_EXT_device_generated_commands` with compute pipeline binding,
-//! [`replay_preprocess_generated`] over each variant's [`GeneratedVariant`] writes a token stream
-//! for one execution per segment instead ([`GeneratedLayout`]).
+//! offsets, a `Boolean` one the device's own nonzero value where a sample passed.
 //! [`clamped_depth`] is a 32-bit float depth clamped into `[0, 1]`, as a copy into a depth image
 //! of a device without `VK_EXT_depth_range_unrestricted` needs it. An ASTC texture
 //! on a device without its block is read through a twin of Metal's decode of its blocks
 //! ([`AstcDecode`], in the texels [`AstcTexels`] names); a PVRTC texture on a device without its
 //! format through a twin of its texels' codes ([`PvrtcDecode`]); an ETC2 or EAC texture on a
 //! device without the formats through a twin of its codes or an 11-bit format's values
-//! ([`EtcDecode`], in the texels [`EtcTexels`] names); a 4:2:2 texture through a twin of its
-//! texels' codes ([`ChromaDecode`]).
-//! [`sampler_desc`] gives the Vulkan sampler a plan's sampler write needs, [`heap_classes`] the
-//! classes of the handle heap's arrays on a profile, [`FunctionTableWords`] the words of a
-//! visible-function table's buffer, and [`FunctionTableSnapshot`] the one buffer of a command's
-//! tables' words. A plan writes an
-//! acceleration structure as the top-level structure the consumer builds for it:
-//! [`instance_record`] gives each Metal instance's record, [`primitive_wrap`] the one instance over
-//! a bound primitive structure, and [`geometry_flags`] and [`geometry_table_offset`] a primitive
-//! structure's geometries. A [`RasterizationRateMap`] is the consumer's `MTLRasterizationRateMap`:
-//! it compiles a [`RateMapDescriptor`], answers the map's queries, and gives the parameter data a
-//! `rasterization_rate_map_decoder` reads, and plans a pass rendered through one region by region
-//! ([`RateMapRegions`]). A [`SparseTileMap`] mirrors a sparse texture's tile mappings where the
-//! device has no shader residency: a plan binds its bytes where a function reads the texture's
-//! residency. An [`ArgumentBufferLayout`] says where an argument encoder (`MTLArgumentEncoder`)
+//! ([`EtcDecode`], in the texels [`EtcTexels`] names).
+//! [`sampler_desc`] gives the Vulkan sampler a plan's sampler write needs, and
+//! [`FunctionTableSnapshot`] the one buffer of a command's visible-function tables' words. A
+//! plan writes an acceleration structure as the top-level structure the consumer builds for it.
+//! A [`RasterizationRateMap`] is the consumer's `MTLRasterizationRateMap`: it compiles a
+//! [`RateMapDescriptor`], answers the map's queries, and gives the parameter data a
+//! `rasterization_rate_map_decoder` reads. An [`ArgumentBufferLayout`] says where an argument
+//! encoder (`MTLArgumentEncoder`)
 //! writes each argument of an argument buffer: a function's (`Function::argument_buffer_layout`),
 //! or one of [`ArgumentDescriptor`]s ([`ArgumentBufferLayout::from_descriptors`]).
 //!
 //! The frozen surface is the items named at this root; the submodules are crate-private.
 
-pub(crate) mod acceleration;
 pub(crate) mod argument_buffer;
 pub(crate) mod astc_decode;
-pub(crate) mod chroma_decode;
 pub(crate) mod depth_clamp;
 pub(crate) mod dispatch;
 pub(crate) mod etc_decode;
@@ -89,42 +72,33 @@ pub(crate) mod pvrtc_decode;
 pub(crate) mod rate_map;
 pub(crate) mod replay;
 pub(crate) mod resident;
-pub(crate) mod sample_interleave;
 pub(crate) mod state;
 pub(crate) mod status;
 pub(crate) mod table;
 pub(crate) mod texel_parts;
 pub(crate) mod texel_rows;
-pub(crate) mod tile_map;
 pub(crate) mod ycbcr_convert;
 pub(crate) mod ycbcr_in_place;
 
-pub use acceleration::{
-    geometry_flags, geometry_table_offset, instance_record, primitive_wrap, InstanceRecord,
-    MetalInstance, GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION, GEOMETRY_OPAQUE,
-};
 pub use argument_buffer::{
-    ArgumentBufferLayout, ArgumentDescriptor, ArgumentLayoutError, ArgumentMember, ArgumentPlace,
-    ArgumentType, ARGUMENT_HANDLE_BYTES,
+    ArgumentBufferLayout, ArgumentDescriptor, ArgumentLayoutError, ArgumentMember, ArgumentType,
+    ARGUMENT_HANDLE_BYTES,
 };
 pub use astc_decode::{AstcDecode, AstcTexels};
-pub use chroma_decode::ChromaDecode;
 pub use depth_clamp::clamped_depth;
 pub use dispatch::{Dispatch, DispatchCommands, DispatchRegion, IndirectArgs};
 pub use etc_decode::{EtcDecode, EtcTexels};
 pub use graphics::{alpha_test_code, DrawCall, DrawCommands, IndexOverrun};
-pub use heap::{
-    handle_entry, handle_entry_flags, heap_classes, heap_element, heap_raw_form, HeapElement,
-    HeapElements, HeapSource, HANDLE_ENTRY_BYTES, HANDLE_TABLE_CAPACITY, NEUTRAL_HEAP_ELEMENT,
-};
+#[cfg(test)]
+pub(crate) use heap::heap_classes;
+pub use heap::{handle_entry, HeapSource, HANDLE_ENTRY_BYTES};
 pub use instantiate::{
     BufferExtent, BufferRange, DescriptorBytes, DescriptorRange, IndexBufferRef, IndirectRef,
-    PushConstantWrite, PushHole, ResidentRange, ResidentSet, RootTable,
+    PushConstantWrite, PushHole, ResidentRange, RootTable,
 };
 pub use mesh_arguments::{
-    fold_object_grid, mesh_arguments_module, metal_object_grid, MeshArguments, MeshArgumentsForm,
-    MeshArgumentsModule, MeshGridLimits, MeshGridRule, ObjectFold, METAL_MESH_GRID_AXIS,
-    METAL_MESH_GRID_TOTAL, METAL_OBJECT_GRID_TOTAL,
+    fold_object_grid, metal_object_grid, MeshArguments, MeshArgumentsForm, MeshGridLimits,
+    ObjectFold, METAL_MESH_GRID_AXIS, METAL_MESH_GRID_TOTAL, METAL_OBJECT_GRID_TOTAL,
 };
 pub use neutral::NeutralResource;
 pub use plan::resources::sampler_desc;
@@ -135,28 +109,11 @@ pub use plan::{
 };
 pub use rate_map::{
     RasterizationRateMap, RateMapAxis, RateMapDescriptor, RateMapError, RateMapLayerDescriptor,
-    RateMapRegion, RateMapRegions, RegionError, RegionLimits, UnpinnedCompile, MAX_SCREEN_EXTENT,
+    UnpinnedCompile, MAX_SCREEN_EXTENT,
 };
-pub use replay::{
-    draw_merge_module, DrawMergeModule, MergePhase, MergedLayout, DRAW_INDEX_ENTRY_BYTES,
-    MERGED_CHUNK, MERGED_HEADER_BYTES, MERGED_REST_FIRST,
-};
-pub use replay::{
-    draw_replay_draw, draw_replay_indexed, draw_replay_merges, draw_replay_primitive_type,
-    draw_replay_slots, draw_replay_state, draw_replay_vertex_layouts, DrawReplayRule,
-    DRAW_REPLAY_WRITES,
-};
-pub use replay::{
-    draw_replay_module, draw_replay_preprocess, DrawReplay, DrawReplayLayout, DrawReplayModule,
-    DrawReplayPreprocess, InheritedBytes, DRAW_ARGUMENT_BYTES, MAX_DRAW_REPLAY_TYPES,
-};
+pub use replay::DRAW_ARGUMENT_BYTES;
 pub(crate) use replay::{merged_fragment_table, merged_vertex, MergedVertex};
-pub use replay::{
-    replay_preprocess, replay_preprocess_generated, replay_preprocess_module, GeneratedLayout,
-    GeneratedRefusal, GeneratedReplay, GeneratedVariant, ReplayExecution, ReplayLayout,
-    ReplayPreprocess, ReplayPreprocessModule, ReplayRefusal, ReplayVariant, MAX_REPLAY_DISPATCHES,
-    MAX_REPLAY_REGIONS, MAX_REPLAY_SLOTS, MAX_REPLAY_VARIANTS,
-};
+pub use replay::{DRAW_INDEX_ENTRY_BYTES, MERGED_REST_FIRST};
 pub use state::{
     ArgumentFunctionTable, ArgumentSampler, ArgumentSamplersShape, BindShape, BindState,
     BoundAccelerationStructure, BoundBuffer, BoundSampler, BoundSamplerShape, BoundTexture,
@@ -169,16 +126,13 @@ pub use state::{
 // How `BindState::shape` classes a buffer: the crate reads it from `state`, and a consumer takes
 // shapes from `BindState::shape`; only the crate's tests and validation reach it here.
 pub use pvrtc_decode::PvrtcDecode;
-pub use sample_interleave::{
-    interleave_merge_modules, interleave_split_module, InterleaveMergeModules,
-    InterleaveSplitModule, PlanesCopy,
-};
 pub use status::{ExecutionStatus, ReplayFaults, StatusBits, StatusReport, StatusWord};
-pub use table::{FunctionTableSnapshot, FunctionTableWords};
-pub use texel_parts::{part_texels, texel_buffer_parts};
+pub use table::FunctionTableSnapshot;
+#[cfg(test)]
+pub(crate) use table::FunctionTableWords;
+pub use texel_parts::part_texels;
 pub use texel_rows::TexelRows;
-pub use tile_map::{SparseTileMap, TileMapError, TileMapping};
-pub use ycbcr_convert::{
-    ycbcr_read, ycbcr_texel, YCbCrCodes, YCbCrMatrix, YCbCrOutput, YCbCrPlanes, YCbCrRange,
-};
+#[cfg(test)]
+pub(crate) use ycbcr_convert::YCbCrPlanes;
+pub use ycbcr_convert::{YCbCrCodes, YCbCrMatrix, YCbCrOutput, YCbCrRange};
 pub use ycbcr_in_place::{YCbCrInPlace, YCbCrPlanesSampler};

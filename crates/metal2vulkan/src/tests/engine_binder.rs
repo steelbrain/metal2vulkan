@@ -518,7 +518,10 @@ fn plans_are_total_on_every_committed_profile() {
                         threads_per_group: [4, 1, 1],
                     },
                     Dispatch::ThreadgroupsIndirect {
-                        indirect: IndirectRef::new(0, 0),
+                        indirect: IndirectRef {
+                            token: 0,
+                            offset: 0,
+                        },
                         threads_per_group: [4, 1, 1],
                     },
                 ] {
@@ -576,13 +579,19 @@ fn dispatch_threads_edges_and_group_splits_compute_metal_grid_builtins() {
         // Indirect: the dispatch reads Metal's 3 groups from its buffer.
         let mut w = World::new([(0, Alloc::new(4 * 64, 0))]);
         let d = Dispatch::ThreadgroupsIndirect {
-            indirect: IndirectRef::new(0, 0),
+            indirect: IndirectRef {
+                token: 0,
+                offset: 0,
+            },
             threads_per_group: [4, 1, 1],
         };
         let c = execute(&dev, &pipe, &m, &mut w, &d).expect(stem);
         assert_eq!(
             c.regions[0].indirect,
-            Some(IndirectArgs::Buffer(IndirectRef::new(0, 0))),
+            Some(IndirectArgs::Buffer(IndirectRef {
+                token: 0,
+                offset: 0
+            })),
             "{stem}"
         );
         let got = words(&w.buffers[&0].bytes);

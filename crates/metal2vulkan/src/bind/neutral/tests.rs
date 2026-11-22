@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use super::*;
-use crate::device::{DeviceDescription, DevicePolicy};
+use crate::device::{Device, DeviceDescription, DevicePolicy};
 
 /// A device for every committed profile (`validation/profiles/`, read-only), sorted by stem.
 fn committed_devices() -> Vec<(String, Device)> {

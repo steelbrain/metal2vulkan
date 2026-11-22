@@ -1306,7 +1306,10 @@ fn a_tessellation_plan_draws_patches() {
         let indirect = DrawCall::PatchesIndirect {
             control_points: 3,
             patch_index: None,
-            indirect: IndirectRef::new(9, 32),
+            indirect: IndirectRef {
+                token: 9,
+                offset: 32,
+            },
             control_point_index: None,
         };
         let cmds = plan.instantiate_draw(&state, &indirect).expect("indirect");

@@ -650,8 +650,9 @@ pub struct UnwrittenFragmentInputs {
 
 /// A render pipeline descriptor's answers to the linked-use questions a creation asks before its
 /// compile, each `None` where it was not asked or not answered: what a consumer keeps under
-/// [`Device::render_descriptor_key`](crate::device::Device::render_descriptor_key) so that a
-/// later creation of the same descriptor, in this process or another, asks none of them again.
+/// [`Device::queried_render_descriptor_key`](crate::device::Device::queried_render_descriptor_key)
+/// so that a later creation of the same descriptor, in this process or another, asks none of them
+/// again.
 /// [`LinkedUseAnswers::to_bytes`] encodes it under that key for one device, and
 /// [`LinkedUseAnswers::from_bytes_for_key`] takes it back.
 #[non_exhaustive]

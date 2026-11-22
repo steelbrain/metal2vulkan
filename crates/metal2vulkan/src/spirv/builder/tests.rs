@@ -1172,7 +1172,7 @@ fn a_shared_struct_dag_finalizes_reading_each_type_once() {
     t.b.plain_global(StorageClass::Private, s, None)
         .expect("private");
     let m = finish_compute(t.b).expect("finalize");
-    assert!(m.requirements().spirv_capabilities.contains(
+    assert!(m.requirements.spirv_capabilities.contains(
         &crate::device::requirements::SpirvCapability::of(crate::spv::Capability::Int16)
     ));
 }

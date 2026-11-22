@@ -214,7 +214,7 @@ fn per_primitive_fragment() -> TypedModule {
 }
 
 fn mesh_shading(m: &TypedModule, feature: VkFeature) {
-    let r = m.requirements();
+    let r = &m.requirements;
     assert!(r
         .spirv_capabilities
         .contains(&SpirvCapability::of(crate::spv::Capability::MeshShadingEXT)));
@@ -227,7 +227,7 @@ fn mesh_shading(m: &TypedModule, feature: VkFeature) {
 fn a_task_entry_launches_its_mesh_workgroups() {
     let m = task_module();
     mesh_shading(&m, VkFeature::TaskShader);
-    assert!(!m.requirements().features.contains(&VkFeature::MeshShader));
+    assert!(!m.requirements.features.contains(&VkFeature::MeshShader));
     assert_spirv_valid(m);
 }
 
@@ -237,10 +237,7 @@ fn a_mesh_entry_writes_its_vertices_and_primitives() {
     mesh_shading(&m, VkFeature::MeshShader);
     // The mesh entry's per-primitive builtins need no `Geometry` or `ShaderLayer`: its
     // `MeshShadingEXT` enables them.
-    assert!(!m
-        .requirements()
-        .features
-        .contains(&VkFeature::GeometryShader));
+    assert!(!m.requirements.features.contains(&VkFeature::GeometryShader));
     assert_spirv_valid(m);
 }
 

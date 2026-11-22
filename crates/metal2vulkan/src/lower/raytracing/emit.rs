@@ -48,7 +48,7 @@
 //! (`FunctionHandle::NULL_WORD`), an entry at or past the table's size (undefined in Metal,
 //! which does not check the index), and any other word (no intersection function is linked,
 //! `Entry::intersection_candidates`) leave it uncommitted, as they leave every bounding box. The entry's index is the candidate instance's
-//! shader-binding-table record offset, which holds Metal's table offset (`bind::acceleration`).
+//! shader-binding-table record offset, which holds Metal's table offset.
 //!
 //! **Result.** On a hit the fields are the committed intersection's: type (Vulkan's committed
 //! type, none 0 and triangle 1 as in Metal), `T`, primitive, geometry, instance index, instance

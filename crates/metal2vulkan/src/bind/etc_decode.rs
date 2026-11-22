@@ -38,6 +38,7 @@
 //! `R32G32_SFLOAT`).
 
 use crate::metal::PixelFormat;
+#[cfg(test)]
 use crate::vk::Format;
 
 /// How an ETC2 or EAC format's blocks decode (the module docs). The sRGB forms decode to their
@@ -127,22 +128,6 @@ impl EtcDecode {
         })
     }
 
-    /// Every decode.
-    pub const ALL: [EtcDecode; 7] = [
-        EtcDecode::Rgb8,
-        EtcDecode::Rgb8A1,
-        EtcDecode::Rgba8,
-        EtcDecode::R11Unorm,
-        EtcDecode::R11Snorm,
-        EtcDecode::Rg11Unorm,
-        EtcDecode::Rg11Snorm,
-    ];
-
-    /// The texels across and down of a block: 4 x 4.
-    pub fn block_extent(self) -> [u32; 2] {
-        [4, 4]
-    }
-
     /// The bytes of a block: 8, or 16 for `EAC_RGBA8` and the `RG11` formats.
     pub fn block_bytes(self) -> u32 {
         match self {
@@ -168,21 +153,6 @@ impl EtcDecode {
             EtcDecode::Rgb8 | EtcDecode::Rgb8A1 | EtcDecode::Rgba8 => 4,
             EtcDecode::R11Unorm | EtcDecode::R11Snorm => channel,
             EtcDecode::Rg11Unorm | EtcDecode::Rg11Snorm => 2 * channel,
-        }
-    }
-
-    /// The Vulkan format of a twin's texels of `texels`: `R8G8B8A8_UNORM` codes; an 11-bit
-    /// format's 16-bit normalized codes or `float` values.
-    pub fn texel_format(self, texels: EtcTexels) -> Format {
-        use EtcTexels as T;
-        match (self, texels) {
-            (EtcDecode::Rgb8 | EtcDecode::Rgb8A1 | EtcDecode::Rgba8, _) => Format::R8G8B8A8_UNORM,
-            (EtcDecode::R11Unorm, T::Compact) => Format::R16_UNORM,
-            (EtcDecode::R11Snorm, T::Compact) => Format::R16_SNORM,
-            (EtcDecode::Rg11Unorm, T::Compact) => Format::R16G16_UNORM,
-            (EtcDecode::Rg11Snorm, T::Compact) => Format::R16G16_SNORM,
-            (EtcDecode::R11Unorm | EtcDecode::R11Snorm, T::Float) => Format::R32_SFLOAT,
-            (EtcDecode::Rg11Unorm | EtcDecode::Rg11Snorm, T::Float) => Format::R32G32_SFLOAT,
         }
     }
 
@@ -314,6 +284,34 @@ impl EtcDecode {
                     self.twin_texel(texels, values[ty * 4 + tx], &mut out[at..at + bytes]);
                 }
             }
+        }
+    }
+
+    /// Every decode.
+    #[cfg(test)]
+    pub(crate) const ALL: [EtcDecode; 7] = [
+        EtcDecode::Rgb8,
+        EtcDecode::Rgb8A1,
+        EtcDecode::Rgba8,
+        EtcDecode::R11Unorm,
+        EtcDecode::R11Snorm,
+        EtcDecode::Rg11Unorm,
+        EtcDecode::Rg11Snorm,
+    ];
+
+    /// The Vulkan format of a twin's texels of `texels`: `R8G8B8A8_UNORM` codes; an 11-bit
+    /// format's 16-bit normalized codes or `float` values.
+    #[cfg(test)]
+    pub(crate) fn texel_format(self, texels: EtcTexels) -> Format {
+        use EtcTexels as T;
+        match (self, texels) {
+            (EtcDecode::Rgb8 | EtcDecode::Rgb8A1 | EtcDecode::Rgba8, _) => Format::R8G8B8A8_UNORM,
+            (EtcDecode::R11Unorm, T::Compact) => Format::R16_UNORM,
+            (EtcDecode::R11Snorm, T::Compact) => Format::R16_SNORM,
+            (EtcDecode::Rg11Unorm, T::Compact) => Format::R16G16_UNORM,
+            (EtcDecode::Rg11Snorm, T::Compact) => Format::R16G16_SNORM,
+            (EtcDecode::R11Unorm | EtcDecode::R11Snorm, T::Float) => Format::R32_SFLOAT,
+            (EtcDecode::Rg11Unorm | EtcDecode::Rg11Snorm, T::Float) => Format::R32G32_SFLOAT,
         }
     }
 }

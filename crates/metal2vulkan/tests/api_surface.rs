@@ -435,7 +435,6 @@ surface! {
         struct ArgumentDescriptor N;
         enum ArgumentLayoutError N;
         struct ArgumentMember N;
-        struct ArgumentPlace N;
         enum ArgumentType N;
         const ARGUMENT_HANDLE_BYTES;
         enum Dispatch N;
@@ -446,17 +445,9 @@ surface! {
         struct DrawCommands N;
         fn alpha_test_code;
         enum IndexOverrun N;
-        fn heap_classes;
-        struct HeapElements O;
         enum HeapSource E;
         fn handle_entry;
-        fn handle_entry_flags;
-        fn heap_element;
-        fn heap_raw_form;
-        enum HeapElement N;
         const HANDLE_ENTRY_BYTES;
-        const HANDLE_TABLE_CAPACITY;
-        const NEUTRAL_HEAP_ELEMENT;
         struct BufferExtent N;
         struct BufferRange N;
         struct DescriptorBytes N;
@@ -466,7 +457,6 @@ surface! {
         struct PushConstantWrite N;
         enum PushHole E;
         struct ResidentRange N;
-        struct ResidentSet O;
         struct RootTable N;
         enum NeutralResource N;
         fn sampler_desc;
@@ -525,59 +515,10 @@ surface! {
         struct StatusReport N;
         enum StatusWord N;
         struct ReplayFaults E;
-        fn replay_preprocess;
-        fn replay_preprocess_module;
-        struct ReplayExecution N;
-        struct ReplayLayout N;
-        struct ReplayPreprocess N;
-        struct ReplayPreprocessModule N;
-        enum ReplayRefusal N;
-        struct ReplayVariant N;
-        const MAX_REPLAY_DISPATCHES;
-        const MAX_REPLAY_REGIONS;
-        const MAX_REPLAY_SLOTS;
-        const MAX_REPLAY_VARIANTS;
-        fn replay_preprocess_generated;
-        struct GeneratedLayout N;
-        enum GeneratedRefusal N;
-        struct GeneratedReplay N;
-        struct GeneratedVariant N;
-        fn draw_replay_module;
-        fn draw_replay_preprocess;
-        struct DrawReplay N;
-        struct DrawReplayLayout N;
-        struct DrawReplayModule N;
-        struct DrawReplayPreprocess N;
-        struct InheritedBytes N;
         const DRAW_ARGUMENT_BYTES;
-        const MAX_DRAW_REPLAY_TYPES;
-        fn draw_replay_draw;
-        fn draw_replay_indexed;
-        fn draw_replay_merges;
-        fn draw_replay_primitive_type;
-        fn draw_replay_slots;
-        fn draw_replay_state;
-        fn draw_replay_vertex_layouts;
-        enum DrawReplayRule N;
-        const DRAW_REPLAY_WRITES;
-        fn draw_merge_module;
-        struct DrawMergeModule N;
-        enum MergePhase E;
-        struct MergedLayout N;
         const DRAW_INDEX_ENTRY_BYTES;
-        const MERGED_CHUNK;
-        const MERGED_HEADER_BYTES;
         const MERGED_REST_FIRST;
         struct FunctionTableSnapshot O;
-        struct FunctionTableWords O;
-        fn geometry_flags;
-        fn geometry_table_offset;
-        fn instance_record;
-        fn primitive_wrap;
-        struct InstanceRecord O;
-        struct MetalInstance N;
-        const GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION;
-        const GEOMETRY_OPAQUE;
         struct RasterizationRateMap O;
         struct RateMapAxis O;
         struct RateMapDescriptor N;
@@ -585,49 +526,29 @@ surface! {
         enum RateMapError N;
         const MAX_SCREEN_EXTENT;
         enum UnpinnedCompile N;
-        struct RateMapRegions O;
-        struct RateMapRegion O;
-        struct RegionLimits N;
-        enum RegionError N;
-        struct SparseTileMap O;
-        enum TileMapError N;
-        enum TileMapping E;
         fn clamped_depth;
         struct AstcDecode N;
         enum AstcTexels N;
         struct PvrtcDecode N;
         enum EtcDecode N;
         enum EtcTexels N;
-        enum ChromaDecode N;
-        fn mesh_arguments_module;
         fn fold_object_grid;
         fn metal_object_grid;
         struct MeshArguments N;
         enum MeshArgumentsForm E;
-        struct MeshArgumentsModule N;
         struct MeshGridLimits N;
-        struct MeshGridRule N;
         struct ObjectFold N;
         const METAL_MESH_GRID_AXIS;
         const METAL_MESH_GRID_TOTAL;
         const METAL_OBJECT_GRID_TOTAL;
-        fn ycbcr_texel;
-        fn ycbcr_read;
-        struct YCbCrPlanes N;
         struct YCbCrInPlace N;
         struct YCbCrPlanesSampler N;
         struct TexelRows N;
         fn part_texels;
-        fn texel_buffer_parts;
         struct YCbCrCodes N;
         enum YCbCrOutput N;
         enum YCbCrRange N;
         enum YCbCrMatrix N;
-        enum PlanesCopy N;
-        fn interleave_merge_modules;
-        fn interleave_split_module;
-        struct InterleaveMergeModules N;
-        struct InterleaveSplitModule N;
         mod indirect_commands;
     }
     "bind::indirect_commands" => metal2vulkan::bind::indirect_commands {
@@ -1387,7 +1308,7 @@ fn stage_io_layout() -> VertexDescriptor {
 }
 
 /// One entry of a bare module translates through its profile as a library's function compiles
-/// on the profile's device: the same compiled function at the same cost, linked alone into a SPIR-V
+/// on the profile's device: the same compiled function, linked alone into a SPIR-V
 /// module, with its plan, its specialized entry, a vertex stage's inputs, and its interface facts
 /// beside it.
 #[test]
@@ -1402,16 +1323,14 @@ fn one_entry_of_a_bare_module_translates_through_the_public_api() {
         let dev = device(stem);
         let profile = dev.profile();
         let entry = EntryDescriptor::new(&kernel, EntryRef::Name("store_const"));
-        let (compiled, report) = profile.compile_entry(&entry, &none, &budget);
+        let (compiled, _) = profile.compile_entry(&entry, &none, &budget);
         let compiled = compiled.expect("compile");
         let function = Library::from_air(&kernel)
             .expect("library")
             .function("store_const")
             .expect("function");
-        let (from_library, library_report) =
-            dev.compile_function_with_report(&FunctionDescriptor::new(function), &none, &budget);
+        let from_library = dev.compile_function(&FunctionDescriptor::new(function), &none, &budget);
         assert_eq!(Ok(&compiled), from_library.as_ref(), "{stem}");
-        assert_eq!(report, library_report, "{stem}");
         assert_eq!(compiled.stage(), Stage::Kernel, "{stem}");
         assert!(
             !compiled.slots().is_empty(),

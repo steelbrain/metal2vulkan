@@ -4,8 +4,8 @@
 //! thread's position along it is 0 in its threadgroup and its threadgroup's in the grid, so a
 //! branch on it is uniform across the threadgroup. A kernel whose emulated simdgroups are walked
 //! predicated only because such a position steers a synchronization states the axes whose variant
-//! relieves the walk (`RuntimeFact::UnitAxes`), and its plan offers that variant to a dispatch of
-//! such threadgroups (`BindingPlan::unit_axes_variant`). The authored kernel here sums its
+//! relieves the walk (`RuntimeFact::UnitAxes`), which its plan states (`unit_relief`). The
+//! authored kernel here sums its
 //! simdgroup in a loop whose trip count reads `thread_position_in_grid.y` (and, for the control,
 //! `.x`). Each module runs on the CPU interpreter at 8, 16 and 32 subgroup lanes in both
 //! scheduling orders, under Vulkan's barrier rule. No GPU is used.
@@ -276,8 +276,7 @@ fn keyed(axes: u8) -> VariantKey {
 /// same as the predicated module's; in a threadgroup of two threads along `y` it is not Metal's
 /// kernel (two trip counts meet the exchange's barrier: Vulkan's rule traps), which its plan
 /// never runs, sending such a dispatch back to the plain variant. Unit `x` relieves nothing of
-/// it, and the same kernel steered by `.x` is relieved by no mask without `x`, so its plan
-/// offers no variant for unit `y`.
+/// it, and the same kernel steered by `.x` is relieved by no mask without `x`.
 #[test]
 fn a_unit_axis_relieves_the_predicated_walk() {
     let dev = lavapipe();
@@ -333,7 +332,7 @@ fn a_unit_axis_relieves_the_predicated_walk() {
         assert_eq!(run_rows(&xbase, &xm, LOCAL, w).as_ref(), Ok(&want), "{w:?}");
     }
 
-    // The binder's offer.
+    // The binder's plan.
     let state = bind_state();
     let shape = state.shape();
     let plan = pipeline(&dev, &ybc, y, &VariantKey::new())
@@ -345,19 +344,10 @@ fn a_unit_axis_relieves_the_predicated_walk() {
     );
     let row = groups(LOCAL);
     assert_eq!(plan.dispatch_variant(&row), Ok(VariantKey::new()));
-    assert_eq!(plan.unit_axes_variant(&row), Ok(Some(keyed(0b010))));
-    // One thread along `x` and `y`: their variant, which `y` relieves too.
-    assert_eq!(
-        plan.unit_axes_variant(&groups([1, 1, 32])),
-        Ok(Some(keyed(0b011)))
-    );
-    // No unit axis, or only `x`, which relieves nothing.
-    assert_eq!(plan.unit_axes_variant(&groups([8, 2, 4])), Ok(None));
-    assert_eq!(plan.unit_axes_variant(&groups([1, 4, 8])), Ok(None));
     // The plain variant runs the dispatch, as it ran before.
     assert!(plan.instantiate_dispatch(&state, &row).is_ok());
 
-    // The variant's plan: runs threadgroups of one thread along `y` only, and offers nothing.
+    // The variant's plan: runs threadgroups of one thread along `y` only.
     let variant = pipeline(&dev, &ybc, y, &keyed(0b010));
     assert!(variant.dependencies.iter().any(|d| d.fact
         == RuntimeFact::UnitAxes {
@@ -372,7 +362,6 @@ fn a_unit_axis_relieves_the_predicated_walk() {
     );
     assert_eq!(vplan.dispatch_variant(&row), Ok(keyed(0b010)));
     assert!(vplan.instantiate_dispatch(&state, &row).is_ok());
-    assert_eq!(vplan.unit_axes_variant(&row), Ok(None));
     let two = groups([8, 2, 4]);
     assert_eq!(vplan.dispatch_variant(&two), Ok(VariantKey::new()));
     assert_eq!(
@@ -381,10 +370,4 @@ fn a_unit_axis_relieves_the_predicated_walk() {
             variant: Box::new(VariantKey::new())
         })
     );
-
-    // The kernel steered by `x` offers no variant for unit `y`.
-    let xplan = pipeline(&dev, &xbc, x, &VariantKey::new())
-        .plan(&dev, &shape)
-        .expect("plan");
-    assert_eq!(xplan.unit_axes_variant(&row), Ok(None));
 }

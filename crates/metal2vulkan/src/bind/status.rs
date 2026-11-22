@@ -3,7 +3,7 @@
 //! One 16-byte buffer per command buffer, shared by every plan in it. The consumer initializes it
 //! with [`ExecutionStatus::initial`] before the command buffer's first use and reads it back with
 //! [`ExecutionStatus::decode`] after the last one (a `SHADER_WRITE -> HOST_READ` barrier first);
-//! the resident-set miss counter, the device replay's preprocess, the index
+//! the resident-set miss counter, the index
 //! bounds pass, an absent argument's read, a mesh draw's arguments pass, a sample
 //! through a cubic argument sampler, and a sequentially consistent fence write the
 //! words named here.
@@ -15,8 +15,6 @@ pub struct ExecutionStatus;
 impl ExecutionStatus {
     /// Size of the buffer in bytes.
     pub const BYTES: usize = 16;
-    /// Size of the buffer in 32-bit words: up to the last of [`StatusWord::ALL`].
-    pub const WORDS: usize = 4;
 
     /// The buffer's initial bytes: every word 0.
     pub const fn initial() -> [u8; ExecutionStatus::BYTES] {
@@ -89,14 +87,6 @@ pub enum StatusWord {
 }
 
 impl StatusWord {
-    /// Every word, in index order.
-    pub const ALL: [StatusWord; 4] = [
-        StatusWord::Status,
-        StatusWord::ResidentMisses,
-        StatusWord::ReplayFaults,
-        StatusWord::SeqCstFences,
-    ];
-
     /// The word's index in the buffer.
     pub const fn index(self) -> u32 {
         match self {
@@ -150,76 +140,23 @@ impl StatusBits {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct ReplayFaults(pub u32);
 
-impl ReplayFaults {
-    /// The record storage's header holds the producer's sticky encoding fault: an encoder
-    /// operation the descriptor policy refused.
-    pub const ENCODING: ReplayFaults = ReplayFaults(1 << 0);
-    /// The command's action is not one the replay runs: a draw in a replay of compute commands,
-    /// or a draw of a primitive type a replay of draws does not record
-    /// (`DrawReplay::primitive_types`).
-    pub const ACTION: ReplayFaults = ReplayFaults(1 << 1);
-    /// The command has no pipeline from its state source, or sets one while it inherits it.
-    pub const PIPELINE: ReplayFaults = ReplayFaults(1 << 2);
-    /// The command sets a kernel buffer while it inherits buffers, or binds one with a dynamic
-    /// attribute stride, which no replayed template reads.
-    pub const BUFFERS: ReplayFaults = ReplayFaults(1 << 3);
-    /// No registered variant has the command's pipeline and threadgroup lengths and the
-    /// threadgroup size of one of its regions: the command's size for its whole threadgroups, an
-    /// edge's remaining threads for a thread dispatch whose grid is not a multiple of it. A
-    /// threadgroup axis of 0 or above 1,024 has no variant.
-    pub const VARIANT: ReplayFaults = ReplayFaults(1 << 4);
-    // Bit 5 (the `NON_UNIFORM`, a ragged thread grid) is not reported: such a grid runs its edge
-    // regions on the variants of their sizes.
-    /// The command dispatches threadgroups whose grid exceeds `2^32 - 1` threads on some axis
-    /// (Metal's `threads_per_grid` is 32 bits). A group count past `maxComputeWorkGroupCount`
-    /// splits into regions instead. On a flat variant also a grid of more than `2^64 - 1` threads,
-    /// or one whose threadgroups of the variant's size no group count within
-    /// `maxComputeWorkGroupCount` holds.
-    pub const GROUP_COUNT: ReplayFaults = ReplayFaults(1 << 6);
-    // Bit 7 (a kernel buffer's address in no allocation of the resident set) is not reported:
-    // such a slot is unbound and counted as a resident miss (`StatusBits::RESIDENT_MISS`), and
-    // the command runs, as the host's step runs it.
-    /// The record is one `CommandRecord::decode` rejects (an action no record encodes, a barrier
-    /// flag other than 0 or 1), or sets an imageblock size with one side 0.
-    pub const RECORD: ReplayFaults = ReplayFaults(1 << 8);
-    /// The command's index is not below the capacity the record storage's header states: the
-    /// execution's capacity is not the storage's, and the record is not read. The runtime also
-    /// reports it for an execution range read from a buffer that Metal's GPU faults on (a
-    /// location past the buffer's size, or a range past `2^32 - 1`), which runs no command.
-    pub const RANGE: ReplayFaults = ReplayFaults(1 << 9);
-    /// The command has more regions (group-count chunks of at most `maxComputeWorkGroupCount`, and
-    /// a thread dispatch's edges) than the execution records per command
-    /// (`ReplayExecution::regions`).
-    pub const REGIONS: ReplayFaults = ReplayFaults(1 << 10);
-    /// The command of a replay of draws sets its barrier: the replay draws every command in one
-    /// render pass instance, which no barrier splits on the GPU.
-    pub const BARRIER: ReplayFaults = ReplayFaults(1 << 11);
-    /// A replay of draws merged into one draw (`DrawReplay::merged`) whose commands' vertices,
-    /// over their instances, reach `2^32` times `MERGED_CHUNK` (above `2^62`), which its two
-    /// draws cannot hold: no command of the execution draws.
-    pub const VERTICES: ReplayFaults = ReplayFaults(1 << 12);
-
-    /// Every bit in `other` is set in `self`.
-    pub const fn contains(self, other: ReplayFaults) -> bool {
-        self.0 & other.0 == other.0
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn words_are_distinct_and_inside_the_buffer() {
-        for (i, w) in StatusWord::ALL.iter().enumerate() {
-            if let Some(next) = StatusWord::ALL.get(i + 1) {
-                assert!(w.index() < next.index(), "{w:?}");
-            }
-            assert!((w.byte_offset() as usize) + 4 <= ExecutionStatus::BYTES);
+    fn words_are_distinct_and_fill_the_buffer() {
+        let words = [
+            StatusWord::Status,
+            StatusWord::ResidentMisses,
+            StatusWord::ReplayFaults,
+            StatusWord::SeqCstFences,
+        ];
+        for (i, w) in words.iter().enumerate() {
+            assert_eq!(w.index() as usize, i, "{w:?}");
+            assert_eq!(w.byte_offset(), 4 * w.index(), "{w:?}");
         }
-        let last = StatusWord::ALL[StatusWord::ALL.len() - 1];
-        assert_eq!(last.index() as usize + 1, ExecutionStatus::WORDS);
-        assert_eq!(ExecutionStatus::WORDS * 4, ExecutionStatus::BYTES);
+        assert_eq!(words.len() * 4, ExecutionStatus::BYTES);
     }
 
     #[test]
@@ -265,37 +202,13 @@ mod tests {
         assert_eq!(r.resident_misses, 0);
         bytes = [0u8; ExecutionStatus::BYTES];
         bytes[0..4].copy_from_slice(&StatusBits::REPLAY_FAULT.0.to_le_bytes());
-        let faults = ReplayFaults::VARIANT.0 | ReplayFaults::RECORD.0;
-        bytes[8..12].copy_from_slice(&faults.to_le_bytes());
+        bytes[8..12].copy_from_slice(&0x41u32.to_le_bytes());
         let r = ExecutionStatus::decode(&bytes);
         assert!(r.replay_fault && !r.cubic_argument_sampler);
-        assert!(r.replay_faults.contains(ReplayFaults::VARIANT));
-        assert!(r.replay_faults.contains(ReplayFaults::RECORD));
-        assert!(!r.replay_faults.contains(ReplayFaults::ENCODING));
+        assert_eq!(r.replay_faults, ReplayFaults(0x41));
         let mut cubic = [0u8; ExecutionStatus::BYTES];
         cubic[0..4].copy_from_slice(&StatusBits::CUBIC_ARGUMENT_SAMPLER.0.to_le_bytes());
         let c = ExecutionStatus::decode(&cubic);
         assert!(c.cubic_argument_sampler && !c.replay_fault);
-    }
-
-    #[test]
-    fn replay_fault_bits_are_distinct() {
-        let bits = [
-            ReplayFaults::ENCODING,
-            ReplayFaults::ACTION,
-            ReplayFaults::PIPELINE,
-            ReplayFaults::BUFFERS,
-            ReplayFaults::VARIANT,
-            ReplayFaults::GROUP_COUNT,
-            ReplayFaults::RECORD,
-            ReplayFaults::RANGE,
-            ReplayFaults::REGIONS,
-        ];
-        let mut all = 0u32;
-        for b in bits {
-            assert_eq!(b.0.count_ones(), 1);
-            assert_eq!(all & b.0, 0);
-            all |= b.0;
-        }
     }
 }

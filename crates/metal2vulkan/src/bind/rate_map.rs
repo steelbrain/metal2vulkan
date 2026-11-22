@@ -5,19 +5,16 @@
 //! Apple's layout (`air::canon::rate_map_data` has it). The consumer implements the Metal object
 //! with a [`RasterizationRateMap`]: `newRasterizationRateMapWithDescriptor:` is
 //! [`RasterizationRateMap::new`] of a [`RateMapDescriptor`]; `physicalSizeForLayer:`,
-//! `physicalGranularity`, `screenSize`, and `layerCount` are its accessors;
-//! `parameterBufferSizeAndAlign` is [`RasterizationRateMap::parameter_data_size`] (24,624 bytes,
-//! Metal's for every map) and an alignment of 4;
-//! `copyParameterDataToBuffer:offset:` writes [`RasterizationRateMap::to_bytes`] at the offset,
-//! Metal's bytes; and `mapScreenToPhysicalCoordinates:forLayer:` and
-//! `mapPhysicalToScreenCoordinates:forLayer:` are [`RasterizationRateMap::screen_to_physical`] and
-//! [`RasterizationRateMap::physical_to_screen`], Apple's CPU arithmetic over those bytes. A
-//! shader's answers are [`RasterizationRateMap::shader_screen_to_physical`] and
-//! [`RasterizationRateMap::shader_physical_to_screen`], Apple's GPU arithmetic over the same bytes,
-//! which differs from the CPU's (the granule of the coordinate plus half a pixel, two roundings
-//! where the CPU fuses, denormals flushed, the layer unclamped). Measured on an Apple M4: the bytes
-//! of 45 maps, and every CPU and GPU answer probed over them, bit for bit, the sign of a zero
-//! included. A shader's `uint2` overloads answer as `air::canon::rate_map_data`'s
+//! `screenSize`, and `layerCount` are its accessors, and `physicalGranularity` is
+//! [`PHYSICAL_GRANULARITY`] on both axes; `parameterBufferSizeAndAlign` is 24,624 bytes (Metal's
+//! for every map) and an alignment of 4; `copyParameterDataToBuffer:offset:` writes
+//! [`RasterizationRateMap::to_bytes`] at the offset, Metal's bytes; and
+//! `mapScreenToPhysicalCoordinates:forLayer:` is [`RasterizationRateMap::screen_to_physical`],
+//! Apple's CPU arithmetic over those bytes. A shader's answers are Apple's GPU arithmetic over the
+//! same bytes, which differs from the CPU's (the granule of the coordinate plus half a pixel, two
+//! roundings where the CPU fuses, denormals flushed, the layer unclamped). Measured on an Apple M4:
+//! the bytes of 45 maps, and every CPU and GPU answer probed over them, bit for bit, the sign of a
+//! zero included. A shader's `uint2` overloads answer as `air::canon::rate_map_data`'s
 //! `shader_screen_to_physical_integer` and `shader_physical_to_screen_integer` (measured on an
 //! Apple M3 Max): the `float2` decoder at the pixel's centre converted to `uint`, and the bits of
 //! a `float` the coordinate's granule gives, not a screen coordinate. The translated decoder's
@@ -60,15 +57,8 @@
 //! outside `[0, 1]` on an axis of two or more samples, and an axis of samples that are not all
 //! equal past the most measured: 9 on a map of one layer, 4 on a map of two.
 //!
-//! [`RasterizationRateMap::from_layers`] takes explicit tiles ([`RateMapAxis`]) instead, for a
-//! consumer that compiles by another rule, within what Metal's parameter data holds: tiles of 32
-//! physical pixels, at most 16384 screen pixels a side, at most two layers, one vertical axis.
-//!
 //! **Rendering a rate-mapped pass** (`MTLRenderPassDescriptor.rasterizationRateMap`) is the
-//! consumer's, on every device region by region ([`RasterizationRateMap::regions`]): into targets
-//! of the map's physical size, each region drawn with the guest's viewport composed with its tiles'
-//! line. The image is Metal's in structure; over a map that is not the identity its lines are this
-//! crate's tiles', a near-equivalent the plan records ([`RateMapRegions::precision`]).
+//! consumer's.
 //!
 //! [`BoundBuffer::Buffer`]: crate::bind::BoundBuffer::Buffer
 
@@ -169,8 +159,8 @@ impl RateMapLayerDescriptor {
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RateMapError {
-    /// [`RasterizationRateMap::from_layers`] has no layer, so no vertical axis
-    /// ([`RasterizationRateMap::new`] compiles a map of none).
+    /// A map of explicit tiles has no layer, so no vertical axis ([`RasterizationRateMap::new`]
+    /// compiles a map of none).
     NoLayers,
     /// A screen extent is 0 or above [`MAX_SCREEN_EXTENT`], or explicit tiles cover more than
     /// 16384 screen pixels, the most Metal's parameter data holds.
@@ -187,8 +177,8 @@ pub enum RateMapError {
     /// [`RasterizationRateMap::new`] does not compile the descriptor: it is outside the bounds
     /// where the compile is measured to be Apple's.
     Unpinned { reason: UnpinnedCompile },
-    /// [`RasterizationRateMap::from_layers`] has more than two layers: Metal's parameter data
-    /// holds two horizontal axes.
+    /// A map of explicit tiles has more than two layers: Metal's parameter data holds two
+    /// horizontal axes.
     LayerCount { count: usize },
     /// Layer `layer`'s vertical axis is not layer 0's: Metal's parameter data holds one vertical
     /// axis, every layer's.
@@ -331,62 +321,6 @@ pub struct RateMapAxis {
 }
 
 impl RateMapAxis {
-    /// The axis of these tiles, each `(screen extent, physical extent)` in pixels from screen 0.
-    /// The granularity is 32, Metal's; every tile spans at least as many
-    /// screen pixels as physical ones (quality at most 1:1); every tile but the last is
-    /// `granularity` physical pixels wide, and the last at most that; the tiles cover at most
-    /// 16384 screen pixels; and no tile's offset ties ([`RateMapError::OffsetTie`]). Those are
-    /// the axes Metal's parameter data holds.
-    pub fn from_tiles(granularity: u32, tiles: &[(u32, u32)]) -> Result<RateMapAxis, RateMapError> {
-        if granularity != PHYSICAL_GRANULARITY {
-            return Err(RateMapError::Granularity { granularity });
-        }
-        if tiles.is_empty() {
-            return Err(RateMapError::Tile { tile: 0 });
-        }
-        let last = tiles.len() - 1;
-        let (mut screen, mut physical) = (0u32, 0u32);
-        for (i, &(s, p)) in tiles.iter().enumerate() {
-            let wide = if i == last {
-                p <= granularity
-            } else {
-                p == granularity
-            };
-            if s == 0 || p == 0 || p > s || !wide {
-                return Err(RateMapError::Tile { tile: i });
-            }
-            if format::offset_tie(screen, physical, s, p) {
-                return Err(RateMapError::OffsetTie { tile: i });
-            }
-            physical += p;
-            screen = screen
-                .checked_add(s)
-                .filter(|&w| w <= MAX_COMPILED_EXTENT)
-                .ok_or(RateMapError::ScreenExtent {
-                    extent: screen.saturating_add(s),
-                })?;
-        }
-        Ok(RateMapAxis {
-            granularity,
-            tiles: tiles.to_vec(),
-        })
-    }
-
-    /// The physical width of every tile but the last.
-    pub fn granularity(&self) -> u32 {
-        self.granularity
-    }
-
-    /// The tiles, each `(screen extent, physical extent)`.
-    pub fn tiles(&self) -> &[(u32, u32)] {
-        &self.tiles
-    }
-
-    /// The screen extent the tiles cover.
-    pub fn screen_extent(&self) -> u32 {
-        self.tiles.iter().map(|&(s, _)| s).sum()
-    }
-
     /// The physical extent the tiles cover.
     pub fn physical_extent(&self) -> u32 {
         self.tiles.iter().map(|&(_, p)| p).sum()
@@ -436,6 +370,63 @@ impl RateMapAxis {
             granularity: g,
             tiles,
         }
+    }
+
+    /// The axis of these tiles, each `(screen extent, physical extent)` in pixels from screen 0.
+    /// The granularity is 32, Metal's; every tile spans at least as many
+    /// screen pixels as physical ones (quality at most 1:1); every tile but the last is
+    /// `granularity` physical pixels wide, and the last at most that; the tiles cover at most
+    /// 16384 screen pixels; and no tile's offset ties ([`RateMapError::OffsetTie`]). Those are
+    /// the axes Metal's parameter data holds.
+    #[cfg(test)]
+    pub(crate) fn from_tiles(
+        granularity: u32,
+        tiles: &[(u32, u32)],
+    ) -> Result<RateMapAxis, RateMapError> {
+        if granularity != PHYSICAL_GRANULARITY {
+            return Err(RateMapError::Granularity { granularity });
+        }
+        if tiles.is_empty() {
+            return Err(RateMapError::Tile { tile: 0 });
+        }
+        let last = tiles.len() - 1;
+        let (mut screen, mut physical) = (0u32, 0u32);
+        for (i, &(s, p)) in tiles.iter().enumerate() {
+            let wide = if i == last {
+                p <= granularity
+            } else {
+                p == granularity
+            };
+            if s == 0 || p == 0 || p > s || !wide {
+                return Err(RateMapError::Tile { tile: i });
+            }
+            if format::offset_tie(screen, physical, s, p) {
+                return Err(RateMapError::OffsetTie { tile: i });
+            }
+            physical += p;
+            screen = screen
+                .checked_add(s)
+                .filter(|&w| w <= MAX_COMPILED_EXTENT)
+                .ok_or(RateMapError::ScreenExtent {
+                    extent: screen.saturating_add(s),
+                })?;
+        }
+        Ok(RateMapAxis {
+            granularity,
+            tiles: tiles.to_vec(),
+        })
+    }
+
+    /// The tiles, each `(screen extent, physical extent)`.
+    #[cfg(test)]
+    pub(crate) fn tiles(&self) -> &[(u32, u32)] {
+        &self.tiles
+    }
+
+    /// The screen extent the tiles cover.
+    #[cfg(test)]
+    pub(crate) fn screen_extent(&self) -> u32 {
+        self.tiles.iter().map(|&(s, _)| s).sum()
     }
 }
 
@@ -593,33 +584,6 @@ impl RasterizationRateMap {
         })
     }
 
-    /// The map of these compiled layers, each `[horizontal, vertical]`, over `screen_size`: at
-    /// least one and at most two layers, each axis covering the map's screen extent, the layers
-    /// sharing one vertical axis (what Metal's parameter data holds).
-    pub fn from_layers(
-        screen_size: [u32; 2],
-        layers: Vec<[RateMapAxis; 2]>,
-    ) -> Result<RasterizationRateMap, RateMapError> {
-        let [_, vertical] = layers.first().ok_or(RateMapError::NoLayers)?;
-        if layers.len() > MAX_COMPILED_LAYERS {
-            return Err(RateMapError::LayerCount {
-                count: layers.len(),
-            });
-        }
-        for (l, layer) in layers.iter().enumerate() {
-            for (a, (axis, extent)) in layer.iter().zip(screen_size).enumerate() {
-                if axis.screen_extent() != extent {
-                    return Err(RateMapError::ExtentMismatch { layer: l, axis: a });
-                }
-            }
-            if layer[1] != *vertical {
-                return Err(RateMapError::VerticalAxis { layer: l });
-            }
-        }
-        let vertical = vertical.clone();
-        Ok(RasterizationRateMap::build(screen_size, layers, &vertical))
-    }
-
     /// The map of `layers` (at most two, each axis's tiles of 32 physical pixels over at most
     /// 16384 screen pixels) and the vertical axis `vertical` (every layer's), with its parameter
     /// data.
@@ -668,27 +632,10 @@ impl RasterizationRateMap {
         self.layers.len() as u32
     }
 
-    /// `physicalGranularity`: the width and height of every tile but each axis's last, 32 by 32
-    /// (a map of no layers answers the same on Metal).
-    pub fn physical_granularity(&self) -> [u32; 2] {
-        [PHYSICAL_GRANULARITY; 2]
-    }
-
     /// `physicalSizeForLayer:`, or `None` past the layers.
     pub fn physical_size(&self, layer: u32) -> Option<[u32; 2]> {
         let [x, y] = self.layers.get(layer as usize)?;
         Some([x.physical_extent(), y.physical_extent()])
-    }
-
-    /// Layer `layer`'s axes, `[horizontal, vertical]`.
-    pub fn layer(&self, layer: u32) -> Option<&[RateMapAxis; 2]> {
-        self.layers.get(layer as usize)
-    }
-
-    /// The parameter data's size in bytes (`parameterBufferSizeAndAlign.size`): 24,624, Metal's
-    /// for every map.
-    pub fn parameter_data_size(&self) -> u64 {
-        u64::from(format::BYTES)
     }
 
     /// The parameter data's words, Apple's layout (`air::canon::rate_map_data`).
@@ -707,8 +654,65 @@ impl RasterizationRateMap {
         layer.min(self.layer_count().saturating_sub(1))
     }
 
+    /// `mapScreenToPhysicalCoordinates:forLayer:`: where screen coordinate `c` lands in layer
+    /// `layer`'s physical space, as Apple's CPU map answers it (a layer past the map's reads the
+    /// last; past the screen the first or last tile's line extends). Over a map of no layers,
+    /// where Metal's query ends the process, the decode of its bytes: 0 across.
+    pub fn screen_to_physical(&self, c: [f32; 2], layer: u32) -> [f32; 2] {
+        format::screen_to_physical(&self.words, self.cpu_layer(layer), c, self.screen_size)
+    }
+
+    /// The map of these compiled layers, each `[horizontal, vertical]`, over `screen_size`: at
+    /// least one and at most two layers, each axis covering the map's screen extent, the layers
+    /// sharing one vertical axis (what Metal's parameter data holds).
+    #[cfg(test)]
+    pub(crate) fn from_layers(
+        screen_size: [u32; 2],
+        layers: Vec<[RateMapAxis; 2]>,
+    ) -> Result<RasterizationRateMap, RateMapError> {
+        let [_, vertical] = layers.first().ok_or(RateMapError::NoLayers)?;
+        if layers.len() > MAX_COMPILED_LAYERS {
+            return Err(RateMapError::LayerCount {
+                count: layers.len(),
+            });
+        }
+        for (l, layer) in layers.iter().enumerate() {
+            for (a, (axis, extent)) in layer.iter().zip(screen_size).enumerate() {
+                if axis.screen_extent() != extent {
+                    return Err(RateMapError::ExtentMismatch { layer: l, axis: a });
+                }
+            }
+            if layer[1] != *vertical {
+                return Err(RateMapError::VerticalAxis { layer: l });
+            }
+        }
+        let vertical = vertical.clone();
+        Ok(RasterizationRateMap::build(screen_size, layers, &vertical))
+    }
+
+    /// `physicalGranularity`: the width and height of every tile but each axis's last, 32 by 32
+    /// (a map of no layers answers the same on Metal).
+    #[cfg(test)]
+    pub(crate) fn physical_granularity(&self) -> [u32; 2] {
+        [PHYSICAL_GRANULARITY; 2]
+    }
+
+    /// Layer `layer`'s axes, `[horizontal, vertical]`.
+    #[cfg(test)]
+    pub(crate) fn layer(&self, layer: u32) -> Option<&[RateMapAxis; 2]> {
+        self.layers.get(layer as usize)
+    }
+
+    /// The parameter data's size in bytes (`parameterBufferSizeAndAlign.size`): 24,624, Metal's
+    /// for every map.
+    #[cfg(test)]
+    pub(crate) fn parameter_data_size(&self) -> u64 {
+        u64::from(format::BYTES)
+    }
+
     /// The physical extent of layer `layer`'s tables: a map of no layers has a vertical axis and
     /// no horizontal one.
+    #[cfg(test)]
     fn physical_extents(&self, layer: u32) -> [u32; 2] {
         let width = self
             .layers
@@ -718,16 +722,9 @@ impl RasterizationRateMap {
     }
 
     /// The vertical axis, every layer's; a map of no layers has one too (the module docs).
-    pub fn vertical(&self) -> &RateMapAxis {
+    #[cfg(test)]
+    pub(crate) fn vertical(&self) -> &RateMapAxis {
         &self.vertical
-    }
-
-    /// `mapScreenToPhysicalCoordinates:forLayer:`: where screen coordinate `c` lands in layer
-    /// `layer`'s physical space, as Apple's CPU map answers it (a layer past the map's reads the
-    /// last; past the screen the first or last tile's line extends). Over a map of no layers,
-    /// where Metal's query ends the process, the decode of its bytes: 0 across.
-    pub fn screen_to_physical(&self, c: [f32; 2], layer: u32) -> [f32; 2] {
-        format::screen_to_physical(&self.words, self.cpu_layer(layer), c, self.screen_size)
     }
 
     /// A shader's `map_screen_to_physical_coordinates(c, layer)` over this map's parameter data,
@@ -735,7 +732,8 @@ impl RasterizationRateMap {
     /// `float` denormals as Metal does: the granule of `c` plus half a pixel, two roundings,
     /// denormals flushed, and the layer's tables unclamped (a layer the map lacks reads the words
     /// where its tables would be).
-    pub fn shader_screen_to_physical(&self, c: [f32; 2], layer: u32) -> [f32; 2] {
+    #[cfg(test)]
+    pub(crate) fn shader_screen_to_physical(&self, c: [f32; 2], layer: u32) -> [f32; 2] {
         format::shader_screen_to_physical(&self.words, layer, c)
     }
 
@@ -743,7 +741,8 @@ impl RasterizationRateMap {
     /// `c` in layer `layer`, as Apple's CPU map answers it (a layer past the map's reads the
     /// last; past the physical extent the first or last tile's line extends). Over a map of no
     /// layers, as [`Self::screen_to_physical`].
-    pub fn physical_to_screen(&self, c: [f32; 2], layer: u32) -> [f32; 2] {
+    #[cfg(test)]
+    pub(crate) fn physical_to_screen(&self, c: [f32; 2], layer: u32) -> [f32; 2] {
         let layer = self.cpu_layer(layer);
         format::physical_to_screen(&self.words, layer, c, self.physical_extents(layer))
     }
@@ -752,7 +751,8 @@ impl RasterizationRateMap {
     /// as Apple's GPU decoder computes it, and the translated decoder on a device that reads
     /// `float` denormals as Metal does: denormals flushed, and the layer's tables unclamped, as
     /// [`Self::shader_screen_to_physical`].
-    pub fn shader_physical_to_screen(&self, c: [f32; 2], layer: u32) -> [f32; 2] {
+    #[cfg(test)]
+    pub(crate) fn shader_physical_to_screen(&self, c: [f32; 2], layer: u32) -> [f32; 2] {
         format::shader_physical_to_screen(&self.words, layer, c)
     }
 }
@@ -767,9 +767,6 @@ fn encode(words: &mut [u32], axis: &RateMapAxis, to_screen: u32, to_physical: u3
         format::encode_axis(&axis.tiles, screen, physical);
     }
 }
-
-mod regions;
-pub use regions::{RateMapRegion, RateMapRegions, RegionError, RegionLimits};
 
 #[cfg(test)]
 mod tests;

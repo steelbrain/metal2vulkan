@@ -595,7 +595,11 @@ fn table_inputs(pipe: &ComputePipeline, handles: &[FunctionHandle]) -> (Vec<u8>,
     let dev = device("moltenvk-m3");
     let directory = directory_binding(pipe);
     let state = BindState {
-        function_tables: vec![ArgumentFunctionTable::new(T, handles.len() as u32)],
+        function_tables: vec![ArgumentFunctionTable {
+            resource_id: T,
+            size: handles.len() as u32,
+            address: 0,
+        }],
         ..Default::default()
     };
     let plan = pipe.plan(&dev, &state.shape()).expect("plan");

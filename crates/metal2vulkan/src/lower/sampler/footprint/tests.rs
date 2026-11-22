@@ -11,10 +11,9 @@ use std::collections::BTreeSet;
 use crate::spv::ImageFormat;
 
 use super::{counted, Footprint, Kind, Site};
-use crate::bind::{SparseTileMap, TileMapping};
 use crate::memory::views::View;
-use crate::metal::TextureType;
 use crate::pipeline::sym::{CombinedSampler, ResourceKind, ResourceSlot, SamplerRef, Stage};
+use crate::pipeline::tile_map;
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
 use crate::spirv::ids::{GlobalId, TypeId, Value};
@@ -177,43 +176,26 @@ fn image(
 
 /// The tile map of `img`'s level 0 with tiles of `tile` texels: a tile is mapped where none of its
 /// texels is unmapped, and a tile only some of whose texels are unmapped is refused.
-fn tile_map(dim: Dim, arrayed: bool, img: &Image, tile: [u32; 3]) -> SparseTileMap {
-    let texture_type = match (dim, arrayed) {
-        (Dim::D3, _) => TextureType::Type3D,
-        (_, true) => TextureType::Type2DArray,
-        _ => TextureType::Type2D,
-    };
-    let mut map =
-        SparseTileMap::new(texture_type, img.extent, 1, img.layers, tile, 1).expect("tile map");
+fn tile_map(img: &Image, tile: [u32; 3]) -> Vec<u8> {
     let [w, h, d] = img.extent;
     let [tw, th, td] = tile;
-    for l in 0..img.layers {
-        for tz in 0..d.div_ceil(td) {
-            for ty in 0..h.div_ceil(th) {
-                for tx in 0..w.div_ceil(tw) {
-                    let (mut texels, mut unmapped) = (0, 0);
-                    for z in tz * td..((tz + 1) * td).min(d) {
-                        for y in ty * th..((ty + 1) * th).min(h) {
-                            for x in tx * tw..((tx + 1) * tw).min(w) {
-                                let i = (((l * d + z) * h + y) * w + x) as usize;
-                                texels += 1;
-                                unmapped += usize::from(img.unmapped.contains(&i));
-                            }
-                        }
-                    }
-                    assert!(
-                        unmapped == 0 || unmapped == texels,
-                        "tile ({tx}, {ty}, {tz}) of layer {l} is partly unmapped"
-                    );
-                    if unmapped == 0 {
-                        map.update(TileMapping::Map, 0, l, [tx, ty, tz], [1, 1, 1])
-                            .expect("map a tile");
-                    }
+    tile_map::one_level_map(img.extent, img.layers, tile, |l, [tx, ty, tz]| {
+        let (mut texels, mut unmapped) = (0, 0);
+        for z in tz * td..((tz + 1) * td).min(d) {
+            for y in ty * th..((ty + 1) * th).min(h) {
+                for x in tx * tw..((tx + 1) * tw).min(w) {
+                    let i = (((l * d + z) * h + y) * w + x) as usize;
+                    texels += 1;
+                    unmapped += usize::from(img.unmapped.contains(&i));
                 }
             }
         }
-    }
-    map
+        assert!(
+            unmapped == 0 || unmapped == texels,
+            "tile ({tx}, {ty}, {tz}) of layer {l} is partly unmapped"
+        );
+        unmapped == 0
+    })
 }
 
 /// The words of `fp` at `probes` (each `[u, v, w, layer]`) through `arm`.
@@ -247,7 +229,7 @@ fn words(
     buffers.push(Buffer {
         slot: Some(slot(ResourceKind::Buffer, 2)),
         address: None,
-        bytes: tile_map(dim, arrayed, &img, tile).to_bytes(),
+        bytes: tile_map(&img, tile),
     });
     img.unmapped.clear();
     let res = Resources {

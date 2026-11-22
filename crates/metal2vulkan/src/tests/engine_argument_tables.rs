@@ -214,7 +214,11 @@ fn table_bytes(handles: &[FunctionHandle], entries: &[Option<usize>]) -> Vec<u8>
 fn state() -> BindState {
     BindState {
         function_tables: [(T, T_ENTRIES.len()), (U, U_ENTRIES.len()), (E, 0)]
-            .map(|(id, size)| ArgumentFunctionTable::new(id, size as u32))
+            .map(|(id, size)| ArgumentFunctionTable {
+                resource_id: id,
+                size: size as u32,
+                address: 0,
+            })
             .to_vec(),
         ..Default::default()
     }
@@ -282,7 +286,11 @@ fn the_plan_writes_the_snapshot_and_its_directory() {
             synthetic(&pipe, SyntheticBinding::FunctionTableSnapshot).expect("a snapshot");
         let directory = directory_binding(&pipe);
         let mut state = state();
-        state.function_tables.push(ArgumentFunctionTable::new(0, 4));
+        state.function_tables.push(ArgumentFunctionTable {
+            resource_id: 0,
+            size: 4,
+            address: 0,
+        });
         let plan = pipe.plan(&dev, &state.shape()).expect("plan");
         let write = |at: (u32, u32)| {
             plan.descriptors
@@ -328,7 +336,11 @@ fn the_plan_writes_the_snapshot_and_its_directory() {
         let mut sixteen = state.clone();
         sixteen
             .function_tables
-            .extend((0..12).map(|i| ArgumentFunctionTable::new(0x100 + i, 1)));
+            .extend((0..12).map(|i| ArgumentFunctionTable {
+                resource_id: 0x100 + i,
+                size: 1,
+                address: 0,
+            }));
         assert_ne!(sixteen.shape(), state.shape(), "{stem}");
         assert!(plan.instantiate_dispatch(&sixteen, &one_group()).is_err());
     }
@@ -544,15 +556,18 @@ fn without_listed_tables_every_id_reads_the_null_table() {
 /// (and their snapshot) pass 128 MiB, lavapipe's `maxStorageBufferRange` and Vulkan's least.
 fn wide_state() -> BindState {
     let mut s = state();
-    s.function_tables
-        .push(ArgumentFunctionTable::new(0x50, (1 << 25) + 64));
+    s.function_tables.push(ArgumentFunctionTable {
+        resource_id: 0x50,
+        size: (1 << 25) + 64,
+        address: 0,
+    });
     s
 }
 
 /// `state`'s tables, each at a device address whose high word is its list position plus one.
 fn at_addresses(mut state: BindState) -> BindState {
     for (i, t) in state.function_tables.iter_mut().enumerate() {
-        *t = t.at_address(((i as u64 + 1) << 32) | 0x40);
+        t.address = ((i as u64 + 1) << 32) | 0x40;
     }
     state
 }

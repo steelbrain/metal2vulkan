@@ -247,63 +247,8 @@ fn records_are_kept_whole_one_entry_a_start() {
     }
 }
 
-/// Each resident entry's extent is the unpadded run its allocations hold from its guest address. A
-/// 60-byte allocation's entry is 64 bytes and its extent 60; an allocation whose padded window a
-/// partially overlapping one continues holds its whole window; the trimmed one's entry holds up to
-/// the overlapping allocation's own end; a gap inside a padded window ends the extent (allocations
-/// not 16-aligned), so every address below an extent is one an allocation holds.
-#[test]
-fn each_entrys_extent_is_the_unpadded_run_its_allocations_hold() {
-    use crate::bind::state::UsedResource;
-    let used = |token: u32, guest: u64, length: u64| {
-        let mut u = UsedResource::new(ResourceClass::Buffer, token);
-        u.gpu_address = Some(guest);
-        u.device_address = Some(guest + 0x10_0000);
-        u.length = length;
-        u
-    };
-    let state = BindState {
-        used_resources: vec![
-            used(0, 0x1000, 60),
-            used(1, 0x2000, 100),
-            // Overlaps the second's window [0x2000, 0x2070) and runs past it: trimmed to 0x2070.
-            used(2, 0x2010, 200),
-            // A 4-byte allocation one byte past a 60-byte one, inside its padded window.
-            used(3, 0x3000, 60),
-            used(4, 0x303D, 4),
-        ],
-        ..BindState::default()
-    };
-    let resident = resident_entries(&state);
-    let got: Vec<(u64, u64)> = resident.iter().map(|e| (e.guest, e.size)).collect();
-    assert_eq!(
-        got,
-        vec![
-            (0x1000, 64),
-            (0x2000, 112),
-            (0x2070, 0x70),
-            (0x3000, 64),
-            (0x3040, 13),
-        ]
-    );
-    let extents = resident_extents(&state, &resident);
-    assert_eq!(extents, vec![60, 112, 0x68, 60, 1]);
-    // Every address below an extent is held by an allocation at its own length.
-    let held = |a: u64| {
-        state
-            .used_resources
-            .iter()
-            .any(|u| (u.gpu_address.unwrap()..u.gpu_address.unwrap() + u.length).contains(&a))
-    };
-    for (e, &x) in resident.iter().zip(&extents) {
-        for a in e.guest..e.guest + x {
-            assert!(held(a), "{a:#x}");
-        }
-    }
-}
-
 /// Ranges listed apart (`BindState::resident_ranges`) join the resident set as used buffers do,
-/// their extents counted at their own lengths, and leave the shape as it was.
+/// and leave the shape as it was.
 #[test]
 fn ranges_listed_apart_join_the_resident_set_and_not_the_shape() {
     use crate::bind::state::UsedResource;
@@ -318,10 +263,22 @@ fn ranges_listed_apart_join_the_resident_set_and_not_the_shape() {
     };
     let listed = BindState {
         resident_ranges: vec![
-            ResidentRange::new(0x9_1000, 0x1000, 60),
+            ResidentRange {
+                host: 0x9_1000,
+                guest: 0x1000,
+                length: 60,
+            },
             // Inside the used buffer's window: dropped as one inside another is.
-            ResidentRange::new(0x9_2010, 0x2010, 16),
-            ResidentRange::new(0x9_3000, 0x3000, 0x20),
+            ResidentRange {
+                host: 0x9_2010,
+                guest: 0x2010,
+                length: 16,
+            },
+            ResidentRange {
+                host: 0x9_3000,
+                guest: 0x3000,
+                length: 0x20,
+            },
         ],
         ..state.clone()
     };
@@ -335,45 +292,16 @@ fn ranges_listed_apart_join_the_resident_set_and_not_the_shape() {
             (0x3000, 0x9_3000, 0x20)
         ]
     );
-    assert_eq!(resident_extents(&listed, &resident), vec![60, 100, 0x20]);
     assert_eq!(listed.shape(), state.shape());
 }
 
-/// A resident set made apart coalesces as a root table's does, and holds a range exactly where
-/// one of its entries resolves every address of it to the same device address.
-#[test]
-fn a_resident_set_holds_what_its_entries_resolve_alike() {
-    use crate::bind::instantiate::{ResidentRange, ResidentSet};
-    // A heap over 0x1_0000..0x1_1000 and a buffer placed in it, and a buffer of its own.
-    let heap = ResidentRange::new(0xa_0000, 0x1_0000, 0x1000);
-    let placed = ResidentRange::new(0xa_0100, 0x1_0100, 0x40);
-    let own = ResidentRange::new(0xb_0000, 0x2_0000, 13);
-    let set = ResidentSet::new([placed, own, heap]);
-    assert_eq!(set.len(), 2);
-    assert_eq!(set.bytes().len(), 64);
-    assert!(set.holds(&placed));
-    assert!(set.holds(&heap));
-    assert!(set.holds(&own));
-    // Another device address for the same Metal bytes, a range past the entry, and one in no
-    // entry are not held.
-    assert!(!set.holds(&ResidentRange::new(0xc_0100, 0x1_0100, 0x40)));
-    assert!(!set.holds(&ResidentRange::new(0xa_0f00, 0x1_0f00, 0x200)));
-    assert!(!set.holds(&ResidentRange::new(0xd_0000, 0x3_0000, 16)));
-    let other = ResidentRange::new(0xd_0000, 0x3_0000, 16);
-    let with = set.with([other]);
-    assert_eq!(with.len(), 3);
-    assert!(with.holds(&other) && with.holds(&own) && with.holds(&placed));
-}
-
 /// Under `BindState::resident_apart` a root table's own resident set is the bound buffers' alone,
-/// and without it the whole set; and a resident set made of a table's ranges and of the used
-/// resources' and listed ranges (as a consumer that points its tables at one makes it) is the same
-/// either way, resolving every address alike, over pseudo-random states whose bound buffers, used buffers and heaps and listed
-/// ranges nest, overlap, touch and repeat.
+/// and without it the whole set, over pseudo-random states whose bound buffers, used buffers and
+/// heaps and listed ranges nest, overlap, touch and repeat.
 #[test]
 fn a_state_resident_apart_keeps_the_used_resources_out_of_its_tables() {
     use crate::bind::state::{StageTable, UsedResource};
-    use crate::bind::{ResidentRange, ResidentSet};
+    use crate::bind::ResidentRange;
     use crate::pipeline::sym::Stage;
     let mut rng = Rng(0x5eed_0fa9_a7c3);
     for _ in 0..300 {
@@ -409,7 +337,11 @@ fn a_state_resident_apart_keeps_the_used_resources_out_of_its_tables() {
                     state.used_resources.push(used);
                 }
                 _ => {
-                    let range = ResidentRange::new(e.host, e.guest, length);
+                    let range = ResidentRange {
+                        host: e.host,
+                        guest: e.guest,
+                        length,
+                    };
                     state.resident_ranges.push(range);
                 }
             }
@@ -425,38 +357,6 @@ fn a_state_resident_apart_keeps_the_used_resources_out_of_its_tables() {
             ..state.clone()
         };
         assert_eq!(table_entries(&apart), resident_entries(&bound_only));
-        let ranges = |entries: Vec<RootEntry>| {
-            let table = stage_root_table(&[], 2, &entries);
-            let used = state.used_resources.iter().filter_map(|u| {
-                Some(ResidentRange::new(
-                    u.device_address?,
-                    u.gpu_address?,
-                    u.length,
-                ))
-            });
-            let listed = state.resident_ranges.iter().copied();
-            ResidentSet::new(
-                table
-                    .resident_ranges()
-                    .into_iter()
-                    .chain(used)
-                    .chain(listed),
-            )
-        };
-        let (pointed, whole) = (ranges(table_entries(&apart)), ranges(table_entries(&state)));
-        let entries = |set: ResidentSet| -> Vec<RootEntry> {
-            let word =
-                |e: &[u8], k: usize| u64::from_le_bytes(e[8 * k..8 * k + 8].try_into().unwrap());
-            (set.bytes().chunks(32))
-                .map(|e| entry(word(e, 0), word(e, 1), word(e, 2)))
-                .collect()
-        };
-        let (pointed, whole) = (&entries(pointed)[..], &entries(whole)[..]);
-        for byte in 0x1_0000..0x1_0000 + 16 * (256 + 40) {
-            let resolved =
-                |set: &[RootEntry]| covers(set, byte).map(|e| e.host.wrapping_add(byte - e.guest));
-            assert_eq!(resolved(pointed), resolved(whole), "{byte:#x}");
-        }
         assert_eq!(apart.shape(), state.shape());
     }
 }

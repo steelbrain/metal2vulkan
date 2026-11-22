@@ -669,7 +669,7 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
                     })?;
                     resources.separate_texture(texture, sampler, *immutable)?
                 }
-                // The consumer builds the structures (`bind::acceleration`).
+                // The consumer builds the structures.
                 BindingSource::AccelerationStructure { slot, level } => {
                     WriteSource::AccelerationStructure { slot, level }
                 }
@@ -711,7 +711,7 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
             continue;
         }
         let v = match c.key {
-            // Each region decides these (`dispatch::region_specialization`).
+            // Each region decides these (`dispatch::region_specialization_into`).
             SpecKey::LocalSize(_)
             | SpecKey::FlatLocalSize
             | SpecKey::MultiRegion
@@ -898,7 +898,7 @@ fn plan(p: &ComputePipeline, device: &Device, shape: &BindShape) -> Result<Bindi
     variant.one_row = p.dependencies.iter().any(|d| d.fact == RuntimeFact::OneRow);
     // A pipeline compiled as its unit-axes variant states its axes; a consumer asks for it where a
     // dispatch's threadgroups have one thread along axes that relieve the walk
-    // (`unit_axes_variant`).
+    // (`VariantKey::unit_axes`).
     variant.unit_axes = unit_axes.0;
     // A pipeline compiled for a flat grid states its variant, and one of the call's threadgroups
     // states that too.

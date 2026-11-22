@@ -106,12 +106,12 @@ pub struct LoweringInputs {
     /// and a vertex function that fetches an attribute in fixed function are
     /// `Unsupported{GpuEncodedIndirectCommands, NotImplemented}` under it (a replayed command is a
     /// compute dispatch with no stage-in region, or a draw whose buffers no fixed-function input
-    /// reads: a pulled attribute reads its slot table, and the replay pulls every layout through
-    /// the pulled-vertex-buffer variant, `bind::draw_replay_vertex_layouts`).
+    /// reads: a pulled attribute reads its slot table, and the replay pulls every fixed-function
+    /// binding's layout through the pulled-vertex-buffer variant).
     #[cfg_attr(feature = "serde", serde(default))]
     pub replay_bindings: bool,
     /// With `replay_bindings`, the vertex function of a draw replay merged into one draw
-    /// (`bind::replay`'s `merged.rs`, `DrawReplay::merged`): it reads its header's device address
+    /// (`bind::replay`'s `merged.rs`): it reads its header's device address
     /// at `PushField::MergedDrawAddress` in place of `RootTableAddress`, finds the command its
     /// corner (`InstanceIndex` and `VertexIndex`) falls in, and runs that command's vertex: its
     /// `[[vertex_id]]`, `[[instance_id]]`, `[[base_vertex]]` and `[[base_instance]]` are the
@@ -212,8 +212,8 @@ pub struct LoweringInputs {
     /// `Unsupported{GpuEncodedIndirectCommands, NotRepresentable}` under it, but a kernel that
     /// observes its partition through its simdgroups alone under
     /// [`call_threadgroups`](Self::call_threadgroups). Under
-    /// `replay_bindings` the replay's preprocess writes the record per command
-    /// (`ReplayVariant::flat`); otherwise the kernel binds as any other, and a preprocess writes
+    /// `replay_bindings` the replay's preprocess writes the record per command; otherwise the
+    /// kernel binds as any other, and a preprocess writes
     /// the record beside its dispatch's group counts. The identity domains refuse it
     /// (`Unsupported{IdentityDomains}`). It needs device addresses, and refuses a
     /// stage-input region, a tile function and `emulated_simdgroups`
@@ -752,8 +752,8 @@ pub struct LoweringInputs {
     /// The function's render pipeline draws a rasterization-rate-mapped pass's regions several
     /// at a time (`VariantKey::region_viewports`): each region one draw of a
     /// `vkCmdDrawMultiEXT` or `vkCmdDrawMultiIndexedEXT`, its viewport and scissor at the draw's
-    /// index among the command's (`bind::RasterizationRateMap::regions`). Under it a vertex
-    /// function stores `ViewportIndex` as its `DrawIndex`, "the zero-based index of the draw"
+    /// index among the command's. Under it a vertex function stores `ViewportIndex` as its
+    /// `DrawIndex`, "the zero-based index of the draw"
     /// within such a command (the specification's `DrawIndex`), which selects "the viewport
     /// transform, scissor rectangle, and exclusive scissor rectangle" (its `ViewportIndex`); the
     /// index is the same at every vertex of a draw, so of a primitive. It needs the device to

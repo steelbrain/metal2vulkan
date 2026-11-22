@@ -28,11 +28,10 @@
 //! [`primitive_data_root`]: crate::memory::provenance::primitive_data_root
 //!
 //! A multi-level intersector (`intersector<instancing, max_levels<n>>`) traverses a Vulkan
-//! top-level structure, which holds one level of instances: the binder refuses a Metal instance
-//! of an instance structure (`bind::acceleration`). So a hit traversed exactly one instance: its
-//! `instance_count` is 1, and the call writes that instance's id and user id into the first
-//! element of the instance-id and user-instance-id arrays it is given ([`LevelIds`]); a miss's
-//! count is 0, with every other field, and it writes neither.
+//! top-level structure, which holds one level of instances. So a hit traversed exactly one
+//! instance: its `instance_count` is 1, and the call writes that instance's id and user id into
+//! the first element of the instance-id and user-instance-id arrays it is given ([`LevelIds`]); a
+//! miss's count is 0, with every other field, and it writes neither.
 //!
 //! **The instance count**. `air.get_instance_count_instance_acceleration_structure`
 //! (`get_instance_count()`) of an entry argument's instance structure reads the push field
@@ -51,8 +50,8 @@
 //! and `1` (`FunctionHandle::RESERVED_WORD`) for Metal's opaque triangle intersection function
 //! (`setOpaqueTriangleIntersectionFunctionWithSignature:`). Its only readers are intersect calls.
 //! The candidate's entry is the one at its instance's shader-binding-table record offset, where the
-//! binder carries Metal's table offset (`bind::acceleration`). An intersection function the
-//! pipeline links would be a case of the entry's switch; linking one is not implemented, so an
+//! consumer's instance carries Metal's table offset. An intersection function the pipeline links
+//! would be a case of the entry's switch; linking one is not implemented, so an
 //! intersect call through a table of a stage that may link one is refused
 //! ([`Entry::intersection_candidates`]).
 //!
@@ -182,9 +181,8 @@ pub struct IntersectPlan {
 
 /// Where a multi-level intersector writes the ids of the instances a hit traversed: the first
 /// element of its instance-id array and of its user-instance-id array, each a `u32` store through
-/// the call's thread pointer. A Vulkan top-level structure holds one level of instances (the binder
-/// refuses a Metal instance of an instance structure, `bind::acceleration`), so a hit traverses
-/// exactly one instance: Metal's `instance_count` is 1 and its one id is the first element's.
+/// the call's thread pointer. A Vulkan top-level structure holds one level of instances, so a hit
+/// traverses exactly one instance: Metal's `instance_count` is 1 and its one id is the first element's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LevelIds {
     pub instance: IntrinsicStore,

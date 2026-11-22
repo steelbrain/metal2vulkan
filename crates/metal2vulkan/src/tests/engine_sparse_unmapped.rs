@@ -15,7 +15,6 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::bind::{SparseTileMap, TileMapping};
 use crate::device::requirements::VkFeature;
 use crate::error::Error;
 use crate::library::FunctionArtifact;
@@ -31,6 +30,7 @@ use crate::pipeline::sym::{
 use crate::pipeline::testing::{
     compile, link_and_validate, llvm_assemble, typed_module, AssembleError,
 };
+use crate::pipeline::tile_map;
 use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Order, Resources};
 use crate::spirv::ir::TypedModule;
 use crate::spirv::testing::committed_profiles;
@@ -330,17 +330,7 @@ fn a_pixel_fetch_reads_metals_value_of_an_unmapped_texel() {
         if !images {
             continue;
         }
-        let mut map = SparseTileMap::new(
-            crate::metal::TextureType::Type2D,
-            [2, 2, 1],
-            1,
-            1,
-            [1; 3],
-            1,
-        )
-        .expect("tile map");
-        map.update(TileMapping::Map, 0, 0, [0; 3], [1, 2, 1])
-            .expect("map");
+        let map = tile_map::one_level_map([2, 2, 1], 1, [1; 3], |_, [x, _, _]| x == 0);
         // Each leg: the swizzle; the device's value of mapped texel `i`, its red `r` (`i + 1`)
         // in the lane the swizzle reads it and garbage in the lanes the format lacks; the
         // device's value of an unmapped texel; and what Metal reads from each.
@@ -394,7 +384,7 @@ fn a_pixel_fetch_reads_metals_value_of_an_unmapped_texel() {
                     index: 0,
                 }),
                 address: None,
-                bytes: map.to_bytes(),
+                bytes: map.clone(),
             });
             res.spec.insert(SpecKey::SparseTexture(texture_slot(0)), 1);
             res.spec

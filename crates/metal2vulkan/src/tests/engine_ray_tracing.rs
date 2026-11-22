@@ -426,7 +426,7 @@ fn an_intersection_function_table_is_read_per_candidate() {
 
 /// The binder plans a structure argument as the consumer's top-level structure of the Metal
 /// structure bound at its slot, at the argument's level, and the table argument as the buffer
-/// bound at its slot: the consumer builds the structures (`bind::acceleration`).
+/// bound at its slot: the consumer builds the structures.
 #[test]
 fn the_binder_writes_the_structure_and_the_table_the_consumer_binds() {
     let Some(bc) = assemble("plan", &table_kernel("")) else {
@@ -2098,7 +2098,7 @@ fn run_counts(
     for &(index, n) in counts {
         table
             .acceleration_structures
-            .insert(index, BoundAccelerationStructure::new(n));
+            .insert(index, BoundAccelerationStructure { instance_count: n });
     }
     let mut state = BindState::default();
     state.stages.insert(Stage::Kernel, table);

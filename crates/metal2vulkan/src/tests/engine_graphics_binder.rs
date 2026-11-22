@@ -320,7 +320,10 @@ fn a_render_pipeline_plans_and_draws() {
             }
         );
         let indirect = DrawCall::Indirect {
-            indirect: IndirectRef::new(4, 32),
+            indirect: IndirectRef {
+                token: 4,
+                offset: 32,
+            },
             indexed: None,
         };
         let cmds = plan.instantiate_draw(&state, &indirect).expect("indirect");
@@ -387,7 +390,10 @@ fn an_indirect_draw_without_draw_indirect_first_instance_reads_its_arguments() {
         let state = render_state(16);
         let plan = p.plan(&dev, &state.shape()).expect("plan");
         let indirect = DrawCall::Indirect {
-            indirect: IndirectRef::new(4, 32),
+            indirect: IndirectRef {
+                token: 4,
+                offset: 32,
+            },
             indexed: None,
         };
         let cmds = plan.instantiate_draw(&state, &indirect).expect("indirect");
@@ -500,7 +506,10 @@ fn an_indexed_indirect_draw_reads_its_arguments_where_nothing_bounds_its_indices
         return;
     };
     let indirect = |indexed| DrawCall::Indirect {
-        indirect: IndirectRef::new(4, 32),
+        indirect: IndirectRef {
+            token: 4,
+            offset: 32,
+        },
         indexed,
     };
     let at = |offset| Some((vk::IndexType::UINT16, IndexBufferRef::new(9, 256), offset));
@@ -1758,8 +1767,7 @@ fn texture_buffers_past_the_limit_bind_their_parts() {
         }
         // Past the limit: the source one texel past it (two parts on every committed profile),
         // the destination in three.
-        let src_parts = crate::bind::texel_buffer_parts(&limits, limit + 1);
-        assert_eq!(src_parts, 2, "{stem}");
+        let src_parts = 2;
         let past = state(tb(limit + 1, src_parts), tb(2 * part + 7, 3));
         let plan = p
             .plan(&dev, &past.shape())

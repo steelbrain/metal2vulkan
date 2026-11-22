@@ -1185,12 +1185,9 @@ fn alpha_to_one_is_refused_only_without_the_feature() {
     assert!(g.alpha_to_one);
 }
 
-/// The graphics state states whether the vertex function writes memory, and a rate-mapped pass
-/// drawn in more than one region refuses such a pipeline, where one region, or a vertex function
-/// without side effects, is drawn as Metal draws it.
+/// The graphics state states whether the vertex function writes memory.
 #[test]
-fn a_vertex_function_that_writes_memory_is_refused_in_a_pass_of_several_regions() {
-    use crate::bind::{RasterizationRateMap, RateMapAxis, RegionError, RegionLimits};
+fn the_graphics_state_states_a_vertex_function_that_writes_memory() {
     let p = profile("lavapipe");
     let r = RenderLinkInputs::new();
     let state = |writes: bool| {
@@ -1205,33 +1202,6 @@ fn a_vertex_function_that_writes_memory_is_refused_in_a_pass_of_several_regions(
     let (writes, pure) = (state(true), state(false));
     assert!(writes.vertex_writes_memory);
     assert!(!pure.vertex_writes_memory);
-    let axis = |tiles: &[(u32, u32)]| RateMapAxis::from_tiles(32, tiles).expect("axis");
-    let limits = RegionLimits::new([4096, 4096], [-8192.0, 8191.0]);
-    // Two horizontal lines (63 to 32, then 4 to 4) make two regions; the identity makes one.
-    let coarse = RasterizationRateMap::from_layers(
-        [256, 32],
-        vec![[
-            axis(&[(63, 32), (63, 32), (63, 32), (63, 32), (4, 4)]),
-            axis(&[(32, 32)]),
-        ]],
-    )
-    .expect("map")
-    .regions(0, [0.0, 0.0, 256.0, 32.0], None, &limits)
-    .expect("plan");
-    let identity = RasterizationRateMap::from_layers(
-        [256, 32],
-        vec![[axis(&[(32, 32); 8]), axis(&[(32, 32)])]],
-    )
-    .expect("map")
-    .regions(0, [0.0, 0.0, 256.0, 32.0], None, &limits)
-    .expect("plan");
-    assert_eq!((coarse.regions().len(), identity.regions().len()), (2, 1));
-    assert_eq!(
-        coarse.admits(&writes),
-        Err(RegionError::VertexSideEffects { regions: 2 })
-    );
-    assert_eq!(coarse.admits(&pure), Ok(()));
-    assert_eq!(identity.admits(&writes), Ok(()));
 }
 
 /// The pipeline's interface lists each stage whose function may write a texture, in stage order,
@@ -1257,14 +1227,10 @@ fn the_interface_lists_the_stages_that_write_textures() {
     assert_eq!(stages(true, true), vec![Stage::Vertex, Stage::Fragment]);
 }
 
-/// The graphics state states whether the vertex function selects its viewport, and a rate-mapped
-/// pass refuses a pipeline that does, or that is layered (a stage declares `Layer`, or it amplifies
-/// vertices), even in one region: the plan sets one viewport per region for one map layer. A
-/// layered pipeline whose slices the consumer bounds to the plan's layer is admitted
-/// (`admits_planned_layers`).
+/// The graphics state states whether the vertex function selects its viewport and whether a stage
+/// declares `Layer`.
 #[test]
-fn a_layered_or_viewport_selecting_pipeline_is_refused_in_a_rate_mapped_pass() {
-    use crate::bind::{RasterizationRateMap, RateMapAxis, RegionError, RegionLimits};
+fn the_graphics_state_states_a_viewport_selecting_or_layered_vertex_function() {
     use crate::pipeline::stage_io::StageBuiltin as B;
     let p = profile("lavapipe");
     let r = RenderLinkInputs::new();
@@ -1285,33 +1251,6 @@ fn a_layered_or_viewport_selecting_pipeline_is_refused_in_a_rate_mapped_pass() {
     assert!(!plain.writes_viewport_index && !plain.declares_layer);
     assert!(viewport.writes_viewport_index);
     assert!(layer.declares_layer);
-    let mut amplified = plain.clone();
-    amplified.max_vertex_amplification_count = 2;
-    let axis = |tiles: &[(u32, u32)]| RateMapAxis::from_tiles(32, tiles).expect("axis");
-    let one =
-        RasterizationRateMap::from_layers([64, 32], vec![[axis(&[(64, 32)]), axis(&[(32, 32)])]])
-            .expect("map")
-            .regions(
-                0,
-                [0.0, 0.0, 64.0, 32.0],
-                None,
-                &RegionLimits::new([4096, 4096], [-8192.0, 8191.0]),
-            )
-            .expect("plan");
-    assert_eq!(one.regions().len(), 1);
-    assert_eq!(one.admits(&plain), Ok(()));
-    assert_eq!(one.admits(&viewport), Err(RegionError::ViewportArray));
-    assert_eq!(one.admits(&layer), Err(RegionError::LayeredPipeline));
-    assert_eq!(one.admits(&amplified), Err(RegionError::LayeredPipeline));
-    // A draw whose slices the consumer bounds to the plan's layer: the layered pipelines are
-    // admitted, the viewport-selecting one is not.
-    assert_eq!(one.admits_planned_layers(&plain), Ok(()));
-    assert_eq!(one.admits_planned_layers(&layer), Ok(()));
-    assert_eq!(one.admits_planned_layers(&amplified), Ok(()));
-    assert_eq!(
-        one.admits_planned_layers(&viewport),
-        Err(RegionError::ViewportArray)
-    );
 }
 
 /// A fragment stage that reads its color attachments was compiled for its pipeline's sample

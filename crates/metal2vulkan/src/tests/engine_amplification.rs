@@ -383,7 +383,10 @@ fn amplified_in(count: u32, mappings: &[(u32, u32)], length: u32) -> BindState {
             count,
             mappings
                 .iter()
-                .map(|&(viewport, layer)| ViewMapping::new(viewport, layer))
+                .map(|&(viewport, layer)| ViewMapping {
+                    viewport_array_index_offset: viewport,
+                    render_target_array_index_offset: layer,
+                })
                 .collect(),
         ),
         ..Default::default()
@@ -1008,7 +1011,10 @@ fn multiview_draws_keep_their_instances_within_the_limit() {
         base_instance,
     };
     let indirect = DrawCall::Indirect {
-        indirect: IndirectRef::new(7, 0),
+        indirect: IndirectRef {
+            token: 7,
+            offset: 0,
+        },
         indexed: None,
     };
     let limit = (1u32 << 27) - 1;

@@ -131,7 +131,7 @@ pub enum FormatEmulation {
     ExtendedRange,
     /// Apple's two-plane YCbCr formats this crate holds ([`ycbcr`]), which Metal makes only over
     /// an IOSurface's two planes and reads as RGB: held as texels of exactly Metal's values,
-    /// which the consumer computes from the planes' bytes (`bind::ycbcr_read`, Metal's conversion):
+    /// which the consumer computes from the planes' bytes (Metal's conversion, `bind::ycbcr_convert`):
     /// `R16G16B16A16_SFLOAT` of a converted format's (a grid of `1/2048`),
     /// `R32G32B32A32_SFLOAT` of an `_sRGB` twin's (a grid of `1/8192`), and
     /// `A2B10G10R10_UNORM_PACK32` of the codes. Exact for a sampled image a function reads or
@@ -194,7 +194,7 @@ pub enum FormatEmulation {
     /// formats reconstruct chroma by the implementation's rules): the texture's blocks are held
     /// for copies alone, and its sampled views present a decoded twin, an image of Metal's decode
     /// of them ([`AstcDecode`](crate::bind::AstcDecode), [`PvrtcDecode`](crate::bind::PvrtcDecode),
-    /// [`EtcDecode`](crate::bind::EtcDecode), [`ChromaDecode`](crate::bind::ChromaDecode)), which
+    /// [`EtcDecode`](crate::bind::EtcDecode)), which
     /// the consumer decodes after each write. The candidate's format is the twin's view of compact
     /// texels, `R8G8B8A8_UNORM` (an `_sRGB` form's `R8G8B8A8_SRGB`), whose texels are 8-bit codes
     /// of Metal's values (a PVRTC, ETC2, EAC or 4:2:2 format's own codes, an sRGB one's decoded by
@@ -1487,7 +1487,7 @@ fn make_repr(pf: PixelFormat) -> Repr {
         // 4:2:2: `G8B8G8R8_422_UNORM`/`B8G8R8G8_422_UNORM` exist (core 1.1), but a view of them
         // needs a sampler Y′CbCr conversion (VUID-VkImageViewCreateInfo-format-06415), whose
         // chroma reconstruction is the implementation's. The decoded twin's view
-        // (`FormatEmulation::Decoded`) holds Metal's texels instead (`bind::ChromaDecode`).
+        // (`FormatEmulation::Decoded`) holds Metal's texels instead.
         P::GBGR422 | P::BGRG422 => {
             color(vec![combined(F::R8G8B8A8_UNORM, FormatEmulation::Decoded)])
         }

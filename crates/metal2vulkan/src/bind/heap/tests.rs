@@ -1,8 +1,6 @@
 use super::*;
-use crate::bind::neutral::NeutralResource;
 use crate::bind::state::{SamplerDescriptor, StageTable, TextureFacts, UsedResource};
 use crate::bind::state::{StageShape, UsedClass, UsedShape};
-use crate::metal::sampler::SamplerUse;
 use crate::metal::{PixelFormat, RenderStages, TextureUsage};
 use crate::pipeline::sym::{SampledType, StorageFormatClass};
 use crate::spirv::testing::committed_profiles;
@@ -46,54 +44,8 @@ fn shape(ty: TextureType, pf: PixelFormat, samples: u32, usage: TextureUsage) ->
     }
 }
 
-/// The committed `moltenvk-m3` profile.
-fn m3() -> DeviceProfile {
-    crate::pipeline::testing::profile("moltenvk-m3", crate::device::DevicePolicy::RESIDENT_TABLES)
-        .expect("profile")
-}
-
 const READ: TextureUsage = TextureUsage::SHADER_READ;
 const WRITE: TextureUsage = TextureUsage::SHADER_WRITE;
-
-/// On every committed profile the heap classes are distinct and sorted, every image class has
-/// a neutral of exactly its type (an empty heap element can be written), the four sampler
-/// classes (one per use: comparison and integer texel) close the list, and cube arrays and
-/// multisampled storage images follow the profile.
-#[test]
-fn heap_classes_are_the_declarable_images_and_every_sampler_use() {
-    for (stem, p) in committed_profiles().expect("profiles") {
-        let classes = heap_classes(&p);
-        assert!(classes.windows(2).all(|w| w[0] < w[1]), "{stem}");
-        for compare in [false, true] {
-            for integer in [false, true] {
-                let class = HandleClass::Sampler { compare, integer };
-                assert!(classes.contains(&class));
-                assert_eq!(class.sampler_use(), Some(SamplerUse::new(compare, integer)));
-                assert_eq!(class.sampler_use().map(HandleClass::sampler), Some(class));
-            }
-        }
-        let images = &p.fields().images;
-        for c in &classes {
-            let HandleClass::Image(i) = c else { continue };
-            assert!(
-                NeutralResource::for_image(i).is_some(),
-                "{stem}: {i:?} has no neutral"
-            );
-            if i.dim == ImageDim::Cube && i.arrayed {
-                assert!(
-                    images.cube_array,
-                    "{stem}: cube array without imageCubeArray"
-                );
-            }
-            assert!(
-                !(i.multisampled && i.access == ImageAccess::Storage),
-                "{stem}: {i:?}"
-            );
-        }
-        let n_images = classes.len() - 4;
-        assert_eq!(n_images, image_classes(&p).len(), "{stem}: duplicates");
-    }
-}
 
 /// A member fits a class by its texture type's dimension, arrayedness, and multisampling, its
 /// sample count, its numeric type, and the usage the class's views need; a storage class never
@@ -427,10 +379,7 @@ fn table_bytes_are_sorted_deduplicated_and_padded() {
 }
 
 /// Under `HeapPlacement::ResourceId` each member and listed argument sampler is at the element
-/// of its resource ID: the tables map each ID to itself, and `HeapElements` sends each heap write
-/// there (a member without an ID, and a sampler element past the list, take no write); writes
-/// outside the heap set and the neutral element keep theirs. An ID at or past the capacity is
-/// `HeapTooLarge`. Under `Planned` (the default) every write keeps its element and the tables
+/// of its resource ID: the tables map each ID to itself. Under `Planned` (the default) the tables
 /// are the planned ones.
 #[test]
 fn resource_id_placement_puts_members_and_samplers_at_their_ids() {
@@ -479,37 +428,11 @@ fn resource_id_placement_puts_members_and_samplers_at_their_ids() {
             })
             .collect()
     };
-    let write = |set: u32, ty: vk::DescriptorType, array_element: u32| DescriptorWrite {
-        set,
-        binding: 0,
-        array_element,
-        ty,
-        source: WriteSource::Neutral(NeutralResource::Sampler { compare: false }),
-    };
-    let (image, sampler) = (
-        vk::DescriptorType::SAMPLED_IMAGE,
-        vk::DescriptorType::SAMPLER,
-    );
-
-    // Planned: elements 1 and 2 hold ids 5 and 3, and every write keeps its element.
+    // Planned: elements 1 and 2 hold ids 5 and 3.
     assert_eq!(entries(&state), vec![(0, 0), (0, 0), (3, 2), (5, 1)]);
-    let planned_elements = heap_elements(&template, &state, 16).expect("planned");
-    for (set, ty, e) in [(1, image, 2), (1, sampler, 9), (0, image, 4)] {
-        assert_eq!(planned_elements.element(&write(set, ty, e)), Some(e));
-    }
 
     state.heap_placement = HeapPlacement::ResourceId;
     assert_eq!(entries(&state), vec![(0, 0), (0, 0), (3, 3), (5, 5)]);
-    let elements = heap_elements(&template, &state, 16).expect("by id");
-    let placed = |set, ty, e| elements.element(&write(set, ty, e));
-    assert_eq!(placed(1, image, 0), Some(0), "the neutral element");
-    assert_eq!(placed(1, image, 1), Some(5));
-    assert_eq!(placed(1, image, 2), Some(3));
-    assert_eq!(placed(1, image, 3), None, "a member without an id");
-    assert_eq!(placed(1, sampler, 1), Some(7));
-    assert_eq!(placed(1, sampler, 2), Some(2));
-    assert_eq!(placed(1, sampler, 3), None, "past the listed samplers");
-    assert_eq!(placed(0, image, 3), Some(3), "outside the heap set");
     let samplers = PlannedHandleTable {
         entries: 3,
         ..planned
@@ -525,21 +448,12 @@ fn resource_id_placement_puts_members_and_samplers_at_their_ids() {
         })
         .collect();
     assert_eq!(ids, vec![(0, 0), (2, 2), (7, 7)]);
-
-    // An id at the capacity.
-    assert!(matches!(
-        heap_elements(&template, &state, 5),
-        Err(BindError::HeapTooLarge { count: 6, limit: 5 })
-    ));
 }
 
 /// Under `HeapPlacement::ResourceId` a listed argument sampler that names an element is at that
-/// element, wherever its resource ID lies: its table entry maps the ID there, and its writes go
-/// there, so an ID past the capacity is held. Its element at or past the capacity is
-/// `HeapTooLarge`; under `Planned` the element is ignored.
+/// element, wherever its resource ID lies: its table entry maps the ID there, under `Planned` too.
 #[test]
 fn resource_id_placement_puts_a_sampler_at_its_element() {
-    let template = ResourceTemplate::default();
     let mut state = BindState {
         heap_placement: HeapPlacement::ResourceId,
         ..BindState::default()
@@ -569,28 +483,8 @@ fn resource_id_placement_puts_a_sampler_at_its_element() {
             .collect()
     };
     assert_eq!(table(&state), vec![(0, 0), (2, 2), (16380, 1)]);
-    let write = |array_element: u32| DescriptorWrite {
-        set: 1,
-        binding: 0,
-        array_element,
-        ty: vk::DescriptorType::SAMPLER,
-        source: WriteSource::Neutral(NeutralResource::Sampler { compare: false }),
-    };
-    let elements = heap_elements(&template, &state, 16).expect("by element");
-    assert_eq!(
-        elements.element(&write(1)),
-        Some(1),
-        "the state at ID 16380"
-    );
-    assert_eq!(elements.element(&write(2)), Some(2));
-    assert!(matches!(
-        heap_elements(&template, &state, 2),
-        Err(BindError::HeapTooLarge { count: 3, limit: 2 })
-    ));
     state.heap_placement = HeapPlacement::Planned;
     assert_eq!(table(&state), vec![(0, 0), (2, 2), (16380, 1)]);
-    let planned_elements = heap_elements(&template, &state, 2).expect("planned");
-    assert_eq!(planned_elements.element(&write(2)), Some(2));
 }
 
 /// A storage member is viewed through its direct format when its storage choice is `Identity`
@@ -972,308 +866,6 @@ fn a_storage_write_makes_every_write_of_its_slot_general() {
     }
 }
 
-/// A plan's sampler tables list again any states that fit them: as many as the planned entries
-/// hold beside the null entry, each of a shape the plan was made for or one its checks admit
-/// ([`sampler_tables_admit_the_shapes_the_plan_s_checks_pass`]), written as the plan writes
-/// them; a list past the entries is not the plan's (`None`), and a plan without sampler tables
-/// relists nothing.
-#[test]
-fn sampler_tables_relist_states_of_the_plans_shapes() {
-    let linear = {
-        let mut d = SamplerDescriptor::new();
-        d.min_filter = crate::metal::SamplerMinMagFilter::Linear;
-        d
-    };
-    let nearest = SamplerDescriptor::new();
-    let compare = {
-        let mut d = SamplerDescriptor::new();
-        d.compare_function = crate::metal::CompareFunction::Less;
-        d
-    };
-    let listed = |descs: &[SamplerDescriptor]| -> Vec<crate::bind::ArgumentSampler> {
-        descs
-            .iter()
-            .enumerate()
-            .map(|(i, &d)| crate::bind::ArgumentSampler {
-                element: Some(i as u32 + 1),
-                ..crate::bind::ArgumentSampler::new(d, i as u64 + 1)
-            })
-            .collect()
-    };
-    let planned = PlannedHandleTable {
-        set: 0,
-        binding: 4,
-        stage: Stage::Kernel,
-        entries: 4,
-    };
-    let encoded = listed(&[linear, nearest]);
-    let template = ResourceTemplate {
-        sampler_tables: vec![planned],
-        argument_samplers: Some(ArgumentSamplersShape::of(&encoded)),
-        sampler_admission: SamplerAdmission {
-            classes: vec![HandleClass::Sampler {
-                compare: false,
-                integer: false,
-            }],
-            cubic: true,
-            opaque_black: false,
-        },
-        ..ResourceTemplate::default()
-    };
-    let profile = m3();
-    let relisted_sampler_tables = |template: &ResourceTemplate,
-                                   samplers: &[crate::bind::ArgumentSampler],
-                                   placement: HeapPlacement| {
-        relisted_sampler_tables(template, &profile, samplers, placement)
-    };
-    let placement = HeapPlacement::ResourceId;
-    let state = |samplers: Vec<crate::bind::ArgumentSampler>| BindState {
-        heap_placement: placement,
-        argument_samplers: samplers,
-        ..BindState::default()
-    };
-    // The encoded list, and one more of a planned shape: the tables the plan writes for them.
-    for samplers in [encoded.clone(), listed(&[linear, nearest, linear])] {
-        let relisted = relisted_sampler_tables(&template, &samplers, placement)
-            .expect("relisted")
-            .expect("held");
-        let written =
-            listed_sampler_tables(&[planned], &state(samplers).argument_samplers, placement)
-                .expect("written");
-        assert_eq!(relisted, written);
-    }
-    let three = relisted_sampler_tables(&template, &listed(&[linear, nearest, linear]), placement)
-        .expect("relisted")
-        .expect("held");
-    let ids: Vec<(u32, u32)> = three[0]
-        .bytes
-        .chunks(16)
-        .map(|e| {
-            let word = |k: usize| u32::from_le_bytes(e[4 * k..4 * k + 4].try_into().unwrap());
-            (word(0), word(2))
-        })
-        .collect();
-    assert_eq!(ids, vec![(0, 0), (1, 1), (2, 2), (3, 3)]);
-    // Past the entries: not the plan's.
-    let past = listed(&[linear, nearest, linear, nearest]);
-    assert_eq!(
-        relisted_sampler_tables(&template, &past, placement).expect("past"),
-        None
-    );
-    // A shape the plan was not made for, which its checks pass: listed as the plan writes it.
-    let shaped = listed(&[linear, compare]);
-    assert_eq!(
-        relisted_sampler_tables(&template, &shaped, placement).expect("shaped"),
-        Some(listed_sampler_tables(&[planned], &shaped, placement).expect("written"))
-    );
-    // A plan without sampler tables.
-    let bare = ResourceTemplate::default();
-    assert_eq!(
-        relisted_sampler_tables(&bare, &encoded, placement).expect("bare"),
-        None
-    );
-}
-
-/// A cubic state made after a command was encoded, beside stages that all test their argument
-/// samplers for a cubic filter, is relisted with `SamplerWord::CUBIC` in its flags, which the
-/// stage's test reads, whether the plan's list held a cubic state or not. Beside a stage that does
-/// not test (a fragment stage's table) a new cubic shape is not the plan's (`None`: the runtime
-/// keeps the states listed before, announcing `unlisted-argument-sampler`), as the plan itself
-/// refuses a listed one there.
-#[test]
-fn a_late_cubic_sampler_is_listed_with_its_cubic_bit_beside_tested_stages() {
-    use crate::metal::sampler::SamplerWord;
-    let linear = {
-        let mut d = SamplerDescriptor::new();
-        d.min_filter = crate::metal::SamplerMinMagFilter::Linear;
-        d
-    };
-    let cubic = {
-        let mut d = SamplerDescriptor::new();
-        d.min_filter = crate::metal::SamplerMinMagFilter::Cubic;
-        d.mag_filter = crate::metal::SamplerMinMagFilter::Cubic;
-        d
-    };
-    let listed = |descs: &[SamplerDescriptor]| -> Vec<crate::bind::ArgumentSampler> {
-        descs
-            .iter()
-            .enumerate()
-            .map(|(i, &d)| crate::bind::ArgumentSampler {
-                element: Some(i as u32 + 1),
-                ..crate::bind::ArgumentSampler::new(d, i as u64 + 1)
-            })
-            .collect()
-    };
-    let planned = PlannedHandleTable {
-        set: 0,
-        binding: 4,
-        stage: Stage::Kernel,
-        entries: 4,
-    };
-    let template = |encoded: &[crate::bind::ArgumentSampler], tested: bool| ResourceTemplate {
-        sampler_tables: vec![planned],
-        argument_samplers: Some(ArgumentSamplersShape::of(encoded)),
-        sampler_admission: SamplerAdmission {
-            classes: vec![HandleClass::Sampler {
-                compare: false,
-                integer: false,
-            }],
-            cubic: tested,
-            opaque_black: false,
-        },
-        ..ResourceTemplate::default()
-    };
-    let profile = m3();
-    let placement = HeapPlacement::ResourceId;
-    let flags = |tables: Vec<crate::bind::instantiate::DescriptorBytes>| -> Vec<(u32, u32)> {
-        tables[0]
-            .bytes
-            .chunks(16)
-            .map(|e| {
-                let word = |k: usize| u32::from_le_bytes(e[4 * k..4 * k + 4].try_into().unwrap());
-                (word(0), word(3))
-            })
-            .collect()
-    };
-    let cubic_word = SamplerWord::of(&cubic).0;
-    assert_eq!(cubic_word & SamplerWord::CUBIC, SamplerWord::CUBIC);
-    let linear_word = SamplerWord::of(&linear).0;
-    // Encoded without a cubic state, beside tested stages: a late one is listed, its flags cubic.
-    let plain = template(&listed(&[linear]), true);
-    let tables = relisted_sampler_tables(&plain, &profile, &listed(&[linear, cubic]), placement)
-        .expect("late")
-        .expect("held");
-    assert_eq!(
-        flags(tables),
-        vec![(0, 0), (0, 0), (1, linear_word), (2, cubic_word)]
-    );
-    // Beside a stage that does not test: not the plan's.
-    let untested = template(&listed(&[linear]), false);
-    assert_eq!(
-        relisted_sampler_tables(&untested, &profile, &listed(&[linear, cubic]), placement)
-            .expect("late"),
-        None
-    );
-    // Encoded with one: a late one of its shape is relisted, its flags cubic.
-    let with = template(&listed(&[linear, cubic]), true);
-    let tables =
-        relisted_sampler_tables(&with, &profile, &listed(&[linear, cubic, cubic]), placement)
-            .expect("late")
-            .expect("held");
-    assert_eq!(
-        flags(tables),
-        vec![(0, 0), (1, linear_word), (2, cubic_word), (3, cubic_word)]
-    );
-}
-
-/// A sampler state of a shape the plan was not made for is held as a command buffer commits where
-/// the plan's checks of a listed shape pass: `check_sampler` for every use of its sampler arrays
-/// (invalid LOD clamps refuse; an anisotropic state passes beside a cube's explicit gradients,
-/// whose use's sampler is isotropic, and, on a device without `samplerAnisotropy`, there alone),
-/// and an opaque-black border only where the members were checked against one. A plan whose arrays
-/// sample nothing (a function that only names the states) holds any shape.
-#[test]
-fn sampler_tables_admit_the_shapes_the_plan_s_checks_pass() {
-    let profile = m3();
-    // The runtime's floor requires `samplerAnisotropy`; a device without it is below the floor.
-    let floor = crate::pipeline::testing::profile_without(
-        "runtime-floor",
-        &[crate::device::requirements::VkFeature::SamplerAnisotropy],
-        crate::device::DevicePolicy::RESIDENT_TABLES,
-    )
-    .expect("profile");
-    let placement = HeapPlacement::ResourceId;
-    let planned = PlannedHandleTable {
-        set: 0,
-        binding: 4,
-        stage: Stage::Kernel,
-        entries: 4,
-    };
-    let encoded = [crate::bind::ArgumentSampler {
-        element: Some(1),
-        ..crate::bind::ArgumentSampler::new(SamplerDescriptor::new(), 1)
-    }];
-    let template = |classes: Vec<HandleClass>, opaque_black: bool| ResourceTemplate {
-        sampler_tables: vec![planned],
-        argument_samplers: Some(ArgumentSamplersShape::of(&encoded)),
-        sampler_admission: SamplerAdmission {
-            classes,
-            cubic: true,
-            opaque_black,
-        },
-        ..ResourceTemplate::default()
-    };
-    let class = HandleClass::Sampler {
-        compare: false,
-        integer: false,
-    };
-    let held_on =
-        |profile: &DeviceProfile, template: &ResourceTemplate, late: SamplerDescriptor| -> bool {
-            let mut samplers = encoded.to_vec();
-            samplers.push(crate::bind::ArgumentSampler {
-                element: Some(2),
-                ..crate::bind::ArgumentSampler::new(late, 2)
-            });
-            assert!(!template
-                .argument_samplers
-                .as_ref()
-                .expect("shape")
-                .shapes
-                .contains(&late.shape()));
-            relisted_sampler_tables(template, profile, &samplers, placement)
-                .expect("relisted")
-                .is_some()
-        };
-    let held = |template: &ResourceTemplate, late: SamplerDescriptor| -> bool {
-        held_on(&profile, template, late)
-    };
-    let lod = {
-        let mut d = SamplerDescriptor::new();
-        d.lod_min_clamp = 2.0;
-        d.lod_max_clamp = 1.0;
-        d
-    };
-    let anisotropic = {
-        let mut d = SamplerDescriptor::new();
-        d.min_filter = crate::metal::SamplerMinMagFilter::Linear;
-        d.mag_filter = crate::metal::SamplerMinMagFilter::Linear;
-        d.mip_filter = crate::metal::SamplerMipFilter::Linear;
-        d.max_anisotropy = 4;
-        d
-    };
-    let black = {
-        let mut d = SamplerDescriptor::new();
-        d.s_address_mode = crate::metal::SamplerAddressMode::ClampToBorderColor;
-        d.border_color = crate::metal::SamplerBorderColor::OpaqueBlack;
-        d
-    };
-    assert!(anisotropic.shape().anisotropic);
-    assert!(black.shape().opaque_black_border);
-    let sampled = template(vec![class], false);
-    assert!(!held(&sampled, lod), "invalid LOD clamps");
-    assert!(held(&sampled, anisotropic), "anisotropic");
-    assert!(!held(&sampled, black), "members unchecked for the border");
-    // Without `samplerAnisotropy` the plan's check refuses an anisotropic state.
-    assert!(
-        !floor
-            .fields()
-            .enabled
-            .features
-            .contains(&crate::device::requirements::VkFeature::SamplerAnisotropy),
-        "the floor without samplerAnisotropy states it"
-    );
-    assert!(
-        !held_on(&floor, &sampled, anisotropic),
-        "anisotropic without samplerAnisotropy"
-    );
-    let checked = template(vec![class], true);
-    assert!(held(&checked, black), "members checked for the border");
-    let naming = template(Vec::new(), false);
-    for late in [lod, anisotropic, black] {
-        assert!(held(&naming, late), "{late:?}: nothing sampled");
-    }
-}
-
 /// A heap member is checked at one level: the bind state's texture of more levels is that member
 /// (a heap array views level 0 alone), and one of another format is not.
 #[test]
@@ -1311,11 +903,8 @@ fn a_member_s_level_count_is_not_the_plan_s() {
 
 /// A texture of a form a heap reads (`ExtendedRange::HEAP_READ`: unswizzled, of one sample, not
 /// sparse) is held raw: the unsigned integer class of its shape views it as a slot's read does
-/// (its raw format), the float class holds its neutral (`Fit::Raw`), and `heap_element` answers
-/// both so: the device-wide set's elements, which a consumer writes for every live texture, hold
-/// the raw view and the neutral. A plan's float array writes the neutral, or refuses it where a
-/// stage that enters it samples heap textures. No class views any other extended-range texture (an
-/// `_sRGB` twin, a two-plane form, a swizzled or multisampled one), as before.
+/// (its raw format), and the float class holds its neutral (`Fit::Raw`). A plan's float array
+/// writes the neutral, or refuses it where a stage that enters it samples heap textures.
 #[test]
 fn a_form_a_heap_reads_is_held_raw_in_the_unsigned_class() {
     use crate::metal::format::ExtendedRange;
@@ -1340,60 +929,16 @@ fn a_form_a_heap_reads_is_held_raw_in_the_unsigned_class() {
         })
         .collect();
     assert_eq!(read.len(), ExtendedRange::HEAP_READ.len());
-    let others: Vec<PixelFormat> = PixelFormat::ALL
-        .iter()
-        .copied()
-        .filter(|&pf| ExtendedRange::of(pf).is_some_and(|f| f.heap_read().is_none()))
-        .collect();
-    assert!(!others.is_empty());
     let profiles = committed_profiles().expect("profiles");
     for (stem, p) in &profiles {
-        let image = |c: ImageHandleClass| HandleClass::Image(c);
         for &pf in &read {
             let s = shape(TextureType::Type2D, pf, 1, READ);
             assert_eq!(fit(&s, &f2d), Fit::Raw, "{pf:?}");
             assert_eq!(fit(&s, &u2d), Fit::Holds, "{pf:?}");
             assert_eq!(fit(&s, &i2d), Fit::NumericType, "{pf:?}");
-            let facts = TextureFacts::new(TextureType::Type2D, pf);
-            let mut slot = crate::bind::plan::resources::sampled_view(p, pf, &u2d)
+            let slot = crate::bind::plan::resources::sampled_view(p, pf, &u2d)
                 .unwrap_or_else(|e| panic!("{stem} {pf:?}: {e}"));
-            slot.layout = layout;
-            assert_eq!(
-                heap_element(p, &image(u2d), &facts, layout),
-                Ok(HeapElement::View(slot)),
-                "{stem} {pf:?}"
-            );
             assert_eq!(slot.format, ExtendedRange::of(pf).unwrap().raw_format());
-            assert_eq!(
-                heap_element(p, &image(f2d), &facts, layout),
-                Ok(HeapElement::Neutral),
-                "{stem} {pf:?}"
-            );
-            assert_eq!(
-                heap_element(p, &image(i2d), &facts, layout),
-                Ok(HeapElement::Neutral)
-            );
-            // Swizzled or multisampled: viewed by no class, as before.
-            let mut swizzled = facts;
-            swizzled.swizzle.red = crate::metal::TextureSwizzle::Zero;
-            for c in [f2d, u2d] {
-                let got = heap_element(p, &image(c), &swizzled, layout);
-                assert!(!matches!(got, Ok(HeapElement::View(_))), "{stem} {pf:?}");
-            }
-            let mut ms = TextureFacts::new(TextureType::Type2DMultisample, pf);
-            ms.sample_count = 4;
-            let ms_class = |ty| class(ImageDim::D2, false, true, ty, Sampled);
-            for ty in [Float, Uint] {
-                let got = heap_element(p, &image(ms_class(ty)), &ms, layout);
-                assert!(!matches!(got, Ok(HeapElement::View(_))), "{stem} {pf:?}");
-            }
-        }
-        for &pf in &others {
-            let facts = TextureFacts::new(TextureType::Type2D, pf);
-            for c in [f2d, u2d] {
-                let got = heap_element(p, &image(c), &facts, layout);
-                assert!(!matches!(got, Ok(HeapElement::View(_))), "{stem} {pf:?}");
-            }
         }
     }
 
@@ -1557,9 +1102,9 @@ fn a_heap_member_a_mode_two_write_would_round_is_refused() {
 }
 
 /// A state listed in token order (`BindState::used_in_token_order`) is searched, not gathered by
-/// token, and gives the same tables and heap elements as the same state listed so without the
-/// flag: among a buffer per token around them, with a member listed twice under one id, and the
-/// same internal errors for a member listed with two ids and a member not listed.
+/// token, and gives the same tables as the same state listed so without the flag: among a buffer
+/// per token around them, with a member listed twice under one id, and the same internal errors
+/// for a member listed with two ids and a member not listed.
 #[test]
 fn a_state_in_token_order_finds_its_members_by_search() {
     let t2d = shape(TextureType::Type2D, PixelFormat::RGBA8Unorm, 1, READ);
@@ -1604,14 +1149,9 @@ fn a_state_in_token_order_finds_its_members_by_search() {
     assert!(matches!(UsedByToken::of(&ordered), UsedByToken::Listed(..)));
     assert!(matches!(UsedByToken::of(&state), UsedByToken::Gathered(_)));
     let tables = |state: &BindState| handle_table_bytes(&template.heap_members, &[planned], state);
-    let elements = |state: &BindState| heap_elements(&template, state, 1024);
     assert_eq!(
         tables(&ordered).expect("ordered"),
         tables(&state).expect("any")
-    );
-    assert_eq!(
-        elements(&ordered).expect("ordered"),
-        elements(&state).expect("any")
     );
     // Member 107 listed again with another id, beside its first entry.
     for state in [&state, &ordered] {
@@ -1625,20 +1165,16 @@ fn a_state_in_token_order_finds_its_members_by_search() {
         again.resource_id = Some(999);
         twice.used_resources.insert(at, again);
         assert!(matches!(tables(&twice), Err(BindError::Internal(_))));
-        assert!(matches!(elements(&twice), Err(BindError::Internal(_))));
         let mut missing = state.clone();
         missing.used_resources.retain(|u| u.token != 157);
         assert!(matches!(tables(&missing), Err(BindError::Internal(_))));
-        assert!(matches!(elements(&missing), Err(BindError::Internal(_))));
     }
 }
 
 /// A state listed in token order finds its heap members' entries searching forward from where
 /// the last member's ended, the plan's members ascending by token (`members`): 4096 textures,
 /// each beside a buffer, compare a few entries a member (an upper bound of 8), not the logarithm
-/// of the 8192 listed twice over, for the tables and for the elements; each answering as the same
-/// state in no order does. A member past an out-of-order lookup is searched from the list's start
-/// and found alike.
+/// of the 8192 listed twice over, answering as the same state in no order does.
 #[test]
 fn a_state_in_token_order_finds_its_members_searching_forward() {
     const MEMBERS: u32 = 4096;
@@ -1679,26 +1215,14 @@ fn a_state_in_token_order_finds_its_members_searching_forward() {
         LISTED_LOOKED_AT.with(Cell::get)
     };
     let tables = |state: &BindState| handle_table_bytes(&template.heap_members, &[planned], state);
-    let elements = |state: &BindState| heap_elements(&template, state, 4 * MEMBERS);
     let bound = 8 * u64::from(MEMBERS);
     let looked = looked_at(&|| assert_eq!(tables(&ordered).unwrap(), tables(&state).unwrap()));
     assert!(looked <= bound, "the tables' lookups compared {looked}");
-    let looked = looked_at(&|| assert_eq!(elements(&ordered).unwrap(), elements(&state).unwrap()));
-    assert!(looked <= bound, "the elements' lookups compared {looked}");
-    // The members in another order: each found from the list's start where it lies before the
-    // last, as the same state in no order finds it.
-    let mut shuffled = template.clone();
-    shuffled.heap_members.reverse();
-    let elements = |state: &BindState| heap_elements(&shuffled, state, 4 * MEMBERS);
-    assert_eq!(elements(&ordered).unwrap(), elements(&state).unwrap());
 }
 
 /// A texture buffer fits only a texel-buffer class: the one of its numeric type holds it, where its
 /// usage has the class's access (its facts' usage; a slot's bound texture buffer states none), and
-/// one of another numeric type fits it in everything but that; no image class fits it. On every
-/// committed profile whose uniform texel buffers take `RGBA32Float`, its element in the sampled
-/// float class is a texel view of `R32G32B32A32_SFLOAT`, the neutral in the other numeric classes,
-/// and a swizzled one, whose swizzle a texel view cannot present, is `Unsupported`.
+/// one of another numeric type fits it in everything but that; no image class fits it.
 #[test]
 fn a_texture_buffer_is_held_by_the_texel_buffer_class_of_its_numeric_type() {
     use ImageAccess::{Sampled, Storage};
@@ -1727,47 +1251,5 @@ fn a_texture_buffer_is_held_by_the_texel_buffer_class_of_its_numeric_type() {
     assert_eq!(
         fit(&shape(TextureType::Type2D, rgba, 1, READ), &fb),
         Fit::No
-    );
-
-    let layout = vk::ImageLayout::GENERAL;
-    let image = HandleClass::Image;
-    let mut held = 0;
-    for (stem, p) in &committed_profiles().expect("profiles") {
-        if !p.supports_format(
-            vk::Format::R32G32B32A32_SFLOAT,
-            FormatUsage::UniformTexelBuffer,
-        ) {
-            continue;
-        }
-        held += 1;
-        let facts = TextureFacts::new(TextureType::TextureBuffer, rgba);
-        assert_eq!(
-            heap_element(p, &image(fb), &facts, layout),
-            Ok(HeapElement::TexelBuffer(vk::Format::R32G32B32A32_SFLOAT)),
-            "{stem}"
-        );
-        assert_eq!(
-            heap_element(p, &image(ub), &facts, layout),
-            Ok(HeapElement::Neutral),
-            "{stem}"
-        );
-        assert_eq!(
-            heap_element(p, &image(f2d), &facts, layout),
-            Ok(HeapElement::Neutral),
-            "{stem}"
-        );
-        let mut swizzled = facts;
-        swizzled.swizzle.red = crate::metal::TextureSwizzle::Zero;
-        assert_eq!(
-            heap_element(p, &image(fb), &swizzled, layout),
-            Err(BindError::Unsupported(Unsupported::not_implemented(
-                Feature::TextureSwizzle
-            ))),
-            "{stem}"
-        );
-    }
-    assert!(
-        held > 0,
-        "no committed profile takes RGBA32Float texel buffers"
     );
 }

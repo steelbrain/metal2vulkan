@@ -147,16 +147,19 @@ fn widths(sizes: SubgroupSizes, pinned: Option<u32>) -> Result<Vec<SubgroupSize>
     )
 }
 
+/// The `ExecutionStatus` buffer's 32-bit words.
+const STATUS_WORDS: usize = ExecutionStatus::BYTES / 4;
+
 /// Check every word of the `ExecutionStatus` buffer `bytes` after a run: a run that misses
 /// nothing leaves every word 0 (no status bit, no resident-set miss, reserved words untouched).
 /// Any other value fails the run.
 fn check_status(bytes: &[u8]) -> Result<(), String> {
     let words = bytes_words(bytes);
-    if words.len() != ExecutionStatus::WORDS {
+    if words.len() != STATUS_WORDS {
         return Err(format!(
             "the status buffer holds {} words, wanted {}",
             words.len(),
-            ExecutionStatus::WORDS
+            STATUS_WORDS
         ));
     }
     if words.iter().any(|&word| word != 0) {
@@ -497,9 +500,9 @@ fn a_selected_pointer_reads_and_writes_where_the_choice_says_on_the_cpu_interpre
 /// Every word of the status buffer is checked: one nonzero word, whichever, fails the run.
 #[test]
 fn a_run_fails_on_any_nonzero_status_word() {
-    let clean = [0u32; ExecutionStatus::WORDS];
+    let clean = [0u32; STATUS_WORDS];
     check_status(&word_bytes(&clean)).unwrap();
-    for word in 0..ExecutionStatus::WORDS {
+    for word in 0..STATUS_WORDS {
         let mut bad = clean;
         bad[word] = 1 << 7;
         assert!(

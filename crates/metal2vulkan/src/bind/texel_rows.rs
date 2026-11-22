@@ -35,8 +35,8 @@
 //! bytes between the rows keep whatever the CPU or another command writes there.
 
 /// A 2D texture's rows in a texel buffer view of its buffer's bytes, where its image is a shadow
-/// (the module docs): the words of its slot's push field (`PushField::TexelRows`), and the texels
-/// the view holds ([`elements`](Self::elements)). A texture states one in its facts
+/// (the module docs): the words of its slot's push field (`PushField::TexelRows`). A texture states
+/// one in its facts
 /// (`TextureFacts::texel_rows`), and a slot whose function only reads, writes or asks the size of
 /// it (`RuntimeFact::TexelRows`) takes the rows variant (`VariantKey::texel_rows`), which binds
 /// the view (`WriteSource::TexelRows`) and addresses texel `(x, y)` at `first + y · row + x`.
@@ -59,72 +59,8 @@ impl TexelRows {
     /// Word: the view's texel that is the texture's first.
     pub const FIRST: usize = 3;
 
-    /// The rows of a texture of `size` texels whose rows lie `row` texels apart from the view's
-    /// texel `first`. `None` for an empty texture, rows shorter than its width, or a view past
-    /// `u32::MAX` texels, which no texel buffer holds (`maxTexelBufferElements` is a `u32`).
-    pub fn new(size: [u32; 2], row: u64, first: u64) -> Option<TexelRows> {
-        let [width, height] = size;
-        if width == 0 || height == 0 || row < u64::from(width) {
-            return None;
-        }
-        let elements = first
-            .checked_add(row.checked_mul(u64::from(height) - 1)?)?
-            .checked_add(u64::from(width))?;
-        if elements > u64::from(u32::MAX) {
-            return None;
-        }
-        let mut words = [0; Self::WORDS];
-        words[Self::WIDTH] = width;
-        words[Self::HEIGHT] = height;
-        words[Self::ROW] = u32::try_from(row).ok()?;
-        words[Self::FIRST] = u32::try_from(first).ok()?;
-        Some(TexelRows { words })
-    }
-
     /// The words of the slot's push field.
     pub fn words(&self) -> [u32; Self::WORDS] {
         self.words
-    }
-
-    /// The texture's width and height in texels.
-    pub fn size(&self) -> [u32; 2] {
-        [self.words[Self::WIDTH], self.words[Self::HEIGHT]]
-    }
-
-    /// The texels the view holds, from its first through the texture's last
-    /// (`maxTexelBufferElements` bounds them).
-    pub fn elements(&self) -> u64 {
-        let [width, height] = self.size().map(u64::from);
-        u64::from(self.words[Self::FIRST]) + u64::from(self.words[Self::ROW]) * (height - 1) + width
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The words are the size, the row and the first texel; the view holds the texels through the
-    /// last row's last texel, none past it.
-    #[test]
-    fn the_view_ends_at_the_last_texel() {
-        let rows = TexelRows::new([61, 4], 68, 3).expect("rows");
-        assert_eq!(rows.words(), [61, 4, 68, 3]);
-        assert_eq!(rows.size(), [61, 4]);
-        assert_eq!(rows.elements(), 3 + 3 * 68 + 61);
-        // One row: its texels alone.
-        assert_eq!(TexelRows::new([5, 1], 5, 0).map(|r| r.elements()), Some(5));
-    }
-
-    /// No rows for an empty texture, rows shorter than the width, or a view past `u32::MAX`
-    /// texels.
-    #[test]
-    fn rows_no_view_holds_are_none() {
-        assert_eq!(TexelRows::new([0, 4], 8, 0), None);
-        assert_eq!(TexelRows::new([4, 0], 8, 0), None);
-        assert_eq!(TexelRows::new([9, 4], 8, 0), None);
-        let last = TexelRows::new([65536, 65536], 65536, 0).map(|r| r.elements());
-        assert_eq!(last, None, "2^32 texels");
-        let fits = TexelRows::new([65535, 65537], 65535, 0).map(|r| r.elements());
-        assert_eq!(fits, Some(65535 * 65537));
     }
 }

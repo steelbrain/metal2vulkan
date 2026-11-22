@@ -1552,9 +1552,4 @@ impl TypedModule {
     pub fn interface(&self) -> &[GlobalId] {
         &self.interface
     }
-
-    /// The module's derived device requirements.
-    pub fn requirements(&self) -> &Requirements {
-        &self.requirements
-    }
 }

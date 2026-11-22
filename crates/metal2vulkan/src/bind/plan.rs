@@ -389,8 +389,7 @@ pub(crate) struct ResourceTemplate {
     #[cfg_attr(feature = "serde", serde(default))]
     pub argument_samplers: Option<crate::bind::state::ArgumentSamplersShape>,
     /// What the sampler arrays and tables admit of a sampler state of a shape
-    /// `argument_samplers` does not list, as a command buffer lists the states again
-    /// (`BindingPlan::relisted_sampler_tables`).
+    /// `argument_samplers` does not list, as a command buffer lists the states again.
     #[cfg_attr(feature = "serde", serde(default))]
     pub sampler_admission: crate::bind::heap::SamplerAdmission,
     /// Each stage's function-table directory.
@@ -556,8 +555,9 @@ pub enum WriteSource {
     },
     /// The planes of the two-plane YCbCr texture bound at `slot`, read in place
     /// (`TextureFacts::ycbcr_in_place`): a uniform texel buffer over the planes' bytes in
-    /// `YCbCrInPlace::format`, from the first byte of the first plane for
-    /// `YCbCrInPlace::view_bytes`. Only a slot under its in-place variant binds it
+    /// `R8G8_UINT` of 8-bit codes or `R16G16_UINT` of 10-bit ones, from the first byte of the
+    /// first plane through the last row of codes either plane holds. Only a slot under its
+    /// in-place variant binds it
     /// (`VariantKey::ycbcr_in_place`).
     YCbCrInPlace { slot: SlotRef },
     /// The planes of the two-plane YCbCr texture bound at `slot`, held as an image the device's
@@ -570,11 +570,9 @@ pub enum WriteSource {
     /// The rows of the 2D texture bound at `slot`, read and written in place
     /// (`TextureFacts::texel_rows`, `bind::texel_rows`): a texel buffer in `format` over the
     /// texture's bytes, from its first texel, or before it where the device's texel buffer offset
-    /// alignment asks, through its last row's last texel ([`TexelRows::elements`]); uniform where
-    /// the slot's function only reads the texture, storage where it writes it. Only a slot under
-    /// its rows variant binds it (`VariantKey::texel_rows`).
-    ///
-    /// [`TexelRows::elements`]: crate::bind::TexelRows::elements
+    /// alignment asks, through its last row's last texel; uniform where the slot's function only
+    /// reads the texture, storage where it writes it. Only a slot under its rows variant binds it
+    /// (`VariantKey::texel_rows`).
     TexelRows { slot: SlotRef, format: vk::Format },
     /// The texture buffer bound at `slot`, as a texel buffer view.
     TexelBuffer {
@@ -624,9 +622,8 @@ pub enum WriteSource {
     /// The top-level structure of the acceleration structure bound at buffer slot `slot`
     /// (`setAccelerationStructure:atBufferIndex:`): the bound instance structure itself when
     /// `level` is `Instance`, and, when `level` is `Primitive`, the top-level structure of one
-    /// instance over the bound primitive structure
-    /// ([`primitive_wrap`](crate::bind::acceleration::primitive_wrap)). A slot the guest left
-    /// unbound takes a top-level structure of no instances, which every ray misses.
+    /// instance over the bound primitive structure. A slot the guest left unbound takes a
+    /// top-level structure of no instances, which every ray misses.
     AccelerationStructure {
         slot: SlotRef,
         level: AccelerationStructureLevel,
@@ -648,9 +645,9 @@ pub enum WriteSource {
         color_index: u32,
         format: vk::Format,
     },
-    /// The tile map of the sparse texture bound at texture slot `slot` (`bind::SparseTileMap`),
-    /// a read-only storage buffer of [`SparseTileMap::byte_len`](crate::bind::SparseTileMap)
-    /// bytes, from which a function answers the texture's residency where the device has no
+    /// The tile map of the sparse texture bound at texture slot `slot`: a read-only storage
+    /// buffer of the map's words, a bit per tile of each level and slice set while Metal has the
+    /// tile mapped, from which a function answers the texture's residency where the device has no
     /// shader residency. The consumer binds the map it keeps for that texture, holding the mappings
     /// Metal's would hold when the command runs. A slot whose bound texture is not sparse takes the
     /// zero buffer instead: the module reads no tile map there.
@@ -762,29 +759,6 @@ pub struct ImageViewDesc {
     /// `components` (and a swizzled storage view is the consumer's refusal).
     #[cfg_attr(feature = "serde", serde(default))]
     pub shader_swizzle: bool,
-}
-
-impl ImageViewDesc {
-    /// A view of type `view_type` and format `format` over the aspect `aspect` of every level, in
-    /// layout `layout`, with the component mapping `components`, no twin, and the texture's
-    /// swizzle for the consumer to compose.
-    pub fn new(
-        view_type: vk::ImageViewType,
-        format: vk::Format,
-        aspect: vk::ImageAspectFlags,
-        layout: vk::ImageLayout,
-        components: vk::ComponentMapping,
-    ) -> ImageViewDesc {
-        ImageViewDesc {
-            view_type,
-            format,
-            aspect,
-            layout,
-            components,
-            level: None,
-            shader_swizzle: false,
-        }
-    }
 }
 
 /// A Vulkan vertex buffer binding fed by a Metal vertex-stage buffer slot.

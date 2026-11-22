@@ -1534,8 +1534,7 @@ fn plan_replay(cx: &mut SelectCx<'_>, sources: &[SlotRef]) -> Result<(), Error> 
     // A replayed command is a compute dispatch with no stage-in region and no tile pass, or a
     // draw whose vertex function fetches no attribute in fixed function: its buffers are the
     // record's, read through the slot table, which a pulled attribute's read reaches and
-    // fixed-function input does not (the replay pulls every layout,
-    // `bind::draw_replay_vertex_layouts`).
+    // fixed-function input does not (the replay pulls every fixed-function binding's layout).
     use crate::pipeline::sym::Stage;
     let drawn = cx.inputs.replay_bindings && matches!(cx.stage, Stage::Vertex | Stage::Fragment);
     // A folded object function: its draw's pieces fold Metal's object grid

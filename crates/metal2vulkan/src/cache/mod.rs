@@ -172,10 +172,9 @@ pub struct VariantKey {
     /// The axes along which every threadgroup of the dispatch has one thread (bit 0 `x`, bit 1
     /// `y`, bit 2 `z`): a kernel whose walk is predicated, where those axes' thread positions
     /// alone make some of its synchronizations' blocks divergent (`RuntimeFact::UnitAxes`'s
-    /// `relief`), compiles with them uniform (`LoweringInputs::unit_axes`). A consumer asks a
-    /// plan for it (`BindingPlan::unit_axes_variant`), and the plan of a pipeline compiled under
-    /// it states it and asks a dispatch of more threads along such an axis for the variant
-    /// without it.
+    /// `relief`), compiles with them uniform (`LoweringInputs::unit_axes`). The plan of a pipeline
+    /// compiled under it states it and asks a dispatch of more threads along such an axis for the
+    /// variant without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub unit_axes: u8,
     /// Texture slots bound to an 8-bit sRGB texture the device cannot sample, which the runtime
@@ -251,9 +250,8 @@ pub struct VariantKey {
     pub call_threadgroups: bool,
     /// The kernel, or the render pipeline's vertex and fragment functions, are a device-replay
     /// variant (`LoweringInputs::replay_bindings`): every buffer they read is at its device
-    /// address in the slot table a replay's preprocess writes for its command, so
-    /// `BindingPlan::instantiate_replay` instantiates a compute plan, which does not state the
-    /// key. The runtime compiles a kernel's with `flat_grid` per pipeline state an execution of
+    /// address in the slot table a replay's preprocess writes for its command; a compute plan of
+    /// it does not state the key. The runtime compiles a kernel's with `flat_grid` per pipeline state an execution of
     /// commands a kernel writes may name, to run it on the GPU alone; and a render pipeline's for
     /// the state an execution of GPU-written draws inherits, its draws' buffers the records'.
     #[cfg_attr(feature = "serde", serde(default))]

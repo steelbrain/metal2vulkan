@@ -697,7 +697,7 @@ pub enum IoRole {
     /// count per primitive (`PushField::VerticesPerPrimitive`): Metal's count of the draw's
     /// primitives in each instance (Metal probes on the M3 Max, macOS 27.0.1).
     PrimitiveId,
-    /// The index of the command a merged draw replay's vertex runs (`bind::DrawReplay::merged`):
+    /// The index of the command a merged draw replay's vertex runs:
     /// the flat `uint` output of a vertex function compiled under `LoweringInputs::merged_draws`,
     /// the same at every vertex of a primitive (each primitive is one command's), and the input of
     /// a fragment function compiled under that field that reads a command's buffers, which finds

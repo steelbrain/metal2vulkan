@@ -90,7 +90,10 @@ fn draws_map_to_the_vulkan_draw_of_the_same_arguments() {
     assert_eq!(base, [(-3i32) as u32, 5]);
     let (d, base) = vk_draw(
         &DrawCall::Indirect {
-            indirect: IndirectRef::new(2, 40),
+            indirect: IndirectRef {
+                token: 2,
+                offset: 40,
+            },
             indexed: Some((vk::IndexType::UINT16, IndexBufferRef::new(3, 64), 8)),
         },
         None,
@@ -282,7 +285,10 @@ fn vertex_windows_follow_the_vertex_and_instance_ranges() {
         Window::Whole
     );
     let indirect = DrawCall::Indirect {
-        indirect: IndirectRef::new(1, 0),
+        indirect: IndirectRef {
+            token: 1,
+            offset: 0,
+        },
         indexed: None,
     };
     assert_eq!(fetch_window(&per_vertex, 24, &indirect), Window::Whole);
@@ -429,7 +435,10 @@ fn draws_list_their_index_and_indirect_buffers() {
     assert_eq!(
         draw_uses(
             &DrawCall::Indirect {
-                indirect: IndirectRef::new(1, 32),
+                indirect: IndirectRef {
+                    token: 1,
+                    offset: 32
+                },
                 indexed: None,
             },
             None,
@@ -440,7 +449,10 @@ fn draws_list_their_index_and_indirect_buffers() {
     assert_eq!(
         draw_uses(
             &DrawCall::Indirect {
-                indirect: IndirectRef::new(1, 32),
+                indirect: IndirectRef {
+                    token: 1,
+                    offset: 32
+                },
                 indexed: Some((vk::IndexType::UINT32, IndexBufferRef::new(2, 64), 8)),
             },
             None,
@@ -514,7 +526,10 @@ fn index_positions_past_the_buffer_are_counted_from_the_index_offset() {
     }
     let sizeless = indexed_in(T::NONE_KHR, 4, 0, 64);
     let indirect = DrawCall::Indirect {
-        indirect: IndirectRef::new(1, 0),
+        indirect: IndirectRef {
+            token: 1,
+            offset: 0,
+        },
         indexed: Some((T::UINT32, IndexBufferRef::new(2, 4), 0)),
     };
     for draw in [sizeless, indirect, primitives(0, 3, (0, 1))] {
@@ -658,7 +673,10 @@ fn a_draw_of_no_index_binds_inside_the_buffer() {
 #[test]
 fn an_unbounded_indexed_indirect_draw_reads_its_arguments() {
     let indirect = |indexed| DrawCall::Indirect {
-        indirect: IndirectRef::new(1, 0),
+        indirect: IndirectRef {
+            token: 1,
+            offset: 0,
+        },
         indexed,
     };
     let at = |offset| Some((vk::IndexType::UINT32, IndexBufferRef::new(2, 64), offset));
@@ -935,7 +953,10 @@ fn patch_draws_draw_one_vertex_per_patch() {
     let indirect = DrawCall::PatchesIndirect {
         control_points: 4,
         patch_index: None,
-        indirect: IndirectRef::new(1, 48),
+        indirect: IndirectRef {
+            token: 1,
+            offset: 48,
+        },
         control_point_index: None,
     };
     assert_eq!(
@@ -995,7 +1016,10 @@ fn patch_draws_bind_their_patch_index_buffers() {
     let indirect = DrawCall::PatchesIndirect {
         control_points: 4,
         patch_index: Some((IndexBufferRef::new(2, 100), 40)),
-        indirect: IndirectRef::new(1, 0),
+        indirect: IndirectRef {
+            token: 1,
+            offset: 0,
+        },
         control_point_index: None,
     };
     let (push, ranges) = patch_draw(Some(&t), &BindState::default(), &indirect)
@@ -1094,7 +1118,10 @@ fn indexed_patch_draws_bind_their_control_point_index_buffers() {
     let indirect = DrawCall::PatchesIndirect {
         control_points: 4,
         patch_index: None,
-        indirect: IndirectRef::new(1, 0),
+        indirect: IndirectRef {
+            token: 1,
+            offset: 0,
+        },
         control_point_index: Some((IndexBufferRef::new(3, 100), 6)),
     };
     let (push, ranges) = patch_draw(Some(&t), &BindState::default(), &indirect)
@@ -1160,7 +1187,10 @@ fn each_step_function_reads_its_factor_window() {
     let indirect = DrawCall::PatchesIndirect {
         control_points: 4,
         patch_index: None,
-        indirect: IndirectRef::new(1, 0),
+        indirect: IndirectRef {
+            token: 1,
+            offset: 0,
+        },
         control_point_index: None,
     };
     assert_eq!(window(S::PerPatch, &indirect), Window::Whole);
@@ -1684,7 +1714,10 @@ fn object_draws_specialize_each_stage_within_its_limits() {
     // Indirect: its object threadgroups' counts, through the object form of the arguments pass;
     // an object threadgroup Metal draws nothing for reads none.
     let indirect = |lo| DrawCall::MeshThreadgroupsIndirect {
-        indirect: IndirectRef::new(1, 12),
+        indirect: IndirectRef {
+            token: 1,
+            offset: 12,
+        },
         threads_per_object_group: lo,
         threads_per_mesh_group: [32, 1, 1],
     };
@@ -1775,7 +1808,6 @@ fn folded_object_draws_run_their_grid_in_pieces() {
         (fold.dispatch, fold.pieces, fold.past),
         ([65535, 64, 1], 2, false)
     );
-    assert_eq!(fold.bytes().len(), 36 + 2 * 12);
     assert!(cmds.mesh_arguments.is_none());
     // 2^29 threadgroups run, in 129 pieces of these limits; more, which Metal's GPU discards,
     // draw nothing and discard the command buffer.
@@ -1810,7 +1842,10 @@ fn folded_object_draws_run_their_grid_in_pieces() {
     }
     // Indirect: the folded arguments pass's pieces.
     let indirect = DrawCall::MeshThreadgroupsIndirect {
-        indirect: IndirectRef::new(1, 12),
+        indirect: IndirectRef {
+            token: 1,
+            offset: 12,
+        },
         threads_per_object_group: [4, 1, 1],
         threads_per_mesh_group: [32, 1, 1],
     };
@@ -1978,7 +2013,7 @@ fn mesh_draws_specialize_their_threadgroup_within_the_device() {
     // Indirect: 12 bytes of arguments, read by the mesh form of the arguments pass; at an offset
     // that is not a multiple of 4, nothing.
     let indirect = |offset| DrawCall::MeshThreadgroupsIndirect {
-        indirect: IndirectRef::new(1, offset),
+        indirect: IndirectRef { token: 1, offset },
         threads_per_object_group: [1; 3],
         threads_per_mesh_group: [32, 1, 1],
     };

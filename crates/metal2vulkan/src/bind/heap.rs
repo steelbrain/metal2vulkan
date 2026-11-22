@@ -1,10 +1,9 @@
 //! The set-1 descriptor heap and the handle table.
 //!
-//! [`heap_classes`] is the fixed enumeration of the heap arrays on a profile: every image class the
-//! core can declare (`neutral::image_classes`) and the four sampler classes. The texture lowering
-//! declares the handle table (`Synthetic(HandleTable)`, one per stage that loads a heap texture)
-//! and one heap array per class a heap texture reaches, and link numbers them (set 1 for the
-//! arrays). The binder's half:
+//! The heap arrays on a profile are of the image classes the core can declare and the four
+//! sampler classes. The texture lowering declares the handle table (`Synthetic(HandleTable)`, one
+//! per stage that loads a heap texture) and one heap array per class a heap texture reaches, and
+//! link numbers them (set 1 for the arrays). The binder's half:
 //!
 //! - **Members.** The textures a handle can name: every used image texture
 //!   (`BindShape.used`, by consumer token) and every image texture bound at a slot of a stage
@@ -14,8 +13,8 @@
 //!   of **every** class array, so the table maps a resource id to one element. Element 0
 //!   ([`NEUTRAL_ELEMENT`]) is each class's neutral, the value of the null handle and of every
 //!   missed id. Texture buffers are no members: only a heap set a consumer keeps for every
-//!   command holds them, each at its resource ID's element of the texel-buffer classes
-//!   ([`heap_element`]), so a planned heap's handle naming one misses.
+//!   command holds them, each at its resource ID's element of the texel-buffer classes, so a
+//!   planned heap's handle naming one misses.
 //! - **Elements.** Element `e` of the array of a class holds member `e - 1` when it fits the
 //!   class (`fit`: the Metal texture type's dimension, arrayedness, and multisampling, a
 //!   sample count above 1 exactly when multisampled, the numeric type, a depth format for a
@@ -56,11 +55,11 @@
 //!   that writes a heap set per command uses as they are. Under `HeapPlacement::ResourceId` each
 //!   member and listed argument sampler is at the element its resource ID names instead (a sampler
 //!   at its `ArgumentSampler::element` where the consumer gives one), and the tables map each ID
-//!   there: the plan is the same, and [`HeapElements`] gives the consumer each heap write's element
+//!   there: the plan is the same, and each heap write's element is the one its resource ID names
 //!   (a member without an ID takes none: no handle names it), so commands whose IDs name the same
 //!   resources write the same elements alike and can share one heap set. A consumer that keeps one
 //!   heap set for every command buffer can hold every live texture there instead: it writes each
-//!   texture's elements as the texture is made ([`heap_element`]) and binds one table of every ID
+//!   texture's elements as the texture is made and binds one table of every ID
 //!   ([`handle_entry`]) at each handle table, so an ID a function loads from memory reaches its
 //!   texture though no command named it, as Metal's does.
 //! - **Query-only classes.** A class whose numeric type is a query-only group's default
@@ -109,8 +108,8 @@
 //!   twice the entries of the shape's capacity class (`ArgumentSamplersShape::entries`, at most the
 //!   heap's capacity): element `i + 1` of each array is `WriteSource::ArgumentSampler` for listed
 //!   sampler `i`, made for the array's use, and element 0 that use's neutral sampler. The second
-//!   half is headroom for states made between a command's encoding and its command buffer's commit,
-//!   which a consumer lists again then ([`BindingPlan::relisted_sampler_tables`]). A class whose
+//!   half is headroom for states made between a command's encoding and its command buffer's commit.
+//!   A class whose
 //!   least count does not fit the capacity is [`BindError::HeapTooLarge`] at plan time, and a list
 //!   longer than the planned entries at instantiation. Every listed shape must pass
 //!   `metal::sampler::check_argument_sampler` for every use the arrays declare (the plan cannot see
@@ -141,6 +140,7 @@
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(test)]
 use crate::bind::neutral::image_classes;
 use crate::bind::neutral::NeutralResource;
 use crate::bind::plan::compute::internal;
@@ -190,24 +190,6 @@ use crate::vk;
 pub enum HeapSource {
     Used(u32),
     Bound(SlotRef),
-}
-
-/// Every heap array class of `profile`, sorted and distinct: the image classes the core can declare
-/// there, then the sampler classes of every use (with comparison or without, of an integer texture
-/// or not).
-pub fn heap_classes(profile: &DeviceProfile) -> Vec<HandleClass> {
-    let mut out: Vec<HandleClass> = image_classes(profile)
-        .into_iter()
-        .map(HandleClass::Image)
-        .collect();
-    for compare in [false, true] {
-        for integer in [false, true] {
-            out.push(HandleClass::Sampler { compare, integer });
-        }
-    }
-    out.sort();
-    out.dedup();
-    out
 }
 
 /// One heap member (the module docs): element `i + 1` for `ResourceTemplate.heap_members[i]`.
@@ -422,7 +404,7 @@ pub(crate) fn raw_held(shape: &TextureShape) -> bool {
 }
 
 /// The bit of `SpecKey::HeapRawTextures`' value that a texture the stage's handles can name is held
-/// by its raw texels alone ([`heap_raw_form`]), whose decode the function's `float` read, sample or
+/// by its raw texels alone, whose decode the function's `float` read, sample or
 /// gather takes (`lower::texture::heap_raw`).
 pub(crate) const HELD: u32 = 1;
 
@@ -466,19 +448,6 @@ pub(crate) fn nan_family(pf: metal::PixelFormat) -> u32 {
         0 if family == B::LINEAR => NAN_WIDE,
         0 if family == 0 => NAN_OTHER,
         _ => 0,
-    }
-}
-
-/// The form of `ExtendedRange::HEAP_READ` by whose raw texels alone a heap holds a texture of
-/// `facts` (an unswizzled, not sparse texture of one sample of such a form), else `None`: its
-/// sampled float classes hold the neutral ([`heap_element`]), which a function's read passes
-/// by, decoding the raw texels its unsigned integer class holds, and so does a sample or gather the
-/// function emulates; one it does not emulate states `RuntimeFact::HeapRawSamples`, and a plan
-/// refuses such a texture its stage reaches.
-pub fn heap_raw_form(facts: &TextureFacts) -> Option<crate::metal::format::ExtendedRange> {
-    match raw_held(&facts.shape()) {
-        true => crate::metal::format::ExtendedRange::of(facts.pixel_format),
-        false => None,
     }
 }
 
@@ -579,80 +548,7 @@ fn member_view(
     Ok(view)
 }
 
-/// What one element of a set-1 heap array holds for a texture ([`heap_element`]).
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HeapElement {
-    /// The array's class's neutral ([`NeutralResource::for_image`]): the texture fits another
-    /// class, or no class (a format the table holds no representation of).
-    Neutral,
-    /// The texture, through this view.
-    View(ImageViewDesc),
-    /// The texture buffer, through a texel buffer view of this format over its texels, as a slot's
-    /// view of it lies: from its offset (a multiple of `minTexelBufferOffsetAlignment`) over the
-    /// whole texel blocks of its length, at most `maxTexelBufferElements` of them. The array is a
-    /// texel-buffer class's: a uniform texel buffer array, or a storage one.
-    TexelBuffer(vk::Format),
-}
-
-/// What the element at a texture's resource ID of the set-1 heap array `class` holds for that
-/// texture, of `facts`, on `profile`, in `layout`, whichever command reads the ID: the
-/// texture's view where it fits the class, as a plan's member's (the module docs' **Elements**),
-/// a texture buffer's texel buffer view where it fits a texel-buffer class
-/// ([`HeapElement::TexelBuffer`]), else the class's neutral. A consumer that keeps one heap set for every command buffer (under
-/// `HeapPlacement::ResourceId`) writes every live texture's elements so, so an ID a function
-/// loads from memory reaches its texture though no command named it, as Metal's does.
-///
-/// Unlike a plan's member, nothing here checks the texture against a pipeline's heap samplers
-/// (a linear filter's format features, an opaque-black border's view): a plan still refuses a
-/// member it names that fails them. `Unsupported` where the class holds the texture's kind but
-/// cannot view it, as for a member; `Internal` for a sampler or function-table class, which holds
-/// no texture. A texture of a form a heap reads by its raw texels ([`heap_raw_form`] names it) is
-/// the neutral in the sampled float class, as a plan's float array holds it, and its raw view in
-/// the unsigned integer class of its shape, where a function's float read, and a sample or gather
-/// it emulates, reach it; nothing here knows whether a function samples it otherwise, which a plan
-/// that names it refuses.
-pub fn heap_element(
-    profile: &DeviceProfile,
-    class: &HandleClass,
-    facts: &TextureFacts,
-    layout: vk::ImageLayout,
-) -> Result<HeapElement, BindError> {
-    let HandleClass::Image(image) = class else {
-        return Err(internal(format!("a texture element of {class:?}")));
-    };
-    let shape = facts.shape();
-    match fit(&shape, image) {
-        Fit::Holds if facts.texture_type == TextureType::TextureBuffer => {
-            member_texel_view(profile, shape.pixel_format(), shape.swizzle(), image)
-                .map(HeapElement::TexelBuffer)
-        }
-        Fit::Holds => member_view(profile, &shape, image, layout).map(HeapElement::View),
-        // The float array holds its neutral, and a function's float read takes its raw texels
-        // from the unsigned integer array, which views it ([`Fit::Holds`] there).
-        Fit::Raw | Fit::NumericType | Fit::No | Fit::Dropped => Ok(HeapElement::Neutral),
-    }
-}
-
-/// The flags word of the handle-table entry of a texture of `facts` on `profile`, for
-/// [`handle_entry`]: bit 1
-/// where its pixel format has no alpha, so a shader-checked read past the texture takes Metal's
-/// out-of-bounds alpha of 1; bit 2 where its pixel format is blue-first
-/// (`metal::format::red_blue_exchanged`), so a storage access exchanges red and blue where the
-/// heap views it through its RGBA-order twin; bits 3 to 14 its border texels
-/// (`metal::sampler::border_texels` of its pixel format and swizzle), which a Metal 4.1 read
-/// through a sampler hands back at a border; bits 16 to 28 the index of the texture's texel class
-/// (`metal::texel_format::heap_class_index` of its pixel format and swizzle), by which the shader
-/// emulates Metal's linear filter of the texture's texels, 0 for a swizzled texture; bit 28 where `profile` reads storage without a format
-/// by the formats' own bits alone and cannot read the texture's view in the heap's storage arrays
-/// so (`memory::handles::FLAG_STORAGE_UNREADABLE`), whereupon a storage read through its handle
-/// reads the null element; every other bit 0. A caller passes the word through as is.
-pub fn handle_entry_flags(profile: &DeviceProfile, facts: &TextureFacts) -> u32 {
-    let shape = facts.shape();
-    entry_flags(&shape, storage_unreadable(profile, &shape))
-}
-
-/// [`handle_entry_flags`] of a texture of view facts `shape`, `unreadable` its
+/// The flags of a handle-table entry for a texture of view facts `shape`, `unreadable` its
 /// [`storage_unreadable`].
 fn entry_flags(shape: &TextureShape, unreadable: bool) -> u32 {
     let pixel_format = shape.pixel_format();
@@ -875,7 +771,7 @@ pub(crate) fn storage_conversions(profile: &DeviceProfile) -> Vec<StorageConvers
 /// element `element`, with `flags`. A consumer that keeps one table of every texture ID for every
 /// command (under `HeapPlacement::ResourceId`) binds it at each `Synthetic(HandleTable)` in place
 /// of the plan's per-command table: sorted by ID, its first entry the null entry
-/// `handle_entry(0, 0, 0)`, at most [`HANDLE_TABLE_CAPACITY`] entries of [`HANDLE_ENTRY_BYTES`]
+/// `handle_entry(0, 0, 0)`, at most 2^16 entries of [`HANDLE_ENTRY_BYTES`]
 /// bytes each, bound over the entries the heap arrays' count reaches (an ID past them misses, as
 /// one no entry names does).
 pub fn handle_entry(id: u64, element: u32, flags: u32) -> [u8; HANDLE_ENTRY_BYTES as usize] {
@@ -893,13 +789,6 @@ pub fn handle_entry(id: u64, element: u32, flags: u32) -> [u8; HANDLE_ENTRY_BYTE
 
 /// The bytes of one handle-table entry ([`handle_entry`]).
 pub const HANDLE_ENTRY_BYTES: u32 = TABLE_ENTRY_BYTES;
-
-/// The most entries a handle table holds: the reach of the shader's search ([`handle_entry`]).
-pub const HANDLE_TABLE_CAPACITY: u32 = TABLE_CAPACITY;
-
-/// The element of every set-1 heap array that holds the array's neutral: a null handle's, and
-/// every ID a table misses (the module docs).
-pub const NEUTRAL_HEAP_ELEMENT: u32 = NEUTRAL_ELEMENT;
 
 /// The stages with a table of `kind` (a handle table or a sampler table) in `layout`, and each
 /// table's `(set, binding)`.
@@ -983,8 +872,7 @@ struct HeapFilter {
 
 /// What a plan's sampler arrays and tables hold of a sampler state of a shape its bind shape did
 /// not list (`ArgumentSamplersShape::shapes`), as a consumer lists the states again when a
-/// command buffer commits ([`BindingPlan::relisted_sampler_tables`]): the plan-time checks of a
-/// listed shape (`HeapPlanner::new`, the module docs), kept so that a state made between a
+/// command buffer commits: the plan-time checks of a listed shape (`HeapPlanner::new`, the module docs), kept so that a state made between a
 /// command's encoding and its commit is listed exactly where they pass.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -1010,18 +898,6 @@ impl SamplerAdmission {
     /// that is not cubic, or every stage tests, or no array samples through it.
     fn cubic_held(&self, s: &SamplerShape) -> bool {
         !s.cubic || self.cubic || self.uses().next().is_none()
-    }
-
-    /// Whether the plan holds a state of shape `s` on `profile` as it holds a listed one: `s`
-    /// passes `check_argument_sampler` for every use, [`cubic_held`](Self::cubic_held), and an
-    /// opaque-black border only where the members were checked against one. Where no array
-    /// samples (a function that only names the states), every shape.
-    fn admits(&self, s: &SamplerShape, profile: &DeviceProfile) -> bool {
-        let sampled = self.uses().next().is_some();
-        self.uses()
-            .all(|use_| check_argument_sampler(s, use_, profile).is_ok())
-            && self.cubic_held(s)
-            && (!sampled || !s.opaque_black_border || self.opaque_black)
     }
 }
 
@@ -1284,7 +1160,7 @@ impl<'a> HeapPlanner<'a> {
                     .any(|d| d.fact == RuntimeFact::CubicArgumentSampler { stage })
             };
             // The same checks admit a shape the bind shape did not list as a command buffer
-            // commits (`relisted_sampler_tables`); the members' border check is the plan's own
+            // commits; the members' border check is the plan's own
             // (`finish`).
             let admission = SamplerAdmission {
                 classes: classes
@@ -2280,176 +2156,7 @@ fn placed(i: usize, id: u64, placement: HeapPlacement) -> Result<u32, BindError>
     }
 }
 
-/// The heap set's number.
-const HEAP_SET: u32 = 1;
-
-/// Where a command's heap writes go under its bind state's [`HeapPlacement`]: the array element of
-/// each of the plan's heap writes ([`BindingPlan::heap_elements`]).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct HeapElements {
-    placement: HeapPlacement,
-    /// Under `ResourceId`, by planned element `e`: member `e - 1`'s resource ID, `None` for a
-    /// member without one (no handle names it).
-    members: Vec<Option<u32>>,
-    /// Under `ResourceId`, by planned element `e`: listed sampler `e - 1`'s element, else its
-    /// resource ID.
-    samplers: Vec<Option<u32>>,
-}
-
-impl HeapElements {
-    /// The array element of `write`, one of the plan's descriptor writes: its own element for a
-    /// write outside the heap set, the neutral element, and every write under `Planned`; under
-    /// `ResourceId`, the resource ID of the member it holds, or the listed sampler's element (its
-    /// resource ID where it names none), or `None` where the command needs no write (a member no
-    /// handle names, a sampler element past the list).
-    pub fn element(&self, write: &DescriptorWrite) -> Option<u32> {
-        let e = write.array_element;
-        if write.set != HEAP_SET || e == NEUTRAL_ELEMENT || self.placement == HeapPlacement::Planned
-        {
-            return Some(e);
-        }
-        let held = match write.ty {
-            vk::DescriptorType::SAMPLER => &self.samplers,
-            _ => &self.members,
-        };
-        held.get(e as usize - 1).copied().flatten()
-    }
-}
-
-impl BindingPlan {
-    /// The resources this plan's commands instantiate: its compute or its graphics template's.
-    fn resource_template(&self) -> Option<&ResourceTemplate> {
-        match (&self.compute, &self.graphics) {
-            (Some(c), _) => Some(&c.resources),
-            (None, Some(g)) => Some(&g.resources),
-            (None, None) => None,
-        }
-    }
-
-    /// The `(set, binding)` of each sampler table this plan writes (the module docs'
-    /// **Argument samplers**): where a command's bytes list its argument samplers.
-    pub fn sampler_tables(&self) -> Vec<(u32, u32)> {
-        self.resource_template().map_or_else(Vec::new, |t| {
-            t.sampler_tables
-                .iter()
-                .map(|table| (table.set, table.binding))
-                .collect()
-        })
-    }
-
-    /// The bytes of this plan's sampler tables listing `samplers` under `placement`, where the
-    /// plan, made on `device`, holds that list: no more samplers than each table's planned
-    /// entries hold beside the null entry (twice the class's entries, the module docs), each of
-    /// a shape the plan was made for or one that passes the plan's checks of a listed shape
-    /// (`metal::sampler::check_argument_sampler` for every use of its sampler arrays, a cubic
-    /// filter only beside stages that test for it, an opaque-black border only where the members
-    /// were checked against one). A consumer whose function reaches a sampler state by its ID as
-    /// the command runs, as Metal's does, lists the states live as the command buffer commits
-    /// over the command's own, and writes their elements with [`WriteSource::ArgumentSampler`]'s
-    /// rule.
-    /// `None` where the plan does not hold the list (more states than its tables hold, or a shape
-    /// its checks refuse), or has no sampler table: the command cannot reach the states as Metal's
-    /// would.
-    pub fn relisted_sampler_tables(
-        &self,
-        device: &crate::device::Device,
-        samplers: &[crate::bind::ArgumentSampler],
-        placement: HeapPlacement,
-    ) -> Result<Option<Vec<crate::bind::instantiate::DescriptorBytes>>, BindError> {
-        match self.resource_template() {
-            Some(template) => {
-                relisted_sampler_tables(template, device.profile(), samplers, placement)
-            }
-            None => Ok(None),
-        }
-    }
-}
-
-/// [`BindingPlan::relisted_sampler_tables`] of a plan whose resources are `template`, made on
-/// `profile`.
-fn relisted_sampler_tables(
-    template: &ResourceTemplate,
-    profile: &DeviceProfile,
-    samplers: &[crate::bind::ArgumentSampler],
-    placement: HeapPlacement,
-) -> Result<Option<Vec<crate::bind::instantiate::DescriptorBytes>>, BindError> {
-    let Some(shape) = &template.argument_samplers else {
-        return Ok(None);
-    };
-    if template.sampler_tables.is_empty() {
-        return Ok(None);
-    }
-    let count = samplers.len() as u64 + 1;
-    // A shape the plan was not made for is held where the plan's checks of a listed one pass.
-    let held = samplers.iter().all(|s| {
-        let s = s.desc.shape();
-        shape.shapes.contains(&s) || template.sampler_admission.admits(&s, profile)
-    }) && template
-        .sampler_tables
-        .iter()
-        .all(|t| count <= u64::from(t.entries));
-    if !held {
-        return Ok(None);
-    }
-    listed_sampler_tables(&template.sampler_tables, samplers, placement).map(Some)
-}
-
-impl BindingPlan {
-    /// Where this plan's heap writes go for `state` ([`HeapElements`]), each heap array having
-    /// `capacity` elements (the layout's set-1 count). Under [`HeapPlacement::ResourceId`] a
-    /// member's element is its resource ID and a listed sampler's its
-    /// [`element`](crate::bind::ArgumentSampler::element) or else its resource ID, refused
-    /// [`BindError::HeapTooLarge`] at or past `capacity`; a state of another shape than the
-    /// plan's is an internal error.
-    pub fn heap_elements(
-        &self,
-        state: &BindState,
-        capacity: u32,
-    ) -> Result<HeapElements, BindError> {
-        let template = self
-            .resource_template()
-            .ok_or_else(|| internal("a plan without a template"))?;
-        heap_elements(template, state, capacity)
-    }
-}
-
-/// [`BindingPlan::heap_elements`] of a plan whose resources are `template`.
-fn heap_elements(
-    template: &ResourceTemplate,
-    state: &BindState,
-    capacity: u32,
-) -> Result<HeapElements, BindError> {
-    let placement = state.heap_placement;
-    if placement == HeapPlacement::Planned {
-        return Ok(HeapElements::default());
-    }
-    let element = |id: Option<u64>| -> Result<Option<u32>, BindError> {
-        match id.filter(|&id| id != 0) {
-            Some(id) if id >= u64::from(capacity) => Err(BindError::HeapTooLarge {
-                count: id.saturating_add(1),
-                limit: u64::from(capacity),
-            }),
-            Some(id) => Ok(Some(id as u32)),
-            None => Ok(None),
-        }
-    };
-    let used = UsedByToken::of(state);
-    let members = template
-        .heap_members
-        .iter()
-        .map(|m| element(member_id(m, &used, state)?))
-        .collect::<Result<_, _>>()?;
-    let samplers = state
-        .argument_samplers
-        .iter()
-        .map(|s| element(Some(s.placed_at())))
-        .collect::<Result<_, _>>()?;
-    Ok(HeapElements {
-        placement,
-        members,
-        samplers,
-    })
-}
+impl BindingPlan {}
 
 /// The bytes of table `t` holding `entries` (`(resource id, element, flags)`, ids nonzero):
 /// deduplicated by id (the lowest element wins: both name the same resource), sorted by id, after
@@ -2492,6 +2199,25 @@ fn heap_storage_use(profile: &DeviceProfile) -> StorageUse {
         images.storage_read_without_format,
         images.storage_write_without_format,
     )
+}
+
+/// Every heap array class of `profile`, sorted and distinct: the image classes the core can declare
+/// there, then the sampler classes of every use (with comparison or without, of an integer texture
+/// or not).
+#[cfg(test)]
+pub(crate) fn heap_classes(profile: &DeviceProfile) -> Vec<HandleClass> {
+    let mut out: Vec<HandleClass> = image_classes(profile)
+        .into_iter()
+        .map(HandleClass::Image)
+        .collect();
+    for compare in [false, true] {
+        for integer in [false, true] {
+            out.push(HandleClass::Sampler { compare, integer });
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 #[cfg(test)]

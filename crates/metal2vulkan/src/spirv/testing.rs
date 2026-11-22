@@ -182,6 +182,12 @@ pub fn check_valid(m: TypedModule, profile: &DeviceProfile) -> Result<Vec<u32>, 
     Ok(words)
 }
 
+/// A finished module's derived device requirements.
+#[cfg(test)]
+pub fn requirements(m: &TypedModule) -> &Requirements {
+    &m.requirements
+}
+
 /// [`check_valid`] for already linked words: requirements ⊆ profile, then `spirv-val` under
 /// Vulkan 1.2 and the profile's environment with the profile's layout relaxations.
 #[cfg(test)]
@@ -325,65 +331,4 @@ pub const MOLTENVK_CAPTURES: [&str; 1] = ["moltenvk-m3"];
 /// Whether the committed profile `stem` is one of [`MOLTENVK_CAPTURES`].
 pub fn is_moltenvk_capture(stem: &str) -> bool {
     MOLTENVK_CAPTURES.contains(&stem)
-}
-
-/// The constants of SPIR-V `words` by id: `(width, value)` of each 32- or 64-bit integer
-/// `OpConstant`.
-pub fn int_constants(words: &[u32]) -> std::collections::BTreeMap<u32, (u32, u64)> {
-    let mut widths = std::collections::BTreeMap::new();
-    let mut out = std::collections::BTreeMap::new();
-    let mut i = 5;
-    while let Some(&w) = words.get(i) {
-        let (len, op) = ((w >> 16) as usize, w & 0xFFFF);
-        let at = |k: usize| words.get(i + k).copied().unwrap_or(0);
-        match op {
-            // OpTypeInt result, width.
-            21 => {
-                widths.insert(at(1), at(2));
-            }
-            // OpConstant type, result, value words.
-            43 => match widths.get(&at(1)) {
-                Some(&32) => {
-                    out.insert(at(2), (32, u64::from(at(3))));
-                }
-                Some(&64) => {
-                    out.insert(at(2), (64, u64::from(at(3)) | (u64::from(at(4)) << 32)));
-                }
-                _ => {}
-            },
-            _ => {}
-        }
-        if len == 0 {
-            break;
-        }
-        i += len;
-    }
-    out
-}
-
-/// How many `OpUDiv`s of SPIR-V `words` divide the all-ones integer of their width (`2^32 - 1`
-/// or `2^64 - 1`), the form of an overflow test (`b <= (2^32 - 1) / a`) NVIDIA's compiler
-/// refuses in some modules (`bind::replay::checked_mul`).
-pub fn all_ones_divisions(words: &[u32]) -> usize {
-    const UDIV: u32 = 134;
-    let consts = int_constants(words);
-    let all_ones = |id: u32| match consts.get(&id) {
-        Some(&(32, v)) => v == u64::from(u32::MAX),
-        Some(&(64, v)) => v == u64::MAX,
-        _ => false,
-    };
-    let mut n = 0;
-    let mut i = 5;
-    while let Some(&w) = words.get(i) {
-        let (len, op) = ((w >> 16) as usize, w & 0xFFFF);
-        // OpUDiv type, result, dividend, divisor.
-        if op == UDIV && words.get(i + 3).is_some_and(|&id| all_ones(id)) {
-            n += 1;
-        }
-        if len == 0 {
-            break;
-        }
-        i += len;
-    }
-    n
 }

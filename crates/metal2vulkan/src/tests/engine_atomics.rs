@@ -1593,7 +1593,7 @@ fn coherent_accesses_select_the_vulkan_memory_model() {
             "{stem}"
         );
         assert!(plan.families.memory_model.device_scope, "{stem}");
-        let caps = &m.requirements().spirv_capabilities;
+        let caps = &crate::spirv::testing::requirements(&m).spirv_capabilities;
         assert_eq!(
             caps.iter().any(|c| format!("{c:?}") == "VulkanMemoryModel"),
             vulkan,

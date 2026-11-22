@@ -144,7 +144,7 @@ fn push_words(r: &DispatchRegion) -> Vec<u32> {
 fn a_threadgroups_indirect_plan_has_no_cpu_argument_dependency() {
     let t = template();
     let d = |token, offset| Dispatch::ThreadgroupsIndirect {
-        indirect: IndirectRef::new(token, offset),
+        indirect: IndirectRef { token, offset },
         threads_per_group: [8, 4, 2],
     };
     let a = instantiate(&t, &state(0), &d(1, 0)).expect("a");
@@ -160,8 +160,14 @@ fn a_threadgroups_indirect_plan_has_no_cpu_argument_dependency() {
     assert_eq!(
         (ra.indirect, rb.indirect),
         (
-            Some(IndirectArgs::Buffer(IndirectRef::new(1, 0))),
-            Some(IndirectArgs::Buffer(IndirectRef::new(9, 4096)))
+            Some(IndirectArgs::Buffer(IndirectRef {
+                token: 1,
+                offset: 0
+            })),
+            Some(IndirectArgs::Buffer(IndirectRef {
+                token: 9,
+                offset: 4096
+            }))
         )
     );
     // The region field is written anyway (VUID-vkCmdDispatch-maintenance4-08602): base 0,
@@ -561,7 +567,10 @@ fn a_partial_simdgroup_asks_for_the_emulated_simdgroups_variant() {
             threads_per_group: [32, 1, 1],
         },
         Dispatch::ThreadgroupsIndirect {
-            indirect: IndirectRef::new(0, 0),
+            indirect: IndirectRef {
+                token: 0,
+                offset: 0,
+            },
             threads_per_group: [8, 1, 1],
         },
     ];
@@ -981,7 +990,10 @@ fn a_flat_plan_runs_a_ragged_dispatch_in_one_region() {
     // The variant's indirect dispatch outside a device replay is not built: only the replay's
     // preprocess writes such a dispatch's record.
     let indirect = Dispatch::ThreadgroupsIndirect {
-        indirect: IndirectRef::new(0, 0),
+        indirect: IndirectRef {
+            token: 0,
+            offset: 0,
+        },
         threads_per_group: local,
     };
     assert!(compute_plan(&t, flat_variant())

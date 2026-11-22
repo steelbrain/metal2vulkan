@@ -1754,8 +1754,7 @@ fn every_committed_profile_validates_the_fetch() {
 /// (`LoweringInputs::replay_bindings`) under a stage-input descriptor, each fixture kernel (the
 /// fetch, and the `[[grid_origin]]` and `[[grid_size]]` readers) is refused as
 /// `GpuEncodedIndirectCommands` on every committed profile with device addresses; a reader of the
-/// region without a descriptor that compiles plans `PushField::StageInRegion`, which the binder
-/// refuses to replay (`check_replay`: `ReplayRefusal::NotReplayVariant`).
+/// region without a descriptor that compiles plans `PushField::StageInRegion`.
 #[test]
 fn a_kernel_the_stage_in_region_reaches_is_no_replay_variant() {
     use crate::pipeline::sym::PushField;

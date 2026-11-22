@@ -101,7 +101,7 @@ pub struct EntryPlan {
 
 impl DeviceProfile {
     /// Compile entry `d` under `inputs` for this profile, and what the compile cost against
-    /// `budget`, whether it compiled or not: `Device::compile_function_with_report` of a bare
+    /// `budget`, whether it compiled or not: `Device::compile_function` of a bare
     /// module's entry. The result is as cacheable, and a pipeline takes it as
     /// `StageSource::Compiled`.
     pub fn compile_entry(

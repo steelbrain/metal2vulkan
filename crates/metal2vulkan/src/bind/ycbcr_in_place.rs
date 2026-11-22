@@ -5,12 +5,12 @@
 //! **What it covers.** `YCBCR8_420_2P` and `YCBCR10_420_2P` (500 and 505) over a surface's two
 //! planes, read converted ([`YCbCrOutput::Converted`]): the 4:2:0 layouts of unpacked codes, a
 //! byte or the high 10 bits of a little-endian 16-bit word. A texture whose planes are those
-//! ([`YCbCrInPlace::of`]) states it in its facts (`TextureFacts::ycbcr_in_place`), and a texture
+//! states it in its facts (`TextureFacts::ycbcr_in_place`), and a texture
 //! slot whose function reads it only as the in-place form reads
 //! (`RuntimeFact::YCbCrInPlace`) takes the slot's in-place variant (`VariantKey::ycbcr_in_place`).
 //!
 //! **The binding.** The slot's one descriptor is a uniform texel buffer over the planes' bytes,
-//! from the first byte of the first plane in memory, in [`YCbCrInPlace::format`]: `R8G8_UINT`
+//! from the first byte of the first plane in memory, in `R8G8_UINT`
 //! for 8-bit codes and `R16G16_UINT` for 10-bit ones, so one element holds two luma codes or one
 //! chroma pair. Vulkan requires `VK_FORMAT_FEATURE_UNIFORM_TEXEL_BUFFER_BIT` of both formats on
 //! every device (the specification's "Required Format Support": `R8G8_UINT` in "1-3 Byte-Sized
@@ -27,7 +27,7 @@
 //! **Through the device's sampler.** Where the consumer also holds the planes as an image of the
 //! multi-planar 4:2:0 format over their own bytes, which the device's sampler Y′CbCr conversion
 //! reads with Metal's reconstruction (the chroma at the midpoint through a linear chroma filter),
-//! the texture states it ([`YCbCrInPlace::with_planes_image`]), and a slot whose every sample the
+//! the texture states it, and a slot whose every sample the
 //! device's sampler takes (`RuntimeFact::YCbCrInPlace`'s `device`: no border address mode, no
 //! texel offset placed by a parent's size) samples that image instead
 //! (`VariantKey::ycbcr_planes_sampled`): its binding a combined image sampler whose immutable
@@ -35,15 +35,18 @@
 //! the device's at level 0, a nearest one at the centre of the luma texel Metal reads. Its answer
 //! is the device's conversion and filter of the codes, not Metal's.
 
+#[cfg(test)]
 use super::ycbcr_convert::{YCbCrMatrix, YCbCrOutput, YCbCrPlanes, YCbCrRange};
+#[cfg(test)]
 use crate::metal::format::ChromaSubsampling;
+#[cfg(test)]
 use crate::vk;
 
 /// A two-plane YCbCr texture's planes as a function reads them in place, where the texture's image
 /// of converted texels would otherwise stand between them: the words of its slot's push field
 /// (`PushField::YCbCrInPlace`), and the uniform texel buffer the slot binds over the planes' bytes
-/// ([`format`](Self::format), from the first byte of the first plane for
-/// [`view_bytes`](Self::view_bytes)). A texture states one in its facts
+/// (`R8G8_UINT` of 8-bit codes, `R16G16_UINT` of 10-bit ones, from the first byte of the first
+/// plane through the last row of codes either plane holds). A texture states one in its facts
 /// (`TextureFacts::ycbcr_in_place`), and a slot whose function reads the texture only as this form
 /// does (`RuntimeFact::YCbCrInPlace`) takes the in-place variant (`VariantKey::ycbcr_in_place`),
 /// which fetches the codes and converts and filters them as Metal does: the luma code at the
@@ -58,8 +61,7 @@ pub struct YCbCrInPlace {
     /// The bytes the texel buffer views, from the planes' first byte: the end of the last row of
     /// codes either plane holds, rounded up to a whole element.
     bytes: u64,
-    /// The consumer holds the planes as an image the device's conversion samples
-    /// ([`with_planes_image`](Self::with_planes_image)).
+    /// The consumer holds the planes as an image the device's conversion samples.
     #[cfg_attr(feature = "serde", serde(default))]
     planes_image: bool,
 }
@@ -83,12 +85,32 @@ impl YCbCrInPlace {
     /// in bits 9 and 10 (0 BT.601, 1 BT.709, 2 BT.2020).
     pub const CONVERSION: usize = 6;
 
+    /// The device's conversion of the planes as an image ([`YCbCrPlanesSampler`]): their codes'
+    /// bits, range and matrix.
+    pub fn sampler(&self) -> YCbCrPlanesSampler {
+        YCbCrPlanesSampler {
+            conversion: self.words[Self::CONVERSION],
+        }
+    }
+
+    /// [`sampler`](Self::sampler), where the consumer holds the planes as an image it samples;
+    /// `None` where it does not.
+    pub fn planes_sampler(&self) -> Option<YCbCrPlanesSampler> {
+        self.planes_image.then(|| self.sampler())
+    }
+
+    /// The words of the slot's push field.
+    pub fn words(&self) -> [u32; Self::WORDS] {
+        self.words
+    }
+
     /// The in-place form of `planes`, where a function reads them so: a
     /// converted 4:2:0 layout of unpacked 8- or 10-bit codes, both planes in the bytes (a chroma
     /// plane of rows; not the conversion's row of zeros), each plane's first byte and rows a
     /// multiple of an element. `None` for any other: such a texture keeps its image of converted
     /// texels alone.
-    pub fn of(planes: &YCbCrPlanes) -> Option<YCbCrInPlace> {
+    #[cfg(test)]
+    pub(crate) fn of(planes: &YCbCrPlanes) -> Option<YCbCrInPlace> {
         let codes = planes.codes;
         if codes.output != YCbCrOutput::Converted
             || codes.subsampling != ChromaSubsampling::Chroma420
@@ -142,39 +164,23 @@ impl YCbCrInPlace {
     /// [`sampler`](Self::sampler)'s format over their bytes, which the device's sampler Y′CbCr
     /// conversion of it reads (the module docs): a slot whose every sample the device's sampler
     /// takes samples that image (`VariantKey::ycbcr_planes_sampled`).
-    pub fn with_planes_image(self) -> YCbCrInPlace {
+    #[cfg(test)]
+    pub(crate) fn with_planes_image(self) -> YCbCrInPlace {
         YCbCrInPlace {
             planes_image: true,
             ..self
         }
     }
 
-    /// The device's conversion of the planes as an image ([`YCbCrPlanesSampler`]): their codes'
-    /// bits, range and matrix.
-    pub fn sampler(&self) -> YCbCrPlanesSampler {
-        YCbCrPlanesSampler {
-            conversion: self.words[Self::CONVERSION],
-        }
-    }
-
-    /// [`sampler`](Self::sampler), where the consumer holds the planes as an image it samples
-    /// ([`with_planes_image`](Self::with_planes_image)); `None` where it does not.
-    pub fn planes_sampler(&self) -> Option<YCbCrPlanesSampler> {
-        self.planes_image.then(|| self.sampler())
-    }
-
-    /// The words of the slot's push field.
-    pub fn words(&self) -> [u32; Self::WORDS] {
-        self.words
-    }
-
     /// The codes' bits: 8 or 10.
-    pub fn bits(&self) -> u32 {
+    #[cfg(test)]
+    pub(crate) fn bits(&self) -> u32 {
         self.words[Self::CONVERSION] & 0xff
     }
 
     /// The texel buffer's format: `R8G8_UINT` of 8-bit codes, `R16G16_UINT` of 10-bit ones.
-    pub fn format(&self) -> vk::Format {
+    #[cfg(test)]
+    pub(crate) fn format(&self) -> vk::Format {
         match self.bits() {
             8 => vk::Format::R8G8_UINT,
             _ => vk::Format::R16G16_UINT,
@@ -182,7 +188,8 @@ impl YCbCrInPlace {
     }
 
     /// The bytes of one element of the texel buffer: 2 of 8-bit codes, 4 of 10-bit ones.
-    pub fn element_bytes(&self) -> u64 {
+    #[cfg(test)]
+    pub(crate) fn element_bytes(&self) -> u64 {
         match self.bits() {
             8 => 2,
             _ => 4,
@@ -191,12 +198,14 @@ impl YCbCrInPlace {
 
     /// The bytes the texel buffer views from the planes' first byte: through the last row of
     /// codes either plane holds, a whole number of elements.
-    pub fn view_bytes(&self) -> u64 {
+    #[cfg(test)]
+    pub(crate) fn view_bytes(&self) -> u64 {
         self.bytes
     }
 
     /// The elements the texel buffer holds (`maxTexelBufferElements` bounds them).
-    pub fn elements(&self) -> u64 {
+    #[cfg(test)]
+    pub(crate) fn elements(&self) -> u64 {
         self.bytes / self.element_bytes()
     }
 }
@@ -218,12 +227,14 @@ pub struct YCbCrPlanesSampler {
 
 impl YCbCrPlanesSampler {
     /// The codes' bits: 8 or 10.
-    pub fn bits(self) -> u32 {
+    #[cfg(test)]
+    pub(crate) fn bits(self) -> u32 {
         self.conversion & 0xff
     }
 
     /// The surface's range.
-    pub fn range(self) -> YCbCrRange {
+    #[cfg(test)]
+    pub(crate) fn range(self) -> YCbCrRange {
         match self.conversion >> 8 & 1 {
             1 => YCbCrRange::Full,
             _ => YCbCrRange::Video,
@@ -231,7 +242,8 @@ impl YCbCrPlanesSampler {
     }
 
     /// The surface's matrix.
-    pub fn matrix(self) -> YCbCrMatrix {
+    #[cfg(test)]
+    pub(crate) fn matrix(self) -> YCbCrMatrix {
         match self.conversion >> 9 & 3 {
             1 => YCbCrMatrix::Bt709,
             2 => YCbCrMatrix::Bt2020,
@@ -242,7 +254,8 @@ impl YCbCrPlanesSampler {
     /// The multi-planar format of the planes' image: `G8_B8R8_2PLANE_420_UNORM` of 8-bit codes,
     /// `G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16` of 10-bit ones (the high 10 bits of each
     /// little-endian 16-bit word, as the planes hold them).
-    pub fn format(self) -> vk::Format {
+    #[cfg(test)]
+    pub(crate) fn format(self) -> vk::Format {
         match self.bits() {
             8 => vk::Format::G8_B8R8_2PLANE_420_UNORM,
             _ => vk::Format::G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16,
@@ -252,6 +265,7 @@ impl YCbCrPlanesSampler {
 
 /// The conversion word ([`YCbCrInPlace::CONVERSION`]) of `bits`-bit codes of `range` and
 /// `matrix`.
+#[cfg(test)]
 fn conversion_word(bits: u32, range: YCbCrRange, matrix: YCbCrMatrix) -> u32 {
     let full = match range {
         YCbCrRange::Video => 0,

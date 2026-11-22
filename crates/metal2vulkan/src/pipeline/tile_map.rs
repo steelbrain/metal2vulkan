@@ -8,14 +8,13 @@
 //! texture with an ordinary image and keeps, beside it, a storage buffer with a bit per tile of
 //! each level and slice that is set while the tile is mapped. A module whose slot has the
 //! tile-map arm (`RuntimeFact::SparseTexture { tile_map: true, .. }`) reads it at the slot's
-//! `ResourceKind::TileMap` binding. The consumer builds the words with `bind::SparseTileMap`,
-//! which mirrors each mapping.
+//! `ResourceKind::TileMap` binding. The consumer builds the words, mirroring each mapping.
 //!
 //! **Format** (version 1): little-endian 32-bit words.
 //!
 //! | word | meaning |
 //! |---|---|
-//! | 0 | [`FORMAT`] |
+//! | 0 | the format's version tag, `"M2T1"` read as a little-endian word |
 //! | 1, 2, 3 | the tile's width, height, and depth in texels (each at least 1) |
 //! | 4 | the slice count `S` (array layers; 1 for a 2D or 3D texture) |
 //! | 5 | `B`, the bits of one slice |
@@ -27,14 +26,12 @@
 //! tail bit, which every level of the tail shares: Metal maps and unmaps the tail as one unit. An
 //! entry past the texture's last level has one tile at bit 0.
 //!
-//! **Decoding** ([`bit_index`]): the residency of texel `(x, y, z)` of level `l` and slice `s` is
+//! **Decoding**: the residency of texel `(x, y, z)` of level `l` and slice `s` is
 //! bit `min(s, S - 1)·B + base + (t_z·n_y + t_y)·n_x + t_x` of level `l' = min(l, 15)`, where
 //! `(base, n_x, n_y, n_z)` is that level's entry and `t_a = min(c_a / tile_a, n_a - 1)`. Every
 //! index is clamped into the words the format states, so a function reads no word past the map
 //! even for an access outside the texture (whose residency it answers from the coordinate alone).
 
-/// Word 0: the format's version tag (`"M2T1"` read as a little-endian word).
-pub const FORMAT: u32 = u32::from_le_bytes(*b"M2T1");
 /// Words 1, 2, 3: the tile's extent in texels.
 pub const TILE_WORD: u32 = 1;
 /// Word 4: the slice count.
@@ -50,41 +47,40 @@ pub const LEVEL_WORDS: u32 = 4;
 /// The first word of the bits.
 pub const BITS_WORD: u32 = LEVELS_WORD + LEVEL_WORDS * MAX_LEVELS;
 
-/// The extent of level `level` of a texture whose level 0 is `extent`: each axis halved per level,
-/// and at least 1.
-pub fn level_extent(extent: [u32; 3], level: u32) -> [u32; 3] {
-    extent.map(|axis| axis.checked_shr(level).unwrap_or(0).max(1))
-}
-
-/// The bit of texel `texel` of level `level` and slice `slice` in a map whose words are `words`,
-/// as [the module docs](self) decode it, or `None` where a word the decoding reads is missing (a
-/// module's read there is the buffer's contained read).
-pub fn bit_index(words: &[u32], level: u32, slice: u32, texel: [u32; 3]) -> Option<u64> {
-    let word = |w: u32| words.get(w as usize).copied();
-    let slices = word(SLICES_WORD)?;
-    let slice_bits = word(SLICE_BITS_WORD)?;
-    let entry = LEVELS_WORD + LEVEL_WORDS * level.min(MAX_LEVELS - 1);
-    let base = word(entry)?;
-    let mut tiles = [0u32; 3];
-    let mut counts = [0u32; 3];
-    for axis in 0..3 {
-        let extent = word(TILE_WORD + axis as u32)?.max(1);
-        let count = word(entry + 1 + axis as u32)?;
-        counts[axis] = count;
-        tiles[axis] = (texel[axis] / extent).min(count.wrapping_sub(1));
+/// The bytes of the tile map of a one-level sparse texture of `slices` slices of `extent` texels,
+/// in tiles of `tile` texels with no mip tail, where tile `(x, y, z)` (in tiles) of slice `s` is
+/// mapped exactly where `mapped(s, [x, y, z])` holds: the map a test binds as Metal's mappings.
+#[cfg(test)]
+pub(crate) fn one_level_map(
+    extent: [u32; 3],
+    slices: u32,
+    tile: [u32; 3],
+    mapped: impl Fn(u32, [u32; 3]) -> bool,
+) -> Vec<u8> {
+    let tiles = [0, 1, 2].map(|axis| extent[axis].div_ceil(tile[axis]));
+    let slice_bits = tiles.iter().product::<u32>();
+    let mut words = vec![0u32; (BITS_WORD + (slice_bits * slices).div_ceil(32)) as usize];
+    words[0] = u32::from_le_bytes(*b"M2T1");
+    words[TILE_WORD as usize..][..3].copy_from_slice(&tile);
+    words[SLICES_WORD as usize] = slices;
+    words[SLICE_BITS_WORD as usize] = slice_bits;
+    for level in 0..MAX_LEVELS {
+        // Each level's first bit is 0; a level past the first has one tile.
+        let at = (LEVELS_WORD + LEVEL_WORDS * level) as usize + 1;
+        words[at..at + 3].copy_from_slice(if level == 0 { &tiles } else { &[1; 3] });
     }
-    let slice = u64::from(slice.min(slices.wrapping_sub(1)));
-    let within = (u64::from(tiles[2]) * u64::from(counts[1]) + u64::from(tiles[1]))
-        * u64::from(counts[0])
-        + u64::from(tiles[0]);
-    Some(slice * u64::from(slice_bits) + u64::from(base) + within)
-}
-
-/// Whether bit `bit` of the map `words` is set; `false` past the words.
-pub fn bit_set(words: &[u32], bit: u64) -> bool {
-    let at = u64::from(BITS_WORD) + bit / 32;
-    usize::try_from(at)
-        .ok()
-        .and_then(|at| words.get(at))
-        .is_some_and(|w| (w >> (bit % 32)) & 1 == 1)
+    let [nx, ny, nz] = tiles;
+    for s in 0..slices {
+        for z in 0..nz {
+            for y in 0..ny {
+                for x in 0..nx {
+                    if mapped(s, [x, y, z]) {
+                        let bit = s * slice_bits + (z * ny + y) * nx + x;
+                        words[(BITS_WORD + bit / 32) as usize] |= 1 << (bit % 32);
+                    }
+                }
+            }
+        }
+    }
+    words.iter().flat_map(|w| w.to_le_bytes()).collect()
 }
