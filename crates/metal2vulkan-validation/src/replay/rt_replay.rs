@@ -1281,6 +1281,72 @@ fn a_kernel_reads_and_writes_the_textures_a_range_binds() {
     assert_eq!(report.first_skip, None);
 }
 
+/// The `unwritten` line counts a Shared buffer a dispatch reads before anything reached it, but
+/// not one the dispatch's state only writes, nor one made in a block over bytes an `m2v.write`
+/// put there before its making: `scale_offset` reads #6 at buffer 0 and writes #7 at buffer 1,
+/// then reads #11, made in block #10 over the bytes written there.
+#[test]
+fn the_unwritten_line_counts_what_a_state_reads_before_anything_reached_it() {
+    let dir = ScratchDir::new("rt-replay-unwritten").unwrap();
+    let workloads = metal2vulkan_devtools::fixtures_dir().join("harness/workloads.ll");
+    let path = written(&dir, |w| {
+        let library = library_of(&dir, &workloads, &[("scale_offset", 2, 0)]);
+        let library = w.blob(&library)?;
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        let library = [Value::Blob(library)];
+        w.call("newLibraryWithData:error:", 1, 3, &library, &[])?;
+        let kernel = [Value::Str("scale_offset".into())];
+        w.call("newFunctionWithName:", 3, 4, &kernel, &[])?;
+        let made = "newComputePipelineStateWithFunction:error:";
+        w.call(made, 1, 5, &[Value::Object(4)], &[])?;
+        let made = [Value::Uint(64), Value::Uint(0)];
+        w.call("newBufferWithLength:options:", 1, 6, &made, &[])?;
+        w.call("newBufferWithLength:options:", 1, 7, &made, &[])?;
+        // A Shared block, written at 0..64 before #11 is made there.
+        let block = [Value::Uint(65536), Value::Uint(0)];
+        w.call("m2v.newBlockWithLength:storageMode:", 1, 10, &block, &[])?;
+        let bytes = [Value::Uint(0), Value::Bytes(vec![1; 64])];
+        w.call("m2v.write", 10, 0, &bytes, &[])?;
+        let placed = [
+            Value::Object(10),
+            Value::Uint(0),
+            Value::Uint(64),
+            Value::Uint(0),
+        ];
+        w.call(
+            "m2v.newBufferInBlock:offset:length:options:",
+            10,
+            11,
+            &placed,
+            &[],
+        )?;
+        w.call("commandBuffer", 2, 8, &[], &[])?;
+        w.call("computeCommandEncoder", 8, 9, &[], &[])?;
+        w.call("setComputePipelineState:", 9, 0, &[Value::Object(5)], &[])?;
+        let affine = [Value::Bytes(vec![0; 8]), Value::Uint(8), Value::Uint(2)];
+        w.call("setBytes:length:atIndex:", 9, 0, &affine, &[])?;
+        let size = |n| uints(&[("width", n), ("height", 1), ("depth", 1)]);
+        let bind = |buffer, at| [Value::Object(buffer), Value::Uint(0), Value::Uint(at)];
+        for source in [6, 11] {
+            w.call("setBuffer:offset:atIndex:", 9, 0, &bind(source, 0), &[])?;
+            w.call("setBuffer:offset:atIndex:", 9, 0, &bind(7, 1), &[])?;
+            let dispatch = "dispatchThreads:threadsPerThreadgroup:";
+            w.call(dispatch, 9, 0, &[size(4), size(4)], &[])?;
+        }
+        w.call("endEncoding", 9, 0, &[], &[])?;
+        w.call("commit", 8, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 8, 0, &[], &[])
+    });
+    let (_, lines) = play("unwritten", &path);
+    let line = lines.iter().find(|line| line.starts_with("unwritten "));
+    let line = line.unwrap_or_else(|| panic!("an unwritten line: {lines:?}"));
+    assert!(
+        line.starts_with("unwritten 1: ") && line.ends_with("; first #6 in #8"),
+        "{line}"
+    );
+}
+
 #[test]
 fn a_render_state_the_runtime_does_not_build_is_counted_by_its_gap() {
     let dir = ScratchDir::new("rt-replay-state-gap").unwrap();

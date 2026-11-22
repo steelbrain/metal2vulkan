@@ -1974,6 +1974,9 @@ impl NewRuntime {
                 // A block's bytes are undefined: the player zeroes them.
                 (self.zero_block(&block, length)).map_err(failed(call))?;
                 self.block_bytes[class_index(class)] += length;
+                if class == rt::MemoryClass::Shared {
+                    self.unwritten.block(call.result);
+                }
                 let made = Made {
                     address: Some(block.gpu_address),
                 };

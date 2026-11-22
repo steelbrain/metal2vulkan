@@ -1925,26 +1925,49 @@ fn a_frame_end_reports_the_gauges_as_they_stand() {
     assert!(ends[1].ends_with(" live calls=3"), "{lines:?}");
 }
 
-/// The runtime's `unwritten` line counts, once, a Shared buffer a committed dispatch read
-/// before anything recorded reached its bytes: not one written through its block, one a blit
-/// names, one written before the commit, one an earlier commit's dispatch bound or one released
-/// before the commit.
-#[test]
-fn a_dispatch_reading_a_buffer_nothing_recorded_reached_is_counted_once() {
-    let call = |selector: &str, receiver: u64, args: Vec<Value>| Call {
+/// A call of `receiver` with `args`, making nothing.
+fn encoder_call(selector: &str, receiver: u64, args: Vec<Value>) -> Call {
+    Call {
         selector: selector.into(),
         receiver,
         result: 0,
         args,
         answers: Vec::new(),
-    };
-    let bind = |encoder: u64, id: u64| {
-        let args = vec![Value::Object(id), Value::Uint(0), Value::Uint(0)];
-        call("setBuffer:offset:atIndex:", encoder, args)
-    };
-    let dispatch = |encoder: u64| call("dispatchThreads:threadsPerThreadgroup:", encoder, vec![]);
+    }
+}
+
+/// `setBuffer:offset:atIndex:` of buffer `id` at slot `slot` of encoder `encoder`.
+fn bind_at(encoder: u64, id: u64, slot: u64) -> Call {
+    let args = vec![Value::Object(id), Value::Uint(0), Value::Uint(slot)];
+    encoder_call("setBuffer:offset:atIndex:", encoder, args)
+}
+
+fn dispatch_of(encoder: u64) -> Call {
+    encoder_call("dispatchThreads:threadsPerThreadgroup:", encoder, vec![])
+}
+
+/// The `unwritten` line of `count` buffers, `unsure` of them only counted as read, the first
+/// named as `first`.
+fn unwritten_line(count: u64, unsure: u64, first: &str) -> String {
+    format!(
+        "unwritten {count}: Shared buffers a dispatch read before any recorded write, upload or GPU \
+         pass reached their bytes, {unsure} of them counted as read though they may not be (named \
+         by an encoder call that neither binds nor uses them, or bound under a skipped \
+         state); first {first}"
+    )
+}
+
+/// The runtime's `unwritten` line counts, once, a Shared buffer a committed dispatch read
+/// before anything recorded reached its bytes: not one written through its block, one a blit
+/// names, one written before the commit, one an earlier commit's dispatch bound or one released
+/// before the commit, nor one made over its block's bytes that an earlier commit's dispatch may
+/// have written. With no state set, a dispatch reads and may write every bound buffer, and the
+/// line says it only counted them as read.
+#[test]
+fn a_dispatch_reading_a_buffer_nothing_recorded_reached_is_counted_once() {
     let mut unwritten = Unwritten::default();
-    // Block 1 holds buffers 2, 3 and 4; buffers 5, 6 and 7 lie in none.
+    // Shared block 1 holds buffers 2, 3 and 4; buffers 5, 6 and 7 lie in none.
+    unwritten.block(1);
     for (id, range) in [(2, 0..256), (3, 256..512), (4, 512..768)] {
         unwritten.made(id, Some((1, range)));
     }
@@ -1952,28 +1975,142 @@ fn a_dispatch_reading_a_buffer_nothing_recorded_reached_is_counted_once() {
         unwritten.made(id, None);
     }
     unwritten.written(1, 300..304);
-    let fill = call("fillBuffer:range:value:", 11, vec![Value::Object(5)]);
+    let fill = encoder_call("fillBuffer:range:value:", 11, vec![Value::Object(5)]);
     unwritten.encoded(&fill, 10, false);
-    for id in [2, 3, 4, 5, 6, 7] {
-        unwritten.encoded(&bind(12, id), 10, true);
+    for (slot, id) in (0..).zip([2, 3, 4, 5, 6, 7]) {
+        unwritten.encoded(&bind_at(12, id, slot), 10, true);
     }
-    unwritten.encoded(&dispatch(12), 10, true);
-    unwritten.encoded(&dispatch(12), 10, true);
+    unwritten.encoded(&dispatch_of(12), 10, true);
+    unwritten.encoded(&dispatch_of(12), 10, true);
     unwritten.written(6, 0..4);
     unwritten.released(7);
     unwritten.committed(10);
-    // Buffer 8 lies over buffer 2's bytes, made after the commit: its own making starts it over.
+    // Buffer 8 lies over buffer 2's bytes, which #10's dispatches may have written.
     unwritten.made(8, Some((1, 0..128)));
-    for id in [2, 8] {
-        unwritten.encoded(&bind(13, id), 14, true);
+    for (slot, id) in (0..).zip([2, 8]) {
+        unwritten.encoded(&bind_at(13, id, slot), 14, true);
     }
-    unwritten.encoded(&dispatch(13), 14, true);
+    unwritten.encoded(&dispatch_of(13), 14, true);
     unwritten.committed(14);
     assert_eq!(
         unwritten.line(),
-        "unwritten 3: Shared buffers a dispatch read before any recorded write, upload or GPU \
-         pass reached their bytes since their making; first #2 in #10, #4 in #10, #8 in #14"
+        unwritten_line(2, 2, "#2 in #10, #4 in #10")
     );
+}
+
+/// A dispatch reads a bound buffer only at a slot its state reads (`ReadOnly`, `ReadWrite`); a
+/// `WriteOnly` slot writes it, so the later dispatches of its command buffer and the later
+/// command buffers find it written, and a slot the state does not use touches nothing. A buffer
+/// `useResource:usage:` names is read or written by its usage's bits. A buffer another call of
+/// the encoder names, or one bound under a skipped state, is counted as read, and the line says
+/// how many were.
+#[test]
+fn a_dispatch_reads_a_buffer_only_where_its_state_or_its_usage_reads_it() {
+    use metal2vulkan_runtime::BindingAccess::{ReadOnly, ReadWrite, WriteOnly};
+    let mut unwritten = Unwritten::default();
+    for id in 2..=13 {
+        unwritten.made(id, None);
+    }
+    // #12 in #10: 2 read, 3 written, 4 read and written, 5 at a slot the state does not use.
+    unwritten.state(
+        12,
+        Some(vec![(0, ReadOnly), (1, WriteOnly), (2, ReadWrite)]),
+    );
+    for (slot, id) in (0..).zip([2, 3, 4, 5]) {
+        unwritten.encoded(&bind_at(12, id, slot), 10, true);
+    }
+    unwritten.encoded(&dispatch_of(12), 10, true);
+    unwritten.committed(10);
+    // #13 in #14: 3, which #10 wrote, then 5, read at slot 0.
+    unwritten.state(13, Some(vec![(0, ReadOnly)]));
+    unwritten.encoded(&bind_at(13, 3, 0), 14, true);
+    unwritten.encoded(&dispatch_of(13), 14, true);
+    unwritten.encoded(&bind_at(13, 5, 0), 14, true);
+    unwritten.encoded(&dispatch_of(13), 14, true);
+    unwritten.committed(14);
+    // #15 in #16: 6 written by a dispatch, then read by the next; 7 read, then written.
+    let (writes, reads) = (vec![(0, WriteOnly)], vec![(0, ReadOnly)]);
+    for (id, first, second) in [(6, &writes, &reads), (7, &reads, &writes)] {
+        unwritten.encoded(&bind_at(15, id, 0), 16, true);
+        unwritten.state(15, Some(first.clone()));
+        unwritten.encoded(&dispatch_of(15), 16, true);
+        unwritten.state(15, Some(second.clone()));
+        unwritten.encoded(&dispatch_of(15), 16, true);
+    }
+    unwritten.committed(16);
+    // #17 in #18: 8 used for writing, 9 for reading; 10 named by a barrier; under a skipped
+    // state, 11 bound.
+    unwritten.state(17, Some(Vec::new()));
+    let used = |id: u64, usage: u64| {
+        encoder_call(
+            "useResource:usage:",
+            17,
+            vec![Value::Object(id), Value::Uint(usage)],
+        )
+    };
+    unwritten.encoded(&used(8, 2), 18, true);
+    unwritten.encoded(&used(9, 1), 18, true);
+    let barrier = vec![Value::List(vec![Value::Object(10)]), Value::Uint(1)];
+    let barrier = encoder_call("memoryBarrierWithResources:count:", 17, barrier);
+    unwritten.encoded(&barrier, 18, true);
+    unwritten.encoded(&dispatch_of(17), 18, true);
+    unwritten.state(17, None);
+    unwritten.encoded(&bind_at(17, 11, 0), 18, true);
+    unwritten.encoded(&dispatch_of(17), 18, true);
+    unwritten.committed(18);
+    // 3, 6 and 8 were written, 12 and 13 never bound: none of them is counted, later either.
+    for id in [3, 6, 8, 12] {
+        unwritten.state(19, Some(vec![(0, ReadOnly)]));
+        unwritten.encoded(&bind_at(19, id, 0), 20, true);
+        unwritten.encoded(&dispatch_of(19), 20, true);
+    }
+    unwritten.committed(20);
+    assert_eq!(
+        unwritten.line(),
+        unwritten_line(
+            8,
+            2,
+            "#2 in #10, #4 in #10, #5 in #14, #7 in #16, #9 in #18, #10 in #18, #11 in #18, \
+             #12 in #20"
+        )
+    );
+}
+
+/// A buffer made in a Shared block over bytes of it that a recorded write or a GPU pass reached
+/// before its making is not unwritten: the block's bytes are what the program's were. One made
+/// over bytes nothing reached is.
+#[test]
+fn a_buffer_made_over_its_block_s_reached_bytes_is_not_unwritten() {
+    use metal2vulkan_runtime::BindingAccess::ReadOnly;
+    let mut unwritten = Unwritten::default();
+    unwritten.block(1);
+    // An m2v.write into the block before any buffer of it.
+    unwritten.written(1, 0..64);
+    // 2 lies in the written bytes, 3 past them, 4 over both.
+    for (id, range) in [(2, 0..64), (3, 64..128), (4, 32..96)] {
+        unwritten.made(id, Some((1, range)));
+    }
+    // A blit names 5, whose bytes 6 lies in once 5 is released.
+    unwritten.made(5, Some((1, 256..512)));
+    let copy = encoder_call("fillBuffer:range:value:", 11, vec![Value::Object(5)]);
+    unwritten.encoded(&copy, 10, false);
+    unwritten.released(5);
+    unwritten.made(6, Some((1, 300..400)));
+    unwritten.state(
+        12,
+        Some(vec![
+            (0, ReadOnly),
+            (1, ReadOnly),
+            (2, ReadOnly),
+            (3, ReadOnly),
+        ]),
+    );
+    for (slot, id) in (0..).zip([2, 3, 4, 6]) {
+        unwritten.encoded(&bind_at(12, id, slot), 10, true);
+    }
+    unwritten.encoded(&dispatch_of(12), 10, true);
+    unwritten.committed(10);
+    assert_eq!(unwritten.line(), unwritten_line(1, 0, "#3 in #10"));
 }
 
 /// A CPU write into a Managed texture counts with its user not seen complete while a committed

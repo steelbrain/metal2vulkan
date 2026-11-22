@@ -606,16 +606,24 @@ records as text, and
   read-backs into the CPU's copy, as Metal does. A Managed buffer played as one copy holds the
   GPU's bytes either way. The report's `announced bytes` line says which rule played and counts the read-backs
   it kept out of the CPU's copies.
-- **Unwritten buffers:** the report's `unwritten` line counts the Shared
-  buffers made without bytes that a compute encoder bound or used and whose command buffer
-  committed before any recorded write, upload or GPU pass reached their bytes since their making,
-  and names the first few with the command buffer that read each. Such a buffer plays with
-  whatever its memory held, which is where a recording that missed the program's writes shows.
-  What reaches a buffer's bytes: an `m2v.write` into it, into its block over them or into another
-  buffer of the block over them; a blit or render encoder's call that names it or such another
-  buffer; and the commit of a dispatch that binds it, which may write it. A dispatch that writes
-  such a buffer before it reads it is counted too, and a texture over a buffer is not followed.
-  The line counts; it stops nothing.
+- **Unwritten buffers:** the report's `unwritten` line counts, once each, the Shared
+  buffers made without bytes that a dispatch read and whose command buffer committed before any
+  recorded write, upload or GPU pass reached their bytes, since their making or, in a block,
+  before it, and names the first few with the command buffer that read each. Such a buffer plays
+  with whatever its memory held, which is where a recording that missed the program's writes
+  shows. A dispatch reads the buffer bound at a slot its pipeline state reads (the runtime's
+  `ComputePipelineState::buffer_accesses`: `ReadOnly` or `ReadWrite`) and one `useResource:usage:`
+  names for reading; it writes the buffer at a slot the state writes and one used for writing,
+  and a slot the state does not use touches nothing. A buffer another call of its encoder named
+  since its last dispatch, and each bound under a state the play skipped, is taken as read and
+  written, and the line says how many of the count were. In a command buffer a dispatch's write
+  comes before the later dispatches' reads. What reaches a buffer's bytes: an `m2v.write` into
+  it, into its block over them or into another buffer of the block over them; a blit or render
+  encoder's call that names it or such another buffer; and the commit of a command buffer whose
+  dispatch writes it or such another buffer. A buffer made in a block over bytes that a write or a
+  GPU pass reached before is not counted. Every commit the player makes counts: a `commit`, an
+  `m2v.split` and an `m2v.commitPart` it cuts. A texture over a buffer is not followed. The line
+  counts; it stops nothing.
 - **Writes into Managed textures** (the backend tells a texture's storage mode): the report's `texture_writes` line counts the CPU's writes into Managed textures
   (`replaceRegion:...` and any other call on a texture that carries bytes), their bytes and
   textures, and of them those made while a command buffer that used the texture (an encoder of it

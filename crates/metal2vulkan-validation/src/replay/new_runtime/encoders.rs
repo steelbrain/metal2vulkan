@@ -260,6 +260,7 @@ impl NewRuntime {
                     Object::Skipped => None,
                     _ => return Err(refuse(call, "argument 0 is no compute pipeline state")),
                 };
+                (self.unwritten).state(id, state.as_ref().map(|s| s.buffer_accesses()));
                 let compute = self.compute(id);
                 compute.skipped_pipeline = state.is_none();
                 match state {
