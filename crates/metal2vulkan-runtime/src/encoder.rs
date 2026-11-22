@@ -13,6 +13,7 @@ use crate::indirect::IndirectCommandBuffer;
 use crate::kept::{Handle, Lent, Uncounted};
 use crate::memory::BlockId;
 use crate::over::{self, Reached, Span};
+use crate::piece::Work;
 use crate::pipeline::{
     address_word, Compiled, ComputePipelineState, FieldValue, Form, Interface, Kernel, Place,
     Which, PUSH_STAGES, SQUARE,
@@ -448,7 +449,7 @@ impl CommandBuffer {
         &self,
         dispatch_type: DispatchType,
     ) -> Result<ComputeCommandEncoder, Error> {
-        let mut building = self.open_encoder()?;
+        let mut building = self.open_encoder(true, true)?;
         // SAFETY: the encoder holds `building`, whose device handle keeps the core, until it ends;
         // nothing uses the borrow after that.
         let core = unsafe { Uncounted::of(building.device.core()) };
@@ -1076,6 +1077,13 @@ impl ComputeCommandEncoder {
             pipeline: vk_pipeline,
         });
         let interface = &kernel.interface;
+        // A dispatch that would take its piece past the bound begins the command buffer's next
+        // piece (`crate::piece`).
+        let groups = direct.map(|(_, groups, _)| groups.iter().map(|&n| u64::from(n)).product());
+        let building = recording(&mut self.building);
+        building.cut(Work::expected(inner, groups))?;
+        let unbound = interface.reads_unbound || interface.writes_unbound;
+        building.dispatched(inner, groups, unbound);
         if self.facts.module != Some(module) {
             self.facts.managed = self.reaches_managed(interface);
             self.facts.host = self.writes_host(interface);
@@ -1761,6 +1769,7 @@ impl Building {
         let command = self.command(Reach::Dispatches {
             indirect: matches!(launch, Launch::Indirect(..)),
         })?;
+        self.stamp_piece(command);
         // SAFETY: the command buffer is the current segment's, recording outside any render pass;
         // the pipeline is the device's, of its layout, and the window lies in the layout's one
         // push range, of `PUSH_STAGES`.

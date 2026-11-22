@@ -268,6 +268,12 @@ pub(crate) enum Metric {
     SubmissionsDuringFrees,
     /// [`Metrics::untimed_command_buffers`].
     UntimedCommandBuffers,
+    /// [`Metrics::cuts`].
+    Cuts,
+    /// [`Metrics::pieces_passed`].
+    PiecesPassed,
+    /// [`Metrics::shared_holds`].
+    SharedHolds,
     /// [`Metrics::sampler_element_writes`].
     SamplerElementWrites,
     /// [`Metrics::stamps_not_available`].
@@ -340,6 +346,9 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::AllocationsFreed,
     Metric::SubmissionsDuringFrees,
     Metric::UntimedCommandBuffers,
+    Metric::Cuts,
+    Metric::PiecesPassed,
+    Metric::SharedHolds,
     Metric::SamplerElementWrites,
     Metric::StampsNotAvailable,
     Metric::WaitsBehindCounter,
@@ -723,6 +732,9 @@ struct Atomics {
     held_release_bytes: AtomicU64,
     held_release_starts: AtomicU64,
     untimed_command_buffers: AtomicU64,
+    cuts: AtomicU64,
+    pieces_passed: AtomicU64,
+    shared_holds: AtomicU64,
     sampler_element_writes: AtomicU64,
     stamps_not_available: AtomicU64,
     runtime_command_buffers: AtomicU64,
@@ -890,6 +902,9 @@ impl Counters {
             Metric::AllocationsFreed => &a.allocations_freed,
             Metric::SubmissionsDuringFrees => &a.submissions_during_frees,
             Metric::UntimedCommandBuffers => &a.untimed_command_buffers,
+            Metric::Cuts => &a.cuts,
+            Metric::PiecesPassed => &a.pieces_passed,
+            Metric::SharedHolds => &a.shared_holds,
             Metric::SamplerElementWrites => &a.sampler_element_writes,
             Metric::StampsNotAvailable => &a.stamps_not_available,
             Metric::WaitsBehindCounter => &a.waits_behind_counter,
@@ -1792,6 +1807,9 @@ impl Counters {
             held_release_bytes: a.held_release_bytes.load(Relaxed),
             held_release_starts: a.held_release_starts.load(Relaxed),
             untimed_command_buffers: a.untimed_command_buffers.load(Relaxed),
+            cuts: a.cuts.load(Relaxed),
+            pieces_passed: a.pieces_passed.load(Relaxed),
+            shared_holds: a.shared_holds.load(Relaxed),
             sampler_element_writes: a.sampler_element_writes.load(Relaxed),
             stamps_not_available: a.stamps_not_available.load(Relaxed),
             runtime_command_buffers: a.runtime_command_buffers.load(Relaxed),
@@ -2615,6 +2633,20 @@ pub struct Metrics {
     /// as they began count here too, and their time in
     /// [`runtime_command_buffer_gpu_nanos`](Self::runtime_command_buffer_gpu_nanos) is lost.
     pub untimed_command_buffers: u64,
+    /// No Metal counterpart: the cuts that ended a piece of a command buffer, before a compute
+    /// dispatch that would take the piece's expected GPU run past 4 ms, or that follows one of a
+    /// kernel with no measured rate yet, or where a compute or blit encoder opens after a full
+    /// piece. Each piece is a submission of its own, so a command buffer of another queue
+    /// committed meanwhile goes between two pieces ([`CommandBuffer`](crate::CommandBuffer)).
+    pub cuts: u64,
+    /// Submissions of a queue's command buffers that went to the `VkQueue` while a cut command
+    /// buffer of another queue had pieces not yet submitted: they run before those pieces.
+    pub pieces_passed: u64,
+    /// Command buffers held behind every piece of a cut command buffer of another queue,
+    /// committed before them, as they hold a buffer or texture it holds (by the ids the hazards
+    /// track them by), wait on a fence it updates, or either reaches memory outside its
+    /// resources.
+    pub shared_holds: u64,
     /// Elements of set 1's sampler arrays written (`vkUpdateDescriptorSets`): a sampler state's or
     /// a constexpr sampler's placement and its going write only the elements whose sampler
     /// differs from what the index's element holds, so an equal state made at the index of one

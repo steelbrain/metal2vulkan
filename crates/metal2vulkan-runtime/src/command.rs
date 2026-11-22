@@ -13,7 +13,8 @@ use crate::hazard::{Access, Hazards};
 use crate::kept::{Lent, Objects};
 use crate::memory::Block;
 use crate::over::{self, Overs, Reached};
-use crate::pipeline::ComputePipelineState;
+use crate::piece::Work;
+use crate::pipeline::{Compiled, ComputePipelineState};
 use crate::queue::QueueInner;
 use crate::record::{self, Reach, Recorder};
 use crate::render::RenderPipelineState;
@@ -34,7 +35,13 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 /// operations between them. The submit thread holds a segment whose waits are not yet met, and its
 /// queue's later command buffers behind it, while the segments before it run: an event the held
 /// part waits for can be signalled by the part before it. Each segment's commands end with one
-/// barrier that makes their writes visible to every later command and to the host.
+/// barrier that makes their writes visible to every later command and to the host. Its compute
+/// work is cut into pieces too, before a dispatch that would take a piece's expected GPU run past
+/// 4 ms and where a compute or blit encoder opens after a full piece, never inside a render pass
+/// (`crate::piece`): each piece is a submission of its own, and a command buffer of another queue
+/// committed meanwhile goes between two pieces unless it holds a buffer or texture the cut one
+/// holds. It is scheduled as its first piece is submitted where its later pieces wait for no
+/// event.
 ///
 /// Its GPU times come from two timestamps, written where its first commands begin and as the last
 /// command of its last segment, after the copies back of the images its commands wrote and its end
@@ -289,6 +296,14 @@ pub(crate) struct Gpu {
     /// The occlusion queries of its render encoders' visibility results, from pools of its own,
     /// each given back to the device as it retires (`crate::visibility`).
     pub(crate) queries: Queries,
+    /// Its recording was cut into pieces (`crate::piece`), each a submission of its own.
+    pub(crate) cut: bool,
+    /// A dispatch reached memory through an address outside its resources: it shares every
+    /// resource with another queue's command buffer (`crate::submit`).
+    pub(crate) unbound: bool,
+    /// Of a cut command buffer, from its commit: the ids its buffers and textures are tracked by
+    /// (`crate::kept::ByKind::tracked`), sorted.
+    pub(crate) ids: Vec<u32>,
 }
 
 impl Gpu {
@@ -309,6 +324,17 @@ impl Gpu {
     /// `vkQueueSubmit2`.
     pub(crate) fn presents(&self) -> bool {
         (self.segments.last()).is_some_and(|segment| !segment.binary.is_empty())
+    }
+
+    /// Whether `self`, committed after `cut`, a cut command buffer of another queue, holds a
+    /// resource `cut` holds, by the ids the hazards track them by (a view's is its texture's, a
+    /// heap's resources' the heap's), waits on a fence `cut` updates, or either reaches memory
+    /// outside its resources: then `cut`'s pieces go first (`crate::submit`).
+    pub(crate) fn shares(&self, cut: &Gpu) -> bool {
+        self.unbound
+            || cut.unbound
+            || self.kept.meets(&cut.ids)
+            || cut.fences.updates_for(&self.fences)
     }
 }
 
@@ -336,6 +362,13 @@ pub(crate) struct Segment {
     /// upload that leads its submission takes the copies back owed to them by writes submitted
     /// before it (`crate::over::ManagedOvers`).
     pub(crate) managed_reached: Vec<Arc<BufferInner>>,
+    /// Its dispatches, which bound it as a piece (`crate::piece`).
+    pub(crate) work: Work,
+    /// Its own pair of timestamp queries, from its first dispatch to its end, whose span feeds
+    /// its kernels' rates; None where it dispatches nothing or found no pair.
+    pub(crate) stamps: Option<Pair>,
+    /// A submission carried it, so its pair was written.
+    pub(crate) sent: bool,
 }
 
 pub(crate) struct Handlers {
@@ -405,6 +438,9 @@ impl CommandBuffer {
                             fences: Fences::default(),
                             executed: Vec::new(),
                             queries: Queries::default(),
+                            cut: false,
+                            unbound: false,
+                            ids: Vec::new(),
                         },
                         handlers: Handlers {
                             scheduled: Vec::new(),
@@ -444,11 +480,21 @@ impl CommandBuffer {
         f(state.open()?)
     }
 
-    /// Takes what is being recorded for an encoder, until [`close_encoder`](Self::close_encoder).
-    /// Err: [`Refusal::Committed`]; [`Refusal::EncoderOpen`].
-    pub(crate) fn open_encoder(&self) -> Result<Building, Error> {
+    /// Takes what is being recorded for an encoder, until [`close_encoder`](Self::close_encoder):
+    /// for a compute or blit encoder (`cut`), past the end of a full piece
+    /// ([`Building::cut`]); the commands of any other than a compute encoder follow the
+    /// segment's dispatches ([`Building::other_commands`]).
+    /// Err: [`Refusal::Committed`]; [`Refusal::EncoderOpen`]; [`Error::Vulkan`] where ending the
+    /// piece's commands fails.
+    pub(crate) fn open_encoder(&self, cut: bool, compute: bool) -> Result<Building, Error> {
         let mut state = self.state();
-        state.open()?;
+        let building = state.open()?;
+        if cut {
+            building.cut(Some(0))?;
+        }
+        if !compute {
+            building.other_commands();
+        }
         state.encoding = true;
         Ok(state
             .building
@@ -668,12 +714,15 @@ impl CommandBuffer {
         (building.device.core().counters).add(&mut building.tally);
         let Building {
             device,
-            gpu,
+            mut gpu,
             handlers,
             stamps,
             presents,
             ..
         } = building;
+        if gpu.cut {
+            gpu.ids = gpu.kept.tracked();
+        }
         state.times.kernel_start = times::host_time();
         state.stamps = stamps;
         // Its drawables are presented: the presentation engine's once it has run.
@@ -844,7 +893,11 @@ impl CommandBuffer {
     /// observed. 0 until it completes, and for one that ended with an error. One whose segments
     /// hold no commands, no event wait and no event signal writes no timestamp: its start and end
     /// are one time, the latest GPU end of its queue's command buffers before it, or its kernel
-    /// end where that is later, as Metal reports for a command buffer that does no work.
+    /// end where that is later, as Metal reports for a command buffer that does no work. Of a
+    /// command buffer cut into pieces ([`Metrics::cuts`](crate::Metrics::cuts)), the span to
+    /// [`gpu_end_time`](Self::gpu_end_time) holds the runs of other queues' command buffers that
+    /// went between its pieces, as on the UHD 630 under macOS 26.7.1 the running command
+    /// buffer's end moved by the run of one that started beside it (job m3-max-68129).
     pub fn gpu_start_time(&self) -> u64 {
         self.state().times.gpu_start
     }
@@ -859,7 +912,9 @@ impl CommandBuffer {
     /// uploads and copy-ins the runtime submits ahead of it are not in it
     /// ([`Metrics::runtime_command_buffer_gpu_nanos`](crate::Metrics::runtime_command_buffer_gpu_nanos)).
     /// 0 until it completes, and for one that ended with an error; its start time for one that
-    /// writes no timestamp.
+    /// writes no timestamp. Of a command buffer cut into pieces, it is later by the runs of other
+    /// queues' command buffers that went between its pieces
+    /// ([`gpu_start_time`](Self::gpu_start_time)).
     pub fn gpu_end_time(&self) -> u64 {
         self.state().times.gpu_end
     }
@@ -1003,6 +1058,10 @@ impl Building {
                     };
                     self.host_written |= back.iter().any(|copy| copy.shared);
                 }
+                // The end of its own pair once its commands completed, before its end barrier.
+                if let Some(pair) = self.last().stamps {
+                    times::write_end(&core.device, command, pair.pool, pair.first);
+                }
                 // Its end barrier pays what is owed and starts the hazard sets again.
                 self.owed = false;
                 self.owed_all = false;
@@ -1025,6 +1084,60 @@ impl Building {
         self.close(&[], None)?;
         self.gpu.segments.push(Segment::default());
         Ok(())
+    }
+
+    /// Before a dispatch expected to run `run` (None: its kernel's rate unknown), and with
+    /// `Some(0)` where a compute or blit encoder opens: where the segment's dispatches are a full
+    /// piece ([`Work::full`]), the commands after begin a new segment, the command buffer's next
+    /// piece, counted (`Metrics::cuts`). Not where a texture over a buffer in an image of its own,
+    /// or over a Managed buffer's device copy, was used in the segment: a cut there would add a
+    /// copy (`crate::over`).
+    pub(crate) fn cut(&mut self, run: Option<u64>) -> Result<(), Error> {
+        let last = self.last();
+        // Commands after a signal go in a new segment anyway (`current`).
+        if !last.signals.is_empty() {
+            return self.split();
+        }
+        let overs = last.overs.ahead() || last.overs.leaning().next().is_some();
+        if !last.work.full(run) || overs || !last.managed_wrote.is_empty() {
+            return Ok(());
+        }
+        self.split()?;
+        self.gpu.cut = true;
+        self.tally.count(Metric::Cuts);
+        Ok(())
+    }
+
+    /// A dispatch of `kernel`, of `groups` threadgroups (None for an indirect one), goes in the
+    /// current segment, after [`cut`](Self::cut); a dispatch reaching memory outside its resources
+    /// is `unbound`.
+    pub(crate) fn dispatched(
+        &mut self,
+        kernel: &Arc<Compiled>,
+        groups: Option<u64>,
+        unbound: bool,
+    ) {
+        self.gpu.unbound |= unbound;
+        self.last().work.add(kernel, groups);
+    }
+
+    /// Commands of a blit or render encoder follow: the segment's run tells no rate.
+    pub(crate) fn other_commands(&mut self) {
+        self.last().work.blind();
+    }
+
+    /// Writes the start of the current segment's own pair into `command`, its command buffer,
+    /// before its first dispatch, where the device gives a pair.
+    pub(crate) fn stamp_piece(&mut self, command: vk::CommandBuffer) {
+        if self.last().stamps.is_some() {
+            return;
+        }
+        let core = self.device.core();
+        let pair = core.stamps.take(&core.device, &core.counters);
+        if let Some(pair) = pair {
+            times::write_start(&core.device, command, pair.pool, pair.first);
+        }
+        self.last().stamps = pair;
     }
 
     fn wait(&mut self, event: &Arc<EventInner>, value: u64) -> Result<(), Error> {
@@ -1629,10 +1742,35 @@ pub(crate) fn retire(
     } = completion;
     // Where its retirement begins, the step before its handlers (`Round::steps`): one clock read.
     let retiring = times::host_time();
-    // Its own GPU run, by its timestamps, sets what its queue expects of the next
-    // (`QueueInner::expected_run`, which bounds the groups `submit.rs` joins).
+    // Each piece's own run, by its own pair, sets its kernels' rates (`crate::piece`), and its
+    // pair goes back, reset where a submission wrote it.
+    let mut pieces = 0;
+    for segment in &gpu.segments {
+        let Some(pair) = segment.stamps else {
+            continue;
+        };
+        if let (true, None) = (segment.sent, error) {
+            // SAFETY: the pair's pool is the device's, and only this retirement resets its two
+            // queries, after this read.
+            if let Some((start, end)) = unsafe { pair.times(&core.device, &core.counters) } {
+                let run = core.ticks.span(start, end);
+                segment.work.ran(run);
+                pieces += run;
+            }
+        }
+        if segment.sent {
+            times::reset(&core.device, pair.pool, pair.first, 2);
+        }
+        core.stamps.give_back(pair);
+    }
+    // Its own GPU run sets what its queue expects of the next (`QueueInner::expected_run`, which
+    // bounds the groups `submit.rs` joins): by its timestamps, or where it was cut, its pieces'
+    // runs summed, without what other queues ran between them.
     if let Some((start, end)) = gpu_times {
-        inner.queue.ran(end.saturating_sub(start));
+        inner.queue.ran(match gpu.cut {
+            true => pieces,
+            false => end.saturating_sub(start),
+        });
     }
     // What was released while it was in flight may go (`crate::memory::Wait`).
     core.pool.ended();
@@ -1672,12 +1810,15 @@ pub(crate) fn retire(
         fences,
         executed,
         queries,
+        cut: _,
+        unbound: _,
+        ids,
     } = gpu;
     if let Some(recorder) = recorder {
         core.recorders.give_back(core, recorder);
     }
     ring.give_back(core);
-    drop((segments, blocks, images, fences, executed));
+    drop((segments, blocks, images, fences, executed, ids));
     queries.give_back(core);
     kept.clear();
     if let Some(pair) = stamps {
@@ -1741,6 +1882,7 @@ impl Drop for CbInner {
             let core = device.core();
             let Gpu {
                 recorder,
+                segments,
                 mut kept,
                 ring,
                 queries,
@@ -1748,6 +1890,9 @@ impl Drop for CbInner {
             } = gpu;
             if let Some(recorder) = recorder {
                 core.recorders.give_back(core, recorder);
+            }
+            for pair in segments.iter().filter_map(|segment| segment.stamps) {
+                core.stamps.give_back(pair);
             }
             ring.give_back(core);
             if let Some(pair) = stamps {

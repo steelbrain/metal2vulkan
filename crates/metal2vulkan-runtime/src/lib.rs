@@ -44,6 +44,7 @@ mod memory;
 mod over;
 mod own;
 mod pass;
+mod piece;
 mod pipeline;
 mod pixel_format_info;
 mod places;

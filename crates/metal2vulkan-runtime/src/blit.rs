@@ -137,7 +137,7 @@ impl CommandBuffer {
     /// Err: [`Refusal::Committed`]; [`Refusal::EncoderOpen`] while another encoder of the command
     /// buffer is open.
     pub fn blit_command_encoder(&self) -> Result<BlitCommandEncoder, Error> {
-        let mut building = self.open_encoder()?;
+        let mut building = self.open_encoder(true, false)?;
         building.count(Metric::Passes);
         Ok(BlitCommandEncoder {
             command_buffer: self.clone(),
