@@ -2953,6 +2953,15 @@ cache is answered compile-required on both.
 
 ### Known gaps of pipeline states
 
+- One large app's pipelines can pass the pipeline cache's 32 MiB on KosmicKrisp (the Mac host's
+  driver), whose blob takes about 140 KB a pipeline against 3-25 KB on NVIDIA's, RADV's and ANV's
+  drivers for the same pipelines. Past the bound the cache is replaced by an empty one, so a launch
+  after the replacement makes those pipelines again. On an M3 Max (KosmicKrisp in Mesa 26.3.1),
+  re-making one recorded session's 448 pipelines in the same process took 1,669-2,370 ms from the
+  bounded cache, with 45-60 cache hits (m3-max-67741, m3-max-67789), against 80.4-81.0 ms with no
+  bound, with 448 hits (m3-max-67847). A launch on that host makes its set in 0.06 s from a full
+  blob, and in 0.83-2.03 s around a replacement. The bound stays: the full cache of those 448
+  pipelines holds about 119 MiB of host memory from device start.
 - Ray tracing's bound acceleration structure is not built (ray tracing is out of scope,
   docs/REFUSALS.md's `RayTracing` row). The runtime makes no acceleration structure, no encoder
   binds one (`setAccelerationStructure:atBufferIndex:`), and nothing supplies the instance count
