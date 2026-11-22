@@ -1650,15 +1650,17 @@ impl WorkState {
             if fifo.blocked && !waits {
                 continue;
             }
-            // A head that would go before an earlier commit of another queue Metal submitted, or
-            // join a group that would, is not staged until that one is submitted
-            // ([`sends_past`](Self::sends_past)).
+            // A head that would go before an earlier commit of another queue Metal submitted
+            // ([`sends_past`](Self::sends_past)) does not join a group held that would not: it
+            // waits for that group to go, and then leads one of its own, held until that commit
+            // is submitted, as a group whose first would go before it is.
             let past = |pending: &Pending| self.sends_past(index, pending);
-            let past = (fifo.group.is_some() && fifo.sends().is_some_and(past))
-                || (fifo.entries.front()).is_some_and(|head| {
+            let joins = (fifo.group.as_ref()).is_some_and(|group| !group.partial)
+                && !fifo.sends().is_some_and(past)
+                && (fifo.entries.front()).is_some_and(|head| {
                     head.error.is_none() && head.pending.as_ref().is_some_and(past)
                 });
-            if past && !waits {
+            if joins && !waits {
                 continue;
             }
             if let (false, Some(at)) = (waits, fifo.entries.front().and_then(|head| head.held)) {
