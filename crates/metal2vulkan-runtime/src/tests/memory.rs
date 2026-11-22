@@ -1549,7 +1549,8 @@ mod on_device {
     /// Shared block of 64 MiB, an allocation of its own, given back with nothing in flight and
     /// freed at its idle age, is the one range that holds an address in it, freed with nothing in
     /// flight and none waited for; a live block's allocation holds an address in it, live; and an
-    /// exported block, where the device exports a handle, holds an address in it by its number.
+    /// exported block, where the device exports a handle, is the one live range that holds an
+    /// address in it, by its number.
     #[test]
     fn every_device_places_an_address_in_an_allocation_freed_at_its_idle_age() {
         const MIB: u64 = 1 << 20;
@@ -1610,9 +1611,13 @@ mod on_device {
                 let place =
                     (core.spans).place(&at(buffer.gpu_address() + 0x2000), crate::host_time());
                 let kind = crate::RangeKind::Export(exported.id);
+                // The live range comes first; a freed one at the same addresses, as the long
+                // allocation's where the driver gives its addresses again, follows it.
                 assert!(
-                    matches!(place.holders.as_slice(), [range] if range.kind == kind),
-                    "{name}: the exported block, by its number: {place}"
+                    matches!(place.holders.as_slice(), [range, rest @ ..]
+                        if range.kind == kind && range.freed.is_none()
+                            && rest.iter().all(|range| range.freed.is_some())),
+                    "{name}: the exported block, by its number, the one live range: {place}"
                 );
                 println!("memory: {name}: {place}");
             }
