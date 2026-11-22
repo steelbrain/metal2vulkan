@@ -2591,7 +2591,6 @@ field	metal2vulkan::device::FragmentCaps.stencil_export	pub stencil_export: bool
 field	metal2vulkan::device::FragmentCaps.terminate_invocation	pub terminate_invocation: bool
 field	metal2vulkan::device::FragmentCaps.tessellation_shader	pub tessellation_shader: bool
 field	metal2vulkan::device::FragmentCaps.vertex_attribute_divisor	pub vertex_attribute_divisor: bool
-field	metal2vulkan::device::FragmentCaps.vertex_attribute_zero_divisor	pub vertex_attribute_zero_divisor: bool
 field	metal2vulkan::device::GeneratedCommandsProperties.max_indirect_commands_indirect_stride	pub max_indirect_commands_indirect_stride: u32
 field	metal2vulkan::device::GeneratedCommandsProperties.max_indirect_commands_token_count	pub max_indirect_commands_token_count: u32
 field	metal2vulkan::device::GeneratedCommandsProperties.max_indirect_commands_token_offset	pub max_indirect_commands_token_offset: u32
