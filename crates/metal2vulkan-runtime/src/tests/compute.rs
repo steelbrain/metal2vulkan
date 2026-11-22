@@ -445,8 +445,11 @@ pub(crate) mod on_device {
                     .unwrap_or_else(|error| panic!("{name}: {error}"))
             };
             // Two dispatches of `step`, each over one buffer: the barriers they take, the
-            // segment's end among them.
+            // segment's end among them. The kernel's rate 1 ps a threadgroup, the test's own
+            // input, so the two dispatches share one piece (`crate::piece`) and the barriers
+            // counted are the hazards' and the one segment end's alone.
             let barriers = |buffers: [&Buffer; 2]| -> u64 {
+                state.inner.compiled.rate.set_for_test(1);
                 let before = device.counters().metrics();
                 let command_buffer = queue.command_buffer().expect("a command buffer");
                 let mut encoder = command_buffer
