@@ -1961,7 +1961,7 @@ mod on_device {
                             .map_err(|error| error.to_string())?;
                         Ok((pipeline, imageblock))
                     };
-                    let modules = (|| {
+                    let modules: Result<Option<_>, String> = (|| {
                         let plain = translator
                             .kernel_inputs_read(
                                 function,
