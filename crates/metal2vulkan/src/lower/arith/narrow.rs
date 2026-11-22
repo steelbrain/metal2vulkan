@@ -1159,6 +1159,36 @@ pub fn select_zero(
     Ok(y)
 }
 
+/// The format bits narrow value `x` of form `f` carries into a phi the lowering makes
+/// ([`note_moved`]), in the open block: the bits noted for it where they hold there (the bits it
+/// was decoded from, through a struct member the module built, or computed with in the block), as
+/// noted, else its [`to_bits`]. A lane's bits above the format's may be set.
+pub fn moved_bits(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value> {
+    let Some(fmt) = narrow_fmt(f) else {
+        return to_bits(fb, f, x);
+    };
+    let mut at = x;
+    while let Some(member) = fb.member_source(at) {
+        at = member;
+    }
+    match fb.bits_of(fmt, at) {
+        Some((bits, _)) => Ok(bits),
+        None => to_bits(fb, f, x),
+    }
+}
+
+/// Note `bits` as the format bits of `x`, a narrow value of form `f`, wherever `x` is: `x` is a phi
+/// the lowering made of values each carrying its [`moved_bits`] beside it, and `bits` the phi of
+/// those bits in the same block. A later [`to_bits`] returns them, cleared above each lane's
+/// format bits, so a `half` moved through the phi and stored unchanged keeps the bits each arm
+/// carried, a NaN's payload included.
+pub fn note_moved(fb: &mut FunctionBuilder<'_>, f: Form, x: Value, bits: Value) {
+    if let Some(fmt) = narrow_fmt(f) {
+        let all = u32::MAX >> (32 - u32::from(f.lanes).clamp(1, 32));
+        fb.note_bits(fmt, x, bits, all, true);
+    }
+}
+
 /// [`from_bits`] of the `half` lanes of form `f` that `words` hold as memory holds them, from half
 /// `first` (0 or 1) of the first word on: lane `k` is the low 16 bits of word `(first + k) / 2`
 /// where `first + k` is even, else its high 16 bits; `h` is the same lanes' bits as [`from_bits`]

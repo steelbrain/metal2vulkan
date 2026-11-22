@@ -13,7 +13,9 @@
 //! leaf (`memory::leaf`) through the slot's descriptor view (`memory::views`): the
 //! descriptor-relative byte offset is the slot's `SlotBindOffset` residual plus the pointer's
 //! offset. A pointer with several candidate slots is dispatched by a switch-at-use on its root; the
-//! default arm is the null root, whose load is 0 and whose store is dropped. Containment is the
+//! default arm is the null root, whose load is 0 and whose store is dropped. A narrow float's arms
+//! carry its bits beside its value (`leaf::carried`), so a load stored unchanged keeps the bits
+//! its arm read, a NaN's payload included. Containment is the
 //! normative check (`memory::contain`) against the storage view's bound size (`OpArrayLength`,
 //! the padded range).
 //!

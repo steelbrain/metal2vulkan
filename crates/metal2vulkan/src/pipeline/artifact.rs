@@ -1619,8 +1619,9 @@ pub enum PrecisionNote {
     /// `OpFConvert` of the bits read as a 16-bit float with `shaderFloat16`, `UnpackHalf2x16`
     /// without it), and a NaN widens to a NaN whose bits are the device's, where Metal widens
     /// every `half` NaN to `0x7fc00000` and moves one it does not widen with its bits, so a `half`
-    /// NaN the module moves as a value (through a select, a phi or a sign operation) may leave
-    /// with the device's bits; a `half` stored back unchanged keeps its bits. And by every module
+    /// NaN the module moves as a value (through the program's select, phi or sign operation) may
+    /// leave with the device's bits; a `half` stored back unchanged keeps its bits, through a
+    /// containment check or the choice among a pointer's candidate buffers too. And by every module
     /// that encodes a `half` to its bits where they are not the bits it was read from (a store, a
     /// reinterpretation, a texel's bits), on every device: the encode is the device's narrowing
     /// (an `OpFConvert` to 16 bits with `shaderFloat16`, `PackHalf2x16` without it), and a NaN

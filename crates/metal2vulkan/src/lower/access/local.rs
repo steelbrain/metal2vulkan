@@ -2059,8 +2059,7 @@ pub(super) fn emit_access_at(
             let zero = k32(fb, 0)?;
             let at = fb.select(inb, off, zero)?;
             let v = leaf::load(fb, &mut mem, &leaf, at)?;
-            let z = leaf::zero(fb, &leaf)?;
-            fb.select(inb, v, z).map(Some)
+            leaf::contained(fb, &leaf, inb, v).map(Some)
         }
         Some(v) => {
             let then: ArmFn<'_, ()> = Box::new(move |fb, _| {

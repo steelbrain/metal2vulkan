@@ -27,6 +27,14 @@
 //! The profiles and policies compile to a few distinct modules: each runs once, all at once on
 //! threads of their own.
 //!
+//! The moves the module makes itself are moves too, and keep the bits with no note: four kernels
+//! move the 2048 patterns whose exponent is all ones (both infinities and every NaN) through one
+//! each, straight to a device buffer, on every committed profile under the resident-table domains:
+//! a contained load of the private arena, a contained load of the constant blob, and the switch
+//! over a pointer's candidate buffers (two device buffers, eight lanes a thread, so the value is
+//! chunked; and a `constant` buffer or the blob, four lanes). Every pattern must come back as its
+//! bits.
+//!
 //! `llvm-as` assembles the kernel; without it the test skips visibly.
 
 use std::collections::BTreeMap;
@@ -40,9 +48,10 @@ use crate::metal::PixelFormat;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{
     Axis, PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage,
+    SyntheticBinding,
 };
 use crate::pipeline::testing::{compile_with, llvm_assemble, typed_module_with, AssembleError};
-use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Order, Resources};
+use crate::spirv::interp::{run, run_with_images, Buffer, Config, Image, Order, Resources};
 use crate::spirv::ir::TypedModule;
 use crate::spirv::testing::committed_profiles_with;
 
@@ -109,11 +118,12 @@ declare void @air.write_texture_2d.i16.v4f16(ptr addrspace(1), <2 x i16>, <4 x h
 !8 = !{i32 5, !"air.thread_index_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}
 "#;
 
-fn assemble() -> Option<Vec<u8>> {
-    let dir = std::env::temp_dir().join(format!("m2v-half-moves-{}", std::process::id()));
+/// Kernel `name`'s text assembled in a scratch directory of its own, removed once `llvm-as` is done.
+fn assemble(name: &str, text: &str) -> Option<Vec<u8>> {
+    let dir = std::env::temp_dir().join(format!("m2v-half-moves-{}-{name}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("scratch");
     let ll = dir.join("k.ll");
-    std::fs::write(&ll, KERNEL).expect("write");
+    std::fs::write(&ll, text).expect("write");
     let r = llvm_assemble(&ll);
     let _ = std::fs::remove_dir_all(&dir);
     match r {
@@ -122,7 +132,7 @@ fn assemble() -> Option<Vec<u8>> {
             eprintln!("SKIPPED: {why}");
             None
         }
-        Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected half_moves: {why}"),
+        Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected {name}: {why}"),
     }
 }
 
@@ -292,7 +302,9 @@ fn run_once(c: &Compiled, what: &str) -> Found {
 /// docs).
 #[test]
 fn every_half_pattern_moves_as_its_bits() {
-    let Some(bc) = assemble() else { return };
+    let Some(bc) = assemble("half_moves", KERNEL) else {
+        return;
+    };
     // Each (policy, profile) and the module it compiles to; each distinct module runs once.
     let mut runs: Vec<(&str, String, Arc<[u32]>)> = Vec::new();
     let mut modules: BTreeMap<Arc<[u32]>, Compiled> = BTreeMap::new();
@@ -356,5 +368,275 @@ fn every_half_pattern_moves_as_its_bits() {
         }
     }
     eprintln!("NaN patterns the device's, as noted: {device_nans:#?}");
+    assert!(report.is_empty(), "{report:#?}");
+}
+
+/// The datalayout and triple of the kernels of our own moves.
+const MOVE_HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\ntarget triple = \"air64_v28-apple-macosx26.0.0\"\n";
+
+/// The threads per threadgroup of our own moves.
+const MOVE_LOCAL: u32 = 64;
+
+/// The patterns our own moves carry: every `half` whose exponent is all ones, by sign and payload
+/// (both infinities and all 2046 NaNs).
+fn all_ones_exponent() -> Vec<u16> {
+    (0..2048u16)
+        .map(|i| ((i >> 10) << 15) | 0x7C00 | (i & 0x3FF))
+        .collect()
+}
+
+/// The arguments every kernel of our own moves takes: `src` (buffer 0) and `alt` (buffer 3) hold
+/// the patterns, `out` (buffer 1) receives them, `flags` (buffer 2) holds 0 and a word per thread,
+/// and `csrc` (buffer 4) is a `constant` buffer holding the patterns.
+const MOVE_ARGS: &str = "ptr addrspace(1) %src, ptr addrspace(1) %out, ptr addrspace(1) %flags, ptr addrspace(1) %alt, ptr addrspace(2) %csrc, i32 %g";
+
+/// The kernel metadata of entry `name` over [`MOVE_ARGS`].
+fn move_metadata(name: &str) -> String {
+    let buffer = |i: u32, access: &str, space: u32, arg: &str| {
+        format!(
+            "!{} = !{{i32 {i}, !\"air.buffer\", !\"air.location_index\", i32 {i}, i32 1, !\"air.{access}\", !\"air.address_space\", i32 {space}, !\"air.arg_type_size\", i32 2, !\"air.arg_type_align_size\", i32 2, !\"air.arg_type_name\", !\"half\", !\"air.arg_name\", !\"{arg}\"}}\n",
+            i + 3
+        )
+    };
+    let mut md = format!(
+        "!air.kernel = !{{!0}}\n!0 = !{{ptr @{name}, !1, !2}}\n!1 = !{{}}\n!2 = !{{!3, !4, !5, !6, !7, !8}}\n"
+    );
+    md += &buffer(0, "read", 1, "src");
+    md += &buffer(1, "read_write", 1, "out");
+    md += &buffer(2, "read_write", 1, "flags");
+    md += &buffer(3, "read", 1, "alt");
+    md += &buffer(4, "read", 2, "csrc");
+    md += "!8 = !{i32 5, !\"air.thread_position_in_grid\", !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"g\"}\n";
+    md
+}
+
+/// A program-scope constant table of the patterns, read as `half` vectors: punned, so it lives in
+/// the constant blob.
+fn pattern_table() -> String {
+    let lanes: Vec<String> = all_ones_exponent()
+        .iter()
+        .map(|&h| format!("i16 {}", h as i16))
+        .collect();
+    format!(
+        "@tbl = internal addrspace(2) constant [2048 x i16] [{}], align 16\n",
+        lanes.join(", ")
+    )
+}
+
+/// One move the module makes itself: the kernel `name` moving `lanes`-lane `half` vectors (thread
+/// `g` the patterns from `lanes · g` on) through it straight to `out`, and what shows its module
+/// makes that move.
+struct OurMove {
+    name: &'static str,
+    lanes: u32,
+    text: String,
+    reached: fn(&Plan, &TypedModule) -> bool,
+}
+
+/// The moves: a contained private-arena load (the alloca is punned by a byte load, its `half`
+/// load at a run-time offset), a contained constant-blob load at a run-time offset, the switch
+/// over two device buffers (an eight-lane chunked value), and the switch over a `constant`
+/// buffer and the blob (half the threads read each).
+fn our_moves() -> Vec<OurMove> {
+    let kernel = |name: &str, globals: &str, body: &str| {
+        format!(
+            "{MOVE_HEADER}\n{globals}\ndefine void @{name}({MOVE_ARGS}) {{\n{body}  ret void\n}}\n\n{}",
+            move_metadata(name)
+        )
+    };
+    let arena = r#"  %a = alloca [2 x <4 x half>], align 8
+  %ps = getelementptr inbounds <4 x half>, ptr addrspace(1) %src, i32 %g
+  %v = load <4 x half>, ptr addrspace(1) %ps, align 8
+  %a0 = getelementptr inbounds [2 x <4 x half>], ptr %a, i32 0, i32 0
+  store <4 x half> %v, ptr %a0, align 8
+  %a1 = getelementptr inbounds [2 x <4 x half>], ptr %a, i32 0, i32 1
+  store <4 x half> %v, ptr %a1, align 8
+  %f = load i32, ptr addrspace(1) %flags, align 4
+  %pk = getelementptr inbounds [2 x <4 x half>], ptr %a, i32 0, i32 %f
+  %y = load <4 x half>, ptr %pk, align 8
+  %pb = getelementptr inbounds i8, ptr %a, i32 %f
+  %b = load i8, ptr %pb, align 1
+  %bw = zext i8 %b to i32
+  %g1 = add i32 %g, 1
+  %pf = getelementptr inbounds i32, ptr addrspace(1) %flags, i32 %g1
+  store i32 %bw, ptr addrspace(1) %pf, align 4
+  %o = getelementptr inbounds <4 x half>, ptr addrspace(1) %out, i32 %g
+  store <4 x half> %y, ptr addrspace(1) %o, align 8
+"#;
+    let blob = r#"  %p = getelementptr inbounds <4 x half>, ptr addrspace(2) @tbl, i32 %g
+  %y = load <4 x half>, ptr addrspace(2) %p, align 8
+  %o = getelementptr inbounds <4 x half>, ptr addrspace(1) %out, i32 %g
+  store <4 x half> %y, ptr addrspace(1) %o, align 8
+"#;
+    let roots = r#"  %c = icmp ult i32 %g, 128
+  %b = select i1 %c, ptr addrspace(1) %src, ptr addrspace(1) %alt
+  %p = getelementptr inbounds <8 x half>, ptr addrspace(1) %b, i32 %g
+  %y = load <8 x half>, ptr addrspace(1) %p, align 16
+  %o = getelementptr inbounds <8 x half>, ptr addrspace(1) %out, i32 %g
+  store <8 x half> %y, ptr addrspace(1) %o, align 16
+"#;
+    let mixed = r#"  %c = icmp ult i32 %g, 256
+  %b = select i1 %c, ptr addrspace(2) %csrc, ptr addrspace(2) @tbl
+  %p = getelementptr inbounds <4 x half>, ptr addrspace(2) %b, i32 %g
+  %y = load <4 x half>, ptr addrspace(2) %p, align 8
+  %o = getelementptr inbounds <4 x half>, ptr addrspace(1) %out, i32 %g
+  store <4 x half> %y, ptr addrspace(1) %o, align 8
+"#;
+    let table = pattern_table();
+    vec![
+        OurMove {
+            name: "arena",
+            lanes: 4,
+            text: kernel("arena", "", arena),
+            reached: |plan, _| plan.census().contains_key("access.private.load.checked"),
+        },
+        OurMove {
+            name: "blob",
+            lanes: 4,
+            text: kernel("blob", &table, blob),
+            reached: |plan, _| plan.census().contains_key("access.blob.load.checked"),
+        },
+        OurMove {
+            name: "roots",
+            lanes: 8,
+            text: kernel("roots", "", roots),
+            reached: |_, m| !m.switches_at_use().is_empty(),
+        },
+        OurMove {
+            name: "mixed",
+            lanes: 4,
+            text: kernel("mixed", &table, mixed),
+            reached: |plan, m| {
+                plan.families.access.blob.is_some() && !m.switches_at_use().is_empty()
+            },
+        },
+    ]
+}
+
+/// The resources of one run of a move over `threads` threads: the buffers [`MOVE_ARGS`] names, the
+/// constant blob where the plan has one, and the local size.
+fn move_resources(plan: &Plan, threads: u32) -> Resources {
+    let mut spec = BTreeMap::new();
+    spec.insert(SpecKey::LocalSize(Axis::X), u64::from(MOVE_LOCAL));
+    spec.insert(SpecKey::LocalSize(Axis::Y), 1);
+    spec.insert(SpecKey::LocalSize(Axis::Z), 1);
+    spec.insert(SpecKey::FlatLocalSize, u64::from(MOVE_LOCAL));
+    let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
+    for f in &plan.push.fields {
+        match (f.field, f.loc) {
+            (PushField::SlotBindOffset(_) | PushField::DispatchRegion, PushLoc::Push { .. }) => {}
+            other => panic!("unexpected push field {other:?}"),
+        }
+    }
+    let patterns: Vec<u8> = all_ones_exponent()
+        .iter()
+        .flat_map(|h| h.to_le_bytes())
+        .collect();
+    let buffer = |kind: ResourceKind, index: u32, bytes: Vec<u8>| Buffer {
+        slot: Some(ResourceSlot {
+            stage: Stage::Kernel,
+            kind,
+            index,
+        }),
+        address: None,
+        bytes,
+    };
+    let mut buffers = vec![
+        buffer(ResourceKind::Buffer, 0, patterns.clone()),
+        buffer(ResourceKind::Buffer, 1, vec![0; patterns.len()]),
+        buffer(ResourceKind::Buffer, 2, vec![0; 4 * (threads as usize + 1)]),
+        buffer(ResourceKind::Buffer, 3, patterns.clone()),
+        buffer(ResourceKind::Buffer, 4, patterns),
+    ];
+    if let Some(b) = &plan.families.access.blob {
+        let kind = ResourceKind::Synthetic(SyntheticBinding::ConstantBlob);
+        buffers.push(buffer(kind, 0, b.bytes.to_vec()));
+    }
+    Resources {
+        buffers,
+        push,
+        spec,
+    }
+}
+
+/// Every pattern whose exponent is all ones comes back as its bits from each move the module makes
+/// itself, on every committed profile under the resident-table domains that compiles the move's
+/// kernel, with no note excusing a change: a move is not arithmetic.
+#[test]
+fn our_own_moves_keep_every_half_patterns_bits() {
+    let patterns = all_ones_exponent();
+    let mut report = Vec::new();
+    for mv in our_moves() {
+        let Some(bc) = assemble(mv.name, &mv.text) else {
+            return;
+        };
+        let inputs = LowerInputs::new();
+        // Each distinct module, its plan, and the profiles that compile to it.
+        let mut modules: BTreeMap<Arc<[u32]>, (Plan, TypedModule, Vec<String>)> = BTreeMap::new();
+        for (stem, p) in committed_profiles_with(DevicePolicy::RESIDENT_TABLES).expect("profiles") {
+            let (plan, module) = match typed_module_with(&bc, mv.name, &p, &inputs) {
+                Ok(x) => x,
+                Err(crate::error::Error::NeedsInput(_) | crate::error::Error::Unsupported(_)) => {
+                    continue
+                }
+                Err(e) => panic!("{} {stem}: {e}", mv.name),
+            };
+            assert!(
+                (mv.reached)(&plan, &module),
+                "{} {stem}: the module does not make the move: {:?}",
+                mv.name,
+                plan.census().keys().collect::<Vec<_>>()
+            );
+            let artifact = compile_with(&bc, mv.name, &p, &inputs).expect("compile");
+            let words: Arc<[u32]> = Arc::from(artifact.module.words.as_slice());
+            modules
+                .entry(words)
+                .or_insert_with(|| (plan, module, Vec::new()))
+                .2
+                .push(stem);
+        }
+        assert!(!modules.is_empty(), "{}: no profile compiles it", mv.name);
+        let threads = patterns.len() as u32 / mv.lanes;
+        let outs: Vec<Vec<u8>> = std::thread::scope(|s| {
+            let handles: Vec<_> = modules
+                .values()
+                .map(|(plan, m, _)| {
+                    s.spawn(move || {
+                        let cfg = Config {
+                            workgroups: [threads / MOVE_LOCAL, 1, 1],
+                            order: Order::Forward,
+                            step_limit: 1 << 30,
+                            ..Config::default()
+                        };
+                        let o = run(m, &cfg, move_resources(plan, threads))
+                            .unwrap_or_else(|e| panic!("{}: run: {e:?}", mv.name));
+                        o.buffers[1].clone()
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("run"))
+                .collect()
+        });
+        for ((_, _, stems), out) in modules.values().zip(&outs) {
+            let changed: Vec<(u16, u16)> = patterns
+                .iter()
+                .zip(out.as_chunks::<2>().0)
+                .map(|(&h, got)| (h, u16::from_le_bytes(*got)))
+                .filter(|(h, got)| h != got)
+                .collect();
+            if !changed.is_empty() {
+                report.push(format!(
+                    "{} {stems:?}: {} of {} patterns changed, first {:x?}",
+                    mv.name,
+                    changed.len(),
+                    patterns.len(),
+                    &changed[..changed.len().min(4)]
+                ));
+            }
+        }
+        eprintln!("{}: {} distinct modules", mv.name, modules.len());
+    }
     assert!(report.is_empty(), "{report:#?}");
 }

@@ -201,10 +201,7 @@ impl SourceRead {
         let v = leaf::load(fb, &mut self.mem, leaf, self.off)?;
         match self.inb {
             None => Ok(v),
-            Some(inb) => {
-                let z = leaf::zero(fb, leaf)?;
-                fb.select(inb, v, z)
-            }
+            Some(inb) => leaf::contained(fb, leaf, inb, v),
         }
     }
 }

@@ -1582,11 +1582,7 @@ pub fn contained(
     inb: Value,
     v: Value,
 ) -> BResult<Value> {
-    let narrow_float = matches!(
-        leaf.form.float_fmt(),
-        Some(FloatFmt::Half | FloatFmt::BFloat)
-    );
-    if narrow_float && leaf.chunked() {
+    if narrow_float(leaf) && leaf.chunked() {
         let mut parts = Vec::new();
         for (i, (chunk, _)) in (0u32..).zip(leaf.chunks()) {
             let part = fb.composite_extract(v, &[i])?;
@@ -1597,4 +1593,73 @@ pub fn contained(
     }
     let z = zero(fb, leaf)?;
     narrow::select_zero(fb, leaf.form, inb, v, z)
+}
+
+/// The values an arm of a merge (a switch over a pointer's candidate buffers) carries for `leaf`'s
+/// value `v`, or for its [`zero`] where `v` is `None`: the value, and for a narrow float its parts
+/// (each chunk of a chunked leaf, else the value) followed by the bits each part moves
+/// ([`narrow::moved_bits`]). [`merged`] makes the merged value from them, so a store of it writes
+/// the bits each arm carried, a NaN's payload included, as a store of a [`contained`] load does.
+pub fn carried(fb: &mut FunctionBuilder<'_>, leaf: &Leaf, v: Option<Value>) -> BResult<Vec<Value>> {
+    if !narrow_float(leaf) {
+        return Ok(vec![match v {
+            Some(v) => v,
+            None => zero(fb, leaf)?,
+        }]);
+    }
+    let parts = moved_parts(leaf);
+    let mut out = Vec::with_capacity(2 * parts.len());
+    for (i, part) in (0u32..).zip(&parts) {
+        out.push(match v {
+            Some(v) if leaf.chunked() => fb.composite_extract(v, &[i])?,
+            Some(v) => v,
+            None => zero(fb, part)?,
+        });
+    }
+    for (i, part) in parts.iter().enumerate() {
+        let x = word(&out, i)?;
+        let bits = narrow::moved_bits(fb, part.form, x)?;
+        out.push(bits);
+    }
+    Ok(out)
+}
+
+/// The value of `leaf` that a merge of [`carried`] arms yields from its merged `values`: each
+/// part's merged bits noted for its merged part ([`narrow::note_moved`]), and the parts of a
+/// chunked leaf rebuilt into its value.
+pub fn merged(fb: &mut FunctionBuilder<'_>, leaf: &Leaf, values: &[Value]) -> BResult<Value> {
+    if !narrow_float(leaf) {
+        return word(values, 0);
+    }
+    let parts = moved_parts(leaf);
+    if values.len() != 2 * parts.len() {
+        return Err(dangling());
+    }
+    let (xs, bits) = values.split_at(parts.len());
+    for ((part, x), b) in parts.iter().zip(xs).zip(bits) {
+        narrow::note_moved(fb, part.form, *x, *b);
+    }
+    if !leaf.chunked() {
+        return word(xs, 0);
+    }
+    let ty = chunked_ty(fb, leaf.form)?;
+    fb.composite_construct(ty, xs)
+}
+
+/// Whether `leaf` holds a narrow float (`half`, `bfloat`), whose moves carry its bits.
+fn narrow_float(leaf: &Leaf) -> bool {
+    matches!(
+        leaf.form.float_fmt(),
+        Some(FloatFmt::Half | FloatFmt::BFloat)
+    )
+}
+
+/// The parts a narrow leaf's moves carry with their bits: each chunk of a chunked leaf, else the
+/// leaf.
+fn moved_parts(leaf: &Leaf) -> Vec<Leaf> {
+    if leaf.chunked() {
+        leaf.chunks().into_iter().map(|(chunk, _)| chunk).collect()
+    } else {
+        vec![*leaf]
+    }
 }

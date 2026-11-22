@@ -497,20 +497,21 @@ pub(super) fn access_at(
         let root = fat_part(fb, p, 0)?;
         let mut cases: Vec<(Vec<u32>, ArmFn<'_, ()>)> = Vec::with_capacity(prepared.len() + 1);
         for (r, _, prep) in prepared.iter().copied() {
-            let arm: ArmFn<'_, ()> =
-                Box::new(move |fb, _| Ok(ArmEnd::FallThrough(vec![load_one(fb, &leaf, prep)?])));
+            let arm: ArmFn<'_, ()> = Box::new(move |fb, _| {
+                let v = load_one(fb, &leaf, prep)?;
+                Ok(ArmEnd::FallThrough(leaf::carried(fb, &leaf, Some(v))?))
+            });
             cases.push((vec![r], arm));
         }
         let arm: ArmFn<'_, ()> = Box::new(move |fb, _| {
-            Ok(ArmEnd::FallThrough(vec![super::blob::load_decl(
-                fb, decl, &leaf, m,
-            )?]))
+            let v = super::blob::load_decl(fb, decl, &leaf, m)?;
+            Ok(ArmEnd::FallThrough(leaf::carried(fb, &leaf, Some(v))?))
         });
         cases.push((vec![BLOB_ROOT], arm));
         let default: ArmFn<'_, ()> =
-            Box::new(move |fb, _| Ok(ArmEnd::FallThrough(vec![leaf::zero(fb, &leaf)?])));
+            Box::new(move |fb, _| Ok(ArmEnd::FallThrough(leaf::carried(fb, &leaf, None)?)));
         let merged = fb.switch_at_use(&mut (), root, cases, default)?;
-        return Ok(merged.0.first().copied());
+        return leaf::merged(fb, &leaf, &merged.0).map(Some);
     }
     match (prepared.as_slice(), stored) {
         // No candidate slot: only null, whose dereference Metal leaves undefined.
@@ -532,7 +533,10 @@ pub(super) fn access_at(
             let mut cases: Vec<(Vec<u32>, ArmFn<'_, Slots>)> = Vec::with_capacity(many.len());
             for (r, slot, prep) in many.iter().copied() {
                 let arm: ArmFn<'_, Slots> = Box::new(move |fb, merged| match stored {
-                    None => Ok(ArmEnd::FallThrough(vec![load_one(fb, &leaf, prep)?])),
+                    None => {
+                        let v = load_one(fb, &leaf, prep)?;
+                        Ok(ArmEnd::FallThrough(leaf::carried(fb, &leaf, Some(v))?))
+                    }
                     Some(v) => {
                         if store_one(fb, &leaf, prep, v)? {
                             merged.insert(slot);
@@ -543,13 +547,16 @@ pub(super) fn access_at(
                 cases.push((vec![r], arm));
             }
             let default: ArmFn<'_, Slots> = Box::new(move |fb, _| match stored {
-                None => Ok(ArmEnd::FallThrough(vec![leaf::zero(fb, &leaf)?])),
+                None => Ok(ArmEnd::FallThrough(leaf::carried(fb, &leaf, None)?)),
                 Some(_) => Ok(ArmEnd::FallThrough(Vec::new())),
             });
             let mut merged = Slots::new();
             let out = fb.switch_at_use(&mut merged, root, cases, default)?;
             cx.merged.extend(merged);
-            Ok(out.0.first().copied())
+            match stored {
+                None => leaf::merged(fb, &leaf, &out.0).map(Some),
+                Some(_) => Ok(None),
+            }
         }
     }
 }
