@@ -4,22 +4,22 @@
 # A cell is the first 64 bits of SHA-256 over the final SPIR-V of its subject, or its
 # refusal class. A cell that changes under an unchanged fixture source and profile
 # fingerprint needs cache::SEMANTICS_VERSION above the semantics line, its bless's.
-semantics	2272
-profile	amd-780m-hawkpoint-radv	23ce749f5dd70b27
-profile	amd-780m-radv	23ce749f5dd70b27
-profile	amd-rdna2-apu-radv	914e48b40ce04ae7
-profile	gate-lavapipe	96a085d980f31aac
-profile	gate-lavapipe-x86_64	5d3f78e9e5474ddc
-profile	intel-arl-anv	fe251db547eb9ea8
-profile	intel-irisxe-anv	2de47698d4c53db6
-profile	intel-irisxe-rplp-anv	adb54e25c4f94741
-profile	intel-uhd770-rpls-anv	adb54e25c4f94741
-profile	lavapipe	c1adb5b5756e6104
-profile	moltenvk-m3	cfc2df50edeae4e9
-profile	nvidia-pascal-linux	d90bceb06f7a43d5
-profile	nvidia-rtx50-linux	c9b865ad1591e261
-profile	nvidia-rtx5080-laptop	5d2874cf67c02770
-profile	runtime-floor	3da549a9f5135f10
+semantics	2273
+profile	amd-780m-hawkpoint-radv	3d53b900cc96dcdf
+profile	amd-780m-radv	3d53b900cc96dcdf
+profile	amd-rdna2-apu-radv	ecbb5390fa654e36
+profile	gate-lavapipe	d662ffcf3cc52f75
+profile	gate-lavapipe-x86_64	8f2d530a74ba580e
+profile	intel-arl-anv	0cc2c743ca399348
+profile	intel-irisxe-anv	2da148419881b2cd
+profile	intel-irisxe-rplp-anv	87744c4afbbf87db
+profile	intel-uhd770-rpls-anv	87744c4afbbf87db
+profile	lavapipe	6e2ff7b484577475
+profile	moltenvk-m3	51ccc69c6bf6c50d
+profile	nvidia-pascal-linux	958e42c29250f7c3
+profile	nvidia-rtx50-linux	98b5485204aa79e6
+profile	nvidia-rtx5080-laptop	d4f171779f7aabff
+profile	runtime-floor	5dded04865fc7f43
 fixture	source	subject	amd-780m-hawkpoint-radv	amd-780m-radv	amd-rdna2-apu-radv	gate-lavapipe	gate-lavapipe-x86_64	intel-arl-anv	intel-irisxe-anv	intel-irisxe-rplp-anv	intel-uhd770-rpls-anv	lavapipe	moltenvk-m3	nvidia-pascal-linux	nvidia-rtx50-linux	nvidia-rtx5080-laptop	runtime-floor
 engine/a1_bool_from_float.air.ll	67a41b1383f5ed2f	a1_bool_from_float	53c97fbbf83a6bf1	53c97fbbf83a6bf1	53c97fbbf83a6bf1	bae649c37ce1f06a	bae649c37ce1f06a	e6ebae3ae5f907f8	e6ebae3ae5f907f8	e6ebae3ae5f907f8	e6ebae3ae5f907f8	bae649c37ce1f06a	bae649c37ce1f06a	db54f667c40a6be2	d977f3434bfd8dc3	d977f3434bfd8dc3	db54f667c40a6be2
 engine/a1_bool_from_float.ll	965508e37289a775	a1_bool_from_float	53c97fbbf83a6bf1	53c97fbbf83a6bf1	53c97fbbf83a6bf1	bae649c37ce1f06a	bae649c37ce1f06a	e6ebae3ae5f907f8	e6ebae3ae5f907f8	e6ebae3ae5f907f8	e6ebae3ae5f907f8	bae649c37ce1f06a	bae649c37ce1f06a	db54f667c40a6be2	d977f3434bfd8dc3	d977f3434bfd8dc3	db54f667c40a6be2
