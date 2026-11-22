@@ -246,8 +246,8 @@ class RuleTests(unittest.TestCase):
                          [f"time {key}: 1.50x its base, against a median of 1.00x over 4 GPUs" for key in (alu, bandwidth)])
 
     def test_a_harness_row_out_in_both_passes_is_judged_by_its_lowest_level(self):
-        # The RTX 3090 at homelab-um870-1, round 6b535f55c9: about 37 or about 80 us a process, two
-        # passes both high, the alone runs low.
+        # An RTX 3090 on a 20 Gb/s Thunderbolt 3 link, round 6b535f55c9: about 37 or about 80 us a
+        # process, two passes both high, the alone runs low.
         row = "sampling_deep_4x16x252"
         key = f"{results.HARNESS_NEW}{row}"
         alone = [f"{results.HARNESS_ALONE}{row}/{pair}/new" for pair in (1, 2)]

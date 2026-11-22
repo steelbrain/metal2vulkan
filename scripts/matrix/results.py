@@ -321,7 +321,7 @@ def outliers_to_retime(found):
     return {leg: keys for leg, keys in found.items() if any(key.startswith(HARNESS_NEW) for key in keys)}
 
 
-#: A host can give each process a level of its own: on the RTX 3090 at homelab-um870-1,
+#: A host can give each process a level of its own: on an RTX 3090 on a 20 Gb/s Thunderbolt 3 link,
 #: sampling_deep_4x16x252 took about 37 or about 80 us of wall a run, one level a process, at equal
 #: GPU time and CPU instructions (rounds b0c08e51b5, 7cda47f536 and 6b535f55c9; m3-max-51629: 39
 #: processes over 13 commits at 36.8 to 40.0 us). Two passes, two processes, both landed high in
