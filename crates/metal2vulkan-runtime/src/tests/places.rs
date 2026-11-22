@@ -486,6 +486,10 @@ mod on_device {
             wait_until("the long block's allocation freed", || {
                 counters.gauges().private_allocation_bytes == allocated - held
             });
+            // The free lowers the gauge before it pushes its record, so the record is waited for too.
+            wait_until("the long block's free recorded", || {
+                core.pool.frees().len() > frees
+            });
             let freed = core.pool.frees();
             assert_eq!(freed.len(), frees + 1, "{name}: one free");
             let (since, began, _) = freed[frees];
