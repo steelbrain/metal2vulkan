@@ -7,8 +7,8 @@
 //! reading inside the bound, and an exact match with it is not a property of the translation. The
 //! user decided that such cases are listed, each with its bound and cause, keyed by case and
 //! candidate, so that a changed candidate leaves the list and is reviewed again. A row that ran a
-//! recorded near-equivalent no exact path replaces yet ([`DEFERRED_NEAR_EQUIVALENTS`]: a
-//! rasterization-rate map's decoder, a sparse texture's filtered access, an explicit cube
+//! recorded near-equivalent no exact path replaces yet ([`DEFERRED_NEAR_EQUIVALENTS`]: a sparse
+//! texture's filtered access, an explicit cube
 //! gradient's footprint, a nearest cube texel from a correctly rounded reciprocal, a simdgroup
 //! operation's lanes before a discard, a depth comparison the device makes, a bicubic sum's
 //! unpinned arithmetic, a varying a device interpolates otherwise than Metal, a vertex simdgroup
@@ -683,9 +683,6 @@ pub struct SlotRow {
 /// mismatch is still counted as one; only its reason names the note, whatever word differs, so a
 /// difference the note did not cause is labelled deferred too but hides nothing.
 ///
-/// - The rasterization-rate map decoder's: Apple's GPU decoder reads fractional tile starts only
-///   Apple's parameter data holds, and a moved coordinate changes what every later word of the row
-///   reads, so no word's difference can be told apart from the note's.
 /// - A sparse texture's filtered access (`SparseResidency`): outside Metal's measured footprint
 ///   rule its residency word is the device's footprint, and its filtered value is the device's
 ///   filter, whose sub-texel precision need not be Metal's 1/256; an emulation of Metal's measured
@@ -743,8 +740,7 @@ pub struct SlotRow {
 /// denormal, a `half` rounding) belongs in a per-word judgement of a reading's differing words,
 /// beside the check of each against Apple's bound, never in this list: a row-level match would
 /// reopen every signed-off reading whose row merely records the note.
-pub const DEFERRED_NEAR_EQUIVALENTS: [PrecisionNote; 10] = [
-    PrecisionNote::RasterizationRateMap,
+pub const DEFERRED_NEAR_EQUIVALENTS: [PrecisionNote; 9] = [
     PrecisionNote::SparseResidency,
     PrecisionNote::CubeGradientFootprint,
     PrecisionNote::QuadsCountedBeforeDiscard,
@@ -789,13 +785,6 @@ impl OpenReason {
 /// The measured bound of a deferred near-equivalent ([`DEFERRED_NEAR_EQUIVALENTS`]).
 fn near_equivalent_bound(note: PrecisionNote) -> &'static str {
     match note {
-        PrecisionNote::RasterizationRateMap => {
-            "tile starts at integers where Apple M3's are fractional: decoder within 0.0194 px \
-             physical to screen and 0.002 px screen to physical of Apple's GPU on the maps \
-             measured; a rate-mapped pass's points within 0.025 px of Metal's where the device \
-             keeps the viewport's fractions, and an axis's last physical line, where its last \
-             tile maps under 2 screen pixels to one, shaded where Metal may leave it"
-        }
         PrecisionNote::SparseResidency => {
             "no bound: outside Metal's measured footprint rule (a runtime sampler, a mip level, \
              repeat or mirrored addressing, a texel offset) a sample's or gather's residency is the \

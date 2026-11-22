@@ -1,6 +1,6 @@
 //! The `uint2` overloads end to end, in the fixture `rate_map_integer` (compiled from our MSL by
 //! `scripts/regen-air-fixtures`): its kernel and its fragment function compile on every tested
-//! profile, pass L3 and record no `RasterizationRateMap` note. On the CPU interpreter, which keeps
+//! profile and pass L3. On the CPU interpreter, which keeps
 //! `float` denormals as lavapipe does, the kernel answers what `rate_map_data`'s shader decoders
 //! compute with denormals kept ([`kept_integer`]), for every layer and two past a map's, inside
 //! the screen, at and around each multiple of 32, past both extents and at far coordinates; where
@@ -68,8 +68,7 @@ fn uints(c: &[[u32; 2]]) -> Vec<u8> {
 }
 
 /// Both `uint2` maps of every layer, as the shader decoders' arithmetic computes them with the
-/// device's denormals ([`kept_integer`]), on every profile, with no `RasterizationRateMap` note;
-/// Metal's answers at every point of a map's own layers.
+/// device's denormals ([`kept_integer`]), on every profile; Metal's answers at every point of a map's own layers.
 #[test]
 fn the_integer_maps_answer_as_metal() {
     let Some(bc) = fixture() else {
@@ -81,11 +80,6 @@ fn the_integer_maps_answer_as_metal() {
         let p = profile_with(stem);
         for entry in ["rate_map_integer", "rate_map_integer_pixel"] {
             let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{what} {entry}: {e}"));
-            assert!(
-                !a.precision.contains(&PrecisionNote::RasterizationRateMap),
-                "{what} {entry}: {:?}",
-                a.precision
-            );
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what} {entry}: L3: {e}"));
         }
         let (plan, m) = typed_module(&bc, "rate_map_integer", &p).expect("module");

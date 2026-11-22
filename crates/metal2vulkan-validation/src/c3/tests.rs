@@ -2990,8 +2990,8 @@ fn a_ray_tracing_refusal_is_out_of_scope_never_refused_or_a_gap() {
     assert!(!stated.holds());
 }
 
-/// The user's decision of 2026-10-03: a row that decoded a rasterization-rate map (the decoder's
-/// recorded near-equivalent) stays open, with its measured bound as the reason, even when the list
+/// The user's decision of 2026-10-03: a row that ran a recorded near-equivalent (a sparse
+/// texture's residency here) stays open, with its measured bound as the reason, even when the list
 /// reviews it; a case whose rate map the product refuses is missing with the refusal as its reason.
 /// Neither holds C3, and an ordinary mismatch carries no reason.
 #[test]
@@ -3013,12 +3013,12 @@ fn a_deferred_near_equivalent_stays_open_with_its_reason() {
                 required_size: None,
             }),
             strategies: Default::default(),
-            precision: [PrecisionNote::RasterizationRateMap].into(),
+            precision: [PrecisionNote::SparseResidency].into(),
             containment: None,
         }],
         artifact: None,
     });
-    row.comparison = ComparisonClass::Unbounded([PrecisionNote::RasterizationRateMap].into());
+    row.comparison = ComparisonClass::Unbounded([PrecisionNote::SparseResidency].into());
     row.status = noted_if_different(row.status);
     assert!(row.class_holds());
     let mut refused = case(2, "refused");
@@ -3058,15 +3058,15 @@ fn a_deferred_near_equivalent_stays_open_with_its_reason() {
             .find(|row| row.case_id == case.case_id)
             .map(|row| (row.verdict, row.reason.clone()))
     };
-    let deferred = OpenReason::NearEquivalent(PrecisionNote::RasterizationRateMap);
+    let deferred = OpenReason::NearEquivalent(PrecisionNote::SparseResidency);
     assert_eq!(
         open(&decoded),
         Some((Verdict::Mismatch, Some(deferred.clone())))
     );
     assert!(
         deferred.label().starts_with(
-            "deferred{near_equivalent:RasterizationRateMap:tile starts at integers where \
-                 Apple M3's are fractional"
+            "deferred{near_equivalent:SparseResidency:no bound: outside Metal's measured \
+                 footprint rule"
         ),
         "{}",
         deferred.label()

@@ -107,9 +107,11 @@ pub use plan::{
     GraphicsTemplate, ImageSource, ImageViewDesc, PlanDiagnostic, PushFieldPlacement, PushTemplate,
     ResourceUse, SamplerSource, UseTarget, VertexBufferBind, ViewSetup, WriteSource,
 };
+#[cfg(test)]
+pub(crate) use rate_map::RateMapAxis;
 pub use rate_map::{
-    RasterizationRateMap, RateMapAxis, RateMapDescriptor, RateMapError, RateMapLayerDescriptor,
-    UnpinnedCompile, MAX_SCREEN_EXTENT,
+    RasterizationRateMap, RateMapDescriptor, RateMapError, RateMapLayerDescriptor, UnpinnedCompile,
+    MAX_SCREEN_EXTENT,
 };
 pub use replay::DRAW_ARGUMENT_BYTES;
 pub(crate) use replay::{merged_fragment_table, merged_vertex, MergedVertex};
@@ -126,7 +128,7 @@ pub use state::{
 // How `BindState::shape` classes a buffer: the crate reads it from `state`, and a consumer takes
 // shapes from `BindState::shape`; only the crate's tests and validation reach it here.
 pub use pvrtc_decode::PvrtcDecode;
-pub use status::{ExecutionStatus, ReplayFaults, StatusBits, StatusReport, StatusWord};
+pub use status::{ExecutionStatus, StatusBits, StatusReport, StatusWord};
 pub use table::FunctionTableSnapshot;
 #[cfg(test)]
 pub(crate) use table::FunctionTableWords;

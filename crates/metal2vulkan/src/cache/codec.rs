@@ -1384,7 +1384,6 @@ codec_enum! {
         TessellationFactorInstance,
         Fp8Value,
         MultisamplePosition,
-        RasterizationRateMap,
         BicubicFilterArithmetic,
         SparseResidency,
         DeviceNanEncoding,

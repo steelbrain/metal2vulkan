@@ -70,14 +70,11 @@
 //! built: a descriptor of three layers, and either coordinate map over a map of no layers or of a
 //! zero screen extent.
 
-use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{
     made, Abort, Case, CoordinateProbe, Input, MappedCoordinates, MetalSource, RateMapForm,
     RateMapLayer, RateMapRequest, Side,
 };
-use crate::degradation::Degradation;
 use crate::rate_map_space as space;
-use crate::replay::NOTICES_SITE;
 use crate::transcript::{Node, Observed, Sites, Value};
 
 /// The quality sweep: one layer at [`space::SWEEP_EXTENT`], over every quality of
@@ -341,33 +338,6 @@ impl Point {
         (0..count).collect()
     }
 
-    /// Whether the compiled map is the identity inside its screen, so that making it announces
-    /// nothing.
-    ///
-    /// A map whose every tile spans as many screen pixels as physical ones maps every screen pixel
-    /// to itself; anything else is drawn region by region, which the runtime announces as the
-    /// `rasterization-rate-map` degradation when the map is made. A point that is not the identity
-    /// is why this family keeps a notice allowance.
-    ///
-    /// It is decided **per axis**, which only a degenerate screen distinguishes. An axis of no
-    /// screen pixels is one tile of nothing — no screen pixels and no physical ones — so it is the
-    /// identity whatever quality it was given, while the *other* axis of the same map is not if its
-    /// quality is below 1. `0` by `64` at a half is exactly that shape, and it is the one
-    /// `rate-map-zero-screen-width` compares and declares the notice for. Reading a zero extent as
-    /// making the whole map the identity would leave this walk's `0` by `64` and `64` by `0` rows
-    /// declaring no notice while the runtime announces one, which is a divergence of the suite's
-    /// own making.
-    fn identity(&self) -> bool {
-        self.layers.iter().all(|layer| {
-            [
-                (&layer.horizontal, self.screen[0]),
-                (&layer.vertical, self.screen[1]),
-            ]
-            .into_iter()
-            .all(|(axis, extent)| extent == 0 || axis.iter().all(|sample| *sample >= 1.0))
-        })
-    }
-
     /// The coordinate grid over this point's map, with each physical probe scaled to the layer's
     /// own derived extent.
     ///
@@ -478,25 +448,6 @@ impl Case for RateMapSweep {
             Input::bytes("descriptors", &words),
             Input::bytes("coordinate-grid", &grid),
         ])
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // Every point of every sweep but one states a quality below 1 somewhere, so making its map
-        // announces the rate-map degradation: a pass over such a map is drawn region by region, a
-        // near-equivalent the runtime declares (`docs/API.md`'s degrade catalogue). Metal announces
-        // nothing, so the notices set is the one field that may differ.
-        //
-        // The allowance is held to its evidence by the suite itself — the notice must have been
-        // announced on the run compared — and it is the only loosening this family declares. Every
-        // derived answer compares exactly, which is the point of the sweep.
-        if self.walk.points().iter().all(|point| point.identity()) {
-            return Vec::new();
-        }
-        vec![Allowance::new(
-            format!("case/{NOTICES_SITE}/*"),
-            Loosening::Unchecked,
-            Justification::notice(Degradation::RasterizationRateMap),
-        )]
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {
@@ -633,24 +584,6 @@ impl Case for RateMapParameterData {
             Input::bytes("descriptor", &words),
             Input::bytes("parameter-copy-offset", &0u64.to_le_bytes()),
         ])
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // The identity announces nothing, on either venue; anything else announces the rate-map
-        // degradation when the map is made, for the reason the sweeps' own allowance gives.
-        let identity = self.layers.iter().all(|layer| {
-            [&layer.horizontal, &layer.vertical]
-                .into_iter()
-                .all(|axis| axis.iter().all(|sample| *sample >= 1.0))
-        });
-        if identity {
-            return Vec::new();
-        }
-        vec![Allowance::new(
-            format!("case/{NOTICES_SITE}/*"),
-            Loosening::Unchecked,
-            Justification::notice(Degradation::RasterizationRateMap),
-        )]
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {
@@ -1273,55 +1206,6 @@ mod tests {
              compares one answer at more than one of them: {answers:?}",
             distinct.len()
         );
-    }
-
-    /// The identity is decided **per axis**, which is what a degenerate screen distinguishes: a
-    /// screen with one zero axis and a quality below 1 on the other is **not** the identity, and a
-    /// screen of two zero axes is.
-    ///
-    /// Without this, a zero extent read as making the whole map the identity leaves the `0` by `64`
-    /// and `64` by `0` rows declaring no notice while the runtime announces one — a divergence the
-    /// suite would have manufactured. `rate-map-zero-screen-width` compares the same descriptor and
-    /// declares the notice, so the two halves of the family would also have disagreed about one
-    /// shape.
-    #[test]
-    fn a_degenerate_screen_is_the_identity_only_where_both_axes_are() {
-        let by_screen: std::collections::BTreeMap<[u32; 2], bool> = Walk::DegenerateForms
-            .points()
-            .iter()
-            .map(|point| (point.screen, point.identity()))
-            .collect();
-        assert_eq!(
-            by_screen.get(&[0, 64]),
-            Some(&false),
-            "0 by 64 at a half on each axis is not the identity: its vertical axis lays 64 \
-             screen pixels into 33 physical ones"
-        );
-        assert_eq!(
-            by_screen.get(&[64, 0]),
-            Some(&false),
-            "64 by 0 at a half on each axis is not the identity: its horizontal axis lays 64 \
-             screen pixels into 33 physical ones"
-        );
-        assert_eq!(
-            by_screen.get(&[0, 0]),
-            Some(&true),
-            "0 by 0 is the identity whatever its qualities: both axes are one tile of no \
-             screen pixels and no physical ones"
-        );
-        // And the answer is the compiled map's own, not a rule restated here.
-        for (screen, identity) in &by_screen {
-            let map = compiled(
-                *screen,
-                &[space::uniform_layer(space::SCREEN_SWEEP_QUALITY)],
-            )
-            .expect("a degenerate screen compiles");
-            assert_eq!(
-                map.is_identity(),
-                *identity,
-                "{screen:?}: the walk calls it identity={identity} and the compiled map disagrees"
-            );
-        }
     }
 
     /// The walks fingerprint differently, so no recording of one is read against another's.

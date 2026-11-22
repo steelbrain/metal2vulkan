@@ -159,9 +159,6 @@ impl RateMapLayerDescriptor {
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RateMapError {
-    /// A map of explicit tiles has no layer, so no vertical axis ([`RasterizationRateMap::new`]
-    /// compiles a map of none).
-    NoLayers,
     /// A screen extent is 0 or above [`MAX_SCREEN_EXTENT`], or explicit tiles cover more than
     /// 16384 screen pixels, the most Metal's parameter data holds.
     ScreenExtent { extent: u32 },
@@ -177,9 +174,6 @@ pub enum RateMapError {
     /// [`RasterizationRateMap::new`] does not compile the descriptor: it is outside the bounds
     /// where the compile is measured to be Apple's.
     Unpinned { reason: UnpinnedCompile },
-    /// A map of explicit tiles has more than two layers: Metal's parameter data holds two
-    /// horizontal axes.
-    LayerCount { count: usize },
     /// Layer `layer`'s vertical axis is not layer 0's: Metal's parameter data holds one vertical
     /// axis, every layer's.
     VerticalAxis { layer: usize },
@@ -270,7 +264,6 @@ impl fmt::Display for UnpinnedCompile {
 impl fmt::Display for RateMapError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RateMapError::NoLayers => f.write_str("explicit tiles need a layer"),
             RateMapError::ScreenExtent { extent } => write!(
                 f,
                 "screen extent {extent} is past {MAX_SCREEN_EXTENT}, or explicit tiles' is \
@@ -292,10 +285,6 @@ impl fmt::Display for RateMapError {
             RateMapError::Unpinned { reason } => {
                 write!(f, "not compiled as Apple compiles it: {reason}")
             }
-            RateMapError::LayerCount { count } => write!(
-                f,
-                "{count} layers, more than the {MAX_COMPILED_LAYERS} Metal's parameter data holds"
-            ),
             RateMapError::OffsetTie { tile } => write!(
                 f,
                 "tile {tile}'s offset lies halfway between two 1/256-pixel steps, whose rounding \
@@ -314,7 +303,7 @@ impl std::error::Error for RateMapError {}
 
 /// One axis of a compiled layer: its tiles in screen order.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct RateMapAxis {
+pub(crate) struct RateMapAxis {
     granularity: u32,
     /// `(screen extent, physical extent)` per tile.
     tiles: Vec<(u32, u32)>,
@@ -322,7 +311,7 @@ pub struct RateMapAxis {
 
 impl RateMapAxis {
     /// The physical extent the tiles cover.
-    pub fn physical_extent(&self) -> u32 {
+    pub(crate) fn physical_extent(&self) -> u32 {
         self.tiles.iter().map(|&(_, p)| p).sum()
     }
 
@@ -663,19 +652,20 @@ impl RasterizationRateMap {
     }
 
     /// The map of these compiled layers, each `[horizontal, vertical]`, over `screen_size`: at
-    /// least one and at most two layers, each axis covering the map's screen extent, the layers
-    /// sharing one vertical axis (what Metal's parameter data holds).
+    /// least one and at most two layers (the tests' own maps; a test that passes another count
+    /// panics), each axis covering the map's screen extent, the layers sharing one vertical axis
+    /// (what Metal's parameter data holds).
     #[cfg(test)]
     pub(crate) fn from_layers(
         screen_size: [u32; 2],
         layers: Vec<[RateMapAxis; 2]>,
     ) -> Result<RasterizationRateMap, RateMapError> {
-        let [_, vertical] = layers.first().ok_or(RateMapError::NoLayers)?;
-        if layers.len() > MAX_COMPILED_LAYERS {
-            return Err(RateMapError::LayerCount {
-                count: layers.len(),
-            });
-        }
+        let [_, vertical] = layers.first().expect("a map of explicit tiles has a layer");
+        assert!(
+            layers.len() <= MAX_COMPILED_LAYERS,
+            "{} layers, more than Metal's parameter data holds",
+            layers.len()
+        );
         for (l, layer) in layers.iter().enumerate() {
             for (a, (axis, extent)) in layer.iter().zip(screen_size).enumerate() {
                 if axis.screen_extent() != extent {

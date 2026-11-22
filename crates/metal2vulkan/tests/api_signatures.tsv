@@ -70,7 +70,6 @@ assoc-const	metal2vulkan::bind::RootTable::SINK_HOST_OFFSET	pub const SINK_HOST_
 assoc-const	metal2vulkan::bind::StatusBits::CUBIC_ARGUMENT_SAMPLER	pub const CUBIC_ARGUMENT_SAMPLER: StatusBits
 assoc-const	metal2vulkan::bind::StatusBits::MESH_GRID_DISCARDED	pub const MESH_GRID_DISCARDED: StatusBits
 assoc-const	metal2vulkan::bind::StatusBits::MESH_GRID_PAST_LIMITS	pub const MESH_GRID_PAST_LIMITS: StatusBits
-assoc-const	metal2vulkan::bind::StatusBits::REPLAY_FAULT	pub const REPLAY_FAULT: StatusBits
 assoc-const	metal2vulkan::bind::StatusBits::RESIDENT_MISS	pub const RESIDENT_MISS: StatusBits
 assoc-const	metal2vulkan::bind::TexelRows::FIRST	pub const FIRST: usize
 assoc-const	metal2vulkan::bind::TexelRows::HEIGHT	pub const HEIGHT: usize
@@ -244,7 +243,6 @@ assoc-const-value	metal2vulkan::bind::RootTable::SINK_HOST_OFFSET	(SINK_ROOT * E
 assoc-const-value	metal2vulkan::bind::StatusBits::CUBIC_ARGUMENT_SAMPLER	StatusBits(1 <<3)
 assoc-const-value	metal2vulkan::bind::StatusBits::MESH_GRID_DISCARDED	StatusBits(1 <<5)
 assoc-const-value	metal2vulkan::bind::StatusBits::MESH_GRID_PAST_LIMITS	StatusBits(1 <<4)
-assoc-const-value	metal2vulkan::bind::StatusBits::REPLAY_FAULT	StatusBits(1 <<1)
 assoc-const-value	metal2vulkan::bind::StatusBits::RESIDENT_MISS	StatusBits(1 <<0)
 assoc-const-value	metal2vulkan::bind::TexelRows::FIRST	3
 assoc-const-value	metal2vulkan::bind::TexelRows::HEIGHT	1
@@ -2131,8 +2129,6 @@ field	metal2vulkan::bind::StageTable.threadgroup_lengths	pub threadgroup_lengths
 field	metal2vulkan::bind::StatusReport.cubic_argument_sampler	pub cubic_argument_sampler: bool
 field	metal2vulkan::bind::StatusReport.mesh_grid_discarded	pub mesh_grid_discarded: bool
 field	metal2vulkan::bind::StatusReport.mesh_grid_past_limits	pub mesh_grid_past_limits: bool
-field	metal2vulkan::bind::StatusReport.replay_fault	pub replay_fault: bool
-field	metal2vulkan::bind::StatusReport.replay_faults	pub replay_faults: ReplayFaults
 field	metal2vulkan::bind::StatusReport.resident_miss	pub resident_miss: bool
 field	metal2vulkan::bind::StatusReport.resident_misses	pub resident_misses: u32
 field	metal2vulkan::bind::TessellationFactorBuffer.instance_stride	pub instance_stride: u64
@@ -6516,7 +6512,6 @@ method	metal2vulkan::bind::RasterizationRateMap::screen_size	pub fn screen_size(
 method	metal2vulkan::bind::RasterizationRateMap::screen_to_physical	pub fn screen_to_physical(&self, c: [f32; 2], layer: u32) -> [f32; 2]
 method	metal2vulkan::bind::RasterizationRateMap::to_bytes	pub fn to_bytes(&self) -> Vec<u8>
 method	metal2vulkan::bind::RasterizationRateMap::words	pub fn words(&self) -> &[u32]
-method	metal2vulkan::bind::RateMapAxis::physical_extent	pub fn physical_extent(&self) -> u32
 method	metal2vulkan::bind::RateMapDescriptor::new	pub fn new(screen_size: [u32; 2]) -> RateMapDescriptor
 method	metal2vulkan::bind::RateMapLayerDescriptor::new	pub fn new(horizontal: Vec<f32>, vertical: Vec<f32>) -> RateMapLayerDescriptor
 method	metal2vulkan::bind::SamplerDescriptor::new	pub fn new() -> SamplerDescriptor
@@ -7276,10 +7271,8 @@ struct	metal2vulkan::bind::PushFieldPlacement	#[cfg_attr(feature = "serde", deri
 struct	metal2vulkan::bind::PushTemplate	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct PushTemplate
 struct	metal2vulkan::bind::PvrtcDecode	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct PvrtcDecode
 struct	metal2vulkan::bind::RasterizationRateMap	#[derive(Clone, Debug, PartialEq, Eq, Hash)] pub struct RasterizationRateMap
-struct	metal2vulkan::bind::RateMapAxis	#[derive(Clone, Debug, PartialEq, Eq, Hash)] pub struct RateMapAxis
 struct	metal2vulkan::bind::RateMapDescriptor	#[derive(Clone, Debug, PartialEq)] #[non_exhaustive] pub struct RateMapDescriptor
 struct	metal2vulkan::bind::RateMapLayerDescriptor	#[derive(Clone, Debug, Default, PartialEq)] #[non_exhaustive] pub struct RateMapLayerDescriptor
-struct	metal2vulkan::bind::ReplayFaults	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct ReplayFaults(pub u32)
 struct	metal2vulkan::bind::ResidentRange	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ResidentRange
 struct	metal2vulkan::bind::ResourceUse	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ResourceUse
 struct	metal2vulkan::bind::RootTable	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct RootTable
@@ -8928,7 +8921,6 @@ variant	metal2vulkan-runtime::PrecisionNote::NativeTranscendentals	NativeTransce
 variant	metal2vulkan-runtime::PrecisionNote::PixelSamplerScaling	PixelSamplerScaling
 variant	metal2vulkan-runtime::PrecisionNote::QuadsCountedBeforeDiscard	QuadsCountedBeforeDiscard
 variant	metal2vulkan-runtime::PrecisionNote::QuadsSplitByClipping	QuadsSplitByClipping
-variant	metal2vulkan-runtime::PrecisionNote::RasterizationRateMap	RasterizationRateMap
 variant	metal2vulkan-runtime::PrecisionNote::ReductionOrder	ReductionOrder
 variant	metal2vulkan-runtime::PrecisionNote::RestrictedDepthRange	RestrictedDepthRange
 variant	metal2vulkan-runtime::PrecisionNote::RotatedBlendRounding	RotatedBlendRounding
@@ -9218,8 +9210,6 @@ variant	metal2vulkan::bind::PushHole::ReplayRegionAddress	ReplayRegionAddress { 
 variant	metal2vulkan::bind::PushHole::RootTableAddress	RootTableAddress { stages: vk::ShaderStageFlags, offset: u32 }
 variant	metal2vulkan::bind::RateMapError::ExtentMismatch	ExtentMismatch { layer: usize, axis: usize }
 variant	metal2vulkan::bind::RateMapError::Granularity	Granularity { granularity: u32 }
-variant	metal2vulkan::bind::RateMapError::LayerCount	LayerCount { count: usize }
-variant	metal2vulkan::bind::RateMapError::NoLayers	NoLayers
 variant	metal2vulkan::bind::RateMapError::NoSamples	NoSamples { layer: usize, axis: usize }
 variant	metal2vulkan::bind::RateMapError::OffsetTie	OffsetTie { tile: usize }
 variant	metal2vulkan::bind::RateMapError::ScreenExtent	ScreenExtent { extent: u32 }
@@ -9232,7 +9222,6 @@ variant	metal2vulkan::bind::ResourceClass::Texture	Texture(TextureFacts)
 variant	metal2vulkan::bind::SamplerSource::Immutable	Immutable
 variant	metal2vulkan::bind::SamplerSource::Neutral	Neutral(NeutralResource)
 variant	metal2vulkan::bind::SamplerSource::Slot	Slot { slot: SlotRef, compare: bool, integer: bool, opaque_black: OpaqueBlackBorder }
-variant	metal2vulkan::bind::StatusWord::ReplayFaults	ReplayFaults
 variant	metal2vulkan::bind::StatusWord::ResidentMisses	ResidentMisses
 variant	metal2vulkan::bind::StatusWord::SeqCstFences	SeqCstFences
 variant	metal2vulkan::bind::StatusWord::Status	Status
@@ -10364,7 +10353,6 @@ variant	metal2vulkan::pipeline::PrecisionNote::NativeTranscendentals	NativeTrans
 variant	metal2vulkan::pipeline::PrecisionNote::PixelSamplerScaling	PixelSamplerScaling
 variant	metal2vulkan::pipeline::PrecisionNote::QuadsCountedBeforeDiscard	QuadsCountedBeforeDiscard
 variant	metal2vulkan::pipeline::PrecisionNote::QuadsSplitByClipping	QuadsSplitByClipping
-variant	metal2vulkan::pipeline::PrecisionNote::RasterizationRateMap	RasterizationRateMap
 variant	metal2vulkan::pipeline::PrecisionNote::ReductionOrder	ReductionOrder
 variant	metal2vulkan::pipeline::PrecisionNote::RestrictedDepthRange	RestrictedDepthRange
 variant	metal2vulkan::pipeline::PrecisionNote::RotatedBlendRounding	RotatedBlendRounding

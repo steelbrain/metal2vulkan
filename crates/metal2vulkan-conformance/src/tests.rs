@@ -3335,8 +3335,7 @@ fn an_undocumented_refusal_is_one_row_and_names_no_excuse() {
     assert!(!printed.contains("documented"), "{printed}");
 }
 
-/// The rate-map cases state the descriptor they feed, name the words Metal's validation used, and
-/// keep the refusal's allowance to the call's own site.
+/// The rate-map cases state the descriptor they feed and loosen nothing.
 #[test]
 fn the_rate_map_cases_name_what_justifies_them() {
     let cases = crate::cases::rate_maps::all();
@@ -3358,44 +3357,9 @@ fn the_rate_map_cases_name_what_justifies_them() {
             inputs.iter().any(|input| input.name == "descriptor"),
             "{inputs:?}"
         );
-        // Every allowance names something that exists -- the rate-map degradation -- over the
-        // notices site alone, so every answer of the map itself still compares exactly.
-        for allowance in case.allowances() {
-            match &allowance.justified_by {
-                Justification::Degradation(code) => {
-                    assert!(code == Degradation::RasterizationRateMap.code(), "{code}");
-                    assert_eq!(allowance.path, "case/notices/*");
-                }
-                other => panic!("an unexpected tolerance: {other:?}"),
-            }
-        }
-    }
-    // The map of the identity announces no rate-map degradation and declares none; the one that is
-    // not the identity announces it when the map is made. Neither rests on the validated oracle:
-    // the zero-screen-width refusal that did is closed.
-    let codes = |case: &crate::cases::rate_maps::RateMapCase| -> Vec<String> {
-        case.allowances()
-            .iter()
-            .filter_map(|allowance| match &allowance.justified_by {
-                Justification::Degradation(code) => Some(code.clone()),
-                _ => None,
-            })
-            .collect()
-    };
-    assert!(codes(&cases[0]).is_empty());
-    assert_eq!(
-        codes(&cases[1]),
-        vec![Degradation::RasterizationRateMap.code().to_owned()]
-    );
-    for case in &cases {
-        assert!(
-            !case.allowances().iter().any(|allowance| matches!(
-                allowance.justified_by,
-                Justification::MetalValidation { .. }
-            )),
-            "{}",
-            case.name()
-        );
+        // Every answer compares exactly: neither case loosens anything, and neither rests on the
+        // validated oracle (the zero-screen-width refusal that did is closed).
+        assert!(case.allowances().is_empty(), "{}", case.name());
     }
 }
 

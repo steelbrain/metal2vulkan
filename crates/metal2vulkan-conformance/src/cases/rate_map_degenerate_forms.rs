@@ -58,12 +58,9 @@
 //! which the runtime refuses for that reason. No case here asks for it, which is the same bound
 //! `rate-map-zero-screen-width` keeps.
 
-use crate::allowance::{Allowance, Justification, Loosening};
 use crate::case::{
     made, Abort, Case, Input, MetalSource, RateMapForm, RateMapLayer, RateMapRequest, Side,
 };
-use crate::degradation::Degradation;
-use crate::replay::NOTICES_SITE;
 use crate::transcript::{ByteLayout, Element, Gaps, Node, Observed, Region, Sites};
 
 /// The screen every case here states: `rate-map-zero-screen-width`'s, whose compiled answer on this
@@ -174,21 +171,6 @@ impl Case for DegenerateFormCase {
             Input::bytes("label", LABEL.as_bytes()),
             Input::bytes("parameter-copy-offset", &0u64.to_le_bytes()),
         ])
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // The same declaration `rate-map-zero-screen-width` makes, because the map is its map: the
-        // rate-map degradation the runtime announces when it makes a map that is not the identity. `0` by `64` at a half is not: its
-        // vertical axis lays 64 screen pixels into 33 physical ones, so a pass over it would be
-        // drawn region by region, a near-equivalent the runtime declares (`docs/API.md`'s degrade
-        // catalogue). Metal announces nothing, so the notices set is the one field that may differ,
-        // and the allowance is held to its evidence — the notice must actually have been announced
-        // on the run compared.
-        vec![Allowance::new(
-            format!("case/{NOTICES_SITE}/*"),
-            Loosening::Unchecked,
-            Justification::notice(Degradation::RasterizationRateMap),
-        )]
     }
 
     fn run(&self, side: &mut dyn Side, sites: &mut Sites) -> Result<(), Abort> {
@@ -350,15 +332,14 @@ mod tests {
         }
     }
 
-    /// Every case runs on Metal, states its descriptor as an input, and loosens nothing but the
-    /// notices site — the shape `tests::the_rate_map_cases_name_what_justifies_them` holds the
-    /// family's other half to.
+    /// Every case runs on Metal, states its descriptor as an input, and loosens nothing — the
+    /// shape `tests::the_rate_map_cases_name_what_justifies_them` holds the family's other half to.
     ///
     /// Every answer the map itself gives therefore compares **exactly**, which is the whole claim
     /// of these cases: a route that compiled a different map at a degenerate extent has nowhere to
     /// hide.
     #[test]
-    fn every_case_runs_on_metal_and_loosens_only_its_notices() {
+    fn every_case_runs_on_metal_and_loosens_nothing() {
         for case in all() {
             assert_eq!(case.metal_source(), MetalSource::Run, "{}", case.name);
             assert!(case.metal_source().forbidden().is_none(), "{}", case.name);
@@ -369,26 +350,7 @@ mod tests {
                  the case fed: {inputs:?}",
                 case.name
             );
-            let allowances = case.allowances();
-            assert_eq!(
-                allowances.len(),
-                1,
-                "{}: the rate-map degradation is the one notice this shape declares",
-                case.name
-            );
-            for allowance in allowances {
-                match &allowance.justified_by {
-                    Justification::Degradation(code) => {
-                        assert!(
-                            *code == Degradation::RasterizationRateMap.code(),
-                            "{}: {code}",
-                            case.name
-                        );
-                        assert_eq!(allowance.path, format!("case/{NOTICES_SITE}/*"));
-                    }
-                    other => panic!("{}: an unexpected tolerance: {other:?}", case.name),
-                }
-            }
+            assert!(case.allowances().is_empty(), "{}", case.name);
         }
     }
 
@@ -453,13 +415,7 @@ mod tests {
             answers.len()
         );
         let (physical, _, identity, _) = answers.into_iter().next().expect("one answer");
-        // The shape the allowance rests on: the map is not the identity, so the runtime announces
-        // the rate-map degradation and every case here has to declare it.
-        assert!(
-            !identity,
-            "0 by 64 at a half compiles the identity, so the notice these cases declare would \
-             never fire and the declaration would be checking nothing"
-        );
+        assert!(!identity, "0 by 64 at a half compiles the identity");
         assert_eq!(
             physical,
             Some([0, 33]),

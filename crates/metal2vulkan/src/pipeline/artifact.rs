@@ -699,13 +699,6 @@ pub enum PrecisionNote {
     /// `[[point_coord]]` and a centroid varying at the sample and `[[position]]`'s z and w at the
     /// pixel, where they equal Metal's to the last bit or two.
     MultisamplePosition,
-    /// A render pass drawn by regions over a rasterization-rate map that is not the identity: its
-    /// regions' lines are this crate's tiles' exact lines,
-    /// where Apple's are its fixed-point ones, so a fragment's evaluated point lies within the
-    /// bound of Metal's. A module that decodes a map records none: its decoder is Apple's GPU
-    /// arithmetic over Metal's parameter data, bit for bit (it once recorded this note, when the
-    /// data was this crate's own layout).
-    RasterizationRateMap,
     /// A filter the module emulates by fetches sums its taps in the device's arithmetic, where
     /// Metal's sampler has its own datapath: Metal's bicubic filter (every format), and an
     /// extended-range texture's linear, 3D and linear-mip-filter samples (`BGR10_XR`,

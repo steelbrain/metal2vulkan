@@ -514,13 +514,11 @@ surface! {
         struct StatusBits E;
         struct StatusReport N;
         enum StatusWord N;
-        struct ReplayFaults E;
         const DRAW_ARGUMENT_BYTES;
         const DRAW_INDEX_ENTRY_BYTES;
         const MERGED_REST_FIRST;
         struct FunctionTableSnapshot O;
         struct RasterizationRateMap O;
-        struct RateMapAxis O;
         struct RateMapDescriptor N;
         struct RateMapLayerDescriptor N;
         enum RateMapError N;

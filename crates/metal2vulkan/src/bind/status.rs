@@ -21,10 +21,9 @@ impl ExecutionStatus {
         [0; ExecutionStatus::BYTES]
     }
 
-    /// What the buffer's bytes report after the command buffer ran. The consumer maps a replay
-    /// fault, a mesh grid Metal's GPU
-    /// discards or the device cannot launch, and a cubic argument sampler's sample
-    /// to a command-buffer execution error, and treats resident-set misses by its own policy.
+    /// What the buffer's bytes report after the command buffer ran. The consumer maps a mesh grid
+    /// Metal's GPU discards or the device cannot launch, and a cubic argument sampler's sample, to a
+    /// command-buffer execution error, and treats resident-set misses by its own policy.
     pub fn decode(bytes: &[u8; ExecutionStatus::BYTES]) -> StatusReport {
         let word = |w: StatusWord| {
             let at = w.byte_offset() as usize;
@@ -34,8 +33,6 @@ impl ExecutionStatus {
         StatusReport {
             resident_miss: bits.contains(StatusBits::RESIDENT_MISS),
             resident_misses: word(StatusWord::ResidentMisses),
-            replay_fault: bits.contains(StatusBits::REPLAY_FAULT),
-            replay_faults: ReplayFaults(word(StatusWord::ReplayFaults)),
             cubic_argument_sampler: bits.contains(StatusBits::CUBIC_ARGUMENT_SAMPLER),
             mesh_grid_discarded: bits.contains(StatusBits::MESH_GRID_DISCARDED),
             mesh_grid_past_limits: bits.contains(StatusBits::MESH_GRID_PAST_LIMITS),
@@ -52,11 +49,6 @@ pub struct StatusReport {
     /// The number of resident-set misses counted (a `u32` the device increments, wrapping after
     /// `2^32` misses).
     pub resident_misses: u32,
-    /// The device replay's preprocess met a command it does not replay: that command dispatched
-    /// nothing. [`StatusReport::replay_faults`] says why.
-    pub replay_fault: bool,
-    /// Why the device replay's preprocess refused commands: the union of their reasons.
-    pub replay_faults: ReplayFaults,
     /// A function sampled through an argument buffer's sampler whose min or mag filter is
     /// `Cubic`, whose bicubic filter it does not emulate there
     /// (`RuntimeFact::CubicArgumentSampler`): no result of the command buffer is then Metal's.
@@ -77,12 +69,11 @@ pub enum StatusWord {
     Status,
     /// Resident-miss count. Initial 0.
     ResidentMisses,
-    /// The device replay's fault reasons ([`ReplayFaults`]). Initial 0.
-    ReplayFaults,
     /// The word every sequentially consistent fence of the command buffer increments with an
     /// acquire-release atomic at the fence's scope (`lower::sync::barrier::seq_cst_order`), so
     /// that the fences of one command buffer are totally ordered, as Metal's are. Its value means
-    /// nothing; the decode does not read it. Initial 0.
+    /// nothing; the decode does not read it. Initial 0. It is the buffer's last word, after one
+    /// that nothing writes.
     SeqCstFences,
 }
 
@@ -92,7 +83,6 @@ impl StatusWord {
         match self {
             StatusWord::Status => 0,
             StatusWord::ResidentMisses => 1,
-            StatusWord::ReplayFaults => 2,
             StatusWord::SeqCstFences => 3,
         }
     }
@@ -110,8 +100,6 @@ pub struct StatusBits(pub u32);
 impl StatusBits {
     /// An access missed the resident set.
     pub const RESIDENT_MISS: StatusBits = StatusBits(1 << 0);
-    /// The device replay's preprocess refused a command; [`StatusWord::ReplayFaults`] holds why.
-    pub const REPLAY_FAULT: StatusBits = StatusBits(1 << 1);
     /// A function sampled, gathered, or queried through a sampler an argument buffer holds whose
     /// min or mag filter is `Cubic`, whose bicubic filter it does not emulate there
     /// (`RuntimeFact::CubicArgumentSampler`): its result is the device's through a nearest
@@ -132,38 +120,38 @@ impl StatusBits {
     }
 }
 
-/// Why the device replay's preprocess refused a command, the bits of [`StatusWord::ReplayFaults`].
-/// A refused command dispatches nothing; every other command of the range still runs, so a consumer
-/// that reads a fault reports the command buffer's execution as failed, as Metal reports an
-/// encoding fault, and may replay the range on the host instead (`CommandBuffer::decode`, which
-/// names the command).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct ReplayFaults(pub u32);
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn words_are_distinct_and_fill_the_buffer() {
+    fn words_are_distinct_and_inside_the_buffer() {
         let words = [
             StatusWord::Status,
             StatusWord::ResidentMisses,
-            StatusWord::ReplayFaults,
             StatusWord::SeqCstFences,
         ];
         for (i, w) in words.iter().enumerate() {
-            assert_eq!(w.index() as usize, i, "{w:?}");
+            assert!(
+                words[..i].iter().all(|other| other.index() != w.index()),
+                "{w:?}"
+            );
             assert_eq!(w.byte_offset(), 4 * w.index(), "{w:?}");
+            assert!(
+                w.byte_offset() as usize + 4 <= ExecutionStatus::BYTES,
+                "{w:?}"
+            );
         }
-        assert_eq!(words.len() * 4, ExecutionStatus::BYTES);
+        assert_eq!(
+            StatusWord::SeqCstFences.byte_offset() as usize + 4,
+            ExecutionStatus::BYTES
+        );
     }
 
     #[test]
     fn status_bits_are_distinct() {
         let bits = [
             StatusBits::RESIDENT_MISS,
-            StatusBits::REPLAY_FAULT,
             StatusBits::CUBIC_ARGUMENT_SAMPLER,
             StatusBits::MESH_GRID_PAST_LIMITS,
             StatusBits::MESH_GRID_DISCARDED,
@@ -174,8 +162,8 @@ mod tests {
             assert_eq!(all & b.0, 0);
             all |= b.0;
         }
-        assert!(StatusBits(all).contains(StatusBits::REPLAY_FAULT));
-        assert!(!StatusBits::RESIDENT_MISS.contains(StatusBits::REPLAY_FAULT));
+        assert!(StatusBits(all).contains(StatusBits::CUBIC_ARGUMENT_SAMPLER));
+        assert!(!StatusBits::RESIDENT_MISS.contains(StatusBits::CUBIC_ARGUMENT_SAMPLER));
     }
 
     /// The initial bytes are all zero, and `decode` of them reports nothing.
@@ -200,15 +188,9 @@ mod tests {
         let r = ExecutionStatus::decode(&bytes);
         assert!(r.cubic_argument_sampler && !r.resident_miss);
         assert_eq!(r.resident_misses, 0);
-        bytes = [0u8; ExecutionStatus::BYTES];
-        bytes[0..4].copy_from_slice(&StatusBits::REPLAY_FAULT.0.to_le_bytes());
-        bytes[8..12].copy_from_slice(&0x41u32.to_le_bytes());
-        let r = ExecutionStatus::decode(&bytes);
-        assert!(r.replay_fault && !r.cubic_argument_sampler);
-        assert_eq!(r.replay_faults, ReplayFaults(0x41));
         let mut cubic = [0u8; ExecutionStatus::BYTES];
         cubic[0..4].copy_from_slice(&StatusBits::CUBIC_ARGUMENT_SAMPLER.0.to_le_bytes());
         let c = ExecutionStatus::decode(&cubic);
-        assert!(c.cubic_argument_sampler && !c.replay_fault);
+        assert!(c.cubic_argument_sampler && !c.resident_miss);
     }
 }

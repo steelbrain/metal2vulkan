@@ -2007,10 +2007,6 @@ bound.
   differs from Metal's by at most its change over half the pixel's diagonal, and a centroid varying
   by at most its change across the pixel's covered area; exact where the device evaluates a read
   where Metal does.
-- `metal2vulkan-degrade-rasterization-rate-map` (precision). `PrecisionNote::RasterizationRateMap`:
-  A render pass drawn by regions over a rasterization-rate map that is not the identity: its
-  regions' lines are this crate's tiles' exact lines, where Apple's are its fixed-point ones, so a
-  fragment's evaluated point lies within a bounded distance of Metal's.
 - `metal2vulkan-degrade-bicubic-filter-arithmetic` (precision).
   `PrecisionNote::BicubicFilterArithmetic`: a filter emulated by fetches (Metal's bicubic filter on
   every format, and an extended-range texture's linear, 3D and linear-mip-filter samples) sums its

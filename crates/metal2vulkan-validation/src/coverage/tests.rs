@@ -101,16 +101,16 @@ fn a_rate_mapped_pass_records_its_regions() {
         screen_size: [37, 23],
         compiled_physical_size: [36, 23],
         regions: 2,
-        precision: [PrecisionNote::RasterizationRateMap].into(),
+        precision: [PrecisionNote::SparseResidency].into(),
     });
     assert_eq!(
         census.comparison_class(),
-        ComparisonClass::derive([PrecisionNote::RasterizationRateMap], ["arith.float"])
+        ComparisonClass::derive([PrecisionNote::SparseResidency], ["arith.float"])
     );
     let json = serde_json::to_value(&census).unwrap();
     assert_eq!(
         json["rate_map_pass"]["precision"],
-        serde_json::json!(["RasterizationRateMap"])
+        serde_json::json!(["SparseResidency"])
     );
     assert_eq!(
         serde_json::from_value::<ExecutedCensus>(json).unwrap(),

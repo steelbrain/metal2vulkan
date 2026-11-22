@@ -654,10 +654,6 @@ fn the_two_maps_are_inverse() {
 /// Malformed descriptors and tiles, and tiles Metal's parameter data cannot hold, are refused.
 #[test]
 fn malformed_maps_are_refused() {
-    assert_eq!(
-        RasterizationRateMap::from_layers([16, 16], Vec::new()),
-        Err(RateMapError::NoLayers)
-    );
     let mut d = RateMapDescriptor::new([70000, 16]);
     d.layers.push(layer(&[1.0], &[1.0]));
     assert_eq!(
@@ -706,13 +702,8 @@ fn malformed_maps_are_refused() {
         Err(RateMapError::ExtentMismatch { layer: 0, axis: 0 })
     );
     assert_eq!(
-        RasterizationRateMap::from_layers([32, 16], vec![[x.clone(), y.clone()], [x.clone(), y2]]),
+        RasterizationRateMap::from_layers([32, 16], vec![[x.clone(), y], [x, y2]]),
         Err(RateMapError::VerticalAxis { layer: 1 })
-    );
-    let three = vec![[x.clone(), y.clone()], [x.clone(), y.clone()], [x, y]];
-    assert_eq!(
-        RasterizationRateMap::from_layers([32, 16], three),
-        Err(RateMapError::LayerCount { count: 3 })
     );
 }
 

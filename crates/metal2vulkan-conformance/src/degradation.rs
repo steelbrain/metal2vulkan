@@ -65,8 +65,6 @@ pub enum Degradation {
     Fp8Value,
     /// `metal2vulkan-degrade-multisample-position`.
     MultisamplePosition,
-    /// `metal2vulkan-degrade-rasterization-rate-map`.
-    RasterizationRateMap,
     /// `metal2vulkan-degrade-bicubic-filter-arithmetic`.
     BicubicFilterArithmetic,
     /// `metal2vulkan-degrade-sparse-residency`.
@@ -209,7 +207,6 @@ impl Degradation {
         Degradation::TessellationFactorInstance,
         Degradation::Fp8Value,
         Degradation::MultisamplePosition,
-        Degradation::RasterizationRateMap,
         Degradation::BicubicFilterArithmetic,
         Degradation::SparseResidency,
         Degradation::DeviceNanEncoding,
@@ -309,7 +306,6 @@ impl Degradation {
             }
             Degradation::Fp8Value => "metal2vulkan-degrade-fp8-value",
             Degradation::MultisamplePosition => "metal2vulkan-degrade-multisample-position",
-            Degradation::RasterizationRateMap => "metal2vulkan-degrade-rasterization-rate-map",
             Degradation::BicubicFilterArithmetic => {
                 "metal2vulkan-degrade-bicubic-filter-arithmetic"
             }
@@ -421,7 +417,6 @@ impl Degradation {
             PrecisionNote::TessellationFactorInstance => Degradation::TessellationFactorInstance,
             PrecisionNote::Fp8Value => Degradation::Fp8Value,
             PrecisionNote::MultisamplePosition => Degradation::MultisamplePosition,
-            PrecisionNote::RasterizationRateMap => Degradation::RasterizationRateMap,
             PrecisionNote::BicubicFilterArithmetic => Degradation::BicubicFilterArithmetic,
             PrecisionNote::SparseResidency => Degradation::SparseResidency,
             PrecisionNote::DeviceNanEncoding => Degradation::DeviceNanEncoding,

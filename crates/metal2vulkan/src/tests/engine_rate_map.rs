@@ -1,7 +1,6 @@
 //! Rasterization-rate maps end to end (Apple's layout): `rasterization_rate_map_decoder`'s `float2`
-//! maps compile to Apple's GPU decoder of Metal's parameter data on every tested profile, pass L3,
-//! and record no `RasterizationRateMap` note (the decoder is Apple's arithmetic over Metal's
-//! bytes). Its `float` arithmetic is the device's: its denormals the device's own, noted
+//! maps compile to Apple's GPU decoder of Metal's parameter data on every tested profile and pass
+//! L3 (the decoder is Apple's arithmetic over Metal's bytes). Its `float` arithmetic is the device's: its denormals the device's own, noted
 //! `DeviceDenormals`, and its `NaN` the device's, noted `NativeNanEncoding`. On the CPU interpreter,
 //! which keeps `float` denormals as lavapipe does, the module computes the shader decoder's
 //! arithmetic over the same bytes with denormals kept ([`kept`]): bit for bit, the sign of a zero
@@ -268,11 +267,6 @@ fn the_decoder_answers_as_the_map() {
         let p = profile_with(stem);
         let a = compile(&bc, "rate_map", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
         assert!(
-            !a.precision.contains(&PrecisionNote::RasterizationRateMap),
-            "{what}: {:?}",
-            a.precision
-        );
-        assert!(
             a.precision.contains(&PrecisionNote::DeviceDenormals),
             "{what}: {:?}",
             a.precision
@@ -388,7 +382,7 @@ fn stray_words_decode_without_a_fault() {
 
 /// A fragment function that unwarps its position through the map (the corpus's fragment shape:
 /// `map_screen_to_physical_coordinates(position.xy, layer)`, the layer a buffer word) compiles on
-/// every profile, passes L3, and records no `RasterizationRateMap` note.
+/// every profile and passes L3.
 #[test]
 fn a_fragment_function_maps_its_position() {
     let text = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
@@ -433,10 +427,6 @@ attributes #1 = { nounwind willreturn memory(argmem: read) }
         let what = stem;
         let p = profile_with(stem);
         let a = compile(&bc, "unwarp", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
-        assert!(
-            !a.precision.contains(&PrecisionNote::RasterizationRateMap),
-            "{what}"
-        );
         link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
     }
 }
