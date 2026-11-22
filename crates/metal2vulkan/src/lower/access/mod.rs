@@ -1098,7 +1098,9 @@ impl Census {
 
 /// The push field a device-address slot's address is read from: its own ([`address_field`]) where
 /// `own`, under the identity domains outside a device-replay variant, else the root table, where a
-/// replay variant's slots are its replayed command's (`replay_guest_base`).
+/// replay variant's slots are its replayed command's (`replay_guest_base`). The identity domains
+/// read no root table, so they refuse a replay variant once its fields are placed
+/// (`select::identity_admits`).
 fn slot_address_field(own: bool, slot: SlotRef) -> PushField {
     match own {
         true => address_field(slot),
