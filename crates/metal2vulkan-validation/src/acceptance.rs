@@ -5,19 +5,19 @@
 //! ([`PipelineLayout`](metal2vulkan::pipeline::PipelineLayout), vertex input, stage modules with
 //! their specialization and subgroup facts, the graphics state), with nothing bound or drawn. A
 //! kernel row is made as a guest's kernel is, through the runtime: its pipeline state on the
-//! sweep's device and one dispatch of one representative threadgroup encoded, never committed
-//! ([`crate::candidate::create_runtime_kernel`]). A row is built as [`PipelineRequest::Row`] says
-//! ([`row`]): a kernel's compute pipeline; a vertex function's rasterization-disabled pipeline with
-//! a vertex descriptor for the attributes it declares; a fragment function's rasterizing pipeline
-//! drawn with its generated passthrough vertex companion ([`crate::companion`], the one the
-//! executors draw with).
+//! sweep's one runtime device and one dispatch of one representative threadgroup encoded, never
+//! committed ([`crate::candidate::RuntimeKernels`]). A row is built as [`PipelineRequest::Row`]
+//! says ([`row`]): a kernel's compute pipeline; a vertex function's rasterization-disabled
+//! pipeline with a vertex descriptor for the attributes it declares; a fragment function's
+//! rasterizing pipeline drawn with its generated passthrough vertex companion
+//! ([`crate::companion`], the one the executors draw with).
 //! This module is the device-free half: compiling a row and deciding whether the opened device
 //! enabled and provides what the pipeline requires ([`unenabled`] for the API version, features,
 //! and extensions, by the product's `DeviceDescription::required_enables` on the opened
 //! description; [`unmet_device_facts`] for properties, limits, formats, stage create flags, and
 //! float-controls independence, against the opened device's queried profile). The device half is
 //! [`crate::candidate::create_acceptance_pipeline`] for a render row and
-//! [`crate::candidate::create_runtime_kernel`] for a kernel row.
+//! [`crate::candidate::RuntimeKernels`] for a kernel row.
 //!
 //! The sweep compiles every row in a killable worker ([`compile_row_in_worker`]), never in the
 //! process that holds the device; [`compile_pipeline`] is the compile the worker runs, and it
@@ -103,7 +103,7 @@ fn stage_precision_notes(stages: &[StageModule]) -> Vec<PrecisionNote> {
 
 /// An L4 row compiled: a kernel's compute pipeline, its module the words the sweep counts (the
 /// driver is asked for the pipeline the runtime makes of the row's AIR,
-/// [`crate::candidate::create_runtime_kernel`]), or a render pipeline, created at its stages'
+/// [`crate::candidate::RuntimeKernels`]), or a render pipeline, created at its stages'
 /// default specializations, of a `row` function.
 #[derive(Clone, Debug)]
 pub enum RowPipeline {
@@ -913,7 +913,7 @@ pub enum Acceptance {
     NoEffect,
 }
 
-/// A kernel row as the runtime makes it ([`crate::candidate::create_runtime_kernel`]): its AIR,
+/// A kernel row as the runtime makes it ([`crate::candidate::RuntimeKernels`]): its AIR,
 /// its kernel, and the function-constant values the function is made with.
 pub struct RuntimeRow<'a> {
     pub bitcode: &'a [u8],

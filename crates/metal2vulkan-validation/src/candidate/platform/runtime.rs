@@ -72,7 +72,7 @@ use metal2vulkan::pipeline::{
 use metal2vulkan_runtime as rt;
 use std::collections::BTreeMap;
 use std::ffi::CStr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// The executor a row's environment names.
@@ -139,16 +139,31 @@ pub(super) fn under_validation(on: impl FnOnce() -> Result<RunAttempt, String>) 
 /// The layer's variables are put back as they were once `on` returns, so an instance the process
 /// makes after it (`corpus-pipeline`'s own context for its next render row) reads none of them.
 pub(super) fn validated<T>(on: impl FnOnce() -> T) -> (T, Option<String>) {
-    let log = std::env::temp_dir().join(format!(
+    let log = validation_log();
+    let _ = std::fs::remove_file(&log);
+    let value = under_validation_variables(&log, on);
+    let messages = std::fs::read_to_string(&log);
+    let _ = std::fs::remove_file(&log);
+    let messages = messages.ok().filter(|messages| !messages.trim().is_empty());
+    (value, messages)
+}
+
+/// The one path this process's validation layer logs to.
+pub(super) fn validation_log() -> PathBuf {
+    std::env::temp_dir().join(format!(
         "metal2vulkan-validation-runtime-{}.log",
         std::process::id()
-    ));
-    let _ = std::fs::remove_file(&log);
+    ))
+}
+
+/// What `on` returns, every instance it makes under the validation layer with its messages logged
+/// to `log` ([`validate_process`]), the layer's variables put back as they were once `on` returns.
+pub(super) fn under_validation_variables<T>(log: &Path, on: impl FnOnce() -> T) -> T {
     let before: Vec<_> = VALIDATION_VARIABLES
         .iter()
         .map(|&name| (name, std::env::var_os(name)))
         .collect();
-    validate_process(&log);
+    validate_process(log);
     let value = on();
     for (name, value) in before {
         match value {
@@ -156,10 +171,7 @@ pub(super) fn validated<T>(on: impl FnOnce() -> T) -> (T, Option<String>) {
             None => std::env::remove_var(name),
         }
     }
-    let messages = std::fs::read_to_string(&log);
-    let _ = std::fs::remove_file(&log);
-    let messages = messages.ok().filter(|messages| !messages.trim().is_empty());
-    (value, messages)
+    value
 }
 
 /// Enable the validation layer for this process's next instance, through the loader's and the
@@ -234,28 +246,48 @@ pub(super) fn opened<T>(
     body: impl FnOnce(&rt::Device, &Identity, &serde_json::Value) -> T,
 ) -> Result<T, String> {
     let value = {
-        let (physical, identity) = select(instance, device_type, layered.profile())?;
-        let tools = runtime_restriction::tools_on(instance, &physical)?;
-        if !tools.iter().any(|tool| tool.layer == VALIDATION_LAYER) {
-            return Err(format!(
-                "{} lists no active validation tool: the loader found no {VALIDATION_LAYER}, and \
-                 a run never proceeds without it",
-                identity.device
-            ));
-        }
-        layered.checked(instance, &physical, &tools)?;
-        let environment = environment(&identity, &tools, executor, layered.record(&tools));
-        let device = metal2vulkan_runtime::Device::new(&physical, rt::DeviceOptions::default())
-            .map_err(|error| format!("the runtime's device on {}: {error}", identity.device))?;
+        let (device, identity, environment) =
+            made_device(instance, device_type, executor, layered)?;
         body(&device, &identity, &environment)
     };
-    if !instance.wait_until_devices_torn_down(TEARDOWN) {
+    torn_down(instance)?;
+    Ok(value)
+}
+
+/// The runtime's device of `device_type` from `instance`, made under `layered`, with the identity
+/// and environment a row of `executor` records of it. `Err` where no device of the kind opens
+/// under the layers, or the validation layer is not active on it.
+pub(super) fn made_device(
+    instance: &rt::Instance,
+    device_type: DeviceType,
+    executor: &'static str,
+    layered: &Layered,
+) -> Result<(rt::Device, Identity, serde_json::Value), String> {
+    let (physical, identity) = select(instance, device_type, layered.profile())?;
+    let tools = runtime_restriction::tools_on(instance, &physical)?;
+    if !tools.iter().any(|tool| tool.layer == VALIDATION_LAYER) {
         return Err(format!(
-            "the runtime's device did not tear down within {} s",
-            TEARDOWN.as_secs()
+            "{} lists no active validation tool: the loader found no {VALIDATION_LAYER}, and a run \
+             never proceeds without it",
+            identity.device
         ));
     }
-    Ok(value)
+    layered.checked(instance, &physical, &tools)?;
+    let environment = environment(&identity, &tools, executor, layered.record(&tools));
+    let device = metal2vulkan_runtime::Device::new(&physical, rt::DeviceOptions::default())
+        .map_err(|error| format!("the runtime's device on {}: {error}", identity.device))?;
+    Ok((device, identity, environment))
+}
+
+/// `Ok` once every device made from `instance` is torn down, `Err` past [`TEARDOWN`].
+pub(super) fn torn_down(instance: &rt::Instance) -> Result<(), String> {
+    if instance.wait_until_devices_torn_down(TEARDOWN) {
+        return Ok(());
+    }
+    Err(format!(
+        "the runtime's device did not tear down within {} s",
+        TEARDOWN.as_secs()
+    ))
 }
 
 /// What a row records of the device that ran it.

@@ -30,15 +30,11 @@ pub fn create_acceptance_pipeline(
     platform::create_acceptance_pipeline(device, pipeline)
 }
 
-/// Make a kernel row's pipeline state through the runtime on `device`, as a guest's kernel is
-/// made, and encode one dispatch of one representative threadgroup of it, never committed, under
-/// the validation layer: what the runtime and the driver answered.
-pub fn create_runtime_kernel(
-    device: DeviceType,
-    row: &crate::acceptance::RuntimeRow<'_>,
-) -> Result<crate::acceptance::Acceptance, crate::acceptance::AcceptanceError> {
-    platform::create_runtime_kernel(device, row)
-}
+/// The sweep's one runtime device of a kind, opened under the validation layer: each kernel row's
+/// pipeline state made on it, as a guest's kernel is made, and one dispatch of one representative
+/// threadgroup of it encoded, never committed; what the runtime, the driver and the layer
+/// answered.
+pub use platform::RuntimeKernels;
 
 /// Restrict every Vulkan context this process opens to committed device profile `stem` through
 /// `VK_LAYER_KHRONOS_profiles` (a command's `--profiles-layer P`). Call it once, before any device
@@ -139,13 +135,28 @@ mod platform {
         ))
     }
 
-    pub fn create_runtime_kernel(
-        _device: DeviceType,
-        _row: &crate::acceptance::RuntimeRow<'_>,
-    ) -> Result<crate::acceptance::Acceptance, crate::acceptance::AcceptanceError> {
-        Err(crate::acceptance::AcceptanceError::DeviceUnavailable(
-            "pipeline creation is supported only on Linux and macOS".into(),
-        ))
+    /// No device opens here.
+    pub struct RuntimeKernels(std::convert::Infallible);
+
+    impl RuntimeKernels {
+        pub fn open(
+            _device: DeviceType,
+        ) -> Result<RuntimeKernels, crate::acceptance::AcceptanceError> {
+            Err(crate::acceptance::AcceptanceError::DeviceUnavailable(
+                "pipeline creation is supported only on Linux and macOS".into(),
+            ))
+        }
+
+        pub fn accept(
+            &mut self,
+            _row: &crate::acceptance::RuntimeRow<'_>,
+        ) -> Result<crate::acceptance::Acceptance, crate::acceptance::AcceptanceError> {
+            match self.0 {}
+        }
+
+        pub fn finish(self) -> Result<(), String> {
+            match self.0 {}
+        }
     }
 
     pub fn execute_engine(

@@ -14,11 +14,12 @@
 //! carries** (set layouts, push ranges, specialization, subgroup size, vertex input, graphics
 //! state), its stages at their default specialization, not the graphics plan's (a limit). A
 //! fragment function's attachments have no more channels than its outputs write. A kernel row is
-//! made as a guest's kernel is, through the runtime (`candidate::create_runtime_kernel`): its
-//! `ComputePipelineState` on the sweep's device, with the row's function-constant values, and one
-//! dispatch of one representative threadgroup (the state's thread execution width of threads, or
-//! its `maxTotalThreadsPerThreadgroup` where fewer) encoded into a command buffer that is never
-//! committed, so the runtime asks the driver for the pipeline that threadgroup runs on. The
+//! made as a guest's kernel is, through the runtime (`candidate::RuntimeKernels`): its
+//! `ComputePipelineState` on the sweep's one runtime device, opened once for all its kernel rows,
+//! with the row's function-constant values, and one dispatch of one representative threadgroup
+//! (the state's thread execution width of threads, or its `maxTotalThreadsPerThreadgroup` where
+//! fewer) encoded into a command buffer that is never committed, so the runtime asks the driver
+//! for the pipeline that threadgroup runs on. The
 //! runtime's typed refusal (the translator's, a known gap, a device limit) is `RUNTIME_REFUSED`,
 //! counted; a kernel that writes no memory, whose dispatch the runtime runs as Metal's without
 //! effects and makes no pipeline for, is `NO_EFFECT`, counted. The make runs in this process,
@@ -86,6 +87,7 @@ use metal2vulkan_validation::acceptance::{
 };
 use metal2vulkan_validation::budgets::PIPELINE_CREATION_CEILING;
 use metal2vulkan_validation::candidate::engine::graphics::RenderTemplate;
+use metal2vulkan_validation::candidate::RuntimeKernels;
 use metal2vulkan_validation::engine::{self, FailureKind, Outcome, RowInput, RowSource};
 use metal2vulkan_validation::gpu::wait::{parse_wait_timeout, set_wait_timeout};
 use metal2vulkan_validation::gpu::DeviceType;
@@ -765,6 +767,8 @@ fn sweep_new(
     } = sweep;
     let mut out = rows_output()?;
     let mut tally = Tally::default();
+    // Opened at the sweep's first kernel row, and finished once the last row is done.
+    let mut kernels = None;
     let mut attempt = |row: NewRow| -> Result<(), String> {
         if tally.rows >= options.limit {
             return Ok(());
@@ -774,6 +778,7 @@ fn sweep_new(
         tally.row_compile = None;
         let (status, detail, create_ms) = attempt_row(
             device,
+            &mut kernels,
             worker,
             compiler,
             projection,
@@ -864,6 +869,12 @@ fn sweep_new(
                 },
             })
         })?;
+    }
+    if let Some(kernels) = kernels {
+        if let Err(error) = kernels.finish() {
+            eprintln!("corpus-pipeline: the kernel rows' runtime device: {error}");
+            tally.errors += 1;
+        }
     }
     let (slowest_key, slowest_ms) = tally
         .slowest
@@ -965,10 +976,12 @@ fn rows_output() -> Result<Box<dyn Write>, String> {
 }
 
 /// Compile one row in a compile worker and create its pipeline (a kernel row's, made through the
-/// runtime from the row's AIR): `(STATUS, detail, create_ms)`. With `keep`, the compiled row's
-/// stage modules are written there first ([`keep_modules`]).
+/// runtime from the row's AIR on the sweep's one runtime device, `kernels`, opened at the first
+/// kernel row): `(STATUS, detail, create_ms)`. With `keep`, the compiled row's stage modules are
+/// written there first ([`keep_modules`]).
 fn attempt_row(
     device: Option<DeviceType>,
+    kernels: &mut Option<RuntimeKernels>,
     worker: &CompileWorker,
     compiler: &WorkerDevice,
     projection: Projection,
@@ -1080,7 +1093,14 @@ fn attempt_row(
                 entry: &input.entry,
                 constants: &constants,
             };
-            metal2vulkan_validation::candidate::create_runtime_kernel(device, &kernel)
+            let kernels = match kernels {
+                Some(kernels) => kernels,
+                None => match RuntimeKernels::open(device) {
+                    Ok(opened) => kernels.insert(opened),
+                    Err(error) => return tally.record(key, detail, Err(error)),
+                },
+            };
+            kernels.accept(&kernel)
         }
         (RowPipeline::Compute { .. }, RowWork::Draw { .. }) => {
             return Err(format!(

@@ -1,7 +1,8 @@
 //! L4 driver acceptance on a device: the unsafe creation path of [`create_acceptance_pipeline`]
 //! (set layouts, binding flags, specialization, subgroup size, render pass, graphics pipeline) runs
-//! against the lane's Vulkan device for a render row, and a kernel row is made through the runtime
-//! ([`create_runtime_kernel`]). Nothing is bound or submitted, so no shader executes.
+//! against the lane's Vulkan device for a render row, and kernel rows are made through the runtime
+//! on one runtime device ([`RuntimeKernels`]). Nothing is bound or submitted, so no shader
+//! executes.
 //! `G-linux`'s `m2v_cpu_icd` step runs it on lavapipe.
 //!
 //! Each render row compiles for the opened device's own `Device` (its queried description
@@ -53,21 +54,34 @@ fn assert_accepted(pipeline: &RowPipeline) {
 }
 
 #[cfg(target_os = "linux")]
-/// What the runtime answered for kernel row `entry` of the owned fixture `file`, made on the
-/// lane's device as `corpus-pipeline` makes a kernel row, with no function-constant values. A
+/// What the runtime answered for each kernel row `(file, entry)` of the owned fixtures, made one
+/// after another on one runtime device of the lane, as `corpus-pipeline` makes its kernel rows,
+/// with no function-constant values; the device finished with nothing logged at its teardown. A
 /// device lane has `llvm-as`, so a missing assembler fails the test.
-fn made(file: &str, entry: &str) -> Acceptance {
-    let bitcode = llvm_assemble(&engine_dir().join(file))
-        .unwrap_or_else(|error| panic!("assemble {file}: {error:?}"));
+fn made(rows: &[(&str, &str)]) -> Vec<Acceptance> {
+    let mut kernels = RuntimeKernels::open(crate::gpu::TEST_DEVICE)
+        .unwrap_or_else(|error| panic!("open the lane's runtime device: {error}"));
     let constants = FunctionConstantValues::defaults();
-    let row = RuntimeRow {
-        bitcode: &bitcode,
-        entry,
-        constants: &constants,
-    };
-    let made = create_runtime_kernel(crate::gpu::TEST_DEVICE, &row)
-        .unwrap_or_else(|error| panic!("{entry}: {error}"));
-    eprintln!("{entry}: {made:?}");
+    let made = rows
+        .iter()
+        .map(|&(file, entry)| {
+            let bitcode = llvm_assemble(&engine_dir().join(file))
+                .unwrap_or_else(|error| panic!("assemble {file}: {error:?}"));
+            let row = RuntimeRow {
+                bitcode: &bitcode,
+                entry,
+                constants: &constants,
+            };
+            let made = kernels
+                .accept(&row)
+                .unwrap_or_else(|error| panic!("{entry}: {error}"));
+            eprintln!("{entry}: {made:?}");
+            made
+        })
+        .collect();
+    kernels
+        .finish()
+        .unwrap_or_else(|error| panic!("finish the lane's runtime device: {error}"));
     made
 }
 
@@ -92,12 +106,19 @@ fn accepted(acceptance: Result<Acceptance, crate::acceptance::AcceptanceError>) 
     }
 }
 
-/// A kernel row is made through the runtime, and the driver creates the pipeline its dispatch
-/// runs on; a vertex function alone is created from the binder layout.
+/// Kernel rows are made through the runtime one after another on one runtime device, and the
+/// driver creates the pipeline each one's dispatch runs on; a vertex function alone is created
+/// from the binder layout.
 #[cfg(target_os = "linux")]
 #[test]
-fn a_kernel_row_is_made_through_the_runtime_and_a_vertex_only_pipeline_is_created() {
-    accepted(Ok(made("store_const.ll", "store_const")));
+fn kernel_rows_are_made_through_the_runtime_on_one_device_and_a_vertex_only_pipeline_is_created() {
+    let rows = [
+        ("store_const.ll", "store_const"),
+        ("a1_pack_rounding.ll", "a1_pack_rounding"),
+    ];
+    for made in made(&rows) {
+        accepted(Ok(made));
+    }
 
     let vertex = compiled(
         "stage_io.ll",
@@ -116,7 +137,9 @@ fn a_kernel_row_is_made_through_the_runtime_and_a_vertex_only_pipeline_is_create
 #[cfg(target_os = "linux")]
 #[test]
 fn a_full_subgroup_kernel_row_is_made_through_the_runtime() {
-    accepted(Ok(made("simd_ops.ll", "simd_shuffle_k")));
+    for made in made(&[("simd_ops.ll", "simd_shuffle_k")]) {
+        accepted(Ok(made));
+    }
 }
 
 /// A kernel with an explicit imageblock is the runtime's typed refusal, as a guest's is: its
@@ -124,7 +147,7 @@ fn a_full_subgroup_kernel_row_is_made_through_the_runtime() {
 #[cfg(target_os = "linux")]
 #[test]
 fn an_imageblock_kernel_row_is_the_runtimes_refusal() {
-    let made = made("a4_imageblock_extent.ll", "a4_imageblock_extent");
+    let made = made(&[("a4_imageblock_extent.ll", "a4_imageblock_extent")]).remove(0);
     assert!(
         matches!(&made, Acceptance::RuntimeRefused(why) if why.contains("mageblock")),
         "{made:?}"
