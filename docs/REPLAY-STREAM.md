@@ -293,7 +293,8 @@ and the (name id, value) answer pairs.
   invariant: where a completion's bytes are missing, a CPU write that restores the bytes last
   recorded is missing too, and the play runs the next command buffer from its own run's bytes
   where the recording device ran it from the restored ones. Such a stream may differ from what the
-  program did, and every report the player writes of it says so on its first line (section 10).
+  program did, and every report the player writes of it says so on the line after its mode line
+  (section 10).
 - **No half-written bytes.** Before capturing, a recorder waits for every earlier command buffer
   that can run: one not held on an event wait that a later record satisfies. The bytes may then
   include final bytes the GPU wrote; the player puts them back at the same point, after its own
@@ -488,9 +489,16 @@ and the (name id, value) answer pairs.
 
 `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
 [--blobs DIR] [--managed one-copy|two-copy]
-[--until-frame F] [--past-range yes|no] [--gpu-wait-timeout SECONDS]
+[--until-frame F] [--past-range yes|no] [--states-only yes|no] [--gpu-wait-timeout SECONDS]
 [--video-handle dma-buf|opaque-fd|opaque-win32] [--check-presents F,...] [--read-device-copies yes|no]` plays a stream (its first segment) on one device through the
-runtime, and writes `DIR/report.txt`. `--video-handle`
+runtime, and writes `DIR/report.txt`, whose first line names the play's mode: `mode full: every
+call`, or with `--states-only yes`, `mode states-only: the device, library, function and pipeline
+state records and the presents alone (--states-only yes)`. A states-only play plays the device
+(`MTLCreateSystemDefaultDevice`, `m2v.deviceIdentity`), every library, function and dynamic
+library made, every render and compute pipeline state made, and every `m2v.present`, so its frames
+and its recording range end where a full play's do; it passes over every other call, runs no
+command and writes no memory, so its pipeline states are made as a full play makes them, cold, and
+it writes none of the matrix's judged metrics. `--video-handle`
 names the consumer's decoder route, the handle its video surfaces are made
 with (a dma-buf where it is not given; below). Each wait on the device's work is bounded by `--gpu-wait-timeout` (10 seconds
 by default; docs/VALIDATION.md, the hang tripwire), which a play on a CPU device raises. It
@@ -532,8 +540,9 @@ records as text, and
   the host's library from source is made of it; else `display library none: the
   host's library from source is skipped`.
 - **Streams recorded before the completion fix.** Where the stream's header lacks bit 1 (section
-  6), the report's first line is, by itself, `recorded before the recorder's completion fix: the
-  stream may differ from what the program did`, so no table taken from the report loses it.
+  6), the report's line after its mode line is, by itself, `recorded before the recorder's
+  completion fix: the stream may differ from what the program did`, so no table taken from the
+  report loses it.
 - It moves address arguments (section 5) and plays the host's plumbing as the plain calls it
   stands for (section 4).
 - **Managed buffers** play in the form the recording device kept them: its
@@ -924,8 +933,9 @@ records as text, and
   Compute encoders play `setStageInRegion:` (the runtime takes it and it changes nothing a
   dispatch of a kernel without a stage-in argument does, the only kernel it builds).
 
-`report.txt` holds one line per item: the line `recorded before the recorder's completion fix: the
-stream may differ from what the program did` first where the stream's header lacks bit 1 (section
+`report.txt` holds one line per item: the mode line (`mode full: every call` or `mode
+states-only: ...`) first, then the line `recorded before the recorder's completion fix: the
+stream may differ from what the program did` where the stream's header lacks bit 1 (section
 6), then `range last-frame F (SOURCE); the play ends there`, `range last-frame F (SOURCE);
 --past-range yes plays past it` or `range whole (SOURCE)`, where `SOURCE` is `the stream's
 sidecar`, `the player's table, stream LABEL` or `no sidecar and no table row`, then

@@ -961,6 +961,8 @@ pub struct Player<'b, B: Backend> {
     report: Report,
     /// The last frame to play (`until_frame`), counted from 0 as `Report::frames` counts them.
     last_frame: Option<usize>,
+    /// Whether the player plays the state records and presents alone (`states_only`).
+    states_only: bool,
     /// The frames whose shown texture the player checks at their `m2v.present`
     /// (`checking_presents`), counted as `last_frame` is.
     checked_presents: BTreeSet<u64>,
@@ -1142,6 +1144,20 @@ fn sets_bytes(selector: &str) -> bool {
     selector.starts_with("set") && selector.ends_with("Bytes:length:atIndex:")
 }
 
+/// Whether a states-only play (`Player::states_only`) plays a call of `selector`: the device and
+/// its identity, a library, function or dynamic library made, a render or compute pipeline state
+/// made, and a present.
+fn states_only_keeps(selector: &str) -> bool {
+    selector == "m2v.present"
+        || selector == "MTLCreateSystemDefaultDevice"
+        || selector == "m2v.deviceIdentity"
+        || selector.starts_with("newLibrary")
+        || selector.starts_with("newFunction")
+        || selector.starts_with("newDynamicLibrary")
+        || selector.starts_with("newRenderPipelineState")
+        || selector.starts_with("newComputePipelineState")
+}
+
 impl<'b, B: Backend> Player<'b, B> {
     pub fn new(backend: &'b mut B) -> Self {
         let baseline = backend.counters();
@@ -1174,6 +1190,7 @@ impl<'b, B: Backend> Player<'b, B> {
             resources: HashSet::new(),
             report,
             last_frame: None,
+            states_only: false,
             checked_presents: BTreeSet::new(),
             presents_dir: None,
             frame_out: None,
@@ -1193,6 +1210,15 @@ impl<'b, B: Backend> Player<'b, B> {
     /// stop may signal it.
     pub fn until_frame(mut self, last: usize) -> Self {
         self.last_frame = Some(last);
+        self
+    }
+
+    /// The player that plays a stream's device, library, function and pipeline state records
+    /// alone, and its presents, so its frames and its range end where they end: every other call
+    /// is passed over (`states_only_keeps`). Its pipeline states are made as a play of the whole
+    /// stream makes them; it runs no command and writes no memory.
+    pub fn states_only(mut self) -> Self {
+        self.states_only = true;
         self
     }
 
@@ -1466,6 +1492,9 @@ impl<'b, B: Backend> Player<'b, B> {
         // A message to nil does nothing: a call of receiver 0 that makes nothing and names no
         // class (a class's call is `MTLX.selector`, the host's `m2v.selector`).
         if call.receiver == 0 && call.result == 0 && !call.selector.contains('.') {
+            return Ok(());
+        }
+        if self.states_only && !states_only_keeps(&call.selector) {
             return Ok(());
         }
         match &*call.selector {

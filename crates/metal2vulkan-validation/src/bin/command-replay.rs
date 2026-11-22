@@ -3,9 +3,11 @@
 //!
 //! `command-replay play --stream FILE --out DIR --device-type cpu|gpu --shader-cache DIR
 //! [--blobs DIR] [--managed one-copy|two-copy]
-//! [--until-frame F] [--past-range yes|no] [--gpu-wait-timeout SECONDS]
+//! [--until-frame F] [--past-range yes|no] [--states-only yes|no] [--gpu-wait-timeout SECONDS]
 //! [--video-handle dma-buf|opaque-fd|opaque-win32] [--check-presents F,...]` plays the stream
-//! whose first segment is `FILE` through the runtime, with
+//! whose first segment is `FILE` through the runtime (with `--states-only yes`, its device,
+//! library, function and pipeline state records and its presents alone, every other call passed
+//! over, and no judged metric), with
 //! `--video-handle dma-buf|opaque-fd|opaque-win32` telling the runtime the consumer's decoder
 //! route, the handle its video surfaces are made with (a dma-buf unless it says otherwise; an NT
 //! handle, `opaque-win32`, on a Windows host), and
@@ -21,7 +23,8 @@
 //! which `compare-plays` sizes where two plays' digests differ; its readback's time is the
 //! frame's, so a timed play lists none). The play ends at the stream's recording range (its sidecar's, else
 //! its row of `RECORDED_RANGES`, else the whole stream) unless `--past-range yes` takes it past.
-//! It writes `DIR/report.txt`, each line to the standard error too: first, where the stream's
+//! It writes `DIR/report.txt`, each line to the standard error too: first `mode full: every call`
+//! or `mode states-only: ...`, then, where the stream's
 //! header lacks `FLAG_COMPLETION_BYTES_RECORDED`, the line `recorded before the recorder's
 //! completion fix: the stream may differ from what the program did` by itself, then `range ...`
 //! (the recording range, where it came from, and whether the play ends there), then `device NAME
@@ -94,7 +97,7 @@ use std::path::{Path, PathBuf};
 const USAGE: &str = "usage: command-replay play --stream FILE --out DIR --device-type cpu|gpu \
                      --shader-cache DIR [--blobs DIR] \
                      [--managed one-copy|two-copy] [--until-frame F] [--past-range yes|no] \
-                     [--gpu-wait-timeout SECONDS] [--video-handle dma-buf|opaque-fd|opaque-win32] \
+                     [--states-only yes|no] [--gpu-wait-timeout SECONDS] [--video-handle dma-buf|opaque-fd|opaque-win32] \
                      [--check-presents F,...] [--read-device-copies yes|no] [--prepass-width N] \
                      [--dump-command-buffers FIRST..LAST --dump-dir DIR]\n       \
                      command-replay compare-dumps --a DIR --b DIR\n       \
@@ -308,7 +311,18 @@ fn shapes(options: &BTreeMap<String, String>) -> i32 {
     }
 }
 
-/// The line by itself at the top of every report of a stream whose header lacks
+/// The report's first line: which calls the play plays (`--states-only`).
+fn mode_line(states_only: bool) -> &'static str {
+    match states_only {
+        true => {
+            "mode states-only: the device, library, function and pipeline state records and the \
+             presents alone (--states-only yes)"
+        }
+        false => "mode full: every call",
+    }
+}
+
+/// The line by itself after the mode line of every report of a stream whose header lacks
 /// `FLAG_COMPLETION_BYTES_RECORDED`, so that no table relayed from the report loses it.
 const BEFORE_COMPLETION_FIX: &str =
     "recorded before the recorder's completion fix: the stream may differ from what the program did";
@@ -386,6 +400,15 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
             return 2;
         }
     };
+    let states_only = match options.get("states-only").map(String::as_str) {
+        None | Some("no") => false,
+        Some("yes") => true,
+        Some(other) => {
+            report.line(&format!("error states-only: {other} is neither yes nor no"));
+            return 2;
+        }
+    };
+    report.line(mode_line(states_only));
     let mut reader = match reader(options) {
         Ok(reader) => reader,
         Err(error) => {
@@ -572,11 +595,13 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
         }
     };
     let first = PathBuf::from(&options["stream"]);
+    // A states-only play runs none of the work the matrix's judged metrics count.
+    let judged = (!states_only).then_some(first.as_path());
     let code = run(
         &mut backend,
         &mut reader,
         &mut report,
-        (until, dump, presents, Some(&first)),
+        (until, dump, presents, judged, states_only),
     );
     // The device ends here, not in `exit()`, where the driver's own exit teardown would
     // run beside the runtime's threads. Its gauges read after it dropped go out as the
@@ -650,7 +675,8 @@ type Dumped = Option<(RangeInclusive<u64>, PathBuf)>;
 /// The frames whose present a play checks (`--check-presents`), and where it keeps their bytes.
 type Presents = (Vec<u64>, PathBuf);
 
-/// Play `reader` through `backend` into `report`, to the last frame where one is given, dumping
+/// Play `reader` through `backend` into `report`, its state records and presents alone where
+/// `states_only`, to the last frame where one is given, dumping
 /// the command buffers where asked, checking the shown texture at the listed frames' presents and
 /// keeping its bytes in the directory given, and on the runtime,
 /// where `judged`
@@ -660,9 +686,19 @@ fn run<B: Backend>(
     backend: &mut B,
     reader: &mut StreamReader,
     report: &mut ReportFile,
-    (until, dump, presents, judged): (Option<usize>, Dumped, Presents, Option<&Path>),
+    (until, dump, presents, judged, states_only): (
+        Option<usize>,
+        Dumped,
+        Presents,
+        Option<&Path>,
+        bool,
+    ),
 ) -> i32 {
     let player = Player::new(backend).with_frame_lines(&mut *report);
+    let player = match states_only {
+        true => player.states_only(),
+        false => player,
+    };
     let player = match until {
         Some(last) => player.until_frame(last),
         None => player,
