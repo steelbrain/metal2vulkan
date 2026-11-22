@@ -182,7 +182,7 @@ pub(crate) struct Heavy {
 }
 
 /// The entry weight past which a stage is compiled only in the consumer's helper: the translator's
-/// `COMPILED_STAGE_WEIGHT`, or, in a device test, one the test sets ([`TEST_BOUND`]), so a small
+/// `COMPILED_STAGE_WEIGHT`, or, in a device test, one the test sets (`TEST_BOUND`), so a small
 /// kernel passes it.
 pub(crate) fn bound() -> u64 {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

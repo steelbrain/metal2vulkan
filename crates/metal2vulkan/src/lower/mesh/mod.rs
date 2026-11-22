@@ -1313,7 +1313,7 @@ pub const BUILTINS: [KernelBuiltin; 2] = [
     KernelBuiltin::ThreadsPerThreadgroup,
 ];
 
-/// Whether the entry has a wrapper that reads [`builtins`].
+/// Whether the entry has a wrapper that reads [`BUILTINS`].
 pub fn wraps(plan: &MeshPlan) -> bool {
     plan.object || plan.mesh.is_some()
 }

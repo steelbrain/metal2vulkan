@@ -202,7 +202,7 @@ mod site {
 const METAL_NIL: &str = "Nil";
 
 /// The variant name **our** side records a typed `Error::Nil` under
-/// ([`crate::case::Failure::of`]).
+/// ([`crate::case::Failure::of_rt`]).
 const OUR_NIL: &str = "Error::Nil";
 
 /// One case of the family: a table of descriptors, each asked of the shared creator.

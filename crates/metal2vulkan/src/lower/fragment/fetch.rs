@@ -129,7 +129,7 @@ pub(crate) fn unorm8_format(pf: crate::metal::PixelFormat) -> bool {
 }
 
 /// Whether `pf` is a packed 16-bit unorm format (`metal::format::WordAttachment::Packed16`), whose
-/// blend Metal computes in `half` over its decoded codes ([`extended_range::Blend::packed16`]).
+/// blend Metal computes in `half` over its decoded codes.
 pub(crate) fn packed16_format(pf: crate::metal::PixelFormat) -> bool {
     matches!(
         WordAttachment::layout(pf),

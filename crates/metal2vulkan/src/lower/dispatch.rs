@@ -537,7 +537,7 @@ pub struct DispatchPlan {
     /// `SpecKey::DeepThreadgroup`, under which its threadgroup runs as one row (the module docs).
     pub deep: bool,
     /// A kernel whose private arena lives in device memory (`memory::plan::ArenaLayout::device`):
-    /// each invocation reaches its slot by its index in its dispatch ([`arena_slot`]).
+    /// each invocation reaches its slot by its index in its dispatch ([`KernelDecl::arena_slot`]).
     pub private_arena: bool,
 }
 

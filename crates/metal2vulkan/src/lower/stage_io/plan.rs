@@ -1418,7 +1418,7 @@ enum IndexStore {
 /// device.
 ///
 /// An index not shown alike is refused because Metal gives it no answer to match: "You must
-/// return the same value of [[render_target_array_index]] for every vertex in a primitive. If
+/// return the same value of `[[render_target_array_index]]` for every vertex in a primitive. If
 /// values differ, the behavior and value passed to the fragment function are undefined." (the
 /// Metal Shading Language specification, and the same of `[[viewport_array_index]]`). It is not
 /// stored to its builtin as written because Vulkan asks a stage that writes `Layer` to "write the

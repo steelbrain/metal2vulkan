@@ -297,7 +297,7 @@ impl Lib {
     }
 
     /// Metal's precise `fmod` of `x` and `y` (`float` lanes of form `f`) by its routine, one call
-    /// per lane; `None` where the module defines no routine ([`Lib::instructions`]).
+    /// per lane; `None` where the module defines no routine (a unit test's `Lib::instructions`).
     pub fn fmod(
         &self,
         fb: &mut FunctionBuilder<'_>,

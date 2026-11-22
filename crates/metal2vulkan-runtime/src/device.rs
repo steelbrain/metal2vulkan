@@ -459,7 +459,7 @@ pub struct DeviceOptions {
     /// the consumer's helper that the runtime only stores with a memory breach
     /// ([`StageBreach::Memory`](crate::StageBreach::Memory)) and compares at a make; the runtime
     /// takes no other path by it, on any device. At the make, a memory breach kept under a lower
-    /// ceiling is a miss ([`Error::StageUnfilled`](crate::Error::StageUnfilled)), so the helper is
+    /// ceiling is a miss ([`Error::StageUnfilled`]), so the helper is
     /// asked again under this one; one kept under this ceiling or a higher one refuses. A memory
     /// breach entry that holds no ceiling counts as kept under 0, the default, so on a device
     /// given 0 every memory breach refuses.
