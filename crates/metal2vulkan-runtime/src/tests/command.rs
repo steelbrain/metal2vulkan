@@ -2046,8 +2046,10 @@ pub(crate) mod on_device {
     /// looked past the second copy (an empty command buffer committed after it is scheduled) the
     /// gate opens. Metal submits the first copy at its commit, its queue having nothing ahead of
     /// it, so its hazard tracking orders that copy after the writer and the second copy after it:
-    /// both read every step. The device's counts once the copies were seen are printed, so a run
-    /// shows the shape it held (the cuts and the copies held behind the writer, where counted).
+    /// both read every step. The device's counts are printed once the copies were seen and once
+    /// all completed, so a run shows the shape it held, where its tree counts it: the cuts, the
+    /// copies held behind the writer, and the submissions that went before a cut command buffer's
+    /// pieces not yet submitted.
     #[test]
     fn every_device_copies_an_idle_queues_copy_of_a_long_write_into_a_later_sharer() {
         each_device("command_sharer_behind_held", |name, _, device| {
@@ -2097,6 +2099,8 @@ pub(crate) mod on_device {
                 finished(name, command_buffer);
                 assert_eq!(command_buffer.error(), None, "{name}");
             }
+            let counts = device.counters().metrics();
+            println!("{name}: the device's counts once all completed: {counts:?}");
             assert_eq!(
                 (word(&written), word(&copied), word(&read)),
                 (63, 63, 63),
