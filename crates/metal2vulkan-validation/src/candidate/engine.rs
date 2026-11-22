@@ -6,8 +6,8 @@
 //! draw (`platform::runtime_render`, [`graphics`]). The case's own function links the functions
 //! its visible-function references name, from the modules the Metal oracle links
 //! ([`linked_modules`]). Each element of a texture array is the texture at its own Metal slot
-//! ([`resources::bound_textures`]), and an argument-buffer buffer is a used resource whose address
-//! its owner holds ([`argument_buffers`]); an argument-buffer texture is a used texture whose
+//! ([`resources::bound_textures`]), and an argument-buffer buffer is a resident buffer whose address
+//! its owner holds ([`argument_buffers`]); an argument-buffer texture is a resident texture whose
 //! resource id its owner holds. A draw of a structure the runtime route does not make, and an
 //! object or mesh case, are typed refusals (`run_prepared`).
 //!
@@ -65,14 +65,11 @@ use crate::worker::compile::{
 use crate::worker::device::{DeviceInput, DeviceOutcome, DeviceRun, OpenedDevice, VenueRun};
 use crate::worker::WorkerFailure;
 use base64::Engine as _;
-use metal2vulkan::bind::{
-    BindShape, BindState, BoundBuffer, BufferRanges, Dispatch, DrawCall, StageTable, StatusReport,
-};
+use metal2vulkan::bind::{Dispatch, DrawCall};
 use metal2vulkan::cache::Hash256;
 use metal2vulkan::device::DeviceProfile;
 use metal2vulkan::error::Error;
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
-use metal2vulkan::metal::RenderStages;
 use metal2vulkan::pipeline::Stage as ShaderStage;
 use metal2vulkan::pipeline::{ComputePipeline, RenderPipeline};
 use std::borrow::Cow;
@@ -85,8 +82,6 @@ pub mod artifact;
 pub mod graphics;
 pub mod guards;
 pub mod mesh;
-#[cfg(test)]
-mod public_cases;
 pub mod resources;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -99,9 +94,9 @@ pub mod variants;
 /// how it decides a match. A change no recorded row can observe (a case kind no earlier executor
 /// ran, or one it refused) needs no bump; its commit says why. The commit that bumps it says what
 /// changed; this comment keeps no history.
-pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v212";
+pub const ENGINE_EXECUTOR_ABI: &str = "vulkan-engine-v213";
 
-/// One kernel case in the terms the binder takes: what this executor supports of an
+/// One kernel case in the terms the runtime route takes: what this executor supports of an
 /// [`AuthoredCase`] (buffers, device buffer arrays, argument-buffer buffers and textures,
 /// textures, texture arrays, samplers, threadgroup lengths, function
 /// constants, a `dispatchThreads` grid, and a buffer, argument-buffer buffer, texture or
@@ -119,20 +114,16 @@ pub struct ComputeCase {
     /// Initial bytes of each argument-buffer buffer, by `(owner Metal index, field offset)`:
     /// a buffer the owner's argument buffer points to (loaded pointers). The run writes its guest
     /// address into the owner's bytes at the field offset, the pointer Metal's argument encoder
-    /// writes there ([`argument_buffers::owner_bytes`]), and lists it as a used resource
-    /// (`useResource`, read and write, as the oracle does), so the resident set reaches it.
+    /// writes there ([`argument_buffers::owner_bytes`]), and makes it resident (`useResource`,
+    /// read and write, as the oracle does).
     pub argument_buffer_buffers: BTreeMap<(u32, u32), Vec<u8>>,
     /// Each argument-buffer texture (initial contents included), by `(owner Metal index, field
-    /// offset)`: a used texture whose resource id the run writes into the owner at the field, the
-    /// `gpuResourceID` Metal's argument encoder writes there ([`argument_buffers::field_words`]),
-    /// resident for reading and writing, so the plan's heap holds it and the kernel's handle table
-    /// finds it.
+    /// offset)`: a texture whose `gpuResourceID` the run writes into the owner at the field, as
+    /// Metal's argument encoder writes it there, resident for reading and writing.
     pub argument_buffer_textures: BTreeMap<(u32, u32), LiteralTexture>,
     /// Each argument-buffer sampler, by `(owner Metal index, field offset)`: a sampler state whose
-    /// id ([`argument_buffers::sampler_ids`]) the run writes into the owner at the field, the
-    /// `gpuResourceID` Metal's argument encoder writes there, and lists among the bind state's
-    /// argument samplers, so the plan's sampler arrays hold it and the function's sampler table
-    /// finds it.
+    /// `gpuResourceID` the run writes into the owner at the field, as Metal's argument encoder
+    /// writes it there.
     pub argument_buffer_samplers: BTreeMap<(u32, u32), ArgumentBufferSamplerResource>,
     /// Each bound texture (initial contents included), by Metal texture index: the case's textures
     /// and each element of its texture arrays at its own slot ([`resources::bound_textures`]).
@@ -201,9 +192,6 @@ pub struct ComputeRun {
     /// for a run through the runtime.
     pub translator_fingerprint: String,
     pub environment: serde_json::Value,
-    /// The binder's execution status, read before the output; `None` for a run through the
-    /// runtime, whose shaders keep no status.
-    pub status: Option<StatusReport>,
     /// Derived from the executed modules' precision notes and strategy census.
     pub comparison: ComparisonClass,
     /// The executed modules' census and the class of the device that ran them.
@@ -464,120 +452,6 @@ pub fn function_constants(
         );
     }
     Ok(constants)
-}
-
-/// `state` with each stage table classing its buffers' lengths under `ranges`
-/// (`StageTable::buffer_ranges`), the device's range limit (`BufferRanges::of`), as the runtime's
-/// tables class them, so a buffer's shape states the length class the runtime's shape of the same
-/// bind states.
-pub fn lengths_classed(mut state: BindState, ranges: BufferRanges) -> BindState {
-    for table in state.stages.values_mut() {
-        table.buffer_ranges = ranges;
-    }
-    state
-}
-
-/// The `BindState` of `case`: each buffer bound at offset 0 with its length, its guest address,
-/// and its host device address when the device has one (`addresses` by Metal index), each texture
-/// and sampler ([`resources`]), the threadgroup lengths, each argument-buffer buffer as a used
-/// buffer (`embedded` by
-/// `(owner, field offset)`; its consumer token is its position in
-/// [`ComputeCase::argument_buffer_buffers`]), and each argument-buffer texture as a used texture
-/// with its resource id (its token follows the buffers', [`argument_buffers::texture_tokens`]),
-/// each made resident for reading and writing, as the Metal oracle's `useResource` does, and each
-/// argument-buffer sampler as an argument sampler with its id
-/// ([`argument_buffers::argument_samplers`]); classing lengths under the device's range limit
-/// `ranges` ([`lengths_classed`]).
-pub fn bind_state(
-    case: &ComputeCase,
-    addresses: &BTreeMap<u32, BufferAddress>,
-    embedded: &BTreeMap<(u32, u32), BufferAddress>,
-    ranges: BufferRanges,
-) -> Result<BindState, String> {
-    let mut table = StageTable::default();
-    for (&index, bytes) in &case.buffers {
-        let address = addresses.get(&index).copied().unwrap_or_default();
-        let bound = BoundBuffer::Buffer {
-            length: bytes.len() as u64,
-            offset: 0,
-            gpu_address: address.guest,
-            device_address: address.host,
-            attribute_stride: None,
-        };
-        table.buffers.insert(index, bound);
-    }
-    for (&index, texture) in &case.textures {
-        table
-            .textures
-            .insert(index, resources::bound_texture(texture)?);
-    }
-    for (&index, sampler) in &case.samplers {
-        table
-            .samplers
-            .insert(index, resources::bound_sampler(sampler));
-    }
-    table.threadgroup_lengths = case.threadgroup_lengths.clone();
-    let mut state = BindState::default();
-    state.stages.insert(ShaderStage::Kernel, table);
-    for (token, (key, bytes)) in case.argument_buffer_buffers.iter().enumerate() {
-        let address = embedded.get(key).copied().unwrap_or_default();
-        state.used_resources.push(argument_buffers::used_buffer(
-            token,
-            bytes.len(),
-            address,
-            RenderStages::empty(),
-        )?);
-    }
-    let tokens = texture_tokens(case)?;
-    for (key, texture) in &case.argument_buffer_textures {
-        state.used_resources.push(argument_buffers::used_texture(
-            tokens[key],
-            texture,
-            RenderStages::empty(),
-        )?);
-    }
-    state.argument_samplers =
-        argument_buffers::argument_samplers(case.argument_buffer_samplers.iter())?;
-    Ok(lengths_classed(state, ranges))
-}
-
-/// The consumer token of each argument-buffer texture of `case`, by its key
-/// ([`argument_buffers::texture_tokens`]).
-pub fn texture_tokens(case: &ComputeCase) -> Result<BTreeMap<(u32, u32), u32>, String> {
-    argument_buffers::texture_tokens(
-        case.argument_buffer_buffers.len(),
-        case.argument_buffer_textures.keys().copied(),
-    )
-}
-
-/// A bound buffer's addresses: the Metal `gpuAddress` the guest sees and the host Vulkan device
-/// address when the buffer has one. Without device addresses the guest address is a distinct
-/// synthetic base ([`BufferAddress::synthetic`], [`BufferAddress::synthetic_used`]).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct BufferAddress {
-    pub guest: u64,
-    pub host: Option<u64>,
-}
-
-impl BufferAddress {
-    /// The synthetic guest base of Metal buffer `index` on a device without device addresses:
-    /// disjoint 4-GiB windows, never 0.
-    pub fn synthetic(index: u32) -> BufferAddress {
-        BufferAddress {
-            guest: (u64::from(index) + 1) << 32,
-            host: None,
-        }
-    }
-
-    /// The synthetic guest base of the argument-buffer buffer with consumer token `token` on a
-    /// device without device addresses: 4-GiB windows in the upper half of the address space,
-    /// disjoint from every [`BufferAddress::synthetic`] window.
-    pub fn synthetic_used(token: u32) -> BufferAddress {
-        BufferAddress {
-            guest: (1 << 63) | ((u64::from(token) + 1) << 32),
-            host: None,
-        }
-    }
 }
 
 /// The translator fingerprint of engine observations: the product and the profile the case
@@ -1275,39 +1149,6 @@ fn render_attempt(
     CompileAttempt::of(compile_render_request(worker, device, libraries, request))
 }
 
-/// The `BindShape` the executor binds `case` with on a device that has device addresses exactly
-/// when `addressed` and the range limits `ranges` (`BufferRanges::of`): [`bind_state`] with every
-/// buffer's guest address and, when `addressed`, a host address (only whether a buffer has one is
-/// part of the shape, not its value).
-pub fn compute_shape(
-    case: &ComputeCase,
-    addressed: bool,
-    ranges: BufferRanges,
-) -> Result<BindShape, String> {
-    let with_host = |mut address: BufferAddress| {
-        address.host = addressed.then_some(address.guest);
-        address
-    };
-    let addresses = case
-        .buffers
-        .keys()
-        .map(|&index| (index, with_host(BufferAddress::synthetic(index))))
-        .collect();
-    let embedded = synthetic_used_addresses(case)?
-        .into_iter()
-        .map(|(key, address)| (key, with_host(address)))
-        .collect();
-    Ok(bind_state(case, &addresses, &embedded, ranges)?.shape())
-}
-
-/// The synthetic guest address of each argument-buffer buffer of `case`, by its key
-/// ([`argument_buffers::synthetic_addresses`]): its [`BufferAddress::synthetic_used`].
-pub fn synthetic_used_addresses(
-    case: &ComputeCase,
-) -> Result<BTreeMap<(u32, u32), BufferAddress>, String> {
-    argument_buffers::synthetic_addresses(case.argument_buffer_buffers.keys().copied())
-}
-
 /// Admit `case` for the engine candidate on `device_type`, then open that device and execute
 /// it, compiling in `worker`.
 pub fn execute(
@@ -1393,7 +1234,7 @@ pub fn prepare_case(
 /// [`prepare_case`] for the authored compile census (`authored_compile`): a case whose only stop
 /// is the mesh render pipeline the executor does not draw
 /// ([`ToolingRequirement::MeshRenderPipeline`]) is prepared too, its draw mapped
-/// ([`mesh::mesh_case`]), so [`case_compile`] plans the pipeline a run of it would compile. A
+/// ([`mesh::mesh_case`]), so [`case_compile`] compiles the pipeline a run of it would compile. A
 /// run's preparation refuses such a case before any device, its device worker's included.
 pub fn prepare_compile(
     device: DeviceType,
@@ -1444,113 +1285,74 @@ pub struct CaseCompile<'a> {
     pipeline: PlannedPipeline<'a>,
 }
 
-/// A planned compile's request, its libraries in [`PipelineRequest::libraries`] order, and the
-/// bind shape the run plans it for: a kernel's, or a draw's (a case's own, or a mesh draw's,
-/// `mesh::mesh_request`).
+/// A compile's request and its libraries in [`PipelineRequest::libraries`] order: a kernel's, or
+/// a draw's (a case's own, or a mesh draw's, `mesh::mesh_request`).
 enum PlannedPipeline<'a> {
     Compute {
         request: PipelineRequest,
         libraries: Vec<RowSource<'a>>,
-        shape: BindShape,
     },
     Render {
         request: PipelineRequest,
         libraries: Vec<RowSource<'a>>,
-        shape: BindShape,
     },
 }
 
 impl CaseCompile<'_> {
     /// Compile in `worker` for `device` as the runtime compiles it and record it in `artifact` as
-    /// the executor's run records it (the pipeline's content and its plan for the run's bind
-    /// shape), keeping only whether it compiled and what the worker measured: the pipeline is
-    /// dropped here.
+    /// the executor's run records it (the pipeline's content), keeping only whether it compiled
+    /// and what the worker measured: the pipeline is dropped here.
     pub fn compile(
         &self,
         worker: &CompileWorker,
         device: &WorkerDevice,
         artifact: &mut artifact::CaseArtifact,
     ) -> (Result<(), CompileFailure>, Option<crate::worker::Measured>) {
-        let mut record = |pipeline: &dyn artifact::Planned, shape| {
-            artifact
-                .record(pipeline, device.device(), shape)
-                .map_err(CompileFailure::Artifact)
-        };
+        let mut record = |content| artifact.record(content).map_err(CompileFailure::Artifact);
         match &self.pipeline {
-            PlannedPipeline::Compute {
-                request,
-                libraries,
-                shape,
-            } => {
+            PlannedPipeline::Compute { request, libraries } => {
                 let attempt = compute_attempt(worker, device, libraries, request);
-                let result = attempt.result.and_then(|pipeline| record(&pipeline, shape));
+                let result = attempt
+                    .result
+                    .and_then(|pipeline| record(pipeline.content_digest()));
                 (result, attempt.measured)
             }
-            PlannedPipeline::Render {
-                request,
-                libraries,
-                shape,
-            } => {
+            PlannedPipeline::Render { request, libraries } => {
                 let attempt = render_attempt(worker, device, request, libraries);
-                let result = attempt.result.and_then(|pipeline| record(&pipeline, shape));
+                let result = attempt
+                    .result
+                    .and_then(|pipeline| record(pipeline.content_digest()));
                 (result, attempt.measured)
             }
         }
     }
 }
 
-/// The pipeline a run of `prepared` compiles on `device` before it reads any device output,
-/// compiled as the runtime compiles it (through no binding plan): the case's own pipeline
-/// ([`kernel_request`] for the case's dispatch, [`render_request`] with its generated companion
-/// and no shape, or a mesh draw's, `mesh::mesh_request`), and the bind shape the artifact's digest
-/// holds the plan of ([`compute_shape`], [`graphics::render_shape`]'s, or `mesh::mesh_shape`'s).
-/// The bind shapes depend on the device only through whether it has device addresses, read from
-/// `device`'s description (for an opened device, restricted to what was enabled), and through its
-/// profile's range limits (`BufferRanges::of`). The authored compile census compiles it on each
-/// committed profile.
-pub fn case_compile<'a>(
-    prepared: &'a PreparedCase,
-    device: &WorkerDevice,
-) -> Result<CaseCompile<'a>, ExecutorError> {
-    use metal2vulkan::device::VkFeature;
-    let addressed = device.description().has(VkFeature::BufferDeviceAddress);
-    let ranges = BufferRanges::of(device.device().profile().limits());
+/// The pipeline a run of `prepared` compiles before it reads any device output, compiled as the
+/// runtime compiles it: the case's own pipeline ([`kernel_request`] for the case's dispatch,
+/// [`render_request`] with its generated companion, or a mesh draw's, `mesh::mesh_request`). The
+/// authored compile census compiles it on each committed profile.
+pub fn case_compile(prepared: &PreparedCase) -> Result<CaseCompile<'_>, ExecutorError> {
     let library = RowSource::of_row(&prepared.checked.primary.source);
     let linked = prepared.linked.as_slice();
     let pipeline = match &prepared.mapped {
         Mapped::Compute(compute) => {
-            let shape = compute_shape(compute, addressed, ranges).map_err(ExecutorError::Failed)?;
             let (request, libraries) = kernel_request(&library, linked, compute);
-            PlannedPipeline::Compute {
-                request,
-                libraries,
-                shape,
-            }
+            PlannedPipeline::Compute { request, libraries }
         }
         Mapped::Render(render) => {
-            let shape =
-                graphics::render_shape(render, addressed, ranges).map_err(ExecutorError::Failed)?;
             let companion = companion_source(render);
             let (request, libraries) =
                 render_request(&library, companion.as_ref(), linked, render)?;
-            PlannedPipeline::Render {
-                request,
-                libraries,
-                shape,
-            }
+            PlannedPipeline::Render { request, libraries }
         }
         Mapped::Mesh(mesh) => {
-            let shape = mesh::mesh_shape(mesh, addressed, ranges)?;
             let companion = mesh
                 .companion
                 .as_ref()
                 .map(|generated| RowSource::Text(Cow::Owned(generated.air_text(Spelling::Opaque))));
             let (request, libraries) = mesh::mesh_request(&library, companion, mesh)?;
-            PlannedPipeline::Render {
-                request,
-                libraries,
-                shape,
-            }
+            PlannedPipeline::Render { request, libraries }
         }
     };
     Ok(CaseCompile { pipeline })

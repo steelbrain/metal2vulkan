@@ -13,18 +13,16 @@
 //!
 //! The compile worker compiles its pipeline device-free as the runtime compiles it
 //! ([`mesh_request`]): the oracle's descriptor ([`MeshTemplate`]) of its functions, each from the
-//! case's library or its companion's (`Device::compile_mesh_pipeline`); the artifact of the
-//! compile digests its plan for the bind shape of its own stage's resources ([`mesh_shape`]).
+//! case's library or its companion's (`Device::compile_mesh_pipeline`).
 
 use super::graphics::{self, ColorTarget, RenderFunction, RenderOutput, StageResources};
-use super::{function_constants, lengths_classed, require_case_families, resources, BufferAddress};
+use super::{function_constants, require_case_families, resources};
 use crate::acceptance::{MeshFunction, PipelineRequest, RequestFunction};
 use crate::case::{AuthoredCase, MeshGrid, OutputSelection, Stage};
 use crate::check::admission::{ExecutorError, NotSupported};
 use crate::companion::Companion;
 use crate::engine::RowSource;
 use crate::literal::LiteralResources;
-use metal2vulkan::bind::{BindShape, BindState, BoundBuffer, BufferRanges};
 use metal2vulkan::error::{DescriptorError, Error, MetalAnswer};
 use metal2vulkan::library::FunctionConstantValues;
 use metal2vulkan::pipeline::Stage as ShaderStage;
@@ -236,49 +234,6 @@ impl MeshTemplate {
         }
         Ok(descriptor)
     }
-}
-
-/// The `BindShape` the runtime binds `mesh`'s draw with on a device that has device addresses
-/// exactly when `addressed` and the range limits `ranges`: its own stage's buffers at their
-/// synthetic guest addresses (and, when `addressed`, a host address), textures and samplers
-/// ([`graphics::stage_table`]); a partner binds none; classing lengths under `ranges`
-/// ([`lengths_classed`]), so its plan is the runtime's
-/// of the same binds. What the compile's artifact plans the draw's pipeline for
-/// (`artifact::CaseArtifact::record`).
-/// A case whose own function takes an argument buffer is not built here (`NotImplemented`).
-pub fn mesh_shape(
-    mesh: &MeshCase,
-    addressed: bool,
-    ranges: BufferRanges,
-) -> Result<BindShape, ExecutorError> {
-    let mut state = BindState::default();
-    for (stage, function) in mesh.stages() {
-        let resources = &function.resources;
-        if !(resources.argument_buffer_buffers.is_empty()
-            && resources.argument_buffer_textures.is_empty()
-            && resources.argument_buffer_samplers.is_empty())
-        {
-            return Err(NotSupported::NotImplemented(
-                "engine candidate: a device-free compile of a mesh draw whose function takes an \
-                 argument buffer"
-                    .into(),
-            )
-            .into());
-        }
-        let bound = |index: u32, length: u64| {
-            let address: BufferAddress = graphics::synthetic_address(stage, index);
-            BoundBuffer::Buffer {
-                length,
-                offset: 0,
-                gpu_address: address.guest,
-                device_address: addressed.then_some(address.guest),
-                attribute_stride: None,
-            }
-        };
-        let table = graphics::stage_table(function, bound).map_err(ExecutorError::Failed)?;
-        state.stages.insert(stage, table);
-    }
-    Ok(lengths_classed(state, ranges).shape())
 }
 
 /// The compile request for `mesh`'s pipeline, and its libraries in

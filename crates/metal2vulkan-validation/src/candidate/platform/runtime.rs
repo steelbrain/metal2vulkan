@@ -626,7 +626,6 @@ pub(super) fn ran(
         spv_sha256: None,
         translator_fingerprint: runtime_fingerprint(),
         environment: environment.clone(),
-        status: None,
         comparison: census.comparison_class(),
         census,
     }

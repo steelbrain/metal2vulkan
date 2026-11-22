@@ -1,19 +1,12 @@
-//! Device-free tests of the engine candidate: the status and output rules, the case mapping,
-//! and the binder accepting the executor's bind state for a looping kernel that reaches no status
-//! buffer. No device is opened.
+//! Device-free tests of the engine candidate: the status and output rules and the case mapping.
+//! No device is opened.
 
 use super::*;
 use crate::case::ScalarType;
 use crate::check::admission::NotSupported;
 use crate::requirement::ToolingRequirement;
-use metal2vulkan::bind::{PushHole, ResourceClass, WriteSource};
 use metal2vulkan::device::{Device, DeviceDescription, DevicePolicy};
-use metal2vulkan::library::Library;
-use metal2vulkan::metal::{DataType, ResourceUsage};
-use metal2vulkan::pipeline::{
-    ComputePipeline, ComputePipelineDescriptor, FunctionDescriptor, StageSource,
-};
-use metal2vulkan::Budget;
+use metal2vulkan::metal::DataType;
 use metal2vulkan_devtools::{llvm_assemble, AssembleError};
 
 mod argument_buffer_members;
@@ -62,20 +55,6 @@ fn device(stem: &str, policy: DevicePolicy) -> Device {
     let text = std::fs::read_to_string(path).unwrap();
     let description = DeviceDescription::from_khronos_json(&text, None).unwrap();
     Device::from_queries(description, policy).unwrap()
-}
-
-fn compile(device: &Device, bitcode: &[u8], entry: &str) -> ComputePipeline {
-    let function = Library::from_air(bitcode)
-        .and_then(|library| library.function(entry))
-        .unwrap();
-    device
-        .compile_compute_pipeline(
-            &ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(
-                function,
-            ))),
-            &Budget::standard(),
-        )
-        .unwrap()
 }
 
 /// A difference under notes is a noted difference unless the C3 reviewed list holds its case under
@@ -136,7 +115,7 @@ fn kernel_case() -> AuthoredCase {
 }
 
 #[test]
-fn the_case_maps_onto_the_binder_or_names_the_gap() {
+fn the_case_maps_or_names_the_gap() {
     let mut case = kernel_case();
     case.threadgroup_memory
         .push(crate::case::ThreadgroupMemoryResource {
@@ -160,38 +139,6 @@ fn the_case_maps_onto_the_binder_or_names_the_gap() {
     // A declared fuel is the Metal oracle's alone: the candidate runs the same case.
     case.fuel = Some(9);
     assert_eq!(map_kernel(&case).unwrap(), mapped);
-
-    let state = bind_state(
-        &mapped,
-        &BTreeMap::from([(
-            0,
-            BufferAddress {
-                guest: 0x1000,
-                host: Some(0x1000),
-            },
-        )]),
-        &BTreeMap::new(),
-        BufferRanges::default(),
-    )
-    .unwrap();
-    assert!(state.used_resources.is_empty());
-    let table = &state.stages[&ShaderStage::Kernel];
-    assert_eq!(table.threadgroup_lengths, mapped.threadgroup_lengths);
-    for (index, bytes) in &mapped.buffers {
-        let expected_host = (*index == 0).then_some(0x1000);
-        match table.buffers[index] {
-            BoundBuffer::Buffer {
-                length,
-                offset,
-                device_address,
-                ..
-            } => {
-                assert_eq!((length, offset), (bytes.len() as u64, 0));
-                assert_eq!(device_address, expected_host);
-            }
-            other => panic!("{other:?}"),
-        }
-    }
 
     // An explicit imageblock is the runtime's limit.
     let mut imageblock = kernel_case();
@@ -604,12 +551,12 @@ fn b64(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
-/// Device buffer array elements bind at consecutive Metal slots (the oracle's and the buffer
-/// table's `first + k`); an argument-buffer buffer is a used resource whose guest address the
-/// owner holds at its field, the owner covering that field; each maps its output, and a
-/// collision, an owner that is not bound, or an element slot that overflows is a gap.
+/// Device buffer array elements bind at consecutive Metal slots (the oracle's `first + k`); an
+/// argument-buffer buffer's guest address is held by its owner at its field, the owner covering
+/// that field; each maps its output, and a collision, an owner that is not bound, or an element
+/// slot that overflows is a gap.
 #[test]
-fn arrays_and_argument_buffers_map_onto_the_binder() {
+fn arrays_and_argument_buffers_map() {
     use crate::case::{
         ArgumentBufferBufferResource, DeviceBufferArrayElementResource, DeviceBufferArrayResource,
         ResourceRole,
@@ -660,66 +607,8 @@ fn arrays_and_argument_buffers_map_onto_the_binder() {
         }
     );
 
-    let host = |guest| BufferAddress {
-        guest,
-        host: Some(guest),
-    };
-    let addresses = mapped
-        .buffers
-        .keys()
-        .map(|&index| (index, host(0x1000 * u64::from(index + 1))))
-        .collect();
-    let embedded = BTreeMap::from([((0, 8), host(0xdead_0000))]);
-    let state = bind_state(&mapped, &addresses, &embedded, BufferRanges::default()).unwrap();
-    assert_eq!(
-        state.stages[&ShaderStage::Kernel]
-            .buffers
-            .keys()
-            .copied()
-            .collect::<Vec<_>>(),
-        [0, 4, 5]
-    );
-    let [used] = state.used_resources.as_slice() else {
-        panic!("{:?}", state.used_resources);
-    };
-    assert_eq!(used.class, ResourceClass::Buffer);
-    assert_eq!(used.token, 0);
-    assert_eq!(
-        (used.gpu_address, used.device_address, used.length),
-        (Some(0xdead_0000), Some(0xdead_0000), 12)
-    );
-    assert_eq!(used.usage, ResourceUsage::READ | ResourceUsage::WRITE);
-    // The executor's shape is the one it compiles for, with and without device addresses.
-    for addressed in [false, true] {
-        let shape = compute_shape(&mapped, addressed, BufferRanges::default()).unwrap();
-        assert_eq!(shape.used.len(), 1);
-        let addresses = mapped
-            .buffers
-            .keys()
-            .map(|&index| {
-                let mut address = BufferAddress::synthetic(index);
-                address.host = addressed.then_some(0x9000);
-                (index, address)
-            })
-            .collect();
-        let mut used = BufferAddress::synthetic_used(0);
-        used.host = addressed.then_some(0xa000);
-        let embedded = BTreeMap::from([((0, 8), used)]);
-        assert_eq!(
-            bind_state(&mapped, &addresses, &embedded, BufferRanges::default())
-                .unwrap()
-                .shape(),
-            shape
-        );
-    }
-    assert_ne!(
-        BufferAddress::synthetic_used(0).guest,
-        BufferAddress::synthetic(0).guest
-    );
-
     // The owner is created holding the pointer, little endian, at its field.
-    let fields =
-        argument_buffers::field_words(&embedded, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+    let fields = BTreeMap::from([((0, 8), 0xdead_0000)]);
     let owner_bytes = |index| argument_buffers::owner_bytes(&mapped.buffers, index, &fields);
     let owner = owner_bytes(0).unwrap();
     assert_eq!(&owner[..4], &[0xab; 4]);
@@ -786,8 +675,7 @@ fn texture_array(
 
 /// Element `k` of a texture array at `[[texture(n)]]` is the texture bound at slot `n + k`, as
 /// the Metal oracle binds it and the product reads it: the case maps each element there beside its
-/// textures, its bind state binds each as a texture of the array's type and format, and an element
-/// output is that texture's region. Element 0 of an array that overrides the texture at its base
+/// textures, and an element output is that texture's region. Element 0 of an array that overrides the texture at its base
 /// slot replaces it (Metal binds arrays last); any other collision and a slot that overflows are
 /// gaps.
 #[test]
@@ -838,24 +726,6 @@ fn texture_arrays_bind_each_element_at_its_slot() {
             dimensions: [1, 1, 1],
         }
     );
-    let state = bind_state(
-        &mapped,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        BufferRanges::default(),
-    )
-    .unwrap();
-    let table = &state.stages[&ShaderStage::Kernel];
-    assert_eq!(
-        table.textures.keys().copied().collect::<Vec<_>>(),
-        [0, 2, 3, 4]
-    );
-    for slot in [2, 3, 4] {
-        assert_eq!(
-            table.textures[&slot],
-            resources::bound_texture(&mapped.textures[&slot]).unwrap()
-        );
-    }
     // The final element texture is the observation.
     let mut finals = mapped.textures.clone();
     finals.get_mut(&3).unwrap().bytes = 99u32.to_le_bytes().to_vec();
@@ -933,154 +803,6 @@ entry:\n\
 !4 = !{{i32 1, !\"air.buffer\", !\"air.location_index\", i32 1, i32 2, !\"air.read_write\", !\"air.address_space\", i32 1, !\"air.arg_type_size\", i32 4, !\"air.arg_type_align_size\", i32 4, !\"air.arg_type_name\", !\"uint\", !\"air.arg_name\", !\"tab\"}}\n\
 !6 = !{{i32 2, i32 8, i32 0}}\n!7 = !{{!\"Metal\", i32 4, i32 0, i32 0}}\n"
     )
-}
-
-/// A case with a device buffer array maps its elements onto consecutive slots, and the binder
-/// plans and instantiates the executor's state for a buffer-table kernel compiled for that
-/// shape, with and without device addresses, with no diagnostic.
-#[test]
-fn a_device_buffer_array_plans_as_the_functions_buffer_table() {
-    use crate::case::{DeviceBufferArrayElementResource, DeviceBufferArrayResource, ResourceRole};
-    let Some(bitcode) = assemble(&buffer_table_kernel()) else {
-        return;
-    };
-    let mut case = kernel_case();
-    case.entry = "table".into();
-    case.buffers[0].initial_bytes_b64 = Some(b64(&[0; 8]));
-    case.device_buffer_arrays.push(DeviceBufferArrayResource {
-        binding: 1,
-        length: 2,
-        elements: (0..2)
-            .map(|index| DeviceBufferArrayElementResource {
-                index,
-                role: ResourceRole::Input,
-                bytes_b64: Some(b64(&[index as u8 + 1; 8])),
-                initial_bytes_b64: None,
-            })
-            .collect(),
-    });
-    let compute = map_kernel(&case).unwrap();
-    assert_eq!(
-        compute.buffers.keys().copied().collect::<Vec<_>>(),
-        [0, 1, 2]
-    );
-    let library = Library::from_air(&bitcode).unwrap();
-    let function = FunctionDescriptor::new(library.function("table").unwrap());
-    for (stem, addressed) in [
-        ("lavapipe", true),
-        ("moltenvk-m3", true),
-        ("runtime-floor", false),
-    ] {
-        let device = device(stem, DevicePolicy::RESIDENT_TABLES);
-        let shape = compute_shape(&compute, addressed, BufferRanges::default()).unwrap();
-        let (pipeline, inputs) = variants::bound::compile_compute_for_shape(
-            &device,
-            &function,
-            &shape,
-            Some(&compute.dispatch),
-            &Budget::standard(),
-        )
-        .unwrap_or_else(|error| panic!("{stem}: compile: {error:?}"));
-        let plan = pipeline.plan(&device, &shape).unwrap();
-        assert!(
-            variants::bound::compiled_for(&inputs, &plan.variant),
-            "{stem}"
-        );
-        assert!(
-            plan.diagnostics.is_empty(),
-            "{stem}: {:?}",
-            plan.diagnostics
-        );
-        let addresses = compute
-            .buffers
-            .keys()
-            .map(|&index| {
-                let mut address = BufferAddress::synthetic(index);
-                address.host = addressed.then_some(address.guest);
-                (index, address)
-            })
-            .collect();
-        let state = bind_state(
-            &compute,
-            &addresses,
-            &BTreeMap::new(),
-            BufferRanges::default(),
-        )
-        .unwrap();
-        assert_eq!(state.shape(), shape, "{stem}");
-        let commands = plan
-            .instantiate_dispatch(&state, &compute.dispatch)
-            .unwrap_or_else(|error| panic!("{stem}: instantiate: {error}"));
-        assert!(!commands.regions.is_empty(), "{stem}");
-    }
-}
-
-/// The binder accepts the executor's bind state for a compiled looping kernel, with and without
-/// device addresses, and plans every buffer write the executor handles; the loop reaches no
-/// status buffer.
-#[test]
-fn the_binder_plans_the_executors_state() {
-    let Some(bitcode) = assemble(&counting_kernel()) else {
-        return;
-    };
-    let case = ComputeCase {
-        out_of_bounds: Vec::new(),
-        creation_bound: crate::budgets::PIPELINE_CREATION_CEILING,
-        entry: "count".into(),
-        constants: FunctionConstantValues::defaults(),
-        buffers: BTreeMap::from([(0, vec![0; 4])]),
-        argument_buffer_buffers: BTreeMap::new(),
-        argument_buffer_textures: BTreeMap::new(),
-        argument_buffer_samplers: BTreeMap::new(),
-        textures: BTreeMap::new(),
-        samplers: BTreeMap::new(),
-        threadgroup_lengths: BTreeMap::new(),
-        dispatch: Dispatch::Threads {
-            threads: [5, 1, 1],
-            threads_per_group: [2, 1, 1],
-        },
-        output: ComputeOutput::Buffer {
-            binding: 0,
-            offset: 0,
-            length: 4,
-        },
-    };
-    for stem in ["lavapipe", "moltenvk-m3", "runtime-floor"] {
-        let device = device(stem, DevicePolicy::RESIDENT_TABLES);
-        let pipeline = compile(&device, &bitcode, "count");
-        for address in [
-            BufferAddress::synthetic(0),
-            BufferAddress {
-                guest: 0x10_0000,
-                host: Some(0x10_0000),
-            },
-        ] {
-            let state = bind_state(
-                &case,
-                &BTreeMap::from([(0, address)]),
-                &BTreeMap::new(),
-                BufferRanges::default(),
-            )
-            .unwrap();
-            let plan = pipeline.plan(&device, &state.shape()).unwrap();
-            let commands = plan.instantiate_dispatch(&state, &case.dispatch).unwrap();
-            assert!(!commands.regions.is_empty(), "{stem}");
-            assert!(plan.descriptors.iter().all(|write| matches!(
-                write.source,
-                WriteSource::Buffer { .. }
-                    | WriteSource::Neutral(_)
-                    | WriteSource::ArgumentTable { .. }
-                    | WriteSource::ConstantBlob { .. }
-            )));
-            assert!(
-                !commands
-                    .push_holes
-                    .iter()
-                    .any(|hole| matches!(hole, PushHole::ExecutionStatusAddress { .. })),
-                "{stem}: the loop reaches no status buffer"
-            );
-        }
-    }
 }
 
 #[test]

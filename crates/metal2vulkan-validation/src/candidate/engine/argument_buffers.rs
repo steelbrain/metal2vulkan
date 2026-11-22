@@ -4,30 +4,13 @@
 //! A case authors each member by its owner (the Metal buffer index of the argument buffer that
 //! holds it) and the byte offset of its field in the owner. The Metal oracle creates the member,
 //! writes it into the owner with its argument encoder (Tier 2), and makes it resident for reading
-//! and writing (`useResource:usage:`, on a render encoder with `stages: Vertex | Fragment`). The
-//! executor does the same in the binder's terms: the owner, a buffer of the function's own stage,
-//! is created holding at each field the 8 bytes the encoder writes there ([`field_words`],
-//! [`owner_bytes`]), and each member is what the binder takes for it:
-//!
-//! - a buffer is its guest address in the owner and a used resource of class `Buffer`
-//!   ([`used_buffer`]), so the resident set reaches it and a loaded pointer is translated through
-//!   it;
-//! - a texture is its `gpuResourceID` in the owner and a used resource of class `Texture` with
-//!   that resource id ([`used_texture`]): a heap member, which the plan writes into every heap
-//!   array whose class holds it and enters in each stage's handle table, so a handle loaded from
-//!   the field finds its element; a texture buffer is one of Metal's `TextureBuffer` type, which
-//!   the plan's heap holds no member of, so only a run through the runtime draws it;
-//! - a sampler is its `gpuResourceID` in the owner and an argument sampler of the bind state with
-//!   that id ([`embed_samplers`], [`sampler_ids`]): the plan writes it into each sampler array
-//!   and enters it in each stage's sampler table, so a sampler loaded from the field finds its
-//!   element.
+//! and writing (`useResource:usage:`, on a render encoder with `stages: Vertex | Fragment`). A run
+//! through the runtime does the same: the owner, a buffer of the function's own stage, is created
+//! holding at each field the 8 bytes the encoder writes there ([`owner_bytes`]): a buffer's
+//! `gpuAddress`, a texture's or a sampler's `gpuResourceID`, as the runtime gives each.
 
-use super::resources;
-use super::BufferAddress;
 use crate::case::ArgumentBufferSamplerResource;
 use crate::literal::{LiteralArgumentBufferBuffer, LiteralArgumentBufferTexture, LiteralTexture};
-use metal2vulkan::bind::{ArgumentSampler, ResourceClass, UsedResource};
-use metal2vulkan::metal::{RenderStages, ResourceUsage};
 use std::collections::BTreeMap;
 
 /// An argument-buffer member's key: its owner's Metal buffer index and its field's byte offset
@@ -128,95 +111,9 @@ pub fn embed_samplers(
     Ok(embedded)
 }
 
-/// The synthetic `gpuResourceID` of the used resource whose consumer token is `token`: nonzero
-/// (a handle table never enters id 0, the null entry) and distinct per token.
-pub fn resource_id(token: u32) -> u64 {
-    (1 << 62) | (u64::from(token) + 1)
-}
-
-/// The synthetic `gpuResourceID` of the argument-buffer sampler at `position` among a case's:
-/// nonzero (a sampler table never enters id 0, the null entry), distinct per position, and apart
-/// from every texture's [`resource_id`].
-pub fn sampler_id(position: usize) -> Result<u64, String> {
-    u64::try_from(position)
-        .ok()
-        .and_then(|position| position.checked_add(1))
-        .filter(|&id| id < 1 << 61)
-        .map(|id| (1 << 61) | id)
-        .ok_or_else(|| "too many argument-buffer samplers".into())
-}
-
-/// The [`sampler_id`] of each argument-buffer sampler `keys` (in order), by key.
-pub fn sampler_ids<K: Ord>(keys: impl Iterator<Item = K>) -> Result<BTreeMap<K, u64>, String> {
-    keys.enumerate()
-        .map(|(position, key)| Ok((key, sampler_id(position)?)))
-        .collect()
-}
-
-/// The bind state's argument samplers of `samplers`, in the order [`sampler_ids`] takes their keys:
-/// each one's authored descriptor ([`resources::argument_sampler_descriptor`]) with its
-/// [`sampler_id`].
-pub fn argument_samplers<'a, K>(
-    samplers: impl Iterator<Item = (K, &'a ArgumentBufferSamplerResource)>,
-) -> Result<Vec<ArgumentSampler>, String> {
-    samplers
-        .enumerate()
-        .map(|(position, (_, sampler))| {
-            Ok(ArgumentSampler::new(
-                resources::argument_sampler_descriptor(sampler),
-                sampler_id(position)?,
-            ))
-        })
-        .collect()
-}
-
-/// The consumer token of each argument-buffer texture `keys` (in order) of a case whose
-/// argument-buffer buffers number `buffers`: its position after them, so the buffers keep theirs.
-pub fn texture_tokens<K: Ord>(
-    buffers: usize,
-    keys: impl Iterator<Item = K>,
-) -> Result<BTreeMap<K, u32>, String> {
-    keys.enumerate()
-        .map(|(position, key)| {
-            let token = buffers
-                .checked_add(position)
-                .and_then(|token| u32::try_from(token).ok())
-                .ok_or("too many argument-buffer members")?;
-            Ok((key, token))
-        })
-        .collect()
-}
-
-/// The 8 bytes Metal's argument encoder writes at each member's field, as a little-endian word
-/// by key: each argument-buffer buffer's guest address (`buffers`), each argument-buffer
-/// texture's [`resource_id`] (`textures`, by consumer token), and each argument-buffer sampler's
-/// id (`samplers`, [`sampler_ids`]). A key named by two members is refused.
-pub fn field_words<K: Ord + Copy + std::fmt::Debug>(
-    buffers: &BTreeMap<K, BufferAddress>,
-    textures: &BTreeMap<K, u32>,
-    samplers: &BTreeMap<K, u64>,
-) -> Result<BTreeMap<K, u64>, String> {
-    let mut words = BTreeMap::new();
-    let members = buffers
-        .iter()
-        .map(|(&key, address)| (key, address.guest))
-        .chain(
-            textures
-                .iter()
-                .map(|(&key, &token)| (key, resource_id(token))),
-        )
-        .chain(samplers.iter().map(|(&key, &id)| (key, id)));
-    for (key, word) in members {
-        if words.insert(key, word).is_some() {
-            return Err(format!("argument-buffer field {key:?} holds two members"));
-        }
-    }
-    Ok(words)
-}
-
 /// The bytes the buffer at Metal index `index` of a function is created with: its initial bytes
-/// (`buffers`) with each of its members' words (`fields`, by key, [`field_words`]) written at
-/// the member's field, little endian. Two members whose fields overlap, and a field the owner
+/// (`buffers`) with each of its members' words (`fields`, by key) written at the member's field,
+/// little endian. Two members whose fields overlap, and a field the owner
 /// does not cover, are refused.
 pub fn owner_bytes(
     buffers: &BTreeMap<u32, Vec<u8>>,
@@ -243,56 +140,4 @@ pub fn owner_bytes(
             .copy_from_slice(&word.to_le_bytes());
     }
     Ok(bytes)
-}
-
-/// The used resource of the argument-buffer buffer of `length` bytes at `address` whose consumer
-/// token is `token` (its position among the bind state's argument-buffer buffers), resident for
-/// reading and writing in `stages`, as the Metal oracle's `useResource` makes it: no stages on a
-/// compute encoder, the vertex and fragment stages on a render encoder.
-pub fn used_buffer(
-    token: usize,
-    length: usize,
-    address: BufferAddress,
-    stages: RenderStages,
-) -> Result<UsedResource, String> {
-    let token = u32::try_from(token).map_err(|_| "too many argument-buffer buffers")?;
-    let mut used = UsedResource::new(ResourceClass::Buffer, token);
-    used.gpu_address = Some(address.guest);
-    used.device_address = address.host;
-    used.length = length as u64;
-    used.usage = ResourceUsage::READ | ResourceUsage::WRITE;
-    used.stages = stages;
-    Ok(used)
-}
-
-/// The used resource of the argument-buffer texture `texture` whose consumer token is `token`
-/// ([`texture_tokens`]): a `Texture` of its facts ([`resources::texture_facts`]), a texture
-/// buffer's of Metal's `TextureBuffer` type, whose resource id is [`resource_id`] of its token,
-/// resident for reading and writing in `stages` as the Metal oracle's `useResource` makes it.
-/// A run through the runtime draws it, and the authored compile census compiles its pipeline for
-/// this bind shape.
-pub fn used_texture(
-    token: u32,
-    texture: &LiteralTexture,
-    stages: RenderStages,
-) -> Result<UsedResource, String> {
-    let facts = resources::texture_facts(texture)?;
-    let mut used = UsedResource::new(ResourceClass::Texture(facts), token);
-    used.usage = ResourceUsage::READ | ResourceUsage::WRITE;
-    used.stages = stages;
-    used.resource_id = Some(resource_id(token));
-    Ok(used)
-}
-
-/// The guest address of each argument-buffer buffer of `keys` (in token order) on a device
-/// without device addresses, by key: its [`BufferAddress::synthetic_used`].
-pub fn synthetic_addresses<K: Ord>(
-    keys: impl Iterator<Item = K>,
-) -> Result<BTreeMap<K, BufferAddress>, String> {
-    keys.enumerate()
-        .map(|(token, key)| {
-            let token = u32::try_from(token).map_err(|_| "too many argument-buffer buffers")?;
-            Ok((key, BufferAddress::synthetic_used(token)))
-        })
-        .collect()
 }

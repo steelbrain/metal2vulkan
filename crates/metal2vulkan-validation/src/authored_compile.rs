@@ -620,7 +620,7 @@ pub fn compile_prepared(
     worker: &CompileWorker,
     device: &WorkerDevice,
 ) -> CellResult {
-    let planned = match case_compile(prepared, device) {
+    let planned = match case_compile(prepared) {
         Ok(planned) => planned,
         Err(error) => return CellResult::decided(executor_outcome(error, FailureClass::Case)),
     };

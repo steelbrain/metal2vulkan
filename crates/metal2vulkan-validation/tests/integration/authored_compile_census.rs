@@ -346,7 +346,7 @@ fn the_census_compiles_the_mesh_pipelines_no_candidate_draws() {
         );
         let prepared = prepare_compile(device, admitted())
             .unwrap_or_else(|error| panic!("{name}: preparation: {error}"));
-        case_compile(&prepared, &lavapipe).unwrap();
+        case_compile(&prepared).unwrap();
         let cells = compile_case(scratch.path(), &worker, &case, &[&lavapipe]);
         assert_eq!(cells.len(), 1, "{name}");
         assert_eq!(
@@ -359,10 +359,8 @@ fn the_census_compiles_the_mesh_pipelines_no_candidate_draws() {
 }
 
 /// A case whose argument buffer holds a texture buffer, which a run draws through the runtime,
-/// compiles in the census under the identity domains (the runtime's): the member is a used
-/// texture of Metal's `TextureBuffer` type in the bind shape the census compiles for
-/// (`argument_buffers::used_texture`), where the census failed the case. Each committed case that
-/// holds one, on lavapipe, whose profile holds a texel-buffer heap array.
+/// compiles in the census as the runtime compiles it: each committed case that holds one, on
+/// lavapipe.
 #[test]
 fn the_census_compiles_a_texture_buffer_an_argument_buffer_holds() {
     use metal2vulkan_validation::authored_compile::compile_case;

@@ -4,9 +4,8 @@
 //! `Library` → `Function` → `compile_render_pipeline` with the Metal oracle's descriptor
 //! ([`RenderTemplate`], compiled in the tools' compile worker as
 //! `acceptance::PipelineRequest::VertexDraw`, or as `PipelineRequest::Draw` with both stages'
-//! libraries), then `RenderPipeline::plan` and `BindingPlan::instantiate_draw`. This module is the
-//! device-free half (case mapping, the bind state, the descriptor, and output selection); the
-//! Vulkan half is `platform::render`.
+//! libraries), then drawn through the runtime. This module is the device-free half (case mapping,
+//! the descriptor, and output selection); the Vulkan half is `platform::runtime_render`.
 //!
 //! What an authored case maps to ([`render_case`]):
 //!
@@ -33,10 +32,7 @@
 //! functions of two libraries through one pipeline with derived expectations.
 
 use super::argument_buffers::{self, FieldKey};
-use super::{
-    function_constants, lengths_classed, require_case_families, resources, select_range,
-    BufferAddress,
-};
+use super::{function_constants, require_case_families, resources, select_range};
 use crate::case::out_of_bounds::OutOfBoundsTarget;
 use crate::case::{
     ArgumentBufferSamplerResource, AttributeFormat, AuthoredCase, OutputSelection, Primitive,
@@ -50,13 +46,10 @@ use crate::executor_contract::render_target_array::render_target_array_length;
 use crate::executor_contract::tessellation as patches;
 use crate::executor_contract::DrawDepthStencil;
 use crate::literal::{LiteralDepthStencil, LiteralResources, LiteralStageInput, LiteralTexture};
-use metal2vulkan::bind::{
-    BindShape, BindState, BoundBuffer, BufferRanges, DrawCall, IndexBufferRef, StageTable,
-    TessellationFactorBuffer, TessellationFactors,
-};
+use metal2vulkan::bind::{DrawCall, IndexBufferRef};
 use metal2vulkan::error::{DescriptorError, Error, MetalAnswer};
 use metal2vulkan::library::FunctionConstantValues;
-use metal2vulkan::metal::{self, RenderStages};
+use metal2vulkan::metal;
 use metal2vulkan::pipeline::Stage as ShaderStage;
 use metal2vulkan::pipeline::{
     ColorAttachmentDescriptor, FunctionDescriptor, RenderPipeline, RenderPipelineDescriptor,
@@ -64,9 +57,6 @@ use metal2vulkan::pipeline::{
     VertexBufferLayoutDescriptor, VertexDescriptor,
 };
 use std::collections::BTreeMap;
-
-/// The Metal buffer slots are `0..31`.
-const BUFFER_SLOTS: u32 = 31;
 
 /// What one stage binds, by Metal index.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -190,7 +180,7 @@ pub enum Assembly {
     },
 }
 
-/// One draw through one render pipeline, in the terms the binder takes.
+/// One draw through one render pipeline, in the terms the runtime route takes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenderCase {
     pub vertex: RenderFunction,
@@ -208,7 +198,7 @@ pub struct RenderCase {
     pub depth_stencil_state: DrawDepthStencil,
     /// The render pass's `renderTargetArrayLength`: the Metal oracle's, 1 when the case's own
     /// function's stage metadata declares its render target slice and 0 otherwise
-    /// ([`render_target_array_length`]), bound as `BindState::render_target_array_length`.
+    /// ([`render_target_array_length`]).
     pub render_target_array_length: u32,
     pub assembly: Assembly,
     pub draw: DrawCall,
@@ -249,48 +239,6 @@ impl RenderCase {
         self.stages()
             .find(|(of, _)| *of == stage)
             .map(|(_, function)| function)
-    }
-
-    /// Each argument-buffer buffer of each stage, by `(stage, owner, field offset)`, in stage
-    /// order: its position is its consumer token in the bind state ([`bind_state`]).
-    pub fn argument_buffer_buffers(
-        &self,
-    ) -> impl Iterator<Item = ((ShaderStage, u32, u32), &Vec<u8>)> {
-        self.stages().flat_map(|(stage, function)| {
-            function
-                .resources
-                .argument_buffer_buffers
-                .iter()
-                .map(move |(&(owner, field), bytes)| ((stage, owner, field), bytes))
-        })
-    }
-
-    /// Each argument-buffer texture of each stage, by `(stage, owner, field offset)`, in stage
-    /// order ([`texture_tokens`] gives its consumer token).
-    pub fn argument_buffer_textures(
-        &self,
-    ) -> impl Iterator<Item = ((ShaderStage, u32, u32), &LiteralTexture)> {
-        self.stages().flat_map(|(stage, function)| {
-            function
-                .resources
-                .argument_buffer_textures
-                .iter()
-                .map(move |(&(owner, field), texture)| ((stage, owner, field), texture))
-        })
-    }
-
-    /// Each argument-buffer sampler of each stage, by `(stage, owner, field offset)`, in stage
-    /// order ([`argument_buffers::sampler_ids`] gives its id).
-    pub fn argument_buffer_samplers(
-        &self,
-    ) -> impl Iterator<Item = ((ShaderStage, u32, u32), &ArgumentBufferSamplerResource)> {
-        self.stages().flat_map(|(stage, function)| {
-            function
-                .resources
-                .argument_buffer_samplers
-                .iter()
-                .map(move |(&(owner, field), sampler)| ((stage, owner, field), sampler))
-        })
     }
 
     /// The stage of the generated companion's function, which links nothing: the vertex stage of a
@@ -903,172 +851,6 @@ pub fn pipeline_descriptor(
         StageSource::Function(vertex),
         fragment.map(StageSource::Function),
     )
-}
-
-/// The guest-visible slot of a stage's buffer: disjoint 4-GiB windows per stage and index, never
-/// 0 (see [`BufferAddress::synthetic`]).
-pub fn synthetic_address(stage: ShaderStage, index: u32) -> BufferAddress {
-    let base = if stage == ShaderStage::Fragment {
-        BUFFER_SLOTS
-    } else {
-        0
-    };
-    BufferAddress::synthetic(base + index)
-}
-
-/// The `BindState` of `case`: each stage's buffers at offset 0 with their lengths and addresses
-/// (`addresses` by stage and Metal index), textures, and samplers; the vertex buffers bound to the
-/// vertex stage at their slots (their strides come from the descriptor); each argument-buffer
-/// buffer as a used buffer at its address (`embedded` by stage, owner, and field offset; its
-/// consumer token is its position in [`RenderCase::argument_buffer_buffers`]) and each
-/// argument-buffer texture as a used texture with its resource id (its token follows the buffers',
-/// [`texture_tokens`]), each resident for reading and writing in the vertex and fragment stages, as
-/// the Metal oracle's `useResource:usage:stages:` makes it; the pass's render target array length;
-/// and a patch draw's factor buffer, its whole length at the shared offset and instance stride,
-/// with Metal's default scale (`executor_contract::tessellation`); and the draw's depth/stencil
-/// descriptor, the one the Metal oracle sets (`RenderCase::depth_stencil_state`), which a
-/// pipeline's shader-side stencil reads as push data; classing lengths under the device's range
-/// limit `ranges` ([`lengths_classed`]).
-pub fn bind_state(
-    case: &RenderCase,
-    addresses: &BTreeMap<(ShaderStage, u32), BufferAddress>,
-    embedded: &BTreeMap<(ShaderStage, u32, u32), BufferAddress>,
-    ranges: BufferRanges,
-) -> Result<BindState, String> {
-    let bound = |stage: ShaderStage, index: u32, length: u64| {
-        let address = addresses.get(&(stage, index)).copied().unwrap_or_default();
-        BoundBuffer::Buffer {
-            length,
-            offset: 0,
-            gpu_address: address.guest,
-            device_address: address.host,
-            attribute_stride: None,
-        }
-    };
-    let mut state = BindState::default();
-    state.render_target_array_length = case.render_target_array_length;
-    if let Assembly::Patches { factors, .. } = &case.assembly {
-        state.tessellation_factors = TessellationFactors::new(
-            Some(TessellationFactorBuffer::new(
-                factors.len() as u64,
-                patches::FACTOR_OFFSET,
-                patches::FACTOR_INSTANCE_STRIDE,
-            )),
-            patches::FACTOR_SCALE,
-        );
-    }
-    for (stage, function) in case.stages() {
-        let table = stage_table(function, |index, length| bound(stage, index, length))?;
-        state.stages.insert(stage, table);
-    }
-    let table = state.stages.entry(ShaderStage::Vertex).or_default();
-    for buffer in &case.vertex_buffers {
-        let slot = bound(
-            ShaderStage::Vertex,
-            buffer.buffer_index,
-            buffer.bytes.len() as u64,
-        );
-        if table.buffers.insert(buffer.buffer_index, slot).is_some() {
-            return Err(format!(
-                "vertex buffer {} is also a bound buffer",
-                buffer.buffer_index
-            ));
-        }
-    }
-    for (token, (key, bytes)) in case.argument_buffer_buffers().enumerate() {
-        let address = embedded.get(&key).copied().unwrap_or_default();
-        state.used_resources.push(argument_buffers::used_buffer(
-            token,
-            bytes.len(),
-            address,
-            RenderStages::VERTEX | RenderStages::FRAGMENT,
-        )?);
-    }
-    let tokens = texture_tokens(case)?;
-    for (key, texture) in case.argument_buffer_textures() {
-        state.used_resources.push(argument_buffers::used_texture(
-            tokens[&key],
-            texture,
-            RenderStages::VERTEX | RenderStages::FRAGMENT,
-        )?);
-    }
-    state.argument_samplers = argument_buffers::argument_samplers(case.argument_buffer_samplers())?;
-    state.depth_stencil = case.depth_stencil_state.descriptor;
-    Ok(lengths_classed(state, ranges))
-}
-
-/// The bind table of `function`'s own resources: its buffers, each bound as `bound` binds a buffer
-/// of its index and length, its textures and its samplers.
-pub fn stage_table(
-    function: &RenderFunction,
-    bound: impl Fn(u32, u64) -> BoundBuffer,
-) -> Result<StageTable, String> {
-    let mut table = StageTable::default();
-    for (&index, bytes) in &function.resources.buffers {
-        table
-            .buffers
-            .insert(index, bound(index, bytes.len() as u64));
-    }
-    for (&index, texture) in &function.resources.textures {
-        table
-            .textures
-            .insert(index, resources::bound_texture(texture)?);
-    }
-    for (&index, sampler) in &function.resources.samplers {
-        table
-            .samplers
-            .insert(index, resources::bound_sampler(sampler));
-    }
-    Ok(table)
-}
-
-/// The consumer token of each argument-buffer texture of `case`, by `(stage, owner, field
-/// offset)`: its position after every argument-buffer buffer
-/// ([`argument_buffers::texture_tokens`]).
-pub fn texture_tokens(case: &RenderCase) -> Result<BTreeMap<(ShaderStage, u32, u32), u32>, String> {
-    argument_buffers::texture_tokens(
-        case.argument_buffer_buffers().count(),
-        case.argument_buffer_textures().map(|(key, _)| key),
-    )
-}
-
-/// The synthetic guest address of each argument-buffer buffer of `case`, by its key
-/// ([`argument_buffers::synthetic_addresses`]): its [`BufferAddress::synthetic_used`].
-pub fn synthetic_used_addresses(
-    case: &RenderCase,
-) -> Result<BTreeMap<(ShaderStage, u32, u32), BufferAddress>, String> {
-    argument_buffers::synthetic_addresses(case.argument_buffer_buffers().map(|(key, _)| key))
-}
-
-/// The `BindShape` the render executor binds `case` with on a device that has device addresses
-/// exactly when `addressed` and the range limits `ranges` ([`bind_state`] with every buffer's and
-/// argument-buffer buffer's synthetic guest address and, when `addressed`, a host address; only
-/// whether a buffer has one is part of the shape): the shape the census's artifact digest plans the
-/// draw's pipeline for.
-pub fn render_shape(
-    case: &RenderCase,
-    addressed: bool,
-    ranges: BufferRanges,
-) -> Result<BindShape, String> {
-    let with_host = |mut address: BufferAddress| {
-        address.host = addressed.then_some(address.guest);
-        address
-    };
-    let addresses = case
-        .stages()
-        .flat_map(|(stage, f)| f.resources.buffers.keys().map(move |&index| (stage, index)))
-        .chain(
-            case.vertex_buffers
-                .iter()
-                .map(|buffer| (ShaderStage::Vertex, buffer.buffer_index)),
-        )
-        .map(|(stage, index)| ((stage, index), with_host(synthetic_address(stage, index))))
-        .collect();
-    let embedded = synthetic_used_addresses(case)?
-        .into_iter()
-        .map(|(key, address)| (key, with_host(address)))
-        .collect();
-    Ok(bind_state(case, &addresses, &embedded, ranges)?.shape())
 }
 
 /// The final contents of a render run, by stage and Metal index (color targets by index).

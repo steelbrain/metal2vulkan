@@ -1,11 +1,9 @@
 //! What an engine run executed, by content.
 //!
 //! The pipeline a run compiles before it reads device output (the case's own, the compile
-//! [`super::case_compile`] plans) contributes one compile digest: its subject (`case`), the
+//! [`super::case_compile`] makes) contributes one compile digest: its subject (`case`) and the
 //! pipeline's content digest (`ComputePipeline::content_digest`, every field but the cache
-//! identity), the content digest of the binding plan the run makes of it for its bind shape
-//! (`BindingPlan::content_digest`, or the refusal of that plan). The case's artifact is the
-//! SHA-256 over the compile digests, by subject.
+//! identity). The case's artifact is the SHA-256 over the compile digests, by subject.
 //!
 //! The executor records it ([`ExecutedArtifact`]) with the product's
 //! `cache::RUNTIME_VERSION`; the authored compile census computes it the same way, device-free,
@@ -13,11 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use metal2vulkan::bind::{BindShape, BindingPlan};
 use metal2vulkan::cache::Hash256;
-use metal2vulkan::device::Device;
-use metal2vulkan::error::BindError;
-use metal2vulkan::pipeline::{ComputePipeline, RenderPipeline};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -57,32 +51,6 @@ impl ExecutedArtifact {
     }
 }
 
-/// A pipeline whose content and binding plan a compile digest covers.
-pub trait Planned {
-    /// The pipeline's content digest.
-    fn content_digest(&self) -> Hash256;
-    /// The pipeline's binding plan for `shape` on `device`.
-    fn plan_for(&self, device: &Device, shape: &BindShape) -> Result<BindingPlan, BindError>;
-}
-
-impl Planned for ComputePipeline {
-    fn content_digest(&self) -> Hash256 {
-        ComputePipeline::content_digest(self)
-    }
-    fn plan_for(&self, device: &Device, shape: &BindShape) -> Result<BindingPlan, BindError> {
-        self.plan(device, shape)
-    }
-}
-
-impl Planned for RenderPipeline {
-    fn content_digest(&self) -> Hash256 {
-        RenderPipeline::content_digest(self)
-    }
-    fn plan_for(&self, device: &Device, shape: &BindShape) -> Result<BindingPlan, BindError> {
-        self.plan(device, shape)
-    }
-}
-
 /// The subject of the case's own compile, as the artifact names it.
 const CASE: &str = "case";
 
@@ -93,31 +61,14 @@ pub struct CaseArtifact {
 }
 
 impl CaseArtifact {
-    /// Record the case's compile: `pipeline` planned for `shape` on `device`. A plan the binder
-    /// refuses is part of the digest as its refusal. Compiled twice, it must be the same compile.
-    pub fn record(
-        &mut self,
-        pipeline: &dyn Planned,
-        device: &Device,
-        shape: &BindShape,
-    ) -> Result<(), ExecutorError> {
+    /// Record the case's compile, a pipeline of content digest `content`. Compiled twice, it must
+    /// be the same compile.
+    pub fn record(&mut self, content: Hash256) -> Result<(), ExecutorError> {
         let label = CASE.to_owned();
         let mut h = Sha256::new();
-        h.update(b"metal2vulkan C3 compile digest v1\0");
+        h.update(b"metal2vulkan C3 compile digest v2\0");
         put(&mut h, label.as_bytes());
-        h.update(pipeline.content_digest());
-        match pipeline.plan_for(device, shape) {
-            Ok(plan) => {
-                h.update([1]);
-                h.update(plan.content_digest().map_err(|error| {
-                    ExecutorError::Failed(format!("the binding plan has no digest: {error}"))
-                })?);
-            }
-            Err(refusal) => {
-                h.update([0]);
-                put(&mut h, format!("{refusal:?}").as_bytes());
-            }
-        }
+        h.update(content);
         self.insert(label, h.finalize().into())
     }
 

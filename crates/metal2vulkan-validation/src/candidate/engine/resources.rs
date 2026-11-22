@@ -1,4 +1,4 @@
-//! Textures and samplers of an engine case in the binder's terms.
+//! Textures and samplers of an engine case as the Metal oracle creates them.
 //!
 //! The executor binds exactly what the Metal oracle binds: each authored texture is a Metal
 //! texture of the same type, pixel format, extent, and sample count (one mip level), a texture
@@ -7,15 +7,15 @@
 //! address, filter, and coordinate modes. Element `k` of a texture array at `[[texture(n)]]` is
 //! the texture bound at slot `n + k` ([`bound_textures`]): the Metal oracle binds it there, and the
 //! product reads that element through that slot's own binding (a handle-array element is the slot
-//! `n + k`, `memory::handles`), so the binder needs no descriptor array. Everything here is
-//! device-free; the Vulkan objects are `platform::plan_resources`.
+//! `n + k`, `memory::handles`). Everything here is device-free; a run through the runtime makes
+//! the objects (`platform::runtime_textures`).
 
 use crate::case::{
     ArgumentBufferSamplerResource, SamplerAddressMode, SamplerCompareFunction, SamplerFilter,
     SamplerMipFilter, SamplerResource, TextureFormat, TextureType,
 };
 use crate::literal::{LiteralTexture, LiteralTextureArray};
-use metal2vulkan::bind::{BoundSampler, BoundTexture, SamplerDescriptor, TextureFacts};
+use metal2vulkan::bind::SamplerDescriptor;
 use metal2vulkan::metal::{self, PixelFormat};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -136,72 +136,6 @@ pub fn bound_textures(
     Ok(bound)
 }
 
-/// The bytes a texture buffer's view covers: its width in texels (the Metal oracle's
-/// `newTextureWithDescriptor:offset:bytesPerRow:` view of the authored bytes at offset 0).
-pub fn texel_buffer_length(texture: &LiteralTexture) -> Result<u64, String> {
-    let length = u64::from(texture.dimensions[0])
-        .checked_mul(texture.format.bytes_per_pixel() as u64)
-        .ok_or_else(|| format!("texture buffer {} length overflows", texture.binding))?;
-    if length == 0 || length > texture.bytes.len() as u64 {
-        return Err(format!(
-            "texture buffer {} is {length} bytes wide but authors {} bytes",
-            texture.binding,
-            texture.bytes.len()
-        ));
-    }
-    Ok(length)
-}
-
-/// What the binder sees bound for an authored texture: a texture buffer's view (offset 0, its
-/// width in texels), or an image texture's facts ([`texture_facts`]).
-pub fn bound_texture(texture: &LiteralTexture) -> Result<BoundTexture, String> {
-    if texture.texture_type == TextureType::Buffer {
-        let length = texel_buffer_length(texture)?;
-        return Ok(BoundTexture::Buffer {
-            pixel_format: pixel_format(texture.format),
-            offset: 0,
-            length,
-            bytes_per_row: length,
-            resource_id: None,
-            swizzle: metal2vulkan::metal::TextureSwizzleChannels::DEFAULT,
-            parts: 1,
-        });
-    }
-    Ok(BoundTexture::Texture {
-        facts: texture_facts(texture)?,
-        resource_id: None,
-    })
-}
-
-/// The facts of an authored texture, as the binder sees an image texture bound and a used
-/// resource (`useResource`) names any texture: its type, its pixel format, and shader read and
-/// write usage; an image texture's sample count, Metal's `arrayLength` (which counts cubes for a
-/// cube array), its levels, and `isSparse` for a sparse texture. A texture buffer is one sample,
-/// level and slice of Metal's `TextureBuffer` type, its width checked ([`texel_buffer_length`]).
-pub fn texture_facts(texture: &LiteralTexture) -> Result<TextureFacts, String> {
-    let mut facts = TextureFacts::new(
-        self::texture_type(texture.texture_type),
-        pixel_format(texture.format),
-    );
-    facts.usage = metal::TextureUsage::SHADER_READ | metal::TextureUsage::SHADER_WRITE;
-    if texture.texture_type == TextureType::Buffer {
-        texel_buffer_length(texture)?;
-        return Ok(facts);
-    }
-    let layout = texture.layout()?;
-    facts.sample_count = layout.sample_count;
-    facts.array_length = match texture.texture_type {
-        TextureType::D1Array | TextureType::D2Array | TextureType::D2MultisampleArray => {
-            layout.array_layers
-        }
-        TextureType::CubeArray => layout.array_layers / 6,
-        _ => 1,
-    };
-    facts.sparse = texture.sparse.is_some();
-    facts.mipmap_level_count = texture.mip_levels;
-    Ok(facts)
-}
-
 /// The `MTLSamplerDescriptor` the Metal oracle creates for `sampler`: the defaults, with the
 /// authored address mode on every axis, the filters, and the coordinate mode.
 pub fn sampler_descriptor(sampler: &SamplerResource) -> SamplerDescriptor {
@@ -253,11 +187,6 @@ pub fn argument_sampler_descriptor(sampler: &ArgumentBufferSamplerResource) -> S
         Some(SamplerCompareFunction::Always) => metal::CompareFunction::Always,
     };
     desc
-}
-
-/// The bound sampler of an authored sampler.
-pub fn bound_sampler(sampler: &SamplerResource) -> BoundSampler {
-    BoundSampler::new(sampler_descriptor(sampler))
 }
 
 /// The observed bytes of a texture output: the `(origin, dimensions)` selection, in the case's
@@ -324,30 +253,6 @@ mod tests {
             sparse: None,
             mip_levels: 1,
         }
-    }
-
-    #[test]
-    fn authored_textures_bind_what_the_metal_oracle_creates() {
-        match bound_texture(&texture(TextureType::CubeArray, [2, 2, 12], vec![0; 48])).unwrap() {
-            BoundTexture::Texture { facts, .. } => {
-                assert_eq!(facts.texture_type, metal::TextureType::CubeArray);
-                assert_eq!(facts.pixel_format, PixelFormat::R8Unorm);
-                assert_eq!((facts.array_length, facts.sample_count), (2, 1));
-                assert_eq!(facts.mipmap_level_count, 1);
-            }
-            other => panic!("{other:?}"),
-        }
-        match bound_texture(&texture(TextureType::D1Array, [4, 3, 1], vec![0; 12])).unwrap() {
-            BoundTexture::Texture { facts, .. } => assert_eq!(facts.array_length, 3),
-            other => panic!("{other:?}"),
-        }
-        // A texture buffer's view is its width, not every authored byte.
-        match bound_texture(&texture(TextureType::Buffer, [5, 1, 1], vec![0; 8])).unwrap() {
-            BoundTexture::Buffer { offset, length, .. } => assert_eq!((offset, length), (0, 5)),
-            other => panic!("{other:?}"),
-        }
-        assert!(bound_texture(&texture(TextureType::Buffer, [9, 1, 1], vec![0; 8])).is_err());
-        assert!(bound_texture(&texture(TextureType::Cube, [2, 3, 6], vec![0; 36])).is_err());
     }
 
     #[test]
