@@ -33,7 +33,7 @@ Columns:
 | Devices below the runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Refusal` | 84 | 84 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Limit` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
-| The runtime's `Gap` | 32 | 32 | 0 | 0 | 0 | 0 | 0 |
+| The runtime's `Gap` | 33 | 33 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
@@ -46,7 +46,7 @@ Columns:
 | Devices below the runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The runtime's `Refusal` | 22 | 26 | 0 | 0 | 36 | 0 | 0 | 0 |
 | The runtime's `Limit` | 0 | 0 | 0 | 13 | 4 | 0 | 0 | 0 |
-| The runtime's `Gap` | 0 | 0 | 0 | 3 | 29 | 0 | 0 | 0 |
+| The runtime's `Gap` | 0 | 0 | 0 | 3 | 30 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -337,10 +337,11 @@ Columns:
 |---|---|---|---|---|---|
 | `IndirectCommandBuffers` | An indirect command buffer, its execution, or a compute pipeline state for one, of what the runtime does not build, `kind` naming it | every device (a public call's own check of its arguments) | `ours`: the first cut of indirect command buffers builds that alone | 5: `crates/metal2vulkan-runtime/src/indirect.rs (new_indirect_command_buffer)`, `crates/metal2vulkan-runtime/src/indirect.rs (shape)` (+3) | `-` |
 | `KernelInput` | A kernel that reads something the compute encoder does not supply yet, `kind` naming what | every device (a public call's own check of its arguments) | `ours`: the encoder supplies only those | 1: `crates/metal2vulkan-runtime/src/pipeline.rs (gap)` | `-` |
+| `StageIn` | A form of a kernel's `[[stage_in]]` that is not built, `kind` naming which | every device (a public call's own check of its arguments) | `ours`: no replay stream makes a compute state with a stage-input descriptor or sets a stage-in region indirectly; what Metal reads at an indexed step's rate past 1 is not measured | 2: `crates/metal2vulkan-runtime/src/encoder.rs (set_stage_in_region_with_indirect_buffer)`, `crates/metal2vulkan-runtime/src/pipeline.rs (of)` | `-` |
 | `ImageblockLength` | An imageblock length Metal answers that no case measures | every device (a public call's own check of its arguments) | `ours`: the length is not measured against Metal's | 2: `crates/metal2vulkan-runtime/src/pipeline.rs (imageblock_memory_length_for_dimensions)`, `crates/metal2vulkan-runtime/src/render.rs (imageblock_sample_length)` | `-` |
 | `PartialSimdgroups` | A dispatch whose threadgroup is not whole SIMD groups of a kernel whose tier runs each SIMD group as one subgroup of `width` threads (a pinned... | every device (a public call's own check of its arguments) | `ours`: no emulated-SIMD-group module | 1: `crates/metal2vulkan-runtime/src/encoder.rs (decide)` | `-` |
 | `PartialThreadgroups` | `dispatchThreads` with a grid that is not a whole number of threadgroups on some axis, of a kernel that observes its threadgroup partition and... | every device (a public call's own check of its arguments) | `ours`: the translator's partial-threadgroups variant does not take the emulated SIMD-group tier, nor a vote word past the workgroup memory | 1: `crates/metal2vulkan-runtime/src/encoder.rs (decide)` | `-` |
-| `NoStageInRegion` | A dispatch of a kernel that reads the stage-in region (`[[grid_origin]]`, `[[grid_size]]`) on an encoder that never set one... | every device (a public call's own check of its arguments) | `ours`: no replay stream dispatches such a kernel without setting a region | 1: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch)` | `-` |
+| `NoStageInRegion` | A dispatch of a kernel that reads the stage-in region (`[[grid_origin]]`, `[[grid_size]]`, a `[[stage_in]]` attribute of a thread-position step)... | every device (a public call's own check of its arguments) | `ours`: no replay stream dispatches such a kernel without setting a region | 1: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch)` | `-` |
 | `IndirectPrivateArena` | `dispatchThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerThreadgroup:` of a kernel whose private memory lives in the runtime's... | every device (a public call's own check of its arguments) | `ours`: no replay stream dispatches such a kernel indirectly | 1: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch)` | `-` |
 | `MemorylessTexture` | A texture of `Memoryless` storage, which only render passes use | every device (a public call's own check of its arguments) | `ours`: render passes are not built | 1: `crates/metal2vulkan-runtime/src/texture.rs (checked)` | `-` |
 | `TextureBufferSwizzle` | A texture buffer (`MTLTextureTypeTextureBuffer`) with a swizzle other than each channel's own (`Buffer::new_texture`), which Metal applies to its... | every device (a public call's own check of its arguments) | `ours`: a texel buffer view has no component mapping, and a texture's resource ID carries no swizzle to the shader; no recorded stream makes one | 1: `crates/metal2vulkan-runtime/src/texture.rs (texel_texture)` | `-` |
@@ -617,6 +618,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Limit::TextureSamples`: `crates/metal2vulkan-runtime/src/texture.rs (plan)`
 - `rt:Gap::IndirectCommandBuffers`: `crates/metal2vulkan-runtime/src/indirect.rs (new_indirect_command_buffer)`; `crates/metal2vulkan-runtime/src/indirect.rs (shape)`; `crates/metal2vulkan-runtime/src/pipeline.rs (compute_pipeline_state)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (draw)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (execution_part)`
 - `rt:Gap::KernelInput`: `crates/metal2vulkan-runtime/src/pipeline.rs (gap)`
+- `rt:Gap::StageIn`: `crates/metal2vulkan-runtime/src/encoder.rs (set_stage_in_region_with_indirect_buffer)`; `crates/metal2vulkan-runtime/src/pipeline.rs (of)`
 - `rt:Gap::ImageblockLength`: `crates/metal2vulkan-runtime/src/pipeline.rs (imageblock_memory_length_for_dimensions)`; `crates/metal2vulkan-runtime/src/render.rs (imageblock_sample_length)`
 - `rt:Gap::PartialSimdgroups`: `crates/metal2vulkan-runtime/src/encoder.rs (decide)`
 - `rt:Gap::PartialThreadgroups`: `crates/metal2vulkan-runtime/src/encoder.rs (decide)`

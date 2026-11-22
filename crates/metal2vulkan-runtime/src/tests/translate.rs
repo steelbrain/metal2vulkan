@@ -13,7 +13,8 @@
 //! buffer land at their own addresses, 4, 8 or 12 bytes past a multiple of 16, as Metal places them.
 //! An access through a buffer argument at 2 GiB and past lands there, on every device that can
 //! allocate the buffer. A kernel that reads the stage-in region stores the region each dispatch
-//! was encoded under, and is refused where the encoder set none. A read of a texture the kernel's function constants removed takes zero,
+//! was encoded under, and is refused where the encoder set none; a kernel's `[[stage_in]]`
+//! attributes are fetched from the element each step function names in that region. A read of a texture the kernel's function constants removed takes zero,
 //! and a read through a buffer argument bound to nothing reads the nil buffer's zeros.
 //! An observer whose partial-threadgroups variant's vote word takes its threadgroup memory past
 //! the device's limit runs its whole grids, threadgroup dispatches and indirect ones on its plain
@@ -31,12 +32,17 @@
 mod on_device {
     use crate::tests::command::on_device::{each_device, finished, within};
     use crate::tests::{devices_of_the_cfgs_kind, keeps_a_blob};
+    use crate::StageInKind;
     use crate::{
         host_time, Block, Buffer, ComputePipelineDescriptor, ComputePipelineState, Device,
         DeviceOptions, DispatchType, Error, FunctionDescriptor, Gap, Gauges, Library, Limit,
         MemoryClass, PrecisionNote, Refusal, Region, StageSource, MAX_BUFFER_LENGTH,
     };
-    use metal2vulkan::pipeline::{KernelVariant, RuntimeFact, StageEntries};
+    use metal2vulkan::metal::{AttributeFormat, IndexType, StepFunction};
+    use metal2vulkan::pipeline::{
+        KernelVariant, RuntimeFact, StageEntries, StageInputAttributeDescriptor,
+        StageInputDescriptor, StageInputLayoutDescriptor,
+    };
     use metal2vulkan::Budget;
     use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
     use std::path::{Path, PathBuf};
@@ -3265,6 +3271,210 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
                 );
             }
             println!("{name}: each dispatch read the stage-in region set before it");
+        });
+    }
+
+    /// The words of element `e` of `every_device_fetches_stage_in_by_each_step_function`'s source
+    /// buffer, under its four attributes: `float4` at 0, `uint4` at 16, `int` at 32 and `half2` at
+    /// 36, 40 bytes an element. None is a NaN or a denormal.
+    fn stage_in_element(e: u32) -> [u32; 10] {
+        let f = [e as f32, e as f32 + 0.5, 1.0, -2.0].map(f32::to_bits);
+        let u = [e, 2 * e, e + 100, 0xdead_0000 | e];
+        let i = (-(e as i32) - 1) as u32;
+        let h = (0x3c00 + e) | (0x4000 + e) << 16;
+        [f[0], f[1], f[2], f[3], u[0], u[1], u[2], u[3], i, h]
+    }
+
+    /// `plain` (`engine/kernel_stage_in`'s `stage_in_fetch`) under a stage-input descriptor of its
+    /// four attributes, `Float4` at 0, `UInt4` at 16, `Int` at 32 and `Half2` at 36 of the buffer
+    /// at index 1, whose layout has `stride` (`None` for `MTLBufferLayoutStrideDynamic`), `step` and
+    /// `rate`; 16-bit indices at index 2.
+    fn stage_in_fetch(
+        plain: &ComputePipelineDescriptor,
+        stride: Option<u32>,
+        step: StepFunction,
+        rate: u32,
+    ) -> ComputePipelineDescriptor {
+        let mut input = StageInputDescriptor::new();
+        let mut layout = StageInputLayoutDescriptor::new(stride);
+        layout.step_function = step;
+        layout.step_rate = rate;
+        input.layouts.insert(1, layout);
+        input.index_type = IndexType::UInt16;
+        input.index_buffer_index = 2;
+        let attributes = [
+            (AttributeFormat::Float4, 0),
+            (AttributeFormat::UInt4, 16),
+            (AttributeFormat::Int, 32),
+            (AttributeFormat::Half2, 36),
+        ];
+        for (index, (format, offset)) in (0..).zip(attributes) {
+            let attribute = StageInputAttributeDescriptor::new(format, offset, 1);
+            input.attributes.insert(index, attribute);
+        }
+        let mut descriptor = plain.clone();
+        descriptor.stage_input = Some(input);
+        descriptor
+    }
+
+    /// `engine/kernel_stage_in`'s `stage_in_fetch` under [`stage_in_fetch`]'s descriptor, its
+    /// layout of a 40-byte element and the buffer at index 1 bound at an offset of 16, once per
+    /// step function a kernel may use: each thread `x`
+    /// of a grid of 8 reports the bits of element `origin + min(x / rate, size - 1)` of a
+    /// thread-position step, of element `index[min(x, size - 1)] + origin` of an indexed one (16-bit
+    /// indices at index 2), and of element 0 of a constant step, so threads past the region read
+    /// its last element. Before the runtime fetched stage inputs the state was
+    /// `Gap::KernelInput`.
+    #[test]
+    fn every_device_fetches_stage_in_by_each_step_function() {
+        let Some(plain) = descriptor_of("kernel_stage_in", "stage_in_fetch") else {
+            return;
+        };
+        const THREADS: u32 = 8;
+        const ELEMENTS: u32 = 16;
+        const OFFSET: u64 = 16;
+        const INDICES: [u16; 8] = [5, 3, 0, 7, 2, 6, 1, 4];
+        // Each step, its rate, the region's origin and size on x, and the element each thread
+        // reads.
+        let element = |x: u32, step: StepFunction, rate: u32, origin: u32, size: u32| match step {
+            StepFunction::Constant => 0,
+            StepFunction::ThreadPositionInGridXIndexed => {
+                u32::from(INDICES[x.min(size - 1) as usize]) + origin
+            }
+            _ => origin + (x / rate).min(size - 1),
+        };
+        let steps = [
+            (StepFunction::ThreadPositionInGridX, 1, 1, 5),
+            (StepFunction::ThreadPositionInGridX, 2, 0, 3),
+            (StepFunction::ThreadPositionInGridXIndexed, 1, 2, 6),
+            (StepFunction::Constant, 0, 3, 8),
+        ];
+        each_device("compute_stage_in_steps", |name, _, device| {
+            let mut buffers = Buffers::new(&device, 8192);
+            let source = buffers.buffer(OFFSET + 40 * u64::from(ELEMENTS));
+            let bytes: Vec<u8> = (0..ELEMENTS)
+                .flat_map(stage_in_element)
+                .flat_map(u32::to_le_bytes)
+                .collect();
+            write(&source, OFFSET, &bytes);
+            let indices = buffers.buffer(2 * INDICES.len() as u64);
+            write(&indices, 0, &INDICES.map(u16::to_le_bytes).concat());
+            let queue = device.new_command_queue(4).expect("a queue");
+            for (step, rate, origin, size) in steps {
+                let descriptor = stage_in_fetch(&plain, Some(40), step, rate);
+                let label = format!("{name}: {step:?} at rate {rate}");
+                let state = state(&label, &device, &descriptor);
+                // Three `uint4`s a thread, and a spare thread's past the grid.
+                let out = buffers.buffer(48 * u64::from(THREADS + 1));
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&state).expect("a state");
+                encoder.set_buffer(Some(&out), 0, 0).expect("a buffer");
+                encoder
+                    .set_buffer(Some(&source), OFFSET, 1)
+                    .expect("a buffer");
+                encoder.set_buffer(Some(&indices), 0, 2).expect("a buffer");
+                encoder.set_stage_in_region(Region {
+                    origin: [origin, 0, 0],
+                    size: [size, 1, 1],
+                });
+                encoder
+                    .dispatch_threads([THREADS, 1, 1], [4, 1, 1])
+                    .unwrap_or_else(|error| panic!("{label}: {error}"));
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                finished(&label, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{label}");
+                // Per thread: the `float4`'s bits, the `uint4`, then the `int`'s bits, each `half`'s
+                // and the thread's index.
+                let mut expected: Vec<u32> = (0..THREADS)
+                    .flat_map(|x| {
+                        let w = stage_in_element(element(x, step, rate, origin, size));
+                        let [front @ .., i, h] = w;
+                        front.into_iter().chain([i, h & 0xffff, h >> 16, x])
+                    })
+                    .collect();
+                expected.extend([0; 12]);
+                assert_eq!(
+                    words(&out, 0, 12 * (THREADS as usize + 1)),
+                    expected,
+                    "{label}: the attributes each thread fetched"
+                );
+                println!("{label}: each thread fetched the element its step names");
+            }
+        });
+    }
+
+    /// The forms of a kernel's `[[stage_in]]` the runtime does not build are each refused as
+    /// `Gap::StageIn` of its own kind: a thread-position layout of `MTLBufferLayoutStrideDynamic`
+    /// (`DynamicStride`) and an indexed step at a step rate of 2 (`IndexedStepRate`) at the state's
+    /// creation, and `setStageInRegionWithIndirectBuffer:indirectBufferOffset:`
+    /// (`IndirectRegion`) at its call. A constant step of a dynamic layout reads no stride, and an
+    /// attribute the kernel does not read (a fifth, at buffer 3, of a dynamic layout) is fetched by
+    /// nothing: both states are made.
+    #[test]
+    fn every_device_refuses_each_unbuilt_stage_in_form_by_its_kind() {
+        let Some(plain) = descriptor_of("kernel_stage_in", "stage_in_fetch") else {
+            return;
+        };
+        let refused = |made: Result<ComputePipelineState, Error>, kind: StageInKind| matches!(made, Err(Error::Unsupported(Gap::StageIn { kind: found })) if found == kind);
+        let dynamic = stage_in_fetch(&plain, None, StepFunction::ThreadPositionInGridX, 1);
+        let indexed = stage_in_fetch(
+            &plain,
+            Some(40),
+            StepFunction::ThreadPositionInGridXIndexed,
+            2,
+        );
+        let constant = stage_in_fetch(&plain, None, StepFunction::Constant, 0);
+        let mut unread = stage_in_fetch(&plain, Some(40), StepFunction::ThreadPositionInGridX, 1);
+        if let Some(input) = &mut unread.stage_input {
+            let mut layout = StageInputLayoutDescriptor::new(None);
+            layout.step_function = StepFunction::ThreadPositionInGridX;
+            input.layouts.insert(3, layout);
+            let attribute = StageInputAttributeDescriptor::new(AttributeFormat::Float, 0, 3);
+            input.attributes.insert(4, attribute);
+        }
+        each_device("compute_stage_in_unbuilt", |name, _, device| {
+            let made = |descriptor: &ComputePipelineDescriptor| {
+                device.new_compute_pipeline_state(descriptor, crate::tests::no_constexpr_samplers)
+            };
+            for (descriptor, kind) in [
+                (&dynamic, StageInKind::DynamicStride),
+                (&indexed, StageInKind::IndexedStepRate),
+            ] {
+                let answer = made(descriptor);
+                assert!(
+                    refused(answer, kind),
+                    "{name}: not Gap::StageIn of {kind:?}"
+                );
+            }
+            for (descriptor, what) in [
+                (&constant, "a constant step of a dynamic layout"),
+                (&unread, "an unread attribute of a dynamic layout"),
+            ] {
+                made(descriptor).unwrap_or_else(|error| panic!("{name}: {what}: {error}"));
+            }
+            let mut buffers = Buffers::new(&device, 4096);
+            let region = buffers.buffer(24);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder = command_buffer
+                .compute_command_encoder(DispatchType::Serial)
+                .expect("an encoder");
+            let indirect = encoder.set_stage_in_region_with_indirect_buffer(&region, 0);
+            assert!(
+                matches!(
+                    indirect,
+                    Err(Error::Unsupported(Gap::StageIn {
+                        kind: StageInKind::IndirectRegion
+                    }))
+                ),
+                "{name}: the indirect region: {indirect:?}"
+            );
+            encoder.end_encoding();
+            println!("{name}: each unbuilt stage-in form was refused by its kind");
         });
     }
 

@@ -5,7 +5,7 @@ use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
 use crate::device::Core;
-use crate::error::{Error, Gap, Limit, Refusal};
+use crate::error::{Error, Gap, Limit, Refusal, StageInKind};
 use crate::fence::Fence;
 use crate::floor;
 use crate::hazard::Access;
@@ -642,11 +642,15 @@ impl ComputeCommandEncoder {
         self.set_sampler_state(sampler, index)
     }
 
-    /// `setStageInRegion:`: the region a kernel's `[[grid_origin]]` and `[[grid_size]]` read,
-    /// pushed at every later dispatch of the encoder as the origin and the size, each a `uvec4`
-    /// with a zero `w`. A dispatch of a kernel that reads the region on an encoder that set none
-    /// is [`Gap::NoStageInRegion`]. A kernel with a `[[stage_in]]` argument, which fetches by the
-    /// region, is [`Gap::KernelInput`] at its state's creation.
+    /// `setStageInRegion:`: the region a kernel's `[[grid_origin]]` and `[[grid_size]]` read and
+    /// its `[[stage_in]]` attributes of a thread-position step fetch by, pushed at every later
+    /// dispatch of the encoder as the origin and the size, each a `uvec4` with a zero `w`. Such an
+    /// attribute's element is the region's origin plus the thread's position on the step's axis
+    /// over the step rate, clamped to the region's size less 1 (a size of 0 clamps nothing); an
+    /// indexed step's is the origin plus the index its index buffer holds at the clamped position.
+    /// A thread past the region, whose fetch Metal leaves undefined, so reads the region's last
+    /// element. A dispatch of a kernel that reads the region on an encoder that set none is
+    /// [`Gap::NoStageInRegion`].
     pub fn set_stage_in_region(&mut self, region: Region) {
         let mut bytes = [0; 32];
         let words =
@@ -655,6 +659,20 @@ impl ComputeCommandEncoder {
             *at = word.to_le_bytes();
         }
         self.stage_in_region = Some(bytes);
+    }
+
+    /// `setStageInRegionWithIndirectBuffer:indirectBufferOffset:`: a stage-in region the GPU
+    /// reads from `buffer` at `offset`, in `MTLStageInRegionIndirectArguments`' layout. Not built:
+    /// always [`Gap::StageIn`] of [`StageInKind::IndirectRegion`], and the encoder's region stays
+    /// the one it had.
+    pub fn set_stage_in_region_with_indirect_buffer(
+        &mut self,
+        _buffer: &Buffer,
+        _offset: u64,
+    ) -> Result<(), Error> {
+        Err(Error::Unsupported(Gap::StageIn {
+            kind: StageInKind::IndirectRegion,
+        }))
     }
 
     /// `setBufferOffset:atIndex:`.

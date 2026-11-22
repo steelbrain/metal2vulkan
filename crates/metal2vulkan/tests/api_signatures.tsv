@@ -604,6 +604,7 @@ enum	metal2vulkan-runtime::Stage	#[cfg_attr(feature = "serde", derive(serde::Ser
 enum	metal2vulkan-runtime::StageBreach	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum StageBreach
 enum	metal2vulkan-runtime::StageFill	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum StageFill
 enum	metal2vulkan-runtime::StageGap	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum StageGap
+enum	metal2vulkan-runtime::StageInKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum StageInKind
 enum	metal2vulkan-runtime::StageSource	#[derive(Clone, Debug, PartialEq, Eq)] pub enum StageSource
 enum	metal2vulkan-runtime::StorageMode	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum StorageMode
 enum	metal2vulkan-runtime::StoreAction	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum StoreAction
@@ -5902,6 +5903,7 @@ method	metal2vulkan-runtime::ComputeCommandEncoder::set_compute_pipeline_state	p
 method	metal2vulkan-runtime::ComputeCommandEncoder::set_sampler_state	pub fn set_sampler_state(&mut self, sampler: Option<&SamplerState>, index: u32) -> Result<(), Error>
 method	metal2vulkan-runtime::ComputeCommandEncoder::set_sampler_state_with_lod_clamps	pub fn set_sampler_state_with_lod_clamps(&mut self, sampler: Option<&SamplerState>, lod_min_clamp: f32, lod_max_clamp: f32, index: u32) -> Result<(), Error>
 method	metal2vulkan-runtime::ComputeCommandEncoder::set_stage_in_region	pub fn set_stage_in_region(&mut self, region: Region)
+method	metal2vulkan-runtime::ComputeCommandEncoder::set_stage_in_region_with_indirect_buffer	pub fn set_stage_in_region_with_indirect_buffer(&mut self, _buffer: &Buffer, _offset: u64) -> Result<(), Error>
 method	metal2vulkan-runtime::ComputeCommandEncoder::set_texture	pub fn set_texture(&mut self, texture: Option<&Texture>, index: u32) -> Result<(), Error>
 method	metal2vulkan-runtime::ComputeCommandEncoder::set_threadgroup_memory_length	pub fn set_threadgroup_memory_length(&mut self, length: u32, index: u32) -> Result<(), Error>
 method	metal2vulkan-runtime::ComputeCommandEncoder::update_fence	pub fn update_fence(&mut self, fence: &Fence) -> Result<(), Error>
@@ -8347,6 +8349,7 @@ variant	metal2vulkan-runtime::Gap::PartialSimdgroups	PartialSimdgroups { threads
 variant	metal2vulkan-runtime::Gap::PartialThreadgroups	PartialThreadgroups { threads_per_grid: [u32; 3], threads_per_threadgroup: [u32; 3] }
 variant	metal2vulkan-runtime::Gap::RenderPass	RenderPass { kind: RenderPassKind }
 variant	metal2vulkan-runtime::Gap::RenderPipeline	RenderPipeline { kind: RenderPipelineKind }
+variant	metal2vulkan-runtime::Gap::StageIn	StageIn { kind: StageInKind }
 variant	metal2vulkan-runtime::Gap::StageSize	StageSize { weight: u64, cause: StageGap }
 variant	metal2vulkan-runtime::Gap::StorageElement	StorageElement { slot: Option<u32>, pixel_format: PixelFormat }
 variant	metal2vulkan-runtime::Gap::SurfaceUsage	SurfaceUsage { pixel_format: PixelFormat, missing: u32 }
@@ -8385,7 +8388,6 @@ variant	metal2vulkan-runtime::KernelInputKind::RuntimeFact	RuntimeFact { fact: &
 variant	metal2vulkan-runtime::KernelInputKind::Slot	Slot
 variant	metal2vulkan-runtime::KernelInputKind::Specialization	Specialization
 variant	metal2vulkan-runtime::KernelInputKind::StageFlags	StageFlags
-variant	metal2vulkan-runtime::KernelInputKind::StageIn	StageIn
 variant	metal2vulkan-runtime::KernelInputKind::Workgroup	Workgroup
 variant	metal2vulkan-runtime::Limit::AllocationNotMapped	AllocationNotMapped { class: MemoryClass, len: u64 }
 variant	metal2vulkan-runtime::Limit::BlockIds	BlockIds
@@ -8638,6 +8640,9 @@ variant	metal2vulkan-runtime::StageGap::Breach	Breach(crate::StageBreach)
 variant	metal2vulkan-runtime::StageGap::NoCacheDirectory	NoCacheDirectory
 variant	metal2vulkan-runtime::StageGap::NoPipelineCache	NoPipelineCache
 variant	metal2vulkan-runtime::StageGap::RenderStage	RenderStage
+variant	metal2vulkan-runtime::StageInKind::DynamicStride	DynamicStride
+variant	metal2vulkan-runtime::StageInKind::IndexedStepRate	IndexedStepRate
+variant	metal2vulkan-runtime::StageInKind::IndirectRegion	IndirectRegion
 variant	metal2vulkan-runtime::StageSource::Compiled	Compiled(CompiledFunction)
 variant	metal2vulkan-runtime::StageSource::Function	Function(FunctionDescriptor)
 variant	metal2vulkan-runtime::StorageMode::Managed	Managed

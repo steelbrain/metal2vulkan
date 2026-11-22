@@ -30,19 +30,19 @@ Its limits, measured rather than asserted:
 
 | | |
 |---|---|
-| implemented Metal items | 621 |
+| implemented Metal items | 622 |
 | of those, unreachable: `objc2-metal` binds no name for them | 1 |
-| so reachable by some case | 620 |
-| of the reachable, exercised by the suite's Metal leg | 545 |
+| so reachable by some case | 621 |
+| of the reachable, exercised by the suite's Metal leg | 546 |
 | of the reachable, not exercised | 75 |
 | share of the reachable exercised | 88% |
-| of those exercised, no case reaching it loosens anything | 325 |
+| of those exercised, no case reaching it loosens anything | 326 |
 | of those exercised, a case reaching it loosens some site | 220 |
 | case modules | 182 |
 | committed recordings | 1325 |
 | distinct SDK items the Metal leg reaches, of any status | 808 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 8024 |
+| ledger rows (a case whose gap is recorded) | 7943 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -371,7 +371,7 @@ Every container with an implemented item, by how much of it the suite reaches. *
 | `MTLRasterizationRateSampleArray` | 3 | 0 | 0 | 3 |  |
 | `MTLRenderPipelineReflection` | 9 | 0 | 6 | 3 | `fragment_imageblock_reflection`, `mesh_pipeline_reflection`, `pipeline_options`, `texture_accesses`… |
 | `MTLBuffer` | 6 | 0 | 4 | 2 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
-| `MTLComputeCommandEncoder` | 25 | 0 | 23 | 2 | `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`… |
+| `MTLComputeCommandEncoder` | 26 | 0 | 24 | 2 | `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`… |
 | `MTLFunctionReflection` | 3 | 1 | 0 | 2 |  |
 | `MTLRasterizationRateMapDescriptor` | 10 | 0 | 8 | 2 | `rate_map_degenerate_forms`, `rate_map_sweeps`, `rate_maps` |
 | `MTLAttributeDescriptorArray` | 3 | 0 | 2 | 1 | `attribute_formats`, `attribute_strides`, `blit_indirect_commands`, `indirect_command_depth`… |
@@ -459,7 +459,7 @@ A container is one Objective-C type; the SDK header it sits in is the family of 
 | `MTLStageInputOutputDescriptor.h` | 21 | 18 | 3 |
 | `MTLVertexDescriptor.h` | 19 | 16 | 3 |
 | `MTLBuffer.h` | 6 | 4 | 2 |
-| `MTLComputeCommandEncoder.h` | 25 | 23 | 2 |
+| `MTLComputeCommandEncoder.h` | 26 | 24 | 2 |
 | `MTLComputePipeline.h` | 24 | 22 | 2 |
 | `MTLCommandBuffer.h` | 19 | 18 | 1 |
 | `MTLCommandQueue.h` | 4 | 3 | 1 |
@@ -671,7 +671,7 @@ Each case module: the cases it holds, the `Side` methods it calls, and how many 
 | `sparse_mappings` | 14 | 14 | every field | 32 |
 | `sparse_tiles` | 4 | 4 | every field | 1 |
 | `srgb_fetch` | 2 | 2 | every field | 132 |
-| `stage_in_regions` | 1 | 1 | every field | 48 |
+| `stage_in_regions` | 1 | 1 | every field | 49 |
 | `stage_in_unread` | 1 | 1 | every field | 48 |
 | `stencil_resolve_pairs` | 2 | 2 | every field | 134 |
 | `stencil_resolved_sample` | 1 | 1 | every field | 134 |
@@ -938,6 +938,7 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `setSamplerStates:lodMinClamps:lodMaxClamps:withRange:` | yes | `compute_encoder_commands`, `compute_heap_residency` | 9 |
 | `setThreadgroupMemoryLength:atIndex:` | yes | `compute_encoder_commands`, `compute_heap_residency`, `threadgroup_start` | 10 |
 | `setStageInRegion:` | yes | `attribute_formats`, `attribute_strides`, `compute_heap_residency`, `stage_in_regions`, `stage_in_unread` | 9 |
+| `setStageInRegionWithIndirectBuffer:indirectBufferOffset:` | yes | `stage_in_regions` | 1 |
 | `dispatchThreadgroups:threadsPerThreadgroup:` | yes | `argument_encoders`, `attribute_strides`, `buffer_bind_off_alignment`, `buffer_depth_samples`, `compute_encoder_commands`, `compute_heap_residency`, `compute_threadgroups`, `extended_range_two_planes`, `pass_bytes`, `shared_exponent_storage`, `simdgroup_lockstep`, `threadgroup_start`, `vector_word_phases`, `visible_tables` | 61 |
 | `dispatchThreadgroupsWithIndirectBuffer:indirectBufferOffset:threadsPerThreadgroup:` | yes | `compute_encoder_commands`, `compute_heap_residency` | 9 |
 | `dispatchThreads:threadsPerThreadgroup:` | yes | `astc_textures`, `attribute_formats`, `bicubic_texel_classes`, `blit_indirect_commands`, `border_swizzles`, `buffer_tails`, `chroma_pairs`, `compressed_decode`, `compute_render_chains`, `denormal_word_fetches`, `depth_texel_reads`, `etc_textures`, `extended_range_blends`, `extended_range_planes`, `extended_range_targets`, `extended_range_two_planes`, `extended_swizzles`, `frame_chains`, `function_constants_half3`, `half_read_nans`, `half_storage_writes`, `half_texel_nans`, `half_write_nans`, `host_page_writes`, `indirect_command_depth`, `indirect_commands`, `indirect_ranges`, `level_sizes`, `math_routines`, `nan_integer_conversions`, `nearest_positions`, `norm_storage_writes`, `pixel_downscales`, `pixel_samplers`, `read_through`, `read_write_tiers`, `resolve_then_load`, `rgb10a2_srgb`, `sampler_crossings`, `sampler_filtering`, `signed_remainders`, `stage_in_regions`, `stage_in_unread`, `swizzled_storage`, `texel_swizzles`, `texture_buffer_tails`, `texture_view_casts`, `two_plane_samples`, `ycbcr_gathers`, `ycbcr_minify`, `ycbcr_textures` | 340 |
@@ -1799,7 +1800,6 @@ An item the suite's Metal leg calls whose coverage-map status is not implemented
 | `MTLComputeCommandEncoder` `setBufferOffset:attributeStride:atIndex:` | missing | a bind with a per-bind stride, which stage-in and vertex fetch read | `attribute_strides`, `compute_heap_residency` |
 | `MTLComputeCommandEncoder` `setBuffers:offsets:attributeStrides:withRange:` | missing | a bind with a per-bind stride, which stage-in and vertex fetch read | `attribute_strides`, `compute_heap_residency` |
 | `MTLComputeCommandEncoder` `setBytes:length:attributeStride:atIndex:` | missing | a bind with a per-bind stride, which stage-in and vertex fetch read | `attribute_strides`, `compute_heap_residency` |
-| `MTLComputeCommandEncoder` `setStageInRegionWithIndirectBuffer:indirectBufferOffset:` | missing | a stage-in region the GPU reads | `stage_in_regions` |
 | `MTLComputeCommandEncoder` `setVisibleFunctionTable:atBufferIndex:` | missing | function tables, function handles and dynamic libraries; a kernel or a draw's function that reads a function table is refused (`Gap::KernelInput`, `Gap::DrawInput`) | `visible_tables` |
 | `MTLComputePipelineDescriptor` `binaryArchives` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `binary_archives`, `compute_pipeline_descriptors` |
 | `MTLComputePipelineDescriptor` `label` | out of scope | the consumer's (metal2vulkan-runtime's README, What the consumer implements) | `compute_pipeline_descriptors`, `pipeline_facts`, `pipeline_handlers` |
@@ -2253,10 +2253,10 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `astc-8x8-ldr` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x8_LDR with the usage the case asks, so rt makes no such te… |
 | `astc-8x8-srgb` | The device's own answer (rule 1): ANV's decode of the case's sRGB blocks, read through the device's decode (notes `compressed-texel-decode` and `srgb-texel-deco… |
 | `astc-8x8-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x8_sRGB with the usage the case asks, so rt makes no such t… |
-| `attribute-stride-buffer` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `attribute-stride-buffer-offset` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `attribute-stride-inline-bytes` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
-| `attribute-stride-plural-buffers` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
+| `attribute-stride-buffer` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
+| `attribute-stride-buffer-offset` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
+| `attribute-stride-inline-bytes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
+| `attribute-stride-plural-buffers` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
 | `attribute-stride-vertex-buffer` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
 | `attribute-stride-vertex-bytes` | refused: no stream uses it yet (states-only play 11-19, m3-max-56371-56373, 56375, player 44668b439f: 32 streams, every render and compute pipeline state made).… |
 | `border-swizzles-rgba8unorm` | The device's own answer (rule 1), a known gap of the runtime (its README, Known gaps of textures): a runtime sampler of an opaque-black border, clamp to border … |
@@ -7393,51 +7393,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `astc-8x8-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x8_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-8x8-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x8_sRGB with the usage the case asks, so rt makes no such t… |
 | `astc-8x8-srgb` | The device's own answer (rule 2): this device's format queries offer no image of MTLPixelFormatASTC_8x8_sRGB with the usage the case asks, so rt makes no such t… |
-| `attribute-format-class-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-class-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-class-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-class-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-class-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-class-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-class-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-class-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-class-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-class-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-class-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-class-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-class-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-class-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-class-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-class-crossings` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `attribute-format-fetches` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
 | `blit-copy-indirect-command-buffer` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every pipeline descriptor's supportIndirectComma… |
 | `blit-generated-mipmaps-bgr10xr` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatBGR10_XR). r… |
 | `blit-generated-mipmaps-bgra10xr` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no texture or view of MTLPixelFormatBGRA10_XR). … |
@@ -8713,43 +8668,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `sparse-tile-size-multisample` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no sparse texture, heap or tile call). The rt si… |
 | `sparse-tile-size-multisample` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no sparse texture, heap or tile call). The rt si… |
 | `sparse-tile-size-multisample` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no sparse texture, heap or tile call). The rt si… |
-| `stage-in-region-clamps` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
-| `stage-in-unread-attributes` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, every compute pipeline descriptor's stageInputDe… |
 | `texture-buffer-fill-groups` | refused: this side's own gap: it answers no `fillTexture:level:slice:region:bytes:length:` yet (`Unavailable`), the program's first step, now that the runtime m… |
 | `texture-buffer-fill-streams` | refused: this side's own gap: it answers no `fillTexture:level:slice:region:bytes:length:` yet (`Unavailable`), the program's first step, now that the runtime m… |
 | `texture-buffer-long-fills` | refused: this side's own gap: it answers no `fillTexture:level:slice:region:bytes:length:` yet (`Unavailable`), the program's first step, now that the runtime m… |
@@ -10088,4 +10006,5 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `pixel-samplers-rgba16f-nearest-zero` | The device's own answer (rule 1): `norm` differs from Metal's (`arg`, `const` and `slot` read Metal's answer). The device's nearest filter at the normalized coo… |
 | `pixel-samplers-rgba16f-nearest-zero` | The device's own answer (rule 1): `norm` differs from Metal's (`arg`, `const` and `slot` read Metal's answer). The device's nearest filter at the normalized coo… |
 | `pixel-samplers-rgba16f-nearest-zero` | The device's own answer (rule 1): `norm` differs from Metal's (`arg`, `const` and `slot` read Metal's answer). The device's nearest filter at the normalized coo… |
+| `stage-in-region-clamps` | refused: no stream uses it yet (four-case census, m3-max-62954..62957: 35 streams, no setStageInRegionWithIndirectBuffer:indirectBufferOffset:). rt refuses the … |
 

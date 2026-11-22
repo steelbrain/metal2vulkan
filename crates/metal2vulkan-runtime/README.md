@@ -2346,8 +2346,15 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
 - `set_stage_in_region` (`setStageInRegion:`) sets the region a kernel's `[[grid_origin]]` and
   `[[grid_size]]` read, pushed at each later dispatch. A dispatch of a kernel that reads it on an
   encoder that set none is `Gap::NoStageInRegion`: what Metal's kernel reads then is not
-  established. A kernel with a `[[stage_in]]` argument, which fetches by the region, is
-  `Gap::KernelInput` of `KernelInputKind::StageIn` at its state's creation.
+  established. A kernel's `[[stage_in]]` attributes, under its descriptor's
+  `stageInputDescriptor`, are fetched in the shader from the buffer bound at each layout's
+  `bufferIndex`, at its pushed address, for every step function a kernel may use (`Constant`,
+  `ThreadPositionInGridX` and `Y`, and their `Indexed` forms at step rate 1, whose indices are
+  read from the buffer at `indexBufferIndex`). A thread-position step's element is the region's
+  origin plus the thread's position over the step rate, clamped to the region's last element, so a
+  thread past the region, whose fetch Metal leaves undefined, reads that element (the Metal
+  recordings of `stage-in-region-clamps`, Apple M3 Max). Each fetch keeps its reach check: an
+  element past the first 2^32 bytes from its bind offset reads zero.
 - A kernel whose private memory passes the translator's 16 KiB floor (its arrays a thread
   indexes at run time: Metal holds such a kernel's thread memory itself) keeps it in the runtime's
   device memory, the private arena (`RuntimeFact::PrivateArena`): one slot of the kernel's bytes,
@@ -3279,11 +3286,19 @@ cache is answered compile-required on both.
   layout and its pipeline cache cost nothing measurable there. The cost is paid once per driver
   cache: the driver keeps compiled pipelines across processes, and the same modules compiled again
   in a new process took 45 to 48 µs.
-- A kernel that reads anything the encoder does not supply yet, a function table, a `[[stage_in]]`
-  fetch, or a sampler or texture state the translator would take from the bound object rather than
-  from its resource ID, is refused (`Gap::KernelInput`, whose `KernelInputKind` names what the
-  runtime found: `Slot` for a function table, `StageIn` for a `[[stage_in]]` fetch). So is a state
-  for indirect command buffers (`Gap::IndirectCommandBuffers`, `IndirectCommandsKind::ComputeCommands`).
+- A kernel that reads anything the encoder does not supply yet, a function table, or a sampler or
+  texture state the translator would take from the bound object rather than from its resource ID,
+  is refused (`Gap::KernelInput`, whose `KernelInputKind` names what the runtime found: `Slot` for
+  a function table). So is a state for indirect command buffers (`Gap::IndirectCommandBuffers`,
+  `IndirectCommandsKind::ComputeCommands`).
+- Three forms of a kernel's `[[stage_in]]` are refused, each as `Gap::StageIn` naming its
+  `StageInKind`: `set_stage_in_region_with_indirect_buffer`
+  (`setStageInRegionWithIndirectBuffer:indirectBufferOffset:`, a region the GPU reads),
+  `IndirectRegion`; an attribute the kernel reads through a thread-position layout of
+  `MTLBufferLayoutStrideDynamic`, whose stride the `setBuffer:offset:attributeStride:atIndex:`
+  family would bind (the compute encoder has none of it), `DynamicStride`, at the state's
+  creation; and one it reads through an indexed step at a step rate other than 1, whose Metal
+  answer is not measured, `IndexedStepRate`, at the state's creation.
   A kernel that encodes indexed triangle draws into an indirect command buffer is built (Indirect
   command buffers, below); one that encodes anything else the translator refuses
   (`Unsupported{GpuEncodedIndirectCommands, NotImplemented}`).

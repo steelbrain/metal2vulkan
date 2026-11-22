@@ -1357,18 +1357,28 @@ impl Side for RtSide<'_> {
         grid: [u32; 3],
         threads: [u32; 3],
     ) -> Answer<Handle> {
+        /// One region call: a region, or the buffer and offset an indirect one reads.
+        enum Set {
+            Direct(rt::Region),
+            Indirect(rt::Buffer, u64),
+        }
         let mut regions = Vec::with_capacity(stage_in.len());
         for region in stage_in {
-            match *region {
-                StageInRegion::Direct { origin, size } => regions.push(rt::Region { origin, size }),
-                StageInRegion::Indirect { .. } => {
-                    return Err(Failure::unavailable("set_stage_in_region_indirect"))
+            regions.push(match *region {
+                StageInRegion::Direct { origin, size } => Set::Direct(rt::Region { origin, size }),
+                StageInRegion::Indirect { buffer, offset } => {
+                    Set::Indirect(self.held(buffer)?.clone(), offset)
                 }
-            }
+            });
         }
         self.encode(pipeline, bindings, |encoder| {
-            for &region in &regions {
-                encoder.set_stage_in_region(region);
+            for region in &regions {
+                match region {
+                    Set::Direct(region) => encoder.set_stage_in_region(*region),
+                    Set::Indirect(buffer, offset) => {
+                        encoder.set_stage_in_region_with_indirect_buffer(buffer, *offset)?
+                    }
+                }
             }
             encoder.dispatch_threads(grid, threads)
         })

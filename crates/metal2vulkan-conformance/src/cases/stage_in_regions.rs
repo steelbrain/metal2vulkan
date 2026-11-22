@@ -21,8 +21,8 @@
 //! every fetch inside its buffer.
 
 use crate::case::{
-    call, made, Abort, Bindings, Case, Failure, Handle, Input, MetalSource, Side, StageInAttribute,
-    StageInLayout, StageInRegion, StageInput,
+    call, made, probe, Abort, Bindings, Case, Failure, Handle, Input, MetalSource, Side,
+    StageInAttribute, StageInLayout, StageInRegion, StageInput,
 };
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
@@ -559,11 +559,18 @@ impl Case for StageInRegions {
 
         for row in ROWS {
             let at = |site: &str| format!("{}/{site}", row.name);
-            let pipeline = made(
+            // A pipeline or a dispatch either side refuses is recorded at its own site and the
+            // sweep carries on, so one refused row compares as a refusal there while every other
+            // row still compares. The row stops at its refusal: the sites after it are the other
+            // side's alone, which the comparison folds under the refusal (`compare`'s walk).
+            let Some(pipeline) = probe(
                 sites,
                 &at("pipeline"),
                 side.compute_pipeline_with_stage_input(library, row.entry(), &row.stage_input()),
-            )?;
+                |_| Value::Absent,
+            ) else {
+                continue;
+            };
             let output = made(
                 sites,
                 &at("buffer/0"),
@@ -576,7 +583,7 @@ impl Case for StageInRegions {
             )?;
             let mut bound = vec![output];
             bound.extend(&sources);
-            let command_buffer = made(
+            let Some(command_buffer) = probe(
                 sites,
                 &at("dispatch"),
                 side.dispatch_threads(
@@ -586,7 +593,10 @@ impl Case for StageInRegions {
                     [row.grid[0], row.grid[1], 1],
                     [row.group[0], row.group[1], 1],
                 ),
-            )?;
+                |_| Value::Absent,
+            ) else {
+                continue;
+            };
             call(
                 sites,
                 &at("status"),

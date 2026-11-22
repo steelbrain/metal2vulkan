@@ -63,7 +63,7 @@ use crate::device::{lock, Core};
 use crate::encoder::{
     decide, size_checked, threadgroup_memory, Dispatch, Lengths, Module, BUFFER_SLOTS,
 };
-use crate::error::{Error, Gap, IndirectCommandsKind, KernelInputKind, Refusal};
+use crate::error::{Error, Gap, IndirectCommandsKind, KernelInputKind, Refusal, StageInKind};
 use crate::hazard::Access;
 use crate::kernel_map::KernelKey;
 use crate::piece::Rate;
@@ -888,7 +888,10 @@ impl crate::Device {
     /// naming the kernel; [`Gap::IndirectCommandBuffers`] of
     /// [`IndirectCommandsKind::ComputeCommands`] for a descriptor that sets
     /// `supportIndirectCommandBuffers`; [`Gap::KernelInput`] for a kernel that
-    /// reads what the compute encoder does not supply yet; [`Refusal::SamplerIds`] where
+    /// reads what the compute encoder does not supply yet; [`Gap::StageIn`] for a `[[stage_in]]`
+    /// attribute the kernel reads through a layout of a dynamic stride
+    /// ([`StageInKind::DynamicStride`]) or of an indexed step at a step rate past 1
+    /// ([`StageInKind::IndexedStepRate`]); [`Refusal::SamplerIds`] where
     /// `sampler_ids` answers another count; [`Refusal::IndicesNotGranted`] for a constexpr
     /// sampler's index; [`Limit::DeviceSamplers`](crate::Limit::DeviceSamplers);
     /// [`Error::StageUnfilled`], whose request the consumer's helper fills before it makes the
@@ -962,6 +965,9 @@ impl Compiled {
                     )
                 })
                 .map_err(Error::translation)?;
+                if let Some(kind) = unbuilt_stage_in(&plain) {
+                    return Err(Error::Unsupported(Gap::StageIn { kind }));
+                }
                 let source = (
                     function,
                     plain.kernel_variant(KernelVariant::EmulatedSimdgroups),
@@ -1408,6 +1414,33 @@ fn past_stage_bound(error: &Error) -> bool {
     )
 }
 
+/// The form of a kernel's `[[stage_in]]` the runtime does not build ([`Gap::StageIn`]) that
+/// `inputs` fetch by, the first in attribute order: `inputs` are the kernel's narrowed to the
+/// attributes it reads (`kernel_inputs_read`), so an attribute it never reads refuses nothing. A
+/// thread-position layout of `MTLBufferLayoutStrideDynamic` is [`StageInKind::DynamicStride`]
+/// and an indexed step at a step rate past 1 [`StageInKind::IndexedStepRate`]. What Metal's
+/// pipeline creation stops (a missing layout, a vertex step, a step rate of 0) is the
+/// translator's to refuse, and a constant step reads no stride.
+fn unbuilt_stage_in(inputs: &LoweringInputs) -> Option<StageInKind> {
+    use metal2vulkan::metal::StepFunction as S;
+    let input = inputs.stage_input.as_ref()?;
+    input.attributes.values().find_map(|attribute| {
+        let layout = input.layouts.get(&attribute.buffer_index)?;
+        let indexed = match layout.step_function {
+            S::ThreadPositionInGridX | S::ThreadPositionInGridY => false,
+            S::ThreadPositionInGridXIndexed | S::ThreadPositionInGridYIndexed => true,
+            _ => return None,
+        };
+        if layout.stride.is_none() {
+            Some(StageInKind::DynamicStride)
+        } else if indexed && layout.step_rate > 1 {
+            Some(StageInKind::IndexedStepRate)
+        } else {
+            None
+        }
+    })
+}
+
 /// The runtime's view of the translator's kernel, or what the kernel reads that the compute
 /// encoder does not supply ([`Gap::KernelInput`] of that kind), the first this finds, on a device
 /// whose push window is `window` bytes (`DeviceProfile::push_window`).
@@ -1421,7 +1454,8 @@ pub(crate) fn interface(
     // Every argument is a pushed address, a pushed resource ID or index, or a specialization: no
     // descriptor but set 1's and no table the binder builds (the translator holds a kernel's
     // constant data in its module on this device's profile); the stage's flags are its
-    // subgroups'.
+    // subgroups'. A `[[stage_in]]` attribute is fetched in the shader from its layout's buffer
+    // slot, at that slot's pushed address, by the pushed stage-in and dispatch regions.
     let stage_flags = vk::PipelineShaderStageCreateFlags::from_raw(stage.stage_flags.as_raw());
     let subgroups = vk::PipelineShaderStageCreateFlags::REQUIRE_FULL_SUBGROUPS
         | vk::PipelineShaderStageCreateFlags::ALLOW_VARYING_SUBGROUP_SIZE;
@@ -1434,7 +1468,6 @@ pub(crate) fn interface(
             translated.needs_handle_translation,
             KernelInputKind::HandleTranslation,
         ),
-        (!translated.stage_in.is_empty(), KernelInputKind::StageIn),
         (
             !pipeline.layout.sets.iter().all(of_the_device),
             KernelInputKind::DescriptorSet,
@@ -1669,6 +1702,10 @@ pub(crate) fn interface(
             ),
             SpecKey::MultiRegion => Constant::MultiRegion,
             SpecKey::DeepThreadgroup => Constant::Deep,
+            // A thread-position `[[stage_in]]` fetch's reach check, kept at the module's default
+            // (true) for every dispatch: one pipeline, whose fetch reads an element past the first
+            // 2^32 bytes from its bind offset as zero.
+            SpecKey::StageInReach => continue,
             _ => return Err(KernelInputKind::Specialization),
         };
         constants.push((constant.id, set));

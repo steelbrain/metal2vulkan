@@ -9,10 +9,6 @@ mod on_device {
     use crate::{ComputePipelineDescriptor, Error, FunctionDescriptor, Gap, KernelInputKind};
     use crate::{NumberedSampler, StageSource};
     use metal2vulkan::library::Library;
-    use metal2vulkan::metal::{AttributeFormat, StepFunction};
-    use metal2vulkan::pipeline::{
-        StageInputAttributeDescriptor, StageInputDescriptor, StageInputLayoutDescriptor,
-    };
     use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
 
     /// The kernel `entry` of the engine fixture `fixture.ll`, or None where `llvm-as` is missing.
@@ -54,36 +50,6 @@ mod on_device {
                 Err(error) => panic!("{name}: {error}, not Gap::KernelInput of {kind:?}"),
             }
         });
-    }
-
-    /// `stage_in_fetch` under a stage-input descriptor of its four attributes, one 40-byte
-    /// element per thread along x: the translator compiles its `[[stage_in]]` fetches, which the
-    /// encoder does not supply (`setStageInRegion:` sets only the region).
-    #[test]
-    fn a_stage_in_kernel_is_refused_as_stage_in() {
-        let Some(mut descriptor) = descriptor_of("kernel_stage_in", "stage_in_fetch") else {
-            return;
-        };
-        let mut input = StageInputDescriptor::new();
-        let mut layout = StageInputLayoutDescriptor::new(Some(40));
-        layout.step_function = StepFunction::ThreadPositionInGridX;
-        input.layouts.insert(1, layout);
-        let attributes = [
-            (AttributeFormat::Float4, 0),
-            (AttributeFormat::UInt4, 16),
-            (AttributeFormat::Int, 32),
-            (AttributeFormat::Half2, 36),
-        ];
-        for (index, (format, offset)) in (0..).zip(attributes) {
-            let attribute = StageInputAttributeDescriptor::new(format, offset, 1);
-            input.attributes.insert(index, attribute);
-        }
-        descriptor.stage_input = Some(input);
-        refused_as(
-            "kernel_input_stage_in",
-            &descriptor,
-            KernelInputKind::StageIn,
-        );
     }
 
     /// `a4_imageblock_extent`, a kernel over an explicit imageblock: its module states the

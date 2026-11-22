@@ -229,10 +229,10 @@ pub enum ToolingRequirement {
     /// compute encoder binds neither, so no call of it runs such a kernel.
     KernelAccelerationStructure,
     /// A compute kernel's `[[stage_in]]` inputs, or its dispatch's stage-in region
-    /// (`executor_contract::case_requirements`). The runtime's make of a pipeline state that
-    /// fetches stage inputs is `metal2vulkan_runtime::Gap::KernelInput` of
-    /// `KernelInputKind::StageIn`, a known gap its README states, held on lavapipe by the runtime's
-    /// device test `tests::kernel_input::a_stage_in_kernel_is_refused_as_stage_in`.
+    /// (`executor_contract::case_requirements`). The runtime fetches stage inputs, but the engine's
+    /// run through it (`candidate::platform::runtime`) makes its pipeline state without the
+    /// case's stage-input descriptor and sets no stage-in region, so no call of it runs such a
+    /// case as written.
     KernelStageInput,
     /// A rasterization-rate map (`executor_contract::case_requirements`): a render pass's, or one
     /// whose parameter data a buffer or an argument buffer's buffer holds. The runtime makes no

@@ -129,6 +129,7 @@ impl Gap {
         match self {
             Gap::IndirectCommandBuffers { .. } => RefusalBasis::Ours,
             Gap::KernelInput { .. } => RefusalBasis::Ours,
+            Gap::StageIn { .. } => RefusalBasis::Ours,
             Gap::ImageblockLength => RefusalBasis::Ours,
             Gap::PartialSimdgroups { .. } => RefusalBasis::Ours,
             Gap::PartialThreadgroups { .. } => RefusalBasis::Ours,

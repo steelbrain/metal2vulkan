@@ -43,13 +43,13 @@ fn a_lowering_error_is_not_reported_as_the_variant_s_gap() {
     );
     assert!(
         matches!(
-            Lowered::Unsupplied(KernelInputKind::StageIn).kernel(partial_simdgroups),
+            Lowered::Unsupplied(KernelInputKind::Slot).kernel(partial_simdgroups),
             Err(Error::Unsupported(Gap::KernelInput {
-                kind: KernelInputKind::StageIn
+                kind: KernelInputKind::Slot
             }))
         ),
         "an input the encoder does not supply, of its kind: {}",
-        reported(&Lowered::Unsupplied(KernelInputKind::StageIn))
+        reported(&Lowered::Unsupplied(KernelInputKind::Slot))
     );
     assert!(
         matches!(

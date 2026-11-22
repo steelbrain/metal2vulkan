@@ -1171,7 +1171,7 @@ fn a_row_is_judged_by_host_time_never_its_gpu_time() {
 fn the_new_runtime_refuses_by_its_gaps_and_limits_alone() {
     let refused = |error: RtError| rt::error(error).downcast::<Refused>().is_ok();
     assert!(refused(RtError::Unsupported(Gap::KernelInput {
-        kind: KernelInputKind::StageIn
+        kind: KernelInputKind::Slot
     })));
     assert!(refused(RtError::Limit(Limit::BlockIds)));
     assert!(!refused(RtError::Quiesced));

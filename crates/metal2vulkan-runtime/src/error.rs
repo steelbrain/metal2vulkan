@@ -1069,19 +1069,33 @@ pub enum Gap {
         kind: IndirectCommandsKind,
     },
     /// A kernel that reads something the compute encoder does not supply yet, `kind` naming what:
-    /// a function table, a `[[stage_in]]` fetch, an explicit imageblock, a parameter the runtime
-    /// does not fill, or a specialization the runtime does not set, among others. Buffers,
-    /// `setBytes` data, textures and sampler states by their resource IDs, constexpr samplers by
-    /// their indices, an integer write's channel widths, threadgroup memory lengths, the
-    /// dispatch's grid, the stage-in region and a pinned subgroup size are supplied. Metal's
-    /// counterpart is the compute pipeline state's make
-    /// (`newComputePipelineStateWithDescriptor:options:reflection:error:` and its siblings),
-    /// which makes each.
+    /// a function table, an explicit imageblock, a parameter the runtime does not fill, or a
+    /// specialization the runtime does not set, among others. Buffers, `setBytes` data, textures
+    /// and sampler states by their resource IDs, constexpr samplers by their indices, an integer
+    /// write's channel widths, threadgroup memory lengths, the dispatch's grid, the stage-in region,
+    /// `[[stage_in]]` attributes of a fixed layout stride and a pinned subgroup size are supplied.
+    /// Metal's counterpart is the compute pipeline state's make
+    /// (`newComputePipelineStateWithDescriptor:options:reflection:error:` and its siblings), which
+    /// makes each.
     ///
     /// Basis: ours (the encoder supplies only those).
     KernelInput {
         /// What the kernel reads, named where the runtime found it.
         kind: KernelInputKind,
+    },
+    /// A form of a kernel's `[[stage_in]]` that is not built, `kind` naming which: a stage-in
+    /// region the GPU reads, a layout of `MTLBufferLayoutStrideDynamic` a read attribute steps
+    /// through, or an indexed step at a step rate other than 1. Metal's counterpart is
+    /// `setStageInRegionWithIndirectBuffer:indirectBufferOffset:`, the
+    /// `setBuffer:offset:attributeStride:atIndex:` family, and the compute pipeline state's make of
+    /// such a `stageInputDescriptor`.
+    ///
+    /// Basis: ours (no replay stream makes a compute state with a stage-input descriptor or sets a
+    /// stage-in region indirectly; what Metal reads at an indexed step's rate past 1 is not
+    /// measured).
+    StageIn {
+        /// The form, named where the runtime found it.
+        kind: StageInKind,
     },
     /// An imageblock length Metal answers that no case measures: a compute state's
     /// `imageblockMemoryLengthForDimensions:` where its kernel declares an imageblock it never
@@ -1129,8 +1143,8 @@ pub enum Gap {
         /// The threadgroup size asked for.
         threads_per_threadgroup: [u32; 3],
     },
-    /// A dispatch of a kernel that reads the stage-in region (`[[grid_origin]]`, `[[grid_size]]`)
-    /// on an encoder that never set one
+    /// A dispatch of a kernel that reads the stage-in region (`[[grid_origin]]`, `[[grid_size]]`,
+    /// a `[[stage_in]]` attribute of a thread-position step) on an encoder that never set one
     /// ([`ComputeCommandEncoder::set_stage_in_region`](crate::ComputeCommandEncoder::set_stage_in_region)):
     /// what such a kernel reads on Metal is not established, and is not invented.
     ///
@@ -1636,10 +1650,6 @@ pub enum KernelInputKind {
     /// pushes each one's resource ID. Metal's counterpart is a texture or sampler the kernel
     /// reads, which Metal resolves by its `gpuResourceID`.
     HandleTranslation,
-    /// A `[[stage_in]]` argument, which fetches by the stage-in region
-    /// (`PipelineInterface::stage_in`). Metal's counterpart is the descriptor's
-    /// `stageInputDescriptor`.
-    StageIn,
     /// A descriptor set of the pipeline's layout that is not the device's: a binding of set 1
     /// that is not one of the device's texture and sampler arrays, or a binding of another set.
     /// Metal has no counterpart: it binds every argument by its index.
@@ -1694,6 +1704,28 @@ pub enum KernelInputKind {
     /// An entry point whose name holds a NUL byte, which names no Vulkan entry point. Metal's
     /// counterpart is the function's name.
     EntryPoint,
+}
+
+/// The form of a kernel's `[[stage_in]]` the runtime does not build ([`Gap::StageIn`]). Every
+/// variant names its Metal counterpart.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum StageInKind {
+    /// A stage-in region the GPU reads from a buffer, in `MTLStageInRegionIndirectArguments`'
+    /// layout
+    /// ([`ComputeCommandEncoder::set_stage_in_region_with_indirect_buffer`](crate::ComputeCommandEncoder::set_stage_in_region_with_indirect_buffer)).
+    /// Metal's counterpart is `setStageInRegionWithIndirectBuffer:indirectBufferOffset:`.
+    IndirectRegion,
+    /// An attribute the kernel reads through a layout of `MTLBufferLayoutStrideDynamic` that
+    /// steps by thread position, whose stride the encoder would bind with the buffer. Metal's
+    /// counterpart is the `setBuffer:offset:attributeStride:atIndex:` family, which the compute
+    /// encoder does not have.
+    DynamicStride,
+    /// An attribute the kernel reads through a layout of an indexed step
+    /// (`MTLStepFunctionThreadPositionInGridXIndexed` or `...YIndexed`) at a step rate other than
+    /// 1. Metal's counterpart is the compute pipeline state's make of that
+    /// `stageInputDescriptor`.
+    IndexedStepRate,
 }
 
 /// What a draw asks that the runtime does not build ([`Gap::Draw`]).
@@ -2650,6 +2682,9 @@ impl fmt::Display for Gap {
                 f,
                 "the kernel reads an input the compute encoder does not supply yet: {kind:?}"
             ),
+            Gap::StageIn { kind } => {
+                write!(f, "a kernel's stage input of a form not built yet: {kind:?}")
+            }
             Gap::ImageblockLength => {
                 f.write_str("the state's imageblock length is not measured against Metal's")
             }
