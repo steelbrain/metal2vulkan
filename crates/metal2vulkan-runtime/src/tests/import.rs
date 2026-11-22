@@ -155,6 +155,50 @@ pub(crate) mod on_device {
         (Some(release), ran)
     }
 
+    /// The readings a timed-out `wait_until` ends with say what each side holds: a committed
+    /// command buffer that waits on an event nothing signalled yet is the submit side's, held for
+    /// the event's value, and no command buffer is in flight; once the event is signalled and the
+    /// command buffer completed, the submit side holds none.
+    #[test]
+    fn every_device_s_stall_readings_name_a_command_buffer_held_for_an_event() {
+        each_device("stall_readings", |name, _, device| {
+            let core = device.core();
+            let event = device.new_shared_event().expect("a shared event");
+            let block = (device.take_block(MemoryClass::Shared, 4096)).expect("a Shared block");
+            let buffer = (device.new_buffer(block.id, 0, 4096, None)).expect("a buffer");
+            let queue = device.new_command_queue(1).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            (command_buffer.encode_wait_for_event(event.as_event(), 1)).expect("a wait");
+            let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+            encoder.fill_buffer(&buffer, 0..4, 7).expect("a fill");
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            let held = "1 heads held for an event's value";
+            let start = Instant::now();
+            let submitting = loop {
+                let submitting = core.work.stall();
+                if submitting.contains(held) || start.elapsed() > Duration::from_secs(10) {
+                    break submitting;
+                }
+                thread::sleep(Duration::from_millis(1));
+            };
+            assert!(submitting.contains(held), "{name}: {submitting}");
+            let completing = core.done.stall(&core.device);
+            assert!(
+                completing.starts_with("in flight 0 command buffers"),
+                "{name}: {completing}"
+            );
+            event.set_signaled_value(1);
+            finished(name, &command_buffer);
+            let after = core.work.stall();
+            assert!(
+                after.contains(" 0 command buffers not wholly submitted"),
+                "{name}: {after}"
+            );
+            println!("stall readings: {name}: {submitting}; {completing}");
+        });
+    }
+
     /// Host memory is imported into a Shared block whose contents are the memory: a fill of its
     /// second half by the GPU reaches the host, the first half keeps the host's bytes, and the
     /// release runs once the last handle and buffer are gone and the memory is freed, with the
