@@ -667,7 +667,7 @@ impl CommandBuffer {
         let mut state = self.state();
         state.open()?;
         if state.status == CommandBufferStatus::NotEnqueued {
-            work.enqueue(&self.inner);
+            work.enqueue(&self.inner, core.done.completed());
             state.status = CommandBufferStatus::Enqueued;
             self.inner.changed.notify_all();
         }
@@ -756,7 +756,7 @@ impl CommandBuffer {
                 .end_all(&core, vec![(Arc::clone(&self.inner), pending, Some(error))]);
         } else {
             // One ended while enqueued retires behind its queue's work held or in flight.
-            work.commit(&self.inner, pending, ended);
+            work.commit(&self.inner, pending, ended, core.done.completed());
             drop(work);
             core.work.wake();
         }

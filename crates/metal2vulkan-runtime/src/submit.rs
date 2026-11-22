@@ -1561,13 +1561,18 @@ impl WorkState {
         &mut self.fifos[index]
     }
 
-    /// Takes `cb`'s place at its queue's end. A queue with nothing queued or in flight takes turn
-    /// 0, as one that never submitted.
-    fn push(&mut self, cb: &Arc<CbInner>) -> &mut Entry {
+    /// Takes `cb`'s place at its queue's end. A queue with nothing queued, and nothing in flight
+    /// past `completed`, the progress value the completion thread has seen complete, takes turn
+    /// 0, as one that never submitted: the submit thread forgets a queue's completed submissions
+    /// only as it next looks ([`settle`](Self::settle)), which a completion with nothing held does
+    /// not wake it to do, so its list alone would keep a queue whose work all completed out of
+    /// turn 0, and a later commit of another queue would rank before it ([`rank`](Self::rank)).
+    fn push(&mut self, cb: &Arc<CbInner>, completed: u64) -> &mut Entry {
         self.next_place += 1;
         let place = self.next_place;
         let fifo = self.fifo(&cb.queue);
-        if fifo.entries.is_empty() && fifo.group.is_none() && fifo.in_flight.is_empty() {
+        let done = (fifo.in_flight.back()).is_none_or(|&value| value <= completed);
+        if fifo.entries.is_empty() && fifo.group.is_none() && done {
             fifo.turn = 0;
         }
         let entries = &mut fifo.entries;
@@ -1581,26 +1586,29 @@ impl WorkState {
         entries.back_mut().expect("an entry just pushed")
     }
 
-    /// Takes `cb`'s place in its queue's FIFO.
-    pub(crate) fn enqueue(&mut self, cb: &Arc<CbInner>) {
-        self.push(cb);
+    /// Takes `cb`'s place in its queue's FIFO, `completed` being the progress value seen
+    /// complete ([`push`](Self::push)).
+    pub(crate) fn enqueue(&mut self, cb: &Arc<CbInner>, completed: u64) {
+        self.push(cb, completed);
     }
 
     /// Hands `cb` to the submit thread: at its place where it was enqueued, else at its queue's
     /// end. With `error` (it ended while enqueued, and its place went), at its queue's end, to
-    /// retire with that error behind the work held or in flight before it.
+    /// retire with that error behind the work held or in flight before it. `completed` is the
+    /// progress value seen complete ([`push`](Self::push)).
     pub(crate) fn commit(
         &mut self,
         cb: &Arc<CbInner>,
         pending: Pending,
         error: Option<CommandBufferError>,
+        completed: u64,
     ) {
         self.dirty = true;
         let enqueued = (self.fifo(&cb.queue).entries.iter_mut())
             .find(|entry| Arc::ptr_eq(&entry.cb, cb) && entry.pending.is_none());
         let entry = match enqueued {
             Some(entry) => entry,
-            None => self.push(cb),
+            None => self.push(cb, completed),
         };
         entry.pending = Some(pending);
         entry.error = error;
