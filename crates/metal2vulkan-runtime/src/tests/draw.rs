@@ -644,11 +644,31 @@ pub(crate) mod on_device {
             let colors = buffers.of(&device, &floats(&[GREEN, GREEN].concat()));
             let queue = device.new_command_queue(4).expect("a queue");
             let draw = |result: Result<(), Error>| result.unwrap_or_else(|e| panic!("{name}: {e}"));
+            let alpha_to_one = (device.core().translator.profile().enabled().features)
+                .contains(&metal2vulkan::device::VkFeature::AlphaToOne);
             for (what, d) in [
                 ("plain", &plain),
                 ("alpha to coverage", &coverage),
                 ("alpha to one", &one),
             ] {
+                if d.alpha_to_one && !alpha_to_one {
+                    // A device without `alphaToOne`: the translator's typed refusal.
+                    let refusal = metal2vulkan::error::Error::Unsupported(
+                        metal2vulkan::error::Unsupported::needs(
+                            metal2vulkan::error::Feature::AlphaToOne,
+                            metal2vulkan::error::Capability::Feature(
+                                metal2vulkan::device::VkFeature::AlphaToOne,
+                            ),
+                        ),
+                    );
+                    match device.new_render_pipeline_state(d, crate::tests::no_constexpr_samplers) {
+                        Err(Error::Translation { error, .. }) => {
+                            assert_eq!(error, refusal, "{name}: {what}")
+                        }
+                        made => panic!("{name}: {what}: {:?}", made.err()),
+                    }
+                    continue;
+                }
                 let state = state(name, &device, d);
                 assert!(
                     !state.precision_notes().contains(&note),

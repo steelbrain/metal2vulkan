@@ -1136,7 +1136,6 @@
           "shaderInt16": true,
           "independentBlend": true,
           "fragmentStoresAndAtomics": true,
-          "alphaToOne": true,
           "logicOp": true,
           "fullDrawIndexUint32": true,
           "imageCubeArray": true,

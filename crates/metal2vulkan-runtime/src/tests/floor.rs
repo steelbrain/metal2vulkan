@@ -4,12 +4,12 @@
 
 use crate::floor::{
     choose, decide, flag_names, limits, vulkan_name, BelowFloor, Features, IndirectCommandLimits,
-    MemoryTypes, Missing, Queried, ATTACHMENT_READS, ATTACHMENT_READ_EXTENSIONS, BARYCENTRICS,
-    BARYCENTRIC_EXTENSIONS, BORDER_SWIZZLE, BORDER_SWIZZLE_EXTENSIONS, DEVICE_EXTENSIONS,
-    FAULT_REPORTS, FILL_MODES, INDIRECT_COMMANDS, INSTANCE_EXTENSIONS, LINEAR_ATTACHMENTS,
-    MEMORY_FLAG_NAMES, MIN_LOD_CLAMPS, OPTIONAL, OPTIONAL_EXTENSIONS, OPTIONAL_INSTANCE_EXTENSIONS,
-    PIXEL_INTERLOCK, PORTABILITY, PRIVATE_MEMORY, QUAD_CONTROL, REQUIRED, RING_MEMORY,
-    SHARED_MEMORY, STEP_RATES, TIMESTAMP_BITS, TIME_DOMAINS, VERSION,
+    MemoryTypes, Missing, Queried, ALPHA_TO_ONE, ATTACHMENT_READS, ATTACHMENT_READ_EXTENSIONS,
+    BARYCENTRICS, BARYCENTRIC_EXTENSIONS, BORDER_SWIZZLE, BORDER_SWIZZLE_EXTENSIONS,
+    DEVICE_EXTENSIONS, FAULT_REPORTS, FILL_MODES, INDIRECT_COMMANDS, INSTANCE_EXTENSIONS,
+    LINEAR_ATTACHMENTS, MEMORY_FLAG_NAMES, MIN_LOD_CLAMPS, OPTIONAL, OPTIONAL_EXTENSIONS,
+    OPTIONAL_INSTANCE_EXTENSIONS, PIXEL_INTERLOCK, PORTABILITY, PRIVATE_MEMORY, QUAD_CONTROL,
+    REQUIRED, RING_MEMORY, SHARED_MEMORY, STEP_RATES, TIMESTAMP_BITS, TIME_DOMAINS, VERSION,
 };
 use ash::vk;
 use std::collections::BTreeSet;
@@ -79,7 +79,6 @@ pub(super) fn at_the_floor() -> Queried {
     features.core.shader_storage_image_extended_formats = vk::TRUE;
     features.vulkan12.sampler_mirror_clamp_to_edge = vk::TRUE;
     features.core.shader_image_gather_extended = vk::TRUE;
-    features.core.alpha_to_one = vk::TRUE;
     features.core.logic_op = vk::TRUE;
     features.core.full_draw_index_uint32 = vk::TRUE;
     features.core.image_cube_array = vk::TRUE;
@@ -440,6 +439,7 @@ fn a_device_at_the_floor_is_above_it() {
     for optional in (OPTIONAL.iter().chain(STEP_RATES))
         .chain(MIN_LOD_CLAMPS)
         .chain(FILL_MODES)
+        .chain(ALPHA_TO_ONE)
         .chain(QUAD_CONTROL)
         .chain(PIXEL_INTERLOCK)
         .chain(BARYCENTRICS)
@@ -719,10 +719,6 @@ fn each_missing_feature_is_named() {
         (
             |f| f.core.shader_image_gather_extended = vk::FALSE,
             feature(CORE, "shaderImageGatherExtended"),
-        ),
-        (
-            |f| f.core.alpha_to_one = vk::FALSE,
-            feature(CORE, "alphaToOne"),
         ),
         (|f| f.core.logic_op = vk::FALSE, feature(CORE, "logicOp")),
         (
@@ -1417,6 +1413,28 @@ fn the_fill_mode_feature_is_enabled_where_reported() {
         .contains(&VkFeature::FillModeNonSolid));
 }
 
+/// A device without `alphaToOne` is above the floor, and neither it nor the translator's
+/// description is given the feature, so the translator refuses `alphaToOneEnabled` there
+/// (`Feature::AlphaToOne`); a device that reports it is given it, and the translator sees it.
+#[test]
+fn the_alpha_to_one_feature_is_enabled_where_reported() {
+    use crate::floor::shader_enables;
+    use metal2vulkan::device::VkFeature;
+    let mut device = at_the_floor();
+    let unreported = decide(&device).unwrap_or_else(|below| panic!("{below}"));
+    assert_eq!(unreported.features.core.alpha_to_one, vk::FALSE);
+    assert!(!shader_enables(&unreported)
+        .features
+        .contains(&VkFeature::AlphaToOne));
+
+    device.features.core.alpha_to_one = vk::TRUE;
+    let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));
+    assert_eq!(capabilities.features.core.alpha_to_one, vk::TRUE);
+    assert!(shader_enables(&capabilities)
+        .features
+        .contains(&VkFeature::AlphaToOne));
+}
+
 /// A device that lists `VK_KHR_shader_quad_control` and reports `shaderQuadControl` is given both,
 /// and the translator sees both; one that lists the extension without the feature is given the
 /// extension alone.
@@ -1888,6 +1906,10 @@ fn the_readme_states_the_floor() {
         (["Step-rate feature", "Structure", "Used for"], STEP_RATES),
         (["Min-LOD feature", "Structure", "Used for"], MIN_LOD_CLAMPS),
         (["Fill-mode feature", "Structure", "Used for"], FILL_MODES),
+        (
+            ["Alpha-to-one feature", "Structure", "Used for"],
+            ALPHA_TO_ONE,
+        ),
         (
             ["Quad-control feature", "Structure", "Used for"],
             QUAD_CONTROL,

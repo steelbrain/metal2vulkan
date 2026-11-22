@@ -1116,13 +1116,8 @@ fn alpha_to_one_is_refused_only_without_the_feature() {
     let va = artifact(iface(Stage::Vertex, vec![], vec![]), None);
     let fa = artifact(iface(Stage::Fragment, vec![], vec![]), None);
     let inputs = LinkInputs::Render(Box::new(r));
-    // `runtime-floor` without `alphaToOne`, which the runtime's floor requires.
-    let p = crate::pipeline::testing::profile_without(
-        "runtime-floor",
-        &[VkFeature::AlphaToOne],
-        DevicePolicy::RESIDENT_TABLES,
-    )
-    .expect("profile");
+    // `runtime-floor`, whose floor does not require `alphaToOne`.
+    let p = profile("runtime-floor");
     assert!(!p.fields().enabled.features.contains(&VkFeature::AlphaToOne));
     assert_eq!(
         link(&[&va, &fa], &inputs, &p).unwrap_err(),

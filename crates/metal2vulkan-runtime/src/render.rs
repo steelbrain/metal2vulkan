@@ -333,7 +333,8 @@ struct Fixed {
     discard: bool,
     samples: vk::SampleCountFlags,
     alpha_to_coverage: bool,
-    /// `alphaToOneEnabled`, the device's own (`alphaToOne`, which the floor requires).
+    /// `alphaToOneEnabled`, the device's own (`alphaToOne`, which device creation enables where
+    /// the device reports it; the translator refuses the state on a device without it).
     alpha_to_one: bool,
     /// The descriptor's private sample mask and sample coverage as one mask of the samples the
     /// draws write (`GraphicsState::sample_mask`), Vulkan's `pSampleMask`; `None` where it keeps

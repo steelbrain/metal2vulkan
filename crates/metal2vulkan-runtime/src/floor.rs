@@ -550,9 +550,6 @@ pub(crate) const REQUIRED: &[Feature] = &[
     // requires both of every graphics device.
     feature!(core.independent_blend => IndependentBlend),
     feature!(core.fragment_stores_and_atomics => FragmentStoresAndAtomics),
-    // A render pipeline's `alphaToOneEnabled`, the device's own: each sample's alpha 1 after the
-    // coverage is taken. Every floor driver reports it.
-    feature!(core.alpha_to_one => AlphaToOne),
     // A line drawn by Bresenham's rule, which is Metal's: the pixels whose diamond the line exits.
     // Vulkan's default rule is the device's own, the rectangle of the line's width on a device
     // whose `strictLines` is set (lavapipe, NVIDIA's driver). Vulkan 1.4 requires it of every
@@ -704,6 +701,12 @@ pub(crate) const MIN_LOD_CLAMPS: &[Feature] =
 /// refuses on a device without it (`DrawKind::FillMode`). No answer chooses a second form.
 pub(crate) const FILL_MODES: &[Feature] = &[feature!(core.fill_mode_non_solid => FillModeNonSolid)];
 
+/// The feature device creation enables where the device reports it, for a render pipeline's
+/// `alphaToOneEnabled`, which the translator builds in one form, the device's own
+/// `alphaToOneEnable` (each sample's alpha 1 after the coverage is taken), and refuses on a device
+/// without it (`Feature::AlphaToOne`). No answer chooses a second form.
+pub(crate) const ALPHA_TO_ONE: &[Feature] = &[feature!(core.alpha_to_one => AlphaToOne)];
+
 /// The feature of `VK_KHR_shader_quad_control` (one of [`OPTIONAL_EXTENSIONS`]), which device
 /// creation enables where the device lists the extension and reports it: a fragment function whose
 /// group operations read, combine or count other lanes runs its quads whole
@@ -781,6 +784,7 @@ pub(crate) const ENABLED: &[&[Feature]] = &[
     STEP_RATES,
     MIN_LOD_CLAMPS,
     FILL_MODES,
+    ALPHA_TO_ONE,
     QUAD_CONTROL,
     PIXEL_INTERLOCK,
     BARYCENTRICS,
@@ -1014,10 +1018,10 @@ pub struct Capabilities {
     /// loop.
     pub feedback_loop: bool,
     /// The features device creation enables: every one the floor requires, each of the optional,
-    /// step-rate, quad-control, pixel-interlock, linear-attachment and fault-report ones the device
-    /// reports, the attachment-read ones where [`feedback_loop`](Self::feedback_loop) holds, the
-    /// border-swizzle ones where the device reports both, and the barycentric one where the device
-    /// lists its extension and reports it.
+    /// step-rate, min-LOD, fill-mode, alpha-to-one, quad-control, pixel-interlock, linear-attachment
+    /// and fault-report ones the device reports, the attachment-read ones where
+    /// [`feedback_loop`](Self::feedback_loop) holds, the border-swizzle ones where the device reports
+    /// both, and the barycentric one where the device lists its extension and reports it.
     pub features: Features,
     /// The device extensions device creation enables: [`DEVICE_EXTENSIONS`], then each of
     /// [`OPTIONAL_EXTENSIONS`] the device lists, then [`ATTACHMENT_READ_EXTENSIONS`] where
@@ -1336,6 +1340,7 @@ pub(crate) fn decide(device: &Queried) -> Result<Capabilities, BelowFloor> {
     for feature in (OPTIONAL.iter().chain(STEP_RATES))
         .chain(MIN_LOD_CLAMPS)
         .chain(FILL_MODES)
+        .chain(ALPHA_TO_ONE)
         .chain(QUAD_CONTROL)
         .chain(PIXEL_INTERLOCK)
     {

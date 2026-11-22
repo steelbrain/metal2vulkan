@@ -3361,6 +3361,12 @@ cache is answered compile-required on both.
   alone does not report it (`vulkaninfo`, job m3-max-48736); RADV on the RX 7900 XTX, the 780Ms
   and the RX 550, NVIDIA's driver on the RTX 2080, RTX 3090 and RTX 5080 Laptop, ANV on the Iris
   Xe, lavapipe and KosmicKrisp on the M3 Max report it (m3-max-48727 to 48731, 48737 and 61508).
+- On a device without `alphaToOne` (Alpha to one, under Floor), a render pipeline whose descriptor
+  sets `alphaToOneEnabled` is refused at creation, an `Error::Translation` naming `AlphaToOne` and
+  `alphaToOne`: the translator has no other form, and Metal has no query for it. A Radeon under
+  AMD's own Windows driver reports no `alphaToOne` (a user's report; no lab venue runs that
+  driver). No replay stream sets it: 0 of the 58,976 render states of the nine streams'
+  states-only plays on lavapipe (job m3-max-66153).
 - On a device without `fragmentShaderBarycentric` (Barycentrics, under Floor), a fragment function
   that reads `[[barycentric_coord]]` is refused at creation, an `Error::Translation` naming
   `Barycentrics` and `fragmentShaderBarycentric`. Of the venues run, lavapipe, ANV on the
@@ -4381,7 +4387,6 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `robustImageAccess2` | `VkPhysicalDeviceRobustness2FeaturesEXT` | an image read or fetch out of range, past the view's levels included, answering Metal's texel (zero, alpha 1 for a format without alpha), with no check in the shader; a texel buffer's read is still checked in the shader |
 | `independentBlend` | `VkPhysicalDeviceFeatures` | each color attachment of a render pipeline blended by its own state, as Metal's are |
 | `fragmentStoresAndAtomics` | `VkPhysicalDeviceFeatures` | a fragment function's writes and atomics on device memory |
-| `alphaToOne` | `VkPhysicalDeviceFeatures` | a render pipeline's `alphaToOneEnabled` |
 | `logicOp` | `VkPhysicalDeviceFeatures` | a render pipeline's logic operation (private render state), the device's own; without it the fragment function would compute it, which is built only over raster-order attachment access, so the state is refused (Known gaps) |
 | `bresenhamLines` | `VkPhysicalDeviceLineRasterizationFeaturesEXT` | a line drawn by Metal's rule, the pixels whose diamond it exits (`VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT`), where Vulkan's default rule is the device's own: the rectangle of the line's width on a device whose `strictLines` is set (lavapipe, NVIDIA's driver); Vulkan 1.4 requires it |
 | `fullDrawIndexUint32` | `VkPhysicalDeviceFeatures` | an indexed draw's 32-bit indices past `2^24 - 1`; Vulkan 1.4 and Roadmap 2022 require it |
@@ -4461,6 +4466,17 @@ render encoders).
 | Fill-mode feature | Structure | Used for |
 |---|---|---|
 | `fillModeNonSolid` | `VkPhysicalDeviceFeatures` | the triangle fill mode `Lines`, each triangle's edges drawn as lines |
+
+### Alpha to one
+
+A render pipeline's `alphaToOneEnabled` has one form, the pipeline's own `alphaToOneEnable`. Where
+the device reports the feature below, device creation enables it, and the translator builds the
+state; elsewhere it refuses the state at creation, an `Error::Translation` naming `AlphaToOne` and
+`alphaToOne` (Known gaps of render pipeline states).
+
+| Alpha-to-one feature | Structure | Used for |
+|---|---|---|
+| `alphaToOne` | `VkPhysicalDeviceFeatures` | a render pipeline's `alphaToOneEnabled`, each sample's alpha 1 after the coverage is taken |
 
 ### Quad control
 
