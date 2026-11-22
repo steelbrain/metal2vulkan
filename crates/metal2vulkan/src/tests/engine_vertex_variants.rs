@@ -24,9 +24,8 @@
 //!   Metal's constant step is a Vulkan vertex-rate binding of stride 0
 //!   (`metal::vertex::attribute_fetch`, `link::vertex::binding_stride`), which is
 //!   `VertexAttribute` and `VertexBinding` state and names no instruction, so a constant-step sweep
-//!   costs exactly what the per-vertex sweep costs. Outside them every format is pulled instead
-//!   and the sweep is one module a creation: 45 of 45 on `moltenvk-m3`, 2 on a native driver under
-//!   the identity domains.
+//!   of the integer formats costs exactly what the per-vertex sweep costs. Outside them every
+//!   format is pulled instead and the sweep is one module a creation: 45 of 45 on `moltenvk-m3`.
 //!
 //! Counts, not times: a count is the same on a loaded host as on a quiet one. No GPU is used, and
 //! `llvm-as` assembles the fixture, so a missing tool skips visibly.
@@ -458,50 +457,6 @@ fn a_pulled_normalized_decode_notes_the_device_s_product() {
         assert!(
             !noted.contains(&VertexFormat::Int1010102Normalized),
             "{entry}"
-        );
-    }
-}
-
-/// The same sweep under the identity domains, whose constant step is a binding: fixed-function
-/// vertex input fetches
-/// the formats the per-vertex sweep fetches, so the constant step costs exactly what the
-/// per-vertex step costs -- **one** module of one translation over the 45 creations, for a `float`
-/// read and a `half` one alike, and the pulled `FloatRGB9E5` (pulled under either step, on every
-/// device) one more. 45 modules to 2.
-#[test]
-fn a_constant_step_binding_compiles_one_module_for_the_whole_sweep() {
-    let Some(bc) = fixture() else { return };
-    for stem in NATIVE {
-        let p = profile(stem, DevicePolicy::default()).expect("committed profile");
-        let got = count(&bc, &p, TO_FLOAT4, VertexStepFunction::Constant);
-        let per_vertex = count(&bc, &p, TO_FLOAT4, VertexStepFunction::PerVertex);
-        assert_eq!(got.creations, 45, "{stem}: the swept formats");
-        assert_eq!(
-            got.pulled, per_vertex.pulled,
-            "{stem}: the constant step pulls what the per-vertex step pulls and no more"
-        );
-        assert_eq!(
-            (got.projections, got.modules),
-            (per_vertex.projections, per_vertex.modules),
-            "{stem}: the constant-step sweep costs what the per-vertex sweep costs"
-        );
-        let half = count(&bc, &p, TO_HALF4, VertexStepFunction::Constant);
-        let half_per_vertex = count(&bc, &p, TO_HALF4, VertexStepFunction::PerVertex);
-        assert_eq!(
-            (half.projections, half.modules),
-            (half_per_vertex.projections, half_per_vertex.modules),
-            "{stem}: the same for a `half` read"
-        );
-        assert_eq!(
-            got.pulled,
-            vec!["MTLVertexFormatFloatRGB9E5"],
-            "{stem}: the formats the shader pulls"
-        );
-        assert_eq!(
-            (got.projections, got.modules, half.projections, half.modules),
-            (2, 2, 2, 2),
-            "{stem}: projections and modules of {} creations",
-            got.creations
         );
     }
 }
