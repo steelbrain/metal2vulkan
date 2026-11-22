@@ -590,6 +590,49 @@ impl Work {
         state
     }
 
+    /// For the device tests: what the submit side holds, read at once, for a wait that timed
+    /// out: across its queues, the command buffers enqueued or committed and not wholly
+    /// submitted, those committed, the heads held for an event's value, the groups staged and
+    /// not submitted, and the submissions not seen complete, with the progress value of the
+    /// last. Its lock is tried for a second: one held longer is named, not waited for.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn stall(&self) -> String {
+        use std::sync::TryLockError;
+        use std::time::{Duration, Instant};
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let state = loop {
+            match self.state.try_lock() {
+                Ok(state) => break state,
+                Err(TryLockError::Poisoned(poisoned)) => break poisoned.into_inner(),
+                Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(TryLockError::WouldBlock) => {
+                    return "the submit side's lock held by another thread for a second".to_owned();
+                }
+            }
+        };
+        let fifos = &state.fifos;
+        let entries: usize = fifos.iter().map(|fifo| fifo.entries.len()).sum();
+        let committed = (fifos.iter().flat_map(|fifo| &fifo.entries))
+            .filter(|entry| entry.pending.is_some())
+            .count();
+        let held = fifos
+            .iter()
+            .filter(|fifo| fifo.held_since.is_some())
+            .count();
+        let staged = fifos.iter().filter(|fifo| fifo.group.is_some()).count();
+        let in_flight: usize = fifos.iter().map(|fifo| fifo.in_flight.len()).sum();
+        format!(
+            "the submit side: {} queues, {entries} command buffers not wholly submitted ({committed} \
+             committed), {held} heads held for an event's value, {staged} groups staged, \
+             {in_flight} submissions not seen complete, the last at progress {}, lost {}",
+            fifos.len(),
+            state.progress,
+            state.lost()
+        )
+    }
+
     /// Wakes the submit thread after a change [`WorkState`] recorded.
     pub(crate) fn wake(&self) {
         self.changed.notify_one();

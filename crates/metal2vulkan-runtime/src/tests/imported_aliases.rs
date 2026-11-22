@@ -357,9 +357,7 @@ mod on_device {
             after.over_copies_imported - before.over_copies_imported,
         );
         drop((queue, t1, t2, b1, b2, import, out, out_block, buffers));
-        wait_until(&device.counters(), "the release", || {
-            released.load(Ordering::SeqCst)
-        });
+        wait_until(&device, "the release", || released.load(Ordering::SeqCst));
         free(mapping);
     }
 
@@ -571,9 +569,7 @@ mod on_device {
         drop(reference_buffer);
         drop((compositor, drawer, import, out, out_block, buffers));
         (device.release_block(reference_block)).unwrap_or_else(|error| panic!("{name}: {error}"));
-        wait_until(&device.counters(), "the release", || {
-            released.load(Ordering::SeqCst)
-        });
+        wait_until(&device, "the release", || released.load(Ordering::SeqCst));
         free(mapping);
         held
     }
@@ -659,9 +655,7 @@ mod on_device {
                     let before = textures();
                     let freed = composite(name, &device, &reader, (&live, first), Format::Bgra8);
                     if !beside {
-                        wait_until(&device.counters(), "the composite's frees", || {
-                            textures() == before
-                        });
+                        wait_until(&device, "the composite's frees", || textures() == before);
                     }
                     let mut d =
                         TextureDescriptor::new(TextureType::Type2D, PixelFormat::BGRA8Unorm, 1, 1);

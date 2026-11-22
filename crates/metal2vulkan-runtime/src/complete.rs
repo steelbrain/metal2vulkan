@@ -47,6 +47,11 @@ struct DoneState {
     woken: u64,
     stop: bool,
     lost: bool,
+    /// For the device tests: the values the completion thread's last GPU wait waits for, in its
+    /// order: the progress semaphore's where it waits for it, each watched event's next pending
+    /// value, then the wake semaphore's ([`Done::stall`]).
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    waits_for: Vec<u64>,
 }
 
 /// Where the completion thread waits.
@@ -149,6 +154,8 @@ impl Done {
                 woken: 0,
                 stop: false,
                 lost: false,
+                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                waits_for: Vec::new(),
             }),
             changed: Condvar::new(),
             progress,
@@ -177,6 +184,89 @@ impl Done {
     /// The highest progress value the completion thread has seen reached.
     pub(crate) fn completed(&self) -> u64 {
         self.completed.load(Ordering::SeqCst)
+    }
+
+    /// For the device tests: what the completion side holds, read at once, for a wait that timed
+    /// out. The command buffers in flight (submitted and not retired) among its retirees; the
+    /// oldest retiree's progress value, the progress semaphore's counter, and whether a wait of
+    /// timeout 0 on that value reports it reached (the oldest's fence: signalled or not); and
+    /// where the completion thread waits, with the values of its GPU wait and the wake
+    /// semaphore's counter. Its lock is tried for a second: one held longer is named, not waited
+    /// for.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn stall(&self, device: &ash::Device) -> String {
+        use std::sync::TryLockError;
+        let deadline = Instant::now() + Duration::from_secs(1);
+        let state = loop {
+            match self.state.try_lock() {
+                Ok(state) => break state,
+                Err(TryLockError::Poisoned(poisoned)) => break poisoned.into_inner(),
+                Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(TryLockError::WouldBlock) => {
+                    return "the completion side's lock held by another thread for a second"
+                        .to_owned();
+                }
+            }
+        };
+        // SAFETY: both are timeline semaphores of the device.
+        let counter = |semaphore: vk::Semaphore| match unsafe {
+            device.get_semaphore_counter_value(semaphore)
+        } {
+            Ok(value) => value.to_string(),
+            Err(result) => format!("unread ({result:?})"),
+        };
+        let commands = (state.flight.iter())
+            .filter(|retiree| matches!(retiree.item, Item::Command { .. }))
+            .count();
+        let oldest = match state.flight.front() {
+            None => "nothing in flight".to_owned(),
+            Some(oldest) => {
+                let kind = match oldest.item {
+                    Item::Command { .. } => "a command buffer",
+                    Item::Upload(_) => "an upload",
+                    Item::CopyIn(_) => "a copy-in",
+                };
+                let reached = match reached_by_wait(device, self.progress, oldest.value) {
+                    Ok(reached) => reached.to_string(),
+                    Err(_) => "no: the wait failed, a loss".to_owned(),
+                };
+                format!(
+                    "the oldest, {kind}, at progress {}: the progress semaphore's counter {}, a \
+                     wait of timeout 0 reports it reached: {reached}",
+                    oldest.value,
+                    counter(self.progress)
+                )
+            }
+        };
+        let waiting = match state.waiting {
+            Waiting::Not => "in no wait of its own: in a round (reading the progress, retiring, \
+                             running handlers or listeners) or a lost device's idle wait"
+                .to_owned(),
+            Waiting::Host => "on the host, for a change of the completion side's state".to_owned(),
+            Waiting::Gpu { progress } => format!(
+                "on the GPU, for any of the values {:?} ({} the progress semaphore's first, then \
+                 the watched events', the wake semaphore's last), the wake semaphore's counter {}",
+                state.waits_for,
+                match progress {
+                    true => "with",
+                    false => "without",
+                },
+                counter(self.wake)
+            ),
+        };
+        format!(
+            "in flight {commands} command buffers among {} retirees, {} ended with nothing in \
+             flight; {oldest}; the completion thread, which saw progress {} reached, waits \
+             {waiting}; watched events {}, lost {}, stopping {}",
+            state.flight.len(),
+            state.ended.len(),
+            self.completed(),
+            state.watched.len(),
+            state.lost,
+            state.stop
+        )
     }
 
     /// Wakes the completion thread where it waits. With `flight_only` (the change is only more
@@ -659,6 +749,8 @@ pub(crate) fn run(core: Arc<Core>) {
         state.waiting = Waiting::Gpu {
             progress: target.is_some(),
         };
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        state.waits_for.clone_from(&values);
         drop(state);
         let wait = vk::SemaphoreWaitInfo::default()
             .flags(vk::SemaphoreWaitFlags::ANY)

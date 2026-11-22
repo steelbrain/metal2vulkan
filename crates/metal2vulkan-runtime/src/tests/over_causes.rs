@@ -278,9 +278,7 @@ mod on_device {
                 assert_eq!(cause, Some(OverCause::HostMemory), "{name}: host memory");
                 found.push(("host memory", cause));
                 drop((texture, imported, import));
-                wait_until(&device.counters(), "the release", || {
-                    released.load(Ordering::SeqCst)
-                });
+                wait_until(&device, "the release", || released.load(Ordering::SeqCst));
                 free(mapping);
             }
             println!("over causes: {name}: {found:?}");

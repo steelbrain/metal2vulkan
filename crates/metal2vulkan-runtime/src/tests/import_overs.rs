@@ -254,9 +254,7 @@ mod on_device {
             let after = counters.metrics();
             let taken = form(name, &texture, &before, &after);
             drop((queue, texture, inverted, sums, sums_block, buffer, block));
-            wait_until(&device.counters(), "the release", || {
-                released.load(Ordering::SeqCst)
-            });
+            wait_until(&device, "the release", || released.load(Ordering::SeqCst));
             println!(
                 "import_overs: {name}: a texture over a dma-buf at pitch {pitch}: {taken}, {} \
                  copies, {} acquires; two rounds read exact through the texture and the buffer",
@@ -332,9 +330,7 @@ mod on_device {
                 "{name}: {taken}: the memfd holds the draw's texels, every other byte the CPU's"
             );
             drop((command_buffer, queue, target, buffer, block));
-            wait_until(&device.counters(), "the release", || {
-                released.load(Ordering::SeqCst)
-            });
+            wait_until(&device, "the release", || released.load(Ordering::SeqCst));
             println!(
                 "import_overs draw: {name}: a render target over a dma-buf at pitch {pitch}: \
                  {taken}, {} copies, {} acquires; the memfd holds the draw exact",

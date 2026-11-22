@@ -286,9 +286,7 @@ mod on_device {
                 (granule, 3 * granule, total),
             );
             drop((queue, buffer, block));
-            wait_until(&device.counters(), "the release", || {
-                released.load(Ordering::SeqCst)
-            });
+            wait_until(&device, "the release", || released.load(Ordering::SeqCst));
             // Each import falls before the release runs; the pool's own allocations may have
             // moved with the test's Shared blocks.
             assert_eq!(
@@ -420,7 +418,7 @@ mod on_device {
                         times[shape][1 + 2 * at].extend(submit_times(&device, command, SUBMITS));
                     }
                     drop(block);
-                    wait_until(&device.counters(), "the chunks' frees", || {
+                    wait_until(&device, "the chunks' frees", || {
                         device.counters().gauges().imports == 0
                     });
                     let blocks: Vec<_> = (0..count)
@@ -439,7 +437,7 @@ mod on_device {
                         }
                     }
                     drop(blocks);
-                    wait_until(&device.counters(), "the imports' frees", || {
+                    wait_until(&device, "the imports' frees", || {
                         device.counters().gauges().imports == 0
                     });
                 }
