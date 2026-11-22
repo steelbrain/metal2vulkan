@@ -628,8 +628,7 @@ struct Exported {
 /// submitted command's write of memory its texels lie in, a write through an address once an
 /// address of the block went out (every such texture), or another texture's copy back over those
 /// bytes. An address goes out by a public call alone: [`crate::Buffer::gpu_address`] of a buffer
-/// whose bytes shaders reach in the block (a Managed buffer's device copy included), and a texture
-/// buffer's storage element at an index over such bytes. A surface's block in the copy form is
+/// whose bytes shaders reach in the block, and a texture buffer's storage element at an index over such bytes. A surface's block in the copy form is
 /// the surface's own, so its address goes out only through its buffer
 /// ([`crate::Surface::buffer`]). Within a segment the Shared rules stand.
 #[derive(Default)]

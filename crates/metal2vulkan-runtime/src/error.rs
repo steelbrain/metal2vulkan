@@ -178,6 +178,15 @@ pub enum Refusal {
         /// The block named.
         block: BlockId,
     },
+    /// A Managed buffer whose device copy is placed in an exported block
+    /// ([`Device::new_managed_buffer`](crate::Device::new_managed_buffer)).
+    ///
+    /// Basis: ours (Metal places a Managed buffer's second copy itself, so no Metal program puts
+    /// it in memory another API shares).
+    ManagedCopyExported {
+        /// The block named.
+        block: BlockId,
+    },
     /// A zero fill whose range leaves its block
     /// ([`Device::zero_block_range`](crate::Device::zero_block_range)), as a buffer placed there
     /// would.
@@ -2256,6 +2265,11 @@ impl fmt::Display for Refusal {
             Refusal::ManagedCopyNotPrivate { block } => write!(
                 f,
                 "a Managed buffer's device copy is placed in block {}, which is not Private",
+                block.get()
+            ),
+            Refusal::ManagedCopyExported { block } => write!(
+                f,
+                "a Managed buffer's device copy is placed in block {}, which is exported",
                 block.get()
             ),
             Refusal::ZeroRangePastBlock {

@@ -16,6 +16,7 @@ impl Refusal {
             Refusal::ManagedCopyMissing => RefusalBasis::Ours,
             Refusal::ManagedCopyOnUnified => RefusalBasis::Ours,
             Refusal::ManagedCopyNotPrivate { .. } => RefusalBasis::Ours,
+            Refusal::ManagedCopyExported { .. } => RefusalBasis::Ours,
             Refusal::ZeroRangePastBlock { .. } => RefusalBasis::Ours,
             Refusal::ZeroRangeShared { .. } => RefusalBasis::Ours,
             Refusal::NotExported { .. } => RefusalBasis::Ours,

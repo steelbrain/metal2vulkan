@@ -309,7 +309,8 @@ impl Device {
     /// [`Device::new_buffer`], for either range; [`Refusal::ManagedBlockPrivate`] for bytes in a
     /// Private block; [`Refusal::ManagedCopyMissing`] for no `copy` where
     /// the device keeps one, [`Refusal::ManagedCopyOnUnified`] for a `copy` where it keeps none
-    /// and [`Refusal::ManagedCopyNotPrivate`] for a `copy` in a Shared block; for a device copy,
+    /// [`Refusal::ManagedCopyNotPrivate`] for a `copy` in a Shared block and
+    /// [`Refusal::ManagedCopyExported`] for one in an exported block; for a device copy,
     /// [`Error::Quiesced`], and [`Error::Vulkan`] where the upload's command buffer cannot be made,
     /// or what making the zero source returns where the fill copies from it and the block-maker
     /// thread made none; for one whose first bytes are copied, what [`Buffer::did_modify_range`]
@@ -347,6 +348,11 @@ impl Device {
                 let copy_block = self.placed(copy_block, copy_offset, length)?;
                 if copy_block.memory.class != MemoryClass::Private {
                     return Err(Error::Refused(Refusal::ManagedCopyNotPrivate {
+                        block: copy_block.memory.id,
+                    }));
+                }
+                if copy_block.memory.exported() {
+                    return Err(Error::Refused(Refusal::ManagedCopyExported {
                         block: copy_block.memory.id,
                     }));
                 }

@@ -8981,6 +8981,7 @@ variant	metal2vulkan-runtime::Refusal::IndicesNotGranted	IndicesNotGranted { cla
 variant	metal2vulkan-runtime::Refusal::IndirectArgumentsPastEnd	IndirectArgumentsPastEnd { offset: u64, length: u64, needed: u64 }
 variant	metal2vulkan-runtime::Refusal::IndirectOffset	IndirectOffset { offset: u64, length: u64 }
 variant	metal2vulkan-runtime::Refusal::ManagedBlockPrivate	ManagedBlockPrivate { block: BlockId }
+variant	metal2vulkan-runtime::Refusal::ManagedCopyExported	ManagedCopyExported { block: BlockId }
 variant	metal2vulkan-runtime::Refusal::ManagedCopyMissing	ManagedCopyMissing
 variant	metal2vulkan-runtime::Refusal::ManagedCopyNotPrivate	ManagedCopyNotPrivate { block: BlockId }
 variant	metal2vulkan-runtime::Refusal::ManagedCopyOnUnified	ManagedCopyOnUnified

@@ -436,7 +436,7 @@ in its memory.
   otherwise). Elsewhere shaders reach a device copy at `gpu_address`, always: `length` bytes at
   `copy`, a Private block the consumer holds and an offset in it, placed by the consumer as it
   places a Private buffer (`Refusal::ManagedCopyMissing` for none, `Refusal::ManagedCopyNotPrivate`
-  for a Shared block). Either offset is any byte, and `gpu_address` is the block's address plus
+  for a Shared block, `Refusal::ManagedCopyExported` for an exported one). Either offset is any byte, and `gpu_address` is the block's address plus
   it. The copy's rest past its first `copied` bytes is zeroed in the upload, and those bytes are
   named as `did_modify_range` names a range.
   `Buffer::did_modify_range(start, length)` names a range changed (`Refusal::ModifiedRange` past
@@ -1438,7 +1438,7 @@ made, with no lock, and never rewritten for layouts.
     write through an address outside the command's bound slots and declared resources changes
     the bytes of every such texture whose block's address a public call handed out before that
     submission, and of no other: `Buffer::gpu_address` of a buffer whose bytes shaders reach in
-    the block (a Managed buffer's device copy placed there included), and a texture buffer's
+    the block, and a texture buffer's
     storage element at an index over the block's bytes; the block's own `BlockInfo` states no
     address. An exported surface's block in the copy form is the surface's own, so only
     `Surface::buffer`'s `gpu_address` hands it out; the planes' resource IDs reach their own

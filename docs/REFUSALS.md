@@ -32,7 +32,7 @@ Columns:
 | Rate maps the compile layer does not compile | 5 | 5 | 0 | 0 | 4 | 1 | 0 |
 | The translation deadline | 1 | 1 | 0 | 0 | 0 | 1 | 0 |
 | Devices below the runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
-| The runtime's `Refusal` | 83 | 83 | 0 | 0 | 0 | 0 | 0 |
+| The runtime's `Refusal` | 84 | 84 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Limit` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Gap` | 32 | 32 | 0 | 0 | 0 | 0 | 0 |
 
@@ -46,7 +46,7 @@ Columns:
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 5 | 0 | 0 | 0 |
 | The translation deadline | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 |
 | Devices below the runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
-| The runtime's `Refusal` | 22 | 26 | 0 | 0 | 35 | 0 | 0 | 0 |
+| The runtime's `Refusal` | 22 | 26 | 0 | 0 | 36 | 0 | 0 | 0 |
 | The runtime's `Limit` | 0 | 0 | 0 | 13 | 4 | 0 | 0 | 0 |
 | The runtime's `Gap` | 0 | 0 | 0 | 3 | 29 | 0 | 0 | 0 |
 
@@ -246,6 +246,7 @@ Columns:
 | `ManagedCopyMissing` | A Managed buffer given no place for its device copy on a device that keeps one, where `Device::has_unified_memory` is false... | every device (a public call's own check of its arguments) | `ours`: Metal keeps a Managed buffer's second copy on a Mac with a discrete GPU; the consumer places it, as it places every buffer | 1: `crates/metal2vulkan-runtime/src/buffer.rs (new_managed_buffer)` | `-` |
 | `ManagedCopyOnUnified` | A Managed buffer given a place for a device copy on a device that keeps none, where `Device::has_unified_memory` is true... | every device (a public call's own check of its arguments) | `ours`: on unified memory a Managed buffer is its bytes, as Metal keeps one copy of a Managed buffer on Apple silicon | 1: `crates/metal2vulkan-runtime/src/buffer.rs (new_managed_buffer)` | `-` |
 | `ManagedCopyNotPrivate` | A Managed buffer whose device copy is placed in a block that is not Private (`Device::new_managed_buffer`) | every device (a public call's own check of its arguments) | `ours`: shaders reach the device copy in Private memory, device-local where it has room, as a discrete GPU's Metal keeps the copy in its own memory | 1: `crates/metal2vulkan-runtime/src/buffer.rs (new_managed_buffer)` | `-` |
+| `ManagedCopyExported` | A Managed buffer whose device copy is placed in an exported block (`Device::new_managed_buffer`) | every device (a public call's own check of its arguments) | `ours`: Metal places a Managed buffer's second copy itself, so no Metal program puts it in memory another API shares | 1: `crates/metal2vulkan-runtime/src/buffer.rs (new_managed_buffer)` | `-` |
 | `ZeroRangePastBlock` | A zero fill whose range leaves its block (`Device::zero_block_range`), as a buffer placed there would | every device (a public call's own check of its arguments) | `ours`: the fill stands for the zeroed contents of a buffer placed in the range, and Metal answers nil for a buffer placed past the end of its heap | 1: `crates/metal2vulkan-runtime/src/buffer.rs (zero_block_range)` | `-` |
 | `ZeroRangeShared` | A zero fill of a Shared block (`Device::zero_block_range`) | every device (a public call's own check of its arguments) | `ours`: the host maps a Shared block, and its bytes are zeroed through the mapping, as a zeroed Shared buffer's are; the fill is for the memory the host does not map | 1: `crates/metal2vulkan-runtime/src/buffer.rs (zero_block_range)` | `-` |
 | `NotExported` | An acquire of another API's writes into a block that is not exported (`Block::external_writes_done`), or a release to another API of a buffer... | every device (a public call's own check of its arguments) | `ours`: only an exported block's memory is another API's to write or read | 2: `crates/metal2vulkan-runtime/src/blit.rs (release_to_external)`, `crates/metal2vulkan-runtime/src/export.rs (external_writes_done)` | `-` |
@@ -547,6 +548,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Refusal::ManagedCopyMissing`: `crates/metal2vulkan-runtime/src/buffer.rs (new_managed_buffer)`
 - `rt:Refusal::ManagedCopyOnUnified`: `crates/metal2vulkan-runtime/src/buffer.rs (new_managed_buffer)`
 - `rt:Refusal::ManagedCopyNotPrivate`: `crates/metal2vulkan-runtime/src/buffer.rs (new_managed_buffer)`
+- `rt:Refusal::ManagedCopyExported`: `crates/metal2vulkan-runtime/src/buffer.rs (new_managed_buffer)`
 - `rt:Refusal::ZeroRangePastBlock`: `crates/metal2vulkan-runtime/src/buffer.rs (zero_block_range)`
 - `rt:Refusal::ZeroRangeShared`: `crates/metal2vulkan-runtime/src/buffer.rs (zero_block_range)`
 - `rt:Refusal::NotExported`: `crates/metal2vulkan-runtime/src/blit.rs (release_to_external)`; `crates/metal2vulkan-runtime/src/export.rs (external_writes_done)`

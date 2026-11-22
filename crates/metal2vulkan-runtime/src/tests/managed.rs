@@ -18,8 +18,8 @@
 //! the buffer and a Managed buffer over a Private block are refused, and every gauge reads zero
 //! after teardown. The consumer places the device copy: at an odd offset of its Private block it
 //! holds the bytes there and nowhere else, the consumer's slack after it and the bytes before it
-//! as the consumer left them; a missing copy, a copy on a unified device, one in a Shared block
-//! and one past its block are refused.
+//! as the consumer left them; a missing copy, a copy on a unified device, one in a Shared block,
+//! one in an exported block and one past its block are refused.
 //!
 //! Managed textures, on every device: the image takes the named bytes of a region at its upload
 //! and nothing outside it, `get_bytes` reads the named bytes, `replace_region` writes them and
@@ -171,9 +171,9 @@ pub(crate) mod on_device {
     use crate::texture::TextureObject;
     use crate::{
         Block, BlockId, Buffer, BufferLayout, BytesPlace, CommandBuffer, CommandBufferStatus,
-        ComputePipelineState, Device, DispatchType, Error, IndexClass, MemoryClass, PixelFormat,
-        Refusal, Region, StorageMode, Texture, TextureDescriptor, TexturePlace, TextureType,
-        TextureUsage,
+        ComputePipelineState, Device, DispatchType, Error, ExportHandle, IndexClass, MemoryClass,
+        PixelFormat, Refusal, Region, StorageMode, Texture, TextureDescriptor, TexturePlace,
+        TextureType, TextureUsage,
     };
     use ash::vk;
     use std::time::Instant;
@@ -372,7 +372,8 @@ pub(crate) mod on_device {
     /// GPU write into the consumer's slack past the copy (at 5100 to 5200) stays through a later
     /// copy-in of the whole buffer, which lands at 4099 to 5099 alone. Without one the buffer is
     /// its bytes, at their block's address plus their offset. A missing copy, a copy on a unified
-    /// device, a copy in a Shared block and a copy past its block are refused.
+    /// device, a copy in a Shared block, a copy in an exported block and a copy past its block are
+    /// refused.
     #[test]
     fn every_device_places_a_managed_buffer_s_device_copy_where_the_consumer_says() {
         const BLOCK: u64 = 64 << 10;
@@ -498,6 +499,22 @@ pub(crate) mod on_device {
                     )
                 }
                 other => panic!("{name}: a copy past its block: {other:?}"),
+            }
+            let export = (ExportHandle::ALL.into_iter())
+                .find_map(|handle| Some((handle, device.new_exported_block(handle, BLOCK).ok()?)));
+            match export {
+                Some((handle, (exported, _export))) => {
+                    match refused(Some((exported.id, 0))) {
+                        Err(Error::Refused(Refusal::ManagedCopyExported { block })) => {
+                            assert_eq!(block, exported.id, "{name}")
+                        }
+                        other => panic!("{name}: a copy in an exported block: {other:?}"),
+                    }
+                    println!(
+                        "managed placed: {name}: a copy in a {handle:?} exported block refused"
+                    );
+                }
+                None => println!("managed placed: {name}: exports no handle"),
             }
             println!("managed placed: {name}: device copy at {AT} of its block");
             drop((managed, whole, into));
