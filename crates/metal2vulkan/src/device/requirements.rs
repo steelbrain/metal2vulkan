@@ -492,7 +492,8 @@ pub enum VkExtension {
     /// [`VkProperty::ProvokingVertexModePerPipeline`].
     ExtProvokingVertex,
     /// `VK_EXT_post_depth_coverage` (never promoted, no feature member): a fragment shader's
-    /// `SampleMask` input read after the early depth and stencil tests (`PostDepthCoverage`).
+    /// `SampleMask` input read after the early depth and stencil tests. The translator reads it
+    /// nowhere: `Feature::PostDepthCoverage` is refused on every device.
     ExtPostDepthCoverage,
     // Appended.
     /// `VK_EXT_line_rasterization` (promoted to `VK_KHR_line_rasterization`, never core):

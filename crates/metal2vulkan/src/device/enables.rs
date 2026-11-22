@@ -355,7 +355,6 @@ fn facts(ext: VkExtension) -> ExtensionFacts {
         | E::ExtMultiDraw
         | E::ExtAttachmentFeedbackLoopLayout
         | E::ExtExtendedDynamicState3
-        | E::ExtPostDepthCoverage
         | E::ImgFormatPvrtc
         | E::KhrPortabilitySubset
         | E::ExtShaderAtomicFloat => fact(true, None, &[]),
@@ -400,6 +399,9 @@ fn facts(ext: VkExtension) -> ExtensionFacts {
         // Described, never enabled: a float fma is the device's `Fma` on every device
         // (`lower::arith::fma`), so the core reads none of its features.
         E::KhrShaderFma => fact(false, None, &[]),
+        // Described, never enabled: the coverage after the depth and stencil tests is refused on
+        // every device (`Feature::PostDepthCoverage`), so the core reads none of it.
+        E::ExtPostDepthCoverage => fact(false, None, &[]),
         E::KhrDynamicRendering => fact(false, Some(3), &[]),
         // Object and mesh functions. `VK_KHR_spirv_1_4` is core at the 1.2 floor.
         E::ExtMeshShader => fact(true, None, &[]),

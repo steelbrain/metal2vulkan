@@ -110,7 +110,7 @@ feature	DepthBiasClamp	app	depth bias clamp on a device without depthBiasClamp
 feature	ConstantAlphaBlendFactor	app	blend-alpha factors on a portability-subset device without them
 feature	SparseTexture	rare	sparse residency reads
 feature	TextureSwizzle	app	texture swizzles whose Metal behaviour is unmeasured
-feature	PostDepthCoverage	rare	the coverage after early depth and stencil tests on a device without VK_EXT_post_depth_coverage
+feature	PostDepthCoverage	rare	the coverage after early depth and stencil tests, on every device
 feature	PrivateMemory	rare	very large per-thread arrays
 feature	Reflection	rare	reflection of argument kinds Metal's answer is unmeasured for
 feature	ViewportDepthRange	rare	viewport depth outside [0, 1]

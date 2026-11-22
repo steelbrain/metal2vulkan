@@ -1445,7 +1445,6 @@ fn mode_contract(m: ExecMode) -> (u8, Option<u8>, &'static [ExecModel]) {
             (18, None, MESH)
         }
         ExecMode::RequireFullQuads => (19, None, FRAG),
-        ExecMode::PostDepthCoverage => (21, None, FRAG),
     }
 }
 

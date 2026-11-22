@@ -40,7 +40,7 @@ Columns:
 
 | Kind | `metal-measured` | `metal-documented` | `metal-takes` | `device` | `ours` | `unknown` | `delegated` | `-` |
 |---|---|---|---|---|---|---|---|---|
-| Translator and front-end refusals | 0 | 0 | 0 | 51 | 68 | 0 | 0 | 0 |
+| Translator and front-end refusals | 0 | 0 | 0 | 50 | 69 | 0 | 0 | 0 |
 | Binder refusals at a device limit | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 0 |
 | Translation caps | 0 | 0 | 0 | 0 | 14 | 0 | 0 | 0 |
 | Rate maps the compile layer does not compile | 0 | 0 | 0 | 0 | 5 | 0 | 0 | 0 |
@@ -171,7 +171,7 @@ Columns:
 | `ProgramScopeBinding` | A program-scope buffer binding of MSL 3.2 (macOS 15 and later), `constant T* constant p [[buffer(n)]];` in Apple's `!air.global_bindings` list,... | every device (not implemented) | `ours` | via a helper: 2: `crates/metal2vulkan-air/src/abi/module.rs (decode)`, `crates/metal2vulkan/src/error/mod.rs (from)` | `app`: MSL 3.2 program-scope buffer bindings (macOS 15 and later) |
 | `GenericPointer` | A generic pointer (MSL 4.1's `addrspace(8)`) that canonicalization cannot make a pointer of one address space, by how it comes to hold a space... | every device (not implemented) | `ours` | 2: `crates/metal2vulkan-air/src/canon/generic.rs (refuse)`, `crates/metal2vulkan-air/src/canon/generic.rs (refused)` | `system`: MSL 4.1 generic pointers held in memory or of two spaces (macOS 27 and later) |
 | `SeqCstFence` | A sequentially consistent fence (`seq_cst` `atomic_thread_fence`, an LLVM `fence seq_cst`, or a `seq_cst` barrier ordering device memory), whose... | devices short of a Vulkan feature the site names | `device` | 1: `crates/metal2vulkan/src/lower/sync/barrier.rs (require_seq_cst)` | `rare`: a seq_cst fence in a vertex or fragment stage without its stores and atomics |
-| `PostDepthCoverage` | The coverage after the depth and stencil tests (`[[sample_mask, post_depth_coverage]]`), read through `VK_EXT_post_depth_coverage` | devices short of a Vulkan extension the site names | `device` | 1: `crates/metal2vulkan/src/lower/stage_io/plan.rs (param)` | `rare`: the coverage after early depth and stencil tests on a device without VK_EXT_post_depth_coverage |
+| `PostDepthCoverage` | The coverage after the depth and stencil tests (`[[sample_mask, post_depth_coverage]]`) | every device (not implemented) | `ours` | 1: `crates/metal2vulkan/src/lower/stage_io/plan.rs (param)` | `rare`: the coverage after early depth and stencil tests, on every device |
 | `WideLines` | Lines at a width other than 1 (Apple's `setLineWidth:`), drawn by the device's own wide lines (`wideLines`) or as bands of triangles through... | devices without VkFeature::TessellationShader; devices without VkLimit::MaxTessellationEvaluationOutputComponents; every device (not implemented) | `ours` | 3: `crates/metal2vulkan/src/pipeline/link/band.rs (plan, 3 sites)` | `none`: a line under the Apple-private setLineWidth: at a width other than 1 drawn as the band, whose pipeline form the translator does not build (a selected slice or viewport, barycentric weights, multiview, synthesized geometry, too many stage outputs) |
 
 ## 2. Binder refusals at a device limit (`BindError`)

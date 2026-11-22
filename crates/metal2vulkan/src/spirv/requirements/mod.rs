@@ -876,11 +876,6 @@ impl Deriver<'_> {
                     self.ext(SpirvExtension::KhrQuadControl);
                     self.feat(VkFeature::ShaderQuadControl);
                 }
-                ExecMode::PostDepthCoverage => {
-                    self.cap(Cap::SampleMaskPostDepthCoverage);
-                    self.ext(SpirvExtension::KhrPostDepthCoverage);
-                    self.r.extensions.insert(VkExtension::ExtPostDepthCoverage);
-                }
                 // A task or mesh entry's local size is bounded by the mesh shader limits, which no
                 // profile records yet: the stage's feature, which none enables, refuses it first.
                 ExecMode::LocalSize { x, y, z } if self.model == ExecModel::GLCompute => {

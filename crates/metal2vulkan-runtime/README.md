@@ -3395,6 +3395,12 @@ cache is answered compile-required on both.
   `Error::Translation` naming `RasterOrderGroups` and `fragmentShaderPixelInterlock`. Of the venues
   run, KosmicKrisp on the M3 Max and RADV on the RX 550 list neither the extension nor the feature
   (vulkaninfo, jobs m3-max-61291 and m3-max-61296).
+- A fragment function that reads `[[sample_mask, post_depth_coverage]]`, the coverage after the
+  early depth and stencil tests, is refused at creation on every device, an `Error::Translation`
+  naming `PostDepthCoverage` (`NotImplemented`). Vulkan's one form for it is
+  `VK_EXT_post_depth_coverage`, which the floor does not enable, and the translator keeps no
+  lowering for it. The runtime has refused it on every device all along, worded before as the
+  extension the device lacked. If a guest meets it, it is built on that extension, with its tests.
 - The depth clip mode `Clamp` and the triangle fill mode `Lines`, which Vulkan 1.3 bakes into a
   `VkPipeline`, are each a `VkPipeline` of the draw's class that a content's first draw under them
   makes, which Metal does not: that draw waits for it (`Metrics::first_use_raster_waits`).

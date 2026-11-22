@@ -999,7 +999,6 @@ impl Ser<'_> {
             ExecMode::SubgroupUniformControlFlow => plain(w, M::SubgroupUniformControlFlowKHR, &[]),
             ExecMode::MaximallyReconverges => plain(w, M::MaximallyReconvergesKHR, &[]),
             ExecMode::RequireFullQuads => plain(w, M::RequireFullQuadsKHR, &[]),
-            ExecMode::PostDepthCoverage => plain(w, M::PostDepthCoverage, &[]),
             ExecMode::Triangles => plain(w, M::Triangles, &[]),
             ExecMode::Quads => plain(w, M::Quads, &[]),
             ExecMode::SpacingEqual => plain(w, M::SpacingEqual, &[]),

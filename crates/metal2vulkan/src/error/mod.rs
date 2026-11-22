@@ -898,8 +898,9 @@ pub enum Feature {
     /// buffer's other such fences the translation keeps through an atomic of the command buffer's
     /// `ExecutionStatus` word: in a vertex or fragment stage without its stores and atomics.
     SeqCstFence,
-    /// The coverage after the depth and stencil tests (`[[sample_mask, post_depth_coverage]]`),
-    /// read through `VK_EXT_post_depth_coverage`.
+    /// The coverage after the depth and stencil tests (`[[sample_mask, post_depth_coverage]]`).
+    /// Vulkan's one form reads `SampleMask` under `VK_EXT_post_depth_coverage`, which no runtime
+    /// enables; no form is built.
     PostDepthCoverage,
     /// Lines at a width other than 1 (Apple's `setLineWidth:`), drawn by the device's own wide
     /// lines (`wideLines`) or as bands of triangles through synthesized tessellation stages
