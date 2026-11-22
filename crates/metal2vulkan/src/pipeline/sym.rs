@@ -213,10 +213,9 @@ pub enum SyntheticBinding {
     /// `x + y · SpecKey::TileGridWidth`, which the pass keeps across its draws and tile
     /// dispatches and starts at zero (`RuntimeFact::TileThreadgroupMemory`).
     TileMemory,
-    /// The function-table snapshot of a device without the set-1 function-table array's
-    /// features: a read-only storage buffer of words the binder writes per command, holding a
-    /// null table's record at word 0 and then each listed table's record, its word count and
-    /// its words ([`FunctionTableSnapshot`](crate::bind::FunctionTableSnapshot)). The stage's
+    /// The function-table snapshot: a read-only storage buffer of words the binder writes per
+    /// command, holding a null table's record at word 0 and then each listed table's record, its
+    /// word count and its words ([`FunctionTableSnapshot`](crate::bind::FunctionTableSnapshot)). The stage's
     /// function-table directory gives each id the word offset of its table's record.
     FunctionTableSnapshot,
 }

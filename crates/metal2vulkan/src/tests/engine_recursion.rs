@@ -36,13 +36,13 @@
 //!
 //! `llvm-as` assembles the module; a missing tool skips visibly.
 
-use super::engine_argument_tables::{bytes_at, capable_profiles, device, one_group, table_layout};
-use crate::bind::{ArgumentFunctionTable, BindState, FunctionTableWords};
+use super::engine_argument_tables::{bytes_at, device, directory_binding, one_group};
+use crate::bind::{ArgumentFunctionTable, BindState, FunctionTableSnapshot, FunctionTableWords};
 use crate::budget::{Budget, SPIRV_WORDS};
 use crate::device::VkLimit;
 use crate::error::{Capability, DescriptorError, Error, Feature, Limit, Unsupported};
 use crate::library::{FunctionConstantValues, Library};
-use crate::lower::access::function_table::{directory_symbol, heap_symbol};
+use crate::lower::access::function_table::{directory_symbol, snapshot_symbol};
 use crate::lower::select::LowerInputs;
 use crate::metal::PixelFormat;
 use crate::pipeline::artifact::PrecisionNote;
@@ -589,11 +589,11 @@ fn pipeline(bitcode: &[u8], entry: &str, k: u32) -> (ComputePipeline, Vec<Functi
     (pipe, handles)
 }
 
-/// The directory bytes a dispatch of `pipe` gets with table [`T`] listed, and the bytes of
+/// The directory bytes a dispatch of `pipe` gets with table [`T`] listed, and the snapshot of
 /// table [`T`] holding `handles` in order.
 fn table_inputs(pipe: &ComputePipeline, handles: &[FunctionHandle]) -> (Vec<u8>, Vec<u8>) {
     let dev = device("moltenvk-m3");
-    let (_, directory) = table_layout(pipe);
+    let directory = directory_binding(pipe);
     let state = BindState {
         function_tables: vec![ArgumentFunctionTable::new(T, handles.len() as u32)],
         ..Default::default()
@@ -607,7 +607,11 @@ fn table_inputs(pipe: &ComputePipeline, handles: &[FunctionHandle]) -> (Vec<u8>,
     for (i, h) in handles.iter().enumerate() {
         assert!(table.set(i as u32, Some(*h)));
     }
-    (directory, table.to_bytes())
+    let snapshot = FunctionTableSnapshot::of(state.function_tables.iter().map(|f| f.size))
+        .expect("snapshot")
+        .bytes([table.to_bytes().as_slice()])
+        .expect("snapshot bytes");
+    (directory, snapshot)
 }
 
 /// Kernel buffer `index`.
@@ -629,8 +633,8 @@ pub(super) fn buffer(slot: ResourceSlot, bytes: Vec<u8>) -> Buffer {
 }
 
 /// Run `m` with one thread per entry of `depths` (buffer 2), `out_words` output words a thread
-/// (buffer 0), and, for a table kernel, `tables`: the directory's bytes and table [`T`]'s, with
-/// [`T`]'s id at buffer 1. The words it writes.
+/// (buffer 0), and, for a table kernel, `tables`: the directory's bytes and the snapshot of table
+/// [`T`], with [`T`]'s id at buffer 1. The words it writes.
 fn dispatch(
     m: &TypedModule,
     depths: &[u32],
@@ -645,12 +649,11 @@ fn dispatch(
             depths.iter().flat_map(|d| d.to_le_bytes()).collect(),
         ),
     ];
-    if let Some((directory, table)) = tables {
+    if let Some((directory, snapshot)) = tables {
         buffers.extend([
             buffer(slot(1), T.to_le_bytes().to_vec()),
             buffer(directory_symbol(Stage::Kernel), directory.clone()),
-            buffer(heap_symbol(Stage::Kernel), vec![0; 16]),
-            buffer(heap_symbol(Stage::Kernel), table.clone()),
+            buffer(snapshot_symbol(Stage::Kernel), snapshot.clone()),
         ]);
     }
     let res = Resources {
@@ -820,7 +823,7 @@ fn recursive_kernels_validate_and_agree_on_every_profile() {
     }
     let ds = depths(24);
     let want: Vec<u32> = ds.iter().flat_map(|&d| [sum(d, 24), even(d, 24)]).collect();
-    for (stem, p) in capable_profiles() {
+    for (stem, p) in committed_profiles().expect("profiles") {
         for entry in [TABLE, BIG] {
             check(&stem, entry, &p);
         }

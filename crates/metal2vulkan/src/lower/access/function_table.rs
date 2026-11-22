@@ -11,28 +11,20 @@
 //!   entry, searched by the module's one search of it (`handles::Lookup::Element`). Metal reads a
 //!   table through an argument buffer without `useResource` (measured on an M3 Max and an M4), so
 //!   the directory lists every live table of the state, resident or not.
-//! - **The heap.** The element indexes the set-1 heap's function-table array
-//!   (`Heap(FunctionTable)`), a runtime array of read-only storage buffers `{ u32 words[]; }`,
-//!   each one table's words, `NonUniform`. Element 0 is the null table, the zero buffer: a null id
-//!   and every id the directory misses read 0 from every word, a null table of size 0 (Metal's
-//!   answer for a null id; an id of a released table, or of another state's, is undefined
-//!   there).
-//! - **Containment.** A word past the table's buffer (an entry at or past its size) is undefined
-//!   in Metal. Where containment is in the shader (`contain::encoding`), the read is checked
-//!   against the element's length and yields 0 outside it (a null entry); elsewhere the device's
-//!   robustness keeps it inside the element.
-//! - **Device needs.** The heap's array needs `runtimeDescriptorArray`,
-//!   `descriptorBindingPartiallyBound`, `shaderStorageBufferArrayNonUniformIndexing`, and
-//!   `descriptorBindingStorageBufferUpdateAfterBind`.
-//! - **The snapshot**. On a device without one of the four, the read takes the tables' words from
-//!   the stage's function-table snapshot (`Synthetic(FunctionTableSnapshot)`) instead: one storage
-//!   buffer the binder writes per command as the command buffer commits
+//! - **Containment.** A word past a table's words (an entry at or past its size) is undefined in
+//!   Metal; both forms below check every read and yield 0 outside the table (a null entry),
+//!   whatever the device's robustness. A null id and every id the directory misses read a null
+//!   table of size 0 (Metal's answer for a null id; an id of a released table, or of another
+//!   state's, is undefined there).
+//! - **The snapshot**. The read takes the tables' words from the stage's function-table snapshot
+//!   (`Synthetic(FunctionTableSnapshot)`): one storage buffer the binder writes per command as the
+//!   command buffer commits
 //!   (`bind::FunctionTableSnapshot`), word 0 the null table's record (a word count of 0) and then
 //!   each listed table's record, its word count and its words. The directory gives each listed
 //!   id its record's word offset `e` in place of an element, so a miss and the null id read the
 //!   null table. Word `w` is checked against the record's count, always: `snapshot[e + 1 + w]`
-//!   below it and 0 at or past it (a null entry), so no read leaves the record, whatever the
-//!   device's robustness. It needs no feature past the directory's own storage buffer.
+//!   below it and 0 at or past it (a null entry), so no read leaves the record. It needs no
+//!   feature past the directory's own storage buffer, on every device.
 //! - **Addressed**. Under `LoweringInputs::addressed_function_tables`, the variant a shape whose
 //!   listed tables may pass `maxStorageBufferRange` asks for, the directory's entry of an id holds
 //!   the device address of the table's words in its element and flags words (low, then high), and
@@ -41,8 +33,8 @@
 //!   against the table's size word (word 1): a header word, or an entry below the size, and 0 past
 //!   it, so no read leaves the table's words, whatever their length. The null entry (address 0)
 //!   reads 0, its loads taken at the directory's last entry's address (a listed table's) and
-//!   dropped, so no load takes the null address. It declares neither the array nor the snapshot,
-//!   and needs device addresses.
+//!   dropped, so no load takes the null address. It declares no snapshot, and needs device
+//!   addresses.
 
 use std::borrow::Cow;
 
@@ -53,19 +45,16 @@ use crate::error::{Error, Feature, Unsupported};
 use crate::lower::arith::legal;
 use crate::lower::emit::EmitCx;
 use crate::lower::select::{DescriptorCounts, Plan, SelectCx};
-use crate::memory::contain::{self, Check};
 use crate::memory::handles::{self, EntryField};
 use crate::memory::leaf::{k32, WordMem};
 use crate::memory::views::{self, View};
 use crate::pipeline::facts::RuntimeFact;
-use crate::pipeline::sym::{HandleClass, ResourceKind, ResourceSlot, Stage, SyntheticBinding};
+use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage, SyntheticBinding};
 use crate::spirv::builder::constructs::{ArmEnd, ArmFn};
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
-use crate::spirv::ids::{FuncId, GlobalId};
-use crate::spirv::ir::{
-    natural_layout, BinOp, ConvOp, LayoutRule, MemAccess, StorageClass, Type as SType,
-};
+use crate::spirv::ids::FuncId;
+use crate::spirv::ir::{BinOp, ConvOp, Type as SType};
 
 use super::handle::HandleIds;
 use super::psb::{k64, PsbMem};
@@ -73,10 +62,7 @@ use super::psb::{k64, PsbMem};
 /// Where a function's table reads find the tables' words.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TableWords {
-    /// The heap's function-table array, at the element the directory gives an id.
-    Heap,
-    /// The stage's function-table snapshot, at the word offset the directory gives an id, on a
-    /// device without the array's features.
+    /// The stage's function-table snapshot, at the word offset the directory gives an id.
     Snapshot,
     /// The device address the directory's entry of an id holds, under
     /// `LoweringInputs::addressed_function_tables`.
@@ -100,39 +86,31 @@ pub struct TableWord {
     pub id: ValueId,
     /// The `i32` word number.
     pub word: ValueId,
-    /// How the id is held and where the words are.
+    /// How the id is held and where the words are: a snapshot read is checked against its
+    /// record's count, an addressed read against its table's size word.
     pub reads: TableReads,
-    /// A heap read is checked against the element's length (in-shader containment); a snapshot read
-    /// is always checked against its record's count, and an addressed read against its table's size
-    /// word.
-    pub checked: bool,
 }
 
 impl TableWord {
     /// The census name.
     pub fn name(&self) -> Cow<'static, str> {
-        match (self.reads.words, self.checked) {
-            (TableWords::Snapshot, _) => "access.function_table.word.snapshot".into(),
-            (TableWords::Addressed, _) => "access.function_table.word.addressed".into(),
-            (TableWords::Heap, true) => "access.function_table.word.checked".into(),
-            (TableWords::Heap, false) => "access.function_table.word".into(),
+        match self.reads.words {
+            TableWords::Snapshot => "access.function_table.word.snapshot".into(),
+            TableWords::Addressed => "access.function_table.word.addressed".into(),
         }
     }
 
-    /// An upper estimate of the SPIR-V words one read emits: the id's two words, the search's call,
-    /// the element's and the word's access chains, and the load, plus the length and two selects of
-    /// a checked read; a snapshot read's two loads, its count's compare, two adds and two selects;
-    /// an addressed read's four entry fields (its entry's and the last entry's), the table's
+    /// An upper estimate of the SPIR-V words one read emits: the id's two words and the search's
+    /// call, then a snapshot read's two loads, its count's compare, two adds and two selects; or an
+    /// addressed read's four entry fields (its entry's and the last entry's), the table's
     /// length, the addresses' widening, tests and select, the branch around the reads, the size's
     /// and the word's loads at their address, and the checks' compares and selects. The search is
     /// the module's routine, counted once ([`routine_words`]).
     pub fn words(&self) -> u32 {
         let read = 64;
-        match (self.reads.words, self.checked) {
-            (TableWords::Snapshot, _) => read + 40,
-            (TableWords::Addressed, _) => read + 4 * handles::ENTRY_FIELD_WORDS + 160,
-            (TableWords::Heap, true) => read + 24,
-            (TableWords::Heap, false) => read,
+        match self.reads.words {
+            TableWords::Snapshot => read + 40,
+            TableWords::Addressed => read + 4 * handles::ENTRY_FIELD_WORDS + 160,
         }
     }
 }
@@ -141,8 +119,8 @@ impl TableWord {
 /// words are.
 #[derive(Clone, Copy, Debug)]
 pub struct FunctionTables {
-    /// `fn(lo: u32, hi: u32) -> u32`, the heap element (or snapshot offset, or directory entry
-    /// of an addressed read) of a table's resource id ([`handles::define_lookup`]).
+    /// `fn(lo: u32, hi: u32) -> u32`, the snapshot offset (or the directory entry of an addressed
+    /// read) of a table's resource id ([`handles::define_lookup`]).
     pub lookup: FuncId,
     /// The tables' words.
     pub words: DeclaredWords,
@@ -151,8 +129,6 @@ pub struct FunctionTables {
 /// The declared home of the tables' words.
 #[derive(Clone, Copy, Debug)]
 pub enum DeclaredWords {
-    /// The set-1 array of the tables' word buffers.
-    Heap(GlobalId),
     /// The stage's function-table snapshot, a word view.
     Snapshot(View),
     /// The directory itself, whose entries hold the tables' device addresses.
@@ -177,32 +153,10 @@ pub fn snapshot_symbol(stage: Stage) -> ResourceSlot {
     }
 }
 
-/// The binding symbol of the heap's function-table array as `stage` declares it.
-pub fn heap_symbol(stage: Stage) -> ResourceSlot {
-    ResourceSlot {
-        stage,
-        kind: ResourceKind::Heap(HandleClass::FunctionTable),
-        index: 0,
-    }
-}
-
-/// Whether `cx`'s profile has the four features the heap's function-table array needs:
-/// `runtimeDescriptorArray`, `descriptorBindingPartiallyBound`,
-/// `shaderStorageBufferArrayNonUniformIndexing`, and
-/// `descriptorBindingStorageBufferUpdateAfterBind`.
-fn has_array(cx: &SelectCx<'_>) -> bool {
-    let d = &cx.profile.fields().descriptors;
-    d.runtime_descriptor_array
-        && d.partially_bound
-        && d.non_uniform_storage_buffer
-        && d.update_after_bind_storage_buffer
-}
-
 /// Select the read of `inst` when it is a [`FunctionTable::Word`] call, `None` otherwise. The
-/// first plans the stage's directory and heap array (one more storage descriptor of the stage;
-/// the heap array is link's), or, on a device without the array's features, its directory and
-/// snapshot (two), or under `LoweringInputs::addressed_function_tables` its directory alone, and
-/// states `RuntimeFact::FunctionTableRange`.
+/// first plans the stage's directory and snapshot (two storage descriptors of the stage), or under
+/// `LoweringInputs::addressed_function_tables` its directory alone, and states
+/// `RuntimeFact::FunctionTableRange`.
 pub fn select(cx: &mut SelectCx<'_>, inst: &Inst) -> Result<Option<TableWord>, Error> {
     let InstKind::Call(call) = &inst.kind else {
         return Ok(None);
@@ -229,10 +183,9 @@ pub fn select(cx: &mut SelectCx<'_>, inst: &Inst) -> Result<Option<TableWord>, E
         )
         .into());
     }
-    let (words, storage_buffers) = match (addressed, has_array(cx)) {
-        (true, _) => (TableWords::Addressed, 1),
-        (false, true) => (TableWords::Heap, 1),
-        (false, false) => (TableWords::Snapshot, 2),
+    let (words, storage_buffers) = match addressed {
+        true => (TableWords::Addressed, 1),
+        false => (TableWords::Snapshot, 2),
     };
     let reads = TableReads { ids, words };
     if cx.families.access.function_tables.is_none() {
@@ -253,7 +206,6 @@ pub fn select(cx: &mut SelectCx<'_>, inst: &Inst) -> Result<Option<TableWord>, E
         id: value(id)?,
         word: value(word)?,
         reads,
-        checked: words != TableWords::Heap || contain::encoding(cx.profile) == Check::InShader,
     }))
 }
 
@@ -270,18 +222,17 @@ pub fn routine_words(tables: Option<TableReads>) -> impl Iterator<Item = (&'stat
 }
 
 /// The directory search's form for `reads`: an addressed read takes the entry's index, whose
-/// element and flags words hold the address; the others the element.
+/// element and flags words hold the address; a snapshot read the element, its record's offset.
 fn lookup_form(reads: TableReads) -> handles::Lookup {
     match reads.words {
         TableWords::Addressed => handles::Lookup::Entry,
-        TableWords::Heap | TableWords::Snapshot => handles::Lookup::Element,
+        TableWords::Snapshot => handles::Lookup::Element,
     }
 }
 
 /// Declare the stage's function-table directory (an entry array, or a word view on a profile
-/// without `shaderInt64`), the module's search of it, and the heap's function-table array or
-/// the stage's snapshot (neither for an addressed read), when the plan reads a table by its
-/// resource id.
+/// without `shaderInt64`), the module's search of it, and the stage's snapshot (none for an
+/// addressed read), when the plan reads a table by its resource id.
 pub fn declare(mb: &mut ModuleBuilder, plan: &Plan) -> BResult<Option<FunctionTables>> {
     let Some(reads) = plan.families.access.function_tables else {
         return Ok(None);
@@ -298,40 +249,14 @@ pub fn declare(mb: &mut ModuleBuilder, plan: &Plan) -> BResult<Option<FunctionTa
             words: DeclaredWords::Addressed(directory),
         }));
     }
-    if reads.words == TableWords::Snapshot {
-        let view = views::declare_at(mb, snapshot_symbol(plan.stage), views::ViewKind::Storage)?;
-        return Ok(Some(FunctionTables {
-            lookup,
-            words: DeclaredWords::Snapshot(view),
-        }));
-    }
-    let u32_ty = mb.ty(SType::Int {
-        width: 32,
-        signed: false,
-    })?;
-    let words = mb.ty(SType::RuntimeArray {
-        elem: u32_ty,
-        stride: Some(4),
-    })?;
-    let layout = natural_layout(mb.types(), LayoutRule::Std430, true, &[words])?;
-    let block = mb.ty(SType::Struct {
-        members: [words].into(),
-        layout: Some(layout),
-    })?;
-    let array = mb.ty(SType::RuntimeArray {
-        elem: block,
-        stride: None,
-    })?;
-    let heap = mb.resource(heap_symbol(plan.stage), StorageClass::StorageBuffer, array)?;
+    let view = views::declare_at(mb, snapshot_symbol(plan.stage), views::ViewKind::Storage)?;
     Ok(Some(FunctionTables {
         lookup,
-        words: DeclaredWords::Heap(heap),
+        words: DeclaredWords::Snapshot(view),
     }))
 }
 
-/// Emit read `s`, defining value `vid`: the id's element in the directory, then the word of that
-/// element of the heap's function-table array; or the id's record offset `e` in the directory,
-/// then, below the record's count `snapshot[e]`, the snapshot's word `e + 1 + w`, and 0 past it;
+/// Emit read `s`, defining value `vid`: the id's record offset `e` in the directory, then, below the record's count `snapshot[e]`, the snapshot's word `e + 1 + w`, and 0 past it;
 /// or the address the id's directory entry holds, then its word `w` below the table's words (the
 /// size word's 2 more), and 0 past them or for the null address ([`addressed_word`]).
 pub fn emit(
@@ -365,14 +290,12 @@ pub fn emit(
     };
     let word = cx.operand(fb, s.word)?;
     let zero = k32(fb, 0)?;
-    let heap = match tables.words {
-        DeclaredWords::Heap(heap) => heap,
+    let w = match tables.words {
         DeclaredWords::Addressed(directory) => {
             let Some(w) = addressed_word(fb, directory, element, word)? else {
                 return Err(cx.fail("an addressed table read without its merged word"));
             };
-            cx.define(vid, w);
-            return Ok(());
+            w
         }
         DeclaredWords::Snapshot(view) => {
             // The record's count, then its word `w` below it: every read stays in the record.
@@ -383,25 +306,7 @@ pub fn emit(
             let at = fb.binary(BinOp::IAdd, first, word)?;
             let at = fb.select(inside, at, zero)?;
             let w = views::read_word(fb, view, at)?;
-            let w = fb.select(inside, w, zero)?;
-            cx.define(vid, w);
-            return Ok(());
-        }
-    };
-    let base = fb.module().global_value(heap)?;
-    let table = fb.access_chain_non_uniform(base, element)?;
-    let w = match s.checked {
-        true => {
-            let len = fb.array_length(table, 0)?;
-            let inside = fb.binary(BinOp::ULessThan, word, len)?;
-            let at = fb.select(inside, word, zero)?;
-            let p = fb.access_chain(table, &[zero, at])?;
-            let w = fb.load(p, MemAccess::default())?;
             fb.select(inside, w, zero)?
-        }
-        false => {
-            let p = fb.access_chain(table, &[zero, word])?;
-            fb.load(p, MemAccess::default())?
         }
     };
     cx.define(vid, w);

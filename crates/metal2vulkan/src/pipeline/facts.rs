@@ -398,9 +398,9 @@ pub enum RuntimeFact {
     /// after the access, from `SpecKey::ConstantLanes`, which the binder sets from the bound
     /// texture's `MTLTexture.pixelFormat` and `swizzle` (0 where `isSparse` is false).
     ConstantLanes { slot: SlotRef },
-    /// The function reads visible-function tables by their resource ids: a listed table whose words
-    /// pass `maxStorageBufferRange` cannot be the function-table array's element, nor the snapshot
-    /// hold every listed table's words, so the plan of a shape whose tables may pass it
+    /// The function reads visible-function tables by their resource ids: the snapshot cannot hold
+    /// a listed table whose words pass `maxStorageBufferRange`, so the plan of a shape whose tables
+    /// may pass it
     /// (`FunctionTablesShape::bytes_class`) asks for the variant that reads every table's words
     /// through its device address (`VariantKey::addressed_function_tables`). `addressed` states
     /// that this compile is that variant.

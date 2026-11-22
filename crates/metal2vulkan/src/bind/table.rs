@@ -113,9 +113,9 @@ impl FunctionTableWords {
     }
 }
 
-/// The function-table snapshot: on a device without the set-1 function-table array's features, the
-/// words of a command's listed tables (`BindState::function_tables`) in one read-only storage
-/// buffer, which the consumer writes as the command's command buffer commits
+/// The function-table snapshot: the words of a command's listed tables
+/// (`BindState::function_tables`) in one read-only storage buffer, which the consumer writes as the
+/// command's command buffer commits
 /// ([`WriteSource::FunctionTableSnapshot`](crate::bind::WriteSource::FunctionTableSnapshot)).
 ///
 /// Word 0 is the null table's record: a word count of 0. Listed table `i`'s record follows the

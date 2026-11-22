@@ -58,7 +58,7 @@
 //! [`sampler_desc`] gives the Vulkan sampler a plan's sampler write needs, [`heap_classes`] the
 //! classes of the handle heap's arrays on a profile, [`FunctionTableWords`] the words of a
 //! visible-function table's buffer, and [`FunctionTableSnapshot`] the one buffer of a command's
-//! tables' words on a device without the function-table array's features. A plan writes an
+//! tables' words. A plan writes an
 //! acceleration structure as the top-level structure the consumer builds for it:
 //! [`instance_record`] gives each Metal instance's record, [`primitive_wrap`] the one instance over
 //! a bound primitive structure, and [`geometry_flags`] and [`geometry_table_offset`] a primitive

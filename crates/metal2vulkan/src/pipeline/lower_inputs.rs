@@ -541,8 +541,8 @@ pub struct LoweringInputs {
     /// table's device address (`VariantKey::addressed_function_tables`): the directory's entry
     /// of the id holds the address of the table's words in place of an element, and a read of
     /// word `w` is checked against the table's size word, so a table whose words pass
-    /// `maxStorageBufferRange` is read whole. It declares neither the function-table array nor
-    /// the snapshot, and states `RuntimeFact::FunctionTableRange` with `addressed`. It needs
+    /// `maxStorageBufferRange` is read whole. It declares no snapshot, and states
+    /// `RuntimeFact::FunctionTableRange` with `addressed`. It needs
     /// device addresses (`Unsupported{BufferRange}` without them). A function that reads no
     /// table by resource id compiles as without it.
     #[cfg_attr(feature = "serde", serde(default))]

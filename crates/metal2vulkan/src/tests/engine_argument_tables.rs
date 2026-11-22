@@ -7,19 +7,14 @@
 //! select of two members. The functions are `engine/visible_table_functions`'s, which the
 //! pipeline links.
 //!
-//! - The kernels compile and pass L3 on every committed profile: they read the set-1
-//!   function-table array where the profile has `runtimeDescriptorArray`,
-//!   `descriptorBindingPartiallyBound`, `shaderStorageBufferArrayNonUniformIndexing`, and
-//!   `descriptorBindingStorageBufferUpdateAfterBind`, and the stage's function-table snapshot
-//!   where it lacks one (the 2023 desktop baseline and the two Vulkan 1.2 floors). A call nothing
-//!   linked can answer compiles too: with no handle to hold, every entry is null.
-//! - Through the public API, the plan writes the set-1 function-table array (the zero buffer at
-//!   element 0, `FunctionTable{index}` at every other element of the class) and the stage's
-//!   directory, whose bytes per dispatch list each listed table's nonzero id with its element;
-//!   on a device without the features, the snapshot (`FunctionTableSnapshot`) and the directory,
-//!   whose bytes give each id its record's word offset by the listed sizes.
-//! - On the CPU interpreter, fed the binder's directory bytes and each listed table's words at
-//!   its element, or the snapshot of the tables' words, every profile's kernels compute what
+//! - The kernels compile and pass L3 on every committed profile, reading the stage's
+//!   function-table snapshot beside its directory. A call nothing linked can answer compiles too:
+//!   with no handle to hold, every entry is null.
+//! - Through the public API, the plan writes the snapshot (`FunctionTableSnapshot`) and the
+//!   stage's directory, whose bytes per dispatch give each listed table's nonzero id its record's
+//!   word offset by the listed sizes.
+//! - On the CPU interpreter, fed the binder's directory bytes and the snapshot of the tables'
+//!   words, every profile's kernels compute what
 //!   Metal does: the entry's function (zero for a function of another type), a null entry, an empty
 //!   table, and a null table for the null id and for an id no listed table has. No GPU is used.
 //!
@@ -29,22 +24,21 @@ use std::path::Path;
 
 use crate::bind::{
     ArgumentFunctionTable, BindState, DescriptorBytes, Dispatch, FunctionTableSnapshot,
-    FunctionTableWords, HeapPlacement, NeutralResource, WriteSource,
+    FunctionTableWords, HeapPlacement, WriteSource,
 };
 use crate::budget::{Budget, SPIRV_WORDS};
 use crate::cache::VariantKey;
 use crate::device::profile::BufferAccess;
-use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
-use crate::error::{Capability, Error, Feature};
+use crate::error::{Error, Feature};
 use crate::library::{FunctionConstantValues, Library};
-use crate::lower::access::function_table::{directory_symbol, heap_symbol, snapshot_symbol};
+use crate::lower::access::function_table::{directory_symbol, snapshot_symbol};
 use crate::lower::select::LowerInputs;
 use crate::memory::handles::TABLE_ENTRY_BYTES;
 use crate::pipeline::compile::{compile_bitcode_linked, EntryRef, LinkedSource};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::layout::BindingSource;
-use crate::pipeline::sym::{HandleClass, ResourceKind, ResourceSlot, Stage, SyntheticBinding};
+use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage, SyntheticBinding};
 use crate::pipeline::testing::{
     engine_dir, link_and_validate, llvm_assemble, meter, typed_module_linked, AssembleError,
 };
@@ -120,55 +114,8 @@ fn compile(
     )
 }
 
-/// The features of the four a table read by its id needs that `p` lacks.
-fn missing(p: &DeviceProfile) -> Vec<Capability> {
-    let d = &p.fields().descriptors;
-    [
-        (
-            d.runtime_descriptor_array,
-            VkFeature::RuntimeDescriptorArray,
-        ),
-        (
-            d.partially_bound,
-            VkFeature::DescriptorBindingPartiallyBound,
-        ),
-        (
-            d.non_uniform_storage_buffer,
-            VkFeature::ShaderStorageBufferArrayNonUniformIndexing,
-        ),
-        (
-            d.update_after_bind_storage_buffer,
-            VkFeature::DescriptorBindingStorageBufferUpdateAfterBind,
-        ),
-    ]
-    .into_iter()
-    .filter(|(has, _)| !has)
-    .map(|(_, f)| Capability::Feature(f))
-    .collect()
-}
-
-/// Every committed profile that reads tables by id from the set-1 array.
-pub(super) fn capable_profiles() -> Vec<(String, DeviceProfile)> {
-    committed_profiles()
-        .expect("profiles")
-        .into_iter()
-        .filter(|(_, p)| missing(p).is_empty())
-        .collect()
-}
-
-/// Every committed profile that reads tables by id from a snapshot.
-fn snapshot_profiles() -> Vec<(String, DeviceProfile)> {
-    committed_profiles()
-        .expect("profiles")
-        .into_iter()
-        .filter(|(_, p)| !missing(p).is_empty())
-        .collect()
-}
-
-/// The kernels compile and validate on every committed profile: where the device has the four
-/// features they declare the heap's function-table array and no snapshot, and where it lacks
-/// one (the runtime's floor, without non-uniform storage-buffer indexing and storage-buffer
-/// update-after-bind) the stage's snapshot and no array, beside the directory.
+/// The kernels compile and validate on every committed profile, declaring the stage's snapshot
+/// beside the directory.
 #[test]
 fn argument_tables_compile_on_every_profile() {
     let Some((caller, functions)) = fixtures() else {
@@ -176,35 +123,21 @@ fn argument_tables_compile_on_every_profile() {
     };
     let none = FunctionConstantValues::defaults();
     let linked = sources(&functions, &none);
-    let mut snapshots = Vec::new();
     for (stem, p) in committed_profiles().expect("profiles") {
-        let snapshot = !missing(&p).is_empty();
         for entry in KERNELS {
             let a = compile(&caller, entry, &linked, &p)
                 .unwrap_or_else(|e| panic!("{stem} {entry}: {e}"));
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem} {entry}: L3: {e}"));
             let declares = |slot| a.interface.descriptors.iter().any(|d| d.slot == slot);
             assert!(declares(directory_symbol(Stage::Kernel)), "{stem} {entry}");
-            assert_eq!(
-                (
-                    declares(heap_symbol(Stage::Kernel)),
-                    declares(snapshot_symbol(Stage::Kernel))
-                ),
-                (!snapshot, snapshot),
-                "{stem} {entry}"
-            );
+            assert!(declares(snapshot_symbol(Stage::Kernel)), "{stem} {entry}");
             let census = &a.strategies.entries;
-            assert_eq!(
+            assert!(
                 census.contains_key("access.function_table.word.snapshot"),
-                snapshot,
                 "{stem} {entry}"
             );
-        }
-        if snapshot {
-            snapshots.push(stem);
         }
     }
-    assert_eq!(snapshots, ["runtime-floor"]);
 }
 
 /// A call through a table loaded from an argument buffer that no linked function can answer
@@ -294,22 +227,6 @@ pub(super) fn one_group() -> Dispatch {
     }
 }
 
-/// The `(set, binding)` of the pipeline's set-1 function-table array and of its kernel
-/// directory.
-pub(super) fn table_layout(p: &ComputePipeline) -> ((u32, u32), (u32, u32)) {
-    let array = p.layout.sets[1]
-        .bindings
-        .iter()
-        .find(|b| b.source == BindingSource::Heap(HandleClass::FunctionTable))
-        .map(|b| {
-            assert_eq!(b.ty, vk::DescriptorType::STORAGE_BUFFER);
-            assert_eq!(b.flags, super::engine_handles::heap_flags(&p.requirements));
-            (1, b.binding)
-        })
-        .expect("a function-table array");
-    (array, directory_binding(p))
-}
-
 /// The `(set, binding)` of the pipeline's kernel synthetic binding `binding`.
 fn synthetic(p: &ComputePipeline, binding: SyntheticBinding) -> Option<(u32, u32)> {
     p.layout.sets[0]
@@ -325,7 +242,7 @@ fn synthetic(p: &ComputePipeline, binding: SyntheticBinding) -> Option<(u32, u32
 }
 
 /// The `(set, binding)` of the pipeline's kernel function-table directory.
-fn directory_binding(p: &ComputePipeline) -> (u32, u32) {
+pub(super) fn directory_binding(p: &ComputePipeline) -> (u32, u32) {
     synthetic(p, SyntheticBinding::FunctionTableDirectory).expect("a function-table directory")
 }
 
@@ -349,110 +266,18 @@ fn entries(bytes: &[u8]) -> Vec<(u64, u32, u32)> {
         .collect()
 }
 
-/// The plan writes element 0 of the function-table array with the zero buffer (the null table)
-/// and every other element of the class (16 entries for up to 15 tables) with the listed table
-/// one before it; the directory is a handle table of as many entries, whose bytes per dispatch
-/// are each listed nonzero id with its element, sorted after leading null entries. A table made
-/// or released replans only when the count leaves the class, and a dispatch whose state lists
-/// more tables than the plan's class holds is refused.
-#[test]
-fn the_plan_writes_the_tables_and_their_directory() {
-    let Some((caller, functions)) = fixtures() else {
-        return;
-    };
-    let dev = device("moltenvk-m3");
-    let pipe = pipeline(&dev, &caller, &functions, ONE);
-    let (array, directory) = table_layout(&pipe);
-    let mut state = state();
-    // A table without an id is listed but named by nothing.
-    state.function_tables.push(ArgumentFunctionTable::new(0, 0));
-    let plan = pipe.plan(&dev, &state.shape()).expect("plan");
-    let mut writes: Vec<_> = plan
-        .descriptors
-        .iter()
-        .filter(|d| (d.set, d.binding) == array)
-        .collect();
-    writes.sort_by_key(|d| d.array_element);
-    assert_eq!(writes.len(), 16);
-    for (e, w) in writes.iter().enumerate() {
-        assert_eq!(w.array_element as usize, e, "one write per element");
-        assert_eq!(w.ty, vk::DescriptorType::STORAGE_BUFFER);
-        match e {
-            0 => assert!(matches!(
-                w.source,
-                WriteSource::Neutral(NeutralResource::ZeroBuffer { .. })
-            )),
-            _ => assert_eq!(
-                w.source,
-                WriteSource::FunctionTable {
-                    index: e as u32 - 1
-                }
-            ),
-        }
-    }
-    let dir = plan
-        .descriptors
-        .iter()
-        .find(|d| (d.set, d.binding) == directory)
-        .expect("the directory's write");
-    assert_eq!(
-        dir.source,
-        WriteSource::HandleTable {
-            stage: Stage::Kernel,
-            bytes_len: 16 * TABLE_ENTRY_BYTES,
-        }
-    );
-    let cmds = plan
-        .instantiate_dispatch(&state, &one_group())
-        .expect("dispatch");
-    let mut want = vec![(0, 0, 0); 13];
-    want.extend([(U, 2, 0), (E, 3, 0), (T, 1, 0)]);
-    assert_eq!(entries(bytes_at(&cmds.descriptor_bytes, directory)), want);
-
-    // Up to 15 tables keep the class; a 16th leaves it.
-    let mut fifteen = state.clone();
-    fifteen
-        .function_tables
-        .extend((0..11).map(|i| ArgumentFunctionTable::new(0x100 + i, 1)));
-    assert_eq!(fifteen.shape(), state.shape());
-    assert!(plan.instantiate_dispatch(&fifteen, &one_group()).is_ok());
-    let mut sixteen = fifteen.clone();
-    sixteen
-        .function_tables
-        .push(ArgumentFunctionTable::new(0x200, 1));
-    assert_ne!(sixteen.shape(), state.shape());
-    assert!(plan.instantiate_dispatch(&sixteen, &one_group()).is_err());
-    let wider = pipe.plan(&dev, &sixteen.shape()).expect("plan");
-    assert_eq!(
-        wider
-            .descriptors
-            .iter()
-            .filter(|d| (d.set, d.binding) == array)
-            .count(),
-        32
-    );
-}
-
-/// On a device without the array's features the plan writes no function-table array: the kernel's
-/// snapshot is `FunctionTableSnapshot`, and its directory, a handle table of the class's entries,
-/// gives each listed nonzero id its record's word offset in the snapshot of the listed sizes,
-/// whatever the heap placement. A 16th table leaves the class as it does with the array.
+/// On every device the kernel's snapshot is `FunctionTableSnapshot`, and its directory, a handle
+/// table of the class's entries, gives each listed nonzero id its record's word offset in the
+/// snapshot of the listed sizes, whatever the heap placement. Up to 15 listed tables keep the
+/// class; a 16th leaves it, and a dispatch of the old plan over it is refused.
 #[test]
 fn the_plan_writes_the_snapshot_and_its_directory() {
     let Some((caller, functions)) = fixtures() else {
         return;
     };
-    for stem in ["runtime-floor"] {
+    for stem in ["runtime-floor", "moltenvk-m3"] {
         let dev = device(stem);
         let pipe = pipeline(&dev, &caller, &functions, ONE);
-        assert!(
-            pipe.layout
-                .sets
-                .iter()
-                .flat_map(|s| &s.bindings)
-                .all(|b| b.source != BindingSource::Heap(HandleClass::FunctionTable)),
-            "{stem}: a function-table array"
-        );
         let snapshot =
             synthetic(&pipe, SyntheticBinding::FunctionTableSnapshot).expect("a snapshot");
         let directory = directory_binding(&pipe);
@@ -512,8 +337,6 @@ fn the_plan_writes_the_snapshot_and_its_directory() {
 /// Where a dispatch's tables' words are.
 #[derive(Clone, Copy)]
 enum Words<'a> {
-    /// The heap's function-table array holds the zero buffer, then these at elements 1, 2, ...
-    Heap(&'a [Vec<u8>]),
     /// The stage's function-table snapshot holds these bytes.
     Snapshot(&'a [u8]),
     /// These words lie at these device addresses.
@@ -545,14 +368,6 @@ fn dispatch(
         buffer(directory_symbol(Stage::Kernel), directory.to_vec()),
     ];
     match words {
-        Words::Heap(tables) => {
-            buffers.push(buffer(heap_symbol(Stage::Kernel), vec![0; 16]));
-            buffers.extend(
-                tables
-                    .iter()
-                    .map(|t| buffer(heap_symbol(Stage::Kernel), t.clone())),
-            );
-        }
         Words::Snapshot(bytes) => {
             buffers.push(buffer(snapshot_symbol(Stage::Kernel), bytes.to_vec()));
         }
@@ -621,11 +436,10 @@ fn directory_of(stem: &str, caller: &[u8], functions: &[u8]) -> Vec<u8> {
     bytes_at(&cmds.descriptor_bytes, directory).to_vec()
 }
 
-/// On every capable profile, each kernel calls the entry the table its argument buffer names
-/// holds, with the binder's directory bytes: a listed table by its id (the high word too), a null
-/// entry, an empty table, and a null table for the null id and for an id no listed table has. On
-/// every profile without the array's features, the same through the snapshot of the tables'
-/// words and the directory of their offsets there.
+/// On every committed profile, each kernel calls the entry the table its argument buffer names
+/// holds, through the snapshot of the tables' words and the binder's directory of their offsets
+/// there: a listed table by its id (the high word too), a null entry, an empty table, and a null
+/// table for the null id and for an id no listed table has.
 #[test]
 fn an_argument_table_call_calls_the_entry_its_table_holds() {
     let Some((caller, functions)) = fixtures() else {
@@ -637,8 +451,6 @@ fn an_argument_table_call_calls_the_entry_its_table_holds() {
         table_bytes(&h, &U_ENTRIES),
         table_bytes(&h, &[]),
     ];
-    let heap = directory_of("moltenvk-m3", &caller, &functions);
-    let snapshot_directory = directory_of("runtime-floor", &caller, &functions);
     let snapshot = FunctionTableSnapshot::of(state().function_tables.iter().map(|f| f.size))
         .expect("snapshot")
         .bytes(tables.iter().map(Vec::as_slice))
@@ -646,15 +458,9 @@ fn an_argument_table_call_calls_the_entry_its_table_holds() {
     let none = FunctionConstantValues::defaults();
     let linked = sources(&functions, &none);
     const N: u32 = 40;
-    let profiles = capable_profiles()
-        .into_iter()
-        .map(|(stem, p)| (stem, p, &heap, Words::Heap(&tables)))
-        .chain(
-            snapshot_profiles()
-                .into_iter()
-                .map(|(stem, p)| (stem, p, &snapshot_directory, Words::Snapshot(&snapshot))),
-        );
-    for (stem, p, directory, words) in profiles {
+    let words = Words::Snapshot(&snapshot);
+    for (stem, p) in committed_profiles().expect("profiles") {
+        let directory = &directory_of(&stem, &caller, &functions);
         let module = |entry| {
             typed_module_linked(&caller, entry, &p, &linked)
                 .unwrap_or_else(|e| panic!("{stem} {entry}: {e}"))
@@ -708,7 +514,7 @@ fn without_listed_tables_every_id_reads_the_null_table() {
     };
     let dev = device("moltenvk-m3");
     let pipe = pipeline(&dev, &caller, &functions, ONE);
-    let (_, directory) = table_layout(&pipe);
+    let directory = directory_binding(&pipe);
     let state = BindState::default();
     let plan = pipe.plan(&dev, &state.shape()).expect("plan");
     let cmds = plan
@@ -721,9 +527,13 @@ fn without_listed_tables_every_id_reads_the_null_table() {
     let p = crate::pipeline::testing::profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES)
         .expect("profile");
     let (_, one) = typed_module_linked(&caller, ONE, &p, &linked).expect("module");
+    let null = FunctionTableSnapshot::of([])
+        .expect("snapshot")
+        .bytes([])
+        .expect("snapshot bytes");
     for id in [T, 0] {
         assert_eq!(
-            dispatch(&one, 4, ids(&[id]), &directory, Words::Heap(&[])),
+            dispatch(&one, 4, ids(&[id]), &directory, Words::Snapshot(&null)),
             [0xffff_ffff; 4],
             "{id:#x}"
         );
@@ -781,8 +591,7 @@ fn needs_device_addresses(e: &Error) -> bool {
 /// A shape whose listed tables may pass the device's `maxStorageBufferRange` (lavapipe's 128 MiB)
 /// asks for the variant that reads them at their device addresses, on a device with device
 /// addresses; tables below 128 MiB, which every device's range reaches, ask for none, nor do they
-/// where the range is 4 GiB. The variant declares the directory alone (no function-table array, no
-/// snapshot) and states `FunctionTableRange` with `addressed`; its plan keeps the key whatever the
+/// where the range is 4 GiB. The variant declares the directory alone (no snapshot) and states `FunctionTableRange` with `addressed`; its plan keeps the key whatever the
 /// shape, and writes each listed table's address into the directory, low word as the element and
 /// high word as the flags. A listed table without an address is refused, as is a directory that
 /// lists no table (its null entry's loads take a listed table's address). Without device addresses
@@ -819,15 +628,6 @@ fn tables_past_the_storage_range_are_read_at_their_addresses() {
             continue;
         }
         let compiled = compiled.unwrap_or_else(|e| panic!("{stem}: {e}"));
-        assert!(
-            compiled
-                .layout
-                .sets
-                .iter()
-                .flat_map(|s| &s.bindings)
-                .all(|b| b.source != BindingSource::Heap(HandleClass::FunctionTable)),
-            "{stem}: a function-table array"
-        );
         assert_eq!(
             synthetic(&compiled, SyntheticBinding::FunctionTableSnapshot),
             None,

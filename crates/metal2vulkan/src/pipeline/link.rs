@@ -22,10 +22,8 @@
 //!   `maxPerStageUpdateAfterBindResources`, each split evenly over the classes of its kind, with
 //!   a fragment stage's eight color attachments reserved), at most the handle table's reach
 //!   (`memory::handles::TABLE_CAPACITY`). The binder writes element 0 of each array with its
-//!   class's neutral and every resident texture at its own element. The function tables' array
-//!   (`HandleClass::FunctionTable`) is a storage-buffer array, which needs
-//!   `descriptorBindingStorageBufferUpdateAfterBind` and counts in the storage-buffer limits. A
-//!   texture buffer class's array is a uniform texel buffer array (sampled) or a storage texel
+//!   class's neutral and every resident texture at its own element. A texture buffer class's
+//!   array is a uniform texel buffer array (sampled) or a storage texel
 //!   buffer array (storage), which needs the type's update-after-bind feature and counts in the
 //!   sampled-image or the storage-image limits, as Vulkan counts texel buffers.
 //! - **Specialization ids** are numbered densely in [`SpecKey`] order over the pipeline; a key two
@@ -1158,10 +1156,6 @@ fn heap_layout_lacks(p: &DeviceProfile, ty: vk::DescriptorType) -> Option<Vec<Vk
             d.update_after_bind_storage_image,
             VkFeature::DescriptorBindingStorageImageUpdateAfterBind,
         ),
-        vk::DescriptorType::STORAGE_BUFFER => (
-            d.update_after_bind_storage_buffer,
-            VkFeature::DescriptorBindingStorageBufferUpdateAfterBind,
-        ),
         vk::DescriptorType::UNIFORM_TEXEL_BUFFER => (
             d.update_after_bind_uniform_texel_buffer,
             VkFeature::DescriptorBindingUniformTexelBufferUpdateAfterBind,
@@ -1242,7 +1236,6 @@ fn heap_capacity(
     let kind = |ty: vk::DescriptorType| match ty {
         vk::DescriptorType::SAMPLER => SAMPLERS,
         vk::DescriptorType::STORAGE_IMAGE | vk::DescriptorType::STORAGE_TEXEL_BUFFER => IMAGES,
-        vk::DescriptorType::STORAGE_BUFFER => STORAGE,
         _ => SAMPLED,
     };
     let mut capacity = u64::from(crate::memory::handles::TABLE_CAPACITY);
@@ -1313,7 +1306,7 @@ fn heap_capacity(
 }
 
 /// The kinds of heap arrays, in the order [`heap_capacity`] bounds them.
-const HEAP_KINDS: [usize; 4] = [SAMPLERS, SAMPLED, IMAGES, STORAGE];
+const HEAP_KINDS: [usize; 3] = [SAMPLERS, SAMPLED, IMAGES];
 
 /// The update-after-bind limits on `l` of heap arrays of kind `k`, one of [`HEAP_KINDS`]: the
 /// set's (`maxDescriptorSetUpdateAfterBind*`), then a stage's
@@ -1340,7 +1333,7 @@ fn heap_limits(l: &crate::device::profile::Limits, k: usize) -> [(VkLimit, u32);
                 l.max_per_stage_descriptor_update_after_bind_sampled_images,
             ),
         ],
-        IMAGES => [
+        _ => [
             (
                 VkLimit::MaxDescriptorSetUpdateAfterBindStorageImages,
                 l.max_descriptor_set_update_after_bind_storage_images,
@@ -1348,16 +1341,6 @@ fn heap_limits(l: &crate::device::profile::Limits, k: usize) -> [(VkLimit, u32);
             (
                 VkLimit::MaxPerStageDescriptorUpdateAfterBindStorageImages,
                 l.max_per_stage_descriptor_update_after_bind_storage_images,
-            ),
-        ],
-        _ => [
-            (
-                VkLimit::MaxDescriptorSetUpdateAfterBindStorageBuffers,
-                l.max_descriptor_set_update_after_bind_storage_buffers,
-            ),
-            (
-                VkLimit::MaxPerStageDescriptorUpdateAfterBindStorageBuffers,
-                l.max_per_stage_descriptor_update_after_bind_storage_buffers,
             ),
         ],
     }

@@ -403,14 +403,9 @@ pub(crate) struct ResourceTemplate {
     /// Each stage's function-table directory.
     #[cfg_attr(feature = "serde", serde(default))]
     pub function_table_directories: Vec<crate::bind::heap::PlannedHandleTable>,
-    /// The tables' shape the function-table array and directories were planned for, when the
-    /// plan has one.
+    /// The tables' shape the function-table directories were planned for, when the plan has one.
     #[cfg_attr(feature = "serde", serde(default))]
     pub function_tables: Option<crate::bind::state::FunctionTablesShape>,
-    /// The directories place each table in the function-table snapshot, not at an element of the
-    /// function-table array.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub function_table_snapshot: bool,
     /// The directories hold each table's device address, not an element or a snapshot offset: the
     /// pipeline reads the tables' words there.
     #[cfg_attr(feature = "serde", serde(default))]
@@ -683,15 +678,6 @@ pub enum WriteSource {
         compare: bool,
         integer: bool,
     },
-    /// Element `index + 1` of the set-1 function-table array: the words of
-    /// `BindState::function_tables[index]` (`pipeline::table`'s layout, as
-    /// [`FunctionTableWords`](crate::bind::FunctionTableWords) encodes them), a read-only
-    /// storage buffer the consumer binds whole, or the zero buffer
-    /// (`NeutralResource::ZeroBuffer`) where the state lists fewer tables: no directory entry
-    /// names that element then. The plan writes every element of its shape's capacity class
-    /// (`FunctionTablesShape::entries`), so the list may grow or shrink within the class without
-    /// a new plan; the consumer resolves each write against the state it binds.
-    FunctionTable { index: u32 },
     /// A patch draw's patch index buffer (`DrawCall::Patches::patch_index`), a read-only storage
     /// buffer of the control stage over the draw's `DescriptorRange`. A draw without one has no range for it, and the consumer binds
     /// the zero buffer of `min_bytes` there (`NeutralResource::ZeroBuffer`'s), whose words the
@@ -706,9 +692,8 @@ pub enum WriteSource {
     /// render area, each `SpecKey::TileThreadgroupLength` bytes), zeroed when the pass begins and
     /// kept across its tile dispatches, bound whole.
     TileMemory { bytes: u64 },
-    /// The function-table snapshot (`SyntheticBinding::FunctionTableSnapshot`) of a device
-    /// without the set-1 function-table array's features: a read-only storage buffer of the
-    /// words of `BindState::function_tables`, laid out as
+    /// The function-table snapshot (`SyntheticBinding::FunctionTableSnapshot`): a read-only
+    /// storage buffer of the words of `BindState::function_tables`, laid out as
     /// [`FunctionTableSnapshot`](crate::bind::FunctionTableSnapshot) of the listed sizes gives
     /// them, bound whole. The consumer writes it as the command's command buffer commits: the
     /// command reads each table's entries as they stand then, where Metal reads them as they

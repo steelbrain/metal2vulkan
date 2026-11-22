@@ -9814,7 +9814,6 @@ variant	metal2vulkan::bind::WriteSource::CombinedImageSampler	CombinedImageSampl
 variant	metal2vulkan::bind::WriteSource::ConstantBlob	ConstantBlob { stage: Stage }
 variant	metal2vulkan::bind::WriteSource::ControlPointIndices	ControlPointIndices
 variant	metal2vulkan::bind::WriteSource::ExecutionStatus	ExecutionStatus
-variant	metal2vulkan::bind::WriteSource::FunctionTable	FunctionTable { index: u32 }
 variant	metal2vulkan::bind::WriteSource::FunctionTableSnapshot	FunctionTableSnapshot
 variant	metal2vulkan::bind::WriteSource::HandleTable	HandleTable { stage: Stage, bytes_len: u32 }
 variant	metal2vulkan::bind::WriteSource::HeapEntry	HeapEntry { class: HandleClass, element: u32, source: HeapSource, view: ImageViewDesc }

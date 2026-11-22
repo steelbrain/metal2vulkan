@@ -189,8 +189,7 @@ pub struct BindState {
     /// listed, resident or not. A function's table names the table of its id here, or misses and
     /// reads the null table. Only the capacity class of the list enters a plan
     /// ([`FunctionTablesShape`]); the ids and sizes are per command, and each table's words are the
-    /// consumer's (`WriteSource::FunctionTable`, or `WriteSource::FunctionTableSnapshot` on a
-    /// device without the function-table array's features, whose directory places each table by the
+    /// consumer's (`WriteSource::FunctionTableSnapshot`, whose directory places each table by the
     /// sizes before it).
     #[cfg_attr(feature = "serde", serde(default))]
     pub function_tables: Vec<ArgumentFunctionTable>,
@@ -1499,7 +1498,7 @@ pub struct BindShape {
     /// samplers' shapes.
     #[cfg_attr(feature = "serde", serde(default))]
     pub argument_samplers: ArgumentSamplersShape,
-    /// `BindState.function_tables`: the function-table array's and directories' length class.
+    /// `BindState.function_tables`: the function-table directories' length class.
     #[cfg_attr(feature = "serde", serde(default))]
     pub function_tables: FunctionTablesShape,
     /// `BindState.tile_threadgroup`: a tile function's threadgroup offsets and tile memory
@@ -1654,8 +1653,8 @@ fn least_count(class: u8) -> u64 {
 
 /// The projection of `BindState::function_tables` that can change a plan: the capacity class of the
 /// list's length, as [`ArgumentSamplersShape`]'s. A plan holds [`FunctionTablesShape::entries`]
-/// entries in each function-table directory and the function-table array, so a table made or
-/// released changes the shape only when the count leaves its class.
+/// entries in each function-table directory, so a table made or released changes the shape only
+/// when the count leaves its class.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]

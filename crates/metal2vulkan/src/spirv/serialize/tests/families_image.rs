@@ -863,8 +863,8 @@ fn non_uniform_elements_are_decorated_through_what_carries_them() {
     });
 }
 
-/// A non-uniform element of a storage-buffer array of blocks (the function-table heap): the
-/// element's chain and the chain into it are decorated `NonUniform`, and the load, the store, and
+/// A non-uniform element of a descriptor array of storage-buffer blocks: the element's chain and
+/// the chain into it are decorated `NonUniform`, and the load, the store, and
 /// `OpArrayLength` read through them; a word loaded from it is data, undecorated, which a `select`
 /// may take. The module requires `ShaderNonUniform` and storage-buffer non-uniform indexing (not
 /// its dynamic one), and `spirv-val` accepts it.

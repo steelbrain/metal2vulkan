@@ -811,8 +811,7 @@ pub struct AccessPlan {
     pub heap_alpha: bool,
     /// Some visible-function table is read by its resource id ([`function_table`]): the function
     /// reads the stage's function-table directory, one more storage descriptor, whose search reads
-    /// the ids as this states, and the heap's function-table array, or, on a device without the
-    /// array's features, the stage's function-table snapshot, one more again.
+    /// the ids as this states, and the stage's function-table snapshot, one more again.
     pub function_tables: Option<function_table::TableReads>,
     /// A heap texture's float write the function makes tests its texel class's index
     /// (`lower::texture::emit`): the handle-table search carries the index
@@ -900,8 +899,8 @@ pub struct Declared {
     pub resolve: Option<crate::spirv::ids::FuncId>,
     /// A tile function's attachment images and render area ([`tile`]).
     pub tile: tile::TileDecl,
-    /// The stage's function-table directory and search and the heap's function-table array,
-    /// when a table is read by its resource id.
+    /// The stage's function-table directory and search and its snapshot, when a table is read by
+    /// its resource id.
     pub function_tables: Option<function_table::FunctionTables>,
     /// The stage's view of the command buffer's `ExecutionStatus` buffer, where it binds the
     /// buffer ([`absent::declare`]).

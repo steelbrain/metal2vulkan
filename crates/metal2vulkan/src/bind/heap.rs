@@ -125,19 +125,16 @@
 //!   `NotImplemented(SamplerBicubicFilter)`.
 //! - **Function tables**. A visible-function table loaded from an argument buffer is searched by
 //!   its resource id in the stage's function-table directory (`Synthetic(FunctionTableDirectory)`,
-//!   the handle table's layout over `BindState::function_tables`, flags 0) and read from the set-1
-//!   function-table array (`HandleClass::FunctionTable`, a storage-buffer array). Both hold the
-//!   entries of the shape's capacity class (`FunctionTablesShape::entries`, at most the heap's
-//!   capacity): element `i + 1` is `WriteSource::FunctionTable` for listed table `i`, whose words
-//!   the consumer binds, and element 0 the zero buffer, the null table. A class whose least count
-//!   does not fit the capacity is [`BindError::HeapTooLarge`] at plan time, and a list longer than
-//!   the planned entries at instantiation. On a device without the array's features the stage reads
-//!   a function-table snapshot (`Synthetic(FunctionTableSnapshot)`) in its place, written
-//!   `WriteSource::FunctionTableSnapshot`, and the directory gives each listed id its record's word
-//!   offset there (`FunctionTableSnapshot` of the listed sizes) instead of an element; the capacity
-//!   is then the handle table's reach alone. Where the listed tables' words may pass
+//!   the handle table's layout over `BindState::function_tables`, flags 0), which holds the
+//!   entries of the shape's capacity class (`FunctionTablesShape::entries`, at most the handle
+//!   table's reach), and read from the stage's function-table snapshot
+//!   (`Synthetic(FunctionTableSnapshot)`), written `WriteSource::FunctionTableSnapshot`: the
+//!   directory gives each listed id its record's word offset there (`FunctionTableSnapshot` of the
+//!   listed sizes). A class whose least count does not fit the capacity is
+//!   [`BindError::HeapTooLarge`] at plan time, and a list longer than the planned entries at
+//!   instantiation. Where the listed tables' words may pass
 //!   `maxStorageBufferRange` (`FunctionTablesShape::may_pass`), the variant that reads them through
-//!   their device addresses (`ResourceTemplate::function_table_addresses`) declares neither: the
+//!   their device addresses (`ResourceTemplate::function_table_addresses`) declares no snapshot: the
 //!   directory's entry holds the table's address in its element and flags words, and a listed table
 //!   without one cannot be represented.
 
@@ -1068,14 +1065,13 @@ pub(crate) struct HeapPlanner<'a> {
     samplers: Option<(ArgumentSamplersShape, u32, SamplerAdmission)>,
     /// The function-table directories, `(stage, set, binding)`.
     directories: Vec<(Stage, u32, u32)>,
-    /// The function-table snapshots, `(stage, set, binding)`, of a device without the
-    /// function-table array's features.
+    /// The function-table snapshots, `(stage, set, binding)`.
     snapshots: Vec<(Stage, u32, u32)>,
     /// The pipeline reads its function tables through the addresses its directories hold
     /// (`VariantKey::addressed_function_tables`).
     addressed_tables: bool,
-    /// The function tables' shape and the entries of the function-table array and every
-    /// directory, when the pipeline has a directory.
+    /// The function tables' shape and the entries of every directory, when the pipeline has a
+    /// directory.
     function_tables: Option<(FunctionTablesShape, u32)>,
     /// The zero buffer's bytes: the null table's (`neutral::zero_buffer_bytes`).
     zero_bytes: u32,
@@ -1221,7 +1217,6 @@ impl<'a> HeapPlanner<'a> {
         // An argument sampler's uses, a cube's explicit gradients included.
         let sampler_uses: Vec<SamplerUse> =
             classes.iter().filter_map(|c| c.sampler_use()).collect();
-        let function_table_array = classes.contains(&HandleClass::FunctionTable);
         let images = classes
             .iter()
             .filter(|c| matches!(c, HandleClass::Image(_)))
@@ -1232,19 +1227,15 @@ impl<'a> HeapPlanner<'a> {
         if !sampler_uses.is_empty() && sampler_tables.is_empty() {
             return Err(internal("a sampler array without a sampler table"));
         }
-        // Directories read the tables from the array, or from a snapshot on a device without
-        // the array's features, or at the addresses they hold: one of the three, never two.
+        // Directories read the tables from a snapshot, or at the addresses they hold: one of the
+        // two, never both.
         let addressed_tables = dependencies
             .iter()
             .any(|d| d.fact == RuntimeFact::FunctionTableRange { addressed: true });
-        let homes = [
-            function_table_array,
-            !snapshots.is_empty(),
-            addressed_tables,
-        ]
-        .into_iter()
-        .filter(|&h| h)
-        .count();
+        let homes = [!snapshots.is_empty(), addressed_tables]
+            .into_iter()
+            .filter(|&h| h)
+            .count();
         if homes != usize::from(!directories.is_empty()) {
             return Err(internal(
                 "function-table directories without one home of the tables' words, or with two",
@@ -1504,49 +1495,12 @@ impl<'a> HeapPlanner<'a> {
         Ok(WriteSource::FunctionTableSnapshot)
     }
 
-    /// The entries of the function-table array and every directory.
+    /// The entries of every function-table directory.
     fn function_table_entries(&self) -> Result<u32, BindError> {
         self.function_tables
             .as_ref()
             .map(|(_, entries)| *entries)
             .ok_or_else(|| internal("function tables without a directory"))
-    }
-
-    /// The writes of the function-table array `b` of set `set`: the zero buffer, the null table, at
-    /// element 0, and listed table `e - 1` at each element `e` of the class.
-    fn function_table_array(
-        &self,
-        set: u32,
-        b: &DescriptorBinding,
-    ) -> Result<Vec<DescriptorWrite>, BindError> {
-        if b.ty != vk::DescriptorType::STORAGE_BUFFER {
-            return Err(internal(format!("a function-table array as {:?}", b.ty)));
-        }
-        let entries = self.function_table_entries()?;
-        if entries > b.count {
-            return Err(internal("a function-table array shorter than its entries"));
-        }
-        let write = |element: u32, source: WriteSource| DescriptorWrite {
-            set,
-            binding: b.binding,
-            array_element: element,
-            ty: b.ty,
-            source,
-        };
-        let mut out = Vec::with_capacity(entries as usize);
-        out.push(write(
-            NEUTRAL_ELEMENT,
-            WriteSource::Neutral(NeutralResource::ZeroBuffer {
-                min_bytes: self.zero_bytes,
-            }),
-        ));
-        for element in 1..entries {
-            out.push(write(
-                element,
-                WriteSource::FunctionTable { index: element - 1 },
-            ));
-        }
-        Ok(out)
     }
 
     /// The entries of every sampler array and table.
@@ -1605,7 +1559,7 @@ impl<'a> HeapPlanner<'a> {
             HandleClass::Sampler { compare, integer } => {
                 return self.sampler_array(set, b, (compare, integer))
             }
-            HandleClass::FunctionTable => return self.function_table_array(set, b),
+            HandleClass::FunctionTable => return Err(internal("a function-table heap array")),
         };
         let expected = match (image.access, image.dim == ImageDim::Buffer) {
             (ImageAccess::Storage, false) => vk::DescriptorType::STORAGE_IMAGE,
@@ -1923,7 +1877,6 @@ impl<'a> HeapPlanner<'a> {
         template.sampler_admission = admission;
         template.function_table_directories = self.planned_directories;
         template.function_tables = self.function_tables.map(|(shape, _)| shape);
-        template.function_table_snapshot = !self.snapshots.is_empty();
         template.function_table_addresses = self.addressed_tables;
         diagnostics.extend(self.diagnostics);
     }
@@ -2126,7 +2079,6 @@ pub(crate) fn table_bytes(
         out.extend(directory_bytes(
             shape,
             &template.function_table_directories,
-            template.function_table_snapshot,
             template.function_table_addresses,
             state,
         )?);
@@ -2137,10 +2089,9 @@ pub(crate) fn table_bytes(
 }
 
 /// The bytes of the function-table directories `tables`, planned for the tables' `shape`, for
-/// `state`: listed table `i` is element `i + 1` (or its resource ID's under
-/// `HeapPlacement::ResourceId`), its flags 0; with `snapshot`, the word offset of its record in the
-/// function-table snapshot of the listed sizes, whatever the placement; with `addresses`, the
-/// device address of its words, low word as the element and high word as the flags. A state of
+/// `state`: listed table `i` is the word offset of its record in the function-table snapshot of
+/// the listed sizes, its flags 0, whatever the placement; with `addresses`, the device address of
+/// its words, low word as the element and high word as the flags. A state of
 /// another shape is the plan's misuse; a list longer than the planned entries is
 /// [`BindError::HeapTooLarge`], a snapshot past `u32::MAX` words is not representable, and a listed
 /// nonzero id without an address, or an addressed directory that lists no table (whose null entry's
@@ -2149,7 +2100,6 @@ pub(crate) fn table_bytes(
 fn directory_bytes(
     shape: &FunctionTablesShape,
     tables: &[PlannedHandleTable],
-    snapshot: bool,
     addresses: bool,
     state: &BindState,
 ) -> Result<Vec<crate::bind::instantiate::DescriptorBytes>, BindError> {
@@ -2158,21 +2108,19 @@ fn directory_bytes(
             "the bind state's shape differs from the plan's at its function tables",
         ));
     }
-    let offsets = match snapshot {
-        true => Some(
+    let offsets = match addresses {
+        true => None,
+        false => Some(
             FunctionTableSnapshot::of(state.function_tables.iter().map(|f| f.size)).ok_or(
                 BindError::Unsupported(Unsupported::not_representable(Feature::DynamicCall)),
             )?,
         ),
-        false => None,
     };
-    let element = |i: usize, id: u64| match &offsets {
-        Some(snapshot) => snapshot
-            .offsets()
-            .get(i)
-            .copied()
-            .ok_or_else(|| internal("a listed table without its snapshot record")),
-        None => placed(i, id, state.heap_placement),
+    let element = |i: usize| {
+        offsets
+            .as_ref()
+            .and_then(|snapshot| snapshot.offsets().get(i).copied())
+            .ok_or_else(|| internal("a listed table without its snapshot record"))
     };
     let count = state.function_tables.len() as u64 + 1;
     let mut out = Vec::with_capacity(tables.len());
@@ -2199,7 +2147,7 @@ fn directory_bytes(
                 entries.push((f.resource_id, f.address as u32, (f.address >> 32) as u32));
                 continue;
             }
-            entries.push((f.resource_id, element(i, f.resource_id)?, 0));
+            entries.push((f.resource_id, element(i)?, 0));
         }
         // The null entry's loads take the last entry's address, a listed table's: a directory of
         // null entries alone gives them none.
@@ -2349,17 +2297,14 @@ pub struct HeapElements {
     /// Under `ResourceId`, by planned element `e`: listed sampler `e - 1`'s element, else its
     /// resource ID.
     samplers: Vec<Option<u32>>,
-    /// Under `ResourceId`, by planned element `e`: listed function table `e - 1`'s resource ID.
-    function_tables: Vec<Option<u32>>,
 }
 
 impl HeapElements {
     /// The array element of `write`, one of the plan's descriptor writes: its own element for a
     /// write outside the heap set, the neutral element, and every write under `Planned`; under
-    /// `ResourceId`, the resource ID of the member or listed function table it holds, or the
-    /// listed sampler's element (its resource ID where it names none), or `None` where the
-    /// command needs no write (a member no handle names, a sampler or
-    /// table element past the list).
+    /// `ResourceId`, the resource ID of the member it holds, or the listed sampler's element (its
+    /// resource ID where it names none), or `None` where the command needs no write (a member no
+    /// handle names, a sampler element past the list).
     pub fn element(&self, write: &DescriptorWrite) -> Option<u32> {
         let e = write.array_element;
         if write.set != HEAP_SET || e == NEUTRAL_ELEMENT || self.placement == HeapPlacement::Planned
@@ -2368,7 +2313,6 @@ impl HeapElements {
         }
         let held = match write.ty {
             vk::DescriptorType::SAMPLER => &self.samplers,
-            vk::DescriptorType::STORAGE_BUFFER => &self.function_tables,
             _ => &self.members,
         };
         held.get(e as usize - 1).copied().flatten()
@@ -2503,19 +2447,10 @@ fn heap_elements(
         .iter()
         .map(|s| element(Some(s.placed_at())))
         .collect::<Result<_, _>>()?;
-    let function_tables = match template.function_tables {
-        Some(_) => state
-            .function_tables
-            .iter()
-            .map(|t| element(Some(t.resource_id)))
-            .collect::<Result<_, _>>()?,
-        None => Vec::new(),
-    };
     Ok(HeapElements {
         placement,
         members,
         samplers,
-        function_tables,
     })
 }
 
