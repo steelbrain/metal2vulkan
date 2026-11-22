@@ -1440,9 +1440,9 @@ that plan a grid of whole threadgroups, of `Threads` or `Threadgroups`, takes th
 unflagged (each `MultiRegion` 1, every thread live), so one `VkPipeline` of a threadgroup size runs
 all of a kernel's direct dispatches. The runtime lowers a kernel that does not observe its
 partition once, as that variant, and runs every direct dispatch of it in its tiles; a kernel that
-observes its partition runs its whole grids, threadgroup dispatches and indirect dispatches on its
-plain module at their own threadgroup size, and a `dispatchThreads` grid that is not a whole
-number of threadgroups on its partial-threadgroups variant. A kernel
+observes its partition runs every direct dispatch, a whole grid, threadgroups or a
+`dispatchThreads` grid that is not a whole number of threadgroups, on its partial-threadgroups
+variant at its own threadgroup size, and its indirect dispatches on its plain module. A kernel
 that steps a stage-in attribute by thread position, or reads `[[grid_origin]]` or `[[grid_size]]`,
 needs the encoder's stage-in region:
 

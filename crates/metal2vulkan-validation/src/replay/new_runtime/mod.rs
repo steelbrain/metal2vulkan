@@ -3052,6 +3052,10 @@ impl Backend for NewRuntime {
             ),
             ("made_ahead_variants", metrics.made_ahead_variants),
             ("made_ahead_variant_nanos", metrics.made_ahead_variant_nanos),
+            (
+                "partial_variant_whole_grids",
+                metrics.partial_variant_whole_grids,
+            ),
             ("blocks_made", metrics.blocks_made),
             ("block_bytes_made", metrics.block_bytes_made),
             ("shared_long_reuses", metrics.shared_long_reuses),

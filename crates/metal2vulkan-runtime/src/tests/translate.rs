@@ -628,14 +628,15 @@ mod on_device {
     }
 
     /// `ComputePipelineState::prepare_dispatch` makes what a dispatch of `icb_replay_grid_template`,
-    /// an observing kernel, then finds made: for a whole `dispatchThreads` grid, a ragged one (its
-    /// partial-threadgroups variant, lowered with the state), a `dispatchThreadgroups` grid and an
-    /// indirect dispatch, each prepared with the dispatch's own arguments, the call makes exactly
-    /// one pipeline and lowers nothing, and the dispatch adds no first-use wait and makes nothing. A `dispatchThreadgroups` grid whose threads saturate on an axis,
-    /// and a `dispatchThreads` grid of exactly `u32::MAX` threads on a size that does not divide
-    /// it, prepared alone, make what a small grid of the same call and size then runs with no
-    /// wait: the whole module and the partial-threadgroups variant. A second call with the same
-    /// arguments makes nothing. A call for what the dispatch records nothing for (a grid with no
+    /// an observing kernel, then finds made: for a whole `dispatchThreads` grid, a
+    /// `dispatchThreadgroups` grid and an indirect dispatch, each prepared with the dispatch's own
+    /// arguments, the call makes exactly one pipeline and lowers nothing, and the dispatch adds no
+    /// first-use wait and makes nothing; a ragged grid of the whole grid's size finds the whole
+    /// grid's made, since every direct dispatch runs the partial-threadgroups variant, lowered with
+    /// the state. A `dispatchThreadgroups` grid whose threads saturate on an axis, prepared alone,
+    /// makes what a small grid of the same call and size then runs with no wait, and a
+    /// `dispatchThreads` grid of exactly `u32::MAX` threads on that size, which does not divide
+    /// it, finds that made. A second call with the same arguments makes nothing. A call for what the dispatch records nothing for (a grid with no
     /// threads) or refuses (a threadgroup past Metal's, threadgroup memory past the device's)
     /// makes nothing, and the dispatch answers as it does unprepared. Each answer is Metal's.
     #[test]
@@ -657,36 +658,42 @@ mod on_device {
             let state = state(name, &device, &descriptor);
             let counters = device.counters();
             let length = |size: [u32; 3]| (4 * size.iter().product::<u32>()).next_multiple_of(16);
-            // What is prepared, at what size; the dispatch that then runs.
+            // What is prepared, at what size; the dispatch that then runs; the pipelines the call
+            // makes.
             let cases = [
                 (
                     Dispatch::Threads([8, 4, 1]),
                     [4, 2, 1],
                     ([8, 4, 1], How::Threads),
+                    1,
                 ),
                 (
                     Dispatch::Threads([10, 3, 1]),
                     [4, 2, 1],
                     ([10, 3, 1], How::Threads),
+                    0,
                 ),
                 (
                     Dispatch::Threadgroups([3, 2, 1]),
                     [2, 2, 1],
                     ([3, 2, 1], How::Groups),
+                    1,
                 ),
-                (Dispatch::Indirect, [1, 1, 4], ([1, 1, 2], How::Indirect)),
+                (Dispatch::Indirect, [1, 1, 4], ([1, 1, 2], How::Indirect), 1),
                 (
                     Dispatch::Threadgroups([u32::MAX, 1, 1]),
                     [2, 1, 1],
                     ([3, 1, 1], How::Groups),
+                    1,
                 ),
                 (
                     Dispatch::Threads([u32::MAX, 1, 1]),
                     [2, 1, 1],
                     ([3, 1, 1], How::Threads),
+                    0,
                 ),
             ];
-            for (prepared, size, (grid, how)) in cases {
+            for (prepared, size, (grid, how), made) in cases {
                 let lengths = [(0, length(size))];
                 let before = counters.metrics();
                 state
@@ -699,7 +706,7 @@ mod on_device {
                         ahead.pipelines_created - before.pipelines_created,
                         ahead.translations - before.translations,
                     ),
-                    (1, 1, 0),
+                    (made, made, 0),
                     "{name}: {prepared:?} by {size:?}: what the call made"
                 );
                 state
@@ -900,9 +907,10 @@ mod on_device {
     /// `ComputePipelineState::dispatch_variant`'s keys name exactly the `VkPipeline`s the
     /// dispatches run: over a table of dispatches of `icb_replay_grid_template`, an observing
     /// kernel with a threadgroup memory argument, two keys are equal exactly when the entries run
-    /// one module at one size and threadgroup memory length. Grids that differ only in their
-    /// extent or their call share a key, the ragged ones on the partial-threadgroups variant
-    /// another, and a different threadgroup size or length gives another. `prepare_dispatch` on
+    /// one module at one size and threadgroup memory length. Direct grids that differ only in their
+    /// extent, their call or whether they are whole threadgroups share a key, all on the
+    /// partial-threadgroups variant; an indirect dispatch, on the whole module, another; and a
+    /// different threadgroup size or length gives another. `prepare_dispatch` on
     /// each entry in turn makes one pipeline for each key not met before and none for one met. A
     /// second state of the same content answers the same keys and finds their pipelines made; a
     /// state of another content (the same function with a required threadgroup size) answers
@@ -930,28 +938,28 @@ mod on_device {
             // Each entry: the dispatch, its size, its threadgroup memory length, and the pipeline
             // it runs.
             let table = [
-                (Dispatch::Threads([8, 4, 1]), size, length(size), "whole"),
-                (Dispatch::Threads([16, 8, 1]), size, length(size), "whole"),
+                (Dispatch::Threads([8, 4, 1]), size, length(size), "direct"),
+                (Dispatch::Threads([16, 8, 1]), size, length(size), "direct"),
                 (
                     Dispatch::Threadgroups([3, 2, 1]),
                     size,
                     length(size),
-                    "whole",
+                    "direct",
                 ),
-                (Dispatch::Indirect, size, length(size), "whole"),
-                (Dispatch::Threads([10, 3, 1]), size, length(size), "partial"),
-                (Dispatch::Threads([9, 5, 1]), size, length(size), "partial"),
+                (Dispatch::Indirect, size, length(size), "indirect"),
+                (Dispatch::Threads([10, 3, 1]), size, length(size), "direct"),
+                (Dispatch::Threads([9, 5, 1]), size, length(size), "direct"),
                 (
                     Dispatch::Threadgroups([3, 2, 1]),
                     small,
                     length(small),
-                    "whole, small",
+                    "direct, small",
                 ),
                 (
                     Dispatch::Threads([8, 4, 1]),
                     size,
                     2 * length(size),
-                    "whole, longer",
+                    "direct, longer",
                 ),
             ];
             let first = state(name, &device, &descriptor);
@@ -2864,18 +2872,19 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
     /// threadgroup partition through `threadgroup_barrier(mem_flags::mem_device)`: each thread
     /// stores `((y << 16) | x) + 1` to its cell, then, past the barrier, copies the word of its
     /// column in row `y ^ 1` where that row is in the grid. The state lowers both modules and makes
-    /// no pipeline, and its grids run at their own size: 512 x 4 in 32 x 2 on the plain module,
-    /// 512 x 3 in 32 x 2 and 96 x 5 in 32 x 4 on the partial-threadgroups variant, each its own
-    /// pipeline made by a first-use wait, with no translation. A state of the descriptor with
-    /// `requiredThreadsPerThreadgroup` 32 x 2 makes, with the state, the pipelines a whole and a
+    /// no pipeline, and its grids run at their own size on the partial-threadgroups variant: 512 x
+    /// 4 in 32 x 2, whole, makes its pipeline by a first-use wait with no translation, 512 x 3 in
+    /// 32 x 2, ragged, finds it made, and 96 x 5 in 32 x 4 makes its own; the whole grid counts in
+    /// `Metrics::partial_variant_whole_grids`. A state of the descriptor with
+    /// `requiredThreadsPerThreadgroup` 32 x 2 makes, with the state, the one pipeline a whole and a
     /// ragged grid run at that size, so its 512 x 4 and 512 x 3 grids make nothing and wait for
     /// nothing. Every read sees the other row's word, Metal's answer: the probe
     /// `metal2vulkan-conformance/probes/row_barrier_reads.m` ran the same source over the same
     /// grids on an Apple M3 Max under macOS 27.0.1, and no word of `seen` differed from it. A
     /// state whose descriptor declares `maxTotalThreadsPerThreadgroup` 64 and no required size
-    /// makes, with the state, the pipelines a whole and a ragged grid run at 64 x 1, so its first
-    /// 512 x 1 and 500 x 1 grids in 64 x 1 make nothing and wait for nothing; one row reads no
-    /// other row's word.
+    /// makes, with the state, the one pipeline a whole and a ragged grid run at 64 x 1, so its
+    /// first 512 x 1 and 500 x 1 grids in 64 x 1 make nothing and wait for nothing; one row reads
+    /// no other row's word.
     #[test]
     fn every_device_keeps_a_kernel_that_reads_across_rows_after_a_barrier_at_its_own_size() {
         let Some(descriptor) = harness_kernel("row_barrier") else {
@@ -2929,13 +2938,13 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
                     "{name}: {grid:?} in {size:?}"
                 );
             };
-            // Each grid at a size its state has not run: one pipeline, made by a first-use wait,
-            // and no translation.
+            // Each grid on the partial variant at its own size: one pipeline, made by a first-use
+            // wait, where the state has not run the size, and no translation.
             let mut before = created;
-            for (grid, size, what) in [
-                ([512, 4, 1], [32, 2, 1], "the plain module at 32 x 2"),
-                ([512, 3, 1], [32, 2, 1], "the partial variant at 32 x 2"),
-                ([96, 5, 1], [32, 4, 1], "the partial variant at 32 x 4"),
+            for (grid, size, made, whole, what) in [
+                ([512, 4, 1], [32, 2, 1], 1, 1, "a whole grid at 32 x 2"),
+                ([512, 3, 1], [32, 2, 1], 0, 0, "a ragged grid at 32 x 2"),
+                ([96, 5, 1], [32, 4, 1], 1, 0, "a ragged grid at 32 x 4"),
             ] {
                 run(&state, grid, size);
                 let after = device.counters().metrics();
@@ -2944,13 +2953,14 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
                         after.pipelines_created - before.pipelines_created,
                         after.first_use_waits - before.first_use_waits,
                         after.translations - before.translations,
+                        after.partial_variant_whole_grids - before.partial_variant_whole_grids,
                     ),
-                    (1, 1, 0),
-                    "{name}: pipelines, first-use waits and translations of {what}"
+                    (made, made, 0, whole),
+                    "{name}: pipelines, first-use waits, translations and whole grids of {what}"
                 );
                 before = after;
             }
-            // At the descriptor's required size, the make makes what both grids run.
+            // At the descriptor's required size, the make makes what both grids run: one pipeline.
             let mut required = descriptor.clone();
             required.required_threads_per_threadgroup = Some([32, 2, 1]);
             let sized = self::state(name, &device, &required);
@@ -2960,8 +2970,8 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
                     made.pipelines_created - before.pipelines_created,
                     made.translations - before.translations,
                 ),
-                (2, 2),
-                "{name}: the required size's state: its whole and ragged grids' pipelines"
+                (1, 2),
+                "{name}: the required size's state: its whole and ragged grids' pipeline"
             );
             run(&sized, [512, 4, 1], [32, 2, 1]);
             run(&sized, [512, 3, 1], [32, 2, 1]);
@@ -2976,7 +2986,7 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
                 "{name}: the required size's grids made nothing and waited for nothing"
             );
             // At a declared bound and no required size, the make makes what a whole and a ragged
-            // grid run at the bound's row.
+            // grid run at the bound's row: one pipeline.
             let mut bounded = descriptor.clone();
             bounded.max_total_threads_per_threadgroup = Some(64);
             let before = device.counters().metrics();
@@ -2985,8 +2995,8 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
             assert_eq!(bound.max_total_threads_per_threadgroup(), 64, "{name}");
             assert_eq!(
                 made.pipelines_created - before.pipelines_created,
-                2,
-                "{name}: the declared bound's state: its whole and ragged grids' pipelines"
+                1,
+                "{name}: the declared bound's state: its whole and ragged grids' pipeline"
             );
             run(&bound, [512, 1, 1], [64, 1, 1]);
             run(&bound, [500, 1, 1], [64, 1, 1]);
@@ -3001,17 +3011,19 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
             );
             println!(
                 "{name}: row barrier reads checked in 512 x 4 and 512 x 3 in 32 x 2 and 96 x 5 in \
-                 32 x 4, at their own size; declared bound 64: whole and ragged grids made with \
-                 the state"
+                 32 x 4, at their own size on the partial variant; declared bound 64: whole and \
+                 ragged grids' pipeline made with the state"
             );
         });
     }
 
     /// `compute_thread_limit_64` declares `[[max_total_threads_per_threadgroup(64)]]` and observes
-    /// its threadgroups, with no required size: its state makes the pipelines a whole and a ragged
-    /// grid run at 64 x 1 x 1, so its first 128 x 1 and 100 x 1 grids in 64 x 1 make nothing and
-    /// wait for nothing, and each grid runs each of its threads once in threadgroups of 64. The
-    /// same kernel without the attribute, bounded only by the device, makes none with its state.
+    /// its threadgroups, with no required size: its state makes the one pipeline a whole and a
+    /// ragged grid run at 64 x 1 x 1, the partial-threadgroups variant's, so its first 128 x 1 and
+    /// 100 x 1 grids in 64 x 1 make nothing and wait for nothing, the whole one counted in
+    /// `Metrics::partial_variant_whole_grids`, and each grid runs each of its threads once in
+    /// threadgroups of 64. The same kernel without the attribute, bounded only by the device,
+    /// makes none with its state.
     #[test]
     fn every_device_makes_a_declared_bound_s_grids_with_the_state() {
         let (Some(bounded), Some(plain)) = (
@@ -3036,8 +3048,8 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
             assert_eq!(state.max_total_threads_per_threadgroup(), 64, "{name}");
             assert_eq!(
                 created.pipelines_created - made.pipelines_created,
-                2,
-                "{name}: the whole and ragged grids' pipelines, made with the state"
+                1,
+                "{name}: the whole and ragged grids' pipeline, made with the state"
             );
             let queue = device.new_command_queue(4).expect("a queue");
             for threads in [128, 100] {
@@ -3067,12 +3079,15 @@ define void @nil_read_kernel(ptr addrspace(1) %in, ptr addrspace(1) %out, i32 %t
                 (
                     after.pipelines_created - created.pipelines_created,
                     after.first_use_waits - created.first_use_waits,
+                    after.partial_variant_whole_grids - created.partial_variant_whole_grids,
                 ),
-                (0, 0),
-                "{name}: the declared bound's grids made nothing and waited for nothing"
+                (0, 0, 1),
+                "{name}: the declared bound's grids made nothing and waited for nothing, the \
+                 whole one on the partial variant"
             );
             println!(
-                "{name}: declared bound 64: 128 x 1 and 100 x 1 in 64 x 1 made with the state"
+                "{name}: declared bound 64: 128 x 1 and 100 x 1 in 64 x 1 made with the state, \
+                 both on the partial variant"
             );
         });
     }

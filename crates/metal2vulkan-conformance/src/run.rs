@@ -41,7 +41,9 @@ pub fn selected(names: &[String]) -> Result<Vec<Box<dyn Case>>, String> {
 ///
 /// A case that made exported surfaces prints how many of each form it made
 /// (`Metrics::surfaces_in_place`, `Metrics::surfaces_copied`), which is the evidence of the form a
-/// venue's surfaces took: nothing in a verdict reads it.
+/// venue's surfaces took, and a case whose whole grids ran an observing kernel's
+/// partial-threadgroups variant prints how many (`Metrics::partial_variant_whole_grids`): nothing
+/// in a verdict reads either.
 pub fn replay_rt_on_under(
     venues: Venues,
     cases: &[Box<dyn Case>],
@@ -62,6 +64,14 @@ pub fn replay_rt_on_under(
             if in_place + copied > 0 {
                 println!(
                     "surface forms: {} on {}: {in_place} in place, {copied} copied",
+                    case.name(),
+                    device.venue().device
+                );
+            }
+            let whole = after.partial_variant_whole_grids - before.partial_variant_whole_grids;
+            if whole > 0 {
+                println!(
+                    "dispatch forms: {} on {}: {whole} whole grids on the partial-threadgroups variant",
                     case.name(),
                     device.venue().device
                 );

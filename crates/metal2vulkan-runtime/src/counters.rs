@@ -214,6 +214,8 @@ pub(crate) enum Metric {
     PrivateArenaDispatches,
     /// [`Metrics::emulated_simdgroup_dispatches`].
     EmulatedSimdgroupDispatches,
+    /// [`Metrics::partial_variant_whole_grids`].
+    PartialVariantWholeGrids,
     /// [`Metrics::private_arena_pieces`].
     PrivateArenaPieces,
     /// [`Metrics::private_arena_blocks`].
@@ -305,6 +307,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::DispatchesWithoutEffects,
     Metric::PrivateArenaDispatches,
     Metric::EmulatedSimdgroupDispatches,
+    Metric::PartialVariantWholeGrids,
     Metric::PrivateArenaPieces,
     Metric::PrivateArenaBlocks,
     Metric::Translations,
@@ -652,6 +655,7 @@ struct Atomics {
     dispatches_without_effects: AtomicU64,
     private_arena_dispatches: AtomicU64,
     emulated_simdgroup_dispatches: AtomicU64,
+    partial_variant_whole_grids: AtomicU64,
     private_arena_pieces: AtomicU64,
     private_arena_blocks: AtomicU64,
     shared_long_reuses: AtomicU64,
@@ -849,6 +853,7 @@ impl Counters {
             Metric::DispatchesWithoutEffects => &a.dispatches_without_effects,
             Metric::PrivateArenaDispatches => &a.private_arena_dispatches,
             Metric::EmulatedSimdgroupDispatches => &a.emulated_simdgroup_dispatches,
+            Metric::PartialVariantWholeGrids => &a.partial_variant_whole_grids,
             Metric::PrivateArenaPieces => &a.private_arena_pieces,
             Metric::PrivateArenaBlocks => &a.private_arena_blocks,
             Metric::Translations => &a.translations,
@@ -1680,6 +1685,7 @@ impl Counters {
             dispatches_without_effects: a.dispatches_without_effects.load(Relaxed),
             private_arena_dispatches: a.private_arena_dispatches.load(Relaxed),
             emulated_simdgroup_dispatches: a.emulated_simdgroup_dispatches.load(Relaxed),
+            partial_variant_whole_grids: a.partial_variant_whole_grids.load(Relaxed),
             private_arena_pieces: a.private_arena_pieces.load(Relaxed),
             private_arena_blocks: a.private_arena_blocks.load(Relaxed),
             translations: a.translations.load(Relaxed),
@@ -2253,6 +2259,11 @@ pub struct Metrics {
     /// time a dispatch needed more than the last block held, or no command buffer kept it. A
     /// dispatch that reaches the last block takes none.
     pub private_arena_blocks: u64,
+    /// Direct dispatches of a whole grid, `dispatchThreads` of whole threadgroups or
+    /// `dispatchThreadgroups`, that ran a kernel's partial-threadgroups variant: a kernel that
+    /// observes its threadgroup partition runs every direct dispatch on that one module where the
+    /// variant takes the threadgroup. No Metal counterpart: Metal compiles one function.
+    pub partial_variant_whole_grids: u64,
     /// Functions the translator lowered, each a module of a pipeline content the device did not
     /// hold compiled: of a compute content, one for a kernel that does not observe its threadgroup
     /// partition and two for one that does; of a render content, one for each of its functions

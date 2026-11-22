@@ -2566,10 +2566,13 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   a thread compare its position with the grid's last thread, inside one branch on the flag. Every
   other dispatch, on the same pipeline, branches past that test. An indirect dispatch runs at its
   own threadgroup size, unflagged. A kernel that observes its partition is
-  lowered plainly: its whole grids, `dispatch_threadgroups` and indirect dispatches run that
-  module at their own size, and a `dispatch_threads` grid that is not a whole number of
-  threadgroups runs its partial-threadgroups variant, which the state's creation lowers too,
-  through the cache directory. The translator gives a kernel no order of the
+  lowered plainly and as its partial-threadgroups variant, which the state's creation lowers too,
+  through the cache directory: every direct dispatch, a whole `dispatch_threads` grid,
+  `dispatch_threadgroups` or a grid that is not a whole number of threadgroups, runs the variant at
+  its own size, a whole grid's regions unflagged, so one `VkPipeline` of a size runs them all
+  (`Metrics::partial_variant_whole_grids` counts the whole grids). Its indirect dispatches run the
+  plain module, and so does a direct dispatch where the variant is refused, or where the
+  threadgroup is not whole SIMD groups of a kernel that runs only whole ones (below). The translator gives a kernel no order of the
   accesses Apple's SIMD-group lockstep orders (docs/API.md, accepted differences), so only the
   kernel's own barriers, fences, atomics of threadgroup or SIMD-group scope, SIMD-group and quad
   functions, threadgroup memory and builtins of the partition observe it.
@@ -2584,8 +2587,8 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   is the same with it or without: for its direct dispatches, one for the tiles of a kernel that
   runs its grid in tiles, 46 for an image-only one (the square one and one per tile, three of
   whose tiles are deeper than 64), and for one that observes its partition one per threadgroup
-  size and threadgroup memory lengths, and one more per size for grids that are not whole
-  threadgroups; for any kernel's indirect dispatches, one per size and lengths.
+  size and threadgroup memory lengths; for any kernel's indirect dispatches, one per size and
+  lengths.
 - A kernel whose SIMD groups run one per subgroup of 32 (pinned where the device lists compute in
   `requiredSubgroupSizeStages` with 32 between its sizes, or the device's own 32), or one per
   32-lane cluster of a 64- or 128-lane subgroup, runs only workgroups of whole subgroups.
@@ -3054,8 +3057,8 @@ cache is answered compile-required on both.
   of one stream and 312 of the other). The 50th, of tile 1x1x256, runs as one row, so a device
   that holds 64 makes the same 50.
 - A kernel's variants are lowered with its state, whether or not a dispatch needs them: an
-  observing kernel's partial-threadgroups variant, which only a `dispatch_threads` grid that is
-  not a whole number of threadgroups runs, and the emulated-SIMD-group variant of a kernel whose
+  observing kernel's partial-threadgroups variant, which its direct dispatches run, and the
+  emulated-SIMD-group variant of a kernel whose
   tier runs only whole SIMD groups, which only a threadgroup that is not whole subgroups runs. So
   a state's creation lowers up to three functions where Metal compiles one, each through the
   cache directory. For the observing kernel the device tests run, a grid template over
