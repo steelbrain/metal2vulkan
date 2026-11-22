@@ -2976,6 +2976,12 @@ cache is answered compile-required on both.
   `Unsupported{ImageAtomics}`, not implemented. Its one exact form is a 64-bit image atomic
   (`shaderImageInt64Atomics`), which device creation does not enable; no form over 32-bit
   atomics is exact.
+- A derivative in a kernel (`dfdx`, `dfdy`, `fwidth` and their `fast_` spellings) is refused on
+  every device: a state over a function that calls one is `Error::Translation` of
+  `Unsupported{ComputeDerivatives}`, needing `computeDerivativeGroupLinear`. The translator lowers
+  it on a device that enables that feature (`VK_KHR_compute_shader_derivatives`, whose linear
+  quads are Metal's four consecutive threads), and device creation does not enable it (Not
+  enabled, below), so the lowering does not run under rt.
 - Every `VkPipeline` is made through the device's `VkPipelineCache` (The cache directory, above),
   which is empty on a host's first run. Cold, the driver's time for a recorded session's render
   pipelines made through it, against the same pipelines made past any cache (states-only plays):
