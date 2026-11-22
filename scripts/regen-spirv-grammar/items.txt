@@ -87,8 +87,7 @@ values OriginUpperLeft EarlyFragmentTests DepthReplacing DepthGreater DepthLess 
 values Quads OutputVertices OutputPoints SubgroupUniformControlFlowKHR SignedZeroInfNanPreserve
 values StencilRefReplacingEXT RequireFullQuadsKHR OutputLinesEXT OutputPrimitivesEXT
 values DerivativeGroupLinearKHR OutputTrianglesEXT PixelInterlockOrderedEXT
-values SampleInterlockOrderedEXT MaximallyReconvergesKHR DenormPreserve RoundingModeRTE
-values PostDepthCoverage
+values MaximallyReconvergesKHR DenormPreserve RoundingModeRTE
 test-values ContractionOff FPFastMathDefault
 
 enum StorageClass

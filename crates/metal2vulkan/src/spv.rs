@@ -5732,7 +5732,6 @@ pub enum ExecutionMode {
     #[cfg(test)]
     ContractionOff = 31,
     SubgroupUniformControlFlowKHR = 4421,
-    PostDepthCoverage = 4446,
     DenormPreserve = 4459,
     SignedZeroInfNanPreserve = 4461,
     RoundingModeRTE = 4462,
@@ -5743,7 +5742,6 @@ pub enum ExecutionMode {
     DerivativeGroupLinearKHR = 5290,
     OutputTrianglesEXT = 5298,
     PixelInterlockOrderedEXT = 5366,
-    SampleInterlockOrderedEXT = 5368,
     MaximallyReconvergesKHR = 6023,
     #[cfg(test)]
     FPFastMathDefault = 6028,
