@@ -12,17 +12,16 @@
 
 use super::*;
 use crate::acceptance::{
-    compile_row_in_worker, retained, Acceptance, Projection, RowCompile, RowPipeline, RowStage,
-    RuntimeRow,
+    compile_row_in_worker, retained, Acceptance, RowCompile, RowPipeline, RowStage, RuntimeRow,
 };
 use metal2vulkan::library::FunctionConstantValues;
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 
-/// Compile `entry` of the owned fixture `file` as an L4 row under `projection` for the device the
+/// Compile `entry` of the owned fixture `file` as an L4 row for the device the
 /// lane opens, in the device tests' compile worker ([`compile_worker`]), as `corpus-pipeline`
 /// compiles its rows. A device lane has `llvm-as`, so a missing assembler fails the test rather
 /// than skipping it.
-fn compiled(file: &str, entry: &str, stage: RowStage, projection: Projection) -> RowPipeline {
+fn compiled(file: &str, entry: &str, stage: RowStage) -> RowPipeline {
     let bitcode = llvm_assemble(&engine_dir().join(file))
         .unwrap_or_else(|error| panic!("assemble {file}: {error:?}"));
     let device = platform::opened_worker_device(crate::gpu::TEST_DEVICE)
@@ -33,7 +32,6 @@ fn compiled(file: &str, entry: &str, stage: RowStage, projection: Projection) ->
         &retained(&bitcode),
         entry,
         stage,
-        projection,
         &metal2vulkan::library::FunctionConstantValues::defaults(),
     ) {
         (RowCompile::Compiled(pipeline), _) => *pipeline,
@@ -125,12 +123,7 @@ fn kernel_rows_are_made_through_the_runtime_on_one_device_and_a_vertex_only_pipe
         accepted(Ok(made));
     }
 
-    let vertex = compiled(
-        "stage_io.ll",
-        "stage_io_vertex_position",
-        RowStage::Vertex,
-        Projection::Derived,
-    );
+    let vertex = compiled("stage_io.ll", "stage_io_vertex_position", RowStage::Vertex);
     assert!(matches!(vertex, RowPipeline::Render { .. }));
     assert_accepted(&vertex);
 }
@@ -167,12 +160,7 @@ fn an_imageblock_kernel_row_is_the_runtimes_refusal() {
 #[test]
 fn post_tessellation_vertex_rows_are_created() {
     for entry in ["tess_quad_buffer", "tess_triangle_points"] {
-        let pipeline = compiled(
-            "tessellation.ll",
-            entry,
-            RowStage::Vertex,
-            Projection::Derived,
-        );
+        let pipeline = compiled("tessellation.ll", entry, RowStage::Vertex);
         let RowPipeline::Render {
             pipeline: render, ..
         } = &pipeline
@@ -186,26 +174,14 @@ fn post_tessellation_vertex_rows_are_created() {
 }
 
 /// A vertex function that reads attributes is created with the descriptor the row synthesizes,
-/// fixed-function and with every attribute pulled, and a fragment function with its generated
+/// fixed function, and a fragment function with its generated
 /// passthrough companion into the attachments its outputs imply.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn attribute_reading_vertex_and_fragment_rows_are_created() {
-    for projection in [Projection::Derived, Projection::Pulled] {
-        let vertex = compiled(
-            "stage_io.ll",
-            "stage_io_vertex",
-            RowStage::Vertex,
-            projection,
-        );
-        assert_accepted(&vertex);
-    }
-    let fragment = compiled(
-        "stage_io.ll",
-        "stage_io_fragment",
-        RowStage::Fragment,
-        Projection::Derived,
-    );
+    let vertex = compiled("stage_io.ll", "stage_io_vertex", RowStage::Vertex);
+    assert_accepted(&vertex);
+    let fragment = compiled("stage_io.ll", "stage_io_fragment", RowStage::Fragment);
     let RowPipeline::Render {
         pipeline: render, ..
     } = &fragment

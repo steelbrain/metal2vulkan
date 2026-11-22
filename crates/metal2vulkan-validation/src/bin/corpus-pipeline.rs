@@ -34,9 +34,7 @@
 //!   the warm creation a program's later launches see, beside the cold one the ceiling times (the
 //!   summary's `driver_caches`). `--keep-modules DIR` writes each compiled row's stage modules,
 //!   their specialization layouts and lowering strategies' words into DIR, a diagnostic (with
-//!   `--compile-only` on any host). `--pulled` compiles every vertex
-//!   attribute pulled in the shader instead of the projection the product derives: the repeatable
-//!   form of the pulled sweep, with `--compile-only` or on a device. `--fixtures` sweeps the owned
+//!   `--compile-only` on any host). `--fixtures` sweeps the owned
 //!   `validation/fixtures/public/engine` sources instead of the corpus, which is what the Linux
 //!   containers can run. A row that retains no bitcode (a public source) is assembled from its AIR
 //!   text.
@@ -82,8 +80,8 @@ use metal2vulkan::pipeline::PrecisionNote;
 use metal2vulkan_validation::acceptance::metal_report::MetalCompileFailure;
 use metal2vulkan_validation::acceptance::row::UnmodelledKind;
 use metal2vulkan_validation::acceptance::{
-    compile_draw_in_worker, compile_row_in_worker, Acceptance, AcceptanceError, Projection,
-    RowCompile, RowPipeline, RowStage, RuntimeRow,
+    compile_draw_in_worker, compile_row_in_worker, Acceptance, AcceptanceError, RowCompile,
+    RowPipeline, RowStage, RuntimeRow,
 };
 use metal2vulkan_validation::budgets::PIPELINE_CREATION_CEILING;
 use metal2vulkan_validation::candidate::engine::graphics::RenderTemplate;
@@ -129,12 +127,12 @@ fn main() {
 fn usage() -> String {
     "usage: corpus-pipeline --profile P [--corpus DIR] [--private-corpus DIR] [--limit N]\n\
      \x20      [--after HASH | --hash HASH | --fixtures] [--partition K/N] [--attempting PATH]\n\
-     \x20      [--pulled] [--driver-caches-on]\n\
+     \x20      [--driver-caches-on]\n\
      \x20      [--keep-modules DIR] [--specializations FILE | --draws FILE]\n\
      \x20      (--device-type cpu|gpu [--gpu-wait-timeout SECONDS] [--profiles-layer P]\n\
      \x20       | --compile-only)\n\
      It runs the engine. --profile P names a committed profile describing the device; it may take\n\
-     --fixtures, --pulled (every vertex attribute pulled in the shader), or --compile-only\n\
+     --fixtures or --compile-only\n\
      (compile every row, open no device).\n\
      --driver-caches-on leaves the drivers' shader disk caches as the environment sets them (warm\n\
      creations, when an earlier run compiled the same pipelines); every other run compiles cold.\n\
@@ -194,7 +192,6 @@ fn run() -> Result<(), String> {
     let mut profile = None;
     let mut fixtures = false;
     let mut compile_only = false;
-    let mut projection = Projection::Derived;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         let mut value = || args.next().ok_or_else(|| format!("{arg} needs a value"));
@@ -218,7 +215,6 @@ fn run() -> Result<(), String> {
             "--fixtures" => fixtures = true,
             "--compile-only" => compile_only = true,
             "--profiles-layer" => options.profiles_layer = Some(value()?),
-            "--pulled" => projection = Projection::Pulled,
             DRIVER_CACHES_ON => options.driver_caches = true,
             "--keep-modules" => options.keep_modules = Some(PathBuf::from(value()?)),
             "--draws" => {
@@ -301,7 +297,6 @@ fn run() -> Result<(), String> {
         &Sweep {
             profile: &profile,
             fixtures,
-            projection,
         },
         &options,
     )
@@ -315,12 +310,10 @@ fn compile_device(stem: &str) -> Result<WorkerDevice, String> {
         .map_err(|error| format!("{stem}: {error}"))
 }
 
-/// What one engine sweep compiles: profile P, the corpus or the owned fixtures, and the
-/// projection of its vertex attributes.
+/// What one engine sweep compiles: profile P, and the corpus or the owned fixtures.
 struct Sweep<'a> {
     profile: &'a str,
     fixtures: bool,
-    projection: Projection,
 }
 
 /// The part of the corpus one process of a split sweep visits (`--partition K/N`): every row
@@ -760,11 +753,7 @@ fn sweep_new(
     sweep: &Sweep<'_>,
     options: &Options,
 ) -> Result<(), String> {
-    let &Sweep {
-        profile,
-        fixtures,
-        projection,
-    } = sweep;
+    let &Sweep { profile, fixtures } = sweep;
     let mut out = rows_output()?;
     let mut tally = Tally::default();
     let mut target = device.map(|kind| SweepDevice {
@@ -782,7 +771,6 @@ fn sweep_new(
             target.as_mut(),
             worker,
             compiler,
-            projection,
             &row,
             options.keep_modules.as_deref(),
             &mut tally,
@@ -921,7 +909,7 @@ fn sweep_new(
         .as_ref()
         .map_or_else(|| "none".to_string(), |listed| listed.0.len().to_string());
     eprintln!(
-        "corpus-pipeline-summary\tengine=new\tprofile={profile}\tprofiles_layer={}\tprojection={projection:?}\tdevice_type={}\trows={}\tcompiled_only={}\tcreated={}\trefused={}\tnot_enabled={}\tnot_compiled={}\tunmodelled={}\tunmodelled_kinds={unmodelled_kinds}\truntime_refused={}\tno_effect={}\tstage_not_covered={}\tno_bitcode={}\ttooling={}\terrors={}\tcreation_over_ceiling={}\tinvalid_usage={}\tworker_stopped={}\tmetal_failures={metal_failures}\tpartition={partition}\tslowest_creation={slowest_key}\tslowest_creation_ms={slowest_ms}\tslowest_compile={slowest_compile_key}\tslowest_compile_ms={slowest_compile_ms}\tpeak_compile_rss={peak_rss_key}\tpeak_compile_rss_bytes={peak_rss}\tpeak_compile_allocator={peak_allocator_key}\tpeak_compile_allocator_bytes={peak_allocator}\tdriver_caches={}\tspecializations={specializations}\tdraws={draws}",
+        "corpus-pipeline-summary\tengine=new\tprofile={profile}\tprofiles_layer={}\tdevice_type={}\trows={}\tcompiled_only={}\tcreated={}\trefused={}\tnot_enabled={}\tnot_compiled={}\tunmodelled={}\tunmodelled_kinds={unmodelled_kinds}\truntime_refused={}\tno_effect={}\tstage_not_covered={}\tno_bitcode={}\ttooling={}\terrors={}\tcreation_over_ceiling={}\tinvalid_usage={}\tworker_stopped={}\tmetal_failures={metal_failures}\tpartition={partition}\tslowest_creation={slowest_key}\tslowest_creation_ms={slowest_ms}\tslowest_compile={slowest_compile_key}\tslowest_compile_ms={slowest_compile_ms}\tpeak_compile_rss={peak_rss_key}\tpeak_compile_rss_bytes={peak_rss}\tpeak_compile_allocator={peak_allocator_key}\tpeak_compile_allocator_bytes={peak_allocator}\tdriver_caches={}\tspecializations={specializations}\tdraws={draws}",
         options.profiles_layer.as_deref().unwrap_or("none"),
         device.map_or("none", DeviceType::as_str),
         tally.rows,
@@ -1007,7 +995,6 @@ fn attempt_row(
     device: Option<&mut SweepDevice>,
     worker: &CompileWorker,
     compiler: &WorkerDevice,
-    projection: Projection,
     row: &NewRow,
     keep: Option<&Path>,
     tally: &mut Tally,
@@ -1032,7 +1019,6 @@ fn attempt_row(
                 &input.source,
                 &input.entry,
                 stage,
-                projection,
                 &constants,
             )
         }

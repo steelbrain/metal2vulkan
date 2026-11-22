@@ -100,7 +100,7 @@ fn plan_case(device: &Device, case: &AuthoredCase, row: &crate::source::SourceRo
     let mut function = FunctionDescriptor::new(library.function(&compute.entry).unwrap());
     function.constants = compute.constants.clone();
     let shape = compute_shape(&compute, true, BufferRanges::default()).unwrap();
-    let (pipeline, inputs) = match variants::compile_compute_for_shape(
+    let (pipeline, inputs) = match variants::bound::compile_compute_for_shape(
         device,
         &function,
         &shape,
@@ -174,7 +174,7 @@ fn plan_case(device: &Device, case: &AuthoredCase, row: &crate::source::SourceRo
     // The dispatch plans the variant its pipeline was compiled for; the executor refuses
     // diagnostics, and no public case has one.
     assert!(
-        variants::compiled_for(&inputs, &plan.variant),
+        variants::bound::compiled_for(&inputs, &plan.variant),
         "{}: planned variant {:?}, compiled {inputs:?}",
         case.name,
         plan.variant
@@ -343,7 +343,7 @@ fn public_texture_array_cases_plan_their_elements_at_their_slots() {
         for stem in ["lavapipe", "moltenvk-m3", "runtime-floor"] {
             let device = device(stem);
             let shape = compute_shape(&compute, true, BufferRanges::default()).unwrap();
-            let compiled = variants::compile_compute_for_shape(
+            let compiled = variants::bound::compile_compute_for_shape(
                 &device,
                 &function,
                 &shape,
@@ -371,7 +371,7 @@ fn public_texture_array_cases_plan_their_elements_at_their_slots() {
             };
             let plan = pipeline.plan(&device, &shape).unwrap();
             assert!(
-                variants::compiled_for(&inputs, &plan.variant),
+                variants::bound::compiled_for(&inputs, &plan.variant),
                 "{} {stem}",
                 case.name
             );
@@ -474,7 +474,7 @@ fn the_public_argument_buffer_cases_plan_their_pointees_resident() {
             let device = device(stem);
             let shape = compute_shape(&compute, true, BufferRanges::default()).unwrap();
             assert_eq!(state.shape(), shape);
-            let (pipeline, inputs) = variants::compile_compute_for_shape(
+            let (pipeline, inputs) = variants::bound::compile_compute_for_shape(
                 &device,
                 &function,
                 &shape,
@@ -483,7 +483,10 @@ fn the_public_argument_buffer_cases_plan_their_pointees_resident() {
             )
             .unwrap_or_else(|error| panic!("{} {stem}: compile: {error:?}", case.name));
             let plan = pipeline.plan(&device, &shape).unwrap();
-            assert!(variants::compiled_for(&inputs, &plan.variant), "{stem}");
+            assert!(
+                variants::bound::compiled_for(&inputs, &plan.variant),
+                "{stem}"
+            );
             assert!(
                 plan.diagnostics.is_empty(),
                 "{} {stem}: {:?}",

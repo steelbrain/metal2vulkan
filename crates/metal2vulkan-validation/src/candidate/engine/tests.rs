@@ -409,7 +409,6 @@ fn the_cases_own_function_links_and_its_libraries_follow_the_stages() {
     };
 
     let kernel = map_kernel(&kernel_case()).unwrap();
-    let shape = BindShape::default();
     // The authored compile census's: the kernel as the runtime compiles it for the dispatch.
     let (request, given) = kernel_request(&case, &linked, &kernel);
     assert_eq!(
@@ -428,14 +427,12 @@ fn the_cases_own_function_links_and_its_libraries_follow_the_stages() {
 
     let mut vertex_case = two_stage_case("shade", "unused", vec![], BTreeMap::new(), 3);
     vertex_case.fragment = None;
-    let (request, given) =
-        render_request(&case, None, &linked, &vertex_case, Some(&shape)).unwrap();
+    let (request, given) = render_request(&case, None, &linked, &vertex_case).unwrap();
     assert_eq!(
         request,
         PipelineRequest::VertexDraw {
             function: linking("shade"),
             template: graphics::render_template(&vertex_case),
-            shape: Some(shape.clone()),
         }
     );
     assert_eq!(given, expected_libraries(&[&case]));
@@ -452,21 +449,14 @@ fn the_cases_own_function_links_and_its_libraries_follow_the_stages() {
     let mut fragment_case =
         two_stage_case(passthrough.entry(), "shade", vec![], BTreeMap::new(), 3);
     fragment_case.companion = Some(passthrough.clone());
-    let (request, given) = render_request(
-        &case,
-        Some(&companion),
-        &linked,
-        &fragment_case,
-        Some(&shape),
-    )
-    .unwrap();
+    let (request, given) =
+        render_request(&case, Some(&companion), &linked, &fragment_case).unwrap();
     assert_eq!(
         request,
         PipelineRequest::Draw {
             vertex: alone(passthrough.entry()),
             fragment: linking("shade"),
             template: graphics::render_template(&fragment_case),
-            shape: Some(shape.clone()),
         }
     );
     assert_eq!(given, expected_libraries(&[&companion, &case]));
@@ -478,21 +468,14 @@ fn the_cases_own_function_links_and_its_libraries_follow_the_stages() {
     });
     let mut observed_case = two_stage_case("shade", observer.entry(), vec![], BTreeMap::new(), 3);
     observed_case.companion = Some(observer.clone());
-    let (request, given) = render_request(
-        &case,
-        Some(&companion),
-        &linked,
-        &observed_case,
-        Some(&shape),
-    )
-    .unwrap();
+    let (request, given) =
+        render_request(&case, Some(&companion), &linked, &observed_case).unwrap();
     assert_eq!(
         request,
         PipelineRequest::Draw {
             vertex: linking("shade"),
             fragment: alone(observer.entry()),
             template: graphics::render_template(&observed_case),
-            shape: Some(shape.clone()),
         }
     );
     assert_eq!(given, expected_libraries(&[&case, &companion]));
@@ -510,11 +493,11 @@ fn the_cases_own_function_links_and_its_libraries_follow_the_stages() {
     // A fragment function that is no companion's, and a companion without its source.
     let owned = two_stage_case("shade", "colour", vec![], BTreeMap::new(), 3);
     assert!(matches!(
-        render_request(&case, Some(&companion), &linked, &owned, Some(&shape)),
+        render_request(&case, Some(&companion), &linked, &owned),
         Err(ExecutorError::Failed(_))
     ));
     assert!(matches!(
-        render_request(&case, None, &linked, &observed_case, Some(&shape)),
+        render_request(&case, None, &linked, &observed_case),
         Err(ExecutorError::Failed(_))
     ));
 
@@ -990,7 +973,7 @@ fn a_device_buffer_array_plans_as_the_functions_buffer_table() {
     ] {
         let device = device(stem, DevicePolicy::RESIDENT_TABLES);
         let shape = compute_shape(&compute, addressed, BufferRanges::default()).unwrap();
-        let (pipeline, inputs) = variants::compile_compute_for_shape(
+        let (pipeline, inputs) = variants::bound::compile_compute_for_shape(
             &device,
             &function,
             &shape,
@@ -999,7 +982,10 @@ fn a_device_buffer_array_plans_as_the_functions_buffer_table() {
         )
         .unwrap_or_else(|error| panic!("{stem}: compile: {error:?}"));
         let plan = pipeline.plan(&device, &shape).unwrap();
-        assert!(variants::compiled_for(&inputs, &plan.variant), "{stem}");
+        assert!(
+            variants::bound::compiled_for(&inputs, &plan.variant),
+            "{stem}"
+        );
         assert!(
             plan.diagnostics.is_empty(),
             "{stem}: {:?}",

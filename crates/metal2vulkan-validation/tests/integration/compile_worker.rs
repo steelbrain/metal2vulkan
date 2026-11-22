@@ -122,7 +122,6 @@ fn a_logged_draw_compiles_in_the_worker_as_in_process() {
         vertex: RequestFunction::new("stage_io_vertex", undefined.clone()),
         fragment: RequestFunction::new("stage_io_fragment", undefined),
         template: template.clone(),
-        shape: None,
     };
     let AcceptancePipeline::Render(expected) =
         compile_pipeline(&[&bitcode, &bitcode], &request, device.device(), None).unwrap()

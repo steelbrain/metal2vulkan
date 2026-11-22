@@ -6594,9 +6594,7 @@ method	metal2vulkan::device::Device::compile_compute_pipeline	pub fn compile_com
 method	metal2vulkan::device::Device::compile_function	pub fn compile_function(&self, f: &FunctionDescriptor, inp: &LoweringInputs, b: &Budget) -> Result<CompiledFunction, Error>
 method	metal2vulkan::device::Device::compile_function_from_entries	pub fn compile_function_from_entries(&self, f: &FunctionDescriptor, inp: &LoweringInputs, b: &Budget, entries: &StageEntries) -> Result<CompiledFunction, Error>
 method	metal2vulkan::device::Device::compile_mesh_pipeline	pub fn compile_mesh_pipeline(&self, d: &MeshPipelineDescriptor, b: &Budget) -> Result<RenderPipeline, Error>
-method	metal2vulkan::device::Device::compile_mesh_variant	pub fn compile_mesh_variant(&self, d: &MeshPipelineDescriptor, v: &VariantKey, b: &Budget) -> Result<RenderPipeline, Error>
 method	metal2vulkan::device::Device::compile_render_pipeline	pub fn compile_render_pipeline(&self, d: &RenderPipelineDescriptor, b: &Budget) -> Result<RenderPipeline, Error>
-method	metal2vulkan::device::Device::compile_render_variant	pub fn compile_render_variant(&self, d: &RenderPipelineDescriptor, v: &VariantKey, b: &Budget) -> Result<RenderPipeline, Error>
 method	metal2vulkan::device::Device::compile_tile_pipeline	pub fn compile_tile_pipeline(&self, d: &TileRenderPipelineDescriptor, b: &Budget) -> Result<ComputePipeline, Error>
 method	metal2vulkan::device::Device::compute_pipeline_key	pub fn compute_pipeline_key(&self, d: &ComputePipelineDescriptor) -> crate::cache::PipelineKey
 method	metal2vulkan::device::Device::from_queries	pub fn from_queries(desc: DeviceDescription, policy: DevicePolicy) -> Result<Device, Error>

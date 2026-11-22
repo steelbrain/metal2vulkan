@@ -244,8 +244,8 @@ pub fn compile_compute(
     compile(worker, device, std::slice::from_ref(library), &request)
 }
 
-/// Compile `request`, a compute pipeline's (`PipelineRequest::BoundCompute`,
-/// `PipelineRequest::Kernel`, or an L4 kernel row's `PipelineRequest::Row`), from `libraries` as [`PipelineRequest::libraries`] orders them (the
+/// Compile `request`, a compute pipeline's (`PipelineRequest::Kernel`, or an L4 kernel row's
+/// `PipelineRequest::Row`), from `libraries` as [`PipelineRequest::libraries`] orders them (the
 /// kernel's, then those of the functions it links) for `device`, in a killable worker.
 pub fn compile_compute_request(
     worker: &CompileWorker,
@@ -257,8 +257,8 @@ pub fn compile_compute_request(
 }
 
 /// Compile `request`, a render pipeline's (`PipelineRequest::VertexDraw` from the Metal oracle's
-/// descriptor template, `PipelineRequest::Draw` of a case and its generated companion, either with
-/// the bind shape's inputs, or an L4 vertex or fragment row's `PipelineRequest::Row`), from
+/// descriptor template, `PipelineRequest::Draw` of a case and its generated companion, or an L4
+/// vertex or fragment row's `PipelineRequest::Row`), from
 /// `libraries` as [`PipelineRequest::libraries`] orders them (the stage libraries, then those of
 /// the functions each links) for `device`, in a killable worker: a case and its companion compile
 /// in one child, under one deadline and one limit.
@@ -609,7 +609,6 @@ mod tests {
     use super::*;
     use crate::acceptance::RequestFunction;
     use crate::worker::MEMORY_LIMIT_BYTES;
-    use metal2vulkan::bind::{BindShape, BufferRanges};
     use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
 
     fn fixture(name: &str) -> Option<Vec<u8>> {
@@ -705,7 +704,6 @@ mod tests {
         let request = PipelineRequest::Row {
             entry: "stage_io_vertex_position".into(),
             stage: crate::acceptance::RowStage::Vertex,
-            projection: crate::acceptance::Projection::Derived,
             constants: Default::default(),
         };
         let (bytes, digest) = input(&device, &stage_io, request.clone());
@@ -725,90 +723,6 @@ mod tests {
         let refused =
             accept::<ComputePipeline>(&output, &artifact, &digest, device.device()).unwrap_err();
         assert!(refused.contains("artifact"), "{refused}");
-    }
-
-    /// A kernel with a storage texture crosses the exchange with the bind shape it is compiled
-    /// for: the worker answers the texture's format input from the shape, and its pipeline is the
-    /// one compiled in process, whose plan of that shape asks for exactly the inputs it was
-    /// compiled with. The format input and the plan are the resident-table domains', the
-    /// executor's own context's.
-    #[test]
-    fn a_bound_compute_request_crosses_the_exchange_with_its_shape() {
-        use crate::candidate::engine::{compute_shape, variants, ComputeCase, ComputeOutput};
-        let Some(bitcode) = fixture("texture_ops.ll") else {
-            return;
-        };
-        // SwiftShader reads storage images only with a format, so the texture needs its input.
-        let device = WorkerDevice::new(
-            crate::engine::load_description("runtime-floor").unwrap(),
-            DevicePolicy::RESIDENT_TABLES,
-        )
-        .unwrap();
-        let case = ComputeCase {
-            out_of_bounds: Vec::new(),
-            creation_bound: crate::budgets::PIPELINE_CREATION_CEILING,
-            entry: "read_write_fence".into(),
-            constants: FunctionConstantValues::defaults(),
-            buffers: Default::default(),
-            argument_buffer_buffers: Default::default(),
-            argument_buffer_textures: Default::default(),
-            argument_buffer_samplers: Default::default(),
-            textures: [(
-                0,
-                crate::literal::LiteralTexture {
-                    binding: 0,
-                    role: crate::case::ResourceRole::InOut,
-                    texture_type: crate::case::TextureType::D2,
-                    format: crate::case::TextureFormat::Rgba32Uint,
-                    dimensions: [2, 2, 1],
-                    sample_count: 1,
-                    bytes: vec![0; 64],
-                    sparse: None,
-                    mip_levels: 1,
-                },
-            )]
-            .into(),
-            samplers: Default::default(),
-            threadgroup_lengths: Default::default(),
-            dispatch: metal2vulkan::bind::Dispatch::Threads {
-                threads: [2, 2, 1],
-                threads_per_group: [1, 1, 1],
-            },
-            output: ComputeOutput::None,
-        };
-        let shape = compute_shape(&case, false, BufferRanges::default()).unwrap();
-        let request = PipelineRequest::BoundCompute {
-            function: RequestFunction::new(case.entry.as_str(), case.constants.clone()),
-            shape: shape.clone(),
-            dispatch: None,
-        };
-        let (bytes, digest) = input(&device, &bitcode, request.clone());
-        let (output, artifact) = served(&bytes, Instant::now()).unwrap();
-        let output: CompileOutput =
-            serde_json::from_slice(&serde_json::to_vec(&output).unwrap()).unwrap();
-        let pipeline = accept::<ComputePipeline>(&output, &artifact, &digest, device.device())
-            .unwrap()
-            .unwrap();
-        let AcceptancePipeline::Compute(expected) =
-            compile_pipeline(&[&bitcode], &request, device.device(), None).unwrap()
-        else {
-            panic!("a kernel compiles to a compute pipeline");
-        };
-        assert_eq!(pipeline, *expected);
-        let library = metal2vulkan::library::Library::from_air(&bitcode).unwrap();
-        let function =
-            metal2vulkan::pipeline::FunctionDescriptor::new(library.function(&case.entry).unwrap());
-        let (_, inputs) = variants::compile_compute_for_shape(
-            device.device(),
-            &function,
-            &shape,
-            None,
-            &metal2vulkan::Budget::standard(),
-        )
-        .unwrap();
-        assert!(!inputs.storage_images.is_empty(), "{inputs:?}");
-        let plan = pipeline.plan(device.device(), &shape).unwrap();
-        assert!(variants::compiled_for(&inputs, &plan.variant));
     }
 
     /// The narrow-attribute vertex case's draw crosses the exchange with the Metal oracle's
@@ -844,14 +758,6 @@ mod tests {
                 case.vertex.constants.clone(),
             ),
             template,
-            shape: Some(
-                crate::candidate::engine::graphics::render_shape(
-                    &case,
-                    false,
-                    BufferRanges::default(),
-                )
-                .unwrap(),
-            ),
         };
         let (bytes, digest) = input(&device, &bitcode, request.clone());
         let (output, artifact) = served(&bytes, Instant::now()).unwrap();
@@ -911,7 +817,6 @@ mod tests {
                 FunctionConstantValues::defaults(),
             ),
             template,
-            shape: None,
         };
         let device = worker_device("lavapipe");
         let libraries = [vertex.as_slice(), fragment.as_slice()];
@@ -950,7 +855,7 @@ mod tests {
             return;
         };
         let device = worker_device("lavapipe");
-        let request = PipelineRequest::BoundCompute {
+        let request = PipelineRequest::Kernel {
             function: RequestFunction {
                 entry: "linked_visible_caller".into(),
                 constants: FunctionConstantValues::defaults(),
@@ -963,8 +868,7 @@ mod tests {
                     },
                 ],
             },
-            shape: BindShape::default(),
-            dispatch: None,
+            threads_per_threadgroup: [32, 1, 1],
         };
         let libraries = [caller.as_slice(), functions.as_slice(), caller.as_slice()];
         let (bytes, digest) = libraries_input(&device, &libraries, request.clone());
@@ -1157,7 +1061,6 @@ mod tests {
             PipelineRequest::Row {
                 entry: "v".into(),
                 stage: crate::acceptance::RowStage::Vertex,
-                projection: crate::acceptance::Projection::Derived,
                 constants: Default::default(),
             },
         );

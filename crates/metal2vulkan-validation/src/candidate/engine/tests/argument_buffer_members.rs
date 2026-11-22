@@ -291,7 +291,7 @@ fn an_argument_buffer_texture_is_the_heap_member_its_owner_names() {
     let library = Library::from_air(&bitcode).unwrap();
     let function = FunctionDescriptor::new(library.function(&mapped.entry).unwrap());
     let shape = compute_shape(&mapped, true, BufferRanges::default()).unwrap();
-    let (pipeline, _) = variants::compile_compute_for_shape(
+    let (pipeline, _) = variants::bound::compile_compute_for_shape(
         &device,
         &function,
         &shape,
@@ -466,7 +466,7 @@ fn an_argument_buffer_sampler_is_the_sampler_table_entry_its_owner_names() {
     let library = Library::from_air(&bitcode).unwrap();
     let function = FunctionDescriptor::new(library.function(&mapped.entry).unwrap());
     let shape = compute_shape(&mapped, true, BufferRanges::default()).unwrap();
-    let (pipeline, _) = variants::compile_compute_for_shape(
+    let (pipeline, _) = variants::bound::compile_compute_for_shape(
         &device,
         &function,
         &shape,

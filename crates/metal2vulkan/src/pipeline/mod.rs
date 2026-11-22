@@ -36,8 +36,8 @@
 //! stage's function key, and the [`LoweringInputs`] each function stage compiles under (see
 //! [`cache`](crate::cache)). A binding plan can ask for another variant of the pipeline, named by
 //! a [`VariantKey`](crate::cache::VariantKey) (`BindingPlan::variant`,
-//! `BindError::NeedsVariant`). A render pipeline compiles its variant with
-//! `Device::compile_render_variant`; a compute pipeline compiles its kernel with
+//! `BindError::NeedsVariant`). A render pipeline's keys under a variant are
+//! `Device::render_variant_key`'s; a compute pipeline compiles its kernel with
 //! `Device::compile_function` under `VariantKey::lowering_inputs(Stage::Kernel)` and links it as
 //! `StageSource::Compiled`.
 //!

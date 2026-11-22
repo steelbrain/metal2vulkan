@@ -1128,11 +1128,8 @@ pub fn companion_source(case: &graphics::RenderCase) -> Option<RowSource<'static
         .map(|generated| RowSource::Text(Cow::Owned(generated.air_text(Spelling::Opaque))))
 }
 
-/// The compile request for `case`'s pipeline with the inputs the bind shape `shape` decides
-/// (storage-texture formats of either stage, pulled vertex buffers,
-/// `variants::compile_render_for_shape`), or with none as the runtime compiles it where `shape`
-/// is `None` (`Device::compile_render_pipeline`), and its libraries in [`PipelineRequest::libraries`]
-/// order: a vertex function alone from `library` as the Metal oracle's rasterization-disabled draw
+/// The compile request for `case`'s pipeline as the runtime compiles it
+/// (`Device::compile_render_pipeline`), and its libraries in [`PipelineRequest::libraries`] order: a vertex function alone from `library` as the Metal oracle's rasterization-disabled draw
 /// (`PipelineRequest::VertexDraw` of [`graphics::render_template`]), or the case's function from
 /// `library` and its generated companion's from `companion` ([`companion_source`]) in stage order,
 /// drawn together (`PipelineRequest::Draw`); each list ends with `linked`'s libraries. The case's
@@ -1145,10 +1142,8 @@ pub fn render_request<'a>(
     companion: Option<&RowSource<'a>>,
     linked: &[LinkedModule],
     case: &graphics::RenderCase,
-    shape: Option<&BindShape>,
 ) -> Result<(PipelineRequest, Vec<RowSource<'a>>), ExecutorError> {
     let template = graphics::render_template(case);
-    let shape = shape.cloned();
     let own =
         |function: &graphics::RenderFunction| linking(&function.entry, &function.constants, linked);
     let generated = |function: &graphics::RenderFunction| {
@@ -1159,7 +1154,6 @@ pub fn render_request<'a>(
             let request = PipelineRequest::VertexDraw {
                 function: own(&case.vertex),
                 template,
-                shape,
             };
             Ok((request, with_linked(&[library], linked)))
         }
@@ -1181,7 +1175,6 @@ pub fn render_request<'a>(
                 vertex,
                 fragment,
                 template,
-                shape,
             };
             Ok((request, with_linked(&stages, linked)))
         }
@@ -1539,7 +1532,7 @@ pub fn case_compile<'a>(
                 graphics::render_shape(render, addressed, ranges).map_err(ExecutorError::Failed)?;
             let companion = companion_source(render);
             let (request, libraries) =
-                render_request(&library, companion.as_ref(), linked, render, None)?;
+                render_request(&library, companion.as_ref(), linked, render)?;
             PlannedPipeline::Render {
                 request,
                 libraries,

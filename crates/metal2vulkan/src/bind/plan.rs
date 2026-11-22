@@ -30,7 +30,7 @@ pub struct BindingPlan {
     /// The variant the shape requires: the storage-image choices, `BufferRangeLimit` device-address
     /// slots, vertex buffers fixed-function input cannot fetch as bound, and a vertex function's
     /// dropped `Layer` output in a pass of one layer. Empty on the common path; otherwise the consumer compiles the pipeline with
-    /// this variant (`Device::compile_render_variant` for a render pipeline) and plans that
+    /// this variant (its keys `Device::render_variant_key`'s for a render pipeline) and plans that
     /// pipeline, whose plan for the same shape states the same key. The descriptors are those of
     /// the pipeline planned; a draw of a plan whose variant pulls a vertex buffer the pipeline
     /// fetches fixed function is an internal error, and one whose variant drops (or keeps) the

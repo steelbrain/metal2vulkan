@@ -992,7 +992,7 @@ the feature), and a fragment `[[primitive_id]]` behind it is `NotImplemented(Tes
 ### Mesh pipelines
 
 `Device::compile_mesh_pipeline` compiles a `MeshPipelineDescriptor` (an optional object function,
-a mesh function and a fragment function), and `compile_mesh_variant` its variants. Its plan draws
+a mesh function and a fragment function). Its plan draws
 mesh draws only (`DrawCall::MeshThreadgroups`, `MeshThreads` and their indirect forms). The
 stages are task and mesh shaders, which need `VK_EXT_mesh_shader` with `meshShader` (and
 `taskShader` for an object function). A device without them (MoltenVK, older ANV) refuses the
@@ -1326,9 +1326,9 @@ instantiation then costs its own bindings and heap members, not every resource t
 
 A plan whose `variant` is not empty asks for another variant of the pipeline (a storage texture's
 format, a buffer range past the descriptor limit, a vertex buffer that fixed-function input cannot
-fetch, ...). Compile it and plan it for the same shape: `device.compile_render_variant(&descriptor,
-&plan.variant, &budget)` for a render pipeline, or compile the kernel with
-`plan.variant.lowering_inputs(Stage::Kernel)` and link it as `StageSource::Compiled`. A dispatch can
+fetch, ...). A render pipeline compiles under no variant (`Device::compile_render_pipeline`); a
+kernel compiles with `plan.variant.lowering_inputs(Stage::Kernel)`, linked as
+`StageSource::Compiled`, and is planned for the same shape. A dispatch can
 ask too (`plan.dispatch_variant(&dispatch)`, or `BindError::NeedsVariant` from instantiation).
 
 Textures follow Metal's texel rules: sparse textures report residency where the device can,

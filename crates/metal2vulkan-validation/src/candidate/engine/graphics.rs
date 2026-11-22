@@ -1043,8 +1043,8 @@ pub fn synthetic_used_addresses(
 /// The `BindShape` the render executor binds `case` with on a device that has device addresses
 /// exactly when `addressed` and the range limits `ranges` ([`bind_state`] with every buffer's and
 /// argument-buffer buffer's synthetic guest address and, when `addressed`, a host address; only
-/// whether a buffer has one is part of the shape): what the compile worker compiles the draw for
-/// (`variants::compile_render_for_shape`).
+/// whether a buffer has one is part of the shape): the shape the census's artifact digest plans the
+/// draw's pipeline for.
 pub fn render_shape(
     case: &RenderCase,
     addressed: bool,

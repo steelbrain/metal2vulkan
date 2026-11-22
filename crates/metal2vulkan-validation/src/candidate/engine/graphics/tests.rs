@@ -563,13 +563,12 @@ pub(crate) struct RenderLibraries<'a> {
     pub fragment: Option<&'a [u8]>,
 }
 
-/// The request the tools send the compile worker for `case`'s pipeline with bind shape `shape`,
-/// and its libraries in request order: a vertex function alone as `PipelineRequest::VertexDraw`, a
-/// vertex and a fragment function of two libraries as `PipelineRequest::Draw`, both with the shape.
+/// The request the tools send the compile worker for `case`'s pipeline, and its libraries in
+/// request order: a vertex function alone as `PipelineRequest::VertexDraw`, a vertex and a
+/// fragment function of two libraries as `PipelineRequest::Draw`.
 pub(crate) fn draw_request<'a>(
     case: &RenderCase,
     libraries: RenderLibraries<'a>,
-    shape: &BindShape,
 ) -> (crate::acceptance::PipelineRequest, Vec<&'a [u8]>) {
     let function = |f: &RenderFunction| {
         crate::acceptance::RequestFunction::new(f.entry.as_str(), f.constants.clone())
@@ -579,7 +578,6 @@ pub(crate) fn draw_request<'a>(
             crate::acceptance::PipelineRequest::VertexDraw {
                 function: function(&case.vertex),
                 template: render_template(case),
-                shape: Some(shape.clone()),
             },
             vec![libraries.vertex],
         ),
@@ -588,7 +586,6 @@ pub(crate) fn draw_request<'a>(
                 vertex: function(&case.vertex),
                 fragment: function(fragment),
                 template: render_template(case),
-                shape: Some(shape.clone()),
             },
             vec![libraries.vertex, bitcode],
         ),
@@ -596,16 +593,15 @@ pub(crate) fn draw_request<'a>(
     }
 }
 
-/// `case`'s pipeline compiled in this process for bind shape `shape`, by [`draw_request`]: the
+/// `case`'s pipeline compiled in this process as the runtime compiles it, by [`draw_request`]: the
 /// device-free plan tests compile here; the device tests compile the same request in the compile
 /// worker.
 pub(crate) fn compile_in_process(
     device: &Device,
     case: &RenderCase,
     libraries: RenderLibraries<'_>,
-    shape: &BindShape,
 ) -> Result<metal2vulkan::pipeline::RenderPipeline, Error> {
-    let (request, bitcode) = draw_request(case, libraries, shape);
+    let (request, bitcode) = draw_request(case, libraries);
     match crate::acceptance::compile_pipeline(&bitcode, &request, device, None) {
         Ok(crate::acceptance::AcceptancePipeline::Render(pipeline)) => Ok(*pipeline),
         Ok(other) => panic!("a draw compiled to {other:?}"),
@@ -683,7 +679,7 @@ fn planned_draw(
     // buffer device addresses: a slot the pipeline reaches through a physical pointer needs one
     // to plan.
     let shape = render_shape(case, true, BufferRanges::default()).unwrap();
-    let pipeline = compile_in_process(device, case, libraries, &shape)?;
+    let pipeline = compile_in_process(device, case, libraries)?;
     assert_eq!(
         pipeline.graphics.rasterizer_discard,
         case.fragment.is_none()
@@ -1098,7 +1094,7 @@ fn render_cases_bind_argument_buffer_buffers_and_texture_arrays() {
         let device = device(stem);
         let shape = render_shape(&render, true, BufferRanges::default()).unwrap();
         assert_eq!(state.shape(), shape, "{stem}");
-        let pipeline = compile_in_process(&device, &render, libraries, &shape)
+        let pipeline = compile_in_process(&device, &render, libraries)
             .unwrap_or_else(|error| panic!("{stem}: compile: {error}"));
         let plan = pipeline.plan(&device, &shape).unwrap();
         assert!(
@@ -1344,7 +1340,6 @@ fn a_slice_choosing_case_binds_the_oracles_one_layer_pass() {
             vertex: &bitcode,
             fragment: Some(&observer),
         },
-        &shape,
     )
     .unwrap();
     assert!(pipeline.graphics.declares_layer);

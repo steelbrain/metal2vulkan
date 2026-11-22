@@ -140,8 +140,8 @@ impl fmt::Debug for PipelineKey {
 /// (ordered maps) and empty on the common path.
 ///
 /// [`VariantKey::lowering_inputs`] is each function's `LoweringInputs` under the key, so the
-/// choice reaches `select` and the `FunctionCompileKey`; a render pipeline compiles under a key
-/// with `Device::compile_render_variant`.
+/// choice reaches `select` and the `FunctionCompileKey`; a render pipeline's keys under one are
+/// `Device::render_variant_key`'s.
 #[non_exhaustive]
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -536,7 +536,7 @@ impl VariantKey {
     /// (a vertex function's projection is
     /// derived from the vertex descriptor and
     /// [`pulled_vertex_buffers`](VariantKey::pulled_vertex_buffers) when the pipeline compiles,
-    /// `Device::compile_render_variant`). A key carries no stage-input descriptor: a kernel of a
+    /// `Device::render_variant_key`). A key carries no stage-input descriptor: a kernel of a
     /// compute pipeline with one compiles its variant under these inputs with the pipeline's
     /// `stage_input` added (`LoweringInputs::stage_input`).
     pub fn lowering_inputs(

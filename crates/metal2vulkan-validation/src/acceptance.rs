@@ -34,8 +34,6 @@ use crate::worker::compile::{
     compile_compute_request, compile_render_request, CompileWorker, NotCompiled, WorkerDevice,
 };
 use crate::worker::{Measured, WorkerFailure};
-use metal2vulkan::bind::{BindShape, Dispatch};
-use metal2vulkan::cache::VariantKey;
 use metal2vulkan::device::Independence;
 use metal2vulkan::device::Requirements;
 use metal2vulkan::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile, EnableSet};
@@ -209,17 +207,6 @@ pub enum RowCompile {
     Stopped(Outcome, String),
 }
 
-/// How an L4 row's vertex function fetches its attributes ([`row`]): the projection the
-/// product derives from the synthesized descriptor (fixed-function wherever the device fetches
-/// the format), or every vertex buffer pulled in the shader (`VariantKey::pulled_vertex_buffers`),
-/// the repeatable form of the pulled sweep.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Projection {
-    #[default]
-    Derived,
-    Pulled,
-}
-
 /// The pipeline one compile builds: its kind, its functions, their function-constant values, and
 /// the functions each links. Its functions come from the compile's libraries
 /// ([`PipelineRequest::libraries`]): a draw's vertex function from the first and its fragment
@@ -233,15 +220,6 @@ pub enum PipelineRequest {
         entry: String,
         constants: FunctionConstantValues,
     },
-    /// Kernel `function`, compiled with the lowering inputs the bind shape `shape` decides
-    /// (`candidate::engine::variants`), and those `dispatch` runs on when given (a partial
-    /// simdgroup's emulated simdgroups): the engine candidate's dispatch.
-    BoundCompute {
-        function: RequestFunction,
-        shape: BindShape,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        dispatch: Option<Dispatch>,
-    },
     /// Kernel `function` as the runtime compiles it for a dispatch of threadgroups of
     /// `threads_per_threadgroup` (`candidate::engine::variants::compile_kernel`): its plain module,
     /// or its emulated-simdgroups variant where that threadgroup ends in a partial simdgroup. The
@@ -252,37 +230,30 @@ pub enum PipelineRequest {
     },
     /// The L4 row `entry`, a `stage` function with the function-constant values `constants`
     /// (none, the default: Metal's undefined, the plain census's compile), built as [`row`]
-    /// derives it from the library's AIR under those values, its vertex attributes fetched under
-    /// `projection`.
+    /// derives it from the library's AIR under those values, its vertex attributes fetched as the
+    /// product projects the synthesized descriptor (fixed function wherever the device fetches the
+    /// format).
     Row {
         entry: String,
         stage: RowStage,
-        projection: Projection,
         #[serde(default)]
         constants: FunctionConstantValues,
     },
     /// A rasterization-disabled `Device::compile_render_pipeline` of vertex function `function`,
     /// from the Metal oracle's descriptor `template` (its vertex descriptor, color attachments,
-    /// and topology class): the engine candidate's vertex draw. With a bind `shape`, the stages
-    /// are compiled with the inputs that shape decides (`variants::compile_render_for_shape`:
-    /// storage-texture formats, pulled vertex buffers).
+    /// and topology class): the engine candidate's vertex draw.
     VertexDraw {
         function: RequestFunction,
         template: RenderTemplate,
-        #[serde(default)]
-        shape: Option<BindShape>,
     },
     /// `Device::compile_render_pipeline` of `vertex` and `fragment`, rasterization enabled, from
     /// the Metal oracle's descriptor `template`: the engine candidate's draw of a case and its
     /// generated companion, each from its own library (a fragment case's passthrough vertex, an
-    /// observed vertex case's observer fragment), with the inputs a bind `shape` decides as for
-    /// [`PipelineRequest::VertexDraw`].
+    /// observed vertex case's observer fragment).
     Draw {
         vertex: RequestFunction,
         fragment: RequestFunction,
         template: RenderTemplate,
-        #[serde(default)]
-        shape: Option<BindShape>,
     },
     /// `Device::compile_mesh_pipeline` of a mesh render pipeline from the Metal oracle's
     /// descriptor `template`, of its object function where it has one, its mesh function, and its
@@ -358,7 +329,6 @@ impl PipelineRequest {
                 .max()
                 .unwrap_or(1),
             PipelineRequest::Compute { .. }
-            | PipelineRequest::BoundCompute { .. }
             | PipelineRequest::Kernel { .. }
             | PipelineRequest::Row { .. }
             | PipelineRequest::VertexDraw { .. } => 1,
@@ -369,8 +339,7 @@ impl PipelineRequest {
     pub fn functions(&self) -> Vec<&RequestFunction> {
         match self {
             PipelineRequest::Compute { .. } | PipelineRequest::Row { .. } => Vec::new(),
-            PipelineRequest::BoundCompute { function, .. }
-            | PipelineRequest::Kernel { function, .. }
+            PipelineRequest::Kernel { function, .. }
             | PipelineRequest::VertexDraw { function, .. } => vec![function],
             PipelineRequest::Draw {
                 vertex, fragment, ..
@@ -493,14 +462,12 @@ pub fn compile_row(
     bitcode: &[u8],
     entry: &str,
     stage: RowStage,
-    projection: Projection,
     device: &Device,
     deadline: Option<Instant>,
 ) -> RowCompile {
     let request = PipelineRequest::Row {
         entry: entry.into(),
         stage,
-        projection,
         constants: FunctionConstantValues::defaults(),
     };
     match compile_pipeline(&[bitcode], &request, device, deadline) {
@@ -531,13 +498,11 @@ pub fn compile_row_in_worker(
     source: &RowSource<'_>,
     entry: &str,
     stage: RowStage,
-    projection: Projection,
     constants: &FunctionConstantValues,
 ) -> (RowCompile, Option<Measured>) {
     let request = PipelineRequest::Row {
         entry: entry.into(),
         stage,
-        projection,
         constants: constants.clone(),
     };
     let compiled = match stage {
@@ -615,7 +580,6 @@ pub fn compile_draw_in_worker(
         vertex: RequestFunction::new(vertex, FunctionConstantValues::defaults()),
         fragment: RequestFunction::new(fragment, FunctionConstantValues::defaults()),
         template: template.clone(),
-        shape: None,
     };
     let compiled = compile_render_request(worker, device, libraries, &request).map(|compiled| {
         (
@@ -638,9 +602,8 @@ pub fn retained(bitcode: &[u8]) -> RowSource<'static> {
 
 /// Compile `request` from `libraries` for `device` through the public API (`Library::from_air`,
 /// `Library::function`, then `Device::compile_compute_pipeline`, with `compile_function` under
-/// the bind's inputs first for a [`PipelineRequest::BoundCompute`] and under the runtime's for a
-/// [`PipelineRequest::Kernel`], or
-/// `Device::compile_render_pipeline` / `compile_render_variant`) under the standard budget with
+/// the runtime's inputs first for a [`PipelineRequest::Kernel`], or
+/// `Device::compile_render_pipeline`) under the standard budget with
 /// `deadline`. The request's functions come from `libraries` as [`PipelineRequest::libraries`]
 /// orders them, each with the functions it links (from its [`PipelineRequest::linked_ranges`]);
 /// another number of libraries is [`PipelineCompileError::Libraries`], checked before anything
@@ -688,13 +651,6 @@ fn compile_counted(
         Ok::<_, Error>(function)
     };
     let budget = Budget::with_deadline(deadline);
-    let render = |descriptor: &RenderPipelineDescriptor, shape: Option<&BindShape>| match shape {
-        None => device.compile_render_pipeline(descriptor, &budget),
-        Some(shape) => crate::candidate::engine::variants::compile_render_for_shape(
-            device, descriptor, shape, &budget,
-        )
-        .map(|(pipeline, _)| pipeline),
-    };
     Ok(match request {
         PipelineRequest::Compute { entry, constants } => {
             let kernel = function(
@@ -709,21 +665,6 @@ fn compile_counted(
                     &budget,
                 )
                 .map(|pipeline| AcceptancePipeline::Compute(Box::new(pipeline)))?
-        }
-        PipelineRequest::BoundCompute {
-            function: kernel,
-            shape,
-            dispatch,
-        } => {
-            let kernel = function(0, Stage::Kernel, kernel, linked(0))?;
-            let (pipeline, _) = crate::candidate::engine::variants::compile_compute_for_shape(
-                device,
-                &kernel,
-                shape,
-                dispatch.as_ref(),
-                &budget,
-            )?;
-            AcceptancePipeline::Compute(Box::new(pipeline))
         }
         PipelineRequest::Kernel {
             function: kernel,
@@ -741,17 +682,16 @@ fn compile_counted(
         PipelineRequest::VertexDraw {
             function: vertex,
             template,
-            shape,
         } => {
             let vertex = function(0, Stage::Vertex, vertex, linked(0))?;
             let descriptor = template.descriptor(StageSource::Function(vertex), None)?;
-            AcceptancePipeline::Render(Box::new(render(&descriptor, shape.as_ref())?))
+            let pipeline = device.compile_render_pipeline(&descriptor, &budget)?;
+            AcceptancePipeline::Render(Box::new(pipeline))
         }
         PipelineRequest::Draw {
             vertex,
             fragment,
             template,
-            shape,
         } => {
             let vertex = function(0, Stage::Vertex, vertex, linked(0))?;
             let fragment = function(1, Stage::Fragment, fragment, linked(1))?;
@@ -759,7 +699,8 @@ fn compile_counted(
                 StageSource::Function(vertex),
                 Some(StageSource::Function(fragment)),
             )?;
-            AcceptancePipeline::Render(Box::new(render(&descriptor, shape.as_ref())?))
+            let pipeline = device.compile_render_pipeline(&descriptor, &budget)?;
+            AcceptancePipeline::Render(Box::new(pipeline))
         }
         PipelineRequest::MeshDraw {
             object,
@@ -789,7 +730,6 @@ fn compile_counted(
         PipelineRequest::Row {
             entry,
             stage,
-            projection,
             constants,
         } => {
             let bitcode = libraries[0];
@@ -832,12 +772,8 @@ fn compile_counted(
                     let descriptor = derived
                         .template
                         .descriptor(StageSource::Function(vertex), None)?;
-                    let mut variant = VariantKey::new();
-                    if *projection == Projection::Pulled {
-                        variant.pulled_vertex_buffers = derived.buffers;
-                    }
                     device
-                        .compile_render_variant(&descriptor, &variant, &budget)
+                        .compile_render_pipeline(&descriptor, &budget)
                         .map(|p| AcceptancePipeline::Render(Box::new(p)))?
                 }
                 RowStage::Object | RowStage::Mesh => {
@@ -1173,14 +1109,9 @@ mod tests {
             .unwrap()
             .expect("a descriptor");
         assert_eq!(implied.attributes.len(), 4);
-        let RowCompile::Compiled(pipeline) = compile_row(
-            &bitcode,
-            "stage_in_fetch",
-            RowStage::Kernel,
-            Projection::Derived,
-            &device,
-            None,
-        ) else {
+        let RowCompile::Compiled(pipeline) =
+            compile_row(&bitcode, "stage_in_fetch", RowStage::Kernel, &device, None)
+        else {
             panic!("stage_in_fetch did not compile");
         };
         let RowPipeline::Compute {
@@ -1212,14 +1143,9 @@ mod tests {
             return;
         };
         let device = crate::engine::load_device("runtime-floor").unwrap();
-        let RowCompile::Compiled(pipeline) = compile_row(
-            &bitcode,
-            "store_const",
-            RowStage::Kernel,
-            Projection::Derived,
-            &device,
-            None,
-        ) else {
+        let RowCompile::Compiled(pipeline) =
+            compile_row(&bitcode, "store_const", RowStage::Kernel, &device, None)
+        else {
             panic!("store_const did not compile");
         };
         let RowPipeline::Compute {
@@ -1253,9 +1179,7 @@ mod tests {
             Vec::<String>::new()
         );
 
-        let row = |bitcode: &[u8], entry, stage| {
-            compile_row(bitcode, entry, stage, Projection::Derived, &device, None)
-        };
+        let row = |bitcode: &[u8], entry, stage| compile_row(bitcode, entry, stage, &device, None);
         match row(&bitcode, "no_such_entry", RowStage::Kernel) {
             RowCompile::NotCompiled(outcome, detail) => {
                 assert_eq!(outcome.label(), "invalid_descriptor", "{detail}");
@@ -1276,8 +1200,7 @@ mod tests {
     }
 
     /// A vertex row that reads attributes compiles against the descriptor the tool synthesizes
-    /// for them (fixed-function input where the device fetches the format, or every attribute
-    /// pulled); a fragment row compiles into a rasterizing pipeline with its generated
+    /// for them (fixed-function input where the device fetches the format); a fragment row compiles into a rasterizing pipeline with its generated
     /// passthrough vertex companion and the attachments its outputs imply.
     #[test]
     fn vertex_and_fragment_rows_compile_with_their_derived_inputs() {
@@ -1285,25 +1208,19 @@ mod tests {
             return;
         };
         let device = crate::engine::load_device("lavapipe").unwrap();
-        let row = |entry, stage, projection| match compile_row(
-            &bitcode, entry, stage, projection, &device, None,
-        ) {
+        let row = |entry, stage| match compile_row(&bitcode, entry, stage, &device, None) {
             RowCompile::Compiled(pipeline) => match *pipeline {
                 RowPipeline::Render { pipeline, .. } => pipeline,
                 other => panic!("{entry} compiled to {other:?}"),
             },
-            other => panic!("{entry} {projection:?}: {other:?}"),
+            other => panic!("{entry}: {other:?}"),
         };
-        let vertex = row("stage_io_vertex", RowStage::Vertex, Projection::Derived);
+        let vertex = row("stage_io_vertex", RowStage::Vertex);
         assert!(vertex.graphics.rasterizer_discard);
         assert_eq!(vertex.vertex_input.attributes.len(), 4);
         assert_eq!(vertex.vertex_input.bindings.len(), 4);
-        let pulled = row("stage_io_vertex", RowStage::Vertex, Projection::Pulled);
-        assert!(pulled.vertex_input.attributes.is_empty(), "{pulled:?}");
-        assert!(pulled.vertex_input.bindings.is_empty());
-        assert_ne!(pulled.stages[0].spirv, vertex.stages[0].spirv);
 
-        let fragment = row("stage_io_fragment", RowStage::Fragment, Projection::Derived);
+        let fragment = row("stage_io_fragment", RowStage::Fragment);
         assert!(!fragment.graphics.rasterizer_discard);
         assert_eq!(fragment.stages.len(), 2);
         let colors: Vec<usize> = fragment
@@ -1362,7 +1279,6 @@ mod tests {
             let request = PipelineRequest::Row {
                 entry: "kernel_vector_function_constant".into(),
                 stage: RowStage::Kernel,
-                projection: Projection::Derived,
                 constants,
             };
             compile_pipeline(&[&vector], &request, &device, None)
@@ -1453,7 +1369,7 @@ mod tests {
                 Swept::NeedsInput,
             ),
         ] {
-            let compiled = compile_row(bitcode, entry, stage, Projection::Derived, &device, None);
+            let compiled = compile_row(bitcode, entry, stage, &device, None);
             let RowCompile::Compiled(row) = compiled else {
                 panic!("{entry}: {compiled:?}");
             };
@@ -1498,7 +1414,6 @@ mod tests {
             &bitcode,
             "signed_targets_f",
             RowStage::Fragment,
-            Projection::Derived,
             &device,
             None,
         ) else {
@@ -1549,26 +1464,11 @@ mod tests {
             }
             Device::from_queries(description, DevicePolicy::default()).unwrap()
         };
-        let compile_on = |device: &Device, entry| {
-            compile_row(
-                &bitcode,
-                entry,
-                RowStage::Vertex,
-                Projection::Derived,
-                device,
-                None,
-            )
-        };
+        let compile_on =
+            |device: &Device, entry| compile_row(&bitcode, entry, RowStage::Vertex, device, None);
         let compile = |profile: &str, entry| {
             let device = crate::engine::load_device(profile).unwrap();
-            compile_row(
-                &bitcode,
-                entry,
-                RowStage::Vertex,
-                Projection::Derived,
-                &device,
-                None,
-            )
+            compile_row(&bitcode, entry, RowStage::Vertex, &device, None)
         };
         for entry in ["tess_quad_buffer", "tess_triangle_points"] {
             let RowCompile::Compiled(pipeline) = compile("lavapipe", entry) else {
@@ -1621,14 +1521,13 @@ mod tests {
             return;
         };
         let device = crate::engine::load_device("moltenvk-m3").unwrap();
-        let request = |linked: Vec<LinkedLibrary>| PipelineRequest::BoundCompute {
+        let request = |linked: Vec<LinkedLibrary>| PipelineRequest::Kernel {
             function: RequestFunction {
                 entry: "linked_visible_caller".into(),
                 constants: FunctionConstantValues::defaults(),
                 linked,
             },
-            shape: BindShape::default(),
-            dispatch: None,
+            threads_per_threadgroup: [32, 1, 1],
         };
         let library = |names: &[&str]| LinkedLibrary {
             functions: names.iter().map(|name| (*name).to_owned()).collect(),
@@ -1685,23 +1584,20 @@ mod tests {
             vertex: function("v", vertex),
             fragment: function("f", fragment),
             template: template.clone(),
-            shape: None,
         };
         assert_eq!(draw(2, 1).linked_ranges(), [2..4, 4..5]);
         assert_eq!(draw(2, 1).libraries(), 5);
         assert_eq!(draw(0, 3).linked_ranges(), [2..2, 2..5]);
         assert_eq!(draw(1, 0).linked_ranges(), [2..3, 3..3]);
-        let kernel = PipelineRequest::BoundCompute {
+        let kernel = PipelineRequest::Kernel {
             function: function("k", 2),
-            shape: BindShape::default(),
-            dispatch: None,
+            threads_per_threadgroup: [32, 1, 1],
         };
         assert_eq!(kernel.linked_ranges(), vec![Range { start: 1, end: 3 }]);
         assert_eq!(kernel.libraries(), 3);
         let vertex = PipelineRequest::VertexDraw {
             function: function("v", 1),
             template,
-            shape: None,
         };
         assert_eq!(vertex.linked_ranges(), vec![Range { start: 1, end: 2 }]);
         let row = PipelineRequest::Compute {
@@ -1780,7 +1676,6 @@ mod tests {
                 &retained(b"bitcode"),
                 "main",
                 stage,
-                Projection::Derived,
                 &FunctionConstantValues::defaults(),
             );
             match row {
@@ -1852,7 +1747,6 @@ mod tests {
             &bitcode,
             "stage_io_fragment",
             RowStage::Fragment,
-            Projection::Derived,
             &device,
             None,
         ) {

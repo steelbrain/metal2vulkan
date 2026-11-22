@@ -323,10 +323,9 @@ impl Device {
         self.render_variant_key(d, &VariantKey::new(), b, &StageEntries::new())
     }
 
-    /// The keys of the render pipeline `d` compiled under variant `v`
-    /// ([`Device::compile_render_variant`]). Each `Function` stage's specialized entry is the one
-    /// `entries` holds, or one made there now: a creation that gave the same object to its
-    /// descriptor's checks specializes each stage once.
+    /// The keys of the render pipeline `d` compiled under variant `v`. Each `Function` stage's
+    /// specialized entry is the one `entries` holds, or one made there now: a creation that gave
+    /// the same object to its descriptor's checks specializes each stage once.
     pub fn render_variant_key(
         &self,
         d: &RenderPipelineDescriptor,
@@ -444,30 +443,16 @@ impl Device {
 
     /// Compile the render pipeline `d` under budget `b`. A vertex attribute whose buffer has no
     /// layout, read by the vertex function or not, is `InvalidDescriptor(VertexLayout)`, where
-    /// Metal stops at an assertion.
+    /// Metal stops at an assertion. Each stage's recursion is sized for `d`'s
+    /// `maxVertexCallStackDepth` or `maxFragmentCallStackDepth`, as a compute kernel's is for its
+    /// pipeline's; a `Compiled` stage sized for another depth is
+    /// `InvalidDescriptor(MaxCallStackDepth)`.
     pub fn compile_render_pipeline(
         &self,
         d: &RenderPipelineDescriptor,
         b: &Budget,
     ) -> Result<RenderPipeline, Error> {
-        self.compile_render_variant(d, &VariantKey::new(), b)
-    }
-
-    /// Compile the render pipeline `d` under the variant `v` a render plan asked for
-    /// (`BindingPlan::variant`) and budget `b`: each `Function` stage under
-    /// [`VariantKey::lowering_inputs`] of its stage (the vertex stage's projection pulls `v`'s
-    /// vertex buffers), linked with those layouts pulled. A `Compiled` stage must have been
-    /// compiled under the same inputs; link refuses a vertex stage compiled under another
-    /// projection. Each stage's recursion is sized for `d`'s `maxVertexCallStackDepth` or
-    /// `maxFragmentCallStackDepth`, as a compute kernel's is for its pipeline's; a `Compiled` stage
-    /// sized for another depth is `InvalidDescriptor(MaxCallStackDepth)`.
-    pub fn compile_render_variant(
-        &self,
-        d: &RenderPipelineDescriptor,
-        v: &VariantKey,
-        b: &Budget,
-    ) -> Result<RenderPipeline, Error> {
-        guarded(|| self.render_pipeline(d, v, &mut Meter::new(b)))
+        guarded(|| self.render_pipeline(d, &VariantKey::new(), &mut Meter::new(b)))
     }
 
     /// Compile the mesh render pipeline `d` under budget `b`: its object function (when it has one)
@@ -487,23 +472,11 @@ impl Device {
         d: &MeshPipelineDescriptor,
         b: &Budget,
     ) -> Result<RenderPipeline, Error> {
-        self.compile_mesh_variant(d, &VariantKey::new(), b)
+        guarded(|| self.mesh_pipeline(d, &VariantKey::new(), &mut Meter::new(b)))
     }
 
-    /// Compile the mesh render pipeline `d` under the variant `v` a plan of it asked for
-    /// (`BindingPlan::variant`) and budget `b`, as [`Device::compile_mesh_pipeline`] does: each
-    /// `Function` stage under [`VariantKey::lowering_inputs`] of its stage, the fragment function's
-    /// for the mesh function's outputs.
-    pub fn compile_mesh_variant(
-        &self,
-        d: &MeshPipelineDescriptor,
-        v: &VariantKey,
-        b: &Budget,
-    ) -> Result<RenderPipeline, Error> {
-        guarded(|| self.mesh_pipeline(d, v, &mut Meter::new(b)))
-    }
-
-    /// [`Device::compile_mesh_variant`] with the caller's meter.
+    /// [`Device::compile_mesh_pipeline`] of `d` under the variant `v` (`VariantKey::new()` there),
+    /// with the caller's meter.
     pub(crate) fn mesh_pipeline(
         &self,
         d: &MeshPipelineDescriptor,
@@ -751,7 +724,20 @@ impl Device {
         })
     }
 
-    /// [`Device::compile_render_variant`] with the caller's meter.
+    /// Compile the render pipeline `d` under the variant `v` and budget `b`: the crate's tests'
+    /// compile of a variant ([`Device::compile_render_pipeline`] compiles under `VariantKey::new()`).
+    #[cfg(test)]
+    pub(crate) fn compile_render_variant(
+        &self,
+        d: &RenderPipelineDescriptor,
+        v: &VariantKey,
+        b: &Budget,
+    ) -> Result<RenderPipeline, Error> {
+        guarded(|| self.render_pipeline(d, v, &mut Meter::new(b)))
+    }
+
+    /// The render pipeline `d` compiled under the variant `v` with the caller's meter
+    /// ([`Device::compile_render_pipeline`] under `VariantKey::new()`).
     pub(crate) fn render_pipeline(
         &self,
         d: &RenderPipelineDescriptor,
