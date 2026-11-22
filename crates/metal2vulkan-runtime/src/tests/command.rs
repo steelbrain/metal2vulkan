@@ -139,6 +139,7 @@ pub(crate) mod on_device {
     use crate::buffer::BufferObject;
     use crate::device::lock;
     use crate::submit::{GROUP_RUN, IN_FLIGHT, UNSEEN_JOINS};
+    use crate::tests::compute::on_device::step;
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         host_time, AllocationId, AllocationInfo, Block, BlockMappings, Buffer, CommandBuffer,
@@ -2030,6 +2031,68 @@ pub(crate) mod on_device {
                 seen,
                 metal_wait_split(),
                 "{name}: (completed, copy, buffer)"
+            );
+        });
+    }
+
+    /// Behind the busy gate ([`Busy::new`]), a long writer runs on one queue: six dispatches of
+    /// `x = x * 2 + 1`, two kernels of unknown rate in turn, so a runtime that cuts a command
+    /// buffer into pieces of a kernel's rate makes six, more than the device's room takes, and
+    /// the rest wait. A copy of what it writes is then committed to an idle queue, and a copy of
+    /// that copy to a third idle queue, with no host wait for either. Once the submit thread has
+    /// looked past the second copy (an empty command buffer committed after it is scheduled) the
+    /// gate opens. Metal submits the first copy at its commit, its queue having nothing ahead of
+    /// it, so its hazard tracking orders that copy after the writer and the second copy after it:
+    /// both read every step. The device's counts once the copies were seen are printed, so a run
+    /// shows the shape it held (the cuts and the copies held behind the writer, where counted).
+    #[test]
+    fn every_device_copies_an_idle_queues_copy_of_a_long_write_into_a_later_sharer() {
+        each_device("command_sharer_behind_held", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let (written, copied, read) = (arena.buffer(), arena.buffer(), arena.buffer());
+            let kernels = [step(&device), step(&device)];
+            let (writing, copying, reading, probing) = (
+                queue(&device),
+                queue(&device),
+                queue(&device),
+                queue(&device),
+            );
+            let busy = Busy::new(&device);
+            let writer = writing.command_buffer().expect("a command buffer");
+            let mut encoder =
+                (writer.compute_command_encoder(DispatchType::Serial)).expect("an encoder");
+            encoder.set_buffer(Some(&written), 0, 0).expect("a buffer");
+            for kernel in kernels.iter().cycle().take(6) {
+                encoder.set_compute_pipeline_state(kernel).expect("a state");
+                (encoder.dispatch_threadgroups([1, 1, 1], [64, 1, 1])).expect("a dispatch");
+            }
+            encoder.end_encoding();
+            writer.commit().expect("a commit");
+            within(name, || writer.status() != CommandBufferStatus::Committed);
+            let copy = |queue: &CommandQueue, from: &Buffer, to: &Buffer| {
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut blit = command_buffer.blit_command_encoder().expect("an encoder");
+                (blit.copy_from_buffer_to_buffer(from, 0, to, 0, 256)).expect("a copy");
+                blit.end_encoding();
+                command_buffer.commit().expect("a commit");
+                command_buffer
+            };
+            let first = copy(&copying, &written, &copied);
+            let second = copy(&reading, &copied, &read);
+            let probe = probing.command_buffer().expect("a command buffer");
+            probe.commit().expect("a commit");
+            within(name, || probe.status() != CommandBufferStatus::Committed);
+            let counts = device.counters().metrics();
+            println!("{name}: the device's counts once the copies were seen: {counts:?}");
+            busy.open();
+            for command_buffer in [&writer, &first, &second, &probe] {
+                finished(name, command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+            }
+            assert_eq!(
+                (word(&written), word(&copied), word(&read)),
+                (63, 63, 63),
+                "{name}: the write's six steps, the first copy and the second"
             );
         });
     }
