@@ -25,10 +25,9 @@
 //! by Metal's twelve-bit table, as `pack_float_to_srgb_unorm4x8` encodes a color channel. The
 //! fragment function encodes the channel by the MSL transfer through the device's `Pow`, as its
 //! `pack_float_to_srgb_unorm4x8` does (`lower::arith::pack`, `PrecisionNote::DevicePackConversion`). A write
-//! of some of its channels merges the word into the texel's over the attachment's input attachment
-//! on a device that orders fetch through rasterization-order input attachments
-//! (`color_writes::merged_word`), and is refused as the device lacking the format elsewhere. A
-//! blend of such an attachment, other than one and zero, is not built.
+//! of some of its channels takes the format's own attachment, refused as the device lacking the
+//! format: its merge into the texel over an ordered read of the attachment is not built. A blend
+//! of such an attachment, other than one and zero, is not built.
 //!
 //! Metal's store of a `float` output into `RGB9E5Float` (measured on the M3 Max: 65,536 draws and
 //! clears, and the format scout's draws): each of red, green and blue clamped to `[0, 65408]` (a
@@ -38,13 +37,9 @@
 //! folds the conversion into the store): that store is not built.
 //!
 //! A blend of factors one and zero, added, stores the same (Metal's draws through it matched too).
-//! A write mask of some of the format's channels keeps the other fields: on a device that orders
-//! fetch through rasterization-order input attachments, the fragment function merges an 8-bit
-//! sRGB word into the word its input attachment holds (`lower::fragment`'s `word_input`). The
-//! device blends no such view, resolves none, and reads none as the format's input attachment: a
-//! pipeline that blends a word attachment, covers by its alpha, or writes some of a packed 16-bit
-//! or `RGB9E5Float` word's channels is refused as the device lacking the format's attachment, as
-//! without the view. A fragment function's color input of a word attachment is
+//! The device blends no such view, resolves none, and reads none as the format's input attachment:
+//! a pipeline that blends a word attachment, covers by its alpha, or writes some of a word's
+//! channels is refused as the device lacking the format's attachment, as without the view. A fragment function's color input of a word attachment is
 //! `NotImplemented(Format)`.
 //!
 //! A multisampled texture of such a format is held in the word's format where the device renders

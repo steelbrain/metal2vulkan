@@ -219,8 +219,7 @@ fn rgba4_opaque_black_swizzled_follows_exposure() {
 
 /// A device that exposes only the ARM spelling of rasterization-order attachment access has the
 /// same feature as one exposing the EXT spelling: the extension and its feature structure map to
-/// one vocabulary entry, so its fragments read their color attachments in rasterization order
-/// and the ordered fetch is enabled.
+/// one vocabulary entry.
 #[test]
 fn the_arm_spelling_of_rasterization_order_access_is_the_ext_one() {
     use crate::device::requirements::VkExtension;
@@ -234,21 +233,11 @@ fn the_arm_spelling_of_rasterization_order_access_is_the_ext_one() {
                        "features": {{{feature}}}}}"#
         ),
     );
-    let mut d = DeviceDescription::from_khronos_json(&arm, None).unwrap();
+    let d = DeviceDescription::from_khronos_json(&arm, None).unwrap();
     assert!(d
         .extensions
         .contains(&VkExtension::ExtRasterizationOrderAttachmentAccess));
     assert!(d.has(VkFeature::RasterizationOrderColorAttachmentAccess));
-    // The push window the floor needs, which a Vulkan 1.2 document leaves at 128.
-    d.limits.max_push_constants_size = 256;
-    let dev = crate::device::Device::from_queries(d, crate::device::DevicePolicy::RESIDENT_TABLES)
-        .unwrap();
-    assert!(
-        dev.profile()
-            .fields()
-            .fragment
-            .rasterization_order_color_access
-    );
     // The structure without its extension is not exposed.
     let bare = doc(
         "1.2.0",

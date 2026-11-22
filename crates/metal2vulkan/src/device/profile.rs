@@ -562,7 +562,7 @@ pub struct DescriptorCaps {
 
 /// Fragment-stage and fixed-function capabilities ([`DeviceProfile::fragment`]). Each field is the
 /// Vulkan feature or extension of that name (`shaderStencilExport` for `stencil_export`,
-/// `rasterizationOrderColorAttachmentAccess` for `rasterization_order_color_access`, ...), enabled.
+/// `shaderClipDistance` for `clip_distance`, ...), enabled.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct FragmentCaps {
@@ -578,7 +578,6 @@ pub struct FragmentCaps {
     pub output_layer: bool,
     pub output_viewport_index: bool,
     pub clip_distance: bool,
-    pub rasterization_order_color_access: bool,
     pub vertex_attribute_divisor: bool,
 }
 

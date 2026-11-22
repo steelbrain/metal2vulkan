@@ -133,9 +133,8 @@ pub use layout::{
 };
 pub use link::{heap_sampler_capacity, heap_unused_while_pending};
 pub use lower_inputs::{
-    AliasView, AmplificationDraws, BlendEquation, ChannelWrite, ExtendedRangeColor, FactorLane,
-    FetchedAttachment, FramebufferFetchInputs, KernelVariant, LoweringInputs, StorageImageChoice,
-    StorageImageClass, VertexFetch, VertexFetchProjection,
+    AliasView, AmplificationDraws, ChannelWrite, ExtendedRangeColor, FactorLane, KernelVariant,
+    LoweringInputs, StorageImageChoice, StorageImageClass, VertexFetch, VertexFetchProjection,
 };
 pub use own::{own_kernel, ExecutionCounts, OwnKernel};
 pub use table::FunctionHandle;

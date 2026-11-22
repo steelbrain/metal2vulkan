@@ -87,12 +87,16 @@ fn recommendations_are_closed_fixed_points_on_every_committed_profile() {
             VkFeature::ShaderFmaFloat32,
             VkFeature::ShaderFloat8,
             VkFeature::ShaderImageInt64Atomics,
+            VkFeature::RasterizationOrderColorAttachmentAccess,
+            VkFeature::RasterizationOrderDepthAttachmentAccess,
+            VkFeature::RasterizationOrderStencilAttachmentAccess,
         ];
         for e in [
             VkExtension::ExtDepthBiasControl,
             VkExtension::KhrShaderFma,
             VkExtension::ExtShaderFloat8,
             VkExtension::ExtShaderImageAtomicInt64,
+            VkExtension::ExtRasterizationOrderAttachmentAccess,
         ] {
             assert!(!rec.extensions.contains(&e), "{stem}: {e:?}");
         }

@@ -147,7 +147,6 @@ ratemap	SampleOutOfRange	rare	a rate map quality sample outside [0, 1] among oth
 ratemap	SampleCount	rare	a rate map axis of more distinct samples than measured (9 on one layer, 4 on two)
 budget	Time	none	a translation past its deadline: a defect of ours to fix on any supported input (AGENTS.md: 20 seconds)
 feature	PrivateRenderState	none	Apple-private pipeline fields of OpenGL on Metal (no public header)
-feature	ExtendedRangeBlend	system	an extended-range (XR10) attachment blended from an output other than four half or float lanes; a 16-bit float attachment's storage-form blend of a second-source factor or a one-color-channel mask under fast math; the consumer's guests blend RGB10A8_2P_XR10 attachments
 feature	CommandPredication	none	Apple-private command predication on a device without buffer device addresses
 feature	ProgramScopeBinding	app	MSL 3.2 program-scope buffer bindings (macOS 15 and later)
 feature	GenericPointer	system	MSL 4.1 generic pointers held in memory or of two spaces (macOS 27 and later)

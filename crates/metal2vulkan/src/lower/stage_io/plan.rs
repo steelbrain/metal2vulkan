@@ -2153,19 +2153,9 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             if cx.stage == Stage::Fragment && cx.inputs.rotated_factors.contains_key(&color) {
                 continue;
             }
-            // The second source of an extended-range blend the function computes over the
-            // attachment's input attachment, which the blend reads from the returned value.
-            if cx.stage == Stage::Fragment
-                && crate::lower::fragment::blends_second_through_inputs(cx, color)
-            {
-                crate::lower::fragment::select_input_second_output(cx, o.field, color, ty)
-                    .map_err(|e| e.at_attachment(Attachment::Color(color)))?;
-                continue;
-            }
-            // Every other write of an extended-range attachment (the raw texel's through the
-            // interface, or over the input attachment unblended) reads no second
-            // output, as Metal's write there reads none: it is stored nowhere, where the
-            // interface's raw texel refused it `Format`.
+            // A write of an extended-range attachment (the raw texel's through the interface)
+            // reads no second output, as Metal's unblended write there reads none: it is stored
+            // nowhere, where the interface's raw texel refused it `Format`.
             if cx.stage == Stage::Fragment && cx.inputs.extended_range_colors.contains_key(&color) {
                 continue;
             }
@@ -2989,12 +2979,6 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             cx.push.insert(PushField::AlphaTestReference);
         }
         cx.families.stage_io.interface.alpha_test = Some(function);
-    }
-    // The render pipeline's private logic operation, which the function's writes compute
-    // (`lower::fragment`'s `logic`): recorded for link, whether or not the function writes an
-    // attachment the operation serves.
-    if cx.stage == Stage::Fragment {
-        cx.families.stage_io.interface.logic_operation = cx.inputs.logic_operation;
     }
     // The render pipeline's private masks a fragment function applies itself: its `SampleMask`
     // output, the function's own where it writes one, which each return ANDs the pixel's mask

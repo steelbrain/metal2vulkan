@@ -1944,32 +1944,6 @@ fn fp8_to_integer_converts_every_pattern_as_its_value() {
     }
 }
 
-/// `k / d` is correctly rounded (the host's IEEE `f32` division) for every `k` in `[0, d]` of every
-/// normalized scale and the sRGB step scale 4095, and for every 97th `k` and both ends of the
-/// 16-bit scales.
-#[test]
-fn normalized_division_is_correctly_rounded() {
-    let u = int(32);
-    let s = float(32);
-    for d in [1u32, 3, 31, 63, 127, 255, 1023, 4095, 32767, 65535] {
-        let step = if d > 4095 { 97 } else { 1 };
-        let cases: Vec<Case> = (0..=u64::from(d))
-            .step_by(step)
-            .chain([u64::from(d) - 1, u64::from(d)])
-            .map(|k| vec![vec![k]])
-            .collect();
-        check(
-            &format!("k / {d}"),
-            &[u],
-            s,
-            &|fb, k| crate::lower::arith::exact_division::div_exact(fb, u, k[0], d),
-            &cases,
-            &|c| Some(vec![u64::from((arg(c, 0) as f32 / d as f32).to_bits())]),
-            false,
-        );
-    }
-}
-
 /// The value of a packed small-float field with a 5-bit exponent (bias 15) above `man` bits.
 fn small_float(field: u64, man: u32) -> f64 {
     let e = (field >> man) & 0x1F;

@@ -67,8 +67,8 @@ pub struct LoweringInputs {
     /// signed-integer pixel format (`MTLRenderPipelineColorAttachmentDescriptor.pixelFormat`). A
     /// 32-bit integer color output to one is declared `int`, because Vulkan writes a signed-integer
     /// attachment only from a signed output; every other integer output is declared `uint`. Under
-    /// the identity domains on a device that orders framebuffer fetch in neither form it also
-    /// holds the signed-integer attachments the function reads (`[[color(n)]]`), whose integer
+    /// the identity domains it also holds the signed-integer attachments the function reads
+    /// (`[[color(n)]]`), whose integer
     /// read fetches the attachment's own view through an `int` image (`PushField::FetchedColor`).
     /// `Device::compile_render_pipeline` sets it for a `Function` fragment stage, and a fragment
     /// compiled on its own for such a pipeline compiles under the same set; any other function
@@ -90,8 +90,8 @@ pub struct LoweringInputs {
     /// `InterpolateAtOffset` at offset 0 on a device with interpolation functions whose offset
     /// reads from the center (`VkProperty::InterpolateAtOffsetCentered`): the pixel center whatever
     /// samples its invocation shades (`StageIo::{multisampled, varyings_at_pixel}`). A function
-    /// that reads its color attachments (`framebuffer_fetch`) reads each one's multisampled image
-    /// at its `SampleId`, running once per covered sample, as
+    /// that reads its color attachments reads each one's multisampled image at its `SampleId`,
+    /// running once per covered sample, as
     /// Metal does. `Device::compile_render_pipeline` sets it for a `Function` fragment stage, and a
     /// fragment compiled on its own for such a pipeline compiles under it: link refuses one
     /// compiled without it whose sample-rate invocations would read either elsewhere, or that reads
@@ -131,18 +131,6 @@ pub struct LoweringInputs {
     /// states `RuntimeFact::MergedDraws`. Any other stage compiles as without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub merged_draws: bool,
-    /// The render pipeline state of the attachments whose writes a fragment function computes
-    /// over their input attachments, on a device that orders fetch through rasterization-order
-    /// input attachments: an extended-range attachment the pipeline blends, one held with its
-    /// channels rotated whose blend no Vulkan state gives, a word or extended-range attachment
-    /// written under a mask of some of a word's channels, and an attachment a private logic
-    /// operation the function computes serves. `Device::compile_render_pipeline` sets it for a
-    /// `Function` fragment stage on such a device, and a fragment compiled on its own for such a
-    /// pipeline compiles under the same state; without it such a function is
-    /// `NeedsInput(FramebufferFetch)`. `None` on every other device and for every other
-    /// function.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub framebuffer_fetch: Option<FramebufferFetchInputs>,
     /// Texture slots bound to an 8-bit sRGB texture the device cannot sample, which the runtime
     /// holds as the format's UNORM twin, whose views read the codes (`VariantKey::srgb_textures`,
     /// `RuntimeFact::SrgbTexture`): each `half` or `float` access of such a slot decodes what its
@@ -473,8 +461,7 @@ pub struct LoweringInputs {
     /// unblended (or blended with factors one and zero, added), under a write mask of all of the
     /// format's channels or none, and that is not attachment 0 under alpha-to-coverage, of a format
     /// the device samples but does not render (one written under a mask of some of its channels
-    /// is merged over the input attachment where the device orders fetch so, named in
-    /// [`framebuffer_fetch`](Self::framebuffer_fetch)). The function writes such an attachment
+    /// takes the format's own attachment). The function writes such an attachment
     /// through an output variable of the word's unsigned integer, the word Metal stores for its
     /// `float` or `half` output (`ChannelWrite::HalfUnorm`'s rule per channel); a dual-source
     /// second output there is stored nowhere, as Metal's unblended write reads none, and a color
@@ -593,16 +580,6 @@ pub struct LoweringInputs {
     /// tests nothing. Any other function compiles as without it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub alpha_test: Option<crate::metal::CompareFunction>,
-    /// The render pipeline's private logic operation (`logicOperationEnabled`, `logicOperation`),
-    /// which the fragment function computes itself on a device without Vulkan's `logicOp` that
-    /// orders framebuffer fetch: its first output's write to each normalized or integer attachment
-    /// the operation serves reads the pixel's texel, operates on the codes, and stores the result
-    /// (`StageIo::logic_operation`; `lower::fragment`'s `logic`). `Device::compile_render_pipeline`
-    /// sets it for a `Function` fragment stage of such a pipeline on such a device, for every
-    /// operation but copy and no-op, which the attachments' blends and masks draw. Any other
-    /// function compiles as without it.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub logic_operation: Option<vk::LogicOp>,
     /// The render pipeline's private `fragmentDepthCompareClampMask`: a fragment function's depth
     /// comparison through `[[sampler(s)]]` where bit `s` is set, or through a constexpr sampler
     /// where bit 31 is, clamps its reference to `[0, 1]`, a NaN taken as 0, before comparing, as
@@ -990,112 +967,6 @@ impl AmplificationDraws {
     /// viewport (`viewports`).
     pub fn new(layered: bool, viewports: bool) -> AmplificationDraws {
         AmplificationDraws { layered, viewports }
-    }
-}
-
-/// The render pipeline state a fragment function's computed writes over its input attachments
-/// depend on (`LoweringInputs::framebuffer_fetch`): the attachments whose blend, merge or logic
-/// operation the function computes over the texel it reads.
-#[non_exhaustive]
-#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct FramebufferFetchInputs {
-    /// Each color attachment index the function declares a `[[color(n)]]` input for: the
-    /// descriptor's attachment there, `None` where the descriptor sets none.
-    pub attachments: BTreeMap<u32, Option<FetchedAttachment>>,
-}
-
-impl FramebufferFetchInputs {
-    /// The state of a pipeline whose color attachments are `colors` (by Metal index), for a
-    /// function whose writes at `read` the function computes over its input attachments.
-    pub fn of(
-        read: impl IntoIterator<Item = u32>,
-        colors: &[Option<crate::pipeline::descriptor::ColorAttachmentDescriptor>],
-    ) -> FramebufferFetchInputs {
-        FramebufferFetchInputs {
-            attachments: read
-                .into_iter()
-                .map(|color| {
-                    let attachment =
-                        colors
-                            .get(color as usize)
-                            .copied()
-                            .flatten()
-                            .map(|a| FetchedAttachment {
-                                pixel_format: a.pixel_format,
-                                blending_enabled: a.blending_enabled,
-                                write_mask: crate::lower::fragment::compiled_write_mask(
-                                    a.pixel_format,
-                                    a.write_mask,
-                                    a.blending_enabled,
-                                ),
-                                replaces: crate::pipeline::color_writes::replaces(&a),
-                                equation: BlendEquation::of(&a),
-                            });
-                    (color, attachment)
-                })
-                .collect(),
-        }
-    }
-}
-
-/// What a function's computed write over its input attachment reads of one color attachment's
-/// descriptor.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct FetchedAttachment {
-    pub pixel_format: metal::PixelFormat,
-    pub blending_enabled: bool,
-    /// The descriptor's write mask, as the function compiles it: for a format whose kept
-    /// channels a draw names (every format but an extended-range or an sRGB one), the mask's class
-    /// (none where it covers none of the format's channels, all where it covers every one, and for
-    /// a mask covering some, every channel of the format but its first), so that the masks of a
-    /// class share one key; any other format's mask as the descriptor sets it.
-    pub write_mask: metal::ColorWriteMask,
-    /// The descriptor's blend factors are one and zero, added, for color and alpha: where
-    /// blending is enabled, Metal stores the source as blending disabled does (but a signed
-    /// normalized NaN, and a 16-bit float attachment's blend without fast math, which keeps the
-    /// destination's product by zero).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub replaces: bool,
-    /// The descriptor's blend where it enables blending, which the function computes in the
-    /// shader for an extended-range attachment (`metal::format::ExtendedRange`) it writes.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub equation: Option<BlendEquation>,
-}
-
-/// A color attachment's blend as its descriptor states it: the factors and operation of the color
-/// channels and of alpha.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct BlendEquation {
-    /// `sourceRGBBlendFactor`.
-    pub source_rgb: metal::BlendFactor,
-    /// `destinationRGBBlendFactor`.
-    pub destination_rgb: metal::BlendFactor,
-    /// `rgbBlendOperation`.
-    pub rgb_operation: metal::BlendOperation,
-    /// `sourceAlphaBlendFactor`.
-    pub source_alpha: metal::BlendFactor,
-    /// `destinationAlphaBlendFactor`.
-    pub destination_alpha: metal::BlendFactor,
-    /// `alphaBlendOperation`.
-    pub alpha_operation: metal::BlendOperation,
-}
-
-impl BlendEquation {
-    /// The blend of attachment `c`, where it enables blending.
-    pub fn of(c: &crate::pipeline::descriptor::ColorAttachmentDescriptor) -> Option<BlendEquation> {
-        c.blending_enabled.then_some(BlendEquation {
-            source_rgb: c.source_rgb_blend_factor,
-            destination_rgb: c.destination_rgb_blend_factor,
-            rgb_operation: c.rgb_blend_operation,
-            source_alpha: c.source_alpha_blend_factor,
-            destination_alpha: c.destination_alpha_blend_factor,
-            alpha_operation: c.alpha_blend_operation,
-        })
     }
 }
 

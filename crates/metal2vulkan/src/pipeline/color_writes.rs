@@ -328,11 +328,9 @@ pub(crate) fn extended_range_colors(
 /// Whether color attachment `c`, of an extended-range form that holds its three color codes in
 /// one raw component (`BGR10_XR`, the two-plane forms' color word, and their `_sRGB` twins), is
 /// written unblended under a mask of some of those codes ([`merges_extended`]): no mask of the
-/// raw components keeps one code of a word and writes another, so the fragment function merges its
-/// codes into the word it reads first, over the attachment's input attachment
-/// (`lower::fragment`'s `input_blend`, `RuntimeFact::WordInputMerge`) where the device orders
-/// fetch through rasterization-order input attachments. On a device that does not order fetch so,
-/// link names the ordering the merge needs (`lower::fragment::fetch::unordered_extended_fetch`).
+/// raw components keeps one code of a word and writes another, and the fragment function's merge
+/// of its codes into the word over an ordered read of the attachment is not built, so link refuses
+/// it (`lower::fragment::fetch::computed_write_refused`).
 pub(crate) fn merged_extended(c: &ColorAttachmentDescriptor) -> bool {
     merges_extended(c.pixel_format, c.write_mask, c.blending_enabled)
 }
@@ -355,11 +353,10 @@ pub(crate) fn merges_extended(
 /// render pipeline, described by `c`, that covers by alpha where `alpha_to_coverage`
 /// (`LoweringInputs::word_colors`): `metal::format::WordAttachment::of` the attachment's format,
 /// where the pipeline writes it unblended (or blended with factors one and zero, added, which
-/// Metal stores alike), under a write mask of all of the format's channels or none, or of some of
-/// them where the function merges the word into the texel over its input attachment
-/// ([`merged_word`]), and it is not attachment 0 under alpha-to-coverage (whose coverage reads the
-/// output's alpha as computed). `None` for every other attachment: one that takes its format's own
-/// attachment, as the device has it or not.
+/// Metal stores alike), under a write mask of all of the format's channels or none, and it is not
+/// attachment 0 under alpha-to-coverage (whose coverage reads the output's alpha as computed).
+/// `None` for every other attachment: one that takes its format's own attachment, as the device
+/// has it or not.
 pub(crate) fn word_color(
     index: u32,
     c: &ColorAttachmentDescriptor,
@@ -369,9 +366,8 @@ pub(crate) fn word_color(
     let word = metal::format::WordAttachment::of(c.pixel_format, p)?;
     let kept = c.write_mask & word_channels(word);
     let whole = kept.is_empty() || kept == word_channels(word);
-    let merged = merges_over_input(c, word, p);
     let unblended = !c.blending_enabled || replaces(c);
-    (unblended && (whole || merged) && !(index == 0 && alpha_to_coverage)).then_some(word)
+    (unblended && whole && !(index == 0 && alpha_to_coverage)).then_some(word)
 }
 
 /// The channels of `word`'s fields: Metal's red, green, blue and alpha, in its field order.
@@ -382,40 +378,6 @@ fn word_channels(word: metal::format::WordAttachment) -> metal::ColorWriteMask {
         .zip(word.fields())
         .filter(|(_, f)| f.is_some())
         .fold(M::NONE, |m, (bit, _)| m | bit)
-}
-
-/// Whether the fragment function merges its word of attachment `c` (a `word` attachment) into the
-/// texel over the attachment's input attachment: a write mask of some of the word's channels, on a
-/// device that orders framebuffer fetch through rasterization-order input attachments
-/// (`lower::fragment`'s `word_input`), for a format whose mask the function compiles as the
-/// descriptor sets it (`lower::fragment::fetch::kept_at_draw` false: the 8-bit sRGB words, where a
-/// packed 16-bit or `RGB9E5Float` word's mask stands for its class).
-fn merges_over_input(
-    c: &ColorAttachmentDescriptor,
-    word: metal::format::WordAttachment,
-    p: &DeviceProfile,
-) -> bool {
-    let channels = word_channels(word);
-    let kept = c.write_mask & channels;
-    let partial = !kept.is_empty() && kept != channels;
-    partial
-        && !crate::lower::fragment::fetch::kept_at_draw(c.pixel_format)
-        && crate::lower::fragment::inputs_order(p)
-}
-
-/// The channels the fragment function keeps from the texel of color attachment `index` of a
-/// render pipeline, described by `c`, that covers by alpha where `alpha_to_coverage`, where it
-/// merges its word into the texel over the attachment's input attachment ([`word_color`],
-/// `lower::fragment`'s `word_input`): those of the word's channels the write mask leaves out.
-/// `None` for every other attachment.
-pub(crate) fn merged_word(
-    index: u32,
-    c: &ColorAttachmentDescriptor,
-    alpha_to_coverage: bool,
-    p: &DeviceProfile,
-) -> Option<metal::ColorWriteMask> {
-    let word = word_color(index, c, alpha_to_coverage, p)?;
-    merges_over_input(c, word, p).then(|| word_channels(word).difference(c.write_mask))
 }
 
 /// The word attachments of a render pipeline whose color attachments are `colors` (covering by
@@ -555,26 +517,15 @@ pub(crate) fn wanted_alpha_in_red(
     out
 }
 
-/// Whether the fragment function computes Metal's blend into color attachment `c` of a render
-/// pipeline on `p` itself, over the texel it reads: an attachment held with its channels rotated
-/// (`ARGB8Unorm` in `R8G8B8A8_UNORM`, `metal::format::rotated_channels`) whose blend no Vulkan
-/// state on the rotated image gives (`rotated_blend` refuses it `NotImplemented(Format)`: Metal's
-/// destination alpha in a color factor, the saturated source alpha, the blend color's red, green
-/// or blue, different color and alpha operations), whose factors read no second source, on a
-/// device that orders framebuffer fetch (`lower::fragment::fetch`). Metal blends the format as
-/// `RGBA8Unorm` with its channels rotated, so the function computes Metal's 8-bit unorm blend
-/// (`extended_range::Blend::unorm8`, which takes every factor and operation but the second
-/// source's) over the texel rotated into Metal's order, over the attachment's input attachment
-/// where the device orders fetch through rasterization-order input attachments
-/// (`lower::fragment`'s `input_blend`). A device that does not order fetch so refuses the pipeline
-/// (`fetch::unordered_extended_fetch`, at link).
-pub(crate) fn shader_rotated_blend(c: &ColorAttachmentDescriptor, p: &DeviceProfile) -> bool {
-    rotated_blend_in_shader(c, p) && !crate::lower::fragment::fetch::fetch_unordered(p)
-}
-
-/// Whether the blend of color attachment `c` of a render pipeline on `p` is one the fragment
-/// function computes over the texel where the device orders framebuffer fetch
-/// ([`shader_rotated_blend`]'s, whatever the device's orderings).
+/// Whether the blend into color attachment `c` of a render pipeline on `p` is one the fragment
+/// function would compute itself over an ordered read of the attachment, which is not built (link
+/// refuses it, `lower::fragment::fetch::computed_write_refused`): an attachment held with its
+/// channels rotated (`ARGB8Unorm` in `R8G8B8A8_UNORM`, `metal::format::rotated_channels`) whose
+/// blend no Vulkan state on the rotated image gives (`rotated_blend` refuses it
+/// `NotImplemented(Format)`: Metal's destination alpha in a color factor, the saturated source
+/// alpha, the blend color's red, green or blue, different color and alpha operations), whose
+/// factors read no second source. One whose factors read a second source stays
+/// `NotImplemented(Format)`.
 pub(crate) fn rotated_blend_in_shader(c: &ColorAttachmentDescriptor, p: &DeviceProfile) -> bool {
     use metal::BlendFactor as F;
     if !metal::format::rotated_channels(c.pixel_format) || !c.blending_enabled {

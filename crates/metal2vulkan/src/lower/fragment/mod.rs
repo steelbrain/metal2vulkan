@@ -6,9 +6,7 @@
 //!   family declares, and [`emit_return`] kills a discarded invocation before `OpReturn`.
 //! - **Framebuffer fetch** (`[[color(n)]]` inputs): each color index is one input attachment
 //!   (`color`), read at every use. Compiled for a multisampled pipeline, it reads the invocation's
-//!   own sample at `SampleId`, which runs the function once per covered sample, as Metal does. On a device that orders the read through
-//!   rasterization-order input attachments, a blend into an extended-range attachment is computed
-//!   over its input attachment (`input_blend`).
+//!   own sample at `SampleId`, which runs the function once per covered sample, as Metal does.
 //! - **Raster order groups** (`rog`): a function that names a group runs its body as a function
 //!   called from `main` between `Begin/EndInvocationInterlockEXT` ([`wrap_entry`], the
 //!   entry-wrapper hook of `lower::emit`); inside it a discard only records `discarded`, and `main`
@@ -41,11 +39,9 @@ mod color;
 mod coverage;
 mod discard;
 pub(crate) mod fetch;
-mod input_blend;
 mod interpolate;
 mod logic;
 mod rog;
-mod word_input;
 
 pub(crate) use color::texture_decl;
 
@@ -79,19 +75,8 @@ use crate::spirv::ir::{
 pub use color::ColorInput;
 pub use coverage::CoveragePlan;
 pub use discard::DiscardForm;
-pub(crate) use fetch::{
-    compiled_write_mask, extended_range_blend, half_float_format, inputs_order, kept_channels,
-};
-pub(crate) use input_blend::{rotated_texel as rotated_input_texel, texel as input_blend_texel};
-pub use input_blend::{
-    select_second_output as select_input_second_output, InputBlend, RotatedInputBlend,
-};
-pub use logic::LogicInput;
-pub(crate) use logic::{
-    channels as logic_channels, input_operated as logic_input_operated,
-    vulkan_differs as logic_vulkan_differs,
-};
-pub(crate) use word_input::merge as word_input_merge;
+pub(crate) use fetch::half_float_format;
+pub(crate) use logic::vulkan_differs as logic_vulkan_differs;
 
 fn not_lowered() -> Error {
     Unsupported::not_implemented(Feature::Lowering(LowerFamily::Fragment)).into()
@@ -158,27 +143,13 @@ pub struct FragmentPlan {
     /// Every used color input (framebuffer fetch), in parameter order.
     pub colors: Vec<ColorInput>,
     /// The color attachments the function reads through the set-1 sampled-texture array's element
-    /// the consumer pushes for each (`PushField::FetchedColor`), under the identity domains on a
-    /// device that orders fetch in neither form (`color`), by index: the class of the element's
+    /// the consumer pushes for each (`PushField::FetchedColor`), under the identity domains
+    /// (`color`), by index: the class of the element's
     /// image, whose array the texture family declares (`texture::declare`).
     pub texture_fetches: BTreeMap<u32, crate::pipeline::sym::ImageHandleClass>,
     /// The function is in a raster order group: its body runs inside this interlock mode's
     /// critical section, called from the entry [`wrap_entry`] builds.
     pub interlock: Option<ExecMode>,
-    /// The extended-range attachments whose blend the function computes over their input
-    /// attachments, on a device that orders fetch through them (`input_blend`), by index.
-    pub input_blends: BTreeMap<u32, InputBlend>,
-    /// The attachments held with their channels rotated whose blend the function computes over
-    /// their input attachments, on a device that orders fetch through them (`input_blend`), by
-    /// index.
-    pub rotated_blends: BTreeMap<u32, RotatedInputBlend>,
-    /// The word attachments whose word the function merges into the texel's over their input
-    /// attachments, on a device that orders fetch through them (`word_input`), by index: the bits
-    /// of the fields each write keeps from the texel.
-    pub word_merges: BTreeMap<u32, u32>,
-    /// The attachments whose private logic operation the function computes over their input
-    /// attachments, on a device that orders fetch through them (`logic`), by index.
-    pub logic_inputs: BTreeMap<u32, LogicInput>,
     /// The stage interface's `FragCoord` object, which gives the pixel a color read through a
     /// pushed texture fetches (`texture_fetches`).
     pub fetch_coord: Option<usize>,
@@ -345,8 +316,6 @@ pub fn declare(
     d.attachments = color::declare(
         mb,
         &fp.colors,
-        (&fp.input_blends, &fp.word_merges),
-        (&fp.rotated_blends, &fp.logic_inputs),
         fp.fetch_sample.is_some(),
         &fp.texture_fetches,
     )?;
@@ -445,13 +414,9 @@ pub fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<(), Error
     Ok(())
 }
 
-/// Plan the entry's framebuffer-fetch forms before its stage interface. Then the loop over the
-/// covered samples, which decides how the stage interface reads `[[sample_id]]` and the
-/// sample-qualified varyings.
+/// Plan the entry's loop over the covered samples before its stage interface, which decides how
+/// the stage interface reads `[[sample_id]]` and the sample-qualified varyings.
 pub fn plan_entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
-    input_blend::plan(cx)?;
-    word_input::plan(cx)?;
-    logic::plan(cx)?;
     coverage::plan(cx)
 }
 
@@ -459,37 +424,6 @@ pub fn plan_entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
 /// `[[sample_id]]` is the pass's sample, and a sample-qualified varying is interpolated there.
 pub fn loops_samples(cx: &SelectCx<'_>) -> bool {
     cx.families.fragment.coverage.is_some_and(|c| c.looped)
-}
-
-/// The extended-range write of attachment `color` the shader computes over the input attachment
-/// (`input_blend`): the pipeline's blend there (`None`
-/// for an unblended write and for a write that stores none of the format's channels), the
-/// attachment's form, and whether the write stores none of its channels. `None` where the
-/// function writes the attachment otherwise (or not at all).
-pub(crate) fn shader_blend(
-    cx: &SelectCx<'_>,
-    color: u32,
-) -> Option<(
-    Option<crate::pipeline::lower_inputs::BlendEquation>,
-    crate::metal::format::ExtendedRange,
-    bool,
-)> {
-    let fp = &cx.families.fragment;
-    fp.input_blends.get(&color).map(|ib| {
-        let blends = ib.blend.is_some();
-        (
-            blends.then_some(ib.equation).flatten(),
-            ib.form,
-            !blends && !ib.merges(),
-        )
-    })
-}
-
-/// Whether the function's second (index-1) output to `color` is the second source of the
-/// extended-range blend it computes over the attachment's input attachment, outside the stage
-/// interface.
-pub fn blends_second_through_inputs(cx: &SelectCx<'_>, color: u32) -> bool {
-    input_blend::blends_second(cx, color)
 }
 
 /// The work before the body, in the function's first block: place the fragment's tile in the

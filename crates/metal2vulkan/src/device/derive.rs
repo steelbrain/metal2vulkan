@@ -275,7 +275,6 @@ fn derive_fields(desc: &DeviceDescription, policy: &DevicePolicy) -> ProfileFiel
         output_layer: has(VkFeature::ShaderOutputLayer),
         output_viewport_index: has(VkFeature::ShaderOutputViewportIndex),
         clip_distance: has(VkFeature::ShaderClipDistance),
-        rasterization_order_color_access: has(VkFeature::RasterizationOrderColorAttachmentAccess),
         vertex_attribute_divisor: has(VkFeature::VertexAttributeInstanceRateDivisor),
     };
 

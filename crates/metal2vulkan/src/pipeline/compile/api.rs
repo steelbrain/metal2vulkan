@@ -100,10 +100,8 @@ pub struct RenderPipelineKeys {
     /// `Compiled` vertex stage.
     pub vertex_inputs: Option<LoweringInputs>,
     /// The inputs a `Function` fragment stage compiles under (`VariantKey::lowering_inputs` of
-    /// the fragment stage, the signed-integer color attachments it writes, whether the pipeline is
-    /// multisampled, and the state of the attachments whose writes it computes over their input
-    /// attachments where the device orders framebuffer fetch through rasterization-order input
-    /// attachments). `None` for a `Compiled` fragment stage or none.
+    /// the fragment stage, the signed-integer color attachments it writes, and whether the
+    /// pipeline is multisampled). `None` for a `Compiled` fragment stage or none.
     pub fragment_inputs: Option<LoweringInputs>,
 }
 
@@ -401,8 +399,7 @@ impl Device {
             crate::pipeline::private_state::check_render(d)?;
             let p = self.profile();
             // The attachments as the private logic operation draws them (`render_pipeline`).
-            let (operated, logic) = crate::pipeline::private_state::logic_operation(d, p)?;
-            let logic = crate::pipeline::private_state::LogicDraw::shader(logic);
+            let (operated, _) = crate::pipeline::private_state::logic_operation(d, p)?;
             let d = operated.as_ref();
             let zeroed = with_zeroed_colors(d, v)?;
             let d = zeroed.as_ref();
@@ -454,7 +451,6 @@ impl Device {
                     // Whether the function applies the private masks itself shows only in its
                     // module, so a pipeline whose masks drop a sample lowers it once.
                     let mut pass: FragmentPass<'_> = d.into();
-                    pass.logic_operation = logic;
                     pass.push_base = push_end;
                     if crate::pipeline::private_state::applied_masks(d).is_some() {
                         let inputs = InputsFrom::Fragment(
@@ -826,17 +822,13 @@ impl Device {
         crate::pipeline::private_state::check_render(d)?;
         let p = self.profile();
         // The attachments as the private logic operation draws them: its normalized and integer
-        // attachments unblended (unwritten under a no-op), and Vulkan's operation, or the fragment
-        // function's, where one is needed.
+        // attachments unblended (unwritten under a no-op), and Vulkan's operation where one is
+        // needed.
         let (operated, logic) = crate::pipeline::private_state::logic_operation(d, p)?;
         let d = operated.as_ref();
         let zeroed = with_zeroed_colors(d, v)?;
         let d = zeroed.as_ref();
-        let pass = || {
-            let mut pass = FragmentPass::from(d);
-            pass.logic_operation = crate::pipeline::private_state::LogicDraw::shader(logic);
-            pass
-        };
+        let pass = || FragmentPass::from(d);
         // On a device without a fragment `PrimitiveId`, whether the vertex function writes the
         // primitive ID's varying: the fragment entry specialized for that is the one its compile
         // reads.
@@ -969,12 +961,7 @@ impl Device {
             d,
             fragment.as_ref().map(|f| f.artifact()),
         )?;
-        crate::pipeline::private_state::logic_operated(
-            logic,
-            fragment.as_ref().map(|f| f.artifact()),
-        )?;
-        let logic_op = crate::pipeline::private_state::LogicDraw::vulkan(logic);
-        graphics.logic_op = logic_op;
+        graphics.logic_op = logic;
         crate::pipeline::private_state::note_vulkan_codes(d, &graphics, &mut stages);
         crate::pipeline::private_state::note_tile_store(d, &mut stages);
         let mut requirements = requirements;
@@ -1124,12 +1111,6 @@ fn graphics_requirements(
         requirements
             .features
             .insert(VkFeature::VertexAttributeAccessBeyondStride);
-    }
-    // Ordered framebuffer fetch: the subpass and pipeline flags need the feature.
-    if graphics.rasterization_order_attachment_access {
-        requirements
-            .features
-            .insert(VkFeature::RasterizationOrderColorAttachmentAccess);
     }
     // A multiview pipeline needs `multiview` and its view count whether or not a stage reads the
     // view index; the binder draws more amplifications than the device has views one at a time, so

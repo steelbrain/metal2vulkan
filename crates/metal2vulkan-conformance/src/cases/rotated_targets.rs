@@ -566,10 +566,10 @@ impl Case for RotatedTarget {
 ///
 /// Our runtime holds the format in an `R8G8B8A8_UNORM` image of the rotated bytes, so the image's
 /// alpha channel is Metal's blue. A colour factor that reads Metal's destination alpha would have
-/// to read the image's *red*, and no Vulkan blend factor does. So the fragment function reads the
-/// texel itself (framebuffer fetch, over a rasterization-order input attachment), rotates it into
-/// Metal's order and computes Metal's 8-bit unorm blend. The runtime binds no input attachment, so
-/// that form is not built and it refuses the pipeline on every device. Metal runs the draw.
+/// to read the image's *red*, and no Vulkan blend factor does. So the fragment function would read
+/// the texel itself (framebuffer fetch), rotate it into Metal's order and compute Metal's 8-bit
+/// unorm blend. That form is not built, so the translator refuses the pipeline on every device.
+/// Metal runs the draw.
 ///
 /// It is its own case so its route, and anything that route does differently, is one case's rows
 /// of the ledger rather than folded into the thirteen states. Metal's leg records normally: the

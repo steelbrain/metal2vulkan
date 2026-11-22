@@ -35,9 +35,6 @@ use crate::spirv::error::BResult;
 use crate::spirv::ids::Value;
 use crate::spirv::ir::{BinOp, ConstBits, Constant, ConvOp, GlslOp, Type, UnOp};
 
-pub mod blend;
-pub use blend::Blend;
-
 /// An upper estimate of the SPIR-V words of one texel's [`decode`]: the codes, the conversion
 /// and product, an `_sRGB` form's transfer (its steps and constants) and sign, and the `half`
 /// narrowing.
@@ -490,33 +487,6 @@ pub(crate) fn bfloat_stored(
     let code = fb.binary(BinOp::ShiftRightLogical, bits, sixteen)?;
     let zero = splat(fb, u, 0)?;
     fb.vector_shuffle(code, zero, bfloat_lanes(form))
-}
-
-/// [`encode`] of `v` into a texel of a form other than a bfloat one that keeps the channels
-/// `kept` (red, green, blue, alpha) of `old`, the raw texel the write overwrites, as Metal's
-/// blended write under a write mask keeps them (every masked configuration, each texel): each kept
-/// channel's code as [`decode`] reads it (a color code as it is, 1023 too; `BGRA10_XR`'s alpha
-/// clamped to `[384, 894]`; a two-plane texel's alpha byte; a padded word's top 10 bits), packed
-/// as a write packs it: plane 0's and `BGR10_XR`'s top two bits as the write sets them (zeros and
-/// ones), `BGRA10_XR`'s and a padded word's six low bits zero.
-pub fn encode_keeping(
-    fb: &mut FunctionBuilder<'_>,
-    form: ExtendedRange,
-    v: Value,
-    (old, kept): (Value, [bool; 4]),
-) -> BResult<Value> {
-    let new = write_codes(fb, form, v)?;
-    let old = codes(fb, form, old)?;
-    let lanes: Vec<u32> = kept
-        .iter()
-        .zip(0..4u32)
-        .map(|(&kept, k)| match kept {
-            true => 4 + k,
-            false => k,
-        })
-        .collect();
-    let code = fb.vector_shuffle(new, old, &lanes)?;
-    pack(fb, form, code)
 }
 
 /// The codes a write of `v` (a `vec4` of `f32`, red first) to a slot of a linear or `_sRGB` form

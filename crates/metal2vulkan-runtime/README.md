@@ -3794,20 +3794,27 @@ cache is answered compile-required on both.
   own draw that cover the same pixel, which Metal orders in primitive order: a fragment may read the
   texel from before an earlier fragment of its draw wrote it
   (`PrecisionNote::UnorderedFetchWithinDraw`). Exact for a draw whose primitives do not overlap at a
-  pixel. A write the translator computes over the function's own read of the attachment, where no
-  Vulkan blend or write mask gives Metal's, is not built: such a state is refused at creation on
-  every device, an `Error::Translation` naming `FramebufferFetch` and
-  `RasterizationOrderColorAttachmentAccess`. These are a padded extended-range attachment's blend,
-  and a write of some of the codes one word of such an attachment holds; a blend no Vulkan state
-  gives on an attachment whose image holds its channels rotated (`ARGB8Unorm` reading destination
-  alpha); a word attachment written under a mask of some of its channels; and a logic operation the
-  device lacks. The translator builds them only over a read ordered after every earlier fragment of
-  the pixel, rasterization-order access over an input attachment, and the runtime enables no
-  rasterization-order access and binds no input attachment. The runtime refused these states on
-  every device before too, worded otherwise (the conformance ledger's 22 such cases). A raster order
-  group on the colour it reads, or on a colour output of an attachment it reads, takes the same form
-  on every device, the pixel interlock's included: the interlock cannot order the attachment's own
-  write, which happens after the function. A fetch of an attachment the draw cannot read through is
+  pixel. A write the fragment function would compute over its own read of the attachment, where no
+  Vulkan blend, write mask or logic operation gives Metal's, is not built: the translator refuses
+  each such state at creation on every device, an `Error::Translation` (the conformance ledger's 22
+  such rows). Each is built on the runtime's own fetch form, the attachment's pushed texture
+  (`PushField::FetchedColor`), if a guest meets it:
+  - a padded extended-range attachment's blend (`R10Unorm_X6`, `RG10Unorm_X12`, their `_sRGB`
+    twins and `RGB10A2Unorm_sRGB`), refused naming `FramebufferFetch`, not implemented;
+  - a write of some of the codes one word of an extended-range attachment holds (`BGR10_XR`, the
+    two-plane forms' colour word and their `_sRGB` twins, under a mask of some of those codes),
+    refused naming `FramebufferFetch`, not implemented;
+  - a blend no Vulkan state gives on an attachment whose image holds its channels rotated
+    (`ARGB8Unorm` reading destination alpha), refused naming `FramebufferFetch`, not implemented;
+  - a word attachment written under a mask of some of its channels, which takes its format's own
+    attachment and is refused where the device lacks that format;
+  - a logic operation on a device without `logicOp`, refused naming
+    `PrivateRenderState(LogicOperation)` and `logicOp`.
+
+  A raster order group on the colour it reads, or on a colour output of an attachment it reads,
+  takes the same form on every device, the pixel interlock's included: the interlock cannot order
+  the attachment's own write, which happens after the function. A fetch of an attachment the draw
+  cannot read through is
   `Gap::Draw` of `FetchedAttachment`: a drawable's texture (its image has no feedback usage and no
   second element; no boot or replay stream fetched one), a texture made with no index, one that is
   no 2D texture at its first level and slice, a texture of an image another attachment of the pass
@@ -4415,7 +4422,7 @@ Presenting runs on the runtime's own device; nothing is exported or imported.
 | `robustImageAccess2` | `VkPhysicalDeviceRobustness2FeaturesEXT` | an image read or fetch out of range, past the view's levels included, answering Metal's texel (zero, alpha 1 for a format without alpha), with no check in the shader; a texel buffer's read is still checked in the shader |
 | `independentBlend` | `VkPhysicalDeviceFeatures` | each color attachment of a render pipeline blended by its own state, as Metal's are |
 | `fragmentStoresAndAtomics` | `VkPhysicalDeviceFeatures` | a fragment function's writes and atomics on device memory |
-| `logicOp` | `VkPhysicalDeviceFeatures` | a render pipeline's logic operation (private render state), the device's own; without it the fragment function would compute it, which is built only over raster-order attachment access, so the state is refused (Known gaps) |
+| `logicOp` | `VkPhysicalDeviceFeatures` | a render pipeline's logic operation (private render state), the device's own; without it the state is refused (Known gaps of render encoders) |
 | `bresenhamLines` | `VkPhysicalDeviceLineRasterizationFeaturesEXT` | a line drawn by Metal's rule, the pixels whose diamond it exits (`VK_LINE_RASTERIZATION_MODE_BRESENHAM_EXT`), where Vulkan's default rule is the device's own: the rectangle of the line's width on a device whose `strictLines` is set (lavapipe, NVIDIA's driver); Vulkan 1.4 requires it |
 | `fullDrawIndexUint32` | `VkPhysicalDeviceFeatures` | an indexed draw's 32-bit indices past `2^24 - 1`; Vulkan 1.4 and Roadmap 2022 require it |
 | `imageCubeArray` | `VkPhysicalDeviceFeatures` | a cube array texture and a view as one, a cube array image view; Vulkan 1.4 and Roadmap 2022 require it |
@@ -4758,7 +4765,6 @@ enables that the translator names.
 
 | Feature | Structure | Without it |
 |---|---|---|
-| `rasterizationOrderColorAttachmentAccess` | `VkPhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT` | a blend into an extended-range attachment, which the function would compute over its own read of the attachment, is refused (`FramebufferFetch`) |
 | `robustBufferAccess` | `VkPhysicalDeviceFeatures` | a buffer is reached by its device address, and an access through a descriptor view is checked in the shader |
 | `computeDerivativeGroupLinear` | `VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR` | a derivative in a kernel is refused (`ComputeDerivatives`) |
 | `descriptorBindingStorageBufferUpdateAfterBind` | `VkPhysicalDeviceVulkan12Features` | the translator's function table is a directory and a snapshot, never a heap array of storage buffers; the runtime supplies no function table (Known gaps of pipeline states) |

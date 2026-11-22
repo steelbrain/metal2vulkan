@@ -194,7 +194,6 @@ surface! {
         enum Feature N;
         enum LowerFamily N;
         enum PrivateRenderField N;
-        enum ExtendedRangeBlend N;
         enum RuntimeInput N;
         enum DescriptorError N;
         enum MetalAnswer N;
@@ -392,12 +391,9 @@ surface! {
         struct PushConstantRange N;
         struct AliasView N;
         struct AmplificationDraws N;
-        struct BlendEquation N;
         enum ChannelWrite N;
         struct ExtendedRangeColor N;
         enum FactorLane N;
-        struct FetchedAttachment N;
-        struct FramebufferFetchInputs N;
         enum KernelVariant N;
         struct LoweringInputs N;
         struct StorageImageChoice N;
@@ -766,7 +762,6 @@ surface! {
         fn writes_dropped;
         fn ycbcr_renders;
         fn ycbcr_pass_refused;
-        fn extended_range_blend;
         fn x_channel;
         fn bound_texel_format;
         fn integer_channels_word;

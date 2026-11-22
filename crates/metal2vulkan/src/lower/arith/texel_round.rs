@@ -16,7 +16,7 @@
 //!
 //! Metal's texture reads and samples decode a raw sRGB code through its twelve-bit table, as its
 //! `air.unpack` does: the step `k` of [`srgb`](crate::lower::arith::srgb), then `k / 4095`
-//! ([`div_exact`](crate::lower::arith::exact_division::div_exact); every code of the authored case
+//! correctly rounded (every code of the authored case
 //! `half-conversion-of-wider-texels-by-read-and-sample`, and every bicubic sum of
 //! `bicubic-rounding-of-random-float-and-srgb-texels`, read those steps).
 //!
@@ -220,9 +220,10 @@ fn round_up(fb: &mut FunctionBuilder<'_>, u: Form, q: Value, r: Value, d: Value)
 }
 
 /// `k / d` correctly rounded to `f32` (nearest even), for `u32` lanes (form `u`) with
-/// `0 <= k <= d` and `1 <= d < 2^16`, the divisor a run-time value:
-/// [`div_exact`](crate::lower::arith::exact_division::div_exact)'s sequence, the divisor's
-/// leading bit found at run time. `k = 0` is `+0`.
+/// `0 <= k <= d` and `1 <= d < 2^16`, the divisor a run-time value, with integer operations only:
+/// `k` shifted into `[d, 2d)`, two exact integer divisions for the significand and the last
+/// remainder's rounding to nearest even, the divisor's leading bit found at run time. `k = 0` is
+/// `+0`.
 pub fn ratio_to_f32(fb: &mut FunctionBuilder<'_>, u: Form, k: Value, d: Value) -> BResult<Value> {
     let c = |fb: &mut FunctionBuilder<'_>, v: u64| splat(fb, u, v);
     let (z, one) = (c(fb, 0)?, c(fb, 1)?);

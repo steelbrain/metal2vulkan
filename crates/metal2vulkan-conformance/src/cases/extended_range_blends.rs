@@ -240,11 +240,6 @@ impl Case for ExtendedRangeBlend {
         // device that blends as Metal does shows as announced with nothing differing -- which is
         // what this M3 Max and lavapipe both show -- and one that does not shows the code. The
         // allowance fails the case if the notice stops firing, so it cannot outlive its reason.
-        //
-        // The function blends the `half4` fill into the extended-range target in the shader, in
-        // the device's arithmetic, so every row announces `extended-range-blend-source`, a native
-        // note the suite declares for every case (`crate::replay::NATIVE_NOTES`); the codes still
-        // compare exactly, and a site the device's arithmetic moves is a known gap.
         vec![crate::replay::notice_allowance(
             Degradation::HalfOutputFastMathBlend.code(),
         )]

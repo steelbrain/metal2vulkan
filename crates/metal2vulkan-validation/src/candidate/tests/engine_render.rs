@@ -806,9 +806,7 @@ fn a_back_culled_patch_and_its_mirror_leave_exactly_one_drawn() {
 
 /// Framebuffer fetch: `fetch_scalar` writes half of the color it reads, its attachment loaded with
 /// the authored contents, and the fullscreen triangle drawn as `n` instances covers every pixel `n`
-/// times in order, so under rasterization-order access each instance reads what the one before it
-/// wrote and the attachment ends at `2^-n` of its contents. A device without that access reads it
-/// as an input attachment with no rasterization-order access, after a barrier between draws
+/// times. Every device reads it as an input attachment, after a barrier between draws
 /// (`platform::graphics_pipeline::fetch_between_draws`), and its fragment module notes
 /// `PrecisionNote::UnorderedFetchWithinDraw`: one instance halves the attachment exactly, and
 /// three, one draw, leave each texel some order's `2^-k` of its contents, `k` in 1 to 3.

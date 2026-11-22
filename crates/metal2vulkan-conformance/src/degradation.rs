@@ -113,10 +113,6 @@ pub enum Degradation {
     ArgumentPixelSamplerScaling,
     /// `metal2vulkan-degrade-half-output-precision`.
     HalfOutputPrecision,
-    /// `metal2vulkan-degrade-extended-range-blend-source`.
-    ExtendedRangeBlendSource,
-    /// `metal2vulkan-degrade-extended-range-float-blend-source`.
-    ExtendedRangeFloatBlendSource,
     /// `metal2vulkan-degrade-anisotropic-filter`.
     AnisotropicFilter,
     /// `metal2vulkan-degrade-device-anisotropic-filter`.
@@ -235,8 +231,6 @@ impl Degradation {
         Degradation::LinkedSamplerNumbering,
         Degradation::ArgumentPixelSamplerScaling,
         Degradation::HalfOutputPrecision,
-        Degradation::ExtendedRangeBlendSource,
-        Degradation::ExtendedRangeFloatBlendSource,
         Degradation::AnisotropicFilter,
         Degradation::DeviceAnisotropicFilter,
         Degradation::DevicePointSize,
@@ -348,12 +342,6 @@ impl Degradation {
                 "metal2vulkan-degrade-argument-pixel-sampler-scaling"
             }
             Degradation::HalfOutputPrecision => "metal2vulkan-degrade-half-output-precision",
-            Degradation::ExtendedRangeBlendSource => {
-                "metal2vulkan-degrade-extended-range-blend-source"
-            }
-            Degradation::ExtendedRangeFloatBlendSource => {
-                "metal2vulkan-degrade-extended-range-float-blend-source"
-            }
             Degradation::AnisotropicFilter => "metal2vulkan-degrade-anisotropic-filter",
             Degradation::DeviceAnisotropicFilter => {
                 "metal2vulkan-degrade-device-anisotropic-filter"
@@ -451,10 +439,6 @@ impl Degradation {
             PrecisionNote::LinkedSamplerNumbering => Degradation::LinkedSamplerNumbering,
             PrecisionNote::ArgumentPixelSamplerScaling => Degradation::ArgumentPixelSamplerScaling,
             PrecisionNote::HalfOutputPrecision => Degradation::HalfOutputPrecision,
-            PrecisionNote::ExtendedRangeBlendSource => Degradation::ExtendedRangeBlendSource,
-            PrecisionNote::ExtendedRangeFloatBlendSource => {
-                Degradation::ExtendedRangeFloatBlendSource
-            }
             PrecisionNote::AnisotropicFilter => Degradation::AnisotropicFilter,
             PrecisionNote::DeviceAnisotropicFilter => Degradation::DeviceAnisotropicFilter,
             PrecisionNote::DevicePointSize => Degradation::DevicePointSize,

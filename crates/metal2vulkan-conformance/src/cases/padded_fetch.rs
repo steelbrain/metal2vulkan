@@ -3,8 +3,8 @@
 //!
 //! `R10Unorm_X6`, `RG10Unorm_X12`, their `_sRGB` twins and `RGB10A2Unorm_sRGB` hold 10-bit
 //! normalized codes ([`super::padded_blends`]). No Vulkan format holds them, so the runtime renders
-//! such a target as its raw unsigned words and a fetch reads the words over an ordered read of the
-//! attachment (the pixel interlock or a rasterization-order input attachment), decoding each code
+//! such a target as its raw unsigned words and a fetch reads the words over a read of the
+//! attachment, decoding each code
 //! to its value rounded to `half`. Metal's fetch reads so for a loaded code, a `float4` input and a
 //! `half4` one alike (the M3 Max under macOS 27.0.1, `probes/padded_fetch.m`), and the missing
 //! lanes of a one- or two-channel format as `(0, 0, 1)`. After a clear, or an earlier draw of the

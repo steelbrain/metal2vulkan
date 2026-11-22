@@ -49,10 +49,6 @@ const GRAPHICS_STATE: &[(&str, Verdict)] = &[
     ("dynamic_states", Applied),
     ("input_attachments", Refused(SET_0)),
     (
-        "rasterization_order_attachment_access",
-        Refused("set only beside input attachments, a set-0 binding draws() refuses"),
-    ),
-    (
         "max_vertex_amplification_count",
         Refused("refuse() refuses the descriptor's count other than 1"),
     ),

@@ -28,10 +28,9 @@
 //! - a color attachment the fragment function reads (framebuffer fetch) is also the input
 //!   attachment of its index: loaded with its authored contents as Metal's `MTLLoadActionLoad`
 //!   loads it, kept in `GENERAL` through the subpass, read through the plan's input-attachment
-//!   write, with the render pass's by-region self-dependency and, where the artifact states it,
-//!   rasterization-order color access, so each fetch sees the earlier fragments of the draw that
-//!   cover its pixel, as in Metal (in a multisampled pass the attachment of the pass's samples,
-//!   which a function running once per sample reads at its own sample);
+//!   write, with the render pass's by-region self-dependency and a barrier of it before each draw,
+//!   so each fetch sees the earlier draws' writes (in a multisampled pass the attachment of the
+//!   pass's samples, which a function running once per sample reads at its own sample);
 //! - a patch draw binds its factor buffer where the plan's `WriteSource::TessellationFactors` names
 //!   it, over the draw's range, and draws a patch list: the tessellation pipeline's synthesized
 //!   vertex and control stages bind nothing of Metal's, and its evaluation stage binds the vertex

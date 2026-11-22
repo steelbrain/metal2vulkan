@@ -1026,18 +1026,6 @@ pub enum PrecisionNote {
     /// than Metal (3,527 of 94,732,288 channels measured a code apart, none further). `RGBA8Unorm`
     /// and `RGB10A2Unorm` hold their codes there, as the device does.
     ///
-    /// Also: a blend the function computes over the input attachment of an attachment held with
-    /// its channels rotated (`ARGB8Unorm`), whose result the device's color write converts to its
-    /// code, where Metal rounds the exact product with 255 (a NaN 0); the write may take the other
-    /// code near a tie.
-    ///
-    /// Also: a render pipeline's private logic operation the fragment function computes on a
-    /// device without Vulkan's `logicOp` (`LoweringInputs::logic_operation`), into an 8- or 16-bit
-    /// unorm or snorm attachment: the function converts its output to the codes it operates on by
-    /// the device's arithmetic, the `float` product with the channel's largest code rounded to
-    /// nearest even, where Metal rounds the exact product to nearest; the two take different codes
-    /// only where the `float` product rounds onto or across a half-code tie.
-    ///
     /// Also (the runtime announces it): a render pass clears a normalized, sRGB, packed 16-bit,
     /// half or small-float color attachment to a color whose conversion is in question. The device
     /// converts the clear color, which Vulkan lets store either of the two codes closest to a
@@ -1214,39 +1202,6 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance and no explanation from it: a difference stays a
     /// mismatch for review, deferred in C3 until an exact path exists.
     HalfOutputPrecision,
-    /// A fragment function's `half` color output (a scalar or vector of AIR's `half`) is blended
-    /// into a padded 10-bit attachment (`R10Unorm_X6`, `RG10Unorm_X12`, their `_sRGB` twins,
-    /// `RGB10A2Unorm_sRGB`), whose raw codes no device's blend unit reads, so the function blends
-    /// in the shader (`lower::arith::extended_range::blend::native`), in the device's arithmetic: a
-    /// blend unit's `S·Fs op D·Fd` in `float`, in the blend equation's order, the source, the
-    /// second source and the blend color unclamped, as Metal takes them there (a blend into one of
-    /// Apple's extended-range forms, `BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10` and their `_sRGB`
-    /// twins, is refused). The device's compiler may contract a product into
-    /// its sum and may regroup the blend: MoltenVK on the M3 Max and NVIDIA's driver on an RTX 5080
-    /// compute a second source's blend `S·F + D·(1 - F)` as `D + F·(S - D)`. Metal's compiler
-    /// folds the blend into the function and fuses, regroups and rounds each step to `half`
-    /// instead, so a blended channel may store another code than Metal's: within two codes on a
-    /// linear format and within six on an sRGB twin near zero, where its transfer is steepest, in
-    /// the conformance suite's extended-range and padded blend cases (its known gaps' rows); and
-    /// where the device's compiler regroups a padded format's blend, an infinite second source
-    /// stores the end code its sign picks where Metal's sum is NaN, stored as code 0. Recorded
-    /// for every blended output that stores a channel, under either math. A `float` output
-    /// records [`PrecisionNote::ExtendedRangeFloatBlendSource`] instead, so a function of both
-    /// records both.
-    ///
-    /// Validation derives no tolerance and no explanation from it: a difference stays a
-    /// mismatch for review.
-    ExtendedRangeBlendSource,
-    /// [`PrecisionNote::ExtendedRangeBlendSource`] for a `float` color output (a scalar or vector
-    /// of AIR's `float`): blended into a padded 10-bit attachment in the shader
-    /// in the device's arithmetic, which the device's compiler may contract and regroup, where
-    /// Metal's compiler rounds the output and each step of the blend to `half`. A blended channel
-    /// may store another code than Metal's, within `ExtendedRangeBlendSource`'s bound. Its own
-    /// note, apart from the `half` output's, so a consumer can tell the two apart.
-    ///
-    /// Validation derives no tolerance and no explanation from it: a difference stays a
-    /// mismatch for review.
-    ExtendedRangeFloatBlendSource,
     /// The module samples a texture through an anisotropic sampler with Metal's anisotropic
     /// filter emulated by the device's samples at explicit levels (`lower::sampler::anisotropic`),
     /// on a device without `samplerAnisotropy`, every Vulkan sampler being isotropic there, each
@@ -1877,19 +1832,17 @@ pub enum PrecisionNote {
     /// Validation derives no tolerance and no explanation from it: a difference stays a
     /// mismatch for review.
     ExtrapolatedInterpolation,
-    /// A fragment function reads a color attachment (framebuffer fetch) on a device without
-    /// rasterization-order color attachment access. It reads
-    /// the attachment as an input attachment, and the consumer records a barrier of the subpass's
+    /// A fragment function reads a color attachment (framebuffer fetch), on every device. It
+    /// reads the attachment as an input attachment, and the consumer records a barrier of the subpass's
     /// dependency on itself, by region, from the color writes of the draws before to the input
     /// attachment reads of a draw that fetches (and from those reads to the color writes of the
     /// draws after): a fetch reads what every earlier draw stored at its pixel, Metal's answer.
     /// Under the identity domains it reads the attachment's texture at its own pixel instead
     /// ([`PushField::FetchedColor`](crate::pipeline::PushField::FetchedColor)), and the
     /// consumer orders each fetching draw after the earlier draws of its pass by a barrier between
-    /// them. Vulkan orders nothing between the overlapping fragments of one draw
-    /// (`GraphicsState::rasterization_order_attachment_access` false), where Metal orders them in
-    /// primitive order: a fragment that covers a pixel an earlier fragment of its own draw
-    /// covered may read the texel from before that fragment's write, and its own write may land
+    /// them. Vulkan orders nothing between the overlapping fragments of one draw, where Metal
+    /// orders them in primitive order: a fragment that covers a pixel an earlier fragment of its
+    /// own draw covered may read the texel from before that fragment's write, and its own write may land
     /// before that one. Exact for a draw whose primitives do not overlap at a pixel (one
     /// fullscreen triangle, a rectangle of two triangles, disjoint quads); otherwise each such
     /// pixel holds the result of some order of the draw's fragments there, not necessarily
@@ -1913,8 +1866,8 @@ pub enum PrecisionNote {
     /// green 938 where Metal's rule gives 937, and its xor of `0xe0` over an `RGBA8Snorm`
     /// channel's `0x80` stored `0x60` where Metal's gives `0x61`. The distance is not bounded,
     /// since the operation's result follows the codes' bits, not their values. A device without
-    /// `logicOp` computes Metal's rule in the fragment function and records none. The fragment
-    /// stage records it whatever the specialization.
+    /// `logicOp` refuses the operation. The fragment stage records it whatever the
+    /// specialization.
     ///
     /// Validation derives no tolerance and no explanation from it: a difference stays a
     /// mismatch for review.

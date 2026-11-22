@@ -338,7 +338,6 @@ fn facts(ext: VkExtension) -> ExtensionFacts {
         E::ExtRobustness2
         | E::ExtShaderStencilExport
         | E::ExtFragmentShaderInterlock
-        | E::ExtRasterizationOrderAttachmentAccess
         | E::KhrShaderMaximalReconvergence
         | E::KhrShaderSubgroupUniformControlFlow
         | E::KhrFragmentShaderBarycentric
@@ -405,6 +404,9 @@ fn facts(ext: VkExtension) -> ExtensionFacts {
         E::ExtShaderImageAtomicInt64 => fact(false, None, &[]),
         // Described, never enabled: the core reads none of its properties.
         E::ExtSampleLocations => fact(false, None, &[]),
+        // Described, never enabled: a framebuffer fetch is ordered between draws alone on every
+        // device (`lower::fragment::fetch`), so the core reads none of its features.
+        E::ExtRasterizationOrderAttachmentAccess => fact(false, None, &[]),
         E::KhrDynamicRendering => fact(false, Some(3), &[]),
         // Object and mesh functions. `VK_KHR_spirv_1_4` is core at the 1.2 floor.
         E::ExtMeshShader => fact(true, None, &[]),

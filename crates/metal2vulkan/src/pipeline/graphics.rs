@@ -53,21 +53,6 @@ pub struct GraphicsState {
     /// Framebuffer-fetch inputs. In a pipeline of more than one sample the fragment function runs
     /// once per covered sample and reads its own sample of each.
     pub input_attachments: Vec<InputAttachmentUse>,
-    /// The pipeline and its subpass use rasterization-order attachment access: set when the
-    /// pipeline has input attachments and the device has `rasterizationOrderColorAttachmentAccess`,
-    /// so each fetch is ordered after the earlier fragments of the draw that cover its pixel, as
-    /// Metal orders it. The consumer creates the subpass with
-    /// `VK_SUBPASS_DESCRIPTION_RASTERIZATION_ORDER_ATTACHMENT_COLOR_ACCESS_BIT_EXT` and the
-    /// pipeline's color blend state with
-    /// `VK_PIPELINE_COLOR_BLEND_STATE_CREATE_RASTERIZATION_ORDER_ATTACHMENT_ACCESS_BIT_EXT`, and
-    /// the pipeline's requirements name the feature. A device without it reads them without this
-    /// flag: the consumer
-    /// then orders each draw that reads them after the color writes of the earlier draws of its
-    /// subpass, and each draw that writes a color after the input attachment reads of the earlier
-    /// ones, by a barrier of the subpass's dependency on itself (by region) between the two, which
-    /// orders draws but not the overlapping fragments of one draw
-    /// (`PrecisionNote::UnorderedFetchWithinDraw`, which the fragment stage records).
-    pub rasterization_order_attachment_access: bool,
     /// Metal's `maxVertexAmplificationCount` (1 without vertex amplification): a draw with this
     /// pipeline amplifies each vertex by a count in `[1, max_vertex_amplification_count]`, or,
     /// above 1, by a larger count too, as plain Metal draws one. Above 1 the pipeline is a
@@ -322,7 +307,6 @@ impl GraphicsState {
             rasterizer_discard: false,
             dynamic_states: Vec::new(),
             input_attachments: Vec::new(),
-            rasterization_order_attachment_access: false,
             max_vertex_amplification_count: 1,
             declares_layer: false,
             tessellation: None,
@@ -622,9 +606,8 @@ impl BlendState {
 
 /// A framebuffer-fetch input: color attachment `color_index` read as input attachment
 /// `input_attachment_index`. The consumer's render pass provides the self-dependency (or
-/// `dynamicRenderingLocalRead` mapping) that the contract names, and, without
-/// [`rasterization_order_attachment_access`](GraphicsState::rasterization_order_attachment_access),
-/// the barriers between draws it states. In a pipeline of more than one
+/// `dynamicRenderingLocalRead` mapping) that the contract names, and the barriers between draws
+/// it states (`PrecisionNote::UnorderedFetchWithinDraw`). In a pipeline of more than one
 /// sample the attachment is the pass's multisampled one, of `GraphicsState::rasterization_samples`
 /// samples, which the function reads at each invocation's own sample.
 #[non_exhaustive]

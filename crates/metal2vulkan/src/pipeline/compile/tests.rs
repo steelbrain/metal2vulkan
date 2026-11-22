@@ -524,19 +524,6 @@ fn function_keys_cover_their_inputs() {
     let cl = a.function_compile_key(&fd, &cl);
     assert_ne!(with_true, cl);
     assert_ne!(replay, cl);
-    // So is the framebuffer-fetch pipeline state, by its attachments' state.
-    let fetch = |format| {
-        let mut i = LoweringInputs::new();
-        let colors = [Some(
-            crate::pipeline::descriptor::ColorAttachmentDescriptor::new(format),
-        )];
-        i.framebuffer_fetch = Some(crate::pipeline::FramebufferFetchInputs::of([0], &colors));
-        a.function_compile_key(&fd, &i)
-    };
-    let r32 = fetch(metal::PixelFormat::R32Float);
-    assert_ne!(with_true, r32);
-    assert_ne!(replay, r32);
-    assert_ne!(r32, fetch(metal::PixelFormat::RGBA8Unorm));
     // So is the raw viewport index's varying.
     let mut viewport = LoweringInputs::new();
     viewport.viewport_index_varying = true;
@@ -662,7 +649,6 @@ fn the_inputs_encoding_is_the_earlier_derived_debug() {
                 .replace(", multisampled: false", "")
                 .replace(", replay_bindings: false", "")
                 .replace(", merged_draws: false", "")
-                .replace(", framebuffer_fetch: None", "")
                 .replace(", srgb_textures: {}", "")
                 .replace(", ycbcr_in_place: {}", "")
                 .replace(", ycbcr_planes_sampled: {}", "")
@@ -698,7 +684,6 @@ fn the_inputs_encoding_is_the_earlier_derived_debug() {
                 .replace(", unattached_colors: {}", "")
                 .replace(", sample_mask: None", "")
                 .replace(", alpha_test: None", "")
-                .replace(", logic_operation: None", "")
                 .replace(", depth_compare_clamp_mask: 0", "")
                 .replace(", read_only_tests: false", "")
                 .replace(", rotated_colors: {}", "")
@@ -1781,17 +1766,16 @@ fn a_vertex_pipeline_makes_its_input_assembly_dynamic_exactly_with_both_extended
     }
 }
 
-/// A render pipeline whose fragment function reads its color attachment orders the read exactly
-/// where the device can. With rasterization-order attachment access it states that access and
-/// requires `rasterizationOrderColorAttachmentAccess` (enabled with its extension). Without it,
-/// with the ordered pixel interlock or not, it reads the input attachment without
-/// rasterization-order access, which the consumer's barriers order between draws alone, a blend
-/// the device's, and its fragment stage records `PrecisionNote::UnorderedFetchWithinDraw`, which
-/// the ordered form does not record. A raster order group on the color input (`fetch_ordered`)
-/// orders that read alone there: no interlock, noted.
+/// A render pipeline whose fragment function reads its color attachment reads the input
+/// attachment without rasterization-order access on every device, lavapipe (which has
+/// `rasterizationOrderColorAttachmentAccess`) included, with the ordered pixel interlock or not:
+/// the consumer's barriers order it between draws alone, a blend is the device's, and its fragment
+/// stage records `PrecisionNote::UnorderedFetchWithinDraw`. A raster order group on the color
+/// input (`fetch_ordered`) orders that read alone: no interlock, noted. No requirement names
+/// either feature.
 #[test]
-fn a_framebuffer_fetch_pipeline_is_ordered_exactly_where_the_device_orders_it() {
-    use crate::device::requirements::{VkExtension, VkFeature};
+fn a_framebuffer_fetch_pipeline_is_ordered_between_draws_on_every_device() {
+    use crate::device::requirements::VkFeature;
     use crate::pipeline::{PrecisionNote, RenderPipeline};
     const ORDERED: VkFeature = VkFeature::RasterizationOrderColorAttachmentAccess;
     const INTERLOCK: VkFeature = VkFeature::FragmentShaderPixelInterlock;
@@ -1843,33 +1827,14 @@ fn a_framebuffer_fetch_pipeline_is_ordered_exactly_where_the_device_orders_it() 
             })
     };
     let lavapipe = description("lavapipe");
-    assert!(lavapipe.has(ORDERED));
-    {
-        let pipe = compile(&lavapipe, DevicePolicy::RESIDENT_TABLES, &d).expect("lavapipe");
-        assert!(!unordered(&pipe));
-        assert_eq!(pipe.graphics.input_attachments.len(), 1);
-        assert!(pipe.graphics.rasterization_order_attachment_access);
-        assert!(pipe.requirements.features.contains(&ORDERED));
-        let enables = lavapipe
-            .required_enables(&pipe.requirements)
-            .expect("enables");
-        assert!(enables.features.contains(&ORDERED));
-        assert!(enables
-            .extensions
-            .contains(&VkExtension::ExtRasterizationOrderAttachmentAccess));
-    }
-
-    let mut interlocked = lavapipe.clone();
-    interlocked.features.remove(&ORDERED);
-    assert!(interlocked.has(INTERLOCK));
-    let mut without = interlocked.clone();
+    assert!(lavapipe.has(ORDERED) && lavapipe.has(INTERLOCK));
+    let mut without = lavapipe.clone();
     without.features.remove(&INTERLOCK);
-    for desc in [&interlocked, &without] {
+    for desc in [&lavapipe, &without] {
         for pd in [&d, &blended, &grouped] {
             let pipe = compile(desc, DevicePolicy::RESIDENT_TABLES, pd).expect("unordered");
             assert!(unordered(&pipe));
             assert_eq!(pipe.graphics.input_attachments.len(), 1);
-            assert!(!pipe.graphics.rasterization_order_attachment_access);
             for f in [ORDERED, INTERLOCK] {
                 assert!(!pipe.requirements.features.contains(&f), "{f:?}");
             }
@@ -1877,8 +1842,8 @@ fn a_framebuffer_fetch_pipeline_is_ordered_exactly_where_the_device_orders_it() 
     }
 }
 
-/// Under the identity domains on a device that orders framebuffer fetch in neither form (rt's
-/// profile), a color read takes no input attachment and no descriptor: the fragment fetches the
+/// Under the identity domains (rt's, on a device without the pixel interlock), a color read takes
+/// no input attachment and no descriptor: the fragment fetches the
 /// sampled-texture array's element pushed for the attachment (`PushField::FetchedColor`), in the
 /// attachment's own numeric class (an unsigned read of a signed-integer attachment as `int`, which
 /// the element's view takes), noted `UnorderedFetchWithinDraw`. A read of another class than the
@@ -1909,12 +1874,9 @@ fn an_identity_fetch_reads_its_attachments_pushed_texture_in_the_attachments_cla
         d
     };
     let mut without = description("lavapipe");
-    for f in [
-        VkFeature::RasterizationOrderColorAttachmentAccess,
-        VkFeature::FragmentShaderPixelInterlock,
-    ] {
-        without.features.remove(&f);
-    }
+    without
+        .features
+        .remove(&VkFeature::FragmentShaderPixelInterlock);
     let policy = DevicePolicy {
         pointer_domain: PointerDomain::Identity,
         handle_domain: HandleDomain::Identity,
@@ -1962,7 +1924,6 @@ fn an_identity_fetch_reads_its_attachments_pushed_texture_in_the_attachments_cla
             pipe.graphics.input_attachments.is_empty(),
             "{fragment} {format:?}"
         );
-        assert!(!pipe.graphics.rasterization_order_attachment_access);
         assert!(
             (pipe.layout.sets.iter())
                 .filter(|s| s.set == 0)
@@ -2022,8 +1983,8 @@ fn images_and_sample_id(words: &[u32]) -> (Vec<(u32, u32, u32)>, bool) {
 /// Metal runs a function that reads a color attachment of a multisampled pass once per covered
 /// sample, reading its own sample. Compiled for a pipeline of 4 samples, the fragment reads each
 /// color at its `SampleId` (which runs it once per covered sample under sample shading) through a
-/// multisampled `SubpassData` image: on lavapipe under rasterization-order access, and on a device
-/// without it unordered within a draw (noted). Where the device lacks sample-rate shading, the
+/// multisampled `SubpassData` image, unordered within a draw (noted). Where the device lacks
+/// sample-rate shading, the
 /// refusal names it; `[[sample_mask]]` in is the pixel's coverage, which no device gives a
 /// per-sample invocation. One sample compiles as before: no `SampleId`, a single-sample image.
 #[test]
@@ -2031,7 +1992,6 @@ fn a_multisampled_framebuffer_fetch_reads_each_samples_own_color() {
     use crate::device::requirements::VkFeature;
     use crate::error::Capability;
     use crate::pipeline::{PrecisionNote, RenderPipeline};
-    const ORDERED: VkFeature = VkFeature::RasterizationOrderColorAttachmentAccess;
     const SUBPASS_DATA: u32 = 6;
     let (Some(io), Some(blend), Some(ms)) = (
         fixture("stage_io"),
@@ -2081,15 +2041,13 @@ fn a_multisampled_framebuffer_fetch_reads_each_samples_own_color() {
             .contains(&PrecisionNote::UnorderedFetchWithinDraw)
     };
 
-    // The input attachment's own sample, ordered where the device orders it.
+    // The input attachment's own sample, ordered between draws alone.
     let lavapipe = description("lavapipe");
-    let mut unordered_device = lavapipe.clone();
-    unordered_device.features.remove(&ORDERED);
-    for (desc, ordered) in [(&lavapipe, true), (&unordered_device, false)] {
+    {
+        let desc = &lavapipe;
         let pipe = compile(desc, &descriptor(&blend, "exf_fetch_blend", 4)).expect("four");
         assert_eq!(pipe.graphics.input_attachments.len(), 1);
-        assert_eq!(pipe.graphics.rasterization_order_attachment_access, ordered);
-        assert_eq!(unordered(&pipe), !ordered);
+        assert!(unordered(&pipe));
         assert_eq!(
             pipe.graphics.rasterization_samples,
             vk::SampleCountFlags::COUNT_4
@@ -2098,7 +2056,6 @@ fn a_multisampled_framebuffer_fetch_reads_each_samples_own_color() {
             .requirements
             .features
             .contains(&VkFeature::SampleRateShading));
-        assert_eq!(pipe.requirements.features.contains(&ORDERED), ordered);
         assert_eq!(
             images_and_sample_id(&fragment_words(&pipe)),
             (vec![(SUBPASS_DATA, 0, 1)], true)
@@ -2112,8 +2069,8 @@ fn a_multisampled_framebuffer_fetch_reads_each_samples_own_color() {
         compile(desc, &descriptor(&ms, "msf_fetch_mask_out", 4)).expect("mask out");
     }
     // Without sample-rate shading no form reads a sample.
-    for desc in [&lavapipe, &unordered_device] {
-        let mut no_rate = desc.clone();
+    {
+        let mut no_rate = lavapipe.clone();
         no_rate.features.remove(&VkFeature::SampleRateShading);
         let (feature, needs) =
             refusal(compile(&no_rate, &descriptor(&blend, "exf_fetch_blend", 4)));
@@ -2127,9 +2084,9 @@ fn a_multisampled_framebuffer_fetch_reads_each_samples_own_color() {
             .any(|c| *c == Capability::Feature(VkFeature::SampleRateShading)));
     }
     // `[[sample_mask]]` in beside a fetch reads the pixel's coverage (measured): no device.
-    for desc in [&lavapipe, &unordered_device] {
+    {
         assert_eq!(
-            refusal(compile(desc, &descriptor(&ms, "msf_fetch_mask_in", 4))),
+            refusal(compile(&lavapipe, &descriptor(&ms, "msf_fetch_mask_in", 4))),
             (Feature::PixelCoverageAtSampleRate, Needs::NotRepresentable)
         );
     }

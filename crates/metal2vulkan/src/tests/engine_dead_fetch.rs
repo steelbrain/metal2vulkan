@@ -11,8 +11,7 @@
 //! nothing of the attachment, so on every committed profile its pipeline is the one of a function
 //! that declares no color input: color 0 an ordinary color attachment that the device blends
 //! where the pipeline blends, and no input attachment, its stages passing L3. Specialized with the
-//! read live, each reads color 0 through an input attachment: ordered where the device orders it
-//! through rasterization-order input attachments, and ordered between draws alone elsewhere, its
+//! read live, each reads color 0 through an input attachment, ordered between draws alone, its
 //! fragment stage noting `UnorderedFetchWithinDraw`.
 //! No GPU is used.
 
@@ -22,7 +21,6 @@ use crate::budget::Budget;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::Error;
 use crate::library::{FunctionConstantValue, FunctionConstantValues, Library};
-use crate::lower::fragment::inputs_order;
 use crate::metal::{BlendFactor, BlendOperation, DataType, PixelFormat};
 use crate::pipeline::artifact::{PrecisionNote, RenderPipeline};
 use crate::pipeline::descriptor::{
@@ -140,8 +138,7 @@ fn a_framebuffer_read_dead_after_specialization_takes_no_fetch_form() {
                         .unwrap_or_else(|e| panic!("{what}, dead: L3: {e}"));
                 }
                 dead += 1;
-                // Rasterization-order input attachments, or input attachments ordered between
-                // draws alone, noted.
+                // An input attachment ordered between draws alone, noted.
                 let pipe = pipeline(&dev, &library, entry, true, blended)
                     .unwrap_or_else(|e| panic!("{what}, live: {e}"));
                 let read: Vec<u32> = (pipe.graphics.input_attachments.iter())
@@ -151,7 +148,7 @@ fn a_framebuffer_read_dead_after_specialization_takes_no_fetch_form() {
                 let noted = (pipe.stages.iter()).any(|s| {
                     (s.precision_notes).contains(&PrecisionNote::UnorderedFetchWithinDraw)
                 });
-                assert_eq!(noted, !inputs_order(&p), "{what}, live");
+                assert!(noted, "{what}, live");
             }
         }
     }

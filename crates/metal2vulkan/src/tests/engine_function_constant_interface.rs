@@ -208,9 +208,8 @@ fn an_unobserved_gated_off_input_compiles() {
         assert!(off.facts.is_empty(), "{stem}: {:?}", off.facts);
         validate(&off, &p);
     }
-    // Defined (and so declared), the color input is read: a framebuffer fetch. Neither profile
-    // has rasterization-order access, so each reads color 0's input attachment, ordered between
-    // draws alone and noted.
+    // Defined (and so declared), the color input is read: a framebuffer fetch. Each profile reads
+    // color 0's input attachment, ordered between draws alone and noted.
     for stem in ["runtime-floor", "moltenvk-m3"] {
         let r = compile_bitcode(
             &bc,

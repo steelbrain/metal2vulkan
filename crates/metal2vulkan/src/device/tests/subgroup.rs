@@ -530,10 +530,9 @@ fn metal_properties_report_d3_d4_values() {
     assert!(!has(&Feature::Int64Arithmetic));
     assert!(!has(&Feature::ArgumentBufferPointers));
     assert!(has(&Feature::RasterOrderGroups));
-    // Neither rasterization-order access nor the pixel interlock: framebuffer fetch reads input
-    // attachments ordered between draws, a note, not a refusal.
-    let fragment = floor.profile().fields().fragment;
-    assert!(!fragment.rasterization_order_color_access && !fragment.pixel_interlock);
+    // No pixel interlock: framebuffer fetch reads input attachments ordered between draws, a
+    // note, not a refusal.
+    assert!(!floor.profile().fields().fragment.pixel_interlock);
     assert!(!has(&Feature::FramebufferFetch));
     let nv = device("nvidia-rtx50-linux");
     let m = nv.metal_properties();

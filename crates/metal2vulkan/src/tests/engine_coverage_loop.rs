@@ -501,8 +501,7 @@ fn l3(dev: &Device, p: &RenderPipeline, what: &str) {
 
 /// Over `coverage_loop` on every committed profile at four samples: where the device makes the
 /// memory writers, they loop without sample shading, each function holding one thing the loop
-/// does not fit is refused for that thing (or first for a feature the device lacks, as the color
-/// attachment read where neither rasterization-order access nor pixel interlock exists, but never
+/// does not fit is refused for that thing (or first for a feature the device lacks, but never
 /// made), and the sample-qualified varying loops, read at each
 /// pass's sample through `InterpolateAtSample` with no `Sample` decoration, or is refused as
 /// needing the interpolation functions on a device that withholds them. A device that does not

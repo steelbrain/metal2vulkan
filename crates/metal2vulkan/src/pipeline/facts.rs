@@ -467,50 +467,6 @@ pub enum RuntimeFact {
     /// with `None`, or naming a slot whose bound sampler states what the emulation does not
     /// answer (`Unsupported(ArgumentBufferTextures)`).
     HeapRawSamples { stage: Stage, sampler: Option<u32> },
-    /// On a device that orders framebuffer fetch through rasterization-order input attachments,
-    /// the function computes Metal's blend `blend` into extended-range color attachment `color`
-    /// in the shader: it reads the attachment's raw texel through its input attachment
-    /// (`RuntimeFact::FramebufferFetch`), blends its output over the texel's tile value, and
-    /// writes the encode of the result through its first output, the channels `kept` (the
-    /// format's channels the descriptor's write mask leaves out) taken from the texel. Link
-    /// gives the attachment no Vulkan blend and writes every raw component, and a pipeline of
-    /// another blend or write mask there is `NeedsInput(FramebufferFetch)`.
-    ExtendedRangeInputBlend {
-        color: u32,
-        blend: crate::pipeline::lower_inputs::BlendEquation,
-        kept: crate::vk::ColorComponentFlags,
-    },
-    /// On a device that orders framebuffer fetch through rasterization-order input attachments,
-    /// the function computes Metal's blend `blend` into color attachment `color`, held with its
-    /// channels rotated (`ARGB8Unorm` in `R8G8B8A8_UNORM`), where no Vulkan state on that image
-    /// gives it (`color_writes::shader_rotated_blend`): it reads the texel through the
-    /// attachment's input attachment (`RuntimeFact::FramebufferFetch`), blends its output over it
-    /// in Metal's channel order by Metal's 8-bit unorm blend, and writes the result through its
-    /// first output, rotated as every output there is. `kept` is the format's channels the
-    /// descriptor's write mask leaves out, which the attachment's write mask keeps. Link gives the
-    /// attachment no Vulkan blend, and a pipeline of another blend or write mask there is
-    /// `NeedsInput(FramebufferFetch)`.
-    RotatedInputBlend {
-        color: u32,
-        blend: crate::pipeline::lower_inputs::BlendEquation,
-        kept: crate::vk::ColorComponentFlags,
-    },
-    /// On a device that orders framebuffer fetch through rasterization-order input attachments,
-    /// the function writes color attachment `color`, which renders through a view of its word
-    /// (`metal::format::WordAttachment`, an 8-bit sRGB one), under a write mask of some of the
-    /// word's channels: it reads the texel's word through the attachment's input attachment
-    /// (`RuntimeFact::FramebufferFetch`) and writes Metal's word of its output with the fields of
-    /// the channels `kept` (those of the word the descriptor's write mask leaves out) taken from
-    /// the word read. Likewise an extended-range attachment whose one raw component holds three
-    /// codes (`BGR10_XR`, the two-plane forms' color word, their `_sRGB` twins) written unblended
-    /// under a mask of some of them: the function writes the kernel write's encode of its output
-    /// with the codes of the channels `kept` taken from the texel read. Link writes the whole word
-    /// (every raw component), and a pipeline of another write mask there is
-    /// `NeedsInput(FramebufferFetch)`.
-    WordInputMerge {
-        color: u32,
-        kept: crate::vk::ColorComponentFlags,
-    },
     /// The function reads, samples or gathers the sampled color texture (not a texture buffer,
     /// a multisampled or a depth texture) bound to the slot only with `float`, `half` or 32-bit
     /// integer results: bound to a texture of a color format whose numeric class is not the
@@ -789,9 +745,6 @@ impl RuntimeFact {
             RuntimeFact::CubicSampler { .. } => "CubicSampler",
             RuntimeFact::CubicArgumentSampler { .. } => "CubicArgumentSampler",
             RuntimeFact::HeapRawSamples { .. } => "HeapRawSamples",
-            RuntimeFact::ExtendedRangeInputBlend { .. } => "ExtendedRangeInputBlend",
-            RuntimeFact::RotatedInputBlend { .. } => "RotatedInputBlend",
-            RuntimeFact::WordInputMerge { .. } => "WordInputMerge",
             RuntimeFact::CrossClassReads { .. } => "CrossClassReads",
             RuntimeFact::StorageTextureWriteRounding { .. } => "StorageTextureWriteRounding",
             RuntimeFact::HeapWriteRounding { .. } => "HeapWriteRounding",

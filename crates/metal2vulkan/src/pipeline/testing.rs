@@ -264,8 +264,7 @@ pub fn fragment_inputs(
     inputs
 }
 
-/// [`compile`] under lowering inputs `inputs` (a pipeline's state, such as its framebuffer
-/// fetch's).
+/// [`compile`] under lowering inputs `inputs` (a pipeline's state, such as its color writes').
 pub fn compile_with(
     bitcode: &[u8],
     entry: &str,

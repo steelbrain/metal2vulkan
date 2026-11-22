@@ -7,8 +7,7 @@
 //! fixtures `engine/fragment_rog` and `fragment_rog_msl22` cover raster order groups: the body
 //! runs as a function called between `Begin/EndInvocationInterlockEXT`, only the entry kills, and
 //! the body's loops stay in it. `engine/fragment_fetch` covers framebuffer fetch: input
-//! attachments, ordered where the device has rasterization-order color attachment access. No GPU
-//! is used.
+//! attachments, ordered between draws. No GPU is used.
 //!
 //! `llvm-as` assembles the fixtures; a missing tool skips visibly.
 
@@ -28,7 +27,7 @@ use crate::pipeline::descriptor::{
     ColorAttachmentDescriptor, FunctionDescriptor, RenderPipelineDescriptor, StageSource,
 };
 use crate::pipeline::facts::RuntimeFact;
-use crate::pipeline::lower_inputs::{FramebufferFetchInputs, LoweringInputs};
+use crate::pipeline::lower_inputs::LoweringInputs;
 use crate::pipeline::sym::ResourceKind;
 use crate::pipeline::testing::{
     compile, compile_with, engine_dir, interlocked_coherence, link_and_validate, llvm_assemble,
@@ -434,84 +433,46 @@ fn attachments(a: &crate::library::FunctionArtifact) -> Vec<u32> {
         .collect()
 }
 
-/// The framebuffer-fetch state of a pipeline whose color attachments are `formats` (by index),
-/// read at `read`.
-fn fetch_state(read: &[u32], formats: &[PixelFormat]) -> LoweringInputs {
-    let colors: Vec<Option<ColorAttachmentDescriptor>> = formats
-        .iter()
-        .map(|&f| Some(ColorAttachmentDescriptor::new(f)))
-        .collect();
-    let mut inputs = LoweringInputs::new();
-    inputs.framebuffer_fetch = Some(FramebufferFetchInputs::of(read.iter().copied(), &colors));
-    inputs
-}
 /// Each color index a function reads is one input attachment with a `FramebufferFetch` fact,
-/// standalone and under its pipeline's fetch state alike: ordered where the device has
-/// rasterization-order color attachment access, and elsewhere ordered between draws alone and
-/// noted `UnorderedFetchWithinDraw`, a raster order group on it (`fetch_ordered`) taking no
-/// interlock there. Every compiled module passes L3.
+/// ordered between draws alone and noted `UnorderedFetchWithinDraw` on every committed profile, a
+/// raster order group on it (`fetch_ordered`) taking no interlock. Every compiled module passes
+/// L3.
 #[test]
-fn framebuffer_fetch_reads_an_input_attachment_ordered_where_the_device_orders_it() {
+fn framebuffer_fetch_reads_an_input_attachment_ordered_between_draws() {
     let Some(bc) = fixture("fragment_fetch") else {
         return;
     };
-    // (entry, colors read, the pipeline's attachment formats): `fetch_blend` reads three colors
-    // of distinct classes and writes the first two; the others read and write color 0.
-    let entries: [(&str, &[u32], &[PixelFormat]); 3] = [
-        (
-            "fetch_blend",
-            &[0, 1, 2],
-            &[
-                PixelFormat::RGBA8Unorm,
-                PixelFormat::RGBA32Uint,
-                PixelFormat::RG16Float,
-            ],
-        ),
-        ("fetch_scalar", &[0], &[PixelFormat::R32Float]),
-        ("fetch_ordered", &[0], &[PixelFormat::RGBA16Float]),
+    // (entry, colors read): `fetch_blend` reads three colors of distinct classes and writes the
+    // first two; the others read and write color 0.
+    let entries: [(&str, &[u32]); 3] = [
+        ("fetch_blend", &[0, 1, 2]),
+        ("fetch_scalar", &[0]),
+        ("fetch_ordered", &[0]),
     ];
-    // [unordered, ordered]
-    let mut forms = [0usize; 2];
+    let mut checked = 0;
     for (stem, strict) in committed_profiles().expect("profiles") {
-        let frag = strict.fields().fragment;
-        let ordered = frag.rasterization_order_color_access;
-        for (entry, colors, formats) in entries {
-            // A color input in a raster order group needs the interlock where rasterization-order
-            // access orders the read; where the read is unordered the group orders it alone.
-            if entry == "fetch_ordered" && !frag.pixel_interlock && ordered {
-                assert_eq!(
-                    refusal(&bc, entry, &strict),
-                    (Feature::RasterOrderGroups, pixel_interlock()),
-                    "{stem}"
-                );
-                continue;
-            }
-            forms[usize::from(ordered)] += 1;
-            for inputs in [LoweringInputs::new(), fetch_state(colors, formats)] {
-                let a = compile_with(&bc, entry, &strict, &inputs)
-                    .unwrap_or_else(|e| panic!("{entry} on {stem}: {e}"));
-                link_and_validate(&a, &strict)
-                    .unwrap_or_else(|e| panic!("{entry} on {stem}: L3: {e}"));
-                assert_eq!(attachments(&a), colors, "{entry} on {stem}");
-                for &color in colors {
-                    assert!(
-                        a.facts.contains(&RuntimeFact::FramebufferFetch { color }),
-                        "{entry} on {stem}: {:?}",
-                        a.facts
-                    );
-                }
-                assert_eq!(
-                    a.precision
-                        .contains(&PrecisionNote::UnorderedFetchWithinDraw),
-                    !ordered,
+        for (entry, colors) in entries {
+            let a = compile_with(&bc, entry, &strict, &LoweringInputs::new())
+                .unwrap_or_else(|e| panic!("{entry} on {stem}: {e}"));
+            link_and_validate(&a, &strict).unwrap_or_else(|e| panic!("{entry} on {stem}: L3: {e}"));
+            assert_eq!(attachments(&a), colors, "{entry} on {stem}");
+            for &color in colors {
+                assert!(
+                    a.facts.contains(&RuntimeFact::FramebufferFetch { color }),
                     "{entry} on {stem}: {:?}",
-                    a.precision
+                    a.facts
                 );
             }
+            assert!(
+                a.precision
+                    .contains(&PrecisionNote::UnorderedFetchWithinDraw),
+                "{entry} on {stem}: {:?}",
+                a.precision
+            );
+            checked += 1;
         }
     }
-    // The committed profiles cover each kind of device.
-    assert!(forms.iter().all(|&n| n > 0), "{forms:?}");
+    assert!(checked > 0, "no committed profile");
 }
 /// Whether module `words` holds a constant composite of 256 or more constituents: Metal's sRGB
 /// table (`lower::arith::srgb::declare`), which no other initializer of these fixtures reaches.
@@ -528,9 +489,8 @@ pub(super) fn holds_srgb_table(words: &[u32]) -> bool {
     false
 }
 
-/// On a device that reads a fetched color through an input attachment (both lavapipes), an
-/// `RGBA8Unorm_sRGB` or `BGRA8Unorm_sRGB` color reads the device's own decode through its input
-/// attachment: the render pipeline's fragment module is the one an `RGBA8Unorm` attachment's
+/// On both lavapipes, an `RGBA8Unorm_sRGB` or `BGRA8Unorm_sRGB` color reads the device's own
+/// decode through its input attachment: the render pipeline's fragment module is the one an `RGBA8Unorm` attachment's
 /// pipeline takes, word for word, holding no Metal sRGB table; the interface records the `float`
 /// colors the device decodes (`StageIo::decoded_fetches`), and the pipeline notes
 /// `PrecisionNote::SrgbTexelDecode` for the sRGB attachment alone. A fragment compiled alone links
@@ -542,7 +502,7 @@ fn an_srgb_input_attachment_reads_the_devices_decode() {
     };
     let mut checked = 0;
     for (stem, p) in committed_profiles().expect("profiles") {
-        if !p.fields().fragment.rasterization_order_color_access {
+        if !stem.contains("lavapipe") {
             continue;
         }
         let plain = compile_with(&bc, "fetch_blend", &p, &LoweringInputs::new())
@@ -645,7 +605,7 @@ fn a_fetched_extended_range_attachment_is_refused() {
         unwritten.write_mask = ColorWriteMask::NONE;
         vec![Some(fetched), Some(read), Some(unwritten)]
     };
-    let state = |read: &[u32], colors: &[Option<ColorAttachmentDescriptor>], p: &DeviceProfile| {
+    let state = |colors: &[Option<ColorAttachmentDescriptor>], p: &DeviceProfile| {
         let mut inputs = LoweringInputs::new();
         inputs.color_writes = crate::pipeline::color_writes::color_writes(
             0..colors.len() as u32,
@@ -655,7 +615,6 @@ fn a_fetched_extended_range_attachment_is_refused() {
         );
         inputs.extended_range_colors =
             crate::pipeline::color_writes::extended_range_colors(colors, Default::default());
-        inputs.framebuffer_fetch = Some(FramebufferFetchInputs::of(read.iter().copied(), colors));
         inputs
     };
     let refused = |r: Result<std::sync::Arc<crate::library::FunctionArtifact>, Error>,
@@ -683,14 +642,14 @@ fn a_fetched_extended_range_attachment_is_refused() {
     let mut checked = 0;
     for (stem, p) in committed_profiles().expect("profiles") {
         for pf in xr {
-            let r = compile_with(&blend, "exf_fetch_blend", &p, &state(&[0], &colors(pf), &p));
+            let r = compile_with(&blend, "exf_fetch_blend", &p, &state(&colors(pf), &p));
             refused(r, &format!("{stem}: {pf:?}"));
             checked += 1;
         }
         let mut both = colors(PixelFormat::RGB10A82PXR10SRGB);
         both[1] = Some(ColorAttachmentDescriptor::new(PixelFormat::R32Uint));
         both[2] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGB10A82PXR10));
-        let r = compile_with(&three, "exf_fetch_three", &p, &state(&[0, 1, 2], &both, &p));
+        let r = compile_with(&three, "exf_fetch_three", &p, &state(&both, &p));
         refused(r, &format!("{stem}: three"));
     }
     assert!(checked > 0, "no committed profile");
@@ -1105,8 +1064,8 @@ fn raster_order_groups_run_the_body_inside_the_interlock() {
 /// needs no interlock: Vulkan already orders a fragment's color writes and blending per sample in
 /// rasterization order, as Metal does. It compiles without an interlock mode or instruction on
 /// every committed profile, and on a device with neither interlock, and passes L3. (A group on a
-/// color input still needs the interlock:
-/// `framebuffer_fetch_reads_in_an_ordered_form_where_the_device_has_one`.)
+/// color input orders only the input attachment's read, between draws:
+/// `framebuffer_fetch_reads_an_input_attachment_ordered_between_draws`.)
 #[test]
 fn a_group_of_color_outputs_alone_needs_no_interlock() {
     let Some(bc) = fixture("fragment_rog") else {
@@ -1436,223 +1395,6 @@ fn a_varying_the_device_interpolates_records_the_device_interpolation_note() {
         let noted = if interpolated { &devices[..] } else { &[][..] };
         notes_on(&bc, what, note, noted);
     }
-}
-
-/// A fragment function blended into an `RG10Unorm_X12` attachment (premultiplied over, and a
-/// blend of source alpha into the color channels) records its output's blend note on every
-/// profile that orders fetch through rasterization-order input attachments, whatever the module's
-/// math and however it computes the output: the shader blends it over the input attachment by the
-/// device's arithmetic, where Metal's compiler
-/// folds the blend into the function in forms of its own. A `half4` output records
-/// `PrecisionNote::ExtendedRangeBlendSource` and a `float4` one
-/// `PrecisionNote::ExtendedRangeFloatBlendSource`, never the other's: the fills loaded from a
-/// buffer, `rt6_resolve_white`'s constant, a computed `half4`, a `float4` computed by whole-vector
-/// arithmetic or with a lane moved alone, under fast math, without it (into the `_sRGB` form too)
-/// and naming no math mode. Unblended, the constant output records none.
-#[test]
-fn a_blended_padded_output_records_its_blend_note() {
-    use crate::metal::BlendFactor;
-    let (Some(fills), Some(resolves)) = (fixture("rt6_samples"), fixture("rt6_resolves")) else {
-        return;
-    };
-    let text = std::fs::read_to_string(engine_dir().join("rt6_samples.ll")).expect("text");
-    assert_eq!(text.matches("air.compile.fast_math_enable").count(), 1);
-    let assemble = |text: &str, what: &str| match metal2vulkan_devtools::llvm_assemble_text(text) {
-        Ok(b) => Some(b),
-        Err(AssembleError::Missing(why)) => {
-            eprintln!("SKIPPED: {why}");
-            None
-        }
-        Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected {what}: {why}"),
-    };
-    let disable = |text: &str| {
-        text.replace(
-            "air.compile.fast_math_enable",
-            "air.compile.fast_math_disable",
-        )
-    };
-    let Some(safe) = assemble(&disable(&text), "the safe fills") else {
-        return;
-    };
-    // The module's options without its math mode.
-    let options = "!air.compile_options = !{!106, !107, !108}";
-    assert_eq!(text.matches(options).count(), 1);
-    assert_eq!(
-        text.matches("!107 = !{!\"air.compile.fast_math_enable\"}")
-            .count(),
-        1
-    );
-    let unnamed = text.replace(options, "!air.compile_options = !{!106, !108}");
-    let Some(unnamed) = assemble(&unnamed, "the fills without a math mode") else {
-        return;
-    };
-    let load = "  ret <4 x half> %19\n";
-    assert_eq!(text.matches(load).count(), 1);
-    let computed = text.replace(
-        load,
-        "  %computed = fmul fast <4 x half> %19, <half 0xH3C00, half 0xH3C00, half 0xH3C00, \
-         half 0xH3C00>\n  ret <4 x half> %computed\n",
-    );
-    let Some(safe_computed) = assemble(&disable(&computed), "the safe computed fill") else {
-        return;
-    };
-    let Some(computed) = assemble(&computed, "the computed fill") else {
-        return;
-    };
-    // The `float4` fill computed by whole-vector arithmetic (its load times ones), and computed
-    // with its alpha the load's (a lane moved alone).
-    let float_load = "  ret <4 x float> %19\n";
-    assert_eq!(text.matches(float_load).count(), 1);
-    let ones = "<float 1.0, float 1.0, float 1.0, float 1.0>";
-    let float_computed = text.replace(
-        float_load,
-        &format!("  %cf = fmul fast <4 x float> %19, {ones}\n  ret <4 x float> %cf\n"),
-    );
-    let Some(float_computed) = assemble(&float_computed, "the computed float4 fill") else {
-        return;
-    };
-    let float_mixed = text.replace(
-        float_load,
-        &format!(
-            "  %cf = fmul fast <4 x float> %19, {ones}\n  %mixed = shufflevector <4 x float> %cf, \
-             <4 x float> %19, <4 x i32> <i32 0, i32 1, i32 2, i32 7>\n  ret <4 x float> %mixed\n"
-        ),
-    );
-    let Some(float_mixed) = assemble(&float_mixed, "the lane-mixed float4 fill") else {
-        return;
-    };
-    let colors_of = |format: PixelFormat, blended: bool| {
-        let mut c = ColorAttachmentDescriptor::new(format);
-        c.blending_enabled = blended;
-        c.destination_rgb_blend_factor = BlendFactor::OneMinusSourceAlpha;
-        c.destination_alpha_blend_factor = BlendFactor::OneMinusSourceAlpha;
-        vec![Some(c)]
-    };
-    let colors = |blended: bool| colors_of(PixelFormat::RG10UnormX12, blended);
-    let state = |colors: &[Option<ColorAttachmentDescriptor>], p: &DeviceProfile| {
-        let mut inputs = LoweringInputs::new();
-        inputs.color_writes = crate::pipeline::color_writes::color_writes(
-            0..colors.len() as u32,
-            colors,
-            (false, Default::default()),
-            p,
-        );
-        inputs.extended_range_colors =
-            crate::pipeline::color_writes::extended_range_colors(colors, Default::default());
-        inputs.framebuffer_fetch = Some(FramebufferFetchInputs::of([0u32], colors));
-        inputs
-    };
-    let notes = [
-        PrecisionNote::ExtendedRangeBlendSource,
-        PrecisionNote::ExtendedRangeFloatBlendSource,
-    ];
-    let (half, float) = (Some(notes[0]), Some(notes[1]));
-    let mut checked = 0;
-    for (stem, p) in committed_profiles().expect("profiles") {
-        if !crate::lower::fragment::inputs_order(&p) {
-            continue;
-        }
-        let blended = state(&colors(true), &p);
-        // The one of the two notes the function records, if it records one.
-        let recorded = |a: &crate::library::FunctionArtifact| {
-            let found: Vec<PrecisionNote> = notes
-                .into_iter()
-                .filter(|n| a.precision.contains(n))
-                .collect();
-            assert!(found.len() <= 1, "{stem}: {found:?}");
-            found.first().copied()
-        };
-        let noted = |bitcode: &[u8], name: &str, inputs: &LoweringInputs| {
-            compile_with(bitcode, name, &p, inputs)
-                .map(|a| recorded(&a))
-                .map_err(|e| format!("{stem}: {name}: {e}"))
-        };
-        let float_fill = match compile_with(&fills, "rt6_fill_rgba32float", &p, &blended) {
-            Ok(a) => recorded(&a),
-            // A device without the raw format's color attachment refuses the blend whatever the
-            // source.
-            Err(Error::Unsupported(u)) if u.needs != Needs::NotImplemented => continue,
-            Err(e) => panic!("{stem}: {e}"),
-        };
-        checked += 1;
-        assert_eq!(float_fill, float, "{stem}: a loaded float4 under fast math");
-        assert_eq!(
-            noted(&fills, "rt6_fill_rgba16float", &blended),
-            Ok(half),
-            "{stem}: a loaded half4 under fast math"
-        );
-        assert_eq!(
-            noted(&resolves, "rt6_resolve_white", &blended),
-            Ok(float),
-            "{stem}: a constant float4"
-        );
-        assert_eq!(
-            noted(&computed, "rt6_fill_rgba16float", &blended),
-            Ok(half),
-            "{stem}: a computed half4 under fast math"
-        );
-        let fill = "rt6_fill_rgba32float";
-        assert_eq!(
-            noted(&float_computed, fill, &blended),
-            Ok(float),
-            "{stem}: a computed float4 under fast math"
-        );
-        let keyed = {
-            let mut c = ColorAttachmentDescriptor::new(PixelFormat::RG10UnormX12);
-            c.blending_enabled = true;
-            c.destination_rgb_blend_factor = BlendFactor::SourceAlpha;
-            c.destination_alpha_blend_factor = BlendFactor::OneMinusSourceAlpha;
-            state(&[Some(c)], &p)
-        };
-        assert_eq!(
-            noted(&fills, fill, &keyed),
-            Ok(float),
-            "{stem}: keyed, loaded"
-        );
-        assert_eq!(
-            noted(&float_computed, fill, &keyed),
-            Ok(float),
-            "{stem}: keyed, computed"
-        );
-        assert_eq!(
-            noted(&float_mixed, fill, &blended),
-            Ok(float),
-            "{stem}: a float4 with a lane moved alone"
-        );
-        let unblended = state(&colors(false), &p);
-        assert_eq!(
-            noted(&resolves, "rt6_resolve_white", &unblended),
-            Ok(None),
-            "{stem}: a constant float4 unblended"
-        );
-        let srgb = state(&colors_of(PixelFormat::RG10UnormX12SRGB, true), &p);
-        for (name, note) in [
-            ("rt6_fill_rgba32float", float),
-            ("rt6_fill_rgba16float", half),
-        ] {
-            assert_eq!(
-                noted(&safe, name, &blended),
-                Ok(note),
-                "{stem}: {name} without fast math"
-            );
-            assert_eq!(
-                noted(&unnamed, name, &blended),
-                Ok(note),
-                "{stem}: {name} of no math mode"
-            );
-            assert_eq!(
-                noted(&safe, name, &srgb),
-                Ok(note),
-                "{stem}: {name} without fast math into the sRGB form"
-            );
-        }
-        assert_eq!(
-            noted(&safe_computed, "rt6_fill_rgba16float", &blended),
-            Ok(half),
-            "{stem}: a computed half4 without fast math"
-        );
-    }
-    assert!(checked > 0, "no profile blended over the input attachment");
 }
 
 /// The opcodes of every instruction in `words`, and the capabilities it declares.

@@ -3,16 +3,11 @@
 //! `probes/padded_and_bfloat_blends.m` of the conformance crate), and which no device blends: the
 //! attachment holds the raw words in an unsigned integer format.
 //!
-//! The function computes the blend over an ordered read of the attachment
-//! (`lower::fragment::input_blend`); a blend into one of Apple's extended-range forms, which
-//! Metal's tile holds as `half`, is refused (`blended_pipelines`). On every committed profile that
-//! orders fetch through rasterization-order input attachments, `rt6_samples`' `half4` and `float4`
-//! fills under premultiplied source-over and one plus one, `xrb_dual`'s second-source blends,
-//! whose index-1 output the blend reads, and a write mask of some of the channels make the whole
-//! pipeline with color 0's blend computed over its input attachment
-//! (`RuntimeFact::ExtendedRangeInputBlend`), the attachment a color attachment of the raw format
-//! with no Vulkan blend. On one that does not order it the pipeline is refused naming the ordering.
-//! No GPU is used.
+//! The function's own blend over an ordered read of the attachment is not built, so on every
+//! committed profile `rt6_samples`' `half4` and `float4` fills under premultiplied source-over and
+//! one plus one, `xrb_dual`'s second-source blends and a write mask of some of the channels are
+//! refused `NotImplemented(FramebufferFetch)`; a blend into one of Apple's extended-range forms,
+//! which Metal's tile holds as `half`, is refused (`blended_pipelines`). No GPU is used.
 //!
 //! `llvm-as` assembles the fixtures; a missing tool skips visibly.
 
@@ -20,19 +15,17 @@ use std::path::Path;
 
 use crate::budget::Budget;
 use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
-use crate::error::{DescriptorError, Error, MetalAnswer, Needs};
+use crate::error::{DescriptorError, Error, Feature, MetalAnswer, Needs};
 use crate::library::Library;
-use crate::metal::{BlendFactor, BlendOperation, ColorWriteMask, PixelFormat};
+use crate::metal::{BlendFactor, ColorWriteMask, PixelFormat};
 use crate::pipeline::artifact::{PrecisionNote, RenderPipeline};
 use crate::pipeline::descriptor::{
     ColorAttachmentDescriptor, FunctionDescriptor, RenderPipelineDescriptor, StageSource,
 };
-use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::link::RenderLinkInputs;
-use crate::pipeline::lower_inputs::{BlendEquation, FramebufferFetchInputs, LoweringInputs};
+use crate::pipeline::lower_inputs::LoweringInputs;
 use crate::pipeline::testing::{compile_with, engine_dir, fragment_inputs, AssembleError};
 use crate::spirv::testing::committed_profiles;
-use crate::vk;
 
 /// Fixture `stem` assembled; `None` (skipped) without `llvm-as`.
 fn assembled(stem: &str) -> Option<Vec<u8>> {
@@ -64,68 +57,55 @@ const BFLOAT: [PixelFormat; 3] = [
     PixelFormat::RGBA16Bfloat,
 ];
 
-/// Premultiplied source-over: one over one minus the source alpha, added, for color and alpha.
-const OVER: BlendEquation = BlendEquation {
-    source_rgb: BlendFactor::One,
-    destination_rgb: BlendFactor::OneMinusSourceAlpha,
-    rgb_operation: BlendOperation::Add,
-    source_alpha: BlendFactor::One,
-    destination_alpha: BlendFactor::OneMinusSourceAlpha,
-    alpha_operation: BlendOperation::Add,
-};
+/// A blend's source and destination factors for color and for alpha, each added.
+type Factors = [BlendFactor; 4];
 
-/// One plus one, added, for color and alpha.
-const ADD: BlendEquation = BlendEquation {
-    source_rgb: BlendFactor::One,
-    destination_rgb: BlendFactor::One,
-    rgb_operation: BlendOperation::Add,
-    source_alpha: BlendFactor::One,
-    destination_alpha: BlendFactor::One,
-    alpha_operation: BlendOperation::Add,
-};
+/// Premultiplied source-over: one over one minus the source alpha, for color and alpha.
+const OVER: Factors = [
+    BlendFactor::One,
+    BlendFactor::OneMinusSourceAlpha,
+    BlendFactor::One,
+    BlendFactor::OneMinusSourceAlpha,
+];
+
+/// One plus one, for color and alpha.
+const ADD: Factors = [BlendFactor::One; 4];
 
 /// The second source's blend: its color and one minus it, its alpha and one minus it.
-const SECOND: BlendEquation = BlendEquation {
-    source_rgb: BlendFactor::Source1Color,
-    destination_rgb: BlendFactor::OneMinusSource1Color,
-    rgb_operation: BlendOperation::Add,
-    source_alpha: BlendFactor::Source1Alpha,
-    destination_alpha: BlendFactor::OneMinusSource1Alpha,
-    alpha_operation: BlendOperation::Add,
-};
+const SECOND: Factors = [
+    BlendFactor::Source1Color,
+    BlendFactor::OneMinusSource1Color,
+    BlendFactor::Source1Alpha,
+    BlendFactor::OneMinusSource1Alpha,
+];
 
-/// Color 0 of `pf` blended by `eq` under write mask `mask`.
+/// Color 0 of `pf` blended by `factors`, added, under write mask `mask`.
 fn attachment(
     pf: PixelFormat,
-    eq: BlendEquation,
+    factors: Factors,
     mask: ColorWriteMask,
 ) -> ColorAttachmentDescriptor {
     let mut c = ColorAttachmentDescriptor::new(pf);
     c.blending_enabled = true;
-    c.source_rgb_blend_factor = eq.source_rgb;
-    c.destination_rgb_blend_factor = eq.destination_rgb;
-    c.rgb_blend_operation = eq.rgb_operation;
-    c.source_alpha_blend_factor = eq.source_alpha;
-    c.destination_alpha_blend_factor = eq.destination_alpha;
-    c.alpha_blend_operation = eq.alpha_operation;
+    c.source_rgb_blend_factor = factors[0];
+    c.destination_rgb_blend_factor = factors[1];
+    c.source_alpha_blend_factor = factors[2];
+    c.destination_alpha_blend_factor = factors[3];
     c.write_mask = mask;
-    assert_eq!(BlendEquation::of(&c), Some(eq));
     c
 }
 
-/// The lowering inputs of a fragment function writing color 0 of `pf` blended by `eq` under
+/// The lowering inputs of a fragment function writing color 0 of `pf` blended by `factors` under
 /// `mask` on `p`, as the render pipeline compile sets them.
 fn state(
     p: &DeviceProfile,
     pf: PixelFormat,
-    eq: BlendEquation,
+    factors: Factors,
     mask: ColorWriteMask,
 ) -> LoweringInputs {
     let mut r = RenderLinkInputs::new();
-    r.color_attachments[0] = Some(attachment(pf, eq, mask));
-    let mut inputs = fragment_inputs(&r, p);
-    inputs.framebuffer_fetch = Some(FramebufferFetchInputs::of([0], &r.color_attachments));
-    inputs
+    r.color_attachments[0] = Some(attachment(pf, factors, mask));
+    fragment_inputs(&r, p)
 }
 
 /// The device of committed profile `stem`.
@@ -163,28 +143,15 @@ fn pipeline(
     dev.compile_render_pipeline(&d, &Budget::standard())
 }
 
-/// The blends a pipeline computes over color 0's input attachment, with the channels each keeps.
-fn input_blends(a: &RenderPipeline) -> Vec<(BlendEquation, vk::ColorComponentFlags)> {
-    a.dependencies
-        .iter()
-        .filter_map(|d| match d.fact {
-            RuntimeFact::ExtendedRangeInputBlend {
-                color: 0,
-                blend,
-                kept,
-            } => Some((blend, kept)),
-            _ => None,
-        })
-        .collect()
-}
-
+/// A blend into a padded attachment is refused `NotImplemented(FramebufferFetch)` on every
+/// committed profile, under every blend and mask here (the module docs).
 #[test]
-fn a_blend_into_a_padded_attachment_is_computed_in_the_shader() {
+fn a_blend_into_a_padded_attachment_is_refused_on_every_device() {
     let (Some(fills), Some(dual)) = (assembled("rt6_samples"), assembled("xrb_dual")) else {
         return;
     };
     // Each function, its vertex function, and the blends it takes.
-    let entries: [(&[u8], &str, &str, &[BlendEquation]); 4] = [
+    let entries: [(&[u8], &str, &str, &[Factors]); 4] = [
         (
             &fills,
             "rt6_fill_vertex",
@@ -204,41 +171,31 @@ fn a_blend_into_a_padded_attachment_is_computed_in_the_shader() {
     let rgb = ColorWriteMask::RED
         .union(ColorWriteMask::GREEN)
         .union(ColorWriteMask::BLUE);
-    let (mut inputs, mut unordered) = (0, 0);
-    for (stem, p) in committed_profiles().expect("profiles") {
+    let mut refused = 0;
+    for (stem, _) in committed_profiles().expect("profiles") {
         let dev = device(&stem);
         for pf in PADDED {
             for &(bc, vertex, fragment, blends) in &entries {
-                for &eq in blends {
+                for &factors in blends {
                     for mask in [ColorWriteMask::ALL, ColorWriteMask::RED, rgb] {
-                        let what = format!("{stem} {pf:?} {fragment} {eq:?} {mask:?}");
-                        let made = pipeline(&dev, (bc, vertex, fragment), attachment(pf, eq, mask));
-                        if crate::lower::fragment::inputs_order(&p) {
-                            let a = made.unwrap_or_else(|e| panic!("{what}: {e}"));
-                            let blends = input_blends(&a);
-                            assert_eq!(blends.len(), 1, "{what}: {blends:?}");
-                            assert_eq!(blends[0].0, eq, "{what}");
-                            let state0 = a.graphics.color_attachments[0].expect("color 0");
-                            let form = crate::metal::format::ExtendedRange::of(pf).expect("padded");
-                            assert_eq!(state0.format, form.raw_format(), "{what}");
-                            assert!(state0.blend.is_none(), "{what}");
-                            inputs += 1;
-                        } else {
-                            let e = made.map(|_| ()).expect_err(&what);
-                            let named = crate::lower::fragment::fetch::unordered_extended_fetch();
-                            assert!(
-                                matches!(&e, Error::Unsupported(u) if u.needs == named.needs),
-                                "{what}: {e}"
-                            );
-                            unordered += 1;
+                        let what = format!("{stem} {pf:?} {fragment} {factors:?} {mask:?}");
+                        let made =
+                            pipeline(&dev, (bc, vertex, fragment), attachment(pf, factors, mask));
+                        match made.map(drop) {
+                            Err(Error::Unsupported(u)) => assert_eq!(
+                                (u.feature, u.needs),
+                                (Feature::FramebufferFetch, Needs::NotImplemented),
+                                "{what}"
+                            ),
+                            other => panic!("{what}: {other:?}"),
                         }
+                        refused += 1;
                     }
                 }
             }
         }
     }
-    assert!(inputs > 0, "no profile blends over the input attachment");
-    assert!(unordered > 0, "no profile leaves fetch unordered");
+    assert!(refused > 0);
 }
 
 /// A blend into a bfloat attachment (`R16Bfloat`, `RG16Bfloat`, `RGBA16Bfloat`) is Metal's
@@ -298,15 +255,12 @@ fn a_blend_into_a_bfloat_attachment_is_metals_pipeline_error() {
 /// `half`, a `float4` input's too (the M3 Max under macOS 27.0.1, `probes/padded_fetch.m` of the
 /// conformance crate). `pfx_fetch`'s `float4` and `half4` reads of color 0 (mask none), stored into
 /// an `RGBA32Float` color 1, make the whole pipeline on every committed profile, color 0 an
-/// attachment of the raw format read as an unsigned input attachment: ordered where the profile
-/// orders fetch through rasterization-order input attachments, elsewhere ordered between draws
-/// alone, its fragment stage noting `UnorderedFetchWithinDraw`. The negative control: a fetch of a
+/// attachment of the raw format read as an unsigned input attachment, ordered between draws alone,
+/// its fragment stage noting `UnorderedFetchWithinDraw`. The negative control: a fetch of a
 /// bfloat attachment, whose read Metal answers unmeasured, stays `NotImplemented(Format)` on every
 /// profile.
 #[test]
 fn a_fetch_of_a_padded_attachment_reads_the_tile_value_of_its_codes() {
-    use crate::error::Feature;
-    use crate::lower::fragment::inputs_order;
     use crate::metal::format::ExtendedRange;
     let Some(bc) = assembled("pfx_fetch") else {
         return;
@@ -329,15 +283,14 @@ fn a_fetch_of_a_padded_attachment_reads_the_tile_value_of_its_codes() {
         d.color_attachments[1] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Float));
         dev.compile_render_pipeline(&d, &Budget::standard())
     };
-    let (mut inputs, mut unordered, mut bfloat) = (0, 0, 0);
-    for (stem, p) in committed_profiles().expect("profiles") {
+    let (mut read_padded, mut bfloat) = (0, 0);
+    for (stem, _) in committed_profiles().expect("profiles") {
         let dev = device(&stem);
         for fragment in ["pfx_fetch_read", "pfx_fetch_read_half"] {
             for pf in PADDED {
                 let what = format!("{stem} {pf:?} {fragment}");
                 let raw = ExtendedRange::of(pf).expect("padded").raw_format();
-                // Rasterization-order input attachments, or input attachments ordered between
-                // draws alone, noted.
+                // Input attachments ordered between draws alone, noted.
                 let a = made(&dev, fragment, pf).unwrap_or_else(|e| panic!("{what}: {e}"));
                 let state0 = a.graphics.color_attachments[0].expect("color 0");
                 assert_eq!(state0.format, raw, "{what}");
@@ -351,11 +304,8 @@ fn a_fetch_of_a_padded_attachment_reads_the_tile_value_of_its_codes() {
                 let noted = (a.stages.iter()).any(|s| {
                     (s.precision_notes).contains(&PrecisionNote::UnorderedFetchWithinDraw)
                 });
-                assert_eq!(noted, !inputs_order(&p), "{what}");
-                match inputs_order(&p) {
-                    true => inputs += 1,
-                    false => unordered += 1,
-                }
+                assert!(noted, "{what}");
+                read_padded += 1;
             }
             for pf in BFLOAT {
                 let what = format!("{stem} {pf:?} {fragment}");
@@ -371,7 +321,6 @@ fn a_fetch_of_a_padded_attachment_reads_the_tile_value_of_its_codes() {
             }
         }
     }
-    assert!(inputs > 0, "no profile reads through the input attachment");
-    assert!(unordered > 0, "no profile leaves fetch unordered");
+    assert!(read_padded > 0, "no padded fetch was made");
     assert!(bfloat > 0, "no bfloat fetch was refused");
 }

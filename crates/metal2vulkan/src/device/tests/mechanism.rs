@@ -169,33 +169,6 @@ fn every_fact() -> Vec<RuntimeFact> {
             stage: Stage::Fragment,
             sampler: Some(1),
         },
-        RuntimeFact::ExtendedRangeInputBlend {
-            color: 0,
-            blend: {
-                let mut c = crate::pipeline::ColorAttachmentDescriptor::new(
-                    crate::metal::PixelFormat::BGRA10XR,
-                );
-                c.blending_enabled = true;
-                crate::pipeline::lower_inputs::BlendEquation::of(&c).expect("a blend")
-            },
-            kept: crate::vk::ColorComponentFlags::empty(),
-        },
-        RuntimeFact::RotatedInputBlend {
-            color: 0,
-            blend: {
-                let mut c = crate::pipeline::ColorAttachmentDescriptor::new(
-                    crate::metal::PixelFormat::ARGB8Unorm,
-                );
-                c.blending_enabled = true;
-                c.destination_rgb_blend_factor = crate::metal::BlendFactor::DestinationAlpha;
-                crate::pipeline::lower_inputs::BlendEquation::of(&c).expect("a blend")
-            },
-            kept: crate::vk::ColorComponentFlags::empty(),
-        },
-        RuntimeFact::WordInputMerge {
-            color: 1,
-            kept: crate::vk::ColorComponentFlags::G,
-        },
         RuntimeFact::CrossClassReads { slot },
         RuntimeFact::StorageTextureWriteRounding { slot, halves: true },
         RuntimeFact::HeapWriteRounding {
@@ -315,7 +288,6 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::CubicSampler { .. } => 63,
         RuntimeFact::CubicArgumentSampler { .. } => 64,
         RuntimeFact::HeapRawSamples { .. } => 68,
-        RuntimeFact::ExtendedRangeInputBlend { .. } => 70,
         RuntimeFact::CrossClassReads { .. } => 71,
         RuntimeFact::StorageTextureWriteRounding { .. } => 72,
         RuntimeFact::HeapWriteRounding { .. } => 73,
@@ -323,7 +295,6 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::AnisotropicSampler { .. } => 75,
         RuntimeFact::StorageTextureIntegerChannels { .. } => 76,
         RuntimeFact::ObjectThreadgroupArena { .. } => 79,
-        RuntimeFact::WordInputMerge { .. } => 81,
         RuntimeFact::ReplayBindings => 82,
         RuntimeFact::MergedDraws => 67,
         RuntimeFact::QuadPrimitiveIds => 54,
@@ -331,22 +302,21 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::PrivateList => 80,
         RuntimeFact::YCbCrInPlace { .. } => 60,
         RuntimeFact::PartialObjectThreadgroups => 83,
-        RuntimeFact::RotatedInputBlend { .. } => 84,
         RuntimeFact::OpenClMode => 85,
         RuntimeFact::RowLockstep => 86,
         RuntimeFact::BorderTexels { .. } => 87,
         RuntimeFact::HeapResidency { .. } => 88,
         RuntimeFact::OneRow => 89,
         RuntimeFact::RegionViewports => 90,
-        RuntimeFact::CallThreadgroups => 91,
-        RuntimeFact::PartialThreadgroups => 92,
+        RuntimeFact::CallThreadgroups => 84,
+        RuntimeFact::PartialThreadgroups => 81,
         RuntimeFact::TexelRows { .. } => 78,
         RuntimeFact::UnitAxes { .. } => 53,
         RuntimeFact::TexelBufferParts { .. } => 65,
         RuntimeFact::OpenClLineTexture { .. } => 69,
         RuntimeFact::AddressAlignment { .. } => 66,
         RuntimeFact::GridTiles => 51,
-        RuntimeFact::PrivateArena { .. } => 93,
+        RuntimeFact::PrivateArena { .. } => 70,
     }
 }
 
@@ -354,7 +324,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..94).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..91).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -467,11 +437,9 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                         _ => Mechanism::PlanTimeCheck,
                     }
                 }
-                RuntimeFact::FramebufferFetch { .. }
-                | RuntimeFact::TileImageblock { .. }
-                | RuntimeFact::ExtendedRangeInputBlend { .. }
-                | RuntimeFact::RotatedInputBlend { .. }
-                | RuntimeFact::WordInputMerge { .. } => Mechanism::RenderPassContract,
+                RuntimeFact::FramebufferFetch { .. } | RuntimeFact::TileImageblock { .. } => {
+                    Mechanism::RenderPassContract
+                }
                 RuntimeFact::ExecutionStatus => match f.buffer_access {
                     crate::device::profile::BufferAccess::Addressed => Mechanism::PushConstant,
                     _ => Mechanism::SyntheticBinding,

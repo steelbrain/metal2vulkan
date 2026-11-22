@@ -25,19 +25,12 @@
 //! refuses it (`ColorAttachment`). So is a blend into a bfloat attachment, whatever the function
 //! writes there (`InvalidDescriptor(ColorAttachment)`: Metal's pipeline validation asserts that
 //! the format is not blendable). A `bfloat` output is refused before, as Metal's compiler rejects
-//! it. The blend of another form, a padded one's included, is the function's own, over an ordered
-//! read of the attachment (below), and a dual-source second output to such an attachment is that
-//! blend's second source: on a device that does not order fetch the blend is refused naming what
-//! it needs (`fetch::unordered_extended_fetch`: `rasterizationOrderColorAttachmentAccess`). A blend
-//! into one
-//! of Apple's extended-range forms (`BGR10_XR`, `BGRA10_XR`, `RGB10A8_2P_XR10` and their `_sRGB`
-//! twins) is not implemented on any device (`Feature::Format`, `fetch::codes_round_the_tile`):
-//! only a padded form's blend is built.
-//!
-//! On a device that orders framebuffer fetch through rasterization-order input attachments, a blend
-//! the function computes over the attachment's input attachment (`lower::fragment`'s `input_blend`)
-//! is built: the output's write stores the raw texel of Metal's blend over the texel the input
-//! attachment reads, which `stage_io` writes through the output variable as it writes [`encode`]'s.
+//! it. A blend into one of Apple's extended-range forms (`BGR10_XR`, `BGRA10_XR`,
+//! `RGB10A8_2P_XR10` and their `_sRGB` twins) is not implemented on any device (`Feature::Format`,
+//! `fetch::codes_round_the_tile`). A padded form's blend would be the function's own, over an
+//! ordered read of the attachment, which is not built: it is refused on every device
+//! (`fetch::computed_write_refused`). A dual-source second output to such an attachment is stored
+//! nowhere, as an unblended write reads none.
 
 use crate::error::{DescriptorError, Error, Feature, MetalAnswer, Unsupported};
 use crate::lower::arith::extended_range;
@@ -92,14 +85,12 @@ pub(super) fn plan(
     if e.blended && crate::lower::fragment::fetch::codes_round_the_tile(e.form) {
         return Err(Unsupported::not_implemented(Feature::Format).into());
     }
-    let blended = e.blended && !cx.families.fragment.input_blends.contains_key(&color);
-    // A blend the function computes over an ordered read of the attachment (over the input
-    // attachment, `lower::fragment`), on a device that does not order fetch: refused naming the
-    // ordering.
-    if blended && crate::lower::fragment::fetch::fetch_unordered(cx.profile) {
-        return Err(crate::lower::fragment::fetch::unordered_extended_fetch().into());
+    // A padded form's blend, which the function would compute over an ordered read of the
+    // attachment.
+    if e.blended {
+        return Err(crate::lower::fragment::fetch::computed_write_refused().into());
     }
-    if blended || !matches!(fmt, FloatFmt::F32 | FloatFmt::Half) {
+    if !matches!(fmt, FloatFmt::F32 | FloatFmt::Half) {
         return Err(Unsupported::not_implemented(Feature::Format).into());
     }
     cx.families

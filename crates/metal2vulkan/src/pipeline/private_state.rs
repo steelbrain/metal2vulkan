@@ -62,28 +62,12 @@
 //!   code above it: Vulkan's operation is the device's native form there, recorded
 //!   (`PrecisionNote::NativeLogicOperation`, [`note_vulkan_codes`]). An integer output past the
 //!   channel's range, which Metal saturates first, Vulkan's conversion leaves undefined
-//!   (lavapipe and an RTX 3090 saturate it, as Metal does). A device without it that
-//!   orders framebuffer fetch through rasterization-order input attachments has the fragment
-//!   function compute
-//!   the operation itself, over the texel its first output's write reads (`lower::fragment`'s
-//!   `logic`; probe `logic_operation` on an Apple M3 Max, macOS 27.0.1: every operation into
-//!   `R8Unorm`, `A8Unorm`, `RGBA8Unorm`, `BGRA8Unorm`, `R16Unorm`, `RGBA16Unorm`, `RGB10A2Unorm`,
-//!   `BGR10A2Unorm`, `RG8Snorm`,
-//!   `RGBA8Snorm`, `RG16Snorm`, `RGBA16Snorm`, `RGBA8Uint`, `R16Uint`, `R32Uint`, `RGBA8Sint`,
-//!   `RG16Sint` and `R32Sint`, some under write masks, at 4 samples and over overlapping
-//!   fragments): a NaN takes the channel's low end (0, or -1 signed), a signed
-//!   normalized channel's lowest code reads and stores as the code above it, and an integer output
-//!   saturates to the channel's range before the operation; `RGB10A2Unorm` and `BGR10A2Unorm`
-//!   operate on their codes widened to 16 bits, the result narrowed back. It refuses formats
-//!   outside that rule (`RGB10A2Uint` and the packed 16-bit formats, whose operation Metal
-//!   computes otherwise), color 0 under alpha to coverage, and a function that writes the attachment
-//!   through a merged word ([`logic_operated`]). A device that does not order fetch refuses the
-//!   operation naming Vulkan's operation and rasterization-order access. So is an operation
-//!   other than copy and no-op refused where Vulkan's form is not Metal's: an sRGB attachment
-//!   (Vulkan applies none there), a float attachment that blends under Vulkan's operation (which
-//!   turns every blend off), a format whose operation Metal was not measured with
-//!   (extended-range, packed small-float, YCbCr), or a function that writes an attachment itself
-//!   ([`logic_operated`]).
+//!   (lavapipe and an RTX 3090 saturate it, as Metal does). A device without `logicOp` refuses
+//!   the operation naming it: the fragment function's own operation over an ordered read of the
+//!   attachment is not built. So is an operation other than copy and no-op refused where
+//!   Vulkan's form is not Metal's: an sRGB attachment (Vulkan applies none there), a float
+//!   attachment that blends under Vulkan's operation (which turns every blend off), and a format
+//!   whose operation Metal was not measured with (extended-range, packed small-float, YCbCr).
 //! - `sampleCoverage` keeps a fraction of the samples, dithered over each 2x2 quad of window
 //!   pixels, and is applied as `sampleMask` is, after the function runs: the value clamped to
 //!   `[0, 1]` (a NaN taken as 0) and converted to an 8-bit unorm code `c`; at one sample a pixel
@@ -424,67 +408,27 @@ fn logic_class(pf: PixelFormat) -> LogicClass {
     }
 }
 
-/// How a pipeline draws its private logic operation other than copy and no-op
-/// ([`logic_operation`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum LogicDraw {
-    /// Through Vulkan's `logicOp` ([`GraphicsState::logic_op`]).
-    Vulkan(vk::LogicOp),
-    /// By the fragment function, over the texel its write reads through framebuffer fetch
-    /// (`LoweringInputs::logic_operation`, `lower::fragment`'s `logic`), on a device without
-    /// Vulkan's `logicOp` that orders the fetch.
-    Shader(vk::LogicOp),
-}
-
-impl LogicDraw {
-    /// The Vulkan logic operation the pipeline draws with, if any.
-    pub(crate) fn vulkan(draw: Option<LogicDraw>) -> Option<vk::LogicOp> {
-        match draw {
-            Some(LogicDraw::Vulkan(op)) => Some(op),
-            _ => None,
-        }
-    }
-
-    /// The logic operation the fragment function computes, if any.
-    pub(crate) fn shader(draw: Option<LogicDraw>) -> Option<vk::LogicOp> {
-        match draw {
-            Some(LogicDraw::Shader(op)) => Some(op),
-            _ => None,
-        }
-    }
-}
-
-/// The pipeline `d` draws as on `p` under its private logic operation (the module docs), and how
-/// it draws the operation: each normalized, sRGB and integer attachment unblended, under a no-op
-/// also unwritten, a float attachment as it is. Copy and no-op are then Metal's on every device
-/// and need no operation. Every other operation takes Vulkan's `logicOp`
-/// ([`LogicDraw::Vulkan`]); on a device without it that orders framebuffer fetch, the fragment
-/// function computes it ([`LogicDraw::Shader`]), refused `NotImplemented`
-/// (`PrivateRenderField::LogicOperation`) at a normalized or integer attachment whose format it
-/// does not serve (`lower::fragment`'s `logic`); on a device that has neither, it is refused naming
-/// them. Every operation but copy and no-op is refused `NotImplemented` where an attachment is
-/// sRGB, where a float attachment blends under Vulkan's operation, and where an attachment's
-/// format was not measured. A pipeline without a fragment function writes no color, and takes no
-/// operation.
+/// The pipeline `d` draws as on `p` under its private logic operation (the module docs), and the
+/// Vulkan `logicOp` it draws the operation with ([`GraphicsState::logic_op`]): each normalized,
+/// sRGB and integer attachment unblended, under a no-op also unwritten, a float attachment as it
+/// is. Copy and no-op are then Metal's on every device and need no operation. Every other
+/// operation takes Vulkan's `logicOp`, refused naming it on a device without it, and refused
+/// `NotImplemented` where an attachment is sRGB, where a float attachment blends under Vulkan's
+/// operation, and where an attachment's format was not measured. A pipeline without a fragment
+/// function writes no color, and takes no operation.
 pub(crate) fn logic_operation<'a>(
     d: &'a RenderPipelineDescriptor,
     p: &DeviceProfile,
-) -> Result<(Cow<'a, RenderPipelineDescriptor>, Option<LogicDraw>), Error> {
+) -> Result<(Cow<'a, RenderPipelineDescriptor>, Option<vk::LogicOp>), Error> {
     if !d.private.logic_operation_enabled || d.fragment.is_none() {
         return Ok((Cow::Borrowed(d), None));
     }
     let op = LOGIC_OPS[(d.private.logic_operation & 15) as usize];
     let blendless = matches!(op, vk::LogicOp::COPY | vk::LogicOp::NO_OP);
-    let shader = !blendless && !p.fields().enabled.features.contains(&VkFeature::LogicOp);
-    if shader && !crate::lower::fragment::inputs_order(p) {
-        return Err(Unsupported::needs_any_of(
+    if !blendless && !p.fields().enabled.features.contains(&VkFeature::LogicOp) {
+        return Err(Unsupported::needs(
             Feature::PrivateRenderState(PrivateRenderField::LogicOperation),
-            vec![
-                vec![Capability::Feature(VkFeature::LogicOp)],
-                vec![Capability::Feature(
-                    VkFeature::RasterizationOrderColorAttachmentAccess,
-                )],
-            ],
+            Capability::Feature(VkFeature::LogicOp),
         )
         .into());
     }
@@ -503,19 +447,10 @@ pub(crate) fn logic_operation<'a>(
         match (logic_class(a.pixel_format), blendless) {
             (LogicClass::Unmeasured, _) => return Err(refused()),
             (LogicClass::Float, true) => {}
-            // The function leaves a float attachment to the device's blend.
-            (LogicClass::Float, false) if a.blending_enabled && !shader => return Err(refused()),
+            // Vulkan's operation turns every blend off.
+            (LogicClass::Float, false) if a.blending_enabled => return Err(refused()),
             (LogicClass::Float, false) => {}
             (LogicClass::Srgb, false) => return Err(refused()),
-            // A format the function's operation does not serve, and color 0 under alpha to
-            // coverage, whose alpha the coverage reads before Metal's operation.
-            (LogicClass::Codes, false)
-                if shader
-                    && (crate::lower::fragment::logic_channels(a.pixel_format).is_none()
-                        || (index == 0 && d.alpha_to_coverage)) =>
-            {
-                return Err(refused());
-            }
             (LogicClass::Codes, _) | (LogicClass::Srgb, true) => {
                 a.blending_enabled = false;
                 if op == vk::LogicOp::NO_OP {
@@ -524,56 +459,13 @@ pub(crate) fn logic_operation<'a>(
             }
         }
     }
-    let draw = match (blendless, shader) {
-        (true, _) => None,
-        (false, true) => Some(LogicDraw::Shader(op)),
-        (false, false) => Some(LogicDraw::Vulkan(op)),
-    };
-    Ok((Cow::Owned(out), draw))
-}
-
-/// `Ok` where the linked pipeline `g` draws its logic operation `draw` ([`logic_operation`]) as
-/// Metal's. Vulkan's operation applies to the color attachments of the subpass alone, so a
-/// pipeline whose fragment function merges a word with its input attachment's is refused
-/// (`PrivateRenderField::LogicOperation`), Metal's answer there unmeasured. The operation the
-/// fragment function computes must be the one it compiled under (`StageIo::logic_operation`,
-/// else `NeedsInput(LogicOperation)`).
-pub(crate) fn logic_operated(
-    draw: Option<LogicDraw>,
-    fragment: Option<&FunctionArtifact>,
-) -> Result<(), Error> {
-    let compiled = fragment.and_then(|f| f.interface.io.logic_operation);
-    let Some(draw) = draw else {
-        return match compiled {
-            Some(_) => Err(Error::NeedsInput(RuntimeInput::LogicOperation)),
-            None => Ok(()),
-        };
-    };
-    let merges = fragment.is_some_and(|f| {
-        f.facts.iter().any(|fact| {
-            matches!(
-                fact,
-                crate::pipeline::facts::RuntimeFact::WordInputMerge { .. }
-            )
-        })
-    });
-    match draw {
-        LogicDraw::Vulkan(_) if merges => Err(refused(PrivateRenderField::LogicOperation)),
-        LogicDraw::Vulkan(_) => match compiled {
-            Some(_) => Err(Error::NeedsInput(RuntimeInput::LogicOperation)),
-            None => Ok(()),
-        },
-        LogicDraw::Shader(op) => match compiled == Some(op) {
-            true => Ok(()),
-            false => Err(Error::NeedsInput(RuntimeInput::LogicOperation)),
-        },
-    }
+    Ok((Cow::Owned(out), (!blendless).then_some(op)))
 }
 
 /// Note Vulkan's operation (`PrecisionNote::NativeLogicOperation`) on the fragment stage among
 /// `modules` of the linked pipeline `g`, of descriptor `d` as it draws its logic operation
 /// ([`logic_operation`]), where Vulkan's `logicOp` ([`GraphicsState::logic_op`]) operates on an
-/// attachment whose codes Metal's operation takes otherwise (`lower::fragment`'s `logic`):
+/// attachment whose codes Metal's operation takes otherwise (`lower::fragment::logic_vulkan_differs`):
 /// `RGB10A2Unorm` and `BGR10A2Unorm`, whose codes Metal widens to 16 bits, and a signed normalized
 /// format, whose lowest code Metal reads and stores as the code above it; one a first output
 /// writes (`GraphicsState::color_outputs`) with a channel its write mask keeps. Vulkan's
@@ -657,8 +549,8 @@ pub(crate) fn note_tile_store(d: &RenderPipelineDescriptor, modules: &mut [Stage
 /// The text the key of the render pipeline `d` appends for its private state: empty at Metal's
 /// defaults and wherever only properties that change nothing differ, so every other pipeline
 /// keeps its key. A logic operation's attachments are already in `d` as it draws them
-/// ([`logic_operation`]), so only the operation is added, Vulkan's or the fragment function's:
-/// copy and no-op key as the pipeline of those attachments.
+/// ([`logic_operation`]), so only Vulkan's operation is added: copy and no-op key as the pipeline
+/// of those attachments.
 pub(crate) fn render_key_fields(d: &RenderPipelineDescriptor) -> String {
     let mut fields = match applied_masks(d) {
         Some(m) if uniform(&m) => format!(" sample_mask {:#x}", m[0]),

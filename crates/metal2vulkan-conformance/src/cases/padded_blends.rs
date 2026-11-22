@@ -287,10 +287,7 @@ impl Case for PaddedBlend {
 
     fn allowances(&self) -> Vec<Allowance> {
         // Every stored word compares exactly. `rt6_samples` is a fast-math module, so a pipeline
-        // that blends its `half4` fill announces `half-output-fast-math-blend`. The blend in the
-        // device's arithmetic announces `extended-range-blend-source`, a native note the suite
-        // declares for every case (`crate::replay::NATIVE_NOTES`); a word the device's arithmetic
-        // moves is a known gap.
+        // that blends its `half4` fill announces `half-output-fast-math-blend`.
         let mut named = Vec::new();
         if self.draw == Draw::PremulHalf {
             named.push(crate::replay::notice_allowance(

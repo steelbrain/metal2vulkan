@@ -261,8 +261,8 @@ fn unsupported_features(profile: &DeviceProfile) -> Vec<Unsupported> {
             vec![vec![feature(VkFeature::FragmentShaderPixelInterlock)]],
         ));
     }
-    // Framebuffer fetch refuses on no device: ordered by rasterization-order access, or without
-    // it through input attachments ordered between draws (`PrecisionNote::UnorderedFetchWithinDraw`).
+    // Framebuffer fetch refuses on no device: input attachments ordered between draws
+    // (`PrecisionNote::UnorderedFetchWithinDraw`).
     // `[[barycentric_coord]]`: the device's builtins.
     if !f.fragment.barycentric {
         out.push(Unsupported::needs(

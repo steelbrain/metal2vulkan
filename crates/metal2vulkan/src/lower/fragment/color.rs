@@ -11,19 +11,12 @@
 //! declared one.
 //!
 //! **Ordering**: Metal orders a fetch after every earlier fragment of the pixel, of the draw and
-//! of earlier draws. Vulkan orders an input-attachment read so only with rasterization-order color
-//! attachment access. Without it, a device with `fragmentShaderPixelInterlock` reads (and writes)
-//! the attachment as a storage image inside the ordered interlock where the pipeline's state lets
-//! that be exact (`fetch`), and refuses the function where that state blocks it. A device with
-//! neither ([`fetch::fetch_unordered`](super::fetch::fetch_unordered)) reads the input attachment
-//! all the same: Vulkan orders an earlier draw's color write before a later draw's input
-//! attachment read of the subpass by a barrier of the subpass's dependency on itself, by region,
-//! which the consumer records between them (`GraphicsState::rasterization_order_attachment_access`
-//! false), but nothing orders the overlapping fragments of one draw. The function records
-//! `PrecisionNote::UnorderedFetchWithinDraw` there. The function states
-//! `RuntimeFact::FramebufferFetch{color}` for every index it reads as an input attachment, so
-//! link can set the pipeline's rasterization-order flags where the device has them and the render
-//! pass can provide the self-dependency.
+//! of earlier draws. Vulkan orders an earlier draw's color write before
+//! a later draw's input attachment read of the subpass by a barrier of the subpass's dependency on
+//! itself, by region, which the consumer records between them, but nothing orders the overlapping
+//! fragments of one draw. The function records `PrecisionNote::UnorderedFetchWithinDraw`. It
+//! states `RuntimeFact::FramebufferFetch{color}` for every index it reads, so the render pass can
+//! provide the self-dependency.
 //!
 //! **Per sample**. Metal runs a function that reads a color attachment of a multisampled pass once
 //! per covered sample, reading its own sample (measured). Compiled for such a pipeline
@@ -31,8 +24,7 @@
 //! (`MS` 1, as Vulkan requires for an attachment of more than one sample), read at the invocation's
 //! `SampleId` (`fetch::plan_sample`), which runs the function once per covered sample under sample
 //! shading; the function's color outputs then write only that sample, and a returned sample mask
-//! and alpha to coverage stay the fixed function's, as at one sample. Rasterization-order
-//! attachment access orders each sample's reads and writes in primitive order. Link's sample
+//! and alpha to coverage stay the fixed function's, as at one sample. Link's sample
 //! invocations read the function's pixel inputs where Metal does or refuse them, and refuse a stage
 //! compiled for another sample count.
 //!
@@ -44,9 +36,7 @@
 //! Metal's tile holds such an attachment as `half` through the pass, which the codes an earlier
 //! draw stored do not keep (`fetch::codes_round_the_tile`); a padded one's is built. The
 //! interface records the attachment (`StageIo::extended_range_colors`), so link holds a stage
-//! compiled for it to the pipeline's attachments. Where the pipeline blends such an attachment the
-//! function writes, the write blends over the same input attachment (`input_blend`), which a
-//! `[[color(n)]]` read of the attachment shares ([`input_texel`]).
+//! compiled for it to the pipeline's attachments.
 //!
 //! **An 8-bit sRGB attachment** (`RGBA8Unorm_sRGB`, `BGRA8Unorm_sRGB` and the rest) reads through
 //! its input attachment the device's decode of its bytes, Vulkan's sRGB EOTF within the device's
@@ -149,7 +139,6 @@ pub(super) fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<Co
     if cx.stage != Stage::Fragment {
         return Err(cx.invariant("a color input outside a fragment function"));
     }
-    let frag = cx.profile.fields().fragment;
     let AbiInt::Const(color) = *index else {
         return Err(not_lowered());
     };
@@ -186,26 +175,21 @@ pub(super) fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<Co
         extended: extended.map(|e| e.form),
         alpha_red: cx.inputs.alpha_in_red_colors.contains(&color),
     };
-    // On a device without rasterization-order access the input attachment is ordered between
-    // draws alone, by the consumer's barriers: overlapping fragments of one draw are not.
-    if !frag.rasterization_order_color_access {
-        cx.precision.insert(PrecisionNote::UnorderedFetchWithinDraw);
-    }
-    // Under the identity domains on such a device no descriptor holds the attachment: the function
-    // reads it through the sampled-texture array's element the consumer pushes for it
-    // (`PushField::FetchedColor`), a view of the attachment's own texels, so an extended-range
-    // attachment's view holds no raw codes to decode there.
-    let textured =
-        crate::lower::access::identity(cx.profile) && super::fetch::fetch_unordered(cx.profile);
+    // The read is ordered between draws alone, by the consumer's barriers: overlapping fragments
+    // of one draw are not.
+    cx.precision.insert(PrecisionNote::UnorderedFetchWithinDraw);
+    // Under the identity domains no descriptor holds the attachment: the function reads it through
+    // the sampled-texture array's element the consumer pushes for it (`PushField::FetchedColor`),
+    // a view of the attachment's own texels, so an extended-range attachment's view holds no raw
+    // codes to decode there.
+    let textured = crate::lower::access::identity(cx.profile);
     if textured && extended.is_some() {
         let refused = Unsupported::not_implemented(Feature::Format);
         return Err(refused.at_attachment(Attachment::Color(color)).into());
     }
     // The input attachment of an image holding Metal's channels rotated (`ARGB8Unorm` in
     // `R8G8B8A8_UNORM`) reads them in the image's order: a color input of one is not modelled.
-    // The function's own blend over it rotates the texel it reads (`input_blend::rotated_texel`),
-    // and link admits the attachment's input attachment for that blend alone. One holding Metal's
-    // alpha in red is read as Metal's alpha (`ColorInput::alpha_red`).
+    // One holding Metal's alpha in red is read as Metal's alpha (`ColorInput::alpha_red`).
     if cx.inputs.rotated_colors.contains(&color) && !cx.inputs.alpha_in_red_colors.contains(&color)
     {
         let refused = Unsupported::not_implemented(Feature::Format);
@@ -219,20 +203,7 @@ pub(super) fn select_param(cx: &mut SelectCx<'_>, b: &ParamBinding) -> Result<Co
     {
         return Err(not_lowered());
     }
-    let blended = cx
-        .families
-        .fragment
-        .input_blends
-        .get(&color)
-        .is_some_and(super::InputBlend::reads)
-        || cx
-            .families
-            .fragment
-            .rotated_blends
-            .get(&color)
-            .is_some_and(super::RotatedInputBlend::reads)
-        || cx.families.fragment.logic_inputs.contains_key(&color);
-    if !known.iter().any(|c| c.color == color) && !blended {
+    if !known.iter().any(|c| c.color == color) {
         match textured {
             true => {
                 let class = texture_class(cx, color, form);
@@ -344,21 +315,11 @@ pub(crate) fn texture_decl(class: ImageHandleClass) -> ImageDecl {
 }
 
 /// Declare one input attachment per color index the plan reads, multisampled for a per-sample
-/// function (`multisampled`); the input attachment of every extended-range attachment whose
-/// blend the function computes over it (`input_blend`) and that of every word attachment whose
-/// word the function merges into the texel's (`word_input`), of `uint` texels; and that of every
-/// attachment held with its channels rotated whose blend the function computes over it
-/// (`rotated`, `input_blend`), of `float` texels; and that of every attachment whose private logic
-/// operation the function computes over it (`logic`). A color read through a pushed texture
-/// (`textured`) declares nothing here.
+/// function (`multisampled`). A color read through a pushed texture (`textured`) declares nothing
+/// here.
 pub(super) fn declare(
     mb: &mut ModuleBuilder,
     colors: &[ColorInput],
-    (blends, merges): (&BTreeMap<u32, super::InputBlend>, &BTreeMap<u32, u32>),
-    (rotated, logic): (
-        &BTreeMap<u32, super::RotatedInputBlend>,
-        &BTreeMap<u32, super::LogicInput>,
-    ),
     multisampled: bool,
     textured: &BTreeMap<u32, ImageHandleClass>,
 ) -> BResult<BTreeMap<u32, GlobalId>> {
@@ -372,27 +333,6 @@ pub(super) fn declare(
         // An extended-range attachment's image holds the raw format's `uint` texels.
         let float = c.form.is_float() && c.extended.is_none();
         out.insert(c.color, input_attachment(mb, c.color, float, multisampled)?);
-    }
-    let blended = blends.iter().filter(|(_, ib)| ib.reads()).map(|(&c, _)| c);
-    for color in blended.chain(merges.keys().copied()) {
-        if let std::collections::btree_map::Entry::Vacant(e) = out.entry(color) {
-            e.insert(input_attachment(mb, color, false, multisampled)?);
-        }
-    }
-    // An attachment held with its channels rotated, whose 8-bit unorm texels its blend reads as
-    // `float`s.
-    for (&color, _) in rotated.iter().filter(|(_, rb)| rb.reads()) {
-        if let std::collections::btree_map::Entry::Vacant(e) = out.entry(color) {
-            e.insert(input_attachment(mb, color, true, multisampled)?);
-        }
-    }
-    // An attachment whose logic operation the function computes over it, of `float` texels for a
-    // normalized format and `uint` ones (a signed integer's bits) for an integer one.
-    for (&color, li) in logic {
-        if let std::collections::btree_map::Entry::Vacant(e) = out.entry(color) {
-            let float = super::logic::reads_float(li.channels);
-            e.insert(input_attachment(mb, color, float, multisampled)?);
-        }
     }
     Ok(out)
 }

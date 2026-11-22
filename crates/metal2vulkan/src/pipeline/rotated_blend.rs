@@ -23,15 +23,13 @@
 //!   the very value Metal's blend reads, and computes one minus it itself, as Metal's does. This
 //!   needs `dualSrcBlend`. A blend of Metal's own second output (`Source1` factors) reads that
 //!   output, which the function stores rotated as the image's channels are.
-//! - **What no such factor gives, the fragment function computes:** Metal's destination alpha in
-//!   a color factor, the saturated source alpha, the blend color's red, green or blue, and
-//!   different color and alpha operations (`rotated_blend` refuses them `NotImplemented(Format)`).
-//!   Where the device orders framebuffer fetch, the function reads the texel, rotates it into
-//!   Metal's order, and computes Metal's 8-bit unorm blend over it
-//!   (`color_writes::shader_rotated_blend`, over the input attachment); a device that does not
-//!   order fetch so refuses the pipeline naming rasterization-order access. A factor of the second source (Metal's own second output beside one the rotation
-//!   needs, or any `Source1` factor where no Vulkan state gives the blend) stays
-//!   `NotImplemented(Format)`. A one minus a value the function would compute is not offered
+//! - **What no such factor gives is refused:** Metal's destination alpha in a color factor, the
+//!   saturated source alpha, the blend color's red, green or blue, and different color and alpha
+//!   operations (`rotated_blend` refuses them `NotImplemented(Format)`). The fragment function's
+//!   own blend over an ordered read of the texel is not built: link refuses the pipeline
+//!   (`color_writes::rotated_blend_in_shader`, `NotImplemented(FramebufferFetch)`). A factor of
+//!   the second source (Metal's own second output beside one the rotation needs, or any `Source1`
+//!   factor where no Vulkan state gives the blend) stays `NotImplemented(Format)`. A one minus a value the function would compute is not offered
 //!   among Vulkan's factors: it would round apart from the blend's own.
 //!
 //! **Rounding.** Apple's blend does not compute every factor pair alike in its color and alpha

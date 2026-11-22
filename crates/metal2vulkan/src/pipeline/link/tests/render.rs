@@ -1028,17 +1028,6 @@ fn graphics_state_maps_the_descriptor() {
         assert_eq!(g.input_attachments.len(), 1);
         assert_eq!(g.input_attachments[0].color_index, 2);
         assert_eq!(g.input_attachments[0].format_class, SampledType::Float);
-        // The fetch is ordered wherever the device can order it.
-        assert_eq!(
-            g.rasterization_order_attachment_access,
-            p.fields().fragment.rasterization_order_color_access,
-            "{stem}"
-        );
-        assert_eq!(
-            g.rasterization_order_attachment_access,
-            stem == "lavapipe",
-            "{stem}: lavapipe alone of these orders attachment reads"
-        );
         // Extended dynamic state makes the cull mode dynamic; the topology and its restart
         // follow with `extendedDynamicState2` too, together.
         assert_eq!(

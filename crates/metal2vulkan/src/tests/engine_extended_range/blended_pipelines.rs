@@ -15,9 +15,9 @@
 //! states no multisampled color attachment of the raw format (`R16G16B16A16_UINT`: its
 //! `framebufferIntegerColorSampleCounts` is one sample, and it records no count of that format's
 //! own), so a pipeline of four samples is refused there naming the properties it needs. An
-//! unblended mask of some of the codes one word holds (`BGR10_XR`'s, the two-plane forms') merges
-//! them over the input attachment where the device orders fetch through rasterization-order input
-//! attachments. No GPU is used.
+//! unblended mask of some of the codes one word holds (`BGR10_XR`'s, the two-plane forms') is
+//! refused `NotImplemented(FramebufferFetch)` on every device: their merge over an ordered read of
+//! the attachment is not built. No GPU is used.
 //!
 //! `llvm-as` assembles the fixture `rt6_samples`; without it the tests skip visibly.
 
@@ -26,7 +26,6 @@ use crate::error::{Error, Needs, Unsupported};
 use crate::metal::{BlendFactor, ColorWriteMask};
 use crate::pipeline::descriptor::{ColorAttachmentDescriptor, RenderPipelineDescriptor};
 use crate::pipeline::RenderPipeline;
-use crate::spirv::testing::check_words_valid;
 use crate::vk;
 
 /// The profiles: the reported device's family, MoltenVK's and lavapipe's.
@@ -283,13 +282,11 @@ fn unwritten_and_masked_extended_range_attachments_are_made() {
     assert_eq!(made_count, 3 * shapes * 2 + shapes);
 }
 
-/// On a device that orders framebuffer fetch in neither form (no `fragmentShaderPixelInterlock`,
-/// no `rasterizationOrderColorAttachmentAccess`: the runtime's floor), a written blended
-/// attachment of either format is refused `NotImplemented(Format)`, as on a device that orders it,
-/// the refusal the public door (`metal::format::extended_range_blend`) gives: no device would make
-/// it. The unwritten attachment, which takes no blend, is still made there.
+/// On the runtime's floor (no `fragmentShaderPixelInterlock`), a written blended attachment of
+/// either format is refused `NotImplemented(Format)`, as on every device: no device would make it.
+/// The unwritten attachment, which takes no blend, is still made there.
 #[test]
-fn an_unordered_device_refuses_an_extended_range_blend_as_every_device_does() {
+fn the_floor_refuses_an_extended_range_blend_as_every_device_does() {
     let Some(library) = library() else {
         return;
     };
@@ -308,10 +305,6 @@ fn an_unordered_device_refuses_an_extended_range_blend_as_every_device_does() {
     let wanted = Unsupported::not_implemented(Feature::Format);
     for stem in ["runtime-floor"] {
         let dev = device(stem);
-        assert!(
-            crate::lower::fragment::fetch::fetch_unordered(dev.profile()),
-            "{stem}"
-        );
         for pf in FORMATS {
             for fill in ["rt6_fill_rgba16float", "rt6_fill_rgba32float"] {
                 let mut d = RenderPipelineDescriptor::new(function("rt6_fill_vertex"));
@@ -342,14 +335,12 @@ fn an_unordered_device_refuses_an_extended_range_blend_as_every_device_does() {
 
 /// An unblended write of some of the codes one word holds (`BGR10_XR`'s and its twin's word, the
 /// two-plane forms' color word: `color_writes::merged_extended`), which no mask of the raw
-/// components gives: on lavapipe, which orders fetch through rasterization-order input
-/// attachments, the function merges them over the input attachment, from a `half4` output and a
-/// `float4` one: color 0 stays a color attachment of the raw format with no blend and a write of
-/// every raw component, the stage states `RuntimeFact::WordInputMerge` with the channels the mask
-/// keeps, and it passes L3 (four samples are its profile's gap). On a device that does not order
-/// fetch so, the pixel interlock's included, the refusal names the ordering the merge needs.
+/// components gives, from a `half4` output and a `float4` one, is refused
+/// `NotImplemented(FramebufferFetch)` on every device here, lavapipe and the floor included: the
+/// merge over an ordered read of the attachment is not built. At four samples a device that lacks
+/// the raw format's samples may name that instead.
 #[test]
-fn a_mask_of_some_codes_of_a_word_merges_them_over_the_input_attachment() {
+fn a_mask_of_some_codes_of_a_word_is_refused_on_every_device() {
     let Some(library) = library() else {
         return;
     };
@@ -369,18 +360,17 @@ fn a_mask_of_some_codes_of_a_word_merges_them_over_the_input_attachment() {
         ColorWriteMask::BLUE.union(ColorWriteMask::GREEN),
         ColorWriteMask::RED.union(ColorWriteMask::ALPHA),
     ];
-    let unordered = crate::lower::fragment::fetch::unordered_extended_fetch();
-    let mut merged = 0;
-    for stem in [
+    let stems = [
         "nvidia-rtx50-linux",
         "nvidia-rtx5080-laptop",
         "moltenvk-m3",
         "intel-uhd770-rpls-anv",
         "lavapipe",
         "runtime-floor",
-    ] {
+    ];
+    let mut refused = 0;
+    for stem in stems {
         let dev = device(stem);
-        let inputs = crate::lower::fragment::inputs_order(dev.profile());
         for pf in formats {
             for mask in masks {
                 for fill in ["rt6_fill_rgba16float", "rt6_fill_rgba32float"] {
@@ -392,52 +382,19 @@ fn a_mask_of_some_codes_of_a_word_merges_them_over_the_input_attachment() {
                         let what =
                             format!("{stem} {pf:?} mask {} {fill} x{samples}", mask.as_raw());
                         match dev.compile_render_pipeline(&d, &Budget::standard()) {
-                            Ok(pipe) => {
-                                assert!(inputs, "{what}");
-                                if inputs {
-                                    let a = pipe.graphics.color_attachments[0].expect("attachment");
-                                    let form = ExtendedRange::of(pf).expect("a form");
-                                    assert_eq!(a.format, form.raw_format(), "{what}");
-                                    let whole = match form.raw_components() {
-                                        1 => vk::ColorComponentFlags::R,
-                                        _ => {
-                                            vk::ColorComponentFlags::R | vk::ColorComponentFlags::G
-                                        }
-                                    };
-                                    assert_eq!(a.write_mask, whole, "{what}");
-                                    assert!(a.blend.is_none(), "{what}");
-                                    let kept = crate::metal::state::color_write_mask(
-                                        crate::lower::fragment::kept_channels(pf, mask, true),
-                                    )
-                                    .expect("mask");
-                                    let fact = crate::pipeline::RuntimeFact::WordInputMerge {
-                                        color: 0,
-                                        kept,
-                                    };
-                                    assert!(
-                                        pipe.dependencies.iter().any(|d| d.fact == fact),
-                                        "{what}: {:?}",
-                                        pipe.dependencies
-                                    );
-                                }
-                                for m in &pipe.stages {
-                                    check_words_valid(&m.spirv, &pipe.requirements, dev.profile())
-                                        .unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-                                }
-                                merged += 1;
+                            Err(Error::Unsupported(u))
+                                if (u.feature, &u.needs)
+                                    == (Feature::FramebufferFetch, &Needs::NotImplemented) =>
+                            {
+                                refused += 1;
                             }
-                            Err(Error::Unsupported(u)) if !inputs => {
-                                assert_eq!(u.feature, unordered.feature, "{what}: {u:?}");
-                                assert_eq!(u.needs, unordered.needs, "{what}: {u:?}");
-                            }
-                            Err(e) if inputs && samples > 1 && lacks_samples(&e) => {}
-                            Err(e) => panic!("{what}: {e:?}"),
+                            Err(e) if samples > 1 && lacks_samples(&e) => {}
+                            other => panic!("{what}: {:?}", other.map(|_| ())),
                         }
                     }
                 }
             }
         }
     }
-    // Lavapipe at one sample.
-    assert_eq!(merged, formats.len() * masks.len() * 2);
+    assert!(refused >= stems.len() * formats.len() * masks.len() * 2);
 }

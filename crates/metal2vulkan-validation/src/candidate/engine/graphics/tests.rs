@@ -247,12 +247,10 @@ fn a_stencil_output_case_plans_through_stencil_export() {
 }
 
 /// A fragment case that reads its color attachment maps like any fragment case (its render target
-/// is the attachment it reads; no requirement stops the engine's candidate) and plans on
-/// lavapipe, whose `rasterizationOrderColorAttachmentAccess` orders the read: the plan reads color
-/// attachment 0 through an input-attachment write, and the pipeline states rasterization-order
-/// access and requires the feature. On moltenvk-m3, which lacks the feature, it plans the input
-/// attachment with no rasterization-order access, which the consumer orders between draws alone
-/// (its barriers, `platform::graphics_pipeline::fetch_between_draws`), the fragment stage noting
+/// is the attachment it reads; no requirement stops the engine's candidate) and plans, on lavapipe
+/// (which has `rasterizationOrderColorAttachmentAccess`) and on moltenvk-m3 alike, color attachment
+/// 0 read through an input-attachment write, which the consumer orders between draws alone (its
+/// barriers, `platform::graphics_pipeline::fetch_between_draws`), the fragment stage noting
 /// `PrecisionNote::UnorderedFetchWithinDraw`, and requires no ordered form.
 #[test]
 fn a_framebuffer_fetch_case_plans_its_ordered_input_attachment() {
@@ -280,8 +278,8 @@ fn a_framebuffer_fetch_case_plans_its_ordered_input_attachment() {
     };
     let (pipeline, plan, _) = planned_draw(&device("lavapipe"), &render, libraries).unwrap();
     assert_eq!(pipeline.graphics.input_attachments.len(), 1);
-    assert!(pipeline.graphics.rasterization_order_attachment_access);
-    assert!(pipeline
+    assert!(unordered_within_draw(&pipeline));
+    assert!(!pipeline
         .requirements
         .features
         .contains(&VkFeature::RasterizationOrderColorAttachmentAccess));
@@ -298,7 +296,6 @@ fn a_framebuffer_fetch_case_plans_its_ordered_input_attachment() {
         .map(|input| input.color_index)
         .collect();
     assert_eq!(read, [0]);
-    assert!(!pipeline.graphics.rasterization_order_attachment_access);
     assert!(pipeline.graphics.color_attachments[0].is_some());
     assert!(!pipeline
         .requirements
@@ -1581,29 +1578,9 @@ fn public_tessellation_cases_plan_their_patch_draws() {
     );
 }
 
-/// The committed profiles whose descriptions lack `rasterizationOrderColorAttachmentAccess`: the
-/// devices that order a fetch between draws alone, read from what each states rather than from its
-/// name.
-fn unordered_profiles() -> Vec<String> {
-    use metal2vulkan::device::VkFeature;
-    let stems = crate::engine::committed_profiles().unwrap();
-    let stems = stems
-        .into_iter()
-        .filter(|stem| {
-            let description = crate::engine::load_description(stem).unwrap();
-            !description.has(VkFeature::RasterizationOrderColorAttachmentAccess)
-        })
-        .collect::<Vec<_>>();
-    assert!(
-        !stems.is_empty(),
-        "a committed profile orders fetch between draws alone"
-    );
-    stems
-}
-
 /// Every installed public framebuffer-fetch case maps onto its fullscreen triangle drawn as its
 /// instances, with each read render target attached, and plans on lavapipe (one input-attachment
-/// write per color input, rasterization-order access, the feature required). Every case carries
+/// write per color input, ordered between draws alone, noted). Every case carries
 /// no requirement, at least one of them drawing more than one instance (overlapping fragments).
 /// The lavapipe pipeline masks every write to a color attachment the function reads but has no
 /// output for, which at least one case does. A case of a multisampled pass, which at least one
@@ -1688,7 +1665,6 @@ fn public_framebuffer_fetch_cases_plan_their_ordered_input_attachments() {
                         assert_eq!(g.rasterization_samples.as_raw(), samples, "{}", case.name);
                         let required = &pipeline.requirements;
                         assert!(required.features.contains(&VkFeature::SampleRateShading));
-                        assert!(g.rasterization_order_attachment_access);
                         let mut fetched: Vec<u32> =
                             g.input_attachments.iter().map(|a| a.color_index).collect();
                         fetched.sort_unstable();
@@ -1710,15 +1686,7 @@ fn public_framebuffer_fetch_cases_plan_their_ordered_input_attachments() {
             }
             let (pipeline, plan, commands) = planned_draw(&device("lavapipe"), &render, libraries)
                 .unwrap_or_else(|error| panic!("lavapipe {}: {error}", case.name));
-            assert!(
-                pipeline.graphics.rasterization_order_attachment_access,
-                "{}",
-                case.name
-            );
-            assert!(pipeline
-                .requirements
-                .features
-                .contains(&VkFeature::RasterizationOrderColorAttachmentAccess));
+            assert!(unordered_within_draw(&pipeline), "{}", case.name);
             // A color attachment the fragment function reads but has no output for keeps its
             // contents, as Metal kept it in case f39cf462: the pipeline the executor builds from
             // the artifact masks every write to it, and keeps the descriptor's mask on the others.
@@ -1785,10 +1753,8 @@ fn public_framebuffer_fetch_cases_plan_their_ordered_input_attachments() {
     );
 }
 
-/// On every committed profile without rasterization-order color attachment access
-/// ([`unordered_profiles`]), every installed public framebuffer-fetch case plans its color inputs
-/// as input attachments with no
-/// rasterization-order access, which the consumer orders between draws alone, and its fragment
+/// On every committed profile, every installed public framebuffer-fetch case plans its color
+/// inputs as input attachments, which the consumer orders between draws alone, and its fragment
 /// stage notes `PrecisionNote::UnorderedFetchWithinDraw`; or, a multisampled pass, is refused as on
 /// every device (the coverage read beside it, or a sample count the attachments lack), or for the
 /// sample-rate shading each invocation's read of its own sample needs, where the device lacks it.
@@ -1798,9 +1764,9 @@ fn public_framebuffer_fetch_cases_plan_input_attachments_without_an_ordered_form
     let root = metal2vulkan_devtools::validation_dir().join("corpus");
     let store = CorpusStore::new(&root);
     let sources = public_sources().unwrap();
-    for stem in unordered_profiles() {
+    for stem in crate::engine::committed_profiles().unwrap() {
         let stem = stem.as_str();
-        let unordered = device(stem);
+        let dev = device(stem);
         let mut fetches = 0;
         for shard in 0..64 {
             for case in store.read_case_shard(shard).unwrap() {
@@ -1849,7 +1815,7 @@ fn public_framebuffer_fetch_cases_plan_input_attachments_without_an_ordered_form
                     vertex: &companion,
                     fragment: Some(&bitcode),
                 };
-                let pipeline = match planned_draw(&unordered, &render, libraries) {
+                let pipeline = match planned_draw(&dev, &render, libraries) {
                     Ok((pipeline, _, _)) => pipeline,
                     // A multisampled pass's refusals of every device's form (the lavapipe
                     // test's), and its fetch on a device without sample-rate shading, which each
@@ -1881,11 +1847,6 @@ fn public_framebuffer_fetch_cases_plan_input_attachments_without_an_ordered_form
                 let mut colors = colors;
                 colors.sort_unstable();
                 assert_eq!(read, colors, "{stem} {}", case.name);
-                assert!(
-                    !pipeline.graphics.rasterization_order_attachment_access,
-                    "{stem} {}",
-                    case.name
-                );
                 assert!(unordered_within_draw(&pipeline), "{stem} {}", case.name);
             }
         }

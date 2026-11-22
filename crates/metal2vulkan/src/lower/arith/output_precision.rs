@@ -22,15 +22,9 @@
 //! (`color_writes::stores_output`): one whose write mask stores none holds nothing the output could
 //! differ by. A module naming no math mode keeps the note at any attachment: what Metal's compiler
 //! does there was not measured.
-//!
-//! **A blended extended-range output** ([`note_extended_range_sources`]): the function blends it by
-//! the device's arithmetic, where Metal's compiler folds the blend into the function.
 
-use crate::air::ir::Type;
-use crate::error::Error;
 use crate::lower::select::SelectCx;
 use crate::pipeline::artifact::PrecisionNote;
-use crate::pipeline::sym::Stage;
 
 /// The note a `half` color output records where Metal may hand it to the attachment otherwise
 /// than the function stores it (the module docs): `PrecisionNote::HalfOutputFastMathBlend` in a
@@ -70,52 +64,4 @@ pub(crate) fn note_half_output(cx: &mut SelectCx<'_>, color: u32) {
     if let Err(at) = colors.binary_search(&color) {
         colors.insert(at, color);
     }
-}
-
-/// Record `PrecisionNote::ExtendedRangeBlendSource` (a `half` output) or
-/// `PrecisionNote::ExtendedRangeFloatBlendSource` (a `float` one) for each color output the
-/// function blends into an extended-range attachment, where the write stores some channel: the
-/// function computes that blend by the device's arithmetic (`extended_range::blend::native`),
-/// where Metal's compiler folds the blend into the function in forms of its own (each sum and
-/// product rounded to `half`, lerps, common factors and fused pairs chosen by the factors and the
-/// function's own arithmetic), so a blended channel may store a value apart from Metal's.
-pub fn note_extended_range_sources(cx: &mut SelectCx<'_>) -> Result<(), Error> {
-    use crate::air::abi::{AbiInt, OutputRole};
-    if cx.stage != Stage::Fragment {
-        return Ok(());
-    }
-    let (_, tys) = crate::lower::stage_io::output_types(cx)?;
-    let types = cx.entry.module.types();
-    let mut notes = Vec::new();
-    for (o, ty) in cx.entry.ep.outputs.iter().zip(tys) {
-        let OutputRole::RenderTarget {
-            attachment: AbiInt::Const(color),
-            index: 0,
-            ..
-        } = o.role
-        else {
-            continue;
-        };
-        let blended = cx
-            .inputs
-            .extended_range_colors
-            .get(&color)
-            .is_some_and(|e| e.blended);
-        // A write of none of the attachment's channels blends nothing.
-        let stores = crate::lower::fragment::shader_blend(cx, color)
-            .is_none_or(|(eq, _, nothing)| eq.is_some() || !nothing);
-        if !blended || !stores {
-            continue;
-        }
-        let elem = match types.get(ty) {
-            Some(Type::Vector { elem, .. }) => types.get(*elem),
-            other => other,
-        };
-        notes.push(match elem {
-            Some(Type::Float) => PrecisionNote::ExtendedRangeFloatBlendSource,
-            _ => PrecisionNote::ExtendedRangeBlendSource,
-        });
-    }
-    cx.precision.extend(notes);
-    Ok(())
 }

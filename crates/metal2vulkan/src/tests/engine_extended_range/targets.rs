@@ -18,10 +18,9 @@
 //!   alpha byte's. A blended attachment no first output writes links so whatever its form, a padded
 //!   or bfloat one's too.
 //! - Refused, typed: a blended attachment the function writes, a fetch of the attachment
-//!   (`NotImplemented(Format)`, on every device), a mask of some of the codes one word
-//!   holds from a stage compiled without the pipeline's fetch state
-//!   (`NeedsInput(FramebufferFetch)`; a stage compiled for the pipeline merges them in the storage
-//!   form or over the input attachment, `blended_pipelines`), an
+//!   (`NotImplemented(Format)`, on every device), a mask of some of the codes one word holds
+//!   (`NotImplemented(FramebufferFetch)`, on every device: their merge over an ordered read of the
+//!   attachment is not built, `blended_pipelines`), an
 //!   integer or a `float` output (Metal's pipeline errors, `ColorAttachment`), a fragment compiled
 //!   without the pipeline's attachments (`NeedsInput(ColorWrites)`).
 
@@ -109,20 +108,6 @@ fn render(r: &RenderLinkInputs) -> LinkInputs {
 
 fn is_format_refusal(e: &Error) -> bool {
     matches!(e, Error::Unsupported(u) if u.feature == Feature::Format && u.needs == Needs::NotImplemented)
-}
-
-/// [`fragment_inputs`] with the framebuffer-fetch state the pipeline compile gives a function
-/// that writes color 0 where it blends an extended-range attachment there, on a device that
-/// orders fetch through rasterization-order input attachments (`compile::fetch_inputs`).
-fn blended_inputs(r: &RenderLinkInputs, p: &crate::device::profile::DeviceProfile) -> LowerInputs {
-    let mut inputs = fragment_inputs(r, p);
-    if crate::lower::fragment::inputs_order(p) {
-        inputs.framebuffer_fetch = Some(crate::pipeline::FramebufferFetchInputs::of(
-            [0],
-            &r.color_attachments,
-        ));
-    }
-    inputs
 }
 
 /// The fixture's `float4` and `half4` fills compile for each format's attachment on every venue,
@@ -329,7 +314,7 @@ fn fragment_outputs_to_bfloat_targets_write_raw_codes() {
             });
             let r = pipeline_of(pf, ColorWriteMask::ALL, true);
             for entry in ["rt6_fill_rgba32float", "rt6_fill_rgba16float"] {
-                let e = compile_with(&bc, entry, &p, &blended_inputs(&r, &p)).expect_err(&what);
+                let e = compile_with(&bc, entry, &p, &fragment_inputs(&r, &p)).expect_err(&what);
                 assert_eq!(e, invalid, "{what} {entry}");
             }
             let e = link(&[&v], &render(&r), &p).expect_err(&what);
@@ -429,7 +414,7 @@ fn unmodelled_extended_range_targets_are_refused() {
             let what = format!("{stem} {pf:?}");
             // Blended: refused on every device, whichever form it fetches in.
             let r = pipeline_of(pf, ColorWriteMask::ALL, true);
-            match compile_with(&bc, "rt6_fill_rgba32float", &p, &blended_inputs(&r, &p)) {
+            match compile_with(&bc, "rt6_fill_rgba32float", &p, &fragment_inputs(&r, &p)) {
                 Err(e) => assert!(is_format_refusal(&e), "{what} blended: {e}"),
                 Ok(a) => panic!("{what} blended: made, {:?}", a.precision),
             }
@@ -474,19 +459,14 @@ fn unmodelled_extended_range_targets_are_refused() {
                     );
                 }
                 form => {
-                    // Merged by a stage compiled with the pipeline's fetch state where the device
-                    // orders fetch through rasterization-order input attachments, which this one
-                    // was not (`blended_pipelines`); elsewhere the ordering the merge needs.
-                    let e = linked.expect_err(&what);
-                    let unordered = crate::lower::fragment::fetch::unordered_extended_fetch();
-                    match (crate::lower::fragment::fetch::fetch_unordered(&p), e) {
-                        (true, Error::Unsupported(u)) => assert_eq!(
+                    // Their merge over an ordered read of the attachment is not built.
+                    match linked.expect_err(&what) {
+                        Error::Unsupported(u) => assert_eq!(
                             (u.feature, u.needs),
-                            (unordered.feature, unordered.needs),
+                            (Feature::FramebufferFetch, Needs::NotImplemented),
                             "{what} red mask"
                         ),
-                        (false, Error::NeedsInput(RuntimeInput::FramebufferFetch)) => {}
-                        (_, e) => panic!("{what} red mask: {e}"),
+                        e => panic!("{what} red mask: {e}"),
                     }
                     // The two-plane forms' three color codes alone are the color word, the
                     // first raw component.

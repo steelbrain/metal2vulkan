@@ -849,12 +849,9 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   does not render (the RTX 5080: it renders neither `R8_SRGB` nor `R8G8_SRGB`, and holds the
   latter in its UNORM twin) renders through an `R8_UINT` or `R16_UINT` view of its texture the
   same way: the fragment function writes the bytes of the device's sRGB encode
-  (`DevicePackConversion`), a pass clears it to the bytes of Metal's clear, and a partial mask
-  merges the word over the attachment's input attachment on a device that orders fetch through
-  rasterization-order input attachments (lavapipe; `RuntimeFact::WordInputMerge`), and is refused
-  as the device lacking the format elsewhere. A blend of one
-  other than one and zero is refused as the device lacking the format; a color input of one is
-  `NotImplemented(Format)`.
+  (`DevicePackConversion`), and a pass clears it to the bytes of Metal's clear. A partial mask, and
+  a blend of one other than one and zero, are refused as the device lacking the format; a color
+  input of one is `NotImplemented(Format)`.
 - An `RGB9E5Float` attachment the device does not render (the RTX 5080) renders through an
   `R32_UINT` view of its texture: the fragment function writes Metal's word of a `float` output
   (each channel clamped to `[0, 65408]`, a NaN 0, the exponent of the largest, every mantissa
@@ -874,13 +871,11 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   tile's finer values. A device whose word's format renders one sample at that
   count refuses the texture (the runtime's `Limit::TextureSamples`).
 - A fragment function that reads a color attachment (framebuffer fetch) reads it as an input
-  attachment, ordered by rasterization-order attachment access wherever the device has it. On a
-  device without it the input attachment has no rasterization-order access
-  (`GraphicsState::rasterization_order_attachment_access` false), and the consumer records a
-  barrier of the subpass's dependency on itself, by region, before each draw that reads input
-  attachments after an earlier draw of the subpass, or its load operations, wrote a color, and
-  before each draw that writes a color after an earlier one read them: a fetch reads what every earlier draw stored, Metal's
-  answer, but the overlapping fragments of one draw are not ordered, which the fragment stage
+  attachment without rasterization-order attachment access, on every device, and the consumer
+  records a barrier of the subpass's dependency on itself, by region, before each draw that reads
+  input attachments after an earlier draw of the subpass, or its load operations, wrote a color,
+  and before each draw that writes a color after an earlier one read them: a fetch reads what every
+  earlier draw stored, Metal's answer, but the overlapping fragments of one draw are not ordered, which the fragment stage
   records (`PrecisionNote::UnorderedFetchWithinDraw`; the runtime does all of this itself). Under
   the identity domains the read is the pushed texture of section 1 instead, at the fragment's own
   pixel, with the same note: the consumer reads the attachment's texture there and orders each
@@ -892,10 +887,14 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   every device (`Unsupported{Format}` at the color attachment): Metal's tile holds
   such an attachment as `half` through the render pass and rounds it to the codes only at the
   store, so a read or a blend after an earlier draw's write sees that draw's `half`, which the
-  stored codes do not keep. An unblended write, under any write mask, is built. On a device
-  without rasterization-order access, a raster order group on a color input, or on a color output
-  of an attachment the function reads, orders that read alone there and takes no interlock; a group on anything else still
-  needs the pixel interlock (`Unsupported{RasterOrderGroups}`). A `[[stencil]]` output uses
+  stored codes do not keep. An unblended write, under any write mask, is built. A write the
+  function would compute over its own read of the attachment, where no Vulkan blend or write mask
+  gives Metal's, is not built (`Unsupported{FramebufferFetch}`, not implemented, on every device):
+  a padded extended-range attachment's blend, a write of some of the codes one word of an
+  extended-range attachment holds, and a blend no Vulkan state gives on an attachment held with
+  its channels rotated. A raster order group on a color input, or on a color output of an
+  attachment the function reads, orders that read alone and takes no interlock; a group on
+  anything else needs the pixel interlock (`Unsupported{RasterOrderGroups}`). A `[[stencil]]` output uses
   `VK_EXT_shader_stencil_export`; a device without it refuses the function
   (`Unsupported{StencilExport}` naming the extension).
 - `[[barycentric_coord]]` reads `BaryCoordKHR` or `BaryCoordNoPerspKHR`, whose vertex order is
@@ -1993,8 +1992,7 @@ bound.
   measured. The sample may read another level or filter than Metal's near a boundary.
 - `metal2vulkan-degrade-unordered-fetch-within-draw` (precision).
   `PrecisionNote::UnorderedFetchWithinDraw`: A fragment function reads a color attachment
-  (framebuffer fetch) on a device without rasterization-order color attachment access (among
-  the committed profiles, every one but the lavapipe ones). It reads the attachment as an input
+  (framebuffer fetch), on every device. It reads the attachment as an input
   attachment, and the runtime records a barrier of the draws' subpass's dependency on itself, by
   region, before each draw that reads input
   attachments after an earlier draw of its render pass instance, or its load operations, wrote a
@@ -2280,27 +2278,6 @@ bound.
   some channel written (`StageIo::half_blend_colors`, which the pipeline's stage reads), or its
   module names no math mode (under fast math the pipeline's stage records
   `PrecisionNote::HalfOutputFastMathBlend` instead).
-- `metal2vulkan-degrade-extended-range-blend-source` (precision).
-  `PrecisionNote::ExtendedRangeBlendSource`: A fragment function's `half` color output (a scalar or
-  vector of AIR's `half`) is blended into a padded 10-bit attachment (`R10Unorm_X6`,
-  `RG10Unorm_X12`, their `_sRGB` twins, `RGB10A2Unorm_sRGB`), whose raw codes no device's blend
-  unit reads, so the function blends in the shader in the device's arithmetic: `S·Fs op D·Fd` in
-  `float`, in the blend equation's order, the source, second source and blend color unclamped, as
-  Metal takes them there (a blend into one of Apple's extended-range formats is refused, section
-  4). The device's compiler may contract a
-  product into its sum and may regroup the blend: MoltenVK on the M3 Max and NVIDIA's driver on an
-  RTX 5080 compute a second source's blend `S·F + D·(1 - F)` as `D + F·(S - D)`. Metal's compiler
-  rounds each step to `half`, so a blended channel may store another code than Metal's: within two
-  codes on a linear format and within six on an sRGB twin near zero, where its transfer is
-  steepest, in the conformance suite's extended-range and padded blend cases; and where the
-  device's compiler regroups a padded format's blend, an infinite second source stores the end code
-  its sign picks where Metal's sum is NaN, stored as code 0.
-- `metal2vulkan-degrade-extended-range-float-blend-source` (precision).
-  `PrecisionNote::ExtendedRangeFloatBlendSource`: `PrecisionNote::ExtendedRangeBlendSource` for a
-  `float` color output (a scalar or vector of AIR's `float`): blended into a padded 10-bit
-  attachment in the shader in the device's arithmetic, which the device's compiler
-  may contract and regroup, where Metal's compiler rounds the output and each step of the blend to
-  `half`; a blended channel within `ExtendedRangeBlendSource`'s bound of Metal's.
 - `metal2vulkan-degrade-anisotropic-filter` (precision). `PrecisionNote::AnisotropicFilter`: The
   module samples a texture through an anisotropic sampler with Metal's anisotropic filter emulated
   by the device's samples at explicit levels (`lower::sampler::anisotropic`), on a device without
@@ -2509,8 +2486,8 @@ bound.
   `RGB10A2Unorm` stored green 938 where Metal's rule gives 937, and its xor of `0xe0` over an
   `RGBA8Snorm` channel's `0x80` stored `0x60` where Metal's gives `0x61`), by a distance the note
   does not bound: the result follows the codes' bits. The device's `logicOp` is its native form
-  there, and no other form is built for it; a device without `logicOp` computes Metal's rule in
-  the fragment function and records none. A signed channel the draw does not write (outside the
+  there, and no other form is built for it; a device without `logicOp` refuses the operation
+  (`Unsupported{PrivateRenderState(LogicOperation)}` naming `logicOp`). A signed channel the draw does not write (outside the
   write mask, or every channel under no-op) keeps its lowest code where any draw's unwritten
   texel does (`snorm-minimum-kept`).
 - `metal2vulkan-degrade-device-depth-bias` (precision). `PrecisionNote::DeviceDepthBias`: A draw

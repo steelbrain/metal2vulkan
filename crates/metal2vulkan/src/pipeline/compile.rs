@@ -104,10 +104,7 @@ pub enum InputsFrom<'a> {
     /// inputs, the attachments among the pipeline's color attachments that the specialized entry
     /// writes and whose pixel format is a signed integer
     /// (`LoweringInputs::signed_color_attachments`), whether the pipeline rasterizes more than one
-    /// sample (`LoweringInputs::multisampled`), on a device that orders framebuffer fetch through
-    /// rasterization-order input attachments the state of the attachments whose writes the entry
-    /// computes over them (`LoweringInputs::framebuffer_fetch`), and, for each index the pipeline's
-    /// vertex function
+    /// sample (`LoweringInputs::multisampled`), and, for each index the pipeline's vertex function
     /// writes (the [`RawIndices`]), whether the entry reads it
     /// (`LoweringInputs::viewport_index_varying`;
     /// `LoweringInputs::render_target_array_index_varying`). The pipeline's
@@ -153,10 +150,6 @@ pub struct FragmentPass<'a> {
     pub(crate) sample_mask: Option<[u32; 4]>,
     /// The pipeline's private alpha test (`LoweringInputs::alpha_test`).
     pub(crate) alpha_test: Option<crate::metal::CompareFunction>,
-    /// The pipeline's private logic operation the function computes itself
-    /// (`LoweringInputs::logic_operation`); `None` from a descriptor, set by the compile layer on
-    /// a device without Vulkan's `logicOp` (`private_state::logic_operation`).
-    pub(crate) logic_operation: Option<crate::vk::LogicOp>,
     /// The pipeline's private `fragmentDepthCompareClampMask`
     /// (`LoweringInputs::depth_compare_clamp_mask`).
     pub(crate) depth_compare_clamp_mask: u32,
@@ -180,7 +173,6 @@ impl<'a> From<&'a RenderPipelineDescriptor> for FragmentPass<'a> {
             alpha_test: crate::pipeline::private_state::alpha_test(&d.private)
                 .ok()
                 .flatten(),
-            logic_operation: None,
             depth_compare_clamp_mask: d.private.fragment_depth_compare_clamp_mask,
             push_base: 0,
         }
@@ -198,7 +190,6 @@ impl<'a> From<&'a MeshPipelineDescriptor> for FragmentPass<'a> {
             texture_write_rounding_mode: d.texture_write_rounding_mode,
             sample_mask: None,
             alpha_test: None,
-            logic_operation: None,
             depth_compare_clamp_mask: 0,
             push_base: crate::lower::push::window(crate::pipeline::sym::Stage::Mesh, 0).1,
         }
@@ -2428,19 +2419,16 @@ pub(crate) fn signed_colors_written(
 
 /// The colors the specialized fragment entry `spec` reads (`[[color(n)]]`) that a render pipeline
 /// whose color attachments are `colors` gives a signed-integer pixel format, under the identity
-/// domains on a device that orders framebuffer fetch in neither form, where an integer read
-/// fetches the attachment's own view through an `int` image (`lower::fragment::color`'s
-/// `texture_class`); none elsewhere, where it reads the attachment's bits through a `uint` input
-/// attachment.
+/// domains, where an integer read fetches the attachment's own view through an `int` image
+/// (`lower::fragment::color`'s `texture_class`); none elsewhere, where it reads the attachment's
+/// bits through a `uint` input attachment.
 fn signed_colors_fetched(
     spec: &air::Entry,
     colors: &[Option<ColorAttachmentDescriptor>],
     p: &DeviceProfile,
 ) -> BTreeSet<u32> {
     use crate::pipeline::sym::SampledType;
-    let textured =
-        crate::lower::access::identity(p) && crate::lower::fragment::fetch::fetch_unordered(p);
-    if !textured || !matches!(spec.ep.stage, AbiStage::Fragment { .. }) {
+    if !crate::lower::access::identity(p) || !matches!(spec.ep.stage, AbiStage::Fragment { .. }) {
         return BTreeSet::new();
     }
     spec.ep
@@ -2491,110 +2479,6 @@ pub(crate) fn unattached_colors_written(
         .collect()
 }
 
-/// The framebuffer-fetch state of pass `d` for the specialized fragment entry `spec` on `p`
-/// (`LoweringInputs::framebuffer_fetch`): on a device that orders fetch through
-/// rasterization-order input attachments, the state of every extended-range attachment the entry
-/// writes that the pass blends (whose blend the function computes over its input attachment,
-/// `lower::fragment`'s `input_blend`), of every attachment held with its channels rotated whose
-/// blend the function computes (`color_writes::shader_rotated_blend`), of every word attachment
-/// it writes under a mask of some of the word's channels (whose word the function merges into its
-/// input attachment's, `color_writes::merged_word`), of every extended-range attachment it writes
-/// unblended under a mask of some of the codes one word holds (merged so,
-/// `color_writes::merged_extended`), and, under a private logic operation the function computes
-/// (`FragmentPass::logic_operation`), of every attachment whose format the operation serves that
-/// the entry writes through its first output (`lower::fragment`'s `logic`); `None` on another
-/// device or for an entry that writes none of them.
-pub(crate) fn fetch_inputs(
-    spec: &air::Entry,
-    d: FragmentPass<'_>,
-    p: &DeviceProfile,
-) -> Option<crate::pipeline::lower_inputs::FramebufferFetchInputs> {
-    if !matches!(spec.ep.stage, AbiStage::Fragment { .. })
-        || !crate::lower::fragment::inputs_order(p)
-    {
-        return None;
-    }
-    let blended = |color: u32| {
-        d.color_attachments
-            .get(color as usize)
-            .copied()
-            .flatten()
-            .is_some_and(|c| {
-                c.blending_enabled
-                    && crate::metal::format::ExtendedRange::of(c.pixel_format).is_some()
-            })
-    };
-    // An extended-range attachment whose word's codes an unblended write of some of them merges
-    // into the word it reads.
-    let merged_extended = |color: u32| {
-        d.color_attachments
-            .get(color as usize)
-            .copied()
-            .flatten()
-            .is_some_and(|c| crate::pipeline::color_writes::merged_extended(&c))
-    };
-    // A word attachment whose writes the function merges into the word its input attachment
-    // holds.
-    let merged_word = |color: u32| {
-        d.color_attachments
-            .get(color as usize)
-            .copied()
-            .flatten()
-            .and_then(|c| {
-                crate::pipeline::color_writes::merged_word(color, &c, d.alpha_to_coverage, p)
-            })
-            .is_some()
-    };
-    // An attachment held with its channels rotated whose blend the function computes over the
-    // texel it reads, in either form (`color_writes::shader_rotated_blend`).
-    let rotated_blend = |color: u32| {
-        d.color_attachments
-            .get(color as usize)
-            .copied()
-            .flatten()
-            .is_some_and(|c| crate::pipeline::color_writes::shader_rotated_blend(&c, p))
-    };
-    // An attachment whose codes the function's write operates on under the pipeline's private
-    // logic operation, over the texel it reads (`lower::fragment`'s `logic`), in either form.
-    let logic = |color: u32| {
-        d.logic_operation.is_some()
-            && d.color_attachments
-                .get(color as usize)
-                .copied()
-                .flatten()
-                .is_some_and(|c| crate::lower::fragment::logic_channels(c.pixel_format).is_some())
-    };
-    let read: BTreeSet<u32> = spec
-        .ep
-        .outputs
-        .iter()
-        .filter_map(|o| match o.role {
-            OutputRole::RenderTarget {
-                attachment: AbiInt::Const(color),
-                index: 0,
-                ..
-            } if blended(color)
-                || rotated_blend(color)
-                || logic(color)
-                || merged_word(color)
-                || merged_extended(color) =>
-            {
-                Some(color)
-            }
-            _ => None,
-        })
-        .collect();
-    if read.is_empty() {
-        return None;
-    }
-    // The blend over an input attachment depends on the attachments' state alone: its write is
-    // the fixed function's, which the tests, coverage and views take as any other's.
-    Some(crate::pipeline::lower_inputs::FramebufferFetchInputs::of(
-        read,
-        d.color_attachments,
-    ))
-}
-
 /// A fragment stage's lowering inputs under variant `v` on `p` that need no decoded entry: the
 /// key's, whether pass `d` rasterizes more than one sample (`LoweringInputs::multisampled`), and
 /// how its color attachments take float outputs (`LoweringInputs::color_writes`).
@@ -2627,7 +2511,6 @@ pub(crate) fn fragment_inputs(
     out.rotated_blends = crate::pipeline::color_writes::rotated_blends(d.color_attachments, p);
     out.sample_mask = d.sample_mask;
     out.alpha_test = d.alpha_test;
-    out.logic_operation = d.logic_operation;
     out.depth_compare_clamp_mask = d.depth_compare_clamp_mask;
     out.texture_write_rounding = d.texture_write_rounding_mode;
     // The floor's one render range moves the fragment function's fields.
@@ -2773,7 +2656,6 @@ fn lower_inputs(
             ));
             out.unattached_colors =
                 unattached_colors_written(spec, d.color_attachments, d.alpha_to_coverage);
-            out.framebuffer_fetch = fetch_inputs(spec, d, p);
             let read = raw_indices_read(spec);
             out.viewport_index_varying = written.viewport && read.viewport;
             out.render_target_array_index_varying = written.layer && read.layer;

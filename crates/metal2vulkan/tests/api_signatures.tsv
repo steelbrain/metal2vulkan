@@ -897,7 +897,6 @@ enum	metal2vulkan::error::DescriptorError	#[derive(Clone, Debug, PartialEq, Eq)]
 enum	metal2vulkan::error::DynamicLibraryProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum DynamicLibraryProblem
 enum	metal2vulkan::error::Error	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Error
 enum	metal2vulkan::error::ErrorClass	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ErrorClass
-enum	metal2vulkan::error::ExtendedRangeBlend	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ExtendedRangeBlend
 enum	metal2vulkan::error::Feature	#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum Feature
 enum	metal2vulkan::error::GenericPointer	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum GenericPointer
 enum	metal2vulkan::error::InputErrorKind	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum InputErrorKind
@@ -2583,7 +2582,6 @@ field	metal2vulkan::device::FragmentCaps.independent_blend	pub independent_blend
 field	metal2vulkan::device::FragmentCaps.output_layer	pub output_layer: bool
 field	metal2vulkan::device::FragmentCaps.output_viewport_index	pub output_viewport_index: bool
 field	metal2vulkan::device::FragmentCaps.pixel_interlock	pub pixel_interlock: bool
-field	metal2vulkan::device::FragmentCaps.rasterization_order_color_access	pub rasterization_order_color_access: bool
 field	metal2vulkan::device::FragmentCaps.sample_rate_shading	pub sample_rate_shading: bool
 field	metal2vulkan::device::FragmentCaps.stencil_export	pub stencil_export: bool
 field	metal2vulkan::device::FragmentCaps.terminate_invocation	pub terminate_invocation: bool
@@ -2849,12 +2847,6 @@ field	metal2vulkan::pipeline::AccessSet.write	pub write: bool
 field	metal2vulkan::pipeline::AliasView.image_format	pub image_format: vk::Format
 field	metal2vulkan::pipeline::AmplificationDraws.layered	pub layered: bool
 field	metal2vulkan::pipeline::AmplificationDraws.viewports	pub viewports: bool
-field	metal2vulkan::pipeline::BlendEquation.alpha_operation	pub alpha_operation: metal::BlendOperation
-field	metal2vulkan::pipeline::BlendEquation.destination_alpha	pub destination_alpha: metal::BlendFactor
-field	metal2vulkan::pipeline::BlendEquation.destination_rgb	pub destination_rgb: metal::BlendFactor
-field	metal2vulkan::pipeline::BlendEquation.rgb_operation	pub rgb_operation: metal::BlendOperation
-field	metal2vulkan::pipeline::BlendEquation.source_alpha	pub source_alpha: metal::BlendFactor
-field	metal2vulkan::pipeline::BlendEquation.source_rgb	pub source_rgb: metal::BlendFactor
 field	metal2vulkan::pipeline::BlendState.alpha_op	pub alpha_op: vk::BlendOp
 field	metal2vulkan::pipeline::BlendState.color_op	pub color_op: vk::BlendOp
 field	metal2vulkan::pipeline::BlendState.dst_alpha	pub dst_alpha: vk::BlendFactor
@@ -2934,12 +2926,6 @@ field	metal2vulkan::pipeline::EntryPlan.strategies	pub strategies: BTreeMap<Stri
 field	metal2vulkan::pipeline::ExtendedRangeColor.blended	pub blended: bool
 field	metal2vulkan::pipeline::ExtendedRangeColor.form	pub form: metal::format::ExtendedRange
 field	metal2vulkan::pipeline::ExtendedRangeColor.nearest_even	pub nearest_even: bool
-field	metal2vulkan::pipeline::FetchedAttachment.blending_enabled	pub blending_enabled: bool
-field	metal2vulkan::pipeline::FetchedAttachment.equation	pub equation: Option<BlendEquation>
-field	metal2vulkan::pipeline::FetchedAttachment.pixel_format	pub pixel_format: metal::PixelFormat
-field	metal2vulkan::pipeline::FetchedAttachment.replaces	pub replaces: bool
-field	metal2vulkan::pipeline::FetchedAttachment.write_mask	pub write_mask: metal::ColorWriteMask
-field	metal2vulkan::pipeline::FramebufferFetchInputs.attachments	pub attachments: BTreeMap<u32, Option<FetchedAttachment>>
 field	metal2vulkan::pipeline::FunctionDescriptor.constants	pub constants: FunctionConstantValues
 field	metal2vulkan::pipeline::FunctionDescriptor.function	pub function: Function
 field	metal2vulkan::pipeline::FunctionDescriptor.libraries	pub libraries: DynamicLibraries
@@ -2957,7 +2943,6 @@ field	metal2vulkan::pipeline::GraphicsState.input_attachments	pub input_attachme
 field	metal2vulkan::pipeline::GraphicsState.line_band	pub line_band: Option<LineBandState>
 field	metal2vulkan::pipeline::GraphicsState.logic_op	pub logic_op: Option<vk::LogicOp>
 field	metal2vulkan::pipeline::GraphicsState.max_vertex_amplification_count	pub max_vertex_amplification_count: u32
-field	metal2vulkan::pipeline::GraphicsState.rasterization_order_attachment_access	pub rasterization_order_attachment_access: bool
 field	metal2vulkan::pipeline::GraphicsState.rasterization_samples	pub rasterization_samples: vk::SampleCountFlags
 field	metal2vulkan::pipeline::GraphicsState.rasterizer_discard	pub rasterizer_discard: bool
 field	metal2vulkan::pipeline::GraphicsState.reads_barycentric_coord	pub reads_barycentric_coord: bool
@@ -3015,11 +3000,9 @@ field	metal2vulkan::pipeline::LoweringInputs.extended_range	pub extended_range: 
 field	metal2vulkan::pipeline::LoweringInputs.extended_range_colors	pub extended_range_colors: BTreeMap<u32, ExtendedRangeColor>
 field	metal2vulkan::pipeline::LoweringInputs.flat_grid	pub flat_grid: bool
 field	metal2vulkan::pipeline::LoweringInputs.folded_groups	pub folded_groups: bool
-field	metal2vulkan::pipeline::LoweringInputs.framebuffer_fetch	pub framebuffer_fetch: Option<FramebufferFetchInputs>
 field	metal2vulkan::pipeline::LoweringInputs.indirect_range	pub indirect_range: bool
 field	metal2vulkan::pipeline::LoweringInputs.instanced_attributes	pub instanced_attributes: BTreeSet<u32>
 field	metal2vulkan::pipeline::LoweringInputs.kept_imageblock_bytes	pub kept_imageblock_bytes: Option<u32>
-field	metal2vulkan::pipeline::LoweringInputs.logic_operation	pub logic_operation: Option<vk::LogicOp>
 field	metal2vulkan::pipeline::LoweringInputs.max_call_stack_depth	pub max_call_stack_depth: Option<u32>
 field	metal2vulkan::pipeline::LoweringInputs.merged_draws	pub merged_draws: bool
 field	metal2vulkan::pipeline::LoweringInputs.multisampled	pub multisampled: bool
@@ -3434,7 +3417,6 @@ fn	metal2vulkan::metal::format::byte_format	pub fn byte_format(pf: PixelFormat) 
 fn	metal2vulkan::metal::format::color_record	pub fn color_record(formats: &[Option<PixelFormat>]) -> Option<Vec<Option<(u32, u32)>>>
 fn	metal2vulkan::metal::format::copies_only	pub fn copies_only(pf: PixelFormat) -> bool
 fn	metal2vulkan::metal::format::direct_format	pub fn direct_format(pf: PixelFormat) -> Option<vk::Format>
-fn	metal2vulkan::metal::format::extended_range_blend	pub fn extended_range_blend(pf: PixelFormat, profile: &DeviceProfile) -> Result<(), Unsupported>
 fn	metal2vulkan::metal::format::footprint	pub fn footprint(pf: PixelFormat) -> Option<Footprint>
 fn	metal2vulkan::metal::format::image_type	pub fn image_type(ty: TextureType) -> Option<(vk::ImageType, vk::ImageCreateFlags)>
 fn	metal2vulkan::metal::format::image_view_type	pub fn image_view_type(ty: TextureType) -> Option<vk::ImageViewType>
@@ -7247,7 +7229,6 @@ method	metal2vulkan::metal::sampler::SamplerWord::of	pub fn of(desc: &SamplerDes
 method	metal2vulkan::pipeline::AliasView::new	pub fn new(image_format: vk::Format) -> AliasView
 method	metal2vulkan::pipeline::AmplificationDraws::new	pub fn new(layered: bool, viewports: bool) -> AmplificationDraws
 method	metal2vulkan::pipeline::BandPrimitive::patch_control_points	pub fn patch_control_points(self) -> u32
-method	metal2vulkan::pipeline::BlendEquation::of	pub fn of(c: &crate::pipeline::descriptor::ColorAttachmentDescriptor) -> Option<BlendEquation>
 method	metal2vulkan::pipeline::BlendState::reads_second_output	pub fn reads_second_output(&self) -> bool
 method	metal2vulkan::pipeline::BufferForm::uniform_view	pub fn uniform_view(self) -> bool
 method	metal2vulkan::pipeline::ColorAttachmentDescriptor::new	pub fn new(pixel_format: metal::PixelFormat) -> ColorAttachmentDescriptor
@@ -7277,7 +7258,6 @@ method	metal2vulkan::pipeline::DynamicLibraries::with_preloaded	pub fn with_prel
 method	metal2vulkan::pipeline::EntryDescriptor::new	pub fn new(bitcode: &'a [u8], entry: EntryRef<'a>) -> EntryDescriptor<'a>
 method	metal2vulkan::pipeline::ExtendedRangeColor::new	pub fn new(form: metal::format::ExtendedRange, blended: bool) -> ExtendedRangeColor
 method	metal2vulkan::pipeline::ExtendedRangeColor::with_rounding	pub fn with_rounding(self, rounding: metal::TextureWriteRoundingMode) -> ExtendedRangeColor
-method	metal2vulkan::pipeline::FramebufferFetchInputs::of	pub fn of(read: impl IntoIterator<Item = u32>, colors: &[Option<crate::pipeline::descriptor::ColorAttachmentDescriptor>]) -> FramebufferFetchInputs
 method	metal2vulkan::pipeline::FunctionDescriptor::needs_specialization	pub fn needs_specialization(&self, budget: &Budget, entries: &StageEntries) -> Result<bool, Error>
 method	metal2vulkan::pipeline::FunctionDescriptor::new	pub fn new(function: Function) -> FunctionDescriptor
 method	metal2vulkan::pipeline::FunctionDescriptor::with_libraries	pub fn with_libraries(mut self, libraries: DynamicLibraries) -> FunctionDescriptor
@@ -7869,7 +7849,6 @@ struct	metal2vulkan::pipeline::AccessSet	#[cfg_attr(feature = "serde", derive(se
 struct	metal2vulkan::pipeline::AirUserKey	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct AirUserKey(pub Box<[u8]>)
 struct	metal2vulkan::pipeline::AliasView	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct AliasView
 struct	metal2vulkan::pipeline::AmplificationDraws	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct AmplificationDraws
-struct	metal2vulkan::pipeline::BlendEquation	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct BlendEquation
 struct	metal2vulkan::pipeline::BlendState	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct BlendState
 struct	metal2vulkan::pipeline::BufferSlot	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct BufferSlot
 struct	metal2vulkan::pipeline::ColorAttachmentDescriptor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ColorAttachmentDescriptor
@@ -7887,8 +7866,6 @@ struct	metal2vulkan::pipeline::EntryDescriptor	#[derive(Clone, Debug)] #[non_exh
 struct	metal2vulkan::pipeline::EntryPlan	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct EntryPlan
 struct	metal2vulkan::pipeline::ExecutionCounts	#[derive(Clone, Copy, Debug)] pub struct ExecutionCounts
 struct	metal2vulkan::pipeline::ExtendedRangeColor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct ExtendedRangeColor
-struct	metal2vulkan::pipeline::FetchedAttachment	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct FetchedAttachment
-struct	metal2vulkan::pipeline::FramebufferFetchInputs	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct FramebufferFetchInputs
 struct	metal2vulkan::pipeline::FunctionDescriptor	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct FunctionDescriptor
 struct	metal2vulkan::pipeline::FunctionHandle	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct FunctionHandle(u32)
 struct	metal2vulkan::pipeline::GraphicsState	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct GraphicsState
@@ -9399,8 +9376,6 @@ variant	metal2vulkan-runtime::PrecisionNote::DeviceSignedZeroInfNan	DeviceSigned
 variant	metal2vulkan-runtime::PrecisionNote::DeviceTexelConversion	DeviceTexelConversion
 variant	metal2vulkan-runtime::PrecisionNote::DeviceTranscendentals	DeviceTranscendentals
 variant	metal2vulkan-runtime::PrecisionNote::DeviceVertexConversion	DeviceVertexConversion
-variant	metal2vulkan-runtime::PrecisionNote::ExtendedRangeBlendSource	ExtendedRangeBlendSource
-variant	metal2vulkan-runtime::PrecisionNote::ExtendedRangeFloatBlendSource	ExtendedRangeFloatBlendSource
 variant	metal2vulkan-runtime::PrecisionNote::ExtrapolatedInterpolation	ExtrapolatedInterpolation
 variant	metal2vulkan-runtime::PrecisionNote::F16FmaDoubleRounding	F16FmaDoubleRounding
 variant	metal2vulkan-runtime::PrecisionNote::F16IntConvDoubleRounding	F16IntConvDoubleRounding
@@ -10506,8 +10481,6 @@ variant	metal2vulkan::error::ErrorClass::InvalidRequest	InvalidRequest
 variant	metal2vulkan::error::ErrorClass::LimitExceeded	LimitExceeded
 variant	metal2vulkan::error::ErrorClass::Malformed	Malformed
 variant	metal2vulkan::error::ErrorClass::Unsupported	Unsupported
-variant	metal2vulkan::error::ExtendedRangeBlend::DualSource	DualSource
-variant	metal2vulkan::error::ExtendedRangeBlend::Output	Output
 variant	metal2vulkan::error::Feature::AddressSpace	AddressSpace(u32)
 variant	metal2vulkan::error::Feature::AgxUnmodeled	AgxUnmodeled
 variant	metal2vulkan::error::Feature::AlphaToOne	AlphaToOne
@@ -10536,7 +10509,6 @@ variant	metal2vulkan::error::Feature::DivergentImplicitLod	DivergentImplicitLod
 variant	metal2vulkan::error::Feature::DivergentInterpolation	DivergentInterpolation
 variant	metal2vulkan::error::Feature::DualSourceBlending	DualSourceBlending
 variant	metal2vulkan::error::Feature::DynamicCall	DynamicCall
-variant	metal2vulkan::error::Feature::ExtendedRangeBlend	ExtendedRangeBlend(ExtendedRangeBlend)
 variant	metal2vulkan::error::Feature::Float64Arithmetic	Float64Arithmetic
 variant	metal2vulkan::error::Feature::Format	Format
 variant	metal2vulkan::error::Feature::FramebufferFetch	FramebufferFetch
@@ -10713,9 +10685,7 @@ variant	metal2vulkan::error::RuntimeInput::ColorWrites	ColorWrites
 variant	metal2vulkan::error::RuntimeInput::DepthCompareClamp	DepthCompareClamp
 variant	metal2vulkan::error::RuntimeInput::DynamicLibrary	DynamicLibrary { install_name: DiagName }
 variant	metal2vulkan::error::RuntimeInput::DynamicSymbol	DynamicSymbol { symbol: DiagName }
-variant	metal2vulkan::error::RuntimeInput::FramebufferFetch	FramebufferFetch
 variant	metal2vulkan::error::RuntimeInput::LinkedFunction	LinkedFunction { symbol: DiagName }
-variant	metal2vulkan::error::RuntimeInput::LogicOperation	LogicOperation
 variant	metal2vulkan::error::RuntimeInput::Multisampled	Multisampled
 variant	metal2vulkan::error::RuntimeInput::ObjectPayload	ObjectPayload
 variant	metal2vulkan::error::RuntimeInput::PrimitiveId	PrimitiveId
@@ -10928,8 +10898,6 @@ variant	metal2vulkan::pipeline::PrecisionNote::DeviceSignedZeroInfNan	DeviceSign
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceTexelConversion	DeviceTexelConversion
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceTranscendentals	DeviceTranscendentals
 variant	metal2vulkan::pipeline::PrecisionNote::DeviceVertexConversion	DeviceVertexConversion
-variant	metal2vulkan::pipeline::PrecisionNote::ExtendedRangeBlendSource	ExtendedRangeBlendSource
-variant	metal2vulkan::pipeline::PrecisionNote::ExtendedRangeFloatBlendSource	ExtendedRangeFloatBlendSource
 variant	metal2vulkan::pipeline::PrecisionNote::ExtrapolatedInterpolation	ExtrapolatedInterpolation
 variant	metal2vulkan::pipeline::PrecisionNote::F16FmaDoubleRounding	F16FmaDoubleRounding
 variant	metal2vulkan::pipeline::PrecisionNote::F16IntConvDoubleRounding	F16IntConvDoubleRounding
@@ -11068,7 +11036,6 @@ variant	metal2vulkan::pipeline::RuntimeFact::DispatchGrid	DispatchGrid
 variant	metal2vulkan::pipeline::RuntimeFact::DroppedColor	DroppedColor { color: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::EmulatedSimdgroups	EmulatedSimdgroups
 variant	metal2vulkan::pipeline::RuntimeFact::ExecutionStatus	ExecutionStatus
-variant	metal2vulkan::pipeline::RuntimeFact::ExtendedRangeInputBlend	ExtendedRangeInputBlend { color: u32, blend: crate::pipeline::lower_inputs::BlendEquation, kept: crate::vk::ColorComponentFlags }
 variant	metal2vulkan::pipeline::RuntimeFact::FlatGrid	FlatGrid
 variant	metal2vulkan::pipeline::RuntimeFact::FoldedGroups	FoldedGroups
 variant	metal2vulkan::pipeline::RuntimeFact::FramebufferFetch	FramebufferFetch { color: u32 }
@@ -11101,7 +11068,6 @@ variant	metal2vulkan::pipeline::RuntimeFact::RegionViewports	RegionViewports
 variant	metal2vulkan::pipeline::RuntimeFact::RenderTargetArrayLength	RenderTargetArrayLength { layer_dropped: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::ReplayBindings	ReplayBindings
 variant	metal2vulkan::pipeline::RuntimeFact::ResourcePresence	ResourcePresence { slot: SlotRef }
-variant	metal2vulkan::pipeline::RuntimeFact::RotatedInputBlend	RotatedInputBlend { color: u32, blend: crate::pipeline::lower_inputs::BlendEquation, kept: crate::vk::ColorComponentFlags }
 variant	metal2vulkan::pipeline::RuntimeFact::RotatedWeights	RotatedWeights
 variant	metal2vulkan::pipeline::RuntimeFact::RowLockstep	RowLockstep
 variant	metal2vulkan::pipeline::RuntimeFact::SampleCount	SampleCount
@@ -11136,7 +11102,6 @@ variant	metal2vulkan::pipeline::RuntimeFact::UnitAxes	UnitAxes { axes: u8, relie
 variant	metal2vulkan::pipeline::RuntimeFact::VertexBufferStride	VertexBufferStride { layout: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::VertexFetch	VertexFetch { attr: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::ViewportCount	ViewportCount
-variant	metal2vulkan::pipeline::RuntimeFact::WordInputMerge	WordInputMerge { color: u32, kept: crate::vk::ColorComponentFlags }
 variant	metal2vulkan::pipeline::RuntimeFact::YCbCrInPlace	YCbCrInPlace { slot: SlotRef, samplers: u32, device: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::ZeroedColor	ZeroedColor { color: u32, format: crate::metal::PixelFormat }
 variant	metal2vulkan::pipeline::SampledType::Float	Float

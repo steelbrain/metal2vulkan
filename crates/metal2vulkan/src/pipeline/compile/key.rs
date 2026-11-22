@@ -11,8 +11,8 @@
 //!   hash, and constant values. A stage without linked functions keeps the key it had before
 //!   linking existed, and one
 //!   compiled without `emulated_simdgroups`, `one_row`, `storage_view_slots`,
-//!   `signed_color_attachments`, `multisampled`, `replay_bindings`, or `framebuffer_fetch` the key
-//!   it had before those inputs existed. A stage that links dynamic libraries records each library
+//!   `signed_color_attachments`, `multisampled` or `replay_bindings` the key it had before those
+//!   inputs existed. A stage that links dynamic libraries records each library
 //!   its imports are searched in, in order (install name and content hash), and the install name
 //!   not loaded; one that links none keeps its key.
 //! - [`pipeline_key`] (`PipelineKey`): the profile fingerprint, each stage's `FunctionCompileKey`
@@ -228,12 +228,6 @@ pub fn function_key(
     if inputs.merged_draws {
         h.bytes(b"merged-draws");
     }
-    // Appended only when set, in its derived `Debug` form (ordered maps of plain enums, flags, and
-    // booleans, a total encoding as `inputs_encoding`'s).
-    if let Some(f) = &inputs.framebuffer_fetch {
-        h.bytes(b"framebuffer-fetch")
-            .bytes(format!("{f:?}").as_bytes());
-    }
     // Appended only when set, as `storage_view_slots`.
     if !inputs.srgb_textures.is_empty() {
         h.bytes(b"srgb-textures")
@@ -423,11 +417,6 @@ pub fn function_key(
     if let Some(function) = inputs.alpha_test {
         h.bytes(b"alpha-test")
             .bytes(&function.as_raw().to_le_bytes());
-    }
-    // Appended only when set.
-    if let Some(op) = inputs.logic_operation {
-        h.bytes(b"logic-operation")
-            .bytes(&op.as_raw().to_le_bytes());
     }
     // Appended only when set.
     if inputs.depth_compare_clamp_mask != 0 {

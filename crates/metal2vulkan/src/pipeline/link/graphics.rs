@@ -52,13 +52,9 @@
 //!   dynamic state also cull mode, front face, topology, the depth/stencil test state, and the
 //!   vertex strides of `PerBind` layouts.
 //! - **Input attachments**: one per framebuffer-fetch binding of the fragment stage. Metal orders
-//!   each fetch after the earlier fragments of the draw that cover the pixel; Vulkan does only
-//!   under rasterization-order attachment access, so a pipeline with input attachments on a profile
-//!   with `rasterizationOrderColorAttachmentAccess` states `rasterization_order_attachment_access`
-//!   (and the compiled pipeline requires the feature). Without the feature a fragment stage reads
+//!   each fetch after the earlier fragments of the draw that cover the pixel; a fragment stage reads
 //!   an input attachment ordered between draws alone (`lower::fragment::color`), whose consumer
-//!   orders the draws by barriers. In a
-//!   multisampled pipeline
+//!   orders the draws by barriers. In a multisampled pipeline
 //!   (`rasterSampleCount` above 1) Metal runs a function that reads a color attachment once per
 //!   covered sample, each invocation reading its own sample (measured), so the stage, compiled for
 //!   the pipeline (`LoweringInputs::multisampled`), reads a multisampled `SubpassData` image at
@@ -171,7 +167,7 @@
 //!   ordinary layered rendering. A mesh pipeline keeps its count and needs no `multiview`: its
 //!   draws of more than one amplification are refused at the draw (`bind::graphics`).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use crate::device::requirements::{FormatUsage, VkFeature, VkLimit, VkProperty};
 use crate::device::DeviceProfile;
@@ -203,7 +199,7 @@ use crate::vk;
 
 /// Whether the fragment stage `fs` reads a color attachment of render inputs `r` through the
 /// sampled-texture array's element the consumer pushes for it (`PushField::FetchedColor`, the
-/// identity domains' form on a device that orders fetch in neither form), each such attachment
+/// identity domains' form), each such attachment
 /// checked as an input attachment of it is: the pipeline has it, its view holds Metal's channels
 /// (no rotated, two-plane YCbCr or extended-range format, whose texels the view does not hold as
 /// Metal's), and its format's numeric class is the one the stage reads, else Metal's pipeline
@@ -297,16 +293,11 @@ fn vertex_amplification(r: &RenderLinkInputs, mesh: bool, p: &DeviceProfile) -> 
 /// The graphics state of render inputs `r` with vertex stage `vs`, fragment stage `fs`, vertex
 /// input `vi`, and, for a tessellation pipeline, its tessellation state `tessellation`: its
 /// topology is `PATCH_LIST` and never dynamic state, as its draws draw patches only.
-/// `input_blends`: the extended-range attachments whose blend the fragment function computes over
-/// their input attachments, and the channels each write keeps (`link::fetch::input_blends`);
-/// `rotated_inputs`: those of them held with their channels rotated, whose blend the function
-/// states as `RuntimeFact::RotatedInputBlend`.
 pub fn graphics_state(
     r: &RenderLinkInputs,
     (vs, fs): (&StageInterface, Option<&StageInterface>),
     vi: &VertexInputState,
     tessellation: Option<TessellationState>,
-    (input_blends, rotated_inputs): (&BTreeMap<u32, vk::ColorComponentFlags>, &BTreeSet<u32>),
     p: &DeviceProfile,
 ) -> Result<GraphicsState, Error> {
     if r.alpha_to_one && !p.fields().enabled.features.contains(&VkFeature::AlphaToOne) {
@@ -379,8 +370,7 @@ pub fn graphics_state(
                     // A word attachment renders through the view of its word, which the function
                     // writes whole and unblended (`color_writes::word_color`): its one component,
                     // where the function writes the attachment and the mask keeps some of the
-                    // format's channels (all of them, or some where the function merges the word
-                    // into its input attachment's, `fetch::word_merges`).
+                    // format's channels (all of them).
                     if let Some(word) =
                         color_writes::word_color(index as u32, a, r.alpha_to_coverage, p)
                     {
@@ -429,10 +419,6 @@ pub fn graphics_state(
                     let keeps_zero =
                         fs.is_some_and(|f| color_writes::keeps_zero(&f.io, index as u32, a));
                     let replaced = stored && color_writes::replaces(a) && !keeps_zero;
-                    // An extended-range attachment whose blend the function computes over its
-                    // input attachment takes no Vulkan blend, and the function's write stores
-                    // every raw component (none where it keeps every channel).
-                    let input_blend = input_blends.get(&(index as u32)).copied();
                     // An extended-range attachment no first output writes (every attachment of a
                     // pipeline without a fragment function) is left as it is, as Metal leaves an
                     // unwritten attachment (the module docs), so its blend changes nothing: it
@@ -448,10 +434,7 @@ pub fn graphics_state(
                     // alpha, the mask's alpha bit in red, and Metal's alpha blend in red.
                     let alpha_red = metal::format::alpha_in_red(a.pixel_format, p);
                     let rotated = metal::format::rotated_channels(a.pixel_format) || alpha_red;
-                    let blended = a.blending_enabled
-                        && !replaced
-                        && input_blend.is_none()
-                        && !unwritten_extended;
+                    let blended = a.blending_enabled && !replaced && !unwritten_extended;
                     // A blend into a two-plane YCbCr `_sRGB` twin a pass renders is not measured
                     // (`metal::format::ycbcr_renders`): whether Metal's tile blends the texels'
                     // linear values or their encoding.
@@ -474,59 +457,29 @@ pub fn graphics_state(
                     // An extended-range attachment holds its raw texels, whose components the
                     // function writes whole (`extended_write_mask`). An unwritten attachment's mask
                     // is empty whatever the descriptor's.
-                    let write_mask = match (extended, input_blend) {
+                    let write_mask = match extended {
                         _ if !written_here => vk::ColorComponentFlags::empty(),
-                        (Some(form), Some(kept)) => {
-                            let stored = match kept == vk::ColorComponentFlags::known_bits() {
-                                true => vk::ColorComponentFlags::empty(),
-                                false => vk::ColorComponentFlags::known_bits(),
-                            };
-                            extended_write_mask(form, stored)?
-                        }
-                        // A mask of some of the codes one word holds, which a stage compiled for
-                        // this pipeline merges where the device orders fetch (one that reaches here
-                        // was compiled for another): on a device that does not, the ordering the
-                        // merge needs.
-                        (Some(form), None) => {
-                            extended_write_mask(form, descriptor_mask).map_err(|e| {
-                                let unordered = crate::lower::fragment::fetch::fetch_unordered(p);
-                                match (color_writes::merged_extended(a), unordered) {
-                                    (true, true) => {
-                                        crate::lower::fragment::fetch::unordered_extended_fetch()
-                                            .into()
-                                    }
-                                    (true, false) => {
-                                        Error::NeedsInput(RuntimeInput::FramebufferFetch)
-                                    }
-                                    (false, _) => e,
+                        // A mask of some of the codes one word holds, which the function would
+                        // merge into the word over an ordered read of the attachment: not built.
+                        Some(form) => extended_write_mask(form, descriptor_mask).map_err(|e| {
+                            match color_writes::merged_extended(a) {
+                                true => {
+                                    crate::lower::fragment::fetch::computed_write_refused().into()
                                 }
-                            })?
-                        }
-                        (None, _) => descriptor_mask,
+                                false => e,
+                            }
+                        })?,
+                        None => descriptor_mask,
                     };
-                    let blend = match (
-                        replaced || input_blend.is_some() || unwritten_extended,
-                        rotated,
-                    ) {
+                    let blend = match (replaced || unwritten_extended, rotated) {
                         (true, _) => None,
                         (false, false) => blend_factors(a, p)?,
                         (false, true) if alpha_red => alpha_in_red_blend(a, p)?,
-                        // A blend no Vulkan state on the rotated image gives, which a stage
-                        // compiled for this pipeline computes itself over the input attachment
-                        // (above): one that does not was compiled for another pipeline. Unwritten,
-                        // it writes nothing.
-                        (false, true) if color_writes::shader_rotated_blend(a, p) => {
-                            match written_here {
-                                true => {
-                                    return Err(Error::NeedsInput(RuntimeInput::FramebufferFetch))
-                                }
-                                false => None,
-                            }
-                        }
-                        // Where the device does not order fetch, the ordering that blend needs.
+                        // A blend no Vulkan state on the rotated image gives, which the function
+                        // would compute over an ordered read of the attachment: not built.
                         (false, true) if color_writes::rotated_blend_in_shader(a, p) => {
                             return Err(
-                                crate::lower::fragment::fetch::unordered_extended_fetch().into()
+                                crate::lower::fragment::fetch::computed_write_refused().into()
                             );
                         }
                         // The second output the rotation needs is the function's only beside
@@ -609,16 +562,12 @@ pub fn graphics_state(
                 }))?;
             // An input attachment of an image holding Metal's channels rotated reads them so: a
             // color input of one is not modelled, which a stage compiled for the attachment refuses
-            // (`lower::fragment::color`), so the one input attachment such a stage reads of it is
-            // the one its own blend there rotates into Metal's order
-            // (`RuntimeFact::RotatedInputBlend`, which `fetch::input_blends` held to the pipeline's
-            // state above); any other is a stage's compiled for another pipeline. (One holding
-            // Metal's alpha in red is read as Metal's alpha by a stage compiled for it,
+            // (`lower::fragment::color`), so one is a stage's compiled for another pipeline. (One
+            // holding Metal's alpha in red is read as Metal's alpha by a stage compiled for it,
             // `StageIo::alpha_in_red_colors`, which `color_writes::check` holds to the pipeline's.)
             // Nor is a two-plane YCbCr attachment's, whose texels Metal holds as halves and the
             // attachment as the function's floats.
-            if (metal::format::rotated_channels(attachment.pixel_format)
-                && !rotated_inputs.contains(&color))
+            if metal::format::rotated_channels(attachment.pixel_format)
                 || metal::format::ycbcr_renders(attachment.pixel_format)
                 || metal::format::ycbcr_pass_refused(attachment.pixel_format)
             {
@@ -627,7 +576,7 @@ pub fn graphics_state(
             }
             // An extended-range attachment's input reads its raw texels, the raw format's
             // `uint`s, which a stage compiled for the attachment decodes (`color_writes::check`);
-            // a word attachment's reads its word, which a stage merges (`fetch::word_merges`).
+            // a word attachment's reads its word (`color_writes::word_color`).
             let word =
                 color_writes::word_color(color, &attachment, r.alpha_to_coverage, p).is_some();
             let format_class = match ExtendedRange::of(attachment.pixel_format) {
@@ -717,9 +666,6 @@ pub fn graphics_state(
         alpha_to_one: r.alpha_to_one,
         rasterizer_discard: !r.rasterization_enabled,
         dynamic_states,
-        // Ordered wherever the device can order the reads.
-        rasterization_order_attachment_access: !input_attachments.is_empty()
-            && p.fields().fragment.rasterization_order_color_access,
         input_attachments,
         max_vertex_amplification_count,
         declares_layer,
@@ -1041,12 +987,9 @@ fn uniform_blend(
 /// Max and an M4, byte-identical). A mask of some of the channels one component holds
 /// (`BGR10_XR`'s word, `RGB10A2Unorm_sRGB`'s, the two-plane forms' color word) is
 /// `NotImplemented(Format)` here: no mask of the raw components keeps one code of a word and
-/// writes another. A stage that writes `BGR10_XR` or a two-plane form so merges the codes
-/// (`color_writes::merged_extended`) over the input attachment, whose write the caller makes of
-/// every raw component, where the device orders fetch through rasterization-order input
-/// attachments, so a stage that reaches here so was compiled for another pipeline (the caller
-/// answers `NeedsInput(FramebufferFetch)`); on a device that does not order it so, the caller names
-/// the ordering the merge needs. A bfloat form's channels
+/// writes another. The merge of such a mask's codes into the word over an ordered read of the
+/// attachment (`color_writes::merged_extended`) is not built: the caller refuses it
+/// (`fetch::computed_write_refused`). A bfloat form's channels
 /// are its own (red; red and green; all four), each a raw component; a mask of some of them is
 /// unmeasured and refused as above.
 fn extended_write_mask(

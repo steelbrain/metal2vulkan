@@ -872,8 +872,7 @@ pub enum PushField {
     /// Residual bind offset of a descriptor-form slot: the bind offset minus the descriptor base,
     /// modulo 2^32.
     SlotBindOffset(SlotRef),
-    /// Under the identity domains, on a device that orders framebuffer fetch in neither form
-    /// (`lower::fragment::fetch::fetch_unordered`), the element of the set-1 sampled-texture array
+    /// Under the identity domains, the element of the set-1 sampled-texture array
     /// through which a fragment function reads color attachment `color` (`[[color(n)]]`): one
     /// `u32`, the index of an element holding a 2D view of the attachment's level and slice
     /// (multisampled in a multisampled pipeline), which the function fetches as `texels` at the

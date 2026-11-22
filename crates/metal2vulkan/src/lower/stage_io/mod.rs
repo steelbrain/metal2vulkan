@@ -2153,54 +2153,11 @@ fn output_part(
         None => part,
     };
     let part = match o.color {
-        // An extended-range attachment's blend the function computes over its input attachment.
-        Some(color) if cx.plan.families.fragment.input_blends.contains_key(&color) => {
-            input_blended(cx, fb, (x, returned), color, (o.link.form, part))?
-        }
-        // An attachment held with its channels rotated whose blend the function computes over its
-        // input attachment, in Metal's order: the rotation below takes it into the image's.
-        Some(color)
-            if cx
-                .plan
-                .families
-                .fragment
-                .rotated_blends
-                .contains_key(&color) =>
-        {
-            let plan = cx.plan;
-            let Some(rb) = plan.families.fragment.rotated_blends.get(&color) else {
-                return Err(
-                    cx.fail("a rotated input blend of an attachment the plan does not name")
-                );
-            };
-            let v = crate::lower::fragment::rotated_input_texel(
-                cx,
-                fb,
-                (color, rb),
-                (o.link.form, part),
-            )?;
-            color_write::round(cx, fb, color, o.link.form, v)?
-        }
-        // The pipeline's private logic operation over the attachment's input attachment.
-        Some(color) if cx.plan.families.fragment.logic_inputs.contains_key(&color) => {
-            let v =
-                crate::lower::fragment::logic_input_operated(cx, fb, color, (o.link.form, part))?;
-            color_write::round(cx, fb, color, o.link.form, v)?
-        }
         Some(color) => match (
             cx.plan.families.stage_io.words_written.get(&color).copied(),
             cx.plan.families.stage_io.extended.get(&color).copied(),
         ) {
-            (Some(w), _) => {
-                let word = word_color::encode(fb, w, (o.link.form, part))?;
-                // A write of some of the word's channels over the attachment's input attachment.
-                match cx.plan.families.fragment.word_merges.get(&color).copied() {
-                    Some(kept) => {
-                        crate::lower::fragment::word_input_merge(cx, fb, color, kept, word)?
-                    }
-                    None => word,
-                }
-            }
+            (Some(w), _) => word_color::encode(fb, w, (o.link.form, part))?,
             (None, Some(e)) => extended_color::encode(fb, e, o.link.form, part)?,
             (None, None) => color_write::round(cx, fb, color, o.link.form, part)?,
         },
@@ -2214,31 +2171,6 @@ fn output_part(
         (false, _) => part,
     };
     Ok(part)
-}
-
-/// The raw components a write of first output `part` (of `form`) to extended-range attachment
-/// `color` stores, whose blend the function computes over the attachment's input attachment
-/// (`lower::fragment`'s `input_blend`), the second source read from the returned value `x` (of
-/// shape `returned`) where the blend reads it.
-fn input_blended(
-    cx: &mut EmitCx<'_>,
-    fb: &mut FunctionBuilder<'_>,
-    (x, returned): (SValue, Returned),
-    color: u32,
-    (form, part): (Form, SValue),
-) -> BResult<SValue> {
-    let plan = cx.plan;
-    let Some(ib) = plan.families.fragment.input_blends.get(&color) else {
-        return Err(cx.fail("an input blend of an attachment the plan does not name"));
-    };
-    let second = match (ib.second, returned) {
-        (Some((field, form)), Returned::Struct) => Some((form, fb.composite_extract(x, &[field])?)),
-        (Some(_), _) => return Err(cx.fail("a second output outside a returned structure")),
-        (None, _) => None,
-    };
-    let texel =
-        crate::lower::fragment::input_blend_texel(cx, fb, (color, ib), (form, part), second)?;
-    extended_color::raw_components(fb, ib.form, texel)
 }
 
 /// The second output `s` holds beside the first output `first`, as the function returns it

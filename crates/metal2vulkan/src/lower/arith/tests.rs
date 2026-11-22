@@ -390,11 +390,6 @@ fn wide_profile() -> DeviceProfile {
         .expect("a committed profile with int64, float64, and float16")
 }
 
-/// The `half` roundings the blends' checks run under (`extended_range::blend::half_of`): the
-/// integer sequence, which every form but the controlled one takes, and the device's conversion
-/// under the 16-bit float controls, each checked against Metal's arithmetic.
-const HALF_FORMS: [QuantizeForm; 2] = [QuantizeForm::Device, QuantizeForm::Controlled];
-
 /// One case: per operand, per lane, the held bits.
 type Case = Vec<Vec<u64>>;
 
@@ -4130,7 +4125,6 @@ fn aggregate_leaf_total_is_capped_before_expansion() {
 
 mod atan2;
 mod bicubic;
-mod blend8;
 mod color_write;
 mod convert_suffix;
 mod divide;

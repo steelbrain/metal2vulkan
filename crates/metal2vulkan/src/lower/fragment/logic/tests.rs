@@ -1,4 +1,4 @@
-//! The formats the function's logic operation serves, and the outputs it takes.
+//! The formats Metal's logic operation takes per channel, and where Vulkan's differs.
 
 use super::*;
 
@@ -85,26 +85,4 @@ fn vulkan_s_operation_differs_on_10_bit_and_signed_codes_alone() {
     ] {
         assert!(!vulkan_differs(pf), "{pf:?}");
     }
-}
-
-/// A normalized format takes a `float` or `half` output, an integer one a 32-bit integer output.
-#[test]
-fn the_operation_takes_its_class_s_outputs() {
-    let unorm = channels(PixelFormat::RGBA8Unorm).expect("served");
-    let uint = channels(PixelFormat::RGBA8Uint).expect("served");
-    let form = |held| Form { held, lanes: 4 };
-    let float = form(Held::Float(FloatFmt::F32));
-    let half = form(Held::Float(FloatFmt::Half));
-    let int32 = form(Held::Int {
-        bits: 32,
-        container: 32,
-    });
-    let int16 = form(Held::Int {
-        bits: 16,
-        container: 32,
-    });
-    assert!(takes(unorm, float) && takes(unorm, half));
-    assert!(!takes(unorm, int32));
-    assert!(takes(uint, int32));
-    assert!(!takes(uint, int16) && !takes(uint, float));
 }

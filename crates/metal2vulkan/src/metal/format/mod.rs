@@ -154,8 +154,7 @@ pub enum FormatEmulation {
     /// rotates too; Metal stores, clears, masks, resolves and blends the format as `RGBA8Unorm`
     /// with its channels rotated. Admitted for those usages, and for blending
     /// through the factors `pipeline::rotated_blend` finds Metal's blend in; a blend no such
-    /// factor gives the fragment function computes over the texel where the device orders
-    /// framebuffer fetch (`pipeline::color_writes::shader_rotated_blend`).
+    /// factor gives is refused (`pipeline::color_writes::rotated_blend_in_shader`).
     RotatedView,
     /// A render pass's color attachment of a two-plane YCbCr format Metal renders into
     /// ([`ycbcr_renders`]): `R32G32B32A32_SFLOAT` of the values the pass leaves in each texel (the
@@ -1027,25 +1026,6 @@ fn copies_only_repr(pf: PixelFormat) -> Repr {
         _ => return Repr::NotImplemented,
     };
     color(vec![combined(format, FormatEmulation::CopiesOnly)])
-}
-
-/// Whether a render pipeline on `profile` blends into a color attachment of `pf`, one of Apple's
-/// extended-range formats ([`ExtendedRange::of`]). No device blends such an attachment's raw
-/// texels: the fragment function computes Metal's blend in the shader from the texel it reads
-/// through the attachment's input attachment. `Ok` where the device orders fetch through
-/// rasterization-order input attachments and that blend holds for an attachment of `pf` written
-/// whole under a blend Metal's model holds (a padded 10-bit form's); else what blocks it (on a
-/// device without rasterization-order color attachment access, `Feature::FramebufferFetch` naming
-/// that feature). `BGR10_XR`, `BGRA10_XR`,
-/// `RGB10A8_2P_XR10` and their `_sRGB` twins answer `NotImplemented(Format)` on every device: Metal's
-/// tile holds such an attachment as `half` through the render pass, which the codes the attachment
-/// holds do not keep, so its blend over an earlier draw's write is not built. A pipeline's own
-/// blend, write mask or output may still be refused by name (`Feature::ExtendedRangeBlend`), as
-/// [`rotated_channels`]' blends are per pipeline. A bfloat format answers `NotRepresentable(Format)`:
-/// Metal blends none (`compile_render_pipeline` refuses such a blend
-/// `InvalidDescriptor(ColorAttachment)`). Another format answers `NotImplemented(Format)`.
-pub fn extended_range_blend(pf: PixelFormat, profile: &DeviceProfile) -> Result<(), Unsupported> {
-    crate::lower::fragment::extended_range_blend(pf, profile)
 }
 
 /// The texel extent of one block of the compressed format `pf`, `None` for an uncompressed one.

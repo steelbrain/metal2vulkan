@@ -52,9 +52,7 @@ use crate::pipeline::interface::{
 use crate::pipeline::layout::{
     BindingSource, DescriptorBinding, DescriptorSetLayout, PipelineLayout, PushConstantRange,
 };
-use crate::pipeline::lower_inputs::{
-    BlendEquation, ChannelWrite, ExtendedRangeColor, FactorLane, VertexFetch,
-};
+use crate::pipeline::lower_inputs::{ChannelWrite, ExtendedRangeColor, FactorLane, VertexFetch};
 use crate::pipeline::stage_io::{
     CoverageLoop, CoverageLoopRefusal, DepthCompares, DepthMode, Interpolation as IoInterpolation,
     IoNumeric, IoRole, IoType, IoVariable, PulledInput, Sampling as IoSampling, StageBuiltin,
@@ -824,13 +822,6 @@ codec_struct! {
 // ---- Link symbols (`pipeline::sym`) ----
 
 codec_struct! {
-    BlendEquation {
-        source_rgb, destination_rgb, rgb_operation, source_alpha, destination_alpha,
-        alpha_operation,
-    }
-}
-
-codec_struct! {
     SlotRef { stage, class, index }
     ImageHandleClass { dim, arrayed, multisampled, sampled_type, depth_compare, access, format }
     CombinedSampler { sampler, compare, integer, unnormalized }
@@ -1148,7 +1139,6 @@ codec_struct! {
         texture_write_rounding, uniform_outputs, uniform_inputs, instanced_attributes,
         half_blend_colors, half_fast_colors, float_blend_colors, zero_indices,
         word_colors, alpha_in_red_colors, alpha_test, depth_compares,
-        logic_operation,
     }
     DepthCompares { samplers, clamped }
     WordField { shift, bits }
@@ -1259,8 +1249,6 @@ codec_enum! {
         CubicSampler { slot },
         CubicArgumentSampler { stage },
         HeapRawSamples { stage, sampler },
-        ExtendedRangeInputBlend { color, blend, kept },
-        WordInputMerge { color, kept },
         CrossClassReads { slot },
         StorageTextureWriteRounding { slot, halves },
         HeapWriteRounding { stage, halves },
@@ -1275,7 +1263,6 @@ codec_enum! {
         PrivateList,
         YCbCrInPlace { slot, samplers, device },
         PartialObjectThreadgroups,
-        RotatedInputBlend { color, blend, kept },
         BorderTexels { slot },
         RegionViewports,
         PartialThreadgroups,
@@ -1372,7 +1359,7 @@ codec_struct! {
     GraphicsState {
         topology, color_attachments, depth_format, stencil_format, rasterization_samples,
         alpha_to_coverage, alpha_to_one, rasterizer_discard, dynamic_states, input_attachments,
-        rasterization_order_attachment_access, max_vertex_amplification_count, declares_layer,
+        max_vertex_amplification_count, declares_layer,
         tessellation, vertex_writes_memory, writes_viewport_index, writes_point_size, writes_depth,
         reads_barycentric_coord, reads_primitive_id, fragment_writes_memory, color_outputs,
         sample_mask, logic_op, line_band,
@@ -1424,8 +1411,6 @@ codec_enum! {
         LinkedSamplerNumbering,
         ArgumentPixelSamplerScaling,
         HalfOutputPrecision,
-        ExtendedRangeBlendSource,
-        ExtendedRangeFloatBlendSource,
         AnisotropicFilter,
         DeviceAnisotropicFilter,
         DevicePointSize,

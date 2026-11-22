@@ -5,10 +5,9 @@
 //! Everything comes from the artifact's graphics state and vertex input: the render pass
 //! ([`create_render_pass`]: every color attachment at its Metal index, each framebuffer-fetch
 //! input as an input attachment of its color attachment with the by-region self-dependency the
-//! contract names, rasterization-order color access where the artifact states it, and the
-//! depth/stencil attachment), the vertex input (static strides, and zero for a stride the pipeline
-//! makes dynamic state; instance divisors through the divisor state), the multisample, blend
-//! (rasterization-order access with the subpass's), and dynamic states. The caller supplies what the artifact leaves to the
+//! contract names, and the depth/stencil attachment), the vertex input (static strides, and zero
+//! for a stride the pipeline makes dynamic state; instance divisors through the divisor state),
+//! the multisample, blend and dynamic states. The caller supplies what the artifact leaves to the
 //! consumer: each stage's specialization, the draw's topology within the compiled class with the
 //! primitive restart Metal applies to it, and the depth-stencil state and front face (Metal's
 //! `MTLDepthStencilState` and front-facing winding, which are encoder state, not pipeline state).
@@ -137,11 +136,8 @@ pub(super) fn has_depth(format: vk::Format) -> bool {
 /// attachment a framebuffer-fetch input also reads, as the input attachment of the same index,
 /// with the by-region self-dependency of [`FETCH_SELF_DEPENDENCY`]), then the depth/stencil
 /// attachment ([`depth_stencil_format`]) in `DEPTH_STENCIL_ATTACHMENT_OPTIMAL`.
-/// The subpass has rasterization-order color access when the artifact states it
-/// (`GraphicsState::rasterization_order_attachment_access`), so each fetch sees the earlier
-/// fragments of the draw that cover its pixel, as in Metal; where it does not, each draw records
-/// after a barrier of that dependency ([`fetch_between_draws`]). Every attachment is loaded before and
-/// stored after the subpass. The framebuffer's views are the present color attachments in index
+/// A subpass that reads input attachments records each draw after a barrier of that dependency
+/// ([`fetch_between_draws`]). Every attachment is loaded before and stored after the subpass. The framebuffer's views are the present color attachments in index
 /// order, then the depth/stencil one.
 pub(super) fn create_render_pass(
     device: &ash::Device,
@@ -252,7 +248,6 @@ pub(super) fn create_render_pass(
             .layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
     });
     let mut subpass = vk::SubpassDescription::default()
-        .flags(subpass_flags(graphics))
         .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
         .color_attachments(&colors)
         .input_attachments(&inputs);
@@ -300,15 +295,14 @@ pub(super) const FETCH_SELF_DEPENDENCY: (vk::PipelineStageFlags, vk::AccessFlags
     ),
 );
 
-/// Whether `graphics` reads input attachments ordered between draws alone: on a device without
-/// rasterization-order color attachment access, which states none
-/// (`GraphicsState::rasterization_order_attachment_access`). The
+/// Whether `graphics` reads input attachments, which are ordered between draws alone on every
+/// device (`PrecisionNote::UnorderedFetchWithinDraw`). The
 /// contract has the consumer order each draw of it after the color writes of the draws before,
 /// and each draw that writes a color after their reads, by a barrier of the subpass's dependency
 /// on itself; the executor records one before each of its draws ([`fetch_between_draws`]), after
 /// the load operations too, as the runtime does.
 pub(super) fn fetches_between_draws(graphics: &GraphicsState) -> bool {
-    !graphics.input_attachments.is_empty() && !graphics.rasterization_order_attachment_access
+    !graphics.input_attachments.is_empty()
 }
 
 /// Record, into `command`, inside a render pass of [`create_render_pass`] whose subpass reads
@@ -334,26 +328,6 @@ pub(super) unsafe fn fetch_between_draws(device: &ash::Device, command: vk::Comm
             &[],
             &[],
         );
-    }
-}
-
-/// The subpass flags of `graphics`: rasterization-order color access where it states it.
-pub(super) fn subpass_flags(graphics: &GraphicsState) -> vk::SubpassDescriptionFlags {
-    if graphics.rasterization_order_attachment_access {
-        vk::SubpassDescriptionFlags::RASTERIZATION_ORDER_ATTACHMENT_COLOR_ACCESS_EXT
-    } else {
-        vk::SubpassDescriptionFlags::empty()
-    }
-}
-
-/// The color blend state flags of `graphics`, matching its subpass's ([`subpass_flags`]).
-pub(super) fn color_blend_flags(
-    graphics: &GraphicsState,
-) -> vk::PipelineColorBlendStateCreateFlags {
-    if graphics.rasterization_order_attachment_access {
-        vk::PipelineColorBlendStateCreateFlags::RASTERIZATION_ORDER_ATTACHMENT_ACCESS_EXT
-    } else {
-        vk::PipelineColorBlendStateCreateFlags::empty()
     }
 }
 
@@ -586,9 +560,7 @@ pub(super) fn create_graphics_pipeline(
             }
         })
         .collect();
-    let blend = vk::PipelineColorBlendStateCreateInfo::default()
-        .flags(color_blend_flags(graphics))
-        .attachments(&blends);
+    let blend = vk::PipelineColorBlendStateCreateInfo::default().attachments(&blends);
     let dynamic_state = vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic);
     // A tessellation pipeline's patches are its control points.
     let tessellation = graphics.tessellation.map(|t| {

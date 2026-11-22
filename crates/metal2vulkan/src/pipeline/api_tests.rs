@@ -315,28 +315,6 @@ mod serde_round_trips {
             multisampled: true,
             replay_bindings: true,
             merged_draws: true,
-            framebuffer_fetch: Some(FramebufferFetchInputs {
-                attachments: BTreeMap::from([
-                    (
-                        0,
-                        Some(FetchedAttachment {
-                            pixel_format: metal::PixelFormat::RGBA32Float,
-                            blending_enabled: true,
-                            write_mask: metal::ColorWriteMask::RED,
-                            replaces: true,
-                            equation: Some(crate::pipeline::BlendEquation {
-                                source_rgb: metal::BlendFactor::One,
-                                destination_rgb: metal::BlendFactor::Zero,
-                                rgb_operation: metal::BlendOperation::Add,
-                                source_alpha: metal::BlendFactor::One,
-                                destination_alpha: metal::BlendFactor::Zero,
-                                alpha_operation: metal::BlendOperation::Add,
-                            }),
-                        }),
-                    ),
-                    (2, None),
-                ]),
-            }),
             srgb_textures: BTreeSet::from([slot(Stage::Fragment, SlotClass::Texture, 7)]),
             ycbcr_in_place: BTreeSet::from([slot(Stage::Fragment, SlotClass::Texture, 9)]),
             ycbcr_planes_sampled: BTreeMap::from([(
@@ -423,7 +401,6 @@ mod serde_round_trips {
             unattached_colors: BTreeSet::from([5, 7]),
             sample_mask: Some([0b1010, 0b0010, 0b1000, 0]),
             alpha_test: Some(metal::CompareFunction::GreaterEqual),
-            logic_operation: Some(crate::vk::LogicOp::XOR),
             depth_compare_clamp_mask: 0x8000_0005,
             rotated_colors: BTreeSet::from([4]),
             alpha_in_red_colors: BTreeSet::from([4]),
@@ -561,7 +538,6 @@ mod serde_round_trips {
                 input_attachment_index: 0,
                 format_class: SampledType::Float,
             }],
-            rasterization_order_attachment_access: true,
             max_vertex_amplification_count: 2,
             declares_layer: true,
             tessellation: Some(TessellationState {

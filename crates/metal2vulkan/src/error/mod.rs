@@ -635,8 +635,9 @@ pub enum Feature {
     // ---- Stages and fragment (lowering B7, B9) ----
     /// Raster order groups without fragment shader interlock.
     RasterOrderGroups,
-    /// Framebuffer fetch that needs an ordered read the device lacks (rasterization-order
-    /// attachment access), or in a shape not implemented.
+    /// Framebuffer fetch in a shape not implemented (a write the function would compute over its
+    /// own read of the attachment), or that needs a feature the device lacks (sample-rate shading
+    /// for a multisampled pass's read).
     FramebufferFetch,
     /// `[[primitive_id]]` in a fragment function: behind a mesh function on a device without
     /// geometry or tessellation shaders, whose fragment stage reads it from a varying no mesh
@@ -880,10 +881,6 @@ pub enum Feature {
     /// Metal's) set to a value whose effect the translation has not built: the property it names
     /// ([`PrivateRenderField`]). Metal's answer for each was measured; building it is open work.
     PrivateRenderState(PrivateRenderField),
-    /// A blend the function computes in the shader, into an extended-range attachment
-    /// (`BGRA10_XR`, `BGR10_XR`, `RGB10A8_2P_XR10` and their `_sRGB` twins), of the part it names
-    /// ([`ExtendedRangeBlend`]).
-    ExtendedRangeBlend(ExtendedRangeBlend),
     /// A program-scope buffer binding of MSL 3.2 (macOS 15 and later), `constant T* constant p
     /// [[buffer(n)]];` in Apple's `!air.global_bindings` list, valid AIR this version does not
     /// implement yet.
@@ -908,22 +905,6 @@ pub enum Feature {
     WideLines,
 }
 
-/// The part of a blend the shader computes that [`Feature::ExtendedRangeBlend`] refuses. An
-/// extended-range attachment's blend, which the shader computes by the device's arithmetic, is
-/// built for every factor, operation and write mask, and refuses only [`Output`](Self::Output);
-/// Metal's blend the shader computes refuses [`DualSource`](Self::DualSource) under fast math.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ExtendedRangeBlend {
-    /// Under fast math, a factor of the second source (`Source1Color`, `Source1Alpha` and their
-    /// one-minus forms): Metal's blend is not built. (A function that writes no second output to
-    /// the attachment Metal refuses: [`DescriptorError::ColorAttachment`].)
-    DualSource,
-    /// An output other than four `half` or `float` lanes, or a second output other than those the
-    /// blend reads: not built.
-    Output,
-}
-
 /// A private property of Metal's render pipeline descriptor that
 /// [`Feature::PrivateRenderState`] refuses at a value other than Metal's default
 /// (`PrivateRenderState`).
@@ -940,7 +921,7 @@ pub enum PrivateRenderField {
     /// `logicOperationEnabled` with an operation other than copy and no-op: on a device without
     /// `logicOp` (`Unsupported::needs` naming it), or where Vulkan's operation is not Metal's (an
     /// sRGB attachment, a float attachment that blends, a format whose operation Metal was not
-    /// measured with, a fragment function that writes an attachment itself).
+    /// measured with).
     LogicOperation,
     /// `pointSmoothEnabled`.
     PointSmooth,
@@ -1023,12 +1004,6 @@ pub enum RuntimeInput {
     /// stencil is compiled for the pipeline's kind either way: its shadow is multisampled exactly
     /// when the pipeline is.
     Multisampled,
-    /// A fragment function reads a color attachment (framebuffer fetch) on a device that orders
-    /// the read only through the pixel interlock, where the read's form depends on the render
-    /// pipeline's attachments and state (`LoweringInputs::framebuffer_fetch`): compiled without
-    /// that state, or for a pipeline whose state chose another form, it is compiled for the
-    /// pipeline again.
-    FramebufferFetch,
     /// A fragment function reads `[[viewport_array_index]]`, which it reads from the raw varying
     /// a vertex function that writes the index adds (`LoweringInputs::viewport_index_varying`), and
     /// was compiled for the other kind of vertex function: compiled without the field behind such a
@@ -1092,11 +1067,6 @@ pub enum RuntimeInput {
     /// or it runs another comparison. It was compiled for another pipeline, and is compiled for
     /// this one again.
     AlphaTest,
-    /// A fragment function in a render pipeline whose private logic operation it computes itself
-    /// on a device without Vulkan's `logicOp` (`LoweringInputs::logic_operation`), as Metal
-    /// operates on its attachments' codes; or it computes another operation, or one its pipeline
-    /// does not take. It was compiled for another pipeline, and is compiled for this one again.
-    LogicOperation,
     /// A fragment function in a render pipeline with a private `fragmentDepthCompareClampMask`
     /// clamps the references of its depth comparisons through the mask's samplers itself
     /// (`LoweringInputs::depth_compare_clamp_mask`), as Metal clamps them; or it clamps others. It

@@ -15,9 +15,8 @@
 //!   field; `Always` keeps the pipeline.
 //! - The logic operation leaves the normalized, sRGB and integer attachments unblended (unwritten
 //!   under a no-op), so copy and no-op draw on every device; the others take Vulkan's `logicOp`
-//!   where the device has it (lavapipe), are computed by the fragment function where it does not
-//!   and the device orders fetch (lavapipe with the feature off), and are refused where neither
-//!   holds (MoltenVK) and where Metal's operation is not built.
+//!   where the device has it (lavapipe), and are refused where it does not (MoltenVK, lavapipe
+//!   with the feature off) and where Metal's operation is not built.
 //! - The sample coverage is Metal's masks by the window pixel's place in its quad, ANDed with the
 //!   sample mask: alike at every place the Vulkan mask, else applied by the fragment function from
 //!   its pixel.
@@ -627,15 +626,12 @@ fn a_shared_exponent_attachment_notes_the_words_metal_s_pass_normalizes() {
 /// another operation (xor, raw 10, and raw 26, whose low four bits are xor's) is Vulkan's
 /// `logicOp` on lavapipe, its requirements naming the feature, its fragment stage noting
 /// `PrecisionNote::NativeLogicOperation` exactly where the operation reaches a written channel of
-/// `RGB10A2Unorm` or `BGR10A2Unorm` (whose codes Metal widens). On lavapipe without it the
-/// fragment function computes it over the attachment's input attachment, noting the device's
-/// conversion of the codes (`RGB10A2Unorm`'s on 16-bit codes, as Metal's); `B5G6R5Unorm`, whose
-/// operation is not a per-channel rule, is refused there, and on a device that lacks it and does
-/// not order fetch (MoltenVK) the operation is refused naming Vulkan's operation and
-/// rasterization-order access. A float attachment keeps its blend under copy and no-op and takes
-/// Vulkan's operation unblended, or keeps its blend beside the function's; an sRGB attachment
-/// under xor, a blended float attachment under Vulkan's xor and a format whose operation Metal
-/// was not measured with are refused `NotImplemented`.
+/// `RGB10A2Unorm` or `BGR10A2Unorm` (whose codes Metal widens). A device without it (MoltenVK,
+/// lavapipe with the feature off) refuses the operation naming Vulkan's operation, and draws copy
+/// as every device does. A float attachment keeps its blend under copy and no-op and takes
+/// Vulkan's operation unblended; an sRGB attachment under xor, a blended float attachment under
+/// Vulkan's xor and a format whose operation Metal was not measured with are refused
+/// `NotImplemented`.
 #[test]
 fn the_logic_operation_draws_as_metal_s_or_is_refused() {
     use crate::device::requirements::VkFeature;
@@ -666,15 +662,10 @@ fn the_logic_operation_draws_as_metal_s_or_is_refused() {
         )))
         .at_attachment(Attachment::Color(index))
     };
-    let unordered = || {
-        use crate::device::requirements::VkFeature as V;
-        use crate::error::Capability as C;
-        Error::Unsupported(Unsupported::needs_any_of(
+    let lacking = || {
+        Error::Unsupported(Unsupported::needs(
             Feature::PrivateRenderState(PrivateRenderField::LogicOperation),
-            vec![
-                vec![C::Feature(V::LogicOp)],
-                vec![C::Feature(V::RasterizationOrderColorAttachmentAccess)],
-            ],
+            Capability::Feature(VkFeature::LogicOp),
         ))
     };
     for stem in STEMS {
@@ -721,20 +712,19 @@ fn the_logic_operation_draws_as_metal_s_or_is_refused() {
                             matches!(pf, PixelFormat::RGB10A2Unorm | PixelFormat::RGBA8Snorm);
                         assert_eq!(native_logic(&p), differs, "{stem} {pf:?} xor");
                     }
-                    // MoltenVK lacks Vulkan's operation and does not order fetch.
-                    (false, Err(e)) => assert_eq!(e, unordered(), "{stem} {pf:?} xor"),
+                    // MoltenVK lacks Vulkan's operation.
+                    (false, Err(e)) => assert_eq!(e, lacking(), "{stem} {pf:?} xor"),
                     (_, other) => panic!("{stem} {pf:?} xor: {other:?}"),
                 }
             }
         }
-        // Where Vulkan's operation is not Metal's, on either device; the function's own leaves a
-        // blended float attachment to the device's blend.
+        // Where Vulkan's operation is not Metal's, on the device that has it.
         for (pf, blended) in [
             (PixelFormat::RGBA8UnormSRGB, false),
             (PixelFormat::RGBA16Float, true),
             (PixelFormat::RG11B10Float, false),
         ] {
-            let want = if has { not_built(0) } else { unordered() };
+            let want = if has { not_built(0) } else { lacking() };
             match dev.compile_render_pipeline(&with(pf, blended, Some(10)), &Budget::standard()) {
                 Err(e) => assert_eq!(e, want, "{stem} {pf:?}"),
                 other => panic!("{stem} {pf:?} xor: {:?}", other.map(|_| ())),
@@ -789,59 +779,17 @@ fn the_logic_operation_draws_as_metal_s_or_is_refused() {
     unwritten.color_attachments[1] =
         Some(ColorAttachmentDescriptor::new(PixelFormat::RGB10A2Unorm));
     assert!(!noted(&unwritten, "RGB10A2Unorm unwritten beside xor"));
-    // lavapipe without `logicOp` orders fetch through rasterization-order input attachments: the
-    // function computes the operation over each served attachment's input attachment, which the
-    // device's write mask then keeps channels of; without either ordered form it is refused naming
-    // the three features.
-    let inputs = device_without("lavapipe", &["logicOp"]);
-    for pf in [
-        PixelFormat::RGBA8Unorm,
-        PixelFormat::RGBA8Snorm,
-        PixelFormat::RGB10A2Unorm,
-        PixelFormat::R16Unorm,
-        PixelFormat::RGBA16Float,
-    ] {
-        let what = format!("lavapipe without logicOp {pf:?}");
-        let p = compile(&inputs, &with(pf, false, Some(10)), &what);
-        let operated = pf != PixelFormat::RGBA16Float;
-        shader_operated(&p, operated, &what);
-        assert!(!native_logic(&p), "{what}");
-        let read = p
-            .graphics
-            .input_attachments
-            .iter()
-            .any(|i| i.color_index == 0);
-        assert_eq!(read, operated, "{what}");
-    }
-    // A packed 16-bit format's operation is not a per-channel rule: refused at the attachment.
-    let packed = with(PixelFormat::B5G6R5Unorm, false, Some(10));
-    match inputs.compile_render_pipeline(&packed, &Budget::standard()) {
-        Err(e) => assert_eq!(e, not_built(0), "lavapipe without logicOp B5G6R5Unorm"),
-        Ok(_) => panic!("lavapipe without logicOp B5G6R5Unorm xor compiled"),
-    }
-    let unordered = device_without(
-        "lavapipe",
-        &["logicOp", "rasterizationOrderColorAttachmentAccess"],
-    );
-    let wanted = Error::Unsupported(Unsupported::needs_any_of(
-        Feature::PrivateRenderState(PrivateRenderField::LogicOperation),
-        vec![
-            vec![Capability::Feature(VkFeature::LogicOp)],
-            vec![Capability::Feature(
-                VkFeature::RasterizationOrderColorAttachmentAccess,
-            )],
-        ],
-    ));
+    // Without `logicOp` the operation is refused naming it; copy needs no operation there.
+    let without = device_without("lavapipe", &["logicOp"]);
     let d = with(PixelFormat::RGBA8Unorm, false, Some(10));
-    match unordered.compile_render_pipeline(&d, &Budget::standard()) {
-        Err(e) => assert_eq!(e, wanted),
-        Ok(_) => panic!("xor compiled without an ordered fetch"),
+    match without.compile_render_pipeline(&d, &Budget::standard()) {
+        Err(e) => assert_eq!(e, lacking(), "lavapipe without logicOp"),
+        Ok(_) => panic!("xor compiled without logicOp"),
     }
-    // Copy needs no operation there either.
     compile(
-        &unordered,
+        &without,
         &with(PixelFormat::RGBA8Unorm, false, Some(2)),
-        "unordered copy",
+        "copy without logicOp",
     );
 }
 
@@ -858,33 +806,6 @@ fn device_without(stem: &str, features: &[&str]) -> Device {
     }
     let description = DeviceDescription::from_khronos_json(&text, None).expect("description");
     Device::from_queries(description, DevicePolicy::RESIDENT_TABLES).expect("device")
-}
-
-/// Assert that pipeline `p` draws its logic operation in its fragment function: no Vulkan
-/// operation or requirement of it; where `operated`, attachment 0 is unblended and the function
-/// notes the device's conversion of its codes.
-fn shader_operated(p: &RenderPipeline, operated: bool, what: &str) {
-    use crate::device::requirements::VkFeature;
-    use crate::pipeline::artifact::PrecisionNote;
-    assert_eq!(p.graphics.logic_op, None, "{what}");
-    assert!(
-        !p.requirements.features.contains(&VkFeature::LogicOp),
-        "{what}"
-    );
-    let fragment = p
-        .stages
-        .iter()
-        .find(|s| s.stage == crate::vk::ShaderStage::FRAGMENT)
-        .expect("a fragment stage");
-    if operated {
-        let noted = fragment
-            .precision_notes
-            .contains(&PrecisionNote::DeviceColorConversion);
-        assert!(noted, "{what}");
-        // Attachment 0 is a color attachment of the subpass over an input attachment.
-        let a = p.graphics.color_attachments[0];
-        assert!(a.is_none_or(|a| a.blend.is_none()), "{what} blends");
-    }
 }
 
 /// Whether pipeline `p`'s fragment stage records Vulkan's operation on a 10-bit or signed

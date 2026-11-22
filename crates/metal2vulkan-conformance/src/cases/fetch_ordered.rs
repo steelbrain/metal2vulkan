@@ -255,8 +255,8 @@ impl Case for FetchOrdered {
         // which is the owner's rule for this family: if Metal allows it we must allow it, so a
         // byte that differs is a bug and a refusal is a bug, and neither gets a tolerance here.
         //
-        // A venue with neither ordered fetch form (no rasterization-order attachment access, no
-        // pixel interlock) reads the input attachment ordered between draws alone and announces
+        // A venue without the pixel interlock reads the input attachment ordered between draws
+        // alone and announces
         // `unordered-fetch-within-draw`, a precision note of what it leaves unordered: overlapping
         // fragments of one draw. Each draw here is one fullscreen triangle, which overlaps itself
         // nowhere, so every byte still compares exactly.

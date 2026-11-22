@@ -68,9 +68,8 @@ fn engine_selection_reads_only_the_selected_row_and_names_its_engine() {
     }
 }
 
-/// A fragment function that fetches its color attachment compiles on a profile with no ordered
-/// form of the fetch (neither rasterization-order attachment access nor the pixel interlock):
-/// through input attachments the consumer orders between draws alone, its row naming
+/// A fragment function that fetches its color attachment compiles on a profile without the pixel
+/// interlock: through input attachments the consumer orders between draws alone, its row naming
 /// `PrecisionNote::UnorderedFetchWithinDraw`.
 #[test]
 fn a_fetch_without_an_ordered_form_compiles_noted() {

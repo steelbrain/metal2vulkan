@@ -57,10 +57,10 @@ use crate::pipeline::testing::{
     engine_dir, fixtures_dir, link_standalone, llvm_assemble, metal_assemble, AssembleError,
 };
 use crate::pipeline::{
-    ColorAttachmentDescriptor, ComputePipelineDescriptor, FramebufferFetchInputs,
-    FunctionDescriptor, LoweringInputs, RenderPipelineDescriptor, SlotClass, SlotRef, Stage,
-    StageSource, StorageImageClass, TileRenderPipelineDescriptor, VertexAttributeDescriptor,
-    VertexBufferLayoutDescriptor, VertexDescriptor,
+    ColorAttachmentDescriptor, ComputePipelineDescriptor, FunctionDescriptor, LoweringInputs,
+    RenderPipelineDescriptor, SlotClass, SlotRef, Stage, StageSource, StorageImageClass,
+    TileRenderPipelineDescriptor, VertexAttributeDescriptor, VertexBufferLayoutDescriptor,
+    VertexDescriptor,
 };
 use crate::Budget;
 
@@ -124,11 +124,9 @@ enum Subject {
         vertex: &'static str,
         fragment: &'static str,
     },
-    /// Fragment `entry` compiled under the framebuffer-fetch state of a pipeline whose color
-    /// attachments are `formats` (by index, each read), linked alone: the state a write the
-    /// function computes over its input attachment needs on a device that orders fetch through
-    /// rasterization-order input attachments. Above one sample, compiled under `multisampled`: the
-    /// per-sample form.
+    /// Fragment `entry`, which reads the color attachments of a pipeline whose attachments are
+    /// `formats` (by index; they name the row, and the function compiles alike for any), linked
+    /// alone. Above one sample, compiled under `multisampled`: the per-sample form.
     Fetch {
         entry: &'static str,
         formats: &'static [PixelFormat],
@@ -580,18 +578,8 @@ fn compiled(lib: &Library, subject: &Subject, dev: &Device) -> Result<Vec<Vec<u3
             let p = dev.compile_render_pipeline(&d, &b)?;
             Ok(p.stages.iter().map(|s| s.spirv.to_vec()).collect())
         }
-        Subject::Fetch {
-            entry,
-            formats,
-            samples,
-        } => {
-            let colors: Vec<Option<ColorAttachmentDescriptor>> = formats
-                .iter()
-                .map(|&f| Some(ColorAttachmentDescriptor::new(f)))
-                .collect();
+        Subject::Fetch { entry, samples, .. } => {
             let mut inputs = LoweringInputs::new();
-            inputs.framebuffer_fetch =
-                Some(FramebufferFetchInputs::of(0..formats.len() as u32, &colors));
             inputs.multisampled = *samples > 1;
             let f = FunctionDescriptor::new(lib.function(entry)?);
             let c = dev.compile_function(&f, &inputs, &b)?;
