@@ -4,7 +4,7 @@
 # A cell is the first 64 bits of SHA-256 over the final SPIR-V of its subject, or its
 # refusal class. A cell that changes under an unchanged fixture source and profile
 # fingerprint needs cache::SEMANTICS_VERSION above the semantics line, its bless's.
-semantics	2269
+semantics	2270
 profile	amd-780m-hawkpoint-radv	9e69c17e87045b63
 profile	amd-780m-radv	9e69c17e87045b63
 profile	amd-rdna2-apu-radv	449a00aeba899d81
