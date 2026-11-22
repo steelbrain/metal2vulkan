@@ -1896,7 +1896,7 @@ mod on_device {
     #[test]
     fn every_device_s_observers_answer_the_same_on_their_variant() {
         use metal2vulkan::library::FunctionStage;
-        use metal2vulkan::pipeline::ComputePipeline;
+        use metal2vulkan::pipeline::{ComputePipeline, LoweringInputs};
 
         // Every `.ll` under the public fixtures that declares a kernel, in path order.
         let mut files = Vec::new();
@@ -1949,7 +1949,7 @@ mod on_device {
                     let StageSource::Function(function) = &descriptor.kernel else {
                         unreachable!("a Function descriptor");
                     };
-                    let linked = |inputs| -> Result<(ComputePipeline, Option<bool>), String> {
+                    let linked = |inputs: &LoweringInputs| -> Result<(ComputePipeline, Option<bool>), String> {
                         let lowered = translator
                             .compile_function_from_entries(function, inputs, &budget, &entries)
                             .map_err(|error| error.to_string())?;
