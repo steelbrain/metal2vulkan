@@ -2515,8 +2515,9 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   constant values, linked functions and dynamic libraries, the descriptor's fields that change
   the compile (the translator's `Device::compute_pipeline_key`), and its
   `requiredThreadsPerThreadgroup`. Every state of one content shares one compiled kernel: its
-  translation, its shader modules and their `VkPipeline`s, its emulated-SIMD-group variant and
-  its precision notes. The device's map holds the last 1,024 contents used, so a state of a
+  translation, its shader modules (a module past the stage bound as its words, with no shader
+  module: Kernels past the stage bound) and their `VkPipeline`s, its emulated-SIMD-group variant
+  and its precision notes. The device's map holds the last 1,024 contents used, so a state of a
   content it holds costs a lookup and its samplers' numbering, and compiles nothing. Past them the
   map forgets the least recently used content, which every state that took it keeps; a compiled
   kernel goes once its last state and the map have let it go. Each state numbers its own
@@ -2899,10 +2900,16 @@ heaviest such stage's weight.
 
 - The make of such a `VkPipeline` (at the state's creation, a `prepare_dispatch` call or a
   dispatch) reads the pipeline's entry under `stages/` in the cache directory. With data, it
-  makes a `VkPipelineCache` of that entry alone, creates the pipeline through it with
-  `VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT`, and destroys the cache: the
-  device's own pipeline cache and its blob never hold it. `Metrics::pipelines_from_stage_fills`
-  counts these creates, which `pipelines_created` counts too.
+  makes a `VkPipelineCache` of that entry alone and a shader module of the kernel's words,
+  creates the pipeline through them with
+  `VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT`, and destroys both: the device's own
+  pipeline cache and its blob never hold the pipeline, and the kernel holds no shader module,
+  only its words, of which each make, two at once included, makes its own. Vulkan lets a module
+  go while pipelines made of it are in use. A driver may keep a copy of a module's code for the
+  module's life: destroying the module of a kernel of 7,966,928 bytes of words, its pipeline
+  kept, gave back 7.6 MiB of heap on an RTX 3090 (NVIDIA 620.70.06; job m3-max-67862).
+  `Metrics::pipelines_from_stage_fills` counts these creates, which `pipelines_created` counts
+  too.
 - With no entry, the make is refused with `Error::StageUnfilled`, carrying a `StageRequest`. Two
   requests of one pipeline compare equal and hash alike (by the pipeline's stage key, the name of
   its entry), so a consumer joins the makes, the `prepare_dispatch` calls and the dispatches that

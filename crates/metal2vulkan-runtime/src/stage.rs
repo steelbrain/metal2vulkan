@@ -6,8 +6,11 @@
 //! that runs the program never compiles it. Each of its `VkPipeline`s is made from a
 //! `VkPipelineCache` made of that pipeline's own entry in the cache directory alone, with
 //! `VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT` ([`made`]), and the cache destroyed
-//! once the create returns: the device's own pipeline cache and its blob never hold it. Where the
-//! directory holds no entry for the pipeline, the make (or the dispatch, or
+//! once the create returns: the device's own pipeline cache and its blob never hold it. The kernel
+//! keeps its module's words and no shader module: each such create is of a shader module made of
+//! the words for it alone, destroyed with the cache, as Vulkan lets a module go while pipelines
+//! made of it are in use, and two makes of one kernel's pipelines at once each make their own.
+//! Where the directory holds no entry for the pipeline, the make (or the dispatch, or
 //! [`ComputePipelineState::prepare_dispatch`](crate::ComputePipelineState::prepare_dispatch)) is
 //! refused with [`Error::StageUnfilled`], carrying a [`StageRequest`]: the consumer runs its helper
 //! process, hands its pipes to [`Device::fill_stage`], which keeps the helper's cache data as the
@@ -171,8 +174,9 @@ impl fmt::Display for StageFill {
     }
 }
 
-/// A kernel's module past the stage bound, kept with its kernel for the requests of its
-/// `VkPipeline`s.
+/// A kernel's module past the stage bound, kept with its kernel in place of a shader module: the
+/// words each make of its `VkPipeline`s makes a shader module of its own from ([`made`]), and
+/// that a request carries.
 pub(crate) struct Heavy {
     /// The module's entry weight.
     weight: u64,
@@ -334,20 +338,24 @@ fn gap(weight: u64, cause: StageGap) -> Error {
     Error::Unsupported(Gap::StageSize { weight, cause })
 }
 
-/// A compute `VkPipeline` of `heavy` that `make` creates through the cache it is given, with
-/// `VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT` in its create info: through a cache
-/// made of the pipeline's entry alone, destroyed once `make` returns (the module docs). Counted as
-/// made, and its time (`Metrics::pipeline_creation_nanos`).
+/// A compute `VkPipeline` of `heavy` that `make` creates through the cache and of the shader
+/// module it is given, with `VK_PIPELINE_CREATE_FAIL_ON_PIPELINE_COMPILE_REQUIRED_BIT` in its
+/// create info: through a cache made of the pipeline's entry alone, and of a module made of
+/// `heavy`'s words for this create alone, both destroyed once `make` returns (the module docs).
+/// Counted as made, and its time (`Metrics::pipeline_creation_nanos`).
 ///
 /// Err: [`Error::StageUnfilled`] where the directory holds no entry for it; [`Gap::StageSize`]
 /// where it holds a breach, where the driver answers compile-required for its data (kept as a
 /// breach), on a device with no cache directory or whose driver writes no pipeline cache header;
-/// [`Error::Vulkan`] where the create fails otherwise.
+/// [`Error::Vulkan`] where the cache's, the module's or the pipeline's create fails otherwise.
 pub(crate) fn made(
     core: &Core,
     heavy: &Heavy,
     create: &Create<'_>,
-    make: impl FnOnce(vk::PipelineCache) -> Result<Vec<vk::Pipeline>, (Vec<vk::Pipeline>, vk::Result)>,
+    make: impl FnOnce(
+        vk::PipelineCache,
+        vk::ShaderModule,
+    ) -> Result<Vec<vk::Pipeline>, (Vec<vk::Pipeline>, vk::Result)>,
 ) -> Result<vk::Pipeline, Error> {
     let weight = heavy.weight;
     let dir = (core.caches.dir()).ok_or_else(|| gap(weight, StageGap::NoCacheDirectory))?;
@@ -385,12 +393,29 @@ pub(crate) fn made(
             result,
         }
     })?;
+    let info = vk::ShaderModuleCreateInfo::default().code(&heavy.words);
+    // SAFETY: the words are the translator's SPIR-V, for the features device creation enabled.
+    let module = match unsafe { core.device.create_shader_module(&info, None) } {
+        Ok(module) => module,
+        Err(result) => {
+            // SAFETY: the cache is the device's, and nothing uses it.
+            unsafe { core.device.destroy_pipeline_cache(cache, None) };
+            return Err(Error::Vulkan {
+                call: "vkCreateShaderModule",
+                result,
+            });
+        }
+    };
     let began = host_time();
-    let created = make(cache);
+    let created = make(cache, module);
     core.counters
         .pipeline_creation(host_time().saturating_sub(began));
-    // SAFETY: the cache is the device's, and the create that used it has returned.
-    unsafe { core.device.destroy_pipeline_cache(cache, None) };
+    // SAFETY: the cache and the module are the device's, and the create that used them has
+    // returned; a module may be destroyed while pipelines made of it are in use.
+    unsafe {
+        core.device.destroy_pipeline_cache(cache, None);
+        core.device.destroy_shader_module(module, None);
+    }
     match created {
         Ok(pipelines) => {
             core.counters.count(Metric::PipelinesCreated);

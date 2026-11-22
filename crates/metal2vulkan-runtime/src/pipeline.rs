@@ -22,7 +22,9 @@
 //! What a state compiles is its content ([`KernelKey`]), never the state: the translator's key
 //! of its descriptor and its `requiredThreadsPerThreadgroup`. Every state of one content shares
 //! one [`Compiled`]: its translation, its shader modules and their `VkPipeline`s, its emulated
-//! variant and its notes. The device's map of kernels holds each content's (`kernel_map`), so a
+//! variant and its notes. A module past the stage bound is kept as its words and no shader
+//! module: each make of its `VkPipeline`s makes one of its own and destroys it once the create
+//! returns (`crate::stage`). The device's map of kernels holds each content's (`kernel_map`), so a
 //! state of a content the map holds costs a lookup; past its cap the map forgets the least
 //! recently used, which a state that took it keeps. What stays a state's own is what the consumer
 //! gives it: the indices of its numbered samplers and the constexpr samplers' elements it holds
@@ -36,10 +38,11 @@
 //! with the state too.
 //!
 //! What a state's make is given is made at the make, as Metal compiles a state when it is made:
-//! every module ([`Lowered`] holds each variant's), and each `VkPipeline` whose key the descriptor
-//! holds (a tiling kernel's tiles, an image-only kernel's square workgroups, and an observing
-//! kernel's at the descriptor's `requiredThreadsPerThreadgroup`, or, with none, at `[N, 1, 1]`
-//! for the bound `N` of threads its state declares). Nothing the runtime records
+//! every module ([`Lowered`] holds each variant's: a shader module, or a module past the stage
+//! bound's words), and each `VkPipeline` whose key the descriptor holds (a tiling kernel's
+//! tiles, an image-only kernel's square workgroups, and an observing kernel's at the
+//! descriptor's `requiredThreadsPerThreadgroup`, or, with none, at `[N, 1, 1]` for the bound `N`
+//! of threads its state declares). Nothing the runtime records
 //! depends on when a compile finishes: an encoding call whose `VkPipeline` is not made yet makes
 //! it and waits for it, then records, so there is one recorded form. Each such wait is a
 //! first-use wait, counted with its time
@@ -408,15 +411,23 @@ pub(crate) enum Partial {
 
 /// One translated module of a state, its interface, and the `VkPipeline`s made of it so far.
 pub(crate) struct Kernel {
-    module: vk::ShaderModule,
+    code: Code,
     /// The module's entry point.
     entry: CString,
     pub(crate) interface: Interface,
-    /// The module, where it is past the stage bound: each `VkPipeline` is made from its helper's
-    /// cache data alone (`crate::stage`).
-    heavy: Option<Heavy>,
     /// The `VkPipeline`s made so far, by their specialization.
     variants: Variants,
+}
+
+/// What a kernel's `VkPipeline`s are created from.
+enum Code {
+    /// A module at or under the stage bound: its shader module, made with the kernel and named
+    /// by each of its `VkPipeline`s' creates.
+    Module(vk::ShaderModule),
+    /// A module past the stage bound: each `VkPipeline` is made from its helper's cache data
+    /// alone, through a shader module of that make's own, made from the module's words and
+    /// destroyed once the create returns (`crate::stage`). The kernel holds no shader module.
+    Heavy(Heavy),
 }
 
 /// The variants of a kernel that each have a cell of their own.
@@ -1963,10 +1974,9 @@ impl ComputePipelineState {
         let module = unsafe { Kernel::module(&core, words) }
             .map_err(Error::vulkan("vkCreateShaderModule"))?;
         let whole = Kernel {
-            module,
+            code: Code::Module(module),
             entry: c"main".to_owned(),
             interface,
-            heavy: None,
             variants: Variants::default(),
         };
         let form = Form::Sized {
@@ -2103,7 +2113,8 @@ impl Lowered {
 }
 
 impl Kernel {
-    /// The translator's `pipeline` as a module of the device, with its interface.
+    /// The translator's `pipeline` as a module of the device, with its interface: its shader
+    /// module made now, or, past the stage bound, its words kept for each make's own.
     fn new(
         core: &Core,
         pipeline: ComputePipeline,
@@ -2115,13 +2126,19 @@ impl Kernel {
         // The translator's entry points hold no NUL; one that did would name no entry point.
         let entry = CString::new(stage.entry_point)
             .map_err(|_| Unmade::Unsupplied(KernelInputKind::EntryPoint))?;
-        // SAFETY: the words are the translator's SPIR-V, for the features device creation enabled.
-        let module = unsafe { Kernel::module(core, &stage.spirv) }.map_err(Unmade::Failed)?;
+        let code = match heavy {
+            Some(heavy) => Code::Heavy(heavy),
+            None => {
+                // SAFETY: the words are the translator's SPIR-V, for the features device creation
+                // enabled.
+                let module = unsafe { Kernel::module(core, &stage.spirv) };
+                Code::Module(module.map_err(Unmade::Failed)?)
+            }
+        };
         Ok(Kernel {
-            module,
+            code,
             entry,
             interface,
-            heavy,
             variants: Variants::default(),
         })
     }
@@ -2140,7 +2157,7 @@ impl Kernel {
     /// For the device tests: whether the kernel holds a shader module of its own.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn holds_module(&self) -> bool {
-        self.module != vk::ShaderModule::null()
+        matches!(self.code, Code::Module(_))
     }
 
     /// The `VkPipeline` of `variant`, made now where it is not yet: the calling thread waits for
@@ -2296,46 +2313,58 @@ impl Kernel {
             vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo::default()
                 .required_subgroup_size(size)
         });
-        let mut stage = vk::PipelineShaderStageCreateInfo::default()
-            .flags(self.interface.stage_flags)
-            .stage(vk::ShaderStageFlags::COMPUTE)
-            .module(self.module)
-            .name(&self.entry)
-            .specialization_info(&specialization);
-        if let Some(required) = &mut required {
-            stage = stage.push_next(required);
-        }
-        let info = vk::ComputePipelineCreateInfo::default()
-            .stage(stage)
-            .layout(core.layout);
-        if let Some(heavy) = &self.heavy {
-            let ids: Vec<u32> = constants.iter().map(|&(id, _)| id).collect();
-            let create = Create {
-                entry: &self.entry,
-                flags: self.interface.stage_flags,
-                subgroup: self.interface.required_subgroup_size,
-                ids: &ids,
-                data: &values,
-            };
-            let info = info.flags(vk::PipelineCreateFlags::FAIL_ON_PIPELINE_COMPILE_REQUIRED);
-            return crate::stage::made(core, heavy, &create, |cache| {
-                // SAFETY: as below; the cache is made of the pipeline's entry alone.
+        // The pipeline's one create, of `module` through `cache` with `flags`.
+        let mut create =
+            |module: vk::ShaderModule, cache: vk::PipelineCache, flags: vk::PipelineCreateFlags| {
+                let mut stage = vk::PipelineShaderStageCreateInfo::default()
+                    .flags(self.interface.stage_flags)
+                    .stage(vk::ShaderStageFlags::COMPUTE)
+                    .module(module)
+                    .name(&self.entry)
+                    .specialization_info(&specialization);
+                if let Some(required) = &mut required {
+                    stage = stage.push_next(required);
+                }
+                let info = vk::ComputePipelineCreateInfo::default()
+                    .flags(flags)
+                    .stage(stage)
+                    .layout(core.layout);
+                // SAFETY: the module, the layout and the cache are the device's, and the
+                // specialization gives each of the kernel's constants a 4-byte value.
                 unsafe { core.device.create_compute_pipelines(cache, &[info], None) }
-            });
+            };
+        match &self.code {
+            Code::Module(module) => made_through_cache(core, "vkCreateComputePipelines", |cache| {
+                create(*module, cache, vk::PipelineCreateFlags::empty())
+            }),
+            Code::Heavy(heavy) => {
+                let ids: Vec<u32> = constants.iter().map(|&(id, _)| id).collect();
+                let stage = Create {
+                    entry: &self.entry,
+                    flags: self.interface.stage_flags,
+                    subgroup: self.interface.required_subgroup_size,
+                    ids: &ids,
+                    data: &values,
+                };
+                // The cache is made of the pipeline's entry alone, and the module of the
+                // kernel's words for this create alone.
+                crate::stage::made(core, heavy, &stage, |cache, module| {
+                    let flags = vk::PipelineCreateFlags::FAIL_ON_PIPELINE_COMPILE_REQUIRED;
+                    create(module, cache, flags)
+                })
+            }
         }
-        made_through_cache(core, "vkCreateComputePipelines", |cache| {
-            // SAFETY: the module, the layout and the cache are the device's, and the
-            // specialization gives each of the kernel's constants a 4-byte value.
-            unsafe { core.device.create_compute_pipelines(cache, &[info], None) }
-        })
     }
 
-    /// Gives the module and its `VkPipeline`s to the reaper.
+    /// Gives its `VkPipeline`s, and a kernel's at or under the stage bound its module, to the
+    /// reaper.
     fn release(&mut self, core: &Core) {
         for pipeline in self.variants.drain() {
             core.reaper.give(Job::Free(Free::Pipeline(pipeline)));
         }
-        core.reaper.give(Job::Free(Free::ShaderModule(self.module)));
+        if let Code::Module(module) = self.code {
+            core.reaper.give(Job::Free(Free::ShaderModule(module)));
+        }
     }
 }
 
