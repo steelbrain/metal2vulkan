@@ -52,13 +52,6 @@ pub struct DeviceDescription {
     /// `rgba4OpaqueBlackSwizzled` (`VkPhysicalDeviceMaintenance10PropertiesKHR`): false where the
     /// device does not report it.
     pub rgba4_opaque_black_swizzled: bool,
-    /// `robustBufferAccessUpdateAfterBind` (`VkPhysicalDeviceVulkan12Properties`): whether
-    /// `robustBufferAccess` may be enabled together with the update-after-bind features of the
-    /// buffer descriptor types (VUID-VkDeviceCreateInfo-robustBufferAccess-10247; the enable-set
-    /// rules of `device::enables` read it). True only where the device or document reports it
-    /// true: a document that does not state it describes devices that may report false, so it is
-    /// held to the rule. No translation reads it.
-    pub robust_buffer_access_update_after_bind: bool,
     /// The device lists `VK_KHR_format_feature_flags2`, which, like Vulkan 1.3, reports
     /// `VkFormatProperties3` ([`DeviceDescription::has_format_feature_flags2`]): a fact of the
     /// query, which an enable set that leaves the extension out keeps. Enabled, the extension is
@@ -70,15 +63,14 @@ pub struct DeviceDescription {
     /// [`DeviceDescription::query`] and `from_khronos_json` fill it whenever the device (or the
     /// profile document) supports it; clear it where you do not enable the extension, since the
     /// device replay's generated-commands path (`bind::replay`), the only reader, then records
-    /// commands that need it. No translation reads it, so, like
-    /// `robust_buffer_access_update_after_bind`, it is not a profile field: two devices that
-    /// differ only in it share every artifact.
+    /// commands that need it. No translation reads it, so it is not a profile field: two devices
+    /// that differ only in it share every artifact.
     pub generated_commands: Option<GeneratedCommandsProperties>,
     /// The device's allocation sizes ([`AllocationLimits`]): what one allocation and one buffer may
     /// hold. They follow the machine's installed memory on integrated GPUs (ANV, MoltenVK), so two
     /// machines with one GPU and one driver differ in them. No translation reads them, so, like
-    /// `robust_buffer_access_update_after_bind`, they are not profile fields: two devices that
-    /// differ only in them share every artifact and every profile fingerprint. The Metal-facing
+    /// `generated_commands`, they are not profile fields: two devices that differ only in them
+    /// share every artifact and every profile fingerprint. The Metal-facing
     /// `maxBufferLength` and the runtime's heap sizes read them from the `Device`.
     #[cfg_attr(feature = "serde", serde(default))]
     pub allocation: AllocationLimits,
@@ -179,7 +171,6 @@ impl DeviceDescription {
             filter_minmax_single_component_formats: false,
             formats: FormatSupport::default(),
             rgba4_opaque_black_swizzled: false,
-            robust_buffer_access_update_after_bind: false,
             khr_format_feature_flags2: false,
             generated_commands: None,
             allocation: AllocationLimits::default(),
@@ -389,7 +380,6 @@ impl FormatProperties {
 /// Notably `uniformBufferStandardLayout` is required by Vulkan 1.2 (the `u32[]` UBO view therefore
 /// needs no optional feature on any 1.2 device that enables it).
 pub fn required_features(version: ApiVersion) -> impl Iterator<Item = VkFeature> {
-    const V1_0: &[VkFeature] = &[VkFeature::RobustBufferAccess];
     const V1_1: &[VkFeature] = &[VkFeature::Multiview];
     const V1_2: &[VkFeature] = &[
         VkFeature::UniformBufferStandardLayout,
@@ -430,8 +420,7 @@ pub fn required_features(version: ApiVersion) -> impl Iterator<Item = VkFeature>
         VkFeature::Maintenance5,
         VkFeature::FullDrawIndexUint32,
     ];
-    let tiers: [(u32, &'static [VkFeature]); 5] =
-        [(0, V1_0), (1, V1_1), (2, V1_2), (3, V1_3), (4, V1_4)];
+    let tiers: [(u32, &'static [VkFeature]); 4] = [(1, V1_1), (2, V1_2), (3, V1_3), (4, V1_4)];
     tiers
         .into_iter()
         .filter(move |&(minor, _)| version >= ApiVersion { major: 1, minor })

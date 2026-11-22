@@ -65,13 +65,9 @@ const fn alloc_guest(k: u64) -> u64 {
     0x0000_0003_0000_0000 + k * 0x1_0000
 }
 
-fn profile(stem: &str, robust: bool) -> DeviceProfile {
-    profile_without(stem, robust, &[])
-}
-
 /// Committed profile `stem` without `features` (a device below the runtime's floor where the floor
-/// states one), optionally without buffer robustness.
-fn profile_without(stem: &str, robust: bool, features: &[VkFeature]) -> DeviceProfile {
+/// states one).
+fn profile_without(stem: &str, features: &[VkFeature]) -> DeviceProfile {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles")
         .join(format!("{stem}.json"));
@@ -80,26 +76,18 @@ fn profile_without(stem: &str, robust: bool, features: &[VkFeature]) -> DevicePr
     for f in features {
         desc.features.remove(f);
     }
-    if !robust {
-        desc.features.remove(&VkFeature::RobustBufferAccess);
-        desc.features.remove(&VkFeature::RobustBufferAccess2);
-    }
     Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()
 }
 
-/// Profile-A profiles in both descriptor encodings, with and without `u64` buffer atomics and
-/// the native `f32` add.
+/// Profile-A profiles, with and without `u64` buffer atomics and the native `f32` add.
 fn profiles() -> Vec<(String, DeviceProfile)> {
-    let mut out = Vec::new();
-    for stem in ["moltenvk-m3", "lavapipe", "amd-rdna2-apu-radv"] {
-        for robust in [true, false] {
-            out.push((format!("{stem} robust={robust}"), profile(stem, robust)));
-        }
-    }
-    out
+    ["moltenvk-m3", "lavapipe", "amd-rdna2-apu-radv"]
+        .into_iter()
+        .map(|stem| (stem.to_owned(), profile_without(stem, &[])))
+        .collect()
 }
 
 pub(super) fn assemble(name: &str, text: &str) -> Option<Vec<u8>> {
@@ -400,7 +388,7 @@ fn run_orders(m: &TypedModule, res: &Resources, what: &str) -> Vec<Vec<Vec<u8>>>
 }
 
 /// The uses of the strategy named `name`, the memory it reaches included (`.psb`,
-/// `.psb_and_view`), in either robustness encoding: `name` and `name.checked`.
+/// `.psb_and_view`), with or without its in-shader check: `name` and `name.checked`.
 fn uses(plan: &Plan, name: &str) -> u32 {
     plan.census()
         .iter()
@@ -1888,7 +1876,7 @@ fn a_memmove_between_static_slots_compares_metal_addresses() {
     let mut all = profiles();
     all.push((
         "runtime-floor without shaderInt64".to_owned(),
-        profile_without("runtime-floor", false, &[VkFeature::ShaderInt64]),
+        profile_without("runtime-floor", &[VkFeature::ShaderInt64]),
     ));
     let mut refused = 0;
     for (what, p) in all {
@@ -2174,7 +2162,7 @@ fn a_wide_pointers_bits_through_a_cell_are_its_guest_address() {
             }
         }
         let stem = "runtime-floor without bufferDeviceAddress";
-        let p = profile_without("runtime-floor", true, &[VkFeature::BufferDeviceAddress]);
+        let p = profile_without("runtime-floor", &[VkFeature::BufferDeviceAddress]);
         match typed_module_with(&bc, &name, &p, &LowerInputs::new()) {
             Err(crate::error::Error::Unsupported(u)) => assert_eq!(
                 u.feature,

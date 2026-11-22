@@ -318,34 +318,21 @@ fn ima_descriptor(library: &Library) -> RenderPipelineDescriptor {
     d
 }
 
-/// `stem`'s profile under the identity domains with no buffer robustness and without
-/// `vertexAttributeInstanceRateDivisor`, as the runtime enables neither where a device does
-/// not offer them.
+/// `stem`'s profile under the identity domains without `vertexAttributeInstanceRateDivisor`, as
+/// the runtime does not enable it where a device does not offer it.
 fn fixed_function_device(stem: &str) -> Device {
     let mut desc = description(stem).unwrap_or_else(|e| panic!("{e}"));
-    for robust in [
-        VkFeature::RobustBufferAccess,
-        VkFeature::RobustBufferAccess2,
-    ] {
-        desc.features.remove(&robust);
-    }
     desc.features
         .remove(&VkFeature::VertexAttributeInstanceRateDivisor);
     Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"))
 }
 
-/// `stem`'s profile under the identity domains with no buffer robustness, with
+/// `stem`'s profile under the identity domains, with
 /// `VK_KHR_vertex_attribute_divisor`'s `vertexAttributeInstanceRateDivisor` enabled, a
 /// `maxVertexAttribDivisor` of 4 and `supportsNonZeroFirstInstance` as `nonzero`.
 fn divisor_device(stem: &str, nonzero: bool) -> Device {
     use crate::device::requirements::VkExtension;
     let mut desc = description(stem).unwrap_or_else(|e| panic!("{e}"));
-    for robust in [
-        VkFeature::RobustBufferAccess,
-        VkFeature::RobustBufferAccess2,
-    ] {
-        desc.features.remove(&robust);
-    }
     desc.features
         .insert(VkFeature::VertexAttributeInstanceRateDivisor);
     desc.extensions

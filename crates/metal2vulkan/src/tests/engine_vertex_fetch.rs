@@ -246,10 +246,7 @@ fn profiles_both_encodings() -> Vec<(String, DeviceProfile)> {
     let mut out = Vec::new();
     for stem in PROFILES {
         out.push((stem.to_owned(), prof(stem)));
-        let bare = prof_with(stem, |d| {
-            d.features.remove(&VkFeature::RobustBufferAccess);
-            d.features.remove(&VkFeature::RobustBufferAccess2);
-        });
+        let bare = prof_with(stem, |_| {});
         out.push((format!("{stem} without robustness"), bare));
     }
     out

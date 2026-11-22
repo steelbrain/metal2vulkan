@@ -11,21 +11,18 @@
 //!   out-of-range or negative index is clamped into the table (contained: it reaches the last
 //!   element and nothing else changes).
 //!
-//! Every case compiles on `vk12-floor` (no `shaderInt64`) and `moltenvk-m3`, in both
-//! containment encodings, passes L3, and runs byte-exact on the CPU interpreter. `llvm-as`
-//! assembles the kernels; without it the tests skip visibly.
+//! Every case compiles on `runtime-floor` and `moltenvk-m3`, passes L3, and runs byte-exact on the
+//! CPU interpreter. `llvm-as` assembles the kernels; without it the tests skip visibly.
 
-use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::device::requirements::VkFeature;
-use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
+use crate::device::{DevicePolicy, DeviceProfile};
 use crate::error::{Error, Feature, LowerFamily, Needs};
 use crate::lower::select::Plan;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
-    compile, link_and_validate, llvm_assemble, typed_module, AssembleError,
+    compile, link_and_validate, llvm_assemble, profile, typed_module, AssembleError,
 };
 use crate::spirv::interp::{run, Buffer, Config, Resources};
 
@@ -35,35 +32,15 @@ const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16
 const FIRST: u32 = 1;
 const COUNT: u32 = 3;
 
-/// Committed profile `stem`, optionally with buffer robustness disabled (the in-shader encoding).
-fn profile_with(stem: &str, robust: bool) -> DeviceProfile {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles")
-        .join(format!("{stem}.json"));
-    let text = std::fs::read_to_string(path).expect("profile");
-    let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    if !robust {
-        desc.features.remove(&VkFeature::RobustBufferAccess);
-        desc.features.remove(&VkFeature::RobustBufferAccess2);
-    }
-    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
-        .expect("device")
-        .profile()
-        .clone()
-}
-
-/// `vk12-floor` (no `shaderInt64`) and `moltenvk-m3`, each in both encodings.
-fn encodings() -> Vec<(String, DeviceProfile)> {
-    let mut out = Vec::new();
-    for stem in ["runtime-floor", "moltenvk-m3"] {
-        for robust in [true, false] {
-            out.push((
-                format!("{stem} robust={robust}"),
-                profile_with(stem, robust),
-            ));
-        }
-    }
-    out
+/// `runtime-floor` and `moltenvk-m3`, under the resident-table domains.
+fn profiles() -> Vec<(String, DeviceProfile)> {
+    ["runtime-floor", "moltenvk-m3"]
+        .into_iter()
+        .map(|stem| {
+            let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("committed profile");
+            (stem.to_owned(), p)
+        })
+        .collect()
 }
 
 fn assemble_text(name: &str, text: &str) -> Option<Vec<u8>> {
@@ -167,7 +144,7 @@ fn constant_table_indices_reach_their_elements_exactly() {
     let Some(bc) = assemble_text("table_const", &kernel("table_const", body)) else {
         return;
     };
-    for (what, p) in encodings() {
+    for (what, p) in profiles() {
         let a = compile(&bc, "table_const", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
         let names: Vec<&String> = a.strategies.entries.keys().collect();
         assert!(
@@ -218,7 +195,7 @@ fn a_dynamic_table_index_is_exact_and_clamped_into_the_table() {
         let Some(bc) = assemble_text(&name, &kernel(&name, &body)) else {
             return;
         };
-        for (what, p) in encodings() {
+        for (what, p) in profiles() {
             let what = format!("{what} {name}");
             let a = compile(&bc, &name, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
             let names: Vec<&String> = a.strategies.entries.keys().collect();
@@ -277,7 +254,7 @@ fn a_table_pointer_crossing_blocks_is_exact() {
     let Some(bc) = assemble_text("table_cross", &kernel("table_cross", body)) else {
         return;
     };
-    for (what, p) in encodings() {
+    for (what, p) in profiles() {
         let a = compile(&bc, "table_cross", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
         link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
         let (plan, m) = typed_module(&bc, "table_cross", &p).expect("module");
@@ -311,7 +288,7 @@ fn a_table_pointer_parked_in_a_private_cell_is_exact() {
     let Some(bc) = assemble_text("table_cell", &kernel("table_cell", body)) else {
         return;
     };
-    for (what, p) in encodings() {
+    for (what, p) in profiles() {
         let a = compile(&bc, "table_cell", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
         let names: Vec<&String> = a.strategies.entries.keys().collect();
         for want in [
@@ -345,7 +322,7 @@ fn an_underaligned_dynamic_table_load_is_refused() {
     let Some(bc) = assemble_text("table_underaligned", &kernel("table_underaligned", body)) else {
         return;
     };
-    for (what, p) in encodings() {
+    for (what, p) in profiles() {
         match compile(&bc, "table_underaligned", &p) {
             Err(Error::Unsupported(u)) => {
                 assert_eq!(u.feature, Feature::Lowering(LowerFamily::Access), "{what}");
@@ -367,7 +344,7 @@ fn table_and_buffer_pointers_carried_in_a_struct_are_forwarded() {
     let Some(bc) = assemble_text("table_struct", &kernel("table_struct", body)) else {
         return;
     };
-    for (what, p) in encodings() {
+    for (what, p) in profiles() {
         let a = compile(&bc, "table_struct", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
         let forwards = a
             .strategies
@@ -415,7 +392,7 @@ fn a_table_pointer_copied_between_cells_is_exact() {
     let Some(bc) = assemble_text("table_copied", &text) else {
         return;
     };
-    for (what, p) in encodings() {
+    for (what, p) in profiles() {
         let a = compile(&bc, "table_copied", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
         let uses = |name: &str| a.strategies.entries.get(name).map_or(0, |u| u.uses);
         assert_eq!(
@@ -509,7 +486,7 @@ fn a_phi_of_pointer_aggregates_is_member_wise() {
     );
     check_inout_phi(
         &carry,
-        &encodings(),
+        &profiles(),
         3,
         &[(0, 0, 9), (1, 1, 3), (2, 0, 7), (9, 2, 3)],
     );
@@ -527,7 +504,7 @@ fn a_loop_carried_phi_of_pointer_aggregates_is_member_wise() {
     );
     check_inout_phi(
         &carry,
-        &encodings(),
+        &profiles(),
         2,
         &[(0, 0, 9), (1, 1, 5), (2, 0, 9), (9, 2, 5)],
     );
@@ -553,7 +530,7 @@ fn a_phi_member_with_a_null_private_pointer_is_refused() {
     ) else {
         return;
     };
-    for (what, p) in encodings() {
+    for (what, p) in profiles() {
         match compile(&null, "member_null", &p) {
             Err(Error::Unsupported(u)) => {
                 assert_eq!(u.feature, Feature::Lowering(LowerFamily::Arith), "{what}");

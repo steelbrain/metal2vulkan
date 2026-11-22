@@ -2,8 +2,7 @@
 //!
 //! - Dynamic-index kernels whose `i64` GEP indices are `zext`/`sext` of an `i1`, `i8`, `i16`, or
 //!   `i32` value (a loaded index, negative ones included, and `thread_position_in_grid`) compile
-//!   on `runtime-floor` without `shaderInt64` (below the runtime's floor) and `moltenvk-m3`, in
-//!   both containment encodings, pass
+//!   on `runtime-floor` without `shaderInt64` (below the runtime's floor) and `moltenvk-m3`, pass
 //!   L3, select the empty `arith.index_extension` strategy, and compute byte-exact results on the
 //!   CPU interpreter.
 //! - An extension defined in another block than its GEPs (the loop-kernel shape: the index is
@@ -40,9 +39,8 @@ const NO_INT64: &str = "runtime-floor without shaderInt64";
 /// A profile without and one with `shaderInt64`.
 const PROFILES: [&str; 2] = [NO_INT64, "moltenvk-m3"];
 
-/// Committed profile `stem` (or [`NO_INT64`]'s device), optionally with buffer robustness disabled
-/// (the in-shader encoding).
-fn profile_with(stem: &str, robust: bool) -> DeviceProfile {
+/// Committed profile `stem` (or [`NO_INT64`]'s device).
+fn profile_with(stem: &str) -> DeviceProfile {
     let file = if stem == NO_INT64 {
         "runtime-floor"
     } else {
@@ -56,28 +54,18 @@ fn profile_with(stem: &str, robust: bool) -> DeviceProfile {
     if stem == NO_INT64 {
         desc.features.remove(&VkFeature::ShaderInt64);
     }
-    if !robust {
-        desc.features.remove(&VkFeature::RobustBufferAccess);
-        desc.features.remove(&VkFeature::RobustBufferAccess2);
-    }
     Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
         .clone()
 }
 
-/// Every tested profile in both encodings.
-fn encodings() -> Vec<(String, DeviceProfile)> {
-    let mut out = Vec::new();
-    for stem in PROFILES {
-        for robust in [true, false] {
-            out.push((
-                format!("{stem} robust={robust}"),
-                profile_with(stem, robust),
-            ));
-        }
-    }
-    out
+/// Every tested profile.
+fn profiles() -> Vec<(String, DeviceProfile)> {
+    PROFILES
+        .into_iter()
+        .map(|stem| (stem.to_owned(), profile_with(stem)))
+        .collect()
 }
 
 fn assemble_text(name: &str, text: &str) -> Option<Vec<u8>> {
@@ -350,7 +338,7 @@ fn extended_loaded_indices_are_exact_without_int64() {
         let Some(bc) = assemble_text(k.name, &k.text()) else {
             return;
         };
-        for (what, p) in encodings() {
+        for (what, p) in profiles() {
             let what = format!("{what} {}", k.name);
             let a = compile(&bc, k.name, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
             let names: Vec<&String> = a.strategies.entries.keys().collect();
@@ -394,7 +382,7 @@ fn a_grid_position_index_is_exact_without_int64() {
     let Some(bc) = assemble_text("grid_copy", &kernel("grid_copy", body, ("uint", 4), true)) else {
         return;
     };
-    for (what, p) in encodings() {
+    for (what, p) in profiles() {
         let a = compile(&bc, "grid_copy", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
         assert!(
             a.strategies.entries.contains_key("arith.index_extension"),
@@ -442,7 +430,7 @@ fn an_extension_used_after_a_loop_is_exact_without_int64() {
         let Some(bc) = assemble_text(name, &loop_kernel(name, ext, tid)) else {
             return;
         };
-        for (what, p) in encodings() {
+        for (what, p) in profiles() {
             let what = format!("{what} {name}");
             let a = compile(&bc, name, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
             let names: Vec<&String> = a.strategies.entries.keys().collect();
@@ -548,7 +536,7 @@ fn an_extension_of_a_loop_header_phi_used_after_the_loop_is_exact() {
             } else {
                 &[0, 5]
             };
-            for (what, p) in encodings() {
+            for (what, p) in profiles() {
                 let what = format!("{what} {name}");
                 let a = compile(&bc, &name, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
                 assert!(
@@ -630,7 +618,7 @@ fn an_i64_index_that_is_not_an_extension_is_a_64_bit_value() {
             return;
         };
         for stem in PROFILES {
-            let p = profile_with(stem, true);
+            let p = profile_with(stem);
             assert_eq!(p.fields().leaf.int64, stem == "moltenvk-m3");
             let a = compile(&bc, name, &p).unwrap_or_else(|e| panic!("{name} {stem}: {e}"));
             assert!(

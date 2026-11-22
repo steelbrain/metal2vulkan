@@ -104,12 +104,7 @@ fn unrobust(stem: &str) -> DeviceProfile {
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    for f in [
-        VkFeature::RobustImageAccess,
-        VkFeature::RobustImageAccess2,
-        VkFeature::RobustBufferAccess,
-        VkFeature::RobustBufferAccess2,
-    ] {
+    for f in [VkFeature::RobustImageAccess, VkFeature::RobustImageAccess2] {
         desc.features.remove(&f);
     }
     Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)

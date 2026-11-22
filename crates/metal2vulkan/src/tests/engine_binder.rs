@@ -11,8 +11,8 @@
 //!
 //! - Plans are total on every committed profile: one write per layout binding, or a typed error.
 //! - `dispatchThreads` edges and group-count splits compute Metal's grid builtins exactly.
-//! - Bind offsets reach the right bytes through the range and the residual, with and without robust
-//!   descriptors (the in-shader check reads the bound range's length).
+//! - Bind offsets reach the right bytes through the range and the residual (the in-shader check
+//!   reads the bound range's length).
 //! - `[[threadgroup(n)]]` lengths specialize the arena; a total above
 //!   `maxComputeSharedMemorySize` is refused at plan.
 //! - Loaded pointers resolve through the binder's root table (resident set from bound buffers and
@@ -104,11 +104,6 @@ pub(super) fn device(stem: &str, tweak: impl FnOnce(&mut DeviceDescription)) -> 
 /// are descriptors at its four storage buffers a stage.
 fn no_addresses(desc: &mut DeviceDescription) {
     desc.features.remove(&VkFeature::BufferDeviceAddress);
-}
-
-fn no_robustness(desc: &mut DeviceDescription) {
-    desc.features.remove(&VkFeature::RobustBufferAccess);
-    desc.features.remove(&VkFeature::RobustBufferAccess2);
 }
 
 fn pipeline(dev: &Device, bc: &[u8], entry: &str) -> Result<ComputePipeline, String> {
@@ -660,7 +655,7 @@ fn a_seq_cst_fence_reaches_the_status_by_binding_or_address_as_the_device_allows
 }
 
 /// `in` at a nonzero bind offset in a larger allocation, `out` too: the range and the residual
-/// reach exactly Metal's bytes, robust or not.
+/// reach exactly Metal's bytes.
 #[test]
 fn bind_offsets_reach_metal_bytes_through_range_and_residual() {
     let Some(load) = fixture("buffer_end_byte_load") else {
@@ -677,53 +672,43 @@ fn bind_offsets_reach_metal_bytes_through_range_and_residual() {
         threads_per_group: [1, 1, 1],
     };
     for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
-        for robust in [true, false] {
-            let dev = if robust {
-                device(stem, |_| {})
-            } else {
-                device(stem, no_robustness)
-            };
-            for (bc, entry) in [
-                (&load, "buffer_end_byte_load"),
-                (&constant, "buffer_end_byte_load_constant"),
-            ] {
-                let pipe = pipeline(&dev, bc, entry).expect(entry);
-                let (_, m) = typed_module(bc, entry, dev.profile()).expect("module");
-                for (offset, out_offset) in [(0u64, 0u64), (100, 36), (250, 260), (1, 4)] {
-                    let mut input = Alloc::new(offset as usize + 6, offset);
-                    for (i, b) in input.bytes.iter_mut().enumerate() {
-                        *b = (i as u8).wrapping_mul(7).wrapping_add(3);
-                    }
-                    let want = u32::from(input.bytes[offset as usize + 5]);
-                    let mut w = World::new([
-                        (0, input),
-                        (1, Alloc::new(out_offset as usize + 4, out_offset)),
-                    ]);
-                    execute(&dev, &pipe, &m, &mut w, &one)
-                        .unwrap_or_else(|e| panic!("{stem} {entry}: {e}"));
-                    let out = &w.buffers[&1].bytes[out_offset as usize..];
-                    assert_eq!(
-                        words(out)[0],
-                        want,
-                        "{stem} robust={robust} {entry} at {offset}"
-                    );
+        let dev = device(stem, |_| {});
+        for (bc, entry) in [
+            (&load, "buffer_end_byte_load"),
+            (&constant, "buffer_end_byte_load_constant"),
+        ] {
+            let pipe = pipeline(&dev, bc, entry).expect(entry);
+            let (_, m) = typed_module(bc, entry, dev.profile()).expect("module");
+            for (offset, out_offset) in [(0u64, 0u64), (100, 36), (250, 260), (1, 4)] {
+                let mut input = Alloc::new(offset as usize + 6, offset);
+                for (i, b) in input.bytes.iter_mut().enumerate() {
+                    *b = (i as u8).wrapping_mul(7).wrapping_add(3);
                 }
+                let want = u32::from(input.bytes[offset as usize + 5]);
+                let mut w = World::new([
+                    (0, input),
+                    (1, Alloc::new(out_offset as usize + 4, out_offset)),
+                ]);
+                execute(&dev, &pipe, &m, &mut w, &one)
+                    .unwrap_or_else(|e| panic!("{stem} {entry}: {e}"));
+                let out = &w.buffers[&1].bytes[out_offset as usize..];
+                assert_eq!(words(out)[0], want, "{stem} {entry} at {offset}");
             }
-            let pipe = pipeline(&dev, &store, "buffer_end_byte_store").expect("store");
-            let (_, m) = typed_module(&store, "buffer_end_byte_store", dev.profile()).expect("m");
-            for offset in [0u64, 3, 100] {
-                let mut a = Alloc::new(offset as usize + 6, offset);
-                a.bytes.iter_mut().for_each(|b| *b = 0x11);
-                let mut w = World::new([(0, a)]);
-                execute(&dev, &pipe, &m, &mut w, &one).expect("store");
-                let b = &w.buffers[&0].bytes;
-                let at = offset as usize + 5;
-                assert_eq!(b[at], 0xA5, "{stem} robust={robust} at {offset}");
-                assert!(
-                    b.iter().enumerate().all(|(i, &x)| i == at || x == 0x11),
-                    "{stem}: neighbours kept"
-                );
-            }
+        }
+        let pipe = pipeline(&dev, &store, "buffer_end_byte_store").expect("store");
+        let (_, m) = typed_module(&store, "buffer_end_byte_store", dev.profile()).expect("m");
+        for offset in [0u64, 3, 100] {
+            let mut a = Alloc::new(offset as usize + 6, offset);
+            a.bytes.iter_mut().for_each(|b| *b = 0x11);
+            let mut w = World::new([(0, a)]);
+            execute(&dev, &pipe, &m, &mut w, &one).expect("store");
+            let b = &w.buffers[&0].bytes;
+            let at = offset as usize + 5;
+            assert_eq!(b[at], 0xA5, "{stem} at {offset}");
+            assert!(
+                b.iter().enumerate().all(|(i, &x)| i == at || x == 0x11),
+                "{stem}: neighbours kept"
+            );
         }
     }
 }
@@ -978,42 +963,36 @@ fn loaded_pointers_resolve_through_the_binders_root_table() {
         threads_per_group: [1, 1, 1],
     };
     for stem in ["moltenvk-m3", "lavapipe"] {
-        for robust in [true, false] {
-            let dev = if robust {
-                device(stem, |_| {})
-            } else {
-                device(stem, no_robustness)
-            };
-            let pipe = pipeline(&dev, &bc, "dyn_load").expect(stem);
-            assert!(pipe.interface.needs_pointer_translation);
-            let (_, m) = typed_module(&bc, "dyn_load", dev.profile()).expect("module");
-            let ptrs = [0x1_0000_0000u64, 0x1_0000_0100, 0x7_0000_0000];
-            for (k, off, want, miss) in [
-                (0, 4, u32::from_le_bytes([4, 5, 6, 7]), false),
-                (1, 60, u32::from_le_bytes([124, 125, 126, 127]), false),
-                (1, 64, 0, false),
-                (2, 0, 0, true),
-            ] {
-                let mut w = World::new([
-                    (0, table(&ptrs)),
-                    (1, Alloc::new(16, 0)),
-                    (2, params(k, off)),
-                ]);
-                targets(&mut w);
-                let c = execute(&dev, &pipe, &m, &mut w, &one)
-                    .unwrap_or_else(|e| panic!("{stem}: {e}"));
-                let table = c.root_table.expect("a root table");
-                let n = u64::from_le_bytes(table.bytes[48..56].try_into().expect("N"));
-                assert_eq!(n, 2, "{stem}: the resident set is the two used resources");
-                assert_eq!(
-                    words(&w.buffers[&1].bytes)[0],
-                    want,
-                    "{stem} k={k} off={off}"
-                );
-                let r = w.report();
-                assert_eq!(r.resident_miss, miss, "{stem} k={k}");
-                assert_eq!(r.resident_misses, u32::from(miss), "{stem} k={k}");
-            }
+        let dev = device(stem, |_| {});
+        let pipe = pipeline(&dev, &bc, "dyn_load").expect(stem);
+        assert!(pipe.interface.needs_pointer_translation);
+        let (_, m) = typed_module(&bc, "dyn_load", dev.profile()).expect("module");
+        let ptrs = [0x1_0000_0000u64, 0x1_0000_0100, 0x7_0000_0000];
+        for (k, off, want, miss) in [
+            (0, 4, u32::from_le_bytes([4, 5, 6, 7]), false),
+            (1, 60, u32::from_le_bytes([124, 125, 126, 127]), false),
+            (1, 64, 0, false),
+            (2, 0, 0, true),
+        ] {
+            let mut w = World::new([
+                (0, table(&ptrs)),
+                (1, Alloc::new(16, 0)),
+                (2, params(k, off)),
+            ]);
+            targets(&mut w);
+            let c =
+                execute(&dev, &pipe, &m, &mut w, &one).unwrap_or_else(|e| panic!("{stem}: {e}"));
+            let table = c.root_table.expect("a root table");
+            let n = u64::from_le_bytes(table.bytes[48..56].try_into().expect("N"));
+            assert_eq!(n, 2, "{stem}: the resident set is the two used resources");
+            assert_eq!(
+                words(&w.buffers[&1].bytes)[0],
+                want,
+                "{stem} k={k} off={off}"
+            );
+            let r = w.report();
+            assert_eq!(r.resident_miss, miss, "{stem} k={k}");
+            assert_eq!(r.resident_misses, u32::from(miss), "{stem} k={k}");
         }
     }
 }

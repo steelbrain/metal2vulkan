@@ -77,12 +77,7 @@ fn quantized(p: &DeviceProfile, h: u16) -> u16 {
 
 fn profiles() -> Vec<(String, DeviceProfile)> {
     let mut out = crate::spirv::testing::committed_profiles().expect("profiles");
-    let all = [
-        VkFeature::RobustImageAccess,
-        VkFeature::RobustImageAccess2,
-        VkFeature::RobustBufferAccess,
-        VkFeature::RobustBufferAccess2,
-    ];
+    let all = [VkFeature::RobustImageAccess, VkFeature::RobustImageAccess2];
     for stem in ["moltenvk-m3", "lavapipe"] {
         out.push((format!("{stem} unrobust"), without(stem, &all)));
     }
@@ -411,12 +406,7 @@ fn a_texture_buffer_s_parts_hold_every_texel() {
     let (read, write) = (slot(0), slot(1));
     const PART: u32 = 1024;
     let word = |i: u32| 0x5000_0000 ^ i;
-    let all = [
-        VkFeature::RobustImageAccess,
-        VkFeature::RobustImageAccess2,
-        VkFeature::RobustBufferAccess,
-        VkFeature::RobustBufferAccess2,
-    ];
+    let all = [VkFeature::RobustImageAccess, VkFeature::RobustImageAccess2];
     let mut inputs = LowerInputs::new();
     inputs.texel_buffer_parts.insert(read, 2);
     inputs.texel_buffer_parts.insert(write, 3);

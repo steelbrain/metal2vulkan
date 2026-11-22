@@ -39,12 +39,9 @@ struct DeviceInner {
     fingerprint: crate::cache::Hash256,
     metal: MetalDeviceProperties,
     policy: DevicePolicy,
-    /// The description's `robustBufferAccessUpdateAfterBind`, which decides what
-    /// `Device::required_enables` may name together. No translation reads it, so it is not a
-    /// profile field: two devices that differ only in it share every artifact.
-    robust_buffer_access_update_after_bind: bool,
-    /// The description's `generated_commands`, which only the device replay reads; not a profile
-    /// field, as above.
+    /// The description's `generated_commands`, which only the device replay reads. No translation
+    /// reads it, so it is not a profile field: two devices that differ only in it share every
+    /// artifact.
     generated_commands: Option<GeneratedCommandsProperties>,
     /// The description's allocation sizes, which the Metal-facing `maxBufferLength` reads; not a
     /// profile field, as above.
@@ -105,7 +102,6 @@ impl Device {
             profile,
             metal,
             policy,
-            robust_buffer_access_update_after_bind: desc.robust_buffer_access_update_after_bind,
             generated_commands: desc.generated_commands,
             allocation: desc.allocation,
         })))
@@ -131,11 +127,6 @@ impl Device {
     /// The policy the device was created with.
     pub fn policy(&self) -> &DevicePolicy {
         &self.0.policy
-    }
-
-    /// The description's `robustBufferAccessUpdateAfterBind`.
-    pub(crate) fn robust_buffer_access_update_after_bind(&self) -> bool {
-        self.0.robust_buffer_access_update_after_bind
     }
 
     /// `VK_EXT_device_generated_commands` as the description states the consumer enabled it: the

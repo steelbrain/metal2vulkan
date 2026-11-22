@@ -1800,13 +1800,13 @@ mod tests {
         use metal2vulkan::device::{ApiVersion, StageCreateFlag, VkExtension, VkFeature};
         let description = description("runtime-floor");
         let mut enabled = EnableSet::new();
-        enabled.features.insert(VkFeature::RobustBufferAccess);
+        enabled.features.insert(VkFeature::ShaderInt16);
         let opened = opened_description(description, &enabled);
         assert!(opened.is_ok(), "{opened:?}");
 
         let mut requirements = Requirements::default();
         requirements.api_version = Some(ApiVersion { major: 1, minor: 4 });
-        requirements.features.insert(VkFeature::RobustBufferAccess);
+        requirements.features.insert(VkFeature::ShaderInt16);
         requirements.features.insert(VkFeature::ShaderInt64);
         requirements.extensions.insert(VkExtension::ExtRobustness2);
         requirements
@@ -1957,7 +1957,7 @@ mod tests {
         let description = description("runtime-floor");
         assert_eq!(description.api_version, ApiVersion::V1_3);
         let mut enabled = EnableSet::new();
-        enabled.features.insert(VkFeature::RobustBufferAccess);
+        enabled.features.insert(VkFeature::ShaderInt16);
         let opened = opened_description(description.clone(), &enabled).unwrap();
         // Vulkan 1.3 core holds the two dynamic-state features, so a 1.3 description keeps them
         // beside what the context enabled.

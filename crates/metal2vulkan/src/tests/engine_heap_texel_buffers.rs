@@ -101,47 +101,25 @@ fn a_texture_buffer_argument_is_a_texel_buffer_heap_class() {
     }
 }
 
-/// `runtime-floor` reports `robustBufferAccess` and the texel-buffer update-after-bind features
-/// without `robustBufferAccessUpdateAfterBind`, so its recommendation keeps `robustBufferAccess` and
-/// leaves those features out (VUID-VkDeviceCreateInfo-robustBufferAccess-10247). A device made from
-/// that recommendation refuses a texture buffer member, naming the update-after-bind feature it
-/// lacks; with those features enabled and `robustBufferAccess` (and `robustBufferAccess2`) not, as
-/// the runtime enables them, the same member compiles.
+/// `runtime-floor`'s recommendation holds the texel-buffer update-after-bind features it reports:
+/// it names no `robustBufferAccess`, beside which `runtime-floor` may not enable them
+/// (VUID-VkDeviceCreateInfo-robustBufferAccess-10247). A device made from that recommendation
+/// compiles a texture buffer member.
 #[test]
-fn a_device_made_from_a_recommendation_that_keeps_robust_buffer_access_refuses_texture_buffers() {
+fn a_device_made_from_the_recommendation_compiles_texture_buffers() {
     let Some(bc) = fixture() else {
         return;
     };
     let entry = "abt_frag_texel_buffer";
     let desc = description("runtime-floor").expect("description");
     let rec = desc.recommended_enables();
-    assert!(rec.features.contains(&VkFeature::RobustBufferAccess));
-    assert!(!rec
-        .features
-        .contains(&VkFeature::DescriptorBindingUniformTexelBufferUpdateAfterBind));
-    let enabled = desc.clone().with_enabled(&rec).expect("enabled");
-    let device = Device::from_queries(enabled, DevicePolicy::RESIDENT_TABLES).expect("device");
-    match compile(&bc, entry, device.profile()) {
-        Err(Error::Unsupported(u)) => {
-            assert_eq!(u.feature, Feature::ArgumentBufferTextures);
-            assert_eq!(
-                u.needs,
-                Needs::AnyOf(vec![vec![Capability::Feature(
-                    VkFeature::DescriptorBindingUniformTexelBufferUpdateAfterBind
-                )]])
-            );
-        }
-        other => panic!("{:?}", other.map(|_| ())),
-    }
-
-    let mut runtime = rec;
-    runtime.features.remove(&VkFeature::RobustBufferAccess);
-    runtime.features.remove(&VkFeature::RobustBufferAccess2);
-    runtime.features.extend([
+    for f in [
         VkFeature::DescriptorBindingUniformTexelBufferUpdateAfterBind,
         VkFeature::DescriptorBindingStorageTexelBufferUpdateAfterBind,
-    ]);
-    let enabled = desc.with_enabled(&runtime).expect("enabled");
+    ] {
+        assert!(rec.features.contains(&f), "{f:?}");
+    }
+    let enabled = desc.with_enabled(&rec).expect("enabled");
     let device = Device::from_queries(enabled, DevicePolicy::RESIDENT_TABLES).expect("device");
     let a = compile(&bc, entry, device.profile()).expect("a texture buffer member");
     assert_eq!(heap(&a).len(), 1, "{:?}", heap(&a));

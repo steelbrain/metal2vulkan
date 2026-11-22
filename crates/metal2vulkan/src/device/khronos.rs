@@ -383,11 +383,6 @@ impl Merged {
             } else {
                 false
             };
-        // A Vulkan 1.2 property (`VkPhysicalDeviceVulkan12Properties`, and the descriptor
-        // indexing structure it absorbed), so every description's version exposes it; a document
-        // that does not state it reads false, which holds it to the rule it gates.
-        desc.robust_buffer_access_update_after_bind =
-            p.bool("robustBufferAccessUpdateAfterBind")?;
         // `VkFormatProperties3` is core in 1.3 and the extension's before.
         desc.khr_format_feature_flags2 = self.extensions.contains("VK_KHR_format_feature_flags2");
         // `VK_EXT_device_generated_commands` where the document lists it with the EXT
@@ -1307,8 +1302,6 @@ fn feature_route(structure: &str) -> Option<Route> {
 pub(super) const FEATURE_MEMBERS: &[(&str, VkFeature)] = {
     use VkFeature as F;
     &[
-        ("robustBufferAccess", F::RobustBufferAccess),
-        ("robustBufferAccess2", F::RobustBufferAccess2),
         ("robustImageAccess", F::RobustImageAccess),
         ("robustImageAccess2", F::RobustImageAccess2),
         ("nullDescriptor", F::NullDescriptor),

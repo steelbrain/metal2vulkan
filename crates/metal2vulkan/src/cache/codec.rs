@@ -916,8 +916,8 @@ codec_struct! {
 
 codec_enum! {
     VkFeature {
-        RobustBufferAccess, RobustBufferAccess2, RobustImageAccess, RobustImageAccess2,
-        NullDescriptor, ShaderInt8, ShaderInt16, ShaderInt64, ShaderFloat16, ShaderFloat64,
+        RobustImageAccess, RobustImageAccess2, NullDescriptor, ShaderInt8, ShaderInt16,
+        ShaderInt64, ShaderFloat16, ShaderFloat64,
         StorageBuffer8BitAccess, UniformAndStorageBuffer8BitAccess, StoragePushConstant8,
         StorageBuffer16BitAccess, UniformAndStorageBuffer16BitAccess, StoragePushConstant16,
         StorageInputOutput16, ShaderBufferInt64Atomics, ShaderSharedInt64Atomics,

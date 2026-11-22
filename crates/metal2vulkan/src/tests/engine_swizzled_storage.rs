@@ -302,12 +302,7 @@ declare void @air.write_texture_2d.{suffix}(ptr addrspace(1), <2 x i32>, {vec4},
 /// checks its reads and guards its writes.
 fn profiles() -> Vec<(String, DeviceProfile)> {
     let mut out = crate::spirv::testing::committed_profiles().expect("profiles");
-    let all = [
-        VkFeature::RobustImageAccess,
-        VkFeature::RobustImageAccess2,
-        VkFeature::RobustBufferAccess,
-        VkFeature::RobustBufferAccess2,
-    ];
+    let all = [VkFeature::RobustImageAccess, VkFeature::RobustImageAccess2];
     for stem in ["moltenvk-m3", "lavapipe"] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../metal2vulkan-validation/profiles")

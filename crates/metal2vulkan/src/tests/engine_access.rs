@@ -1,5 +1,5 @@
-//! The access family end to end: descriptor views, word-composed leaves, sub-word stores, and both
-//! containment encodings.
+//! The access family end to end: descriptor views, word-composed leaves, sub-word stores, and the
+//! in-shader containment check.
 //!
 //! - The end-of-buffer fixtures (`engine/buffer_end_*`) compile on every tested profile, pass
 //!   L3, and compute byte-exact results on the CPU interpreter, including the untouched bytes of a
@@ -62,21 +62,9 @@ fn policy() -> DevicePolicy {
     DevicePolicy::RESIDENT_TABLES
 }
 
-/// Committed profile `stem`, optionally with buffer robustness disabled (the in-shader encoding).
-fn profile_with(stem: &str, robust: bool) -> DeviceProfile {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles")
-        .join(format!("{stem}.json"));
-    let text = std::fs::read_to_string(path).expect("profile");
-    let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    if !robust {
-        desc.features.remove(&VkFeature::RobustBufferAccess);
-        desc.features.remove(&VkFeature::RobustBufferAccess2);
-    }
-    Device::from_queries(desc, policy())
-        .expect("device")
-        .profile()
-        .clone()
+/// Committed profile `stem`.
+fn profile_with(stem: &str) -> DeviceProfile {
+    profile_without(stem, &[])
 }
 
 fn assemble_file(name: &str) -> Option<Vec<u8>> {
@@ -164,18 +152,12 @@ fn check_l3(bitcode: &[u8], entry: &str, p: &DeviceProfile, what: &str) {
     link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
 }
 
-/// Every tested profile in both encodings.
-fn encodings() -> Vec<(String, DeviceProfile)> {
-    let mut out = Vec::new();
-    for stem in PROFILES {
-        for robust in [true, false] {
-            out.push((
-                format!("{stem} robust={robust}"),
-                profile_with(stem, robust),
-            ));
-        }
-    }
-    out
+/// Every tested profile.
+fn profiles() -> Vec<(String, DeviceProfile)> {
+    PROFILES
+        .into_iter()
+        .map(|stem| (stem.to_owned(), profile_with(stem)))
+        .collect()
 }
 
 /// The last byte of a 6-byte `device` buffer through the word view, with residuals 0 and 8.
@@ -185,7 +167,7 @@ fn the_last_byte_of_a_six_byte_buffer_loads_exactly() {
         return;
     };
     let data = [1u8, 2, 3, 4, 5, 0x9C];
-    for (what, p) in encodings() {
+    for (what, p) in profiles() {
         check_l3(&bc, "buffer_end_byte_load", &p, &what);
         let (plan, m) = typed_module(&bc, "buffer_end_byte_load", &p).expect("module");
         for r in [0u32, 8] {
@@ -207,7 +189,7 @@ fn the_last_half_of_a_ten_byte_buffer_loads_exactly() {
         return;
     };
     let data = [0u8, 1, 2, 3, 4, 5, 6, 7, 0x34, 0x92];
-    for (what, p) in encodings() {
+    for (what, p) in profiles() {
         check_l3(&bc, "buffer_end_half_load", &p, &what);
         let (plan, m) = typed_module(&bc, "buffer_end_half_load", &p).expect("module");
         for r in [0u32, 4] {
@@ -230,7 +212,7 @@ fn a_byte_store_at_the_end_preserves_its_neighbours() {
         return;
     };
     let data = [0x10u8, 0x11, 0x12, 0x13, 0x14, 0x15];
-    for (what, p) in encodings() {
+    for (what, p) in profiles() {
         check_l3(&bc, "buffer_end_byte_store", &p, &what);
         let (plan, m) = typed_module(&bc, "buffer_end_byte_store", &p).expect("module");
         for r in [0u32, 4, 12] {
@@ -261,7 +243,7 @@ fn a_constant_buffer_shorter_than_its_window_is_contained_in_shader() {
     let alloc: [u8; 16] = std::array::from_fn(|i| 0x10 + i as u8);
     for stem in PROFILES {
         let what = stem;
-        let p = profile_with(stem, false);
+        let p = profile_with(stem);
         let a = compile(&bc, "buffer_end_byte_load_constant", &p)
             .unwrap_or_else(|e| panic!("{what}: {e}"));
         let form = match a.interface.slots.get(&sref(0)) {
@@ -615,7 +597,7 @@ fn offsets(size: u64) -> Vec<u64> {
 fn every_leaf_path_is_exact_in_bounds_and_contained_out_of_bounds() {
     let size = 32u64;
     for stem in ["moltenvk-m3", "runtime-floor"] {
-        let p = profile_with(stem, false);
+        let p = profile_with(stem);
         for k in leaf_kernels() {
             let what = format!("{stem} {}", k.name);
             let Some(bc) = assemble_text(k.name, &leaf_kernel(&k)) else {
@@ -726,7 +708,7 @@ fn a_pointer_selected_between_two_slots_dispatches_by_root() {
     let Some(bc) = assemble_text("select_two", &text) else {
         return;
     };
-    for (what, p) in encodings() {
+    for (what, p) in profiles() {
         let a = compile(&bc, "select_two", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
         assert!(
             a.strategies
@@ -800,7 +782,7 @@ fn an_unbounded_storage_slot_declares_its_range_limit() {
         return;
     };
     for stem in PROFILES {
-        let p = profile_with(stem, true);
+        let p = profile_with(stem);
         let a = compile(&bc, k.name, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
         assert!(
             a.facts
@@ -915,15 +897,14 @@ fn push_with_table(plan: &Plan) -> Vec<u8> {
 /// A `BufferRangeLimit` variant reaches the slot through its device address from the root table.
 /// Every leaf path, with bind offsets 0 and 8, at offsets around the end of the allocation and near
 /// 2^32: no trap, exact in bounds, 0 out of bounds, and an out-of-bounds store lands in the sink
-/// and leaves the allocation unchanged. Robust buffer access does not cover device addresses, so
-/// the check is emitted on a robust profile too. A `half` NaN loaded, or stored from a constant,
+/// and leaves the allocation unchanged. A `half` NaN loaded, or stored from a constant,
 /// need only come back a NaN where the module reads a `half` from its bits by the device's
 /// widening or encodes one by its narrowing (`PrecisionNote::NativeNanEncoding`,
 /// `device_nan_bits`), whose NaN encoding is the device's.
 #[test]
 fn a_device_address_slot_is_exact_and_contained() {
     let size = 32u64;
-    let p = profile_with("moltenvk-m3", true);
+    let p = profile_with("moltenvk-m3");
     assert_eq!(p.fields().buffer_access, BufferAccess::Addressed);
     let mut inputs = LowerInputs::new();
     inputs.psb_slots.insert(sref(0));
@@ -1065,90 +1046,88 @@ fn a_device_address_slot_below_its_bind_offset_is_exact_and_contained() {
     };
     let mut inputs = LowerInputs::new();
     inputs.psb_slots.insert(sref(0));
-    for robust in [true, false] {
-        let p = profile_with("moltenvk-m3", robust);
-        let what = format!("robust={robust}");
-        assert_eq!(p.fields().buffer_access, BufferAccess::Addressed);
-        let a = compile_bitcode(
-            &bc,
-            EntryRef::Name("far_window"),
-            &FunctionConstantValues::defaults(),
-            &p,
-            &inputs,
-            &mut meter(),
-            SPIRV_WORDS,
-        )
-        .unwrap_or_else(|e| panic!("{what}: {e}"));
-        match a.interface.slots.get(&sref(0)) {
-            Some(SlotInterface::Buffer(b)) => {
-                assert_eq!(
-                    b.window,
-                    Window::Bounded {
-                        start: -16,
-                        len: FAR + 24
-                    },
-                    "{what}"
-                );
-                assert_eq!(b.form, BufferForm::Psb, "{what}");
-            }
-            other => panic!("{what}: {other:?}"),
+    let p = profile_with("moltenvk-m3");
+    let what = "moltenvk-m3";
+    assert_eq!(p.fields().buffer_access, BufferAccess::Addressed);
+    let a = compile_bitcode(
+        &bc,
+        EntryRef::Name("far_window"),
+        &FunctionConstantValues::defaults(),
+        &p,
+        &inputs,
+        &mut meter(),
+        SPIRV_WORDS,
+    )
+    .unwrap_or_else(|e| panic!("{what}: {e}"));
+    match a.interface.slots.get(&sref(0)) {
+        Some(SlotInterface::Buffer(b)) => {
+            assert_eq!(
+                b.window,
+                Window::Bounded {
+                    start: -16,
+                    len: FAR + 24
+                },
+                "{what}"
+            );
+            assert_eq!(b.form, BufferForm::Psb, "{what}");
         }
-        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-        let (plan, m) = typed_module_with(&bc, "far_window", &p, &inputs);
-        // (bind offset, size): all in bounds; the far side out of bounds; the near side out of
-        // bounds (bind − 16 wraps below the allocation).
-        for (bind, size) in [(64u64, 64 + FAR + 8), (64, 64 + FAR), (8, 8 + FAR + 8)] {
-            let near = pattern(128);
-            let far: Vec<u8> = pattern(160).into_iter().skip(128).collect();
-            // `far` holds allocation bytes `bind + FAR - 16 ..`.
-            let far_at = bind + FAR - 16;
-            let res = Resources {
-                buffers: vec![
-                    Buffer {
-                        slot: None,
-                        address: Some(DATA),
-                        bytes: near.clone(),
-                    },
-                    Buffer {
-                        slot: None,
-                        address: Some(DATA + far_at),
-                        bytes: far.clone(),
-                    },
-                    Buffer {
-                        slot: None,
-                        address: Some(SINK),
-                        bytes: vec![0; 64],
-                    },
-                    root_table(size, bind),
-                    bound(1, 0, &[0; 16], 0),
-                ],
-                push: push_with_table(&plan),
-                spec: Default::default(),
-            };
-            let near_inb = bind >= 16;
-            let far_inb = bind + FAR + 8 <= size;
-            let out = match run(&m, &Config::default(), res) {
-                Ok(o) => o,
-                Err(InterpError::Trap(t)) => panic!("{what} bind={bind}: trapped {t:?}"),
-                Err(e) => panic!("{what}: {e}"),
-            };
-            let what = format!("{what} bind={bind} size={size:#x}");
-            let lo = bind.wrapping_sub(16) as usize;
-            let mut want_out = vec![0u8; 16];
-            let mut want_near = near.clone();
-            let mut want_far = far.clone();
-            if near_inb {
-                want_out[..4].copy_from_slice(&near[lo..lo + 4]);
-                want_near[lo + 4..lo + 8].copy_from_slice(&0x1234_5678u32.to_le_bytes());
-            }
-            if far_inb {
-                want_out[4..8].copy_from_slice(&far[16..20]);
-                want_far[20..24].copy_from_slice(&0x9ABC_DEF0u32.to_le_bytes());
-            }
-            assert_eq!(out.buffers[4], want_out, "{what}: out");
-            assert_eq!(out.buffers[0], want_near, "{what}: near");
-            assert_eq!(out.buffers[1], want_far, "{what}: far");
+        other => panic!("{what}: {other:?}"),
+    }
+    link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+    let (plan, m) = typed_module_with(&bc, "far_window", &p, &inputs);
+    // (bind offset, size): all in bounds; the far side out of bounds; the near side out of
+    // bounds (bind − 16 wraps below the allocation).
+    for (bind, size) in [(64u64, 64 + FAR + 8), (64, 64 + FAR), (8, 8 + FAR + 8)] {
+        let near = pattern(128);
+        let far: Vec<u8> = pattern(160).into_iter().skip(128).collect();
+        // `far` holds allocation bytes `bind + FAR - 16 ..`.
+        let far_at = bind + FAR - 16;
+        let res = Resources {
+            buffers: vec![
+                Buffer {
+                    slot: None,
+                    address: Some(DATA),
+                    bytes: near.clone(),
+                },
+                Buffer {
+                    slot: None,
+                    address: Some(DATA + far_at),
+                    bytes: far.clone(),
+                },
+                Buffer {
+                    slot: None,
+                    address: Some(SINK),
+                    bytes: vec![0; 64],
+                },
+                root_table(size, bind),
+                bound(1, 0, &[0; 16], 0),
+            ],
+            push: push_with_table(&plan),
+            spec: Default::default(),
+        };
+        let near_inb = bind >= 16;
+        let far_inb = bind + FAR + 8 <= size;
+        let out = match run(&m, &Config::default(), res) {
+            Ok(o) => o,
+            Err(InterpError::Trap(t)) => panic!("{what} bind={bind}: trapped {t:?}"),
+            Err(e) => panic!("{what}: {e}"),
+        };
+        let what = format!("{what} bind={bind} size={size:#x}");
+        let lo = bind.wrapping_sub(16) as usize;
+        let mut want_out = vec![0u8; 16];
+        let mut want_near = near.clone();
+        let mut want_far = far.clone();
+        if near_inb {
+            want_out[..4].copy_from_slice(&near[lo..lo + 4]);
+            want_near[lo + 4..lo + 8].copy_from_slice(&0x1234_5678u32.to_le_bytes());
         }
+        if far_inb {
+            want_out[4..8].copy_from_slice(&far[16..20]);
+            want_far[20..24].copy_from_slice(&0x9ABC_DEF0u32.to_le_bytes());
+        }
+        assert_eq!(out.buffers[4], want_out, "{what}: out");
+        assert_eq!(out.buffers[0], want_near, "{what}: near");
+        assert_eq!(out.buffers[1], want_far, "{what}: far");
     }
 }
 
@@ -1173,7 +1152,7 @@ entry:\n\
     let Some(bc) = assemble_text("wide_window", &text) else {
         return;
     };
-    let p = profile_with("moltenvk-m3", true);
+    let p = profile_with("moltenvk-m3");
     let mut inputs = LowerInputs::new();
     inputs.psb_slots.insert(sref(0));
     let r = plan_bitcode(
@@ -1215,7 +1194,7 @@ entry:\n\
     let Some(bc) = assemble_text("huge_gep", &text) else {
         return;
     };
-    for (what, p) in encodings() {
+    for (what, p) in profiles() {
         let (plan, m) = match typed_module(&bc, "huge_gep", &p) {
             Ok(x) => x,
             Err(e) => panic!("{what}: {e}"),
@@ -1374,7 +1353,7 @@ fn summing_kernel(name: &str, n: u32) -> String {
 #[test]
 fn a_block_loads_each_push_field_once() {
     const LOAD: u16 = 61;
-    for (what, p) in encodings() {
+    for (what, p) in profiles() {
         let mut loads = Vec::new();
         for n in [1u32, 3] {
             let name = if n == 1 { "sum_one" } else { "sum_three" };
@@ -1427,7 +1406,7 @@ fn guarded_store(name: &str, crossing: bool) -> String {
 #[test]
 fn a_constant_crossing_value_is_used_as_the_constant() {
     const FUNCTION: u16 = 54;
-    for (what, p) in encodings() {
+    for (what, p) in profiles() {
         let mut bodies = Vec::new();
         for (name, crossing) in [("store_late", false), ("store_crossing", true)] {
             let Some(bc) = assemble_text(name, &guarded_store(name, crossing)) else {
@@ -1462,7 +1441,7 @@ fn two_block_kernel(name: &str, second: bool) -> String {
 #[test]
 fn a_push_field_the_entry_block_loaded_is_not_reloaded() {
     const LOAD: u16 = 61;
-    for (what, p) in encodings() {
+    for (what, p) in profiles() {
         let mut loads = Vec::new();
         for (name, second) in [("entry_only", false), ("entry_and_later", true)] {
             let Some(bc) = assemble_text(name, &two_block_kernel(name, second)) else {
@@ -1488,7 +1467,7 @@ fn the_word_cap_holds_on_the_emitted_words() {
     let Some(bc) = assemble_file("storage_texture_write") else {
         return;
     };
-    let p = profile_with("moltenvk-m3", true);
+    let p = profile_with("moltenvk-m3");
     let entry = EntryRef::Name("storage_texture_write");
     let consts = FunctionConstantValues::defaults();
     let inputs = LowerInputs::new();
@@ -1505,15 +1484,13 @@ fn the_word_cap_holds_on_the_emitted_words() {
     );
 }
 
-/// Profile `stem` with the in-shader encoding and without `features`.
+/// Profile `stem` without `features`.
 fn profile_without(stem: &str, features: &[VkFeature]) -> DeviceProfile {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles")
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    desc.features.remove(&VkFeature::RobustBufferAccess);
-    desc.features.remove(&VkFeature::RobustBufferAccess2);
     for f in features {
         desc.features.remove(f);
     }
@@ -1890,7 +1867,7 @@ fn non_writable_slots(a: &crate::library::FunctionArtifact, what: &str) -> Vec<u
 /// and that no store, atomic, volatile or coherent access of the kernel reaches is decorated
 /// `NonWritable` (RADV then reads a uniform address of it with a scalar load); a written slot is
 /// not, and without the attribute no slot is, since another argument may be bound over the same
-/// memory. In both containment encodings on every tested profile, the sum stays exact on the CPU
+/// memory. On every tested profile, the sum stays exact on the CPU
 /// interpreter (`a_block_loads_each_push_field_once`).
 #[test]
 fn an_unaliased_unwritten_buffer_is_non_writable() {
@@ -1927,7 +1904,7 @@ fn an_unaliased_unwritten_buffer_is_non_writable() {
         let Some(bc) = assemble_text(case, text) else {
             return;
         };
-        for (what, p) in encodings() {
+        for (what, p) in profiles() {
             let what = format!("{what} {case}");
             let a = compile(&bc, "unwritten", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
@@ -1946,7 +1923,7 @@ const VEC2_RESIDUALS: [u32; 7] = [0, 4, 8, 16, 24, 36, 0xFFFF_FFF8];
 
 /// A 16-byte leaf whose alignment is at least 16 at an offset proven a multiple of 16
 /// ([`leaf_kernel_in`] over `uint4` buffers) is one element of the slot's `uvec4` view (declared beside the word
-/// view, and stored with one `OpStore`), in both encodings, on every tested profile; aligned to 4,
+/// view, and stored with one `OpStore`), on every tested profile; aligned to 4,
 /// or at an offset nothing proves a multiple of 16 ([`leaf_kernel`]'s byte offset from a buffer,
 /// whatever its `align`), it moves word by word (four stores, no `uvec4` view of the slot it stores
 /// to). At every residual its buffer's alignment allows, a descriptor offset that is a multiple of
@@ -1970,7 +1947,7 @@ fn sixteen_byte_leaves_move_as_one_uvec4() {
 /// one bitcast, `half4` and a chunked `uchar8` through their words. Aligned to 4, or at an offset
 /// nothing proves a multiple of 8, it moves word by word (two stores, no `uvec2` view of the slot
 /// it stores to). At every residual its buffer's alignment allows, the leaf's 8 bytes of a 48-byte
-/// range are read and written exactly, in both encodings, on every tested profile, and with the
+/// range are read and written exactly, on every tested profile, and with the
 /// in-shader check the offset past the range reads 0 and writes nothing.
 #[test]
 fn eight_byte_leaves_move_as_one_uvec2() {
@@ -2029,8 +2006,7 @@ fn eight_byte_leaves_move_as_one_uvec2() {
 fn leaves_move_as_one_vector(kernels: &[LeafKernel], unit: u32, residuals: &[u32]) {
     const OP_STORE: u16 = 62;
     let words = (unit / 4) as usize;
-    for (what, p) in encodings() {
-        let robust = what.ends_with("robust=true");
+    for (what, p) in profiles() {
         for k in kernels {
             for units in [true, false] {
                 let what = format!("{what} {} units={units}", k.name);
@@ -2079,12 +2055,7 @@ fn leaves_move_as_one_vector(kernels: &[LeafKernel], unit: u32, residuals: &[u32
                 // A `uint2` or `uint4` buffer is bound at a multiple of its size.
                 let residuals = residuals.iter().filter(|r| !units || *r % unit == 0);
                 for &r in residuals {
-                    // The interpreter models no robustness: robust encodings run in bounds only.
-                    let descs: Vec<u32> = (0..=48 / unit)
-                        .map(|i| i * unit)
-                        .filter(|d| !robust || d + unit <= 48)
-                        .collect();
-                    for desc in descs {
+                    for desc in (0..=48 / unit).map(|i| i * unit) {
                         let o = desc.wrapping_sub(r);
                         let o = if units { o / unit } else { o };
                         let mut params = vec![0u8; 16];
@@ -2241,7 +2212,7 @@ fn eight_threads() -> BTreeMap<SpecKey, u64> {
 /// `p 0 1 2 p 4 5 6 p 8 9 10 p 12 13 14 16 17 18 19 20`. Nothing proves those offsets multiples of
 /// 16 (the row's stride is 84 bytes and its buffer a `float` buffer, bound at any multiple of 4), so
 /// the slot has no `uvec4` view and the vectors move as words, at residuals 0 and 4, on every tested
-/// profile in both encodings. Where the offsets are proven multiples of 16 ([`FLOAT4_GRID`], a
+/// profile. Where the offsets are proven multiples of 16 ([`FLOAT4_GRID`], a
 /// `float4` buffer at its own indices) the vector is one element of the slot's `uvec4` view.
 #[test]
 fn a_float4_aligned_only_to_its_lanes_is_placed_at_its_address() {
@@ -2263,7 +2234,7 @@ fn a_float4_aligned_only_to_its_lanes_is_placed_at_its_address() {
             row
         })
         .collect();
-    for (what, p) in encodings() {
+    for (what, p) in profiles() {
         check_l3(&rows, "float4_rows", &p, &what);
         let (plan, m) =
             typed_module(&rows, "float4_rows", &p).unwrap_or_else(|e| panic!("{what}: {e}"));

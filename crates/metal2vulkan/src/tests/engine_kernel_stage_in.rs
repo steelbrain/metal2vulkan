@@ -35,7 +35,6 @@ use crate::bind::{
 };
 use crate::budget::{Budget, SPIRV_WORDS};
 use crate::device::profile::BufferAccess;
-use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{BindError, DescriptorError, Error, Feature, LowerFamily, Needs, RuntimeInput};
 use crate::library::{FunctionConstantValues, Library};
@@ -63,7 +62,7 @@ const TABLE: u64 = 0x0000_0010_0000_0000;
 const SINK: u64 = 0x0000_0011_0000_0000;
 const STATUS: u64 = 0x0000_0012_0000_0000;
 
-/// Profiles the dispatches run on, each also without buffer robustness (the in-shader check).
+/// Profiles the dispatches run on.
 const PROFILES: [&str; 2] = ["moltenvk-m3", "lavapipe"];
 
 fn fixture() -> Option<Vec<u8>> {
@@ -77,46 +76,27 @@ fn fixture() -> Option<Vec<u8>> {
     }
 }
 
-/// Committed profile `stem` as a device, without buffer robustness when `bare`.
-fn device(stem: &str, bare: bool) -> Device {
+/// Committed profile `stem` as a device.
+fn device(stem: &str) -> Device {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles")
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    device_of(desc, bare)
-}
-
-/// `desc` as a device, without buffer robustness when `bare`.
-fn device_of(mut desc: DeviceDescription, bare: bool) -> Device {
-    if bare {
-        desc.features.remove(&VkFeature::RobustBufferAccess);
-        desc.features.remove(&VkFeature::RobustBufferAccess2);
-    }
     Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
 /// Each profile of [`PROFILES`] and Profile F (`runtime-floor` without device addresses, below
-/// the runtime's floor, whose buffers are all descriptors), and each without buffer robustness
-/// (`true`).
-fn devices() -> Vec<(String, Device, bool)> {
+/// the runtime's floor, whose buffers are all descriptors).
+fn devices() -> Vec<(String, Device)> {
     use crate::pipeline::testing::{description_f, PROFILE_F};
-    let mut out = Vec::new();
-    for stem in PROFILES {
-        out.push((stem.to_owned(), device(stem, false), false));
-        out.push((
-            format!("{stem} without robustness"),
-            device(stem, true),
-            true,
-        ));
-    }
+    let mut out: Vec<(String, Device)> = PROFILES
+        .into_iter()
+        .map(|stem| (stem.to_owned(), device(stem)))
+        .collect();
     let f = description_f().expect("Profile F");
-    out.push((PROFILE_F.to_owned(), device_of(f.clone(), false), false));
-    out.push((
-        format!("{PROFILE_F} without robustness"),
-        device_of(f, true),
-        true,
-    ));
+    let f = Device::from_queries(f, DevicePolicy::RESIDENT_TABLES).expect("Profile F's device");
+    out.push((PROFILE_F.to_owned(), f));
     out
 }
 
@@ -590,7 +570,7 @@ fn run_fetch(
 ) {
     let d = fetch_descriptor(x, y, index);
     let mut ran = 0;
-    for (what, dev, _) in devices() {
+    for (what, dev) in devices() {
         let Some(pipe) = compiled(&what, pipeline(&dev, bc, "stage_in_fetch", Some(&d))) else {
             continue;
         };
@@ -676,7 +656,7 @@ fn grid_steps_read_the_element_at_the_origin_plus_the_position() {
         (StepFunction::ThreadPositionInGridX, 1),
     );
     let d = fetch_descriptor(sx, sy, IndexType::UInt16);
-    let dev = device("moltenvk-m3", false);
+    let dev = device("moltenvk-m3");
     let pipe = pipeline(&dev, &bc, "stage_in_fetch", Some(&d)).expect("pipeline");
     let (_, m) = typed_module_with(&bc, "stage_in_fetch", dev.profile(), &inputs(&d)).expect("m");
     let mut world = World::new(
@@ -770,7 +750,7 @@ fn indexed_steps_read_the_index_at_the_position() {
 #[test]
 fn a_nonzero_origin_adds_to_the_quotient_and_the_index() {
     let Some(bc) = fixture() else { return };
-    let dev = device("moltenvk-m3", false);
+    let dev = device("moltenvk-m3");
     for x in [
         (StepFunction::ThreadPositionInGridX, 2),
         (StepFunction::ThreadPositionInGridXIndexed, 1),
@@ -924,7 +904,7 @@ fn integer_formats_cross_into_a_float_attribute_as_their_values() {
         threads_per_group: [1, 1, 1],
     };
     let mut ran = 0;
-    for (what, dev, _) in devices() {
+    for (what, dev) in devices() {
         let mut here = 0;
         // Attribute 0 (`float4`) at byte 4 and attribute 3 (`half2`) at byte 16 of layout 1, each
         // in turn carrying the crossing format while the other three stay in their own class, so
@@ -1006,7 +986,7 @@ fn fetch_buffers() -> [(u32, Alloc); 5] {
 #[test]
 fn a_kernel_that_reads_the_region_needs_the_encoders_region() {
     let Some(bc) = fixture() else { return };
-    let dev = device("moltenvk-m3", false);
+    let dev = device("moltenvk-m3");
     let constant = (StepFunction::Constant, 0);
     for (x, y, reads) in [
         (constant, constant, false),
@@ -1149,7 +1129,7 @@ fn run_reaching(
     at2: impl Fn(u32) -> Option<usize>,
 ) {
     let mut ran = 0;
-    for (what, dev, _) in devices() {
+    for (what, dev) in devices() {
         let Some(pipe) = compiled(&what, pipeline(&dev, bc, "stage_in_fetch", Some(d))) else {
             continue;
         };
@@ -1195,7 +1175,7 @@ fn a_fixed_layout_reads_its_own_stride_whatever_the_bind() {
         (StepFunction::ThreadPositionInGridY, 1),
         IndexType::UInt16,
     );
-    let dev = device("moltenvk-m3", false);
+    let dev = device("moltenvk-m3");
     let pipe = pipeline(&dev, &bc, "stage_in_fetch", Some(&d)).expect("pipeline");
     assert!(
         !pipe
@@ -1225,7 +1205,7 @@ fn a_dynamic_layout_reads_the_bound_stride() {
     for layout in [1, 2, 3] {
         d.layouts.get_mut(&layout).expect("layout").stride = None;
     }
-    let dev = device("moltenvk-m3", false);
+    let dev = device("moltenvk-m3");
     let pipe = pipeline(&dev, &bc, "stage_in_fetch", Some(&d)).expect("pipeline");
     let strides: Vec<u32> = pipe
         .dependencies
@@ -1277,10 +1257,8 @@ fn an_element_past_four_gigabytes_reads_zero() {
     });
 }
 
-/// A source buffer's bind offset moves the fetch with it (the range and the residual), and without
-/// buffer robustness one bound too short reads zero bytes past its end through the in-shader check
-/// (the interpreter traps any access a robust device would contain, so it does not model the robust
-/// side).
+/// A source buffer's bind offset moves the fetch with it (the range and the residual), and one
+/// bound too short reads zero bytes past its end through the in-shader check.
 #[test]
 fn bind_offsets_and_short_buffers_reach_the_right_bytes() {
     let Some(bc) = fixture() else { return };
@@ -1289,19 +1267,15 @@ fn bind_offsets_and_short_buffers_reach_the_right_bytes() {
         (StepFunction::ThreadPositionInGridY, 1),
         IndexType::UInt16,
     );
-    for (what, dev, bare) in devices() {
+    for (what, dev) in devices() {
         let pipe = pipeline(&dev, &bc, "stage_in_fetch", Some(&d)).expect("pipeline");
         let (_, m) =
             typed_module_with(&bc, "stage_in_fetch", dev.profile(), &inputs(&d)).expect("m");
-        // Layout 1 bound 72 bytes (three elements) into its allocation; without robustness,
-        // layout 2 holds two elements, so rows 2 and above read zeros.
+        // Layout 1 bound 72 bytes (three elements) into its allocation; layout 2 holds two
+        // elements, so rows 2 and above read zeros.
         let mut shifted = vec![0x55; 72];
         shifted.extend(layout1());
-        let short: Vec<u8> = if bare {
-            layout2()[..16].to_vec()
-        } else {
-            layout2()
-        };
+        let short: Vec<u8> = layout2()[..16].to_vec();
         let mut world = World::new(
             [
                 (
@@ -1343,7 +1317,7 @@ fn bind_offsets_and_short_buffers_reach_the_right_bytes() {
                 let t = gy * W + gx;
                 let at = (12 * t) as usize;
                 let mut want = expected_fetch(gx, gy, t);
-                if bare && gy >= 2 {
+                if gy >= 2 {
                     want[4..8].copy_from_slice(&[0; 4]);
                 }
                 assert_eq!(out[at..at + 12], want, "{what}: thread ({gx}, {gy})");
@@ -1366,7 +1340,7 @@ fn the_region_builtins_read_the_bound_region() {
         .flat_map(|e| (e as f32 + 0.5).to_le_bytes())
         .collect();
     let (origin, size) = ([3, 0, 7], [10, 20, 30]);
-    for (what, dev, _) in devices() {
+    for (what, dev) in devices() {
         let pipe = pipeline(&dev, &bc, "stage_in_region", Some(&d)).expect("pipeline");
         let (_, m) =
             typed_module_with(&bc, "stage_in_region", dev.profile(), &inputs(&d)).expect("m");
@@ -1451,7 +1425,7 @@ fn not_implemented(r: Result<ComputePipeline, Error>, feature: Feature) {
 #[test]
 fn descriptor_refusals_are_typed() {
     let Some(bc) = fixture() else { return };
-    let dev = device("moltenvk-m3", false);
+    let dev = device("moltenvk-m3");
     let fetch = |d: Option<&StageInputDescriptor>| pipeline(&dev, &bc, "stage_in_fetch", d);
     let grid = |x: (StepFunction, u32)| {
         fetch_descriptor(
@@ -1577,7 +1551,7 @@ fn descriptor_refusals_are_typed() {
 #[test]
 fn compiled_kernels_and_keys_follow_the_descriptor() {
     let Some(bc) = fixture() else { return };
-    let dev = device("moltenvk-m3", false);
+    let dev = device("moltenvk-m3");
     let f = function(&bc, "stage_in_fetch");
     let a = fetch_descriptor(
         (StepFunction::ThreadPositionInGridX, 1),

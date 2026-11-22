@@ -62,12 +62,12 @@ driver's identity. Three ways to get one:
   `description.recommended_enables()` at `vkCreateDevice`, then pass
   `with_enabled(&enabled)` so the description states what is enabled. `with_enabled` refuses a set
   that breaks one of Vulkan's co-enable rules, naming its VUID. The recommendation keeps those
-  rules itself: on a device that reports `robustBufferAccess` without
-  `robustBufferAccessUpdateAfterBind`, it keeps `robustBufferAccess` and leaves out the buffer
-  update-after-bind features (VUID-VkDeviceCreateInfo-robustBufferAccess-10247), so a device made
-  from it there gets no texture buffers: each is refused, naming the texel-buffer update-after-bind
-  feature it lacks. Enable those features without `robustBufferAccess` (and
-  `robustBufferAccess2`) to have them. `VkFeature::exposure()` and
+  rules itself. It names neither `robustBufferAccess` nor `robustBufferAccess2`: the translator
+  checks every buffer access in the shader and reads neither. If you enable `robustBufferAccess`
+  yourself on a device that does not report `robustBufferAccessUpdateAfterBind`, leave out the
+  buffer update-after-bind features the recommendation holds
+  (VUID-VkDeviceCreateInfo-robustBufferAccess-10247); a device made without the texel-buffer ones
+  refuses every texture buffer, naming the feature it lacks. `VkFeature::exposure()` and
   `VkExtension::requires(version)` say where each feature lives at the device's version, to chain
   the create info.
 - Build one field by field.

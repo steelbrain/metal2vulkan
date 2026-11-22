@@ -1143,12 +1143,7 @@ fn profiles() -> Vec<(String, DeviceProfile)> {
         "moltenvk-m3 robust1".into(),
         without("moltenvk-m3", &[VkFeature::RobustImageAccess2]),
     ));
-    let all = [
-        VkFeature::RobustImageAccess,
-        VkFeature::RobustImageAccess2,
-        VkFeature::RobustBufferAccess,
-        VkFeature::RobustBufferAccess2,
-    ];
+    let all = [VkFeature::RobustImageAccess, VkFeature::RobustImageAccess2];
     for stem in ["moltenvk-m3", "lavapipe"] {
         out.push((format!("{stem} unrobust"), without(stem, &all)));
     }
@@ -2083,12 +2078,7 @@ fn a_heap_read_takes_its_out_of_bounds_alpha_from_its_table_entry() {
     const ALPHA: u64 = 0x0000_0001_0000_0020;
     const MISSED: u64 = 0x0000_0002_0000_0000;
     let entry = "argument_buffer_read";
-    let unrobust = [
-        VkFeature::RobustImageAccess,
-        VkFeature::RobustImageAccess2,
-        VkFeature::RobustBufferAccess,
-        VkFeature::RobustBufferAccess2,
-    ];
+    let unrobust = [VkFeature::RobustImageAccess, VkFeature::RobustImageAccess2];
     let devices = [
         ("moltenvk-m3", device("moltenvk-m3", &[])),
         (

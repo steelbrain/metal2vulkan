@@ -908,7 +908,7 @@ macro_rules! members {
 use VkFeature as F;
 
 members! {
-    Core.core.robust_buffer_access => Some(F::RobustBufferAccess);
+    Core.core.robust_buffer_access => None, registry = "robustBufferAccess";
     Core.core.shader_int16 => Some(F::ShaderInt16);
     Core.core.shader_int64 => Some(F::ShaderInt64);
     Core.core.shader_float64 => Some(F::ShaderFloat64);
@@ -1140,7 +1140,7 @@ members! {
         Some(F::ExtendedDynamicState3ColorWriteMask);
     FeedbackLoop.feedback_loop.attachment_feedback_loop_layout =>
         Some(F::AttachmentFeedbackLoopLayout);
-    Robustness2.robustness2.robust_buffer_access2 => Some(F::RobustBufferAccess2);
+    Robustness2.robustness2.robust_buffer_access2 => None, registry = "robustBufferAccess2";
     Robustness2.robustness2.robust_image_access2 => Some(F::RobustImageAccess2);
     Robustness2.robustness2.null_descriptor => Some(F::NullDescriptor);
     ImageRobustness.image_robustness.robust_image_access => Some(F::RobustImageAccess);

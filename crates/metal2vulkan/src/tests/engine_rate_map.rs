@@ -12,8 +12,8 @@
 //! `bind::RasterizationRateMap`'s shader decoders answer (`shader_screen_to_physical` and
 //! `shader_physical_to_screen`, Metal's). Stray words (a map of garbage) decode without a fault.
 //!
-//! A far coordinate's saturating index reads before or past the buffer, which robust descriptors
-//! contain on a device and the interpreter traps on, so with them only the near points run.
+//! A far coordinate's saturating index reads before or past the buffer, which the in-shader check
+//! reads as 0.
 //!
 //! The kernel is the shape Apple's compiler emits for
 //! `out[tid] = float4(dec.map_screen_to_physical_coordinates(in[tid], layer),
@@ -25,8 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::air::canon::rate_map_data as format;
 use crate::bind::{RasterizationRateMap, RateMapAxis, RateMapDescriptor, RateMapLayerDescriptor};
-use crate::device::requirements::VkFeature;
-use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
+use crate::device::{DevicePolicy, DeviceProfile};
 use crate::lower::select::Plan;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
@@ -104,21 +103,10 @@ fn assemble(text: &str) -> Option<Vec<u8>> {
     }
 }
 
-/// Committed profile `stem`, with buffer robustness or with the in-shader containment encoding.
-fn profile_with(stem: &str, robust: bool) -> DeviceProfile {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles")
-        .join(format!("{stem}.json"));
-    let text = std::fs::read_to_string(path).expect("profile");
-    let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    if !robust {
-        desc.features.remove(&VkFeature::RobustBufferAccess);
-        desc.features.remove(&VkFeature::RobustBufferAccess2);
-    }
-    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
-        .expect("device")
-        .profile()
-        .clone()
+/// Committed profile `stem`, under the resident-table domains.
+fn profile_with(stem: &str) -> DeviceProfile {
+    crate::pipeline::testing::profile(stem, DevicePolicy::RESIDENT_TABLES)
+        .expect("committed profile")
 }
 
 /// A shader's map of `c` over parameter data `words` in layer `layer`, to physical coordinates
@@ -215,10 +203,6 @@ fn points(screen: [u32; 2]) -> Vec<[f32; 2]> {
     out
 }
 
-/// The largest coordinate whose saturating index reads inside the buffer at every decoded layer
-/// (the tables of layer `count + 1` end below its last word for indices up to 512).
-const NEAR: f32 = 16_384.0;
-
 /// Bit for bit, the sign of a zero included; a `NaN` is any `NaN` (the module leaves a `NaN`'s
 /// bits to the device, which the interpreter does not model).
 fn same(a: f32, b: f32) -> bool {
@@ -280,88 +264,77 @@ fn the_decoder_answers_as_the_map() {
     };
     let (mut metals, mut apart) = (0, 0);
     for stem in PROFILES {
-        for robust in [true, false] {
-            let what = format!("{stem} robust={robust}");
-            let p = profile_with(stem, robust);
-            let a = compile(&bc, "rate_map", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
-            assert!(
-                !a.precision.contains(&PrecisionNote::RasterizationRateMap),
-                "{what}: {:?}",
-                a.precision
-            );
-            assert!(
-                a.precision.contains(&PrecisionNote::DeviceDenormals),
-                "{what}: {:?}",
-                a.precision
-            );
-            assert!(
-                a.precision.contains(&PrecisionNote::NativeNanEncoding),
-                "{what}: {:?}",
-                a.precision
-            );
-            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            let (plan, m) = typed_module(&bc, "rate_map", &p).expect("module");
-            for (name, map) in maps() {
-                let words: Vec<u32> = map
-                    .to_bytes()
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .map(|b| u32::from_le_bytes(*b))
-                    .collect();
-                let pts = points(map.screen_size());
-                // A far coordinate's saturating index reads before or past the buffer: robust
-                // descriptors contain those reads on a device, which the interpreter does not
-                // model (it traps there), so with them only the near points run; the in-shader
-                // containment encoding reads 0 there, as the map's shader decoders do.
-                let pts: Vec<[f32; 2]> = if robust {
-                    pts.into_iter()
-                        .filter(|p| !p.iter().any(|&v| v > NEAR))
-                        .collect()
-                } else {
-                    pts
+        let what = stem;
+        let p = profile_with(stem);
+        let a = compile(&bc, "rate_map", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert!(
+            !a.precision.contains(&PrecisionNote::RasterizationRateMap),
+            "{what}: {:?}",
+            a.precision
+        );
+        assert!(
+            a.precision.contains(&PrecisionNote::DeviceDenormals),
+            "{what}: {:?}",
+            a.precision
+        );
+        assert!(
+            a.precision.contains(&PrecisionNote::NativeNanEncoding),
+            "{what}: {:?}",
+            a.precision
+        );
+        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+        let (plan, m) = typed_module(&bc, "rate_map", &p).expect("module");
+        for (name, map) in maps() {
+            let words: Vec<u32> = map
+                .to_bytes()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| u32::from_le_bytes(*b))
+                .collect();
+            // A far coordinate's saturating index reads before or past the buffer: the in-shader
+            // check reads 0 there, as the map's shader decoders do.
+            let pts = points(map.screen_size());
+            for layer in 0..map.layer_count() + 2 {
+                let res = Resources {
+                    buffers: vec![
+                        bound(0, &map.to_bytes()),
+                        bound(1, &floats(&pts)),
+                        bound(2, &vec![0u8; pts.len() * 16]),
+                        bound(3, &layer.to_le_bytes()),
+                    ],
+                    push: push_bytes(&plan),
+                    spec: Default::default(),
                 };
-                for layer in 0..map.layer_count() + 2 {
-                    let res = Resources {
-                        buffers: vec![
-                            bound(0, &map.to_bytes()),
-                            bound(1, &floats(&pts)),
-                            bound(2, &vec![0u8; pts.len() * 16]),
-                            bound(3, &layer.to_le_bytes()),
-                        ],
-                        push: push_bytes(&plan),
-                        spec: Default::default(),
-                    };
-                    let cfg = Config {
-                        workgroups: [pts.len() as u32, 1, 1],
-                        ..Config::default()
-                    };
-                    let out = run(&m, &cfg, res).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-                    for (i, &c) in pts.iter().enumerate() {
-                        let got: Vec<f32> = out.buffers[2][i * 16..i * 16 + 16]
-                            .chunks(4)
-                            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-                            .collect();
-                        let want =
-                            [kept(&words, layer, c, true), kept(&words, layer, c, false)].concat();
+                let cfg = Config {
+                    workgroups: [pts.len() as u32, 1, 1],
+                    ..Config::default()
+                };
+                let out = run(&m, &cfg, res).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+                for (i, &c) in pts.iter().enumerate() {
+                    let got: Vec<f32> = out.buffers[2][i * 16..i * 16 + 16]
+                        .chunks(4)
+                        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                        .collect();
+                    let want =
+                        [kept(&words, layer, c, true), kept(&words, layer, c, false)].concat();
+                    assert!(
+                        got.iter().zip(&want).all(|(&g, &w)| same(g, w)),
+                        "{what}: {name} layer {layer} at {c:?}: {got:?}, kept {want:?}"
+                    );
+                    let metal = [
+                        map.shader_screen_to_physical(c, layer),
+                        map.shader_physical_to_screen(c, layer),
+                    ]
+                    .concat();
+                    if want.iter().zip(&metal).all(|(&g, &w)| same(g, w)) {
+                        metals += 1;
+                    } else {
                         assert!(
-                            got.iter().zip(&want).all(|(&g, &w)| same(g, w)),
-                            "{what}: {name} layer {layer} at {c:?}: {got:?}, kept {want:?}"
+                            layer >= map.layer_count(),
+                            "{what}: {name} layer {layer} at {c:?}: {want:?}, Metal's {metal:?}"
                         );
-                        let metal = [
-                            map.shader_screen_to_physical(c, layer),
-                            map.shader_physical_to_screen(c, layer),
-                        ]
-                        .concat();
-                        if want.iter().zip(&metal).all(|(&g, &w)| same(g, w)) {
-                            metals += 1;
-                        } else {
-                            assert!(
-                                layer >= map.layer_count(),
-                                "{what}: {name} layer {layer} at {c:?}: {want:?}, Metal's {metal:?}"
-                            );
-                            apart += 1;
-                        }
+                        apart += 1;
                     }
                 }
             }
@@ -375,9 +348,7 @@ fn the_decoder_answers_as_the_map() {
 }
 
 /// A buffer of stray words (an unbound map's neutral zeros, or garbage) decodes to some value
-/// without a fault under the in-shader containment encoding: every read past the buffer is
-/// contained. With robust descriptors the device contains them, which the interpreter does not
-/// model (it traps there, to catch reads a module relies on).
+/// without a fault: the in-shader check contains every read past the buffer.
 #[test]
 fn stray_words_decode_without_a_fault() {
     let Some(bc) = assemble(KERNEL) else {
@@ -391,8 +362,8 @@ fn stray_words_decode_without_a_fault() {
         })
         .collect();
     for stem in PROFILES {
-        let what = format!("{stem} in-shader containment");
-        let p = profile_with(stem, false);
+        let what = stem;
+        let p = profile_with(stem);
         let (plan, m) = typed_module(&bc, "rate_map", &p).expect("module");
         let pts = points([64, 64]);
         for words in [vec![0u8; 16], garbage.clone()] {
@@ -459,15 +430,13 @@ attributes #1 = { nounwind willreturn memory(argmem: read) }
         return;
     };
     for stem in PROFILES {
-        for robust in [true, false] {
-            let what = format!("{stem} robust={robust}");
-            let p = profile_with(stem, robust);
-            let a = compile(&bc, "unwarp", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
-            assert!(
-                !a.precision.contains(&PrecisionNote::RasterizationRateMap),
-                "{what}"
-            );
-            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-        }
+        let what = stem;
+        let p = profile_with(stem);
+        let a = compile(&bc, "unwarp", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert!(
+            !a.precision.contains(&PrecisionNote::RasterizationRateMap),
+            "{what}"
+        );
+        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
     }
 }

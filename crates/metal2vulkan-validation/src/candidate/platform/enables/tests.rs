@@ -597,8 +597,13 @@ fn the_list_enables_no_buffer_robustness_and_keeps_the_texel_buffers_update_afte
         let enables = engine_list(&description, &supported, &available)
             .unwrap_or_else(|error| panic!("{stem}: {error}"));
         let set = enabled_set(&enables);
-        for feature in [F::RobustBufferAccess, F::RobustBufferAccess2] {
-            assert!(!set.features.contains(&feature), "{stem}: {feature:?}");
+        let robust: Vec<&Member> = MEMBERS
+            .iter()
+            .filter(|m| matches!(m.name, "robust_buffer_access" | "robust_buffer_access2"))
+            .collect();
+        assert_eq!(robust.len(), 2, "{stem}");
+        for member in robust {
+            assert!(!enabled(&enables, member), "{stem}: {}", member.name);
         }
         for feature in [
             F::DescriptorBindingUniformTexelBufferUpdateAfterBind,
@@ -675,8 +680,8 @@ fn the_moltenvk_context_opens_full_subgroups_and_the_memory_model() {
 
 /// The opened context enables what the runtime enables of the device (lavapipe and MoltenVK both
 /// list subgroup size control and have the memory model), under the validation layer without a
-/// message, and its opened description is restricted to exactly what it enabled. It enables no
-/// buffer robustness, and none of its stated robustness is unmet.
+/// message, and its opened description is restricted to exactly what it enabled. None of its
+/// stated robustness is unmet.
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 #[test]
 fn the_opened_contexts_enable_their_lists() {
@@ -693,7 +698,6 @@ fn the_opened_contexts_enable_their_lists() {
     .unwrap();
     assert!(messages.is_empty(), "{messages:?}");
     assert_eq!(unmet, BTreeSet::new());
-    assert!(!new.features.contains(&F::RobustBufferAccess));
     let opened = opened.unwrap();
     assert_eq!(opened.features, new.features);
     assert_eq!(opened.extensions, new.extensions);

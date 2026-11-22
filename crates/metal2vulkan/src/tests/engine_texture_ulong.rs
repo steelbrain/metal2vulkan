@@ -94,12 +94,7 @@ fn profiles() -> Vec<(String, DeviceProfile)> {
         "moltenvk-m3 robust1".into(),
         without("moltenvk-m3", &[VkFeature::RobustImageAccess2]),
     ));
-    let all = [
-        VkFeature::RobustImageAccess,
-        VkFeature::RobustImageAccess2,
-        VkFeature::RobustBufferAccess,
-        VkFeature::RobustBufferAccess2,
-    ];
+    let all = [VkFeature::RobustImageAccess, VkFeature::RobustImageAccess2];
     for stem in ["moltenvk-m3", "lavapipe"] {
         out.push((format!("{stem} unrobust"), without(stem, &all)));
     }

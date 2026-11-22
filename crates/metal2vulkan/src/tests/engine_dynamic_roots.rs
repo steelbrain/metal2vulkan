@@ -24,13 +24,12 @@
 //! assembles the kernels; without it the tests skip visibly.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::bind::status::{ExecutionStatus, StatusBits, StatusWord};
 use crate::device::profile::DeviceProfile;
 use crate::device::requirements::VkFeature;
-use crate::device::{Device, DeviceDescription, DevicePolicy};
+use crate::device::DevicePolicy;
 use crate::error::{Capability, Error, Feature, Needs};
 use crate::lower::select::Plan;
 use crate::pipeline::facts::RuntimeFact;
@@ -59,35 +58,21 @@ const fn guest(k: u64) -> u64 {
 /// Bytes of each resident allocation (a multiple of 16).
 const ALLOC: u64 = 64;
 
-fn profile(stem: &str, robust: bool, policy: DevicePolicy) -> DeviceProfile {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles")
-        .join(format!("{stem}.json"));
-    let text = std::fs::read_to_string(path).expect("profile");
-    let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    if !robust {
-        desc.features.remove(&VkFeature::RobustBufferAccess);
-        desc.features.remove(&VkFeature::RobustBufferAccess2);
-    }
-    Device::from_queries(desc, policy)
-        .expect("device")
-        .profile()
-        .clone()
+fn profile(stem: &str, policy: DevicePolicy) -> DeviceProfile {
+    crate::pipeline::testing::profile(stem, policy).expect("committed profile")
 }
 
-/// Profile-A profiles in both descriptor encodings (the device-address check is emitted in both:
-/// robustness does not cover device addresses).
+/// The Profile-A profiles.
 fn profiles() -> Vec<(String, DeviceProfile)> {
-    let mut out = Vec::new();
-    for stem in ["moltenvk-m3", "lavapipe"] {
-        for robust in [true, false] {
-            out.push((
-                format!("{stem} robust={robust}"),
-                profile(stem, robust, DevicePolicy::RESIDENT_TABLES),
-            ));
-        }
-    }
-    out
+    ["moltenvk-m3", "lavapipe"]
+        .into_iter()
+        .map(|stem| {
+            (
+                stem.to_owned(),
+                profile(stem, DevicePolicy::RESIDENT_TABLES),
+            )
+        })
+        .collect()
 }
 
 fn assemble_text(name: &str, text: &str) -> Option<Vec<u8>> {
@@ -440,7 +425,7 @@ fn inttoptr_resolves_every_resident_address() {
     let Some(bc) = assemble_text("from_int", &kernel("from_int", body)) else {
         return;
     };
-    let p = profile("moltenvk-m3", true, DevicePolicy::RESIDENT_TABLES);
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES);
     let a = compile(&bc, "from_int", &p).expect("compile");
     link_and_validate(&a, &p).expect("L3");
     let (plan, m) = typed_module(&bc, "from_int", &p).expect("module");
@@ -501,7 +486,7 @@ fn inttoptr_resolves_addresses_of_large_sets() {
     let Some(bc) = assemble_text("from_int", &kernel("from_int", body)) else {
         return;
     };
-    let p = profile("moltenvk-m3", true, DevicePolicy::RESIDENT_TABLES);
+    let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES);
     let a = compile(&bc, "from_int", &p).expect("compile");
     link_and_validate(&a, &p).expect("L3");
     let (plan, m) = typed_module(&bc, "from_int", &p).expect("module");

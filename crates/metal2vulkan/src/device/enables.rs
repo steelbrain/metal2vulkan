@@ -9,10 +9,8 @@
 //! is exposed, and enable an extension only together with the extensions it depends on, so every
 //! enable set this module returns is **closed** under those three rules.
 //!
-//! Vulkan also forbids enabling some features without another ([`FEATURE_NEEDS`]) or together
-//! ([`BUFFER_UPDATE_AFTER_BIND`] beside `robustBufferAccess` on a device without
-//! `robustBufferAccessUpdateAfterBind`), so every enable set this module returns also keeps those
-//! **co-enable rules**.
+//! Vulkan also forbids enabling some features without another ([`FEATURE_NEEDS`]), so every enable
+//! set this module returns also keeps those **co-enable rules**.
 //!
 //! - [`DeviceDescription::recommended_enables`]: what the core can use on a device described by
 //!   what it supports (`DeviceDescription::query`); the consumer merges it into its own list.
@@ -194,8 +192,8 @@ const fn promoted(minor: u32, extensions: &'static [VkExtension]) -> Exposure {
 exposures! {
     // `VkPhysicalDeviceFeatures` (1.0).
     Core(v(0)) => [
-        RobustBufferAccess, ShaderInt16, ShaderInt64, ShaderFloat64,
-        VertexPipelineStoresAndAtomics, FragmentStoresAndAtomics, GeometryShader,
+        ShaderInt16, ShaderInt64, ShaderFloat64, VertexPipelineStoresAndAtomics,
+        FragmentStoresAndAtomics, GeometryShader,
         TessellationShader, SampleRateShading, DualSrcBlend, LogicOp, IndependentBlend,
         ShaderClipDistance,
         ShaderCullDistance, DrawIndirectFirstInstance, MultiDrawIndirect, DepthClamp,
@@ -254,7 +252,7 @@ exposures! {
     promoted(4, ROTATE) => [ShaderSubgroupRotate, ShaderSubgroupRotateClustered];
     promoted(4, &[E::KhrMaintenance5]) => [Maintenance5];
     // Extension-only.
-    Extension(ROBUSTNESS2) => [RobustBufferAccess2, RobustImageAccess2, NullDescriptor];
+    Extension(ROBUSTNESS2) => [RobustImageAccess2, NullDescriptor];
     Extension(&[E::ExtShaderImageAtomicInt64]) => [ShaderImageInt64Atomics];
     Extension(ATOMIC_FLOAT) => [
         ShaderBufferFloat32Atomics, ShaderBufferFloat32AtomicAdd, ShaderSharedFloat32Atomics,
@@ -506,11 +504,6 @@ fn close_requirements(extensions: &mut BTreeSet<VkExtension>, api: ApiVersion) {
 /// chains. No companion needs one itself.
 pub const FEATURE_NEEDS: &[(VkFeature, VkFeature, &str)] = &[
     (
-        VkFeature::RobustBufferAccess2,
-        VkFeature::RobustBufferAccess,
-        "VUID-VkPhysicalDeviceRobustness2FeaturesKHR-robustBufferAccess2-04000",
-    ),
-    (
         VkFeature::MultiviewTessellationShader,
         VkFeature::Multiview,
         "VUID-VkPhysicalDeviceMultiviewFeatures-multiviewTessellationShader-00581",
@@ -522,66 +515,18 @@ pub const FEATURE_NEEDS: &[(VkFeature, VkFeature, &str)] = &[
     ),
 ];
 
-/// The update-after-bind features of buffer descriptor types, which a device whose
-/// `robustBufferAccessUpdateAfterBind` is false may not enable beside `robustBufferAccess`
-/// ([`BUFFER_UPDATE_AFTER_BIND_VUID`]). The rule's fourth,
-/// `descriptorBindingUniformBufferUpdateAfterBind`, is not in the vocabulary, so no set the core
-/// returns or reads names it.
-pub const BUFFER_UPDATE_AFTER_BIND: &[VkFeature] = &[
-    VkFeature::DescriptorBindingStorageBufferUpdateAfterBind,
-    VkFeature::DescriptorBindingUniformTexelBufferUpdateAfterBind,
-    VkFeature::DescriptorBindingStorageTexelBufferUpdateAfterBind,
-];
-
-/// "If the `robustBufferAccess` feature is enabled, and `robustBufferAccessUpdateAfterBind` is
-/// `VK_FALSE`, then `descriptorBindingUniformBufferUpdateAfterBind`,
-/// `descriptorBindingStorageBufferUpdateAfterBind`,
-/// `descriptorBindingUniformTexelBufferUpdateAfterBind`, and
-/// `descriptorBindingStorageTexelBufferUpdateAfterBind` must not be enabled" (Vulkan 1.4.357).
-pub const BUFFER_UPDATE_AFTER_BIND_VUID: &str = "VUID-VkDeviceCreateInfo-robustBufferAccess-10247";
-
-/// The first co-enable rule `features` breaks on a device whose
-/// `robustBufferAccessUpdateAfterBind` is `rba_update_after_bind`, naming the features and the
-/// rule's VUID.
-fn co_enable_violation(
-    features: &BTreeSet<VkFeature>,
-    rba_update_after_bind: bool,
-) -> Option<String> {
-    if !rba_update_after_bind && features.contains(&VkFeature::RobustBufferAccess) {
-        if let Some(f) = BUFFER_UPDATE_AFTER_BIND
-            .iter()
-            .find(|f| features.contains(f))
-        {
-            return Some(format!(
-                "{f:?} with RobustBufferAccess on a device that does not report \
-                 robustBufferAccessUpdateAfterBind ({BUFFER_UPDATE_AFTER_BIND_VUID})"
-            ));
-        }
-    }
+/// The first co-enable rule `features` breaks, naming the features and the rule's VUID.
+fn co_enable_violation(features: &BTreeSet<VkFeature>) -> Option<String> {
     FEATURE_NEEDS
         .iter()
         .find(|(f, needs, _)| features.contains(f) && !features.contains(needs))
         .map(|(f, needs, vuid)| format!("{f:?} without {needs:?} ({vuid})"))
 }
 
-/// `features` less what the co-enable rules forbid with the rest, on a device whose
-/// `robustBufferAccessUpdateAfterBind` is `rba_update_after_bind`. Where `robustBufferAccess`
-/// meets [`BUFFER_UPDATE_AFTER_BIND`] on a device without that property, the update-after-bind
-/// features go: the core reads `robustBufferAccess` to choose the containment encoding, and the
-/// set-1 arrays that need them (the function tables', the texel-buffer classes') are refused there,
-/// naming the feature.
-/// Then each feature whose [`FEATURE_NEEDS`] companion is missing goes; no companion is itself
-/// dropped, so one pass keeps every rule.
-fn co_enabled(
-    features: impl Iterator<Item = VkFeature>,
-    rba_update_after_bind: bool,
-) -> BTreeSet<VkFeature> {
+/// `features` less each feature whose [`FEATURE_NEEDS`] companion is missing; no companion is
+/// itself dropped, so one pass keeps every rule.
+fn co_enabled(features: impl Iterator<Item = VkFeature>) -> BTreeSet<VkFeature> {
     let mut out: BTreeSet<VkFeature> = features.collect();
-    if !rba_update_after_bind && out.contains(&VkFeature::RobustBufferAccess) {
-        for f in BUFFER_UPDATE_AFTER_BIND {
-            out.remove(f);
-        }
-    }
     let lonely: Vec<VkFeature> = FEATURE_NEEDS
         .iter()
         .filter(|(f, needs, _)| out.contains(f) && !out.contains(needs))
@@ -663,20 +608,14 @@ impl DeviceDescription {
     /// what it wants (normally all of it, merged into its own list) and passes the result to
     /// [`with_enabled`](DeviceDescription::with_enabled).
     ///
-    /// The set keeps Vulkan's co-enable rules: where `robustBufferAccess` stays and the description
-    /// does not report `robustBufferAccessUpdateAfterBind`, the update-after-bind features of the
-    /// storage buffer, uniform texel buffer, and storage texel buffer descriptor types are left out
-    /// (VUID-VkDeviceCreateInfo-robustBufferAccess-10247); and `robustBufferAccess2` without
-    /// `robustBufferAccess`, or `multiviewTessellationShader` without `multiview`, is left out. The
-    /// core reads the two texel-buffer ones: a texture buffer is an element of a set-1 texel-buffer
-    /// array, which needs its type's update-after-bind feature, so a device made from this set on
-    /// such a device refuses every texture buffer, naming the feature it lacks. A consumer that wants
-    /// texture buffers there enables those features without `robustBufferAccess` (and
-    /// `robustBufferAccess2`), as the runtime does, and the profile then contains buffer accesses
-    /// in the shader.
+    /// The set keeps Vulkan's co-enable rules: `multiviewTessellationShader` or
+    /// `multiviewGeometryShader` without `multiview` is left out. It names neither
+    /// `robustBufferAccess` nor `robustBufferAccess2`, which the core does not read: it checks
+    /// every buffer access in the shader. A consumer that enables `robustBufferAccess` itself
+    /// keeps its rule beside the update-after-bind features of buffer descriptor types the set
+    /// holds (VUID-VkDeviceCreateInfo-robustBufferAccess-10247).
     pub fn recommended_enables(&self) -> EnableSet {
-        let features = self.features.iter().copied();
-        let features = co_enabled(features, self.robust_buffer_access_update_after_bind);
+        let features = co_enabled(self.features.iter().copied());
         closed(self.api_version, features.into_iter(), &self.extensions)
     }
 
@@ -690,12 +629,10 @@ impl DeviceDescription {
     /// version nor any of its extensions); enables an extension without one it requires; omits
     /// `VK_KHR_portability_subset` where the description lists it
     /// (VUID-VkDeviceCreateInfo-pProperties-04451); or breaks a co-enable rule, naming its VUID:
-    /// `robustBufferAccess` with a buffer descriptor type's update-after-bind feature where the
-    /// description does not report `robustBufferAccessUpdateAfterBind`
-    /// (VUID-VkDeviceCreateInfo-robustBufferAccess-10247), `robustBufferAccess2` without
-    /// `robustBufferAccess` (VUID-VkPhysicalDeviceRobustness2FeaturesKHR-robustBufferAccess2-04000),
-    /// or `multiviewTessellationShader` without `multiview`
-    /// (VUID-VkPhysicalDeviceMultiviewFeatures-multiviewTessellationShader-00581).
+    /// `multiviewTessellationShader` without `multiview`
+    /// (VUID-VkPhysicalDeviceMultiviewFeatures-multiviewTessellationShader-00581), or
+    /// `multiviewGeometryShader` without it
+    /// (VUID-VkPhysicalDeviceMultiviewFeatures-multiviewGeometryShader-00580).
     pub fn with_enabled(mut self, enabled: &EnableSet) -> Result<DeviceDescription, Error> {
         let api = self.api_version;
         if let Some(f) = enabled.features.difference(&self.features).next() {
@@ -732,10 +669,7 @@ impl DeviceDescription {
                 "does not enable {portability:?}, which the device lists"
             )));
         }
-        if let Some(rule) = co_enable_violation(
-            &enabled.features,
-            self.robust_buffer_access_update_after_bind,
-        ) {
+        if let Some(rule) = co_enable_violation(&enabled.features) {
             return Err(invalid(format!("enables {rule}")));
         }
         self.features
@@ -833,26 +767,17 @@ impl Device {
     /// [`DeviceDescription::recommended_enables`] (restricted by
     /// [`DeviceDescription::with_enabled`]) enabled at least this.
     ///
-    /// It keeps the co-enable rules as the recommendation does, under the description's
-    /// `robustBufferAccessUpdateAfterBind`: a description listing `robustBufferAccess` and buffer
-    /// update-after-bind features without it (a committed profile read whole, as the tests and the
-    /// tier table use them) states a device no consumer can create, and the set leaves out those
-    /// update-after-bind features, which no artifact needs.
+    /// It keeps the co-enable rules as the recommendation does.
     pub fn required_enables(&self) -> EnableSet {
         let f = self.profile().fields();
-        let features = co_enabled(
-            f.enabled.features.iter().copied(),
-            self.robust_buffer_access_update_after_bind(),
-        );
+        let features = co_enabled(f.enabled.features.iter().copied());
         closed(f.api_version, features.into_iter(), &f.enabled.extensions)
     }
 }
 
 /// `Device::from_queries`'s check of the description invariants: every listed feature is exposed by
 /// the description's version or listed extensions, and every listed feature's [`FEATURE_NEEDS`]
-/// companion is listed. The rule of [`BUFFER_UPDATE_AFTER_BIND_VUID`] is not checked here: a
-/// committed profile read whole lists both sides of it on three profiles, and the profile the core
-/// derives from such a description translates exactly as from its creatable restriction.
+/// companion is listed.
 pub(crate) fn check_invariants(desc: &DeviceDescription) -> Result<(), Error> {
     for &f in &desc.features {
         let x = f.exposure();

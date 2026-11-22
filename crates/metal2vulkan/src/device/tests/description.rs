@@ -107,7 +107,6 @@ fn runtime_floor_is_vulkan_1_3_core_and_the_runtime_s_floor() {
     assert_eq!(d.api_version, ApiVersion::V1_3);
     for f in [
         VkFeature::UniformBufferStandardLayout,
-        VkFeature::RobustBufferAccess,
         VkFeature::ShaderInt16,
         VkFeature::ShaderInt64,
         VkFeature::BufferDeviceAddress,
@@ -246,49 +245,6 @@ fn the_arm_spelling_of_rasterization_order_access_is_the_ext_one() {
     );
     let d = DeviceDescription::from_khronos_json(&bare, None).unwrap();
     assert!(!d.has(VkFeature::RasterizationOrderColorAttachmentAccess));
-}
-
-/// `robustBufferAccessUpdateAfterBind` is read from either structure that states it, and a
-/// document that does not state it (`roadmap-2022`, which requires nothing of it) reads false.
-#[test]
-fn robust_buffer_access_update_after_bind_is_read_where_stated() {
-    for (stem, stated) in [
-        ("lavapipe", true),
-        ("moltenvk-m3", true),
-        ("nvidia-rtx50-linux", true),
-        ("runtime-floor", false),
-        ("runtime-floor", false),
-        ("runtime-floor", false),
-        ("runtime-floor", false),
-    ] {
-        assert_eq!(
-            profile(stem).robust_buffer_access_update_after_bind,
-            stated,
-            "{stem}"
-        );
-    }
-    for structure in [
-        "VkPhysicalDeviceVulkan12Properties",
-        "VkPhysicalDeviceDescriptorIndexingProperties",
-        "VkPhysicalDeviceDescriptorIndexingPropertiesEXT",
-    ] {
-        let with = doc(
-            "1.2.0",
-            r#""a""#,
-            &format!(
-                r#""a": {{"properties": {{"{structure}":
-                    {{"robustBufferAccessUpdateAfterBind": true}}}}}}"#
-            ),
-        );
-        let d = DeviceDescription::from_khronos_json(&with, None).unwrap();
-        assert!(d.robust_buffer_access_update_after_bind, "{structure}");
-    }
-    let unstated = doc("1.2.0", r#""a""#, r#""a": {}"#);
-    assert!(
-        !DeviceDescription::from_khronos_json(&unstated, None)
-            .unwrap()
-            .robust_buffer_access_update_after_bind
-    );
 }
 
 /// A profile's `m2v_color_attachment_sample_counts` entry states each color attachment format's

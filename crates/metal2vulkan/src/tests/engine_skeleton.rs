@@ -12,10 +12,8 @@
 //! visibly, a tool that rejects an engine fixture fails it.
 
 use std::collections::BTreeSet;
-use std::path::Path;
 
-use crate::device::requirements::VkFeature;
-use crate::device::{Device, DeviceDescription, DevicePolicy};
+use crate::device::DevicePolicy;
 use crate::error::{Error, InternalKind, Limit};
 use crate::library::{FunctionArtifact, FunctionConstantValues};
 use crate::lower::select::LowerInputs;
@@ -161,41 +159,17 @@ fn store_const_passes_the_pipeline_on_every_m1_profile() {
     }
 }
 
-/// The store sits in the in-shader bounds check (a selection around it), without robust buffer
-/// access and with it stated alike. Both validate.
+/// The store sits in the in-shader bounds check (a selection around it), and validates.
 #[test]
-fn containment_guards_the_store_whatever_robustness_is_stated() {
+fn containment_guards_the_store() {
     let Some(bitcode) = store_const() else { return };
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles/runtime-floor.json");
-    let text = std::fs::read_to_string(path).expect("runtime-floor");
-    let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    desc.features.remove(&VkFeature::RobustBufferAccess);
-    desc.features.remove(&VkFeature::RobustBufferAccess2);
-    let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
-    let p = dev.profile();
-    let a = compile(&bitcode, "store_const", p).expect("compile");
+    let p = profile("runtime-floor", DevicePolicy::RESIDENT_TABLES).expect("profile");
+    let a = compile(&bitcode, "store_const", &p).expect("compile");
     assert!(a.strategies.entries.contains_key("access.store.checked"));
-    let (_, words) = link_and_validate(&a, p).unwrap_or_else(|e| panic!("{e}"));
+    let (_, words) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{e}"));
     let ops = opcodes(&words);
     assert!(ops.contains(&(crate::spv::Op::ArrayLength as u32)));
     assert!(ops.contains(&(crate::spv::Op::SelectionMerge as u32)));
-    // The same guarded store where the description states buffer robustness: no robustness is
-    // left an access to.
-    let robust = profile("runtime-floor", DevicePolicy::RESIDENT_TABLES).expect("profile");
-    let stated = compile(&bitcode, "store_const", &robust).expect("compile");
-    assert!(stated
-        .strategies
-        .entries
-        .contains_key("access.store.checked"));
-    let (_, words) = link_and_validate(&stated, &robust).unwrap_or_else(|e| panic!("{e}"));
-    let stated_ops = opcodes(&words);
-    for op in [crate::spv::Op::ArrayLength, crate::spv::Op::SelectionMerge] {
-        assert!(
-            stated_ops.contains(&(op as u32)),
-            "{op:?} with robustness stated"
-        );
-    }
 }
 
 /// Compilation is deterministic: equal artifacts (key, words, relocations, interface) and equal

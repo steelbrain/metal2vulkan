@@ -241,8 +241,8 @@ fn a_tessellation_pipeline_census_is_its_functions() {
 /// The tier table holds every committed profile as stated and, where it states a robustness
 /// feature, in its robustness-off leg: the stated leg compiles the robust image encodings the
 /// profile states, the off leg the in-shader ones, on the same device class and subgroup width.
-/// Every committed profile states `robustBufferAccess`, so every one has both legs; every one
-/// states image robustness too (the floor's Vulkan 1.3 requires `robustImageAccess`).
+/// Every committed profile states image robustness (the floor's Vulkan 1.3 requires
+/// `robustImageAccess`), so every one has both legs.
 #[test]
 fn the_tier_table_derives_a_robustness_off_leg_from_each_profile() {
     let table = committed_profiles().unwrap();

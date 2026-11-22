@@ -3,9 +3,9 @@
 //! - `i64` arithmetic (`add`, `sub`, `mul`, `shl` by a constant below 32, `and`, `or`, `xor`)
 //!   over index extensions and constants, whose only uses are index operands of GEPs on
 //!   `u32`-offset pointers, is held as its low word: kernels built on it compile on [`FLOOR_F`]
-//!   (no `shaderInt64`) and `moltenvk-m3`, in both containment encodings, pass L3, select
-//!   `arith.index_word`, and read and write exactly the element the 64-bit index names, including
-//!   an index whose 64-bit computation wraps through 2³².
+//!   (no `shaderInt64`) and `moltenvk-m3`, pass L3, select `arith.index_word`, and read and write
+//!   exactly the element the 64-bit index names, including an index whose 64-bit computation
+//!   wraps through 2³².
 //! - An index word used in another block crosses it as a `u32`.
 //! - `i64` arithmetic with any other use, a shift right, or a shift by 32 or more keeps its
 //!   64-bit form: `moltenvk-m3` as a `u64`, [`FLOOR_F`] as two words.
@@ -40,9 +40,8 @@ const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16
 /// Profile F device that holds a 64-bit value as two words.
 const FLOOR_F: &str = "runtime-floor without bufferDeviceAddress and shaderInt64";
 
-/// Committed profile `stem` (or [`FLOOR_F`]'s device), optionally with buffer robustness disabled
-/// (the in-shader encoding).
-fn profile_with(stem: &str, robust: bool) -> DeviceProfile {
+/// Committed profile `stem` (or [`FLOOR_F`]'s device).
+fn profile_with(stem: &str) -> DeviceProfile {
     let file = if stem == FLOOR_F {
         "runtime-floor"
     } else {
@@ -57,10 +56,6 @@ fn profile_with(stem: &str, robust: bool) -> DeviceProfile {
         desc.features.remove(&VkFeature::BufferDeviceAddress);
         desc.features.remove(&VkFeature::ShaderInt64);
     }
-    if !robust {
-        desc.features.remove(&VkFeature::RobustBufferAccess);
-        desc.features.remove(&VkFeature::RobustBufferAccess2);
-    }
     Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
         .expect("device")
         .profile()
@@ -68,18 +63,12 @@ fn profile_with(stem: &str, robust: bool) -> DeviceProfile {
 }
 
 /// A profile without ([`FLOOR_F`], Profile F) and one with `shaderInt64` (`moltenvk-m3`,
-/// Profile A), each in both containment encodings.
-fn encodings() -> Vec<(String, DeviceProfile)> {
-    let mut out = Vec::new();
-    for stem in [FLOOR_F, "moltenvk-m3"] {
-        for robust in [true, false] {
-            out.push((
-                format!("{stem} robust={robust}"),
-                profile_with(stem, robust),
-            ));
-        }
-    }
-    out
+/// Profile A).
+fn profiles() -> Vec<(String, DeviceProfile)> {
+    [FLOOR_F, "moltenvk-m3"]
+        .into_iter()
+        .map(|stem| (stem.to_owned(), profile_with(stem)))
+        .collect()
 }
 
 fn assemble_text(name: &str, text: &str) -> Option<Vec<u8>> {
@@ -248,7 +237,7 @@ fn index_words_are_exact_without_int64() {
         let Some(bc) = assemble_text(k.name, &kernel(k.name, &body, ("int", 4))) else {
             return;
         };
-        for (what, p) in encodings() {
+        for (what, p) in profiles() {
             let what = format!("{what} {}", k.name);
             let a = compile(&bc, k.name, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
             let names: Vec<&String> = a.strategies.entries.keys().collect();
@@ -277,7 +266,7 @@ fn an_index_word_used_in_other_blocks_crosses_as_a_word() {
     let Some(bc) = assemble_text(name, &kernel(name, &body, ("int", 4))) else {
         return;
     };
-    for (what, p) in encodings() {
+    for (what, p) in profiles() {
         let a = compile(&bc, name, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
         assert!(
             a.strategies.entries.contains_key("arith.index_word"),
@@ -338,7 +327,7 @@ fn index_arithmetic_with_other_uses_or_operators_keeps_64_bits() {
             return;
         };
         for stem in [FLOOR_F, "moltenvk-m3"] {
-            let p = profile_with(stem, true);
+            let p = profile_with(stem);
             let a = compile(&bc, name, &p).unwrap_or_else(|e| panic!("{name} {stem}: {e}"));
             assert!(
                 !a.strategies.entries.contains_key("arith.index_word"),
@@ -364,13 +353,13 @@ fn a_wide_pointer_index_keeps_its_64_bit_form() {
     let Some(bc) = assemble_text(name, &kernel(name, body, ("long", 8))) else {
         return;
     };
-    let p = profile_with("moltenvk-m3", true);
+    let p = profile_with("moltenvk-m3");
     let a = compile(&bc, name, &p).unwrap_or_else(|e| panic!("{e}"));
     assert!(a.interface.needs_pointer_translation);
     assert!(!a.strategies.entries.contains_key("arith.index_word"));
     assert!(a.strategies.entries.contains_key("arith.int"));
     link_and_validate(&a, &p).unwrap_or_else(|e| panic!("L3: {e}"));
-    match compile(&bc, name, &profile_with(FLOOR_F, true)) {
+    match compile(&bc, name, &profile_with(FLOOR_F)) {
         Err(Error::Unsupported(u)) => {
             assert_eq!(u.feature, Feature::DereferenceLoadedPointer);
             assert_eq!(
@@ -392,7 +381,7 @@ fn a_wide_pointer_index_keeps_its_64_bit_form() {
 /// it with `LimitExceeded(WorkUnits)`.
 #[test]
 fn the_index_value_scan_is_metered_and_linear() {
-    let p = profile_with(FLOOR_F, true);
+    let p = profile_with(FLOOR_F);
     for n in [16usize, 64, 256] {
         let name = format!("index_chains_{n}");
         let mut body = String::from("  %o = load i32, ptr addrspace(1) %2, align 4\n");

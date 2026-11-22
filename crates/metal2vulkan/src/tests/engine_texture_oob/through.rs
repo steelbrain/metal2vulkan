@@ -818,12 +818,7 @@ fn an_argument_buffer_texture_reads_its_border_texels_from_its_table_entry() {
         (SWIZZLED, PixelFormat::RGBA32Float, swizzle),
         (RED, PixelFormat::R32Float, TextureSwizzleChannels::DEFAULT),
     ];
-    let unrobust = [
-        VkFeature::RobustImageAccess,
-        VkFeature::RobustImageAccess2,
-        VkFeature::RobustBufferAccess,
-        VkFeature::RobustBufferAccess2,
-    ];
+    let unrobust = [VkFeature::RobustImageAccess, VkFeature::RobustImageAccess2];
     let devices = [
         ("moltenvk-m3", device("moltenvk-m3", &[])),
         (

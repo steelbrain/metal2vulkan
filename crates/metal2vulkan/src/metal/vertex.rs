@@ -601,24 +601,15 @@ mod tests {
     /// Vulkan bounds fixed-function vertex input only under robust buffer access
     /// (`VUID-vkCmdDraw-None-02721`), which no profile enables, so outside the identity domains
     /// every attribute is pulled and read through the in-shader check, whatever its format and
-    /// step, and whatever buffer robustness the device describes. The descriptor errors and the
-    /// tessellation refusal come first in every case.
+    /// step. The descriptor errors and the tessellation refusal come first in every case.
     #[test]
     fn fixed_function_input_is_pulled_outside_the_identity_domains() {
         use VertexStepFunction as S;
-        let robust = floor();
-        assert!(robust.features.contains(&VkFeature::RobustBufferAccess));
-        let mut bare = robust.clone();
-        bare.features.remove(&VkFeature::RobustBufferAccess);
-        bare.features.remove(&VkFeature::RobustBufferAccess2);
-        let checked = Device::from_queries(bare, DevicePolicy::RESIDENT_TABLES).unwrap();
-        let robust = Device::from_queries(robust, DevicePolicy::RESIDENT_TABLES).unwrap();
+        let checked = Device::from_queries(floor(), DevicePolicy::RESIDENT_TABLES).unwrap();
         let float4 = VertexFormat::Float4;
         for (step, rate) in [(S::PerVertex, 1), (S::PerInstance, 1)] {
-            for dev in [&checked, &robust] {
-                let fetch = attribute_fetch(float4, step, rate, dev.profile());
-                assert_eq!(fetch, Ok(AttributeFetch::Pulled), "{step:?}");
-            }
+            let fetch = attribute_fetch(float4, step, rate, checked.profile());
+            assert_eq!(fetch, Ok(AttributeFetch::Pulled), "{step:?}");
         }
         assert!(matches!(
             attribute_fetch(float4, S::PerInstance, 0, checked.profile()),

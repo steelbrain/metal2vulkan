@@ -50,7 +50,6 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::budget::{Budget, Meter};
-use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::library::Library;
 use crate::metal::{AttributeFormat, IndexType, StepFunction};
@@ -85,8 +84,7 @@ fn device() -> Device {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
     let text = std::fs::read_to_string(path).expect("profile");
-    let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    desc.features.insert(VkFeature::RobustBufferAccess);
+    let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
     Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 

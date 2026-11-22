@@ -48,7 +48,7 @@ use crate::spirv::interp::{run, Buffer, Config, InterpError, Order, Resources};
 use crate::spirv::ir::TypedModule;
 use crate::spirv::verify::verify;
 
-/// Profiles with robust descriptors and without, with and without 64-bit integers.
+/// Profiles with and without 64-bit integers.
 const PROFILES: [&str; 4] = [
     "moltenvk-m3",
     "runtime-floor",
@@ -60,17 +60,6 @@ const DATALAYOUT: &str = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:
 
 fn p(stem: &str) -> DeviceProfile {
     profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile")
-}
-
-/// Committed profile `stem` without buffer robustness: containment is checked in the shader.
-fn unrobust(stem: &str) -> DeviceProfile {
-    without(
-        stem,
-        &[
-            VkFeature::RobustBufferAccess,
-            VkFeature::RobustBufferAccess2,
-        ],
-    )
 }
 
 /// Committed profile `stem` without `features`.
@@ -310,7 +299,7 @@ declare i32 @air.atomic.global.load.i32(ptr addrspace(1), i32, i32, i1)
 "#;
 
 /// The uses of the strategy named `name`, the memory it reaches included (`.psb`,
-/// `.psb_and_view`), in either robustness encoding: `name` and `name.checked`.
+/// `.psb_and_view`), with or without its in-shader check: `name` and `name.checked`.
 fn uses(plan: &Plan, name: &str) -> u32 {
     plan.census()
         .iter()
@@ -526,16 +515,14 @@ declare i32 @air.atomic.global.add.u.i32(ptr addrspace(1), i32, i32, i32, i1)
 "#;
 
 /// Invocation 0 adds 5 to word 0; the others' atomics are 1000·t words out: contained (no trap, old
-/// value 0, nothing written) by the in-shader check (robustness removed; the interpreter traps an
-/// unchecked out-of-bounds access, so the robust profiles pass L3 only).
+/// value 0, nothing written) by the in-shader check.
 #[test]
 fn an_out_of_bounds_buffer_atomic_is_contained() {
     let Some(bc) = assemble("oob", OOB) else {
         return;
     };
     for stem in PROFILES {
-        l3(&bc, "oob", &p(stem), stem);
-        let prof = unrobust(stem);
+        let prof = p(stem);
         l3(&bc, "oob", &prof, stem);
         let (plan, m) = typed_module(&bc, "oob", &prof).expect("module");
         assert!(
@@ -780,11 +767,11 @@ declare i32 @air.atomic.global.add.u.i32(ptr addrspace(1), i32, i32, i32, i1)
 "#;
 
 /// A slot a typed atomic reaches is read by device address, while another slot is a descriptor
-/// view, both checked in the shader on every profile whatever buffer robustness it describes, so
+/// view, both checked in the shader on every profile, so
 /// the census names each access by the form it takes: the `u64` add
 /// `access.atomic.buffer.rmw.psb.checked`, the `u32` add through the view
 /// `access.atomic.buffer.rmw.checked`, and a load whose pointer may be either
-/// `access.load.switch.psb_and_view.checked`, with robustness described and without it alike.
+/// `access.load.switch.psb_and_view.checked`.
 #[test]
 fn a_device_address_access_is_named_apart_from_a_descriptor_access() {
     let Some(bc) = assemble("addressed_and_viewed", ADDRESSED_AND_VIEWED) else {
@@ -805,9 +792,9 @@ fn a_device_address_access_is_named_apart_from_a_descriptor_access() {
             assert!(names.contains(*name), "{what}: {name} not in {names:?}");
         }
     };
-    let robust = p("lavapipe");
-    l3(&bc, entry, &robust, "lavapipe");
-    let (plan, robust_names) = names(&robust);
+    let prof = p("lavapipe");
+    l3(&bc, entry, &prof, "lavapipe");
+    let (plan, found) = names(&prof);
     assert!(plan.families.access.psb_contained);
     let forms = plan
         .families
@@ -828,13 +815,7 @@ fn a_device_address_access_is_named_apart_from_a_descriptor_access() {
         "access.load.switch.psb_and_view.checked",
         "access.store.checked",
     ];
-    expect(&robust_names, &want, "lavapipe");
-    let checked = unrobust("lavapipe");
-    l3(&bc, entry, &checked, "lavapipe without robustness");
-    let (_, checked_names) = names(&checked);
-    expect(&checked_names, &want, "lavapipe without robustness");
-    // One form whatever buffer robustness the description states.
-    assert_eq!(robust_names, checked_names);
+    expect(&found, &want, "lavapipe");
 }
 
 const ADDRESSED_COPIES: &str = r#"define void @addressed_copies(ptr addrspace(1) %wide, ptr addrspace(1) %words, i32 %t) {
@@ -866,37 +847,31 @@ declare void @llvm.memset.p1.i64(ptr addrspace(1), i8, i64, i1)
 /// typed atomic reaches it) and `[[buffer(1)]]` a descriptor view: a copy from the device address
 /// to the view loads checked in the shader and stores under the profile's encoding, the reverse
 /// copy the other way round, so they are `access.memcpy.from_psb` and `access.memcpy.to_psb`, never
-/// one name for both; a fill of the device address is `access.memset.to_psb`. The names are the
-/// same with robust descriptors and without them (the view side follows the module's buffer
-/// encoding, the coverage key).
+/// one name for both; a fill of the device address is `access.memset.to_psb`.
 #[test]
 fn a_memory_intrinsic_names_each_side_by_what_it_reaches() {
     let Some(bc) = assemble("addressed_copies", ADDRESSED_COPIES) else {
         return;
     };
     let entry = "addressed_copies";
-    for (what, prof) in [
-        ("lavapipe", p("lavapipe")),
-        ("lavapipe without robustness", unrobust("lavapipe")),
-    ] {
-        l3(&bc, entry, &prof, what);
-        let (plan, _) = typed_module(&bc, entry, &prof).expect("module");
-        let intrinsics = plan
-            .census()
-            .into_iter()
-            .filter(|(name, _)| name.starts_with("access.mem"))
-            .map(|(name, (uses, _))| (name, uses))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            intrinsics,
-            [
-                ("access.memcpy.from_psb".to_owned(), 1),
-                ("access.memcpy.to_psb".to_owned(), 1),
-                ("access.memset.to_psb".to_owned(), 1),
-            ],
-            "{what}"
-        );
-    }
+    let (what, prof) = ("lavapipe", p("lavapipe"));
+    l3(&bc, entry, &prof, what);
+    let (plan, _) = typed_module(&bc, entry, &prof).expect("module");
+    let intrinsics = plan
+        .census()
+        .into_iter()
+        .filter(|(name, _)| name.starts_with("access.mem"))
+        .map(|(name, (uses, _))| (name, uses))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        intrinsics,
+        [
+            ("access.memcpy.from_psb".to_owned(), 1),
+            ("access.memcpy.to_psb".to_owned(), 1),
+            ("access.memset.to_psb".to_owned(), 1),
+        ],
+        "{what}"
+    );
 }
 
 const FENCES: &str = r#"define void @fences(ptr addrspace(1) %buf, i32 %t) {
@@ -1322,55 +1297,54 @@ fn narrow_atomics_are_exact_under_contention() {
     };
     const N: u32 = 64;
     for stem in PROFILES {
-        for prof in [p(stem), unrobust(stem)] {
-            l3(&bc, "narrow", &prof, stem);
-            let (plan, m) = typed_module(&bc, "narrow", &prof).expect("module");
-            // or, xor, and, load.
-            assert_eq!(uses(&plan, "access.atomic.buffer.narrow"), 4, "{stem}");
-            // add ×2, umax, min, sub, xchg, nand, cmpxchg, store, uinc_wrap, udec_wrap, umin.
-            assert_eq!(uses(&plan, "access.atomic.buffer.narrow_cas"), 12, "{stem}");
-            let mut init = vec![0u32; 16 + 6 * N as usize];
-            init[1] = 1000;
-            init[2] = 0x1200_FF5A;
-            init[3] = 0xAB00_0000;
-            init[4] = 0xFFFF_0300;
-            let res = resources(&plan, &[init], N);
-            for out in run_orders(&m, &res).expect("run") {
-                let w = &out[0];
-                let b = |i: usize| (w[i / 4] >> (8 * (i % 4))) & 0xFF;
-                let h = |i: usize| (w[i / 2] >> (16 * (i % 2))) & 0xFFFF;
-                assert_eq!(b(0), N, "{stem}: add");
-                assert_eq!(b(1), (3 * N) & 0xFF, "{stem}: add wraps at 8 bits");
-                assert_eq!(b(2), N - 1, "{stem}: umax");
-                assert_eq!(b(3), 0xE0, "{stem}: signed min (-32)");
-                assert_eq!(h(2), 1000 - 5 * N, "{stem}: sub");
-                assert_eq!(h(3), 0xFFFF, "{stem}: or");
-                assert_eq!(b(8), 0x5A, "{stem}: xor of 0..64");
-                assert_eq!(b(9), 0, "{stem}: and");
-                assert!(b(10) < N, "{stem}: xchg");
-                assert_eq!(b(11), 0x12, "{stem}: nand toggled an even number of times");
-                assert_eq!(b(14), 77, "{stem}: store");
-                assert_eq!(b(15), 0xAB, "{stem}: load leaves the byte");
-                assert_eq!(b(16), N % 11, "{stem}: uinc_wrap");
-                assert_eq!(b(17), 5, "{stem}: udec_wrap");
-                assert_eq!(h(9), 5, "{stem}: umin");
-                let mut olds: Vec<u32> = w[16..16 + N as usize].to_vec();
-                olds.sort_unstable();
-                assert_eq!(olds, (0..N).collect::<Vec<_>>(), "{stem}: add olds");
-                let won: Vec<usize> = (0..N as usize).filter(|t| w[144 + t] == 1).collect();
-                assert_eq!(won.len(), 1, "{stem}: one cmpxchg winner");
-                assert_eq!(h(6), won[0] as u32 + 1, "{stem}: cmpxchg");
-                for t in 0..N as usize {
-                    let want = if t == won[0] { 0 } else { won[0] as u32 + 1 };
-                    assert_eq!(w[80 + t], want, "{stem}: cmpxchg old {t}");
-                    assert_eq!(w[208 + t], 0xAB, "{stem}: load {t}");
-                    assert!(w[272 + t] == 0x12 || w[272 + t] == 0xED, "{stem}: nand old");
-                }
-                let mut subs: Vec<u32> = w[336..336 + N as usize].to_vec();
-                subs.sort_unstable();
-                let want: Vec<u32> = (0..N).rev().map(|k| 1000 - 5 * (k + 1) + 5).collect();
-                assert_eq!(subs, want, "{stem}: sub olds");
+        let prof = p(stem);
+        l3(&bc, "narrow", &prof, stem);
+        let (plan, m) = typed_module(&bc, "narrow", &prof).expect("module");
+        // or, xor, and, load.
+        assert_eq!(uses(&plan, "access.atomic.buffer.narrow"), 4, "{stem}");
+        // add ×2, umax, min, sub, xchg, nand, cmpxchg, store, uinc_wrap, udec_wrap, umin.
+        assert_eq!(uses(&plan, "access.atomic.buffer.narrow_cas"), 12, "{stem}");
+        let mut init = vec![0u32; 16 + 6 * N as usize];
+        init[1] = 1000;
+        init[2] = 0x1200_FF5A;
+        init[3] = 0xAB00_0000;
+        init[4] = 0xFFFF_0300;
+        let res = resources(&plan, &[init], N);
+        for out in run_orders(&m, &res).expect("run") {
+            let w = &out[0];
+            let b = |i: usize| (w[i / 4] >> (8 * (i % 4))) & 0xFF;
+            let h = |i: usize| (w[i / 2] >> (16 * (i % 2))) & 0xFFFF;
+            assert_eq!(b(0), N, "{stem}: add");
+            assert_eq!(b(1), (3 * N) & 0xFF, "{stem}: add wraps at 8 bits");
+            assert_eq!(b(2), N - 1, "{stem}: umax");
+            assert_eq!(b(3), 0xE0, "{stem}: signed min (-32)");
+            assert_eq!(h(2), 1000 - 5 * N, "{stem}: sub");
+            assert_eq!(h(3), 0xFFFF, "{stem}: or");
+            assert_eq!(b(8), 0x5A, "{stem}: xor of 0..64");
+            assert_eq!(b(9), 0, "{stem}: and");
+            assert!(b(10) < N, "{stem}: xchg");
+            assert_eq!(b(11), 0x12, "{stem}: nand toggled an even number of times");
+            assert_eq!(b(14), 77, "{stem}: store");
+            assert_eq!(b(15), 0xAB, "{stem}: load leaves the byte");
+            assert_eq!(b(16), N % 11, "{stem}: uinc_wrap");
+            assert_eq!(b(17), 5, "{stem}: udec_wrap");
+            assert_eq!(h(9), 5, "{stem}: umin");
+            let mut olds: Vec<u32> = w[16..16 + N as usize].to_vec();
+            olds.sort_unstable();
+            assert_eq!(olds, (0..N).collect::<Vec<_>>(), "{stem}: add olds");
+            let won: Vec<usize> = (0..N as usize).filter(|t| w[144 + t] == 1).collect();
+            assert_eq!(won.len(), 1, "{stem}: one cmpxchg winner");
+            assert_eq!(h(6), won[0] as u32 + 1, "{stem}: cmpxchg");
+            for t in 0..N as usize {
+                let want = if t == won[0] { 0 } else { won[0] as u32 + 1 };
+                assert_eq!(w[80 + t], want, "{stem}: cmpxchg old {t}");
+                assert_eq!(w[208 + t], 0xAB, "{stem}: load {t}");
+                assert!(w[272 + t] == 0x12 || w[272 + t] == 0xED, "{stem}: nand old");
             }
+            let mut subs: Vec<u32> = w[336..336 + N as usize].to_vec();
+            subs.sort_unstable();
+            let want: Vec<u32> = (0..N).rev().map(|k| 1000 - 5 * (k + 1) + 5).collect();
+            assert_eq!(subs, want, "{stem}: sub olds");
         }
     }
 }
@@ -1486,8 +1460,7 @@ fn an_out_of_bounds_narrow_atomic_is_contained() {
         return;
     };
     for stem in PROFILES {
-        l3(&bc, "narrow_oob", &p(stem), stem);
-        let prof = unrobust(stem);
+        let prof = p(stem);
         l3(&bc, "narrow_oob", &prof, stem);
         let (plan, m) = typed_module(&bc, "narrow_oob", &prof).expect("module");
         assert!(
@@ -1818,7 +1791,7 @@ declare void @air.wg.barrier(i32, i32)
 /// the exit test (`ctrl`, whose exit tests only `t`), and through a threadgroup word a store of the
 /// loop writes (`poll`); a load outside every loop, one a counted loop repeats only to store
 /// (`count`), and an acquire load keep what they ask. The read of the compare-and-swap loop a float
-/// `max` is, which that loop exits on, acquires. Every profile, whatever its robustness: the rule
+/// `max` is, which that loop exits on, acquires. Every profile: the rule
 /// reads the function's structure only.
 #[test]
 fn a_relaxed_load_acquires_where_its_loops_exit_depends_on_it() {

@@ -424,8 +424,8 @@ fn every_device_of_the_cfgs_kind_enables_the_consumers_extensions_it_offers() {
 }
 
 /// The translator's profile on every device of the cfg's kind holds only what device creation
-/// enabled: the floor's `robustImageAccess` and `nullDescriptor`, and none of the robustness
-/// features the runtime leaves off, whatever the device reports.
+/// enabled: the floor's `robustImageAccess`, `robustImageAccess2` and `nullDescriptor`, whatever the
+/// device reports.
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 #[test]
 fn every_device_of_the_cfgs_kind_gives_the_translator_only_what_it_enables() {
@@ -450,18 +450,11 @@ fn every_device_of_the_cfgs_kind_gives_the_translator_only_what_it_enables() {
         ] {
             assert!(enabled.contains(&on), "{name}: {on:?}");
         }
-        for off in [
-            VkFeature::RobustBufferAccess,
-            VkFeature::RobustBufferAccess2,
-        ] {
-            assert!(!enabled.contains(&off), "{name}: {off:?}");
-        }
         // An image read out of range is the device's; a texel buffer's is still the shader's.
         assert!(profile.device_reads_texels(false), "{name}: image reads");
         assert!(!profile.device_reads_texels(true), "{name}: texel buffers");
         println!(
-            "profile: {name}: robustImageAccess, robustImageAccess2 and nullDescriptor alone of \
-             the robustness features"
+            "profile: {name}: robustImageAccess, robustImageAccess2 and nullDescriptor enabled"
         );
     }
 }

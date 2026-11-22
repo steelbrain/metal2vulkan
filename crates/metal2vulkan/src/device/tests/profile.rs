@@ -491,7 +491,7 @@ fn check_reports_the_first_missing_capability() {
     );
     assert_eq!(
         need(Requirements {
-            features: [VkFeature::RobustBufferAccess, VkFeature::ShaderFloat64].into(),
+            features: [VkFeature::ShaderInt16, VkFeature::ShaderFloat64].into(),
             ..Requirements::default()
         }),
         Err(Capability::Feature(VkFeature::ShaderFloat64))

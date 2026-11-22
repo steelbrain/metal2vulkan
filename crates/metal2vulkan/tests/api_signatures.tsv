@@ -2271,7 +2271,6 @@ field	metal2vulkan::device::DeviceDescription.generated_commands	pub generated_c
 field	metal2vulkan::device::DeviceDescription.khr_format_feature_flags2	pub khr_format_feature_flags2: bool
 field	metal2vulkan::device::DeviceDescription.limits	pub limits: Limits
 field	metal2vulkan::device::DeviceDescription.rgba4_opaque_black_swizzled	pub rgba4_opaque_black_swizzled: bool
-field	metal2vulkan::device::DeviceDescription.robust_buffer_access_update_after_bind	pub robust_buffer_access_update_after_bind: bool
 field	metal2vulkan::device::DeviceDescription.subgroup	pub subgroup: SubgroupProperties
 field	metal2vulkan::device::DeviceDescription.vendor_id	pub vendor_id: u32
 field	metal2vulkan::device::DevicePolicy.handle_domain	pub handle_domain: HandleDomain
@@ -9548,8 +9547,6 @@ variant	metal2vulkan::device::VkFeature::RasterizationOrderColorAttachmentAccess
 variant	metal2vulkan::device::VkFeature::RasterizationOrderDepthAttachmentAccess	RasterizationOrderDepthAttachmentAccess
 variant	metal2vulkan::device::VkFeature::RasterizationOrderStencilAttachmentAccess	RasterizationOrderStencilAttachmentAccess
 variant	metal2vulkan::device::VkFeature::RayQuery	RayQuery
-variant	metal2vulkan::device::VkFeature::RobustBufferAccess	RobustBufferAccess
-variant	metal2vulkan::device::VkFeature::RobustBufferAccess2	RobustBufferAccess2
 variant	metal2vulkan::device::VkFeature::RobustImageAccess	RobustImageAccess
 variant	metal2vulkan::device::VkFeature::RobustImageAccess2	RobustImageAccess2
 variant	metal2vulkan::device::VkFeature::RuntimeDescriptorArray	RuntimeDescriptorArray

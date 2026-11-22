@@ -928,7 +928,6 @@ fn bound(path: &[String]) -> Option<Bound> {
         ["float_controls", "denorm_independence" | "rounding_independence"] => Bound::Independence,
         ["filter_minmax_single_component_formats"
         | "rgba4_opaque_black_swizzled"
-        | "robust_buffer_access_update_after_bind"
         | "khr_format_feature_flags2"] => Bound::Implies,
         ["generated_commands"] => Bound::Present,
         ["generated_commands", "max_indirect_pipeline_count"

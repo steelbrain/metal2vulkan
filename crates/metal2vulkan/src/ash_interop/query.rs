@@ -624,8 +624,6 @@ macro_rules! v13_or {
 }
 
 feature_sources! { c, x;
-    RobustBufferAccess => on(c.core.robust_buffer_access);
-    RobustBufferAccess2 => on(c.robustness2.robust_buffer_access2);
     RobustImageAccess => v13_or!(c.robust_image_access, image_robustness.robust_image_access);
     RobustImageAccess2 => on(c.robustness2.robust_image_access2);
     NullDescriptor => on(c.robustness2.null_descriptor);
@@ -1051,8 +1049,6 @@ impl DeviceDescription {
                     vk::ShaderStageFlags::from_raw(g.supported_stages_pipeline_binding.as_raw()),
                 )
             });
-        desc.robust_buffer_access_update_after_bind =
-            on(properties.v12.robust_buffer_access_update_after_bind);
         // No query reports where the driver departs from the specifications; the driver and
         // its release decide it, measured (`device::driver_facts`). `VkFormatProperties3` where the
         // effective version or an available extension has it, whose storage-without-format bits

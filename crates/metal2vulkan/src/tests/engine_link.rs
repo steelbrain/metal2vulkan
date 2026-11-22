@@ -14,8 +14,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::budget::SPIRV_WORDS;
-use crate::device::requirements::{FormatUsage, VkFeature};
-use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
+use crate::device::requirements::FormatUsage;
+use crate::device::{DevicePolicy, DeviceProfile};
 use crate::error::{
     DescriptorError, Error, Feature, LowerFamily, MetalAnswer, Needs, RuntimeInput,
 };
@@ -61,21 +61,6 @@ fn prof(stem: &str) -> DeviceProfile {
 /// vertex attribute is fetched in fixed function (outside them every attribute is pulled).
 fn identity_prof(stem: &str) -> DeviceProfile {
     profile(stem, DevicePolicy::default()).expect("committed profile")
-}
-
-/// Committed profile `stem` without buffer robustness: its containment is checked in the shader.
-fn without_robustness(stem: &str) -> DeviceProfile {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles")
-        .join(format!("{stem}.json"));
-    let text = std::fs::read_to_string(path).expect("profile");
-    let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    desc.features.remove(&VkFeature::RobustBufferAccess);
-    desc.features.remove(&VkFeature::RobustBufferAccess2);
-    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
-        .expect("device")
-        .profile()
-        .clone()
 }
 
 /// The vertex descriptor of `stage_io_vertex`'s `Attributes`: one interleaved per-vertex buffer.
@@ -363,20 +348,20 @@ fn a_color_without_an_attachment_is_written_nowhere() {
     }
 }
 
-/// Without buffer robustness nothing bounds fixed-function vertex input
-/// (`VUID-vkCmdDraw-None-02721`), so the projection pulls every attribute. On each profile with
-/// its robustness removed, the fixture's descriptor (the one `a_vertex_fragment_pipeline_links_end_to_end`
-/// fetches fixed function) links with no fixed-function binding or attribute, every attribute is
+/// Without buffer robustness, which no profile enables, nothing bounds fixed-function vertex input
+/// (`VUID-vkCmdDraw-None-02721`), so outside the identity domains the projection pulls every
+/// attribute. On each profile, the fixture's descriptor (the one
+/// `a_vertex_fragment_pipeline_links_end_to_end` fetches fixed function) links with no fixed-function binding or attribute, every attribute is
 /// pulled from buffer 0 through a read-only storage descriptor, and both modules pass L3. The
 /// vertex stage compiled with fixed-function input for the same profile is another pipeline's:
 /// link refuses it against the descriptor.
 #[test]
-fn without_buffer_robustness_every_attribute_is_pulled() {
+fn outside_the_identity_domains_every_attribute_is_pulled() {
     let Some(bc) = assemble("stage_io.ll") else {
         return;
     };
     for stem in PROFILES {
-        let p = without_robustness(stem);
+        let p = prof(stem);
         let d = vertex_descriptor();
         let v = vertex_under(&bc, &d, &p).unwrap_or_else(|e| panic!("{stem}: vertex: {e}"));
         let attrs = v.interface.io.attributes();

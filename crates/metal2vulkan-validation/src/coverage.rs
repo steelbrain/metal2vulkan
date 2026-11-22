@@ -60,16 +60,12 @@ impl SubgroupShape {
 }
 
 /// The robustness features a tier-table profile's robustness-off leg removes
-/// ([`Leg::RobustnessOff`]). Image robustness drops the in-shader clamp and guard of images
-/// (`robust_image_access`); buffer robustness chooses no encoding, as the shader checks every
+/// ([`Leg::RobustnessOff`]): image robustness, which drops the in-shader clamp and guard of images
+/// (`robust_image_access`). The translator names no buffer robustness: the shader checks every
 /// descriptor view. The engine executor's own context enables the ones its device's description
-/// states that the runtime enables on some device (the image ones), all or none.
-pub const ROBUSTNESS_FEATURES: [VkFeature; 4] = [
-    VkFeature::RobustBufferAccess,
-    VkFeature::RobustBufferAccess2,
-    VkFeature::RobustImageAccess,
-    VkFeature::RobustImageAccess2,
-];
+/// states, all or none.
+pub const ROBUSTNESS_FEATURES: [VkFeature; 2] =
+    [VkFeature::RobustImageAccess, VkFeature::RobustImageAccess2];
 
 /// How buffers reached through descriptor views (and texel buffers) are contained: the shader
 /// checks every one, on every profile. Its out-of-bounds targets' mechanism

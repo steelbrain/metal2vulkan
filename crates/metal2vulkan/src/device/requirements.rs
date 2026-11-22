@@ -21,8 +21,6 @@ use crate::vk;
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum VkFeature {
     // Robustness.
-    RobustBufferAccess,
-    RobustBufferAccess2,
     RobustImageAccess,
     RobustImageAccess2,
     NullDescriptor,

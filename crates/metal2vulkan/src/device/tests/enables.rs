@@ -4,9 +4,7 @@
 use std::collections::BTreeSet;
 
 use super::*;
-use crate::device::enables::{
-    self, Exposure, BUFFER_UPDATE_AFTER_BIND, BUFFER_UPDATE_AFTER_BIND_VUID, FEATURE_NEEDS,
-};
+use crate::device::enables::{self, Exposure, FEATURE_NEEDS};
 use crate::device::requirements::{Requirements, StageCreateFlag};
 use crate::error::Capability;
 
@@ -48,15 +46,9 @@ fn floor_with(extensions: &[VkExtension], features: &[VkFeature]) -> DeviceDescr
 
 /// On every committed profile the recommendation lists only what the description lists, is closed
 /// (`with_enabled` accepts it, `Device::from_queries` accepts the result), and is a fixed point:
-/// the device made from it needs exactly it, as does the device made from the full description. It
-/// leaves out only what VUID 10247 forbids: `runtime-floor` is the one committed profile that lists
-/// buffer update-after-bind features (the two texel-buffer ones the runtime's floor requires for
-/// texture buffers) with `robustBufferAccess` and without `robustBufferAccessUpdateAfterBind`, so
-/// its recommendation keeps `robustBufferAccess` and leaves those two out; the runtime enables
-/// them and never `robustBufferAccess` ([`a_recommendation_keeps_vuid_10247`] builds another).
+/// the device made from it needs exactly it, as does the device made from the full description.
 #[test]
 fn recommendations_are_closed_fixed_points_on_every_committed_profile() {
-    let mut left_out = Vec::new();
     for (stem, text) in committed_profiles() {
         let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
         let rec = desc.recommended_enables();
@@ -70,15 +62,9 @@ fn recommendations_are_closed_fixed_points_on_every_committed_profile() {
             );
         }
         // Every listed feature with a member is recommended (the committed profiles list only
-        // exposed features whose extensions' requirements are listed), except the buffer
-        // update-after-bind features VUID 10247 forbids beside `robustBufferAccess`, and the
-        // features of the extensions the core reads nothing of: `VK_EXT_depth_bias_control`,
-        // `VK_KHR_shader_fma`, `VK_EXT_shader_float8` and `VK_EXT_shader_image_atomic_int64`.
-        let forbidden = |f: VkFeature| {
-            !desc.robust_buffer_access_update_after_bind
-                && desc.has(VkFeature::RobustBufferAccess)
-                && BUFFER_UPDATE_AFTER_BIND.contains(&f)
-        };
+        // exposed features whose extensions' requirements are listed), except the features of the
+        // extensions the core reads nothing of: `VK_EXT_depth_bias_control`, `VK_KHR_shader_fma`,
+        // `VK_EXT_shader_float8` and `VK_EXT_shader_image_atomic_int64`.
         let unread = [
             VkFeature::DepthBiasControl,
             VkFeature::FloatRepresentation,
@@ -103,17 +89,10 @@ fn recommendations_are_closed_fixed_points_on_every_committed_profile() {
         for &f in &desc.features {
             assert_eq!(
                 rec.features.contains(&f),
-                f.exposure().has_member(desc.api_version) && !forbidden(f) && !unread.contains(&f),
+                f.exposure().has_member(desc.api_version) && !unread.contains(&f),
                 "{stem}: {f:?}"
             );
-            if forbidden(f) {
-                left_out.push((stem.clone(), f));
-            }
         }
-        assert!(
-            rec.features.contains(&VkFeature::RobustBufferAccess),
-            "{stem}"
-        );
         let restricted = desc
             .clone()
             .with_enabled(&rec)
@@ -131,102 +110,6 @@ fn recommendations_are_closed_fixed_points_on_every_committed_profile() {
     }
     let m = profile("moltenvk-m3").recommended_enables();
     assert!(m.extensions.contains(&VkExtension::KhrPortabilitySubset));
-    left_out.sort();
-    assert_eq!(
-        left_out,
-        vec![
-            (
-                "runtime-floor".to_string(),
-                VkFeature::DescriptorBindingUniformTexelBufferUpdateAfterBind
-            ),
-            (
-                "runtime-floor".to_string(),
-                VkFeature::DescriptorBindingStorageTexelBufferUpdateAfterBind
-            ),
-        ]
-    );
-}
-
-/// A description listing `robustBufferAccess` and update-after-bind features: without
-/// `robustBufferAccessUpdateAfterBind` the recommendation keeps `robustBufferAccess` (the
-/// containment encoding) and leaves out the buffer update-after-bind features, which the core does
-/// not read (VUID-VkDeviceCreateInfo-robustBufferAccess-10247), keeping the image ones the rule
-/// does not name; with it, both. Either set passes `with_enabled`, and the device made from the
-/// description, whole or restricted, requires exactly it.
-#[test]
-fn recommendations_keep_robust_buffer_access_and_vuid_10247() {
-    let images = [
-        VkFeature::DescriptorBindingSampledImageUpdateAfterBind,
-        VkFeature::DescriptorBindingStorageImageUpdateAfterBind,
-    ];
-    let listed: Vec<VkFeature> = BUFFER_UPDATE_AFTER_BIND
-        .iter()
-        .chain(&images)
-        .copied()
-        .collect();
-    let mut d = floor_with(&[], &listed);
-    assert!(d.has(VkFeature::RobustBufferAccess));
-    for reported in [false, true] {
-        d.robust_buffer_access_update_after_bind = reported;
-        let rec = d.recommended_enables();
-        assert!(rec.features.contains(&VkFeature::RobustBufferAccess));
-        assert!(rec.features.is_superset(&set(&images)));
-        for f in BUFFER_UPDATE_AFTER_BIND {
-            assert_eq!(rec.features.contains(f), reported, "{reported}: {f:?}");
-        }
-        let restricted = d.clone().with_enabled(&rec).unwrap();
-        let dev = Device::from_queries(restricted, DevicePolicy::RESIDENT_TABLES).unwrap();
-        assert_eq!(dev.required_enables(), rec, "{reported}");
-        let whole = Device::from_queries(d.clone(), DevicePolicy::RESIDENT_TABLES).unwrap();
-        assert_eq!(whole.required_enables(), rec, "{reported}");
-    }
-}
-
-/// `runtime-floor` with the buffer update-after-bind features and
-/// `robustBufferAccessUpdateAfterBind` false, as SwiftShader's report stated them beside
-/// `robustBufferAccess` (the finding: a device made from the recommendation failed
-/// `vkCreateDevice`). Its recommendation keeps the rule, so the
-/// stated robustness can be created; adding the buffer update-after-bind features to the restricted
-/// description changes only the profile's update-after-bind facts, which only the set-1 arrays that
-/// need them read (the texel-buffer classes'): every other field is the same.
-#[test]
-fn a_recommendation_keeps_vuid_10247() {
-    let mut desc = profile("runtime-floor");
-    desc.features
-        .extend(BUFFER_UPDATE_AFTER_BIND.iter().copied());
-    assert!(!desc.robust_buffer_access_update_after_bind);
-    assert!(desc.has(VkFeature::RobustBufferAccess));
-    assert!(BUFFER_UPDATE_AFTER_BIND.iter().all(|&f| desc.has(f)));
-    let rec = desc.recommended_enables();
-    assert!(rec.features.contains(&VkFeature::RobustBufferAccess));
-    assert!(rec.features.is_disjoint(&set(BUFFER_UPDATE_AFTER_BIND)));
-    assert!(rec
-        .features
-        .contains(&VkFeature::DescriptorBindingSampledImageUpdateAfterBind));
-    let restricted = desc.clone().with_enabled(&rec).unwrap();
-    let stated = Device::from_queries(restricted.clone(), DevicePolicy::RESIDENT_TABLES).unwrap();
-    assert_eq!(stated.required_enables(), rec);
-    let mut with_buffers = restricted;
-    with_buffers
-        .features
-        .extend(BUFFER_UPDATE_AFTER_BIND.iter().copied());
-    let both = Device::from_queries(with_buffers, DevicePolicy::RESIDENT_TABLES).unwrap();
-    assert_eq!(both.required_enables(), rec);
-    let mut fields = both.profile().fields().clone();
-    assert!(fields.descriptors.update_after_bind_uniform_texel_buffer);
-    assert!(fields.descriptors.update_after_bind_storage_texel_buffer);
-    fields.descriptors.update_after_bind_uniform_texel_buffer = false;
-    fields.descriptors.update_after_bind_storage_texel_buffer = false;
-    for f in BUFFER_UPDATE_AFTER_BIND {
-        fields.enabled.features.remove(f);
-    }
-    assert_eq!(&fields, stated.profile().fields());
-    // The whole set is the one a conformant SwiftShader refuses.
-    let mut both = rec.clone();
-    both.features
-        .insert(VkFeature::DescriptorBindingStorageBufferUpdateAfterBind);
-    let e = description_error(desc.with_enabled(&both));
-    assert!(e.contains(BUFFER_UPDATE_AFTER_BIND_VUID), "{e}");
 }
 
 /// The recommendation names the exposing extension of promoted features below their version,
@@ -381,7 +264,7 @@ fn with_enabled_refuses_unsound_sets() {
             VkExtension::ExtShaderAtomicFloat2,
             VkExtension::ExtShaderAtomicFloat,
         ],
-        &[VkFeature::RobustBufferAccess2],
+        &[VkFeature::RobustImageAccess2],
     );
     // Not listed.
     let e = description_error(
@@ -397,7 +280,7 @@ fn with_enabled_refuses_unsound_sets() {
     // Enabled without its structure's extension.
     let e = description_error(
         d.clone()
-            .with_enabled(&enables(&[VkFeature::RobustBufferAccess2], &[])),
+            .with_enabled(&enables(&[VkFeature::RobustImageAccess2], &[])),
     );
     assert!(e.contains("ExtRobustness2"), "{e}");
     // An extension without its requirement.
@@ -414,49 +297,21 @@ fn with_enabled_refuses_unsound_sets() {
         .unwrap();
 }
 
-/// `with_enabled` refuses a set breaking a co-enable rule, naming its VUID: `robustBufferAccess`
-/// with a buffer update-after-bind feature where the description does not report
-/// `robustBufferAccessUpdateAfterBind` (and accepts it where it does, and either side alone), and a
-/// feature without its companion.
+/// `with_enabled` refuses a set breaking a co-enable rule, a feature without its companion, naming
+/// its VUID, and accepts the two together.
 #[test]
 fn with_enabled_refuses_sets_breaking_a_co_enable_rule() {
-    let mut d = floor_with(
-        &[VkExtension::ExtRobustness2],
+    let d = floor_with(
+        &[],
         &[
-            VkFeature::RobustBufferAccess2,
             VkFeature::MultiviewTessellationShader,
             VkFeature::MultiviewGeometryShader,
         ],
     );
-    d.features.extend(BUFFER_UPDATE_AFTER_BIND.iter().copied());
-    assert!(!d.robust_buffer_access_update_after_bind);
-    let robustness2 = [VkExtension::ExtRobustness2];
-    for &f in BUFFER_UPDATE_AFTER_BIND {
-        let e = description_error(
-            d.clone()
-                .with_enabled(&enables(&[VkFeature::RobustBufferAccess, f], &[])),
-        );
-        assert!(
-            e.contains(BUFFER_UPDATE_AFTER_BIND_VUID) && e.contains(&format!("{f:?}")),
-            "{e}"
-        );
-        d.clone().with_enabled(&enables(&[f], &[])).unwrap();
-    }
-    d.clone()
-        .with_enabled(&enables(&[VkFeature::RobustBufferAccess], &[]))
-        .unwrap();
-    let mut reported = d.clone();
-    reported.robust_buffer_access_update_after_bind = true;
-    let mut all = BUFFER_UPDATE_AFTER_BIND.to_vec();
-    all.push(VkFeature::RobustBufferAccess);
-    reported.with_enabled(&enables(&all, &[])).unwrap();
-    // Each feature without its companion.
     for &(f, needs, vuid) in FEATURE_NEEDS {
-        let e = description_error(d.clone().with_enabled(&enables(&[f], &robustness2)));
+        let e = description_error(d.clone().with_enabled(&enables(&[f], &[])));
         assert!(e.contains(vuid) && e.contains(&format!("{needs:?}")), "{e}");
-        d.clone()
-            .with_enabled(&enables(&[f, needs], &robustness2))
-            .unwrap();
+        d.clone().with_enabled(&enables(&[f, needs], &[])).unwrap();
     }
 }
 
@@ -471,7 +326,7 @@ fn device_new_refuses_a_feature_without_its_companion() {
             let desc = DeviceDescription::from_khronos_json(&text, None).unwrap();
             assert!(!desc.has(f) || desc.has(needs), "{stem}: {f:?}");
         }
-        let mut d = floor_with(&[VkExtension::ExtRobustness2], &[f]);
+        let mut d = floor_with(&[], &[f]);
         d.features.remove(&needs);
         let e = match Device::from_queries(d.clone(), DevicePolicy::RESIDENT_TABLES) {
             Err(Error::InvalidDescriptor(DescriptorError::DeviceDescription { detail })) => detail,
@@ -494,7 +349,7 @@ fn with_enabled_restricts_features_extensions_and_formats() {
     ];
     let mut d = floor_with(
         &listed,
-        &[VkFeature::RobustBufferAccess2, VkFeature::NullDescriptor],
+        &[VkFeature::RobustImageAccess2, VkFeature::NullDescriptor],
     );
     let a8 = vk::Format::A8_UNORM;
     let r8 = vk::Format::R8_UNORM;
@@ -504,8 +359,7 @@ fn with_enabled_restricts_features_extensions_and_formats() {
         .clone()
         .with_enabled(&enables(
             &[
-                VkFeature::RobustBufferAccess,
-                VkFeature::RobustBufferAccess2,
+                VkFeature::RobustImageAccess2,
                 VkFeature::UniformBufferStandardLayout,
             ],
             &listed,
@@ -514,8 +368,7 @@ fn with_enabled_restricts_features_extensions_and_formats() {
     assert_eq!(
         kept.features,
         set(&[
-            VkFeature::RobustBufferAccess,
-            VkFeature::RobustBufferAccess2,
+            VkFeature::RobustImageAccess2,
             VkFeature::UniformBufferStandardLayout
         ])
     );

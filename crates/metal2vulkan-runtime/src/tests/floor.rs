@@ -392,13 +392,7 @@ fn the_translator_sees_only_what_device_creation_enables() {
     // translator names.
     assert_eq!(capabilities.features.core.occlusion_query_precise, vk::TRUE);
     assert!(enables.features.contains(&VkFeature::OcclusionQueryPrecise));
-    for reported in [
-        VkFeature::GeometryShader,
-        VkFeature::RobustBufferAccess2,
-        VkFeature::RobustBufferAccess,
-    ] {
-        assert!(!enables.features.contains(&reported), "{reported:?}");
-    }
+    assert!(!enables.features.contains(&VkFeature::GeometryShader));
     // `nullDescriptor` comes with the extension, which device creation enables.
     assert!(enables.extensions.contains(&VkExtension::ExtRobustness2));
 }

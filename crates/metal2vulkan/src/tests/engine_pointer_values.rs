@@ -21,7 +21,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::bind::status::ExecutionStatus;
 use crate::budget::SPIRV_WORDS;
 use crate::device::profile::{BufferAccess, DeviceProfile};
-use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Error, Feature, Needs};
 use crate::library::FunctionConstantValues;
@@ -72,25 +71,12 @@ fn profile(stem: &str) -> DeviceProfile {
         .clone()
 }
 
-/// Profile A with and without robust descriptors, and Profile F ([`PROFILE_F`], below the
-/// runtime's floor).
+/// Profile A, and Profile F ([`PROFILE_F`], below the runtime's floor).
 fn profiles() -> Vec<(String, DeviceProfile)> {
-    let mut out = Vec::new();
-    for stem in ["moltenvk-m3", "lavapipe", PROFILE_F] {
-        out.push((stem.to_owned(), profile(stem)));
-    }
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles/moltenvk-m3.json");
-    let text = std::fs::read_to_string(path).expect("profile");
-    let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    desc.features.remove(&VkFeature::RobustBufferAccess);
-    desc.features.remove(&VkFeature::RobustBufferAccess2);
-    let p = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
-        .expect("device")
-        .profile()
-        .clone();
-    out.push(("moltenvk-m3 robust=false".to_owned(), p));
-    out
+    ["moltenvk-m3", "lavapipe", PROFILE_F]
+        .into_iter()
+        .map(|stem| (stem.to_owned(), profile(stem)))
+        .collect()
 }
 
 fn addressed(p: &DeviceProfile) -> bool {
