@@ -505,7 +505,8 @@ struct DepthStencil {
 }
 
 impl Targets {
-    /// Each color target of `case` as a 2D texture of its format, extent and samples, made for
+    /// Each color target of `case` as a 2D texture of its format, extent and samples (a one-slice
+    /// 2D array in a layered pass, which the oracle draws with one sample only), made for
     /// rendering at the next of `indices`: of one sample Shared and written from its bytes, of more
     /// Private and filled sample by sample (`runtime_multisample`), with the next index for its
     /// read's view. A rasterization-disabled draw's one attachment is the oracle's 1x1 `R8Unorm`
@@ -520,13 +521,21 @@ impl Targets {
         if case.fragment.is_none() {
             let (grant, at) =
                 runtime_textures::texture_indices(device, indices, 1, &runtime_error)?;
-            let sink = attachment(device, SINK, [1, 1], 1, (0, at.start))?;
+            let sink = attachment(device, SINK, [1, 1], 1, (0, at.start), false)?;
             return Ok(Targets {
                 textures: BTreeMap::from([(0, sink)]),
                 depth_stencil: None,
                 views: BTreeMap::new(),
                 _grant: grant,
             });
+        }
+        let layered = case.render_target_array_length > 0;
+        let multisampled = case.color_targets.values().any(|target| target.samples > 1)
+            || (case.depth_stencil.as_ref()).is_some_and(|authored| authored.samples > 1);
+        if layered && multisampled {
+            return Err(ExecutorError::Failed(
+                "a layered multisampled pass is not modelled, as the oracle models none".into(),
+            ));
         }
         let aspects = usize::from(
             case.depth_stencil
@@ -557,7 +566,7 @@ impl Targets {
                     true => Some(next()?),
                     false => None,
                 };
-                DepthStencil::make(device, device_type, authored, at)
+                DepthStencil::make(device, device_type, authored, at, layered)
             })
             .transpose()?;
         let mut textures = BTreeMap::new();
@@ -572,6 +581,7 @@ impl Targets {
                 [width, height],
                 target.samples,
                 (index, next()?),
+                layered,
             )?;
             if target.samples > 1 {
                 let read = sample_read(target.format).map_err(ExecutorError::Failed)?;
@@ -616,11 +626,12 @@ impl Targets {
         })
     }
 
-    /// The pass of `case`: each attachment loaded and stored, a multisampled stencil aspect
-    /// cleared to its one value; with no attachment, the oracle's (`metal::platform`) 1x1 area at
+    /// The pass of `case`, of its render target array length: each attachment loaded and stored, a
+    /// multisampled stencil aspect cleared to its one value; with no attachment, the oracle's (`metal::platform`) 1x1 area at
     /// the case's samples (`renderTargetWidth`, `renderTargetHeight`, `defaultRasterSampleCount`).
     fn pass(&self, case: &RenderCase) -> rt::RenderPassDescriptor {
         let mut pass = rt::RenderPassDescriptor::default();
+        pass.render_target_array_length = case.render_target_array_length;
         if self.textures.is_empty() && self.depth_stencil.is_none() {
             pass.render_target_width = 1;
             pass.render_target_height = 1;
@@ -784,13 +795,14 @@ impl DepthStencil {
         device_type: DeviceType,
         authored: &LiteralDepthStencil,
         at: Option<u32>,
+        layered: bool,
     ) -> Result<DepthStencil, ExecutorError> {
         let [width, height] = authored.dimensions;
         let samples = authored.samples.max(1);
         let what = "the depth/stencil attachment";
         let made = |format, depth, clear| {
             Ok::<_, ExecutorError>(DepthStencil {
-                texture: aspect(device, format, [width, height], samples, at)?,
+                texture: aspect(device, format, [width, height], samples, at, layered)?,
                 depth,
                 dimensions: authored.dimensions,
                 samples,
@@ -849,15 +861,17 @@ impl DepthStencil {
     }
 }
 
-/// A 2D depth or stencil attachment of `format`, `extent` and `samples`, at texture index `at` of
-/// the run's grant where shaders reach it ([`made_attachment`]): one of one sample shaders neither
-/// read nor write, and the runtime gives such a target no index (`Refusal::TextureIndex`).
+/// A 2D depth or stencil attachment of `format`, `extent` and `samples`, `layered` or not, at
+/// texture index `at` of the run's grant where shaders reach it ([`made_attachment`]): one of one
+/// sample shaders neither read nor write, and the runtime gives such a target no index
+/// (`Refusal::TextureIndex`).
 fn aspect(
     device: &rt::Device,
     format: rt::PixelFormat,
     extent: [u32; 2],
     samples: u32,
     at: Option<u32>,
+    layered: bool,
 ) -> Result<rt::Texture, ExecutorError> {
     made_attachment(
         device,
@@ -865,41 +879,45 @@ fn aspect(
         extent,
         samples,
         rt::TextureUsage::empty(),
-        at,
+        (at, layered),
     )
     .map_err(|error| runtime_error("the depth/stencil attachment", error))
 }
 
-/// A 2D color attachment of `format`, `extent` and `samples`, color attachment `index`'s, at
-/// texture index `at` of the run's grant ([`made_attachment`]).
+/// A 2D color attachment of `format`, `extent` and `samples`, `layered` or not, color attachment
+/// `index`'s, at texture index `at` of the run's grant ([`made_attachment`]).
 fn attachment(
     device: &rt::Device,
     format: rt::PixelFormat,
     extent: [u32; 2],
     samples: u32,
     (index, at): (u32, u32),
+    layered: bool,
 ) -> Result<rt::Texture, ExecutorError> {
     let viewed = rt::TextureUsage::PIXEL_FORMAT_VIEW;
-    made_attachment(device, format, extent, samples, viewed, Some(at))
+    made_attachment(device, format, extent, samples, viewed, (Some(at), layered))
         .map_err(|error| runtime_error(&format!("color target {index}"), error))
 }
 
 /// A 2D attachment of `format`, `extent` and `samples` at texture index `at`, if any: of one sample
-/// Shared, of more a Private multisampled texture (Metal keeps none in shared memory) that a shader
-/// reads, with `viewed` beside (a color one is viewed in another pixel format), as its per-sample
-/// fill and read take it.
+/// Shared, a one-slice 2D array in a `layered` pass, as the oracle makes it
+/// (`metal::platform::attachments`); of more a Private multisampled texture (Metal keeps none in
+/// shared memory) that a shader reads, with `viewed` beside (a color one is viewed in another pixel
+/// format), as its per-sample fill and read take it. No layered pass is multisampled
+/// ([`Targets::make`]).
 fn made_attachment(
     device: &rt::Device,
     format: rt::PixelFormat,
     [width, height]: [u32; 2],
     samples: u32,
     viewed: rt::TextureUsage,
-    at: Option<u32>,
+    (at, layered): (Option<u32>, bool),
 ) -> Result<rt::Texture, rt::Error> {
     let multisampled = samples > 1;
-    let texture_type = match multisampled {
-        true => rt::TextureType::Type2DMultisample,
-        false => rt::TextureType::Type2D,
+    let texture_type = match (multisampled, layered) {
+        (true, _) => rt::TextureType::Type2DMultisample,
+        (false, true) => rt::TextureType::Type2DArray,
+        (false, false) => rt::TextureType::Type2D,
     };
     let mut descriptor = rt::TextureDescriptor::new(texture_type, format, width, height);
     descriptor.sample_count = samples;

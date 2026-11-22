@@ -869,7 +869,7 @@ pub struct RuntimeKernel<'a> {
 /// and bound samplers, argument buffers of buffers, textures and samplers (their textures made so
 /// too), function constants and linked functions, its vertex buffers, its color targets and a depth/stencil
 /// attachment of one aspect, or none (a fragment case's pass of no attachment is the oracle's 1x1
-/// at its samples), the encoder's depth-stencil state, cull mode and winding, and
+/// at its samples), layered or not (`RenderCase::render_target_array_length`), the encoder's depth-stencil state, cull mode and winding, and
 /// one direct or indexed draw of primitives or one patch draw with no patch or control-point index
 /// buffer (a post-tessellation vertex function's, its factors bound as the tessellation factor
 /// buffer), observing a buffer, a texture, an argument-buffer member, a color target, the
@@ -885,7 +885,7 @@ pub fn runs_render_through_runtime(case: &graphics::RenderCase) -> bool {
         color_targets: _,
         depth_stencil,
         depth_stencil_state: _,
-        render_target_array_length,
+        render_target_array_length: _,
         assembly,
         draw,
         index_buffer: _,
@@ -901,7 +901,6 @@ pub fn runs_render_through_runtime(case: &graphics::RenderCase) -> bool {
         attachment.depth.is_none() || attachment.stencil.is_none()
     };
     depth_stencil.as_ref().is_none_or(one_aspect)
-        && *render_target_array_length == 0
         && matches!(
             (assembly, draw),
             (
