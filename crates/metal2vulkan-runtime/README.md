@@ -2247,7 +2247,7 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   intermittently: 2 failing runs of 31 alone at one build and 0 of 31 at the next (m3-max-68291,
   m3-max-68314), and 1 failing suite run of 11 (m3-max-68142). No other device the suites run on
   shows it, no split dispatch has shown it, and a kernel that checks each of its reads met no wrong
-  one in 5 runs (m3-max-68367). The cause is unproven and ranks as the driver's.
+  one in 5 runs (m3-max-68367). The cause is not found.
 
 ## Compute encoders
 
