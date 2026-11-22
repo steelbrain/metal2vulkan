@@ -454,7 +454,22 @@ fn releases_under_work(device: &rt::Device) -> Result<OwnReport> {
             completed(in_flight.pop_front().ok_or("a command buffer in flight")?)?;
         }
         if READ_AFTER.contains(&iteration) {
-            reads.push(counters.gauges());
+            // A completed command buffer's releases leave the gauges on the block-maker thread, a
+            // turn of its loop after the completion thread wakes it, so the read waits, at most
+            // `WAIT`, for that thread to reach the bounds; a gauge still past one then fails.
+            let (textures, bytes) = each.ok_or("no iteration ran")?;
+            let within = |g: &rt::Gauges| {
+                g.releases_waiting <= 2 * textures * HELD_ITERATIONS
+                    && g.textures <= textures * HELD_ITERATIONS
+                    && g.texture_block_bytes <= bytes * PLACED_ITERATIONS
+            };
+            let since = Instant::now();
+            let mut read = counters.gauges();
+            while !within(&read) && since.elapsed() < WAIT {
+                thread::sleep(Duration::from_millis(1));
+                read = counters.gauges();
+            }
+            reads.push(read);
         }
     }
     for command_buffer in in_flight {
