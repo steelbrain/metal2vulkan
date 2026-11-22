@@ -1850,6 +1850,90 @@ pub(crate) mod on_device {
         });
     }
 
+    /// A command buffer committed to an idle queue fills the first half of a tracked buffer with
+    /// 1, waits for a shared event's value 1, then fills the second half with 3; one of another
+    /// idle queue, committed after it, copies the buffer and signals that value, and the host
+    /// sends it at once (`send_now`, as a host wait for it sends it). Metal submits the first at
+    /// its commit, its queue having nothing ahead of it, so its hazard tracking orders the copy
+    /// after the fill before the wait, and the copy reads that fill and not the one after the
+    /// wait (the conformance case event-signaller-of-a-wait, M3 Max, job m3-max-68673). The
+    /// submit thread, parked in a scheduled handler, first looks at the two once both are
+    /// committed and the second sent. Where the copy has not completed within ten seconds, the
+    /// host sets the value, so both finish and the case fails instead of stalling.
+    #[test]
+    fn every_device_copies_an_idle_queues_fill_before_its_wait_into_a_later_sharer_it_sends() {
+        each_device("command_wait_split_sharer", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let (written, copied) = (arena.buffer(), arena.buffer());
+            let event = shared_event(&device);
+            let (parking, waiting, signalling) = (queue(&device), queue(&device), queue(&device));
+            let park = Arc::new(std::sync::Barrier::new(2));
+            let parker = parking.command_buffer().expect("a command buffer");
+            let parked = Arc::clone(&park);
+            (parker.add_scheduled_handler(move |_| {
+                parked.wait();
+                parked.wait();
+            }))
+            .expect("a handler");
+            parker.commit().expect("a commit");
+            park.wait();
+            let mut release = Release::of(&park);
+            let waiter = waiting.command_buffer().expect("a command buffer");
+            let mut blit = waiter.blit_command_encoder().expect("an encoder");
+            (blit.fill_buffer(&written, 0..128, 1)).expect("a fill");
+            blit.end_encoding();
+            (waiter.encode_wait_for_event(event.as_event(), 1)).expect("a wait");
+            let mut blit = waiter.blit_command_encoder().expect("an encoder");
+            (blit.fill_buffer(&written, 128..256, 3)).expect("a fill");
+            blit.end_encoding();
+            waiter.commit().expect("a commit");
+            let signaller = signalling.command_buffer().expect("a command buffer");
+            let mut blit = signaller.blit_command_encoder().expect("an encoder");
+            (blit.copy_from_buffer_to_buffer(&written, 0, &copied, 0, 256)).expect("a copy");
+            blit.end_encoding();
+            (signaller.encode_signal_event(event.as_event(), 1)).expect("a signal");
+            signaller.commit().expect("a commit");
+            signalling.send_now(&signaller);
+            release.now();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while signaller.status() != CommandBufferStatus::Completed && Instant::now() < deadline
+            {
+                thread::sleep(Duration::from_millis(1));
+            }
+            let ran = signaller.status() == CommandBufferStatus::Completed;
+            if !ran {
+                event.set_signaled_value(1);
+            }
+            for command_buffer in [&waiter, &signaller, &parker] {
+                finished(name, command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+            }
+            // Each buffer's bytes as runs of one value: (value, count).
+            let runs = |buffer: &Buffer| {
+                let contents = buffer.contents().expect("a Shared buffer");
+                // SAFETY: the buffer is alive and 256 bytes long, and no command writes it now.
+                let bytes = unsafe { std::slice::from_raw_parts(contents.as_ptr(), 256) };
+                let mut runs: Vec<(u8, usize)> = Vec::new();
+                for &byte in bytes {
+                    match runs.last_mut() {
+                        Some((value, count)) if *value == byte => *count += 1,
+                        _ => runs.push((byte, 1)),
+                    }
+                }
+                runs
+            };
+            assert!(
+                ran,
+                "{name}: the copy completes while the first waits for its signal"
+            );
+            assert_eq!(
+                (runs(&copied), runs(&written)),
+                (vec![(1, 128), (0, 128)], vec![(1, 128), (3, 128)]),
+                "{name}: the copy reads the fill before the wait and not the one after it"
+            );
+        });
+    }
+
     /// The expected run of queue A of [`two_queues`]: past `GROUP_RUN` with one more behind its
     /// oldest submission, so it has room for two.
     const LONG_RUN: u64 = 20_000_000;
