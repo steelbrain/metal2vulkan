@@ -1902,7 +1902,13 @@ made, with no lock, and never rewritten for layouts.
   (`Metrics::pieces_passed`), unless it holds a buffer or texture the cut one holds (by the ids
   the hazards track them by, a heap's resources by the heap's), waits on a fence the cut one
   updates, or either reaches memory outside its resources: then it goes after the last piece
-  (`Metrics::shared_holds`). The cut command buffer is scheduled as its first piece is submitted,
+  (`Metrics::shared_holds`), held only while the cut one's next piece is ready; where that piece
+  waits for an event not yet met, it goes, as Metal's wait stops only its own queue, and the
+  signal may come from the queue it holds. Across queues, work goes to the device in any order,
+  except that a command buffer never goes ahead of an earlier-committed one it shares a tracked
+  resource or a fence with, and an event wait holds only its own queue. Two readers of one
+  resource share it here, so a read waits behind a cut command buffer that only reads what it
+  reads, though no write orders them: an over-hold. The cut command buffer is scheduled as its first piece is submitted,
   where none of its later pieces waits for an event, and its GPU times run from its first piece's
   start to its last piece's end, the runs of what went between its pieces included, as on the UHD
   630 under macOS 26.7.1 a running command buffer's end moved by the run of one that started
@@ -2152,7 +2158,8 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   dispatch whose own expected run passes 4 ms, a render pass and the encoders after it, the
   dispatches of a kernel whose rate is not yet measured, and the commands of a piece that writes
   a Managed buffer or while copies over a texture are owed. It waits behind every piece of a cut
-  command buffer that holds one of its buffers or textures, a read of a read included. Metal
+  command buffer that holds one of its buffers or textures, a read of a read included, except
+  while that command buffer's next piece waits for an event. Metal
   starts it beside the running command buffer: on a Radeon Pro 5300M another queue's command
   buffer started 0.21 to 0.40 ms after its commit beside a running one (job m3-max-68137), and on
   an Intel UHD 630 under macOS 26.7.1 one of a queue at a lower priority number started about

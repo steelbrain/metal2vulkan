@@ -2646,7 +2646,7 @@ pub struct Metrics {
     /// Command buffers held behind every piece of a cut command buffer of another queue,
     /// committed before them, as they hold a buffer or texture it holds (by the ids the hazards
     /// track them by), wait on a fence it updates, or either reaches memory outside its
-    /// resources.
+    /// resources: held while its next piece is ready, not while that piece waits for an event.
     pub shared_holds: u64,
     /// Elements of set 1's sampler arrays written (`vkUpdateDescriptorSets`): a sampler state's or
     /// a constexpr sampler's placement and its going write only the elements whose sampler

@@ -1762,14 +1762,17 @@ impl WorkState {
     }
 
     /// Marks each FIFO whose head, committed after a cut command buffer of another queue, the head
-    /// of its own with pieces not yet staged, shares a resource with it (`Gpu::shares`): held until that
-    /// command buffer's every piece is staged, counted once a head
-    /// (`Metrics::shared_holds`).
+    /// of its own with pieces not yet staged, shares a resource with it (`Gpu::shares`): held while
+    /// that command buffer's next piece is ready, until its every piece is staged, counted once a
+    /// head (`Metrics::shared_holds`). One whose next piece waits for an event not yet met holds
+    /// no other queue, as Metal's wait stops only its own queue: the signal it waits for may come
+    /// from the queue it would hold.
     fn block_shared(&mut self, counters: &Counters) {
         let cuts: Vec<(usize, u64)> = (self.fifos.iter().enumerate())
             .filter_map(|(index, fifo)| {
                 let pending = fifo.head()?;
-                pending.gpu.cut.then_some((index, pending.seq))
+                let next = pending.gpu.segments.get(pending.next);
+                (pending.gpu.cut && next.is_some_and(ready)).then_some((index, pending.seq))
             })
             .collect();
         for index in 0..self.fifos.len() {
