@@ -3,20 +3,23 @@
 //! counted in `Metrics::over_copies` and `Metrics::over_copy_bytes`. After a fill of the buffer and
 //! the block's acquire, four submissions that read the texture copy it in once; a fill between
 //! makes one copy more, and a zero fill of the block's range one more; reads with no event between
-//! copy nothing. Each read finds the bytes of the last event. The block's make states its address,
-//! counted in `Metrics::exported_blocks_addressed`.
+//! copy nothing. Each read finds the bytes of the last event. The block's handle states no address
+//! (`BlockInfo::gpu_address` is `None`), so `Metrics::exported_blocks_addressed` reads 0.
 //!
 //! A write through an address owes such a texture its copy in only once an address of its block
-//! went out. A plane of an exported surface in the copy form, read by four submissions that each
-//! then write through an address into another buffer (`store_through`), is copied in once, and the
-//! count of blocks whose address went out reads 0; once its buffer's `gpu_address` is read, it
-//! reads 1, and each submission after the next copies the plane in again.
+//! went out. The texture, read by three submissions that each then write through an address into
+//! another buffer (`store_through`), is copied in by none of them, and the count of blocks whose
+//! address went out reads 0; once the buffer the texture is over answers `gpu_address`, it reads
+//! 1, and each submission after the next copies the texture in again. A plane of an exported
+//! surface in the copy form, read by four such submissions, is copied in once, and the count reads
+//! 0; once its buffer's `gpu_address` is read, it reads 1, and each submission after the next
+//! copies the plane in again.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use crate::tests::command::on_device::{each_device, finished};
     use crate::{
-        Buffer, BufferLayout, CommandQueue, ComputePipelineDescriptor, ComputePipelineState,
+        Block, Buffer, BufferLayout, CommandQueue, ComputePipelineDescriptor, ComputePipelineState,
         Device, DispatchType, ExportHandle, FunctionDescriptor, IndexClass, Library, MemoryClass,
         PixelFormat, PlaneSpec, Resource, ResourceUsage, StageSource, StorageMode, SurfaceForm,
         SurfaceSpec, Texture, TextureDescriptor, TexturePlace, TextureType, TextureUsage,
@@ -197,6 +200,36 @@ entry:
             .collect()
     }
 
+    /// `store_through`'s state, and the block of the two Shared buffers it reaches: the argument
+    /// buffer, which holds the target's address, and the target.
+    fn store_through(
+        name: &str,
+        device: &Device,
+        library: &Library,
+    ) -> (ComputePipelineState, Block, Buffer, Buffer) {
+        let function = library.function("store_through").expect("the kernel");
+        let kernel = ComputePipelineDescriptor::new(StageSource::Function(
+            FunctionDescriptor::new(function),
+        ));
+        let state = (device
+            .new_compute_pipeline_state(&kernel, crate::tests::no_constexpr_samplers))
+        .unwrap_or_else(|error| panic!("{name}: store_through: {error}"));
+        let interface = &state.inner.compiled.whole.interface;
+        assert!(
+            interface.writes_unbound,
+            "{name}: store_through writes through an address"
+        );
+        let block = (device.take_block(MemoryClass::Shared, 2 * ROW))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let target = (device.new_buffer(block.id, 0, ROW, Some(0))).expect("a buffer");
+        let held = (device.new_buffer(block.id, ROW, 8, Some(0))).expect("a buffer");
+        let address = target.gpu_address().to_le_bytes();
+        let contents = held.contents().expect("Shared");
+        // SAFETY: the buffer holds 8 bytes, and no command reaches them.
+        unsafe { std::ptr::copy_nonoverlapping(address.as_ptr(), contents.as_ptr(), 8) };
+        (state, block, held, target)
+    }
+
     /// A plane of an exported surface in the copy form, over a block whose address no call has
     /// handed out, read by submissions that each then write through an address into another
     /// buffer: the copies in each made before and after its buffer's `gpu_address` is read, and
@@ -205,7 +238,7 @@ entry:
         name: &str,
         at: (&Device, &CommandQueue),
         out: &Buffer,
-        library: &Library,
+        writer: &Writer<'_>,
     ) -> Option<(Vec<u64>, Vec<u64>, SurfaceForm)> {
         let device = at.0;
         let mut d =
@@ -242,33 +275,8 @@ entry:
             (encoder.fill_buffer(&buffer, 0..buffer.length(), 0x3c))
                 .unwrap_or_else(|error| panic!("{name}: the fill: {error}"));
         });
-        let function = library.function("store_through").expect("the kernel");
-        let kernel = ComputePipelineDescriptor::new(StageSource::Function(
-            FunctionDescriptor::new(function),
-        ));
-        let state = (device
-            .new_compute_pipeline_state(&kernel, crate::tests::no_constexpr_samplers))
-        .unwrap_or_else(|error| panic!("{name}: store_through: {error}"));
-        let interface = &state.inner.compiled.whole.interface;
-        assert!(
-            interface.writes_unbound,
-            "{name}: store_through writes through an address"
-        );
-        let block = (device.take_block(MemoryClass::Shared, 2 * ROW))
-            .unwrap_or_else(|error| panic!("{name}: {error}"));
-        let target = (device.new_buffer(block.id, 0, ROW, Some(0))).expect("a buffer");
-        let held = (device.new_buffer(block.id, ROW, 8, Some(0))).expect("a buffer");
-        let address = target.gpu_address().to_le_bytes();
-        let contents = held.contents().expect("Shared");
-        // SAFETY: the buffer holds 8 bytes, and no command reaches them.
-        unsafe { std::ptr::copy_nonoverlapping(address.as_ptr(), contents.as_ptr(), 8) };
-        let writer = Writer {
-            state: &state,
-            held: &held,
-            target: &target,
-        };
         let over = (&surface.planes()[0], out);
-        let before = written_reads(name, at, over, &writer, 4, 0x3c);
+        let before = written_reads(name, at, over, writer, 4, 0x3c);
         assert_eq!(before, [1, 0, 0, 0], "{name}: no address of the block out");
         assert_eq!(addressed() - made, 0, "{name}: no address of the block out");
         assert_ne!(
@@ -282,7 +290,7 @@ entry:
             "{name}: the surface buffer's address read"
         );
         // The submission before the read owes nothing: no address of the block was out then.
-        let after = written_reads(name, at, over, &writer, 3, 0x3c);
+        let after = written_reads(name, at, over, writer, 3, 0x3c);
         assert_eq!(after, [0, 1, 1], "{name}: the block's address out");
         Some((before, after, export.form))
     }
@@ -309,9 +317,13 @@ entry:
             let (block, _export) = (device.new_exported_block(handle, LEN))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             assert_eq!(
+                block.gpu_address, None,
+                "{name}: the block's handle states no address"
+            );
+            assert_eq!(
                 addressed() - made,
-                1,
-                "{name}: the block's handle states its address"
+                0,
+                "{name}: the make hands out no address"
             );
             let buffer = (device.new_buffer(block.id, 0, LEN, None)).expect("a buffer");
             let pitch = (device.minimum_linear_texture_alignment(PixelFormat::RGBA8Unorm))
@@ -360,7 +372,26 @@ entry:
             let Some(library) = &library else {
                 return;
             };
-            if let Some((before, after, form)) = through_addresses(name, at, &out, library) {
+            let (state, _block, held, target) = store_through(name, &device, library);
+            let writer = Writer {
+                state: &state,
+                held: &held,
+                target: &target,
+            };
+            let before = written_reads(name, at, over, &writer, 3, 0);
+            assert_eq!(before, [0, 0, 0], "{name}: no address of the block out");
+            assert_eq!(addressed() - made, 0, "{name}: no address of the block out");
+            assert_ne!(buffer.gpu_address(), 0, "{name}: the buffer's address");
+            assert_eq!(addressed() - made, 1, "{name}: the buffer's address read");
+            // The submission before the read owes nothing: no address of the block was out then.
+            let after = written_reads(name, at, over, &writer, 3, 0);
+            assert_eq!(after, [0, 1, 1], "{name}: the block's address out");
+            println!(
+                "exported_overs: {name}: {handle:?} block: copies in a submission that writes \
+                 through an address, the block's address not out: {before:?}, then out: \
+                 {after:?}; blocks addressed 0, then 1"
+            );
+            if let Some((before, after, form)) = through_addresses(name, at, &out, &writer) {
                 println!(
                     "exported_overs: {name}: {OPAQUE:?} surface, {form:?}: copies in a \
                      submission that writes through an address, the block's address not out: \

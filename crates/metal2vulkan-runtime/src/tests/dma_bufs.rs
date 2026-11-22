@@ -275,7 +275,7 @@ mod on_device {
                 "{name}: one bind"
             );
             let buffer = (device.new_buffer(block.id, 0, total, None)).expect("a buffer");
-            assert_eq!(buffer.gpu_address(), block.gpu_address, "{name}");
+            assert_eq!(Some(buffer.gpu_address()), block.gpu_address, "{name}");
             let queue = device.new_command_queue(4).expect("a queue");
             rounds(
                 name,

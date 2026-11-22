@@ -283,14 +283,14 @@ mod on_device {
                 command_buffer
             };
             let first = take(SMALL);
-            let first_address = first.gpu_address;
+            let first_address = first.gpu_address.expect("a taken block's address");
             let buffer = (device.new_buffer(first.id, 0, SMALL, Some(0))).expect("a buffer");
             let command_buffer = encode(&buffer);
             drop((buffer, first));
             let second = take(SMALL);
+            let second_address = second.gpu_address.expect("a taken block's address");
             assert!(
-                second.gpu_address + SMALL <= first_address
-                    || first_address + SMALL <= second.gpu_address,
+                second_address + SMALL <= first_address || first_address + SMALL <= second_address,
                 "{name}: a take got the range an encoded command buffer holds"
             );
             let contents = second.contents.expect("a Shared block").cast::<u32>();

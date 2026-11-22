@@ -202,10 +202,11 @@ impl Device {
     /// No image is made in its memory, which is dedicated to its buffer
     /// (`VUID-vkBindImageMemory-memory-10926`): a texture over a buffer in it is copied, as over
     /// host memory's import ([`Buffer::new_texture`](crate::Buffer::new_texture)), and it is no
-    /// heap's memory ([`Device::new_heap_texture`]). The block's handle states its device address
-    /// ([`BlockInfo::gpu_address`](crate::BlockInfo::gpu_address)), so the make counts in
-    /// [`Metrics::exported_blocks_addressed`](crate::Metrics::exported_blocks_addressed), as
-    /// [`Buffer::gpu_address`](crate::Buffer::gpu_address) does.
+    /// heap's memory ([`Device::new_heap_texture`]). The block's handle states no device address
+    /// ([`BlockInfo::gpu_address`](crate::BlockInfo::gpu_address) is `None`): an address of its
+    /// memory goes out only as [`Buffer::gpu_address`](crate::Buffer::gpu_address) of a buffer in
+    /// it, which counts in
+    /// [`Metrics::exported_blocks_addressed`](crate::Metrics::exported_blocks_addressed).
     ///
     /// Err: [`Limit::NoExport`] where the device does not export the handle;
     /// [`Limit::ExportType`] for a dma-buf on a device without the foreign queue family, or where
@@ -215,18 +216,6 @@ impl Device {
     /// [`Limit::BlockIds`]; [`Error::Vulkan`] where the buffer, the
     /// allocation, its binding or the handle fails; [`Error::Quiesced`].
     pub fn new_exported_block(
-        &self,
-        handle: ExportHandle,
-        len: u64,
-    ) -> Result<(Block, Export), Error> {
-        let (block, export) = self.exported_block(handle, len)?;
-        block.held()?.1.address_out();
-        Ok((block, export))
-    }
-
-    /// An exported block, as [`Device::new_exported_block`] makes it, whose address no call has
-    /// handed out yet: an exported surface's in the copy form, whose handle the surface keeps.
-    pub(crate) fn exported_block(
         &self,
         handle: ExportHandle,
         len: u64,

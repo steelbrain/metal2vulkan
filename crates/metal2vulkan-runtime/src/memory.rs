@@ -246,8 +246,9 @@ pub struct BlockInfo {
     /// The offset of its first byte in that allocation.
     pub offset: u64,
     /// `gpuAddress` of the block's first byte: its allocation's device address plus
-    /// [`offset`](Self::offset).
-    pub gpu_address: u64,
+    /// [`offset`](Self::offset); `None` for an exported block, an address of whose memory goes
+    /// out only as [`Buffer::gpu_address`](crate::Buffer::gpu_address) of a buffer in it.
+    pub gpu_address: Option<u64>,
     /// `contents` of the block's first byte: the host mapping of a Shared block, `None` for a
     /// Private one; for an imported block, the host memory imported, or `None` for a dma-buf,
     /// whose pages the consumer reaches through its own mappings.
@@ -436,7 +437,7 @@ impl Memory {
             len: self.len,
             allocation: self.allocation,
             offset: self.base,
-            gpu_address: self.address,
+            gpu_address: (!self.exported()).then_some(self.address),
             contents: self.mapping.map(Mapping::get),
             device_local: self.device_local,
         }

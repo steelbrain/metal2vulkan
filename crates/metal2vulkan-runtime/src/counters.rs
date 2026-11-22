@@ -2535,12 +2535,12 @@ pub struct Metrics {
     /// [`SurfaceForm::Copy`](crate::SurfaceForm::Copy)).
     pub surfaces_copied: u64,
     /// Exported blocks a public call handed out a device address of, each counted at the first:
-    /// [`Buffer::gpu_address`](crate::Buffer::gpu_address) answering an address in one,
-    /// [`Device::new_exported_block`](crate::Device::new_exported_block), whose handle states its
-    /// block's, and a texture buffer's storage element at an index over its bytes. A write
-    /// through an address makes the textures over an exported block owe their copies in only
-    /// once its address went out; 0 where none went out, as for a surface's block in the copy
-    /// form whose buffer's address nothing read.
+    /// [`Buffer::gpu_address`](crate::Buffer::gpu_address) answering an address in one, and a
+    /// texture buffer's storage element at an index over its bytes; the block's own handle states
+    /// none ([`BlockInfo::gpu_address`](crate::BlockInfo::gpu_address)). A write through an
+    /// address makes the textures over an exported block owe their copies in only once its
+    /// address went out; 0 where none went out, as for a surface's block in the copy form whose
+    /// buffer's address nothing read.
     pub exported_blocks_addressed: u64,
     /// Waits of surfaces made in place for the submission that moves their planes to the general
     /// layout ([`Surface::wait_until_ready`](crate::Surface::wait_until_ready)), on the

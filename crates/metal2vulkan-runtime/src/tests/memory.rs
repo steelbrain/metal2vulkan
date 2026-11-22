@@ -230,7 +230,7 @@ mod on_device {
                     block.contents.map(|c| c.as_ptr() as usize)
                 ),
                 (
-                    allocation.gpu_address + block.offset,
+                    Some(allocation.gpu_address + block.offset),
                     allocation.contents.map(|c| c + block.offset as usize)
                 ),
                 "{name}: block {:?}'s address and mapping",
@@ -437,7 +437,7 @@ mod on_device {
                 .new_buffer(block.id, 0, MAX_BUFFER_LENGTH, None)
                 .expect("a buffer of 2 GiB");
             assert_eq!(
-                (buffer.gpu_address(), buffer.length()),
+                (Some(buffer.gpu_address()), buffer.length()),
                 (block.gpu_address, MAX_BUFFER_LENGTH),
                 "{name}"
             );
@@ -493,7 +493,10 @@ mod on_device {
                 (shared.class, shared.len),
                 (MemoryClass::Shared, MemoryClass::Shared.block_len())
             );
-            assert_ne!(shared.gpu_address, 0, "{name}: a Shared block's address");
+            assert!(
+                shared.gpu_address.is_some_and(|address| address != 0),
+                "{name}: a Shared block's address"
+            );
             let host = bytes(&shared);
 
             // A new Private block, unmapped.
@@ -504,7 +507,10 @@ mod on_device {
                 (private.class, private.len, private.contents),
                 (MemoryClass::Private, MemoryClass::Private.block_len(), None)
             );
-            assert_ne!(private.gpu_address, 0, "{name}: a Private block's address");
+            assert!(
+                private.gpu_address.is_some_and(|address| address != 0),
+                "{name}: a Private block's address"
+            );
             assert_ne!(private.id, shared.id);
             hook.assert_mapped(name, &shared);
             hook.assert_mapped(name, &private);
@@ -514,7 +520,10 @@ mod on_device {
                 .new_buffer(shared.id, 4096, 256, None)
                 .expect("a Shared buffer");
             let base = shared.contents.unwrap().as_ptr() as usize;
-            assert_eq!(view.gpu_address(), shared.gpu_address + 4096);
+            assert_eq!(
+                view.gpu_address(),
+                shared.gpu_address.expect("a taken block's address") + 4096
+            );
             assert_eq!(
                 view.contents().map(|c| c.as_ptr() as usize),
                 Some(base + 4096)
@@ -527,7 +536,7 @@ mod on_device {
                 .new_buffer(private.id, 0, MemoryClass::Private.block_len(), None)
                 .expect("a Private buffer");
             assert_eq!(
-                (whole.gpu_address(), whole.contents()),
+                (Some(whole.gpu_address()), whole.contents()),
                 (private.gpu_address, None)
             );
             let clone = view.clone();
@@ -1552,7 +1561,10 @@ mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: a block of 1 MiB: {error}"));
             let long = (device.take_block(MemoryClass::Shared, 64 * MIB))
                 .unwrap_or_else(|error| panic!("{name}: a block of 64 MiB: {error}"));
-            let (allocation, address) = (long.allocation, long.gpu_address);
+            let (allocation, address) = (
+                long.allocation,
+                long.gpu_address.expect("a taken block's address"),
+            );
             device.release_block(long).expect("a release");
             wait_until("the long allocation freed", || {
                 core.pool.frees().len() == 1 && !core.submit_calls.freeing()
@@ -1572,7 +1584,10 @@ mod on_device {
                 [(kind, address, 64 * MIB, Some((0, None)))],
                 "{name}: the freed allocation alone, nothing in flight at its free: {freed}"
             );
-            let held = core.spans.place(&at(live.gpu_address), crate::host_time());
+            let held = core.spans.place(
+                &at(live.gpu_address.expect("a taken block's address")),
+                crate::host_time(),
+            );
             let kind = crate::RangeKind::Allocation(live.allocation, MemoryClass::Shared);
             assert!(
                 matches!(held.holders.as_slice(),

@@ -660,8 +660,10 @@ handle may outlive the block, unused. Neither `BlockMappings` hook runs for an e
 its bytes are undefined until written, as a taken block's are. No image is made in its memory,
 which is dedicated to its buffer (`VUID-vkBindImageMemory-memory-10926`): a texture over a buffer
 in it is the counted copy, as over host memory's import, and a heap texture in it is
-`Gap::HeapTexture`. The `Block` handle states the block's `gpu_address`, so the make counts in
-`Metrics::exported_blocks_addressed` (Textures over a buffer, the exported block's rule).
+`Gap::HeapTexture`. The `Block` handle states no address (`BlockInfo::gpu_address` is `None`): an
+address of the block's memory goes out only as `Buffer::gpu_address` of a buffer in it, which
+counts in `Metrics::exported_blocks_addressed` (Textures over a buffer, the exported block's
+rule).
 
 Once the other API's work that accessed the block has completed (work that wrote it, or that read it
 after a release; the consumer's own wait on the decoder), the consumer calls
@@ -950,8 +952,8 @@ the Direct3D 11 texture's payload until it is freed.
   and a buffer the consumer did not place at the address its guest asked for has a `gpu_address`
   other than that one. A stale address, of a released buffer, can still fault the device. An
   address in an exported block is one the consumer read from rt before the commit of the command
-  buffer that writes through it (`Buffer::gpu_address`, or the block's own from
-  `Device::new_exported_block`): a write through an address made any other way does not reach
+  buffer that writes through it (`Buffer::gpu_address` of a buffer in the block, whose
+  `BlockInfo` states no address): a write through an address made any other way does not reach
   the textures over the block, whose copies in owe nothing for it (Textures over a buffer).
 - An app buffer too large for the consumer's map budget is copied, on drivers whose dma-buf query
   offers a non-host-visible type first.
@@ -1436,16 +1438,16 @@ made, with no lock, and never rewritten for layouts.
     write through an address outside the command's bound slots and declared resources changes
     the bytes of every such texture whose block's address a public call handed out before that
     submission, and of no other: `Buffer::gpu_address` of a buffer whose bytes shaders reach in
-    the block (a Managed buffer's device copy placed there included), the `Block` that
-    `Device::new_exported_block` answers, whose `gpu_address` states the block's address, and a
-    texture buffer's storage element at an index over the block's bytes. An exported surface's
-    block in the copy form is the surface's own, so only `Surface::buffer`'s `gpu_address`
-    hands it out; the planes' resource IDs reach their own images. Each such block counts once in
-    `Metrics::exported_blocks_addressed`. A command recorded while no texture over a buffer in an
-    image of its own lived is untracked, and changes every such texture's bytes. The upload that
-    leads the next submission that uses the texture makes the copy; a submission that only reads
-    the texture copies nothing. The block is Private, so no host write reaches it, and the other
-    API's writes are the consumer's to announce by the acquire.
+    the block (a Managed buffer's device copy placed there included), and a texture buffer's
+    storage element at an index over the block's bytes; the block's own `BlockInfo` states no
+    address. An exported surface's block in the copy form is the surface's own, so only
+    `Surface::buffer`'s `gpu_address` hands it out; the planes' resource IDs reach their own
+    images. Each such block counts once in `Metrics::exported_blocks_addressed`. A command
+    recorded while no texture over a buffer in an image of its own lived is untracked, and changes
+    every such texture's bytes. The upload that leads the next submission that uses the texture
+    makes the copy; a submission that only reads the texture copies nothing. The block is Private,
+    so no host write reaches it, and the other API's writes are the consumer's to announce by the
+    acquire.
   - Over a Managed buffer's device copy, only at Metal's own Managed events, each texture keeping
     one flag of each kind: in, after a `did_modify_range` over its range, by the commit that
     captures the range, after its copies into the device copy; and at its making, or where device

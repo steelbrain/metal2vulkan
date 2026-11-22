@@ -299,8 +299,8 @@ mod on_device {
             };
             println!(
                 "{name}: the heap's block at {:#x}..{:#x}",
-                heap_block.gpu_address,
-                heap_block.gpu_address + len
+                heap_block.gpu_address.expect("a taken block's address"),
+                heap_block.gpu_address.expect("a taken block's address") + len
             );
             let descriptor = |format| {
                 let mut d = TextureDescriptor::new(TextureType::Type2D, format, SIDE, SIDE);

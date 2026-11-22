@@ -1301,7 +1301,7 @@ field	metal2vulkan-runtime::BlockInfo.allocation	pub allocation: AllocationId
 field	metal2vulkan-runtime::BlockInfo.class	pub class: MemoryClass
 field	metal2vulkan-runtime::BlockInfo.contents	pub contents: Option<NonNull<u8>>
 field	metal2vulkan-runtime::BlockInfo.device_local	pub device_local: bool
-field	metal2vulkan-runtime::BlockInfo.gpu_address	pub gpu_address: u64
+field	metal2vulkan-runtime::BlockInfo.gpu_address	pub gpu_address: Option<u64>
 field	metal2vulkan-runtime::BlockInfo.id	pub id: BlockId
 field	metal2vulkan-runtime::BlockInfo.len	pub len: u64
 field	metal2vulkan-runtime::BlockInfo.offset	pub offset: u64

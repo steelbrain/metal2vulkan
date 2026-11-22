@@ -470,7 +470,7 @@ fn block_span(object: u64, range: &rt::HeapRange, block: &rt::Block) -> faulted:
     faulted::Span {
         object,
         heap: true,
-        start: block.gpu_address + range.offset,
+        start: block.gpu_address.expect("a taken block's address") + range.offset,
         len: range.len,
     }
 }
@@ -1978,7 +1978,7 @@ impl NewRuntime {
                     self.unwritten.block(call.result);
                 }
                 let made = Made {
-                    address: Some(block.gpu_address),
+                    address: block.gpu_address,
                 };
                 let range = rt::HeapRange {
                     block: block.id,

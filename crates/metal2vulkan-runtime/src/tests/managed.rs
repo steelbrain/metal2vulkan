@@ -392,7 +392,7 @@ pub(crate) mod on_device {
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
                 assert_eq!(
                     managed.gpu_address(),
-                    cpu.gpu_address + AT,
+                    cpu.gpu_address.expect("a taken block's address") + AT,
                     "{name}: one copy"
                 );
                 let private = (device.take_block(MemoryClass::Private, BLOCK))
@@ -446,7 +446,7 @@ pub(crate) mod on_device {
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
             assert_eq!(
                 managed.gpu_address(),
-                private.gpu_address + AT,
+                private.gpu_address.expect("a taken block's address") + AT,
                 "{name}: the copy where the consumer placed it"
             );
             // The consumer's write into its slack, in the commit that takes the first bytes in.
@@ -551,10 +551,14 @@ pub(crate) mod on_device {
         match &copy {
             Some(copy) => assert_eq!(
                 managed.gpu_address(),
-                copy.gpu_address + 4096,
+                copy.gpu_address.expect("a taken block's address") + 4096,
                 "{name}: a device that is not unified keeps a device copy where it is placed"
             ),
-            None => assert_eq!(managed.gpu_address(), cpu.gpu_address, "{name}: one copy"),
+            None => assert_eq!(
+                Some(managed.gpu_address()),
+                cpu.gpu_address,
+                "{name}: one copy"
+            ),
         }
         let host: Vec<u32> = (0..WORDS as u32).map(|i| i * 3 + 7).collect();
         let bytes =
