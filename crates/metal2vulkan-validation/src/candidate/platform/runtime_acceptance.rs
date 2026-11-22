@@ -50,7 +50,8 @@ pub struct RuntimeKernels {
 
 impl RuntimeKernels {
     /// The runtime's device of `device_type`, under the validation layer and the process's
-    /// restriction. Only a device that cannot be used (none of the kind, the hang tripwire, a
+    /// restriction, its whole sampler range granted once (a grant lasts as long as the device),
+    /// which every row's constexpr samplers are numbered in. Only a device that cannot be used (none of the kind, the hang tripwire, a
     /// restriction it cannot take, a message the layer logs while it opens) is
     /// [`AcceptanceError::DeviceUnavailable`].
     pub fn open(device_type: DeviceType) -> Result<RuntimeKernels, AcceptanceError> {
@@ -72,6 +73,8 @@ impl RuntimeKernels {
             })
         })
         .map_err(unavailable)?;
+        // A grant lasts as long as the device: every row's constexpr samplers are numbered in it.
+        sampler_grant(&device).map_err(|error| unavailable(error.to_string()))?;
         let mut kernels = RuntimeKernels {
             device,
             instance,
@@ -165,8 +168,6 @@ impl Drop for Log {
 
 /// `row`'s state made on `device`, and its dispatch encoded.
 fn made(device: &rt::Device, row: &RuntimeRow<'_>) -> Result<Acceptance, AcceptanceError> {
-    let _grant =
-        sampler_grant(device).map_err(|error| AcceptanceError::Tooling(error.to_string()))?;
     let function =
         match Library::from_air(row.bitcode).and_then(|library| library.function(row.entry)) {
             Ok(function) => function,
