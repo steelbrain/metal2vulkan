@@ -20,11 +20,10 @@
 //!    fetch sign-extending each component as Metal's does;
 //! 2. the per-attribute choice of `metal::vertex::attribute_fetch` (format, step, profile), in
 //!    item 1's Vulkan format. It
-//!    pulls every attribute when the profile's buffer containment is checked in the shader
-//!    (`memory::contain::encoding`: containment on and no buffer robustness): Vulkan bounds
-//!    fixed-function input only under robust buffer access (`VUID-vkCmdDraw-None-02721`), and a
+//!    pulls every attribute outside the identity domains: Vulkan bounds fixed-function input only
+//!    under robust buffer access (`VUID-vkCmdDraw-None-02721`), which no profile enables, and a
 //!    Metal draw may fetch past its buffer, so the fetch moves into the shader behind the check.
-//!    Every later item then finds no fixed-function attribute.
+//!    Every later item then finds no fixed-function attribute there.
 //!    A layout of Metal's **constant step** is answered there under the identity domains at
 //!    vertex rate (pulled outside them), and this module emits its binding with a **stride of 0**
 //!    ([`binding_stride`]): a vertex-rate binding fetches element `vertexIndex`, Metal's constant

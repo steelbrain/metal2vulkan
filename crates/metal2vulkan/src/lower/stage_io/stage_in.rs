@@ -51,7 +51,7 @@ use crate::lower::arith::Form;
 use crate::lower::dispatch::Projection;
 use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
-use crate::memory::contain;
+use crate::memory::contain::Check;
 use crate::metal::{AttributeFormat, IndexType, StepFunction, VertexFormat};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::stage_io::{StageInFetch, StageInInput};
@@ -249,7 +249,7 @@ fn select(
         step,
         stride,
         form,
-        check: contain::encoding(cx.profile),
+        check: Check::InShader,
     })
 }
 

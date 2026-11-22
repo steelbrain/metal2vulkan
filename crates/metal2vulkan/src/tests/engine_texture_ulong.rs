@@ -30,7 +30,7 @@ use std::collections::BTreeMap;
 
 use crate::bind::{BindState, BoundBuffer, BoundTexture, StageTable, TextureFacts};
 use crate::budget::Budget;
-use crate::device::profile::{DeviceProfile, Robustness};
+use crate::device::profile::DeviceProfile;
 use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Error, Feature, Needs, Unsupported};
@@ -112,17 +112,19 @@ fn profiles() -> Vec<(String, DeviceProfile)> {
 }
 
 /// What the interpreter's image does outside itself on `p`: the device's texel for an `RG32` view,
-/// `(0, 0, 0, 1)`, and its discarded write where the device's robustness covers the access; a
-/// poisoned texel where the device discards writes but the shader checks reads; a trap where the
-/// shader contains both.
+/// `(0, 0, 0, 1)`, and its discarded write where the device's image robustness covers the access;
+/// a poisoned texel where the device discards writes but the shader checks reads; a trap where the
+/// shader contains both, as it does for every texel buffer (`buffer`).
 fn robust(p: &DeviceProfile, buffer: bool) -> Option<[u32; 4]> {
     let f = p.fields();
-    match (buffer, f.robustness) {
-        (true, Robustness::Rba2) => Some([0, 0, 0, 1]),
-        (true, _) => None,
-        (false, _) if f.images.robust_image_access2 => Some([0, 0, 0, 1]),
-        (false, _) if f.images.robust_image_access => Some([0xDEAD_BEEF; 4]),
-        (false, _) => None,
+    if buffer {
+        None
+    } else if f.images.robust_image_access2 {
+        Some([0, 0, 0, 1])
+    } else if f.images.robust_image_access {
+        Some([0xDEAD_BEEF; 4])
+    } else {
+        None
     }
 }
 

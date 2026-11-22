@@ -239,23 +239,16 @@ fn a_tessellation_pipeline_census_is_its_functions() {
 }
 
 /// The tier table holds every committed profile as stated and, where it states a robustness
-/// feature, in its robustness-off leg: the stated leg compiles the robust
-/// encodings the profile states, the off leg the in-shader ones, on the same device class and
-/// subgroup width. Every committed profile states `robustBufferAccess`, so every one has both legs;
-/// every one states image robustness too (the floor's Vulkan 1.3 requires `robustImageAccess`),
-/// and `moltenvk-m3` states `robustBufferAccess` without `robustBufferAccess2`.
+/// feature, in its robustness-off leg: the stated leg compiles the robust image encodings the
+/// profile states, the off leg the in-shader ones, on the same device class and subgroup width.
+/// Every committed profile states `robustBufferAccess`, so every one has both legs; every one
+/// states image robustness too (the floor's Vulkan 1.3 requires `robustImageAccess`).
 #[test]
 fn the_tier_table_derives_a_robustness_off_leg_from_each_profile() {
-    use metal2vulkan::device::Robustness;
     let table = committed_profiles().unwrap();
     let stems = crate::engine::committed_profiles().unwrap();
     assert_eq!(table.len(), 2 * stems.len());
-    let robust = |profile: &DeviceProfile| {
-        (
-            profile.checks_buffers_in_shader(),
-            profile.images().robust_image_access,
-        )
-    };
+    let robust = |profile: &DeviceProfile| profile.images().robust_image_access;
     for stem in &stems {
         let description = crate::engine::load_description(stem).unwrap();
         let legs = table
@@ -275,8 +268,8 @@ fn the_tier_table_derives_a_robustness_off_leg_from_each_profile() {
         );
         let images = description.has(VkFeature::RobustImageAccess)
             || description.has(VkFeature::RobustImageAccess2);
-        assert_eq!(robust(&stated.profile), (false, images), "{stem}");
-        assert_eq!(robust(&off.profile), (true, false), "{stem}");
+        assert_eq!(robust(&stated.profile), images, "{stem}");
+        assert!(!robust(&off.profile), "{stem}");
     }
     let stated = |stem: &str| {
         table
@@ -286,8 +279,6 @@ fn the_tier_table_derives_a_robustness_off_leg_from_each_profile() {
     };
     assert!(stated("runtime-floor").profile.images().robust_image_access);
     assert!(stated("lavapipe").profile.images().robust_image_access);
-    assert_eq!(stated("moltenvk-m3").profile.robustness(), Robustness::Rba);
-    assert_eq!(stated("lavapipe").profile.robustness(), Robustness::Rba2);
     // A description that states no robustness feature has no second leg.
     let mut none = crate::engine::load_description("runtime-floor").unwrap();
     none.features
@@ -296,14 +287,14 @@ fn the_tier_table_derives_a_robustness_off_leg_from_each_profile() {
 }
 
 /// A compile records the containment it compiled under, from its profile and its own module:
-/// the robust and the in-shader leg of one copy census the same strategy names (the name hides
-/// the encoding) under different encodings; a kernel that declares no image has none; a texture
+/// both legs of one copy census the same strategy names under the one buffer encoding, checked
+/// (the shader checks every descriptor view); a kernel that declares no image has none; a texture
 /// write's image encoding follows the leg's image robustness, and a device that writes a storage
 /// image only through its declared format (`runtime-floor` without
 /// `shaderStorageImageWriteWithoutFormat`, below the runtime's floor) needs the texture's format
 /// first; and a kernel that turns an integer into a pointer (a dynamic root) reaches that memory by
-/// device address under names of its own, checked in the shader in both legs, while its descriptor
-/// accesses take each leg's encoding.
+/// device address under names of its own, checked in the shader in both legs, as its descriptor
+/// accesses are.
 #[test]
 fn a_compile_records_the_containment_it_compiled_under() {
     use metal2vulkan_devtools::{engine_dir, fixtures_dir, llvm_assemble};
@@ -335,7 +326,7 @@ fn a_compile_records_the_containment_it_compiled_under() {
     let (stated, off) = (copy(Leg::Stated), copy(Leg::RobustnessOff));
     assert!(stated.strategies.contains("access.memcpy.dynamic"));
     assert!(off.strategies.contains("access.memcpy.dynamic"));
-    assert_eq!(stated.containment, encoding(B::Robust, I::Unused));
+    assert_eq!(stated.containment, encoding(B::Checked, I::Unused));
     assert_eq!(off.containment, encoding(B::Checked, I::Unused));
 
     let write = |stem: &str, leg_of| {
@@ -394,28 +385,22 @@ fn a_compile_records_the_containment_it_compiled_under() {
             .collect::<Vec<_>>();
         (module.containment, accesses)
     };
-    assert_eq!(
-        round_trip(Leg::Stated),
-        (
-            encoding(B::Robust, I::Unused),
-            ["access.dynamic.load", "access.load", "access.store"]
+    for leg_of in [Leg::Stated, Leg::RobustnessOff] {
+        assert_eq!(
+            round_trip(leg_of),
+            (
+                encoding(B::Checked, I::Unused),
+                [
+                    "access.dynamic.load",
+                    "access.load.checked",
+                    "access.store.checked"
+                ]
                 .map(String::from)
                 .into()
-        )
-    );
-    assert_eq!(
-        round_trip(Leg::RobustnessOff),
-        (
-            encoding(B::Checked, I::Unused),
-            [
-                "access.dynamic.load",
-                "access.load.checked",
-                "access.store.checked"
-            ]
-            .map(String::from)
-            .into()
-        )
-    );
+            ),
+            "{leg_of:?}"
+        );
+    }
 }
 
 /// A kernel that reads, through a `select` of two textures by thread parity (a switch-at-use),
@@ -546,10 +531,10 @@ fn an_image_encoding_names_what_its_device_is_left() {
 
 /// A vertex case's row compiles under the vertex descriptor its executors draw it with.
 /// `vertex_varying_triangle` reads two `float2` attributes and binds no buffer. Under its
-/// descriptor the stated leg fetches them fixed function and declares no buffer, while the
-/// robustness-off leg, whose buffer robustness no longer bounds fixed-function input, pulls them
-/// from a storage buffer checked in the shader: the row the executed module belongs to. A fixture
-/// entry's default inputs (no descriptor) declare no buffer on either leg.
+/// descriptor both legs pull them from a storage buffer checked in the shader, as nothing bounds
+/// fixed-function input outside the identity domains (VUID-vkCmdDraw-None-02721): the row the
+/// executed module belongs to. A fixture entry's default inputs (no descriptor) declare no buffer
+/// on either leg.
 #[test]
 fn a_vertex_case_compiles_under_its_vertex_descriptor() {
     use crate::case::{AttributeFormat, AttributeInput};
@@ -592,17 +577,12 @@ fn a_vertex_case_compiles_under_its_vertex_descriptor() {
             .buffers
     };
     for stem in ["lavapipe", "moltenvk-m3", "runtime-floor"] {
-        assert_eq!(
-            buffers(&inputs, leg(stem, Leg::Stated)),
-            BufferEncoding::Unused,
-            "{stem}"
-        );
-        assert_eq!(
-            buffers(&inputs, leg(stem, Leg::RobustnessOff)),
-            BufferEncoding::Checked,
-            "{stem}"
-        );
         for leg_of in [Leg::Stated, Leg::RobustnessOff] {
+            assert_eq!(
+                buffers(&inputs, leg(stem, leg_of)),
+                BufferEncoding::Checked,
+                "{stem} {leg_of:?}"
+            );
             assert_eq!(
                 buffers(&CaseInputs::defaults(), leg(stem, leg_of)),
                 BufferEncoding::Unused,
@@ -699,11 +679,9 @@ fn target(resource: OutOfBoundsResource, form: ContainmentForm) -> OutOfBoundsTa
 
 /// The out-of-bounds fixtures (`engine/ob1_*`) compile each target they declare to the form
 /// and mechanism of the inventory on lavapipe, MoltenVK, and the runtime's floor, in both legs: a
-/// descriptor view left to the device's buffer robustness where the leg enables it and checked in
-/// the shader where it does not, a device address and the arena checked in the shader on every
-/// leg, and an image or texel buffer left to the device's image or buffer robustness where
-/// enabled. The form is the compiled structure's: a robustness-off leg views the `constant`
-/// buffer as a storage buffer.
+/// descriptor view, a texel buffer, a device address and the arena checked in the shader on every
+/// leg, and an image left to the device's image robustness where enabled. The form is the
+/// compiled structure's: every leg views the `constant` buffer as a storage buffer.
 #[test]
 fn the_out_of_bounds_fixtures_contain_each_target_as_declared() {
     use metal2vulkan_devtools::{engine_dir, llvm_assemble};
@@ -749,25 +727,15 @@ fn the_out_of_bounds_fixtures_contain_each_target_as_declared() {
             ],
         ),
     ];
-    // The mechanism label of each fixture's targets per (stem, leg). MoltenVK and the runtime's
-    // floor state `robustBufferAccess` without `robustBufferAccess2`.
-    let expected = |fixture: &str, stem: &str, leg: Leg| -> &str {
-        let off = leg == Leg::RobustnessOff;
-        let robust1 = ["moltenvk-m3", "runtime-floor"].contains(&stem);
+    // The mechanism label of each fixture's targets per (stem, leg).
+    let expected = |fixture: &str, _: &str, leg: Leg| -> &str {
         match fixture {
             "ob1_device_address" => "device-address:shader",
             "ob1_threadgroup" => "arena:shader",
-            _ if off => match fixture {
-                "ob1_texture" => "image:shader",
-                "ob1_texel_buffer" => "texel-buffer:shader",
-                _ => "descriptor-view:shader",
-            },
+            "ob1_texture" if leg == Leg::RobustnessOff => "image:shader",
             "ob1_texture" => "image:robust2",
-            // `robustBufferAccess` alone: the texel buffer is checked in the shader.
-            "ob1_texel_buffer" if robust1 => "texel-buffer:shader",
-            "ob1_texel_buffer" => "texel-buffer:robust2",
-            _ if robust1 => "descriptor-view:robust",
-            _ => "descriptor-view:robust2",
+            "ob1_texel_buffer" => "texel-buffer:shader",
+            _ => "descriptor-view:shader",
         }
     };
     // The form each target is exercised as: the declared one, but a buffer as its compiled slot
@@ -993,21 +961,18 @@ fn ob3_case(fixture: &str) -> AuthoredCase {
 
 /// The fixtures of the authorable forms (`engine/ob3_*`) compile, under the inputs their cases
 /// imply (a vertex descriptor, a stage-input descriptor), each target to its declared form and the
-/// mechanism of its fetch on every committed profile, in both legs: a vertex input is
-/// fixed-function under the stated buffer robustness and pulled with the check without it; a
-/// control point and a stage input are pulled through a descriptor view, left to the stated
-/// robustness or checked in the shader; an index buffer is bounded by `robustBufferAccess2` where
-/// the leg enables it and clamped by the binder elsewhere; a top-level texture array's index is
-/// clamped in the shader. The profiles without `tessellationShader` refuse the control-point draw,
+/// mechanism of its fetch on every committed profile, in both legs: a vertex input, a control
+/// point and a stage input are pulled through a descriptor view checked in the shader (outside
+/// the identity domains nothing bounds fixed-function input); an index buffer is drawn from a
+/// zero-padded copy; a top-level texture array's index is clamped in the shader. The profiles without `tessellationShader` refuse the control-point draw,
 /// a post-tessellation vertex function, and those without vertex stores the vertex draws, which
 /// write memory, each a typed refusal; a control point compiles on every other profile.
 #[test]
 fn the_ob3_fixtures_contain_each_target_by_its_fetch_on_every_profile() {
     use metal2vulkan_devtools::{engine_dir, llvm_assemble};
     let table = committed_profiles().unwrap();
-    // What each profile's description states, by stem: whether it has `robustBufferAccess2`,
-    // vertex stores and `tessellationShader`. The stated description decides both legs; the robustness-off leg reads none
-    // of the robustness here.
+    // What each profile's description states, by stem: whether it has vertex stores and
+    // `tessellationShader`. The stated description decides both legs.
     let described = table
         .iter()
         .map(|entry| entry.tier.stem.as_str())
@@ -1017,7 +982,6 @@ fn the_ob3_fixtures_contain_each_target_by_its_fetch_on_every_profile() {
             let description = crate::engine::load_description(stem).unwrap();
             let has = |feature| description.has(feature);
             let facts = (
-                has(VkFeature::RobustBufferAccess2),
                 has(VkFeature::VertexPipelineStoresAndAtomics),
                 has(VkFeature::TessellationShader),
             );
@@ -1039,9 +1003,7 @@ fn the_ob3_fixtures_contain_each_target_by_its_fetch_on_every_profile() {
         for entry in table.iter() {
             let label = entry.tier.label();
             let stem = entry.tier.stem.as_str();
-            let off = entry.tier.leg == Leg::RobustnessOff;
-            let (robust2, vertex_stores, tessellation) = described[stem];
-            let robust = if robust2 { "robust2" } else { "robust" };
+            let (vertex_stores, tessellation) = described[stem];
             let refused = match fixture {
                 "ob3_control_point" if !tessellation => Some("Tessellation"),
                 "ob3_vertex_input" | "ob3_index_buffer" | "ob3_control_point" => {
@@ -1050,13 +1012,12 @@ fn the_ob3_fixtures_contain_each_target_by_its_fetch_on_every_profile() {
                 _ => None,
             };
             let expected = match fixture {
-                "ob3_vertex_input" if off => "descriptor-view:shader".to_string(),
-                "ob3_vertex_input" => format!("vertex-input:{robust}"),
-                "ob3_control_point" | "ob3_stage_input" if off => "descriptor-view:shader".into(),
-                "ob3_control_point" | "ob3_stage_input" => format!("descriptor-view:{robust}"),
+                "ob3_vertex_input" | "ob3_control_point" | "ob3_stage_input" => {
+                    "descriptor-view:shader"
+                }
                 // Every device and leg draws from a zero-padded copy.
-                "ob3_index_buffer" => "index-buffer:padded".into(),
-                _ => "handle-array:shader".into(),
+                "ob3_index_buffer" => "index-buffer:padded",
+                _ => "handle-array:shader",
             };
             match compile_module(&bitcode, fixture, &inputs, &entry.profile) {
                 Ok(compiled) => {

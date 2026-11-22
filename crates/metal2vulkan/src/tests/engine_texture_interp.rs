@@ -13,16 +13,16 @@
 //! - a depth read and a multisampled integer read.
 //!
 //! Containment: the interpreter traps any access outside an image, so a dispatch that overruns
-//! its image on a profile without robust image access (for a texel buffer, without
-//! `robustBufferAccess2`) completes only because the shader checks its reads and guards its
-//! writes, and the in-range texels are exact. `engine_texture_oob` checks the out-of-bounds
+//! its image on a profile without robust image access (for a texel buffer, on every profile)
+//! completes only because the shader checks its reads and guards its writes, and the in-range
+//! texels are exact. `engine_texture_oob` checks the out-of-bounds
 //! values themselves.
 //!
 //! `llvm-as` assembles the fixture; without it the tests skip visibly.
 
 use std::collections::BTreeMap;
 
-use crate::device::profile::{DeviceProfile, Robustness};
+use crate::device::profile::DeviceProfile;
 use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription};
 use crate::error::Error;
@@ -93,12 +93,6 @@ fn profiles() -> Vec<(String, DeviceProfile)> {
 fn contains_images(p: &DeviceProfile) -> bool {
     let f = p.fields();
     !f.images.robust_image_access
-}
-
-/// Reads are checked and writes guarded for texel buffers on `p`: `robustBufferAccess` may write
-/// past a texel buffer anywhere in its buffer.
-fn contains_texel_buffers(p: &DeviceProfile) -> bool {
-    matches!(p.fields().robustness, Robustness::None | Robustness::Rba)
 }
 
 /// The module of `entry` on `p`, or `None` when `p` needs a runtime input for it (a storage
@@ -191,8 +185,8 @@ fn words(bytes: &[u8]) -> Vec<u32> {
         .collect()
 }
 
-/// `dst[i] = src[i] * 2` over a texel buffer of `N` texels; on a profile that contains texel
-/// buffers, a grid of `N + 3` threads checks its reads and drops its writes past the end.
+/// `dst[i] = src[i] * 2` over a texel buffer of `N` texels: on every profile a grid of `N + 3`
+/// threads checks its reads and drops its writes past the end.
 #[test]
 fn texel_buffers_double_their_input() {
     const N: u32 = 5;
@@ -200,7 +194,6 @@ fn texel_buffers_double_their_input() {
         return;
     };
     let mut ran = 0;
-    let mut overran = 0;
     for (stem, p) in profiles() {
         let Some((plan, m)) = module(&bc, "texel_buffers", &stem, &p) else {
             continue;
@@ -211,14 +204,8 @@ fn texel_buffers_double_their_input() {
             *t = [fl(x), fl(-x), fl(0.5 + x), fl(1.0)];
         }
         let dst = Image::new(texture(1), [N, 1, 1], 1, 1, 1);
-        let threads = if contains_texel_buffers(&p) {
-            overran += 1;
-            N + 3
-        } else {
-            N
-        };
         let res = resources(&plan, &[]);
-        let (_, imgs) = run_both(&m, &res, &[src, dst], [threads, 1, 1])
+        let (_, imgs) = run_both(&m, &res, &[src, dst], [N + 3, 1, 1])
             .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
         for (i, t) in imgs[1].texels.iter().enumerate() {
             let x = i as f32;
@@ -230,7 +217,7 @@ fn texel_buffers_double_their_input() {
         }
         ran += 1;
     }
-    assert!(ran > 0 && overran > 0, "ran {ran}, overran {overran}");
+    assert!(ran > 0, "ran {ran}");
 }
 
 /// A texture buffer's reads take the bound swizzle: `texel_buffers` states
@@ -316,9 +303,9 @@ fn a_texel_buffer_read_takes_the_bound_swizzle() {
 /// A swizzled texture buffer's read past its texels reads Metal's out-of-bounds texel swizzled,
 /// its alpha the bound format's (1 where it has none) wherever the swizzle carries it, also where
 /// the function reads only the red lane (the MoltenVK lane read 0 there): `ob1_texel_buffer` writes
-/// `src.read(idx[t]).x`, so on a profile whose shader checks its texel-buffer reads it states
-/// `OutOfBoundsAlpha` for the slot it reads, and under a swizzle taking red from alpha reads each
-/// texel's alpha in bounds and the specialized alpha past them.
+/// `src.read(idx[t]).x`, so it states `OutOfBoundsAlpha` for the slot it reads (the shader checks
+/// every texel-buffer read), and under a swizzle taking red from alpha reads each texel's alpha in
+/// bounds and the specialized alpha past them.
 #[test]
 fn a_swizzled_texel_buffer_reads_metals_out_of_bounds_alpha_in_any_lane() {
     use crate::metal::{TextureSwizzle as S, TextureSwizzleChannels as C};
@@ -348,9 +335,6 @@ fn a_swizzled_texel_buffer_reads_metals_out_of_bounds_alpha_in_any_lane() {
     let red_from_alpha = C::new(S::Alpha, S::Green, S::Blue, S::Alpha);
     let mut ran = 0;
     for (stem, p) in profiles() {
-        if !contains_texel_buffers(&p) {
-            continue;
-        }
         let Some((plan, m)) = module(&bc, "ob1_texel_buffer", &stem, &p) else {
             continue;
         };
@@ -402,9 +386,9 @@ fn limited(stem: &str, limit: u32, drop: &[VkFeature]) -> DeviceProfile {
 /// (`bind::texel_parts`, `LoweringInputs::texel_buffer_parts`), on lavapipe's profile with views
 /// of 1024 texels: `ob1_texel_buffer` reads texels on both sides of each part's end, each its own,
 /// and writes texels on both sides of each part's end, each in its own place and nowhere else.
-/// Without robustness the shader checks the reads and guards the writes against the whole width:
-/// a read past the last texel is Metal's zero and a write there is dropped. The interpreter traps
-/// any access outside an image, so no access leaves its part.
+/// With or without the device's robustness, the shader checks the reads and guards the writes
+/// against the whole width: a read past the last texel is Metal's zero and a write there is
+/// dropped. The interpreter traps any access outside an image, so no access leaves its part.
 #[test]
 fn a_texture_buffer_s_parts_hold_every_texel() {
     use crate::lower::select::LowerInputs;
@@ -446,8 +430,6 @@ fn a_texture_buffer_s_parts_hold_every_texel() {
             crate::bind::part_texels(&p.fields().limits),
             u64::from(PART)
         );
-        let contained = contains_texel_buffers(&p);
-        assert_eq!(contained, stem.ends_with("unrobust"), "{stem}");
         let (plan, m) = typed_module_with(&bc, "ob1_texel_buffer", &p, &inputs)
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
         for at in [read, write] {
@@ -471,25 +453,15 @@ fn a_texture_buffer_s_parts_hold_every_texel() {
             part(1, 1, PART, PART, false),
             part(1, 2, 2 * PART, dst_n - 2 * PART, false),
         ];
-        // Past the last texel only where the shader checks the access; the device's robustness
-        // answers such an access elsewhere, which the interpreter traps.
-        let (past, far) = match contained {
-            true => (src_n, u32::MAX),
-            false => (1, 2),
-        };
-        let reads = [0, PART - 1, PART, src_n - 1, past, far, 5, PART + 3];
-        let (past, far) = match contained {
-            true => (dst_n, u32::MAX),
-            false => (7, 8),
-        };
+        let reads = [0, PART - 1, PART, src_n - 1, src_n, u32::MAX, 5, PART + 3];
         let writes = [
             PART - 1,
             PART,
             2 * PART - 1,
             2 * PART,
             dst_n - 1,
-            past,
-            far,
+            dst_n,
+            u32::MAX,
             3,
         ];
         let idx: Vec<u8> = reads

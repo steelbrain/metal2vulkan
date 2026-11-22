@@ -33,7 +33,6 @@ use crate::bind::{
     TextureFacts, UseTarget, WriteSource,
 };
 use crate::budget::Budget;
-use crate::device::profile::Robustness;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{BindError, DescriptorError, Error, Feature};
 use crate::library::Library;
@@ -2207,8 +2206,8 @@ fn spec_value(plan: &BindingPlan, id: u32) -> u8 {
 /// A read the shader checks whose alpha the function observes takes its out-of-bounds alpha from
 /// `OutOfBoundsAlpha`, which the plan sets from the bound pixel format: 1 for a format without
 /// alpha, 0 for one with it, and 0 for an unbound slot or one bound to a placeholder format (the
-/// slot reads its neutral, which reads zero). A compute texel buffer declares it where
-/// `robustBufferAccess2` is absent, a fragment texture where `robustImageAccess2` is.
+/// slot reads its neutral, which reads zero). A compute texel buffer always declares it (the shader
+/// checks every texel buffer read), a fragment texture where `robustImageAccess2` is.
 #[test]
 fn out_of_bounds_alpha_follows_the_bound_format() {
     let (Some(ops), Some(io), Some(tail)) = (
@@ -2254,8 +2253,7 @@ fn out_of_bounds_alpha_follows_the_bound_format() {
             .constants
             .iter()
             .find(|c| c.key == SpecKey::OutOfBoundsAlpha(src));
-        let checked = f.robustness != Robustness::Rba2;
-        assert_eq!(c.is_some(), checked, "{stem}");
+        assert!(c.is_some(), "{stem}");
         if let Some(c) = c {
             // Vulkan 1.2 requires `R32_SFLOAT` and `R32G32B32A32_SFLOAT` uniform texel buffers.
             for (pf, want) in [(PixelFormat::RGBA32Float, 0), (PixelFormat::R32Float, 1)] {

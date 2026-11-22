@@ -6,10 +6,9 @@
 //! offsets with the buffer family's index rule (`access::gep_offset`), and `bitcast`,
 //! `addrspacecast`, `freeze`, and `select` copy or select the offset. Several blob globals in one
 //! root set share the representation, since their offsets are all blob offsets. A load is a
-//! word-composed leaf from the blob's words (`memory::blob`): a bound blob's storage view,
-//! contained by the descriptor encoding (none with robust descriptors, else the normative check
-//! against the bound size), or under the identity domains the module's `Private` words, checked
-//! against their length on every load.
+//! word-composed leaf from the blob's words (`memory::blob`): a bound blob's storage view, under
+//! the normative check against the bound size, or under the identity domains the module's
+//! `Private` words, checked against their length on every load.
 //!
 //! The blob is constant: a store through a blob pointer is refused, as is a root set that mixes
 //! the blob with a parameter slot or null (not implemented: it needs the blob's root in the
@@ -22,7 +21,7 @@ use crate::error::Error;
 use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
 use crate::memory::blob::{BlobDecl, BlobHome, BlobUse};
-use crate::memory::contain::{self, Check};
+use crate::memory::contain;
 use crate::memory::leaf::{self, k32, Leaf, WordMem, WordOps};
 use crate::memory::plan::{ConstGlobalForm, MemoryPlan};
 use crate::memory::provenance::{Repr, RootSetId};
@@ -42,7 +41,7 @@ use super::{is_ptr_ty, operand, refuse, GepTerms};
 pub struct BlobLoad {
     pub ptr: LocalPtr,
     pub leaf: Leaf,
-    /// The in-shader containment check (without robust descriptors).
+    /// The in-shader containment check.
     pub checked: bool,
 }
 
@@ -173,16 +172,6 @@ pub fn use_blob(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     Ok(())
 }
 
-/// The containment check of a load from the blob on `cx`'s profile: the descriptor encoding's for
-/// a bound blob; in the shader for the module's words under the identity domains, which no
-/// robustness covers.
-pub fn check(cx: &SelectCx<'_>) -> Check {
-    match super::identity(cx.profile) {
-        true => Check::InShader,
-        false => contain::encoding(cx.profile),
-    }
-}
-
 /// The operand form of blob pointer `v`: a value, or a global's address as its blob offset.
 pub fn blob_ptr(cx: &SelectCx<'_>, v: Value) -> Result<LocalPtr, Error> {
     let Value::Const(c) = v else {
@@ -211,7 +200,7 @@ pub fn load(
     Ok(BlobLoad {
         ptr: blob_ptr(cx, ptr)?,
         leaf,
-        checked: check(cx) == Check::InShader,
+        checked: true,
     })
 }
 

@@ -71,9 +71,8 @@ pub use profile::{
     Independence, Limits, MeshLimits, PointerDomain,
 };
 // The profile's facts a consumer or a validation tool reads: its descriptor capabilities, its
-// subgroup model and simdgroup tiers, the buffer robustness that bounds a buffer-slot access, and
-// the Function storage a thread holds.
-pub use profile::{DescriptorCaps, FunctionStorage, Robustness};
+// subgroup model and simdgroup tiers, and the Function storage a thread holds.
+pub use profile::{DescriptorCaps, FunctionStorage};
 pub use requirements::{
     ApiVersion, FloatControl, FloatWidth, FormatUsage, Requirements, ResolveMode, SpirvCapability,
     SpirvExtension, StageCreateFlag, SubgroupOp, VkExtension, VkFeature, VkLimit, VkProperty,

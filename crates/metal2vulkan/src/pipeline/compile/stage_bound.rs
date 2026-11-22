@@ -90,7 +90,7 @@ pub(super) fn emit(
         })?;
         // A load of a uniform view that every trip of its loop reads alike leaves the loop.
         m.weighted(crate::pipeline::compile::weights::HOIST, |m| {
-            crate::spirv::hoist::hoist_uniform_loads(&mut emitted.module, p.robustness(), m)
+            crate::spirv::hoist::hoist_uniform_loads(&mut emitted.module, m)
         })?;
         // A structurizer variable whose value no later trip of a loop reads is ended at each
         // trip's top, so the driver carries none of it around the loop.

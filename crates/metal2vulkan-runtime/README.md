@@ -4765,7 +4765,6 @@ enables that the translator names.
 
 | Feature | Structure | Without it |
 |---|---|---|
-| `robustBufferAccess` | `VkPhysicalDeviceFeatures` | a buffer is reached by its device address, and an access through a descriptor view is checked in the shader |
 | `computeDerivativeGroupLinear` | `VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR` | a derivative in a kernel is refused (`ComputeDerivatives`) |
 | `descriptorBindingStorageBufferUpdateAfterBind` | `VkPhysicalDeviceVulkan12Features` | the translator's function table is a directory and a snapshot, never a heap array of storage buffers; the runtime supplies no function table (Known gaps of pipeline states) |
 | `shaderStorageBufferArrayNonUniformIndexing` | `VkPhysicalDeviceVulkan12Features` | as `descriptorBindingStorageBufferUpdateAfterBind` |

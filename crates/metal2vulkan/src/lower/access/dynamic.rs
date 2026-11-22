@@ -104,7 +104,7 @@ use crate::error::{Capability, Error, Feature, LowerFamily, Unsupported};
 use crate::lower::arith::{Form, Held};
 use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
-use crate::memory::contain;
+use crate::memory::contain::{self, Check};
 use crate::memory::leaf::{self, k32, Coherence, Leaf, Path, Units, WordOps};
 use crate::memory::provenance::{Repr, RootSetId};
 use crate::memory::roots::{self, k64};
@@ -623,7 +623,7 @@ fn static_access(
     m: &mut Meter,
 ) -> Result<Access, Error> {
     let (mut targets, null) = static_roots(cx, ptr, m)?;
-    let check = contain::encoding(cx.profile);
+    let check = Check::InShader;
     let fixed = super::fixed_offset(cx, ptr);
     for t in &mut targets {
         *t = Target { check, ..*t };

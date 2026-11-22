@@ -238,7 +238,6 @@ surface! {
         enum PointerDomain N;
         struct DescriptorCaps N;
         enum FunctionStorage N;
-        enum Robustness N;
         enum SimdClass N;
         struct StageSubgroup N;
         struct SubgroupModel N;

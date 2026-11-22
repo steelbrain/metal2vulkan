@@ -11,7 +11,6 @@ use crate::air::container::Hash256;
 use crate::device::requirements::{ApiVersion, FormatUsage, VkExtension, VkFeature, VkProperty};
 use crate::device::subgroup::{SimdClass, SubgroupModel, Tier};
 use crate::error::{Capability, Unsupported};
-use crate::memory::contain::Check;
 use crate::pipeline::sym::Stage;
 use crate::vk;
 
@@ -181,29 +180,16 @@ impl DeviceProfile {
         crate::device::subgroup::tier(class, stage, &self.fields.subgroup)
     }
 
-    /// The buffer robustness this profile enables, which bounds a descriptor view's access at a
-    /// run-time offset where it holds ([`checks_buffers_in_shader`](Self::checks_buffers_in_shader)).
-    pub fn robustness(&self) -> Robustness {
-        self.fields.robustness
-    }
-
-    /// Whether a module compiled for this profile checks a buffer access in the shader: exactly
-    /// when no buffer robustness is enabled. Elsewhere the descriptor range and the device's
-    /// robustness bound it.
-    pub fn checks_buffers_in_shader(&self) -> bool {
-        crate::memory::contain::encoding(self) == Check::InShader
-    }
-
-    /// Whether this profile leaves an out-of-bounds read of an image (`texel_buffer`: of a texel
-    /// buffer) to the device, whose robustness answers Metal's out-of-bounds texel; elsewhere the
-    /// shader checks the read.
+    /// Whether this profile leaves an out-of-bounds read of an image to the device, whose
+    /// `robustImageAccess2` answers Metal's out-of-bounds texel; elsewhere, and for every texel
+    /// buffer (`texel_buffer`), the shader checks the read.
     pub fn device_reads_texels(&self, texel_buffer: bool) -> bool {
         crate::memory::contain::device_reads_texels(self, texel_buffer)
     }
 
-    /// Whether this profile leaves an out-of-bounds write of an image (`texel_buffer`: of a texel
-    /// buffer) to the device, whose robustness discards it as Metal does; elsewhere the shader
-    /// guards the write.
+    /// Whether this profile leaves an out-of-bounds write of an image to the device, whose
+    /// `robustImageAccess` discards it as Metal does; elsewhere, and for every texel buffer
+    /// (`texel_buffer`), the shader guards the write.
     pub fn device_drops_texel_writes(&self, texel_buffer: bool) -> bool {
         crate::memory::contain::device_drops_texel_writes(self, texel_buffer)
     }
@@ -339,8 +325,6 @@ pub struct ProfileFields {
     pub buffer_access: BufferAccess,
     pub pointer_domain: PointerDomain,
     pub handle_domain: HandleDomain,
-    /// The buffer robustness the profile enables.
-    pub robustness: Robustness,
     pub leaf: LeafCaps,
     pub subgroup: SubgroupModel,
     pub images: ImageCaps,
@@ -476,20 +460,6 @@ pub enum HandleDomain {
     /// (`docs/RESOURCE-ID.md`). A texture or sampler use with no form under it is refused as
     /// [`Feature::IdentityDomains`](crate::error::Feature::IdentityDomains).
     Identity,
-}
-
-/// Which buffer robustness the profile enables: a descriptor view's access at a run-time offset is
-/// bounded by it where it holds, and by the normative in-shader check where none is enabled
-/// (`memory::contain`).
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Robustness {
-    /// Neither; descriptor views get in-shader checks.
-    None,
-    /// `robustBufferAccess`.
-    Rba,
-    /// `robustBufferAccess2`.
-    Rba2,
 }
 
 /// Leaf arithmetic, storage, and atomic capabilities.

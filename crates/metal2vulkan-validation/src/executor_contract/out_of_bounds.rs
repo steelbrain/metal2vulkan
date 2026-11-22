@@ -7,23 +7,21 @@
 //!
 //! - **The form and mechanism** of each target are what its compiled module does with it, never
 //!   only what the case says ([`containment`]): a buffer is a storage buffer through its
-//!   descriptor, or a device address; a buffer slot the product reaches through a descriptor view is
-//!   checked in the shader or left to the device's buffer robustness (the two encodings); a slot
-//!   reached by its device address and the threadgroup arena are checked in the shader in every
-//!   leg; a texel buffer and an image follow the product's texel containment
-//!   (`DeviceProfile::device_reads_texels` and `device_drops_texel_writes`): a texel buffer is left
-//!   to `robustBufferAccess2` and otherwise checked in the shader; an image's reads are left to
-//!   `robustImageAccess2` and its writes to `robustImageAccess` at either level, each otherwise
-//!   checked in the shader. A buffer reached through a pointer loaded from an argument buffer is a
+//!   descriptor, or a device address; a buffer slot the product reaches through a descriptor view,
+//!   a slot reached by its device address and the threadgroup arena are checked in the shader in
+//!   every leg; a texel buffer and an image follow the product's texel containment
+//!   (`DeviceProfile::device_reads_texels` and `device_drops_texel_writes`): a texel buffer is
+//!   checked in the shader; an image's reads are left to `robustImageAccess2` and its writes to
+//!   `robustImageAccess` at either level, each otherwise checked in the shader. A buffer reached through a pointer loaded from an argument buffer is a
 //!   device address the resident set resolves, a thread-local array a typed object whose index is
 //!   checked against its length, and an argument buffer's texture array a handle table the loaded
 //!   resource id is looked up in: each checked in the shader in every leg. Under the identity
 //!   domains (`DevicePolicy`) a loaded pointer is the address it holds, which nothing checks, so
 //!   the candidate does not run the case ([`Check::Unchecked`]), and a loaded resource id's index
 //!   is masked onto the descriptor arrays, whose elements no live texture owns are null
-//!   descriptors. An attribute buffer is fetched by fixed-function vertex input, left to the
-//!   device's buffer robustness (unchecked without it, [`Check::Unchecked`]), or pulled in the
-//!   shader through the slot its fetch names, contained as that slot is ([`Fetch`]); a direct
+//!   descriptors. An attribute buffer is fetched by fixed-function vertex input, which nothing
+//!   bounds ([`Check::Unchecked`]), or pulled in the shader through the slot its fetch names,
+//!   contained as that slot is ([`Fetch`]); a direct
 //!   indexed draw's index buffer is bounded by `robustBufferAccess2` or the binder's clamp; and a
 //!   top-level texture array's dynamic index is clamped onto its elements in the shader.
 //! - **The read rule** ([`read_rule`]) says what an out-of-bounds read of the target may return:
@@ -51,7 +49,7 @@ use crate::case::out_of_bounds::{ContainmentForm, OutOfBoundsResource, OutOfBoun
 use crate::case::{AuthoredCase, OutputSelection};
 use crate::observation_contract::{ComparisonClass, ObservationLanes};
 use base64::Engine as _;
-use metal2vulkan::device::{DevicePolicy, DeviceProfile, HandleDomain, PointerDomain, Robustness};
+use metal2vulkan::device::{DevicePolicy, DeviceProfile, HandleDomain, PointerDomain};
 use metal2vulkan::library::CompiledFunction;
 use metal2vulkan::pipeline::VertexInputState;
 use metal2vulkan::pipeline::{AttributeFetch, StrategyCensus};
@@ -104,7 +102,8 @@ pub enum Check {
     /// The shader clamps an image's reads, and the device's `robustImageAccess` without the
     /// second level discards its writes.
     ShaderReads,
-    /// The device's `robustBufferAccess` without the second level.
+    /// The device's `robustBufferAccess` without the second level. No executor contains a target
+    /// so now; committed records of earlier runs state it.
     Robust,
     /// The device's `robustBufferAccess2` (or `robustImageAccess2`).
     Robust2,
@@ -406,10 +405,9 @@ mod census {
     pub const HANDLE_ARRAY_LOAD_CLAMPED: &str = "access.handle.array_load.clamped";
 }
 
-/// How the compiled `module` contains `target`, compiled for `profile`, whose buffer and image
-/// robustness are the leg's (`Robustness::Rba2` for `robustBufferAccess2`;
-/// `robust_image_access2` for `robustImageAccess2`), read through the product's own containment
-/// predicates (the `DeviceProfile` containment facts).
+/// How the compiled `module` contains `target`, compiled for `profile`, whose image robustness is
+/// the leg's (`robust_image_access2` for `robustImageAccess2`), read through the product's own
+/// containment predicates (the `DeviceProfile` containment facts).
 ///
 /// The form is the structure's, never only the case's word: a buffer is a `uniform_buffer` when
 /// the module views it as a uniform buffer, a `storage_buffer` when it views it as a storage
@@ -429,7 +427,6 @@ pub fn containment(
     profile: &DeviceProfile,
 ) -> Result<Contained, String> {
     let ModuleFacts { stage, slots, .. } = *module;
-    let robust = robust_check(profile)?;
     let slot = |class, index| {
         slots
             .get(&SlotRef {
@@ -478,13 +475,13 @@ pub fn containment(
                     BufferForm::Descriptor if atomic => made(
                         ContainmentForm::BufferAtomic,
                         Medium::DescriptorView,
-                        robust,
+                        Check::Shader,
                         written,
                     ),
                     BufferForm::Descriptor => made(
                         ContainmentForm::StorageBuffer,
                         Medium::DescriptorView,
-                        robust,
+                        Check::Shader,
                         written,
                     ),
                     _ => unknown(),
@@ -568,17 +565,15 @@ pub fn containment(
             )
         }
         OutOfBoundsResource::AttributeBuffer { location } => {
-            // Fixed-function vertex input is left to the device's buffer robustness, which a
-            // device without it leaves unchecked, and a pulled fetch reads its buffer's slot,
-            // contained as that slot is.
+            // Nothing bounds fixed-function vertex input (no buffer robustness is enabled), and a
+            // pulled fetch reads its buffer's slot, contained as that slot is.
             match module.attributes.get(&location).copied() {
                 None => Err(format!(
                     "the compiled module fetches no attribute {location}"
                 )),
-                Some(Fetch::FixedFunction) if robust == Check::Shader => {
+                Some(Fetch::FixedFunction) => {
                     made(target.form, Medium::VertexInput, Check::Unchecked, false)
                 }
-                Some(Fetch::FixedFunction) => made(target.form, Medium::VertexInput, robust, false),
                 Some(Fetch::Pulled { buffer_index }) => {
                     match slot(SlotClass::Buffer, buffer_index)? {
                         SlotInterface::Buffer(buffer) => match buffer.form {
@@ -586,7 +581,7 @@ pub fn containment(
                                 made(target.form, Medium::DeviceAddress, Check::Shader, false)
                             }
                             BufferForm::Descriptor => {
-                                made(target.form, Medium::DescriptorView, robust, false)
+                                made(target.form, Medium::DescriptorView, Check::Shader, false)
                             }
                             _ => unknown(),
                         },
@@ -626,22 +621,14 @@ pub fn containment(
             )
         }
         OutOfBoundsResource::Texture { binding } => match slot(SlotClass::Texture, binding)? {
-            // The product's texel containment: a texel buffer is left to the device only where both
-            // its reads and its writes are Metal's there (`robustBufferAccess2`).
-            SlotInterface::Texture(texture) if target.form == ContainmentForm::TexelBuffer => {
-                let device =
-                    profile.device_reads_texels(true) && profile.device_drops_texel_writes(true);
-                made(
-                    ContainmentForm::TexelBuffer,
-                    Medium::TexelBuffer,
-                    if device {
-                        Check::Robust2
-                    } else {
-                        Check::Shader
-                    },
-                    texture.access.write,
-                )
-            }
+            // The product's texel containment: the shader checks every texel buffer access
+            // (`DeviceProfile::device_reads_texels`).
+            SlotInterface::Texture(texture) if target.form == ContainmentForm::TexelBuffer => made(
+                ContainmentForm::TexelBuffer,
+                Medium::TexelBuffer,
+                Check::Shader,
+                texture.access.write,
+            ),
             // An image's writes are left to `robustImageAccess` at either level, its reads only
             // to the second level.
             SlotInterface::Texture(texture) => {
@@ -661,26 +648,6 @@ pub fn containment(
             }
             _ => Err(format!("{} is not a texture slot", target.resource.label())),
         },
-    }
-}
-
-/// The check `profile`'s leg gives every access its compiled modules leave to the device's buffer
-/// robustness (the two encodings): a descriptor view's loads, stores and atomics and
-/// fixed-function vertex input.
-/// [`Check::Robust2`] under `robustBufferAccess2`, [`Check::Robust`] under `robustBufferAccess`
-/// alone, and [`Check::Shader`] without buffer robustness; `Err` for a robustness validation
-/// does not know. The only source of
-/// [`Check::Robust`]: every other medium's check is the shader's, the binder's, or
-/// `robustBufferAccess2`'s.
-pub fn robust_check(profile: &DeviceProfile) -> Result<Check, String> {
-    match profile.robustness() {
-        Robustness::Rba2 => Ok(Check::Robust2),
-        Robustness::Rba | Robustness::None => Ok(if profile.checks_buffers_in_shader() {
-            Check::Shader
-        } else {
-            Check::Robust
-        }),
-        _ => Err("a robustness validation does not know".into()),
     }
 }
 

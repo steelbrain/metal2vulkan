@@ -865,7 +865,6 @@ enum	metal2vulkan::device::HandleDomain	#[cfg_attr(feature = "serde", derive(ser
 enum	metal2vulkan::device::Independence	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Independence
 enum	metal2vulkan::device::PointerDomain	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum PointerDomain
 enum	metal2vulkan::device::ResolveMode	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum ResolveMode
-enum	metal2vulkan::device::Robustness	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Robustness
 enum	metal2vulkan::device::SimdClass	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum SimdClass
 enum	metal2vulkan::device::SpirvExtension	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum SpirvExtension
 enum	metal2vulkan::device::StageCreateFlag	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum StageCreateFlag
@@ -7035,7 +7034,6 @@ method	metal2vulkan::device::DeviceDescription::required_enables	pub fn required
 method	metal2vulkan::device::DeviceDescription::with_enabled	pub fn with_enabled(mut self, enabled: &EnableSet) -> Result<DeviceDescription, Error>
 method	metal2vulkan::device::DeviceProfile::addressed_needs	pub fn addressed_needs(&self) -> Vec<Capability>
 method	metal2vulkan::device::DeviceProfile::check	pub fn check(&self, req: &Requirements) -> Result<(), Capability>
-method	metal2vulkan::device::DeviceProfile::checks_buffers_in_shader	pub fn checks_buffers_in_shader(&self) -> bool
 method	metal2vulkan::device::DeviceProfile::compile_entry	pub fn compile_entry(&self, d: &EntryDescriptor<'_>, inputs: &LoweringInputs, budget: &Budget) -> (Result<CompiledFunction, Error>, CompileReport)
 method	metal2vulkan::device::DeviceProfile::descriptors	pub fn descriptors(&self) -> &DescriptorCaps
 method	metal2vulkan::device::DeviceProfile::device_drops_texel_writes	pub fn device_drops_texel_writes(&self, texel_buffer: bool) -> bool
@@ -7049,7 +7047,6 @@ method	metal2vulkan::device::DeviceProfile::interpolation_function_needs	pub fn 
 method	metal2vulkan::device::DeviceProfile::limits	pub fn limits(&self) -> &Limits
 method	metal2vulkan::device::DeviceProfile::link_standalone	pub fn link_standalone(&self, f: &CompiledFunction) -> Result<StandaloneModule, Error>
 method	metal2vulkan::device::DeviceProfile::plan_entry	pub fn plan_entry(&self, d: &EntryDescriptor<'_>, inputs: &LoweringInputs, budget: &Budget) -> (Result<EntryPlan, Error>, CompileReport)
-method	metal2vulkan::device::DeviceProfile::robustness	pub fn robustness(&self) -> Robustness
 method	metal2vulkan::device::DeviceProfile::simd_tier	pub fn simd_tier(&self, class: &SimdClass, stage: Stage) -> Result<Tier, Unsupported>
 method	metal2vulkan::device::DeviceProfile::specialized_entry	pub fn specialized_entry(&self, d: &EntryDescriptor<'_>, inputs: &LoweringInputs, budget: &Budget) -> Result<Entry, Error>
 method	metal2vulkan::device::DeviceProfile::spirv_validation	pub fn spirv_validation(&self) -> SpirvValidation
@@ -9897,9 +9894,6 @@ variant	metal2vulkan::device::ResolveMode::Average	Average
 variant	metal2vulkan::device::ResolveMode::Max	Max
 variant	metal2vulkan::device::ResolveMode::Min	Min
 variant	metal2vulkan::device::ResolveMode::SampleZero	SampleZero
-variant	metal2vulkan::device::Robustness::None	None
-variant	metal2vulkan::device::Robustness::Rba	Rba
-variant	metal2vulkan::device::Robustness::Rba2	Rba2
 variant	metal2vulkan::device::SimdClass::CrossLane	CrossLane(OpBits)
 variant	metal2vulkan::device::SimdClass::LaneArithmetic	LaneArithmetic
 variant	metal2vulkan::device::SimdClass::Matrix	Matrix

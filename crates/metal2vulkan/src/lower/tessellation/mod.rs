@@ -84,7 +84,7 @@ use crate::lower::select::{FamilyPlans, Plan, SelectCx};
 use crate::lower::stage_io;
 use crate::lower::stage_io::fetch::{self, Encoding, PulledRead, Step, Stride};
 use crate::lower::strategy::FamilyStrategy;
-use crate::memory::contain::{self, Check};
+use crate::memory::contain::Check;
 use crate::memory::leaf::k32;
 use crate::metal::VertexStepFunction;
 use crate::pipeline::facts::RuntimeFact;
@@ -579,7 +579,7 @@ fn pulled_read(
             .pulled
             .insert(at, PulledInput::new(attribute, ty, fetch));
     }
-    let check = contain::encoding(cx.profile);
+    let check = Check::InShader;
     let e = eval(cx)?;
     match element {
         Element::Patch => e.patch = true,

@@ -98,7 +98,7 @@ use crate::lower::arith::{narrow, ops, FloatFmt, Form, Held};
 use crate::lower::dispatch;
 use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
-use crate::memory::contain::{self, Check};
+use crate::memory::contain::Check;
 use crate::memory::leaf::{k32, Leaf, Path};
 use crate::metal::{VertexFormat, VertexStepFunction};
 use crate::pipeline::facts::RuntimeFact;
@@ -632,7 +632,7 @@ pub(super) fn select(
         step,
         stride: Stride::Push(PushField::VertexBufferStride(buffer)),
         form,
-        check: contain::encoding(cx.profile),
+        check: Check::InShader,
     })
 }
 

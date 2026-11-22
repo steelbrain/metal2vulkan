@@ -68,7 +68,6 @@ use crate::lower::arith::{Form, Held};
 use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
 use crate::memory::arena::Arena;
-use crate::memory::contain::Check;
 use crate::memory::leaf::{self, k32, u32_op, Leaf, Path};
 use crate::memory::plan::ArenaObject;
 use crate::pipeline::interface::Window;
@@ -387,7 +386,7 @@ pub fn endpoint(
         blob::use_blob(cx)?;
         return Ok(Endpoint::Blob {
             ptr: blob::blob_ptr(cx, v)?,
-            checked: blob::check(cx) == Check::InShader,
+            checked: true,
         });
     }
     match local::home_of(cx, v) {

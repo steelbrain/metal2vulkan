@@ -123,7 +123,7 @@ use crate::error::{Capability, Error, Feature, LowerFamily, Unsupported};
 use crate::lower::emit::EmitCx;
 use crate::lower::select::{DescriptorCounts, FamilyPlans, Plan, SelectCx, SlotChoice};
 use crate::lower::strategy::FamilyStrategy;
-use crate::memory::contain::{self, Check};
+use crate::memory::contain::Check;
 use crate::memory::leaf::{self, Coherence, Leaf, Units};
 use crate::memory::plan::SlotPlan;
 use crate::memory::provenance::{Repr, Root};
@@ -2007,7 +2007,7 @@ fn blob_roots(
     }
     let blob_check = if in_blob {
         blob::use_blob(cx)?;
-        Some(blob::check(cx))
+        Some(Check::InShader)
     } else {
         None
     };
@@ -2024,7 +2024,7 @@ fn place_targets(
     (write, fixed): (bool, bool),
     reach: u32,
 ) -> Result<(), Error> {
-    let check = contain::encoding(cx.profile);
+    let check = Check::InShader;
     for t in targets {
         t.check = check;
         let plan = cx

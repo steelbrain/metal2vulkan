@@ -17,7 +17,6 @@ use crate::device::policy::DevicePolicy;
 use crate::device::profile::{
     BufferAccess, DescriptorCaps, DeviceProfile, EnabledCaps, FormatTable, FragmentCaps,
     FunctionStorage, HandleDomain, ImageCaps, Independence, LeafCaps, PointerDomain, ProfileFields,
-    Robustness,
 };
 use crate::device::requirements::{
     ApiVersion, FloatControl, FloatWidth, FormatUsage, ResolveMode, SubgroupOp, VkExtension,
@@ -186,15 +185,6 @@ fn derive_fields(desc: &DeviceDescription, policy: &DevicePolicy) -> ProfileFiel
     } else {
         BufferAccess::Floor
     };
-    // The bounds of a descriptor view's access are a leaf choice from the enabled robustness.
-    let robustness = if has(VkFeature::RobustBufferAccess2) {
-        Robustness::Rba2
-    } else if has(VkFeature::RobustBufferAccess) {
-        Robustness::Rba
-    } else {
-        Robustness::None
-    };
-
     let leaf = LeafCaps {
         int8: has(VkFeature::ShaderInt8),
         int16: has(VkFeature::ShaderInt16),
@@ -283,7 +273,6 @@ fn derive_fields(desc: &DeviceDescription, policy: &DevicePolicy) -> ProfileFiel
         buffer_access,
         pointer_domain: policy.pointer_domain,
         handle_domain: policy.handle_domain,
-        robustness,
         leaf,
         subgroup: subgroup_model(desc),
         images,

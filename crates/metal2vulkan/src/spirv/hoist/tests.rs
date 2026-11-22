@@ -1,5 +1,5 @@
-//! A uniform view's load that every trip of its loop reads alike leaves the loop where it may be
-//! read early, and every other load stays; the kernel computes the same either way.
+//! A uniform view's load that every trip of its loop reads alike, at the top of every trip, leaves
+//! the loop, and every other load stays; the kernel computes the same either way.
 
 use super::*;
 use crate::budget::Budget;
@@ -15,8 +15,6 @@ use crate::spirv::ir::{
     natural_layout, BinOp, ConstBits, Constant, ExecMode, ExecModel, LayoutRule, MemAccess,
 };
 use crate::spirv::testing::{assert_valid, committed_profiles};
-
-const ROBUST: Robustness = Robustness::Rba2;
 
 fn meter() -> Meter {
     Meter::new(&Budget::default())
@@ -66,13 +64,13 @@ enum Shape {
     Guarded,
     /// `p[1]` at the top of every trip, before the trip test.
     AtTop,
-    /// `p[i & 7]`: a word that changes from trip to trip.
+    /// `p[i & 7]` at the top of every trip: a word that changes from trip to trip.
     ByTrip,
-    /// [`Shape::Guarded`], with `out[i + 1] = i` stored on every trip.
+    /// [`Shape::AtTop`], with `out[i + 1] = i` stored on every trip.
     StoresInLoop,
-    /// [`Shape::Guarded`], with `out[1] = n` stored before the loop.
+    /// [`Shape::AtTop`], with `out[1] = n` stored before the loop.
     StoresBefore,
-    /// `in[k + 2]` on odd trips, from the storage buffer.
+    /// `in[k + 2]` at the top of every trip, from the storage buffer.
     FromStorage,
 }
 
@@ -133,11 +131,21 @@ fn kernel(shape: Shape) -> TypedModule {
                 let t = f.load(ip, MemAccess::default())?;
                 let a = f.load(ap, MemAccess::default())?;
                 let top = match shape {
-                    Shape::AtTop => {
+                    Shape::AtTop | Shape::StoresInLoop | Shape::StoresBefore => {
                         let one = c32(f, 1);
                         Some(read_word(f, p, one)?)
                     }
-                    _ => None,
+                    Shape::ByTrip => {
+                        let seven = c32(f, 7);
+                        let at = f.binary(BinOp::BitwiseAnd, t, seven)?;
+                        Some(read_word(f, p, at)?)
+                    }
+                    Shape::FromStorage => {
+                        let two = c32(f, 2);
+                        let at = f.binary(BinOp::IAdd, k, two)?;
+                        Some(word(f, input, at)?)
+                    }
+                    Shape::Guarded => None,
                 };
                 let done = f.binary(BinOp::UGreaterThanEqual, t, n)?;
                 f.if_(
@@ -149,29 +157,19 @@ fn kernel(shape: Shape) -> TypedModule {
                     }),
                     None,
                 )?;
-                let add = match (shape, top) {
-                    (_, Some(w)) => w,
-                    (Shape::ByTrip, _) => {
-                        let seven = c32(f, 7);
-                        let at = f.binary(BinOp::BitwiseAnd, t, seven)?;
-                        read_word(f, p, at)?
-                    }
-                    _ => {
+                let add = match top {
+                    Some(w) => w,
+                    None => {
                         let one = c32(f, 1);
                         let odd = f.binary(BinOp::BitwiseAnd, t, one)?;
                         let odd = f.binary(BinOp::INotEqual, odd, zero)?;
-                        let storage = shape == Shape::FromStorage;
                         let merged = f.if_(
                             &mut (),
                             odd,
                             Box::new(move |f, _| {
                                 let two = c32(f, 2);
                                 let at = f.binary(BinOp::IAdd, k, two)?;
-                                let read = match storage {
-                                    true => word(f, input, at)?,
-                                    false => read_word(f, p, at)?,
-                                };
-                                Ok(ArmEnd::FallThrough(vec![read]))
+                                Ok(ArmEnd::FallThrough(vec![read_word(f, p, at)?]))
                             }),
                             Some(Box::new(move |f, _| {
                                 let three = c32(f, 3);
@@ -275,45 +273,25 @@ fn out_word(m: &TypedModule, input: &[u32], p: &[u32]) -> u32 {
     u32::from_le_bytes([b[0], b[1], b[2], b[3]])
 }
 
-/// Hoist `shape`'s kernel under `robustness`; returns the moves, the kernel before and after.
-fn hoisted(shape: Shape, robustness: Robustness) -> (u32, TypedModule, TypedModule) {
+/// Hoist `shape`'s kernel; returns the moves, the kernel before and after.
+fn hoisted(shape: Shape) -> (u32, TypedModule, TypedModule) {
     let before = kernel(shape);
     let mut after = before.clone();
-    let moved = hoist_uniform_loads(&mut after, robustness, &mut meter()).expect("hoist");
+    let moved = hoist_uniform_loads(&mut after, &mut meter()).expect("hoist");
     assert_valid(after.clone(), &lavapipe());
     (moved, before, after)
 }
 
-/// The guarded loads at a trip-invariant word leave the loop for its preheader under robust
-/// buffer access, and the kernel sums the same words.
+/// A guarded load, which runs on some trips only, stays; a load at the top of every trip leaves,
+/// and the kernel sums the same words.
 #[test]
-fn a_guarded_uniform_load_at_a_fixed_word_leaves_its_loop() {
-    let (moved, before, after) = hoisted(Shape::Guarded, ROBUST);
-    assert_eq!(moved, 2);
-    let pre = after.loops()[0].preheader;
-    assert_eq!(uniform_loads(&after), [(pre, 2)]);
-    assert!(!uniform_loads(&before).iter().any(|&(b, _)| b == pre));
-    let p = [10, 20, 30, 40, 50, 60, 70, 80];
-    for (n, k) in [(0, 0), (1, 0), (5, 1), (6, 4)] {
-        let input = [n, k];
-        let want = (0..n)
-            .map(|t| if t & 1 == 1 { p[k as usize + 2] } else { p[3] })
-            .sum::<u32>();
-        assert_eq!(out_word(&before, &input, &p), want, "before, n {n} k {k}");
-        assert_eq!(out_word(&after, &input, &p), want, "after, n {n} k {k}");
-    }
-}
-
-/// Without robust buffer access, a guarded load stays, and a load at the top of every trip still
-/// leaves.
-#[test]
-fn without_robust_access_only_a_load_every_entry_runs_leaves() {
-    let (moved, _, after) = hoisted(Shape::Guarded, Robustness::None);
+fn only_a_load_every_entry_runs_leaves() {
+    let (moved, _, after) = hoisted(Shape::Guarded);
     assert_eq!(moved, 0);
     assert!(!uniform_loads(&after)
         .iter()
         .any(|&(b, _)| b == after.loops()[0].preheader));
-    let (moved, before, after) = hoisted(Shape::AtTop, Robustness::None);
+    let (moved, before, after) = hoisted(Shape::AtTop);
     assert_eq!(moved, 1);
     let p = [0, 7, 0, 0, 0, 0, 0, 0];
     for n in [0, 1, 3] {
@@ -322,12 +300,18 @@ fn without_robust_access_only_a_load_every_entry_runs_leaves() {
     }
 }
 
-/// A load whose word changes from trip to trip, a loop that stores to a buffer, a store to a buffer
-/// before the loop, and a load of a storage buffer all stay.
+/// At the top of every trip, a load whose word changes from trip to trip, a load in a loop that
+/// stores to a buffer, one after a store to a buffer before the loop, and a load of a storage
+/// buffer all stay.
 #[test]
 fn loads_a_trip_or_a_buffer_write_may_change_stay() {
-    for shape in [Shape::ByTrip, Shape::StoresInLoop, Shape::StoresBefore] {
-        let (moved, _, after) = hoisted(shape, ROBUST);
+    for shape in [
+        Shape::ByTrip,
+        Shape::StoresInLoop,
+        Shape::StoresBefore,
+        Shape::FromStorage,
+    ] {
+        let (moved, _, after) = hoisted(shape);
         assert_eq!(moved, 0, "{shape:?}");
         assert!(
             !uniform_loads(&after)
@@ -336,9 +320,6 @@ fn loads_a_trip_or_a_buffer_write_may_change_stay() {
             "{shape:?}"
         );
     }
-    // The even trips' uniform load leaves; the odd trips' storage load stays.
-    let (moved, _, _) = hoisted(Shape::FromStorage, ROBUST);
-    assert_eq!(moved, 1);
 }
 
 /// No module holds a `Uniform` resource that is not a `Block` (what `BufferBlock` decorates in

@@ -188,8 +188,8 @@ fn recommendations_keep_robust_buffer_access_and_vuid_10247() {
 /// `vkCreateDevice`). Its recommendation keeps the rule, so the
 /// stated robustness can be created; adding the buffer update-after-bind features to the restricted
 /// description changes only the profile's update-after-bind facts, which only the set-1 arrays that
-/// need them read (the function tables', the texel-buffer classes'): the containment encoding and
-/// every other field are the same.
+/// need them read (the function tables', the texel-buffer classes'): every other field is the
+/// same.
 #[test]
 fn a_recommendation_keeps_vuid_10247() {
     let mut desc = profile("runtime-floor");
@@ -224,7 +224,6 @@ fn a_recommendation_keeps_vuid_10247() {
         fields.enabled.features.remove(f);
     }
     assert_eq!(&fields, stated.profile().fields());
-    assert_eq!(fields.robustness, crate::device::profile::Robustness::Rba);
     // The whole set is the one a conformant SwiftShader refuses.
     let mut both = rec.clone();
     both.features

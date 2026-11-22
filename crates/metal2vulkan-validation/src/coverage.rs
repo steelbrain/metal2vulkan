@@ -14,9 +14,9 @@
 //! A run's census ([`ExecutedCensus`]) is the class of the device it ran on ([`ExecutionClass`]:
 //! a CPU ICD, or a GPU's driver, [`HostClass`]), the product build that compiled its modules, and
 //! their censuses. The tier table compiles each committed profile twice where it states a
-//! robustness feature ([`Leg`]): as stated, which selects the robust encodings, and with every
-//! robustness feature removed ([`robustness_off`]), which selects the in-shader ones, the ones the
-//! runtime's floor compiles, as it enables no robustness feature.
+//! robustness feature ([`Leg`]): as stated, which selects the robust image encodings where it
+//! states image robustness, and with every robustness feature removed ([`robustness_off`]), which
+//! selects the in-shader ones. Buffers are checked in the shader on both legs.
 
 use crate::candidate::engine::artifact::ExecutedArtifact;
 use crate::case::Stage;
@@ -59,12 +59,11 @@ impl SubgroupShape {
     }
 }
 
-/// The device features whose enablement chooses a containment encoding: buffer robustness drops the
-/// in-shader check of descriptor views (`DeviceProfile::checks_buffers_in_shader`), image
-/// robustness the in-shader clamp and guard of images (`robust_image_access`). A tier-table
-/// profile's robustness-off leg removes them ([`Leg::RobustnessOff`]), and the engine executor's
-/// own context enables the ones its device's description states that the runtime enables on some
-/// device (the image ones), all or none.
+/// The robustness features a tier-table profile's robustness-off leg removes
+/// ([`Leg::RobustnessOff`]). Image robustness drops the in-shader clamp and guard of images
+/// (`robust_image_access`); buffer robustness chooses no encoding, as the shader checks every
+/// descriptor view. The engine executor's own context enables the ones its device's description
+/// states that the runtime enables on some device (the image ones), all or none.
 pub const ROBUSTNESS_FEATURES: [VkFeature; 4] = [
     VkFeature::RobustBufferAccess,
     VkFeature::RobustBufferAccess2,
@@ -72,22 +71,20 @@ pub const ROBUSTNESS_FEATURES: [VkFeature; 4] = [
     VkFeature::RobustImageAccess2,
 ];
 
-/// How buffers reached through descriptor views (and texel buffers) are contained. A texel
-/// buffer is left to the device only under `robustBufferAccess2`, and is checked in the shader
-/// below it (`DeviceProfile::device_reads_texels`): its out-of-bounds targets' mechanism
-/// (`executor_contract::out_of_bounds`) states that exactly, where this module-wide label says
-/// what the descriptor views take.
+/// How buffers reached through descriptor views (and texel buffers) are contained: the shader
+/// checks every one, on every profile. Its out-of-bounds targets' mechanism
+/// (`executor_contract::out_of_bounds`) states each access's check, where this module-wide label
+/// says what the descriptor views take.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BufferEncoding {
     /// The module declares no buffer (no variable in the `StorageBuffer` or `Uniform` storage
     /// class, no texel buffer), so no buffer encoding applies to it, whatever its profile's.
     Unused,
-    /// Checked in the shader: no buffer robustness is enabled
-    /// (`DeviceProfile::checks_buffers_in_shader`).
+    /// Checked in the shader.
     Checked,
-    /// Left to robust descriptors: `robustBufferAccess` or `robustBufferAccess2` is enabled, and
-    /// the shader emits no check. Both levels select the same shader.
+    /// Left to robust descriptors, the shader emitting no check: a stored row may state it; no
+    /// compile does.
     Robust,
 }
 
@@ -114,8 +111,7 @@ pub enum ImageEncoding {
 
 /// The containment encodings a module compiled under: the leaf encodings of its descriptor
 /// accesses. They are those of the profile it compiled for, which every lowering that reads them
-/// reads (`DeviceProfile::checks_buffers_in_shader`, the access targets' checks,
-/// `lower::texture::slot`).
+/// reads (the access targets' checks, `lower::texture::slot`).
 ///
 /// Census names do not all show the encoding they compiled under, so the report keys its rows by
 /// this, taken from the compile, not by the names. An access by device address (a `BufferForm::Psb`
@@ -158,10 +154,8 @@ impl Containment {
         Containment {
             buffers: if !declared.buffers {
                 BufferEncoding::Unused
-            } else if profile.checks_buffers_in_shader() {
-                BufferEncoding::Checked
             } else {
-                BufferEncoding::Robust
+                BufferEncoding::Checked
             },
             images: if !declared.images {
                 ImageEncoding::Unused
@@ -454,11 +448,11 @@ impl ExecutedCensus {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Leg {
-    /// The profile as committed, with the robustness features it states: the robust encodings
-    /// where it states them.
+    /// The profile as committed, with the robustness features it states: the robust image
+    /// encodings where it states them.
     Stated,
-    /// The profile without any of [`ROBUSTNESS_FEATURES`]: the in-shader encodings. A profile has
-    /// this leg only when it states one of them.
+    /// The profile without any of [`ROBUSTNESS_FEATURES`]: the in-shader image encodings. A
+    /// profile has this leg only when it states one of them.
     RobustnessOff,
 }
 

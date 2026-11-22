@@ -30,12 +30,9 @@
 //!   write too. A loop in a function the entry calls moves loads only where the module makes no
 //!   such write at all.
 //! - **Safe to read early.** A load in the loop's header, or in a block the header leads to
-//!   unconditionally and alone ([`entry_run`]), runs whenever the loop is entered, so it moves on
-//!   every profile. A load elsewhere in the loop runs on some trips or paths only; it
-//!   moves only where the profile's bounds rest on the device's robust buffer access
-//!   ([`Robustness::Rba`] or [`Robustness::Rba2`]), under which a read
-//!   past the bound range reads defined bytes rather than faulting, and a uniform view carries no
-//!   in-shader check that moving it could pass by.
+//!   unconditionally and alone ([`entry_run`]), runs whenever the loop is entered, so it moves. A
+//!   load elsewhere in the loop runs on some trips or paths only, and stays: no buffer robustness
+//!   is enabled to make a read the loop would not have made safe.
 //!
 //! The loops are taken innermost first, so a load leaves every loop it is the same in. The moved
 //! values are the same values, computed earlier: nothing a dispatch computes changes.
@@ -44,7 +41,6 @@
 mod tests;
 
 use crate::budget::Meter;
-use crate::device::profile::Robustness;
 use crate::error::Error;
 use crate::spirv::ids::{BlockId, Value};
 use crate::spirv::ir::{
@@ -55,18 +51,12 @@ use crate::spirv::ir::{
 /// walk, which no measured address reaches).
 const MAX_DEPTH: u32 = 64;
 
-/// Move the loads of uniform views that are the same on every trip of their loop out of it, under
-/// `containment` (the module docs). Returns the moves made: a load counts once for each loop it
-/// leaves.
-pub fn hoist_uniform_loads(
-    m: &mut TypedModule,
-    robustness: Robustness,
-    meter: &mut Meter,
-) -> Result<u32, Error> {
+/// Move the loads of uniform views that are the same on every trip of their loop out of it (the
+/// module docs). Returns the moves made: a load counts once for each loop it leaves.
+pub fn hoist_uniform_loads(m: &mut TypedModule, meter: &mut Meter) -> Result<u32, Error> {
     if m.loops.is_empty() {
         return Ok(0);
     }
-    let speculate = matches!(robustness, Robustness::Rba | Robustness::Rba2);
     let writers = buffer_writers(m, meter)?;
     let any_writer = writers.iter().any(|&w| w);
     let blocks = m.blocks.len();
@@ -87,7 +77,7 @@ pub fn hoist_uniform_loads(
     for b in 0..blocks {
         scratch.place(m, BlockId::new(u32::try_from(b).unwrap_or(u32::MAX)));
     }
-    let r = hoist_loops(m, (speculate, any_writer), &writers, &mut scratch, meter);
+    let r = hoist_loops(m, any_writer, &writers, &mut scratch, meter);
     meter.release(bytes);
     let moved = r?;
     if moved > 0 {
@@ -145,11 +135,10 @@ impl Scratch {
 }
 
 /// Every loop of `m` whose preheader enters it, innermost first, each moved as the module docs
-/// say. `(speculate, any_writer)`: whether a load outside the header may move, and whether the
-/// module writes buffer memory anywhere.
+/// say. `any_writer`: whether the module writes buffer memory anywhere.
 fn hoist_loops(
     m: &mut TypedModule,
-    (speculate, any_writer): (bool, bool),
+    any_writer: bool,
     writers: &[bool],
     s: &mut Scratch,
     meter: &mut Meter,
@@ -180,7 +169,7 @@ fn hoist_loops(
         if writes_before(m, &lm, writers, s, meter)? {
             continue;
         }
-        moved = moved.saturating_add(hoist_loop(m, &lm, speculate, s, meter)?);
+        moved = moved.saturating_add(hoist_loop(m, &lm, s, meter)?);
     }
     Ok(moved)
 }
@@ -368,7 +357,6 @@ fn writes_before(
 fn hoist_loop(
     m: &mut TypedModule,
     lm: &LoopMeta,
-    speculate: bool,
     s: &mut Scratch,
     meter: &mut Meter,
 ) -> Result<u32, Error> {
@@ -389,7 +377,7 @@ fn hoist_loop(
             continue;
         };
         meter.tick(u32::try_from(block.insts.len()).unwrap_or(u32::MAX))?;
-        let early = speculate || run.contains(&b);
+        let early = run.contains(&b);
         for (i, node) in block.insts.iter().enumerate() {
             let (Some(v), Inst::Load { .. } | Inst::ImageFetch { .. }) = (node.result, &node.inst)
             else {

@@ -401,9 +401,8 @@ fn a_member_is_enabled_only_through_a_listed_extension() {
 
 /// On every committed profile (as a context's API-1.2 query reads it), the engine's context
 /// enables exactly what the runtime enables of it (`engine::runtime_enables`), in the one closed
-/// set `with_enabled` accepts and `Device::from_queries` derives from: its opened profile checks
-/// buffers reached through descriptor views in the shader (the runtime enables no buffer
-/// robustness) and leaves images to the device where the profile states image robustness. No
+/// set `with_enabled` accepts and `Device::from_queries` derives from: its opened profile leaves
+/// images to the device where the profile states image robustness. No
 /// member the vocabulary does not name is enabled (`textureCompressionASTC_HDR` among them).
 #[test]
 fn the_list_enables_what_the_runtime_enables_of_the_description() {
@@ -424,16 +423,9 @@ fn the_list_enables_what_the_runtime_enables_of_the_description() {
             .profile()
             .clone();
         let states = |feature| description.features.contains(&feature);
-        let robust = (
-            profile.checks_buffers_in_shader(),
-            profile.images().robust_image_access,
-        );
         assert_eq!(
-            robust,
-            (
-                true,
-                states(F::RobustImageAccess) || states(F::RobustImageAccess2)
-            ),
+            profile.images().robust_image_access,
+            states(F::RobustImageAccess) || states(F::RobustImageAccess2),
             "{stem}"
         );
         assert!(!enables.linked.contains(&Structure::AstcHdr), "{stem}");

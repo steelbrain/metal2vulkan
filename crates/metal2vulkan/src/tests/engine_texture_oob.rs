@@ -15,12 +15,13 @@
 //! Each kernel reads (or writes) `p[i]` per thread and must compute Metal's result in both
 //! scheduling orders on every profile class:
 //!
-//! - `robustImageAccess2` (or `robustBufferAccess2` for a texel buffer): the device reads Metal's
-//!   texel and discards the write; the interpreter's image models that ([`Image::robust`]).
-//! - `robustImageAccess` alone: the shader checks its reads (the device's out-of-bounds texel is
-//!   not Metal's; the interpreter's poisons it) and the device discards writes.
-//! - no robustness for the resource (`robustBufferAccess` alone for a texel buffer): the shader
-//!   checks reads and guards writes; the interpreter traps any access outside the image.
+//! - `robustImageAccess2`, for an image: the device reads Metal's texel and discards the write;
+//!   the interpreter's image models that ([`Image::robust`]).
+//! - `robustImageAccess` alone, for an image: the shader checks its reads (the device's
+//!   out-of-bounds texel is not Metal's; the interpreter's poisons it) and the device discards
+//!   writes.
+//! - no image robustness, and every texel buffer: the shader checks reads and guards writes; the
+//!   interpreter traps any access outside the image.
 //!
 //! Where the shader checks a read whose alpha it observes, the alpha comes from the
 //! `OutOfBoundsAlpha` specialization, run with both values.
@@ -32,7 +33,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::bind::{BindState, Dispatch, ResourceClass, TextureFacts, UsedResource, WriteSource};
 use crate::budget::Budget;
-use crate::device::profile::{DeviceProfile, Robustness};
+use crate::device::profile::DeviceProfile;
 use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Capability, Error, Feature, LowerFamily, Unsupported};
@@ -1167,12 +1168,14 @@ enum Class {
 
 fn class(p: &DeviceProfile, buffer: bool) -> Class {
     let f = p.fields();
-    match (buffer, f.robustness) {
-        (true, Robustness::Rba2) => Class::Device,
-        (true, _) => Class::Shader,
-        (false, _) if f.images.robust_image_access2 => Class::Device,
-        (false, _) if f.images.robust_image_access => Class::ShaderReads,
-        (false, _) => Class::Shader,
+    if buffer {
+        Class::Shader
+    } else if f.images.robust_image_access2 {
+        Class::Device
+    } else if f.images.robust_image_access {
+        Class::ShaderReads
+    } else {
+        Class::Shader
     }
 }
 
@@ -1772,8 +1775,8 @@ fn sample_storage_depth_and_half_reads_out_of_bounds_are_zero() {
     }
 }
 
-/// A texel buffer read is out of bounds past its last texel, also where `robustBufferAccess`
-/// (whose out-of-bounds texel may be any value of the buffer) is the only robustness.
+/// A texel buffer read is out of bounds past its last texel: the shader checks it on every
+/// profile.
 #[test]
 fn texel_buffer_reads_out_of_bounds_are_zero() {
     let Some(bc) = assemble() else {
@@ -1792,13 +1795,7 @@ fn texel_buffer_reads_out_of_bounds_are_zero() {
         ],
     };
     let ran = case.check(&bc);
-    assert_eq!(ran, [Class::Device, Class::Shader]);
-    // `robustBufferAccess` alone is the shader's check.
-    let vk12 = profiles()
-        .into_iter()
-        .find(|(s, _)| s == "runtime-floor")
-        .expect("runtime-floor");
-    assert_eq!(class(&vk12.1, true), Class::Shader);
+    assert_eq!(ran, [Class::Shader]);
 }
 
 /// Run a write kernel over `rows` on every profile: the texture's texels other than `written`
@@ -1864,8 +1861,7 @@ fn cube_array_writes_out_of_bounds_are_dropped() {
     assert!(ran.contains(&Class::Device), "{ran:?}");
 }
 
-/// A texel buffer write past its last texel writes nothing, also where `robustBufferAccess`
-/// (which may write the value anywhere in the buffer) is the only robustness.
+/// A texel buffer write past its last texel writes nothing: the shader guards it on every profile.
 #[test]
 fn texel_buffer_writes_out_of_bounds_are_dropped() {
     let Some(bc) = assemble() else {
@@ -1880,7 +1876,7 @@ fn texel_buffer_writes_out_of_bounds_are_dropped() {
         &rows,
         (0, 0, 0, [4, 0, 0]),
     );
-    assert_eq!(ran, [Class::Device, Class::Shader]);
+    assert_eq!(ran, [Class::Shader]);
 }
 
 /// A thread that writes a texel out of bounds and then reads that location reads Metal's zero
@@ -1962,11 +1958,7 @@ fn a_read_where_its_thread_wrote_out_of_bounds_is_zero() {
         }
         ran.sort();
         ran.dedup();
-        let want: &[Class] = if buffer {
-            &[Class::Device, Class::Shader]
-        } else {
-            &ALL
-        };
+        let want: &[Class] = if buffer { &[Class::Shader] } else { &ALL };
         assert_eq!(ran, want, "{entry}");
     }
 }

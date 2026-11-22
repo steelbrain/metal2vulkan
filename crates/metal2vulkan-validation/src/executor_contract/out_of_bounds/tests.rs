@@ -933,9 +933,9 @@ fn the_identity_domains_leave_a_loaded_pointer_unchecked_and_mask_a_resource_id(
     assert_eq!(run.targets[0].mechanism, masked.mechanism);
 }
 
-/// A draw's targets: a fixed-function attribute is contained by the device's buffer robustness, and
-/// unchecked without it; a direct indexed draw's index buffer by the padded copy of its indices on
-/// every device; a top-level texture array by the clamped handle-array load. A pulled attribute is
+/// A draw's targets: a fixed-function attribute is unchecked on every device (no buffer
+/// robustness bounds it); a direct indexed draw's index buffer is contained by the padded copy of
+/// its indices on every device; a top-level texture array by the clamped handle-array load. A pulled attribute is
 /// contained as the slot its fetch names, which a module that does not bind it does not access.
 #[test]
 fn a_draws_targets_are_contained_by_their_fetch() {
@@ -970,7 +970,6 @@ fn a_draws_targets_are_contained_by_their_fetch() {
     let fixed = BTreeMap::from([(0, Fetch::FixedFunction)]);
     let pulled = BTreeMap::from([(0, Fetch::Pulled { buffer_index: 30 })]);
     let attribute = OutOfBoundsResource::AttributeBuffer { location: 0 };
-    let mut unchecked_seen = false;
     for committed in &profiles {
         let profile = &committed.profile;
         let label = &committed.tier.stem;
@@ -984,19 +983,11 @@ fn a_draws_targets_are_contained_by_their_fetch() {
                 strategies,
             )
         };
-        let shader =
-            !matches!(profile.robustness(), Robustness::Rba2) && profile.checks_buffers_in_shader();
         let contained = vertex(attribute, ContainmentForm::VertexInput, &fixed, &strategies)
             .unwrap_or_else(|why| panic!("{label}: {why}"));
         assert_eq!(contained.mechanism.medium, Medium::VertexInput, "{label}");
-        assert_ne!(contained.mechanism.check, Check::Shader, "{label}");
-        assert_eq!(
-            contained.mechanism.check == Check::Unchecked,
-            shader,
-            "{label}"
-        );
+        assert_eq!(contained.mechanism.check, Check::Unchecked, "{label}");
         assert!(!contained.written, "{label}");
-        unchecked_seen |= shader;
         assert!(
             vertex(
                 attribute,
@@ -1043,8 +1034,6 @@ fn a_draws_targets_are_contained_by_their_fetch() {
         )
         .is_err());
     }
-    // Some committed profile enables no buffer robustness, so the unchecked form is exercised.
-    assert!(unchecked_seen);
     // A top-level texture array's target needs its slot and the clamped load.
     let lavapipe = &profiles
         .iter()

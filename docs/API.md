@@ -100,9 +100,8 @@ compile does. `DevicePolicy::default()` is the one constructor: the runtime comp
 and so do the command line, the compile worker and every validation tool. It holds:
 
 - **Bounds on a buffer-slot access at a run-time offset.** Such an access stays inside the range
-  the binder supplied: where the device enables `robustBufferAccess`, buffer accesses and vertex
-  input are left to it, and elsewhere the shader checks them. (MoltenVK advertises the feature
-  without implementing it; there such accesses are not bounded, as on native Metal.)
+  the binder supplied: the shader checks it on every device, whatever buffer robustness the device
+  enables.
 - **The device's arithmetic.** The device's own maths library, divisions, fused multiply-adds,
   `float` denormals, rounding order of `dot`/`mix`/`fast::sqrt`, the grouping and fusion of
   fast-math sums and products (each operation in the AIR's order, its own fast-math flags its
@@ -307,8 +306,7 @@ println!("  Metal properties: {:?}", device.metal_properties());
 - `profile().spirv_validation()`: the `spirv-val` environments and relaxations every module for
   the device is valid under. The command line runs exactly these.
 - The profile's facts: `enabled()`, `limits()`, `images()`, `fragment()`, `descriptors()`,
-  its `subgroups()` model and `simd_tier(...)`, the buffer robustness that bounds a buffer-slot
-  access (`robustness()`, `checks_buffers_in_shader()`), and the Function
+  its `subgroups()` model and `simd_tier(...)`, and the Function
   storage a thread holds (`function_storage()`: `FunctionStorage::Measured` bytes for a measured
   device, or `FunctionStorage::Assumed` with the 16 KiB floor, past which a vertex or fragment
   function runs with `FunctionStorageAssumed` up to 192 KiB and any other stage is refused).
@@ -797,13 +795,11 @@ A `RenderPipeline` holds:
 
 - `stages`: vertex, then fragment when rasterization is enabled;
 - `layout`: one pipeline layout for every stage;
-- `vertex_input`: Vulkan bindings and attributes. An attribute Vulkan cannot fetch as described is
-  pulled in the shader instead, and so is every attribute on a device without
-  `robustBufferAccess`. A `FloatRGB9E5` attribute is pulled on every
-  device: no device must fetch the shared-exponent format as vertex input, and its decode is
-  exact, so the shader's is the answer a conformant fetch gives. Under the identity domains
-  nothing is pulled, as the pulled fetch reads through a
-  descriptor: every attribute is fetched in fixed function, with or without buffer robustness
+- `vertex_input`: Vulkan bindings and attributes. Outside the identity domains every attribute is
+  pulled in the shader through a checked descriptor view: nothing bounds fixed-function input
+  without buffer robustness (VUID-vkCmdDraw-None-02721), which the translator never leaves an
+  access to. Under the identity domains nothing is pulled, as the pulled fetch reads through a
+  descriptor: every attribute is fetched in fixed function
   (a fetch outside its buffer reads what the device gives), an unnormalized signed-integer format
   into a variable declared `int`, the constant step at vertex rate on a binding of stride 0 (no
   divisor); an attribute fixed-function input cannot take is refused,
