@@ -207,7 +207,7 @@ fn every_device_of_the_cfgs_kind_opens_presents_and_tears_down_to_zero() {
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 #[test]
 fn every_device_joins_its_cache_directory_s_removal_at_teardown() {
-    use crate::cache::{Store, REMOVAL_PAUSE};
+    use crate::cache::{Store, Versions, REMOVAL_PAUSE};
     use std::sync::atomic::Ordering::Relaxed;
 
     REMOVAL_PAUSE.store(200, Relaxed);
@@ -221,7 +221,7 @@ fn every_device_joins_its_cache_directory_s_removal_at_teardown() {
         let _ = std::fs::remove_dir_all(&dir);
         // Generations 1 to 4 made through a store of its own, 4 young; then 1 and 2, dead, refilled
         // as a run cut short in their removal leaves them.
-        let store = Store::open(dir.clone(), 1000, Counters::new());
+        let store = Store::open(dir.clone(), 1000, Counters::new(), Versions::BUILT);
         for n in 0..16_u32 {
             assert!(store.put(&format!("translations/{n:064x}"), &[1; 100]));
         }

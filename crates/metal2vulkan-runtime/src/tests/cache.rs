@@ -2,15 +2,17 @@
 //! records alike, a record read only as its own content's, a hit in old moved into young,
 //! a lookup that reads no state, the state file read at open with no listing and rebuilt where it
 //! is torn or missing, a settled store's removal thread ended with its last look, a removal cut
-//! short (a process's exit in it included) finished by the next
-//! open, an earlier version's pipeline data removed at open, torn files removed, a blob that does
+//! short (a process's exit in it included) finished by the next open, the dead generations removed
+//! lowest first, a newer translator's open retiring both generations once and an older one's
+//! retiring nothing, a state with no versions read as older once, an earlier version's pipeline
+//! data removed at open, torn files removed, a blob that does
 //! not check refused, a blob named by its device's whole pipeline cache header, at most four
 //! blobs kept, and stores in threads and processes sharing one directory without losing a count
 //! or reading a file another was writing.
 
 use crate::cache::{
     blob_name, checksum, frame, prune_blobs, read_record, record_bytes, unframe, usable_header,
-    Caches, Lowerings, Pending, State, Store, BLOBS_KEPT, RECORD_LEN,
+    Caches, Lowerings, Pending, State, Store, Versions, BLOBS_KEPT, RECORD_LEN,
 };
 use crate::counters::Counters;
 use std::fs;
@@ -111,7 +113,12 @@ fn a_store_filled_past_its_cap_stays_within_it_and_moves_on() {
         _ => record_of(n),
     };
     let scratch = Scratch::new("store-cap");
-    let store = Store::open(scratch.0.clone(), 10 * len, Counters::new());
+    let store = Store::open(
+        scratch.0.clone(),
+        10 * len,
+        Counters::new(),
+        Versions::BUILT,
+    );
     assert_eq!(state(&store), State { young: 1, bytes: 0 });
     for n in 0..40 {
         let (name, bytes) = file(n);
@@ -219,7 +226,7 @@ fn a_record_reads_only_as_its_own_content_s() {
 #[test]
 fn a_hit_in_old_moves_into_young_and_outlives_the_next_generation() {
     let scratch = Scratch::new("store-old");
-    let store = Store::open(scratch.0.clone(), 1000, Counters::new());
+    let store = Store::open(scratch.0.clone(), 1000, Counters::new(), Versions::BUILT);
     for n in 0..6 {
         assert!(store.put(&name(n), &[n as u8; 100]));
     }
@@ -247,8 +254,8 @@ fn a_hit_in_old_moves_into_young_and_outlives_the_next_generation() {
 #[test]
 fn a_lookup_reads_no_state_and_sees_another_stores_move_at_its_next_write() {
     let scratch = Scratch::new("store-young");
-    let first = Store::open(scratch.0.clone(), 1000, Counters::new());
-    let second = Store::open(scratch.0.clone(), 1000, Counters::new());
+    let first = Store::open(scratch.0.clone(), 1000, Counters::new(), Versions::BUILT);
+    let second = Store::open(scratch.0.clone(), 1000, Counters::new(), Versions::BUILT);
     assert!(first.put(&name(0), &[0; 100]));
     let reads = first.state_reads.load(Relaxed);
     for _ in 0..10 {
@@ -284,7 +291,7 @@ fn a_lookup_reads_no_state_and_sees_another_stores_move_at_its_next_write() {
 #[test]
 fn a_reopened_store_reads_its_state_and_lists_no_directory() {
     let scratch = Scratch::new("store-reopen");
-    let store = Store::open(scratch.0.clone(), 1000, Counters::new());
+    let store = Store::open(scratch.0.clone(), 1000, Counters::new(), Versions::BUILT);
     assert_eq!(
         store.listings.load(Relaxed),
         1,
@@ -296,7 +303,7 @@ fn a_reopened_store_reads_its_state_and_lists_no_directory() {
     store.settle();
     let before = state(&store);
     drop(store);
-    let reopened = Store::open(scratch.0.clone(), 1000, Counters::new());
+    let reopened = Store::open(scratch.0.clone(), 1000, Counters::new(), Versions::BUILT);
     assert_eq!(state(&reopened), before);
     // Files 20 to 22 in young, file 15 in old.
     for n in [20, 21, 22, 15] {
@@ -313,7 +320,7 @@ fn a_reopened_store_reads_its_state_and_lists_no_directory() {
 #[test]
 fn a_removal_cut_short_is_finished_by_the_next_open() {
     let scratch = Scratch::new("store-cut");
-    let store = Store::open(scratch.0.clone(), 1000, Counters::new());
+    let store = Store::open(scratch.0.clone(), 1000, Counters::new(), Versions::BUILT);
     for n in 0..16 {
         assert!(store.put(&name(n), &[n as u8; 100]));
     }
@@ -327,7 +334,7 @@ fn a_removal_cut_short_is_finished_by_the_next_open() {
         fs::create_dir_all(path.parent().expect("a parent")).expect("the directory");
         fs::write(&path, [0; 100]).expect("the file");
     }
-    let reopened = Store::open(scratch.0.clone(), 1000, Counters::new());
+    let reopened = Store::open(scratch.0.clone(), 1000, Counters::new(), Versions::BUILT);
     reopened.settle();
     assert!(!reopened.generation(2).exists() && !reopened.generation(1).exists());
     assert!(reopened.generation(3).exists() && reopened.generation(4).exists());
@@ -354,7 +361,12 @@ fn store_exit_child() {
     let Some(dir) = std::env::var_os(EXIT_DIR) else {
         return;
     };
-    let store = Store::open(PathBuf::from(dir), EXIT_CAP, Counters::new());
+    let store = Store::open(
+        PathBuf::from(dir),
+        EXIT_CAP,
+        Counters::new(),
+        Versions::BUILT,
+    );
     for n in 0..=2 * EXIT_FILES {
         assert!(store.put(&name(n), &[1; 10]));
     }
@@ -385,7 +397,12 @@ fn a_process_that_exits_in_a_removal_leaves_it_to_the_next_open() {
     assert!(status.success(), "the child wrote every file");
     let dead = scratch.0.join("g1");
     assert!(dead.exists(), "the child exited before its removal ended");
-    let reopened = Store::open(scratch.0.clone(), EXIT_CAP, Counters::new());
+    let reopened = Store::open(
+        scratch.0.clone(),
+        EXIT_CAP,
+        Counters::new(),
+        Versions::BUILT,
+    );
     reopened.settle();
     assert!(!dead.exists(), "the next open finished the removal");
     assert_eq!(
@@ -411,7 +428,7 @@ fn a_settled_stores_removal_reads_the_state_no_more() {
     use crate::cache::LAST_LOOK_PAUSE;
     let scratch = Scratch::new("store-settled");
     LAST_LOOK_PAUSE.store(200, Relaxed);
-    let store = Store::open(scratch.0.clone(), 1000, Counters::new());
+    let store = Store::open(scratch.0.clone(), 1000, Counters::new(), Versions::BUILT);
     // The move to generation 3 leaves generation 1 dead, and starts the removal.
     for n in 0..13 {
         assert!(store.put(&name(n), &[n as u8; 100]));
@@ -440,7 +457,7 @@ fn a_settled_stores_removal_reads_the_state_no_more() {
 #[test]
 fn a_torn_or_missing_state_is_rebuilt_from_the_generations() {
     let scratch = Scratch::new("store-state");
-    let store = Store::open(scratch.0.clone(), 1000, Counters::new());
+    let store = Store::open(scratch.0.clone(), 1000, Counters::new(), Versions::BUILT);
     for n in 0..13 {
         assert!(store.put(&name(n), &[n as u8; 100]));
     }
@@ -449,7 +466,7 @@ fn a_torn_or_missing_state_is_rebuilt_from_the_generations() {
     drop(store);
     for torn in [&b"cut short"[..], &[7; 24][..], &[][..]] {
         fs::write(scratch.0.join("state"), torn).expect("the state torn");
-        let reopened = Store::open(scratch.0.clone(), 1000, Counters::new());
+        let reopened = Store::open(scratch.0.clone(), 1000, Counters::new(), Versions::BUILT);
         assert_eq!(
             reopened.listings.load(Relaxed),
             1,
@@ -466,7 +483,7 @@ fn a_torn_or_missing_state_is_rebuilt_from_the_generations() {
         assert_eq!(reopened.get(&name(12), whole), Some(vec![12; 100]));
     }
     fs::remove_file(scratch.0.join("state")).expect("the state removed");
-    let reopened = Store::open(scratch.0.clone(), 1000, Counters::new());
+    let reopened = Store::open(scratch.0.clone(), 1000, Counters::new(), Versions::BUILT);
     assert_eq!(
         state(&reopened),
         State {
@@ -488,10 +505,241 @@ fn a_torn_or_missing_state_is_rebuilt_from_the_generations() {
     assert!(scratch.bytes() <= 1000);
 }
 
+/// Translator versions below this build's, for a store of an older build.
+const OLDER: Versions = Versions {
+    semantics: 10,
+    format: 20,
+};
+
+/// Fills the directory under `versions` with files 0 to 12 of 100 bytes in a cap of 1000: young
+/// is generation 3, holding files 10 to 12, and old is generation 2, holding files 5 to 9.
+fn filled(scratch: &Scratch, versions: Versions) {
+    let store = Store::open(scratch.0.clone(), 1000, Counters::new(), versions);
+    for n in 0..13 {
+        assert!(store.put(&name(n), &[n as u8; 100]));
+    }
+    store.settle();
+    assert_eq!(
+        state(&store),
+        State {
+            young: 3,
+            bytes: 300
+        }
+    );
+}
+
+/// A store under a translator newer in its semantics or its artifact format version retires
+/// young and old at its open, both dead to it: young moves two generations on, counted empty, the
+/// removal takes both, and the directory then holds only what the store writes. Four stores
+/// opening at once retire them once, and a reopen under the same versions retires nothing.
+#[test]
+fn a_newer_translators_open_retires_both_generations_once() {
+    let newer = [
+        Versions {
+            semantics: OLDER.semantics + 1,
+            ..OLDER
+        },
+        Versions {
+            format: OLDER.format + 1,
+            ..OLDER
+        },
+    ];
+    for (case, newer) in newer.into_iter().enumerate() {
+        let scratch = Scratch::new(&format!("store-newer-{case}"));
+        filled(&scratch, OLDER);
+        let barrier = std::sync::Barrier::new(4);
+        let stores: Vec<Arc<Store>> = std::thread::scope(|scope| {
+            let opens: Vec<_> = (0..4)
+                .map(|_| {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        Store::open(scratch.0.clone(), 1000, Counters::new(), newer)
+                    })
+                })
+                .collect();
+            (opens.into_iter())
+                .map(|open| open.join().expect("an open"))
+                .collect()
+        });
+        for store in &stores {
+            store.settle();
+        }
+        assert_eq!(
+            state(&stores[0]),
+            State { young: 5, bytes: 0 },
+            "case {case}: young moved on twice, once"
+        );
+        assert!(!stores[0].generation(3).exists() && !stores[0].generation(2).exists());
+        assert_eq!(
+            scratch.bytes(),
+            0,
+            "case {case}: an older translator's file left"
+        );
+        for n in [12, 5] {
+            assert_eq!(
+                stores[1].get(&name(n), whole),
+                None,
+                "case {case}: file {n}"
+            );
+        }
+        assert!(stores[2].put(&name(13), &[13; 100]));
+        assert_eq!(stores[3].get(&name(13), whole), Some(vec![13; 100]));
+        drop(stores);
+        let reopened = Store::open(scratch.0.clone(), 1000, Counters::new(), newer);
+        reopened.settle();
+        assert_eq!(
+            state(&reopened),
+            State {
+                young: 5,
+                bytes: 100
+            },
+            "case {case}: the reopen retired nothing"
+        );
+    }
+}
+
+/// Builds of two translators on one directory, in turn, keep each other's files after the newer
+/// one's first open: the older one's open retires nothing and records nothing, and what it writes
+/// goes into young beside the newer one's. A translator newer in one version and older in the
+/// other retires them, and the directory records the higher of each, so neither earlier one
+/// retires anything after it.
+#[test]
+fn an_older_translators_open_retires_nothing_of_a_newer_ones() {
+    let newer = Versions {
+        semantics: OLDER.semantics + 1,
+        ..OLDER
+    };
+    let scratch = Scratch::new("store-older");
+    filled(&scratch, OLDER);
+    let store = Store::open(scratch.0.clone(), 1000, Counters::new(), newer);
+    assert!(store.put(&name(100), &[100; 100]));
+    store.settle();
+    drop(store);
+    let older = Store::open(scratch.0.clone(), 1000, Counters::new(), OLDER);
+    older.settle();
+    assert_eq!(
+        state(&older),
+        State {
+            young: 5,
+            bytes: 100
+        }
+    );
+    assert_eq!(
+        older.get(&name(100), whole),
+        Some(vec![100; 100]),
+        "the newer one's file"
+    );
+    assert!(older.put(&name(101), &[101; 100]));
+    drop(older);
+    let store = Store::open(scratch.0.clone(), 1000, Counters::new(), newer);
+    store.settle();
+    assert_eq!(state(&store).young, 5, "the older one recorded nothing");
+    for n in [100, 101] {
+        assert_eq!(
+            store.get(&name(n), whole),
+            Some(vec![n as u8; 100]),
+            "file {n}"
+        );
+    }
+    drop(store);
+    let format = Versions {
+        format: OLDER.format + 1,
+        ..OLDER
+    };
+    let store = Store::open(scratch.0.clone(), 1000, Counters::new(), format);
+    store.settle();
+    assert_eq!(state(&store), State { young: 7, bytes: 0 });
+    assert_eq!(scratch.bytes(), 0);
+    drop(store);
+    for versions in [newer, format, OLDER] {
+        let store = Store::open(scratch.0.clone(), 1000, Counters::new(), versions);
+        store.settle();
+        assert_eq!(state(&store).young, 7, "{versions:?} retired nothing");
+    }
+}
+
+/// A state with no versions after young's number and bytes, as an earlier version of the store
+/// wrote it, or whose versions do not check, reads as older than every translator: the open
+/// retires both generations, once, and records its versions. An earlier version's write of the
+/// state, its 24 bytes at the file's start through a file opened without truncation, keeps the
+/// versions after them, so the next open retires nothing. (A state that does not check at all is
+/// rebuilt and retires nothing: `a_torn_or_missing_state_is_rebuilt_from_the_generations`.)
+#[test]
+fn a_state_with_no_versions_reads_as_older_once() {
+    for case in ["cut", "flipped"] {
+        let scratch = Scratch::new(&format!("store-unversioned-{case}"));
+        filled(&scratch, Versions::BUILT);
+        let path = scratch.0.join("state");
+        let mut held = fs::read(&path).expect("the state");
+        assert_eq!(
+            held.len(),
+            40,
+            "young, its bytes, the versions and two checksums"
+        );
+        match case {
+            "cut" => held.truncate(24),
+            _ => held[30] ^= 1,
+        }
+        fs::write(&path, &held).expect("the state rewritten");
+        let store = Store::open(scratch.0.clone(), 1000, Counters::new(), Versions::BUILT);
+        store.settle();
+        assert_eq!(state(&store), State { young: 5, bytes: 0 }, "{case}");
+        assert_eq!(scratch.bytes(), 0, "{case}: a file left");
+        assert_eq!(
+            store.listings.load(Relaxed),
+            0,
+            "{case}: young's record was whole"
+        );
+        assert!(store.put(&name(13), &[13; 100]));
+        drop(store);
+        let mut head = [0; 24];
+        head[..8].copy_from_slice(&5_u64.to_le_bytes());
+        head[8..16].copy_from_slice(&200_u64.to_le_bytes());
+        let sum = checksum(&head[..16]);
+        head[16..].copy_from_slice(&sum.to_le_bytes());
+        let mut earlier = fs::File::options()
+            .write(true)
+            .open(&path)
+            .expect("the state");
+        std::io::Write::write_all(&mut earlier, &head).expect("an earlier version's write");
+        drop(earlier);
+        assert_eq!(fs::metadata(&path).expect("the state").len(), 40);
+        let store = Store::open(scratch.0.clone(), 1000, Counters::new(), Versions::BUILT);
+        store.settle();
+        assert_eq!(
+            state(&store),
+            State {
+                young: 5,
+                bytes: 200
+            },
+            "{case}: the earlier version's write read, its versions kept"
+        );
+        assert_eq!(store.get(&name(13), whole), Some(vec![13; 100]), "{case}");
+    }
+}
+
+/// The removal takes the dead generations lowest first, by number, so one cut short leaves the
+/// generation just below old, which the next open looks for.
+#[test]
+fn the_dead_generations_are_removed_lowest_first() {
+    let scratch = Scratch::new("store-dead-order");
+    let store = Store::open(scratch.0.clone(), 2, Counters::new(), Versions::BUILT);
+    for n in 0..32 {
+        assert!(store.put(&name(n), &[1]));
+    }
+    store.settle();
+    assert_eq!(state(&store).young, 32);
+    for number in [30, 9, 1, 10, 2] {
+        fs::create_dir(store.generation(number)).expect("a dead generation");
+    }
+    let dead = Vec::from([1, 2, 9, 10, 30].map(|number| store.generation(number)));
+    assert_eq!(store.dead(), dead);
+}
+
 #[test]
 fn a_torn_file_is_a_miss_and_is_removed() {
     let scratch = Scratch::new("store-torn");
-    let store = Store::open(scratch.0.clone(), 1000, Counters::new());
+    let store = Store::open(scratch.0.clone(), 1000, Counters::new(), Versions::BUILT);
     let data: Vec<u8> = (0..=255).collect();
     assert!(store.put(&name(1), &framed(&data)));
     let path = store.generation(1).join(name(1));
@@ -510,8 +758,8 @@ fn a_torn_file_is_a_miss_and_is_removed() {
 #[test]
 fn stores_on_one_directory_share_its_files_and_its_count() {
     let scratch = Scratch::new("store-share");
-    let first = Store::open(scratch.0.clone(), 1000, Counters::new());
-    let second = Store::open(scratch.0.clone(), 1000, Counters::new());
+    let first = Store::open(scratch.0.clone(), 1000, Counters::new(), Versions::BUILT);
+    let second = Store::open(scratch.0.clone(), 1000, Counters::new(), Versions::BUILT);
     assert!(first.put(&name(1), b"compiled"));
     assert_eq!(second.get(&name(1), whole), Some(b"compiled".to_vec()));
     assert_eq!(state(&second).bytes, 8);
@@ -690,7 +938,7 @@ fn the_write_queue_refuses_a_file_past_its_bound() {
 #[test]
 fn an_earlier_versions_pipeline_data_is_removed_at_open() {
     let scratch = Scratch::new("store-earlier");
-    let store = Store::open(scratch.0.clone(), 1000, Counters::new());
+    let store = Store::open(scratch.0.clone(), 1000, Counters::new(), Versions::BUILT);
     for n in 0..6 {
         assert!(store.put(&name(n), &[n as u8; 100]));
     }
@@ -704,7 +952,7 @@ fn an_earlier_versions_pipeline_data_is_removed_at_open() {
         fs::create_dir_all(dir).expect("an earlier version's directory");
         fs::write(dir.join(format!("{:064x}", 1)), [1; 50]).expect("its file");
     }
-    let reopened = Store::open(scratch.0.clone(), 1000, Counters::new());
+    let reopened = Store::open(scratch.0.clone(), 1000, Counters::new(), Versions::BUILT);
     reopened.settle();
     for g in [1, 2] {
         let dir = scratch.0.join(format!("g{g}/pipelines"));
@@ -761,7 +1009,12 @@ fn store_stress_child() {
     let Some(dir) = std::env::var_os(STRESS_DIR) else {
         return;
     };
-    let store = Store::open(PathBuf::from(dir), STRESS_CAP, Counters::new());
+    let store = Store::open(
+        PathBuf::from(dir),
+        STRESS_CAP,
+        Counters::new(),
+        Versions::BUILT,
+    );
     assert_eq!(stress(&store, u64::from(std::process::id()), 4000), 0);
     store.settle();
 }
@@ -781,7 +1034,14 @@ fn stores_in_threads_and_processes_racing_writes_moves_and_flips_corrupt_nothing
         })
         .collect();
     let stores: Vec<Arc<Store>> = (0..3)
-        .map(|_| Store::open(scratch.0.clone(), STRESS_CAP, Counters::new()))
+        .map(|_| {
+            Store::open(
+                scratch.0.clone(),
+                STRESS_CAP,
+                Counters::new(),
+                Versions::BUILT,
+            )
+        })
         .collect();
     std::thread::scope(|scope| {
         let workers: Vec<_> = (0..6)

@@ -430,7 +430,10 @@ pub struct DeviceOptions {
     /// compiling again ([`Metrics::translations_loaded`]). The lowerings take at most
     /// [`pipeline_cache_cap`](Self::pipeline_cache_cap) bytes, in two generations of half of it
     /// each: a file used again moves into the young one, and the old one is removed whole when
-    /// the young one fills. Beside them, one file per pipeline cache header (a kind of device and
+    /// the young one fills. Both are removed at the open of a device whose translator is newer, in
+    /// its semantics or artifact format version, than every one before it on the directory,
+    /// since none of its lookups reads their files; a device of an older one removes nothing of
+    /// a newer one's. Beside them, one file per pipeline cache header (a kind of device and
     /// driver version; at most four such files, the oldest by last write removed) holds the data
     /// of the `VkPipelineCache` every `VkPipeline` of the device is made through, at most 32 MiB:
     /// the device's cache takes it in off every guest thread, and it is

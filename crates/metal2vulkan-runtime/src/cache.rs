@@ -76,18 +76,36 @@
 //! reaper: a state hands its lowering over ([`keep_translation`]) and returns, and a lowering that
 //! would take the ones waiting past [`PENDING_BYTES`] is dropped and counted, never waited for,
 //! except that one larger than that by itself is queued where nothing else waits. The
-//! bytes young holds are counted in `state`, 24 bytes beside the generations: young's number, its
-//! bytes and a checksum of both, read and written under a lock on the file, which every store on
-//! the directory, in this process or another, holds open for its life. The write that takes young
-//! past half the cap makes the next generation young: young becomes old, and the old one is dead. A
-//! store keeps young's number as it last read or wrote the state, so a lookup reads no state: a
-//! move another store made is seen at this store's next write, and until then its lookups try the
-//! generations it knew, a miss at worst. A thread of the store's own removes the dead generation
-//! and ends, so no thread that submits, waits for or completes work removes files. So a file stays
-//! at least half the cap and at most the cap of other writes and moves after its last use, opening
-//! reads one file whatever the store holds, and nothing per file is kept in memory. The same thread
-//! removes the `pipelines/` directories under young and old in which an earlier version kept one
-//! file of pipeline data per `VkPipeline`; their bytes stay counted in young until it moves on.
+//! bytes young holds are counted in `state`, 40 bytes beside the generations: young's number, its
+//! bytes and a checksum of both, then the newest translator versions a store opened the directory
+//! under ([`Versions`]) and a checksum of them, read and written under a lock on the file, which
+//! every store on the directory, in this process or another, holds open for its life. The write
+//! that takes young past half the cap makes the next generation young: young becomes old, and the
+//! old one is dead. A store keeps young's number as it last read or wrote the state, so a lookup
+//! reads no state: a move another store made is seen at this store's next write, and until then
+//! its lookups try the generations it knew, a miss at worst. A thread of the store's own removes
+//! the dead generation and ends, so no thread that submits, waits for or completes work removes
+//! files. So a file stays at least half the cap and at most the cap of other writes and moves
+//! after its last use, until a newer translator's open (below), opening reads one file whatever
+//! the store holds, and nothing per file is kept in memory. The same thread removes the
+//! `pipelines/` directories under young and old in which an earlier version kept one file of
+//! pipeline data per `VkPipeline`; their bytes stay counted in young until it moves on.
+//!
+//! **A newer translator.** Every lowering's and record's name holds the translator's semantics
+//! version, and a lowering decodes under its own artifact format version alone, so a store under
+//! a newer translator reads no file an older one wrote: in both generations they are dead. So a
+//! store whose translator is newer, in either version, than the newest the state records retires
+//! both at its open: under the lock, young moves two generations on, counted empty, so the young
+//! and old it found are both below old and the removal thread takes them, and the state records
+//! the higher of each version. A store at the versions the state records, or older ones, retires
+//! nothing and records nothing. So builds of two versions that share a directory, at once or in
+//! turn, keep each other's files after the newer one's first open: the older one's go into young
+//! and stay by use, as every store's do. Versions that are missing or do not check after young's
+//! number and bytes that do, as in an earlier version's state file, read as older than every
+//! translator's, so the first open of a store that records them retires both generations once.
+//! An earlier version writes only the first 24 bytes, at the file's start, and leaves the versions
+//! as they are. A store that is still open under an older translator when a newer one retires its
+//! generations misses in them until its next write reads the new young.
 //!
 //! Every write is a temporary file renamed over its name, counted before it is written and given
 //! back where it fails, so the count is never below what young holds. Every file checks itself
@@ -164,6 +182,9 @@ pub(crate) const RECORD_LEN: usize = 8 + 4 + 4 + 32 + 2 * 33 + 8;
 const PIPELINES: &str = "pipelines";
 /// The state file, under the cache directory.
 const STATE: &str = "state";
+/// Where the newest versions the state file records start in it, after young's number, its
+/// bytes and their checksum.
+const NEWEST_AT: u64 = 24;
 
 /// Young's number and the bytes counted in it.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -172,12 +193,44 @@ pub(crate) struct State {
     pub(crate) bytes: u64,
 }
 
+/// The translator's versions a store writes its files under: its semantics version, which every
+/// lowering's and record's name holds, and its artifact format version, under which alone a
+/// lowering decodes. So a store under newer versions reads no file of older ones.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Versions {
+    pub(crate) semantics: u32,
+    pub(crate) format: u32,
+}
+
+impl Versions {
+    /// This build's translator's.
+    pub(crate) const BUILT: Versions = Versions {
+        semantics: SEMANTICS_VERSION,
+        format: ARTIFACT_FORMAT_VERSION,
+    };
+
+    /// Whether either version is above `other`'s.
+    fn newer_than(self, other: Versions) -> bool {
+        self.semantics > other.semantics || self.format > other.format
+    }
+
+    /// The higher of each version.
+    fn newest(self, other: Versions) -> Versions {
+        Versions {
+            semantics: self.semantics.max(other.semantics),
+            format: self.format.max(other.format),
+        }
+    }
+}
+
 /// The lowerings of a cache directory, `translations/<name>` under two generations of at most
 /// half of `cap` bytes each (the module's doc).
 pub(crate) struct Store {
     root: PathBuf,
     /// Half the cap: the most bytes young counts.
     half: u64,
+    /// The translator's versions the store writes its files under.
+    versions: Versions,
     /// The state file, open for the store's life; none where it could not be opened, and every
     /// lookup misses.
     state: Option<File>,
@@ -203,9 +256,16 @@ pub(crate) struct Store {
 }
 
 impl Store {
-    /// The store in `root`, made where it is missing; it starts the removal of a generation a
-    /// removal before left, and of an earlier version's pipeline data.
-    pub(crate) fn open(root: PathBuf, cap: u64, counters: Counters) -> Arc<Store> {
+    /// The store in `root` under the translator's `versions`, made where it is missing. It
+    /// retires both generations where the directory records older versions ([`Store::meet`]),
+    /// and starts the removal of the generations that leaves dead, of a generation a removal
+    /// before left, and of an earlier version's pipeline data.
+    pub(crate) fn open(
+        root: PathBuf,
+        cap: u64,
+        counters: Counters,
+        versions: Versions,
+    ) -> Arc<Store> {
         let _ = fs::create_dir_all(&root);
         let path = root.join(STATE);
         let opened = File::options()
@@ -221,6 +281,7 @@ impl Store {
         let store = Arc::new(Store {
             root,
             half: cap / 2,
+            versions,
             state,
             writable,
             writer: Mutex::new(()),
@@ -233,6 +294,7 @@ impl Store {
             #[cfg(test)]
             state_reads: AtomicUsize::new(0),
         });
+        store.meet();
         if let Some(state) = store.current() {
             store.young.fetch_max(state.young, Relaxed);
             let young = state.young;
@@ -247,6 +309,37 @@ impl Store {
     /// Whether the state file is open for writing: a read-only directory serves hits only.
     pub(crate) fn writable(&self) -> bool {
         self.writable
+    }
+
+    /// At the open, under the state file's lock: where the state records versions older than
+    /// the store's in either, makes young two generations on, counted empty, so the young and old
+    /// it found are both dead (no lookup of the store's reads their files), and records the
+    /// higher of each version. A state that records the store's versions or newer ones keeps its
+    /// generations and its record: a store of an older build on the directory empties nothing of
+    /// a newer one's. Versions that are missing or do not check after a state that does (an
+    /// earlier version's state file) read as older than every translator's; a state that does not
+    /// check at all, a new directory's among them, is rebuilt (the module's doc) and retires
+    /// nothing.
+    fn meet(&self) {
+        self.locked(|file| {
+            let recorded = read_newest(file);
+            if recorded.is_some_and(|recorded| !self.versions.newer_than(recorded)) {
+                return Some(());
+            }
+            if recorded.is_some() || read_state(file).is_some() {
+                self.change(file, |state| {
+                    let next = state.young + 2;
+                    make_dir(&self.generation(next)).ok()?;
+                    *state = State {
+                        young: next,
+                        bytes: 0,
+                    };
+                    Some(())
+                })?;
+            }
+            let newest = recorded.map_or(self.versions, |recorded| recorded.newest(self.versions));
+            write_newest(file, newest).ok()
+        });
     }
 
     /// The directories of an earlier version's pipeline data under young, `young`, and old.
@@ -406,18 +499,27 @@ impl Store {
 
     /// Runs `change` on the state under the lock, and writes the state back where it answers.
     fn update<T>(&self, change: impl FnOnce(&mut State) -> Option<T>) -> Option<T> {
+        self.locked(|file| self.change(file, change))
+    }
+
+    /// Runs `op` on the state file under its lock, where the file is open for writing.
+    fn locked<T>(&self, op: impl FnOnce(&File) -> Option<T>) -> Option<T> {
         let file = self.state.as_ref().filter(|_| self.writable)?;
         let _writer = lock(&self.writer);
         file.lock().ok()?;
-        let changed = (|| {
-            let mut state = read_state(file).or_else(|| self.rebuild(file))?;
-            let answer = change(&mut state)?;
-            write_state(file, state).ok()?;
-            self.young.fetch_max(state.young, Relaxed);
-            Some(answer)
-        })();
+        let done = op(file);
         let _ = file.unlock();
-        changed
+        done
+    }
+
+    /// Under the lock: runs `change` on the state `file` holds, rebuilt where it does not check,
+    /// and writes the state back where it answers.
+    fn change<T>(&self, file: &File, change: impl FnOnce(&mut State) -> Option<T>) -> Option<T> {
+        let mut state = read_state(file).or_else(|| self.rebuild(file))?;
+        let answer = change(&mut state)?;
+        write_state(file, state).ok()?;
+        self.young.fetch_max(state.young, Relaxed);
+        Some(answer)
     }
 
     /// Under the lock, a state for a state file that is missing or does not check: young is the
@@ -518,12 +620,16 @@ impl Store {
         }
     }
 
-    /// The generations below old, and an earlier version's pipeline data under young and old.
-    fn dead(&self) -> Vec<PathBuf> {
+    /// The generations below old, lowest first, so a removal cut short leaves the one just below
+    /// old, which the next open looks for; and an earlier version's pipeline data under young and
+    /// old.
+    pub(crate) fn dead(&self) -> Vec<PathBuf> {
         let Some(young) = self.current().map(|state| state.young) else {
             return Vec::new();
         };
-        let mut dead: Vec<PathBuf> = (generations(&self.root).into_iter())
+        let mut numbers = generations(&self.root);
+        numbers.sort_unstable();
+        let mut dead: Vec<PathBuf> = (numbers.into_iter())
             .filter(|&number| number + 1 < young)
             .map(|number| self.generation(number))
             .collect();
@@ -565,8 +671,8 @@ fn generations(root: &Path) -> Vec<u64> {
 
 /// The state `file` holds, where it checks.
 fn read_state(file: &File) -> Option<State> {
-    let mut record = [0; 24];
-    read_at(file, &mut record).ok()?;
+    let mut record = [0; NEWEST_AT as usize];
+    read_at(file, &mut record, 0).ok()?;
     let word = |at: usize| u64::from_le_bytes(record[at..at + 8].try_into().expect("8 bytes"));
     let state = State {
         young: word(0),
@@ -577,35 +683,57 @@ fn read_state(file: &File) -> Option<State> {
 
 /// Writes `state` to `file`, with its checksum.
 fn write_state(file: &File, state: State) -> io::Result<()> {
-    let mut record = [0; 24];
+    let mut record = [0; NEWEST_AT as usize];
     record[..8].copy_from_slice(&state.young.to_le_bytes());
     record[8..16].copy_from_slice(&state.bytes.to_le_bytes());
     let sum = checksum(&record[..16]);
     record[16..].copy_from_slice(&sum.to_le_bytes());
-    write_at(file, &record)
+    write_at(file, &record, 0)
+}
+
+/// The newest versions `file` records after the state, where they check.
+fn read_newest(file: &File) -> Option<Versions> {
+    let mut record = [0; 16];
+    read_at(file, &mut record, NEWEST_AT).ok()?;
+    let word = |at: usize| u32::from_le_bytes(record[at..at + 4].try_into().expect("4 bytes"));
+    let sum = u64::from_le_bytes(record[8..].try_into().expect("8 bytes"));
+    (sum == checksum(&record[..8])).then(|| Versions {
+        semantics: word(0),
+        format: word(4),
+    })
+}
+
+/// Writes `versions` to `file` after the state, with their checksum.
+fn write_newest(file: &File, versions: Versions) -> io::Result<()> {
+    let mut record = [0; 16];
+    record[..4].copy_from_slice(&versions.semantics.to_le_bytes());
+    record[4..8].copy_from_slice(&versions.format.to_le_bytes());
+    let sum = checksum(&record[..8]);
+    record[8..].copy_from_slice(&sum.to_le_bytes());
+    write_at(file, &record, NEWEST_AT)
 }
 
 #[cfg(unix)]
-fn read_at(file: &File, buf: &mut [u8]) -> io::Result<()> {
-    std::os::unix::fs::FileExt::read_exact_at(file, buf, 0)
+fn read_at(file: &File, buf: &mut [u8], at: u64) -> io::Result<()> {
+    std::os::unix::fs::FileExt::read_exact_at(file, buf, at)
 }
 
 #[cfg(unix)]
-fn write_at(file: &File, buf: &[u8]) -> io::Result<()> {
-    std::os::unix::fs::FileExt::write_all_at(file, buf, 0)
+fn write_at(file: &File, buf: &[u8], at: u64) -> io::Result<()> {
+    std::os::unix::fs::FileExt::write_all_at(file, buf, at)
 }
 
 #[cfg(windows)]
-fn read_at(file: &File, buf: &mut [u8]) -> io::Result<()> {
-    match std::os::windows::fs::FileExt::seek_read(file, buf, 0)? {
+fn read_at(file: &File, buf: &mut [u8], at: u64) -> io::Result<()> {
+    match std::os::windows::fs::FileExt::seek_read(file, buf, at)? {
         read if read == buf.len() => Ok(()),
         _ => Err(ErrorKind::UnexpectedEof.into()),
     }
 }
 
 #[cfg(windows)]
-fn write_at(file: &File, buf: &[u8]) -> io::Result<()> {
-    match std::os::windows::fs::FileExt::seek_write(file, buf, 0)? {
+fn write_at(file: &File, buf: &[u8], at: u64) -> io::Result<()> {
+    match std::os::windows::fs::FileExt::seek_write(file, buf, at)? {
         written if written == buf.len() => Ok(()),
         _ => Err(ErrorKind::WriteZero.into()),
     }
@@ -1107,7 +1235,8 @@ impl Caches {
     /// removal thread counts in `counters`' thread gauge.
     pub(crate) fn new(dir: Option<&Path>, cap: u64, counters: &Counters) -> Caches {
         Caches {
-            store: dir.map(|dir| Store::open(dir.to_owned(), cap, counters.clone())),
+            store: dir
+                .map(|dir| Store::open(dir.to_owned(), cap, counters.clone(), Versions::BUILT)),
             dir: dir.map(Path::to_owned),
             blob: OnceLock::new(),
             header: OnceLock::new(),

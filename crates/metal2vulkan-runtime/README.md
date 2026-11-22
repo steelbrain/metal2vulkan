@@ -2700,16 +2700,28 @@ the lowerings waiting for the reaper past 8 MiB it is dropped and counted
 larger than 8 MiB by itself is queued where none waits, so the heaviest kernels are kept too. The write that takes young past half the cap starts
 the next generation: young becomes old, and the old one is removed whole, by a thread the store
 starts for it. So a file stays for at least half the cap, and at most the whole cap, of files
-written or moved after its last use. Half the cap is what the store is sure to keep: a set of
+written or moved after its last use, until a device of a newer translator opens the directory
+(below). Half the cap is what the store is sure to keep: a set of
 functions used over and over that is larger than half the cap is partly removed at each new
 generation and lowered again. On disk the lowerings take at most the cap, and while a removal runs,
 also what is left of the generation it removes; the blobs are beside them. A file larger than half
 the cap is not kept. `Metrics::cache_bytes_written` counts the bytes the device wrote there,
 lowerings and blobs.
 
-The bytes young holds are counted in `state`, a file of 24 bytes beside the generations, read and
+The bytes young holds are counted in `state`, a file of 40 bytes beside the generations, read and
 written under its lock, so devices open on one directory, in one process or several, share its
 files and one count; they should pass one cap, since each starts a generation at half its own.
+After the count, `state` records the newest translator semantics and artifact format versions a
+device opened the directory under. Every file's name holds the semantics version, and a lowering
+decodes under its own format version alone, so a device under a newer translator reads no file
+an older one wrote. So a device whose translator is newer than the recorded one, in either
+version, retires both generations at its open: young moves two generations on, counted empty, the
+store's thread removes the two it found, and `state` records the higher of each version. A device
+at the recorded versions or older ones retires nothing and records nothing. So two builds of
+different versions on one directory, at once or in turn, keep each other's files after the newer
+one's first open. A `state` of 24 bytes, as an earlier version of the runtime wrote it, reads as
+older than every translator: its first open retires both generations once. An earlier version
+writes only those 24 bytes and leaves the recorded versions as they are.
 Opening the directory reads `state` and checks for a generation a removal left unfinished, and for
 the `pipelines/` directories under young and old in which an earlier version kept one file of
 pipeline data per `VkPipeline`, which the store's thread then removes; it lists no directory and
