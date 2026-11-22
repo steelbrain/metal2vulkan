@@ -5,237 +5,6 @@ target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f3
 target triple = "air64_v28-apple-macosx26.0.0"
 
 ; Function Attrs: convergent mustprogress nounwind willreturn
-define void @simd_shuffles_by_index_and_xor(i32 noundef %0, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %1, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %2) local_unnamed_addr #0 {
-  %4 = zext i32 %0 to i64
-  %5 = getelementptr inbounds i32, ptr addrspace(1) %1, i64 %4
-  %6 = load i32, ptr addrspace(1) %5, align 4, !tbaa !33, !alias.scope !37, !noalias !40
-  %7 = tail call i32 @air.simd_prefix_exclusive_sum.u.i32(i32 1) #3
-  %8 = mul i32 %0, 6
-  %9 = zext i32 %8 to i64
-  %10 = getelementptr inbounds i32, ptr addrspace(1) %2, i64 %9
-  %11 = trunc i32 %7 to i16
-  %12 = add i16 %11, 9
-  %13 = and i16 %12, 31
-  %14 = freeze i32 %6
-  %15 = tail call i32 @air.simd_shuffle.u.i32(i32 %14, i16 %13) #3
-  store i32 %15, ptr addrspace(1) %10, align 4, !tbaa !33, !alias.scope !40, !noalias !37
-  %16 = sub i16 31, %11
-  %17 = tail call i32 @air.simd_shuffle.u.i32(i32 %14, i16 %16) #3
-  %18 = getelementptr inbounds i32, ptr addrspace(1) %10, i64 1
-  store i32 %17, ptr addrspace(1) %18, align 4, !tbaa !33, !alias.scope !40, !noalias !37
-  %19 = tail call i32 @air.simd_shuffle_xor.u.i32(i32 %14, i16 8) #3
-  %20 = getelementptr inbounds i32, ptr addrspace(1) %10, i64 2
-  store i32 %19, ptr addrspace(1) %20, align 4, !tbaa !33, !alias.scope !40, !noalias !37
-  %21 = and i32 %0, 1
-  %22 = icmp eq i32 %21, 0
-  br i1 %22, label %23, label %34
-
-23:                                               ; preds = %3
-  %24 = add i16 %11, 1
-  %25 = and i16 %24, 31
-  %26 = tail call i32 @air.simd_shuffle.u.i32(i32 %14, i16 %25) #3
-  %27 = getelementptr inbounds i32, ptr addrspace(1) %10, i64 3
-  store i32 %26, ptr addrspace(1) %27, align 4, !tbaa !33, !alias.scope !40, !noalias !37
-  %28 = add i16 %11, 2
-  %29 = and i16 %28, 31
-  %30 = tail call i32 @air.simd_shuffle.u.i32(i32 %14, i16 %29) #3
-  %31 = getelementptr inbounds i32, ptr addrspace(1) %10, i64 4
-  store i32 %30, ptr addrspace(1) %31, align 4, !tbaa !33, !alias.scope !40, !noalias !37
-  %32 = tail call i32 @air.simd_shuffle_xor.u.i32(i32 %14, i16 1) #3
-  %33 = getelementptr inbounds i32, ptr addrspace(1) %10, i64 5
-  store i32 %32, ptr addrspace(1) %33, align 4, !tbaa !33, !alias.scope !40, !noalias !37
-  br label %34
-
-34:                                               ; preds = %23, %3
-  ret void
-}
-
-; Function Attrs: convergent mustprogress nounwind willreturn
-define void @simd_shuffles_up_and_down(i32 noundef %0, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %1, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %2) local_unnamed_addr #0 {
-  %4 = zext i32 %0 to i64
-  %5 = getelementptr inbounds i32, ptr addrspace(1) %1, i64 %4
-  %6 = load i32, ptr addrspace(1) %5, align 4, !tbaa !33, !alias.scope !42, !noalias !45
-  %7 = mul i32 %0, 5
-  %8 = zext i32 %7 to i64
-  %9 = getelementptr inbounds i32, ptr addrspace(1) %2, i64 %8
-  %10 = freeze i32 %6
-  %11 = tail call i32 @air.simd_shuffle_up.u.i32(i32 %10, i16 3) #3
-  store i32 %11, ptr addrspace(1) %9, align 4, !tbaa !33, !alias.scope !45, !noalias !42
-  %12 = tail call i32 @air.simd_shuffle_down.u.i32(i32 %10, i16 5) #3
-  %13 = getelementptr inbounds i32, ptr addrspace(1) %9, i64 1
-  store i32 %12, ptr addrspace(1) %13, align 4, !tbaa !33, !alias.scope !45, !noalias !42
-  %14 = and i32 %0, 1
-  %15 = icmp eq i32 %14, 0
-  br i1 %15, label %16, label %23
-
-16:                                               ; preds = %3
-  %17 = tail call i32 @air.simd_shuffle_up.u.i32(i32 %10, i16 1) #3
-  %18 = getelementptr inbounds i32, ptr addrspace(1) %9, i64 2
-  store i32 %17, ptr addrspace(1) %18, align 4, !tbaa !33, !alias.scope !45, !noalias !42
-  %19 = tail call i32 @air.simd_shuffle_down.u.i32(i32 %10, i16 1) #3
-  %20 = getelementptr inbounds i32, ptr addrspace(1) %9, i64 3
-  store i32 %19, ptr addrspace(1) %20, align 4, !tbaa !33, !alias.scope !45, !noalias !42
-  %21 = tail call i32 @air.simd_shuffle_down.u.i32(i32 %10, i16 2) #3
-  %22 = getelementptr inbounds i32, ptr addrspace(1) %9, i64 4
-  store i32 %21, ptr addrspace(1) %22, align 4, !tbaa !33, !alias.scope !45, !noalias !42
-  br label %23
-
-23:                                               ; preds = %16, %3
-  ret void
-}
-
-; Function Attrs: convergent mustprogress nounwind willreturn
-define void @simd_and_quad_rotations(i32 noundef %0, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %1, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %2) local_unnamed_addr #0 {
-  %4 = zext i32 %0 to i64
-  %5 = getelementptr inbounds i32, ptr addrspace(1) %1, i64 %4
-  %6 = load i32, ptr addrspace(1) %5, align 4, !tbaa !33, !alias.scope !47, !noalias !50
-  %7 = mul i32 %0, 6
-  %8 = zext i32 %7 to i64
-  %9 = getelementptr inbounds i32, ptr addrspace(1) %2, i64 %8
-  %10 = freeze i32 %6
-  %11 = tail call i32 @air.simd_shuffle_rotate_up.u.i32(i32 %10, i16 4) #3
-  store i32 %11, ptr addrspace(1) %9, align 4, !tbaa !33, !alias.scope !50, !noalias !47
-  %12 = tail call i32 @air.simd_shuffle_rotate_down.u.i32(i32 %10, i16 6) #3
-  %13 = getelementptr inbounds i32, ptr addrspace(1) %9, i64 1
-  store i32 %12, ptr addrspace(1) %13, align 4, !tbaa !33, !alias.scope !50, !noalias !47
-  %14 = tail call i32 @air.quad_shuffle_rotate_down.u.i32(i32 %10, i16 1) #3
-  %15 = getelementptr inbounds i32, ptr addrspace(1) %9, i64 2
-  store i32 %14, ptr addrspace(1) %15, align 4, !tbaa !33, !alias.scope !50, !noalias !47
-  %16 = and i32 %0, 1
-  %17 = icmp eq i32 %16, 0
-  br i1 %17, label %18, label %25
-
-18:                                               ; preds = %3
-  %19 = tail call i32 @air.simd_shuffle_rotate_up.u.i32(i32 %10, i16 1) #3
-  %20 = getelementptr inbounds i32, ptr addrspace(1) %9, i64 3
-  store i32 %19, ptr addrspace(1) %20, align 4, !tbaa !33, !alias.scope !50, !noalias !47
-  %21 = tail call i32 @air.simd_shuffle_rotate_down.u.i32(i32 %10, i16 2) #3
-  %22 = getelementptr inbounds i32, ptr addrspace(1) %9, i64 4
-  store i32 %21, ptr addrspace(1) %22, align 4, !tbaa !33, !alias.scope !50, !noalias !47
-  %23 = tail call i32 @air.quad_shuffle_rotate_up.u.i32(i32 %10, i16 1) #3
-  %24 = getelementptr inbounds i32, ptr addrspace(1) %9, i64 5
-  store i32 %23, ptr addrspace(1) %24, align 4, !tbaa !33, !alias.scope !50, !noalias !47
-  br label %25
-
-25:                                               ; preds = %18, %3
-  ret void
-}
-
-; Function Attrs: convergent mustprogress nounwind willreturn
-define void @simd_broadcasts(i32 noundef %0, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %1, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %2) local_unnamed_addr #0 {
-  %4 = zext i32 %0 to i64
-  %5 = getelementptr inbounds i32, ptr addrspace(1) %1, i64 %4
-  %6 = load i32, ptr addrspace(1) %5, align 4, !tbaa !33, !alias.scope !52, !noalias !55
-  %7 = shl i32 %0, 2
-  %8 = zext i32 %7 to i64
-  %9 = getelementptr inbounds i32, ptr addrspace(1) %2, i64 %8
-  %10 = freeze i32 %6
-  %11 = tail call i32 @air.simd_broadcast.u.i32(i32 %10, i16 21) #3
-  store i32 %11, ptr addrspace(1) %9, align 4, !tbaa !33, !alias.scope !55, !noalias !52
-  %12 = tail call i32 @air.simd_broadcast.u.i32(i32 %10, i16 3) #3
-  %13 = getelementptr inbounds i32, ptr addrspace(1) %9, i64 1
-  store i32 %12, ptr addrspace(1) %13, align 4, !tbaa !33, !alias.scope !55, !noalias !52
-  %14 = and i32 %0, 1
-  %15 = icmp eq i32 %14, 0
-  br i1 %15, label %16, label %21
-
-16:                                               ; preds = %3
-  %17 = getelementptr inbounds i32, ptr addrspace(1) %9, i64 3
-  %18 = getelementptr inbounds i32, ptr addrspace(1) %9, i64 2
-  %19 = tail call i32 @air.simd_broadcast.u.i32(i32 %10, i16 5) #3
-  store i32 %19, ptr addrspace(1) %18, align 4, !tbaa !33, !alias.scope !55, !noalias !52
-  %20 = tail call i32 @air.simd_broadcast.u.i32(i32 %10, i16 4) #3
-  store i32 %20, ptr addrspace(1) %17, align 4, !tbaa !33, !alias.scope !55, !noalias !52
-  br label %21
-
-21:                                               ; preds = %16, %3
-  ret void
-}
-
-; Function Attrs: convergent mustprogress nounwind willreturn
-define void @simd_fills(i32 noundef %0, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %1, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %2) local_unnamed_addr #0 {
-  %4 = zext i32 %0 to i64
-  %5 = getelementptr inbounds i32, ptr addrspace(1) %1, i64 %4
-  %6 = load i32, ptr addrspace(1) %5, align 4, !tbaa !33, !alias.scope !57, !noalias !60
-  %7 = shl i32 %0, 2
-  %8 = zext i32 %7 to i64
-  %9 = getelementptr inbounds i32, ptr addrspace(1) %2, i64 %8
-  %10 = xor i32 %6, -1
-  %11 = freeze i32 %6
-  %12 = tail call i32 @air.simd_shuffle_and_fill_up.u.i32(i32 %11, i32 %10, i16 2, i16 32) #3
-  store i32 %12, ptr addrspace(1) %9, align 4, !tbaa !33, !alias.scope !60, !noalias !57
-  %13 = tail call i32 @air.simd_shuffle_and_fill_down.u.i32(i32 %11, i32 %10, i16 3, i16 32) #3
-  %14 = getelementptr inbounds i32, ptr addrspace(1) %9, i64 1
-  store i32 %13, ptr addrspace(1) %14, align 4, !tbaa !33, !alias.scope !60, !noalias !57
-  %15 = and i32 %0, 1
-  %16 = icmp eq i32 %15, 0
-  br i1 %16, label %17, label %22
-
-17:                                               ; preds = %3
-  %18 = getelementptr inbounds i32, ptr addrspace(1) %9, i64 3
-  %19 = getelementptr inbounds i32, ptr addrspace(1) %9, i64 2
-  %20 = tail call i32 @air.simd_shuffle_and_fill_up.u.i32(i32 %11, i32 %10, i16 1, i16 32) #3
-  store i32 %20, ptr addrspace(1) %19, align 4, !tbaa !33, !alias.scope !60, !noalias !57
-  %21 = tail call i32 @air.simd_shuffle_and_fill_down.u.i32(i32 %11, i32 %10, i16 2, i16 8) #3
-  store i32 %21, ptr addrspace(1) %18, align 4, !tbaa !33, !alias.scope !60, !noalias !57
-  br label %22
-
-22:                                               ; preds = %17, %3
-  ret void
-}
-
-; Function Attrs: convergent mustprogress nounwind willreturn
-define void @quad_moves(i32 noundef %0, ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %1, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %2) local_unnamed_addr #0 {
-  %4 = zext i32 %0 to i64
-  %5 = getelementptr inbounds i32, ptr addrspace(1) %1, i64 %4
-  %6 = load i32, ptr addrspace(1) %5, align 4, !tbaa !33, !alias.scope !62, !noalias !65
-  %7 = tail call i32 @air.simd_prefix_exclusive_sum.u.i32(i32 1) #3
-  %8 = mul i32 %0, 9
-  %9 = zext i32 %8 to i64
-  %10 = getelementptr inbounds i32, ptr addrspace(1) %2, i64 %9
-  %11 = trunc i32 %7 to i16
-  %12 = and i16 %11, 3
-  %13 = xor i16 %12, 2
-  %14 = freeze i32 %6
-  %15 = tail call i32 @air.quad_shuffle.u.i32(i32 %14, i16 %13) #3
-  store i32 %15, ptr addrspace(1) %10, align 4, !tbaa !33, !alias.scope !65, !noalias !62
-  %16 = tail call i32 @air.quad_shuffle_xor.u.i32(i32 %14, i16 1) #3
-  %17 = getelementptr inbounds i32, ptr addrspace(1) %10, i64 1
-  store i32 %16, ptr addrspace(1) %17, align 4, !tbaa !33, !alias.scope !65, !noalias !62
-  %18 = tail call i32 @air.quad_broadcast.u.i32(i32 %14, i16 3) #3
-  %19 = getelementptr inbounds i32, ptr addrspace(1) %10, i64 2
-  store i32 %18, ptr addrspace(1) %19, align 4, !tbaa !33, !alias.scope !65, !noalias !62
-  %20 = tail call i32 @air.quad_shuffle_up.u.i32(i32 %14, i16 1) #3
-  %21 = getelementptr inbounds i32, ptr addrspace(1) %10, i64 3
-  store i32 %20, ptr addrspace(1) %21, align 4, !tbaa !33, !alias.scope !65, !noalias !62
-  %22 = tail call i32 @air.quad_shuffle_down.u.i32(i32 %14, i16 1) #3
-  %23 = getelementptr inbounds i32, ptr addrspace(1) %10, i64 4
-  store i32 %22, ptr addrspace(1) %23, align 4, !tbaa !33, !alias.scope !65, !noalias !62
-  %24 = xor i32 %14, -1
-  %25 = tail call i32 @air.quad_shuffle_and_fill_down.u.i32(i32 %14, i32 %24, i16 2, i16 4) #3
-  %26 = getelementptr inbounds i32, ptr addrspace(1) %10, i64 5
-  store i32 %25, ptr addrspace(1) %26, align 4, !tbaa !33, !alias.scope !65, !noalias !62
-  %27 = and i32 %0, 1
-  %28 = icmp eq i32 %27, 0
-  br i1 %28, label %29, label %36
-
-29:                                               ; preds = %3
-  %30 = tail call i32 @air.quad_shuffle_xor.u.i32(i32 %14, i16 3) #3
-  %31 = getelementptr inbounds i32, ptr addrspace(1) %10, i64 6
-  store i32 %30, ptr addrspace(1) %31, align 4, !tbaa !33, !alias.scope !65, !noalias !62
-  %32 = tail call i32 @air.quad_broadcast.u.i32(i32 %14, i16 2) #3
-  %33 = getelementptr inbounds i32, ptr addrspace(1) %10, i64 7
-  store i32 %32, ptr addrspace(1) %33, align 4, !tbaa !33, !alias.scope !65, !noalias !62
-  %34 = tail call i32 @air.quad_shuffle_and_fill_up.u.i32(i32 %14, i32 %24, i16 1, i16 4) #3
-  %35 = getelementptr inbounds i32, ptr addrspace(1) %10, i64 8
-  store i32 %34, ptr addrspace(1) %35, align 4, !tbaa !33, !alias.scope !65, !noalias !62
-  br label %36
-
-36:                                               ; preds = %29, %3
-  ret void
-}
-
-; Function Attrs: convergent mustprogress nounwind willreturn
 define void @lane_moves_in_a_branch_of_a_kernel(ptr addrspace(1) noundef readonly captures(none) "air-buffer-no-alias" %0, ptr addrspace(1) noundef writeonly captures(none) "air-buffer-no-alias" %1, i32 noundef %2, i32 noundef %3, i32 noundef %4) local_unnamed_addr #0 {
   %6 = and i32 %3, 1
   %7 = icmp eq i32 %6, 0
@@ -247,75 +16,72 @@ define void @lane_moves_in_a_branch_of_a_kernel(ptr addrspace(1) noundef readonl
   %11 = getelementptr inbounds i32, ptr addrspace(1) %1, i64 %10
   %12 = zext i32 %2 to i64
   %13 = getelementptr inbounds i32, ptr addrspace(1) %0, i64 %12
-  %14 = load i32, ptr addrspace(1) %13, align 4, !tbaa !33, !alias.scope !67, !noalias !70
+  %14 = load i32, ptr addrspace(1) %13, align 4, !tbaa !23, !alias.scope !27, !noalias !30
   %15 = trunc i32 %3 to i16
   %16 = xor i16 %15, 6
   %17 = freeze i32 %14
   %18 = tail call i32 @air.simd_shuffle.u.i32(i32 %17, i16 %16) #3
-  store i32 %18, ptr addrspace(1) %11, align 4, !tbaa !33, !alias.scope !70, !noalias !67
+  store i32 %18, ptr addrspace(1) %11, align 4, !tbaa !23, !alias.scope !30, !noalias !27
   %19 = tail call i32 @air.simd_shuffle_xor.u.i32(i32 %17, i16 2) #3
   %20 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 1
-  store i32 %19, ptr addrspace(1) %20, align 4, !tbaa !33, !alias.scope !70, !noalias !67
+  store i32 %19, ptr addrspace(1) %20, align 4, !tbaa !23, !alias.scope !30, !noalias !27
   %21 = tail call i32 @air.simd_shuffle_up.u.i32(i32 %17, i16 2) #3
   %22 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 2
-  store i32 %21, ptr addrspace(1) %22, align 4, !tbaa !33, !alias.scope !70, !noalias !67
+  store i32 %21, ptr addrspace(1) %22, align 4, !tbaa !23, !alias.scope !30, !noalias !27
   %23 = tail call i32 @air.simd_shuffle_down.u.i32(i32 %17, i16 4) #3
   %24 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 3
-  store i32 %23, ptr addrspace(1) %24, align 4, !tbaa !33, !alias.scope !70, !noalias !67
+  store i32 %23, ptr addrspace(1) %24, align 4, !tbaa !23, !alias.scope !30, !noalias !27
   %25 = tail call i32 @air.simd_shuffle_rotate_up.u.i32(i32 %17, i16 2) #3
   %26 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 4
-  store i32 %25, ptr addrspace(1) %26, align 4, !tbaa !33, !alias.scope !70, !noalias !67
+  store i32 %25, ptr addrspace(1) %26, align 4, !tbaa !23, !alias.scope !30, !noalias !27
   %27 = tail call i32 @air.simd_shuffle_rotate_down.u.i32(i32 %17, i16 2) #3
   %28 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 5
-  store i32 %27, ptr addrspace(1) %28, align 4, !tbaa !33, !alias.scope !70, !noalias !67
+  store i32 %27, ptr addrspace(1) %28, align 4, !tbaa !23, !alias.scope !30, !noalias !27
   %29 = tail call i32 @air.simd_broadcast.u.i32(i32 %17, i16 20) #3
   %30 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 6
-  store i32 %29, ptr addrspace(1) %30, align 4, !tbaa !33, !alias.scope !70, !noalias !67
+  store i32 %29, ptr addrspace(1) %30, align 4, !tbaa !23, !alias.scope !30, !noalias !27
   %31 = xor i32 %17, -1
   %32 = tail call i16 @air.get_simdgroup_size.i16() #4
   %33 = tail call i32 @air.simd_shuffle_and_fill_up.u.i32(i32 %17, i32 %31, i16 2, i16 %32) #3
   %34 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 7
-  store i32 %33, ptr addrspace(1) %34, align 4, !tbaa !33, !alias.scope !70, !noalias !67
+  store i32 %33, ptr addrspace(1) %34, align 4, !tbaa !23, !alias.scope !30, !noalias !27
   %35 = tail call i32 @air.simd_shuffle_and_fill_down.u.i32(i32 %17, i32 %31, i16 2, i16 %32) #3
   %36 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 8
-  store i32 %35, ptr addrspace(1) %36, align 4, !tbaa !33, !alias.scope !70, !noalias !67
+  store i32 %35, ptr addrspace(1) %36, align 4, !tbaa !23, !alias.scope !30, !noalias !27
   %37 = trunc i32 %4 to i16
   %38 = xor i16 %37, 2
   %39 = tail call i32 @air.quad_shuffle.u.i32(i32 %17, i16 %38) #3
   %40 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 9
-  store i32 %39, ptr addrspace(1) %40, align 4, !tbaa !33, !alias.scope !70, !noalias !67
+  store i32 %39, ptr addrspace(1) %40, align 4, !tbaa !23, !alias.scope !30, !noalias !27
   %41 = tail call i32 @air.quad_shuffle_xor.u.i32(i32 %17, i16 2) #3
   %42 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 10
-  store i32 %41, ptr addrspace(1) %42, align 4, !tbaa !33, !alias.scope !70, !noalias !67
+  store i32 %41, ptr addrspace(1) %42, align 4, !tbaa !23, !alias.scope !30, !noalias !27
   %43 = tail call i32 @air.quad_broadcast.u.i32(i32 %17, i16 2) #3
   %44 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 11
-  store i32 %43, ptr addrspace(1) %44, align 4, !tbaa !33, !alias.scope !70, !noalias !67
+  store i32 %43, ptr addrspace(1) %44, align 4, !tbaa !23, !alias.scope !30, !noalias !27
   %45 = tail call i32 @air.quad_shuffle_up.u.i32(i32 %17, i16 2) #3
   %46 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 12
-  store i32 %45, ptr addrspace(1) %46, align 4, !tbaa !33, !alias.scope !70, !noalias !67
+  store i32 %45, ptr addrspace(1) %46, align 4, !tbaa !23, !alias.scope !30, !noalias !27
   %47 = tail call i32 @air.quad_shuffle_down.u.i32(i32 %17, i16 2) #3
   %48 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 13
-  store i32 %47, ptr addrspace(1) %48, align 4, !tbaa !33, !alias.scope !70, !noalias !67
+  store i32 %47, ptr addrspace(1) %48, align 4, !tbaa !23, !alias.scope !30, !noalias !27
   %49 = tail call i32 @air.quad_shuffle_rotate_up.u.i32(i32 %17, i16 2) #3
   %50 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 14
-  store i32 %49, ptr addrspace(1) %50, align 4, !tbaa !33, !alias.scope !70, !noalias !67
+  store i32 %49, ptr addrspace(1) %50, align 4, !tbaa !23, !alias.scope !30, !noalias !27
   %51 = tail call i32 @air.quad_shuffle_rotate_down.u.i32(i32 %17, i16 2) #3
   %52 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 15
-  store i32 %51, ptr addrspace(1) %52, align 4, !tbaa !33, !alias.scope !70, !noalias !67
+  store i32 %51, ptr addrspace(1) %52, align 4, !tbaa !23, !alias.scope !30, !noalias !27
   %53 = tail call i32 @air.quad_shuffle_and_fill_up.u.i32(i32 %17, i32 %31, i16 2, i16 4) #3
   %54 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 16
-  store i32 %53, ptr addrspace(1) %54, align 4, !tbaa !33, !alias.scope !70, !noalias !67
+  store i32 %53, ptr addrspace(1) %54, align 4, !tbaa !23, !alias.scope !30, !noalias !27
   %55 = tail call i32 @air.quad_shuffle_and_fill_down.u.i32(i32 %17, i32 %31, i16 2, i16 4) #3
   %56 = getelementptr inbounds i32, ptr addrspace(1) %11, i64 17
-  store i32 %55, ptr addrspace(1) %56, align 4, !tbaa !33, !alias.scope !70, !noalias !67
+  store i32 %55, ptr addrspace(1) %56, align 4, !tbaa !23, !alias.scope !30, !noalias !27
   br label %57
 
 57:                                               ; preds = %8, %5
   ret void
 }
-
-; Function Attrs: convergent mustprogress nounwind willreturn
-declare i32 @air.simd_prefix_exclusive_sum.u.i32(i32) local_unnamed_addr #1
 
 ; Function Attrs: convergent mustprogress nounwind willreturn
 declare i32 @air.simd_shuffle.u.i32(i32, i16) local_unnamed_addr #1
@@ -336,13 +102,10 @@ declare i32 @air.simd_shuffle_rotate_up.u.i32(i32, i16) local_unnamed_addr #1
 declare i32 @air.simd_shuffle_rotate_down.u.i32(i32, i16) local_unnamed_addr #1
 
 ; Function Attrs: convergent mustprogress nounwind willreturn
-declare i32 @air.quad_shuffle_rotate_down.u.i32(i32, i16) local_unnamed_addr #1
-
-; Function Attrs: convergent mustprogress nounwind willreturn
-declare i32 @air.quad_shuffle_rotate_up.u.i32(i32, i16) local_unnamed_addr #1
-
-; Function Attrs: convergent mustprogress nounwind willreturn
 declare i32 @air.simd_broadcast.u.i32(i32, i16) local_unnamed_addr #1
+
+; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
+declare i16 @air.get_simdgroup_size.i16() local_unnamed_addr #2
 
 ; Function Attrs: convergent mustprogress nounwind willreturn
 declare i32 @air.simd_shuffle_and_fill_up.u.i32(i32, i32, i16, i16) local_unnamed_addr #1
@@ -366,13 +129,16 @@ declare i32 @air.quad_shuffle_up.u.i32(i32, i16) local_unnamed_addr #1
 declare i32 @air.quad_shuffle_down.u.i32(i32, i16) local_unnamed_addr #1
 
 ; Function Attrs: convergent mustprogress nounwind willreturn
-declare i32 @air.quad_shuffle_and_fill_down.u.i32(i32, i32, i16, i16) local_unnamed_addr #1
+declare i32 @air.quad_shuffle_rotate_up.u.i32(i32, i16) local_unnamed_addr #1
+
+; Function Attrs: convergent mustprogress nounwind willreturn
+declare i32 @air.quad_shuffle_rotate_down.u.i32(i32, i16) local_unnamed_addr #1
 
 ; Function Attrs: convergent mustprogress nounwind willreturn
 declare i32 @air.quad_shuffle_and_fill_up.u.i32(i32, i32, i16, i16) local_unnamed_addr #1
 
-; Function Attrs: mustprogress nofree nosync nounwind willreturn memory(none)
-declare i16 @air.get_simdgroup_size.i16() local_unnamed_addr #2
+; Function Attrs: convergent mustprogress nounwind willreturn
+declare i32 @air.quad_shuffle_and_fill_down.u.i32(i32, i32, i16, i16) local_unnamed_addr #1
 
 attributes #0 = { convergent mustprogress nounwind willreturn "approx-func-fp-math"="true" "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins" "no-infs-fp-math"="true" "no-nans-fp-math"="true" "no-signed-zeros-fp-math"="true" "no-trapping-math"="true" "stack-protector-buffer-size"="8" "unsafe-fp-math"="true" }
 attributes #1 = { convergent mustprogress nounwind willreturn }
@@ -381,12 +147,11 @@ attributes #3 = { convergent nounwind willreturn }
 attributes #4 = { nounwind willreturn memory(none) }
 
 !llvm.module.flags = !{!0, !1, !2, !3, !4, !5, !6, !7, !8}
-!air.vertex = !{!9, !15, !16, !17, !18, !19}
-!air.kernel = !{!20}
-!air.compile_options = !{!27, !28, !29}
-!llvm.ident = !{!30}
-!air.version = !{!31}
-!air.language_version = !{!32}
+!air.kernel = !{!9}
+!air.compile_options = !{!17, !18, !19}
+!llvm.ident = !{!20}
+!air.version = !{!21}
+!air.language_version = !{!22}
 
 !0 = !{i32 2, !"SDK Version", [2 x i32] [i32 27, i32 2]}
 !1 = !{i32 1, !"wchar_size", i32 4}
@@ -397,66 +162,26 @@ attributes #4 = { nounwind willreturn memory(none) }
 !6 = !{i32 7, !"air.max_textures", i32 128}
 !7 = !{i32 7, !"air.max_read_write_textures", i32 8}
 !8 = !{i32 7, !"air.max_samplers", i32 16}
-!9 = !{ptr @simd_shuffles_by_index_and_xor, !10, !11}
+!9 = !{ptr @lane_moves_in_a_branch_of_a_kernel, !10, !11}
 !10 = !{}
-!11 = !{!12, !13, !14}
-!12 = !{i32 0, !"air.vertex_id", !"air.arg_type_name", !"uint", !"air.arg_name", !"vid"}
-!13 = !{i32 1, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"in"}
-!14 = !{i32 2, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}
-!15 = !{ptr @simd_shuffles_up_and_down, !10, !11}
-!16 = !{ptr @simd_and_quad_rotations, !10, !11}
-!17 = !{ptr @simd_broadcasts, !10, !11}
-!18 = !{ptr @simd_fills, !10, !11}
-!19 = !{ptr @quad_moves, !10, !11}
-!20 = !{ptr @lane_moves_in_a_branch_of_a_kernel, !10, !21}
-!21 = !{!22, !23, !24, !25, !26}
-!22 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"in"}
-!23 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}
-!24 = !{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}
-!25 = !{i32 3, !"air.thread_index_in_simdgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"lane"}
-!26 = !{i32 4, !"air.thread_index_in_quadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"q"}
-!27 = !{!"air.compile.denorms_disable"}
-!28 = !{!"air.compile.fast_math_enable"}
-!29 = !{!"air.compile.framebuffer_fetch_enable"}
-!30 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
-!31 = !{i32 2, i32 8, i32 0}
-!32 = !{!"Metal", i32 4, i32 0, i32 0}
-!33 = !{!34, !34, i64 0}
-!34 = !{!"int", !35, i64 0}
-!35 = !{!"omnipotent char", !36, i64 0}
-!36 = !{!"Simple C++ TBAA"}
-!37 = !{!38}
-!38 = distinct !{!38, !39, !"air-alias-scope-arg(1)"}
-!39 = distinct !{!39, !"air-alias-scopes(simd_shuffles_by_index_and_xor)"}
-!40 = !{!41}
-!41 = distinct !{!41, !39, !"air-alias-scope-arg(2)"}
-!42 = !{!43}
-!43 = distinct !{!43, !44, !"air-alias-scope-arg(1)"}
-!44 = distinct !{!44, !"air-alias-scopes(simd_shuffles_up_and_down)"}
-!45 = !{!46}
-!46 = distinct !{!46, !44, !"air-alias-scope-arg(2)"}
-!47 = !{!48}
-!48 = distinct !{!48, !49, !"air-alias-scope-arg(1)"}
-!49 = distinct !{!49, !"air-alias-scopes(simd_and_quad_rotations)"}
-!50 = !{!51}
-!51 = distinct !{!51, !49, !"air-alias-scope-arg(2)"}
-!52 = !{!53}
-!53 = distinct !{!53, !54, !"air-alias-scope-arg(1)"}
-!54 = distinct !{!54, !"air-alias-scopes(simd_broadcasts)"}
-!55 = !{!56}
-!56 = distinct !{!56, !54, !"air-alias-scope-arg(2)"}
-!57 = !{!58}
-!58 = distinct !{!58, !59, !"air-alias-scope-arg(1)"}
-!59 = distinct !{!59, !"air-alias-scopes(simd_fills)"}
-!60 = !{!61}
-!61 = distinct !{!61, !59, !"air-alias-scope-arg(2)"}
-!62 = !{!63}
-!63 = distinct !{!63, !64, !"air-alias-scope-arg(1)"}
-!64 = distinct !{!64, !"air-alias-scopes(quad_moves)"}
-!65 = !{!66}
-!66 = distinct !{!66, !64, !"air-alias-scope-arg(2)"}
-!67 = !{!68}
-!68 = distinct !{!68, !69, !"air-alias-scope-arg(0)"}
-!69 = distinct !{!69, !"air-alias-scopes(lane_moves_in_a_branch_of_a_kernel)"}
-!70 = !{!71}
-!71 = distinct !{!71, !69, !"air-alias-scope-arg(1)"}
+!11 = !{!12, !13, !14, !15, !16}
+!12 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"in"}
+!13 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}
+!14 = !{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}
+!15 = !{i32 3, !"air.thread_index_in_simdgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"lane"}
+!16 = !{i32 4, !"air.thread_index_in_quadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"q"}
+!17 = !{!"air.compile.denorms_disable"}
+!18 = !{!"air.compile.fast_math_enable"}
+!19 = !{!"air.compile.framebuffer_fetch_enable"}
+!20 = !{!"Apple metal version 32023.922 (metalfe-32023.922.4)"}
+!21 = !{i32 2, i32 8, i32 0}
+!22 = !{!"Metal", i32 4, i32 0, i32 0}
+!23 = !{!24, !24, i64 0}
+!24 = !{!"int", !25, i64 0}
+!25 = !{!"omnipotent char", !26, i64 0}
+!26 = !{!"Simple C++ TBAA"}
+!27 = !{!28}
+!28 = distinct !{!28, !29, !"air-alias-scope-arg(0)"}
+!29 = distinct !{!29, !"air-alias-scopes(lane_moves_in_a_branch_of_a_kernel)"}
+!30 = !{!31}
+!31 = distinct !{!31, !29, !"air-alias-scope-arg(1)"}
