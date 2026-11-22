@@ -1360,7 +1360,7 @@ codec_struct! {
         reads_unbound_resources, writes_unbound_resources, unbound_storage_textures, writes_memory,
         numbered_samplers, stage_in,
     }
-    PipelineLayout { sets, push_constants, push_descriptor_eligible }
+    PipelineLayout { sets, push_constants }
     DescriptorSetLayout { set, bindings, flags }
     DescriptorBinding {
         binding, ty, count, stages, source, immutable_sampler, flags, variables,

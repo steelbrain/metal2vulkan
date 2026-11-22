@@ -2525,7 +2525,6 @@ field	metal2vulkan::device::DescriptorCaps.non_uniform_storage_texel_buffer	pub 
 field	metal2vulkan::device::DescriptorCaps.non_uniform_uniform_texel_buffer	pub non_uniform_uniform_texel_buffer: bool
 field	metal2vulkan::device::DescriptorCaps.null_descriptor	pub null_descriptor: bool
 field	metal2vulkan::device::DescriptorCaps.partially_bound	pub partially_bound: bool
-field	metal2vulkan::device::DescriptorCaps.push_descriptor	pub push_descriptor: bool
 field	metal2vulkan::device::DescriptorCaps.runtime_descriptor_array	pub runtime_descriptor_array: bool
 field	metal2vulkan::device::DescriptorCaps.scalar_block_layout	pub scalar_block_layout: bool
 field	metal2vulkan::device::DescriptorCaps.uniform_buffer_standard_layout	pub uniform_buffer_standard_layout: bool
@@ -3113,7 +3112,6 @@ field	metal2vulkan::pipeline::PipelineInterface.unbound_storage_textures	pub unb
 field	metal2vulkan::pipeline::PipelineInterface.writes_memory	pub writes_memory: bool
 field	metal2vulkan::pipeline::PipelineInterface.writes_unbound_resources	pub writes_unbound_resources: bool
 field	metal2vulkan::pipeline::PipelineLayout.push_constants	pub push_constants: Vec<PushConstantRange>
-field	metal2vulkan::pipeline::PipelineLayout.push_descriptor_eligible	pub push_descriptor_eligible: bool
 field	metal2vulkan::pipeline::PipelineLayout.sets	pub sets: Vec<DescriptorSetLayout>
 field	metal2vulkan::pipeline::PlacedField.field	pub field: PushField
 field	metal2vulkan::pipeline::PlacedField.loc	pub loc: PushLoc

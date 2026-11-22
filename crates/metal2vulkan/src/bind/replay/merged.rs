@@ -303,7 +303,6 @@ pub fn draw_merge_module(device: &Device, phase: MergePhase) -> Result<DrawMerge
                 offset: 0,
                 size: DrawMergeModule::PUSH_BYTES,
             }],
-            push_descriptor_eligible: false,
         },
     })
 }

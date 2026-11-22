@@ -36,8 +36,6 @@
 //! - **Pipeline-wide limits**: the `maxDescriptorSet*` sums over stages and
 //!   `maxBoundDescriptorSets`. A breach is `Unsupported{DescriptorCount}` naming the limit, never
 //!   a code change. Per-stage limits are `select`'s.
-//! - **`push_descriptor_eligible`** is set 0 fitting `maxPushDescriptors` on a profile with push
-//!   descriptors; otherwise the same layout is used as a pooled set.
 //! - **Render state** ([`vertex`], [`graphics`]): `VertexInputState` and `GraphicsState` from the
 //!   descriptor, checked against the vertex stage's compiled fetch projection, with the fragment
 //!   stage's framebuffer fetch over input attachments ([`fetch`]), and the
@@ -955,9 +953,6 @@ fn layout(
             u64::from(limits.max_bound_descriptor_sets),
         ));
     }
-    let total: u64 = bindings.iter().map(|b| u64::from(b.count)).sum();
-    let push_descriptor_eligible =
-        p.fields().descriptors.push_descriptor && total <= u64::from(limits.max_push_descriptors);
     let mut push_constants = Vec::new();
     for i in ifaces {
         if let Some((offset, size)) = i.push.push_range {
@@ -987,7 +982,6 @@ fn layout(
     Ok(PipelineLayout {
         sets,
         push_constants,
-        push_descriptor_eligible,
     })
 }
 

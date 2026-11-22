@@ -311,9 +311,8 @@ exposures! {
 /// What the enable-set rules need to know about one extension.
 struct ExtensionFacts {
     /// The core enables it where it is available: it exposes a feature or format the core reads,
-    /// or the core reads it directly (stencil export, push descriptors, the runtime's sample
-    /// locations), or it is mandatory (the portability subset). Extensions that only name
-    /// refusals are not.
+    /// or the core reads it directly (stencil export, the runtime's sample locations), or it is
+    /// mandatory (the portability subset). Extensions that only name refusals are not.
     consumed: bool,
     /// The core version that promoted everything the core reads from it (then enabling it
     /// there adds nothing).
@@ -386,8 +385,10 @@ fn facts(ext: VkExtension) -> ExtensionFacts {
         }
         E::ExtVertexAttributeDivisor
         | E::KhrVertexAttributeDivisor
-        | E::KhrPushDescriptor
         | E::KhrShaderSubgroupRotate => fact(true, Some(4), &[]),
+        // Described, never enabled: a pipeline layout states no push-descriptor eligibility, so
+        // the core reads none of it.
+        E::KhrPushDescriptor => fact(false, Some(4), &[]),
         // Enabled only as another extension's requirement.
         E::ExtCustomBorderColor => fact(false, None, &[]),
         // Described, never enabled: a depth bias counts the device's own unit

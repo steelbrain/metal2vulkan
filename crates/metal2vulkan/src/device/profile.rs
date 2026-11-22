@@ -542,8 +542,8 @@ pub struct ImageCaps {
 }
 
 /// Descriptor and addressing capabilities ([`DeviceProfile::descriptors`]). Each field is the
-/// Vulkan feature or extension of that name (`bufferDeviceAddress` for `buffer_device_address`,
-/// `VK_KHR_push_descriptor` for `push_descriptor`, ...), enabled.
+/// Vulkan feature of that name (`bufferDeviceAddress` for `buffer_device_address`,
+/// `nullDescriptor` for `null_descriptor`, ...), enabled.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct DescriptorCaps {
@@ -563,7 +563,6 @@ pub struct DescriptorCaps {
     pub non_uniform_storage_buffer: bool,
     pub non_uniform_uniform_texel_buffer: bool,
     pub non_uniform_storage_texel_buffer: bool,
-    pub push_descriptor: bool,
     pub null_descriptor: bool,
 }
 

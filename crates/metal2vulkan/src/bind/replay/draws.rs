@@ -671,7 +671,6 @@ pub fn draw_replay_module(device: &Device) -> Result<DrawReplayModule, Error> {
                 offset: 0,
                 size: DrawReplayModule::PUSH_BYTES,
             }],
-            push_descriptor_eligible: false,
         },
     })
 }

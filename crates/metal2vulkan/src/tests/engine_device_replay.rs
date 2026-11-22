@@ -1587,7 +1587,7 @@ fn the_generated_commands_path_holds_to_what_the_device_states() {
     );
     // A variant whose pipeline layout differs binds other descriptors.
     let mut other = pipe.clone();
-    other.layout.push_descriptor_eligible = !other.layout.push_descriptor_eligible;
+    other.layout.sets.push(Default::default());
     let mixed = [generated[0], GeneratedVariant::new(&other, &plan, &cmds[1])];
     assert_eq!(
         refusal(&dev, &mixed),

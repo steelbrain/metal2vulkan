@@ -178,7 +178,6 @@ fn derive_fields(desc: &DeviceDescription, policy: &DevicePolicy) -> ProfileFiel
     let has = |f: VkFeature| desc.has(f);
     let ext = |e: VkExtension| desc.extensions.contains(&e);
     let api = desc.api_version;
-    let v1_4 = api >= ApiVersion { major: 1, minor: 4 };
 
     // Memory's A/F split: Profile A needs device addresses and 64-bit integers; scalar block layout
     // is required only where an emitted type needs it, so it does not select the profile.
@@ -259,8 +258,6 @@ fn derive_fields(desc: &DeviceDescription, policy: &DevicePolicy) -> ProfileFiel
         non_uniform_storage_texel_buffer: has(
             VkFeature::ShaderStorageTexelBufferArrayNonUniformIndexing,
         ),
-        // Push descriptors are unconditionally required by Vulkan 1.4 (vk.xml VK_VERSION_1_4).
-        push_descriptor: ext(VkExtension::KhrPushDescriptor) || v1_4,
         null_descriptor: has(VkFeature::NullDescriptor),
     };
     let fragment = FragmentCaps {

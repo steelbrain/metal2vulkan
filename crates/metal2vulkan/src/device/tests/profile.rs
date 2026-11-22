@@ -266,7 +266,6 @@ fn robustness2_selects_the_rba2_encoding() {
     assert_eq!(f.profile().fields().robustness, Robustness::Rba);
     let m = f.profile().fields();
     assert!(m.dynamic_vertex_stride);
-    assert!(m.descriptors.push_descriptor);
     assert!(f
         .profile()
         .supports_format(vk::Format::R8G8B8A8_UNORM, FormatUsage::SampledImage));

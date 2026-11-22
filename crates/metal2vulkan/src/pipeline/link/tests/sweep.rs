@@ -115,13 +115,6 @@ fn check(p: &DeviceProfile, stem: &str, stages: &[&StageInterface], inputs: &Lin
                     assert_eq!((b.ty, b.stages), (d.ty, stage_of(d)), "{what}");
                 }
             }
-            let f = p.fields();
-            assert_eq!(
-                l.layout.push_descriptor_eligible,
-                f.descriptors.push_descriptor
-                    && total as u64 <= u64::from(f.limits.max_push_descriptors),
-                "{what}"
-            );
         }
         Err(Error::Unsupported(u)) => {
             assert_eq!(u.feature, Feature::DescriptorCount, "{what}");

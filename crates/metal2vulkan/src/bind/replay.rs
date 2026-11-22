@@ -852,7 +852,6 @@ pub fn replay_preprocess_module(device: &Device) -> Result<ReplayPreprocessModul
                 offset: 0,
                 size: ReplayPreprocessModule::PUSH_BYTES,
             }],
-            push_descriptor_eligible: false,
         },
     })
 }

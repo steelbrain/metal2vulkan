@@ -229,7 +229,6 @@ fn binds_alike(a: &GeneratedVariant<'_>, b: &GeneratedVariant<'_>) -> bool {
             .then(|| v.pipeline.stage.constant_blob.clone())
     };
     a.pipeline.layout.sets == b.pipeline.layout.sets
-        && a.pipeline.layout.push_descriptor_eligible == b.pipeline.layout.push_descriptor_eligible
         && a.plan.descriptors == b.plan.descriptors
         && a.commands.descriptor_bytes == b.commands.descriptor_bytes
         && a.commands.descriptor_ranges == b.commands.descriptor_ranges
@@ -373,7 +372,6 @@ pub(super) fn plan(
             offset: 0,
             size: push_bytes,
         }],
-        push_descriptor_eligible: first.pipeline.layout.push_descriptor_eligible,
     };
     Ok(Planned {
         push_bytes,

@@ -1659,7 +1659,7 @@ fn a_content_digest_is_the_content_not_the_key() {
     edited.stage.spirv = words.into();
     assert_ne!(edited.content_digest(), digest);
     let mut edited = pipe.clone();
-    edited.layout.push_descriptor_eligible = !edited.layout.push_descriptor_eligible;
+    edited.layout.sets.push(Default::default());
     assert_ne!(edited.content_digest(), digest);
     let mut edited = pipe.clone();
     edited

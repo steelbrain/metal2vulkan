@@ -501,7 +501,6 @@ mod serde_round_trips {
                 offset: 64,
                 size: 16,
             }],
-            push_descriptor_eligible: true,
         };
         round_trip(&layout);
         round_trip(&VertexInputState {

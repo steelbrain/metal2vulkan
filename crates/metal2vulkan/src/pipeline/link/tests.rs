@@ -772,40 +772,6 @@ fn a_mesh_pipelines_fragment_reads_its_primitive_outputs_per_primitive() {
     }
 }
 
-/// `push_descriptor_eligible` is set 0 fitting `maxPushDescriptors` on a profile with push
-/// descriptors; the layout never splits.
-#[test]
-fn push_descriptor_eligibility_follows_the_profile() {
-    let mut p = profile("moltenvk-m3");
-    let k = Stage::Kernel;
-    let descs = |n: u32| {
-        (0..n)
-            .map(|i| {
-                StageDescriptor::new(
-                    res(k, ResourceKind::Buffer, i),
-                    vk::DescriptorType::STORAGE_BUFFER,
-                    1,
-                )
-            })
-            .collect::<Vec<_>>()
-    };
-    p.edit(|x| {
-        x.descriptors.push_descriptor = true;
-        x.limits.max_push_descriptors = 4;
-    });
-    for (n, eligible) in [(0, true), (4, true), (5, false)] {
-        let a = artifact(iface(k, descs(n), vec![]), None);
-        let l = link(&[&a], &LinkInputs::compute(), &p).expect("link");
-        assert_eq!(l.layout.push_descriptor_eligible, eligible, "{n}");
-        assert_eq!(l.layout.sets.len(), 1);
-        assert_eq!(l.layout.sets[0].bindings.len(), n as usize);
-    }
-    p.edit(|x| x.descriptors.push_descriptor = false);
-    let a = artifact(iface(k, descs(1), vec![]), None);
-    let l = link(&[&a], &LinkInputs::compute(), &p).expect("link");
-    assert!(!l.layout.push_descriptor_eligible);
-}
-
 /// An acceleration structure binding is an `ACCELERATION_STRUCTURE_KHR` descriptor fed by its
 /// buffer slot and level, counted against `maxDescriptorSetAccelerationStructures` only.
 #[test]

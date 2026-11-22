@@ -18,9 +18,6 @@ pub struct PipelineLayout {
     pub sets: Vec<DescriptorSetLayout>,
     /// One range per stage that has push fields, over the bytes its fields take.
     pub push_constants: Vec<PushConstantRange>,
-    /// Set 0 fits `maxPushDescriptors`. When false, the same layout is used as a pooled set; the
-    /// layout is never split.
-    pub push_descriptor_eligible: bool,
 }
 
 /// One descriptor set of a [`PipelineLayout`].
