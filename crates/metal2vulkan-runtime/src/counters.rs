@@ -2269,9 +2269,8 @@ pub struct Metrics {
     /// hold compiled: of a compute content, one for its partial-threadgroups variant, one more for
     /// the plain module of an observing kernel whose state keeps one beside the variant, and one
     /// more for an emulated-SIMD-group variant the state lowers; of a render content, one for each
-    /// of its functions
-    /// that the cache directory did not hold. A state of a content the device holds lowers
-    /// nothing.
+    /// of its functions that the cache directory did not hold. A state of a content the device
+    /// holds lowers nothing.
     pub translations: u64,
     /// Lowered kernels a pipeline state took from the cache directory in place of a lowering.
     pub translations_loaded: u64,
