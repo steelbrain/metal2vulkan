@@ -276,11 +276,12 @@ struct Fifo {
     /// The group staged and not yet submitted.
     group: Option<Batch>,
     /// The progress values of the queue's submissions not yet seen complete, in order: what its
-    /// command buffers with no submission of their own retire behind, and whether it stands for
-    /// the device's room as a queue with nothing in flight ([`WorkState::rank`]).
+    /// command buffers with no submission of their own retire behind, and whether a commit finds
+    /// it idle ([`WorkState::push`]).
     in_flight: VecDeque<u64>,
-    /// When it last submitted ([`WorkState::turns`]), 0 before: the device's room goes first to
-    /// the queue that waited longest ([`WorkState::rank`]).
+    /// When it last submitted ([`WorkState::turns`]), 0 before and from a commit that found it
+    /// with nothing queued or in flight: the device's room goes first to the queue that waited
+    /// longest ([`WorkState::rank`]).
     turn: u64,
     /// Its head is held behind every piece of a cut command buffer of another queue committed
     /// before it, with which it shares a resource ([`WorkState::block_shared`]).
@@ -1546,11 +1547,16 @@ impl WorkState {
         &mut self.fifos[index]
     }
 
-    /// Takes `cb`'s place at its queue's end.
+    /// Takes `cb`'s place at its queue's end. A queue with nothing queued or in flight takes turn
+    /// 0, as one that never submitted.
     fn push(&mut self, cb: &Arc<CbInner>) -> &mut Entry {
         self.next_place += 1;
         let place = self.next_place;
-        let entries = &mut self.fifo(&cb.queue).entries;
+        let fifo = self.fifo(&cb.queue);
+        if fifo.entries.is_empty() && fifo.group.is_none() && fifo.in_flight.is_empty() {
+            fifo.turn = 0;
+        }
+        let entries = &mut fifo.entries;
         entries.push_back(Entry {
             cb: Arc::clone(cb),
             place,
@@ -1700,28 +1706,24 @@ impl WorkState {
     /// shared-resource rule holds wants nothing, so it holds no other queue back.
     fn has_room(&self, index: usize, run: u64) -> bool {
         let fifo = &self.fifos[index];
-        let me = self.rank(fifo, self.wants(fifo).map_or(u64::MAX, |(_, seq)| seq));
+        let me = Self::rank(fifo, self.wants(fifo).map_or(u64::MAX, |(_, seq)| seq));
         room(&self.in_flight, run)
             && !(self.fifos.iter().enumerate()).any(|(other, fifo)| {
                 other != index
                     && (self.wants(fifo)).is_some_and(|(run, seq)| {
-                        self.rank(fifo, seq) < me && room(&self.in_flight, run)
+                        Self::rank(fifo, seq) < me && room(&self.in_flight, run)
                     })
             })
     }
 
-    /// Where `fifo` stands for the device's room, for work of its committed at `seq`: by its last
-    /// submission, the earliest first, a queue with nothing in flight standing as one that never
-    /// submitted, then by commit order. So of queues with nothing in flight the earliest commit
-    /// goes first, as its submission at its commit would have gone, and one with nothing in flight
-    /// goes before a queue's backlog, as it would have gone at its commit with room for itself.
-    fn rank(&self, fifo: &Fifo, seq: u64) -> (u64, u64) {
-        let turn = if fifo.in_flight.is_empty() {
-            0
-        } else {
-            fifo.turn
-        };
-        (turn, seq)
+    /// Where `fifo` stands for the device's room, for work of its committed at `seq`: by its turn
+    /// (its last submission, or 0 where it was idle at its head's commit), the earliest first,
+    /// then by commit order. So a command buffer committed to an idle queue goes before every
+    /// queue's backlog, as it would have gone at its commit with room for itself, behind only
+    /// other idle queues' earlier commits, in their commit order; and a backlog whose last piece
+    /// just completed outranks no queue that submitted before it.
+    fn rank(fifo: &Fifo, seq: u64) -> (u64, u64) {
+        (fifo.turn, seq)
     }
 
     /// The expected run of what `fifo` would submit with room, and the commit number of its first
@@ -2184,7 +2186,7 @@ impl WorkState {
     fn unheld(&self) -> Option<usize> {
         let rank = |index: usize| {
             let fifo = &self.fifos[index];
-            self.rank(fifo, self.wants(fifo).map_or(u64::MAX, |(_, seq)| seq))
+            Self::rank(fifo, self.wants(fifo).map_or(u64::MAX, |(_, seq)| seq))
         };
         (0..self.fifos.len())
             .filter(|&index| self.goes(index))
