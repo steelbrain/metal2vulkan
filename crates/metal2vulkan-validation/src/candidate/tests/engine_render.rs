@@ -693,7 +693,7 @@ fn a_back_culled_patch_and_its_mirror_leave_exactly_one_drawn() {
     };
     let draw = |authored: &AuthoredCase| {
         let (case, companion) = with_companion(authored, &vertex);
-        let output = run(
+        run(
             &case,
             RenderLibraries {
                 vertex: &vertex,
@@ -701,8 +701,7 @@ fn a_back_culled_patch_and_its_mirror_leave_exactly_one_drawn() {
             },
         )
         .unwrap()
-        .output;
-        output
+        .output
     };
     assert_eq!(draw(&authored), tagged(Some(0), Some(1)));
     let one_survivor = [tagged(Some(0), None), tagged(None, Some(1))];

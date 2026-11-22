@@ -280,7 +280,7 @@ impl RenderCase {
     }
 
     /// Each argument-buffer sampler of each stage, by `(stage, owner, field offset)`, in stage
-    /// order ([`sampler_ids`] gives its id).
+    /// order ([`argument_buffers::sampler_ids`] gives its id).
     pub fn argument_buffer_samplers(
         &self,
     ) -> impl Iterator<Item = ((ShaderStage, u32, u32), &ArgumentBufferSamplerResource)> {
