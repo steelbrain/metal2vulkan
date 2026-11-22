@@ -17,8 +17,6 @@
 
 use std::path::Path;
 
-use crate::bind::plan::FieldLocation;
-use crate::bind::{BindState, DrawCall, VertexAmplification, ViewMapping, ViewSetup};
 use crate::budget::Budget;
 use crate::cache::VariantKey;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
@@ -28,11 +26,10 @@ use crate::pipeline::descriptor::{FunctionDescriptor, RenderPipelineDescriptor, 
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::lower_inputs::LoweringInputs;
 use crate::pipeline::stage_io::{IoRole, StageBuiltin};
-use crate::pipeline::sym::{PushField, Stage, VaryingKey};
-use crate::pipeline::testing::{engine_dir, fixtures_dir, llvm_assemble, AssembleError};
-use crate::pipeline::{AmplificationDraws, RenderPipeline};
+use crate::pipeline::sym::{Stage, VaryingKey};
+use crate::pipeline::testing::{engine_dir, llvm_assemble, AssembleError};
+use crate::pipeline::RenderPipeline;
 use crate::spirv::testing::check_words_valid;
-use crate::vk;
 
 fn assemble(path: &Path) -> Option<Vec<u8>> {
     match llvm_assemble(path) {
@@ -72,23 +69,6 @@ fn render(bc: &[u8], vertex: &str, fragment: Option<&str>, max: u32) -> RenderPi
     d
 }
 
-/// A bind state of a pass of `length` layers.
-fn pass(length: u32) -> BindState {
-    BindState {
-        render_target_array_length: length,
-        ..Default::default()
-    }
-}
-
-fn draw() -> DrawCall {
-    DrawCall::Primitives {
-        vertex_start: 0,
-        vertex_count: 3,
-        instance_count: 1,
-        base_instance: 0,
-    }
-}
-
 /// The `RenderTargetArrayLength` fact of `p`'s vertex function, if it chooses its slice.
 fn layer_fact(p: &RenderPipeline) -> Option<bool> {
     p.dependencies.iter().find_map(|d| match d.fact {
@@ -97,137 +77,11 @@ fn layer_fact(p: &RenderPipeline) -> Option<bool> {
     })
 }
 
-/// Whether `p`'s vertex stage reads the pass's length from its push data.
-fn reads_length(p: &RenderPipeline) -> bool {
-    p.interface.push.iter().any(|pl| {
-        pl.stage == Stage::Vertex
-            && pl
-                .fields
-                .iter()
-                .any(|f| f.field == PushField::RenderTargetArrayLength)
-    })
-}
-
-/// The bytes of `p`'s vertex push data that hold the pass's length, in the draw of a pass of
-/// `length` layers.
-fn length_word(p: &RenderPipeline, dev: &Device, length: u32) -> [u8; 4] {
-    let state = pass(length);
-    let plan = p.plan(dev, &state.shape()).expect("plan");
-    let placed = plan
-        .push
-        .fields
-        .iter()
-        .find(|f| f.stage == Stage::Vertex && f.field == PushField::RenderTargetArrayLength)
-        .expect("placed");
-    let FieldLocation::PushWindow { offset } = placed.location else {
-        panic!("the length spilled: {placed:?}");
-    };
-    let commands = plan.instantiate_draw(&state, &draw()).expect("draw");
-    let write = commands
-        .push_constants
-        .iter()
-        .find(|w| w.stages.contains(vk::ShaderStageFlags::VERTEX))
-        .expect("vertex push");
-    let at = (offset - write.offset) as usize;
-    write.bytes[at..at + 4].try_into().expect("a word")
-}
-
 /// Every stage of `p` passes L3 on `dev`.
 fn valid(p: &RenderPipeline, dev: &Device, what: &str) {
     for m in &p.stages {
         check_words_valid(&m.spirv, &p.requirements, dev.profile())
             .unwrap_or_else(|e| panic!("{what} {:?}: L3: {e}", m.stage));
-    }
-}
-
-/// The vertex function that chooses its slice writes `Layer` in a pass of any length: each plan
-/// states no variant, and each draw writes the pass's length as at least 1, which the function
-/// reads (at 0 and 1 it stores 0 for every index). Amplified draws in a pass of one layer are
-/// drawn one amplification at a time, without `Layer`, never as views.
-#[test]
-fn every_pass_runs_the_vertex_function_that_writes_its_layer() {
-    let Some(bc) = assemble(&engine_dir().join("vertex_amplification.ll")) else {
-        return;
-    };
-    let Some(public) = assemble(&fixtures_dir().join("vertex_amplification_id_layer.ll")) else {
-        return;
-    };
-    let budget = Budget::standard();
-    let pipelines = [
-        (&bc, "amp_vertex_layer", None),
-        (&bc, "amp_vertex_layer", Some("amp_fragment_layer")),
-        (&public, "vertex_amplification_id_layer", None),
-    ];
-    for stem in ["amd-780m-radv", "lavapipe"] {
-        let dev = device(stem);
-        for (bc, vertex, fragment) in pipelines {
-            let what = format!("{stem} {vertex} {fragment:?}");
-            let d = render(bc, vertex, fragment, 2);
-            let written = dev
-                .compile_render_pipeline(&d, &budget)
-                .unwrap_or_else(|e| panic!("{what}: {e}"));
-            valid(&written, &dev, &what);
-            assert_eq!(layer_fact(&written), Some(false), "{what}");
-            assert!(written.graphics.declares_layer, "{what}");
-            assert!(reads_length(&written), "{what}");
-            for length in [0, 1, 4] {
-                assert_eq!(
-                    length_word(&written, &dev, length),
-                    length.max(1).to_le_bytes(),
-                    "{what} {length}"
-                );
-                let plan = written.plan(&dev, &pass(length).shape()).expect("plan");
-                assert!(plan.variant.is_empty(), "{what} {length}");
-                plan.instantiate_draw(&pass(length), &draw())
-                    .unwrap_or_else(|e| panic!("{what} {length}: {e:?}"));
-            }
-            let mut amplified = pass(1);
-            amplified.vertex_amplification = VertexAmplification::new(
-                2,
-                vec![
-                    ViewMapping {
-                        viewport_array_index_offset: 0,
-                        render_target_array_index_offset: 0,
-                    },
-                    ViewMapping {
-                        viewport_array_index_offset: 0,
-                        render_target_array_index_offset: 1,
-                    },
-                ],
-            );
-            let plan = written
-                .plan(&dev, &amplified.shape())
-                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            assert_eq!(plan.views, ViewSetup::default(), "{what}");
-            assert_eq!(
-                plan.variant.amplification_draws,
-                Some(AmplificationDraws::new(false, false)),
-                "{what}"
-            );
-        }
-    }
-}
-
-/// A fragment function that reads its slice behind a vertex function that does not choose one
-/// asks for no variant at any length: there is no `Layer` output to drop.
-#[test]
-fn a_fragment_reading_its_slice_alone_asks_for_no_variant() {
-    let Some(bc) = assemble(&engine_dir().join("vertex_amplification.ll")) else {
-        return;
-    };
-    let dev = device("amd-780m-radv");
-    let p = dev
-        .compile_render_pipeline(
-            &render(&bc, "amp_vertex", Some("amp_fragment_layer"), 1),
-            &Budget::standard(),
-        )
-        .expect("pipeline");
-    assert_eq!(layer_fact(&p), None);
-    for length in [0, 1, 4] {
-        let plan = p.plan(&dev, &pass(length).shape()).expect("plan");
-        assert!(plan.variant.is_empty(), "{length}");
-        plan.instantiate_draw(&pass(length), &draw())
-            .unwrap_or_else(|e| panic!("{length}: {e:?}"));
     }
 }
 

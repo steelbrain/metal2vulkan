@@ -107,11 +107,10 @@ pub enum RuntimeFact {
     /// whatever the bind's, and records nothing.
     StageInStride { layout: u32 },
     /// The kernel is a tile function (`Device::compile_tile_pipeline`): a dispatch covers the
-    /// render pass's render area (`BindState::render_area`, `SpecKey::RenderAreaWidth` and
-    /// `SpecKey::RenderAreaHeight`) in tiles of the imageblock size (`BindState::imageblock_size`),
-    /// one threadgroup per tile, and stages the color attachments it reaches through the
-    /// threadgroup's imageblock. A layered pass is not modeled: the planner refuses a render
-    /// target array length above 1.
+    /// render pass's render area (`renderTargetWidth` and `renderTargetHeight`,
+    /// `SpecKey::RenderAreaWidth` and `SpecKey::RenderAreaHeight`) in tiles of the pass's tile
+    /// size, one threadgroup per tile, and stages the color attachments it reaches through the
+    /// threadgroup's imageblock. A layered pass is not modeled.
     TileFunction,
     /// The tile function stages color attachment `color` as a storage image of pixel format
     /// `format` (`LoweringInputs::tile_attachments`): its texel conversions and declared image
@@ -161,8 +160,8 @@ pub enum RuntimeFact {
     /// resident everywhere, and the status word Metal returns for it is compiled in, exact on
     /// every device. `sparse_arm`: the module also answers a sparse texture, with the device's
     /// sparse residency (`OpImageSparse*` and `OpImageSparseTexelsResident` under
-    /// `shaderResourceResidency`), selected by `SpecKey::SparseTexture`. Without it the binder
-    /// refuses a sparse texture at the slot (`BindError::Unsupported`): naming
+    /// `shaderResourceResidency`), selected by `SpecKey::SparseTexture`. Without it a sparse
+    /// texture at the slot is refused (`Unsupported`): naming
     /// `shaderResourceResidency` where the device lacks it, `NotImplemented` where one of the
     /// slot's accesses has no sparse form (a bicubic sample), and `NotRepresentable` where the
     /// function updates the slot atomically (`SparseTextureWrites`). A slot the function writes
@@ -214,8 +213,8 @@ pub enum RuntimeFact {
     /// The vertex function writes `[[viewport_array_index]]`, which selects a viewport only below
     /// the render encoder's viewport count (`setViewports:count:`): Metal draws a primitive whose
     /// index is at or past the count through viewport 0, so the function stores `ViewportIndex`
-    /// as 0 there, reading the count from `PushField::ViewportCount`, which the binder writes per
-    /// draw (`BindState::viewport_count`).
+    /// as 0 there, reading the count from `PushField::ViewportCount`, which the consumer writes per
+    /// draw.
     ViewportCount,
     /// The tile function aliases an explicit imageblock onto its implicit one
     /// (`air.alias_implicit_imageblock`), of `data_size` bytes (`air.imageblock_data_size`): a
@@ -294,10 +293,10 @@ pub enum RuntimeFact {
     /// The tile function reads its threadgroup argument `index` (`[[threadgroup(index)]]`):
     /// memory of its tile that the render pass keeps across its tile dispatches, at the offset
     /// and in the tile memory the encoder sets (`setThreadgroupMemoryLength:offset:atIndex:` and
-    /// the pass's `threadgroupMemoryLength`, `BindState::tile_threadgroup`). The binder
+    /// the pass's `threadgroupMemoryLength`). The consumer
     /// specializes `SpecKey::TgOffset(index)`, `SpecKey::TileThreadgroupLength` and
     /// `SpecKey::TileGridWidth`, binds the pass's `SyntheticBinding::TileMemory`, and refuses an
-    /// index the encoder did not set (`BindError::MissingThreadgroupMemory`). A fragment
+    /// index the encoder did not set. A fragment
     /// function's threadgroup arguments are the same memory: its draws read and write it in the
     /// buffer, at its tile, which `SpecKey::ImageblockWidth` and `SpecKey::ImageblockHeight` (the
     /// pass's tile size) place.
@@ -352,27 +351,24 @@ pub enum RuntimeFact {
     /// The fragment function was compiled under `VariantKey::zeroed_colors`
     /// (`LoweringInputs::zeroed_colors`): it writes zero to color attachment `color`, of pixel
     /// format `format`, which its Metal pipeline lacks and the pass has, as plain Metal stores
-    /// zero bytes there at every sample a draw covers. Its plans state the variant the shape asks
-    /// for (`BindShape::zeroed_colors`).
+    /// zero bytes there at every sample a draw covers.
     ZeroedColor {
         color: u32,
         format: crate::metal::PixelFormat,
     },
     /// The fragment function was compiled under `LoweringInputs::dropped_colors` holding
     /// `color`: it keeps no output at that color attachment, which the render pass lacks and
-    /// whose writes plain Metal drops. A plan of a draw whose pass has the attachment asks for the
-    /// variant without it.
+    /// whose writes plain Metal drops. A draw whose pass has the attachment takes the variant
+    /// without it.
     DroppedColor { color: u32 },
     /// The fragment function was compiled under `VariantKey::depth_clamp_range`
     /// (`LoweringInputs::depth_clamp_range`) and writes its depth: it clamps that depth to the
-    /// draw's depth clamp range itself, read from `PushField::DepthClampRange`, which the binder
-    /// writes from `BindState::depth_clamp_range`, a negative NaN storing 0 as Metal's does. Its
-    /// plans state the variant the shape asks for (`BindShape::depth_clamp_range`).
+    /// draw's depth clamp range itself, read from `PushField::DepthClampRange`, which the consumer
+    /// writes, a negative NaN storing 0 as Metal's does.
     DepthClampRange,
     /// The fragment function was compiled under `VariantKey::rotated_weights`
     /// (`LoweringInputs::rotated_weights`) and reads `[[barycentric_coord]]`: it takes Metal's
-    /// weights back from a triangle drawn with Metal's last vertex first. Its plans state the
-    /// variant the shape asks for (`BindShape::rotated_weights`).
+    /// weights back from a triangle drawn with Metal's last vertex first.
     RotatedWeights,
     /// The function reads, samples, gathers, or fetches through a sampler the color texture
     /// bound to the slot, on a profile whose sparse textures are sparse images (it enables
@@ -394,8 +390,8 @@ pub enum RuntimeFact {
     /// per threadgroup or their `dispatch_` forms, its position in the grid, the threads per
     /// grid, or its thread or quadgroup index in the threadgroup), and was compiled under
     /// `tile_sized`, that flag (`LoweringInputs::threadgroup_size_matches_tile_size`). With
-    /// `tile_sized` the binder runs each dispatch with the pass's tile, its imageblock size
-    /// (`BindShape::imageblock_size`), as Metal's threadgroup in every region (`MultiRegion` 1),
+    /// `tile_sized` the consumer runs each dispatch with the pass's tile, its imageblock size,
+    /// as Metal's threadgroup in every region (`MultiRegion` 1),
     /// the threads per tile its workgroups; a tile pipeline whose descriptor gives the flag the
     /// other value is `InvalidDescriptor(TileThreadgroupSize)`.
     TileThreadgroup { tile_sized: bool },
@@ -427,10 +423,9 @@ pub enum RuntimeFact {
     /// not emulate there, it sets `StatusBits::CUBIC_ARGUMENT_SAMPLER` in the command buffer's
     /// `ExecutionStatus` buffer (through the address the stage's `ExecutionStatus` fact asks
     /// for), and a consumer that reads the bit reports the command buffer's execution as failed. A
-    /// run that never reaches such a sampler is Metal's exactly. The planner admits a cubic listed
-    /// state (`BindState::argument_samplers`) beside a stage's sampler table only where the stage
-    /// states this fact (a device that cannot write the buffer from the stage tests nothing, and
-    /// its stage is refused `NotImplemented(SamplerBicubicFilter)` there). A fragment stage never
+    /// run that never reaches such a sampler is Metal's exactly. A cubic argument sampler beside a
+    /// stage's sampler table is Metal's only where the stage states this fact (a device that
+    /// cannot write the buffer from the stage tests nothing). A fragment stage never
     /// states it: the mark is a store, which costs a fragment function the device's hidden-surface
     /// removal and early depth test although it never runs.
     CubicArgumentSampler { stage: Stage },
@@ -541,49 +536,13 @@ pub enum RuntimeFact {
     /// The render pipeline was compiled under `VariantKey::quad_primitive_ids`, and its fragment
     /// function reads `[[primitive_id]]` from Vulkan's `PrimitiveId` shifted right by one
     /// (`LoweringInputs::quad_primitive_ids`): for a draw of Metal's private quads or quad strip,
-    /// listed as two triangles a quad. Its plans state the variant the shape asks for
-    /// (`BindShape::quad_primitive_ids`).
+    /// listed as two triangles a quad.
     QuadPrimitiveIds,
     /// The render pipeline was compiled under `VariantKey::private_list`, and its vertex function
     /// runs the consumer's list of one of Metal's private primitive types in the pulled list form
     /// (`LoweringInputs::private_list`): its index and Metal's base vertex read at
-    /// `PushHole::CaptureIndexAddress`, each list position run once. Its plans state the variant
-    /// the shape asks for (`BindShape::private_list`).
+    /// `PushHole::CaptureIndexAddress`, each list position run once.
     PrivateList,
-    /// The function reads the texture bound to the slot only as the in-place form of a two-plane
-    /// YCbCr texture reads it (`bind::YCbCrInPlace`): sampled or gathered through a constexpr sampler
-    /// or through the runtime sampler slots whose bits `samplers` holds (bit `n` for
-    /// `[[sampler(n)]]` of the slot's stage), read, or its size queried, as a 2D `float` texture.
-    /// Recorded on a profile that reads planes in place (`ProfileFields::ycbcr_in_place`). Where
-    /// the binder binds a texture whose planes are read so (`TextureShape::Texture::ycbcr_in_place`)
-    /// and each of those samplers states a filter the form reads (one filter for minification and
-    /// magnification, no anisotropy, no cubic filter, comparison or reduction), the slot joins the
-    /// plan's variant (`VariantKey::ycbcr_in_place`, `LoweringInputs::ycbcr_in_place`), under
-    /// which the slot's one binding is the planes' texel buffer (`WriteSource::YCbCrInPlace`) and
-    /// every access of it reads the codes and converts them as Metal does, its words in the slot's
-    /// push field (`PushField::YCbCrInPlace`). Elsewhere the slot binds the texture's image as
-    /// before. `device`: every sample of the slot is one the device's own sampler Y′CbCr
-    /// conversion takes (none addresses a border through a constexpr sampler or places a texel
-    /// offset by a parent's size, and none is a gather): where the bound texture's planes are also held as an image it
-    /// samples (`TextureShape::Texture::ycbcr_planes_sampler`) and each runtime sampler addresses
-    /// no border on either axis, the slot samples that image instead
-    /// (`VariantKey::ycbcr_planes_sampled`, `bind::YCbCrPlanesSampler`).
-    YCbCrInPlace {
-        slot: SlotRef,
-        samplers: u32,
-        device: bool,
-    },
-    /// The function only reads, writes or asks the size of the 2D texture bound to the slot
-    /// (`bind::TexelRows`): `read` at level 0 or a computed level, `write`, its width, height or
-    /// level count, `is_null` and a texture fence; no sample, gather, LOD query, atomic, read
-    /// through a sampler, imageblock slice or access of a level past the first through a storage
-    /// slot, and no arm of a handle that switches between slots. Where the binder binds a texture
-    /// whose rows are read and written in place (`TextureShape::Texture::texel_rows`), the slot
-    /// joins the plan's variant (`VariantKey::texel_rows`, `LoweringInputs::texel_rows`), under
-    /// which its one binding is a texel buffer over the rows' bytes (`WriteSource::TexelRows`),
-    /// texel `(x, y)` the view's `first + y · row + x`, those words in the slot's push field
-    /// (`PushField::TexelRows`). Elsewhere the slot binds the texture's image as before.
-    TexelRows { slot: SlotRef },
     /// The object function runs a partial threadgroup of a `drawMeshThreads` as Metal does
     /// (`lower::dispatch`'s partial object threadgroups): where its `DispatchRegion` (or a folded
     /// variant's region record) carries `lower::dispatch::NONUNIFORM`, it answers its
@@ -602,8 +561,7 @@ pub enum RuntimeFact {
     /// The render pipeline was compiled under `VariantKey::region_viewports`, and its vertex
     /// function stores `ViewportIndex` as `DrawIndex` (`LoweringInputs::region_viewports`): each
     /// draw of a multi-draw renders through the viewport and scissor at its index, the runtime's
-    /// draw of a rasterization-rate-mapped pass's regions several at a time. Its plans state the
-    /// variant the shape asks for (`BindShape::region_viewports`).
+    /// draw of a rasterization-rate-mapped pass's regions several at a time.
     RegionViewports,
     /// The kernel was compiled under `VariantKey::partial_threadgroups`
     /// (`LoweringInputs::partial_threadgroups`): where its `DispatchRegion` carries
@@ -615,11 +573,10 @@ pub enum RuntimeFact {
     /// The function only reads, writes, updates by a texture atomic or asks the width of the
     /// texture buffer bound to the slot (`bind::texel_parts`): `read` (not through a sampler),
     /// `write`, an atomic, `get_width`, `is_null` and a texture fence, on a device that indexes an
-    /// array of the slot's kind of texel buffer by a `NonUniform` value. Where the binder binds a
-    /// texture buffer of more texels than one view holds there (`TextureShape::Buffer::parts`
-    /// past 1), the slot joins the plan's variant (`VariantKey::texel_buffer_parts`,
-    /// `LoweringInputs::texel_buffer_parts`), under which its binding is an array of the texture
-    /// buffer's parts, one texel buffer view each. Elsewhere the slot binds one view, which
+    /// array of the slot's kind of texel buffer by a `NonUniform` value. Where the consumer binds a
+    /// texture buffer of more texels than one view holds there, the slot takes the variant
+    /// (`VariantKey::texel_buffer_parts`, `LoweringInputs::texel_buffer_parts`), under which its
+    /// binding is an array of the texture buffer's parts, one texel buffer view each. Elsewhere the slot binds one view, which
     /// `maxTexelBufferElements` bounds (`TexelBufferRange`).
     TexelBufferParts { slot: SlotRef },
     /// Under the identity domains, the buffer slot's address, its buffer's `gpuAddress` plus the
@@ -738,8 +695,6 @@ impl RuntimeFact {
             RuntimeFact::ObjectThreadgroupArena { .. } => "ObjectThreadgroupArena",
             RuntimeFact::QuadPrimitiveIds => "QuadPrimitiveIds",
             RuntimeFact::PrivateList => "PrivateList",
-            RuntimeFact::YCbCrInPlace { .. } => "YCbCrInPlace",
-            RuntimeFact::TexelRows { .. } => "TexelRows",
             RuntimeFact::PartialObjectThreadgroups => "PartialObjectThreadgroups",
             RuntimeFact::BorderTexels { .. } => "BorderTexels",
             RuntimeFact::RegionViewports => "RegionViewports",

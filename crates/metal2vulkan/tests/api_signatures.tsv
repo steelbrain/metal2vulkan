@@ -59,31 +59,7 @@ assoc-const	metal2vulkan-runtime::ResourceUsage::READ	pub const READ: ResourceUs
 assoc-const	metal2vulkan-runtime::ResourceUsage::SAMPLE	pub const SAMPLE: ResourceUsage
 assoc-const	metal2vulkan-runtime::ResourceUsage::WRITE	pub const WRITE: ResourceUsage
 assoc-const	metal2vulkan-runtime::TextureSwizzleChannels::DEFAULT	pub const DEFAULT: TextureSwizzleChannels
-assoc-const	metal2vulkan::bind::ArgumentSamplersShape::MIN_ENTRIES	pub const MIN_ENTRIES: u64
 assoc-const	metal2vulkan::bind::AstcDecode::BLOCK_BYTES	pub const BLOCK_BYTES: u32
-assoc-const	metal2vulkan::bind::ExecutionStatus::BYTES	pub const BYTES: usize
-assoc-const	metal2vulkan::bind::MeshArguments::OBJECT_COMMANDS	pub const OBJECT_COMMANDS: u32
-assoc-const	metal2vulkan::bind::MeshArguments::OBJECT_COUNT	pub const OBJECT_COUNT: u32
-assoc-const	metal2vulkan::bind::MeshArguments::OBJECT_PIECES	pub const OBJECT_PIECES: u32
-assoc-const	metal2vulkan::bind::NeutralResource::SINK_BYTES	pub const SINK_BYTES: u32
-assoc-const	metal2vulkan::bind::RootTable::SINK_HOST_OFFSET	pub const SINK_HOST_OFFSET: u32
-assoc-const	metal2vulkan::bind::StatusBits::CUBIC_ARGUMENT_SAMPLER	pub const CUBIC_ARGUMENT_SAMPLER: StatusBits
-assoc-const	metal2vulkan::bind::StatusBits::MESH_GRID_DISCARDED	pub const MESH_GRID_DISCARDED: StatusBits
-assoc-const	metal2vulkan::bind::StatusBits::MESH_GRID_PAST_LIMITS	pub const MESH_GRID_PAST_LIMITS: StatusBits
-assoc-const	metal2vulkan::bind::StatusBits::RESIDENT_MISS	pub const RESIDENT_MISS: StatusBits
-assoc-const	metal2vulkan::bind::TexelRows::FIRST	pub const FIRST: usize
-assoc-const	metal2vulkan::bind::TexelRows::HEIGHT	pub const HEIGHT: usize
-assoc-const	metal2vulkan::bind::TexelRows::ROW	pub const ROW: usize
-assoc-const	metal2vulkan::bind::TexelRows::WIDTH	pub const WIDTH: usize
-assoc-const	metal2vulkan::bind::TexelRows::WORDS	pub const WORDS: usize
-assoc-const	metal2vulkan::bind::YCbCrInPlace::CHROMA_AT	pub const CHROMA_AT: usize
-assoc-const	metal2vulkan::bind::YCbCrInPlace::CHROMA_ROW	pub const CHROMA_ROW: usize
-assoc-const	metal2vulkan::bind::YCbCrInPlace::CONVERSION	pub const CONVERSION: usize
-assoc-const	metal2vulkan::bind::YCbCrInPlace::HEIGHT	pub const HEIGHT: usize
-assoc-const	metal2vulkan::bind::YCbCrInPlace::LUMA_AT	pub const LUMA_AT: usize
-assoc-const	metal2vulkan::bind::YCbCrInPlace::LUMA_ROW	pub const LUMA_ROW: usize
-assoc-const	metal2vulkan::bind::YCbCrInPlace::WIDTH	pub const WIDTH: usize
-assoc-const	metal2vulkan::bind::YCbCrInPlace::WORDS	pub const WORDS: usize
 assoc-const	metal2vulkan::bind::indirect_commands::BufferBinding::MIN_BUFFER_ADDRESS	pub const MIN_BUFFER_ADDRESS: u64
 assoc-const	metal2vulkan::bind::indirect_commands::RenderDraws::PRIMITIVES	pub const PRIMITIVES: RenderDraws
 assoc-const	metal2vulkan::device::ApiVersion::V1_2	pub const V1_2: ApiVersion
@@ -232,31 +208,7 @@ assoc-const-value	metal2vulkan-runtime::ResourceUsage::READ	ResourceUsage(1)
 assoc-const-value	metal2vulkan-runtime::ResourceUsage::SAMPLE	ResourceUsage(4)
 assoc-const-value	metal2vulkan-runtime::ResourceUsage::WRITE	ResourceUsage(2)
 assoc-const-value	metal2vulkan-runtime::TextureSwizzleChannels::DEFAULT	TextureSwizzleChannels
-assoc-const-value	metal2vulkan::bind::ArgumentSamplersShape::MIN_ENTRIES	16
 assoc-const-value	metal2vulkan::bind::AstcDecode::BLOCK_BYTES	16
-assoc-const-value	metal2vulkan::bind::ExecutionStatus::BYTES	16
-assoc-const-value	metal2vulkan::bind::MeshArguments::OBJECT_COMMANDS	36
-assoc-const-value	metal2vulkan::bind::MeshArguments::OBJECT_COUNT	32
-assoc-const-value	metal2vulkan::bind::MeshArguments::OBJECT_PIECES	256
-assoc-const-value	metal2vulkan::bind::NeutralResource::SINK_BYTES	64
-assoc-const-value	metal2vulkan::bind::RootTable::SINK_HOST_OFFSET	(SINK_ROOT * ENTRY_BYTES + HOST) as u32
-assoc-const-value	metal2vulkan::bind::StatusBits::CUBIC_ARGUMENT_SAMPLER	StatusBits(1 <<3)
-assoc-const-value	metal2vulkan::bind::StatusBits::MESH_GRID_DISCARDED	StatusBits(1 <<5)
-assoc-const-value	metal2vulkan::bind::StatusBits::MESH_GRID_PAST_LIMITS	StatusBits(1 <<4)
-assoc-const-value	metal2vulkan::bind::StatusBits::RESIDENT_MISS	StatusBits(1 <<0)
-assoc-const-value	metal2vulkan::bind::TexelRows::FIRST	3
-assoc-const-value	metal2vulkan::bind::TexelRows::HEIGHT	1
-assoc-const-value	metal2vulkan::bind::TexelRows::ROW	2
-assoc-const-value	metal2vulkan::bind::TexelRows::WIDTH	0
-assoc-const-value	metal2vulkan::bind::TexelRows::WORDS	4
-assoc-const-value	metal2vulkan::bind::YCbCrInPlace::CHROMA_AT	4
-assoc-const-value	metal2vulkan::bind::YCbCrInPlace::CHROMA_ROW	5
-assoc-const-value	metal2vulkan::bind::YCbCrInPlace::CONVERSION	6
-assoc-const-value	metal2vulkan::bind::YCbCrInPlace::HEIGHT	1
-assoc-const-value	metal2vulkan::bind::YCbCrInPlace::LUMA_AT	2
-assoc-const-value	metal2vulkan::bind::YCbCrInPlace::LUMA_ROW	3
-assoc-const-value	metal2vulkan::bind::YCbCrInPlace::WIDTH	0
-assoc-const-value	metal2vulkan::bind::YCbCrInPlace::WORDS	8
 assoc-const-value	metal2vulkan::bind::indirect_commands::BufferBinding::MIN_BUFFER_ADDRESS	1 <<32
 assoc-const-value	metal2vulkan::bind::indirect_commands::RenderDraws::PRIMITIVES	RenderDraws
 assoc-const-value	metal2vulkan::device::ApiVersion::V1_2	ApiVersion
@@ -398,14 +350,7 @@ const	metal2vulkan-runtime::floor::OPTIONAL_INSTANCE_EXTENSIONS	pub const OPTION
 const	metal2vulkan-runtime::floor::TIME_DOMAINS	pub const TIME_DOMAINS: [vk::TimeDomainKHR; 2]
 const	metal2vulkan-runtime::floor::VERSION	pub const VERSION: u32
 const	metal2vulkan::bind::ARGUMENT_HANDLE_BYTES	pub const ARGUMENT_HANDLE_BYTES: u64
-const	metal2vulkan::bind::DRAW_ARGUMENT_BYTES	pub const DRAW_ARGUMENT_BYTES: u64
-const	metal2vulkan::bind::DRAW_INDEX_ENTRY_BYTES	pub const DRAW_INDEX_ENTRY_BYTES: u64
-const	metal2vulkan::bind::HANDLE_ENTRY_BYTES	pub const HANDLE_ENTRY_BYTES: u32
 const	metal2vulkan::bind::MAX_SCREEN_EXTENT	pub const MAX_SCREEN_EXTENT: u32
-const	metal2vulkan::bind::MERGED_REST_FIRST	pub const MERGED_REST_FIRST: u32
-const	metal2vulkan::bind::METAL_MESH_GRID_AXIS	pub const METAL_MESH_GRID_AXIS: u32
-const	metal2vulkan::bind::METAL_MESH_GRID_TOTAL	pub const METAL_MESH_GRID_TOTAL: u32
-const	metal2vulkan::bind::METAL_OBJECT_GRID_TOTAL	pub const METAL_OBJECT_GRID_TOTAL: u32
 const	metal2vulkan::bind::indirect_commands::BINDING_COUNT	pub const BINDING_COUNT: usize
 const	metal2vulkan::bind::indirect_commands::COMMAND_BUFFER_HEADER_BYTES	pub const COMMAND_BUFFER_HEADER_BYTES: usize
 const	metal2vulkan::bind::indirect_commands::COMMAND_BYTES	pub const COMMAND_BYTES: usize
@@ -470,14 +415,7 @@ const-value	metal2vulkan-runtime::floor::OPTIONAL_INSTANCE_EXTENSIONS	&[ash::khr
 const-value	metal2vulkan-runtime::floor::TIME_DOMAINS	[vk::TimeDomainKHR::DEVICE, crate::times::HOST_DOMAIN]
 const-value	metal2vulkan-runtime::floor::VERSION	vk::API_VERSION_1_3
 const-value	metal2vulkan::bind::ARGUMENT_HANDLE_BYTES	8
-const-value	metal2vulkan::bind::DRAW_ARGUMENT_BYTES	16
-const-value	metal2vulkan::bind::DRAW_INDEX_ENTRY_BYTES	16
-const-value	metal2vulkan::bind::HANDLE_ENTRY_BYTES	TABLE_ENTRY_BYTES
 const-value	metal2vulkan::bind::MAX_SCREEN_EXTENT	1 <<16
-const-value	metal2vulkan::bind::MERGED_REST_FIRST	1 <<31
-const-value	metal2vulkan::bind::METAL_MESH_GRID_AXIS	65_535
-const-value	metal2vulkan::bind::METAL_MESH_GRID_TOTAL	1_048_575
-const-value	metal2vulkan::bind::METAL_OBJECT_GRID_TOTAL	1 <<29
 const-value	metal2vulkan::bind::indirect_commands::BINDING_COUNT	32
 const-value	metal2vulkan::bind::indirect_commands::COMMAND_BUFFER_HEADER_BYTES	16
 const-value	metal2vulkan::bind::indirect_commands::COMMAND_BYTES	((THREADGROUP_WORD + THREADGROUP_COUNT + 2) * 4).next_multiple_of(8)
@@ -676,39 +614,15 @@ enum	metal2vulkan-runtime::VariantStart	#[derive(Clone, Copy, Debug, PartialEq, 
 enum	metal2vulkan-runtime::VisibilityResultMode	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum VisibilityResultMode
 enum	metal2vulkan-runtime::VisibilityResultType	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum VisibilityResultType
 enum	metal2vulkan-runtime::floor::Missing	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Missing
-enum	metal2vulkan::bind::AccessClass	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum AccessClass
 enum	metal2vulkan::bind::ArgumentLayoutError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum ArgumentLayoutError
 enum	metal2vulkan::bind::ArgumentType	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ArgumentType
 enum	metal2vulkan::bind::AstcTexels	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum AstcTexels
-enum	metal2vulkan::bind::BoundBuffer	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum BoundBuffer
-enum	metal2vulkan::bind::BoundTexture	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum BoundTexture
-enum	metal2vulkan::bind::BufferShape	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum BufferShape
 enum	metal2vulkan::bind::Dispatch	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Dispatch
 enum	metal2vulkan::bind::DrawCall	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum DrawCall
 enum	metal2vulkan::bind::EtcDecode	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum EtcDecode
 enum	metal2vulkan::bind::EtcTexels	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum EtcTexels
-enum	metal2vulkan::bind::FieldLocation	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum FieldLocation
-enum	metal2vulkan::bind::HeapPlacement	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum HeapPlacement
-enum	metal2vulkan::bind::HeapSource	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum HeapSource
-enum	metal2vulkan::bind::ImageSource	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum ImageSource
-enum	metal2vulkan::bind::IndexOverrun	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum IndexOverrun
-enum	metal2vulkan::bind::IndirectArgs	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum IndirectArgs
-enum	metal2vulkan::bind::MeshArgumentsForm	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum MeshArgumentsForm
-enum	metal2vulkan::bind::NeutralResource	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum NeutralResource
-enum	metal2vulkan::bind::PlanDiagnostic	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum PlanDiagnostic
-enum	metal2vulkan::bind::PushHole	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum PushHole
 enum	metal2vulkan::bind::RateMapError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum RateMapError
-enum	metal2vulkan::bind::ResourceClass	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ResourceClass
-enum	metal2vulkan::bind::SamplerSource	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum SamplerSource
-enum	metal2vulkan::bind::StatusWord	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum StatusWord
-enum	metal2vulkan::bind::TextureShape	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum TextureShape
 enum	metal2vulkan::bind::UnpinnedCompile	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum UnpinnedCompile
-enum	metal2vulkan::bind::UseTarget	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum UseTarget
-enum	metal2vulkan::bind::UsedClass	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum UsedClass
-enum	metal2vulkan::bind::WriteSource	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum WriteSource
-enum	metal2vulkan::bind::YCbCrMatrix	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum YCbCrMatrix
-enum	metal2vulkan::bind::YCbCrOutput	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum YCbCrOutput
-enum	metal2vulkan::bind::YCbCrRange	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum YCbCrRange
 enum	metal2vulkan::bind::indirect_commands::Action	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] pub enum Action
 enum	metal2vulkan::bind::indirect_commands::AddressError	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum AddressError
 enum	metal2vulkan::bind::indirect_commands::BindingError	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum BindingError
@@ -740,7 +654,6 @@ enum	metal2vulkan::device::VkLimit	#[derive(Clone, Copy, Debug, PartialEq, Eq, P
 enum	metal2vulkan::device::VkProperty	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum VkProperty
 enum	metal2vulkan::error::AbiError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum AbiError
 enum	metal2vulkan::error::Attachment	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Attachment
-enum	metal2vulkan::error::BindError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum BindError
 enum	metal2vulkan::error::BitcodeError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum BitcodeError
 enum	metal2vulkan::error::BitstreamError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum BitstreamError
 enum	metal2vulkan::error::BudgetExceeded	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum BudgetExceeded
@@ -823,7 +736,6 @@ enum	metal2vulkan::pipeline::Window	#[cfg_attr(feature = "serde", derive(serde::
 enum	metal2vulkan::reflection::LinkedUseGap	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum LinkedUseGap
 enum	metal2vulkan::reflection::SlotWritability	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum SlotWritability
 enum	metal2vulkan::reflection::SlotWriteGap	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum SlotWriteGap
-enum	metal2vulkan::vk::DrawCommand	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum DrawCommand
 enum	metal2vulkan::vk::NumericFormat	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum NumericFormat
 enum	metal2vulkan::vk::NumericType	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum NumericType
 field	metal2vulkan-air::ConstValue.bytes	pub bytes: Box<[u8]>
@@ -1906,9 +1818,6 @@ field	metal2vulkan::bind::ArgumentDescriptor.constant_block_alignment	pub consta
 field	metal2vulkan::bind::ArgumentDescriptor.data_type	pub data_type: DataType
 field	metal2vulkan::bind::ArgumentDescriptor.index	pub index: u32
 field	metal2vulkan::bind::ArgumentDescriptor.texture_type	pub texture_type: TextureType
-field	metal2vulkan::bind::ArgumentFunctionTable.address	pub address: u64
-field	metal2vulkan::bind::ArgumentFunctionTable.resource_id	pub resource_id: u64
-field	metal2vulkan::bind::ArgumentFunctionTable.size	pub size: u32
 field	metal2vulkan::bind::ArgumentMember.count	pub count: u32
 field	metal2vulkan::bind::ArgumentMember.id	pub id: u32
 field	metal2vulkan::bind::ArgumentMember.ids_per_element	pub ids_per_element: u32
@@ -1917,168 +1826,12 @@ field	metal2vulkan::bind::ArgumentMember.offset	pub offset: u64
 field	metal2vulkan::bind::ArgumentMember.size	pub size: u64
 field	metal2vulkan::bind::ArgumentMember.stride	pub stride: u64
 field	metal2vulkan::bind::ArgumentMember.ty	pub ty: ArgumentType
-field	metal2vulkan::bind::ArgumentSampler.desc	pub desc: SamplerDescriptor
-field	metal2vulkan::bind::ArgumentSampler.element	pub element: Option<u32>
-field	metal2vulkan::bind::ArgumentSampler.resource_id	pub resource_id: u64
-field	metal2vulkan::bind::ArgumentSamplersShape.class	pub class: u8
-field	metal2vulkan::bind::ArgumentSamplersShape.shapes	pub shapes: std::collections::BTreeSet<SamplerShape>
 field	metal2vulkan::bind::AstcDecode.hdr	pub hdr: bool
 field	metal2vulkan::bind::AstcDecode.height	pub height: u32
 field	metal2vulkan::bind::AstcDecode.srgb	pub srgb: bool
 field	metal2vulkan::bind::AstcDecode.width	pub width: u32
-field	metal2vulkan::bind::BindShape.argument_samplers	pub argument_samplers: ArgumentSamplersShape
-field	metal2vulkan::bind::BindShape.depth_clamp_range	pub depth_clamp_range: bool
-field	metal2vulkan::bind::BindShape.dropped_colors	pub dropped_colors: BTreeSet<u32>
-field	metal2vulkan::bind::BindShape.far_vertex_buffers	pub far_vertex_buffers: BTreeSet<u32>
-field	metal2vulkan::bind::BindShape.function_tables	pub function_tables: FunctionTablesShape
-field	metal2vulkan::bind::BindShape.imageblock_size	pub imageblock_size: ImageblockSize
-field	metal2vulkan::bind::BindShape.kept_imageblock_bytes	pub kept_imageblock_bytes: Option<u32>
-field	metal2vulkan::bind::BindShape.line_band	pub line_band: Option<crate::pipeline::BandPrimitive>
-field	metal2vulkan::bind::BindShape.primitive_id_indices	pub primitive_id_indices: Option<metal::IndexType>
-field	metal2vulkan::bind::BindShape.private_list	pub private_list: bool
-field	metal2vulkan::bind::BindShape.quad_primitive_ids	pub quad_primitive_ids: bool
-field	metal2vulkan::bind::BindShape.region_viewports	pub region_viewports: bool
-field	metal2vulkan::bind::BindShape.render_area	pub render_area: [u32; 2]
-field	metal2vulkan::bind::BindShape.render_target_array_length	pub render_target_array_length: u32
-field	metal2vulkan::bind::BindShape.rotated_weights	pub rotated_weights: bool
-field	metal2vulkan::bind::BindShape.stages	pub stages: BTreeMap<Stage, StageShape>
-field	metal2vulkan::bind::BindShape.tessellation_factor_buffer	pub tessellation_factor_buffer: bool
-field	metal2vulkan::bind::BindShape.tile_threadgroup	pub tile_threadgroup: TileThreadgroupMemory
-field	metal2vulkan::bind::BindShape.used	pub used: BTreeMap<u32, UsedShape>
-field	metal2vulkan::bind::BindShape.vertex_amplification	pub vertex_amplification: VertexAmplification
-field	metal2vulkan::bind::BindShape.zeroed_colors	pub zeroed_colors: BTreeMap<u32, metal::PixelFormat>
-field	metal2vulkan::bind::BindState.alpha_test_reference	pub alpha_test_reference: Option<f32>
-field	metal2vulkan::bind::BindState.argument_samplers	pub argument_samplers: Vec<ArgumentSampler>
-field	metal2vulkan::bind::BindState.blend_color	pub blend_color: [f32; 4]
-field	metal2vulkan::bind::BindState.depth_clamp_range	pub depth_clamp_range: Option<[f32; 2]>
-field	metal2vulkan::bind::BindState.depth_stencil	pub depth_stencil: metal::state::DepthStencilDescriptor
-field	metal2vulkan::bind::BindState.dropped_colors	pub dropped_colors: BTreeSet<u32>
-field	metal2vulkan::bind::BindState.far_vertex_buffers	pub far_vertex_buffers: BTreeSet<u32>
-field	metal2vulkan::bind::BindState.function_tables	pub function_tables: Vec<ArgumentFunctionTable>
-field	metal2vulkan::bind::BindState.heap_placement	pub heap_placement: HeapPlacement
-field	metal2vulkan::bind::BindState.imageblock_size	pub imageblock_size: ImageblockSize
-field	metal2vulkan::bind::BindState.kept_imageblock_bytes	pub kept_imageblock_bytes: Option<u32>
-field	metal2vulkan::bind::BindState.line_band	pub line_band: Option<(crate::pipeline::BandPrimitive, [f32; 4])>
-field	metal2vulkan::bind::BindState.primitive_id_indices	pub primitive_id_indices: Option<metal::IndexType>
-field	metal2vulkan::bind::BindState.primitive_type	pub primitive_type: Option<metal::PrimitiveType>
-field	metal2vulkan::bind::BindState.private_list	pub private_list: bool
-field	metal2vulkan::bind::BindState.quad_primitive_ids	pub quad_primitive_ids: bool
-field	metal2vulkan::bind::BindState.region_viewports	pub region_viewports: bool
-field	metal2vulkan::bind::BindState.render_area	pub render_area: [u32; 2]
-field	metal2vulkan::bind::BindState.render_target_array_length	pub render_target_array_length: u32
-field	metal2vulkan::bind::BindState.resident_apart	pub resident_apart: bool
-field	metal2vulkan::bind::BindState.resident_ranges	pub resident_ranges: Vec<ResidentRange>
-field	metal2vulkan::bind::BindState.rotated_weights	pub rotated_weights: bool
-field	metal2vulkan::bind::BindState.stage_in_region	pub stage_in_region: Option<StageInRegion>
-field	metal2vulkan::bind::BindState.stages	pub stages: BTreeMap<Stage, StageTable>
-field	metal2vulkan::bind::BindState.tessellation_factors	pub tessellation_factors: TessellationFactors
-field	metal2vulkan::bind::BindState.tile_threadgroup	pub tile_threadgroup: TileThreadgroupMemory
-field	metal2vulkan::bind::BindState.used_in_token_order	pub used_in_token_order: bool
-field	metal2vulkan::bind::BindState.used_resources	pub used_resources: Vec<UsedResource>
-field	metal2vulkan::bind::BindState.vertex_amplification	pub vertex_amplification: VertexAmplification
-field	metal2vulkan::bind::BindState.viewport_count	pub viewport_count: u32
-field	metal2vulkan::bind::BindState.zeroed_colors	pub zeroed_colors: BTreeMap<u32, metal::PixelFormat>
-field	metal2vulkan::bind::BindingPlan.compute	pub compute: Option<ComputeTemplate>
-field	metal2vulkan::bind::BindingPlan.descriptors	pub descriptors: Vec<DescriptorWrite>
-field	metal2vulkan::bind::BindingPlan.diagnostics	pub diagnostics: Vec<PlanDiagnostic>
-field	metal2vulkan::bind::BindingPlan.graphics	pub graphics: Option<GraphicsTemplate>
-field	metal2vulkan::bind::BindingPlan.push	pub push: PushTemplate
-field	metal2vulkan::bind::BindingPlan.specialization	pub specialization: SpecializationKey
-field	metal2vulkan::bind::BindingPlan.uses	pub uses: Vec<ResourceUse>
-field	metal2vulkan::bind::BindingPlan.variant	pub variant: VariantKey
-field	metal2vulkan::bind::BindingPlan.vertex_buffers	pub vertex_buffers: Vec<VertexBufferBind>
-field	metal2vulkan::bind::BindingPlan.views	pub views: ViewSetup
-field	metal2vulkan::bind::BoundAccelerationStructure.instance_count	pub instance_count: u32
-field	metal2vulkan::bind::BoundSampler.desc	pub desc: SamplerDescriptor
-field	metal2vulkan::bind::BoundSampler.resource_id	pub resource_id: Option<u64>
-field	metal2vulkan::bind::BoundSamplerShape.degree	pub degree: u32
-field	metal2vulkan::bind::BoundSamplerShape.min_level	pub min_level: u32
-field	metal2vulkan::bind::BoundSamplerShape.shape	pub shape: SamplerShape
-field	metal2vulkan::bind::BoundSamplerShape.word	pub word: metal::sampler::SamplerWord
-field	metal2vulkan::bind::BufferExtent.slot	pub slot: SlotRef
-field	metal2vulkan::bind::BufferExtent.window	pub window: Window
-field	metal2vulkan::bind::BufferRange.offset	pub offset: u64
-field	metal2vulkan::bind::BufferRange.range	pub range: u64
-field	metal2vulkan::bind::BufferRanges.storage	pub storage: u32
-field	metal2vulkan::bind::ByteRange.len	pub len: u64
-field	metal2vulkan::bind::ByteRange.offset	pub offset: u64
-field	metal2vulkan::bind::DescriptorBytes.binding	pub binding: u32
-field	metal2vulkan::bind::DescriptorBytes.bytes	pub bytes: Vec<u8>
-field	metal2vulkan::bind::DescriptorBytes.set	pub set: u32
-field	metal2vulkan::bind::DescriptorRange.binding	pub binding: u32
-field	metal2vulkan::bind::DescriptorRange.element	pub element: u32
-field	metal2vulkan::bind::DescriptorRange.range	pub range: BufferRange
-field	metal2vulkan::bind::DescriptorRange.set	pub set: u32
-field	metal2vulkan::bind::DescriptorWrite.array_element	pub array_element: u32
-field	metal2vulkan::bind::DescriptorWrite.binding	pub binding: u32
-field	metal2vulkan::bind::DescriptorWrite.set	pub set: u32
-field	metal2vulkan::bind::DescriptorWrite.source	pub source: WriteSource
-field	metal2vulkan::bind::DescriptorWrite.ty	pub ty: vk::DescriptorType
-field	metal2vulkan::bind::DispatchCommands.descriptor_bytes	pub descriptor_bytes: Vec<DescriptorBytes>
-field	metal2vulkan::bind::DispatchCommands.descriptor_ranges	pub descriptor_ranges: Vec<DescriptorRange>
-field	metal2vulkan::bind::DispatchCommands.extents	pub extents: Vec<BufferExtent>
-field	metal2vulkan::bind::DispatchCommands.push_holes	pub push_holes: Vec<PushHole>
-field	metal2vulkan::bind::DispatchCommands.region_record	pub region_record: Option<[u8; 32]>
-field	metal2vulkan::bind::DispatchCommands.regions	pub regions: Vec<DispatchRegion>
-field	metal2vulkan::bind::DispatchCommands.root_table	pub root_table: Option<RootTable>
-field	metal2vulkan::bind::DispatchCommands.uses	pub uses: Vec<ResourceUse>
-field	metal2vulkan::bind::DispatchRegion.group_count	pub group_count: [u32; 3]
-field	metal2vulkan::bind::DispatchRegion.indirect	pub indirect: Option<IndirectArgs>
-field	metal2vulkan::bind::DispatchRegion.push_constants	pub push_constants: Vec<PushConstantWrite>
-field	metal2vulkan::bind::DispatchRegion.required_subgroup_size	pub required_subgroup_size: Option<u32>
-field	metal2vulkan::bind::DispatchRegion.specialization	pub specialization: SpecializationKey
-field	metal2vulkan::bind::DispatchRegion.stage_flags	pub stage_flags: vk::PipelineShaderStageCreateFlags
-field	metal2vulkan::bind::DrawCommands.amplifications	pub amplifications: Vec<Vec<PushConstantWrite>>
-field	metal2vulkan::bind::DrawCommands.buffer_offsets	pub buffer_offsets: Vec<(u32, u64)>
-field	metal2vulkan::bind::DrawCommands.descriptor_bytes	pub descriptor_bytes: Vec<DescriptorBytes>
-field	metal2vulkan::bind::DrawCommands.descriptor_ranges	pub descriptor_ranges: Vec<DescriptorRange>
-field	metal2vulkan::bind::DrawCommands.discards_command_buffer	pub discards_command_buffer: bool
-field	metal2vulkan::bind::DrawCommands.draw	pub draw: vk::DrawCommand
-field	metal2vulkan::bind::DrawCommands.extents	pub extents: Vec<BufferExtent>
-field	metal2vulkan::bind::DrawCommands.index_overrun	pub index_overrun: Option<IndexOverrun>
-field	metal2vulkan::bind::DrawCommands.indirect_needs_arguments	pub indirect_needs_arguments: bool
-field	metal2vulkan::bind::DrawCommands.mesh_arguments	pub mesh_arguments: Option<MeshArgumentsForm>
-field	metal2vulkan::bind::DrawCommands.object_fold	pub object_fold: Option<crate::bind::ObjectFold>
-field	metal2vulkan::bind::DrawCommands.push_constants	pub push_constants: Vec<PushConstantWrite>
-field	metal2vulkan::bind::DrawCommands.push_holes	pub push_holes: Vec<PushHole>
-field	metal2vulkan::bind::DrawCommands.root_tables	pub root_tables: Vec<(vk::ShaderStageFlags, RootTable)>
-field	metal2vulkan::bind::DrawCommands.specialization	pub specialization: Option<SpecializationKey>
-field	metal2vulkan::bind::DrawCommands.uses	pub uses: Vec<ResourceUse>
-field	metal2vulkan::bind::DrawCommands.vertex_strides	pub vertex_strides: Vec<(u32, u32)>
-field	metal2vulkan::bind::FunctionTablesShape.bytes_class	pub bytes_class: u8
-field	metal2vulkan::bind::FunctionTablesShape.class	pub class: u8
-field	metal2vulkan::bind::ImageViewDesc.aspect	pub aspect: vk::ImageAspectFlags
-field	metal2vulkan::bind::ImageViewDesc.components	pub components: vk::ComponentMapping
-field	metal2vulkan::bind::ImageViewDesc.format	pub format: vk::Format
-field	metal2vulkan::bind::ImageViewDesc.layout	pub layout: vk::ImageLayout
-field	metal2vulkan::bind::ImageViewDesc.level	pub level: Option<u32>
-field	metal2vulkan::bind::ImageViewDesc.shader_swizzle	pub shader_swizzle: bool
-field	metal2vulkan::bind::ImageViewDesc.view_type	pub view_type: vk::ImageViewType
-field	metal2vulkan::bind::ImageblockSize.height	pub height: u32
-field	metal2vulkan::bind::ImageblockSize.width	pub width: u32
 field	metal2vulkan::bind::IndexBufferRef.length	pub length: u64
 field	metal2vulkan::bind::IndexBufferRef.token	pub token: u32
-field	metal2vulkan::bind::IndirectRef.offset	pub offset: u64
-field	metal2vulkan::bind::IndirectRef.token	pub token: u32
-field	metal2vulkan::bind::MeshArguments.form	pub form: MeshArgumentsForm
-field	metal2vulkan::bind::MeshArguments.push_constants	pub push_constants: [u8; 8]
-field	metal2vulkan::bind::MeshArguments.source	pub source: IndirectRef
-field	metal2vulkan::bind::MeshArguments.source_range	pub source_range: BufferRange
-field	metal2vulkan::bind::MeshGridLimits.axes	pub axes: [u32; 3]
-field	metal2vulkan::bind::MeshGridLimits.total	pub total: u32
-field	metal2vulkan::bind::ObjectFold.discarded	pub discarded: bool
-field	metal2vulkan::bind::ObjectFold.dispatch	pub dispatch: [u32; 3]
-field	metal2vulkan::bind::ObjectFold.past	pub past: bool
-field	metal2vulkan::bind::ObjectFold.pieces	pub pieces: u32
-field	metal2vulkan::bind::ObjectFold.record	pub record: [u32; 8]
-field	metal2vulkan::bind::PushConstantWrite.bytes	pub bytes: Vec<u8>
-field	metal2vulkan::bind::PushConstantWrite.offset	pub offset: u32
-field	metal2vulkan::bind::PushConstantWrite.stages	pub stages: vk::ShaderStageFlags
-field	metal2vulkan::bind::PushFieldPlacement.field	pub field: PushField
-field	metal2vulkan::bind::PushFieldPlacement.location	pub location: FieldLocation
-field	metal2vulkan::bind::PushFieldPlacement.size	pub size: u32
-field	metal2vulkan::bind::PushFieldPlacement.stage	pub stage: Stage
-field	metal2vulkan::bind::PushTemplate.fields	pub fields: Vec<PushFieldPlacement>
 field	metal2vulkan::bind::PvrtcDecode.alpha	pub alpha: bool
 field	metal2vulkan::bind::PvrtcDecode.srgb	pub srgb: bool
 field	metal2vulkan::bind::PvrtcDecode.two_bits	pub two_bits: bool
@@ -2088,15 +1841,6 @@ field	metal2vulkan::bind::RateMapDescriptor.mutability	pub mutability: Mutabilit
 field	metal2vulkan::bind::RateMapDescriptor.screen_size	pub screen_size: [u32; 2]
 field	metal2vulkan::bind::RateMapLayerDescriptor.horizontal	pub horizontal: Vec<f32>
 field	metal2vulkan::bind::RateMapLayerDescriptor.vertical	pub vertical: Vec<f32>
-field	metal2vulkan::bind::ResidentRange.guest	pub guest: u64
-field	metal2vulkan::bind::ResidentRange.host	pub host: u64
-field	metal2vulkan::bind::ResidentRange.length	pub length: u64
-field	metal2vulkan::bind::ResourceUse.access	pub access: AccessSet
-field	metal2vulkan::bind::ResourceUse.class	pub class: AccessClass
-field	metal2vulkan::bind::ResourceUse.range	pub range: Option<ByteRange>
-field	metal2vulkan::bind::ResourceUse.resource	pub resource: UseTarget
-field	metal2vulkan::bind::ResourceUse.stages	pub stages: vk::PipelineStageFlags2
-field	metal2vulkan::bind::RootTable.bytes	pub bytes: Vec<u8>
 field	metal2vulkan::bind::SamplerDescriptor.border_color	pub border_color: metal::SamplerBorderColor
 field	metal2vulkan::bind::SamplerDescriptor.compare_function	pub compare_function: metal::CompareFunction
 field	metal2vulkan::bind::SamplerDescriptor.lod_average	pub lod_average: bool
@@ -2112,79 +1856,8 @@ field	metal2vulkan::bind::SamplerDescriptor.r_address_mode	pub r_address_mode: m
 field	metal2vulkan::bind::SamplerDescriptor.reduction_mode	pub reduction_mode: metal::SamplerReductionMode
 field	metal2vulkan::bind::SamplerDescriptor.s_address_mode	pub s_address_mode: metal::SamplerAddressMode
 field	metal2vulkan::bind::SamplerDescriptor.t_address_mode	pub t_address_mode: metal::SamplerAddressMode
-field	metal2vulkan::bind::SamplerShape.anisotropic	pub anisotropic: bool
-field	metal2vulkan::bind::SamplerShape.compare	pub compare: bool
-field	metal2vulkan::bind::SamplerShape.cubic	pub cubic: bool
-field	metal2vulkan::bind::SamplerShape.linear	pub linear: bool
-field	metal2vulkan::bind::SamplerShape.mirror_clamp_to_edge	pub mirror_clamp_to_edge: bool
-field	metal2vulkan::bind::SamplerShape.opaque_black_border	pub opaque_black_border: bool
-field	metal2vulkan::bind::SamplerShape.reduction	pub reduction: metal::SamplerReductionMode
-field	metal2vulkan::bind::SamplerShape.valid_lod_clamps	pub valid_lod_clamps: bool
 field	metal2vulkan::bind::StageInRegion.origin	pub origin: [u32; 3]
 field	metal2vulkan::bind::StageInRegion.size	pub size: [u32; 3]
-field	metal2vulkan::bind::StageShape.buffers	pub buffers: BTreeMap<u32, BufferShape>
-field	metal2vulkan::bind::StageShape.samplers	pub samplers: BTreeMap<u32, BoundSamplerShape>
-field	metal2vulkan::bind::StageShape.textures	pub textures: BTreeMap<u32, TextureShape>
-field	metal2vulkan::bind::StageShape.threadgroup_lengths	pub threadgroup_lengths: BTreeMap<u32, u32>
-field	metal2vulkan::bind::StageTable.acceleration_structures	pub acceleration_structures: BTreeMap<u32, BoundAccelerationStructure>
-field	metal2vulkan::bind::StageTable.buffer_ranges	pub buffer_ranges: BufferRanges
-field	metal2vulkan::bind::StageTable.buffers	pub buffers: BTreeMap<u32, BoundBuffer>
-field	metal2vulkan::bind::StageTable.samplers	pub samplers: BTreeMap<u32, BoundSampler>
-field	metal2vulkan::bind::StageTable.textures	pub textures: BTreeMap<u32, BoundTexture>
-field	metal2vulkan::bind::StageTable.threadgroup_lengths	pub threadgroup_lengths: BTreeMap<u32, u32>
-field	metal2vulkan::bind::StatusReport.cubic_argument_sampler	pub cubic_argument_sampler: bool
-field	metal2vulkan::bind::StatusReport.mesh_grid_discarded	pub mesh_grid_discarded: bool
-field	metal2vulkan::bind::StatusReport.mesh_grid_past_limits	pub mesh_grid_past_limits: bool
-field	metal2vulkan::bind::StatusReport.resident_miss	pub resident_miss: bool
-field	metal2vulkan::bind::StatusReport.resident_misses	pub resident_misses: u32
-field	metal2vulkan::bind::TessellationFactorBuffer.instance_stride	pub instance_stride: u64
-field	metal2vulkan::bind::TessellationFactorBuffer.length	pub length: u64
-field	metal2vulkan::bind::TessellationFactorBuffer.offset	pub offset: u64
-field	metal2vulkan::bind::TessellationFactors.buffer	pub buffer: Option<TessellationFactorBuffer>
-field	metal2vulkan::bind::TessellationFactors.scale	pub scale: f32
-field	metal2vulkan::bind::TextureFacts.address_modes	pub address_modes: metal::sampler::AddressModeMap
-field	metal2vulkan::bind::TextureFacts.array_length	pub array_length: u32
-field	metal2vulkan::bind::TextureFacts.mipmap_level_count	pub mipmap_level_count: u32
-field	metal2vulkan::bind::TextureFacts.parent_base_size	pub parent_base_size: [u32; 3]
-field	metal2vulkan::bind::TextureFacts.parent_relative_level	pub parent_relative_level: u32
-field	metal2vulkan::bind::TextureFacts.pixel_format	pub pixel_format: metal::PixelFormat
-field	metal2vulkan::bind::TextureFacts.sample_count	pub sample_count: u32
-field	metal2vulkan::bind::TextureFacts.sparse	pub sparse: bool
-field	metal2vulkan::bind::TextureFacts.swizzle	pub swizzle: metal::TextureSwizzleChannels
-field	metal2vulkan::bind::TextureFacts.texel_rows	pub texel_rows: Option<crate::bind::TexelRows>
-field	metal2vulkan::bind::TextureFacts.texture_type	pub texture_type: metal::TextureType
-field	metal2vulkan::bind::TextureFacts.usage	pub usage: metal::TextureUsage
-field	metal2vulkan::bind::TextureFacts.ycbcr_in_place	pub ycbcr_in_place: Option<crate::bind::YCbCrInPlace>
-field	metal2vulkan::bind::TileThreadgroupArgument.length	pub length: u32
-field	metal2vulkan::bind::TileThreadgroupArgument.offset	pub offset: u32
-field	metal2vulkan::bind::TileThreadgroupMemory.arguments	pub arguments: BTreeMap<u32, TileThreadgroupArgument>
-field	metal2vulkan::bind::TileThreadgroupMemory.length	pub length: u32
-field	metal2vulkan::bind::UsedResource.class	pub class: ResourceClass
-field	metal2vulkan::bind::UsedResource.device_address	pub device_address: Option<u64>
-field	metal2vulkan::bind::UsedResource.gpu_address	pub gpu_address: Option<u64>
-field	metal2vulkan::bind::UsedResource.length	pub length: u64
-field	metal2vulkan::bind::UsedResource.resource_id	pub resource_id: Option<u64>
-field	metal2vulkan::bind::UsedResource.stages	pub stages: metal::RenderStages
-field	metal2vulkan::bind::UsedResource.token	pub token: u32
-field	metal2vulkan::bind::UsedResource.usage	pub usage: metal::ResourceUsage
-field	metal2vulkan::bind::UsedShape.class	pub class: UsedClass
-field	metal2vulkan::bind::UsedShape.stages	pub stages: metal::RenderStages
-field	metal2vulkan::bind::UsedShape.usage	pub usage: metal::ResourceUsage
-field	metal2vulkan::bind::VertexAmplification.count	pub count: u32
-field	metal2vulkan::bind::VertexAmplification.one_at_a_time	pub one_at_a_time: bool
-field	metal2vulkan::bind::VertexAmplification.view_mappings	pub view_mappings: Vec<ViewMapping>
-field	metal2vulkan::bind::VertexBufferBind.binding	pub binding: u32
-field	metal2vulkan::bind::VertexBufferBind.buffer_index	pub buffer_index: u32
-field	metal2vulkan::bind::VertexBufferBind.per_bind_stride	pub per_bind_stride: bool
-field	metal2vulkan::bind::ViewMapping.render_target_array_index_offset	pub render_target_array_index_offset: u32
-field	metal2vulkan::bind::ViewMapping.viewport_array_index_offset	pub viewport_array_index_offset: u32
-field	metal2vulkan::bind::ViewSetup.base_layer	pub base_layer: u32
-field	metal2vulkan::bind::ViewSetup.view_mask	pub view_mask: u32
-field	metal2vulkan::bind::YCbCrCodes.bits	pub bits: u32
-field	metal2vulkan::bind::YCbCrCodes.bytes	pub bytes: u32
-field	metal2vulkan::bind::YCbCrCodes.output	pub output: YCbCrOutput
-field	metal2vulkan::bind::YCbCrCodes.packed	pub packed: bool
-field	metal2vulkan::bind::YCbCrCodes.subsampling	pub subsampling: ChromaSubsampling
 field	metal2vulkan::bind::indirect_commands::Bindings.pipeline	pub pipeline: Option<NonZeroU64>
 field	metal2vulkan::bind::indirect_commands::BufferBinding.address	pub address: u64
 field	metal2vulkan::bind::indirect_commands::BufferBinding.attribute_stride	pub attribute_stride: Option<u64>
@@ -2242,10 +1915,7 @@ field	metal2vulkan::cache::VariantKey.srgb_textures	pub srgb_textures: BTreeSet<
 field	metal2vulkan::cache::VariantKey.storage_images	pub storage_images: BTreeMap<SlotRef, StorageImageChoice>
 field	metal2vulkan::cache::VariantKey.swizzled_storage	pub swizzled_storage: BTreeSet<SlotRef>
 field	metal2vulkan::cache::VariantKey.texel_buffer_parts	pub texel_buffer_parts: BTreeMap<SlotRef, u32>
-field	metal2vulkan::cache::VariantKey.texel_rows	pub texel_rows: BTreeSet<SlotRef>
 field	metal2vulkan::cache::VariantKey.unit_axes	pub unit_axes: u8
-field	metal2vulkan::cache::VariantKey.ycbcr_in_place	pub ycbcr_in_place: BTreeSet<SlotRef>
-field	metal2vulkan::cache::VariantKey.ycbcr_planes_sampled	pub ycbcr_planes_sampled: BTreeMap<SlotRef, crate::bind::YCbCrPlanesSampler>
 field	metal2vulkan::cache::VariantKey.zeroed_colors	pub zeroed_colors: BTreeMap<u32, crate::metal::PixelFormat>
 field	metal2vulkan::device::AllocationLimits.max_buffer_size	pub max_buffer_size: u64
 field	metal2vulkan::device::AllocationLimits.max_memory_allocation_size	pub max_memory_allocation_size: u64
@@ -2761,7 +2431,6 @@ field	metal2vulkan::pipeline::LoweringInputs.stage_input	pub stage_input: Option
 field	metal2vulkan::pipeline::LoweringInputs.storage_images	pub storage_images: BTreeMap<SlotRef, StorageImageChoice>
 field	metal2vulkan::pipeline::LoweringInputs.swizzled_storage	pub swizzled_storage: BTreeSet<SlotRef>
 field	metal2vulkan::pipeline::LoweringInputs.texel_buffer_parts	pub texel_buffer_parts: BTreeMap<SlotRef, u32>
-field	metal2vulkan::pipeline::LoweringInputs.texel_rows	pub texel_rows: BTreeSet<SlotRef>
 field	metal2vulkan::pipeline::LoweringInputs.texture_write_rounding	pub texture_write_rounding: metal::TextureWriteRoundingMode
 field	metal2vulkan::pipeline::LoweringInputs.threadgroup_size_matches_tile_size	pub threadgroup_size_matches_tile_size: bool
 field	metal2vulkan::pipeline::LoweringInputs.tile_attachments	pub tile_attachments: Option<BTreeMap<u32, metal::PixelFormat>>
@@ -2771,8 +2440,6 @@ field	metal2vulkan::pipeline::LoweringInputs.unit_axes	pub unit_axes: u8
 field	metal2vulkan::pipeline::LoweringInputs.vertex_fetch	pub vertex_fetch: Option<VertexFetchProjection>
 field	metal2vulkan::pipeline::LoweringInputs.viewport_index_varying	pub viewport_index_varying: bool
 field	metal2vulkan::pipeline::LoweringInputs.word_colors	pub word_colors: BTreeMap<u32, metal::format::WordAttachment>
-field	metal2vulkan::pipeline::LoweringInputs.ycbcr_in_place	pub ycbcr_in_place: BTreeSet<SlotRef>
-field	metal2vulkan::pipeline::LoweringInputs.ycbcr_planes_sampled	pub ycbcr_planes_sampled: BTreeMap<SlotRef, crate::bind::YCbCrPlanesSampler>
 field	metal2vulkan::pipeline::LoweringInputs.zeroed_colors	pub zeroed_colors: BTreeMap<u32, metal::PixelFormat>
 field	metal2vulkan::pipeline::MeshPipelineDescriptor.alpha_to_coverage	pub alpha_to_coverage: bool
 field	metal2vulkan::pipeline::MeshPipelineDescriptor.alpha_to_one	pub alpha_to_one: bool
@@ -3099,13 +2766,8 @@ fn	metal2vulkan-runtime::serve_stage	pub fn serve_stage(instance: &Instance, mut
 fn	metal2vulkan::ash_interop::sampler_create_info	pub fn sampler_create_info<'a>(desc: &vk::SamplerDesc, reduction: &'a mut ash::vk::SamplerReductionModeCreateInfo<'static>, border: &'a mut ash::vk::SamplerBorderColorComponentMappingCreateInfoEXT<'static>) -> ash::vk::SamplerCreateInfo<'a>
 fn	metal2vulkan::bind::alpha_test_code	pub fn alpha_test_code(reference: f32) -> u32
 fn	metal2vulkan::bind::clamped_depth	pub const fn clamped_depth(bits: u32) -> u32
-fn	metal2vulkan::bind::fold_object_grid	pub fn fold_object_grid(groups: [u32; 3], threads: [u32; 3], task: MeshGridLimits, direct: bool) -> Option<ObjectFold>
-fn	metal2vulkan::bind::handle_entry	pub fn handle_entry(id: u64, element: u32, flags: u32) -> [u8; HANDLE_ENTRY_BYTES as usize]
 fn	metal2vulkan::bind::indirect_commands::records_address	pub const fn records_address(id: u64) -> u64
 fn	metal2vulkan::bind::indirect_commands::written_flag_offset	pub const fn written_flag_offset(capacity: u32, index: u32) -> u64
-fn	metal2vulkan::bind::metal_object_grid	pub fn metal_object_grid(groups: [u32; 3], threads: [u32; 3], direct: bool) -> Option<([u32; 3], [u32; 3])>
-fn	metal2vulkan::bind::part_texels	pub fn part_texels(limits: &Limits) -> u64
-fn	metal2vulkan::bind::sampler_desc	pub fn sampler_desc(device: &crate::device::Device, desc: &crate::bind::state::SamplerDescriptor, use_: SamplerUse, opaque_black: OpaqueBlackBorder, image_format: Option<vk::Format>) -> Result<vk::SamplerDesc, BindError>
 fn	metal2vulkan::device::vk_stage	pub fn vk_stage(stage: Stage) -> vk::ShaderStage
 fn	metal2vulkan::metal::format::alpha_in_red	pub fn alpha_in_red(pf: PixelFormat, profile: &DeviceProfile) -> bool
 fn	metal2vulkan::metal::format::alpha_in_red_format	pub fn alpha_in_red_format(pf: PixelFormat) -> Option<vk::Format>
@@ -6463,10 +6125,6 @@ method	metal2vulkan::CancelToken::new	pub fn new() -> CancelToken
 method	metal2vulkan::bind::ArgumentBufferLayout::from_descriptors	pub fn from_descriptors(descriptors: &[ArgumentDescriptor]) -> Result<ArgumentBufferLayout, ArgumentLayoutError>
 method	metal2vulkan::bind::ArgumentBufferLayout::id_span	pub fn id_span(&self) -> u32
 method	metal2vulkan::bind::ArgumentDescriptor::new	pub fn new(data_type: DataType, index: u32) -> ArgumentDescriptor
-method	metal2vulkan::bind::ArgumentSampler::new	pub fn new(desc: SamplerDescriptor, resource_id: u64) -> ArgumentSampler
-method	metal2vulkan::bind::ArgumentSamplersShape::entries	pub fn entries(&self) -> u64
-method	metal2vulkan::bind::ArgumentSamplersShape::least_count	pub fn least_count(&self) -> u64
-method	metal2vulkan::bind::ArgumentSamplersShape::of	pub fn of(samplers: &[ArgumentSampler]) -> ArgumentSamplersShape
 method	metal2vulkan::bind::AstcDecode::block_extent	pub fn block_extent(self) -> [u32; 2]
 method	metal2vulkan::bind::AstcDecode::decode	pub fn decode(self, texels: AstcTexels, blocks: &[u8], size: [u32; 3]) -> Vec<u8>
 method	metal2vulkan::bind::AstcDecode::decode_into	pub fn decode_into(self, texels: AstcTexels, blocks: &[u8], [width, height, depth]: [u32; 3], out: &mut [u8])
@@ -6474,20 +6132,6 @@ method	metal2vulkan::bind::AstcDecode::form	pub fn form(self, texels: AstcTexels
 method	metal2vulkan::bind::AstcDecode::metal_value	pub fn metal_value(self, c: [u16; 4]) -> [f32; 4]
 method	metal2vulkan::bind::AstcDecode::of	pub fn of(pf: PixelFormat) -> Option<AstcDecode>
 method	metal2vulkan::bind::AstcDecode::texel_bytes	pub fn texel_bytes(self, texels: AstcTexels) -> u32
-method	metal2vulkan::bind::BindState::shape	pub fn shape(&self) -> BindShape
-method	metal2vulkan::bind::BindingPlan::content_digest	pub fn content_digest(&self) -> Result<crate::cache::Hash256, String>
-method	metal2vulkan::bind::BindingPlan::dispatch_variant	pub fn dispatch_variant(&self, dispatch: &Dispatch) -> Result<VariantKey, BindError>
-method	metal2vulkan::bind::BindingPlan::instantiate_dispatch	pub fn instantiate_dispatch(&self, state: &BindState, dispatch: &Dispatch) -> Result<DispatchCommands, BindError>
-method	metal2vulkan::bind::BindingPlan::instantiate_dispatch_into	pub fn instantiate_dispatch_into(&self, state: &BindState, dispatch: &Dispatch, commands: &mut DispatchCommands) -> Result<(), BindError>
-method	metal2vulkan::bind::BindingPlan::instantiate_draw	pub fn instantiate_draw(&self, state: &BindState, draw: &DrawCall) -> Result<DrawCommands, BindError>
-method	metal2vulkan::bind::BindingPlan::instantiate_draw_into	pub fn instantiate_draw_into(&self, state: &BindState, draw: &DrawCall, commands: &mut DrawCommands) -> Result<(), BindError>
-method	metal2vulkan::bind::BindingPlan::specialized_value	pub fn specialized_value(&self, key: SpecKey) -> Option<u64>
-method	metal2vulkan::bind::BoundBuffer::shape	pub fn shape(&self, ranges: BufferRanges) -> BufferShape
-method	metal2vulkan::bind::BoundSampler::new	pub fn new(desc: SamplerDescriptor) -> BoundSampler
-method	metal2vulkan::bind::BoundSampler::shape	pub fn shape(&self) -> BoundSamplerShape
-method	metal2vulkan::bind::BoundTexture::shape	pub fn shape(&self) -> TextureShape
-method	metal2vulkan::bind::BufferRanges::length_class	pub fn length_class(&self, length: u64) -> u8
-method	metal2vulkan::bind::BufferRanges::of	pub fn of(limits: &Limits) -> BufferRanges
 method	metal2vulkan::bind::Dispatch::threads_per_group	pub fn threads_per_group(&self) -> [u32; 3]
 method	metal2vulkan::bind::EtcDecode::block_bytes	pub fn block_bytes(self) -> u32
 method	metal2vulkan::bind::EtcDecode::block_values	pub fn block_values(self, block: &[u8]) -> [[i32; 2]; 16]
@@ -6497,19 +6141,7 @@ method	metal2vulkan::bind::EtcDecode::eleven_bit	pub fn eleven_bit(self) -> bool
 method	metal2vulkan::bind::EtcDecode::metal_value	pub fn metal_value(self, c: i32) -> f32
 method	metal2vulkan::bind::EtcDecode::of	pub fn of(pf: PixelFormat) -> Option<EtcDecode>
 method	metal2vulkan::bind::EtcDecode::texel_bytes	pub fn texel_bytes(self, texels: EtcTexels) -> u32
-method	metal2vulkan::bind::ExecutionStatus::decode	pub fn decode(bytes: &[u8; ExecutionStatus::BYTES]) -> StatusReport
-method	metal2vulkan::bind::ExecutionStatus::initial	pub const fn initial() -> [u8; ExecutionStatus::BYTES]
-method	metal2vulkan::bind::FunctionTableSnapshot::of	pub fn of(sizes: impl IntoIterator<Item = u32>) -> Option<FunctionTableSnapshot>
-method	metal2vulkan::bind::FunctionTableSnapshot::offsets	pub fn offsets(&self) -> &[u32]
-method	metal2vulkan::bind::FunctionTablesShape::entries	pub fn entries(&self) -> u64
-method	metal2vulkan::bind::FunctionTablesShape::least_count	pub fn least_count(&self) -> u64
-method	metal2vulkan::bind::FunctionTablesShape::may_pass	pub fn may_pass(&self, max_storage_buffer_range: u32) -> bool
-method	metal2vulkan::bind::FunctionTablesShape::of	pub fn of(tables: &[ArgumentFunctionTable]) -> FunctionTablesShape
-method	metal2vulkan::bind::ImageblockSize::new	pub fn new(width: u32, height: u32) -> ImageblockSize
-method	metal2vulkan::bind::IndexBufferRef::fetch_end	pub fn fetch_end(&self, index_offset: u64) -> u64
 method	metal2vulkan::bind::IndexBufferRef::new	pub fn new(token: u32, length: u64) -> IndexBufferRef
-method	metal2vulkan::bind::NeutralResource::for_image	pub fn for_image(class: &ImageHandleClass) -> Option<NeutralResource>
-method	metal2vulkan::bind::NeutralResource::format	pub fn format(&self) -> Option<vk::Format>
 method	metal2vulkan::bind::PvrtcDecode::metal_value	pub fn metal_value(self, ch: usize, c: u8) -> f32
 method	metal2vulkan::bind::PvrtcDecode::of	pub fn of(pf: PixelFormat) -> Option<PvrtcDecode>
 method	metal2vulkan::bind::RasterizationRateMap::is_identity	pub fn is_identity(&self) -> bool
@@ -6525,24 +6157,6 @@ method	metal2vulkan::bind::RateMapLayerDescriptor::new	pub fn new(horizontal: Ve
 method	metal2vulkan::bind::SamplerDescriptor::new	pub fn new() -> SamplerDescriptor
 method	metal2vulkan::bind::SamplerDescriptor::shape	pub fn shape(&self) -> SamplerShape
 method	metal2vulkan::bind::StageInRegion::new	pub fn new(origin: [u32; 3], size: [u32; 3]) -> StageInRegion
-method	metal2vulkan::bind::StageTable::shape	pub fn shape(&self) -> StageShape
-method	metal2vulkan::bind::StatusBits::contains	pub const fn contains(self, other: StatusBits) -> bool
-method	metal2vulkan::bind::StatusWord::byte_offset	pub const fn byte_offset(self) -> u32
-method	metal2vulkan::bind::StatusWord::index	pub const fn index(self) -> u32
-method	metal2vulkan::bind::TessellationFactorBuffer::new	pub fn new(length: u64, offset: u64, instance_stride: u64) -> TessellationFactorBuffer
-method	metal2vulkan::bind::TessellationFactors::new	pub fn new(buffer: Option<TessellationFactorBuffer>, scale: f32) -> TessellationFactors
-method	metal2vulkan::bind::TexelRows::words	pub fn words(&self) -> [u32; Self::WORDS]
-method	metal2vulkan::bind::TextureFacts::new	pub fn new(texture_type: metal::TextureType, pixel_format: metal::PixelFormat) -> Self
-method	metal2vulkan::bind::TextureFacts::offset_base_axes	pub fn offset_base_axes(&self) -> u8
-method	metal2vulkan::bind::TextureFacts::shape	pub fn shape(&self) -> TextureShape
-method	metal2vulkan::bind::UsedResource::new	pub fn new(class: ResourceClass, token: u32) -> UsedResource
-method	metal2vulkan::bind::VertexAmplification::layer	pub fn layer(&self, a: u32, length: u32, max: u32) -> u32
-method	metal2vulkan::bind::VertexAmplification::mapping	pub fn mapping(&self, a: u32, max: u32) -> ViewMapping
-method	metal2vulkan::bind::VertexAmplification::new	pub fn new(count: u32, view_mappings: Vec<ViewMapping>) -> VertexAmplification
-method	metal2vulkan::bind::YCbCrCodes::of	pub fn of(format: crate::metal::format::YCbCrFormat) -> Option<YCbCrCodes>
-method	metal2vulkan::bind::YCbCrInPlace::planes_sampler	pub fn planes_sampler(&self) -> Option<YCbCrPlanesSampler>
-method	metal2vulkan::bind::YCbCrInPlace::sampler	pub fn sampler(&self) -> YCbCrPlanesSampler
-method	metal2vulkan::bind::YCbCrInPlace::words	pub fn words(&self) -> [u32; Self::WORDS]
 method	metal2vulkan::bind::indirect_commands::Action::writes	pub fn writes(&self) -> crate::pipeline::CommandWrites
 method	metal2vulkan::bind::indirect_commands::Bindings::buffers	pub fn buffers(&self, stage: BufferStage) -> &[Option<BufferBinding>; BINDING_COUNT]
 method	metal2vulkan::bind::indirect_commands::Bindings::buffers_mut	pub fn buffers_mut(&mut self, stage: BufferStage) -> &mut [Option<BufferBinding>; BINDING_COUNT]
@@ -6584,9 +6198,7 @@ method	metal2vulkan::bind::indirect_commands::ResolvedBindings::buffers	pub fn b
 method	metal2vulkan::cache::PipelineKey::digest	pub const fn digest(&self) -> &Hash256
 method	metal2vulkan::cache::PipelineKey::new	pub const fn new(hash: Hash256) -> PipelineKey
 method	metal2vulkan::cache::SpecializationKey::new	pub fn new() -> SpecializationKey
-method	metal2vulkan::cache::VariantKey::covers	pub fn covers(&self, settled: &VariantKey) -> bool
 method	metal2vulkan::cache::VariantKey::is_empty	pub fn is_empty(&self) -> bool
-method	metal2vulkan::cache::VariantKey::large_buffer_form	pub fn large_buffer_form(&self, dependencies: &[crate::pipeline::RuntimeDependency], shape: &crate::bind::BindShape) -> VariantKey
 method	metal2vulkan::cache::VariantKey::lowering_inputs	pub fn lowering_inputs(&self, stage: crate::pipeline::sym::Stage) -> crate::pipeline::LoweringInputs
 method	metal2vulkan::cache::VariantKey::new	pub fn new() -> VariantKey
 method	metal2vulkan::device::AllocationLimits::new	pub fn new(max_memory_allocation_size: u64, max_buffer_size: u64) -> AllocationLimits
@@ -6811,7 +6423,6 @@ method	metal2vulkan::pipeline::CommandWrites::union	pub const fn union(self, oth
 method	metal2vulkan::pipeline::CommandWrites::writes_kinds	pub const fn writes_kinds(self, kinds: u8) -> bool
 method	metal2vulkan::pipeline::ComputePipeline::content_digest	pub fn content_digest(&self) -> Hash256
 method	metal2vulkan::pipeline::ComputePipeline::footprint	pub fn footprint(&self) -> u64
-method	metal2vulkan::pipeline::ComputePipeline::plan	pub fn plan(&self, device: &Device, shape: &BindShape) -> Result<BindingPlan, BindError>
 method	metal2vulkan::pipeline::ComputePipelineDescriptor::lowering_inputs	pub fn lowering_inputs(&self) -> LoweringInputs
 method	metal2vulkan::pipeline::ComputePipelineDescriptor::new	pub fn new(kernel: StageSource) -> ComputePipelineDescriptor
 method	metal2vulkan::pipeline::ComputePipelineDescriptor::reflection	pub fn reflection(&self, budget: &crate::Budget) -> Result<ComputePipelineReflection, Error>
@@ -6875,7 +6486,6 @@ method	metal2vulkan::pipeline::PrecisionNote::of_math_call	pub fn of_math_call(c
 method	metal2vulkan::pipeline::PrivateRenderState::new	pub const fn new() -> PrivateRenderState
 method	metal2vulkan::pipeline::RenderPipeline::content_digest	pub fn content_digest(&self) -> Hash256
 method	metal2vulkan::pipeline::RenderPipeline::footprint	pub fn footprint(&self) -> u64
-method	metal2vulkan::pipeline::RenderPipeline::plan	pub fn plan(&self, device: &Device, shape: &BindShape) -> Result<BindingPlan, BindError>
 method	metal2vulkan::pipeline::RenderPipelineDescriptor::fragment_writes_depth_unattached	pub fn fragment_writes_depth_unattached(&self, budget: &crate::Budget, entries: &StageEntries) -> Result<bool, Error>
 method	metal2vulkan::pipeline::RenderPipelineDescriptor::new	pub fn new(vertex: StageSource) -> RenderPipelineDescriptor
 method	metal2vulkan::pipeline::RenderPipelineDescriptor::reflection	pub fn reflection(&self, budget: &crate::Budget) -> Result<RenderPipelineReflection, Error>
@@ -7242,70 +6852,15 @@ struct	metal2vulkan::Budget	#[derive(Clone, Debug, Default)] #[non_exhaustive] p
 struct	metal2vulkan::CancelToken	#[derive(Clone, Debug, Default)] pub struct CancelToken(Arc<AtomicBool>)
 struct	metal2vulkan::bind::ArgumentBufferLayout	#[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ArgumentBufferLayout
 struct	metal2vulkan::bind::ArgumentDescriptor	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ArgumentDescriptor
-struct	metal2vulkan::bind::ArgumentFunctionTable	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ArgumentFunctionTable
 struct	metal2vulkan::bind::ArgumentMember	#[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ArgumentMember
-struct	metal2vulkan::bind::ArgumentSampler	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq)] #[non_exhaustive] pub struct ArgumentSampler
-struct	metal2vulkan::bind::ArgumentSamplersShape	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct ArgumentSamplersShape
 struct	metal2vulkan::bind::AstcDecode	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct AstcDecode
-struct	metal2vulkan::bind::BindShape	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct BindShape
-struct	metal2vulkan::bind::BindState	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq)] #[non_exhaustive] pub struct BindState
-struct	metal2vulkan::bind::BindingPlan	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct BindingPlan
-struct	metal2vulkan::bind::BoundAccelerationStructure	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct BoundAccelerationStructure
-struct	metal2vulkan::bind::BoundSampler	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq)] #[non_exhaustive] pub struct BoundSampler
-struct	metal2vulkan::bind::BoundSamplerShape	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct BoundSamplerShape
-struct	metal2vulkan::bind::BufferExtent	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct BufferExtent
-struct	metal2vulkan::bind::BufferRange	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct BufferRange
-struct	metal2vulkan::bind::BufferRanges	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct BufferRanges
-struct	metal2vulkan::bind::ByteRange	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ByteRange
-struct	metal2vulkan::bind::ComputeTemplate	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ComputeTemplate
-struct	metal2vulkan::bind::DescriptorBytes	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct DescriptorBytes
-struct	metal2vulkan::bind::DescriptorRange	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct DescriptorRange
-struct	metal2vulkan::bind::DescriptorWrite	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct DescriptorWrite
-struct	metal2vulkan::bind::DispatchCommands	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct DispatchCommands
-struct	metal2vulkan::bind::DispatchRegion	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct DispatchRegion
-struct	metal2vulkan::bind::DrawCommands	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct DrawCommands
-struct	metal2vulkan::bind::ExecutionStatus	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub struct ExecutionStatus
-struct	metal2vulkan::bind::FunctionTableSnapshot	#[derive(Clone, Debug, PartialEq, Eq, Hash)] pub struct FunctionTableSnapshot
-struct	metal2vulkan::bind::FunctionTablesShape	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct FunctionTablesShape
-struct	metal2vulkan::bind::GraphicsTemplate	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct GraphicsTemplate
-struct	metal2vulkan::bind::ImageViewDesc	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ImageViewDesc
-struct	metal2vulkan::bind::ImageblockSize	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct ImageblockSize
 struct	metal2vulkan::bind::IndexBufferRef	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct IndexBufferRef
-struct	metal2vulkan::bind::IndirectRef	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct IndirectRef
-struct	metal2vulkan::bind::MeshArguments	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct MeshArguments
-struct	metal2vulkan::bind::MeshGridLimits	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct MeshGridLimits
-struct	metal2vulkan::bind::ObjectFold	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ObjectFold
-struct	metal2vulkan::bind::PushConstantWrite	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct PushConstantWrite
-struct	metal2vulkan::bind::PushFieldPlacement	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct PushFieldPlacement
-struct	metal2vulkan::bind::PushTemplate	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct PushTemplate
 struct	metal2vulkan::bind::PvrtcDecode	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct PvrtcDecode
 struct	metal2vulkan::bind::RasterizationRateMap	#[derive(Clone, Debug, PartialEq, Eq, Hash)] pub struct RasterizationRateMap
 struct	metal2vulkan::bind::RateMapDescriptor	#[derive(Clone, Debug, PartialEq)] #[non_exhaustive] pub struct RateMapDescriptor
 struct	metal2vulkan::bind::RateMapLayerDescriptor	#[derive(Clone, Debug, Default, PartialEq)] #[non_exhaustive] pub struct RateMapLayerDescriptor
-struct	metal2vulkan::bind::ResidentRange	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ResidentRange
-struct	metal2vulkan::bind::ResourceUse	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ResourceUse
-struct	metal2vulkan::bind::RootTable	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct RootTable
 struct	metal2vulkan::bind::SamplerDescriptor	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq)] #[non_exhaustive] pub struct SamplerDescriptor
-struct	metal2vulkan::bind::SamplerShape	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct SamplerShape
 struct	metal2vulkan::bind::StageInRegion	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct StageInRegion
-struct	metal2vulkan::bind::StageShape	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct StageShape
-struct	metal2vulkan::bind::StageTable	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq)] #[non_exhaustive] pub struct StageTable
-struct	metal2vulkan::bind::StatusBits	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct StatusBits(pub u32)
-struct	metal2vulkan::bind::StatusReport	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct StatusReport
-struct	metal2vulkan::bind::TessellationFactorBuffer	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct TessellationFactorBuffer
-struct	metal2vulkan::bind::TessellationFactors	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq)] #[non_exhaustive] pub struct TessellationFactors
-struct	metal2vulkan::bind::TexelRows	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] #[non_exhaustive] pub struct TexelRows
-struct	metal2vulkan::bind::TextureFacts	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct TextureFacts
-struct	metal2vulkan::bind::TileThreadgroupArgument	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct TileThreadgroupArgument
-struct	metal2vulkan::bind::TileThreadgroupMemory	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct TileThreadgroupMemory
-struct	metal2vulkan::bind::UsedResource	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct UsedResource
-struct	metal2vulkan::bind::UsedShape	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct UsedShape
-struct	metal2vulkan::bind::VertexAmplification	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct VertexAmplification
-struct	metal2vulkan::bind::VertexBufferBind	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct VertexBufferBind
-struct	metal2vulkan::bind::ViewMapping	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub struct ViewMapping
-struct	metal2vulkan::bind::ViewSetup	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ViewSetup
-struct	metal2vulkan::bind::YCbCrCodes	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct YCbCrCodes
-struct	metal2vulkan::bind::YCbCrInPlace	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] #[non_exhaustive] pub struct YCbCrInPlace
 struct	metal2vulkan::bind::YCbCrPlanesSampler	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] #[non_exhaustive] pub struct YCbCrPlanesSampler
 struct	metal2vulkan::bind::indirect_commands::Bindings	#[derive(Clone, Debug, Default, PartialEq, Eq)] pub struct Bindings
 struct	metal2vulkan::bind::indirect_commands::BufferBinding	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct BufferBinding
@@ -7564,14 +7119,11 @@ trait-impl	metal2vulkan-runtime::floor::Maintenance8Features impl fe impl vk::Ex
 trait-impl	metal2vulkan-runtime::floor::Maintenance8Features impl fe impl vk::ExtendsPhysicalDeviceFeatures2	unsafe impl vk::ExtendsPhysicalDeviceFeatures2 for Maintenance8Features
 trait-impl	metal2vulkan-runtime::floor::Missing impl fmt::Display	impl fmt::Display for Missing
 trait-impl	metal2vulkan::bind::ArgumentLayoutError impl From<Error>	impl From<Error> for ArgumentLayoutError
-trait-impl	metal2vulkan::bind::DrawCommands impl Default	impl Default for DrawCommands
 trait-impl	metal2vulkan::bind::RateMapDescriptor impl Default	impl Default for RateMapDescriptor
 trait-impl	metal2vulkan::bind::RateMapError impl fmt::Display	impl fmt::Display for RateMapError
 trait-impl	metal2vulkan::bind::RateMapError impl std::error::Error	impl std::error::Error for RateMapError
 trait-impl	metal2vulkan::bind::SamplerDescriptor impl Default	impl Default for SamplerDescriptor
-trait-impl	metal2vulkan::bind::TessellationFactors impl Default	impl Default for TessellationFactors
 trait-impl	metal2vulkan::bind::UnpinnedCompile impl fmt::Display	impl fmt::Display for UnpinnedCompile
-trait-impl	metal2vulkan::bind::VertexAmplification impl Default	impl Default for VertexAmplification
 trait-impl	metal2vulkan::bind::indirect_commands::AddressError impl fmt::Display	impl fmt::Display for AddressError
 trait-impl	metal2vulkan::bind::indirect_commands::AddressError impl std::error::Error	impl std::error::Error for AddressError
 trait-impl	metal2vulkan::bind::indirect_commands::BindingError impl fmt::Display	impl fmt::Display for BindingError
@@ -7588,8 +7140,6 @@ trait-impl	metal2vulkan::device::DevicePolicy impl Default	impl Default for Devi
 trait-impl	metal2vulkan::device::SpirvCapability impl Codec	impl Codec for SpirvCapability
 trait-impl	metal2vulkan::device::SpirvCapability impl fmt::Debug	impl fmt::Debug for SpirvCapability
 trait-impl	metal2vulkan::error::Attachment impl fmt::Display	impl fmt::Display for Attachment
-trait-impl	metal2vulkan::error::BindError impl fmt::Display	impl fmt::Display for BindError
-trait-impl	metal2vulkan::error::BindError impl std::error::Error	impl std::error::Error for BindError
 trait-impl	metal2vulkan::error::DescriptorError impl From<RequestError>	impl From<RequestError> for DescriptorError
 trait-impl	metal2vulkan::error::DiagName impl fmt::Debug	impl fmt::Debug for DiagName
 trait-impl	metal2vulkan::error::DiagName impl fmt::Display	impl fmt::Display for DiagName
@@ -8905,14 +8455,12 @@ variant	metal2vulkan-runtime::PrecisionNote::ExtrapolatedInterpolation	Extrapola
 variant	metal2vulkan-runtime::PrecisionNote::F16FmaDoubleRounding	F16FmaDoubleRounding
 variant	metal2vulkan-runtime::PrecisionNote::F16IntConvDoubleRounding	F16IntConvDoubleRounding
 variant	metal2vulkan-runtime::PrecisionNote::FastMathRewrites	FastMathRewrites
-variant	metal2vulkan-runtime::PrecisionNote::FloatSampleFilter	FloatSampleFilter
 variant	metal2vulkan-runtime::PrecisionNote::Fp8Value	Fp8Value
 variant	metal2vulkan-runtime::PrecisionNote::FragmentSimdgroupGrouping	FragmentSimdgroupGrouping
 variant	metal2vulkan-runtime::PrecisionNote::FunctionStorageAssumed	FunctionStorageAssumed
 variant	metal2vulkan-runtime::PrecisionNote::GradFromBias	GradFromBias
 variant	metal2vulkan-runtime::PrecisionNote::HalfOutputFastMathBlend	HalfOutputFastMathBlend
 variant	metal2vulkan-runtime::PrecisionNote::HalfOutputPrecision	HalfOutputPrecision
-variant	metal2vulkan-runtime::PrecisionNote::HalfSampleFilter	HalfSampleFilter
 variant	metal2vulkan-runtime::PrecisionNote::HalfTexelConversion	HalfTexelConversion
 variant	metal2vulkan-runtime::PrecisionNote::LinkedSamplerNumbering	LinkedSamplerNumbering
 variant	metal2vulkan-runtime::PrecisionNote::LoopedSampleOutputs	LoopedSampleOutputs
@@ -9130,15 +8678,6 @@ variant	metal2vulkan-runtime::floor::Missing::QueueFamily	QueueFamily
 variant	metal2vulkan-runtime::floor::Missing::SetLayout	SetLayout { set: u32 }
 variant	metal2vulkan-runtime::floor::Missing::TimeDomain	TimeDomain(&'static str)
 variant	metal2vulkan-runtime::floor::Missing::Version	Version(u32)
-variant	metal2vulkan::bind::AccessClass::Attachment	Attachment
-variant	metal2vulkan::bind::AccessClass::Index	Index
-variant	metal2vulkan::bind::AccessClass::Indirect	Indirect
-variant	metal2vulkan::bind::AccessClass::Sampled	Sampled
-variant	metal2vulkan::bind::AccessClass::Storage	Storage
-variant	metal2vulkan::bind::AccessClass::StorageImage	StorageImage
-variant	metal2vulkan::bind::AccessClass::TexelRows	TexelRows
-variant	metal2vulkan::bind::AccessClass::VertexInput	VertexInput
-variant	metal2vulkan::bind::AccessClass::YCbCrPlanes	YCbCrPlanes
 variant	metal2vulkan::bind::ArgumentLayoutError::ArrayOfArrays	ArrayOfArrays { id: u32 }
 variant	metal2vulkan::bind::ArgumentLayoutError::Compile	Compile(Error)
 variant	metal2vulkan::bind::ArgumentLayoutError::ConstantBlockAlignment	ConstantBlockAlignment { position: usize }
@@ -9161,23 +8700,13 @@ variant	metal2vulkan::bind::ArgumentType::VisibleFunctionTable	VisibleFunctionTa
 variant	metal2vulkan::bind::AstcTexels::Float	Float
 variant	metal2vulkan::bind::AstcTexels::Half	Half
 variant	metal2vulkan::bind::AstcTexels::Unorm8	Unorm8
-variant	metal2vulkan::bind::BoundBuffer::Buffer	Buffer { length: u64, offset: u64, gpu_address: u64, device_address: Option<u64>, attribute_stride: Option<u32> }
-variant	metal2vulkan::bind::BoundBuffer::Bytes	Bytes { len: u32,  attribute_stride: Option<u32> }
-variant	metal2vulkan::bind::BoundTexture::Buffer	Buffer { pixel_format: metal::PixelFormat, offset: u64, length: u64, bytes_per_row: u64, resource_id: Option<u64>,  swizzle: metal::TextureSwizzleChannels,  parts: u32 }
-variant	metal2vulkan::bind::BoundTexture::Texture	Texture { facts: TextureFacts, resource_id: Option<u64> }
-variant	metal2vulkan::bind::BufferShape::Buffer	Buffer { attribute_stride: Option<u32>, device_address: bool, length_class: u8, offset_alignment: u32 }
-variant	metal2vulkan::bind::BufferShape::Bytes	Bytes {  attribute_stride: Option<u32> }
 variant	metal2vulkan::bind::Dispatch::ThreadgroupRange	ThreadgroupRange { groups: [u32; 3], first: [u32; 3], count: [u32; 3], threads_per_group: [u32; 3] }
 variant	metal2vulkan::bind::Dispatch::Threadgroups	Threadgroups { groups: [u32; 3], threads_per_group: [u32; 3] }
-variant	metal2vulkan::bind::Dispatch::ThreadgroupsIndirect	ThreadgroupsIndirect { indirect: IndirectRef, threads_per_group: [u32; 3] }
 variant	metal2vulkan::bind::Dispatch::Threads	Threads { threads: [u32; 3], threads_per_group: [u32; 3] }
 variant	metal2vulkan::bind::DrawCall::Indexed	Indexed { index_type: vk::IndexType, index_buffer: IndexBufferRef, index_count: u32, index_offset: u64, instance_count: u32, base_vertex: i32, base_instance: u32 }
-variant	metal2vulkan::bind::DrawCall::Indirect	Indirect { indirect: IndirectRef, indexed: Option<(vk::IndexType, IndexBufferRef, u64)> }
 variant	metal2vulkan::bind::DrawCall::MeshThreadgroups	MeshThreadgroups { groups: [u32; 3], threads_per_object_group: [u32; 3], threads_per_mesh_group: [u32; 3] }
-variant	metal2vulkan::bind::DrawCall::MeshThreadgroupsIndirect	MeshThreadgroupsIndirect { indirect: IndirectRef, threads_per_object_group: [u32; 3], threads_per_mesh_group: [u32; 3] }
 variant	metal2vulkan::bind::DrawCall::MeshThreads	MeshThreads { threads: [u32; 3], threads_per_object_group: [u32; 3], threads_per_mesh_group: [u32; 3] }
 variant	metal2vulkan::bind::DrawCall::Patches	Patches { control_points: u32, patch_start: u32, patch_count: u32, patch_index: Option<(IndexBufferRef, u64)>, instance_count: u32, base_instance: u32, control_point_index: Option<(IndexBufferRef, u64)> }
-variant	metal2vulkan::bind::DrawCall::PatchesIndirect	PatchesIndirect { control_points: u32, patch_index: Option<(IndexBufferRef, u64)>, indirect: IndirectRef, control_point_index: Option<(IndexBufferRef, u64)> }
 variant	metal2vulkan::bind::DrawCall::Primitives	Primitives { vertex_start: u32, vertex_count: u32, instance_count: u32, base_instance: u32 }
 variant	metal2vulkan::bind::EtcDecode::R11Snorm	R11Snorm
 variant	metal2vulkan::bind::EtcDecode::R11Unorm	R11Unorm
@@ -9188,36 +8717,6 @@ variant	metal2vulkan::bind::EtcDecode::Rgb8A1	Rgb8A1
 variant	metal2vulkan::bind::EtcDecode::Rgba8	Rgba8
 variant	metal2vulkan::bind::EtcTexels::Compact	Compact
 variant	metal2vulkan::bind::EtcTexels::Float	Float
-variant	metal2vulkan::bind::FieldLocation::ArgumentTable	ArgumentTable { offset: u32 }
-variant	metal2vulkan::bind::FieldLocation::PushWindow	PushWindow { offset: u32 }
-variant	metal2vulkan::bind::HeapPlacement::Planned	Planned
-variant	metal2vulkan::bind::HeapPlacement::ResourceId	ResourceId
-variant	metal2vulkan::bind::HeapSource::Bound	Bound(SlotRef)
-variant	metal2vulkan::bind::HeapSource::Used	Used(u32)
-variant	metal2vulkan::bind::ImageSource::Neutral	Neutral(NeutralResource)
-variant	metal2vulkan::bind::ImageSource::Texture	Texture { slot: SlotRef, view: ImageViewDesc }
-variant	metal2vulkan::bind::IndexOverrun::Clamped	Clamped { past_end: u32 }
-variant	metal2vulkan::bind::IndirectArgs::Buffer	Buffer(IndirectRef)
-variant	metal2vulkan::bind::IndirectArgs::Replay	Replay
-variant	metal2vulkan::bind::MeshArgumentsForm::FoldedObject	FoldedObject
-variant	metal2vulkan::bind::MeshArgumentsForm::Mesh	Mesh
-variant	metal2vulkan::bind::MeshArgumentsForm::Object	Object
-variant	metal2vulkan::bind::NeutralResource::Image	Image { view_type: vk::ImageViewType, sampled_type: SampledType, depth_compare: bool, samples: u32, storage_format: Option<vk::Format> }
-variant	metal2vulkan::bind::NeutralResource::Sampler	Sampler { compare: bool }
-variant	metal2vulkan::bind::NeutralResource::Sink	Sink { min_bytes: u32 }
-variant	metal2vulkan::bind::NeutralResource::TexelBuffer	TexelBuffer { format: vk::Format }
-variant	metal2vulkan::bind::NeutralResource::ZeroBuffer	ZeroBuffer { min_bytes: u32 }
-variant	metal2vulkan::bind::PlanDiagnostic::AstcStorageNeutral	AstcStorageNeutral { slot: SlotRef, substituted: NeutralResource }
-variant	metal2vulkan::bind::PlanDiagnostic::CrossClassHeapNeutral	CrossClassHeapNeutral { stage: Stage, class: HandleClass, element: u32, source: HeapSource }
-variant	metal2vulkan::bind::PlanDiagnostic::CrossClassNeutral	CrossClassNeutral { slot: SlotRef, substituted: NeutralResource }
-variant	metal2vulkan::bind::PlanDiagnostic::IncompatibleBinding	IncompatibleBinding { slot: SlotRef, substituted: NeutralResource }
-variant	metal2vulkan::bind::PlanDiagnostic::IncompatibleHeapEntry	IncompatibleHeapEntry { class: HandleClass, element: u32, source: HeapSource, substituted: NeutralResource }
-variant	metal2vulkan::bind::PushHole::CaptureIndexAddress	CaptureIndexAddress { stages: vk::ShaderStageFlags, offset: u32 }
-variant	metal2vulkan::bind::PushHole::CommandRecordsAddress	CommandRecordsAddress { stages: vk::ShaderStageFlags, offset: u32 }
-variant	metal2vulkan::bind::PushHole::ExecutionStatusAddress	ExecutionStatusAddress { stages: vk::ShaderStageFlags, offset: u32 }
-variant	metal2vulkan::bind::PushHole::MergedDrawAddress	MergedDrawAddress { stages: vk::ShaderStageFlags, offset: u32 }
-variant	metal2vulkan::bind::PushHole::ReplayRegionAddress	ReplayRegionAddress { stages: vk::ShaderStageFlags, offset: u32 }
-variant	metal2vulkan::bind::PushHole::RootTableAddress	RootTableAddress { stages: vk::ShaderStageFlags, offset: u32 }
 variant	metal2vulkan::bind::RateMapError::ExtentMismatch	ExtentMismatch { layer: usize, axis: usize }
 variant	metal2vulkan::bind::RateMapError::Granularity	Granularity { granularity: u32 }
 variant	metal2vulkan::bind::RateMapError::NoSamples	NoSamples { layer: usize, axis: usize }
@@ -9226,67 +8725,11 @@ variant	metal2vulkan::bind::RateMapError::ScreenExtent	ScreenExtent { extent: u3
 variant	metal2vulkan::bind::RateMapError::Tile	Tile { tile: usize }
 variant	metal2vulkan::bind::RateMapError::Unpinned	Unpinned { reason: UnpinnedCompile }
 variant	metal2vulkan::bind::RateMapError::VerticalAxis	VerticalAxis { layer: usize }
-variant	metal2vulkan::bind::ResourceClass::Buffer	Buffer
-variant	metal2vulkan::bind::ResourceClass::Heap	Heap
-variant	metal2vulkan::bind::ResourceClass::Texture	Texture(TextureFacts)
-variant	metal2vulkan::bind::SamplerSource::Immutable	Immutable
-variant	metal2vulkan::bind::SamplerSource::Neutral	Neutral(NeutralResource)
-variant	metal2vulkan::bind::SamplerSource::Slot	Slot { slot: SlotRef, compare: bool, integer: bool, opaque_black: OpaqueBlackBorder }
-variant	metal2vulkan::bind::StatusWord::ResidentMisses	ResidentMisses
-variant	metal2vulkan::bind::StatusWord::SeqCstFences	SeqCstFences
-variant	metal2vulkan::bind::StatusWord::Status	Status
-variant	metal2vulkan::bind::TextureShape::Buffer	Buffer { pixel_format: metal::PixelFormat,  swizzle: metal::TextureSwizzleChannels,  parts: u32 }
-variant	metal2vulkan::bind::TextureShape::Texture	Texture { texture_type: metal::TextureType, pixel_format: metal::PixelFormat, sample_count: u32, usage: metal::TextureUsage,  mipmap_level_count: u32,  sparse: bool,  swizzle: metal::TextureSwizzleChannels,  address_modes: metal::sampler::AddressModeMap,  offset_base_axes: u8,  ycbcr_in_place: bool,  ycbcr_planes_sampler: Option<crate::bind::YCbCrPlanesSampler>,  texel_rows: bool }
 variant	metal2vulkan::bind::UnpinnedCompile::DenseSamples	DenseSamples { layer: usize, axis: usize, samples: usize, extent: u32 }
 variant	metal2vulkan::bind::UnpinnedCompile::LayerCount	LayerCount { count: usize }
 variant	metal2vulkan::bind::UnpinnedCompile::SampleCount	SampleCount { layer: usize, axis: usize, samples: usize, max: usize }
 variant	metal2vulkan::bind::UnpinnedCompile::SampleOutOfRange	SampleOutOfRange { layer: usize, axis: usize, index: usize }
 variant	metal2vulkan::bind::UnpinnedCompile::ScreenExtent	ScreenExtent { extent: u32 }
-variant	metal2vulkan::bind::UseTarget::ControlPointIndices	ControlPointIndices
-variant	metal2vulkan::bind::UseTarget::IndexBuffer	IndexBuffer
-variant	metal2vulkan::bind::UseTarget::Indirect	Indirect
-variant	metal2vulkan::bind::UseTarget::PatchIndices	PatchIndices
-variant	metal2vulkan::bind::UseTarget::Slot	Slot(SlotRef)
-variant	metal2vulkan::bind::UseTarget::TessellationFactors	TessellationFactors
-variant	metal2vulkan::bind::UseTarget::TileMap	TileMap(SlotRef)
-variant	metal2vulkan::bind::UseTarget::Used	Used(u32)
-variant	metal2vulkan::bind::UsedClass::Buffer	Buffer
-variant	metal2vulkan::bind::UsedClass::Heap	Heap
-variant	metal2vulkan::bind::UsedClass::Texture	Texture(TextureShape)
-variant	metal2vulkan::bind::WriteSource::AccelerationStructure	AccelerationStructure { slot: SlotRef, level: AccelerationStructureLevel }
-variant	metal2vulkan::bind::WriteSource::ArgumentSampler	ArgumentSampler { index: u32, compare: bool, integer: bool }
-variant	metal2vulkan::bind::WriteSource::ArgumentTable	ArgumentTable { stage: Stage, bytes_len: u32 }
-variant	metal2vulkan::bind::WriteSource::Attachment	Attachment { color_index: u32 }
-variant	metal2vulkan::bind::WriteSource::Buffer	Buffer { slot: SlotRef }
-variant	metal2vulkan::bind::WriteSource::CombinedImageSampler	CombinedImageSampler { image: ImageSource, sampler: SamplerSource }
-variant	metal2vulkan::bind::WriteSource::ConstantBlob	ConstantBlob { stage: Stage }
-variant	metal2vulkan::bind::WriteSource::ControlPointIndices	ControlPointIndices
-variant	metal2vulkan::bind::WriteSource::ExecutionStatus	ExecutionStatus
-variant	metal2vulkan::bind::WriteSource::FunctionTableSnapshot	FunctionTableSnapshot
-variant	metal2vulkan::bind::WriteSource::HandleTable	HandleTable { stage: Stage, bytes_len: u32 }
-variant	metal2vulkan::bind::WriteSource::HeapEntry	HeapEntry { class: HandleClass, element: u32, source: HeapSource, view: ImageViewDesc }
-variant	metal2vulkan::bind::WriteSource::Imageblock	Imageblock
-variant	metal2vulkan::bind::WriteSource::InlineBytes	InlineBytes { slot: SlotRef }
-variant	metal2vulkan::bind::WriteSource::Neutral	Neutral(NeutralResource)
-variant	metal2vulkan::bind::WriteSource::PatchIndices	PatchIndices { min_bytes: u32 }
-variant	metal2vulkan::bind::WriteSource::Sampler	Sampler { slot: SlotRef, compare: bool, integer: bool, opaque_black: OpaqueBlackBorder }
-variant	metal2vulkan::bind::WriteSource::TessellationFactors	TessellationFactors
-variant	metal2vulkan::bind::WriteSource::TexelBuffer	TexelBuffer { slot: SlotRef, format: vk::Format, window: Window }
-variant	metal2vulkan::bind::WriteSource::TexelRows	TexelRows { slot: SlotRef, format: vk::Format }
-variant	metal2vulkan::bind::WriteSource::Texture	Texture { slot: SlotRef, view: ImageViewDesc }
-variant	metal2vulkan::bind::WriteSource::TileAttachment	TileAttachment { color_index: u32, format: vk::Format }
-variant	metal2vulkan::bind::WriteSource::TileMap	TileMap { slot: SlotRef }
-variant	metal2vulkan::bind::WriteSource::TileMemory	TileMemory { bytes: u64 }
-variant	metal2vulkan::bind::WriteSource::YCbCrInPlace	YCbCrInPlace { slot: SlotRef }
-variant	metal2vulkan::bind::WriteSource::YCbCrPlanesImage	YCbCrPlanesImage { slot: SlotRef }
-variant	metal2vulkan::bind::YCbCrMatrix::Bt2020	Bt2020
-variant	metal2vulkan::bind::YCbCrMatrix::Bt601	Bt601
-variant	metal2vulkan::bind::YCbCrMatrix::Bt709	Bt709
-variant	metal2vulkan::bind::YCbCrOutput::Codes	Codes
-variant	metal2vulkan::bind::YCbCrOutput::Converted	Converted
-variant	metal2vulkan::bind::YCbCrOutput::Srgb	Srgb
-variant	metal2vulkan::bind::YCbCrRange::Full	Full
-variant	metal2vulkan::bind::YCbCrRange::Video	Video
 variant	metal2vulkan::bind::indirect_commands::Action::DispatchThreadgroups	DispatchThreadgroups { grid: [u32; 3], local_size: [u32; 3] }
 variant	metal2vulkan::bind::indirect_commands::Action::DispatchThreads	DispatchThreads { grid: [u32; 3], local_size: [u32; 3] }
 variant	metal2vulkan::bind::indirect_commands::Action::DrawIndexedPatches	DrawIndexedPatches { control_points: u32, patch_start: u32, patch_count: u32, patch_index_buffer: u64, control_point_index_buffer: u64, instance_count: u32, base_instance: u32, factor_buffer: u64, factor_instance_stride: u32, factor_scale: u32 }
@@ -9788,33 +9231,6 @@ variant	metal2vulkan::error::AbiError::UnknownStageAttribute	UnknownStageAttribu
 variant	metal2vulkan::error::Attachment::Color	Color(u32)
 variant	metal2vulkan::error::Attachment::Depth	Depth
 variant	metal2vulkan::error::Attachment::Stencil	Stencil
-variant	metal2vulkan::error::BindError::ControlPointIndexRange	ControlPointIndexRange { needed: u64, limit: u64 }
-variant	metal2vulkan::error::BindError::ControlPointIndexing	ControlPointIndexing { indexed: bool }
-variant	metal2vulkan::error::BindError::DescriptorRangeExceeded	DescriptorRangeExceeded { slot: SlotRef, needed: u64, limit: u64 }
-variant	metal2vulkan::error::BindError::HeapTooLarge	HeapTooLarge { count: u64, limit: u64 }
-variant	metal2vulkan::error::BindError::Internal	Internal(InternalError)
-variant	metal2vulkan::error::BindError::InvalidControlPointIndexBuffer	InvalidControlPointIndexBuffer { offset: u64 }
-variant	metal2vulkan::error::BindError::InvalidDescriptor	InvalidDescriptor(DescriptorError)
-variant	metal2vulkan::error::BindError::InvalidDrawKind	InvalidDrawKind { patches: bool }
-variant	metal2vulkan::error::BindError::InvalidImageblockSize	InvalidImageblockSize { width: u32, height: u32 }
-variant	metal2vulkan::error::BindError::InvalidMeshDraw	InvalidMeshDraw { mesh: bool }
-variant	metal2vulkan::error::BindError::InvalidPatchIndexBuffer	InvalidPatchIndexBuffer { offset: u64 }
-variant	metal2vulkan::error::BindError::InvalidRenderArea	InvalidRenderArea { width: u32, height: u32 }
-variant	metal2vulkan::error::BindError::InvalidTessellationFactorScale	InvalidTessellationFactorScale { bits: u32 }
-variant	metal2vulkan::error::BindError::InvalidVertexAmplification	InvalidVertexAmplification { count: u32, max: u32, view_mappings: u32 }
-variant	metal2vulkan::error::BindError::MissingDeviceAddress	MissingDeviceAddress { slot: SlotRef }
-variant	metal2vulkan::error::BindError::MissingGuestAddress	MissingGuestAddress { slot: SlotRef }
-variant	metal2vulkan::error::BindError::MissingPrimitiveType	MissingPrimitiveType
-variant	metal2vulkan::error::BindError::MissingStageInRegion	MissingStageInRegion
-variant	metal2vulkan::error::BindError::MissingThreadgroupMemory	MissingThreadgroupMemory { index: u32 }
-variant	metal2vulkan::error::BindError::NeedsVariant	NeedsVariant { variant: Box<crate::cache::VariantKey> }
-variant	metal2vulkan::error::BindError::PatchControlPoints	PatchControlPoints { given: u32, expected: u32 }
-variant	metal2vulkan::error::BindError::PatchIndexRange	PatchIndexRange { needed: u64, limit: u64 }
-variant	metal2vulkan::error::BindError::SlotOutOfRange	SlotOutOfRange { slot: SlotRef }
-variant	metal2vulkan::error::BindError::TessellationFactorRange	TessellationFactorRange { needed: u64, limit: u64 }
-variant	metal2vulkan::error::BindError::TexelBufferTooLarge	TexelBufferTooLarge { slot: SlotRef, elements: u64, limit: u64 }
-variant	metal2vulkan::error::BindError::UnboundVertexBuffer	UnboundVertexBuffer { slot: SlotRef }
-variant	metal2vulkan::error::BindError::Unsupported	Unsupported(Unsupported)
 variant	metal2vulkan::error::BitcodeError::BadDataLayout	BadDataLayout
 variant	metal2vulkan::error::BitcodeError::BadIdentification	BadIdentification
 variant	metal2vulkan::error::BitcodeError::BadMetadata	BadMetadata
@@ -10338,14 +9754,12 @@ variant	metal2vulkan::pipeline::PrecisionNote::ExtrapolatedInterpolation	Extrapo
 variant	metal2vulkan::pipeline::PrecisionNote::F16FmaDoubleRounding	F16FmaDoubleRounding
 variant	metal2vulkan::pipeline::PrecisionNote::F16IntConvDoubleRounding	F16IntConvDoubleRounding
 variant	metal2vulkan::pipeline::PrecisionNote::FastMathRewrites	FastMathRewrites
-variant	metal2vulkan::pipeline::PrecisionNote::FloatSampleFilter	FloatSampleFilter
 variant	metal2vulkan::pipeline::PrecisionNote::Fp8Value	Fp8Value
 variant	metal2vulkan::pipeline::PrecisionNote::FragmentSimdgroupGrouping	FragmentSimdgroupGrouping
 variant	metal2vulkan::pipeline::PrecisionNote::FunctionStorageAssumed	FunctionStorageAssumed
 variant	metal2vulkan::pipeline::PrecisionNote::GradFromBias	GradFromBias
 variant	metal2vulkan::pipeline::PrecisionNote::HalfOutputFastMathBlend	HalfOutputFastMathBlend
 variant	metal2vulkan::pipeline::PrecisionNote::HalfOutputPrecision	HalfOutputPrecision
-variant	metal2vulkan::pipeline::PrecisionNote::HalfSampleFilter	HalfSampleFilter
 variant	metal2vulkan::pipeline::PrecisionNote::HalfTexelConversion	HalfTexelConversion
 variant	metal2vulkan::pipeline::PrecisionNote::LinkedSamplerNumbering	LinkedSamplerNumbering
 variant	metal2vulkan::pipeline::PrecisionNote::LoopedSampleOutputs	LoopedSampleOutputs
@@ -10422,13 +9836,11 @@ variant	metal2vulkan::pipeline::PushField::TessellationFactorAddress	Tessellatio
 variant	metal2vulkan::pipeline::PushField::TessellationFactorInstanceStride	TessellationFactorInstanceStride
 variant	metal2vulkan::pipeline::PushField::TessellationFactorOffset	TessellationFactorOffset
 variant	metal2vulkan::pipeline::PushField::TessellationFactorScale	TessellationFactorScale
-variant	metal2vulkan::pipeline::PushField::TexelRows	TexelRows(SlotRef)
 variant	metal2vulkan::pipeline::PushField::TextureIntegerChannels	TextureIntegerChannels(SlotRef)
 variant	metal2vulkan::pipeline::PushField::TextureLevels	TextureLevels(SlotRef)
 variant	metal2vulkan::pipeline::PushField::VertexBufferStride	VertexBufferStride(u32)
 variant	metal2vulkan::pipeline::PushField::VerticesPerPrimitive	VerticesPerPrimitive
 variant	metal2vulkan::pipeline::PushField::ViewportCount	ViewportCount
-variant	metal2vulkan::pipeline::PushField::YCbCrInPlace	YCbCrInPlace(SlotRef)
 variant	metal2vulkan::pipeline::PushField::ZeroAddress	ZeroAddress
 variant	metal2vulkan::pipeline::PushLoc::ArgumentTable	ArgumentTable { offset: u32 }
 variant	metal2vulkan::pipeline::PushLoc::Push	Push { offset: u32 }
@@ -10523,7 +9935,6 @@ variant	metal2vulkan::pipeline::RuntimeFact::StorageTextureNumericType	StorageTe
 variant	metal2vulkan::pipeline::RuntimeFact::StorageTextureWriteRounding	StorageTextureWriteRounding { slot: SlotRef, halves: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::TexelBufferParts	TexelBufferParts { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::TexelBufferRange	TexelBufferRange { slot: SlotRef }
-variant	metal2vulkan::pipeline::RuntimeFact::TexelRows	TexelRows { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::TextureSwizzle	TextureSwizzle { slot: SlotRef }
 variant	metal2vulkan::pipeline::RuntimeFact::ThreadgroupMemoryLength	ThreadgroupMemoryLength { index: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::ThreadsPerThreadgroup	ThreadsPerThreadgroup
@@ -10536,7 +9947,6 @@ variant	metal2vulkan::pipeline::RuntimeFact::UnitAxes	UnitAxes { axes: u8, relie
 variant	metal2vulkan::pipeline::RuntimeFact::VertexBufferStride	VertexBufferStride { layout: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::VertexFetch	VertexFetch { attr: u32 }
 variant	metal2vulkan::pipeline::RuntimeFact::ViewportCount	ViewportCount
-variant	metal2vulkan::pipeline::RuntimeFact::YCbCrInPlace	YCbCrInPlace { slot: SlotRef, samplers: u32, device: bool }
 variant	metal2vulkan::pipeline::RuntimeFact::ZeroedColor	ZeroedColor { color: u32, format: crate::metal::PixelFormat }
 variant	metal2vulkan::pipeline::SampledType::Float	Float
 variant	metal2vulkan::pipeline::SampledType::Sint	Sint
@@ -10636,13 +10046,6 @@ variant	metal2vulkan::reflection::SlotWritability::Unknown	Unknown(SlotWriteGap)
 variant	metal2vulkan::reflection::SlotWriteGap::MemberRole	MemberRole
 variant	metal2vulkan::reflection::SlotWriteGap::UnmeasuredPayloadStage	UnmeasuredPayloadStage
 variant	metal2vulkan::reflection::SlotWriteGap::UnresolvedIndex	UnresolvedIndex
-variant	metal2vulkan::vk::DrawCommand::Draw	Draw { vertex_count: u32, instance_count: u32, first_vertex: u32, first_instance: u32 }
-variant	metal2vulkan::vk::DrawCommand::DrawIndexed	DrawIndexed { index_type: IndexType, index_buffer_offset: u64, index_count: u32, instance_count: u32, first_index: u32, vertex_offset: i32, first_instance: u32 }
-variant	metal2vulkan::vk::DrawCommand::DrawIndexedIndirect	DrawIndexedIndirect { index_type: IndexType, index_buffer_offset: u64, offset: u64, draw_count: u32, stride: u32 }
-variant	metal2vulkan::vk::DrawCommand::DrawIndirect	DrawIndirect { offset: u64, draw_count: u32, stride: u32 }
-variant	metal2vulkan::vk::DrawCommand::DrawMeshTasks	DrawMeshTasks { group_count_x: u32, group_count_y: u32, group_count_z: u32 }
-variant	metal2vulkan::vk::DrawCommand::DrawMeshTasksIndirect	DrawMeshTasksIndirect { offset: u64, draw_count: u32, stride: u32 }
-variant	metal2vulkan::vk::DrawCommand::DrawMeshTasksIndirectCount	DrawMeshTasksIndirectCount { offset: u64, count_offset: u64, max_draw_count: u32, stride: u32 }
 variant	metal2vulkan::vk::NumericFormat::Bool	Bool
 variant	metal2vulkan::vk::NumericFormat::Sfixed5	Sfixed5
 variant	metal2vulkan::vk::NumericFormat::Sfloat	Sfloat

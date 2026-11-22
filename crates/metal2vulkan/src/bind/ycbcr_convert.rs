@@ -61,9 +61,10 @@
 use crate::metal::format::ChromaSubsampling;
 
 /// The range of a YCbCr surface's codes, which its pixel format names.
+#[cfg(test)]
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum YCbCrRange {
+pub(crate) enum YCbCrRange {
     /// Video range: luma codes 16 to 235 span black to white (CoreVideo's `420v`).
     Video,
     /// Full range: luma codes 0 to 255 (CoreVideo's `420f`).
@@ -72,9 +73,10 @@ pub enum YCbCrRange {
 
 /// The YCbCr matrix of a conversion: the surface's `IOSurfaceYCbCrMatrix` as Metal reads it when
 /// it makes the texture (none reads as BT.601).
+#[cfg(test)]
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum YCbCrMatrix {
+pub(crate) enum YCbCrMatrix {
     /// ITU-R BT.601 (`ITU_R_601_4`, or no matrix).
     Bt601,
     /// ITU-R BT.709 (`ITU_R_709_2`).
@@ -165,6 +167,7 @@ impl YCbCrCodes {
 
 /// The `(kb, kr)` of red, green and blue for `range` and `matrix`, in the units of the module
 /// docs' conversion (measured, the module docs).
+#[cfg(test)]
 pub(crate) fn coefficients(range: YCbCrRange, matrix: YCbCrMatrix) -> [(i32, i32); 3] {
     match (range, matrix) {
         (YCbCrRange::Video, YCbCrMatrix::Bt601) => [(-9, 13123), (-3218, -6686), (16591, 9)],
@@ -327,6 +330,21 @@ pub(crate) fn ycbcr_read(
         YCbCrOutput::Converted => sums().map(|t| ((t + 2048) >> 12).clamp(0, 2048) as u16),
         YCbCrOutput::Srgb => sums().map(|t| srgb_step(((t + 512) >> 10).clamp(0, 8192) as u32)),
     }
+}
+
+/// The device's own sampler Y′CbCr conversion of a two-plane YCbCr texture's planes held as an
+/// image of the multi-planar 4:2:0 format over their bytes: the codes' bits, the surface's range
+/// and matrix, Metal's reconstruction (the chroma at the midpoint through a linear chroma filter)
+/// and a linear filter. A slot that samples such a texture through it is a combined image sampler
+/// whose immutable sampler is the device's conversion of this (`ResourceKind::YCbCrPlanes`,
+/// `vk::SamplerDesc::ycbcr`); the consumer makes the image's view with the same conversion.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct YCbCrPlanesSampler {
+    /// The conversion: the codes' bits in bits 0 to 7, full range in bit 8, and the matrix in bits
+    /// 9 and 10 (0 BT.601, 1 BT.709, 2 BT.2020).
+    pub(crate) conversion: u32,
 }
 
 #[cfg(test)]

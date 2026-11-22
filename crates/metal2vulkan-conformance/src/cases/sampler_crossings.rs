@@ -950,11 +950,6 @@ impl Case for SamplerCrossings {
         // a border colour, a level clamp and a comparison -- so nothing is emulated; what is
         // declared is what a device announces about its own sampling.
         //
-        // Where the device filters a float texture its own way (`float-sample-filter`, the
-        // address-mode triples and the three mip-filter rows on llvmpipe and the 5080), the note is
-        // the device's own answer, which the suite declares for every case
-        // (`crate::replay::NATIVE_NOTES`).
-        //
         // The `compare-filters` row's `Depth32Float` texture: on every device (no runtime enables
         // `VK_EXT_depth_range_unrestricted`) the comparing stage records that its texels hold no
         // value outside [0, 1] (`restricted-depth-range`). Its depths all lie in [0, 1], so the

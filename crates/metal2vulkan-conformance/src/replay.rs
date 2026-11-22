@@ -460,9 +460,8 @@ pub fn reads_opaque_black_border(spec: &crate::case::SamplerSpec) -> bool {
 /// - **texel, vertex and colour conversions**: `device-texel-conversion`,
 ///   `half-texel-conversion`, `srgb-texel-decode`, the device's fixed-function conversion of a
 ///   normalized vertex attribute (`device-vertex-conversion`), `device-color-conversion`;
-/// - **sampling and filtering**: `device-sampling`, `device-sample-level`, the device's filter of a
-///   generated mipmap chain (`device-filtered-mipmaps`), and Vulkan's Y′CbCr model filtering a
-///   two-plane texture's planes read in place (`half-sample-filter`, `float-sample-filter`);
+/// - **sampling and filtering**: `device-sampling`, `device-sample-level`, and the device's filter
+///   of a generated mipmap chain (`device-filtered-mipmaps`);
 /// - **logic operations**: the device's `logicOp` on a 10-bit or signed normalized format's own
 ///   codes (`native-logic-operation`, where Metal operates on 10-bit codes widened to 16 bits, and
 ///   reads and stores a signed lowest code as the code above it);
@@ -519,8 +518,6 @@ pub const NATIVE_NOTES: &[crate::degradation::Degradation] = {
         D::DeviceSampling,
         D::DeviceSampleLevel,
         D::DeviceFilteredMipmaps,
-        D::HalfSampleFilter,
-        D::FloatSampleFilter,
         D::NativeLogicOperation,
         D::DeviceRoundedResolve,
         D::DeviceAlphaCoverage,

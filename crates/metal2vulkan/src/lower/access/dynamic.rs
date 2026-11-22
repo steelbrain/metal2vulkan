@@ -245,8 +245,8 @@ pub enum Side {
     Null,
 }
 
-/// SPIR-V words of the module's resident-set search ([`roots::resolve`], once per module): the
-/// table's and the set's conversions, the hit test, and a function's frame (216); its two loops,
+/// SPIR-V words of the module's resident-set search ([`roots::define_resolve`], once per module):
+/// the table's and the set's conversions, the hit test, and a function's frame (216); its two loops,
 /// each with its two variables' stores and loads and the loop's and its exit's blocks (96 each);
 /// three steps (the halving, the entry's access chain and load, a compare, and a select, about 40
 /// words each: one in the 64-bit narrowing, two in the 32-bit loop); and the window between them,

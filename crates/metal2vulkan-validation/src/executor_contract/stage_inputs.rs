@@ -1,7 +1,7 @@
 //! How both executors fetch a kernel case's `[[stage_in]]` data: the Metal oracle's
 //! `MTLStageInputOutputDescriptor` and `setStageInRegion:`, and the engine candidate's
-//! `ComputePipelineDescriptor::stage_input` and `BindState::stage_in_region`, derived once here, so
-//! the two agree.
+//! `ComputePipelineDescriptor::stage_input` and stage-in region, derived once here, so the two
+//! agree.
 //!
 //! Each authored stage input's data is its own buffer at the slot the shared slot rule gives its
 //! location ([`stage_input_slots`]), read as the case's format at offset 0 with the case's stride,

@@ -213,10 +213,10 @@ pub enum SyntheticBinding {
     /// `x + y · SpecKey::TileGridWidth`, which the pass keeps across its draws and tile
     /// dispatches and starts at zero (`RuntimeFact::TileThreadgroupMemory`).
     TileMemory,
-    /// The function-table snapshot: a read-only storage buffer of words the binder writes per
+    /// The function-table snapshot: a read-only storage buffer of words the consumer writes per
     /// command, holding a null table's record at word 0 and then each listed table's record, its
-    /// word count and its words ([`FunctionTableSnapshot`](crate::bind::FunctionTableSnapshot)). The stage's
-    /// function-table directory gives each id the word offset of its table's record.
+    /// word count and its words. The stage's function-table directory gives each id the word
+    /// offset of its table's record.
     FunctionTableSnapshot,
 }
 
@@ -268,9 +268,9 @@ pub enum ResourceKind {
     SeparateSampler(SamplerRef),
     /// The planes of the two-plane YCbCr texture bound at the stage's texture slot
     /// `ResourceSlot::index`, held as an image of the multi-planar format that the device's own
-    /// sampler Y′CbCr conversion samples (`LoweringInputs::ycbcr_planes_sampled`): a combined
-    /// image sampler whose immutable sampler is the device's conversion of this
-    /// (`vk::SamplerDesc::ycbcr`), whose image the consumer views with the same conversion.
+    /// sampler Y′CbCr conversion samples: a combined image sampler whose immutable sampler is the
+    /// device's conversion of this (`vk::SamplerDesc::ycbcr`), whose image the consumer views
+    /// with the same conversion.
     YCbCrPlanes(crate::bind::YCbCrPlanesSampler),
     /// The constexpr samplers one heap sampling chooses among by its sampler handle: an array of
     /// one immutable sampler per candidate, each made for this use (with comparison or without,
@@ -335,7 +335,7 @@ pub struct CombinedSampler {
     pub sampler: SamplerRef,
     /// The shader hands the binding a pixel sampler's coordinate in texels: its `VkSampler` is
     /// the device's unnormalized one (`SamplerUse::unnormalized`), and its image a view of the
-    /// texture's first level alone (`bind::ImageViewDesc::level`).
+    /// texture's first level alone.
     #[cfg_attr(feature = "serde", serde(default))]
     pub unnormalized: bool,
     /// The shader samples with depth comparison through this binding.
@@ -572,11 +572,9 @@ pub enum SpecKey {
     /// fragment function that reaches its tile's threadgroup memory, the render pass's tile
     /// height.
     ImageblockHeight,
-    /// The width of the render area a tile dispatch covers (`renderTargetWidth`,
-    /// `BindState::render_area`, default 0).
+    /// The width of the render area a tile dispatch covers (`renderTargetWidth`, default 0).
     RenderAreaWidth,
-    /// The height of the render area a tile dispatch covers (`renderTargetHeight`,
-    /// `BindState::render_area`, default 0).
+    /// The height of the render area a tile dispatch covers (`renderTargetHeight`, default 0).
     RenderAreaHeight,
     /// Boolean: an out-of-bounds read of the texture bound to the slot reads alpha 1, because its
     /// pixel format has no alpha component (or is a depth or stencil format, whose missing
@@ -668,7 +666,7 @@ pub enum SpecKey {
     /// texture's map sends them), read by a specialized note's test alone
     /// ([`SpecTest`](crate::pipeline::SpecTest)): no stage declares it as a constant and no
     /// pipeline's key carries it, so the bound sampler decides the note without a `VkPipeline` of
-    /// its own. A plan gives it (`BindingPlan::specialized_value`), and the runtime reads such a
+    /// its own. The consumer gives it, and the runtime reads such a
     /// test at each draw or dispatch (`StageModule::precision_notes_bound`); where the sampler is
     /// not known, such a test
     /// holds. A slot bound to no sampler takes 0.
@@ -680,8 +678,8 @@ pub enum SpecKey {
     /// where one such is of a form whose linear sample the function filters by the device's
     /// arithmetic (not a bfloat form, whose sample reads the nearest texel under either filter,
     /// `PrecisionNote::BicubicFilterArithmetic`): of the heap members of the command reaching the
-    /// stage, a member it makes resident (`BindShape::used`) or binds at a texture slot of the
-    /// stage (`bind::heap`'s members), and given by a plan (`BindingPlan::specialized_value`). A
+    /// stage, a member it makes resident (`useResource:`) or binds at a texture slot of the
+    /// stage, given by the consumer. A
     /// texture the command neither names nor makes resident, which a handle loaded from memory may
     /// still reach and whose read Metal leaves undefined, is not counted. A stage whose `float`
     /// read, sample, gather or query of a heap may meet such a texture declares it as a constant
@@ -759,13 +757,6 @@ pub(crate) struct DispatchKeys {
     pub flat: SpecKey,
     /// Whether the dispatch takes its grid and region base from push fields.
     pub multi_region: SpecKey,
-}
-
-impl DispatchKeys {
-    /// The axis `key` is the local size of, or `None` for any other key.
-    pub(crate) fn axis(&self, key: SpecKey) -> Option<usize> {
-        self.local.iter().position(|k| *k == key)
-    }
 }
 
 /// A push-constant field kind, in the fixed placement order (the derived `Ord`).
@@ -905,14 +896,12 @@ pub enum PushField {
     /// The render encoder's viewport count (`u32`, `setViewports:count:`) for a vertex function
     /// that writes `[[viewport_array_index]]` (`RuntimeFact::ViewportCount`): it stores
     /// `ViewportIndex` as 0 for an index at or past it. 0 where the encoder never set its
-    /// viewports, which keeps every index 0, as Metal's one default viewport does
-    /// (`BindState::viewport_count`).
+    /// viewports, which keeps every index 0, as Metal's one default viewport does.
     ViewportCount,
     /// The render pass's `renderTargetArrayLength` (`u32`) for a vertex function that writes
     /// `[[render_target_array_index]]` and writes `Layer` (`RuntimeFact::RenderTargetArrayLength`
     /// without `layer_dropped`): it stores `Layer` as 0
-    /// for an index at or past it, as Metal renders the pass's first layer there
-    /// (`BindState::render_target_array_length`).
+    /// for an index at or past it, as Metal renders the pass's first layer there.
     RenderTargetArrayLength,
     /// The patch index buffer's residual bind offset (`u32`), as `SlotBindOffset`'s: a field of
     /// a tessellation pipeline's synthesized control stage.
@@ -925,8 +914,7 @@ pub enum PushField {
     /// The draw's band of a pipeline variant that draws its lines as bands
     /// (`VariantKey::line_band`, `link::band`): one `vec4` of the synthesized evaluation stage's
     /// own push range, `[sx, sy, h, 0]`, the half extent of the draw's Vulkan viewport 0 (its
-    /// height negative, as the runtime's viewports are) and half the band's width in pixels
-    /// (`BindState::line_band`).
+    /// height negative, as the runtime's viewports are) and half the band's width in pixels.
     LineBand,
     /// The stride (`u32`) the compute encoder binds the kernel buffer at this Metal index with
     /// (`setBuffer:offset:attributeStride:atIndex:` and its forms, its low 32 bits,
@@ -937,7 +925,7 @@ pub enum PushField {
     /// The draw's depth clamp range for a fragment function compiled under
     /// `LoweringInputs::depth_clamp_range` (`RuntimeFact::DepthClampRange`): one `uvec2` holding
     /// the bits of two `f32`s, `[low, high]`, which the function clamps the depth it writes to
-    /// after Metal's `[0, 1]` (`BindState::depth_clamp_range`).
+    /// after Metal's `[0, 1]`.
     DepthClampRange,
     /// The draw's layout for a vertex function compiled in the primitive ID's de-indexed form
     /// (`LoweringInputs::primitive_id_indices`), a `uvec4`, of a draw run from vertex 0: 0, the
@@ -961,25 +949,13 @@ pub enum PushField {
     /// The render encoder's blend color (`setBlendColorRed:green:blue:alpha:`) for a fragment
     /// function that computes a blend in the shader under a blend that reads it (an
     /// extended-range attachment's, or a rotated one's): one `uvec4`
-    /// holding the four `f32`s' bits as the encoder set them (`BindState::blend_color`).
+    /// holding the four `f32`s' bits as the encoder set them.
     HalfBlendColor,
     /// The render encoder's alpha test reference (`setAlphaTestReferenceValue:`) for a fragment
     /// function compiled under `LoweringInputs::alpha_test`: one `u32`, the reference's 8-bit
-    /// unorm code as Metal's alpha test compares it (`bind::alpha_test_code` of
-    /// `BindState::alpha_test_reference`), which the function compares its color 0's alpha's code
-    /// with.
+    /// unorm code as Metal's alpha test compares it (`bind::alpha_test_code` of the reference),
+    /// which the function compares its color 0's alpha's code with.
     AlphaTestReference,
-    /// The planes of the two-plane YCbCr texture bound to the slot, read in place
-    /// (`RuntimeFact::YCbCrInPlace`, `LoweringInputs::ycbcr_in_place`): two `uvec4`s, the
-    /// texture's size, its planes' first elements and rows in the slot's texel buffer, and its
-    /// conversion (`bind::YCbCrInPlace::words`), from the bound texture's facts
-    /// (`TextureFacts::ycbcr_in_place`).
-    YCbCrInPlace(SlotRef),
-    /// The rows of the 2D texture bound to the slot in its texel buffer view, read and written in
-    /// place (`RuntimeFact::TexelRows`, `LoweringInputs::texel_rows`): one `uvec4`, the texture's
-    /// width and height, its rows in texels and its first texel in the view
-    /// (`bind::TexelRows::words`), from the bound texture's facts (`TextureFacts::texel_rows`).
-    TexelRows(SlotRef),
     /// Under the identity domains, the sampler a sample takes through a constexpr sampler
     /// (`SamplerRef::Constexpr`), used as the field's [`CombinedSampler`] states: one `u32`, the
     /// index (1 to 3,999, `docs/RESOURCE-ID.md`) of the element of the set-1 sampler array of the

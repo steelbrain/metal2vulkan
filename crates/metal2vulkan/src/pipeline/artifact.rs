@@ -141,19 +141,14 @@ pub struct StageModule {
     pub entry_point: String,
     /// SPIR-V 1.5 words, relocated for this pipeline.
     pub spirv: Arc<[u32]>,
-    /// The specialization constants with their defaults. A kernel's defaults are placeholders the
-    /// binder replaces (a local size of 1): create each compute `VkPipeline` from a planned
-    /// dispatch's [`DispatchRegion`](crate::bind::DispatchRegion), its `specialization`,
-    /// `stage_flags`, and `required_subgroup_size`, never from this stage's defaults.
+    /// The specialization constants with their defaults. A kernel's defaults are placeholders (a
+    /// local size of 1): create each compute `VkPipeline` with the values its dispatch gives
+    /// the constants' keys, never from this stage's defaults.
     pub specialization: SpecializationLayout,
-    /// `VkPipelineShaderStageRequiredSubgroupSizeCreateInfo`, when the tier pins a size. For a
-    /// kernel, each [`DispatchRegion`](crate::bind::DispatchRegion) carries the value to create its
-    /// pipeline with.
+    /// `VkPipelineShaderStageRequiredSubgroupSizeCreateInfo`, when the tier pins a size.
     pub required_subgroup_size: Option<u32>,
-    /// Stage create flags (`REQUIRE_FULL_SUBGROUPS`). For a kernel, each
-    /// [`DispatchRegion`](crate::bind::DispatchRegion) carries the flags to create its pipeline
-    /// with: a region that is not whole subgroups runs on a variant without them. These flags at
-    /// the default specialization's local size of 1 are invalid usage
+    /// Stage create flags (`REQUIRE_FULL_SUBGROUPS`). These flags at the default specialization's
+    /// local size of 1 are invalid usage
     /// (`VUID-VkPipelineShaderStageCreateInfo-flags-02759`, or `-pNext-02757` with a required
     /// subgroup size).
     pub stage_flags: vk::PipelineShaderStageCreateFlags,
@@ -206,7 +201,7 @@ impl StageModule {
     /// or dispatch binds the values `bound` gives, where a test of a key no pipeline's
     /// key carries (the bound format's class, `SpecKey::BoundTexelFormat`; a bound sampler's word,
     /// `SpecKey::BoundSamplerWord`; what the command's handles can name) reads the value `bound`
-    /// gives for it (`BindingPlan::specialized_value`); a test of a key neither gives holds.
+    /// gives for it; a test of a key neither gives holds.
     pub fn precision_notes_bound(
         &self,
         specialization: &SpecializationKey,
@@ -854,7 +849,7 @@ pub enum PrecisionNote {
     /// slot bound in an 8-bit sRGB format the device holds as its UNORM twin decodes the code
     /// exactly instead, and a bicubic sample sums the codes' steps exactly, under the slot's
     /// `SrgbTexture` variant, and records nothing. What a filtered sample converts is the filter's
-    /// value ([`PrecisionNote::HalfSampleFilter`]). Validation derives no tolerance from it.
+    /// value. Validation derives no tolerance from it.
     ///
     /// Native device sampling (a texel conversion): every access with a `half` result records this
     /// note, a heap element's and a depth texture's included. The recorded bound: the device's
@@ -865,15 +860,6 @@ pub enum PrecisionNote {
     /// saturates to `±65504` and the rounding takes to the infinity of its sign; a NaN is the
     /// device's decode ([`PrecisionNote::DeviceNanEncoding`]).
     HalfTexelConversion,
-    /// The module samples a texture with a `half` result through a filter (linear minification
-    /// or magnification, a linear mip filter, anisotropy, or a runtime sampler) by Vulkan's Y′CbCr
-    /// model of the codes of a two-plane YCbCr texture whose planes the function reads in place
-    /// (`lower::sampler::in_place`), which blends the codes, not Metal's exact filter of the
-    /// format, on every device: recorded under the slot's bound converted 4:2:0 format and,
-    /// through a runtime sampler slot, the bound word's linear filter that addresses no border.
-    /// The `float` result's counterpart is [`PrecisionNote::FloatSampleFilter`]. Validation derives
-    /// no tolerance from it: the class is unbounded.
-    HalfSampleFilter,
     /// The module reads, samples, or gathers a texture with a `half` or `float` result through
     /// the device's sRGB decode, or decodes the device's filter of its codes, where the texture may
     /// be bound in an 8-bit sRGB format (`metal::texel_format::srgb_coded`: the 8-bit sRGB formats
@@ -909,13 +895,6 @@ pub enum PrecisionNote {
     /// it, where MoltenVK's `Pow` read within `1.83e-7` of the transfer through the alias.
     /// Validation derives no tolerance from it: the class is unbounded.
     SrgbTexelDecode,
-    /// The module samples a texture with a `float` result through a filter by Vulkan's Y′CbCr
-    /// model of the codes of a two-plane YCbCr texture whose planes the function reads in place
-    /// (`lower::sampler::in_place`), as [`PrecisionNote::HalfSampleFilter`] states for a `half`
-    /// result: a sample is filtered unless its sampler has nearest minification and
-    /// magnification, no mip filter or a nearest one, and no anisotropy. Validation derives no
-    /// tolerance from it: the class is unbounded.
-    FloatSampleFilter,
     /// A vertex or fragment function keeps more private memory (its `alloca`s, a call stack among
     /// them, or constants held as `Private` variables) than the floor, 16 KiB a thread, on a device
     /// whose Function storage was not measured, up to the 192 KiB a thread Metal was measured to

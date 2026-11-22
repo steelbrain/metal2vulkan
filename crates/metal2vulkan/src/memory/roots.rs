@@ -16,17 +16,17 @@
 //! entries `{host, guest, size, bind_offset}: u64`. Entry 0 is the null root (all fields 0:
 //! `guest = 0` makes a miss round-trip through a later `ptrtoint`, `size = 0` puts every access
 //! through it out of bounds). Entry 1 is the write-only sink (`host` its device address). Entry
-//! `2 + n` is `[[buffer(n)]]`. The **resident set** (the bound arguments and
-//! `BindState.used_resources`, overlaps coalesced into the outermost range) is the entries `R0 ..
+//! `2 + n` is `[[buffer(n)]]`. The **resident set** (the bound arguments and the resources the
+//! encoder makes resident, `useResource:`, overlaps coalesced into the outermost range) is the
+//! entries `R0 ..
 //! R0 + N`, sorted by `guest` and disjoint but for indirect command buffers' records, which may
 //! overlap (each found only at its start, `lower::access::dynamic::search_start`), each with
-//! `bind_offset = 0`. The binder states `R0` and
+//! `bind_offset = 0`. The consumer states `R0` and
 //! `N` in the sink entry's otherwise unread `guest` and `size` fields ([`RESIDENT_FIRST`],
-//! [`RESIDENT_COUNT`]); `N` is any count (At most 2¹⁶ before, a larger set
-//! `BindError::ResidentSetTooLarge`). `R0` counts entries from the table's address modulo 2⁶⁴, so
+//! [`RESIDENT_COUNT`]); `N` is any count. `R0` counts entries from the table's address modulo 2⁶⁴, so
 //! the set may lie apart from the table, below it too (a consumer's set shared by many tables).
 //!
-//! **The search** ([`resolve`]) turns a guest address `i` into a wide pointer: a binary search for
+//! **The search** ([`define_resolve`]) turns a guest address `i` into a wide pointer: a binary search for
 //! the last resident entry whose `guest ≤ i`, whose step halves the candidates whatever its
 //! compare gives (one entry load and a select, no branch on the address), so its trip count
 //! follows `N` alone and every invocation that searches one table takes the same branches. A set
@@ -250,7 +250,7 @@ fn field_of(fb: &mut FunctionBuilder<'_>, e: Value, root: Value, field: u64) -> 
 }
 
 /// The wide pointer `[root, at, host, size]` (four `u64`s) of guest address `guest` (a `u64`)
-/// through the resident set of the root table at `table` ([`resolve`]): a hit's `at` is `i −
+/// through the resident set of the root table at `table` ([`define_resolve`]): a hit's `at` is `i −
 /// guest` (a resident entry's `bind_offset` is 0) and `host` and `size` its entry's, read here
 /// once; a miss is `[0, i, 0, 0]`, the null root's fields.
 pub fn resolve_wide(
@@ -280,7 +280,7 @@ struct Found {
     off: Value,
 }
 
-/// The search of [`resolve`].
+/// The search of [`define_resolve`].
 fn search(fb: &mut FunctionBuilder<'_>, table: Value, guest: Value) -> BResult<Found> {
     let e = entries(fb, table)?;
     let sink = k64(fb, SINK_ROOT)?;

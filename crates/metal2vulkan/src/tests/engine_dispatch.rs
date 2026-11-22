@@ -71,6 +71,10 @@ fn single(local: [u32; 3], groups: [u32; 3]) -> Dispatch {
 /// The device address of the command buffer's `ExecutionStatus` buffer in [`run_word0`].
 const STATUS_AT: u64 = 0x0000_0042_0000_0000;
 
+/// The `ExecutionStatus` buffer's bytes: through its last word.
+const STATUS_BYTES: usize =
+    crate::bind::status::StatusWord::SeqCstFences.byte_offset() as usize + 4;
+
 /// Run `m` (planned as `plan`) once in each scheduling order with the planner's values and return
 /// word 0 of buffer 0.
 fn run_word0(plan: &Plan, m: &TypedModule, d: &Dispatch) -> u32 {
@@ -121,7 +125,7 @@ fn run_word0(plan: &Plan, m: &TypedModule, d: &Dispatch) -> u32 {
             Buffer {
                 slot: Some(crate::lower::access::absent::symbol(Stage::Kernel)),
                 address: Some(STATUS_AT),
-                bytes: vec![0; crate::bind::status::ExecutionStatus::BYTES],
+                bytes: vec![0; STATUS_BYTES],
             },
         ],
         push,

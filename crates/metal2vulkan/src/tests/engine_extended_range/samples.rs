@@ -20,11 +20,11 @@
 //!   slot's own image in the raw format and binds no sampler.
 
 use super::*;
-use crate::bind::{BoundSampler, SamplerDescriptor};
+use crate::bind::SamplerDescriptor;
 use crate::error::Unsupported;
 use crate::metal::format::extended_srgb::SRGB_DECODE_STEPS;
 use crate::metal::sampler::SamplerWord;
-use crate::metal::{SamplerAddressMode, SamplerBorderColor, SamplerMinMagFilter};
+use crate::metal::{SamplerAddressMode, SamplerBorderColor};
 
 /// Metal's linear samples, the files `xr_samples.tsv` and `xr_plane_samples.tsv` beside the owned
 /// fixture `xr_samples.metal`, one per line: the raw format (550 `RGB10A8_2P_XR10`, 551 its `_sRGB`
@@ -1360,165 +1360,6 @@ fn replay_padded_samples(name: &str) {
         }
     }
     assert!(checked > 0);
-}
-
-/// A kernel's state: texture slot 0 bound in `pf`, buffers 0 and 1, and sampler slot 0 bound to
-/// `desc`.
-pub(super) fn sampled_state(pf: PixelFormat, desc: SamplerDescriptor) -> BindState {
-    sampled_state_of(TextureType::Type2D, pf, desc)
-}
-
-/// [`sampled_state`] with a texture of type `ty`.
-pub(super) fn sampled_state_of(
-    ty: TextureType,
-    pf: PixelFormat,
-    desc: SamplerDescriptor,
-) -> BindState {
-    let mut t = StageTable::default();
-    t.textures.insert(
-        0,
-        BoundTexture::Texture {
-            facts: TextureFacts::new(ty, pf),
-            resource_id: None,
-        },
-    );
-    for index in [0, 1] {
-        t.buffers.insert(
-            index,
-            BoundBuffer::Buffer {
-                length: 65536,
-                offset: 0,
-                gpu_address: 0x1_0000 * u64::from(index + 1),
-                device_address: None,
-                attribute_stride: None,
-            },
-        );
-    }
-    t.samplers.insert(0, BoundSampler::new(desc));
-    let mut s = BindState::default();
-    s.stages.insert(Stage::Kernel, t);
-    s
-}
-
-/// A sampled slot bound in an extended-range format joins the plan's variant through a
-/// constexpr and a runtime sampler: the variant's pipeline plans the same key, views the slot's
-/// image in the raw format, and binds no sampler. The binder refuses a runtime sampler whose
-/// word states mixed filters, `NotImplemented(Format)`, and plans one stating a nearest mip
-/// filter, whose level the function reads (`levels`), or `MirrorClampToEdge`, whose taps the
-/// fetches address. On every committed profile.
-#[test]
-fn a_sampled_slot_joins_the_variant() {
-    use SamplerMinMagFilter as F;
-    let formats = [
-        (PixelFormat::BGR10XR, ExtendedRange::Bgr10 { srgb: false }),
-        (
-            PixelFormat::BGRA10XRSRGB,
-            ExtendedRange::Bgra10 { srgb: true },
-        ),
-        (
-            PixelFormat::RGB10A82PXR10,
-            ExtendedRange::Planes { srgb: false },
-        ),
-        (PixelFormat::R10UnormX6, ExtendedRange::R10X6),
-        (PixelFormat::RG10UnormX12, ExtendedRange::Rg10X12),
-    ];
-    let mut linear = SamplerDescriptor::new();
-    linear.min_filter = F::Linear;
-    linear.mag_filter = F::Linear;
-    let mut planned = 0;
-    for through in [
-        Through::Constexpr(words(true, 1, false, 0)),
-        Through::Runtime,
-    ] {
-        let Some(bc) = assemble("bind sample", &sample_kernel(through, false, (0, 0), false))
-        else {
-            return;
-        };
-        for (stem, dev) in devices() {
-            let plain = pipeline(&dev, &bc, &LowerInputs::new()).expect("a sampling kernel");
-            for (pf, form) in formats {
-                let what = format!("{through:?} {pf:?} on {stem}");
-                let shape = sampled_state(pf, linear).shape();
-                let plan = plain
-                    .plan(&dev, &shape)
-                    .unwrap_or_else(|e| panic!("{what}: {e}"));
-                assert_eq!(
-                    plan.variant.extended_range,
-                    BTreeMap::from([(SOURCE, form)]),
-                    "{what}"
-                );
-                let key = plan.variant.lowering_inputs(Stage::Kernel);
-                let variant = pipeline(&dev, &bc, &key).expect("the variant's inputs");
-                let again = variant.plan(&dev, &shape).expect("variant plan");
-                assert_eq!(again.variant, plan.variant, "{what}");
-                let mut views = Vec::new();
-                for d in &again.descriptors {
-                    match &d.source {
-                        WriteSource::Texture { view, .. } => views.push(view.format),
-                        WriteSource::Sampler { .. } | WriteSource::CombinedImageSampler { .. } => {
-                            panic!("{what}: the variant binds {:?}", d.source)
-                        }
-                        _ => {}
-                    }
-                }
-                assert_eq!(views, [form.raw_format()], "{what}");
-                planned += 1;
-                // A swizzled texture joins `swizzled_storage` too, under a border sampler as
-                // under this one, and the variant's pipeline plans the same key.
-                let mut border = linear;
-                border.s_address_mode = SamplerAddressMode::ClampToBorderColor;
-                border.t_address_mode = SamplerAddressMode::ClampToBorderColor;
-                border.border_color = SamplerBorderColor::OpaqueWhite;
-                for desc in [linear, border] {
-                    let mut state = sampled_state(pf, desc);
-                    if let Some(BoundTexture::Texture { facts, .. }) = state
-                        .stages
-                        .get_mut(&Stage::Kernel)
-                        .and_then(|t| t.textures.get_mut(&0))
-                    {
-                        use crate::metal::{TextureSwizzle as S, TextureSwizzleChannels as C};
-                        facts.swizzle = C::new(S::Alpha, S::Red, S::One, S::Zero);
-                    }
-                    let shape = state.shape();
-                    let what = format!("{what} swizzled {:?}", desc.s_address_mode);
-                    let plan = plain
-                        .plan(&dev, &shape)
-                        .unwrap_or_else(|e| panic!("{what}: {e}"));
-                    assert!(plan.variant.swizzled_storage.contains(&SOURCE), "{what}");
-                    let key = plan.variant.lowering_inputs(Stage::Kernel);
-                    let variant = pipeline(&dev, &bc, &key).expect("the variant's inputs");
-                    let again = variant.plan(&dev, &shape).expect("variant plan");
-                    assert_eq!(again.variant, plan.variant, "{what}");
-                }
-                if let Through::Runtime = through {
-                    let mut mip = linear;
-                    mip.mip_filter = crate::metal::SamplerMipFilter::Nearest;
-                    let mut mixed = linear;
-                    mixed.mag_filter = F::Nearest;
-                    let mut clamp = linear;
-                    clamp.t_address_mode = SamplerAddressMode::MirrorClampToEdge;
-                    for (name, desc) in [("mirror clamp", clamp), ("mip", mip)] {
-                        let shape = sampled_state(pf, desc).shape();
-                        for p in [&plain, &variant] {
-                            let named = p
-                                .plan(&dev, &shape)
-                                .unwrap_or_else(|e| panic!("{what} {name}: {e}"));
-                            assert_eq!(named.variant, plan.variant, "{what} {name}");
-                        }
-                    }
-                    match plain.plan(&dev, &sampled_state(pf, mixed).shape()) {
-                        Err(crate::error::BindError::Unsupported(u)) => assert_eq!(
-                            u,
-                            Unsupported::not_implemented(Feature::Format),
-                            "{what} mixed"
-                        ),
-                        other => panic!("{what} mixed: {:?}", other.map(|_| ())),
-                    }
-                }
-            }
-        }
-    }
-    assert!(planned > 0);
 }
 
 /// [`sample_kernel`]'s `float` sample through `through` taken `n` times, the `i`-th at the

@@ -5,9 +5,8 @@
 //! view holds at most the device's `maxTexelBufferElements` texels
 //! (`VUID-VkBufferViewCreateInfo-range-00930`): 2^27 on ANV and lavapipe, 2^26 on MoltenVK. The
 //! consumer states with a texture buffer's binding how many parts its texels take
-//! (`BoundTexture::Buffer::parts`: its texels over [`part_texels`], rounded up), which its shape carries
-//! (`TextureShape::Buffer::parts`): one for every texture buffer within the limit, which binds one
-//! view as it always has.
+//! (its texels over [`part_texels`], rounded up): one for every texture buffer within the limit,
+//! which binds one view.
 //!
 //! **The views.** Part `k` views the texels from `k · P`, `P` the device's [`part_texels`] (its
 //! `maxTexelBufferElements` rounded down to a multiple of its `minTexelBufferOffsetAlignment`, so
@@ -19,13 +18,13 @@
 //! **What a function reads.** A slot whose function reads, writes, updates by an atomic or asks
 //! the width of the texture buffer bound there, and does nothing else with it
 //! (`RuntimeFact::TexelBufferParts`), on a device that indexes arrays of its kind of texel buffer
-//! by a `NonUniform` value, takes the parts variant where the shape binds more than one part
-//! there (`VariantKey::texel_buffer_parts`). Under it the slot is declared as an array of its
+//! by a `NonUniform` value, takes the parts variant where the bound texture buffer takes more than
+//! one part (`VariantKey::texel_buffer_parts`). Under it the slot is declared as an array of its
 //! parts, and texel `i` is texel `i − k · P` of part `k = min(⌊i / P⌋, parts − 1)`. A texel past
 //! the last lies past the last part's end, so its read is Metal's out-of-bounds texel and its
 //! write is dropped, by the device's robustness or the function's own check as through one view.
 //! The width is `(parts − 1) · P` plus the last part's. Any other slot binds one view, which
-//! `maxTexelBufferElements` bounds (`BindError::TexelBufferTooLarge`).
+//! `maxTexelBufferElements` bounds.
 
 use crate::device::Limits;
 

@@ -77,12 +77,8 @@ pub enum Degradation {
     CubeGradientFootprint,
     /// `metal2vulkan-degrade-half-texel-conversion`.
     HalfTexelConversion,
-    /// `metal2vulkan-degrade-half-sample-filter`.
-    HalfSampleFilter,
     /// `metal2vulkan-degrade-srgb-texel-decode`.
     SrgbTexelDecode,
-    /// `metal2vulkan-degrade-float-sample-filter`.
-    FloatSampleFilter,
     /// `metal2vulkan-degrade-function-storage-assumed`.
     FunctionStorageAssumed,
     /// `metal2vulkan-degrade-quads-counted-before-discard`.
@@ -213,9 +209,7 @@ impl Degradation {
         Degradation::RestrictedDepthRange,
         Degradation::CubeGradientFootprint,
         Degradation::HalfTexelConversion,
-        Degradation::HalfSampleFilter,
         Degradation::SrgbTexelDecode,
-        Degradation::FloatSampleFilter,
         Degradation::FunctionStorageAssumed,
         Degradation::QuadsCountedBeforeDiscard,
         Degradation::ViewBaseTexelOffset,
@@ -314,9 +308,7 @@ impl Degradation {
             Degradation::RestrictedDepthRange => "metal2vulkan-degrade-restricted-depth-range",
             Degradation::CubeGradientFootprint => "metal2vulkan-degrade-cube-gradient-footprint",
             Degradation::HalfTexelConversion => "metal2vulkan-degrade-half-texel-conversion",
-            Degradation::HalfSampleFilter => "metal2vulkan-degrade-half-sample-filter",
             Degradation::SrgbTexelDecode => "metal2vulkan-degrade-srgb-texel-decode",
-            Degradation::FloatSampleFilter => "metal2vulkan-degrade-float-sample-filter",
             Degradation::FunctionStorageAssumed => "metal2vulkan-degrade-function-storage-assumed",
             Degradation::QuadsCountedBeforeDiscard => {
                 "metal2vulkan-degrade-quads-counted-before-discard"
@@ -423,9 +415,7 @@ impl Degradation {
             PrecisionNote::RestrictedDepthRange => Degradation::RestrictedDepthRange,
             PrecisionNote::CubeGradientFootprint => Degradation::CubeGradientFootprint,
             PrecisionNote::HalfTexelConversion => Degradation::HalfTexelConversion,
-            PrecisionNote::HalfSampleFilter => Degradation::HalfSampleFilter,
             PrecisionNote::SrgbTexelDecode => Degradation::SrgbTexelDecode,
-            PrecisionNote::FloatSampleFilter => Degradation::FloatSampleFilter,
             PrecisionNote::FunctionStorageAssumed => Degradation::FunctionStorageAssumed,
             PrecisionNote::QuadsCountedBeforeDiscard => Degradation::QuadsCountedBeforeDiscard,
             PrecisionNote::ViewBaseTexelOffset => Degradation::ViewBaseTexelOffset,

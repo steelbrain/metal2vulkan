@@ -109,7 +109,7 @@ fn the_runtime_sources_are_the_committed_ones() {
 
     let compile = "compile-time translation, reached only from the compile-time parts of mixed runtime files; what it produces is in the pipeline the artifact digests";
     let values = "the compiled pipeline's value types; the artifact digests their values";
-    let spirv = "the SPIR-V builder: the binder's files reach it only through the merged draw's reads (bind/replay), which the compile emits into the merged variant; what they emit is in the pipeline the artifact digests";
+    let spirv = "the SPIR-V builder: the bind module's files reach it only through the merged draw's reads (bind/replay), which the compile emits into the merged variant; what they emit is in the pipeline the artifact digests";
     let packed = "compile-time translation, reached only through lower/arith/pack.rs's pack and unpack intrinsics, which the compile emits; the runtime's YCbCr write takes that file's sRGB encode (srgb_encode), which reaches none of it";
     let not_runtime = BTreeMap::from([
         ("metal2vulkan-air/src/abi/mod.rs", compile),
@@ -119,12 +119,11 @@ fn the_runtime_sources_are_the_committed_ones() {
         ("metal2vulkan-air/src/intrinsics/mod.rs", packed),
         ("metal2vulkan-air/src/ir/mod.rs", compile),
         ("metal2vulkan-air/src/lib.rs", compile),
-        ("metal2vulkan/src/cache/digest.rs", "the content digest, which defines the artifact rather than acting on it"),
-        ("metal2vulkan/src/cache/mod.rs", "the plan's specialization and variant keys, whose values the plan digest holds, and RUNTIME_VERSION itself, which cannot be among the sources it versions"),
+        ("metal2vulkan/src/cache/mod.rs", "the `Hash256` re-export device/derive.rs names a profile's fingerprint with, and RUNTIME_VERSION itself, which cannot be among the sources it versions"),
         ("metal2vulkan/src/error/mod.rs", "the error vocabulary: the runtime's code decides which error a run reports, and a record keeps the error as reported"),
         ("metal2vulkan/src/lower/access/imageblock.rs", compile),
         ("metal2vulkan/src/lower/access/mod.rs", "compile-time translation, reached only from lower/dispatch.rs's kernel plan, which asks `identity` whether the profile takes the identity domains; what it produces is in the pipeline the artifact digests"),
-        ("metal2vulkan/src/lower/access/tile.rs", "compile-time translation, reached only from the compile-time parts of mixed runtime files; what it produces is in the pipeline the artifact digests; the tile staging format reaches a run through the plan"),
+        ("metal2vulkan/src/lower/access/tile.rs", "compile-time translation, reached only from the compile-time parts of mixed runtime files; what it produces is in the pipeline the artifact digests"),
         ("metal2vulkan/src/lower/arith/aggregate.rs", compile),
         // The block decode (`bind/block_decode.rs`) and its exact division
         // (`lower/arith/exact_division.rs`) reach the numeric forms and the constant emission at
@@ -138,8 +137,6 @@ fn the_runtime_sources_are_the_committed_ones() {
         ("metal2vulkan/src/lower/mesh/mod.rs", "compile-time translation, reached only from the compile-time part of lower/dispatch.rs (plan_kernel's mesh wrapper builtins) and as the parent of its work-buffer layout (lower/mesh/work.rs, an input); what it produces is in the pipeline the artifact digests"),
         ("metal2vulkan/src/lower/push.rs", "the push window's lowering, reached only from device/derive.rs, which reads `LEAST_BYTES`, Vulkan's least maxPushConstantsSize, to refuse a description below it before any pipeline exists, and from device/profile.rs, whose `push_window` reads `MOST_BYTES` to cap the device's window; what the lowering makes of the window is in the pipeline the artifact digests"),
         ("metal2vulkan/src/lower/select.rs", compile),
-        ("metal2vulkan/src/lower/simd/divergent.rs", "compile-time translation (the predicated walk); the runtime reads only VOTE_BYTES, the vote word's size, which the compile also adds to the static threadgroup length the artifact reports, so a change to it moves the artifact digest"),
-        ("metal2vulkan/src/lower/simd/workgroup.rs","binding-plan construction; the artifact digests the plan it makes (the workgroup arena size)"),
         ("metal2vulkan/src/memory/abi_index.rs", compile),
         ("metal2vulkan/src/memory/contain.rs", "the containment encoding, a function of the device profile (the venue's profile key holds it), shared by compile and the vertex layout"),
         ("metal2vulkan/src/memory/leaf.rs", compile),
@@ -148,7 +145,6 @@ fn the_runtime_sources_are_the_committed_ones() {
         ("metal2vulkan/src/memory/union_find.rs", compile),
         ("metal2vulkan/src/memory/views.rs", compile),
         ("metal2vulkan/src/metal/resource_word.rs", "the gpuResourceID texture word of the runtime's ID spec (docs/RESOURCE-ID.md); the product's run-time files reach it only as a child of metal/mod.rs and call none of it"),
-        ("metal2vulkan/src/pipeline/artifact.rs", values),
         ("metal2vulkan/src/pipeline/compile.rs", compile),
         ("metal2vulkan/src/pipeline/compile/key.rs", "the compile's cache key, which the artifact digest excludes"),
         ("metal2vulkan/src/pipeline/compile/partition.rs", "compile-time translation, reached only from the compile-time part of lower/dispatch.rs (plan_kernel's grid edge: whether a kernel observes its threadgroup partition, decided from its AIR); what it produces is in the pipeline the artifact digests"),
@@ -156,12 +152,9 @@ fn the_runtime_sources_are_the_committed_ones() {
         ("metal2vulkan/src/pipeline/facts.rs", values),
         ("metal2vulkan/src/pipeline/graphics.rs", "the compiled pipeline's value types; the artifact digests their values (the graphics state)"),
         ("metal2vulkan/src/pipeline/interface.rs", values),
-        ("metal2vulkan/src/pipeline/layout.rs", values),
         ("metal2vulkan/src/pipeline/lower_inputs.rs", "the compiled pipeline's value types; the artifact digests their values (the storage image classes)"),
         ("metal2vulkan/src/pipeline/mod.rs", values),
-        ("metal2vulkan/src/pipeline/stage_io.rs", "the compiled pipeline's value types; the artifact digests their values (a kernel's `[[stage_in]]` fetches, which its binding plan carries for the stage-in reach the binder decides)"),
         ("metal2vulkan/src/pipeline/sym.rs", "the compiled pipeline's value types; the artifact digests their values (slots, push fields, handle classes)"),
-        ("metal2vulkan/src/pipeline/vertex.rs", "the compiled pipeline's value types; the artifact digests their values (the vertex layout)"),
         ("metal2vulkan/src/spirv/builder/constructs.rs", spirv),
         ("metal2vulkan/src/spirv/builder/mod.rs", spirv),
         ("metal2vulkan/src/spirv/error.rs", spirv),

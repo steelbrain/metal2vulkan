@@ -1,5 +1,5 @@
-//! The sampling routines are routines: the in-place linear quad's exact sum states `DontInline`,
-//! every other function none, and the entry states none.
+//! The bicubic filters' sums are plain routines: each states no function control, as the entry
+//! does.
 
 use super::kernel_on;
 use crate::lower::sampler::bicubic::routines;
@@ -21,21 +21,16 @@ fn controls(words: &[u32]) -> Vec<u32> {
     out
 }
 
-/// The linear and bicubic filters' sums beside a kernel entry: the in-place linear quad's exact
-/// sum, a kept routine, states `DontInline` (0x2) and every other function `None`.
+/// The bicubic filters' sums beside a kernel entry: each routine and the entry state `None`.
 #[test]
-fn the_texel_routine_alone_is_declared_dont_inline() {
+fn the_bicubic_routines_state_no_function_control() {
     let mut b = ModuleBuilder::new();
     routines::define_plane(&mut b).expect("plane");
     routines::define_line(&mut b).expect("line");
-    routines::define_quad(&mut b).expect("quad");
     let m = kernel_on(b, 3, &|_, p, _| Ok(p)).expect("kernel");
     let words = serialize(m).expect("serialized").words;
-    let mut got = controls(&words);
-    got.sort_unstable();
-    // 3 routines (the plane's, the line's and the quad's) and the entry.
-    assert!(got.len() >= 4, "{} functions", got.len());
-    let mut want = vec![0; got.len() - 1];
-    want.push(0x2);
-    assert_eq!(got, want, "each routine's control, and none on the entry");
+    let got = controls(&words);
+    // 2 routines (the plane's and the line's) and the entry.
+    assert!(got.len() >= 3, "{} functions", got.len());
+    assert_eq!(got, vec![0; got.len()], "each function's control");
 }

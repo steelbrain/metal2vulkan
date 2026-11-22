@@ -1,8 +1,8 @@
 //! How both executors draw a tessellation case: the Metal oracle's `MTLRenderPipelineDescriptor`
 //! tessellation fields, `setTessellationFactorBuffer:offset: instanceStride:`, `setCullMode:`, and
 //! `drawPatches:...`, and the engine candidate's `RenderPipelineDescriptor::tessellation`,
-//! `BindState::tessellation_factors`, cull mode, and `DrawCall::Patches`, derived once here, so the
-//! two agree.
+//! tessellation factor buffer, cull mode, and `DrawCall::Patches`, derived once here, so the two
+//! agree.
 //!
 //! A case's patches are drawn from patch 0 with no patch index buffer, as many instances as the
 //! case states from base instance 0, `numberOfPatchControlPoints` the function's

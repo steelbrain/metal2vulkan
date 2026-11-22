@@ -24,8 +24,7 @@ differences from Metal. The runtime's own guide is [its README](../crates/metal2
   build values with `new`, `Default` or constants, assign fields, and match with a wildcard arm.
   The exceptions are exhaustive on purpose: keys and Vulkan structs (`SlotRef`, `ResourceSlot`,
   `ApiVersion`, ...), and the enums a consumer must interpret completely to bind and draw
-  correctly (`StageSource`, `PushHole`, `HeapSource`, `ImageSource`, `SamplerSource`,
-  `UseTarget`, `SlotClass`, `VertexStride`, `DrawCommand`, `PrecisionNote`, and Metal's `PrimitiveType`, `IndexType`, `CullMode`, `Winding`
+  correctly (`StageSource`, `SlotClass`, `VertexStride`, `PrecisionNote`, and Metal's `PrimitiveType`, `IndexType`, `CullMode`, `Winding`
   and `TextureType`), where a new variant breaks your build on purpose.
 - **Semver** covers this surface from 0.2.0 (still `0.x`: a breaking change bumps the minor
   version).
@@ -83,16 +82,15 @@ a description whose `maxPushConstantsSize` is below 128 bytes, Vulkan's least an
 window a stage is lowered for (`Unsupported{PushWindow}`, a `Limit` of `MaxPushConstantsSize`),
 and an inconsistent description or policy. The push window is the device's `maxPushConstantsSize`
 up to 256 bytes (`DeviceProfile::push_window`, section 5). A
-`Device` is cheap to clone; every compile and plan takes it.
+`Device` is cheap to clone; every compile takes it.
 
 The guide's examples are quoted from `examples/api_preview.rs`. Its tour device takes
-`DevicePolicy::RESIDENT_TABLES`, because its binding plans (sections 5 and 6) are the translator's
-binder's, which plans the resident-table domains. A runtime's device takes `DevicePolicy::default()`
-and pushes the identity domains' own fields itself: the binder refuses each of them,
-`Unsupported{IdentityDomains}` (a texture's or sampler's resource ID in `PushField::SlotGuestBase`,
-`PushField::ConstexprSampler`, `PushField::FetchedColor`, `PushField::TessellationFactorAddress`,
-the indirect commands' `PushField::IndirectRange`, `IndirectSequence` and `IndirectBase`, and
-`ZeroAddress`, `BicubicTexels` and `PrivateArenaAddress`).
+`DevicePolicy::default()`, the runtime's policy, which compiles under the identity domains; the
+consumer pushes their fields itself (a texture's or sampler's resource ID in
+`PushField::SlotGuestBase`, `PushField::ConstexprSampler`, `PushField::FetchedColor`,
+`PushField::TessellationFactorAddress`, the indirect commands' `PushField::IndirectRange`,
+`IndirectSequence` and `IndirectBase`, and `ZeroAddress`, `BicubicTexels` and
+`PrivateArenaAddress`).
 
 ### The policy
 
@@ -101,8 +99,8 @@ compile does. `DevicePolicy::default()` is the one constructor: the runtime comp
 and so do the command line, the compile worker and every validation tool. It holds:
 
 - **Bounds on a buffer-slot access at a run-time offset.** Such an access stays inside the range
-  the binder supplied: the shader checks it on every device, whatever buffer robustness the device
-  enables.
+  the consumer supplied: the shader checks it on every device, whatever buffer robustness the
+  device enables.
 - **The device's arithmetic.** The device's own maths library, divisions, fused multiply-adds,
   `float` denormals, rounding order of `dot`/`mix`/`fast::sqrt`, the grouping and fusion of
   fast-math sums and products (each operation in the AIR's order, its own fast-math flags its
@@ -185,15 +183,14 @@ and so do the command line, the compile worker and every validation tool. It hol
   declares `SpecKey::DeepThreadgroup`, default false: at true its workgroup is one row of the
   threadgroup's threads, `(sx·sy·sz, 1, 1)`, each thread's position its `LocalInvocationIndex`
   unflattened in Metal's order, so a threadgroup deeper than a device's
-  `maxComputeWorkGroupSize[2]` runs; the binder sets it for a region deeper than
-  `pipeline::DEEP_THREADGROUP` (64) alone, and so does a runtime, so every other pipeline
-  specializes it away. `MetalDeviceProperties::max_threads_per_threadgroup` is
+  `maxComputeWorkGroupSize[2]` runs; a runtime sets it for a region deeper than
+  `pipeline::DEEP_THREADGROUP` (64) alone, so every other pipeline specializes it away. `MetalDeviceProperties::max_threads_per_threadgroup` is
   the capped `maxComputeWorkGroupInvocations` on every axis. A texture slot's `gpuResourceID` is pushed as
   its `PushField::SlotGuestBase`, and its texture is the element at the ID's index of set 1's two
   fixed arrays, the same layout for every pipeline ([RESOURCE-ID.md](RESOURCE-ID.md)); it binds no
   descriptor of its own and declares no specialization constant. An argument buffer's texture is
   the element at the index of the `gpuResourceID` its member holds, with no handle table, so a
-  slot and a member of one class index one array. No binder chooses a variant there: a
+  slot and a member of one class index one array. No variant is chosen there: a
   texture reads through the plain form whatever texture its ID names, its `float` or `half` reads
   take the device's sRGB decode with `PrecisionNote::SrgbTexelDecode`, and no texture is sparse
   (the consumer refuses a sparse texture). A texture slot sampled through a runtime sampler slot
@@ -241,7 +238,7 @@ and so do the command line, the compile worker and every validation tool. It hol
   supplies `count * slot_bytes` bytes for each dispatch of `count` invocations, and keeps a
   dispatch's invocations under `2^32`. The memory needs no zeros: Metal's private memory is
   undefined until the thread writes it. Every precision note is
-  static there: no constant or binder decides one. So far they lower a kernel that reaches memory
+  static there: no constant or variant decides one. So far they lower a kernel that reaches memory
   through its buffer slots and the device addresses it loads (an argument buffer's pointer
   member, a stored `gpuAddress`) or makes from integers, and reads, writes, sizes or tests for nil
   its texture slots and its argument buffers' textures, those of an argument buffer a pointer
@@ -293,7 +290,7 @@ Loops run as written: no execution bound is translated in.
 ### What the device answers
 
 ```rust
-let device = committed_device("moltenvk-m3")?;
+let device = runtime_device("moltenvk-m3")?;
 let enables = device.required_enables();
 // ...
 hex(&device.profile().fingerprint()),
@@ -436,8 +433,8 @@ A `ComputePipeline` is immutable plain data:
 - `requirements`: what the device must have enabled.
 
 Do not create the compute `VkPipeline` from `stage` alone: its specialization defaults are
-placeholders (a kernel's local size is 1). Create each pipeline from a planned dispatch's
-`DispatchRegion` (section 6), with the region's `specialization`, `stage_flags` and
+placeholders (a kernel's local size is 1). Create each pipeline with the values its dispatch
+gives the specialization constants' keys, and with the stage's `stage_flags` and
 `required_subgroup_size`. A required subgroup size needs `subgroupSizeControl` and the stage in
 `requiredSubgroupSizeStages`; full subgroups need `computeFullSubgroups`. A pipeline compiled for
 one device pins only what that device can take; `DeviceProfile::check` tells whether another
@@ -493,9 +490,8 @@ axis is 0 and its `thread_position_in_grid` is its threadgroup's position, parti
 included. A dispatch of such threadgroups, where its axes are among the masks of `relief`, may
 run on the kernel's unit-axes variant (`VariantKey::unit_axes`, which `LoweringInputs::unit_axes`
 compiles): the same kernel with those positions uniform, walked without the predication they
-caused, giving the same answers. Its plan
-states `UnitAxes { axes, relief: 0 }` and sends a dispatch with more than one thread along one of
-its axes back to the variant without them (`BindError::NeedsVariant`). A kernel has at most seven
+caused, giving the same answers. Its compile states `UnitAxes { axes, relief: 0 }`, and a
+dispatch with more than one thread along one of its axes takes the variant without them. A kernel has at most seven
 such variants per variant it runs on, one per mask. On the Iris Xe, an authored kernel of four shuffles each way and a
 simdgroup sum in a loop of 8 to 11 trips, in threadgroups of 8 x 1 x 16, ran 1.14 to 2.16 times
 the GPU time predicated (its trip count read from `thread_position_in_grid.y`) as with the same
@@ -668,8 +664,7 @@ through buffer arguments it reads at any index.
   threadgroup memory on a profile without it is `Unsupported` with
   `Feature::ZeroedThreadgroupMemory`. The translator's own `Workgroup` words have none: an
   emulated SIMD group's exchange scratch and vote word, an object function's mesh grid, a mesh
-  function's primitive count and staged indices, and those of the binder's own shadow-merge and
-  index-rewrite kernels. Each is written
+  function's primitive count and staged indices. Each is written
   before any read of it, and an object function's payload "is assumed uninitialized at the entry
   of the object function" (the Metal Shading Language Specification, the `payload` attribute). Metal's documents give
   threadgroup memory no first contents: `MTLComputeCommandEncoder.h`'s
@@ -931,14 +926,14 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   `NotImplemented(PrimitiveId)`: an indexed strip, an indirect indexed draw, indices past their
   buffer, a vertex function that writes memory in that form, and a mesh pipeline.
   A draw of Metal's private quads or quad strip, which the consumer lists as two triangles a quad
-  (`BindState::quad_primitive_ids`), runs the fragment variant that reads `PrimitiveId` shifted
+  runs the fragment variant that reads `PrimitiveId` shifted
   right by one (`VariantKey::quad_primitive_ids`), as Metal counts one primitive a quad. A
   private type's draw whose vertex function writes the varying, or writes memory (Metal runs it
   once for each vertex of its list, where an indexed draw may run a shared vertex once), runs the
-  private list form (`VariantKey::private_list`, `BindShape::private_list`; needs device
+  private list form (`VariantKey::private_list`; needs device
   addresses): the consumer draws its list without indices from its first index as first vertex,
   and the vertex function reads each position's index, and Metal's base vertex in the word before
-  the list, at the list's address (`PushHole::CaptureIndexAddress`), adding them as Metal's vertex
+  the list, at the list's address (`PushField::CaptureIndexAddress`), adding them as Metal's vertex
   ID wraps, so each position runs once and the positions count Metal's primitives.
 - A device draws to at most the lesser of its `maxColorAttachments` and
   `maxFragmentOutputAttachments` color attachments at once (eight at the runtime's floor), where
@@ -959,7 +954,7 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   primitive one patch of its vertices (`PATCH_LIST`, `BandPrimitive::patch_control_points`), a
   line's without culling under front face `LineBandState::FRONT_FACE` and without depth bias, a
   triangle's under the draw's cull mode, front face and depth bias, and the band's `[sx, sy, h, f]`
-  pushed to the evaluation stage at `push_offset` (`BindState::line_band`: Vulkan viewport 0's half
+  pushed to the evaluation stage at `push_offset` (Vulkan viewport 0's half
   extent, the half width, and for triangles 1 under a clockwise front face, -1 under a
   counter-clockwise one). A smooth varying and the clip distances are each endpoint's, a flat or
   integer varying the first vertex's. It needs `tessellationShader` (`Unsupported{WideLines}`
@@ -987,8 +982,8 @@ let pipeline = device.compile_render_pipeline(&descriptor, &Budget::standard())?
 ```
 
 Its `stages` are a synthesized vertex and tessellation control stage, the function as the
-evaluation stage, and the fragment stage. It draws patches only (`DrawCall::Patches` or
-`PatchesIndirect`), with the factors from a tessellation factor buffer. The device's tessellator
+evaluation stage, and the fragment stage. It draws patches only (`drawPatches:` and its
+indirect and indexed forms), with the factors from a tessellation factor buffer. The device's tessellator
 orders the triangles (`PrecisionNote::TessellationTriangleOrder` where it is not Apple's).
 
 A device without `tessellationShader` refuses the function (`Unsupported{Tessellation}`, naming
@@ -997,8 +992,8 @@ the feature), and a fragment `[[primitive_id]]` behind it is `NotImplemented(Tes
 ### Mesh pipelines
 
 `Device::compile_mesh_pipeline` compiles a `MeshPipelineDescriptor` (an optional object function,
-a mesh function and a fragment function). Its plan draws
-mesh draws only (`DrawCall::MeshThreadgroups`, `MeshThreads` and their indirect forms). The
+a mesh function and a fragment function). It draws mesh draws only (`drawMeshThreadgroups:`,
+`drawMeshThreads:` and their indirect forms). The
 stages are task and mesh shaders, which need `VK_EXT_mesh_shader` with `meshShader` (and
 `taskShader` for an object function). A device without them (MoltenVK, older ANV) refuses the
 pipeline and each of its object and mesh functions (`Unsupported{MeshShading}`, naming what it
@@ -1015,46 +1010,26 @@ The mesh lowering is only compiled and validated: no mesh draw it makes has been
 Metal on a GPU, and the runtime makes no mesh pipeline (its README's known gaps of render pipeline
 states). What follows is what the lowering emits.
 
-A grid Metal draws nothing for (an axis past `bind::METAL_MESH_GRID_AXIS`, or more than
-`bind::METAL_MESH_GRID_TOTAL` threadgroups, measured on the M3 Max) draws nothing in every form:
-a direct draw's command is zeroed, an object function's wrapper launches nothing for such a grid,
-and an indirect draw reads its counts on the GPU. An indirect draw's
-`DrawCommands::mesh_arguments` is the form of a pass to record before the render pass (one
-invocation) that writes the draw's counts into the consumer's scratch, which the draw reads in
-place of Metal's arguments; the translator builds no module for that pass.
+A grid Metal draws nothing for (an axis past 65,535 threadgroups, or more than 1,048,575 of them,
+measured on the M3 Max) draws nothing: an object function's wrapper launches nothing for such a
+grid.
 
 An object grid runs at any count Metal runs, past the task stage's limits too, on a device with
 device addresses, `shaderInt64`, `multiDrawIndirect` and `drawIndirectCount` (every committed
-profile with the extension): the object function is compiled folded, and each draw runs its grid
-in pieces within the task limits (`bind::fold_object_grid`), its object stage reading the
+profile with the extension): the object function is compiled folded, its object stage reading the
 threadgroups Metal runs and its grid from a 32-byte region record at its
-`PushHole::ReplayRegionAddress`. A direct draw's fold is `DrawCommands::object_fold`, whose bytes
-the consumer uploads (the record, and its pieces' commands where `draw` is indirect); an indirect
-draw's arguments pass (`MeshArgumentsForm::FoldedObject`) writes the record, the pieces and their
-commands, which `draw` (`DrawMeshTasksIndirectCount`) reads. Metal's threads per grid wrap to 32
-bits along each axis, as its builtins report them; a direct draw runs only the threadgroups those
-threads fill, rounded up, an indirect one every threadgroup (`bind::metal_object_grid`). The
-lowering takes a grid of up to `bind::METAL_OBJECT_GRID_TOTAL` (2^29) threadgroups on every device,
-the most Metal's GPU ran within its watchdog's 5 seconds. A larger one, which Metal's GPU discards, draws nothing and
-fails its command buffer with Metal's error (the runtime's `CommandBufferError::GpuRecoveryVictim`):
-a direct draw says so in `DrawCommands::discards_command_buffer`, and the consumer fails the command
-buffer from the draw's encoder on, as Metal does; an indirect draw's arguments pass sets
-`StatusBits::MESH_GRID_DISCARDED` in the command buffer's `ExecutionStatus`. Where the device cannot
-launch a grid Metal draws, the draw draws nothing and the command buffer fails with the runtime's
-own error (`CommandBufferError::MeshGridPastLimits`, not Metal's): an indirect draw's object grid past
-the task limits of a device that does not fold object grids, or a mesh grid past the mesh limits,
-through `StatusBits::MESH_GRID_PAST_LIMITS`, or a fold of more pieces than
-`MeshArguments::OBJECT_PIECES` (only under task limits below Vulkan's required least), its `past`.
-A direct object grid past the task limits of a device that does not fold is refused naming the
-limit.
+`PushField::ReplayRegionAddress`, so a draw runs its grid in pieces within the task limits. Metal's
+threads per grid wrap to 32 bits along each axis, as its builtins report them. The lowering takes
+a grid of up to 2^29 threadgroups on every device, the most Metal's GPU ran within its watchdog's
+5 seconds; Metal's GPU discards a larger one and fails its command buffer with Metal's error.
 
 ### Tile pipelines
 
 `Device::compile_tile_pipeline` compiles a `TileRenderPipelineDescriptor` (the tile function and the
 render pass's color attachment formats) into a `ComputePipeline` that stands in for
-`dispatchThreadsPerTile:`. Dispatch it as `Dispatch::Threadgroups` over the render area, one
-threadgroup per tile, with `BindState::imageblock_size` and `BindState::render_area` set, and bind
-each attachment it reaches as a storage image where the plan writes `WriteSource::TileAttachment`.
+`dispatchThreadsPerTile:`. Dispatch it as threadgroups over the render area, one threadgroup per
+tile, and bind each attachment it reaches as a storage image at its `ResourceKind::TileAttachment`
+binding.
 Its threads are numbered as Metal's tile dispatch numbers them, for every threadgroup of even sides
 up to 32x32 and the single thread; a threadgroup with an odd side, whose quads Metal leaves partly
 empty, is refused. A tile function runs on a single-sample pass: a multisample
@@ -1062,7 +1037,7 @@ imageblock's operations (its sample count, the colors a pixel holds and their co
 store to the samples a coverage mask selects) are refused as not implemented
 (`Feature::Imageblocks`, naming the intrinsic).
 
-## 5. The interface and the plan
+## 5. The interface
 
 The pipeline states what it binds and how:
 
@@ -1089,9 +1064,8 @@ for dependency in &pipeline.dependencies {
   2^64. An access through the slot adds its 32-bit byte offset plus 2^31, modulo 2^32,
   zero-extended, to that word; a pointer compare, a pulled vertex fetch and an access from the
   word below it add the 2^31 back to read the address itself, and so does a slot pointer
-  converted to an integer or stored, which is the slot's address plus its offset. The binder
-  (`BindingPlan::instantiate_*`) of a device that compiles under the identity domains writes the
-  word so. A pointer loaded from memory (an argument buffer's pointer member, a `gpuAddress` the
+  converted to an integer or stored, which is the slot's address plus its offset. A runtime
+  writes the word so. A pointer loaded from memory (an argument buffer's pointer member, a `gpuAddress` the
   program stored) and a pointer made from an integer are the device address the word holds,
   unbiased and used directly, unchecked: there is no root table, no `PushField::RootTableAddress`
   and no search. A texture's or sampler's `SlotGuestBase` is its `gpuResourceID`, unbiased. A
@@ -1118,8 +1092,8 @@ for dependency in &pipeline.dependencies {
   outside sits in the check's selection and runs nothing; an atomic's answer there is 0. Nil and a
   slot shorter than one access push a length that every such access past it fails. An access at
   a constant offset, and an access through a pointer loaded from memory or made from an integer,
-  is not checked. The binder writes `SlotBounds` from the bound buffer and refuses
-  `ZeroAddress` (`Unsupported{IdentityDomains}`): the zero range is the runtime's own memory.
+  is not checked. A runtime writes `SlotBounds` from the bound buffer; `ZeroAddress` is the
+  runtime's own memory.
   What the check costs, measured on the runtime against the same build with the check
   removed (release, no validation layer): in the compute harness's GPU time, `wide_bindings`
   34.7% slower on a Radeon 780M (job m3-max-56485), 38.5% on an RTX 3090 (m3-max-56486) and 68%
@@ -1138,17 +1112,16 @@ for dependency in &pipeline.dependencies {
   a storage texel buffer array declared without a format where it writes it, each needing the
   texel buffer kind's non-uniform indexing and update-after-bind features (a storage one also
   `shaderStorageImageWriteWithoutFormat`, and where it is read `shaderStorageImageReadWithoutFormat`
-  or, without it, the formats' own read bits, section 10). A planned heap's members are
-  textures with images, so only a heap set the consumer keeps for every command (each live
-  texture at its resource ID) holds texture buffers. Push constants carry the values the
-  binder writes per command. A stage that writes the command buffer's `ExecutionStatus` (a
+  or, without it, the formats' own read bits, section 10). A heap set the consumer keeps for
+  every command holds each live texture at its resource ID, texture buffers among them. Push
+  constants carry the values the runtime writes per command. A stage that writes the command
+  buffer's status (a
   `seq_cst` fence, an argument buffer's cubic sampler) reaches it by device address, a push hole, where the device addresses buffers
   (`bufferDeviceAddress` and `shaderInt64`), and through a set-0 storage buffer of its own
   (`SyntheticBinding::ExecutionStatus`) where it does not. That binding counts against the
   stage's storage-buffer limits: past one, an absent read or a fence is refused
   (`DescriptorCount`), and a stage that would bind it only to test its argument samplers for a
-  cubic filter binds nothing, so the plan refuses a cubic sampler listed beside it
-  (`SamplerBicubicFilter`).
+  cubic filter binds nothing.
 - A heap texture sampled through one of several constexpr samplers, the one a sampler handle names
   at run time (a table of constexpr samplers read at a computed index), samples once through a
   set-0 array of those samplers (`ResourceKind::SamplerArray`, `BindingSource::SamplerArray`),
@@ -1187,8 +1160,8 @@ for dependency in &pipeline.dependencies {
   (`OpArrayLength`).
 - `dependencies` lists the bind-time state the pipeline depends on (`RuntimeFact`: threadgroup
   sizes, sampler coordinate modes, buffer ranges, ...) and how this profile honors each
-  (`Mechanism`: a specialization constant, a push field, a plan-time check, a variant). The plan
-  acts on them; you do not have to.
+  (`Mechanism`: a specialization constant, a push field, a plan-time check, a variant), which a
+  runtime honors at each draw or dispatch.
 - The format class of a bound texture is read by the shader as push data, not specialized, so binds
   that differ only in their textures' formats share one `VkPipeline`. On MoltenVK a slot read with a
   `half` result also specializes one bit of it: whether the class converts its texels to `half` by
@@ -1197,77 +1170,18 @@ for dependency in &pipeline.dependencies {
   takes two pipelines. Other bound values (a slot's presence, a sampler's word) are
   specialization constants. A buffer slot's storage view reads at its residual, its range from
   the buffer's start, so the bytes before a bind offset stay reachable.
-- A bound buffer's length enters its shape only as a length class (`bind::length_class`), which a
-  plan compares with the device's `maxStorageBufferRange` alone (whether every range of the
-  buffer fits it). Set each table's `buffer_ranges = BufferRanges::of(limits)` and its shape tells
-  apart only the classes that limit tells apart (`BufferRanges::length_class`: a class rounded up
-  to the greatest one that fits the same limit), so commands over buffers of many sizes keep one
-  shape and one plan: on a device whose limit is 4 GiB, every buffer below 4 GiB. The default
-  tells every class apart. The runtime binds through no stage table; the validation executor sets
-  it on every table it builds, from its profile's limits.
-- A two-plane YCbCr texture whose planes a function may read in place states them in its facts
-  (`TextureFacts::ycbcr_in_place`, a `YCbCrInPlace` of its planes). A slot whose function only samples it (nearest or linear, no comparison,
-  anisotropy or `min_lod_clamp`), gathers it or reads its size (`RuntimeFact::YCbCrInPlace`) takes the
-  pipeline's in-place variant (`VariantKey::ycbcr_in_place`): the slot binds a uniform texel buffer
-  over the planes' bytes (`WriteSource::YCbCrInPlace`, in `YCbCrInPlace::format`), its push field
-  (`PushField::YCbCrInPlace`) holds `YCbCrInPlace::words`, and the function converts and filters
-  the codes as Metal does, exactly (a gather Metal's taps of them). Any other slot, and any texture without the fact, binds the
-  texture's image of converted texels. Where the consumer also holds the planes as a linear image
-  of their multi-planar 4:2:0 format over their bytes, which the device's sampler Y′CbCr
-  conversion reads with Metal's reconstruction, it states so (`YCbCrInPlace::with_planes_image`,
-  its conversion `YCbCrInPlace::sampler`, a `YCbCrPlanesSampler`). A slot whose every sample the
-  device's sampler takes (the fact's `device`: no border address mode, no texel offset placed by a
-  parent's size, no gather; a runtime sampler's word without a border mode) then takes the planes variant
-  (`VariantKey::ycbcr_planes_sampled`): the slot is a combined image sampler of the image
-  (`ResourceKind::YCbCrPlanes`, `BindingSource::YCbCrPlanes`, written from
-  `WriteSource::YCbCrPlanesImage`) whose immutable sampler is `SamplerDesc::ycbcr` of the
-  conversion. The consumer chains its `VkSamplerYcbcrConversionInfo` into that sampler and makes
-  the image's view with an identically defined conversion, and sizes a pool for the format's
-  `combinedImageSamplerDescriptorCount` descriptors at the binding. Each sample is the device's,
-  at level 0, its conversion and filter of the codes rather than Metal's.
-- A 2D texture whose image is a shadow but whose bytes the consumer reads and writes in place
-  states its rows in its facts (`TextureFacts::texel_rows`, a `TexelRows`: its width, height, the
-  texels from one row's first to the next's, and its first texel in a texel buffer view of its
-  bytes; the runtime states one for a shadow over host pages whose image the device refused, not
-  one its policy asks for). A slot whose function only reads, writes or asks the size of it (no
-  sample, gather, atomic, read through a sampler, level views, switch at use or residency;
-  `RuntimeFact::TexelRows`) takes the pipeline's rows variant (`VariantKey::texel_rows`) where
-  the device views the texture's format as a texel buffer of the slot's kind (uniform where the
-  slot's declaration only reads, storage otherwise, read and written without a declared format):
-  the slot binds a texel buffer of the format over the rows' bytes (`WriteSource::TexelRows`,
-  from the view's first texel through the last row's last; a use of class `AccessClass::TexelRows`
-  of those bytes), its push field (`PushField::TexelRows`) holds `TexelRows::words`, and the
-  function addresses texel `(x, y)` at `first + y · row + x`, testing every read and write against
-  the texture's size itself (a coordinate past the width names the next row's texel in the view):
-  a read outside is Metal's out-of-bounds texel and a write there is dropped, and a size query
-  answers the field's size and one level. A texel buffer's texels go through the device's format
-  conversion as an image's do, so the reads and writes are the image route's, bit for bit (the
-  runtime's `texel_rows_device` tests compare every `RGBA8Unorm` and `RGBA16Float` code), and no
-  precision note is recorded. Any other slot, and any texture without the fact, binds the image.
-- A texture buffer of more texels than the device's `maxTexelBufferElements` (Metal makes them up
-  to 2^28 texels on every Mac; one texel buffer view holds 2^27 on ANV and lavapipe and 2^26 on
-  MoltenVK) is bound through views of its parts. State with its binding the views its texels take
-  (`BoundTexture::Buffer::parts`: 1 within the limit, which binds one view as before and keeps
-  the pipeline and its key, else `⌈texels / P⌉` parts of `P` texels). Each part but the last holds
-  `P = bind::part_texels(limits)` texels, the limit rounded down to a multiple of
-  `minTexelBufferOffsetAlignment`, so every part starts on that alignment where the texture buffer
-  does; the last holds the rest. A slot whose function only reads (not through a sampler), writes,
-  updates by an atomic or asks the width of the texture buffer, on a device that indexes an array
-  of the slot's kind of texel buffer by a `NonUniform` value (`RuntimeFact::TexelBufferParts`),
-  takes the pipeline's parts variant (`VariantKey::texel_buffer_parts`) where the shape binds more
-  than one part there: the slot is an array of the parts' texel buffers, one `WriteSource::TexelBuffer`
-  per array element, each element's view the bytes of the instance's `DescriptorRange` at that
-  `element`. The function reads texel `i` as texel `i - k · P` of part `k = min(⌊i / P⌋, parts - 1)`;
-  a texel past the last lies past the last part's end, so its read is Metal's out-of-bounds texel
-  and its write is dropped, as through one view, and the width is `(parts - 1) · P` plus the last
-  part's. Each part is the device's own view in the format one view takes, so a read converts its
-  texel as that view does, and no precision note is recorded. Still refused with
-  `BindError::TexelBufferTooLarge`: a slot that reads the texture buffer through a sampler, a device
-  without `shaderUniformTexelBufferArrayNonUniformIndexing` (or
-  `shaderStorageTexelBufferArrayNonUniformIndexing` for a slot that writes), and a format whose
-  block holds several texels; parts past a stage's sampled or storage image descriptors are the
-  link's descriptor-count refusal. A texture buffer past the limit in an argument buffer is the
-  heap class's neutral.
+- A texture-buffer slot compiled under `LoweringInputs::texel_buffer_parts` (its function only
+  reads the texture buffer, not through a sampler, writes it, updates it by an atomic or asks its
+  width, on a device that indexes an array of the slot's kind of texel buffer by a `NonUniform`
+  value: `RuntimeFact::TexelBufferParts`) is an array of that many texel buffers, each part but
+  the last of `P` texels, the device's `maxTexelBufferElements` rounded down to a multiple of
+  `minTexelBufferOffsetAlignment`. The function reads texel `i` as texel `i - k · P` of part
+  `k = min(⌊i / P⌋, parts - 1)`; a texel past the last lies past the last part's end, so its
+  read is Metal's out-of-bounds texel and its write is dropped, as through one view, and the
+  width is `(parts - 1) · P` plus the last part's. Each part is the device's own view in the
+  format one view takes, so a read converts its texel as that view does, and no precision note
+  is recorded. The runtime binds a texture buffer as one view and refuses a width past the limit
+  (`Limit::TextureSize`).
 - `interface.reaches_command_buffers` and `interface.texture_writing_stages` say, provably, which
   pipelines may touch an indirect command buffer and which stages may write a texture.
   `interface.command_writes` (`CommandWrites`) says what its functions may write into the
@@ -1292,49 +1206,13 @@ for dependency in &pipeline.dependencies {
   a resource ID), or an intersection or a call the function cannot see into. A runtime that
   gives some textures no storage image needs it to find such an access to one.
 
-### Plans
+### Binding
 
-Per draw or dispatch, describe what is bound, keyed by Metal slot, as a `BindState`. The binder
-never sees your resources, only facts about them:
-
-```rust
-let mut table = StageTable::default();
-table.buffers.insert(0, buffer(4096, 0));
-let facts = TextureFacts::new(TextureType::Type2D, PixelFormat::RGBA8Unorm);
-let texture = BoundTexture::Texture {
-    facts,
-    resource_id: None,
-};
-table.textures.insert(0, texture);
-let sampler = BoundSampler::new(SamplerDescriptor::new());
-table.samplers.insert(0, sampler);
-let mut state = BindState::default();
-state.stages.insert(Stage::Kernel, table);
-
-let plan = pipeline.plan(&device, &state.shape())?;
-assert!(plan.variant.is_empty(), "this shape needs no other variant");
-```
-
-`state.shape()` keeps only what can change a plan (which slots are bound with what kind of
-resource, formats, level counts, sampler modes, alignment classes). A plan is a pure function of the
-pipeline, the device and the shape: memoize it on `(PipelineKey, BindShape)`.
-
-The plan holds one `DescriptorWrite` per layout binding element (the resource at a slot, a buffer
-the binder synthesizes, or a neutral resource where nothing compatible is bound), the vertex
-buffers, and the `ResourceUse`s that drive staging, writeback and barriers. List in the state
-every live sampler state and visible-function table the command can reach through argument buffers
-(`argument_samplers`, function tables), and the resources it uses (`used_resources`). A consumer
-that lists those in token order says so (`used_in_token_order`), and one that points every root
-table at a resident set it uploads apart, holding them and the ranges it lists
-(`resident_ranges`), says that (`resident_apart`): a command's
-instantiation then costs its own bindings and heap members, not every resource the state lists.
-
-A plan whose `variant` is not empty asks for another variant of the pipeline (a storage texture's
-format, a buffer range past the descriptor limit, a vertex buffer that fixed-function input cannot
-fetch, ...). A render pipeline compiles under no variant (`Device::compile_render_pipeline`); a
-kernel compiles with `plan.variant.lowering_inputs(Stage::Kernel)`, linked as
-`StageSource::Compiled`, and is planned for the same shape. A dispatch can
-ask too (`plan.dispatch_variant(&dispatch)`, or `BindError::NeedsVariant` from instantiation).
+The translator plans no binding and calls no Vulkan to bind. A runtime binds each pipeline from
+what it states: its layout's bindings by Metal slot (`ResourceSlot`, set 0 densely in that order
+and set 1's heap arrays), the push fields its stages read (`PushField`), its specialization
+constants (`SpecKey`), and its `dependencies`. The runtime crate, `metal2vulkan-runtime`, is that
+runtime on every device; its README states what it binds, pushes and refuses.
 
 Textures follow Metal's texel rules: sparse textures report residency where the device can,
 `Depth32Float` texels are the device's depth image's (a value it clamps or a denormal it flushes is
@@ -1342,8 +1220,7 @@ the device's, `PrecisionNote::DepthDenormals`), a `ulong` texture is an `RG32` u
 whose two words the function joins and splits (its atomics are refused, `ImageAtomics`), and
 `half` and sRGB reads give Metal's values or record
 their bound (an sRGB texel is the device's own decode wherever the device samples its format,
-`srgb-texel-decode`). The
-rustdoc of `BindState`, `TextureFacts` and `BindingPlan` states each rule. A read's, sample's or
+`srgb-texel-decode`). A read's, sample's or
 gather's `{T, i8}` result (the texel and its residency word) may pass through phis, selects,
 freezes and member insertions and extractions, Apple's GL code generator's swizzled read among
 them. A function whose effects depend on a bit of the word other than bit 0 (`resident()`'s), or
@@ -1352,87 +1229,26 @@ establishes no other bit.
 
 ## 6. At bind time
 
-Instantiate the plan per dispatch or draw:
-
-```rust
-let dispatch = Dispatch::Threads {
-    threads: [100, 1, 1],
-    threads_per_group: [32, 1, 1],
-};
-let commands = plan.instantiate_dispatch(&state, &dispatch)?;
-for region in &commands.regions {
-// ...
-println!("  descriptor ranges: {:?}", commands.descriptor_ranges);
-println!("  push holes: {:?}", commands.push_holes);
-```
-
-```rust
-let plan = pipeline.plan(device, &state.shape())?;
-let draw = DrawCall::Primitives {
-    vertex_start: 0,
-    vertex_count: 6,
-    instance_count: 1,
-    base_instance: 0,
-};
-let commands = plan.instantiate_draw(&state, &draw)?;
-```
-
-A buffer slot read through a storage view of its whole window (a `device` pointer the function
-indexes) takes the descriptor range from the start of the bound buffer's space to its end padded
-to 16 bytes, whatever its bind offset, which its `SlotBindOffset` push field holds: draws and
-dispatches that bind one buffer at other offsets write the same descriptors, and only push data
-differs. Where that range would pass the view's `maxStorageBufferRange` or 4 GiB, or the offset
-lies at or past the padded end, the range starts at the bind offset aligned down to the
-descriptor base alignment. An access that reaches back before the bind offset, inside the buffer,
-reads the buffer's bytes there, as Metal's does.
-
-A slot of a bounded window read at its residual (a storage view's) takes a range its bind offsets
-share in the same way: the buffer from 0 to its padded end where that fits the view's maximum
-range (`maxStorageBufferRange`; a texel form's is `maxTexelBufferElements` texels) and 4 GiB,
-else the block of half that
-maximum (rounded down to a power of two) its window starts in, to the maximum past the block's
-start. A window of at most half the maximum starting in a block ends inside its block's range; a
-longer one, or one at or past the padded end, takes the range from its bind offset, as every
-other descriptor-form slot does. So draws that move such a slot's offset along one buffer (a
-consumer's staged `setVertexBytes`, a constant reference bound at the next offset of an upload
-chunk) write the same descriptor, keep set 0 and push only the slot's `SlotBindOffset`. Each read
-inside the window reads the bytes it read before; one outside it, which Metal leaves undefined,
-reads the buffer's bytes inside the range.
-
-`instantiate_draw_into` writes the same commands over a `DrawCommands` you keep, in the storage
-its vectors already hold: keep one from draw to draw (`DrawCommands::default()` to start) and the
-draws allocate none of it again once it holds as much. `instantiate_dispatch_into` does the same
-for a compute dispatch over a `DispatchCommands` you keep (one `instantiate_dispatch` made, to
-start): each region's specialization and push bytes, and the argument table's, are written in the
-storage the commands before held.
-
-A plan that reads handles (a texture's or sampler state's resource ID, a visible function table's)
-writes heap tables among its descriptor bytes, after the stage tables: its handle tables, sampler
-tables and function-table directories. Their bytes grow with the resources the state lists as
-used and the textures its slots bind that a handle names, and they depend on nothing else of the
-state but its argument samplers, function tables and heap placement.
-
-A dispatch is one or more regions (a grid that is not whole threadgroups adds edge regions), each
-with its group count, specialization and push constants: create one `VkPipeline` per distinct
-specialization. The plan of a kernel's partial-threadgroups variant (`VariantKey::partial_threadgroups`,
-which `LoweringInputs::partial_threadgroups` compiles) runs such a grid as the threadgroups its
-threads fill at the dispatch's threadgroup size instead, the last along an axis Metal's partial
-threadgroup, so every remainder takes the same `VkPipeline`; a kernel the variant cannot run
-exactly (a tile function, a stage-input region, compute derivatives, emulated simdgroups) is
-refused it, `Unsupported{PartialThreadgroups, NotImplemented}`, and keeps the edges. On
-the identity domains the variant of a kernel that does not
-observe its threadgroup partition (`KernelFacts::partition_oblivious`) runs its grid in tiles
-instead (`RuntimeFact::GridTiles`): its plans run a direct dispatch's threads in
-`pipeline::grid_tile`'s tiles, one workgroup of `pipeline::GRID_TILE_THREADS` each with the tile
-as the region's nominal size (`MultiRegion` 1), the region flagged `NONUNIFORM` where the tile
-does not divide the grid, and a range of threadgroups at its own size (`MultiRegion` 0); the
-kernel runs the same positions with the same answers: where the region is flagged `NONUNIFORM`,
-every invocation compares its position with the region's grid and one past it returns before the
-body, a test inside one branch on the flag; an unflagged region runs no such test, so a runtime
-flags every region of a grid its workgroups do not divide. At `MultiRegion` 0 a runtime may run a
-direct dispatch of the variant in workgroups of a size it picks, flagged where they do not divide
-the grid, whose invocations past it return before the body as a tile's do; an indirect dispatch's
-region states no grid and is unflagged, and all of its invocations run.
+A kernel's dispatch runs as one or more regions, each a group count with its specialization and
+push constants, and each distinct specialization is one `VkPipeline`. A kernel's
+partial-threadgroups variant (`LoweringInputs::partial_threadgroups`) runs a grid that is not
+whole threadgroups as the threadgroups its threads fill at the dispatch's threadgroup size, the
+last along an axis Metal's partial threadgroup, so every remainder takes the same `VkPipeline`; a
+kernel the variant cannot run exactly (a tile function, a stage-input region, compute
+derivatives, emulated simdgroups) is refused it, `Unsupported{PartialThreadgroups,
+NotImplemented}`. On the identity domains the variant of a kernel that does not observe its
+threadgroup partition (`KernelFacts::partition_oblivious`) runs its grid in tiles instead
+(`RuntimeFact::GridTiles`): a direct dispatch's threads run in `pipeline::grid_tile`'s tiles, one
+workgroup of `pipeline::GRID_TILE_THREADS` each with the tile as the region's nominal size
+(`MultiRegion` 1), the region flagged `NONUNIFORM` where the tile does not divide the grid, and a
+range of threadgroups at its own size (`MultiRegion` 0); the kernel runs the same positions with
+the same answers: where the region is flagged `NONUNIFORM`, every invocation compares its
+position with the region's grid and one past it returns before the body, a test inside one
+branch on the flag; an unflagged region runs no such test, so a runtime flags every region of a
+grid its workgroups do not divide. At `MultiRegion` 0 a runtime may run a direct dispatch of the
+variant in workgroups of a size it picks, flagged where they do not divide the grid, whose
+invocations past it return before the body as a tile's do; an indirect dispatch's region states
+no grid and is unflagged, and all of its invocations run.
 `Device::kernel_observes_partition(&kernel, &inputs, &budget, &entries)` answers, before any
 lowering, what `CompiledFunction::observes_threadgroup_partition` answers for the compile under the
 same inputs (from the specialized entry `entries` holds, ordered for the device where its
@@ -1440,61 +1256,16 @@ profile takes the lockstep order), so a runtime lowers only the variant a creati
 `CompiledFunction::is_image_only` (`KernelFacts::image_only`) states, from the AIR alone, a kernel
 that samples, gathers or reads a texture and loads, stores and updates atomically nothing through
 a `device` pointer (`constant` loads and texture writes allowed), which a runtime may run in
-square workgroups. On
-that plan a grid of whole threadgroups, of `Threads` or `Threadgroups`, takes the same regions
-unflagged (each `MultiRegion` 1, every thread live), so one `VkPipeline` of a threadgroup size runs
-all of a kernel's direct dispatches. The runtime lowers a kernel that does not observe its
-partition once, as that variant, and runs every direct dispatch of it in its tiles; a kernel that
-observes its partition runs every dispatch, a whole grid, threadgroups, an indirect dispatch or
-a `dispatchThreads` grid that is not a whole number of threadgroups, on its partial-threadgroups
-variant at its own threadgroup size, where the variant takes the dispatch's threadgroup memory
-(the variant's predicated walk may add a vote word); an indirect dispatch states no grid in its region and takes
-the single-region form, unflagged. A kernel
-that steps a stage-in attribute by thread position, or reads `[[grid_origin]]` or `[[grid_size]]`,
-needs the encoder's stage-in region:
-
-```rust
-match plan.instantiate_dispatch(&state, &dispatch) {
-    Err(BindError::MissingStageInRegion) => {}
-// ...
-state.stage_in_region = Some(StageInRegion::new([0, 0, 0], [64, 1, 1]));
-let commands = plan.instantiate_dispatch(&state, &dispatch)?;
-```
-
-A tessellation pipeline draws patches, with the factors' buffer in the state:
-
-```rust
-let factors = TessellationFactorBuffer::new(4096, 0, 0);
-state.tessellation_factors = TessellationFactors::new(Some(factors), 1.0);
-let plan = pipeline.plan(device, &state.shape())?;
-let draw = DrawCall::Patches {
-    control_points: 4,
-    patch_start: 0,
-    patch_count: 16,
-    patch_index: None,
-    instance_count: 1,
-    base_instance: 0,
-    control_point_index: None,
-};
-let commands = plan.instantiate_draw(&state, &draw)?;
-```
-
-What you record from `DispatchCommands` or `DrawCommands`:
-
-- **Descriptors.** Write each of the plan's `descriptors`, binding each buffer descriptor over
-  exactly its `descriptor_ranges` entry. Upload `descriptor_bytes` (argument and handle tables) and
-  the resident root tables where present. A handle table maps each resident resource's
-  `gpuResourceID` to its heap element; a consumer that keeps one heap for every command buffer can
-  bind one table of every texture ID instead (`bind::handle_entry`), as the runtime does.
-- **Push constants.** Write `push_constants`, and fill each of the `push_holes` with the device
-  address it names: the uploaded root table, the command buffer's `ExecutionStatus` buffer, an
-  indirect command buffer's records.
-- **The dispatch or draw.** Record `regions` or `draw` as given: the binder has already applied
-  Metal's offsets, bases and clamps.
-- **Status.** Per command buffer, keep one `ExecutionStatus` buffer for what translated shaders
-  report (a resident-set miss, for one), and read it when the command buffer completes. A plan
-  binds it as `WriteSource::ExecutionStatus` on a device that does not address buffers: bind the
-  same buffer there, its `ExecutionStatus::BYTES` bytes.
+square workgroups. On that variant a grid of whole threadgroups, of `dispatchThreads` or
+`dispatchThreadgroups`, takes the same regions unflagged (each `MultiRegion` 1, every thread
+live), so one `VkPipeline` of a threadgroup size runs all of a kernel's direct dispatches. The
+runtime lowers a kernel that does not observe its partition once, as that variant, and runs every
+direct dispatch of it in its tiles; a kernel that observes its partition runs every dispatch, a
+whole grid, threadgroups, an indirect dispatch or a `dispatchThreads` grid that is not a whole
+number of threadgroups, on its partial-threadgroups variant at its own threadgroup size, where the
+variant takes the dispatch's threadgroup memory (the variant's predicated walk may add a vote
+word); an indirect dispatch states no grid in its region and takes the single-region form,
+unflagged.
 
 ### Levels a slot reads
 
@@ -1519,8 +1290,7 @@ The translator replays no records. For a consumer that replays them, a render pi
 as its replay variant (`VariantKey::replay_bindings`), whose vertex and fragment functions read
 each command's buffers from slot tables in memory, and as its merged variant
 (`VariantKey::merged_draws`), whose vertex function finds its command in one merged draw by a
-prefix of the commands' first vertices (`bind::DRAW_ARGUMENT_BYTES`,
-`bind::DRAW_INDEX_ENTRY_BYTES`, `bind::MERGED_REST_FIRST`) and runs the command's vertex,
+prefix of the commands' first vertices and runs the command's vertex,
 instance and buffers, in the commands' order. A buffer's records start at
 `bind::indirect_commands::records_address` of its ID, outside every Metal address; records may
 run past later IDs' starts, and a resident set keeps each records range whole. Storage may hold a written flag per command,
@@ -1580,8 +1350,7 @@ assert_eq!(linked, pipeline);
   the descriptor past the fetch -- its layout agreement, its reflection, and `compute_pipeline_key`
   -- reads it whole.
 - A key names an artifact by its inputs and versions; a content digest names it by what it says.
-  `pipeline.content_digest()` hashes everything but the key and profile, and `plan.content_digest()`
-  (with `serde`) everything a plan states. A cache of driver objects keyed on the digest survives a
+  `pipeline.content_digest()` hashes everything but the key and profile. A cache of driver objects keyed on the digest survives a
   release that bumped `SEMANTICS_VERSION` without changing the output. A digest identifies
   content; it authenticates nothing.
 - A compiled function keeps its last relocation beside it, so a sweep of pipeline states over
@@ -1602,7 +1371,7 @@ Every failure is typed; match variants, never messages. A refusal says what woul
 answer:
 
 ```rust
-let floor = committed_device("runtime-floor")?;
+let floor = runtime_device("runtime-floor")?;
 let min_lod = FunctionDescriptor::new(sampling.function("sample_min_lod")?);
 match floor.compile_function(&min_lod, &LoweringInputs::new(), &Budget::standard()) {
     Err(Error::Unsupported(refusal)) => match (&refusal.feature, &refusal.needs) {
@@ -1643,12 +1412,9 @@ compiles, as plain Metal's does (section 10, "Function constants").
 
 A storage texture's format (`RuntimeInput::StorageTextureFormat { slot }`) comes from what is
 bound: `metal::format::storage_image_choice(pixel_format, device.profile())`, placed in a
-`VariantKey`'s `storage_images` and compiled as a variant. The plan asks for it itself where the
-bound format needs a declared format.
+`VariantKey`'s `storage_images` and compiled as a variant.
 
-**What to cache.** `error.retry()` says whether the same request can succeed later. A
-`BindError` from `plan` depends only on the pipeline, the device and the shape, so it
-memoizes beside the plan; one from instantiation does not.
+**What to cache.** `error.retry()` says whether the same request can succeed later.
 
 **Where a refusal comes from.** `error.basis()` (a `RefusalBasis`) says where the belief that the
 input must be refused comes from: a refusal's follows from its `needs` (`Device` for what a
@@ -1662,8 +1428,9 @@ runtime's `Error::basis` answers a translation error so.
 whether subgroup reconvergence after divergence matches Metal's
 (`Reconvergence::ImplementationDefined` where the profile lacks maximal reconvergence). A note
 that holds only under some bound values is in `specialized_notes`;
-`stage.precision_notes_bound(&plan.specialization, &|key| plan.specialized_value(key))` gives the
-notes a plan reaches. Section 9 lists every note.
+`stage.precision_notes_bound(&specialization, &|key| bound(key))` gives the notes a pipeline
+created under `specialization` reaches where a draw or dispatch binds the values `bound` gives.
+Section 9 lists every note.
 
 **The runtime's errors** are its own type, `metal2vulkan_runtime::Error`;
 
@@ -2074,11 +1841,6 @@ bound.
   texel's sample past `±65504`, the infinity where Metal saturates. Recorded outright for every
   such access, a heap element's and a depth texture's included: the device's `float` texel is its
   own.
-- `metal2vulkan-degrade-half-sample-filter` (precision). `PrecisionNote::HalfSampleFilter`: The
-  module samples a texture with a `half` result through a filter (linear minification or
-  magnification, a linear mip filter, anisotropy, or a runtime sampler slot whose bound sampler
-  filters so) by Vulkan's Y′CbCr model of a 4:2:0 two-plane YCbCr texture's planes read in place,
-  which blends the codes, not Metal's exact filter of the format, on every device.
 - `metal2vulkan-degrade-srgb-texel-decode` (precision). `PrecisionNote::SrgbTexelDecode`: The module
   reads, samples, or gathers a texture with a `half` or `float` result through the device's sRGB
   decode, or decodes the device's filter of its codes, where the texture may be bound in an 8-bit
@@ -2091,10 +1853,6 @@ bound.
   alias (at a slot, or held by an argument buffer), the module decodes the codes (or the
   device's filter of them) by the MSL transfer through the device's `Pow`, at every such access on
   every device.
-- `metal2vulkan-degrade-float-sample-filter` (precision). `PrecisionNote::FloatSampleFilter`: The
-  module samples a texture with a `float` result through a filter by Vulkan's Y′CbCr model of a
-  4:2:0 two-plane YCbCr texture's planes read in place, which blends the codes, not Metal's exact
-  filter of the format, on every device.
 - `metal2vulkan-degrade-function-storage-assumed` (precision).
   `PrecisionNote::FunctionStorageAssumed`: A vertex or fragment function keeps more private memory
   (its `alloca`s, a call stack among them, or constants held as `Private` variables) than the floor,
@@ -2559,8 +2317,8 @@ bound.
   (`BGR10_XR`, `BGRA10_XR`, `R10Unorm_X6`, `RG10Unorm_X12` and the bfloat formats), whose
   `float` read, sample or gather through an argument buffer the
   function decodes the same way: such a stage records the note as a specialized note, holding
-  where a texture its handles can name is one (`SpecKey::HeapRawTextures`, which the binding plan
-  gives from the textures the command makes resident or binds), so a reading of the module alone
+  where a texture its handles can name is one (`SpecKey::HeapRawTextures`, which a runtime gives
+  from the textures the command makes resident or binds), so a reading of the module alone
   holds it, and so does a command that can name one.
 - `metal2vulkan-degrade-device-fragment-runs` (precision). `PrecisionNote::DeviceFragmentRuns`: A
   fragment function that writes memory (`StageInterface::writes_memory`) in a render pipeline of

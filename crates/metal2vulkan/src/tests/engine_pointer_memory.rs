@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::bind::status::{ExecutionStatus, StatusWord};
+use crate::bind::status::StatusWord;
 use crate::budget::SPIRV_WORDS;
 use crate::device::profile::DeviceProfile;
 use crate::device::requirements::VkFeature;
@@ -41,6 +41,10 @@ use crate::pipeline::testing::{
 };
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources, TrapKind};
 use crate::spirv::ir::{AtomicOp, Inst, StorageClass, Type, TypedModule};
+
+/// The `ExecutionStatus` buffer's bytes, every word 0 at the start: through its last word.
+const STATUS_BYTES: usize =
+    crate::bind::status::StatusWord::SeqCstFences.byte_offset() as usize + 4;
 
 const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\ntarget triple = \"air64_v28-apple-macosx26.0.0\"\n\n";
 
@@ -332,7 +336,7 @@ fn resources_bound(plan: &Plan, mem: &Memory, threads: u32, binds: &[Bind]) -> (
     buffers.push(Buffer {
         slot: None,
         address: Some(STATUS),
-        bytes: ExecutionStatus::initial().to_vec(),
+        bytes: vec![0; STATUS_BYTES],
     });
     (
         Resources {

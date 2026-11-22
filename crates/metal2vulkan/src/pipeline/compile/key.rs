@@ -229,21 +229,6 @@ pub fn function_key(
             .bytes(format!("{:?}", inputs.srgb_textures).as_bytes());
     }
     // Appended only when set, as `signed_color_attachments`.
-    if !inputs.ycbcr_in_place.is_empty() {
-        h.bytes(b"ycbcr-in-place")
-            .bytes(format!("{:?}", inputs.ycbcr_in_place).as_bytes());
-    }
-    // Appended only when set, as `signed_color_attachments`.
-    if !inputs.ycbcr_planes_sampled.is_empty() {
-        h.bytes(b"ycbcr-planes-sampled")
-            .bytes(format!("{:?}", inputs.ycbcr_planes_sampled).as_bytes());
-    }
-    // Appended only when set, as `signed_color_attachments`.
-    if !inputs.texel_rows.is_empty() {
-        h.bytes(b"texel-rows")
-            .bytes(format!("{:?}", inputs.texel_rows).as_bytes());
-    }
-    // Appended only when set, as `signed_color_attachments`.
     if !inputs.texel_buffer_parts.is_empty() {
         h.bytes(b"texel-buffer-parts")
             .bytes(format!("{:?}", inputs.texel_buffer_parts).as_bytes());

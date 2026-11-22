@@ -18,24 +18,17 @@
 //!
 //! `llvm-as` assembles the fixtures; without it the tests skip visibly.
 
-use crate::bind::{
-    BindState, BoundBuffer, BoundSampler, BoundTexture, NeutralResource, SamplerDescriptor,
-    StageTable, TextureFacts, WriteSource,
-};
-use crate::budget::Budget;
 use crate::device::profile::DeviceProfile;
 use crate::device::requirements::VkLimit;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Capability, Error, Feature, Needs};
-use crate::library::{FunctionArtifact, Library};
-use crate::metal::{PixelFormat, SamplerMinMagFilter, TextureType};
+use crate::library::FunctionArtifact;
 use crate::pipeline::layout::BindingSource;
 use crate::pipeline::link::{link, LinkInputs};
-use crate::pipeline::sym::{ResourceKind, SamplerRef, SlotClass, SlotRef, Stage};
+use crate::pipeline::sym::{ResourceKind, SamplerRef, Stage};
 use crate::pipeline::testing::{
     compile, engine_dir, link_and_validate, llvm_assemble, AssembleError,
 };
-use crate::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, StageSource};
 use crate::spirv::testing::committed_profiles;
 use crate::vk;
 
@@ -220,107 +213,5 @@ fn the_trigger_is_the_sampler_limit() {
         assert_eq!(a32.module.words, a1000.module.words, "{name}");
         assert_eq!(kinds(&a31).1, 32, "{name}");
         assert_ne!(a31.module.words, a32.module.words, "{name}");
-    }
-}
-
-/// `smp_runtime_array` on `moltenvk-m3` samples 32 separate textures through one runtime separate
-/// sampler. The plan writes the sampler with the one bound at the kernel's slot 0, made for the use
-/// (the neutral sampler where none is bound), and each separate texture with its bound texture's
-/// view; a texture slot left unbound reads the neutral image.
-#[test]
-fn the_binder_writes_a_runtime_separate_sampler_and_its_textures() {
-    let Some(bc) = fixture("smp_runtime_array") else {
-        return;
-    };
-    let dev = m3_with(|_| {});
-    let lib = Library::from_air(&bc).expect("library");
-    let f = lib.function("smp_runtime_array").expect("entry");
-    let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
-    let pipe = dev
-        .compile_compute_pipeline(&d, &Budget::standard())
-        .expect("pipeline");
-    let sampler_binding = pipe.layout.sets[0]
-        .bindings
-        .iter()
-        .find(|b| matches!(b.source, BindingSource::SeparateSampler { .. }))
-        .expect("separate sampler")
-        .binding;
-    let state = |bound: u32, sampler: Option<BoundSampler>| {
-        let mut t = StageTable::default();
-        for i in 0..bound {
-            t.textures.insert(
-                i,
-                BoundTexture::Texture {
-                    facts: TextureFacts::new(TextureType::Type2D, PixelFormat::RGBA16Float),
-                    resource_id: None,
-                },
-            );
-        }
-        if let Some(s) = sampler {
-            t.samplers.insert(0, s);
-        }
-        t.buffers.insert(
-            0,
-            BoundBuffer::Buffer {
-                length: 32 * 16,
-                offset: 0,
-                gpu_address: 0x1000_0000,
-                device_address: None,
-                attribute_stride: None,
-            },
-        );
-        let mut state = BindState::default();
-        state.stages.insert(Stage::Kernel, t);
-        state
-    };
-    let mut linear = SamplerDescriptor::new();
-    linear.min_filter = SamplerMinMagFilter::Linear;
-    linear.mag_filter = SamplerMinMagFilter::Linear;
-    let s0 = SlotRef {
-        stage: Stage::Kernel,
-        class: SlotClass::Sampler,
-        index: 0,
-    };
-    for (bound, sampler, want) in [
-        (
-            32,
-            Some(BoundSampler::new(linear)),
-            WriteSource::Sampler {
-                slot: s0,
-                compare: false,
-                integer: false,
-                opaque_black: crate::metal::sampler::OpaqueBlackBorder::Stated,
-            },
-        ),
-        (
-            31,
-            None,
-            WriteSource::Neutral(NeutralResource::Sampler { compare: false }),
-        ),
-    ] {
-        let plan = pipe
-            .plan(&dev, &state(bound, sampler).shape())
-            .expect("plan");
-        let written: Vec<_> = plan
-            .descriptors
-            .iter()
-            .filter(|w| w.set == 0 && w.binding == sampler_binding)
-            .map(|w| w.source.clone())
-            .collect();
-        assert_eq!(written, vec![want]);
-        let mut textures = 0;
-        let mut neutral = 0;
-        for w in &plan.descriptors {
-            match &w.source {
-                WriteSource::Texture { slot, .. } if slot.class == SlotClass::Texture => {
-                    assert_eq!(w.ty, vk::DescriptorType::SAMPLED_IMAGE);
-                    textures += 1;
-                }
-                WriteSource::Neutral(NeutralResource::Image { .. }) => neutral += 1,
-                WriteSource::CombinedImageSampler { .. } => panic!("a combined write"),
-                _ => {}
-            }
-        }
-        assert_eq!((textures, neutral), (bound, 32 - bound));
     }
 }

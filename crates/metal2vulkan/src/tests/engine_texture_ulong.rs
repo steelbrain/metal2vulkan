@@ -28,24 +28,17 @@
 
 use std::collections::BTreeMap;
 
-use crate::bind::{BindState, BoundBuffer, BoundTexture, StageTable, TextureFacts};
-use crate::budget::Budget;
 use crate::device::profile::DeviceProfile;
 use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Error, Feature, Needs, Unsupported};
-use crate::library::Library;
 use crate::lower::select::Plan;
-use crate::metal::{PixelFormat, TextureType, TextureUsage};
 use crate::pipeline::interface::{PushLoc, SlotInterface};
 use crate::pipeline::sym::{
     Axis, PushField, ResourceKind, ResourceSlot, SampledType, SlotClass, SpecKey, Stage,
 };
 use crate::pipeline::testing::{
     compile, engine_dir, link_and_validate, llvm_assemble, typed_module, AssembleError,
-};
-use crate::pipeline::{
-    ComputePipeline, ComputePipelineDescriptor, FunctionDescriptor, StageSource,
 };
 use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Order, Resources};
 use crate::spirv::ir::TypedModule;
@@ -503,92 +496,4 @@ fn ulong_atomics_are_refused_on_every_device() {
         }
     }
     assert!(refused >= profiles.len(), "{refused}");
-}
-
-fn device(stem: &str) -> Device {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles")
-        .join(format!("{stem}.json"));
-    let text = std::fs::read_to_string(path).expect("profile");
-    let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
-}
-
-fn pipeline(dev: &Device, bc: &[u8], entry: &str) -> ComputePipeline {
-    let lib = Library::from_air(bc).expect("library");
-    let f = FunctionDescriptor::new(lib.function(entry).expect("function"));
-    let d = ComputePipelineDescriptor::new(StageSource::Function(f));
-    dev.compile_compute_pipeline(&d, &Budget::standard())
-        .unwrap_or_else(|e| panic!("{entry}: {e}"))
-}
-
-/// A bind state with `RG32Uint` textures of `types` at texture slots 0, 1, ... (`None`: left
-/// unbound), Metal's usage for atomics, and a buffer at slot 0.
-fn ulong_state(types: &[Option<TextureType>]) -> BindState {
-    let mut t = StageTable::default();
-    t.buffers.insert(
-        0,
-        BoundBuffer::Bytes {
-            len: 4096,
-            attribute_stride: None,
-        },
-    );
-    for (i, ty) in types.iter().enumerate() {
-        let Some(ty) = *ty else { continue };
-        let mut facts = TextureFacts::new(ty, PixelFormat::RG32Uint);
-        facts.usage =
-            TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE | TextureUsage::SHADER_ATOMIC;
-        t.textures.insert(
-            i as u32,
-            BoundTexture::Texture {
-                facts,
-                resource_id: None,
-            },
-        );
-    }
-    let mut s = BindState::default();
-    s.stages.insert(Stage::Kernel, t);
-    s
-}
-
-/// A texture buffer made with a swizzle at a slot the function reads as `ulong` texels is refused
-/// (`Unsupported { feature: TextureSwizzle }`): the read applies no swizzle, and Metal's swizzled
-/// `ulong` texel is not measured. Unswizzled, it binds.
-#[test]
-fn a_swizzled_texture_buffer_read_as_ulong_is_refused() {
-    use crate::metal::{TextureSwizzle as S, TextureSwizzleChannels as C};
-    let Some(bc) = fixture("unk_ulong_rw") else {
-        return;
-    };
-    let dev = device("amd-780m-radv");
-    let rw = pipeline(&dev, &bc, "unk_ulong_rw");
-    let state = |swizzle| {
-        let mut t = ulong_state(&[]);
-        t.stages
-            .get_mut(&Stage::Kernel)
-            .expect("kernel")
-            .textures
-            .insert(
-                5,
-                BoundTexture::Buffer {
-                    pixel_format: PixelFormat::RG32Uint,
-                    offset: 0,
-                    length: 256,
-                    bytes_per_row: 256,
-                    resource_id: None,
-                    swizzle,
-                    parts: 1,
-                },
-            );
-        t
-    };
-    rw.plan(&dev, &state(C::DEFAULT).shape()).expect("plan");
-    let bgr1 = C::new(S::Blue, S::Green, S::Red, S::One);
-    match rw.plan(&dev, &state(bgr1).shape()) {
-        Err(crate::error::BindError::Unsupported(u)) => assert_eq!(
-            u,
-            crate::error::Unsupported::not_implemented(Feature::TextureSwizzle)
-        ),
-        other => panic!("{other:?}"),
-    }
 }

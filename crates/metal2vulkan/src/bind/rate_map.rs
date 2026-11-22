@@ -21,7 +21,7 @@
 //! `float` arithmetic is the device's: it computes the shader's
 //! answers bit for bit on a device that reads `float` denormals as Metal does, and with the
 //! device's own denormals elsewhere (`PrecisionNote::DeviceDenormals`), as the SPIR-V interpreter
-//! keeps them. The buffer is then bound like any other ([`BoundBuffer::Buffer`]).
+//! keeps them. The buffer is then bound like any other.
 //!
 //! **Compiling a descriptor.** Metal leaves the compiled map to the device: a layer's quality
 //! samples "may be rounded up ... depending on hardware support". [`RasterizationRateMap::new`]
@@ -59,8 +59,6 @@
 //!
 //! **Rendering a rate-mapped pass** (`MTLRenderPassDescriptor.rasterizationRateMap`) is the
 //! consumer's.
-//!
-//! [`BoundBuffer::Buffer`]: crate::bind::BoundBuffer::Buffer
 
 use std::fmt;
 

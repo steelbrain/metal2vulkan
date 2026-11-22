@@ -665,7 +665,7 @@ fn the_offset_rule_is_metals_by_level_and_base() {
 /// view's own, as before.
 #[test]
 fn the_offset_rule_reads_the_parent_s_base_through_the_view_bit() {
-    use crate::bind::TextureFacts;
+    use crate::bind::state::TextureFacts;
     use crate::metal::{PixelFormat, TextureType};
     let rule = |n: u32, base: u32| (2..=7).contains(&n) && !base.is_power_of_two();
     let mut lanes = Vec::new();

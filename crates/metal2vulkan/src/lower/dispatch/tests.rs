@@ -548,7 +548,7 @@ fn group_count_splits_match_the_single_dispatch() {
 
 /// A partial object threadgroups module's run of a draw of `threads` threads in threadgroups of
 /// `l` (one dispatch of the threadgroups the threads fill, rounded up, each of `l` invocations,
-/// `MultiRegion` 1), its region flagged where `flagged` ([`partial_region_bytes`]): each
+/// `MultiRegion` 1), its region flagged where `flagged` ([`nonuniform_region_bytes`]): each
 /// invocation's live word and builtins.
 fn run_partial(
     m: &TypedModule,
@@ -571,7 +571,7 @@ fn run_partial(
     }
     spec.insert(SpecKey::MultiRegion, 1);
     let push = match flagged {
-        true => partial_region_bytes(threads, l),
+        true => nonuniform_region_bytes([0; 3], threads, l),
         false => region_bytes([0; 3], threads, l),
     };
     let res = Resources {

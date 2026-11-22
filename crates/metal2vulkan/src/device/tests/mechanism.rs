@@ -128,12 +128,6 @@ fn every_fact() -> Vec<RuntimeFact> {
         RuntimeFact::RegionViewports,
         RuntimeFact::PartialThreadgroups,
         RuntimeFact::GridTiles,
-        RuntimeFact::YCbCrInPlace {
-            slot,
-            samplers: 1,
-            device: true,
-        },
-        RuntimeFact::TexelRows { slot },
         RuntimeFact::ZeroedColor {
             color: 1,
             format: crate::metal::PixelFormat::RGBA8Unorm,
@@ -287,15 +281,13 @@ fn variant(f: &RuntimeFact) -> usize {
         RuntimeFact::QuadPrimitiveIds => 54,
         RuntimeFact::RotatedWeights => 77,
         RuntimeFact::PrivateList => 80,
-        RuntimeFact::YCbCrInPlace { .. } => 60,
         RuntimeFact::PartialObjectThreadgroups => 83,
         RuntimeFact::OpenClMode => 85,
         RuntimeFact::RowLockstep => 86,
-        RuntimeFact::BorderTexels { .. } => 87,
-        RuntimeFact::HeapResidency { .. } => 88,
+        RuntimeFact::BorderTexels { .. } => 60,
+        RuntimeFact::HeapResidency { .. } => 78,
         RuntimeFact::CallThreadgroups => 84,
         RuntimeFact::PartialThreadgroups => 81,
-        RuntimeFact::TexelRows { .. } => 78,
         RuntimeFact::UnitAxes { .. } => 53,
         RuntimeFact::TexelBufferParts { .. } => 65,
         RuntimeFact::OpenClLineTexture { .. } => 69,
@@ -309,7 +301,7 @@ fn variant(f: &RuntimeFact) -> usize {
 fn mechanism_is_total_over_every_fact_and_profile() {
     let facts = every_fact();
     let covered: std::collections::BTreeSet<usize> = facts.iter().map(variant).collect();
-    assert_eq!(covered, (0..89).collect(), "every_fact misses a variant");
+    assert_eq!(covered, (0..87).collect(), "every_fact misses a variant");
     for (stem, _) in super::committed_profiles() {
         let dev = device(&stem);
         let p = dev.profile();
@@ -384,8 +376,6 @@ fn mechanism_is_total_over_every_fact_and_profile() {
                 | RuntimeFact::QuadPrimitiveIds
                 | RuntimeFact::PrivateList
                 | RuntimeFact::RegionViewports
-                | RuntimeFact::YCbCrInPlace { .. }
-                | RuntimeFact::TexelRows { .. }
                 | RuntimeFact::TexelBufferParts { .. }
                 | RuntimeFact::OpenClLineTexture { .. }
                 | RuntimeFact::ZeroedColor { .. }

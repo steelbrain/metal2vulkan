@@ -16,31 +16,23 @@
 //! interpreter runs it over the binder's instantiated push bytes.
 
 use crate::air::error::IntrinsicError;
-use crate::bind::{
-    BindState, BoundAccelerationStructure, BoundBuffer, Dispatch, StageTable, WriteSource,
-};
 use crate::budget::{Budget, Meter, LEDGER_BYTES, SPIRV_WORDS};
 use crate::device::requirements::VkFeature;
-use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
+use crate::device::{DevicePolicy, DeviceProfile};
 use crate::error::{
     Capability, DiagName, Error, Feature, InputErrorKind, Limit, Location, LowerFamily, Needs,
     Unsupported,
 };
-use crate::library::{FunctionConstantValues, Library};
+use crate::library::FunctionConstantValues;
 use crate::lower::select::LowerInputs;
 use crate::pipeline::compile::{compile_bitcode, compile_bitcode_linked, EntryRef, LinkedSource};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::{AccessSet, BufferForm, SlotInterface, Window};
-use crate::pipeline::sym::{
-    AccelerationStructureLevel, Axis, PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef,
-    SpecKey, Stage,
-};
+use crate::pipeline::sym::{PushField, SlotClass, SlotRef, Stage};
 use crate::pipeline::testing::{
-    compile, engine_dir, link_and_validate, llvm_assemble, meter, specialized_entry, AssembleError,
-    Scratch,
+    compile, link_and_validate, llvm_assemble, meter, specialized_entry, AssembleError, Scratch,
 };
-use crate::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, PrecisionNote, StageSource};
-use crate::spirv::interp::{run, Buffer, Config, Resources};
+use crate::pipeline::PrecisionNote;
 use crate::spirv::testing::{committed_profiles, is_moltenvk_capture, spirv_dis};
 
 const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\ntarget triple = \"air64_v28-apple-macosx26.0.0\"\n\n";
@@ -421,58 +413,6 @@ fn an_intersection_function_table_is_read_per_candidate() {
         ] {
             assert!(dis.contains(needle), "{stem}: {needle} missing");
         }
-    }
-}
-
-/// The binder plans a structure argument as the consumer's top-level structure of the Metal
-/// structure bound at its slot, at the argument's level, and the table argument as the buffer
-/// bound at its slot: the consumer builds the structures.
-#[test]
-fn the_binder_writes_the_structure_and_the_table_the_consumer_binds() {
-    let Some(bc) = assemble("plan", &table_kernel("")) else {
-        return;
-    };
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles");
-    let text = std::fs::read_to_string(path.join("lavapipe.json")).expect("profile");
-    let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
-    let lib = Library::from_air(&bc).expect("library");
-    let f = lib.function("k").expect("entry");
-    let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
-    let pipe = dev
-        .compile_compute_pipeline(&d, &Budget::standard())
-        .expect("compiled");
-    let slot = |index| SlotRef {
-        stage: Stage::Kernel,
-        class: SlotClass::Buffer,
-        index,
-    };
-    let mut table = StageTable::default();
-    for index in [0, 2] {
-        table.buffers.insert(
-            index,
-            BoundBuffer::Buffer {
-                length: 16,
-                offset: 0,
-                gpu_address: 0,
-                device_address: None,
-                attribute_stride: None,
-            },
-        );
-    }
-    let mut state = BindState::default();
-    state.stages.insert(Stage::Kernel, table);
-    let plan = pipe.plan(&dev, &state.shape()).expect("planned");
-    let sources: Vec<&WriteSource> = plan.descriptors.iter().map(|w| &w.source).collect();
-    for expected in [
-        WriteSource::AccelerationStructure {
-            slot: slot(1),
-            level: AccelerationStructureLevel::Primitive,
-        },
-        WriteSource::Buffer { slot: slot(2) },
-    ] {
-        assert!(sources.contains(&&expected), "{expected:?}: {sources:?}");
     }
 }
 
@@ -2040,144 +1980,6 @@ fn a_structures_other_queries_stay_refused() {
     }
 }
 
-/// The owned fixture's bitcode (`validation/fixtures/public/engine/<stem>.ll`).
-fn fixture(stem: &str) -> Option<Vec<u8>> {
-    match llvm_assemble(&engine_dir().join(format!("{stem}.ll"))) {
-        Ok(b) => Some(b),
-        Err(AssembleError::Missing(why)) => {
-            eprintln!("SKIPPED: {why}");
-            None
-        }
-        Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected {stem}.ll: {why}"),
-    }
-}
-
-/// The profiles the count kernels run on: two without ray queries, MoltenVK's, and one with them.
-const COUNT_PROFILES: [&str; 3] = ["runtime-floor", "moltenvk-m3", "lavapipe"];
-
-/// `entry` of `bc` end to end on `stem`: compiled through the device, planned for a stage table
-/// that binds a 16-byte buffer at index 0 and each of `counts` (buffer index, instance count) as
-/// an acceleration structure, instantiated for one group of `threads` threads, and run on the
-/// interpreter over the instantiated push bytes, with buffer 0 starting as `initial`. Returns
-/// buffer 0's final bytes. The plan writes no acceleration-structure descriptor.
-fn run_counts(
-    bc: &[u8],
-    entry: &str,
-    stem: &str,
-    counts: &[(u32, u32)],
-    threads: u32,
-    initial: [u8; 16],
-) -> Vec<u8> {
-    let what = format!("{entry} on {stem} with {counts:?}");
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles");
-    let text = std::fs::read_to_string(path.join(format!("{stem}.json"))).expect("profile");
-    let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
-    let lib = Library::from_air(bc).expect("library");
-    let f = lib.function(entry).expect("entry");
-    let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
-    let pipe = dev
-        .compile_compute_pipeline(&d, &Budget::standard())
-        .unwrap_or_else(|e| panic!("{what}: {e}"));
-    let p =
-        crate::pipeline::testing::profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
-    let (_, m) = crate::pipeline::testing::typed_module(bc, entry, &p)
-        .unwrap_or_else(|e| panic!("{what}: {e}"));
-    let mut table = StageTable::default();
-    table.buffers.insert(
-        0,
-        BoundBuffer::Buffer {
-            length: 16,
-            offset: 0,
-            gpu_address: 0,
-            device_address: None,
-            attribute_stride: None,
-        },
-    );
-    for &(index, n) in counts {
-        table
-            .acceleration_structures
-            .insert(index, BoundAccelerationStructure { instance_count: n });
-    }
-    let mut state = BindState::default();
-    state.stages.insert(Stage::Kernel, table);
-    let plan = pipe.plan(&dev, &state.shape()).expect("planned");
-    assert!(
-        !plan
-            .descriptors
-            .iter()
-            .any(|w| matches!(w.source, WriteSource::AccelerationStructure { .. })),
-        "{what}: {:?}",
-        plan.descriptors
-    );
-    let cmds = plan
-        .instantiate_dispatch(
-            &state,
-            &Dispatch::Threadgroups {
-                groups: [1, 1, 1],
-                threads_per_group: [threads, 1, 1],
-            },
-        )
-        .expect("instantiated");
-    let region = &cmds.regions[0];
-    let mut push = Vec::new();
-    for w in &region.push_constants {
-        let end = w.offset as usize + w.bytes.len();
-        if push.len() < end {
-            push.resize(end, 0);
-        }
-        push[w.offset as usize..end].copy_from_slice(&w.bytes);
-    }
-    let mut spec = std::collections::BTreeMap::new();
-    for (axis, n) in [Axis::X, Axis::Y, Axis::Z]
-        .into_iter()
-        .zip([u64::from(threads), 1, 1])
-    {
-        spec.insert(SpecKey::LocalSize(axis), n);
-    }
-    spec.insert(SpecKey::FlatLocalSize, u64::from(threads));
-    let res = Resources {
-        buffers: vec![Buffer {
-            slot: Some(ResourceSlot {
-                stage: Stage::Kernel,
-                kind: ResourceKind::Buffer,
-                index: 0,
-            }),
-            address: None,
-            bytes: initial.to_vec(),
-        }],
-        push,
-        spec,
-    };
-    let cfg = Config {
-        workgroups: [1, 1, 1],
-        ..Config::default()
-    };
-    let mut out = run(&m, &cfg, res).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-    out.buffers.swap_remove(0)
-}
-
-/// `rt_instance_count` end to end on a device without ray queries and on one with them: the
-/// binder plans no descriptor for the structure and pushes the count
-/// `StageTable::acceleration_structures` states for its slot, 0 for an unbound slot, and running
-/// the module over the instantiated push bytes writes `count * 3 + gid`.
-#[test]
-fn the_binder_pushes_the_bound_structures_instance_count() {
-    let Some(bc) = fixture("rt_instance_count") else {
-        return;
-    };
-    for stem in COUNT_PROFILES {
-        for count in [Some(5u32), Some(0), None] {
-            let bound: Vec<(u32, u32)> = count.map(|n| (1, n)).into_iter().collect();
-            let out = run_counts(&bc, "rt_instance_count", stem, &bound, 4, [0xAB; 16]);
-            let n = count.unwrap_or(0);
-            let want: Vec<u8> = (0..4u32).flat_map(|g| (n * 3 + g).to_le_bytes()).collect();
-            assert_eq!(out, want, "{stem}: {count:?}");
-        }
-    }
-}
-
 /// The declaration of `get_instance_count()`.
 const COUNT_DECL: &str =
     "declare i32 @air.get_instance_count_instance_acceleration_structure(ptr addrspace(1))";
@@ -2188,118 +1990,6 @@ fn count_of(name: &str, structure: &str) -> String {
         "  %{name} = call i32 @air.get_instance_count_instance_acceleration_structure(ptr \
          addrspace(1) {structure})\n"
     )
-}
-
-/// `k` of `bc` on every committed profile: translated and valid with neither a ray query nor an
-/// acceleration structure in the module, stating the count's runtime fact and push field for
-/// exactly the structures at `slots`.
-fn assert_counts_everywhere(tag: &str, bc: &[u8], slots: &[u32]) {
-    let want: Vec<SlotRef> = slots
-        .iter()
-        .map(|&index| SlotRef {
-            stage: Stage::Kernel,
-            class: SlotClass::Buffer,
-            index,
-        })
-        .collect();
-    for (stem, p) in committed_profiles().expect("committed profiles") {
-        let a = compile(bc, "k", &p).unwrap_or_else(|e| panic!("{tag} on {stem}: {e}"));
-        let mut facts: Vec<SlotRef> = a
-            .facts
-            .iter()
-            .filter_map(|f| match f {
-                RuntimeFact::AccelerationStructureInstanceCount { slot } => Some(*slot),
-                _ => None,
-            })
-            .collect();
-        facts.sort();
-        assert_eq!(facts, want, "{tag} on {stem}: {:?}", a.facts);
-        let mut fields: Vec<SlotRef> = a
-            .interface
-            .push
-            .fields
-            .iter()
-            .filter_map(|f| match &f.field {
-                PushField::InstanceCount(slot) => Some(*slot),
-                _ => None,
-            })
-            .collect();
-        fields.sort();
-        assert_eq!(fields, want, "{tag} on {stem}: {:?}", a.interface.push);
-        let (_, words) =
-            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{tag} on {stem}: {e}"));
-        let dis = spirv_dis(&words);
-        for needle in ["RayQueryKHR", "AccelerationStructureKHR"] {
-            assert!(!dis.contains(needle), "{tag} on {stem}: {needle} present");
-        }
-    }
-}
-
-/// Two structures, each counted: each count is its own slot's push field, so the binder's two
-/// counts reach their own stores, and an unbound one reads 0.
-#[test]
-fn several_structures_read_their_own_counts() {
-    let body = format!(
-        "{}{}  store i32 %a, ptr addrspace(1) %0, align 4\n  %p1 = getelementptr i32, ptr \
-         addrspace(1) %0, i64 1\n  store i32 %b, ptr addrspace(1) %p1, align 4\n  ret void\n",
-        count_of("a", "%1"),
-        count_of("b", "%2"),
-    );
-    let text = kernel_with(
-        ", ptr addrspace(1) %1, ptr addrspace(1) %2",
-        &[structure(1, "instance"), structure(2, "instance")],
-        &body,
-        COUNT_DECL,
-    );
-    let Some(bc) = assemble("two-counts", &text) else {
-        return;
-    };
-    assert_counts_everywhere("two-counts", &bc, &[1, 2]);
-    for stem in COUNT_PROFILES {
-        for (bound, a, b) in [
-            (vec![(1, 7), (2, 9)], 7u32, 9u32),
-            (vec![(2, 9)], 0, 9),
-            (vec![(1, 7)], 7, 0),
-        ] {
-            let out = run_counts(&bc, "k", stem, &bound, 1, [0xAB; 16]);
-            let mut want = [0xAB; 16];
-            want[..4].copy_from_slice(&a.to_le_bytes());
-            want[4..8].copy_from_slice(&b.to_le_bytes());
-            assert_eq!(out, want, "{stem}: {bound:?}");
-        }
-    }
-}
-
-/// A count read in one arm of a branch and merged by a phi is the binder's count where that arm
-/// runs, and the other arm's value where it does not.
-#[test]
-fn a_count_under_control_flow_is_the_binders() {
-    let body = format!(
-        "  %v = load i32, ptr addrspace(1) %0, align 4\n  %c = icmp eq i32 %v, 0\n  br i1 %c, \
-         label %then, label %join\nthen:\n{}  br label %join\njoin:\n  %r = phi i32 [ %n, %then \
-         ], [ 99, %2 ]\n  store i32 %r, ptr addrspace(1) %0, align 4\n  ret void\n",
-        count_of("n", "%1"),
-    );
-    let text = kernel_with(
-        ", ptr addrspace(1) %1",
-        &[structure(1, "instance")],
-        &body,
-        COUNT_DECL,
-    );
-    let Some(bc) = assemble("branch-count", &text) else {
-        return;
-    };
-    assert_counts_everywhere("branch-count", &bc, &[1]);
-    for stem in COUNT_PROFILES {
-        for (first, want) in [(0u32, 5u32), (1, 99)] {
-            let mut initial = [0xAB; 16];
-            initial[..4].copy_from_slice(&first.to_le_bytes());
-            let out = run_counts(&bc, "k", stem, &[(1, 5)], 1, initial);
-            let mut expected = initial;
-            expected[..4].copy_from_slice(&want.to_le_bytes());
-            assert_eq!(out, expected, "{stem}: out[0] = {first}");
-        }
-    }
 }
 
 /// A count of a structure that is not an entry argument has no slot the binder knows, so it is

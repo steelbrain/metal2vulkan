@@ -24,7 +24,6 @@ pub(super) fn half_of(x: f32, mode: HalfRounding) -> u32 {
     let q = a / ulp;
     let r = match mode {
         HalfRounding::NearestEven => q.round_ties_even(),
-        HalfRounding::NearestAway => q.round(),
         HalfRounding::TowardZeroSaturating => q.trunc(),
     } * ulp;
     let r = if r > 65504.0 {
@@ -91,7 +90,6 @@ fn f32_to_half_rounds_exactly_in_every_mode() {
         .collect();
     for mode in [
         HalfRounding::NearestEven,
-        HalfRounding::NearestAway,
         HalfRounding::TowardZeroSaturating,
     ] {
         check(
@@ -109,70 +107,4 @@ fn f32_to_half_rounds_exactly_in_every_mode() {
             false,
         );
     }
-}
-
-/// The normalized grids the bicubic filter's exact sums land on: `16 · 255`, `16 · 127`, `65535`,
-/// `32767`, and the sRGB step scale 4095. The grids: the bicubic sums', the sRGB table's, and the
-/// normalized formats' fields' that a tile function's `half` member reads, down to a 2-bit alpha's
-/// 3 and 1, where `3 · 2^24 / d` reaches `2^24`.
-const GRIDS: [u32; 10] = [4080, 2032, 65535, 32767, 4095, 1023, 255, 127, 3, 1];
-
-fn ratio_cases(d: u32) -> Vec<Case> {
-    let step = if d > 4095 { 13 } else { 1 };
-    (0..=u64::from(d))
-        .step_by(step)
-        .chain([1, 2, 3, 4, u64::from(d) - 1, u64::from(d)])
-        // The quotients that round differently through `f32` (module docs).
-        .chain([65455, 65519, 32759])
-        .filter(|k| *k <= u64::from(d))
-        .map(|k| vec![vec![k], vec![u64::from(d)]])
-        .collect()
-}
-
-/// `ratio_to_f32` is correctly rounded with a run-time divisor on every grid.
-#[test]
-fn ratio_to_f32_is_correctly_rounded() {
-    let u = int(32);
-    for d in GRIDS {
-        check(
-            &format!("k / {d} to f32"),
-            &[u, u],
-            float(32),
-            &|fb, a| texel_round::ratio_to_f32(fb, u, a[0], a[1]),
-            &ratio_cases(d),
-            &|c| {
-                Some(vec![u64::from(
-                    ((arg(c, 0) as f64 / d as f64) as f32).to_bits(),
-                )])
-            },
-            false,
-        );
-    }
-}
-
-/// `ratio_to_half` rounds `k / d` to `half` once, half denormals included, where rounding the
-/// `f32` quotient would round twice.
-#[test]
-fn ratio_to_half_rounds_once() {
-    let u = int(32);
-    for d in GRIDS {
-        check(
-            &format!("k / {d} to half"),
-            &[u, u],
-            float(32),
-            &|fb, a| texel_round::ratio_to_half(fb, u, a[0], a[1]),
-            &ratio_cases(d),
-            &|c| {
-                let h = f64_to_f16(arg(c, 0) as f64 / d as f64);
-                Some(vec![u64::from((f16_to_f64(h) as f32).to_bits())])
-            },
-            false,
-        );
-    }
-    // The quotients where the f32 detour differs exist: the test above covers them.
-    let twice = |k: u32, d: u32| {
-        let f = (f64::from(k) / f64::from(d)) as f32;
-        f64_to_f16(f64::from(f)) != f64_to_f16(f64::from(k) / f64::from(d))
-    };
-    assert!(twice(65455, 65535) && twice(65519, 65535) && twice(32759, 32767));
 }

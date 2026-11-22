@@ -13,7 +13,7 @@
 //!   measured, by the lowering for a constexpr sampler and by the binder for a runtime one, and a
 //!   runtime sampler with a linear mip filter whose clamp's maximum the function does not read.
 
-use super::samples::{form_of, raw_of, sampled_state, Through};
+use super::samples::{form_of, raw_of, Through};
 use super::*;
 use crate::bind::SamplerDescriptor;
 use crate::error::Unsupported;
@@ -546,9 +546,7 @@ fn grad_kernel(through: Through) -> String {
 
 /// A linear mip filter is built for the forms whose levels' blend is measured: the lowering
 /// refuses a constexpr sampler's of another form (a two-plane or padded one),
-/// `NotImplemented(Format)`, and builds its nearest mip filter; the binder refuses a runtime
-/// sampler's of such a form, and one whose clamp's maximum a nearest mip filter would read below
-/// the last level, and plans the rest into the variant.
+/// `NotImplemented(Format)`, and builds its nearest mip filter.
 #[test]
 fn unmeasured_linear_mip_filters_are_refused() {
     let forms = [
@@ -585,49 +583,6 @@ fn unmeasured_linear_mip_filters_are_refused() {
                     (other, _) => {
                         panic!("{mip:?} {form:?} on {stem}: {:?}", other.map(|_| ()))
                     }
-                }
-            }
-        }
-    }
-    let Some(bc) = assemble(
-        "runtime mip",
-        &level_kernel(Through::Runtime, false, false, false),
-    ) else {
-        return;
-    };
-    for (stem, dev) in devices() {
-        let plain = pipeline(&dev, &bc, &LowerInputs::new()).expect("a sampling kernel");
-        for (pf, form) in forms {
-            let short = descriptor(true, SamplerMipFilter::Linear, Some((0.0, 3.0)));
-            for (name, desc, planned) in [
-                (
-                    "nearest",
-                    descriptor(true, SamplerMipFilter::Nearest, None),
-                    true,
-                ),
-                (
-                    "clamped nearest",
-                    descriptor(false, SamplerMipFilter::Nearest, Some((0.75, 2.5))),
-                    true,
-                ),
-                (
-                    "linear",
-                    descriptor(true, SamplerMipFilter::Linear, None),
-                    form.blends_levels(),
-                ),
-                ("short linear", short, false),
-            ] {
-                let what = format!("{name} {pf:?} on {stem}");
-                match (plain.plan(&dev, &sampled_state(pf, desc).shape()), planned) {
-                    (Ok(plan), true) => assert_eq!(
-                        plan.variant.extended_range,
-                        BTreeMap::from([(SOURCE, form)]),
-                        "{what}"
-                    ),
-                    (Err(crate::error::BindError::Unsupported(u)), false) => {
-                        assert_eq!(u, Unsupported::not_implemented(Feature::Format), "{what}")
-                    }
-                    (other, _) => panic!("{what}: {:?}", other.map(|_| ())),
                 }
             }
         }

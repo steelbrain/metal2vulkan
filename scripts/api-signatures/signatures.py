@@ -793,7 +793,7 @@ CRATES = ["metal2vulkan", "metal2vulkan-air", "metal2vulkan-runtime"]
 # thousands of removals and fails on its own; the floor is what makes a *blessed* collapse loud as
 # well, so a table of four items cannot pass quietly. It is a long way under the real counts and
 # is raised only when a crate's surface grows past it.
-FLOORS = {"metal2vulkan": 6000, "metal2vulkan-air": 1800, "metal2vulkan-runtime": 25}
+FLOORS = {"metal2vulkan": 5000, "metal2vulkan-air": 1800, "metal2vulkan-runtime": 25}
 
 HEADER = """\
 # The signature-level public surface of metal2vulkan, metal2vulkan-air and metal2vulkan-runtime: one

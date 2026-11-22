@@ -11,7 +11,7 @@
 //!   constexpr sampler and by the binder for a runtime one, and a padded form's 3D sample.
 
 use super::levels::{constexpr_words, descriptor, level_kernel, probe_texture, run_levels, Shape};
-use super::samples::{form_of, sampled_state_of, Through};
+use super::samples::{form_of, Through};
 use super::*;
 use crate::error::Unsupported;
 use crate::metal::{SamplerAddressMode, SamplerMipFilter};
@@ -190,8 +190,7 @@ fn volume_samples_are_metals_bytes() {
 
 /// A 3D texture's linear mip filter is not built (its blend of two levels fits no rule tried):
 /// the lowering refuses a constexpr sampler's, `NotImplemented(Format)`, and builds its nearest
-/// one; the binder refuses a runtime sampler's and plans a nearest one into the variant. A padded
-/// form's 3D sample is refused too (not measured).
+/// one. A padded form's 3D sample is refused too (not measured).
 #[test]
 fn volume_linear_mip_filters_and_padded_forms_are_refused() {
     let forms = [
@@ -232,33 +231,6 @@ fn volume_linear_mip_filters_and_padded_forms_are_refused() {
             i.extended_range.insert(SOURCE, ExtendedRange::R10X6);
             let r = typed_module_with(&bc, "k", &p, &i).map(|_| ());
             refused(&format!("{mip:?} R10X6 on {stem}"), r);
-        }
-    }
-    let Some(bc) = assemble("runtime 3D mip", &volume_kernel(Through::Runtime, false)) else {
-        return;
-    };
-    for (stem, dev) in devices() {
-        let plain = pipeline(&dev, &bc, &LowerInputs::new()).expect("a sampling kernel");
-        for (pf, form) in forms {
-            for (mip, planned) in [
-                (SamplerMipFilter::Nearest, true),
-                (SamplerMipFilter::Linear, false),
-            ] {
-                let what = format!("{mip:?} {pf:?} on {stem}");
-                let desc = volume_descriptor(true, mip, edge);
-                let state = sampled_state_of(TextureType::Type3D, pf, desc);
-                match (plain.plan(&dev, &state.shape()), planned) {
-                    (Ok(plan), true) => assert_eq!(
-                        plan.variant.extended_range,
-                        BTreeMap::from([(SOURCE, form)]),
-                        "{what}"
-                    ),
-                    (Err(crate::error::BindError::Unsupported(u)), false) => {
-                        assert_eq!(u, Unsupported::not_implemented(Feature::Format), "{what}")
-                    }
-                    (other, _) => panic!("{what}: {:?}", other.map(|_| ())),
-                }
-            }
         }
     }
 }

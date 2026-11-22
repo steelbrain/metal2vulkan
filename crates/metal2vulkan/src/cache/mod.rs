@@ -15,9 +15,9 @@
 //!   checks the format and semantics versions, the key, the device's profile fingerprint, and a
 //!   checksum, then scans the modules; it does not re-run the verifier. Every [`ArtifactError`]
 //!   is a cache miss: compile again and replace the entry.
-//! - A [`BindingPlan`](crate::bind::BindingPlan) memoizes in memory on `(PipelineKey, BindShape)`.
 //!
-//! [`VariantKey`] names the variant of a pipeline a bind shape or a dispatch asks for, and
+//! [`VariantKey`] names a variant of a pipeline, the lowering inputs each of its functions
+//! compiles under ([`VariantKey::lowering_inputs`]), and
 //! [`SpecializationKey`] is the data of one `VkSpecializationInfo`.
 //!
 //! Three versions move independently: the crate's (the API), [`SEMANTICS_VERSION`] (the output:
@@ -42,8 +42,7 @@ use crate::vk;
 mod artifacts;
 mod checksum;
 mod codec;
-// Content digests: `ComputePipeline::content_digest`, `RenderPipeline::content_digest` and
-// `BindingPlan::content_digest`.
+// Content digests: `ComputePipeline::content_digest` and `RenderPipeline::content_digest`.
 pub(crate) mod digest;
 mod envelope;
 mod scan;
@@ -73,20 +72,20 @@ pub const SEMANTICS_VERSION: u32 = 2273;
 /// bumps it says what changed; this comment keeps no history.
 pub const ARTIFACT_FORMAT_VERSION: u32 = 591;
 
-/// The version of what this crate's runtime does with a compiled pipeline: instantiating a binding
-/// plan (`BindingPlan::instantiate_*`: descriptor ranges, push bytes, root, argument, and handle
-/// tables, dispatch regions and draws), the device replay and its preprocess, resident sets, status
-/// decoding, and the other run-time data the binder computes. Independent of
-/// [`SEMANTICS_VERSION`] (what is compiled) and [`ARTIFACT_FORMAT_VERSION`] (how it is encoded):
-/// two runs of byte-identical artifacts and plans under one runtime version do the same thing. A
+/// The version of what this crate gives a runtime for the runs of a compiled pipeline, beside the
+/// compile: the device a run opens and what it enables, the Vulkan and Metal vocabularies a runtime
+/// maps, the record and table formats it writes (indirect commands, rate and tile maps, function
+/// tables, argument-buffer layouts), the texel decoders, and the other run-time data `bind` holds.
+/// Independent of [`SEMANTICS_VERSION`] (what is compiled) and [`ARTIFACT_FORMAT_VERSION`] (how it
+/// is encoded): two runs of byte-identical artifacts under one runtime version do the same thing. A
 /// consumer that keeps records of what runs of an artifact did (its own regression records, or what
 /// a run refused) keys them on it beside the artifact, as it keys cached artifacts on
 /// [`SEMANTICS_VERSION`].
 ///
-/// Bump it whenever a run of an unchanged artifact and plan may do something else: an answer, a
-/// refusal or its class, an announcement, or what the run records and submits. A field added to an
-/// encoded artifact or a plan whose zero value would change what existing pipelines do needs the
-/// same bump (or the executor's), since their digests omit it.
+/// Bump it whenever a run of an unchanged artifact may do something else: an answer, a refusal or
+/// its class, an announcement, or what the run records and submits. A field added to an encoded
+/// artifact whose zero value would change what existing pipelines do needs the same bump (or the
+/// executor's), since its digest omits it.
 ///
 /// This workspace's validation holds every recorded run to it beside the run's artifact content
 /// digest (`cache::digest`), and its runtime guard fails when the runtime's sources no longer hash
@@ -131,13 +130,10 @@ impl fmt::Debug for PipelineKey {
     }
 }
 
-/// The per-function variant choices a bind shape or a dispatch can require: storage-image choices
-/// for slots whose `StorageTextureFormat` fact maps to `Variant`, slots that a `BufferRangeLimit`
-/// variant moves to `BufferForm::Psb`, vertex buffers the shape binds where fixed-function vertex
-/// input cannot fetch them, a kernel's emulated simdgroups for a dispatch whose threadgroup has a
-/// partial simdgroup, a vertex function's dropped `Layer` output in a pass of one layer, and the
-/// read-only slots Profile F's per-stage storage-buffer fallback keeps as storage views. Canonical
-/// (ordered maps) and empty on the common path.
+/// The per-function variant choices of a pipeline: storage-image choices for slots whose
+/// `StorageTextureFormat` fact maps to `Variant`, slots that a `BufferRangeLimit` variant moves to
+/// `BufferForm::Psb`, vertex buffers fetched in the shader, a kernel's emulated simdgroups, and the
+/// other forms each field names. Canonical (ordered maps) and empty on the common path.
 ///
 /// [`VariantKey::lowering_inputs`] is each function's `LoweringInputs` under the key, so the
 /// choice reaches `select` and the `FunctionCompileKey`; a render pipeline's keys under one are
@@ -156,80 +152,46 @@ pub struct VariantKey {
     pub pulled_vertex_buffers: BTreeSet<u32>,
     /// The kernel's simdgroups run in the emulated tier, which is exact for every threadgroup size:
     /// a dispatch whose threadgroup has a partial simdgroup asks for it where the kernel's own tier
-    /// runs simdgroups on whole subgroups (`BindingPlan::dispatch_variant`,
-    /// `BindError::NeedsVariant`), and the plan of a pipeline compiled under it states it.
+    /// runs simdgroups on whole subgroups.
     #[cfg_attr(feature = "serde", serde(default))]
     pub emulated_simdgroups: bool,
-    /// Every threadgroup of the dispatch is one row, so each of its simdgroups lies within the
-    /// row: a kernel whose lockstep simdgroup barriers order only pairs that meet where a
-    /// simdgroup spans two rows (`RuntimeFact::RowLockstep`) runs without them, keeping its
-    /// threadgroup ones, and without the subgroup size they pinned (`LoweringInputs::one_row`).
-    /// A dispatch whose every region is one row asks for it (`BindingPlan::dispatch_variant`),
-    /// and the plan of a pipeline compiled under it states it and asks another dispatch for the
-    /// variant without it.
+    /// Every threadgroup of the dispatch is one row, so each of its simdgroups lies within the row:
+    /// a kernel whose lockstep simdgroup barriers order only pairs that meet where a simdgroup
+    /// spans two rows (`RuntimeFact::RowLockstep`) runs without them, keeping its threadgroup ones,
+    /// and without the subgroup size they pinned (`LoweringInputs::one_row`). A dispatch whose
+    /// every region is one row asks for it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub one_row: bool,
-    /// The axes along which every threadgroup of the dispatch has one thread (bit 0 `x`, bit 1
-    /// `y`, bit 2 `z`): a kernel whose walk is predicated, where those axes' thread positions
-    /// alone make some of its synchronizations' blocks divergent (`RuntimeFact::UnitAxes`'s
-    /// `relief`), compiles with them uniform (`LoweringInputs::unit_axes`). The plan of a pipeline
-    /// compiled under it states it and asks a dispatch of more threads along such an axis for the
-    /// variant without it.
+    /// The axes along which every threadgroup of the dispatch has one thread (bit 0 `x`, bit 1 `y`,
+    /// bit 2 `z`): a kernel whose walk is predicated, where those axes' thread positions alone make
+    /// some of its synchronizations' blocks divergent (`RuntimeFact::UnitAxes`'s `relief`),
+    /// compiles with them uniform (`LoweringInputs::unit_axes`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub unit_axes: u8,
     /// Texture slots bound to an 8-bit sRGB texture the device cannot sample, which the runtime
     /// holds as the format's UNORM twin (`metal::format::srgb_raw_twin`), whose views read the
     /// codes (`c / 255`): every slot of a `RuntimeFact::SrgbTexture` the shape binds in such a
-    /// format (`metal::texel_format::srgb_twin_on`). The function decodes what it reads there
-    /// by the MSL transfer through the device's `Pow`, as the device would through an sRGB view
-    /// it lacks
-    /// (`LoweringInputs::srgb_textures`); a slot bound in an sRGB format the device samples reads
-    /// the device's decode and is no slot of this. The plan of a pipeline compiled under it
-    /// states it.
+    /// format (`metal::texel_format::srgb_twin_on`). The function decodes what it reads there by
+    /// the MSL transfer through the device's `Pow`, as the device would through an sRGB view it
+    /// lacks (`LoweringInputs::srgb_textures`); a slot bound in an sRGB format the device samples
+    /// reads the device's decode and is no slot of this.
     #[cfg_attr(feature = "serde", serde(default))]
     pub srgb_textures: BTreeSet<SlotRef>,
-    /// Texture slots whose function reads the two-plane YCbCr texture the shape binds there in
-    /// place: every slot of a `RuntimeFact::YCbCrInPlace` the shape binds a texture whose planes
-    /// are read so (`TextureShape::Texture::ycbcr_in_place`). Each such slot binds the planes'
-    /// texel buffer alone, and its accesses read the codes and convert them as Metal does
-    /// (`bind::YCbCrInPlace`). The plan of a pipeline compiled under it states it.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub ycbcr_in_place: BTreeSet<SlotRef>,
-    /// Slots of [`ycbcr_in_place`](Self::ycbcr_in_place) whose function's every sample the
-    /// device's own sampler Y′CbCr conversion takes, at which the shape binds a texture whose
-    /// planes are also held as an image it samples, each with that conversion
-    /// (`TextureShape::Texture::ycbcr_planes_sampler`, `RuntimeFact::YCbCrInPlace`'s `device`):
-    /// each such slot binds that image through an immutable sampler of the conversion, and its
-    /// samples are the device's (`bind::YCbCrPlanesSampler`). The plan of a pipeline compiled
-    /// under it states it.
-    #[cfg_attr(
-        feature = "serde",
-        serde(default, with = "crate::pipeline::serde_pairs")
-    )]
-    pub ycbcr_planes_sampled: BTreeMap<SlotRef, crate::bind::YCbCrPlanesSampler>,
-    /// Texture slots whose function only reads, writes or asks the size of the 2D texture the
-    /// shape binds there, whose rows are read and written in place: every slot of a
-    /// `RuntimeFact::TexelRows` the shape binds such a texture at
-    /// (`TextureShape::Texture::texel_rows`). Each such slot binds a texel buffer over the rows'
-    /// bytes alone (`bind::TexelRows`). The plan of a pipeline compiled under it states it.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub texel_rows: BTreeSet<SlotRef>,
     /// Texture-buffer slots whose function reads it through its parts, each with the parts of the
     /// texture buffer the shape binds there: every slot of a `RuntimeFact::TexelBufferParts` the
-    /// shape binds a texture buffer of more texels than one view holds at
-    /// (`TextureShape::Buffer::parts`). Each such slot binds an array of that many texel buffer
+    /// shape binds a texture buffer of more texels than one view holds at. Each such slot binds an array of that many texel buffer
     /// views (`bind::texel_parts`). A texture buffer one view holds adds nothing, so its draws
-    /// keep their key. The plan of a pipeline compiled under it states it.
+    /// keep their key.
     #[cfg_attr(
         feature = "serde",
         serde(default, with = "crate::pipeline::serde_pairs")
     )]
     pub texel_buffer_parts: BTreeMap<SlotRef, u32>,
-    /// Texture slots a constexpr sampler samples, each with the address-mode map of the texture
-    /// the shape binds there where it is not the identity: every slot of a
+    /// Texture slots a constexpr sampler samples, each with the address-mode map of the texture the
+    /// shape binds there where it is not the identity: every slot of a
     /// `RuntimeFact::ConstexprSampled` the shape binds such a texture at. The function's constexpr
-    /// samplers sample the slot with their modes mapped; the plan of a pipeline compiled under it
-    /// states it. A texture of the identity map adds nothing, so ordinary draws keep their key.
+    /// samplers sample the slot with their modes mapped. A texture of the identity map adds
+    /// nothing, so ordinary draws keep their key.
     #[cfg_attr(
         feature = "serde",
         serde(default, with = "crate::pipeline::serde_pairs")
@@ -238,20 +200,18 @@ pub struct VariantKey {
     /// The kernel runs its grid flat (`LoweringInputs::flat_grid`): one variant runs every grid
     /// and threadgroup size of a kernel that does not observe its threadgroup partition
     /// (`KernelFacts::partition_oblivious`), reading the grid from the region record at its
-    /// `PushField::ReplayRegionAddress`. The plan of a pipeline compiled under it states it.
+    /// `PushField::ReplayRegionAddress`.
     #[cfg_attr(feature = "serde", serde(default))]
     pub flat_grid: bool,
     /// With [`flat_grid`](Self::flat_grid), its dispatch's threadgroups are the call's
     /// (`LoweringInputs::call_threadgroups`): a one-row grid in threadgroups of one row, so a
     /// kernel that observes its partition through its simdgroups alone
-    /// (`KernelFacts::partition_simdgroups`) runs flat too. The plan of a pipeline compiled under
-    /// it states it.
+    /// (`KernelFacts::partition_simdgroups`) runs flat too.
     #[cfg_attr(feature = "serde", serde(default))]
     pub call_threadgroups: bool,
     /// The kernel, or the render pipeline's vertex and fragment functions, are a device-replay
     /// variant (`LoweringInputs::replay_bindings`): every buffer they read is at its device
-    /// address in the slot table a replay's preprocess writes for its command; a compute plan of
-    /// it does not state the key. The runtime compiles a kernel's with `flat_grid` per pipeline state an execution of
+    /// address in the slot table a replay's preprocess writes for its command. The runtime compiles a kernel's with `flat_grid` per pipeline state an execution of
     /// commands a kernel writes may name, to run it on the GPU alone; and a render pipeline's for
     /// the state an execution of GPU-written draws inherits, its draws' buffers the records'.
     #[cfg_attr(feature = "serde", serde(default))]
@@ -259,78 +219,73 @@ pub struct VariantKey {
     /// With `replay_bindings`, the render pipeline's vertex and fragment functions run a draw
     /// replay merged into one draw (`LoweringInputs::merged_draws`): the variant the runtime
     /// compiles where an execution of GPU-written draws of one list type or points draws as one
-    /// draw. The plan of a pipeline compiled under it states it.
+    /// draw.
     #[cfg_attr(feature = "serde", serde(default))]
     pub merged_draws: bool,
     /// The render pipeline draws each vertex amplification as a draw of its own
-    /// (`LoweringInputs::amplification_draws` for its vertex and fragment functions): the
-    /// variant a shape whose amplification Vulkan multiview cannot draw as Metal renders it asks
-    /// for (a `nil` mapping above a count of 1, layers out of order, apart or repeated, a
-    /// viewport offset, a stage that chooses or reads its slice, or more amplifications than
-    /// the device has views; `bind::graphics`). The plan of a pipeline compiled under it states
-    /// it.
+    /// (`LoweringInputs::amplification_draws` for its vertex and fragment functions): the variant a
+    /// shape whose amplification Vulkan multiview cannot draw as Metal renders it asks for (a `nil`
+    /// mapping above a count of 1, layers out of order, apart or repeated, a viewport offset, a
+    /// stage that chooses or reads its slice, or more amplifications than the device has views;
+    /// `bind::graphics`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub amplification_draws: Option<crate::pipeline::AmplificationDraws>,
     /// The kernel folds Metal's group counts into one dispatch within the device's limits
     /// (`LoweringInputs::folded_groups`): the variant a threadgroup dispatch whose group counts
     /// are GPU data runs on, for a kernel that observes its threadgroup partition, reading its
     /// group counts and every grid builtin's region from the region record at its
-    /// `PushField::ReplayRegionAddress`. The plan of a pipeline compiled under it states it.
+    /// `PushField::ReplayRegionAddress`.
     #[cfg_attr(feature = "serde", serde(default))]
     pub folded_groups: bool,
-    /// The kernel runs a ragged `dispatchThreads` grid in the threadgroups its threads fill, at
-    /// the call's threadgroup size, the last along an axis Metal's partial threadgroup
+    /// The kernel runs a ragged `dispatchThreads` grid in the threadgroups its threads fill, at the
+    /// call's threadgroup size, the last along an axis Metal's partial threadgroup
     /// (`LoweringInputs::partial_threadgroups`): the variant such a dispatch of a kernel that
     /// observes its threadgroup partition runs on, one `VkPipeline` of the call's size in place of
-    /// an edge region's of each remainder. The plan of a pipeline compiled under it states it,
-    /// and plans such a dispatch so (`BindingPlan::instantiate_dispatch`).
+    /// an edge region's of each remainder.
     #[cfg_attr(feature = "serde", serde(default))]
     pub partial_threadgroups: bool,
     /// Texture slots bound in one of Apple's extended-range formats, by the format
     /// (`LoweringInputs::extended_range`): the function reads and writes the bound texture's raw
-    /// texels there, decoding and encoding Metal's values. The plan of a pipeline compiled under
-    /// it states it.
+    /// texels there, decoding and encoding Metal's values.
     #[cfg_attr(
         feature = "serde",
         serde(default, with = "crate::pipeline::serde_pairs")
     )]
     pub extended_range: BTreeMap<SlotRef, crate::metal::format::ExtendedRange>,
     /// Color attachments of the pass the render pipeline has no pixel format for, the pass's
-    /// pixel format of each by color index (`BindShape::zeroed_colors`): plain Metal stores zero
+    /// pixel format of each by color index: plain Metal stores zero
     /// bytes into each at every sample a draw covers. The variant's pipeline has each attachment
     /// in that format, written whole and unblended, and its fragment function writes zero to it
-    /// (`LoweringInputs::zeroed_colors`). The plan of a pipeline compiled under it states it.
+    /// (`LoweringInputs::zeroed_colors`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub zeroed_colors: BTreeMap<u32, crate::metal::PixelFormat>,
     /// Color attachments the render pipeline has a pixel format for and the pass has none, by
-    /// color index (`BindShape::dropped_colors`): plain Metal drops the fragment function's
+    /// color index: plain Metal drops the fragment function's
     /// writes there. The variant's fragment function keeps no output at each
-    /// (`LoweringInputs::dropped_colors`). The plan of a pipeline compiled under it states it.
+    /// (`LoweringInputs::dropped_colors`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub dropped_colors: BTreeSet<u32>,
     /// The bytes of each cell of a tile function's explicit imageblock standing alone that the
-    /// render pass keeps, fewer than the cell holds (`BindShape::kept_imageblock_bytes`): plain
+    /// render pass keeps, fewer than the cell holds: plain
     /// Metal reads the block's other words as zero and drops their writes. The variant's
-    /// function does (`LoweringInputs::kept_imageblock_bytes`). The plan of a tile function with
-    /// such an imageblock states it.
+    /// function does (`LoweringInputs::kept_imageblock_bytes`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub kept_imageblock_bytes: Option<u32>,
     /// The fragment function clamps the depth it writes to the draw's depth clamp range itself
-    /// (`BindShape::depth_clamp_range`, `LoweringInputs::depth_clamp_range`): the variant a draw
+    /// (`LoweringInputs::depth_clamp_range`): the variant a draw
     /// in depth clamp mode through a range above 0 runs, where Metal stores a negative NaN as 0.
-    /// The plan of a pipeline compiled under it states it.
+    ///
     #[cfg_attr(feature = "serde", serde(default))]
     pub depth_clamp_range: bool,
     /// The fragment function's triangles are drawn with Metal's last vertex first
-    /// (`BindShape::rotated_weights`, `LoweringInputs::rotated_weights`): the variant a listed
+    /// (`LoweringInputs::rotated_weights`): the variant a listed
     /// triangle draw under Apple's last provoking vertex runs, whose `[[barycentric_coord]]` reads
-    /// take Metal's weights back from the drawn triangle's. The plan of a pipeline compiled under
-    /// it states it.
+    /// take Metal's weights back from the drawn triangle's.
     #[cfg_attr(feature = "serde", serde(default))]
     pub rotated_weights: bool,
     /// The pipeline draws its lines, or its triangles' edges, as bands of triangles through
     /// synthesized tessellation stages, each patch one primitive of this kind
-    /// (`BindShape::line_band`, `pipeline::link::band`): the variant a draw of lines, or of
+    /// (`pipeline::link::band`): the variant a draw of lines, or of
     /// triangles in fill mode `Lines`, at an Apple `setLineWidth:` width the device's own lines do
     /// not draw runs. Its graphics state states it (`GraphicsState::line_band`).
     #[cfg_attr(feature = "serde", serde(default))]
@@ -340,60 +295,55 @@ pub struct VariantKey {
     /// (`LoweringInputs::swizzled_storage`): a Vulkan storage view takes no swizzle, so the
     /// function applies the bound texture's swizzle to its reads and undoes it on its writes, as
     /// plain Metal does, under the slot's `SpecKey::TextureSwizzle`, and the slot's storage view
-    /// takes none (`ImageViewDesc::shader_swizzle`). The plan of a pipeline compiled under it
-    /// states it. It holds too each sampled slot of `extended_range` bound to such a texture whose
-    /// texels the function reads or samples: its view holds raw codes, so the function swizzles the
-    /// decoded texels and the view takes none. So does, on a device without Metal's own sampler,
-    /// each sampled slot bound to a swizzled packed normalized texture, whose texels the function
-    /// converts by each channel's own scale before it swizzles them.
+    /// takes none. It holds too each sampled slot of
+    /// `extended_range` bound to such a texture whose texels the function reads or samples: its
+    /// view holds raw codes, so the function swizzles the decoded texels and the view takes none.
+    /// So does, on a device without Metal's own sampler, each sampled slot bound to a swizzled
+    /// packed normalized texture, whose texels the function converts by each channel's own scale
+    /// before it swizzles them.
     #[cfg_attr(feature = "serde", serde(default))]
     pub swizzled_storage: BTreeSet<SlotRef>,
     /// Every function that reads visible-function tables by their resource ids reads their
     /// words through their device addresses (`LoweringInputs::addressed_function_tables`): the
     /// variant a shape whose listed tables may pass `maxStorageBufferRange` asks for
-    /// (`FunctionTablesShape::bytes_class`). The plan of a pipeline compiled under it states it.
+    /// (`FunctionTablesShape::bytes_class`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub addressed_function_tables: bool,
-    /// The runtime sampler slots of a `RuntimeFact::CubicSampler` that the shape binds to a
-    /// sampler whose min or mag filter is `Cubic`, each with the bound word masked by
+    /// The runtime sampler slots of a `RuntimeFact::CubicSampler` that the shape binds to a sampler
+    /// whose min or mag filter is `Cubic`, each with the bound word masked by
     /// `SamplerWord::CUBIC_STATE` (`LoweringInputs::cubic_samplers`): the variant whose function
-    /// samples through each with Metal's bicubic filter of that state. The plan of a pipeline
-    /// compiled under it states it.
+    /// samples through each with Metal's bicubic filter of that state.
     #[cfg_attr(
         feature = "serde",
         serde(default, with = "crate::pipeline::serde_pairs")
     )]
     pub cubic_samplers: BTreeMap<SlotRef, u32>,
     /// The de-indexed form of a pipeline whose vertex function writes the primitive ID's varying
-    /// (`LoweringInputs::primitive_id_indices`, `BindShape::primitive_id_indices`): the vertex
+    /// (`LoweringInputs::primitive_id_indices`): the vertex
     /// function of an indexed draw of this index type runs the draw's indices as `index count`
-    /// vertices from 0, read at the draw's index address, so each primitive's stream position
-    /// names it. The runtime asks for it for an indexed draw of such a pipeline, and the plan of
-    /// a pipeline compiled under it states it.
+    /// vertices from 0, read at the draw's index address, so each primitive's stream position names
+    /// it. The runtime asks for it for an indexed draw of such a pipeline.
     #[cfg_attr(feature = "serde", serde(default))]
     pub primitive_id_indices: Option<crate::metal::IndexType>,
     /// A draw of Metal's private quads or quad strip, listed as two triangles a quad, of a
-    /// pipeline whose fragment function reads Vulkan's `PrimitiveId` (`BindShape::
-    /// quad_primitive_ids`): the variant's fragment function reads `[[primitive_id]]` as that
+    /// pipeline whose fragment function reads Vulkan's `PrimitiveId`: the variant's fragment function reads `[[primitive_id]]` as that
     /// value shifted right by one, the quad's (`LoweringInputs::quad_primitive_ids`). The runtime
-    /// asks for it for such a draw, and the plan of a pipeline compiled under it states it
-    /// (`RuntimeFact::QuadPrimitiveIds`).
+    /// asks for it for such a draw (`RuntimeFact::QuadPrimitiveIds`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub quad_primitive_ids: bool,
     /// A draw of one of Metal's private primitive types drawn in the pulled list form
-    /// (`BindShape::private_list`): the variant's vertex function runs each position of the
+    ///: the variant's vertex function runs each position of the
     /// consumer's list once, without indices, reading its index and Metal's base vertex at the
     /// list's address (`LoweringInputs::private_list`). The runtime asks for it for such a draw
     /// whose vertex function writes memory or the primitive ID's varying, or whose vertex start
-    /// a list's base vertex cannot carry, and the plan of a pipeline compiled under it states it
-    /// (`RuntimeFact::PrivateList`).
+    /// a list's base vertex cannot carry (`RuntimeFact::PrivateList`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub private_list: bool,
     /// Sampled texture slots whose compile states `RuntimeFact::CrossClassReads` bound to a
     /// texture of a color format whose numeric class is not the slot's declared one, by the
     /// bound format's class (`LoweringInputs::cross_class`): the variant's function reads,
     /// samples and gathers the texture in its own class and hands back its words as the declared
-    /// type, as plain Metal does. The plan of a pipeline compiled under it states it.
+    /// type, as plain Metal does.
     #[cfg_attr(
         feature = "serde",
         serde(default, with = "crate::pipeline::serde_pairs")
@@ -402,21 +352,19 @@ pub struct VariantKey {
     /// The runtime sampler slots of a `RuntimeFact::AnisotropicSampler` that the shape binds to a
     /// sampler whose word states anisotropy (`SamplerWord::ANISOTROPIC`,
     /// `LoweringInputs::anisotropic_samplers`): the variant whose function takes Metal's
-    /// anisotropic filter, emulated, at each one's samples. The plan of a pipeline compiled under
-    /// it states it.
+    /// anisotropic filter, emulated, at each one's samples.
     #[cfg_attr(feature = "serde", serde(default))]
     pub anisotropic_samplers: BTreeSet<SlotRef>,
     /// The texture slots of a kernel of OpenCL mode whose `RuntimeFact::OpenClLineTexture` (a 1D
     /// image it reads as the 2D texture of height 1 Apple's OpenCL binds) the shape binds a 1D or
     /// 1D array texture at (`LoweringInputs::open_cl_lines`): the variant's kernel declares each
-    /// as that 1D texture and reads it. The plan of a pipeline compiled under it states it.
+    /// as that 1D texture and reads it.
     #[cfg_attr(feature = "serde", serde(default))]
     pub open_cl_lines: BTreeSet<SlotRef>,
     /// The render pipeline draws a rasterization-rate-mapped pass's regions several at a time,
-    /// each one draw of a multi-draw whose index selects its viewport and scissor
-    /// (`BindShape::region_viewports`): its vertex function stores `ViewportIndex` as `DrawIndex`
-    /// (`LoweringInputs::region_viewports`). The plan of a pipeline compiled under it states it
-    /// (`RuntimeFact::RegionViewports`).
+    /// each one draw of a multi-draw whose index selects its viewport and scissor: its vertex
+    /// function stores `ViewportIndex` as `DrawIndex`
+    /// (`LoweringInputs::region_viewports`, `RuntimeFact::RegionViewports`).
     #[cfg_attr(feature = "serde", serde(default))]
     pub region_viewports: bool,
 }
@@ -425,64 +373,6 @@ impl VariantKey {
     /// The empty key: no variant is needed.
     pub fn new() -> VariantKey {
         VariantKey::default()
-    }
-
-    /// This key in the large-buffer form, for a pipeline of `dependencies` bound as `shape`: with
-    /// every slot a large buffer would move to its device address ([`psb_slots`](Self::psb_slots):
-    /// a `RuntimeFact::BufferRangeLimit` the pipeline honours by a variant) at its device address
-    /// whatever buffer is bound there, but those `shape` binds without one (inline bytes, or a
-    /// buffer without a device address). A pipeline of this key runs a dispatch or draw of any
-    /// buffer lengths at those slots ([`covers`](Self::covers)), so one compiled before the buffers
-    /// are known (an indirect command the GPU may write) is the one that runs. Every access inside
-    /// a slot's window reads and writes as in the form the bound buffers ask for; outside it, the
-    /// slot has a large buffer's containment. On a device without device addresses the fact is a
-    /// plan-time check, and the key is unchanged.
-    pub fn large_buffer_form(
-        &self,
-        dependencies: &[crate::pipeline::RuntimeDependency],
-        shape: &crate::bind::BindShape,
-    ) -> VariantKey {
-        use crate::bind::BufferShape;
-        use crate::pipeline::{Mechanism, RuntimeFact};
-        let addressless = |slot: &SlotRef| {
-            let bound = shape
-                .stages
-                .get(&slot.stage)
-                .and_then(|stage| stage.buffers.get(&slot.index));
-            matches!(
-                bound,
-                Some(
-                    BufferShape::Bytes { .. }
-                        | BufferShape::Buffer {
-                            device_address: false,
-                            ..
-                        }
-                )
-            )
-        };
-        let mut out = self.clone();
-        out.psb_slots.extend(
-            dependencies
-                .iter()
-                .filter_map(|dependency| match dependency.fact {
-                    RuntimeFact::BufferRangeLimit { slot }
-                        if dependency.mechanism == Mechanism::Variant && !addressless(&slot) =>
-                    {
-                        Some(slot)
-                    }
-                    _ => None,
-                }),
-        );
-        out
-    }
-
-    /// Whether a pipeline compiled under this key runs a dispatch or draw whose plan settles on
-    /// `settled`: the same key but for device-address slots this one adds, as
-    /// [`large_buffer_form`](Self::large_buffer_form) adds them.
-    pub fn covers(&self, settled: &VariantKey) -> bool {
-        let mut widened = settled.clone();
-        widened.psb_slots.extend(self.psb_slots.iter().copied());
-        widened == *self
     }
 
     /// Whether nothing needs a variant (the common path).
@@ -494,9 +384,6 @@ impl VariantKey {
             && !self.one_row
             && self.unit_axes == 0
             && self.srgb_textures.is_empty()
-            && self.ycbcr_in_place.is_empty()
-            && self.ycbcr_planes_sampled.is_empty()
-            && self.texel_rows.is_empty()
             && self.texel_buffer_parts.is_empty()
             && self.address_maps.is_empty()
             && !self.flat_grid
@@ -589,24 +476,6 @@ impl VariantKey {
             self.region_viewports && stage == crate::pipeline::sym::Stage::Vertex;
         out.srgb_textures = self
             .srgb_textures
-            .iter()
-            .filter(|s| s.stage == stage)
-            .copied()
-            .collect();
-        out.ycbcr_in_place = self
-            .ycbcr_in_place
-            .iter()
-            .filter(|s| s.stage == stage)
-            .copied()
-            .collect();
-        out.ycbcr_planes_sampled = self
-            .ycbcr_planes_sampled
-            .iter()
-            .filter(|(s, _)| s.stage == stage)
-            .map(|(s, sampler)| (*s, *sampler))
-            .collect();
-        out.texel_rows = self
-            .texel_rows
             .iter()
             .filter(|s| s.stage == stage)
             .copied()

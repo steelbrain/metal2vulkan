@@ -8,32 +8,23 @@
 //!   stores `ViewportIndex` (needing `shaderDrawParameters` and `shaderOutputViewportIndex`) while
 //!   its contract states no viewport selection, and passes L3 (`spirv-val` and requirements
 //!   within the profile), adding a bounded handful of words; compiled without it, it reads no
-//!   `DrawIndex` and stores no `ViewportIndex`. The variant's pipeline selects none of the encoder's viewports
-//!   (`GraphicsState::writes_viewport_index`), so a rate-mapped pass's plan admits it.
+//!   `DrawIndex` and stores no `ViewportIndex`. The variant's pipeline selects none of the
+//!   encoder's viewports (`GraphicsState::writes_viewport_index`).
 //! - A fragment function compiled under it that reads `[[viewport_array_index]]` reads 0 and
 //!   declares no `ViewportIndex`.
 //! - A vertex function that selects its own viewport, a post-tessellation one, and one under
 //!   draws of one amplification each is
 //!   `NotImplemented(RasterizationRateMap)`; a device without `shaderDrawParameters` names the
 //!   three features the variant needs.
-//! - A render plan whose shape asks for it states the variant, which the pipeline compiled
-//!   without it does not draw (`BindError::NeedsVariant`); compiled, the variant states the fact
-//!   and its plan settles on itself.
 //!
 //! `llvm-as` assembles the fixtures; a missing tool skips visibly. No GPU is used.
 
 use std::path::Path;
 
-use crate::bind::{BindState, DrawCall};
-use crate::budget::Budget;
 use crate::device::requirements::VkFeature as F;
 use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
-use crate::error::{BindError, Capability, Error, Feature, Unsupported};
-use crate::library::{FunctionArtifact, Library};
-use crate::metal::PixelFormat;
-use crate::pipeline::descriptor::{
-    ColorAttachmentDescriptor, FunctionDescriptor, RenderPipelineDescriptor, StageSource,
-};
+use crate::error::{Capability, Error, Feature, Unsupported};
+use crate::library::FunctionArtifact;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::link::{link, LinkInputs};
 use crate::pipeline::lower_inputs::{AmplificationDraws, LoweringInputs};
@@ -208,82 +199,4 @@ fn region_viewports_refuse_what_is_drawn_region_by_region() {
         )))
     );
     compile_with(&viewports, "rfb_full", &without, &inputs(false)).expect("without the field");
-}
-
-/// A plan whose shape draws regions several at a time states the variant, which the base
-/// pipeline does not draw; compiled, the variant's modules pass L3, it states the fact, and its
-/// plan settles on itself and draws.
-#[test]
-fn a_region_draw_runs_its_variant() {
-    let Some(bc) = fixture("rt6_viewports") else {
-        return;
-    };
-    let budget = Budget::standard();
-    let lib = Library::from_air(&bc).expect("library");
-    let Some(full) = fixture("rfb_viewports") else {
-        return;
-    };
-    let full = Library::from_air(&full).expect("library");
-    let mut d = RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(
-        full.function("rfb_full").expect("function"),
-    )));
-    d.fragment = Some(StageSource::Function(FunctionDescriptor::new(
-        lib.function("rt6_viewport_read").expect("function"),
-    )));
-    d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
-    let triangle = DrawCall::Primitives {
-        vertex_start: 0,
-        vertex_count: 3,
-        instance_count: 1,
-        base_instance: 0,
-    };
-    for stem in ["lavapipe", "intel-irisxe-rplp-anv"] {
-        let dev =
-            Device::from_queries(description(stem), DevicePolicy::RESIDENT_TABLES).expect("device");
-        let base = dev
-            .compile_render_pipeline(&d, &budget)
-            .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let state = BindState {
-            region_viewports: true,
-            ..Default::default()
-        };
-        let plan = base
-            .plan(&dev, &state.shape())
-            .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
-        assert!(plan.variant.region_viewports, "{stem}");
-        assert_eq!(
-            plan.instantiate_draw(&state, &triangle),
-            Err(BindError::NeedsVariant {
-                variant: Box::new(plan.variant.clone())
-            }),
-            "{stem}"
-        );
-        let key = plan.variant.clone();
-        let p = dev
-            .compile_render_variant(&d, &key, &budget)
-            .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        for m in &p.stages {
-            check_words_valid(&m.spirv, &p.requirements, dev.profile())
-                .unwrap_or_else(|e| panic!("{stem} {:?}: L3: {e}", m.stage));
-        }
-        assert!(
-            p.dependencies
-                .iter()
-                .any(|x| x.fact == RuntimeFact::RegionViewports),
-            "{stem}"
-        );
-        // It selects none of the encoder's viewports: a rate-mapped pass's plan admits it.
-        assert!(!p.graphics.writes_viewport_index, "{stem}");
-        let plan = p
-            .plan(&dev, &state.shape())
-            .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
-        assert_eq!(plan.variant, key, "{stem}");
-        plan.instantiate_draw(&state, &triangle)
-            .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
-        // Drawn one region at a time, the base pipeline's plan is its own.
-        let plain = base
-            .plan(&dev, &BindState::default().shape())
-            .unwrap_or_else(|e| panic!("{stem}: {e:?}"));
-        assert!(!plain.variant.region_viewports, "{stem}");
-    }
 }

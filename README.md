@@ -13,7 +13,7 @@ of a Vulkan device.
 
 | Crate | Directory | What it is |
 |---|---|---|
-| `metal2vulkan` | [`crates/metal2vulkan`](crates/metal2vulkan) | The translator. A Metal-shaped API (device, library, pipeline descriptors, binding plans) that compiles compute, render, tessellation, tile and mesh pipelines for a described Vulkan device: SPIR-V per stage, one pipeline layout, fixed-function state, and per-draw descriptor writes and push constants. The `cli` feature builds the `metal2vulkan` command. |
+| `metal2vulkan` | [`crates/metal2vulkan`](crates/metal2vulkan) | The translator. A Metal-shaped API (device, library, pipeline descriptors) that compiles compute, render, tessellation, tile and mesh pipelines for a described Vulkan device: SPIR-V per stage, one pipeline layout, fixed-function state, and the interface a consumer binds each draw and dispatch by. The `cli` feature builds the `metal2vulkan` command. |
 | `metal2vulkan-runtime` | [`crates/metal2vulkan-runtime`](crates/metal2vulkan-runtime) | The Metal API on Vulkan, with one path for every device: devices, memory blocks and buffers, textures, sampler states, command queues, command buffers and events, encoders and pipeline states, run on a Vulkan device through `ash`. It uses only the translator's public API. |
 | `metal2vulkan-air` | [`crates/metal2vulkan-air`](crates/metal2vulkan-air) | The AIR front end: the metallib container, the bitcode reader, a typed IR, AIR's metadata ABI, intrinsics and canonicalization. For tools that read AIR without translating it. |
 | `metal2vulkan-validation` | [`crates/metal2vulkan-validation`](crates/metal2vulkan-validation) | Not published. Authored cases run on Metal and on Vulkan and compared, and bounded audits over a private corpus. |
@@ -121,7 +121,7 @@ let kernel = FunctionDescriptor::new(library.function("my_kernel")?);
 let descriptor = ComputePipelineDescriptor::new(StageSource::Function(kernel));
 let pipeline = device.compile_compute_pipeline(&descriptor, &Budget::standard())?;
 // pipeline.stage.spirv, pipeline.layout, pipeline.interface: create the Vulkan objects from these,
-// then pipeline.plan(...) and plan.instantiate_dispatch(...) per dispatch.
+// and bind each dispatch by the interface, as metal2vulkan-runtime does.
 ```
 
 [docs/API.md](docs/API.md) walks the whole flow on a runnable example,

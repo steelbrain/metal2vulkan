@@ -28,7 +28,6 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::bind::{heap_classes, BindState, BindingPlan, WriteSource};
 use crate::budget::Budget;
 use crate::device::profile::DeviceProfile;
 use crate::device::DevicePolicy;
@@ -1324,21 +1323,6 @@ fn is_table(k: &ResourceKind) -> bool {
     matches!(k, ResourceKind::Synthetic(SyntheticBinding::HandleTable))
 }
 
-/// Every heap array `a` declares is one of the binder's heap classes on `p`, so the binder has a
-/// neutral of its type for element 0: one class, and its unsigned integer twin where a float read
-/// or query of its sampled group declares one.
-fn assert_binder_classes(a: &FunctionArtifact, p: &DeviceProfile, stem: &str) {
-    let classes = heap_classes(p);
-    let mut n = 0;
-    for d in &a.interface.descriptors {
-        if let ResourceKind::Heap(c) = d.slot.kind {
-            assert!(classes.contains(&c), "{stem}: {c:?}");
-            n += 1;
-        }
-    }
-    assert_eq!(n, 1 + siblings(a), "{stem}");
-}
-
 /// The sibling classes `a` declares: a sampled `Sint` or `Uint` heap class beside the sampled
 /// float class of its shape. A float read or query of that class's group declares the unsigned
 /// integer twin (its members of a form a heap reads held there raw, `HeapPlan::raw`), and its
@@ -1393,7 +1377,6 @@ fn an_argument_buffer_texture_is_a_heap_lookup() {
                 // No static texture slot: the texture is the heap's.
                 assert!(texture_slots(&a).is_empty(), "{stem}");
                 assert_eq!(bindings_of(&t, is_heap), one_heap(&a), "{stem}");
-                assert_binder_classes(&a, &p, &stem);
                 let table = bindings_of(&t, is_table);
                 assert_eq!(table.len(), 1, "{stem}");
                 assert_eq!(table[0].0, 0, "{stem}");
@@ -1411,11 +1394,10 @@ fn an_argument_buffer_texture_is_a_heap_lookup() {
 }
 
 /// Through the public compile API the heap pipeline's layout is the heap's (set 1, one partially
-/// bound, update-after-bind array in an update-after-bind pool), the device accepts its
-/// requirements, and with nothing resident the binder plans the table's null entry and the array's
-/// neutral element 0 (`src/tests/engine_heap_binder.rs` binds textures).
+/// bound, update-after-bind array in an update-after-bind pool), and the device accepts its
+/// requirements.
 #[test]
-fn a_heap_pipeline_compiles_and_plans() {
+fn a_heap_pipeline_compiles_to_the_heap_layout() {
     let Some(bc) = fixture() else { return };
     let dev = m3_device();
     let lib = Library::from_air(&bc).expect("library");
@@ -1450,10 +1432,6 @@ fn a_heap_pipeline_compiles_and_plans() {
             ..
         }
     )));
-    let plan = pipe
-        .plan(&dev, &BindState::default().shape())
-        .expect("plan");
-    assert_empty_heap(&plan, 1, 3);
 }
 
 /// Set 1 of a layout whose one sampled float class a read declares its siblings beside: the heap
@@ -1479,34 +1457,11 @@ fn assert_siblings(bindings: &[crate::pipeline::layout::DescriptorBinding]) {
     }
 }
 
-/// With nothing resident, a heap plan writes each handle table as its null entry alone and each
-/// of the `arrays` heap arrays' element 0, the class's neutral.
-fn assert_empty_heap(plan: &BindingPlan, tables: usize, arrays: usize) {
-    let table_writes: Vec<_> = plan
-        .descriptors
-        .iter()
-        .filter(|d| matches!(d.source, WriteSource::HandleTable { .. }))
-        .collect();
-    assert_eq!(table_writes.len(), tables);
-    for d in table_writes {
-        assert!(matches!(
-            d.source,
-            WriteSource::HandleTable { bytes_len: 16, .. }
-        ));
-    }
-    let heap: Vec<_> = plan.descriptors.iter().filter(|d| d.set == 1).collect();
-    assert_eq!(heap.len(), arrays);
-    for d in heap {
-        assert_eq!(d.array_element, 0);
-        assert!(matches!(d.source, WriteSource::Neutral(_)));
-    }
-}
-
 /// The binding flags of a pipeline's set-1 arrays, by its `requirements`:
 /// `PARTIALLY_BOUND | UPDATE_AFTER_BIND`, and `UPDATE_UNUSED_WHILE_PENDING` exactly where the
 /// pipeline requires `descriptorBindingUpdateUnusedWhilePending` (link's
 /// `heap_unused_while_pending`).
-pub(super) fn heap_flags(requirements: &Requirements) -> vk::DescriptorBindingFlags {
+fn heap_flags(requirements: &Requirements) -> vk::DescriptorBindingFlags {
     let flags =
         vk::DescriptorBindingFlags::PARTIALLY_BOUND | vk::DescriptorBindingFlags::UPDATE_AFTER_BIND;
     match requirements
@@ -1529,7 +1484,7 @@ fn m3_device() -> Device {
 
 /// A render pipeline whose vertex and fragment functions both read a texture from an argument
 /// buffer: both stages share the one set-1 array of the class and each reads its own handle
-/// table, which `RenderPipeline::plan` writes.
+/// table.
 #[test]
 fn a_render_heap_pipeline_shares_its_array() {
     let Some(bc) = assemble(
@@ -1616,12 +1571,7 @@ declare { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1), ptr add
         })
         .count();
     assert_eq!(tables, 2, "one handle table per stage");
-    let plan = pipe
-        .plan(&dev, &BindState::default().shape())
-        .expect("plan");
-    assert_empty_heap(&plan, 2, 3);
 }
-
 /// Two members of one argument buffer merged by a select form one heap group: a storage class
 /// written through a guard on the handle (a null handle drops the write), queried and tested
 /// for null through the same element.
@@ -1737,7 +1687,6 @@ declare i32 @air.get_width_texture_2d(ptr addrspace(1), i32)
                 assert_eq!(uses(&a, "texture.is_null.heap"), 1, "{stem}");
                 // One class: both members and the merged handle name one array.
                 assert_eq!(bindings_of(&t, is_heap), one_heap(&a), "{stem}");
-                assert_binder_classes(&a, &p, &stem);
                 compiled += 1;
             }
             Err(e) => {
@@ -1812,7 +1761,6 @@ fn a_heap_texel_write_is_the_devices_write() {
                 }
             };
             link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            assert_binder_classes(&a, &p, &what);
             let classes = heap_image_classes(&a);
             assert_eq!(classes.len(), 1, "{what}: {classes:?}");
             assert_eq!(classes[0].access, ImageAccess::Storage, "{what}");
@@ -1942,7 +1890,6 @@ fn a_selected_member_resource_id_is_a_heap_lookup() {
                 assert_eq!(uses(&a, "access.handle.lookup"), 1, "{stem}");
                 assert_eq!(uses(&a, "texture.query.heap"), 1, "{stem}");
                 assert_eq!(bindings_of(&t, is_heap), one_heap(&a), "{stem}");
-                assert_binder_classes(&a, &p, &stem);
                 compiled += 1;
             }
             Err(e) => {
@@ -2036,7 +1983,6 @@ fn dynamic_argument_buffer_elements_are_heap_lookups() {
                     }
                     assert!(texture_slots(&a).is_empty(), "{stem} {entry}");
                     assert_eq!(bindings_of(&t, is_heap), one_heap(&a), "{stem} {entry}");
-                    assert_binder_classes(&a, &p, &stem);
                     compiled += 1;
                 }
                 Err(e) => {
@@ -2097,9 +2043,6 @@ fn an_argument_buffer_depth_texture_reads_through_the_float_class() {
                         && c.dim == ImageDim::D2),
                     "{stem}: {classes:?}"
                 );
-                for c in &classes {
-                    assert!(heap_classes(&p).contains(&HandleClass::Image(*c)), "{stem}");
-                }
                 // Every image type is 2D (Dim 1) and not a depth image.
                 for (dim, depth, _) in image_types(&a) {
                     assert_eq!((dim, depth), (1, 0), "{stem}");
@@ -2326,10 +2269,8 @@ fn a_heap_texture_samples_through_a_runtime_sampler() {
 
 /// A cube's explicit gradients through a sampler loaded from an argument buffer: the sample takes
 /// Metal's footprint as a slot's does (`PrecisionNote::CubeGradientFootprint`), the isotropic or
-/// the anisotropic form by its table entry's word, through the set-1 sampler array of its own use,
-/// and the plan takes an anisotropic listed sampler for it (`engine_heap_binder`). Every profile
-/// with the
-/// sampled heap compiles it and passes L3; it was `ArgumentBufferTextures NotImplemented` before.
+/// the anisotropic form by its table entry's word, through the set-1 sampler array of its own use.
+/// Every profile with the sampled heap compiles it and passes L3.
 #[test]
 fn a_cube_gradient_through_an_argument_buffer_sampler_reads_its_own_sampler_array() {
     let Some(bc) = assemble(
@@ -2888,7 +2829,6 @@ fn an_argument_buffer_depth_texture_compares_through_the_depth_comparison_class(
             ),
             "{stem}"
         );
-        assert!(heap_classes(&p).contains(&HandleClass::Image(c)), "{stem}");
         // The one image type is 2D (Dim 1) and a depth image.
         assert_eq!(
             image_types(&a)
@@ -2994,8 +2934,7 @@ define void @k(ptr addrspace(2) %m, ptr addrspace(1) %out{param}, i32 %gid) {{
 
 /// A heap texture's linear sample, through a constexpr sampler of linear filters (2D and 3D), a
 /// runtime sampler slot, or the sampler its argument buffer holds, is the device's sample; the
-/// census names the sample by its source, and the module records no `FloatSampleFilter`, outright
-/// or specialized. A 2D sample through a constexpr or
+/// census names the sample by its source. A 2D sample through a constexpr or
 /// runtime sampler also emulates a raw-held texture's, in a branch on the class the handle carries
 /// (the search's flagged form, whose masks and table the census counts under `HEAP_CLASS_CENSUS`).
 /// Each validates; a profile without the sampled heap refuses each. (The interpreter models no
@@ -3052,9 +2991,6 @@ fn heap_linear_samples_are_the_device_s() {
                 raw,
                 "{what}"
             );
-            let filter = PrecisionNote::FloatSampleFilter;
-            assert!(!a.precision.contains(&filter), "{what}");
-            assert!(!a.specialized.iter().any(|s| s.note == filter), "{what}");
             compiled += 1;
         }
         assert!(
@@ -3349,12 +3285,6 @@ fn argument_buffer_textures_sample_through_heap_samplers() {
                 .collect();
             sampled.sort();
             assert_eq!(sampled, classes, "{stem} {entry}");
-            for c in heap_image_classes(&a) {
-                assert!(
-                    heap_classes(&p).contains(&HandleClass::Image(c)),
-                    "{stem} {entry}"
-                );
-            }
             let hs = heap_samplers(&a);
             let integer: Vec<bool> = hs.iter().map(|c| c.integer).collect();
             assert_eq!(integer, samplers, "{stem} {entry}");
@@ -4482,11 +4412,6 @@ fn argument_buffer_samplers_are_heap_lookups() {
             let heap = bindings_of(&t, is_heap);
             assert_eq!(heap.len(), 2, "{stem} {entry}");
             assert!(heap.iter().all(|(set, _)| *set == 1), "{stem} {entry}");
-            for d in &a.interface.descriptors {
-                if let ResourceKind::Heap(c) = d.slot.kind {
-                    assert!(heap_classes(&p).contains(&c), "{stem} {entry}: {c:?}");
-                }
-            }
             assert_eq!(count(&a, OP_SAMPLED_IMAGE), 1, "{stem} {entry}");
             assert_eq!(count(&a, op), 1, "{stem} {entry}");
             assert_eq!(

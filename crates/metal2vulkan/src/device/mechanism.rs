@@ -166,11 +166,6 @@ pub fn mechanism(fact: &RuntimeFact, profile: &DeviceProfile) -> Mechanism {
         // The runtime pushes its arena's address, and sizes and orders the arena's slots by the
         // slot's bytes.
         RuntimeFact::PrivateArena { .. } => Mechanism::PushConstant,
-        // Keyed by the slots bound to a texture whose planes are read in place, on a profile that
-        // reads them so (`ProfileFields::ycbcr_in_place`).
-        RuntimeFact::YCbCrInPlace { .. } => Mechanism::Variant,
-        // Keyed by the slots bound to a texture whose rows are read and written in place.
-        RuntimeFact::TexelRows { .. } => Mechanism::Variant,
         // Keyed by the slots bound to a texture buffer of more texels than one view holds.
         RuntimeFact::TexelBufferParts { .. } => Mechanism::Variant,
         // The runtime refuses a dispatch whose slot address is not a multiple of the alignment.

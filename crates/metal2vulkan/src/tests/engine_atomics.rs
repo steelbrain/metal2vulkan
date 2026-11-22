@@ -140,6 +140,10 @@ const SINK_AT: u64 = 0x0000_0041_0000_0000;
 /// The command buffer's `ExecutionStatus` buffer (the `seq_cst` order).
 const STATUS_AT: u64 = 0x0000_0042_0000_0000;
 
+/// The `ExecutionStatus` buffer's bytes: through its last word.
+const STATUS_BYTES: usize =
+    crate::bind::status::StatusWord::SeqCstFences.byte_offset() as usize + 4;
+
 /// Resources of a kernel with `threads` threads and buffers `[[buffer(i)]]` holding `init[i]`,
 /// bound at their starts. Every buffer is also at a device address with
 /// its root-table entry, for a plan that reaches slots by device address (typed atomics).
@@ -199,7 +203,7 @@ fn resources(plan: &Plan, init: &[Vec<u32>], threads: u32) -> Resources {
     buffers.push(Buffer {
         slot: Some(crate::lower::access::absent::symbol(Stage::Kernel)),
         address: Some(STATUS_AT),
-        bytes: vec![0; crate::bind::status::ExecutionStatus::BYTES],
+        bytes: vec![0; STATUS_BYTES],
     });
     Resources {
         buffers,

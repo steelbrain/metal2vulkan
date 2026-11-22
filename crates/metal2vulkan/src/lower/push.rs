@@ -195,10 +195,6 @@ pub const fn shape(f: PushField) -> FieldShape {
         // A constexpr sampler's index in its use's sampler array, and the sampled-texture array's
         // element a fetched color attachment is read through.
         PushField::ConstexprSampler(_) | PushField::FetchedColor { .. } => FieldShape::U32,
-        // An in-place YCbCr texture's size, planes and conversion.
-        PushField::YCbCrInPlace(_) => FieldShape::UVec4Array(2),
-        // A texture's size, rows and first texel in its texel buffer view.
-        PushField::TexelRows(_) => FieldShape::UVec4Array(1),
         // The residual is below `min{Storage,Uniform}BufferOffsetAlignment`.
         PushField::SlotBindOffset(_) | PushField::VertexBufferStride(_) => FieldShape::U32,
         // The bytes of a slot's buffer before its bind offset, and its length: each at most 2 GiB

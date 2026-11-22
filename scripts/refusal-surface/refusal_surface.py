@@ -8,7 +8,6 @@ The refusal surface is read from the construction sites of the typed refusals, o
   `Unsupported { .. }`
   literals, in the `src` of crates/metal2vulkan-air, crates/metal2vulkan and
   crates/metal2vulkan-runtime;
-- the binder's refusals of valid bind states at a device limit (`BindError`);
 - the translation caps (`Limit`, `Error::LimitExceeded`);
 - the rasterization-rate maps the compile layer does not compile (`UnpinnedCompile`);
 - the translation deadline (`BudgetExceeded`, `Error::Budget`);
@@ -79,20 +78,6 @@ CONSTRUCTORS = {
     "needs": "AnyOf",
     "needs_any_of": "AnyOf",
 }
-
-# Binder refusals of a valid bind state: a device limit or an unestablished reading. The other
-# `BindError` variants are Metal's own validation (misuse), or carry an `Unsupported` already
-# counted under its feature.
-BIND_REFUSALS = [
-    "DescriptorRangeExceeded",
-    "TexelBufferTooLarge",
-    "HeapTooLarge",
-    "TessellationFactorRange",
-    "PatchIndexRange",
-    "ControlPointIndexRange",
-    "MissingStageInRegion",
-    "MissingDeviceAddress",
-]
 
 REACH_MARKS = OrderedDict(
     [
@@ -224,8 +209,6 @@ def derived_basis(section, kinds, table):
         if "ours" in bases:
             return "ours"
         return bases.pop() if len(bases) == 1 else ""
-    if section == "bind":
-        return "device"
     # A cap, the deadline, and a rate map outside the bounds where Apple's compile was measured
     # (`UnpinnedCompile`: "the bounds are this crate's, not Metal's").
     if section in ("limit", "budget", "ratemap"):
@@ -559,10 +542,6 @@ def scan(rt_enums=()):
                     if is_pattern(text, m.start(), m.end()):
                         continue
                     rows[(rt_section(enum), m.group(1))]["sites"].append(site(m.start()))
-        for m in re.finditer(r"\bBindError::([A-Z][A-Za-z0-9_]*)", text):
-            if m.group(1) not in BIND_REFUSALS or is_pattern(text, m.start(), m.end()):
-                continue
-            rows[("bind", m.group(1))]["sites"].append(site(m.start()))
         for m in re.finditer(r"\bLimit::([A-Z][A-Za-z0-9_]*)", text):
             if tree == "rt" or is_pattern(text, m.start(), m.end()):
                 continue
@@ -781,7 +760,6 @@ def build(rt_enums):
     fdocs = OrderedDict(enum_variants(CRATES / "metal2vulkan" / "src" / "error" / "mod.rs", "Feature"))
     for n, d in enum_variants(CRATES / "metal2vulkan-air" / "src" / "error.rs", "Feature"):
         fdocs.setdefault(n, d)
-    bdocs = OrderedDict(enum_variants(CRATES / "metal2vulkan" / "src" / "error" / "mod.rs", "BindError"))
     ldocs = OrderedDict(enum_variants(CRATES / "metal2vulkan-air" / "src" / "error.rs", "Limit"))
     rdocs = OrderedDict(enum_variants(CRATES / "metal2vulkan" / "src" / "bind" / "rate_map.rs", "UnpinnedCompile"))
     tdocs = OrderedDict(enum_variants(CRATES / "metal2vulkan-air" / "src" / "error.rs", "BudgetExceeded"))
@@ -800,7 +778,6 @@ def build(rt_enums):
     basis_faults = []
     sections = [
         ("feature", fdocs, "Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)"),
-        ("bind", OrderedDict((n, bdocs.get(n, "")) for n in BIND_REFUSALS), "Binder refusals at a device limit (`BindError`)"),
         ("limit", ldocs, "Translation caps (`Error::LimitExceeded(Limit)`)"),
         (
             "ratemap",
@@ -825,8 +802,8 @@ def build(rt_enums):
             sites = (r["sites"] if r else [])
             indirect = (r["indirect"] if r else [])
             conds = sorted(r["conds"]) if r else []
-            if section in ("bind", "limit"):
-                conds = ["at the device's limit" if section == "bind" else "every device (a deterministic cap)"]
+            if section == "limit":
+                conds = ["every device (a deterministic cap)"]
             elif section == "ratemap":
                 conds = ["every device (this crate's bound: Apple's compile unmeasured or crashing there)"]
             elif section == "budget":
@@ -901,7 +878,7 @@ def render(tables):
         "Every refusal of something Metal accepts, read from the code: the construction sites of the "
         "typed refusals outside tests (`scripts/refusal-surface/refusal_surface.py`, which writes this "
         "file; edit its `reach.tsv` and the refusals' own doc comments, never the tables). "
-        "Section 6 is the runtime's floor: a "
+        "Section 5 is the runtime's floor: a "
         "device below it is refused when the device is made, with every item it lacks named. "
         "The sections after it are the runtime's own typed refusals, one for each enum its "
         "`Error` carries, every row with its declared basis, which the runtime answers at run time "
@@ -944,7 +921,7 @@ def render(tables):
         lines.append(f"  - `{k}`: {v};")
     lines.append("  - `?`: not assessed yet.")
     lines.append(
-        "  The floor (section 6) carries no reach mark, as it turns on the device whatever the "
+        "  The floor (section 5) carries no reach mark, as it turns on the device whatever the "
         "program, and nor do the runtime's refusals after it, each an argument of a public "
         "call."
     )

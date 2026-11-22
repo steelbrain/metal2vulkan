@@ -220,63 +220,30 @@ fn gather(component: u32) -> String {
     format!("@air.gather_texture_2d.v4f32(ptr addrspace(1) %t, ptr addrspace(2) @__air_sampler_state, <2 x float> %uv, i1 true, <2 x i32> zeroinitializer, i32 {component}, i32 0)")
 }
 
-/// The `ConstantLanes` word of an `R32Float` texture made with `swizzle`.
+/// The `ConstantLanes` word of an `R32Float` texture made with `swizzle`: bit `lane` (0 red to 3
+/// alpha) where Metal reads the lane as a constant (a channel the format lacks, or a `Zero` or `One`
+/// swizzle), and bit `CONSTANT_ONES + lane` where that constant is 1.
 fn r32_lanes(swizzle: TextureSwizzleChannels) -> u64 {
     let present = crate::metal::format::channels(PixelFormat::R32Float).expect("channels");
-    u64::from(crate::metal::sampler::constant_lanes(present, swizzle))
-}
-
-/// The lanes Metal reads as constants are the channels a format lacks (red, green and blue 0,
-/// alpha 1) and the `Zero` and `One` swizzles, through the texture's swizzle; a format holding
-/// every channel has none under its own swizzle; a depth format states none.
-#[test]
-fn the_constant_lanes_are_the_channels_a_format_lacks_through_its_swizzle() {
-    use crate::metal::format::channels;
-    use crate::metal::sampler::constant_lanes;
-    use TextureSwizzle as T;
-    let s = TextureSwizzleChannels::new;
-    let id = TextureSwizzleChannels::DEFAULT;
-    let lanes = |pf: PixelFormat, sw: TextureSwizzleChannels| {
-        constant_lanes(channels(pf).expect("channels"), sw)
-    };
-    // R8: green and blue read 0, alpha 1.
-    assert_eq!(lanes(PixelFormat::R8Unorm, id), 0b1110 | 0b1000 << 4);
-    assert_eq!(lanes(PixelFormat::R32Float, id), 0b1110 | 0b1000 << 4);
-    assert_eq!(lanes(PixelFormat::BC4RUnorm, id), 0b1110 | 0b1000 << 4);
-    // RG: blue 0, alpha 1; RGB: alpha 1.
-    assert_eq!(lanes(PixelFormat::RG8Unorm, id), 0b1100 | 0b1000 << 4);
-    assert_eq!(lanes(PixelFormat::B5G6R5Unorm, id), 0b1000 | 0b1000 << 4);
-    assert_eq!(lanes(PixelFormat::ETC2RGB8, id), 0b1000 | 0b1000 << 4);
-    // A8: red, green and blue 0.
-    assert_eq!(lanes(PixelFormat::A8Unorm, id), 0b0111);
-    // Every channel: none, but a swizzle's constants.
-    assert_eq!(lanes(PixelFormat::RGBA8Unorm, id), 0);
-    assert_eq!(
-        lanes(
-            PixelFormat::RGBA8Unorm,
-            s(T::Red, T::Green, T::Zero, T::One)
-        ),
-        0b1100 | 0b1000 << 4
-    );
-    // Through a swizzle: each lane takes its source's constant.
-    assert_eq!(
-        lanes(
-            PixelFormat::R8Unorm,
-            s(T::Alpha, T::Alpha, T::Alpha, T::Alpha)
-        ),
-        0b1111 | 0b1111 << 4
-    );
-    assert_eq!(
-        lanes(PixelFormat::R8Unorm, s(T::Alpha, T::Red, T::Green, T::Blue)),
-        0b1101 | 0b0001 << 4
-    );
-    assert_eq!(
-        lanes(PixelFormat::A8Unorm, s(T::Alpha, T::Red, T::One, T::Alpha)),
-        0b0110 | 0b0100 << 4
-    );
-    assert_eq!(channels(PixelFormat::Depth32Float), None);
-    assert_eq!(channels(PixelFormat::Stencil8), None);
-    assert_eq!(channels(PixelFormat::Invalid), None);
+    let lanes = [swizzle.red, swizzle.green, swizzle.blue, swizzle.alpha];
+    let mut word = 0;
+    for (lane, source) in (0u32..).zip(lanes) {
+        let constant = match source {
+            TextureSwizzle::Zero => Some(false),
+            TextureSwizzle::One => Some(true),
+            TextureSwizzle::Red => (!present[0]).then_some(false),
+            TextureSwizzle::Green => (!present[1]).then_some(false),
+            TextureSwizzle::Blue => (!present[2]).then_some(false),
+            TextureSwizzle::Alpha => (!present[3]).then_some(true),
+        };
+        if let Some(one) = constant {
+            word |= 1 << lane;
+            if one {
+                word |= 1 << (crate::metal::sampler::CONSTANT_ONES + lane);
+            }
+        }
+    }
+    word
 }
 
 /// On the interpreter: a nearest, clamp-to-edge pixel sampler's fetch of a 2x2 sparse `R32Float`

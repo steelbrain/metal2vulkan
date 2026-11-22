@@ -113,8 +113,9 @@ fn main() {
 
     // The product's runtime: the modules that act on a compiled pipeline after the compile, whose
     // behaviour C3's currency holds to `metal2vulkan::cache::RUNTIME_VERSION` beside an artifact's
-    // content digest. That is the binder (`src/bind`: planning, instantiation, the device replay,
-    // resident sets, status decoding), the device a run opens and what it enables (`src/device`,
+    // content digest. That is `src/bind` (argument-buffer layouts, the texel decoders, rate maps,
+    // indirect-command records, the device replay's helpers, the heap classes and status words),
+    // the device a run opens and what it enables (`src/device`,
     // `src/ash_interop`), the Vulkan and Metal vocabularies the runtime maps (`src/vk`,
     // `src/metal`, and the AIR front end's `metal2vulkan-air/src/metal`, whose `MTLDataType`
     // `metal` re-exports), the record and table formats it writes (indirect commands, the rate and
@@ -127,7 +128,7 @@ fn main() {
     // encode the YCbCr write takes from `air.pack`'s lowering (`src/lower/arith/pack.rs`), and
     // half-float conversion. The translator's paths above are below its crate (`metal2vulkan/src/...`). Each
     // path is a product file below the workspace's crates/ directory, this crate's parent: those
-    // listed here and the binder's Rust sources under `metal2vulkan/src/bind/`, test modules aside
+    // listed here and the Rust sources under `metal2vulkan/src/bind/`, test modules aside
     // (`runtime_files`, so a file added there joins), all sorted as strings. The guard test in
     // `candidate::engine::artifact` requires this hash to be the one validation pins
     // (`runtime-sources.sha256`), and the inputs to be closed over the module files their non-test
@@ -182,7 +183,6 @@ fn main() {
         "metal2vulkan/src/metal/vertex.rs",
         "metal2vulkan/src/pipeline/table.rs",
         "metal2vulkan/src/pipeline/tile_map.rs",
-        "metal2vulkan/src/vk/draw.rs",
         "metal2vulkan/src/vk/generated.rs",
         "metal2vulkan/src/vk/mod.rs",
         "metal2vulkan/src/vk/structs.rs",
@@ -227,7 +227,7 @@ fn crate_files(root: &Path) -> Vec<PathBuf> {
 
 /// Every Rust source below `relative` under `product` but test modules (a `tests` directory, a
 /// `tests.rs` or `*_tests.rs` file) and hidden files, pushed as paths relative to `product` with
-/// `/` separators: the binder's (`metal2vulkan/src/bind/`), whose non-test code reads no data file
+/// `/` separators: those of `metal2vulkan/src/bind/`, whose non-test code reads no data file
 /// (its `.txt` files are its tests' measured answers). Cargo reruns this script when anything
 /// under the directory changes, so a file added there joins the runtime's inputs.
 fn runtime_files(product: &Path, relative: &Path, output: &mut Vec<String>) {

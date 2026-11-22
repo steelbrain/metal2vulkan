@@ -396,42 +396,6 @@ pub fn check_sampler(
     Ok(())
 }
 
-/// [`check_sampler`] for a sampler an argument buffer lists, which a function reads without
-/// knowing its state: anisotropy above 1 without `samplerAnisotropy` is refused too, since such a
-/// function neither emulates Metal's anisotropic filter through it nor records the isotropic
-/// filter its Vulkan sampler takes there (`lower::sampler::anisotropic`'s reach).
-pub(crate) fn check_argument_sampler(
-    shape: &SamplerShape,
-    use_: SamplerUse,
-    profile: &DeviceProfile,
-) -> Result<(), Error> {
-    check_sampler(shape, use_, profile)?;
-    if shape.anisotropic && !profile.fields().images.sampler_anisotropy {
-        return Err(Unsupported::needs(
-            Feature::SamplerAnisotropy,
-            Capability::Feature(VkFeature::SamplerAnisotropy),
-        )
-        .into());
-    }
-    Ok(())
-}
-
-/// What of the Vulkan sampler [`vk_sampler`] makes for a sampler of `shape` used as `use_` decides
-/// the format features it needs of a view it reads (`bind::sampler_desc`): whether some filter is
-/// linear (none for an integer use, which [`vk_sampler`] makes nearest), and its reduction, the
-/// weighted average ([`vk_sampler`]). A plan reads it where a runtime sampler meets its textures
-/// through separate descriptors, so the textures' views are checked against the bound sampler at
-/// plan time as a combined write's view is per bind.
-pub(crate) fn vk_filtering(
-    shape: &SamplerShape,
-    use_: SamplerUse,
-) -> (bool, vk::SamplerReductionMode) {
-    (
-        shape.linear && !use_.integer_texture,
-        vk::SamplerReductionMode::WEIGHTED_AVERAGE,
-    )
-}
-
 /// The Vulkan sampler for a Metal sampler descriptor used as `use_` on `profile`.
 ///
 /// An integer texture is never filtered: Metal reads a linear filter on one as nearest (an Apple M3
@@ -926,38 +890,9 @@ pub(crate) fn border_texel(
     ]
 }
 
-/// The first bit of a [`constant_lanes`] word that says a lane is the constant 1: bit
+/// The first bit of a `SpecKey::ConstantLanes` word that says a lane is the constant 1: bit
 /// `CONSTANT_ONES + lane`, where bit `lane` says it is a constant.
 pub(crate) const CONSTANT_ONES: u32 = 4;
-
-/// The lanes Metal reads as constants from every texel of a texture whose format holds the
-/// channels `present` (red, green, blue, alpha; [`crate::metal::format::channels`]), made with
-/// `swizzle`, as a word: bit `lane` (0 red to 3 alpha) where the lane's source is a channel the
-/// format lacks or a `Zero` or `One` swizzle, and bit [`CONSTANT_ONES`]` + lane` where that
-/// constant is 1 (a missing alpha, or `One`); a missing red, green or blue, and `Zero`, read 0.
-/// Metal reads them so at a mapped texel, an unmapped one, and the border alike, and so after any
-/// filter, which weighs constants alone there.
-pub(crate) fn constant_lanes(present: [bool; 4], swizzle: TextureSwizzleChannels) -> u32 {
-    let lanes = [swizzle.red, swizzle.green, swizzle.blue, swizzle.alpha];
-    let mut word = 0;
-    for (lane, source) in (0u32..).zip(lanes) {
-        let constant = match source {
-            TextureSwizzle::Zero => Some(false),
-            TextureSwizzle::One => Some(true),
-            TextureSwizzle::Red => (!present[0]).then_some(false),
-            TextureSwizzle::Green => (!present[1]).then_some(false),
-            TextureSwizzle::Blue => (!present[2]).then_some(false),
-            TextureSwizzle::Alpha => (!present[3]).then_some(true),
-        };
-        if let Some(one) = constant {
-            word |= 1 << lane;
-            if one {
-                word |= 1 << (CONSTANT_ONES + lane);
-            }
-        }
-    }
-    word
-}
 
 /// Whether every component of `m` is the identity swizzle (Vulkan's "identity mapping": each
 /// component `IDENTITY` or its own channel).
@@ -1005,16 +940,6 @@ pub fn compare_op(f: CompareFunction) -> vk::CompareOp {
         CompareFunction::GreaterEqual => C::GREATER_OR_EQUAL,
         CompareFunction::Always => C::ALWAYS,
     }
-}
-
-/// `log2` of the degree a sampler of `desc` filters with: its `maxAnisotropy` rounded up to a power
-/// of two, 0 for an isotropic one; a pixel-coordinate sampler is isotropic. The runtime hands the
-/// descriptor Metal samples with (`maxAnisotropy` 32 for 17 to 31), whose degree is then 5.
-pub(crate) fn anisotropy_degree(desc: &SamplerDescriptor) -> u32 {
-    if !desc.normalized_coordinates || desc.max_anisotropy <= 1 {
-        return 0;
-    }
-    desc.max_anisotropy.next_power_of_two().trailing_zeros()
 }
 
 /// Metal's discrete sampler state as one `u32` word: what a shader reads of a sampler it learns
@@ -1348,55 +1273,6 @@ mod tests {
         Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).unwrap()
     }
 
-    /// What a plan reads of a bound sampler's shape to check its separate textures' views
-    /// (`vk_filtering`) is exactly what `vk_sampler` makes of the descriptor for the use: a linear
-    /// filter or mip mode (none for an integer texture) and the reduction, the weighted average
-    /// whatever the descriptor's, with or without a comparison.
-    #[test]
-    fn the_shape_states_the_filtering_vk_sampler_makes() {
-        use SamplerMinMagFilter as F;
-        let dev = device(&[], &[VkFeature::SamplerFilterMinmax]);
-        let mut checked = 0;
-        for min in [F::Nearest, F::Linear] {
-            for mag in [F::Nearest, F::Linear] {
-                for mip in [
-                    SamplerMipFilter::NotMipmapped,
-                    SamplerMipFilter::Nearest,
-                    SamplerMipFilter::Linear,
-                ] {
-                    for reduction in [
-                        SamplerReductionMode::WeightedAverage,
-                        SamplerReductionMode::Minimum,
-                        SamplerReductionMode::Maximum,
-                    ] {
-                        for (compare, integer) in
-                            [(false, false), (true, false), (false, true), (true, true)]
-                        {
-                            let mut d = metal_default();
-                            d.min_filter = min;
-                            d.mag_filter = mag;
-                            d.mip_filter = mip;
-                            d.reduction_mode = reduction;
-                            let use_ = SamplerUse::new(compare, integer);
-                            let s = vk_sampler(&d, use_, dev.profile()).expect("a sampler");
-                            assert_eq!(s.reduction, vk::SamplerReductionMode::WEIGHTED_AVERAGE);
-                            let linear = s.mag_filter == vk::Filter::LINEAR
-                                || s.min_filter == vk::Filter::LINEAR
-                                || s.mipmap_mode == vk::SamplerMipmapMode::LINEAR;
-                            assert_eq!(
-                                vk_filtering(&d.shape(), use_),
-                                (linear, s.reduction),
-                                "{d:?} {use_:?}"
-                            );
-                            checked += 1;
-                        }
-                    }
-                }
-            }
-        }
-        assert_eq!(checked, 12 * 3 * 4);
-    }
-
     #[test]
     fn defaults_map_to_a_base_level_sampler() {
         let dev = device(&[], &[]);
@@ -1409,16 +1285,14 @@ mod tests {
         assert_eq!(s.reduction, vk::SamplerReductionMode::WEIGHTED_AVERAGE);
     }
 
-    /// A descriptor's LOD bias makes, on every committed device and for every use, the binding
-    /// shape its zero bias makes, and the Vulkan sampler its zero bias makes but for its
-    /// `mipLodBias`: without `SamplerUse::lod_bias` (an Apple GPU of the families the runtime
+    /// A descriptor's LOD bias makes, on every committed device and for every use, the Vulkan
+    /// sampler its zero bias makes but for its `mipLodBias`: without `SamplerUse::lod_bias` (an Apple GPU of the families the runtime
     /// claims, which samples every level as with no bias) 0; with it (a Mac with an Intel or AMD
     /// GPU) `device_lod_bias`'s, the bias within the device's `maxSamplerLodBias` and none through
     /// a portability subset that withholds `samplerMipLodBias`, and 0 for a use of texel
     /// coordinates. Refused nowhere: past the limit, NaN or infinite, and withheld.
     #[test]
     fn a_lod_bias_is_the_device_s_where_the_use_adds_it() {
-        use crate::bind::state::BoundSampler;
         use SamplerMinMagFilter::{Linear, Nearest};
         let biases = [
             1.0,
@@ -1473,7 +1347,6 @@ mod tests {
             descs.push((pixel, SamplerUse::default().with_unnormalized(true)));
             for (unbiased, plain) in descs {
                 let want = vk_sampler(&unbiased, plain, p);
-                let shape = BoundSampler::new(unbiased).shape();
                 for bias in biases {
                     let mut d = unbiased;
                     d.lod_bias = bias;
@@ -1495,7 +1368,6 @@ mod tests {
                         assert_eq!(got, want, "{stem}: bias {bias}, {d:?} {use_:?}");
                         checked += 1;
                     }
-                    assert_eq!(BoundSampler::new(d).shape(), shape, "{stem}: bias {bias}");
                     past_limit += usize::from(bias.abs() > limit);
                 }
             }
@@ -1893,64 +1765,6 @@ mod tests {
         d.s_address_mode = SamplerAddressMode::Repeat;
         let s = vk_sampler(&d, SamplerUse::default(), dev.profile()).unwrap();
         assert_eq!(s.border_color, vk::BorderColor::FLOAT_TRANSPARENT_BLACK);
-    }
-
-    /// Mirror-clamp needs its feature; anisotropy needs its own only through an argument buffer
-    /// (`check_argument_sampler`), the Vulkan sampler isotropic without it; a min or max
-    /// reduction needs none and reads the weighted average, with or without a comparison.
-    #[test]
-    fn optional_sampler_features_are_required_or_refused() {
-        let none = device(
-            &[],
-            &[
-                VkFeature::SamplerMirrorClampToEdge,
-                VkFeature::SamplerFilterMinmax,
-                VkFeature::SamplerAnisotropy,
-            ],
-        );
-        let all = device(
-            &[
-                VkFeature::SamplerMirrorClampToEdge,
-                VkFeature::SamplerFilterMinmax,
-                VkFeature::SamplerAnisotropy,
-            ],
-            &[],
-        );
-        let mut mirror = metal_default();
-        mirror.r_address_mode = SamplerAddressMode::MirrorClampToEdge;
-        let mut minmax = metal_default();
-        minmax.reduction_mode = SamplerReductionMode::Maximum;
-        // Linear filters: off Metal's sampler a nearest one is handed no anisotropy.
-        let mut aniso = metal_default();
-        aniso.min_filter = SamplerMinMagFilter::Linear;
-        aniso.mag_filter = SamplerMinMagFilter::Linear;
-        aniso.max_anisotropy = 32;
-        let feature = |err: Error| {
-            let Error::Unsupported(u) = err else {
-                panic!("{err:?}")
-            };
-            u.needs
-        };
-        let needs = |f| crate::error::Needs::AnyOf(vec![vec![Capability::Feature(f)]]);
-        let err = vk_sampler(&mirror, SamplerUse::default(), none.profile()).unwrap_err();
-        assert_eq!(feature(err), needs(VkFeature::SamplerMirrorClampToEdge));
-        assert!(vk_sampler(&mirror, SamplerUse::default(), all.profile()).is_ok());
-        let s = vk_sampler(&aniso, SamplerUse::default(), none.profile()).unwrap();
-        assert_eq!(s.max_anisotropy, None, "isotropic without the feature");
-        let s = vk_sampler(&aniso, SamplerUse::default(), all.profile()).unwrap();
-        assert_eq!(s.max_anisotropy, Some(16.0), "clamped to the device limit");
-        // An argument buffer's sampler needs the feature.
-        let shape = aniso.shape();
-        let err = check_argument_sampler(&shape, SamplerUse::default(), none.profile());
-        assert_eq!(
-            feature(err.unwrap_err()),
-            needs(VkFeature::SamplerAnisotropy)
-        );
-        assert!(check_argument_sampler(&shape, SamplerUse::default(), all.profile()).is_ok());
-        for (p, compare) in [(&none, false), (&none, true), (&all, false), (&all, true)] {
-            let s = vk_sampler(&minmax, SamplerUse::new(compare, false), p.profile()).unwrap();
-            assert_eq!(s.reduction, vk::SamplerReductionMode::WEIGHTED_AVERAGE);
-        }
     }
 
     /// An opaque-black border through a non-identity view mapping, the texture's swizzle composed

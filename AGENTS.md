@@ -10,7 +10,7 @@ manifest at the root) of seven crates under `crates/`:
 
 | Crate | Published | What it is |
 |---|---|---|
-| `crates/metal2vulkan` | yes | The translator: Metal AIR to SPIR-V through a Metal-shaped API (device, library, pipelines, binding plans), and the `metal2vulkan` command (feature `cli`) |
+| `crates/metal2vulkan` | yes | The translator: Metal AIR to SPIR-V through a Metal-shaped API (device, library, pipelines and their interfaces), and the `metal2vulkan` command (feature `cli`) |
 | `crates/metal2vulkan-runtime` | yes | The runtime: the Metal API on Vulkan with one path for every device, built only on the translator's public API |
 | `crates/metal2vulkan-air` | yes | The AIR front end: container, bitstream, bitcode, typed IR, metadata ABI, intrinsics, canonicalization, `graph`, `budget` |
 | `crates/metal2vulkan-validation` | no | Authored semantic cases, Metal and Vulkan execution, harvest, the corpus index and audits |

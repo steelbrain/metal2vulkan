@@ -207,7 +207,6 @@ surface! {
         enum GenericPointer N;
         struct InternalError N;
         enum InternalKind N;
-        enum BindError N;
     }
     "device" => metal2vulkan::device {
         fn vk_stage;
@@ -438,86 +437,11 @@ surface! {
         enum ArgumentType N;
         const ARGUMENT_HANDLE_BYTES;
         enum Dispatch N;
-        struct DispatchCommands N;
-        struct DispatchRegion N;
-        enum IndirectArgs N;
         enum DrawCall N;
-        struct DrawCommands N;
         fn alpha_test_code;
-        enum IndexOverrun N;
-        enum HeapSource E;
-        fn handle_entry;
-        const HANDLE_ENTRY_BYTES;
-        struct BufferExtent N;
-        struct BufferRange N;
-        struct DescriptorBytes N;
-        struct DescriptorRange N;
         struct IndexBufferRef N;
-        struct IndirectRef N;
-        struct PushConstantWrite N;
-        enum PushHole E;
-        struct ResidentRange N;
-        struct RootTable N;
-        enum NeutralResource N;
-        fn sampler_desc;
-        enum AccessClass N;
-        struct BindingPlan N;
-        struct ByteRange N;
-        struct ComputeTemplate N;
-        struct DescriptorWrite N;
-        enum FieldLocation N;
-        struct GraphicsTemplate N;
-        enum ImageSource E;
-        struct ImageViewDesc N;
-        enum PlanDiagnostic N;
-        struct PushFieldPlacement N;
-        struct PushTemplate N;
-        struct ResourceUse N;
-        enum SamplerSource E;
-        enum UseTarget E;
-        struct VertexBufferBind N;
-        struct ViewSetup N;
-        enum WriteSource N;
-        struct BindShape N;
-        struct BindState N;
-        struct BoundAccelerationStructure N;
-        enum BoundBuffer N;
-        struct BoundSampler N;
-        struct BoundSamplerShape N;
-        enum BoundTexture N;
-        struct BufferRanges N;
-        enum BufferShape N;
-        enum HeapPlacement N;
-        enum ResourceClass N;
         struct SamplerDescriptor N;
-        struct SamplerShape N;
-        struct StageShape N;
-        struct StageTable N;
-        struct TextureFacts N;
-        enum TextureShape N;
-        enum UsedClass N;
-        struct UsedResource N;
-        struct UsedShape N;
-        struct VertexAmplification N;
-        struct ViewMapping N;
-        struct ImageblockSize N;
         struct StageInRegion N;
-        struct TessellationFactors N;
-        struct TessellationFactorBuffer N;
-        struct ArgumentSampler N;
-        struct ArgumentSamplersShape N;
-        struct ArgumentFunctionTable N;
-        struct FunctionTablesShape N;
-        struct TileThreadgroupMemory N;
-        struct TileThreadgroupArgument N;
-        struct ExecutionStatus E;
-        struct StatusBits E;
-        struct StatusReport N;
-        enum StatusWord N;
-        const DRAW_ARGUMENT_BYTES;
-        const DRAW_INDEX_ENTRY_BYTES;
-        const MERGED_REST_FIRST;
-        struct FunctionTableSnapshot O;
         struct RasterizationRateMap O;
         struct RateMapDescriptor N;
         struct RateMapLayerDescriptor N;
@@ -530,23 +454,7 @@ surface! {
         struct PvrtcDecode N;
         enum EtcDecode N;
         enum EtcTexels N;
-        fn fold_object_grid;
-        fn metal_object_grid;
-        struct MeshArguments N;
-        enum MeshArgumentsForm E;
-        struct MeshGridLimits N;
-        struct ObjectFold N;
-        const METAL_MESH_GRID_AXIS;
-        const METAL_MESH_GRID_TOTAL;
-        const METAL_OBJECT_GRID_TOTAL;
-        struct YCbCrInPlace N;
         struct YCbCrPlanesSampler N;
-        struct TexelRows N;
-        fn part_texels;
-        struct YCbCrCodes N;
-        enum YCbCrOutput N;
-        enum YCbCrRange N;
-        enum YCbCrMatrix N;
         mod indirect_commands;
     }
     "bind::indirect_commands" => metal2vulkan::bind::indirect_commands {
@@ -735,7 +643,6 @@ surface! {
         fn attribute_fetch;
     }
     "vk" => metal2vulkan::vk {
-        enum DrawCommand E;
         struct AccessFlags O;
         struct AccessFlags2 O;
         struct BlendFactor O;
@@ -799,7 +706,6 @@ surface! {
 
 // ---- The consumer flow through the public paths (M5 "`CompiledFunction` round trip") ----
 
-use metal2vulkan::bind::{BindState, BoundBuffer, Dispatch, DrawCall, StageTable};
 use metal2vulkan::cache::{Hash256, PipelineArtifact, PipelineKey};
 use metal2vulkan::device::{Device, DeviceDescription, DevicePolicy, FloatWidth};
 use metal2vulkan::library::{CompiledFunction, Library};
@@ -858,17 +764,6 @@ fn device_under(stem: &str, policy: DevicePolicy) -> Device {
     Device::from_queries(desc, policy).expect("device")
 }
 
-/// A buffer bound at `offset` in a `length`-byte allocation.
-fn buffer(length: u64, offset: u64) -> BoundBuffer {
-    BoundBuffer::Buffer {
-        length,
-        offset,
-        gpu_address: 0x1_0000,
-        device_address: None,
-        attribute_stride: None,
-    }
-}
-
 /// `f` compiled on `dev`, encoded, and decoded: the decoded function equals the original and
 /// re-encodes to the same bytes.
 fn round_tripped(
@@ -885,58 +780,6 @@ fn round_tripped(
     assert_eq!(back, compiled);
     assert_eq!(back.to_bytes(), bytes, "the encoding is canonical");
     back
-}
-
-/// A compute pipeline linked from a decoded `CompiledFunction` is the pipeline compiled from the
-/// function, it round-trips as an artifact, and plans and dispatches the same.
-#[test]
-fn compiled_functions_round_trip_through_the_public_api() {
-    let Some(bc) = fixture("store_const") else {
-        return;
-    };
-    for stem in ["moltenvk-m3", "runtime-floor"] {
-        let dev = device(stem);
-        let f = FunctionDescriptor::new(
-            Library::from_air(&bc)
-                .expect("library")
-                .function("store_const")
-                .expect("function"),
-        );
-        let from_source = dev
-            .compile_compute_pipeline(
-                &ComputePipelineDescriptor::new(StageSource::Function(f.clone())),
-                &Budget::standard(),
-            )
-            .expect("pipeline from the function");
-        let back = round_tripped(&dev, &f, &LoweringInputs::new());
-        let d = ComputePipelineDescriptor::new(StageSource::Compiled(back));
-        assert_eq!(dev.compute_pipeline_key(&d), from_source.key, "{stem}");
-        let linked = dev
-            .compile_compute_pipeline(&d, &Budget::standard())
-            .expect("pipeline from the decoded function");
-        assert_eq!(linked, from_source, "{stem}");
-        let cached = ComputePipeline::from_bytes_for_key(&linked.to_bytes(), &linked.key, &dev)
-            .expect("pipeline decode");
-        assert_eq!(cached, from_source, "{stem}");
-
-        let mut table = StageTable::default();
-        table.buffers.insert(0, buffer(4096, 256));
-        let mut state = BindState::default();
-        state.stages.insert(Stage::Kernel, table);
-        let dispatch = Dispatch::Threads {
-            threads: [100, 1, 1],
-            threads_per_group: [32, 1, 1],
-        };
-        let plan = cached.plan(&dev, &state.shape()).expect("plan");
-        assert_eq!(plan, from_source.plan(&dev, &state.shape()).expect("plan"));
-        assert_eq!(
-            plan.instantiate_dispatch(&state, &dispatch),
-            from_source
-                .plan(&dev, &state.shape())
-                .expect("plan")
-                .instantiate_dispatch(&state, &dispatch)
-        );
-    }
 }
 
 /// A stage's module statistics: filled by the compile, the same counts the compiled function
@@ -1018,64 +861,6 @@ fn a_stage_states_what_its_module_contains() {
         looping.reachable_blocks < looping.blocks,
         "{looping:?}: a declared merge no path reaches"
     );
-}
-
-/// The content digests are public: a pipeline's names what it says, not the build that compiled it.
-/// Another build of the crate, whose versions differ and so move every cache key, compiles the same
-/// content under another `key`; that key and another profile fingerprint leave the digest equal,
-/// while one SPIR-V word moves it. A binding plan's digest is its content's: equal for equal plans,
-/// moved by one changed value.
-#[test]
-fn content_digests_name_what_a_pipeline_says_not_its_build() {
-    let Some(bc) = fixture("store_const") else {
-        return;
-    };
-    let dev = device("moltenvk-m3");
-    let f = FunctionDescriptor::new(
-        Library::from_air(&bc)
-            .expect("library")
-            .function("store_const")
-            .expect("function"),
-    );
-    let pipeline = dev
-        .compile_compute_pipeline(
-            &ComputePipelineDescriptor::new(StageSource::Function(f)),
-            &Budget::standard(),
-        )
-        .expect("pipeline");
-    let digest: Hash256 = pipeline.content_digest();
-    let decoded = ComputePipeline::from_bytes(&pipeline.to_bytes(), &dev).expect("decode");
-    assert_eq!(decoded.content_digest(), digest);
-
-    let mut other_build = pipeline.clone();
-    other_build.key = PipelineKey::new([7; 32]);
-    other_build.profile = [9; 32];
-    assert_eq!(other_build.content_digest(), digest);
-
-    let mut edited = pipeline.clone();
-    let mut words = edited.stage.spirv.to_vec();
-    let last = words.len() - 1;
-    words[last] ^= 1;
-    edited.stage.spirv = words.into();
-    assert_ne!(edited.content_digest(), digest);
-
-    // The render pipeline's digest, by the same definition.
-    let _: fn(&RenderPipeline) -> Hash256 = RenderPipeline::content_digest;
-
-    #[cfg(feature = "serde")]
-    {
-        let mut table = StageTable::default();
-        table.buffers.insert(0, buffer(4096, 256));
-        let mut state = BindState::default();
-        state.stages.insert(Stage::Kernel, table);
-        let plan = pipeline.plan(&dev, &state.shape()).expect("plan");
-        let plan_digest = plan.content_digest().expect("plan digest");
-        let replanned = other_build.plan(&dev, &state.shape()).expect("plan");
-        assert_eq!(replanned.content_digest(), Ok(plan_digest));
-        let mut edited = plan.clone();
-        edited.compute = None;
-        assert_ne!(edited.content_digest(), Ok(plan_digest));
-    }
 }
 
 /// The precision contract is public: a fast `float` division records the device's arithmetic,
@@ -1384,91 +1169,6 @@ fn one_entry_of_a_bare_module_translates_through_the_public_api() {
         });
         assert!(
             other.profile().link_standalone(&compiled).is_err(),
-            "{stem}"
-        );
-    }
-}
-
-/// A render pipeline linked from decoded vertex and fragment `CompiledFunction`s, each compiled
-/// under the inputs `render_pipeline_key` hands out, is the pipeline compiled from the
-/// functions, round-trips as an artifact, and plans and draws the same.
-#[test]
-fn compiled_render_stages_round_trip_through_the_public_api() {
-    let Some(bc) = fixture("stage_io") else {
-        return;
-    };
-    let lib = Library::from_air(&bc).expect("library");
-    let vertex = FunctionDescriptor::new(lib.function("stage_io_vertex").expect("vertex"));
-    let fragment = FunctionDescriptor::new(lib.function("stage_io_fragment").expect("fragment"));
-    let layout = stage_io_layout();
-    let descriptor = |v: StageSource, f: StageSource| {
-        let mut d = RenderPipelineDescriptor::new(v);
-        d.fragment = Some(f);
-        d.vertex_descriptor = Some(layout.clone());
-        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
-        d.color_attachments[2] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Uint));
-        d.depth_format = Some(PixelFormat::Depth32Float);
-        d
-    };
-    for stem in ["moltenvk-m3", "lavapipe"] {
-        let dev = device(stem);
-        let from_functions = descriptor(
-            StageSource::Function(vertex.clone()),
-            StageSource::Function(fragment.clone()),
-        );
-        let keys = dev
-            .render_pipeline_key(&from_functions, &Budget::standard())
-            .expect("keys");
-        let from_source = dev
-            .compile_render_pipeline(&from_functions, &Budget::standard())
-            .expect("pipeline from the functions");
-        assert_eq!(keys.pipeline, from_source.key, "{stem}");
-
-        // Each stage compiles on its own under the inputs its pipeline's keys hand out: a
-        // vertex function's are the vertex-fetch projection over the attributes it reads, a
-        // fragment function's on the common path how its `RGBA8Unorm` attachment takes its
-        // float output where the device does not convert as Metal does, and where its push
-        // fields start, at the vertex function's push end.
-        let vertex_inputs = keys.vertex_inputs.clone().expect("vertex inputs");
-        assert!(vertex_inputs.vertex_fetch.is_some(), "{stem}");
-        let v = round_tripped(&dev, &vertex, &vertex_inputs);
-        assert_eq!(*v.key(), keys.vertex, "{stem}");
-        let mut common = with_color_writes(LoweringInputs::new(), &[(0, UNORM8)]);
-        common.push_base = v.fragment_push_base();
-        assert_eq!(keys.fragment_inputs.as_ref(), Some(&common), "{stem}");
-        let f = round_tripped(&dev, &fragment, &common);
-        assert_eq!(Some(*f.key()), keys.fragment, "{stem}");
-        let from_compiled = descriptor(StageSource::Compiled(v), StageSource::Compiled(f));
-        let compiled_keys = dev
-            .render_pipeline_key(&from_compiled, &Budget::standard())
-            .expect("keys of the decoded functions");
-        assert_eq!(compiled_keys.pipeline, keys.pipeline, "{stem}");
-        assert_eq!(compiled_keys.vertex_inputs, None, "{stem}");
-        let linked = dev
-            .compile_render_pipeline(&from_compiled, &Budget::standard())
-            .expect("pipeline from the decoded functions");
-        assert_eq!(linked, from_source, "{stem}");
-        let cached = RenderPipeline::from_bytes_for_key(&linked.to_bytes(), &linked.key, &dev)
-            .expect("pipeline decode");
-        assert_eq!(cached, from_source, "{stem}");
-
-        let mut table = StageTable::default();
-        table.buffers.insert(0, buffer(24 * 64, 48));
-        table.buffers.insert(1, buffer(256, 16));
-        let mut state = BindState::default();
-        state.stages.insert(Stage::Vertex, table);
-        let draw = DrawCall::Primitives {
-            vertex_start: 3,
-            vertex_count: 6,
-            instance_count: 2,
-            base_instance: 5,
-        };
-        let plan = cached.plan(&dev, &state.shape()).expect("plan");
-        let original = from_source.plan(&dev, &state.shape()).expect("plan");
-        assert_eq!(plan, original, "{stem}");
-        assert_eq!(
-            plan.instantiate_draw(&state, &draw),
-            original.instantiate_draw(&state, &draw),
             "{stem}"
         );
     }
@@ -2181,4 +1881,145 @@ fn every_public_entry_is_documented() {
         "the consumer reference renders these undocumented:\n  {}",
         missing.join("\n  ")
     );
+}
+
+/// A compute pipeline linked from a decoded `CompiledFunction` is the pipeline compiled from the
+/// function, and it round-trips as an artifact.
+#[test]
+fn compiled_functions_round_trip_through_the_public_api() {
+    let Some(bc) = fixture("store_const") else {
+        return;
+    };
+    for stem in ["moltenvk-m3", "runtime-floor"] {
+        let dev = device(stem);
+        let f = FunctionDescriptor::new(
+            Library::from_air(&bc)
+                .expect("library")
+                .function("store_const")
+                .expect("function"),
+        );
+        let from_source = dev
+            .compile_compute_pipeline(
+                &ComputePipelineDescriptor::new(StageSource::Function(f.clone())),
+                &Budget::standard(),
+            )
+            .expect("pipeline from the function");
+        let back = round_tripped(&dev, &f, &LoweringInputs::new());
+        let d = ComputePipelineDescriptor::new(StageSource::Compiled(back));
+        assert_eq!(dev.compute_pipeline_key(&d), from_source.key, "{stem}");
+        let linked = dev
+            .compile_compute_pipeline(&d, &Budget::standard())
+            .expect("pipeline from the decoded function");
+        assert_eq!(linked, from_source, "{stem}");
+        let cached = ComputePipeline::from_bytes_for_key(&linked.to_bytes(), &linked.key, &dev)
+            .expect("pipeline decode");
+        assert_eq!(cached, from_source, "{stem}");
+    }
+}
+
+/// The content digests are public: a pipeline's names what it says, not the build that compiled it.
+/// Another build of the crate, whose versions differ and so move every cache key, compiles the same
+/// content under another `key`; that key and another profile fingerprint leave the digest equal,
+/// while one SPIR-V word moves it.
+#[test]
+fn content_digests_name_what_a_pipeline_says_not_its_build() {
+    let Some(bc) = fixture("store_const") else {
+        return;
+    };
+    let dev = device("moltenvk-m3");
+    let f = FunctionDescriptor::new(
+        Library::from_air(&bc)
+            .expect("library")
+            .function("store_const")
+            .expect("function"),
+    );
+    let pipeline = dev
+        .compile_compute_pipeline(
+            &ComputePipelineDescriptor::new(StageSource::Function(f)),
+            &Budget::standard(),
+        )
+        .expect("pipeline");
+    let digest: Hash256 = pipeline.content_digest();
+    let decoded = ComputePipeline::from_bytes(&pipeline.to_bytes(), &dev).expect("decode");
+    assert_eq!(decoded.content_digest(), digest);
+
+    let mut other_build = pipeline.clone();
+    other_build.key = PipelineKey::new([7; 32]);
+    other_build.profile = [9; 32];
+    assert_eq!(other_build.content_digest(), digest);
+
+    let mut edited = pipeline.clone();
+    let mut words = edited.stage.spirv.to_vec();
+    let last = words.len() - 1;
+    words[last] ^= 1;
+    edited.stage.spirv = words.into();
+    assert_ne!(edited.content_digest(), digest);
+
+    // The render pipeline's digest, by the same definition.
+    let _: fn(&RenderPipeline) -> Hash256 = RenderPipeline::content_digest;
+}
+
+/// A render pipeline linked from decoded vertex and fragment `CompiledFunction`s, each compiled
+/// under the inputs `render_pipeline_key` hands out, is the pipeline compiled from the
+/// functions, and round-trips as an artifact.
+#[test]
+fn compiled_render_stages_round_trip_through_the_public_api() {
+    let Some(bc) = fixture("stage_io") else {
+        return;
+    };
+    let lib = Library::from_air(&bc).expect("library");
+    let vertex = FunctionDescriptor::new(lib.function("stage_io_vertex").expect("vertex"));
+    let fragment = FunctionDescriptor::new(lib.function("stage_io_fragment").expect("fragment"));
+    let layout = stage_io_layout();
+    let descriptor = |v: StageSource, f: StageSource| {
+        let mut d = RenderPipelineDescriptor::new(v);
+        d.fragment = Some(f);
+        d.vertex_descriptor = Some(layout.clone());
+        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
+        d.color_attachments[2] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Uint));
+        d.depth_format = Some(PixelFormat::Depth32Float);
+        d
+    };
+    for stem in ["moltenvk-m3", "lavapipe"] {
+        let dev = device(stem);
+        let from_functions = descriptor(
+            StageSource::Function(vertex.clone()),
+            StageSource::Function(fragment.clone()),
+        );
+        let keys = dev
+            .render_pipeline_key(&from_functions, &Budget::standard())
+            .expect("keys");
+        let from_source = dev
+            .compile_render_pipeline(&from_functions, &Budget::standard())
+            .expect("pipeline from the functions");
+        assert_eq!(keys.pipeline, from_source.key, "{stem}");
+
+        // Each stage compiles on its own under the inputs its pipeline's keys hand out: a
+        // vertex function's are the vertex-fetch projection over the attributes it reads, a
+        // fragment function's on the common path how its `RGBA8Unorm` attachment takes its
+        // float output where the device does not convert as Metal does, and where its push
+        // fields start, at the vertex function's push end.
+        let vertex_inputs = keys.vertex_inputs.clone().expect("vertex inputs");
+        assert!(vertex_inputs.vertex_fetch.is_some(), "{stem}");
+        let v = round_tripped(&dev, &vertex, &vertex_inputs);
+        assert_eq!(*v.key(), keys.vertex, "{stem}");
+        let mut common = with_color_writes(LoweringInputs::new(), &[(0, UNORM8)]);
+        common.push_base = v.fragment_push_base();
+        assert_eq!(keys.fragment_inputs.as_ref(), Some(&common), "{stem}");
+        let f = round_tripped(&dev, &fragment, &common);
+        assert_eq!(Some(*f.key()), keys.fragment, "{stem}");
+        let from_compiled = descriptor(StageSource::Compiled(v), StageSource::Compiled(f));
+        let compiled_keys = dev
+            .render_pipeline_key(&from_compiled, &Budget::standard())
+            .expect("keys of the decoded functions");
+        assert_eq!(compiled_keys.pipeline, keys.pipeline, "{stem}");
+        assert_eq!(compiled_keys.vertex_inputs, None, "{stem}");
+        let linked = dev
+            .compile_render_pipeline(&from_compiled, &Budget::standard())
+            .expect("pipeline from the decoded functions");
+        assert_eq!(linked, from_source, "{stem}");
+        let cached = RenderPipeline::from_bytes_for_key(&linked.to_bytes(), &linked.key, &dev)
+            .expect("pipeline decode");
+        assert_eq!(cached, from_source, "{stem}");
+    }
 }

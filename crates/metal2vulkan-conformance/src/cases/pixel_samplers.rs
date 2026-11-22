@@ -30,8 +30,7 @@
 //! reads in its own arithmetic: at a sub-texel step it may read the neighbouring step, which the
 //! runtime announces on every device (`pixel-sampler-scaling`, and
 //! `argument-pixel-sampler-scaling` for `arg`). The `slot` site announces it under a nearest
-//! state too, as the function does not know the bound state. A device that converts an 8-bit texel to a float
-//! its own way announces `float-sample-filter`.
+//! state too, as the function does not know the bound state.
 //! Each notice is declared at the notices site alone, so a texel that differs still fails the case
 //! where it differs, and is a `known-gaps-rt.tsv` row naming the note.
 //!

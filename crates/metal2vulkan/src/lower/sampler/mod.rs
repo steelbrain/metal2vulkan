@@ -166,7 +166,6 @@ pub mod extended;
 pub mod face;
 pub mod footprint;
 pub mod heap_raw;
-pub mod in_place;
 pub mod level;
 pub mod linear;
 pub mod position;
@@ -1312,8 +1311,6 @@ pub struct Declared {
     pub bicubic_plane: Option<bicubic::routines::Plane>,
     /// The 1D bicubic samples' routine, when the module has one.
     pub bicubic_line: Option<bicubic::routines::Line>,
-    /// The in-place two-plane YCbCr linear samples' routines, when the module has one.
-    pub linear_quad: Option<bicubic::routines::Quad>,
     /// Under the identity domains, the set-1 sampler array of each use ([`IdentitySampling`]).
     pub identity: BTreeMap<SamplerUse, GlobalId>,
 }
@@ -1364,9 +1361,6 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             level_views: None,
             extended: None,
             x_channel: false,
-            in_place: false,
-            planes_sampler: None,
-            rows: false,
             parts: None,
         };
         if crate::lower::access::identity(cx.profile) {
@@ -1856,9 +1850,6 @@ pub fn declare(
             }
             bicubic::routines::Routine::Line => {
                 d.bicubic_line = Some(bicubic::routines::define_line(mb)?);
-            }
-            bicubic::routines::Routine::Quad => {
-                d.linear_quad = Some(bicubic::routines::define_quad(mb)?);
             }
         }
     }

@@ -1,6 +1,6 @@
 //! What a merged draw's vertex and fragment variants read (`merged`): the header of a merged draw,
-//! its commands' `VkDrawIndirectCommand`s ([`DRAW_ARGUMENT_BYTES`]) and index entries
-//! ([`DRAW_INDEX_ENTRY_BYTES`]), and the SPIR-V helpers its reads are built from, reaching memory
+//! its commands' `VkDrawIndirectCommand`s (`merged::DRAW_ARGUMENT_BYTES`) and index entries
+//! (`merged::DRAW_INDEX_ENTRY_BYTES`), and the SPIR-V helpers its reads are built from, reaching memory
 //! by device address (`bufferDeviceAddress`, `shaderInt64`).
 
 use crate::memory::roots;
@@ -11,7 +11,6 @@ use crate::spirv::ir::{BinOp, ConvOp, MemAccess};
 
 mod merged;
 pub(crate) use merged::{merged_fragment_table, merged_vertex, MergedVertex};
-pub use merged::{DRAW_ARGUMENT_BYTES, DRAW_INDEX_ENTRY_BYTES, MERGED_REST_FIRST};
 
 // ---- The module ----
 

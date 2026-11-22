@@ -14,11 +14,9 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::bind::heap::{storage_unreadable, tier_read_gaps};
-use crate::bind::{
-    handle_entry, BindState, ResourceClass, TextureFacts, UsedResource, WriteSource,
-};
+use crate::bind::heap::tier_read_gaps;
 use crate::budget::Budget;
 use crate::device::metal::read_write_tier_formats;
 use crate::device::requirements::{FormatUsage, SpirvCapability, VkFeature};
@@ -26,19 +24,39 @@ use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::{Capability, Error, Feature, Needs};
 use crate::library::Library;
 use crate::memory::handles::{Lookup, FLAG_STORAGE_UNREADABLE};
-use crate::metal::{PixelFormat, TextureType, TextureUsage};
 use crate::pipeline::sym::{
     Axis, HandleClass, ImageAccess, ImageHandleClass, ResourceKind, ResourceSlot, SpecKey, Stage,
     SyntheticBinding,
 };
-use crate::pipeline::testing::typed_module;
+use crate::pipeline::testing::{llvm_assemble, typed_module, AssembleError};
 use crate::pipeline::{
     ComputePipeline, ComputePipelineDescriptor, FunctionDescriptor, StageSource,
 };
 use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Resources};
 use crate::vk;
 
-use super::engine_binder::assemble_text;
+/// `text` assembled by `llvm-as`, or `None` (printed as skipped) where the tool is missing.
+fn assemble_text(name: &str, text: &str) -> Option<Vec<u8>> {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "m2v-binder-{}-{}-{name}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch");
+    let ll = dir.join("k.ll");
+    std::fs::write(&ll, text).expect("write");
+    let r = llvm_assemble(&ll);
+    let _ = std::fs::remove_dir_all(&dir);
+    match r {
+        Ok(b) => Some(b),
+        Err(AssembleError::Missing(why)) => {
+            eprintln!("SKIPPED: {why}");
+            None
+        }
+        Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected {name}: {why}\n{text}"),
+    }
+}
 
 const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\ntarget triple = \"air64_v28-apple-macosx26.0.0\"\n\n";
 
@@ -121,38 +139,6 @@ fn storage_class() -> ImageHandleClass {
         format: crate::pipeline::sym::StorageFormatClass::Unknown,
     }
 }
-
-/// A 2D `read_write` texture of `pf`.
-fn read_write(pf: PixelFormat) -> TextureFacts {
-    let mut f = TextureFacts::new(TextureType::Type2D, pf);
-    f.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
-    f
-}
-
-/// A command making the textures of `members` resident, each with its resource ID.
-fn state(members: &[(TextureFacts, u64)]) -> BindState {
-    BindState {
-        used_resources: (members.iter().zip(1u32..))
-            .map(|(&(f, id), token)| {
-                let mut u = UsedResource::new(ResourceClass::Texture(f), token);
-                u.resource_id = Some(id);
-                u
-            })
-            .collect(),
-        ..Default::default()
-    }
-}
-
-/// The non-tier formats whose storage view the Iris Xe cannot read without a format (Mesa's isl
-/// table: no typed reads of `R10G10B10A2`, `B10G10R10A2`, `R11G11B10_FLOAT` or `B8G8R8A8` below
-/// Gfx12.5; `BGR10A2Unorm` through its `A2B10G10R10` twin as well).
-const IRIS_UNREADABLE: [PixelFormat; 5] = [
-    PixelFormat::RGB10A2Unorm,
-    PixelFormat::RGB10A2Uint,
-    PixelFormat::BGR10A2Unorm,
-    PixelFormat::RG11B10Float,
-    PixelFormat::BGRA8Unorm,
-];
 
 /// The heap's storage read compiles where the formats' own bits grant it: on the Iris Xe, without
 /// `shaderStorageImageReadWithoutFormat`, the pipeline requires the SPIR-V capability (which
@@ -250,11 +236,17 @@ fn a_flagged_member_reads_the_null_element() {
     images[2].texels = texels(10.0);
     // The table: the null entry, the readable member at element 1, the flagged one at 2.
     let table: Vec<u8> = [
-        handle_entry(0, 0, 0),
-        handle_entry(READABLE_ID, 1, 0),
-        handle_entry(FLAGGED_ID, 2, FLAG_STORAGE_UNREADABLE),
+        (0, 0, 0),
+        (READABLE_ID, 1, 0),
+        (FLAGGED_ID, 2, FLAG_STORAGE_UNREADABLE),
     ]
-    .concat();
+    .into_iter()
+    .flat_map(|(id, element, flags): (u64, u32, u32)| {
+        [id as u32, (id >> 32) as u32, element, flags]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+    })
+    .collect();
     let buffer = |kind, index, bytes| Buffer {
         slot: Some(ResourceSlot {
             stage: Stage::Kernel,
@@ -300,13 +292,11 @@ fn a_flagged_member_reads_the_null_element() {
     }
 }
 
-/// On every committed profile that reads storage without a format by the formats' bits alone,
-/// where a view of one of Metal's read-write tier formats on the profile cannot be read so
-/// (flagged), a function reading its storage class is refused for it ([`tier_read_gaps`]): no tier
-/// format reads zero. On the Iris Xe none is flagged; the non-tier formats its view cannot read
-/// are flagged; on lavapipe, which has the feature, nothing is flagged.
+/// Some committed profile reads storage without a format by the formats' bits alone, and on the
+/// Iris Xe, one such, a function reading the storage class of any of Metal's read-write tier
+/// formats on the profile has nothing to lack ([`tier_read_gaps`]).
 #[test]
-fn only_a_view_the_device_cannot_read_is_flagged() {
+fn the_iris_xe_reads_every_tier_format_s_storage_class() {
     let mut bits_alone = 0;
     for (stem, profile) in crate::spirv::testing::committed_profiles().expect("profiles") {
         let profile = &profile;
@@ -314,109 +304,36 @@ fn only_a_view_the_device_cannot_read_is_flagged() {
             continue;
         }
         bits_alone += 1;
+        if stem != IRIS {
+            continue;
+        }
         let tiers = read_write_tier_formats(profile);
         for &pf in tiers.iter().flat_map(|tier| tier.iter()) {
-            let facts = read_write(pf);
             let class = ImageHandleClass {
                 sampled_type: crate::metal::format::sampled_type(pf).expect("type"),
                 ..storage_class()
             };
-            let flagged = storage_unreadable(profile, &facts.shape());
             let gaps = tier_read_gaps(profile, &class);
-            assert!(!flagged || !gaps.is_empty(), "{stem}: {pf:?} reads zero");
-            if stem == IRIS {
-                assert!(!flagged && gaps.is_empty(), "{stem}: {pf:?}: {gaps:?}");
-            }
+            assert!(gaps.is_empty(), "{stem}: {pf:?}: {gaps:?}");
         }
     }
     assert!(
         bits_alone > 0,
         "no committed profile reads by the bits alone"
     );
-
-    let iris = device(IRIS);
-    let lavapipe = device("lavapipe");
-    for pf in IRIS_UNREADABLE {
-        let shape = read_write(pf).shape();
-        assert!(storage_unreadable(iris.profile(), &shape), "{pf:?}");
-        assert!(!storage_unreadable(lavapipe.profile(), &shape), "{pf:?}");
-    }
-}
-
-/// A plan on the Iris Xe holds an `RGBA16Float` member and an `RG11B10Float` one in the storage
-/// class and flags only the second's table entry.
-#[test]
-fn a_plan_flags_its_unreadable_members() {
-    let Some(bc) = kernel() else {
-        return;
-    };
-    let iris = device(IRIS);
-    let pipe = pipeline(&iris, &bc).expect("pipeline");
-    let state = state(&[
-        (read_write(PixelFormat::RGBA16Float), READABLE_ID),
-        (read_write(PixelFormat::RG11B10Float), FLAGGED_ID),
-    ]);
-    let bplan = pipe.plan(&iris, &state.shape()).expect("plan");
-    let views: Vec<(u32, vk::Format)> = (bplan.descriptors.iter())
-        .filter_map(|d| match &d.source {
-            WriteSource::HeapEntry { element, view, .. } => Some((*element, view.format)),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        views,
-        vec![
-            (1, vk::Format::R16G16B16A16_SFLOAT),
-            (2, vk::Format::B10G11R11_UFLOAT_PACK32)
-        ]
-    );
-    let dispatch = crate::bind::Dispatch::Threadgroups {
-        groups: [1, 1, 1],
-        threads_per_group: [1, 1, 1],
-    };
-    let cmds = bplan
-        .instantiate_dispatch(&state, &dispatch)
-        .expect("dispatch");
-    let (set, binding) = (bplan.descriptors.iter())
-        .find_map(|d| {
-            matches!(d.source, WriteSource::HandleTable { .. }).then_some((d.set, d.binding))
-        })
-        .expect("a handle table");
-    let table = &(cmds.descriptor_bytes.iter())
-        .find(|b| (b.set, b.binding) == (set, binding))
-        .expect("table bytes")
-        .bytes;
-    let flags: Vec<(u64, u32)> = table
-        .chunks(16)
-        .map(|e| {
-            let word = |w: usize| u32::from_le_bytes(e[4 * w..4 * w + 4].try_into().unwrap());
-            (
-                u64::from(word(0)) | u64::from(word(1)) << 32,
-                word(3) & FLAG_STORAGE_UNREADABLE,
-            )
-        })
-        .filter(|(id, _)| *id != 0)
-        .collect();
-    assert_eq!(
-        flags,
-        vec![(READABLE_ID, 0), (FLAGGED_ID, FLAG_STORAGE_UNREADABLE)]
-    );
 }
 
 /// A function that reads a storage class one of Metal's read-write tier formats is held in through
-/// a view the device cannot read without a format is refused, naming the view's bit, and the member
-/// is flagged unreadable: on the Iris Xe with `R16G16B16A16_SFLOAT`'s `STORAGE_READ_WITHOUT_FORMAT`
-/// bit cleared (a synthetic profile), the kernel is `Unsupported` naming that bit alone (the
-/// class's neutral, `R32_SFLOAT`, keeps its own), and an `RGBA16Float` member is flagged. The
-/// committed profile compiles the kernel and leaves the member unflagged.
+/// a view the device cannot read without a format is refused, naming the view's bit: on the Iris
+/// Xe with `R16G16B16A16_SFLOAT`'s `STORAGE_READ_WITHOUT_FORMAT` bit cleared (a synthetic
+/// profile), the kernel is `Unsupported` naming that bit alone (the class's neutral, `R32_SFLOAT`,
+/// keeps its own). The committed profile compiles the kernel.
 #[test]
 fn a_tier_format_without_its_read_bit_is_refused() {
     let Some(bc) = kernel() else {
         return;
     };
-    let shape = read_write(PixelFormat::RGBA16Float).shape();
     let iris = device(IRIS);
-    assert!(!storage_unreadable(iris.profile(), &shape));
     pipeline(&iris, &bc).expect("the committed profile");
     let mut desc = description(IRIS);
     let format = vk::Format::R16G16B16A16_SFLOAT;
@@ -441,5 +358,4 @@ fn a_tier_format_without_its_read_bit_is_refused() {
         }
         other => panic!("the kernel: {:?}", other.map(|_| ())),
     }
-    assert!(storage_unreadable(cleared.profile(), &shape));
 }

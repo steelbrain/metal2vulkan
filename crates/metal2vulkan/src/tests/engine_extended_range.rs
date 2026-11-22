@@ -24,14 +24,13 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::bind::{BindState, BoundBuffer, BoundTexture, StageTable, TextureFacts, WriteSource};
 use crate::budget::{Budget, SPIRV_WORDS};
 use crate::device::{Device, DeviceDescription, DevicePolicy};
 use crate::error::Feature;
 use crate::library::{FunctionConstantValues, Library};
 use crate::lower::select::{LowerInputs, Plan};
 use crate::metal::format::ExtendedRange;
-use crate::metal::{self, PixelFormat, TextureType};
+use crate::metal::{self, PixelFormat};
 use crate::pipeline::compile::{compile_bitcode, EntryRef};
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::lower_inputs::{StorageImageChoice, StorageImageClass};
@@ -40,8 +39,8 @@ use crate::pipeline::sym::{SpecKey, Stage};
 use crate::pipeline::testing::{
     link_and_validate, llvm_assemble, meter, profile, typed_module_with, AssembleError,
 };
+use crate::pipeline::FunctionDescriptor;
 use crate::pipeline::StageSource;
-use crate::pipeline::{ComputePipeline, ComputePipelineDescriptor, FunctionDescriptor};
 use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Order, Resources};
 use crate::spirv::ir::TypedModule;
 
@@ -768,244 +767,6 @@ fn devices() -> Vec<(String, Device)> {
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out
-}
-
-/// The kernel compiled into a compute pipeline under `inputs`, or `None` where the device needs a
-/// storage slot's format as an input (it accesses no storage image without one).
-fn pipeline(dev: &Device, bc: &[u8], inputs: &LowerInputs) -> Option<ComputePipeline> {
-    pipeline_entry(dev, bc, "k", inputs)
-}
-
-/// [`pipeline`] of the kernel `entry` of `bc`.
-fn pipeline_entry(
-    dev: &Device,
-    bc: &[u8],
-    entry: &str,
-    inputs: &LowerInputs,
-) -> Option<ComputePipeline> {
-    let lib = Library::from_air(bc).expect("library");
-    let f = lib.function(entry).expect("function");
-    let compiled =
-        match dev.compile_function(&FunctionDescriptor::new(f), inputs, &Budget::standard()) {
-            Ok(c) => c,
-            Err(crate::error::Error::NeedsInput(_)) => return None,
-            Err(e) => panic!("compile: {e}"),
-        };
-    Some(
-        dev.compile_compute_pipeline(
-            &ComputePipelineDescriptor::new(StageSource::Compiled(compiled)),
-            &Budget::standard(),
-        )
-        .expect("pipeline"),
-    )
-}
-
-/// A kernel's state: texture slots 0 and 1 bound in `pf` (shader read and write), buffer 0.
-fn state(pf: PixelFormat) -> BindState {
-    let mut t = StageTable::default();
-    for index in [0, 1] {
-        let mut facts = TextureFacts::new(TextureType::Type2D, pf);
-        facts.usage = metal::TextureUsage::SHADER_READ | metal::TextureUsage::SHADER_WRITE;
-        t.textures.insert(
-            index,
-            BoundTexture::Texture {
-                facts,
-                resource_id: None,
-            },
-        );
-    }
-    t.buffers.insert(
-        0,
-        BoundBuffer::Buffer {
-            length: 65536,
-            offset: 0,
-            gpu_address: 0x1_0000,
-            device_address: None,
-            attribute_stride: None,
-        },
-    );
-    let mut s = BindState::default();
-    s.stages.insert(Stage::Kernel, t);
-    s
-}
-
-/// A slot bound in an extended-range format joins the plan's variant, the variant's pipeline
-/// plans the same key for the same shape, and both slots view the image in the format's raw
-/// unsigned format; a slot bound in another format leaves the variant. On every committed
-/// profile, for a sampled and a storage source.
-#[test]
-fn a_slot_bound_in_an_extended_range_format_joins_the_variant() {
-    let formats = [
-        (PixelFormat::BGR10XR, ExtendedRange::Bgr10 { srgb: false }),
-        (
-            PixelFormat::BGR10XRSRGB,
-            ExtendedRange::Bgr10 { srgb: true },
-        ),
-        (PixelFormat::BGRA10XR, ExtendedRange::Bgra10 { srgb: false }),
-        (
-            PixelFormat::BGRA10XRSRGB,
-            ExtendedRange::Bgra10 { srgb: true },
-        ),
-        (
-            PixelFormat::RGB10A82PXR10,
-            ExtendedRange::Planes { srgb: false },
-        ),
-        (
-            PixelFormat::RGB10A82PXR10SRGB,
-            ExtendedRange::Planes { srgb: true },
-        ),
-    ];
-    let mut planned = 0;
-    for source in [Source::Read, Source::ReadWrite] {
-        let Some(bc) = assemble("bind", &kernel(source, false, 0)) else {
-            return;
-        };
-        for (stem, dev) in devices() {
-            let Some(plain) = pipeline(&dev, &bc, &LowerInputs::new()) else {
-                continue;
-            };
-            for (pf, form) in formats {
-                let what = format!("{source:?} {pf:?} on {stem}");
-                let shape = state(pf).shape();
-                let plan = match plain.plan(&dev, &shape) {
-                    Ok(plan) => plan,
-                    // A profile without the raw format's storage refuses it for the format.
-                    Err(crate::error::BindError::Unsupported(u))
-                        if u.feature == Feature::Format =>
-                    {
-                        continue
-                    }
-                    Err(e) => panic!("{what}: {e}"),
-                };
-                assert_eq!(
-                    plan.variant.extended_range,
-                    BTreeMap::from([(SOURCE, form), (TARGET, form)]),
-                    "{what}"
-                );
-                let key = plan.variant.lowering_inputs(Stage::Kernel);
-                assert_eq!(key.extended_range, plan.variant.extended_range, "{what}");
-                let variant = pipeline(&dev, &bc, &key).expect("the variant's inputs");
-                let again = variant.plan(&dev, &shape).expect("variant plan");
-                assert_eq!(again.variant, plan.variant, "{what}");
-                let views: Vec<_> = again
-                    .descriptors
-                    .iter()
-                    .filter_map(|d| match &d.source {
-                        WriteSource::Texture { view, .. } => Some(view.format),
-                        _ => None,
-                    })
-                    .collect();
-                assert_eq!(views, [form.raw_format(); 2], "{what}");
-                planned += 1;
-                let other = variant
-                    .plan(&dev, &state(PixelFormat::RGBA16Float).shape())
-                    .expect("plan");
-                assert!(other.variant.extended_range.is_empty(), "{what}");
-            }
-        }
-    }
-    assert!(planned > 0);
-}
-
-/// A swizzled extended-range, padded or bfloat texture joins the plan's variant
-/// (`swizzled_storage`) at a sampled slot as at a storage slot: its view holds raw codes, which
-/// a swizzle in the view's component mapping would move before the function decodes them, so the
-/// view takes none (`shader_swizzle`) and the variant's function swizzles the decoded texel
-/// under the slot's `TextureSwizzle` specialization, the swizzle's word. An
-/// unswizzled texture leaves the variant. On every committed profile.
-#[test]
-fn a_swizzled_extended_texture_joins_the_variant_at_a_sampled_slot() {
-    use crate::metal::{TextureSwizzle as S, TextureSwizzleChannels};
-    let swizzle = TextureSwizzleChannels::new(S::Alpha, S::Red, S::One, S::Zero);
-    let mut planned = 0;
-    for source in [Source::Read, Source::ReadWrite] {
-        let Some(bc) = assemble("extended swizzle", &kernel(source, false, 0)) else {
-            return;
-        };
-        for (stem, dev) in devices() {
-            let Some(plain) = pipeline(&dev, &bc, &LowerInputs::new()) else {
-                continue;
-            };
-            for pf in [
-                PixelFormat::BGR10XR,
-                PixelFormat::BGR10XRSRGB,
-                PixelFormat::BGRA10XR,
-                PixelFormat::BGRA10XRSRGB,
-                PixelFormat::R10UnormX6,
-                PixelFormat::RG10UnormX12,
-                PixelFormat::R16Bfloat,
-                PixelFormat::RG16Bfloat,
-                PixelFormat::RGBA16Bfloat,
-            ] {
-                let what = format!("{source:?} {pf:?} on {stem}");
-                let mut state = state(pf);
-                if let Some(BoundTexture::Texture { facts, .. }) = state
-                    .stages
-                    .get_mut(&Stage::Kernel)
-                    .and_then(|t| t.textures.get_mut(&0))
-                {
-                    facts.swizzle = swizzle;
-                }
-                let shape = state.shape();
-                let (plan, own) = match (
-                    plain.plan(&dev, &shape),
-                    plain.plan(&dev, &self::state(pf).shape()),
-                ) {
-                    // A profile without the raw format's storage refuses it for the format.
-                    (_, Err(crate::error::BindError::Unsupported(u)))
-                        if u.feature == Feature::Format =>
-                    {
-                        continue
-                    }
-                    (Ok(plan), Ok(own)) => (plan, own),
-                    (swizzled, unswizzled) => panic!(
-                        "{what}: swizzled {:?}, unswizzled {:?}",
-                        swizzled.map(|_| ()),
-                        unswizzled.map(|_| ())
-                    ),
-                };
-                assert!(plan.variant.swizzled_storage.contains(&SOURCE), "{what}");
-                assert!(!own.variant.swizzled_storage.contains(&SOURCE), "{what}");
-                let key = plan.variant.lowering_inputs(Stage::Kernel);
-                let variant = pipeline(&dev, &bc, &key).expect("the variant's inputs");
-                let again = variant
-                    .plan(&dev, &shape)
-                    .unwrap_or_else(|e| panic!("{what}: variant {e}"));
-                assert_eq!(again.variant, plan.variant, "{what}");
-                let view = again
-                    .descriptors
-                    .iter()
-                    .find_map(|d| match &d.source {
-                        WriteSource::Texture { slot, view } if *slot == SOURCE => Some(*view),
-                        _ => None,
-                    })
-                    .expect("the source's view");
-                assert!(view.shader_swizzle, "{what}");
-                let id = variant
-                    .stage
-                    .specialization
-                    .constants
-                    .iter()
-                    .find_map(|c| (c.key == SpecKey::TextureSwizzle(SOURCE)).then_some(c.id))
-                    .unwrap_or_else(|| panic!("{what}: no TextureSwizzle constant"));
-                let e = again
-                    .specialization
-                    .entries
-                    .iter()
-                    .find(|e| e.constant_id == id)
-                    .expect("TextureSwizzle entry");
-                let at = e.offset as usize;
-                let word = u32::from_le_bytes(
-                    again.specialization.data[at..at + 4]
-                        .try_into()
-                        .expect("a u32"),
-                );
-                assert_eq!(word, swizzle.word(), "{what}");
-                planned += 1;
-            }
-        }
-    }
-    assert!(planned > 0);
 }
 
 /// A `half` read of a slot bound in an extended-range form decodes the texel's codes and rounds

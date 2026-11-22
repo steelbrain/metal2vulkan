@@ -132,31 +132,6 @@ pub struct LoweringInputs {
     /// `PrecisionNote::SrgbTexelDecode`. A slot of no such access is ignored.
     #[cfg_attr(feature = "serde", serde(default))]
     pub srgb_textures: BTreeSet<SlotRef>,
-    /// Texture slots bound to a two-plane YCbCr texture whose planes are read in place
-    /// (`VariantKey::ycbcr_in_place`, `RuntimeFact::YCbCrInPlace`): each is declared as the
-    /// planes' uniform texel buffer, and its samples, reads and size queries read the codes and
-    /// convert them as Metal does (`bind::YCbCrInPlace`). Ignored on a profile that does not read
-    /// planes in place (`ProfileFields::ycbcr_in_place`).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub ycbcr_in_place: BTreeSet<SlotRef>,
-    /// Slots of [`ycbcr_in_place`](Self::ycbcr_in_place) bound to a texture whose planes are also
-    /// held as an image the device's own sampler Y′CbCr conversion samples, each with that
-    /// conversion (`VariantKey::ycbcr_planes_sampled`): each is declared as a combined image
-    /// sampler whose immutable sampler is the conversion (`ResourceKind::YCbCrPlanes`), and its
-    /// samples are the device's at level 0 (`bind::YCbCrPlanesSampler`); its size queries read the
-    /// push field as the in-place form's do.
-    #[cfg_attr(
-        feature = "serde",
-        serde(default, with = "crate::pipeline::serde_pairs")
-    )]
-    pub ycbcr_planes_sampled: BTreeMap<SlotRef, crate::bind::YCbCrPlanesSampler>,
-    /// Texture slots bound to a 2D texture whose rows are read and written in place
-    /// (`VariantKey::texel_rows`, `RuntimeFact::TexelRows`): each is declared as a texel buffer of
-    /// the rows, uniform where the function only reads it and storage where it writes it, its
-    /// reads and writes of texel `(x, y)` addressing the view's `first + y · row + x` and its size
-    /// queries reading the slot's push field (`bind::TexelRows`).
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub texel_rows: BTreeSet<SlotRef>,
     /// Texture-buffer slots bound to a texture buffer of more texels than one view holds, each
     /// with its parts (`VariantKey::texel_buffer_parts`, `RuntimeFact::TexelBufferParts`): each is
     /// declared as an array of that many texel buffers, texel `i` of its reads, writes and atomics

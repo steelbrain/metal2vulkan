@@ -188,15 +188,9 @@ impl UlpTable {
 /// - `HalfTexelConversion`: unbounded: a format whose conversion to `half` is not measured keeps
 ///   the device's quantize of its `f32` texel, so a lane can differ from Metal's by any amount (an
 ///   sRGB texel's decode).
-/// - `HalfSampleFilter`: unbounded: a filtered `half` sample of a two-plane YCbCr texture whose
-///   planes the function reads in place blends the codes by Vulkan's Y′CbCr model, off Metal's
-///   sum on the format's grid, which no tolerance is derived from.
 /// - `SrgbTexelDecode`: unbounded: an 8-bit sRGB texel the device decodes where Metal decodes its
 ///   raw code through a twelve-bit table; Vulkan bounds the device's decode only by its precision
 ///   rules, and Metal's `float` gathers of sRGB texels are not measured.
-/// - `FloatSampleFilter`: unbounded: a filtered `float` sample of a two-plane YCbCr texture whose
-///   planes the function reads in place blends the codes by Vulkan's Y′CbCr model, off Metal's
-///   sum on the format's grid, which no tolerance is derived from.
 /// - `QuadsCountedBeforeDiscard`: unbounded: a non-quad simdgroup operation before a discard, in a
 ///   shape whose placement by Metal's compiler is not known, takes, among its lanes, the quads the
 ///   discard drops, which moves a count, a ballot, or a reduction by whole lanes.
@@ -291,9 +285,7 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::RestrictedDepthRange
         | N::CubeGradientFootprint
         | N::HalfTexelConversion
-        | N::HalfSampleFilter
         | N::SrgbTexelDecode
-        | N::FloatSampleFilter
         | N::QuadsCountedBeforeDiscard
         | N::DeviceInterpolation
         | N::ExtrapolatedInterpolation

@@ -1827,8 +1827,6 @@ fn identity_unsourced(f: &RuntimeFact) -> bool {
             | RuntimeFact::HeapStorageReads { .. }
             | RuntimeFact::AnisotropicSampler { .. }
             | RuntimeFact::StorageTextureIntegerChannels { .. }
-            | RuntimeFact::YCbCrInPlace { .. }
-            | RuntimeFact::TexelRows { .. }
             | RuntimeFact::TexelBufferParts { .. }
     )
 }
@@ -1976,10 +1974,7 @@ fn identity_refusal(plan: &Plan) -> Option<String> {
     // at pixel coordinates, bicubic sample of a 1D texture (`Routine::Line`), or specialization of
     // a slot's state. Constexpr samplers a lane chooses among beside an argument buffer's texture
     // read the set-1 sampler array at the chosen candidate's pushed index
-    // (`SamplerPlan::heap_array_identity`) or are a switch over them. A two-plane texture's
-    // sample read in place (`Routine::Quad`) never reaches here: its slot's
-    // `PushField::YCbCrInPlace` is refused first, as an encoder value the identity domains do not
-    // source.
+    // (`SamplerPlan::heap_array_identity`) or are a switch over them.
     use crate::lower::sampler::bicubic::routines::Routine;
     let sampled = &plan.families.sampler;
     let refused = [

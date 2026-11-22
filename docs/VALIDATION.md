@@ -377,7 +377,7 @@ worker under the 20-second and 500-MiB ceilings, resumable in bounded batches (`
 | `translation --profile P...` | Each row translated for each committed profile, recorded as a typed outcome class under the current product fingerprint (`--current-fingerprint`, `--retry-failures`, `--hash-file PATH` select rows). It fails when a row breaks a ceiling |
 | `budgets --profile P...` | The budget gates from recorded rows: no row above 20 s or 500 MiB, no stopped worker, and each row's ledger peak at least 0.7 of its allocator peak |
 | `specialization --profile P...` | Rows translated under planned function-constant value sets and the pipeline inputs their AIR states, not only with none |
-| `authored-compile [--bless \| --bless-additions \| --case ID]` | Every committed authored case compiled, with the requests its executor builds, as the runtime compiles them (a kernel for its dispatch's threadgroup size, a draw with no binding plan's variant), on each profile of `corpus/authored-compile.tsv`; it fails on any changed cell. The table is re-blessed on `development` |
+| `authored-compile [--bless \| --bless-additions \| --case ID]` | Every committed authored case compiled, with the requests its executor builds, as the runtime compiles them (a kernel for its dispatch's threadgroup size, a draw with no variant), on each profile of `corpus/authored-compile.tsv`; it fails on any changed cell. The table is re-blessed on `development` |
 | `bitcode-reader` | The bitcode reader's decode compared with `llvm-dis`, and the intrinsic census |
 | focused audits (`rasterization-rate-maps`, `sample-rate`, `ulong-textures`, `fragment-varyings`, `linked-functions`, `tile-functions`, `mesh-draws`) | One structural family, selected by current facts, translated in batches |
 
@@ -413,7 +413,7 @@ Other corpus tools:
 
 - `corpus-pipeline --device-type cpu|gpu --profile P` is driver acceptance (L4), on lavapipe and
   the real cards. It compiles each row in a compile worker, then asks the device's driver for its
-  pipeline. A render row's pipeline is created from the binder layout its artifact carries, with
+  pipeline. A render row's pipeline is created from the pipeline layout its artifact carries, with
   nothing drawn. A kernel row is made as a guest's kernel is, through the runtime: its
   `ComputePipelineState` on the one runtime device the sweep opens for all its kernel rows, and
   one dispatch of one representative threadgroup (the state's thread execution width of threads)
@@ -476,8 +476,8 @@ cargo run -p metal2vulkan-validation --release --bin corpus-vulkan -- \
   observation for the environment. `--prepare-only` does the CPU side and stops before a device
   opens, to screen cases.
 - **The Vulkan candidate** (`corpus-vulkan`, on Linux) translates the
-  case through the public API in a killable compile worker, executes exactly what the binder plans,
-  and compares the observations with Metal's. Every context runs under the validation layer and
+  case through the public API in a killable compile worker, runs it through the runtime, and
+  compares the observations with Metal's. Every context runs under the validation layer and
   enables what the runtime enables of the device: no buffer robustness, and the image robustness
   the device states.
 - **Through the runtime.** On Linux, without a profile restriction, every kernel case the engine

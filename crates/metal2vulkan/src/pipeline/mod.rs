@@ -34,9 +34,8 @@
 //! decoding; `Device::render_pipeline_key` decodes (but does not lower) the vertex function to
 //! learn the attributes it reads, and returns [`RenderPipelineKeys`]: the pipeline's key, each
 //! stage's function key, and the [`LoweringInputs`] each function stage compiles under (see
-//! [`cache`](crate::cache)). A binding plan can ask for another variant of the pipeline, named by
-//! a [`VariantKey`](crate::cache::VariantKey) (`BindingPlan::variant`,
-//! `BindError::NeedsVariant`). A render pipeline's keys under a variant are
+//! [`cache`](crate::cache)). Another variant of the pipeline is named by a
+//! [`VariantKey`](crate::cache::VariantKey). A render pipeline's keys under a variant are
 //! `Device::render_variant_key`'s; a compute pipeline compiles its kernel with
 //! `Device::compile_function` under `VariantKey::lowering_inputs(Stage::Kernel)` and links it as
 //! `StageSource::Compiled`.
@@ -46,7 +45,7 @@
 //! kernel compiled on its own for such a pipeline compiles under the same descriptor
 //! (`LoweringInputs::stage_input`). A dispatch of a kernel that steps an attribute by thread
 //! position, or reads `[[grid_origin]]` or `[[grid_size]]`, needs the encoder's stage-in region
-//! (`BindState::stage_in_region`). A render pipeline whose vertex function is a post-tessellation
+//! (`setStageInRegion:`). A render pipeline whose vertex function is a post-tessellation
 //! vertex function is a tessellation pipeline, under the descriptor's `tessellation`
 //! ([`TessellationDescriptor`], or Metal's defaults): a synthesized vertex and tessellation
 //! control stage, the function's evaluation stage, and the fragment stage when rasterization is
@@ -55,17 +54,17 @@
 //! **Tile pipelines.** `Device::compile_tile_pipeline` compiles a [`TileRenderPipelineDescriptor`]
 //! into a [`ComputePipeline`]: its tile function compiled under the descriptor's color attachment
 //! formats (`LoweringInputs::tile_attachments`), which the consumer dispatches over the render
-//! area's tiles in place of `dispatchThreadsPerTile:`, with the pass's tile size
-//! (`BindState::imageblock_size`) and render area (`BindState::render_area`), and the pass's
-//! attachments bound as storage images in the plan's formats (`WriteSource::TileAttachment`: a
+//! area's tiles in place of `dispatchThreadsPerTile:`, with the pass's tile size and render area,
+//! and the pass's attachments bound as storage images in the interface's formats
+//! (`WriteSource::TileAttachment`: a
 //! float attachment through the unsigned-integer format of its channels, so its bits move).
 //!
 //! **Mesh pipelines.** `Device::compile_mesh_pipeline` compiles a [`MeshPipelineDescriptor`]
 //! into a [`RenderPipeline`] whose stages are its object (`TASK_EXT`), mesh (`MESH_EXT`) and
 //! fragment stages, with no vertex input; its fragment function reads the mesh function's primitive
-//! outputs per primitive (`LoweringInputs::primitive_varyings`). Its plan draws mesh draws
+//! outputs per primitive (`LoweringInputs::primitive_varyings`). It draws mesh draws
 //! (`DrawCall::MeshThreadgroups` and its siblings), each with the specialization of its mesh
-//! threadgroup's size (`DrawCommands::specialization`).
+//! threadgroup's size.
 //!
 //! **Not implemented yet.** The plan of a mesh pipeline with an object function, an object
 //! function's payload, and a patch draw with a patch index buffer are refused, each as

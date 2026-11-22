@@ -1,7 +1,7 @@
 metal2vulkan: the API (reference)
 
-Metal AIR in; Vulkan SPIR-V, pipeline layouts, and per-draw binding instructions out, through an
-API shaped like Metal's object lifecycle. The consumer never parses AIR, never parses or patches
+Metal AIR in; Vulkan SPIR-V, pipeline layouts, and the interface a runtime binds them by out,
+through an API shaped like Metal's object lifecycle. The consumer never parses AIR, never parses or patches
 SPIR-V, never infers binding numbers from Metal indices, and never classifies errors by message
 text.
 
@@ -23,8 +23,8 @@ This reference shows exactly the API's frozen surface. A walkthrough with a runn
   `new`, `Default`, or their constants and assign fields, and match enums with a wildcard arm.
   The exceptions are exhaustive by design, because their fields are their identity or are fixed
   by Vulkan: [`pipeline::SlotRef`], [`pipeline::ResourceSlot`], [`pipeline::AirUserKey`],
-  [`pipeline::VaryingKey`], [`device::ApiVersion`], [`device::OpBits`], [`bind::StatusBits`],
-  [`bind::ExecutionStatus`], [`vk::ComponentMapping`], and [`vk::SpecializationMapEntry`].
+  [`pipeline::VaryingKey`], [`device::ApiVersion`], [`device::OpBits`],
+  [`vk::ComponentMapping`], and [`vk::SpecializationMapEntry`].
 - **Semver.** The crate is `0.x`: a breaking change bumps the minor version.
 - **Everything else is internal.** An item this reference does not show is not API: every
   submodule of `library`, `pipeline`, `bind`, and `device` (name a type by its root path,
@@ -45,18 +45,13 @@ This reference shows exactly the API's frozen surface. A walkthrough with a runn
    [`pipeline::RenderPipelineDescriptor`]) and compile it with
    [`device::Device::compile_compute_pipeline`] or [`device::Device::compile_render_pipeline`]:
    SPIR-V per stage, one pipeline layout, vertex input and fixed-function state, and the
-   [`pipeline::PipelineInterface`].
-4. **A plan.** Describe what is bound, keyed by Metal slot ([`bind::BindState`]), and plan the
-   pipeline for its shape ([`bind::BindingPlan`]): the descriptor writes, vertex buffers, and
-   resource uses. Memoize it per shape.
-5. **Commands.** Instantiate the plan per dispatch or draw ([`bind::DispatchCommands`],
-   [`bind::DrawCommands`]): descriptor ranges, push-constant bytes, table uploads, and the Vulkan
-   dispatches or draw to record. The binder never calls Vulkan.
-6. **Caching.** Keys are known before compiling ([`cache::PipelineKey`],
+   [`pipeline::PipelineInterface`] (what each Metal slot binds as), and the bind-time state the
+   pipeline depends on (its `dependencies`), which a runtime binds, pushes or specializes.
+4. **Caching.** Keys are known before compiling ([`cache::PipelineKey`],
    [`library::FunctionCompileKey`]), and artifacts encode and decode through
    [`cache::PipelineArtifact`]. The crate keeps no cache.
 
-Failures are typed ([`error::Error`], [`error::BindError`]): a refusal
+Failures are typed ([`error::Error`]): a refusal
 ([`error::Unsupported`]) names the Metal feature and what would make it translatable, and a
 pipeline input the compile needs ([`error::RuntimeInput`]) is asked for, never guessed. Where an
 output accepts a documented difference from Metal, its stage says so
@@ -72,8 +67,7 @@ The library needs none of them.
 - `ash`: `From` conversions between [`vk`] values and `ash::vk`, and
   `DeviceDescription::query`, which reads a physical device into a description (`ash_interop`).
 - `serde`: `Serialize` and `Deserialize` on the plain-data values: device descriptions and
-  policies, bind states and shapes, plans and commands, pipeline interfaces and layouts, and the
-  Metal and Vulkan enums. Not on artifacts, which have their own encoding
+  policies, pipeline interfaces and layouts, and the Metal and Vulkan enums. Not on artifacts, which have their own encoding
   ([`cache::PipelineArtifact`]), nor on descriptors that hold a library.
 - `cli`: the `metal2vulkan` command-line tool (`cargo install metal2vulkan --features cli`), which
   compiles one pipeline with this API and writes its SPIR-V. It enables `serde` and adds nothing

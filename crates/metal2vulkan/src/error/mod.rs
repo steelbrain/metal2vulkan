@@ -1,8 +1,8 @@
-//! Errors: every way compiling or binding can fail, as typed values to match on.
+//! Errors: every way compiling can fail, as typed values to match on.
 //!
 //! Compiling returns [`Error`]: `Device::from_queries`, `Library::parse`, every `Device::compile_*`
-//! call, `Device::render_pipeline_key`, and the [`metal`](crate::metal) mappings. Planning and
-//! instantiating a binding returns [`BindError`]. Decoding cached bytes returns
+//! call, `Device::render_pipeline_key`, and the [`metal`](crate::metal) mappings. Decoding cached
+//! bytes returns
 //! [`ArtifactError`](crate::cache::ArtifactError), which is always a cache miss. Match variants,
 //! not messages: `Display` is for logs.
 //!
@@ -29,14 +29,7 @@
 //! - [`Error::Internal`]: a translator bug ([`InternalError`]). A panic inside a compile entry
 //!   point is caught and returned as one.
 //!
-//! **Caching failures.** [`Error::retry`] says whether the same request can succeed later. A
-//! [`BindError`] from a pipeline's `plan` depends only on the pipeline, the
-//! device, and the [`BindShape`](crate::bind::BindShape), so it memoizes beside the plan on
-//! `(PipelineKey, BindShape)`. One from `instantiate_dispatch` or `instantiate_draw` can also
-//! depend on that dispatch or draw and on the bind state's per-draw values (offsets, lengths,
-//! addresses, the stage-in region, the tessellation factor buffer), so it does not memoize on the
-//! shape. [`BindError::NeedsVariant`] names the pipeline variant to plan or instantiate on
-//! instead.
+//! **Caching failures.** [`Error::retry`] says whether the same request can succeed later.
 //!
 //! Every enum here is `#[non_exhaustive]`, and so are [`Unsupported`], [`InputError`], and
 //! [`InternalError`]: new refusals and variants arrive additively, so match with a wildcard arm.
@@ -1356,135 +1349,18 @@ pub enum DynamicLibraryProblem {
     FunctionConstants,
 }
 
-/// A binder planning or instantiation error. A pipeline's `plan` sees only the pipeline, the
-/// device, and the `BindShape`, so a planning error is permanent for its `(PipelineKey,
-/// BindShape)` pair. An instantiation error can also depend on the dispatch or draw and on the
-/// bind state's per-draw values (`MissingStageInRegion`, the patch-draw
-/// errors, a descriptor range or texel buffer beyond its limit, ...), so it is not permanent for
-/// the pair. `NeedsVariant` names the pipeline a dispatch or draw runs on instead.
+/// Why the view of a texture a heap array may hold cannot be made (`bind::heap`): the storage-read
+/// check of `lower::texture::slot` skips such a member.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum BindError {
-    /// A slot index beyond the Metal maximum for its table.
-    SlotOutOfRange { slot: SlotRef },
-    /// The bind shape needs something the device cannot do (local size limits, formats,
-    /// sampler reduction, GPU-encoded ICBs, …).
+pub(crate) enum BindError {
+    /// The view needs something the device cannot do (a format, a view type).
     Unsupported(Unsupported),
-    /// A device-address slot received a buffer without a device address.
-    MissingDeviceAddress { slot: SlotRef },
-    /// A descriptor-form slot's window exceeds the descriptor range limit (Profile F).
-    DescriptorRangeExceeded {
-        slot: SlotRef,
-        needed: u64,
-        limit: u64,
-    },
-    /// A texture buffer bound through one texel buffer view exceeds `maxTexelBufferElements`:
-    /// one wider than that view binds through views of its parts (`bind::texel_parts`) except at
-    /// a slot whose function reads it through a sampler, on a device that indexes no array of
-    /// the slot's kind of texel buffer by a `NonUniform` value, or in a format whose block holds
-    /// several texels.
-    TexelBufferTooLarge {
-        slot: SlotRef,
-        elements: u64,
-        limit: u64,
-    },
-    /// The pipeline and the binder disagree (a pipeline built by another device, or a binder
-    /// bug); always a bug, never the guest's.
+    /// A view the derivation cannot state; always a bug, never the guest's.
     Internal(InternalError),
     /// A bound resource's descriptor is invalid (e.g. a sampler whose LOD clamps are NaN or
     /// inverted).
     InvalidDescriptor(DescriptorError),
-    /// A render pipeline fetches a fixed-function vertex buffer that nothing is bound to.
-    UnboundVertexBuffer { slot: SlotRef },
-    /// The set-1 heap's elements (one per resident texture a handle can name, plus the null
-    /// element) exceed the pipeline's heap capacity: the heap arrays' count, at most the handle
-    /// table's reach.
-    HeapTooLarge { count: u64, limit: u64 },
-    /// A pipeline reads the Metal address of a buffer slot (`SlotGuestBase`: a pointer compare,
-    /// `ptrtoint`, or stored pointer) that is bound with `set*Bytes`, which gives the binder no
-    /// Metal address to write.
-    MissingGuestAddress { slot: SlotRef },
-    /// The encoder's vertex amplification (`setVertexAmplificationCount:viewMappings:`) is not
-    /// one Metal draws this pipeline with: a count of 0, one above 1 for a pipeline whose
-    /// `maxVertexAmplificationCount` (`max`) is 1, or view mappings given for fewer
-    /// amplifications than the count.
-    InvalidVertexAmplification {
-        count: u32,
-        max: u32,
-        view_mappings: u32,
-    },
-    /// The dispatch runs on another variant of the pipeline than the one planned: a threadgroup
-    /// with a partial simdgroup, which the kernel's flattened simd tier cannot run, runs on its
-    /// emulated-simdgroups variant (`VariantKey::emulated_simdgroups`). The consumer compiles the
-    /// pipeline under `variant` (the plan's key and what the dispatch adds, also
-    /// `BindingPlan::dispatch_variant`), plans it for the same shape, whose plan states `variant`,
-    /// and instantiates the dispatch there. Nothing is dispatched on the plan asked. A draw answers
-    /// it when the pipeline planned is not the variant the shape asks for (its amplification
-    /// draws, its colors, its depth clamp range, its rotated weights, its band, its tests, its
-    /// primitive IDs, its list or its regions); `variant` is then the plan's own. Boxed: a key holds a set per kind of variant, and the
-    /// error stays small.
-    NeedsVariant {
-        variant: Box<crate::cache::VariantKey>,
-    },
-    /// The compute encoder's imageblock size (`setImageblockWidth:height:`) is not one a kernel
-    /// with an imageblock dispatches with: a width or height of 0 (the encoder never set it) or
-    /// above 65535, which `get_imageblock_width` and `get_imageblock_height` cannot answer.
-    InvalidImageblockSize { width: u32, height: u32 },
-    /// The kernel reads the compute encoder's stage-in region (a `[[stage_in]]` attribute
-    /// stepping by thread position, or `[[grid_origin]]` or `[[grid_size]]`) and the encoder
-    /// never set one (`setStageInRegion:`): what Metal reads then is not established.
-    MissingStageInRegion,
-    /// A draw Metal does not make with this pipeline: patches (`patches`) with a pipeline whose
-    /// vertex function is not post-tessellation, or primitives with one whose vertex function is.
-    InvalidDrawKind { patches: bool },
-    /// A patch draw's `numberOfPatchControlPoints` (`given`) differs from the `N` the
-    /// post-tessellation vertex function's `[[patch(_, N)]]` states (`expected`).
-    PatchControlPoints { given: u32, expected: u32 },
-    /// The tessellation factors a draw reads span more bytes (`needed`) than one storage-buffer
-    /// descriptor can bind (`limit`, `maxStorageBufferRange`), or an instance stride does.
-    TessellationFactorRange { needed: u64, limit: u64 },
-    /// The encoder's tessellation factor scale (`bits`, the `float`'s) rounded to `half` is not a
-    /// positive `half` (it is negative, zero, or NaN). Metal's validation stops
-    /// `setTessellationFactorScale:` for a scale that is not a positive normal `float`, and
-    /// culls every patch for one that is 0 as a `half` (2^-30), which
-    /// a consumer draws as nothing.
-    InvalidTessellationFactorScale { bits: u32 },
-    /// A tile function's render area (`BindState::render_area`) has a width or height of 0: the
-    /// encoder's render pass was never set, so the dispatch has no tile to run.
-    InvalidRenderArea { width: u32, height: u32 },
-    /// A patch draw's patch index buffer is bound at an offset that is not a multiple of 4, which
-    /// Metal requires (a Metal probe on an M4: "patchIndexBufferOffset(2) must be a multiple of 4
-    /// bytes").
-    InvalidPatchIndexBuffer { offset: u64 },
-    /// The patch indices a draw reads span more bytes (`needed`) than one storage-buffer
-    /// descriptor can bind (`limit`, `maxStorageBufferRange`).
-    PatchIndexRange { needed: u64, limit: u64 },
-    /// A patch draw with a control-point index buffer (`indexed`, `drawIndexedPatches`) for a
-    /// pipeline whose `tessellationControlPointIndexType` is `None`, or one without it for a
-    /// pipeline whose type is not, which Metal's validation stops (a Metal probe on an M4:
-    /// "tessellationControlPointIndexType of MTLTessellationControlPointIndexTypeNone not valid for
-    /// drawIndexedPatches", and of `UInt32` for `drawPatches`).
-    ControlPointIndexing { indexed: bool },
-    /// A patch draw's control-point index buffer is bound at an offset that is not a multiple of
-    /// its pipeline's index size, which Metal requires (a Metal probe on an M4:
-    /// "controlPointIndexBufferOffset(1) must be a multiple of 2 bytes").
-    InvalidControlPointIndexBuffer { offset: u64 },
-    /// The control-point indices a draw reads span more bytes (`needed`) than one storage-buffer
-    /// descriptor can bind (`limit`, `maxStorageBufferRange`).
-    ControlPointIndexRange { needed: u64, limit: u64 },
-    /// A tile function reads its threadgroup argument `index`, which the encoder never set
-    /// (`BindState::tile_threadgroup`, `setThreadgroupMemoryLength:offset:atIndex:`): Metal's
-    /// validation stops the dispatch ("missing Threadgroup Memory binding").
-    MissingThreadgroupMemory { index: u32 },
-    /// A draw Metal does not make with this pipeline: a mesh draw (`mesh`) with a pipeline that is
-    /// not a mesh render pipeline, or a draw of primitives or patches with one (Metal ends the
-    /// process on `drawPrimitives` with a mesh pipeline state).
-    InvalidMeshDraw { mesh: bool },
-    /// A draw of a pipeline whose vertex function writes the primitive ID
-    /// (`LoweringInputs::primitive_id_varying`) whose bind state names no primitive type
-    /// (`BindState::primitive_type`): its vertices per primitive, and whether an indexed draw
-    /// runs de-indexed (a strip's does not), depend on it.
-    MissingPrimitiveType,
 }
 
 impl fmt::Display for BindError {

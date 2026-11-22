@@ -36,8 +36,8 @@
 //!
 //! `llvm-as` assembles the module; a missing tool skips visibly.
 
-use super::engine_argument_tables::{bytes_at, device, directory_binding, one_group};
-use crate::bind::{ArgumentFunctionTable, BindState, FunctionTableSnapshot, FunctionTableWords};
+use super::engine_argument_tables::device;
+use crate::bind::FunctionTableWords;
 use crate::budget::{Budget, SPIRV_WORDS};
 use crate::device::VkLimit;
 use crate::error::{Capability, DescriptorError, Error, Feature, Limit, Unsupported};
@@ -589,35 +589,6 @@ fn pipeline(bitcode: &[u8], entry: &str, k: u32) -> (ComputePipeline, Vec<Functi
     (pipe, handles)
 }
 
-/// The directory bytes a dispatch of `pipe` gets with table [`T`] listed, and the snapshot of
-/// table [`T`] holding `handles` in order.
-fn table_inputs(pipe: &ComputePipeline, handles: &[FunctionHandle]) -> (Vec<u8>, Vec<u8>) {
-    let dev = device("moltenvk-m3");
-    let directory = directory_binding(pipe);
-    let state = BindState {
-        function_tables: vec![ArgumentFunctionTable {
-            resource_id: T,
-            size: handles.len() as u32,
-            address: 0,
-        }],
-        ..Default::default()
-    };
-    let plan = pipe.plan(&dev, &state.shape()).expect("plan");
-    let cmds = plan
-        .instantiate_dispatch(&state, &one_group())
-        .expect("dispatch");
-    let directory = bytes_at(&cmds.descriptor_bytes, directory).to_vec();
-    let mut table = FunctionTableWords::new(handles.len() as u32);
-    for (i, h) in handles.iter().enumerate() {
-        assert!(table.set(i as u32, Some(*h)));
-    }
-    let snapshot = FunctionTableSnapshot::of(state.function_tables.iter().map(|f| f.size))
-        .expect("snapshot")
-        .bytes([table.to_bytes().as_slice()])
-        .expect("snapshot bytes");
-    (directory, snapshot)
-}
-
 /// Kernel buffer `index`.
 pub(super) fn slot(index: u32) -> ResourceSlot {
     ResourceSlot {
@@ -749,29 +720,29 @@ fn direct_recursion_makes_one_call_fewer_than_its_depth() {
     }
 }
 
-/// Recursion through a table holds the frames Metal reached: within them each sum and parity is
-/// Metal's, past them the sum stops and the parity is zero.
-#[test]
-fn table_recursion_reaches_the_frames_metal_reaches() {
-    let Some(bitcode) = module() else {
-        return;
+/// The directory bytes a dispatch gets with table [`T`] listed, and the snapshot of table [`T`]
+/// holding `handles` in order (`lower::access::function_table`): the directory is the handle
+/// table's layout (`memory::handles`), its null entry and then [`T`]'s, whose element is the word
+/// offset of its record in the snapshot (1, after the null table's word count, 0); the record is
+/// the table's word count and its words.
+fn table_inputs(handles: &[FunctionHandle]) -> (Vec<u8>, Vec<u8>) {
+    let entry = |id: u64, element: u32| {
+        [id as u32, (id >> 32) as u32, element, 0]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
     };
-    let p = profile("moltenvk-m3", crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
-    for (k, frames) in TABLE_FRAMES {
-        let (pipe, handles) = pipeline(&bitcode, TABLE, k);
-        let tables = table_inputs(&pipe, &handles);
-        let m = typed(&bitcode, TABLE, k, &p);
-        let ds = depths(frames);
-        let want: Vec<u32> = ds
-            .iter()
-            .flat_map(|&d| [sum(d, frames), even(d, frames)])
-            .collect();
-        assert_eq!(
-            dispatch(&m, &ds, 2, Some(&tables)),
-            want,
-            "depth {k}: {ds:?}"
-        );
+    let directory = entry(0, crate::memory::handles::NEUTRAL_ELEMENT)
+        .chain(entry(T, 1))
+        .collect();
+    let mut table = FunctionTableWords::new(handles.len() as u32);
+    for (i, h) in handles.iter().enumerate() {
+        assert!(table.set(i as u32, Some(*h)));
     }
+    let words = table.to_bytes();
+    let mut snapshot = 0u32.to_le_bytes().to_vec();
+    snapshot.extend((words.len() as u32 / 4).to_le_bytes());
+    snapshot.extend(words);
+    (directory, snapshot)
 }
 
 /// A frame keeps its function's private array across the recursive call: at depth 8 every one of
@@ -783,8 +754,8 @@ fn a_recursive_frame_keeps_its_private_array() {
         return;
     };
     let p = profile("moltenvk-m3", crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
-    let (pipe, handles) = pipeline(&bitcode, BIG, 8);
-    let tables = table_inputs(&pipe, &handles);
+    let (_, handles) = pipeline(&bitcode, BIG, 8);
+    let tables = table_inputs(&handles);
     let m = typed(&bitcode, BIG, 8, &p);
     let ds: Vec<u32> = vec![0, 1, 2, 5, 6, 7, 8];
     let want: Vec<u32> = ds.iter().map(|&d| big(d, 8)).collect();
@@ -815,8 +786,8 @@ fn recursive_kernels_validate_and_agree_on_every_profile() {
     let Some(bitcode) = module() else {
         return;
     };
-    let (pipe, handles) = pipeline(&bitcode, TABLE, 8);
-    let tables = table_inputs(&pipe, &handles);
+    let (_, handles) = pipeline(&bitcode, TABLE, 8);
+    let tables = table_inputs(&handles);
     let check = |stem: &str, entry: &str, p: &crate::device::DeviceProfile| {
         let a = compile(&bitcode, entry, 8, p).unwrap_or_else(|e| panic!("{stem}: {e}"));
         link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem} {entry}: L3: {e}"));
@@ -1112,5 +1083,30 @@ fn recursion_through_a_pointer_passed_as_a_value_makes_one_call_fewer_than_its_d
             let want: Vec<u32> = ds.iter().map(|&d| sum(d, k)).collect();
             assert_eq!(dispatch(&m, &ds, 1, None), want, "{list:?} at depth {k}");
         }
+    }
+}
+
+/// Recursion through a table holds the frames Metal reached: within them each sum and parity is
+/// Metal's, past them the sum stops and the parity is zero.
+#[test]
+fn table_recursion_reaches_the_frames_metal_reaches() {
+    let Some(bitcode) = module() else {
+        return;
+    };
+    let p = profile("moltenvk-m3", crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
+    for (k, frames) in TABLE_FRAMES {
+        let (_, handles) = pipeline(&bitcode, TABLE, k);
+        let tables = table_inputs(&handles);
+        let m = typed(&bitcode, TABLE, k, &p);
+        let ds = depths(frames);
+        let want: Vec<u32> = ds
+            .iter()
+            .flat_map(|&d| [sum(d, frames), even(d, frames)])
+            .collect();
+        assert_eq!(
+            dispatch(&m, &ds, 2, Some(&tables)),
+            want,
+            "depth {k}: {ds:?}"
+        );
     }
 }

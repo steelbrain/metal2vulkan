@@ -16,7 +16,7 @@
 
 use metal2vulkan_devtools::xr_bicubic::{self, KERNELS, SIZES};
 
-use super::samples::{form_of, run_samples, sample_kernel, sampled_state, words, Texels, Through};
+use super::samples::{form_of, run_samples, sample_kernel, words, Texels, Through};
 use super::*;
 use crate::bind::SamplerDescriptor;
 use crate::error::Unsupported;
@@ -195,81 +195,14 @@ fn unmeasured_bicubic_samples_are_refused() {
     }
 }
 
-/// A texture bound in an extended-range format joins its slot's variant through a constexpr
-/// bicubic sampler, and through a runtime sampler whose filters are `Cubic`, whose slot joins the
-/// cubic-sampler variant too, under the word the interpreter's replay compiles: the pipeline as
-/// compiled plans that variant, whose pipeline plans the same key. On every committed profile.
+/// The variant of a runtime sampler whose filters are `Cubic` and whose state Metal's bicubic
+/// filter is not measured under whatever a function samples (a mip filter, anisotropy, a minimum
+/// reduction) is refused, `NotImplemented(SamplerBicubicFilter)`, at an extended-range slot as at
+/// a slot of another format, on every committed profile, by one rule
+/// (`metal::bicubic::runtime_cubic_measured`); a device without `samplerAnisotropy` (`vk12-floor`)
+/// refuses an anisotropic one alike.
 #[test]
-fn a_bicubic_sample_s_slots_join_the_variants() {
-    let bc = match llvm_assemble(&engine_dir().join("xr_bicubic.ll")) {
-        Ok(bc) => bc,
-        Err(AssembleError::Missing(why)) => {
-            eprintln!("SKIPPED: {why}");
-            return;
-        }
-        Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected xr_bicubic: {why}"),
-    };
-    let formats = [
-        (PixelFormat::RGB10A82PXR10, 550),
-        (PixelFormat::RGB10A82PXR10SRGB, 551),
-        (PixelFormat::BGRA10XR, 552),
-        (PixelFormat::BGRA10XRSRGB, 553),
-        (PixelFormat::BGR10XR, 554),
-        (PixelFormat::BGR10XRSRGB, 555),
-    ];
-    let mut cubic = SamplerDescriptor::new();
-    cubic.min_filter = SamplerMinMagFilter::Cubic;
-    cubic.mag_filter = SamplerMinMagFilter::Cubic;
-    cubic.s_address_mode = SamplerAddressMode::ClampToEdge;
-    cubic.t_address_mode = SamplerAddressMode::ClampToEdge;
-    let word = SamplerWord::of(&cubic).0 & SamplerWord::CUBIC_STATE;
-    let mut planned = 0;
-    for (stem, dev) in devices() {
-        for kernel in ["xrb_edge", "xrb_runtime"] {
-            let plain =
-                pipeline_entry(&dev, &bc, kernel, &LowerInputs::new()).expect("a sampling kernel");
-            let cubic_samplers = match kernel {
-                "xrb_runtime" => BTreeMap::from([(SAMPLER, word)]),
-                _ => BTreeMap::new(),
-            };
-            for (pf, raw) in formats {
-                let what = format!("{kernel} {pf:?} on {stem}");
-                let shape = sampled_state(pf, cubic).shape();
-                let plan = plain
-                    .plan(&dev, &shape)
-                    .unwrap_or_else(|e| panic!("{what}: {e}"));
-                let form = form_of(&raw.to_string());
-                assert_eq!(
-                    plan.variant.extended_range,
-                    BTreeMap::from([(SOURCE, form)]),
-                    "{what}"
-                );
-                assert_eq!(plan.variant.cubic_samplers, cubic_samplers, "{what}");
-                let key = plan.variant.lowering_inputs(Stage::Kernel);
-                let variant =
-                    pipeline_entry(&dev, &bc, kernel, &key).expect("the variant's inputs");
-                let again = variant
-                    .plan(&dev, &shape)
-                    .unwrap_or_else(|e| panic!("{what}: the variant: {e}"));
-                assert_eq!(again.variant, plan.variant, "{what}");
-                planned += 1;
-            }
-        }
-    }
-    assert!(planned > 0);
-}
-
-/// A runtime sampler whose filters are `Cubic` and whose state Metal's bicubic filter is not
-/// measured under whatever a function samples (a mip filter, anisotropy, a minimum reduction) is
-/// refused by the plan of the pipeline as compiled, `NotImplemented(SamplerBicubicFilter)`, before
-/// the plan names a variant: a dispatch of it compiles nothing, where the variant it would name
-/// refuses the same word only once compiled, and the runtime keeps no compile that refused. At an
-/// extended-range slot (which refused every `Cubic` word at planning before Metal's bicubic filter
-/// of its texels was built) as at a slot of another format. On every committed profile, the
-/// lowering refuses that variant by the same rule (`metal::bicubic::runtime_cubic_measured`), a
-/// device without `samplerAnisotropy` (`vk12-floor`) an anisotropic one alike.
-#[test]
-fn an_unmeasured_cubic_sampler_is_refused_before_any_variant() {
+fn an_unmeasured_cubic_sampler_s_variant_is_refused() {
     let bc = match llvm_assemble(&engine_dir().join("xr_bicubic.ll")) {
         Ok(bc) => bc,
         Err(AssembleError::Missing(why)) => {
@@ -302,29 +235,11 @@ fn an_unmeasured_cubic_sampler_is_refused_before_any_variant() {
     let want = Unsupported::not_implemented(Feature::SamplerBicubicFilter);
     let mut refused = 0;
     for (stem, dev) in devices() {
-        let plain = pipeline_entry(&dev, &bc, "xrb_runtime", &LowerInputs::new())
-            .expect("a sampling kernel");
-        // The measured word plans its variant (`a_bicubic_sample_s_slots_join_the_variants`).
-        let measured = sampled_state(PixelFormat::BGRA10XR, cubic).shape();
-        plain
-            .plan(&dev, &measured)
-            .unwrap_or_else(|e| panic!("the measured cubic word on {stem}: {e}"));
         for (state, sampler) in unmeasured {
             let word = SamplerWord::of(&sampler).0;
             assert!(word & SamplerWord::CUBIC != 0, "{state}");
             for (pf, form) in formats {
                 let what = format!("a cubic sampler with {state}, {pf:?}, on {stem}");
-                match plain.plan(&dev, &sampled_state(pf, sampler).shape()) {
-                    Err(crate::error::BindError::Unsupported(u)) => {
-                        assert_eq!(
-                            (&u.feature, &u.needs),
-                            (&want.feature, &want.needs),
-                            "{what}"
-                        )
-                    }
-                    other => panic!("{what}: planned {:?}", other.map(|p| p.variant)),
-                }
-                // The variant the word would name refuses it.
                 let mut inputs = LowerInputs::new();
                 inputs
                     .cubic_samplers

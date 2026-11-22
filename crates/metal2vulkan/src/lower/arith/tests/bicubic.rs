@@ -184,16 +184,8 @@ fn bicubic_routines_words_bound_their_emission() {
         routines::define_line(fb.module())?;
         Ok(x[0])
     }) - without;
-    let quad = size(&|fb, x| {
-        routines::define_quad(fb.module())?;
-        Ok(x[0])
-    }) - without;
-    eprintln!("bicubic routines: plane {plane} words, line {line} words, quad {quad} words");
-    for (routine, words) in [
-        (Routine::Plane, plane),
-        (Routine::Line, line),
-        (Routine::Quad, quad),
-    ] {
+    eprintln!("bicubic routines: plane {plane} words, line {line} words");
+    for (routine, words) in [(Routine::Plane, plane), (Routine::Line, line)] {
         assert!(
             words <= routine.words() as usize,
             "{routine:?} is {words} words, bound {}",

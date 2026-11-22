@@ -30,7 +30,6 @@
 
 use std::collections::BTreeMap;
 
-use crate::bind::ExecutionStatus;
 use crate::budget::SPIRV_WORDS;
 use crate::device::{DevicePolicy, DeviceProfile, SubgroupSizes};
 use crate::pipeline::compile::compile_bitcode_kept;
@@ -148,7 +147,7 @@ fn widths(sizes: SubgroupSizes, pinned: Option<u32>) -> Result<Vec<SubgroupSize>
 }
 
 /// The `ExecutionStatus` buffer's 32-bit words.
-const STATUS_WORDS: usize = ExecutionStatus::BYTES / 4;
+const STATUS_WORDS: usize = crate::bind::status::StatusWord::SeqCstFences.index() as usize + 1;
 
 /// Check every word of the `ExecutionStatus` buffer `bytes` after a run: a run that misses
 /// nothing leaves every word 0 (no status bit, no resident-set miss, reserved words untouched).
@@ -349,7 +348,7 @@ impl Execute for CpuInterp {
             buffers.push(Buffer {
                 slot: None,
                 address: Some(STATUS),
-                bytes: ExecutionStatus::initial().to_vec(),
+                bytes: vec![0; 4 * STATUS_WORDS],
             });
             buffers.len() - 1
         });

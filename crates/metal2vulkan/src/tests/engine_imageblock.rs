@@ -29,17 +29,16 @@
 
 use std::collections::BTreeMap;
 
-use crate::bind::{BindState, BindingPlan, BoundTexture, ImageblockSize, StageTable, TextureFacts};
 use crate::budget::Budget;
 use crate::cache::VariantKey;
 use crate::device::profile::DeviceProfile;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
-use crate::error::{BindError, Error, Feature, LowerFamily, Needs, RuntimeInput};
+use crate::error::{Error, Feature, LowerFamily, Needs, RuntimeInput};
 use crate::library::Library;
 use crate::lower::select::LowerInputs;
 use crate::lower::select::Plan;
 use crate::metal::format::storage_image_choice;
-use crate::metal::{PixelFormat, TextureType, TextureUsage};
+use crate::metal::PixelFormat;
 use crate::pipeline::facts::{Mechanism, RuntimeFact};
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::lower_inputs::{StorageImageChoice, StorageImageClass};
@@ -50,9 +49,7 @@ use crate::pipeline::testing::{
     engine_dir, fixtures_dir, llvm_assemble, typed_module, typed_module_with, AssembleError,
     Scratch,
 };
-use crate::pipeline::{
-    ComputePipeline, ComputePipelineDescriptor, FunctionDescriptor, StageSource,
-};
+use crate::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, StageSource};
 use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Order, Resources};
 use crate::spirv::ir::TypedModule;
 use crate::spirv::testing::threadgroup_profiles;
@@ -695,194 +692,6 @@ fn device(stem: &str) -> Device {
     Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device")
 }
 
-fn pipeline(dev: &Device, bc: &[u8], entry: &str) -> ComputePipeline {
-    let lib = Library::from_air(bc).expect("library");
-    let f = lib.function(entry).expect("function");
-    let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
-    dev.compile_compute_pipeline(&d, &Budget::standard())
-        .unwrap_or_else(|e| panic!("{entry}: {e}"))
-}
-
-/// The value `plan` specializes `key` to.
-fn specialized(pipe: &ComputePipeline, plan: &BindingPlan, key: SpecKey) -> Option<u32> {
-    let id = pipe
-        .stage
-        .specialization
-        .constants
-        .iter()
-        .find(|c| c.key == key)?
-        .id;
-    let e = plan
-        .specialization
-        .entries
-        .iter()
-        .find(|e| e.constant_id == id)?;
-    let at = e.offset as usize;
-    Some(u32::from_le_bytes(
-        plan.specialization.data[at..at + 4]
-            .try_into()
-            .expect("u32"),
-    ))
-}
-
-/// The binder specializes the imageblock's extent from `BindState::imageblock_size`, refuses an
-/// extent the encoder never set or `get_width` cannot answer, and charges the imageblock, after
-/// the `[[threadgroup(0)]]` region, to `maxComputeSharedMemorySize`: exactly full plans, one
-/// more cell does not.
-#[test]
-fn the_binder_specializes_and_charges_the_imageblock() {
-    let Some(bc) = owned() else { return };
-    for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
-        let dev = device(stem);
-        let pipe = pipeline(&dev, &bc, "imageblock_after_threadgroup");
-        assert!(pipe
-            .dependencies
-            .iter()
-            .any(|d| d.fact == RuntimeFact::ImageblockSize { cell_bytes: 8 }));
-        let state = |w: u32, h: u32| {
-            let mut table = StageTable::default();
-            table.threadgroup_lengths.insert(0, 64);
-            let mut s = BindState::default();
-            s.stages.insert(Stage::Kernel, table);
-            s.imageblock_size = ImageblockSize::new(w, h);
-            s
-        };
-        for (w, h) in [(0, 0), (4, 0), (65536, 1)] {
-            assert_eq!(
-                pipe.plan(&dev, &state(w, h).shape()).map(|_| ()),
-                Err(BindError::InvalidImageblockSize {
-                    width: w,
-                    height: h
-                }),
-                "{stem}"
-            );
-        }
-        let plan = pipe.plan(&dev, &state(4, 3).shape()).expect("plan");
-        assert_eq!(specialized(&pipe, &plan, SpecKey::ImageblockWidth), Some(4));
-        assert_eq!(
-            specialized(&pipe, &plan, SpecKey::ImageblockHeight),
-            Some(3)
-        );
-        assert_eq!(specialized(&pipe, &plan, SpecKey::TgLength(0)), Some(64));
-        // 64 region bytes, then 8-byte cells: `cells` of them fill the limit exactly.
-        let max = dev.profile().fields().limits.max_compute_shared_memory_size;
-        let cells = (max - 64) / 8;
-        assert!(pipe.plan(&dev, &state(cells, 1).shape()).is_ok(), "{stem}");
-        match pipe.plan(&dev, &state(cells + 1, 1).shape()) {
-            Err(BindError::Unsupported(u)) => {
-                assert_eq!(u.feature, Feature::ThreadgroupMemorySize, "{stem}");
-                assert!(format!("{:?}", u.needs).contains("MaxComputeSharedMemorySize"));
-            }
-            other => panic!("{stem}: {:?}", other.map(|_| ())),
-        }
-    }
-}
-
-/// On a profile that writes storage images without a format, the binder keys an integer slice's
-/// slot although the formatless declaration would serve its format: the function compiled under
-/// the slot's choice depends on the numeric type it keeps (`StorageTextureNumericType`), so the
-/// plan of a signed bound format asks for exactly the key it was compiled under, which every signed
-/// format shares. The float slot keys nothing.
-#[test]
-fn a_formatless_profile_keys_an_integer_slice_type() {
-    let Some(bc) = owned() else { return };
-    let dev = device("moltenvk-m3");
-    let images = &dev.profile().fields().images;
-    assert!(images.storage_read_without_format && images.storage_write_without_format);
-    let budget = Budget::standard();
-    let lib = Library::from_air(&bc).expect("library");
-    let f = FunctionDescriptor::new(lib.function("imageblock_runtime_region").expect("function"));
-    match dev.compile_function(&f, &LowerInputs::new(), &budget) {
-        Err(Error::NeedsInput(RuntimeInput::StorageTextureFormat { slot })) => {
-            assert_eq!(slot, kernel_texture(0));
-        }
-        other => panic!("{:?}", other.map(|_| ())),
-    }
-    let mut key = VariantKey::new();
-    let choice = storage_image_choice(PixelFormat::RGBA16Sint, dev.profile()).expect("choice");
-    assert_eq!(choice.vk_format, vk::Format::UNDEFINED);
-    key.storage_images.insert(kernel_texture(0), choice);
-    let compiled = dev
-        .compile_function(&f, &key.lowering_inputs(Stage::Kernel), &budget)
-        .expect("compiles under the choice");
-    let pipe = dev
-        .compile_compute_pipeline(
-            &ComputePipelineDescriptor::new(StageSource::Compiled(compiled)),
-            &budget,
-        )
-        .expect("pipeline");
-    assert!(pipe.dependencies.iter().any(|d| d.fact
-        == RuntimeFact::StorageTextureNumericType {
-            slot: kernel_texture(0)
-        }
-        && d.mechanism == Mechanism::Variant));
-    let state = |code: PixelFormat| {
-        let mut table = StageTable::default();
-        for (index, pf) in [(0, code), (1, PixelFormat::R32Float)] {
-            let mut facts = TextureFacts::new(TextureType::Type2D, pf);
-            facts.usage = TextureUsage::SHADER_WRITE;
-            table.textures.insert(
-                index,
-                BoundTexture::Texture {
-                    facts,
-                    resource_id: None,
-                },
-            );
-        }
-        let mut s = BindState::default();
-        s.stages.insert(Stage::Kernel, table);
-        s.imageblock_size = ImageblockSize::new(4, 4);
-        s
-    };
-    // Every signed format shares the key; the float slot keys nothing.
-    for pf in [PixelFormat::RGBA16Sint, PixelFormat::R32Sint] {
-        let plan = pipe.plan(&dev, &state(pf).shape()).expect("plan");
-        assert_eq!(plan.variant, key, "{pf:?}");
-    }
-    assert_eq!(
-        key.storage_images[&kernel_texture(0)].numeric,
-        Some(SampledType::Sint)
-    );
-}
-
-/// A two-lane slice plans against a bound format of any component count, as Metal writes its
-/// lanes and zeros whatever the format; an unbound texture drops the write.
-#[test]
-fn a_narrow_slice_plans_against_any_bound_format() {
-    let Some(bc) = owned() else { return };
-    let dev = device("moltenvk-m3");
-    let pipe = pipeline(&dev, &bc, "imageblock_sized_slice");
-    let state = |pf: Option<PixelFormat>| {
-        let mut table = StageTable::default();
-        if let Some(pf) = pf {
-            let mut facts = TextureFacts::new(TextureType::Type2D, pf);
-            facts.usage = TextureUsage::SHADER_WRITE;
-            table.textures.insert(
-                0,
-                BoundTexture::Texture {
-                    facts,
-                    resource_id: None,
-                },
-            );
-        }
-        let mut s = BindState::default();
-        s.stages.insert(Stage::Kernel, table);
-        s.imageblock_size = ImageblockSize::new(4, 4);
-        s
-    };
-    for pf in [
-        Some(PixelFormat::RG16Float),
-        None,
-        Some(PixelFormat::R16Float),
-        Some(PixelFormat::RGBA16Float),
-        Some(PixelFormat::RGBA32Float),
-    ] {
-        if let Err(e) = pipe.plan(&dev, &state(pf).shape()) {
-            panic!("{pf:?}: {e:?}");
-        }
-    }
-}
-
 /// A kernel whose 4x4 threads each store their cell `(x, y, 7, 9)`, then, after the imageblock
 /// barrier and `between`, under the guard `guard` (which defines `%g`), write the whole imageblock
 /// to texture 0 at their threadgroup's position times 4: the shape `texture::cooperative` shares
@@ -1160,4 +969,47 @@ fn a_cell_holds_the_widest_access_through_its_pointer() {
         }
     }
     assert!(ran > 0);
+}
+
+/// On a profile that writes storage images without a format, an integer slice's slot is keyed
+/// although the formatless declaration would serve its format: the function asks for the slot's
+/// format (`NeedsInput(StorageTextureFormat)`), and compiled under a signed format's choice it
+/// depends on the numeric type the choice keeps (`StorageTextureNumericType`), `Sint`.
+#[test]
+fn a_formatless_profile_keys_an_integer_slice_type() {
+    let Some(bc) = owned() else { return };
+    let dev = device("moltenvk-m3");
+    let images = &dev.profile().fields().images;
+    assert!(images.storage_read_without_format && images.storage_write_without_format);
+    let budget = Budget::standard();
+    let lib = Library::from_air(&bc).expect("library");
+    let f = FunctionDescriptor::new(lib.function("imageblock_runtime_region").expect("function"));
+    match dev.compile_function(&f, &LowerInputs::new(), &budget) {
+        Err(Error::NeedsInput(RuntimeInput::StorageTextureFormat { slot })) => {
+            assert_eq!(slot, kernel_texture(0));
+        }
+        other => panic!("{:?}", other.map(|_| ())),
+    }
+    let mut key = VariantKey::new();
+    let choice = storage_image_choice(PixelFormat::RGBA16Sint, dev.profile()).expect("choice");
+    assert_eq!(choice.vk_format, vk::Format::UNDEFINED);
+    key.storage_images.insert(kernel_texture(0), choice);
+    let compiled = dev
+        .compile_function(&f, &key.lowering_inputs(Stage::Kernel), &budget)
+        .expect("compiles under the choice");
+    let pipe = dev
+        .compile_compute_pipeline(
+            &ComputePipelineDescriptor::new(StageSource::Compiled(compiled)),
+            &budget,
+        )
+        .expect("pipeline");
+    assert!(pipe.dependencies.iter().any(|d| d.fact
+        == RuntimeFact::StorageTextureNumericType {
+            slot: kernel_texture(0)
+        }
+        && d.mechanism == Mechanism::Variant));
+    assert_eq!(
+        key.storage_images[&kernel_texture(0)].numeric,
+        Some(SampledType::Sint)
+    );
 }

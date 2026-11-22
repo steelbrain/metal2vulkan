@@ -665,9 +665,6 @@ pub enum TextureStrategy {
     /// A sample of a texture slot bound in an extended-range format, emulated by fetches of its
     /// raw texels (`sampler::extended`).
     ExtendedSample(Box<crate::lower::sampler::extended::Sample>),
-    /// A sample of a two-plane YCbCr texture slot whose variant reads its planes in place,
-    /// computed from their codes (`sampler::in_place`).
-    InPlaceSample(Box<crate::lower::sampler::in_place::Sample>),
     /// An operation on the absent handle: a texture or sampler a function constant removed
     /// (`memory::handles::Candidate::Absent`).
     AbsentArgument(AbsentArgument),
@@ -901,7 +898,6 @@ impl TextureStrategy {
             TextureStrategy::ImageblockSlice(s) if s.guard => "texture.imageblock_slice_guarded",
             TextureStrategy::ImageblockSlice(_) => "texture.imageblock_slice",
             TextureStrategy::ExtendedSample(e) => e.name(),
-            TextureStrategy::InPlaceSample(e) => e.name(),
             TextureStrategy::AbsentArgument(_) => AbsentArgument::NAME,
         })
     }
@@ -958,7 +954,6 @@ impl TextureStrategy {
             TextureStrategy::Switch(s) => s.words(),
             TextureStrategy::ImageblockSlice(s) => s.words(),
             TextureStrategy::ExtendedSample(e) => e.words(),
-            TextureStrategy::InPlaceSample(e) => e.words(),
             // The zero, a constant.
             TextureStrategy::AbsentArgument(_) => 0,
         }
@@ -1242,19 +1237,7 @@ pub fn declare(
                 }
                 None => image,
             };
-            // A planes image's slot is the combined image sampler of the device's conversion
-            // (`ResourceKind::YCbCrPlanes`).
-            let (ty, symbol) = match decl.planes_sampler {
-                Some(sampler) => (
-                    mb.ty(SType::SampledImage { image: ty })?,
-                    crate::pipeline::sym::ResourceSlot {
-                        stage: s.slot.stage,
-                        kind: crate::pipeline::sym::ResourceKind::YCbCrPlanes(sampler),
-                        index: s.slot.index,
-                    },
-                ),
-                None => (ty, crate::pipeline::sym::ResourceSlot::metal(s.slot)),
-            };
+            let symbol = crate::pipeline::sym::ResourceSlot::metal(s.slot);
             let g = mb.resource(symbol, crate::spirv::ir::StorageClass::UniformConstant, ty)?;
             if s.volatile && volatile_decorated(plan) {
                 mb.volatile(g)?;
@@ -1805,8 +1788,6 @@ pub fn select(
             _ => Vec::new(),
         };
         for index in slots {
-            not_in_place(cx, index);
-            not_rows(cx, index);
             if extended_range(cx, ImageRef::Slot(index))?.is_some() {
                 return Err(Unsupported::not_implemented(Feature::Format).into());
             }
@@ -1850,8 +1831,6 @@ pub fn select(
                 let arm = match c {
                     // A switch-at-use's arm reads its slot's image.
                     Candidate::Texture(index) => {
-                        not_in_place(cx, index);
-                        not_rows(cx, index);
                         select_image(cx, (at, inst), t, &ops, ImageRef::Slot(index), m)?
                     }
                     Candidate::Absent => AbsentArgument::select(cx, at, inst)?,
@@ -2454,40 +2433,12 @@ pub(crate) fn extended_range(
     Ok(cx.inputs.extended_range.get(&slot).copied())
 }
 
-/// Whether texture slot `index`'s variant reads a two-plane YCbCr texture's planes in place
-/// (`LoweringInputs::ycbcr_in_place`, `sampler::in_place`).
-pub(crate) fn ycbcr_in_place(cx: &SelectCx<'_>, index: u32) -> Result<bool, Error> {
-    let slot = slot_of(cx, index)?.slot;
-    Ok(cx.inputs.ycbcr_in_place.contains(&slot))
-}
-
-/// Record an access of texture slot `index` that its in-place form does not read
-/// (`slot::InPlaceReads::blocked`): no texture is read in place there.
-pub(crate) fn not_in_place(cx: &mut SelectCx<'_>, index: u32) {
-    if let Some(s) = cx.families.texture.slots.get_mut(&index) {
-        s.in_place.blocked = true;
-    }
-}
-
-/// Record an access of texture slot `index` that its texture's rows read in place do not answer
-/// (`slot::SlotPlan::not_rows`): the slot takes no rows variant.
-pub(crate) fn not_rows(cx: &mut SelectCx<'_>, index: u32) {
-    if let Some(s) = cx.families.texture.slots.get_mut(&index) {
-        s.not_rows = true;
-    }
-}
-
 /// Mark texture slot `index` as accessed in a way a texture buffer's parts do not answer
 /// (`slot::SlotPlan::not_parts`): the slot takes no parts variant.
 pub(crate) fn not_parts(cx: &mut SelectCx<'_>, index: u32) {
     if let Some(s) = cx.families.texture.slots.get_mut(&index) {
         s.not_parts = true;
     }
-}
-
-/// Whether the function observes any of texture call `at`'s status word.
-pub(crate) fn observes_status(cx: &mut SelectCx<'_>, at: InstId) -> bool {
-    status_use(cx, at).is_some()
 }
 
 /// The numeric class of the texture texture slot `image`'s variant binds where it is not the
@@ -2582,16 +2533,6 @@ pub(crate) fn swizzled_storage(cx: &SelectCx<'_>, image: ImageRef) -> Result<boo
     Ok(cx.inputs.swizzled_storage.contains(&slot))
 }
 
-/// Whether texture slot `image`'s variant reads and writes its texture's rows in place
-/// (`LoweringInputs::texel_rows`, `bind::texel_rows`). A heap element never does.
-pub(crate) fn texel_rows(cx: &SelectCx<'_>, image: ImageRef) -> Result<bool, Error> {
-    let ImageRef::Slot(index) = image else {
-        return Ok(false);
-    };
-    let slot = slot_of(cx, index)?.slot;
-    Ok(cx.inputs.texel_rows.contains(&slot))
-}
-
 /// Record that texture slot `index`'s function applies its bound texture's swizzle: the slot's
 /// `TextureSwizzle` specialization (`RuntimeFact::TextureSwizzle`).
 pub(crate) fn swizzles(cx: &mut SelectCx<'_>, index: u32) -> Result<(), Error> {
@@ -2669,25 +2610,7 @@ fn select_image(
     m: &mut Meter,
 ) -> Result<TextureStrategy, Error> {
     let shape = t.image;
-    // The in-place form reads a slot's width, height and level count, and nothing else here.
     if let ImageRef::Slot(index) = image {
-        if !matches!(
-            t.op,
-            TexOp::Query(Query::Width | Query::Height | Query::NumMipLevels)
-        ) {
-            not_in_place(cx, index);
-        }
-        // The rows read and write a texel by its coordinate, and answer the size, the level
-        // count and the presence; nothing else.
-        if !matches!(
-            t.op,
-            TexOp::Read
-                | TexOp::Write
-                | TexOp::IsNull
-                | TexOp::Query(Query::Width | Query::Height | Query::NumMipLevels)
-        ) {
-            not_rows(cx, index);
-        }
         // A texture buffer's parts read, write and update a texel by its index, and answer the
         // width, the presence and a fence; nothing else.
         if !matches!(
@@ -2912,7 +2835,6 @@ fn select_read_as(
     if let Some(t) = through {
         select_through(cx, image, texel, t)?;
         if let ImageRef::Slot(index) = image {
-            not_rows(cx, index);
             not_parts(cx, index);
         }
     }
@@ -2946,9 +2868,6 @@ fn select_read_as(
     }
     let check = match slot::read_check(cx, shape.dim == ImageDim::Buffer) {
         ReadCheck::Device if extended.is_some() => ReadCheck::Shader,
-        // A rows slot's coordinate past the width names the next row's texel in the view
-        // (`bind::texel_rows`): the shader selects Metal's out-of-bounds texel on every profile.
-        _ if texel_rows(cx, image)? => ReadCheck::Shader,
         c => c,
     };
     // A storage read at a level reads the slot's level views, and past the bound level count

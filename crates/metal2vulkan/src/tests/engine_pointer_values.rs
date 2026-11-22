@@ -18,7 +18,6 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::bind::status::ExecutionStatus;
 use crate::budget::SPIRV_WORDS;
 use crate::device::profile::{BufferAccess, DeviceProfile};
 use crate::device::{Device, DeviceDescription, DevicePolicy};
@@ -244,7 +243,7 @@ fn resources(
     buffers.push(Buffer {
         slot: None,
         address: Some(STATUS),
-        bytes: ExecutionStatus::initial().to_vec(),
+        bytes: vec![0; crate::bind::status::StatusWord::SeqCstFences.byte_offset() as usize + 4],
     });
     if let Some(b) = &plan.families.access.blob {
         let mut bytes = b.bytes.to_vec();

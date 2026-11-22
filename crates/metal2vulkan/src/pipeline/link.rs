@@ -36,7 +36,7 @@
 //!   a code change. Per-stage limits are `select`'s.
 //! - **Render state** ([`vertex`], [`graphics`]): `VertexInputState` and `GraphicsState` from the
 //!   descriptor, checked against the vertex stage's compiled fetch projection, with the fragment
-//!   stage's framebuffer fetch over input attachments ([`fetch`]), and the
+//!   stage's framebuffer fetch over input attachments, and the
 //!   precision notes of the formats fixed-function vertex input converts for the vertex stage
 //!   (`vertex::fixed_function_notes`), which the module, shared by every such format, cannot
 //!   record, with the measured properties a conversion relies on in place of a note. A mesh

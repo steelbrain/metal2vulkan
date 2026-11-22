@@ -359,14 +359,9 @@ pub struct ProfileFields {
     pub dynamic_vertex_stride: bool,
     /// The enabled capability sets `Requirements` are checked against.
     pub enabled: EnabledCaps,
-    /// Whether a two-plane YCbCr texture's planes may be read in place
-    /// (`bind::YCbCrInPlace`): on a device whose GPU reads the planes' memory with no bus between
-    /// (`VkPhysicalDeviceType` integrated or CPU), a texture slot whose function reads such a
-    /// texture only as the in-place form reads records `RuntimeFact::YCbCrInPlace`, and the
-    /// consumer states the planes of each texture it holds so. A discrete, virtual or other
-    /// device, or one of no stated type, keeps every such texture's image of converted texels,
-    /// which its refresh reads across the bus once per encoder where the in-place form would read
-    /// the planes there at every pass. Both forms read Metal's texels exactly.
+    /// Whether a two-plane YCbCr texture's planes may be read in place: true on every device
+    /// (`device::derive`). No lowering reads it; it is part of the profile's fingerprint, the
+    /// `Debug` text of these fields, which stored observations name.
     pub ycbcr_in_place: bool,
     /// The Function storage a thread holds correctly (`device::function_storage`): a stage's
     /// private memory, its call stacks included, may take this much a thread
@@ -855,26 +850,4 @@ pub struct FormatTable {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::device::requirements::Requirements;
-    use crate::pipeline::facts::{Mechanism, RuntimeFact};
-    use crate::spirv::ids::{BlockId, DemoteTy, Value, VarId};
-
-    /// Vocabulary shared across threads by the consumer's worker pool.
-    #[test]
-    fn vocabulary_is_send_and_sync() {
-        fn send_sync<T: Send + Sync>() {}
-        send_sync::<DeviceProfile>();
-        send_sync::<ProfileFields>();
-        send_sync::<Requirements>();
-        send_sync::<RuntimeFact>();
-        send_sync::<Mechanism>();
-        send_sync::<DemoteTy>();
-        send_sync::<Value>();
-        send_sync::<VarId>();
-        send_sync::<BlockId>();
-        send_sync::<crate::air::ir::value::ValueId>();
-        send_sync::<crate::bind::status::ExecutionStatus>();
-    }
-}
+mod tests {}

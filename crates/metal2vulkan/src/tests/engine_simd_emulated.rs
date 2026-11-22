@@ -31,13 +31,12 @@
 
 use std::collections::BTreeMap;
 
-use crate::bind::{BindState, BoundBuffer, Dispatch, StageTable};
 use crate::budget::Budget;
 use crate::cache::VariantKey;
 use crate::device::profile::{DeviceProfile, HandleDomain, PointerDomain};
 use crate::device::subgroup::{OpBits, SimdClass, SubgroupRequirement, Tier};
 use crate::device::{Device, DeviceDescription, DevicePolicy};
-use crate::error::{BindError, Error, Feature};
+use crate::error::{Error, Feature};
 use crate::library::Library;
 use crate::lower::dispatch::{region_bytes, LocalSizeForm};
 use crate::lower::select::Plan;
@@ -56,7 +55,6 @@ use crate::pipeline::{
 use crate::spirv::interp::{run, BarrierRule, Buffer, Config, Order, Resources, SubgroupSize};
 use crate::spirv::ir::TypedModule;
 use crate::spirv::testing::spirv_dis;
-use crate::vk;
 
 /// The committed profiles whose kernels' simdgroups are emulated.
 const PROFILES: [&str; 2] = ["lavapipe", "runtime-floor"];
@@ -1512,8 +1510,7 @@ fn the_static_length_is_rounded_up_to_16_bytes_as_metal_reports_it() {
 /// The scratch takes 128 bytes per simdgroup and word beside the kernel's threadgroup memory. A
 /// kernel whose arena leaves less than one simdgroup's scratch is refused at compile time;
 /// otherwise the pipeline reports the threads whose scratch fits as its maximum and its own
-/// threadgroup memory as its static length, as Metal reports it, and the planner refuses a larger
-/// threadgroup as `ThreadgroupMemorySize`.
+/// threadgroup memory as its static length, as Metal reports it.
 #[test]
 fn the_scratch_must_fit_beside_the_threadgroup_memory() {
     // roadmap-2022: 16 KiB. An arena of exactly 16 KiB leaves nothing for the scratch.
@@ -1543,19 +1540,13 @@ fn the_scratch_must_fit_beside_the_threadgroup_memory() {
     let pipe = pipeline(&dev, &bc, "barrier_k");
     assert_eq!(pipe.metal_info.max_total_threads_per_threadgroup, 256);
     assert_eq!(pipe.metal_info.static_threadgroup_memory_length, 31 * 1024);
-    let state = bind_state(None);
-    let plan = pipe.plan(&dev, &state.shape()).expect("plan");
-    assert!(plan.instantiate_dispatch(&state, &threads(256)).is_ok());
-    assert_memory_refused(plan.instantiate_dispatch(&state, &threads(257)), 32896);
 }
 
 /// A kernel that reads a `[[threadgroup(0)]]` region declares the threadgroup arena, a `u32` array
 /// of at least `MIN_ARENA_BYTES` even when the region is empty, beside the scratch. `region_k`
 /// publishes eight words per lane (1 KiB per simdgroup): lavapipe's 32 KiB fits 31 simdgroups
 /// beside the 32-byte arena, not 32. The reported static length is the kernel's own, 0, as Metal
-/// reports it: neither the arena's minimum nor the scratch, which the planner still counts, so the
-/// remainder a Metal client gives the region beside that length is refused at the most threads
-/// (the device's gap, `ThreadgroupMemorySize`), and a region that fits beside the scratch runs.
+/// reports it: neither the arena's minimum nor the scratch.
 #[test]
 fn an_empty_region_declares_the_arena_beside_the_scratch() {
     let Some(bc) = assemble("simd_uniform") else {
@@ -1563,28 +1554,8 @@ fn an_empty_region_declares_the_arena_beside_the_scratch() {
     };
     let dev = lavapipe();
     let pipe = pipeline(&dev, &bc, "region_k");
-    let state = bind_state(Some(0));
-    let plan = pipe.plan(&dev, &state.shape()).expect("plan");
-    assert_memory_refused(
-        plan.instantiate_dispatch(&state, &threads(1024)),
-        32 + 32 * 1024,
-    );
-    assert!(plan.instantiate_dispatch(&state, &threads(31 * 32)).is_ok());
     assert_eq!(pipe.metal_info.max_total_threads_per_threadgroup, 31 * 32);
     assert_eq!(pipe.metal_info.static_threadgroup_memory_length, 0);
-    // The remainder beside the reported static length, at the most threads: the arena and the
-    // scratch of 31 simdgroups do not fit beside it.
-    let remainder = 32 * 1024 - pipe.metal_info.static_threadgroup_memory_length;
-    let state = bind_state(Some(remainder));
-    let plan = pipe.plan(&dev, &state.shape()).expect("plan");
-    match plan.instantiate_dispatch(&state, &threads(31 * 32)) {
-        Err(BindError::Unsupported(u)) => assert_eq!(u.feature, Feature::ThreadgroupMemorySize),
-        other => panic!("{other:?}"),
-    }
-    // A region that fits beside the arena and the scratch runs.
-    let state = bind_state(Some(32 * 1024 - 32 - 31 * 1024));
-    let plan = pipe.plan(&dev, &state.shape()).expect("plan");
-    assert!(plan.instantiate_dispatch(&state, &threads(31 * 32)).is_ok());
 }
 
 /// An emulated operation exchanges through workgroup memory between workgroup barriers in
@@ -1672,45 +1643,6 @@ fn pipeline(dev: &Device, bc: &[u8], kernel: &str) -> ComputePipeline {
         .unwrap_or_else(|e| panic!("{kernel}: {e}"))
 }
 
-/// Buffer 0 bound, and `[[threadgroup(0)]]` set to `region` bytes.
-fn bind_state(region: Option<u32>) -> BindState {
-    let mut table = StageTable::default();
-    table.buffers.insert(
-        0,
-        BoundBuffer::Buffer {
-            length: 4096,
-            offset: 0,
-            gpu_address: 0x1_0000,
-            device_address: None,
-            attribute_stride: None,
-        },
-    );
-    if let Some(len) = region {
-        table.threadgroup_lengths.insert(0, len);
-    }
-    let mut state = BindState::default();
-    state.stages.insert(Stage::Kernel, table);
-    state
-}
-
-fn threads(n: u32) -> Dispatch {
-    Dispatch::Threadgroups {
-        groups: [1, 1, 1],
-        threads_per_group: [n, 1, 1],
-    }
-}
-
-fn assert_memory_refused<T: std::fmt::Debug>(r: Result<T, BindError>, required: u64) {
-    match r {
-        Err(BindError::Unsupported(u)) => {
-            assert_eq!(u.feature, Feature::ThreadgroupMemorySize);
-            let needs = format!("{:?}", u.needs);
-            assert!(needs.contains(&format!("required: {required},")), "{needs}");
-        }
-        other => panic!("{other:?}"),
-    }
-}
-
 /// The committed profile whose kernels run their simdgroups on whole 32-lane subgroups
 /// (`Direct`, `REQUIRE_FULL_SUBGROUPS`): a threadgroup with a partial simdgroup runs on the
 /// kernel's emulated-simdgroups variant.
@@ -1738,12 +1670,6 @@ fn emulated_inputs() -> LoweringInputs {
 fn emulated_key() -> VariantKey {
     let mut key = VariantKey::new();
     key.emulated_simdgroups = true;
-    key
-}
-
-fn one_row_key() -> VariantKey {
-    let mut key = VariantKey::new();
-    key.one_row = true;
     key
 }
 
@@ -1823,238 +1749,6 @@ fn partial_simdgroups_run_on_the_emulated_variant_of_a_direct_kernel() {
         "guard_simd_barrier_k",
     ] {
         run_variant(&divergent, kernel, None);
-    }
-}
-
-/// Through the public API on `DIRECT`: the plan of a kernel whose simdgroups run on whole subgroups
-/// asks for the emulated-simdgroups variant exactly for the dispatches with a partial simdgroup
-/// (and a `dispatchThreads` grid whose edge has one), instead of refusing them; the pipeline
-/// compiled under that key states it in its plan and runs each of them, and a full one, with
-/// Metal's local size and no subgroup requirement. A profile that emulates every kernel's
-/// simdgroups never asks.
-#[test]
-fn the_plan_asks_for_the_emulated_variant_only_for_partial_simdgroups() {
-    let Some(bc) = assemble("simd_ops") else {
-        return;
-    };
-    let dev = direct();
-    let budget = Budget::standard();
-    let f = Library::from_air(&bc)
-        .and_then(|lib| lib.function("simd_sum_k"))
-        .expect("kernel");
-    let fd = FunctionDescriptor::new(f);
-    let base = pipeline(&dev, &bc, "simd_sum_k");
-    let state = bind_state(None);
-    let shape = state.shape();
-    let plan = base.plan(&dev, &shape).expect("plan");
-    assert!(plan.variant.is_empty());
-    let key = emulated_key();
-    let edge = Dispatch::Threads {
-        threads: [40, 1, 1],
-        threads_per_group: [32, 1, 1],
-    };
-    for d in [threads(1), threads(4), threads(8), threads(16), edge] {
-        assert_eq!(plan.dispatch_variant(&d), Ok(key.clone()), "{d:?}");
-        assert_eq!(
-            plan.instantiate_dispatch(&state, &d),
-            Err(BindError::NeedsVariant {
-                variant: Box::new(key.clone())
-            }),
-            "{d:?}"
-        );
-    }
-    // Whole simdgroups keep the flattened pipeline.
-    for n in [32, 64] {
-        assert_eq!(plan.dispatch_variant(&threads(n)), Ok(VariantKey::new()));
-        let c = plan
-            .instantiate_dispatch(&state, &threads(n))
-            .expect("full");
-        assert!(c.regions[0]
-            .stage_flags
-            .contains(vk::PipelineShaderStageCreateFlags::REQUIRE_FULL_SUBGROUPS));
-    }
-
-    // The variant the plan asked for.
-    let compiled = dev
-        .compile_function(&fd, &key.lowering_inputs(Stage::Kernel), &budget)
-        .expect("variant");
-    assert_ne!(
-        *compiled.key(),
-        dev.function_compile_key(&fd, &LoweringInputs::new())
-    );
-    let variant = dev
-        .compile_compute_pipeline(
-            &ComputePipelineDescriptor::new(StageSource::Compiled(compiled)),
-            &budget,
-        )
-        .expect("variant pipeline");
-    assert_ne!(variant.key, base.key);
-    assert!(variant
-        .dependencies
-        .iter()
-        .any(|d| d.fact == RuntimeFact::EmulatedSimdgroups && d.mechanism == Mechanism::Variant));
-    assert_eq!(variant.stage.required_subgroup_size, None);
-    assert!(variant.stage.stage_flags.is_empty());
-    let vplan = variant.plan(&dev, &shape).expect("variant plan");
-    assert_eq!(vplan.variant, key, "the variant's plan states its key");
-    for d in [threads(1), threads(4), threads(16), threads(32), edge] {
-        assert_eq!(vplan.dispatch_variant(&d), Ok(key.clone()), "{d:?}");
-        let c = vplan.instantiate_dispatch(&state, &d).expect("runs");
-        for r in &c.regions {
-            assert!(r.stage_flags.is_empty(), "{d:?}");
-            assert_eq!(r.required_subgroup_size, None, "{d:?}");
-        }
-    }
-
-    // lavapipe emulates every kernel's simdgroups: no dispatch asks for a variant.
-    let lava = lavapipe();
-    let own = pipeline(&lava, &bc, "simd_sum_k");
-    let lplan = own.plan(&lava, &shape).expect("plan");
-    assert_eq!(lplan.dispatch_variant(&threads(16)), Ok(VariantKey::new()));
-    assert!(lplan.instantiate_dispatch(&state, &threads(16)).is_ok());
-}
-
-/// The emulated tier's own limits stay refusals when a partial simdgroup asks for the variant. A
-/// matrix multiply-add in a divergent block compiles in both; a kernel whose threadgroup memory
-/// leaves no room for one simdgroup's scratch is `ThreadgroupMemorySize` at the variant's compile;
-/// and one that leaves room for some is refused at the variant's plan for a threadgroup whose
-/// scratch does not fit, which the `Direct` pipeline runs when its simdgroups are whole.
-#[test]
-fn the_emulated_tiers_limits_stay_refused_for_partial_simdgroups() {
-    let dev = direct();
-    let p = dev.profile();
-    let emulated = |bc: &[u8], kernel: &str| {
-        let f = Library::from_air(bc)
-            .and_then(|lib| lib.function(kernel))
-            .expect("kernel");
-        dev.compile_function(
-            &FunctionDescriptor::new(f),
-            &emulated_inputs(),
-            &Budget::standard(),
-        )
-    };
-
-    let text = std::fs::read_to_string(engine_dir().join("simd_matrix.ll")).expect("read");
-    let text = text.replacen(
-        "  %5 = shl i32 %3, 1\n",
-        "  %c = icmp ult i32 %3, 16\n  br i1 %c, label %go, label %done\n\ngo:\n  %5 = shl i32 %3, 1\n",
-        1,
-    );
-    let text = text.replacen(
-        "<2 x i64> zeroinitializer) #5\n  ret void\n}",
-        "<2 x i64> zeroinitializer) #5\n  br label %done\n\ndone:\n  ret void\n}",
-        1,
-    );
-    assert!(text.contains("label %go") && text.contains("\ndone:\n"));
-    let Some(bc) = assemble_text("direct-divergent-matrix", &text) else {
-        return;
-    };
-    compile(&bc, "matrix_thread_elements", p).expect("Direct");
-    let variant = emulated(&bc, "matrix_thread_elements").expect("the variant");
-    assert!(variant
-        .artifact()
-        .facts
-        .contains(&RuntimeFact::EmulatedSimdgroups));
-
-    // 32 KiB of shared memory: an arena of 32 KiB leaves nothing for the scratch.
-    assert_eq!(p.fields().limits.max_compute_shared_memory_size, 32 * 1024);
-    let Some(full) = arena_kernel(8192) else {
-        return;
-    };
-    compile(&full, "barrier_k", p).expect("Direct");
-    match emulated(&full, "barrier_k") {
-        Err(Error::Unsupported(u)) => {
-            assert_eq!(u.feature, Feature::ThreadgroupMemorySize);
-            let needs = format!("{:?}", u.needs);
-            assert!(needs.contains("required: 32896"), "{needs}");
-        }
-        other => panic!("{other:?}"),
-    }
-
-    // An arena of 31 KiB leaves the scratch of 8 simdgroups.
-    let Some(bc) = arena_kernel(31 * 256) else {
-        return;
-    };
-    let state = bind_state(None);
-    let shape = state.shape();
-    let base = pipeline(&dev, &bc, "barrier_k");
-    let plan = base.plan(&dev, &shape).expect("plan");
-    assert!(plan.instantiate_dispatch(&state, &threads(512)).is_ok());
-    assert_eq!(
-        plan.dispatch_variant(&threads(260)),
-        Ok(emulated_key()),
-        "a partial simdgroup"
-    );
-    let variant = dev
-        .compile_compute_pipeline(
-            &ComputePipelineDescriptor::new(StageSource::Compiled(
-                emulated(&bc, "barrier_k").expect("variant"),
-            )),
-            &Budget::standard(),
-        )
-        .expect("variant pipeline");
-    let vplan = variant.plan(&dev, &shape).expect("variant plan");
-    assert!(vplan.instantiate_dispatch(&state, &threads(250)).is_ok());
-    assert_memory_refused(
-        vplan.instantiate_dispatch(&state, &threads(260)),
-        31 * 1024 + 9 * 128,
-    );
-}
-
-/// A `dispatchThreads` grid whose edge is a partial simdgroup runs whole on the variant, so its
-/// interior is checked against the variant's limits, not the flattened tier's: those of a kernel
-/// that runs a threadgroup deeper than `DEEP_THREADGROUP` as one row. On nvidia-rtx50-linux
-/// (`Direct`, z at most 64), an interior of `[1, 1, 96]`, which the flattened pipeline runs alone,
-/// asks for no variant, and a grid of `[1, 1, 100]` in threadgroups of `[1, 1, 96]` or `[1, 1, 64]`
-/// asks for the variant, whose plan runs both regions: the flattened plan's check and the
-/// variant's plan agree.
-#[test]
-fn a_mixed_dispatch_is_checked_against_the_variants_limits() {
-    let Some(bc) = assemble("simd_ops") else {
-        return;
-    };
-    let dev = device("nvidia-rtx50-linux");
-    assert_eq!(
-        dev.profile().fields().limits.max_compute_work_group_size[2],
-        64
-    );
-    let (own, _) = typed_module(&bc, "simd_sum_k", dev.profile()).expect("simd_sum_k");
-    assert_eq!(own.simd.1, Tier::Direct);
-    let budget = Budget::standard();
-    let state = bind_state(None);
-    let shape = state.shape();
-    let plan = pipeline(&dev, &bc, "simd_sum_k")
-        .plan(&dev, &shape)
-        .expect("plan");
-    let f = Library::from_air(&bc)
-        .and_then(|lib| lib.function("simd_sum_k"))
-        .expect("kernel");
-    let compiled = dev
-        .compile_function(&FunctionDescriptor::new(f), &emulated_inputs(), &budget)
-        .expect("variant");
-    let vplan = dev
-        .compile_compute_pipeline(
-            &ComputePipelineDescriptor::new(StageSource::Compiled(compiled)),
-            &budget,
-        )
-        .expect("variant pipeline")
-        .plan(&dev, &shape)
-        .expect("variant plan");
-    let mixed = |z| Dispatch::Threads {
-        threads: [1, 1, 100],
-        threads_per_group: [1, 1, z],
-    };
-
-    let interior = Dispatch::Threads {
-        threads: [1, 1, 96],
-        threads_per_group: [1, 1, 96],
-    };
-    assert_eq!(plan.dispatch_variant(&interior), Ok(VariantKey::new()));
-    assert!(plan.instantiate_dispatch(&state, &interior).is_ok());
-    for z in [96, 64] {
-        let variant = plan.dispatch_variant(&mixed(z));
-        let regions = (vplan.instantiate_dispatch(&state, &mixed(z))).map(|c| c.regions.len());
-        assert_eq!((variant, regions), (Ok(emulated_key()), Ok(2)), "z {z}");
     }
 }
 
@@ -2206,36 +1900,13 @@ attributes #0 = {{ convergent mustprogress nounwind willreturn }}
     )
 }
 
-/// Buffers 0 and 1 bound.
-fn two_buffers() -> BindState {
-    let mut state = bind_state(None);
-    if let Some(table) = state.stages.get_mut(&Stage::Kernel) {
-        table.buffers.insert(
-            1,
-            BoundBuffer::Buffer {
-                length: 4,
-                offset: 0,
-                gpu_address: 0x2_0000,
-                device_address: None,
-                attribute_stride: None,
-            },
-        );
-    }
-    state
-}
-
 /// A kernel whose only simdgroup semantics are the barrier its lockstep order took, between a
 /// read and a write of `b[gid]` that two threads of one simdgroup meet at only where the
 /// simdgroup spans two rows of its threadgroup (the shape of OpenCL C's `if (i < n) b[i] *= k`),
-/// keeps the RTX 5080's `Direct` tier and records `RowLockstep`. A threadgroup of one row (1, 16
-/// or 48 threads, or a whole 32) asks for its one-row variant (`VariantKey::one_row`), and the
-/// planned pipeline still runs one without whole subgroups: no emulated-simdgroups variant is
-/// compiled, so none is announced. A threadgroup of two rows that is not whole subgroups still
-/// asks for the emulated variant. The same kernel at `b[gid >> 1]` (two threads of a row meet) or
-/// reading its simdgroup lane keeps every partial threadgroup on the emulated variant and a whole
-/// one on its pinned pipeline.
+/// keeps the RTX 5080's `Direct` tier and records `RowLockstep`. The same kernel at `b[gid >> 1]`
+/// (two threads of a row meet) or reading its simdgroup lane does not record it.
 #[test]
-fn a_row_of_a_lockstep_only_kernel_takes_one_compile() {
+fn a_row_of_a_lockstep_only_kernel_records_its_row_lockstep() {
     let x = "%x = zext i32 %gid to i64";
     let none = "%e = add i32 0, 0";
     let kernels = [
@@ -2250,8 +1921,6 @@ fn a_row_of_a_lockstep_only_kernel_takes_one_compile() {
     ];
     let dev = device("nvidia-rtx5080-laptop");
     let p = dev.profile();
-    let state = two_buffers();
-    let shape = state.shape();
     for (name, index, extra, rows) in kernels {
         let Some(bc) = assemble_text(name, &row_kernel(name, index, extra)) else {
             return;
@@ -2268,53 +1937,6 @@ fn a_row_of_a_lockstep_only_kernel_takes_one_compile() {
             rows,
             "{name}"
         );
-        let base = pipeline(&dev, &bc, name);
-        let plan = base.plan(&dev, &shape).expect("plan");
-        for n in [1, 16, 48] {
-            let want = if rows { one_row_key() } else { emulated_key() };
-            assert_eq!(
-                plan.dispatch_variant(&threads(n)),
-                Ok(want),
-                "{name} at {n}"
-            );
-        }
-        for n in [32, 64] {
-            let want = if rows {
-                one_row_key()
-            } else {
-                VariantKey::new()
-            };
-            assert_eq!(
-                plan.dispatch_variant(&threads(n)),
-                Ok(want),
-                "{name} at {n}"
-            );
-        }
-        let two_rows = Dispatch::Threadgroups {
-            groups: [1, 1, 1],
-            threads_per_group: [8, 2, 1],
-        };
-        assert_eq!(
-            plan.dispatch_variant(&two_rows),
-            Ok(emulated_key()),
-            "{name}"
-        );
-        if rows {
-            let c = plan
-                .instantiate_dispatch(&state, &threads(16))
-                .expect("one row on the planned pipeline");
-            assert_eq!(
-                c.regions[0].stage_flags,
-                vk::PipelineShaderStageCreateFlags::empty()
-            );
-            assert_eq!(c.regions[0].required_subgroup_size, Some(32));
-            let c = plan
-                .instantiate_dispatch(&state, &threads(32))
-                .expect("whole subgroups");
-            assert!(c.regions[0]
-                .stage_flags
-                .contains(vk::PipelineShaderStageCreateFlags::REQUIRE_FULL_SUBGROUPS));
-        }
     }
 }
 
@@ -2485,11 +2107,11 @@ fn run_local(plan: &Plan, m: &TypedModule, local: [u32; 3], lanes: SubgroupSize)
 /// 32-lane subgroups makes that barrier a tangle barrier). Its own pipeline keeps the barrier,
 /// takes `CrossLane(BASIC)` and `Direct` (32 lanes pinned), records `RowLockstep`, and leaves
 /// Metal's words in a threadgroup 144 wide and 2 tall, which runs on it, the shared lane's word
-/// included. A dispatch of one row (128 or 48 threads) asks for the one-row variant, which keeps
-/// the threadgroup barrier the `@nb` pair takes, has no simdgroup barrier, no simd class and no
-/// pinned subgroup, states `OneRow`, and leaves Metal's words at every width; its plan sends a
-/// threadgroup of two rows back. The same kernel with a simdgroup sum keeps its pinned pipeline
-/// for every threadgroup of whole simdgroups, one row or not.
+/// included. Its one-row variant (`LoweringInputs::one_row`) keeps the threadgroup barrier the
+/// `@nb` pair takes, has no simdgroup barrier, no simd class and no pinned subgroup, states
+/// `OneRow`, and leaves Metal's words in a threadgroup of one row (128 or 48 threads) at every
+/// width. The same kernel with a simdgroup sum keeps its pinned pipeline and records no
+/// `RowLockstep`.
 #[test]
 fn a_one_row_dispatch_drops_the_lockstep_simdgroup_barriers() {
     let dev = device("intel-irisxe-rplp-anv");
@@ -2556,52 +2178,6 @@ fn a_one_row_dispatch_drops_the_lockstep_simdgroup_barriers() {
         }
     }
 
-    // The binder's choice.
-    let state = bind_state(None);
-    let shape = state.shape();
-    let plan = pipeline(&dev, &bc, name).plan(&dev, &shape).expect("plan");
-    let two_rows = Dispatch::Threadgroups {
-        groups: [1, 1, 1],
-        threads_per_group: wide,
-    };
-    assert_eq!(plan.dispatch_variant(&threads(128)), Ok(one_row_key()));
-    assert_eq!(plan.dispatch_variant(&threads(48)), Ok(one_row_key()));
-    assert_eq!(plan.dispatch_variant(&two_rows), Ok(VariantKey::new()));
-    let f = Library::from_air(&bc)
-        .ok()
-        .and_then(|lib| lib.function(name).ok())
-        .expect("kernel");
-    let budget = Budget::standard();
-    let compiled = dev
-        .compile_function(
-            &FunctionDescriptor::new(f),
-            &one_row_key().lowering_inputs(Stage::Kernel),
-            &budget,
-        )
-        .expect("variant");
-    let variant = dev
-        .compile_compute_pipeline(
-            &ComputePipelineDescriptor::new(StageSource::Compiled(compiled)),
-            &budget,
-        )
-        .expect("variant pipeline");
-    assert_eq!(variant.stage.required_subgroup_size, None);
-    let vplan = variant.plan(&dev, &shape).expect("variant plan");
-    assert_eq!(
-        vplan.variant,
-        one_row_key(),
-        "the variant's plan states its key"
-    );
-    assert_eq!(vplan.dispatch_variant(&threads(128)), Ok(one_row_key()));
-    assert!(vplan.instantiate_dispatch(&state, &threads(48)).is_ok());
-    assert_eq!(vplan.dispatch_variant(&two_rows), Ok(VariantKey::new()));
-    assert_eq!(
-        vplan.instantiate_dispatch(&state, &two_rows),
-        Err(BindError::NeedsVariant {
-            variant: Box::new(VariantKey::new())
-        })
-    );
-
     // With a simdgroup operation of its own the kernel keeps its pinned pipeline.
     let summed = "row_tile_sum";
     let Some(bc) = assemble_text(
@@ -2617,12 +2193,6 @@ fn a_one_row_dispatch_drops_the_lockstep_simdgroup_barriers() {
     let (own, _) = typed_module(&bc, summed, p).unwrap_or_else(|e| panic!("{summed}: {e}"));
     assert_eq!(own.simd.1, Tier::Direct);
     assert!(!own.facts.contains(&RuntimeFact::RowLockstep));
-    let plan = pipeline(&dev, &bc, summed)
-        .plan(&dev, &shape)
-        .expect("plan");
-    for d in [threads(32), threads(128), two_rows] {
-        assert_eq!(plan.dispatch_variant(&d), Ok(VariantKey::new()), "{d:?}");
-    }
 }
 
 /// A wave64-only device: the committed RDNA3 description, which reconverges maximally, with its
@@ -2708,26 +2278,6 @@ attributes #0 = {{ convergent mustprogress nounwind willreturn }}
     )
 }
 
-/// A multisampled texture of four samples in `format` bound at texture 0 for reading, and
-/// buffer 0.
-fn samples_state(format: crate::metal::PixelFormat) -> BindState {
-    let mut state = bind_state(None);
-    let mut facts =
-        crate::bind::TextureFacts::new(crate::metal::TextureType::Type2DMultisample, format);
-    facts.sample_count = 4;
-    facts.usage = crate::metal::TextureUsage::SHADER_READ;
-    if let Some(table) = state.stages.get_mut(&Stage::Kernel) {
-        table.textures.insert(
-            0,
-            crate::bind::BoundTexture::Texture {
-                facts,
-                resource_id: None,
-            },
-        );
-    }
-    state
-}
-
 /// A texel's samples read into a buffer, `out[(y * w + x) * n + s]` over `s < n` with `n` the
 /// texture's sample count (`wsm_samples`'s kernels, as the Metal compiler emits them): the store
 /// meets itself in a later iteration only where two threads of a simdgroup share a pixel, which
@@ -2736,25 +2286,20 @@ fn samples_state(format: crate::metal::PixelFormat) -> BindState {
 /// `Cluster32` tier, and a multiple of 64 threads. In a row its threads' `x` differ and their `y`
 /// are equal, and each thread's cells `(y * w + x) * n + s` lie below the next pixel's, `s` a
 /// counter that starts at 0 below `n` (the branch before the loop tested `n != 0`, as a `select`
-/// or an `and`) and leaves the loop on reaching it: the kernel records `RowLockstep`, and a
-/// threadgroup of one row (1, 16, 32 or 48 threads) asks for its one-row variant, not the
-/// emulated-simdgroups variant. Two rows of 16 still ask for the latter. Negative controls keep
-/// every partial threadgroup on the variant: the row scaled by the width rather than by `n`
-/// (cells of two pixels may meet), the latch testing the counter rather than the next value (the
-/// body runs at `s == n`, the next pixel's first cell), and the loop entered without the `n != 0`
-/// test (at `n == 0` every pixel writes cell 0).
+/// or an `and`) and leaves the loop on reaching it: the kernel records `RowLockstep`. Negative
+/// controls do not: the row scaled by the width rather than by `n` (cells of two pixels may meet),
+/// the latch testing the counter rather than the next value (the body runs at `s == n`, the next
+/// pixel's first cell), and the loop entered without the `n != 0` test (at `n == 0` every pixel
+/// writes cell 0).
 #[test]
 fn a_texel_s_samples_in_a_row_need_no_emulated_simdgroups_on_wave64() {
     let compiler = "select i1 %iny, i1 %some, i1 false";
-    let mut kernels: Vec<(String, Vec<u8>, crate::metal::PixelFormat, bool)> = Vec::new();
+    let mut kernels: Vec<(String, Vec<u8>, bool)> = Vec::new();
     let Some(fixture) = assemble("wsm_samples") else {
         return;
     };
-    for (name, format) in [
-        ("wsm_read_f", crate::metal::PixelFormat::RGBA32Float),
-        ("wsm_read_u", crate::metal::PixelFormat::R32Uint),
-    ] {
-        kernels.push((name.into(), fixture.clone(), format, true));
+    for name in ["wsm_read_f", "wsm_read_u"] {
+        kernels.push((name.into(), fixture.clone(), true));
     }
     for (name, guard, mult, tested, rows) in [
         ("cells", compiler, "%n", "%next", true),
@@ -2772,11 +2317,11 @@ fn a_texel_s_samples_in_a_row_need_no_emulated_simdgroups_on_wave64() {
         let Some(bc) = assemble_text(name, &cells_kernel(name, guard, mult, tested)) else {
             return;
         };
-        kernels.push((name.into(), bc, crate::metal::PixelFormat::R32Uint, rows));
+        kernels.push((name.into(), bc, rows));
     }
     let dev = wave64();
     let p = dev.profile();
-    for (name, bc, format, rows) in kernels {
+    for (name, bc, rows) in kernels {
         let (own, _) = typed_module(&bc, &name, p).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert_eq!(own.simd.1, Tier::Cluster32, "{name}");
         assert!(
@@ -2788,27 +2333,6 @@ fn a_texel_s_samples_in_a_row_need_no_emulated_simdgroups_on_wave64() {
         assert_eq!(
             own.facts.contains(&RuntimeFact::RowLockstep),
             rows,
-            "{name}"
-        );
-        let state = samples_state(format);
-        let plan = pipeline(&dev, &bc, &name)
-            .plan(&dev, &state.shape())
-            .unwrap_or_else(|e| panic!("{name}: {e:?}"));
-        let want = if rows { one_row_key() } else { emulated_key() };
-        for n in [1, 16, 32, 48] {
-            assert_eq!(
-                plan.dispatch_variant(&threads(n)),
-                Ok(want.clone()),
-                "{name} at {n}"
-            );
-        }
-        let two_rows = Dispatch::Threadgroups {
-            groups: [1, 1, 1],
-            threads_per_group: [16, 2, 1],
-        };
-        assert_eq!(
-            plan.dispatch_variant(&two_rows),
-            Ok(emulated_key()),
             "{name}"
         );
     }
@@ -3044,4 +2568,114 @@ fn a_kernel_without_a_lockstep_pair_records_no_access_order_note() {
         "{:?}",
         ordered.precision
     );
+}
+
+/// Through the public API on `DIRECT`, a kernel whose simdgroups run on whole subgroups compiled
+/// under the emulated-simdgroups key is another function and another pipeline, which states the
+/// variant as its mechanism for `EmulatedSimdgroups` and runs with no subgroup requirement and no
+/// stage flags.
+#[test]
+fn the_emulated_simdgroups_variant_compiles_without_a_subgroup_requirement() {
+    let Some(bc) = assemble("simd_ops") else {
+        return;
+    };
+    let dev = direct();
+    let budget = Budget::standard();
+    let f = Library::from_air(&bc)
+        .and_then(|lib| lib.function("simd_sum_k"))
+        .expect("kernel");
+    let fd = FunctionDescriptor::new(f);
+    let base = pipeline(&dev, &bc, "simd_sum_k");
+    let key = emulated_key();
+    let compiled = dev
+        .compile_function(&fd, &key.lowering_inputs(Stage::Kernel), &budget)
+        .expect("variant");
+    assert_ne!(
+        *compiled.key(),
+        dev.function_compile_key(&fd, &LoweringInputs::new())
+    );
+    let variant = dev
+        .compile_compute_pipeline(
+            &ComputePipelineDescriptor::new(StageSource::Compiled(compiled)),
+            &budget,
+        )
+        .expect("variant pipeline");
+    assert_ne!(variant.key, base.key);
+    assert!(variant
+        .dependencies
+        .iter()
+        .any(|d| d.fact == RuntimeFact::EmulatedSimdgroups && d.mechanism == Mechanism::Variant));
+    assert_eq!(variant.stage.required_subgroup_size, None);
+    assert!(variant.stage.stage_flags.is_empty());
+}
+
+/// The emulated tier's own limits stay refusals in the emulated-simdgroups variant. A matrix
+/// multiply-add in a divergent block compiles in both; a kernel whose threadgroup memory leaves no
+/// room for one simdgroup's scratch is `ThreadgroupMemorySize` at the variant's compile; and one
+/// that leaves room for some states as its maximum the threads whose scratch fits.
+#[test]
+fn the_emulated_tiers_limits_stay_refused_for_partial_simdgroups() {
+    let dev = direct();
+    let p = dev.profile();
+    let emulated = |bc: &[u8], kernel: &str| {
+        let f = Library::from_air(bc)
+            .and_then(|lib| lib.function(kernel))
+            .expect("kernel");
+        dev.compile_function(
+            &FunctionDescriptor::new(f),
+            &emulated_inputs(),
+            &Budget::standard(),
+        )
+    };
+
+    let text = std::fs::read_to_string(engine_dir().join("simd_matrix.ll")).expect("read");
+    let text = text.replacen(
+        "  %5 = shl i32 %3, 1\n",
+        "  %c = icmp ult i32 %3, 16\n  br i1 %c, label %go, label %done\n\ngo:\n  %5 = shl i32 %3, 1\n",
+        1,
+    );
+    let text = text.replacen(
+        "<2 x i64> zeroinitializer) #5\n  ret void\n}",
+        "<2 x i64> zeroinitializer) #5\n  br label %done\n\ndone:\n  ret void\n}",
+        1,
+    );
+    assert!(text.contains("label %go") && text.contains("\ndone:\n"));
+    let Some(bc) = assemble_text("direct-divergent-matrix", &text) else {
+        return;
+    };
+    compile(&bc, "matrix_thread_elements", p).expect("Direct");
+    let variant = emulated(&bc, "matrix_thread_elements").expect("the variant");
+    assert!(variant
+        .artifact()
+        .facts
+        .contains(&RuntimeFact::EmulatedSimdgroups));
+
+    // 32 KiB of shared memory: an arena of 32 KiB leaves nothing for the scratch.
+    assert_eq!(p.fields().limits.max_compute_shared_memory_size, 32 * 1024);
+    let Some(full) = arena_kernel(8192) else {
+        return;
+    };
+    compile(&full, "barrier_k", p).expect("Direct");
+    match emulated(&full, "barrier_k") {
+        Err(Error::Unsupported(u)) => {
+            assert_eq!(u.feature, Feature::ThreadgroupMemorySize);
+            let needs = format!("{:?}", u.needs);
+            assert!(needs.contains("required: 32896"), "{needs}");
+        }
+        other => panic!("{other:?}"),
+    }
+
+    // An arena of 31 KiB leaves the scratch of 8 simdgroups.
+    let Some(bc) = arena_kernel(31 * 256) else {
+        return;
+    };
+    let variant = dev
+        .compile_compute_pipeline(
+            &ComputePipelineDescriptor::new(StageSource::Compiled(
+                emulated(&bc, "barrier_k").expect("variant"),
+            )),
+            &Budget::standard(),
+        )
+        .expect("variant pipeline");
+    assert_eq!(variant.metal_info.max_total_threads_per_threadgroup, 256);
 }

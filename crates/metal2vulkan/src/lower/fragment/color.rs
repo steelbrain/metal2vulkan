@@ -307,9 +307,6 @@ pub(crate) fn texture_decl(class: ImageHandleClass) -> ImageDecl {
         level_views: None,
         extended: None,
         x_channel: false,
-        in_place: false,
-        planes_sampler: None,
-        rows: false,
         parts: None,
     }
 }

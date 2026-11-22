@@ -1,6 +1,5 @@
-//! The Vulkan graphics pipeline of an engine `RenderPipeline`: one builder that L4 driver
-//! acceptance ([`super::acceptance`]) and the render executor ([`super::render`]) share, so a
-//! pipeline the sweep creates is the pipeline the executor draws with.
+//! The Vulkan graphics pipeline of an engine `RenderPipeline`, as L4 driver acceptance
+//! ([`super::acceptance`]) creates it.
 //!
 //! Everything comes from the artifact's graphics state and vertex input: the render pass
 //! ([`create_render_pass`]: every color attachment at its Metal index, each framebuffer-fetch

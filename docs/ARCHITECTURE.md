@@ -38,8 +38,6 @@ metallib | AIR bitcode
                     band
   ── relocate ────► the final words of each stage                       pipeline::relocate
   = ComputePipeline | RenderPipeline | tile and mesh pipelines
-
-BindState ── shape ──► BindingPlan (per pipeline and shape) ── instantiate ──► dispatch or draw commands   bind
 ```
 
 `pipeline::compile::compile_stage` runs one function from decode to serialize and keeps only the
@@ -83,7 +81,7 @@ rest is `crates/metal2vulkan/src/`.
 | `library/` | `Library`, `Function`, `CompiledFunction`, `FunctionCompileKey` |
 | `reflection/` | Metal-shaped reflection of functions and pipelines |
 | `pipeline/` | Descriptors, compile entry points, link and relocate, `PipelineInterface`, the pipeline layout, vertex input and fixed-function state, runtime facts, precision notes |
-| `bind/` | The binder: `BindState` and `BindShape`, `BindingPlan`, per-command instantiation, neutral resources, argument, handle and heap tables, residency, indirect-command replay, and the helper kernels the runtime records. It never calls Vulkan |
+| `bind/` | What a runtime computes beside the compile: argument-buffer layouts, the ASTC, ETC and PVRTC decoders, rasterization-rate maps, indirect-command records, Metal's draw and dispatch calls, and the heap classes, status words and device-replay tables the lowering reads. It never calls Vulkan |
 | `cache/` | `PipelineKey`, `SEMANTICS_VERSION`, the artifact encoding |
 | `metal/`, `vk/`, `ash_interop/` | Metal's enums and format facts; plain-data Vulkan values; `ash` conversions (feature `ash`) |
 | `error/` | The typed errors every entry point returns |

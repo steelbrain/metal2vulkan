@@ -118,14 +118,6 @@ feature	ViewportDepthRange	rare	viewport depth outside [0, 1]
 feature	IndirectRenderState	rare	render state set by a kernel on an indirect command
 feature	GlobalBuiltinInFragment	rare	Metal 3.1 global built-ins in fragment functions
 feature	(computed)	none	helpers that build a refusal for a feature their callers name: see the "via a helper" rows
-bind	DescriptorRangeExceeded	app	a buffer window past a device's descriptor range
-bind	TexelBufferTooLarge	rare	a texture buffer past maxTexelBufferElements its parts do not bind
-bind	HeapTooLarge	rare	more resident textures than the pipeline's heap holds (bindless at scale)
-bind	TessellationFactorRange	rare	tessellation factors past one storage descriptor
-bind	PatchIndexRange	rare	patch indices past one storage descriptor
-bind	ControlPointIndexRange	rare	control-point indices past one storage descriptor
-bind	MissingStageInRegion	none	a stage-in region never set, which Metal leaves undefined
-bind	MissingDeviceAddress	rare	a slot reached through a pointer loaded from memory, bound with inline bytes or on a device without device addresses
 limit	InlinedInstructions	rare	very large shaders after inlining
 limit	OutputBlocks	rare	very large control flow
 limit	IrreducibleDepth	none	deeply nested irreducible loops

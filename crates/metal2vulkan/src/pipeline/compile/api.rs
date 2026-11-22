@@ -288,8 +288,7 @@ impl Device {
     /// descriptor's color attachment formats (`LoweringInputs::tile_attachments`, the color index
     /// of each attachment whose format is set), as a compute pipeline that runs one threadgroup per
     /// tile of the render area and stages the attachments it reaches (`lower::access::tile`). The
-    /// consumer dispatches it in place of `dispatchThreadsPerTile:` with
-    /// `BindState::imageblock_size` set to the pass's tile size and `BindState::render_area` to its
+    /// consumer dispatches it in place of `dispatchThreadsPerTile:` over the pass's tile size and
     /// render area, binding each attachment it reaches (`WriteSource::TileAttachment`). A
     /// `Compiled` tile function must have been compiled under the same formats: one compiled
     /// without tile inputs is `InvalidDescriptor(StageMismatch)`, and one that stages an attachment
@@ -964,9 +963,8 @@ impl Device {
             metal = metal.min(cap);
         }
         // The static part of Metal's own layout, as Metal reports it: neither the emulated
-        // simdgroups' scratch nor a predicated walk's vote word, which are ours and which the
-        // planner counts in each dispatch's total (`bind::plan::compute`), refusing a threadgroup
-        // whose lengths fit beside this length and not beside them (`ThreadgroupMemorySize`).
+        // simdgroups' scratch nor a predicated walk's vote word, which are ours
+        // (`RuntimeFact::SimdgroupEmulation`, `RuntimeFact::PredicationVote`).
         // Metal reports it rounded up to 16 bytes, its threadgroup memory's granularity
         // (`threadgroup uint a[256]; threadgroup uint b;` answers 1040, not 1028, on the M3 Max,
         // macOS 27.0.1).

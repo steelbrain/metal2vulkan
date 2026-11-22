@@ -91,22 +91,6 @@ pub struct Uses {
     pub narrow_result: bool,
 }
 
-/// How a slot's accesses read a two-plane YCbCr texture bound there, for its planes read in
-/// place (`sampler::in_place`, `RuntimeFact::YCbCrInPlace`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub struct InPlaceReads {
-    /// An access the form does not read: anything but a sample or gather it builds
-    /// (`sampler::select`'s `in_place_sample`) and a query of the width, the height or the level
-    /// count.
-    pub blocked: bool,
-    /// The runtime sampler slots the slot's samples and gathers read, bit `n` `[[sampler(n)]]`.
-    pub samplers: u32,
-    /// A sample the device's own sampler Y′CbCr conversion does not take
-    /// (`LoweringInputs::ycbcr_planes_sampled`): one through a constexpr sampler that addresses a
-    /// border, one that places a texel offset by a parent's size, or a gather.
-    pub device_blocked: bool,
-}
-
 /// The `OpTypeImage` a slot is declared as, and the conversion a storage image's class needs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ImageDecl {
@@ -132,20 +116,6 @@ pub struct ImageDecl {
     /// after the class's conversion, its reads take alpha 1 and its writes store green in the
     /// fourth channel.
     pub x_channel: bool,
-    /// The slot's variant reads a two-plane YCbCr texture's planes in place
-    /// (`LoweringInputs::ycbcr_in_place`): the image is the planes' uniform texel buffer of
-    /// unsigned codes (`sampler::in_place`), the texture's size its push field's.
-    pub in_place: bool,
-    /// The slot's variant samples those planes as an image through the device's own sampler
-    /// Y′CbCr conversion (`LoweringInputs::ycbcr_planes_sampled`): the slot is a combined image
-    /// sampler of a sampled 2D `float` image (`ResourceKind::YCbCrPlanes`), whose immutable
-    /// sampler bakes the conversion; `in_place` holds, so its size is still the push field's.
-    pub planes_sampler: Option<crate::bind::YCbCrPlanesSampler>,
-    /// The slot's variant reads and writes a 2D texture's rows in place
-    /// (`LoweringInputs::texel_rows`, `bind::texel_rows`): the image is the rows' texel buffer,
-    /// uniform for a sampled slot and storage for a storage one, texel `(x, y)` its texel
-    /// `first + y · row + x` and the texture's size the push field's.
-    pub rows: bool,
     /// A texture-buffer slot under its parts variant (`LoweringInputs::texel_buffer_parts`,
     /// `bind::texel_parts`), declared as an array of its parts' texel buffers.
     pub parts: Option<Parts>,
@@ -247,12 +217,6 @@ pub struct SlotPlan {
     /// specialization, which states the axes on which the base-level size the rule reads, a
     /// view's parent's, is not a power of two where the bound view's is.
     pub offset_base: bool,
-    /// How its accesses read a two-plane YCbCr texture's planes in place.
-    pub in_place: InPlaceReads,
-    /// An access its texture's rows read in place do not answer (`bind::texel_rows`): anything
-    /// but a read or write of a texel by its coordinate, a query of the width, the height or the
-    /// level count, and a presence test. The uses rule out the rest ([`rows_reads`]).
-    pub not_rows: bool,
     /// An access a texture buffer's parts do not answer (`bind::texel_parts`): anything but a
     /// read of a texel by its index (not through a sampler), a write, an atomic, a width query, a
     /// presence test and a fence. The uses rule out the rest ([`parts_reads`]).
@@ -281,8 +245,6 @@ impl SlotPlan {
             swizzle: false,
             constant_lanes: false,
             offset_base: false,
-            in_place: InPlaceReads::default(),
-            not_rows: false,
             not_parts: false,
             decl: None,
         }
@@ -607,9 +569,6 @@ fn declare_heap(
         level_views: None,
         extended: None,
         x_channel: false,
-        in_place: false,
-        planes_sampler: None,
-        rows: false,
         parts: None,
     };
     Ok((class, decl))
@@ -1096,107 +1055,6 @@ fn declare_slot(
 ) -> Result<ImageDecl, Error> {
     let images = &cx.profile.fields().images;
     let storage = s.storage();
-    // A slot that samples its texture's planes as an image through the device's own sampler
-    // Y′CbCr conversion is a combined image sampler of a 2D `float` image, with the field of the
-    // planes' words for its size (`sampler::in_place`).
-    if let Some(&sampler) = cx.inputs.ycbcr_planes_sampled.get(&s.slot) {
-        if !cx.inputs.ycbcr_in_place.contains(&s.slot) {
-            return Err(cx.invariant("a planes image's slot outside its in-place variant"));
-        }
-        push.push(PushField::YCbCrInPlace(s.slot));
-        counts.sampled_images = counts.sampled_images.saturating_add(1);
-        counts.samplers = counts.samplers.saturating_add(1);
-        return Ok(ImageDecl {
-            dim: Dim::D2,
-            arrayed: false,
-            multisampled: false,
-            depth: false,
-            usage: ImageUsage::Sampled,
-            format: crate::spv::ImageFormat::Unknown,
-            texel: TexelClass::Float,
-            cube_as_array: false,
-            class: StorageImageClass::Identity,
-            level_views: None,
-            extended: None,
-            x_channel: false,
-            in_place: true,
-            planes_sampler: Some(sampler),
-            rows: false,
-            parts: None,
-        });
-    }
-    // A slot under its in-place variant is the uniform texel buffer of its texture's planes, of
-    // unsigned codes, with the field of their words (`sampler::in_place`).
-    if cx.inputs.ycbcr_in_place.contains(&s.slot) {
-        push.push(PushField::YCbCrInPlace(s.slot));
-        counts.sampled_images = counts.sampled_images.saturating_add(1);
-        return Ok(ImageDecl {
-            dim: Dim::Buffer,
-            arrayed: false,
-            multisampled: false,
-            depth: false,
-            usage: ImageUsage::Sampled,
-            format: crate::spv::ImageFormat::Unknown,
-            texel: TexelClass::Uint,
-            cube_as_array: false,
-            class: StorageImageClass::Identity,
-            level_views: None,
-            extended: None,
-            x_channel: false,
-            in_place: true,
-            planes_sampler: None,
-            rows: false,
-            parts: None,
-        });
-    }
-    // A slot under its rows variant is the texel buffer of its texture's rows, with the field of
-    // their words (`bind::texel_rows`): a uniform one for a sampled slot, a storage one, declared
-    // as the slot's storage image would be, for a storage slot.
-    if cx.inputs.texel_rows.contains(&s.slot) {
-        if !rows_reads(s) {
-            return Err(cx.invariant("a rows slot whose accesses the rows do not answer"));
-        }
-        push.push(PushField::TexelRows(s.slot));
-        let texel = image_class(cx.inputs, s);
-        let (format, class) = match storage {
-            true => {
-                facts.push(RuntimeFact::StorageTextureFormat { slot: s.slot });
-                storage_format(cx, s, texel)?
-            }
-            false => (
-                crate::spv::ImageFormat::Unknown,
-                StorageImageClass::Identity,
-            ),
-        };
-        if class != StorageImageClass::Identity {
-            return Err(cx.invariant("a rows slot whose storage image converts its texels"));
-        }
-        match storage {
-            true => counts.storage_images = counts.storage_images.saturating_add(1),
-            false => counts.sampled_images = counts.sampled_images.saturating_add(1),
-        }
-        return Ok(ImageDecl {
-            dim: Dim::Buffer,
-            arrayed: false,
-            multisampled: false,
-            depth: false,
-            usage: match storage {
-                true => ImageUsage::Storage,
-                false => ImageUsage::Sampled,
-            },
-            format,
-            texel,
-            cube_as_array: false,
-            class,
-            level_views: None,
-            extended: None,
-            x_channel: false,
-            in_place: false,
-            planes_sampler: None,
-            rows: true,
-            parts: None,
-        });
-    }
     // A slot bound in an extended-range format holds its raw texels in an unsigned integer
     // image.
     let extended = cx.inputs.extended_range.get(&s.slot).copied();
@@ -1325,45 +1183,8 @@ fn declare_slot(
         level_views: views,
         extended,
         x_channel,
-        in_place: false,
-        planes_sampler: None,
-        rows: false,
         parts,
     })
-}
-
-/// Whether every access of slot `s` is one its texture's planes read in place answer
-/// (`sampler::in_place`), on a profile that takes the form (`ProfileFields::ycbcr_in_place`): a
-/// sampled 2D texture's (not an array, multisampled or depth one), of a `float` class or only
-/// queried, used, and no access blocked ([`InPlaceReads::blocked`]).
-fn in_place_reads(cx: &SelectCx<'_>, s: &SlotPlan) -> bool {
-    let used = s.uses.read || s.uses.query || s.uses.sample;
-    cx.profile.fields().ycbcr_in_place
-        && used
-        && !s.in_place.blocked
-        && !s.storage()
-        && s.shape
-            .is_some_and(|x| x.dim == ImageDim::D2 && !x.array && !x.ms && !x.depth)
-        && matches!(s.texel, None | Some(TexelClass::Float))
-}
-
-/// Whether every access of slot `s` is one its texture's rows read in place answer
-/// (`bind::texel_rows`): a single-sample 2D color texture's (not an array, multisampled or depth
-/// one) of a 32-bit class, read, written or asked its size, every access of a texel at the first
-/// level of a storage slot (no level views), and nothing sampled, gathered, updated by an atomic,
-/// read through a sampler or a switch, its residency observed or its integer channels read; no
-/// access blocked ([`SlotPlan::not_rows`]).
-fn rows_reads(s: &SlotPlan) -> bool {
-    let u = &s.uses;
-    (u.read || u.write || u.query)
-        && !(u.sample || u.compare || u.atomic || u.level_views || u.residency || u.faces)
-        && !(u.int_channels || u.narrow_result || s.not_rows)
-        && s.shape
-            .is_some_and(|x| x.dim == ImageDim::D2 && !x.array && !x.ms && !x.depth)
-        && matches!(
-            s.texel,
-            None | Some(TexelClass::Float | TexelClass::Sint | TexelClass::Uint)
-        )
 }
 
 /// Whether every access of texture-buffer slot `s` is one its parts answer (`bind::texel_parts`),
@@ -1435,48 +1256,18 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             }
             Err(error) => return Err(error),
         };
-        // A rows slot's every load and store is the function's own test's, inside the view.
-        let volatile = !d.rows && forwards(cx, &s.uses, shape.dim == ImageDim::Buffer);
+        let volatile = forwards(cx, &s.uses, shape.dim == ImageDim::Buffer);
         decls.push((*index, d, volatile));
     }
-    // The variants a slot may take by its bound texture (cross-class reads, planes read in place,
-    // a texture's rows, a texture buffer's parts): under the identity domains no binder chooses a
-    // variant, and the slot reads whatever texture its resource ID names through the plain form.
+    // The variants a slot may take by its bound texture (cross-class reads, a texture buffer's
+    // parts): under the identity domains no variant is chosen, and the slot reads whatever
+    // texture its resource ID names through the plain form.
     if !crate::lower::access::identity(cx.profile) {
         // The slots read, sampled or gathered in any class (a slot only sampled is declared by its
         // combined bindings, `sampler::finish`).
         for s in cx.families.texture.slots.values() {
             if s.shape.is_some_and(|shape| cross_reads(s, shape)) {
                 facts.push(RuntimeFact::CrossClassReads { slot: s.slot });
-            }
-        }
-        // The slots whose every access the in-place form reads, on a profile that takes it: their
-        // compile under the form states the same, which its plan holds to.
-        for s in cx.families.texture.slots.values() {
-            let reads = in_place_reads(cx, s);
-            if !reads && cx.inputs.ycbcr_in_place.contains(&s.slot) {
-                return Err(
-                    cx.invariant("an in-place texture slot whose accesses the form does not read")
-                );
-            }
-            if s.in_place.device_blocked && cx.inputs.ycbcr_planes_sampled.contains_key(&s.slot) {
-                return Err(cx.invariant(
-                    "a planes image's texture slot with a sample the device's sampler does not take",
-                ));
-            }
-            if reads {
-                facts.push(RuntimeFact::YCbCrInPlace {
-                    slot: s.slot,
-                    samplers: s.in_place.samplers,
-                    device: !s.in_place.device_blocked,
-                });
-            }
-        }
-        // The slots whose every access the rows answer: their compile under the rows variant states
-        // the same, which its plan holds to.
-        for s in cx.families.texture.slots.values() {
-            if rows_reads(s) {
-                facts.push(RuntimeFact::TexelRows { slot: s.slot });
             }
         }
         // The texture-buffer slots whose every access their parts answer: their compile under the
@@ -1747,17 +1538,13 @@ impl SlotPlan {
 /// shader joins and splits, so its class is the unsigned integer one of its shape. A texture
 /// buffer's is a texel buffer's, uniform where the slot reads and storage where it writes, the
 /// element its resource ID holds in the texel-buffer arrays. `None` for a declaration the identity
-/// arrays hold no element of yet: a cube viewed as an array, level views, a texture buffer's parts
-/// or rows, planes, an extended-range or RGBX form, or a storage image with another format or a
-/// conversion.
+/// arrays hold no element of yet: a cube viewed as an array, level views, a texture buffer's parts,
+/// an extended-range or RGBX form, or a storage image with another format or a conversion.
 pub(crate) fn identity_class(decl: &ImageDecl) -> Option<ImageHandleClass> {
     let plain = !decl.cube_as_array
         && decl.level_views.is_none()
         && decl.extended.is_none()
         && !decl.x_channel
-        && !decl.in_place
-        && decl.planes_sampler.is_none()
-        && !decl.rows
         && decl.parts.is_none()
         && decl.class == StorageImageClass::Identity;
     let dim = match decl.dim {

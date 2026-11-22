@@ -483,9 +483,6 @@ pub(super) struct Texture {
     /// The slot's `SpecKey::OffsetBaseAxes` tests, by which a texel offset is placed
     /// (`position::offset_dropped`), where the sample reads them ([`Sample::offset_base`]).
     pub parent: Option<crate::lower::texture::OffsetBase>,
-    /// The base level's size (a `uvec2`) where the image's own query does not state it: an
-    /// in-place texture's, whose image is its planes' texel buffer (`super::in_place`).
-    pub size: Option<SValue>,
 }
 
 /// How a sample's raw texels decode: by one form, a slot's variant's; or by the form a heap handle's class index names (`sampler::heap_raw`), through the
@@ -503,9 +500,6 @@ pub(super) enum Decode {
         /// The routine of a `float` result, and of a `half` one where the access rounds to it.
         routines: (FuncId, Option<FuncId>),
     },
-    /// The planes of a two-plane YCbCr texture read in place, each tap converted as Metal reads
-    /// it (`super::in_place::texel`).
-    InPlace(super::in_place::Planes),
 }
 
 /// Where a sample reads: its plane coordinate (two floats), a 2D array's layer (an integer), the
@@ -688,7 +682,6 @@ fn sampled(
         flags: value(fb, flags)?,
         swizzle,
         parent,
-        size: None,
     };
     let at = At {
         coord,
@@ -787,7 +780,7 @@ fn sampled(
 }
 
 /// The footprint over `taps` of the sample at `at` of `tex`, the border color seen through the
-/// channels `bits` state: its size the image's query of the taps' level, or `tex`'s stated size.
+/// channels `bits` state: its size the image's query of the taps' level.
 fn footprint_of(
     fb: &mut FunctionBuilder<'_>,
     t: &Tys,
@@ -796,24 +789,14 @@ fn footprint_of(
     bits: Bits,
     taps: &Taps<'_>,
 ) -> BResult<Footprint> {
-    match tex.size {
-        Some(size) => super::bicubic::footprint_sized(
-            fb,
-            t,
-            (at.coord, at.layer, at.passed),
-            (size, tex.image),
-            bits,
-            (taps, tex.parent),
-        ),
-        None => footprint_of_image(
-            fb,
-            t,
-            (at.coord, at.layer, at.passed),
-            (tex.img, tex.image),
-            bits,
-            (taps, tex.parent),
-        ),
-    }
+    footprint_of_image(
+        fb,
+        t,
+        (at.coord, at.layer, at.passed),
+        (tex.img, tex.image),
+        bits,
+        (taps, tex.parent),
+    )
 }
 
 /// The filtered texel at `at` of `tex` (unswizzled) by `state`: a constexpr sampler's linear or
@@ -1043,9 +1026,7 @@ fn swizzled(fb: &mut FunctionBuilder<'_>, tex: &Texture, x: SValue) -> BResult<S
 
 /// The linear sample at `at` of `tex` under `addressing`: the device's `FMix` of the four taps'
 /// decoded values by the fractions `k / 256`, a merged axis's fraction taken as 0, or a 3D
-/// texture's of the eight ([`block_taps`]); its `half` result the device's narrowing. An in-place
-/// two-plane YCbCr texture's is Metal's exact sum of its taps on its grid (`super::in_place`,
-/// `bicubic::routines::Quad`).
+/// texture's of the eight ([`block_taps`]); its `half` result the device's narrowing.
 pub(super) fn filtered(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -1054,19 +1035,6 @@ pub(super) fn filtered(
     tex: &Texture,
     addressing: Addressing<'_>,
 ) -> BResult<SValue> {
-    if let Decode::InPlace(_) = tex.decode {
-        let Some(quad) = cx.decl.families.sampler.linear_quad else {
-            return Err(cx.fail("an in-place linear sample without its routines"));
-        };
-        let mut args = quad_taps(cx, fb, t, at, tex, addressing)?.to_vec();
-        args.push(tex.flags);
-        let half = fb.module().constant(Constant::Scalar {
-            ty: t.bool_,
-            bits: ConstBits(u64::from(at.half)),
-        })?;
-        args.push(value(fb, half)?);
-        return fb.call(quad.exact, &args)?.ok_or_else(missing_routine);
-    }
     let x = match tex.image.plane {
         3 => {
             let (taps, [kx, ky, kz]) = block_taps(cx, fb, t, at, tex, addressing)?;
@@ -1290,7 +1258,7 @@ pub(super) fn nearest(
             let v = texel(cx, fb, &fp, tex, &site, false)?;
             crate::lower::arith::extended_range::bfloat_sample_half(fb, v)
         }
-        (true, Decode::Form { .. } | Decode::InPlace(_)) => texel(cx, fb, &fp, tex, &site, true),
+        (true, Decode::Form { .. }) => texel(cx, fb, &fp, tex, &site, true),
         // A heap handle's form: both roundings of the one raw texel, chosen by the form.
         (true, Decode::Heap { bfloat, .. }) => {
             let (raw, inside) = tap(fb, &fp, tex, &site)?;
@@ -1352,11 +1320,6 @@ pub(super) fn texel(
     site: &[Tap],
     half: bool,
 ) -> BResult<SValue> {
-    if let Decode::InPlace(planes) = tex.decode {
-        let (at, inside) = fp.site(fb, site)?;
-        let v = super::in_place::texel(fb, &planes, tex.img, at, half)?;
-        return fp.border(fb, v, inside);
-    }
     let (raw, inside) = tap(fb, fp, tex, site)?;
     let v = decoded(cx, fb, tex, raw, half)?;
     fp.border(fb, v, inside)
@@ -1400,7 +1363,6 @@ fn decoded(
             fb.call(routine, &[raw, form, inside])?
                 .ok_or_else(missing_routine)
         }
-        Decode::InPlace(_) => Err(cx.fail("an in-place tap decoded as a raw texel")),
     }
 }
 

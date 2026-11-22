@@ -136,8 +136,7 @@ pub enum FormatEmulation {
     /// `R32G32B32A32_SFLOAT` of an `_sRGB` twin's (a grid of `1/8192`), and
     /// `A2B10G10R10_UNORM_PACK32` of the codes. Exact for a sampled image a function reads or
     /// fetches from; a linear sample is the device's filter of the texels, noted, off their grid
-    /// (`metal::texel_format::PackedTexels::YCbCr2048` and `YCbCr8192`), but where the function
-    /// reads the planes in place (`bind::YCbCrInPlace`), Metal's filter. Admitted for sampling only:
+    /// (`metal::texel_format::PackedTexels::YCbCr2048` and `YCbCr8192`). Admitted for sampling only:
     /// Metal drops a function's writes to a 4:2:0 or 4:2:2 format ([`writes_dropped`]), stores a
     /// 4:4:4 one's into both planes (refused here, `storage_choice`), and renders into such a
     /// texture by an inverse conversion, for which a pipeline into one of [`ycbcr_renders`] is
@@ -1131,24 +1130,6 @@ pub fn alpha_in_red(pf: PixelFormat, profile: &DeviceProfile) -> bool {
     alpha_in_red_format(pf).is_some() && direct_format(pf).is_some_and(|own| !held(own))
 }
 
-/// The format a texel buffer view of a texture buffer of `pf` takes for `usage` (a texel buffer
-/// usage) on `profile` where the format's own does not serve it and the bytes hold Metal's alpha in
-/// red ([`FormatEmulation::AlphaInRed`]): `R8_UNORM` for `A8Unorm` on a device that views no
-/// `A8_UNORM` texels for the usage (a Vulkan 1.2 device without `VK_KHR_maintenance5`), where it
-/// views `R8_UNORM` ones. A view reads `(r, 0, 0, 1)` where Metal reads `(0, 0, 0, r)`: a storage
-/// view's reads and writes convert by its choice's class (`StorageImageClass::AlphaInRed`,
-/// [`storage_choice`]), and a uniform view's reads take the alpha from red through the slot's
-/// swizzle (`TextureSwizzleChannels::alpha_in_red`). `None` elsewhere.
-pub(crate) fn texel_buffer_alpha_in_red(
-    pf: PixelFormat,
-    usage: FormatUsage,
-    profile: &DeviceProfile,
-) -> Option<vk::Format> {
-    let own = direct_format(pf)?;
-    let held = alpha_in_red_format(pf)?;
-    (!profile.supports_format(own, usage) && profile.supports_format(held, usage)).then_some(held)
-}
-
 /// The format of `pf`'s image where the device holds no image of its direct format and `pf`
 /// holds Metal's alpha in red ([`FormatEmulation::AlphaInRed`]): `R8_UNORM` for `A8Unorm`,
 /// `None` for every other format.
@@ -1873,10 +1854,10 @@ pub fn ycbcr(pf: PixelFormat) -> bool {
 /// kernel's write leaves both planes' bytes as they were, and Metal's validation stops the
 /// binding), and the packed ones, `YCBCR10_444_2P_PACKED` and its `_sRGB` twin among them (the
 /// M3 Max under macOS 27.0.1, our probe `ycw` over `p444` and `pf44` surfaces: every byte of both
-/// planes kept, the command buffer completed; an Apple M4 stores them). A storage slot a function
-/// only writes takes its neutral there (`bind::plan`), and so does a heap's storage class
-/// (`bind::heap`, an argument buffer's texture, whose writes Metal drops alike: the M3 Max under
-/// macOS 27.0.1, `YCBCR8_420_2P`), which the writes leave as Metal leaves the texture.
+/// planes kept, the command buffer completed; an Apple M4 stores them). A heap's storage class
+/// holds such a texture as its neutral (`bind::heap::fit`, an argument buffer's texture, whose
+/// writes Metal drops alike: the M3 Max under macOS 27.0.1, `YCBCR8_420_2P`), which the writes
+/// leave as Metal leaves the texture.
 ///
 /// An unpacked 4:4:4 YCbCr format's writes are not dropped: Metal stores each texel's codes into
 /// both planes, and a slot that writes one is refused (`storage_choice`).
@@ -2661,8 +2642,7 @@ pub fn storage_image_choice(
 /// `SrgbEncode` (`BGRA8Unorm_sRGB`, where its twin is not accessed without a format, through
 /// `R8G8B8A8_UNORM` with `SrgbEncodeBgra`), `RGB9E5Float` through `R32_UINT` with
 /// `SharedExponentBits`, and `A8Unorm` through `R8_UNORM` with `AlphaInRed` (no alias: such a
-/// texture's image is `R8_UNORM` itself, [`FormatEmulation::AlphaInRed`]; a texture buffer's bytes
-/// take that view wherever `A8_UNORM` does not serve the use, [`texel_buffer_alpha_in_red`]).
+/// texture's image is `R8_UNORM` itself, [`FormatEmulation::AlphaInRed`]).
 /// Anything else is `Unsupported{Format}` naming what each route lacks, a format's without-format
 /// usage included.
 ///

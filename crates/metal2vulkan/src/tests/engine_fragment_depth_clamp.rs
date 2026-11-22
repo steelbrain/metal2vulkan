@@ -17,9 +17,8 @@
 //! tool skips visibly. No GPU is used.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
-use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
+use crate::device::{DevicePolicy, DeviceProfile};
 use crate::library::FunctionArtifact;
 use crate::pipeline::link::{link, LinkInputs};
 use crate::pipeline::lower_inputs::LoweringInputs;
@@ -170,135 +169,5 @@ fn a_depth_clamp_range_variant_clamps_the_depth_to_the_draws_range() {
         // The `[0, 1]` selects run under the input.
         assert!(count(&a, 169) >= 5, "{stem}: {} selects", count(&a, 169));
         assert_eq!((kills(&a), kills(&b)), (1, 1), "{stem}: the kill");
-    }
-}
-
-/// A draw asking for the depth clamp range runs the variant whose fragment function clamps the
-/// depth it writes, with the state's range at the function's push field; a pipeline whose
-/// fragment function writes no depth has no such variant and draws as it is.
-#[test]
-fn a_depth_clamp_range_draw_runs_the_variant_with_the_states_range() {
-    use crate::bind::{BindState, DrawCall};
-    use crate::budget::Budget;
-    use crate::error::BindError;
-    use crate::library::Library;
-    use crate::metal::PixelFormat;
-    use crate::pipeline::descriptor::{
-        ColorAttachmentDescriptor, FunctionDescriptor, RenderPipelineDescriptor, StageSource,
-    };
-    use crate::pipeline::facts::RuntimeFact;
-    use crate::pipeline::interface::PushLoc;
-    use crate::pipeline::sym::{PushField, Stage};
-    let Some(bc) = fixture() else {
-        return;
-    };
-    let budget = Budget::standard();
-    let lib = Library::from_air(&bc).expect("library");
-    let function =
-        |name| StageSource::Function(FunctionDescriptor::new(lib.function(name).expect(name)));
-    let triangle = DrawCall::Primitives {
-        vertex_start: 0,
-        vertex_count: 3,
-        instance_count: 1,
-        base_instance: 0,
-    };
-    let range = [0.25f32, 0.5];
-    let state = BindState {
-        depth_clamp_range: Some(range),
-        ..Default::default()
-    };
-    for stem in ["moltenvk-m3", "lavapipe"] {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../metal2vulkan-validation/profiles")
-            .join(format!("{stem}.json"));
-        let text = std::fs::read_to_string(path).expect("profile");
-        let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
-        for (fragment, writes) in [("rfb_depth", true), ("rfb_position", false)] {
-            let what = format!("{stem} {fragment}");
-            let mut d = RenderPipelineDescriptor::new(function("rfb_full"));
-            d.fragment = Some(function(fragment));
-            d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Float));
-            d.depth_format = Some(PixelFormat::Depth32Float);
-            let base = dev
-                .compile_render_pipeline(&d, &budget)
-                .unwrap_or_else(|e| panic!("{what}: {e}"));
-            assert_eq!(base.graphics.writes_depth, writes, "{what}");
-            let plan = base
-                .plan(&dev, &state.shape())
-                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            assert_eq!(plan.variant.depth_clamp_range, writes, "{what}");
-            if !writes {
-                plan.instantiate_draw(&state, &triangle)
-                    .unwrap_or_else(|e| panic!("{what}: {e:?}"));
-                continue;
-            }
-            assert_eq!(
-                plan.instantiate_draw(&state, &triangle),
-                Err(BindError::NeedsVariant {
-                    variant: Box::new(plan.variant.clone())
-                }),
-                "{what}"
-            );
-            let key = plan.variant.clone();
-            let v = dev
-                .compile_render_variant(&d, &key, &budget)
-                .unwrap_or_else(|e| panic!("{what}: {e}"));
-            for m in &v.stages {
-                check_words_valid(&m.spirv, &v.requirements, dev.profile())
-                    .unwrap_or_else(|e| panic!("{what} {:?}: L3: {e}", m.stage));
-            }
-            assert!(
-                v.dependencies
-                    .iter()
-                    .any(|x| x.fact == RuntimeFact::DepthClampRange),
-                "{what}"
-            );
-            let plan = v
-                .plan(&dev, &state.shape())
-                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            assert_eq!(plan.variant, key, "{what}");
-            let commands = plan
-                .instantiate_draw(&state, &triangle)
-                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            let offset = v
-                .interface
-                .push
-                .iter()
-                .filter(|pl| pl.stage == Stage::Fragment)
-                .flat_map(|pl| pl.fields.iter())
-                .find(|f| f.field == PushField::DepthClampRange)
-                .map(|f| match f.loc {
-                    PushLoc::Push { offset } => offset as usize,
-                    other => panic!("{what}: {other:?}"),
-                })
-                .unwrap_or_else(|| panic!("{what}: no range field"));
-            let mut pushed = vec![None; 256];
-            for w in &commands.push_constants {
-                for (i, b) in w.bytes.iter().enumerate() {
-                    if let Some(slot) = pushed.get_mut(w.offset as usize + i) {
-                        *slot = Some(*b);
-                    }
-                }
-            }
-            let bytes: Vec<Option<u8>> = range
-                .iter()
-                .flat_map(|v| v.to_le_bytes())
-                .map(Some)
-                .collect();
-            assert_eq!(pushed.get(offset..offset + 8), Some(&bytes[..]), "{what}");
-            // Without the range the variant asks for the base again.
-            let plan = v
-                .plan(&dev, &BindState::default().shape())
-                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            assert!(!plan.variant.depth_clamp_range, "{what}");
-            assert!(
-                matches!(
-                    plan.instantiate_draw(&BindState::default(), &triangle),
-                    Err(BindError::NeedsVariant { .. })
-                ),
-                "{what}"
-            );
-        }
     }
 }

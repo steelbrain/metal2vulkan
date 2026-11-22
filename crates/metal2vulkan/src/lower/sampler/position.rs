@@ -1,6 +1,6 @@
 //! Metal's texel-space position of a normalized coordinate, which the filters the device has no
-//! form for read their footprints from (`bicubic`, `extended`, `heap_raw`, `in_place`, and the
-//! residency `footprint`), and Metal's placement of a texel offset on a repeating or mirrored axis.
+//! form for read their footprints from (`bicubic`, `extended`, `heap_raw`, and the residency
+//! `footprint`), and Metal's placement of a texel offset on a repeating or mirrored axis.
 //!
 //! **The position** (Apple M3 Max, macOS 26.7, and Apple M4, macOS 27.0.1, byte-identical; the
 //! tie, gather, and bicubic probes). Per axis of size `N` and normalized coordinate `u`, Apple's

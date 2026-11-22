@@ -594,7 +594,7 @@ fn draw_input() -> Error {
 /// through ([`RenderCompiled::numbered`]), and what a draw of it supplies.
 ///
 /// Err: [`Gap::RenderPipeline`] of [`RenderPipelineKind::DrawInput`] for a pipeline that reads
-/// what a draw does not supply: a function table, a table the binder builds, a parameter block
+/// what a draw does not supply: a function table, a pointer or handle translation table, a parameter block
 /// longer than a ring chunk, push bytes past the device's push `window`
 /// (`DeviceProfile::push_window`), a push field or bind-time fact the encoder does not fill, or an
 /// unnormalized constexpr sampler.

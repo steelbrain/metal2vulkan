@@ -3049,9 +3049,8 @@ cache is answered compile-required on both.
   - a value from the encoder that the function reads and the identity domains do not source ("an
     encoder value the function reads as F", `F` the `PushField`: a texture buffer's bind offset,
     `SlotBindOffset`; a texture's level count, `TextureLevels`; the draw's `InstanceCount` or
-    `BaseVertexInstance`; a stage-in stride, `StageInStride`; a two-plane texture read in place,
-    `YCbCrInPlace`, which `tests::engine_ycbcr_in_place` asserts; and the others the translator
-    pushes beside the identity fields): no other test yet;
+    `BaseVertexInstance`; a stage-in stride, `StageInStride`; and the others the translator
+    pushes beside the identity fields): no test yet;
   - a buffer argument not reached through its device address ("a buffer argument not reached
     through its device address"): no test yet;
   - a texture argument of a type the identity arrays hold no element of, or whose bound texture's
@@ -3066,7 +3065,7 @@ cache is answered compile-required on both.
   - other state of a bound texture or sampler beyond its resource ID ("state of a bound texture
     or sampler beyond its resource ID (F)", `F` the `RuntimeFact`), among them an argument
     buffer's texture that the function only queries (`HeapNumericType`):
-    `tests::engine_heap_binder`'s
+    `tests::engine_heap_groups`'s
     `a_query_only_argument_buffer_texture_is_refused_naming_its_numeric_type` asserts the text
     for a 2D texture and a cube array, and the golden table holds the refusal's class for
     `engine/tail_cases`' `tail_heap_cube_queries`;
@@ -3484,7 +3483,7 @@ cache is answered compile-required on both.
   other than the sample and
   amplification counts, dynamic state beyond Vulkan 1.3's (a vertex buffer layout whose stride is
   set per bind among it), a feature or extension device creation does not enable, and a function
-  that reads what a draw does not supply (`DrawInput`: a function table, a table the binder builds,
+  that reads what a draw does not supply (`DrawInput`: a function table, a pointer or handle translation table,
   a parameter block past the push range, a push field or bind-time fact the encoder does not fill,
   an unnormalized constexpr sampler). Of the replay streams' contents that translate, every one
   reads only its slots' addresses, resource IDs and constexpr sampler indices. The

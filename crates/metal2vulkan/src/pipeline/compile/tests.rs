@@ -649,9 +649,6 @@ fn the_inputs_encoding_is_the_earlier_derived_debug() {
                 .replace(", replay_bindings: false", "")
                 .replace(", merged_draws: false", "")
                 .replace(", srgb_textures: {}", "")
-                .replace(", ycbcr_in_place: {}", "")
-                .replace(", ycbcr_planes_sampled: {}", "")
-                .replace(", texel_rows: {}", "")
                 .replace(", texel_buffer_parts: {}", "")
                 .replace(", viewport_index_varying: false", "")
                 .replace(", max_call_stack_depth: None", "")
@@ -3043,461 +3040,6 @@ fn a_fragment_reading_through_a_loaded_pointer_writes_no_memory() {
     }
 }
 
-/// A vertex function that writes `[[viewport_array_index]]` depends on the draw's viewport count,
-/// which its push window holds and each draw writes from `BindState::viewport_count`, and writes
-/// the index as written to a flat varying (`IoRole::ViewportIndex`). In its pipeline a fragment
-/// function that reads the index compiles under `viewport_index_varying` and reads that varying, as
-/// `render_pipeline_key` names, its push fields from the vertex function's push end
-/// (`CompiledFunction::fragment_push_base`); one that does not read it compiles without
-/// `viewport_index_varying`. A reading fragment compiled for the other kind of
-/// vertex function is `NeedsInput(ViewportIndex)` either way. Every module passes L3.
-#[test]
-fn a_fragment_reads_the_viewport_index_its_vertex_function_wrote() {
-    use crate::bind::plan::FieldLocation;
-    use crate::bind::{BindState, DrawCall};
-    use crate::error::RuntimeInput;
-    use crate::pipeline::facts::RuntimeFact;
-    use crate::pipeline::stage_io::{IoRole, StageBuiltin};
-    use crate::pipeline::sym::{PushField, Stage, VaryingKey};
-    let (Some(bc), Some(other)) = (fixture("rt6_viewports"), fixture("rt6_render_state")) else {
-        return;
-    };
-    let lib = Library::from_air(&bc).expect("library");
-    let other = Library::from_air(&other).expect("library");
-    let function = |lib: &Library, name: &str| {
-        FunctionDescriptor::new(lib.function(name).unwrap_or_else(|e| panic!("{name}: {e}")))
-    };
-    let dev = device("moltenvk-m3");
-    let budget = Budget::standard();
-    let pipeline = |vertex: StageSource, fragment: StageSource| {
-        let mut d = RenderPipelineDescriptor::new(vertex);
-        d.fragment = Some(fragment);
-        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(
-            metal::PixelFormat::RGBA8Unorm,
-        ));
-        d
-    };
-    let select = || StageSource::Function(function(&lib, "rt6_select"));
-    let reader = function(&lib, "rt6_viewport_read");
-
-    // The vertex function: the fact, the push field, the builtin, and the raw varying.
-    let vertex = dev
-        .compile_function(
-            &function(&lib, "rt6_select"),
-            &LoweringInputs::new(),
-            &budget,
-        )
-        .expect("vertex");
-    let a = vertex.artifact();
-    assert!(a.facts.contains(&RuntimeFact::ViewportCount));
-    assert!(a
-        .interface
-        .push
-        .fields
-        .iter()
-        .any(|f| f.field == PushField::ViewportCount));
-    assert!(a
-        .interface
-        .io
-        .builtins
-        .contains(&StageBuiltin::ViewportIndex));
-    let raw: Vec<_> = a
-        .interface
-        .io
-        .outputs
-        .iter()
-        .filter(|v| v.role == IoRole::ViewportIndex)
-        .collect();
-    assert_eq!(raw.len(), 1);
-    assert_eq!(raw[0].key, VaryingKey::viewport_index());
-
-    // The reading fragment in the pipeline: the field, the varying, no builtin.
-    let d = pipeline(select(), StageSource::Function(reader.clone()));
-    let keys = dev.render_pipeline_key(&d, &budget).expect("keys");
-    let inputs = keys.fragment_inputs.clone().expect("fragment inputs");
-    assert!(inputs.viewport_index_varying);
-    let pipe = dev.compile_render_pipeline(&d, &budget).expect("pipeline");
-    assert_eq!(pipe.key, keys.pipeline);
-    for s in &pipe.stages {
-        l3(&s.spirv, &pipe.requirements, &dev);
-    }
-    assert!(pipe
-        .dependencies
-        .iter()
-        .any(|d| d.fact == RuntimeFact::ViewportCount));
-    let fragment = dev
-        .compile_function(&reader, &inputs, &budget)
-        .expect("fragment");
-    assert_eq!(Some(*fragment.key()), keys.fragment);
-    let io = &fragment.artifact().interface.io;
-    assert!(io.inputs.iter().any(|v| v.role == IoRole::ViewportIndex));
-    assert!(!io.builtins.contains(&StageBuiltin::ViewportIndex));
-
-    // A fragment that does not read the index keeps its key.
-    let white = function(&lib, "rt6_white");
-    let keys = dev
-        .render_pipeline_key(
-            &pipeline(select(), StageSource::Function(white.clone())),
-            &budget,
-        )
-        .expect("keys");
-    let inputs = keys.fragment_inputs.clone().expect("fragment inputs");
-    assert!(!inputs.viewport_index_varying);
-    assert_eq!(
-        keys.fragment,
-        Some(dev.function_compile_key(&white, &inputs))
-    );
-
-    // Each draw writes the encoder's viewport count into the vertex push window.
-    let state = BindState {
-        viewport_count: 3,
-        ..BindState::default()
-    };
-    let plan = pipe.plan(&dev, &state.shape()).expect("plan");
-    let placed = plan
-        .push
-        .fields
-        .iter()
-        .find(|f| f.stage == Stage::Vertex && f.field == PushField::ViewportCount)
-        .expect("placed");
-    let FieldLocation::PushWindow { offset } = placed.location else {
-        panic!("the count spilled: {placed:?}");
-    };
-    let draw = DrawCall::Primitives {
-        vertex_start: 0,
-        vertex_count: 3,
-        instance_count: 1,
-        base_instance: 4,
-    };
-    let commands = plan.instantiate_draw(&state, &draw).expect("draw");
-    let write = commands
-        .push_constants
-        .iter()
-        .find(|w| w.stages.contains(crate::vk::ShaderStageFlags::VERTEX))
-        .expect("vertex push");
-    let at = (offset - write.offset) as usize;
-    assert_eq!(write.bytes[at..at + 4], 3u32.to_le_bytes());
-
-    // Compiled for the other kind of vertex function: refused, never a wrong read.
-    let without = dev
-        .compile_function(&reader, &LoweringInputs::new(), &budget)
-        .expect("fragment");
-    let mut under = LoweringInputs::new();
-    under.viewport_index_varying = true;
-    let under = dev
-        .compile_function(&reader, &under, &budget)
-        .expect("fragment");
-    let full = || StageSource::Function(function(&other, "rt6_full"));
-    for d in [
-        pipeline(select(), StageSource::Compiled(without)),
-        pipeline(full(), StageSource::Compiled(under)),
-    ] {
-        assert_eq!(
-            dev.compile_render_pipeline(&d, &budget).err(),
-            Some(Error::NeedsInput(RuntimeInput::ViewportIndex))
-        );
-    }
-}
-
-/// A merged draw replay's vertex function (`VariantKey::merged_draws`) reads its command's slot
-/// table from the header at its `MergedDrawAddress`, a hole of the vertex stage, in place of a
-/// `RootTableAddress`, and its plan states the variant. A fragment function that reads a buffer
-/// reads its command's fragment slot table from the header too, at the command its vertex wrote
-/// (`IoRole::MergedCommand`): `MergedDrawAddress` is its push field, `RootTableAddress` none. One
-/// that reads `[[primitive_id]]`, which Metal counts per command, is refused, as is a merged key
-/// without replay bindings.
-#[test]
-fn a_merged_draw_reads_its_command_s_table_from_its_header() {
-    use crate::cache::VariantKey;
-    use crate::pipeline::sym::PushField;
-    let dev = device("moltenvk-m3");
-    let mut key = VariantKey::new();
-    key.replay_bindings = true;
-    key.merged_draws = true;
-    let compile = |vertex: (&str, &str),
-                   fragment: Option<(&str, &str, metal::PixelFormat)>,
-                   key: &VariantKey| {
-        let function = |(file, name): (&str, &str)| {
-            let bc = fixture(file)?;
-            Some(FunctionDescriptor::new(
-                Library::from_air(&bc)
-                    .expect("library")
-                    .function(name)
-                    .expect("function"),
-            ))
-        };
-        let mut d = RenderPipelineDescriptor::new(StageSource::Function(function(vertex)?));
-        match fragment {
-            Some((file, name, format)) => {
-                d.fragment = Some(StageSource::Function(function((file, name))?));
-                d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(format));
-            }
-            None => d.rasterization_enabled = false,
-        }
-        Some(dev.compile_render_variant(&d, key, &Budget::standard()))
-    };
-    let Some(merged) = compile(("primitive_ids", "pi_place"), None, &key) else {
-        return;
-    };
-    let merged = merged.expect("merged");
-    let fields: Vec<PushField> = merged
-        .interface
-        .push
-        .iter()
-        .flat_map(|p| p.fields.iter().map(|f| f.field))
-        .collect();
-    assert!(fields.contains(&PushField::MergedDrawAddress), "{fields:?}");
-    assert!(!fields.contains(&PushField::RootTableAddress), "{fields:?}");
-    assert!(
-        !fields.contains(&PushField::BaseVertexInstance),
-        "{fields:?}"
-    );
-    let plan = merged
-        .plan(&dev, &crate::bind::BindShape::default())
-        .expect("plan");
-    assert!(plan.variant.replay_bindings && plan.variant.merged_draws);
-    let placed: Vec<_> = plan
-        .push
-        .fields
-        .iter()
-        .filter(|f| f.field == PushField::MergedDrawAddress)
-        .map(|f| f.stage)
-        .collect();
-    assert_eq!(placed, [crate::pipeline::sym::Stage::Vertex]);
-    let mut unreplayed = VariantKey::new();
-    unreplayed.merged_draws = true;
-    let plain = compile(("primitive_ids", "pi_place"), None, &unreplayed)
-        .expect("fixture")
-        .expect("merged alone is no variant");
-    assert!(!plain.interface.push.iter().any(|p| p
-        .fields
-        .iter()
-        .any(|f| f.field == PushField::MergedDrawAddress)));
-    let (vertex, fragment) = (
-        ("primitive_ids", "pi_place"),
-        ("primitive_ids", "pi_ids", metal::PixelFormat::RGBA32Uint),
-    );
-    compile(vertex, Some(fragment), &VariantKey::new())
-        .expect("fixture")
-        .expect("plain");
-    let refused = compile(vertex, Some(fragment), &key)
-        .expect("fixture")
-        .expect_err("a fragment's primitive ID under a merged draw");
-    assert!(
-        format!("{refused:?}").contains("GpuEncodedIndirectCommands"),
-        "{fragment:?}: {refused:?}"
-    );
-    let (vertex, fragment) = (
-        ("a8r_targets", "a8r_vertex"),
-        ("a8r_targets", "a8r_fill", metal::PixelFormat::RGBA8Unorm),
-    );
-    let buffered = compile(vertex, Some(fragment), &key)
-        .expect("fixture")
-        .expect("a fragment's buffer under a merged draw");
-    let fragment_fields: Vec<PushField> = (buffered.interface.push.iter())
-        .filter(|p| p.stage == crate::pipeline::sym::Stage::Fragment)
-        .flat_map(|p| p.fields.iter().map(|f| f.field))
-        .collect();
-    assert!(
-        fragment_fields.contains(&PushField::MergedDrawAddress)
-            && !fragment_fields.contains(&PushField::RootTableAddress),
-        "{fragment_fields:?}"
-    );
-}
-
-/// A merged draw replay's functions find their command's slot tables before any entry hook reads
-/// one: a fragment function that loads a pointer from its argument buffer reads that buffer's
-/// root entry at entry (`access::dynamic::emit_entry`), from the fragment slot table the command
-/// its vertex wrote names, and the merged variant of `icb_merged_arguments` (a vertex function
-/// that fetches `[[stage_in]]` attributes, a fragment function whose argument buffer holds two
-/// textures and a constant pointer) compiles on each device that has the replay, every stage
-/// passing L3, its fragment stage reading the header at its `MergedDrawAddress`.
-#[test]
-fn a_merged_fragment_reads_its_argument_buffer_through_its_command_s_table() {
-    use crate::cache::VariantKey;
-    use crate::pipeline::sym::{PushField, Stage};
-    let Some(bc) = fixture("icb_merged_arguments") else {
-        return;
-    };
-    let lib = Library::from_air(&bc).expect("library");
-    let function = |name: &str| {
-        StageSource::Function(FunctionDescriptor::new(lib.function(name).expect(name)))
-    };
-    let mut d = RenderPipelineDescriptor::new(function("ica_vertex"));
-    d.fragment = Some(function("ica_fragment"));
-    d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(
-        metal::PixelFormat::RGBA32Uint,
-    ));
-    let mut input = VertexDescriptor::new();
-    input
-        .layouts
-        .insert(0, VertexBufferLayoutDescriptor::new(Some(8)));
-    input
-        .layouts
-        .insert(1, VertexBufferLayoutDescriptor::new(Some(4)));
-    input.attributes.insert(
-        0,
-        VertexAttributeDescriptor::new(metal::VertexFormat::Float2, 0, 0),
-    );
-    input.attributes.insert(
-        1,
-        VertexAttributeDescriptor::new(metal::VertexFormat::UInt, 0, 1),
-    );
-    d.vertex_descriptor = Some(input);
-    for stem in ["moltenvk-m3", "amd-780m-radv", "lavapipe"] {
-        let dev = device(stem);
-        let base = dev
-            .compile_render_variant(&d, &VariantKey::new(), &Budget::standard())
-            .unwrap_or_else(|e| panic!("{stem}: base: {e}"));
-        let layouts = (base.vertex_input.bindings.iter())
-            .map(|b| b.buffer_index)
-            .collect();
-        let shape = crate::bind::BindShape {
-            far_vertex_buffers: layouts,
-            ..Default::default()
-        };
-        let mut key = base.plan(&dev, &shape).expect("base plan").variant;
-        key.replay_bindings = true;
-        key.merged_draws = true;
-        let merged = dev
-            .compile_render_variant(&d, &key, &Budget::standard())
-            .unwrap_or_else(|e| panic!("{stem}: merged: {e}"));
-        for stage in &merged.stages {
-            l3(&stage.spirv, &merged.requirements, &dev);
-        }
-        let fragment: Vec<PushField> = (merged.interface.push.iter())
-            .filter(|p| p.stage == Stage::Fragment)
-            .flat_map(|p| p.fields.iter().map(|f| f.field))
-            .collect();
-        assert!(
-            fragment.contains(&PushField::MergedDrawAddress)
-                && !fragment.contains(&PushField::RootTableAddress),
-            "{stem}: {fragment:?}"
-        );
-    }
-}
-
-/// A render pipeline compiled as a device-replay variant (`VariantKey::replay_bindings`) reads
-/// every buffer its vertex function reaches through its root entry (`BufferForm::Psb`), from the
-/// slot table at the stage's own `RootTableAddress`, and needs no `SlotGuestBase`
-/// (`icb_render_replay_template`); its plan states the variant. A vertex function that fetches
-/// a `[[stage_in]]` attribute (`icb_render_stride_template`) in fixed function, as it does under
-/// the identity domains, is refused: fixed-function input reads no slot table. Outside them the
-/// attribute is pulled, so the draw binds no fixed-function layout, and its replay variant
-/// compiles, one draw per command and merged, binds no layout and pulls the attribute, whose read
-/// reaches the slot table; every stage passes L3, and its plan states its key.
-#[test]
-fn a_replayed_draw_reads_its_buffers_through_the_slot_table() {
-    use crate::cache::VariantKey;
-    use crate::pipeline::interface::{BufferForm, SlotInterface};
-    use crate::pipeline::sym::PushField;
-    let dev = device("moltenvk-m3");
-    let mut key = VariantKey::new();
-    key.replay_bindings = true;
-    let Some(bc) = fixture("icb_render_replay_template") else {
-        return;
-    };
-    let vertex = Library::from_air(&bc)
-        .expect("library")
-        .function("icb_render_replay_template")
-        .expect("vertex");
-    let mut d =
-        RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(vertex)));
-    d.rasterization_enabled = false;
-    let plain = dev
-        .compile_render_variant(&d, &VariantKey::new(), &Budget::standard())
-        .expect("plain");
-    let replayed = dev
-        .compile_render_variant(&d, &key, &Budget::standard())
-        .expect("replayed");
-    let forms = |p: &crate::pipeline::artifact::RenderPipeline| -> Vec<BufferForm> {
-        p.interface
-            .slots
-            .values()
-            .filter_map(|s| match s {
-                SlotInterface::Buffer(b) => Some(b.form),
-                _ => None,
-            })
-            .collect()
-    };
-    assert_eq!(forms(&replayed).len(), 2);
-    assert!(forms(&replayed).iter().all(|f| *f == BufferForm::Psb));
-    assert!(forms(&plain).iter().any(|f| *f != BufferForm::Psb));
-    let fields: Vec<PushField> = replayed
-        .interface
-        .push
-        .iter()
-        .flat_map(|p| p.fields.iter().map(|f| f.field))
-        .collect();
-    assert!(fields.contains(&PushField::RootTableAddress));
-    assert!(!fields
-        .iter()
-        .any(|f| matches!(f, PushField::SlotGuestBase(_))));
-    let plan = replayed
-        .plan(&dev, &crate::bind::BindShape::default())
-        .expect("plan");
-    assert!(plan.variant.replay_bindings);
-
-    // A fixed-function fetch is the identity domains' alone (the runtime's): outside them every
-    // attribute is pulled.
-    let idev =
-        Device::from_queries(description("moltenvk-m3"), DevicePolicy::default()).expect("device");
-    let Some(bc) = fixture("icb_render_stride_template") else {
-        return;
-    };
-    let vertex = Library::from_air(&bc)
-        .expect("library")
-        .function("icb_render_stride_template")
-        .expect("vertex");
-    let mut d =
-        RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(vertex)));
-    d.rasterization_enabled = false;
-    d.vertex_descriptor = Some(vertex_descriptor(&[(0, metal::VertexFormat::UInt)]));
-    let fetched = idev
-        .compile_render_variant(&d, &VariantKey::new(), &Budget::standard())
-        .expect("fetched");
-    assert_eq!(fetched.vertex_input.bindings.len(), 1);
-    let refused = idev
-        .compile_render_variant(&d, &key, &Budget::standard())
-        .expect_err("a fetch under replay bindings");
-    assert!(
-        format!("{refused:?}").contains("GpuEncodedIndirectCommands"),
-        "{refused:?}"
-    );
-    let base = dev
-        .compile_render_variant(&d, &VariantKey::new(), &Budget::standard())
-        .expect("pulled");
-    assert!(
-        base.vertex_input.bindings.is_empty(),
-        "{:?}",
-        base.vertex_input.bindings
-    );
-    for merged in [false, true] {
-        let mut replay = key.clone();
-        replay.merged_draws = merged;
-        let p = dev
-            .compile_render_variant(&d, &replay, &Budget::standard())
-            .unwrap_or_else(|e| panic!("merged {merged}: {e}"));
-        let input = &p.vertex_input;
-        assert!(input.bindings.is_empty(), "merged {merged}");
-        assert_eq!(input.pulled.len(), 1, "merged {merged}");
-        // The pulled layout's buffer is read through its root entry, as every other slot.
-        let slots = forms(&p);
-        assert!(
-            !slots.is_empty() && slots.iter().all(|f| *f == BufferForm::Psb),
-            "merged {merged}: {slots:?}"
-        );
-        for stage in &p.stages {
-            l3(&stage.spirv, &p.requirements, &dev);
-        }
-        let replayed = p
-            .plan(&dev, &crate::bind::BindShape::default())
-            .expect("the variant's plan");
-        assert_eq!(replayed.variant, replay, "merged {merged}");
-        assert!(replayed.vertex_buffers.is_empty(), "merged {merged}");
-    }
-}
-
 /// Under the identity domains a device-replay variant (`VariantKey::replay_bindings`), which reads
 /// every buffer slot's address from its replayed command's root entry at the stage's
 /// `RootTableAddress`, is refused, typed (`Unsupported{IdentityDomains}` naming the field the
@@ -3615,63 +3157,126 @@ fn a_pipeline_for_indirect_command_buffers_pulls_its_stage_in() {
     }
 }
 
-/// A draw replay's variant reads every buffer through the slot table its replay's preprocess
-/// writes, so inline bytes the encoder bound at a slot it reads are no refusal: commands that
-/// inherit the encoder's buffers read them at the consumer's upload of them, whose address the
-/// preprocess's entry takes (`bind::DrawReplayPreprocess::inherited_bytes`). Its plan for a shape
-/// with inline bytes at every buffer slot plans; one with a buffer bound without a device
-/// address there, which no entry can name, stays `MissingDeviceAddress`.
+/// A vertex function that writes `[[viewport_array_index]]` depends on the draw's viewport count,
+/// which its push window holds (`PushField::ViewportCount`), and writes the index as written to a
+/// flat varying (`IoRole::ViewportIndex`). In its pipeline a fragment
+/// function that reads the index compiles under `viewport_index_varying` and reads that varying, as
+/// `render_pipeline_key` names, its push fields from the vertex function's push end
+/// (`CompiledFunction::fragment_push_base`); one that does not read it compiles without
+/// `viewport_index_varying`. A reading fragment compiled for the other kind of
+/// vertex function is `NeedsInput(ViewportIndex)` either way. Every module passes L3.
 #[test]
-fn a_replayed_draw_plans_inline_bytes_at_its_slots() {
-    use crate::bind::{BindShape, BufferShape, StageShape};
-    use crate::cache::VariantKey;
-    use crate::error::BindError;
-    use crate::pipeline::interface::SlotInterface;
-    let dev = device("moltenvk-m3");
-    let mut key = VariantKey::new();
-    key.replay_bindings = true;
-    let Some(bc) = fixture("icb_render_replay_template") else {
+fn a_fragment_reads_the_viewport_index_its_vertex_function_wrote() {
+    use crate::error::RuntimeInput;
+    use crate::pipeline::facts::RuntimeFact;
+    use crate::pipeline::stage_io::{IoRole, StageBuiltin};
+    use crate::pipeline::sym::{PushField, VaryingKey};
+    let (Some(bc), Some(other)) = (fixture("rt6_viewports"), fixture("rt6_render_state")) else {
         return;
     };
-    let vertex = Library::from_air(&bc)
-        .expect("library")
-        .function("icb_render_replay_template")
+    let lib = Library::from_air(&bc).expect("library");
+    let other = Library::from_air(&other).expect("library");
+    let function = |lib: &Library, name: &str| {
+        FunctionDescriptor::new(lib.function(name).unwrap_or_else(|e| panic!("{name}: {e}")))
+    };
+    let dev = device("moltenvk-m3");
+    let budget = Budget::standard();
+    let pipeline = |vertex: StageSource, fragment: StageSource| {
+        let mut d = RenderPipelineDescriptor::new(vertex);
+        d.fragment = Some(fragment);
+        d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(
+            metal::PixelFormat::RGBA8Unorm,
+        ));
+        d
+    };
+    let select = || StageSource::Function(function(&lib, "rt6_select"));
+    let reader = function(&lib, "rt6_viewport_read");
+
+    // The vertex function: the fact, the push field, the builtin, and the raw varying.
+    let vertex = dev
+        .compile_function(
+            &function(&lib, "rt6_select"),
+            &LoweringInputs::new(),
+            &budget,
+        )
         .expect("vertex");
-    let mut d =
-        RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(vertex)));
-    d.rasterization_enabled = false;
-    let replayed = dev
-        .compile_render_variant(&d, &key, &Budget::standard())
-        .expect("replayed");
-    let slots: Vec<_> = (replayed.interface.slots.iter())
-        .filter(|(_, s)| matches!(s, SlotInterface::Buffer(_)))
-        .map(|(slot, _)| *slot)
+    let a = vertex.artifact();
+    assert!(a.facts.contains(&RuntimeFact::ViewportCount));
+    assert!(a
+        .interface
+        .push
+        .fields
+        .iter()
+        .any(|f| f.field == PushField::ViewportCount));
+    assert!(a
+        .interface
+        .io
+        .builtins
+        .contains(&StageBuiltin::ViewportIndex));
+    let raw: Vec<_> = a
+        .interface
+        .io
+        .outputs
+        .iter()
+        .filter(|v| v.role == IoRole::ViewportIndex)
         .collect();
-    assert!(!slots.is_empty());
-    let shape_with = |bound: BufferShape| {
-        let mut shape = BindShape::default();
-        for slot in &slots {
-            let stage: &mut StageShape = shape.stages.entry(slot.stage).or_default();
-            stage.buffers.insert(slot.index, bound);
-        }
-        shape
-    };
-    let bytes = BufferShape::Bytes {
-        attribute_stride: None,
-    };
-    let plan = replayed
-        .plan(&dev, &shape_with(bytes))
-        .expect("inline bytes");
-    assert!(plan.variant.replay_bindings);
-    let unaddressed = BufferShape::Buffer {
-        attribute_stride: None,
-        device_address: false,
-        length_class: 0,
-        offset_alignment: 4,
-    };
-    let refused = replayed.plan(&dev, &shape_with(unaddressed));
-    assert!(
-        matches!(refused, Err(BindError::MissingDeviceAddress { .. })),
-        "{refused:?}"
+    assert_eq!(raw.len(), 1);
+    assert_eq!(raw[0].key, VaryingKey::viewport_index());
+
+    // The reading fragment in the pipeline: the field, the varying, no builtin.
+    let d = pipeline(select(), StageSource::Function(reader.clone()));
+    let keys = dev.render_pipeline_key(&d, &budget).expect("keys");
+    let inputs = keys.fragment_inputs.clone().expect("fragment inputs");
+    assert!(inputs.viewport_index_varying);
+    let pipe = dev.compile_render_pipeline(&d, &budget).expect("pipeline");
+    assert_eq!(pipe.key, keys.pipeline);
+    for s in &pipe.stages {
+        l3(&s.spirv, &pipe.requirements, &dev);
+    }
+    assert!(pipe
+        .dependencies
+        .iter()
+        .any(|d| d.fact == RuntimeFact::ViewportCount));
+    let fragment = dev
+        .compile_function(&reader, &inputs, &budget)
+        .expect("fragment");
+    assert_eq!(Some(*fragment.key()), keys.fragment);
+    let io = &fragment.artifact().interface.io;
+    assert!(io.inputs.iter().any(|v| v.role == IoRole::ViewportIndex));
+    assert!(!io.builtins.contains(&StageBuiltin::ViewportIndex));
+
+    // A fragment that does not read the index keeps its key.
+    let white = function(&lib, "rt6_white");
+    let keys = dev
+        .render_pipeline_key(
+            &pipeline(select(), StageSource::Function(white.clone())),
+            &budget,
+        )
+        .expect("keys");
+    let inputs = keys.fragment_inputs.clone().expect("fragment inputs");
+    assert!(!inputs.viewport_index_varying);
+    assert_eq!(
+        keys.fragment,
+        Some(dev.function_compile_key(&white, &inputs))
     );
+
+    // Compiled for the other kind of vertex function: refused, never a wrong read.
+    let without = dev
+        .compile_function(&reader, &LoweringInputs::new(), &budget)
+        .expect("fragment");
+    let mut under = LoweringInputs::new();
+    under.viewport_index_varying = true;
+    let under = dev
+        .compile_function(&reader, &under, &budget)
+        .expect("fragment");
+    let full = || StageSource::Function(function(&other, "rt6_full"));
+    for d in [
+        pipeline(select(), StageSource::Compiled(without)),
+        pipeline(full(), StageSource::Compiled(under)),
+    ] {
+        assert_eq!(
+            dev.compile_render_pipeline(&d, &budget).err(),
+            Some(Error::NeedsInput(RuntimeInput::ViewportIndex))
+        );
+    }
 }

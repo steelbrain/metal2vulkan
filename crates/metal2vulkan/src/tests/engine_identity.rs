@@ -16,9 +16,7 @@
 //!   whole dispatch, one split in two pieces at a base, and an indirect one (a zero grid, its grid
 //!   `NumWorkgroups · L`) store the same answers, and a ragged grid split into a region of its
 //!   threadgroup size and an edge region of fewer threads, at 1 with Metal's threadgroup size in
-//!   the region, stores Metal's answers. Through the binder (`BindingPlan::instantiate_dispatch`)
-//!   a ragged `dispatchThreads` grid's regions, edges of fewer threads among them, set
-//!   `MultiRegion` 1 and store Metal's answers.
+//!   the region, stores Metal's answers.
 //! - A kernel's partial-threadgroups variant (`partial`, generated) dispatched at its whole
 //!   threadgroup size over a ragged grid, its pushed region flagged `NONUNIFORM`, answers each
 //!   edge threadgroup's own size, and its invocations past the grid store nothing.
@@ -125,7 +123,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use super::engine_word_phases::{bounds_word, slot_word, ZERO_UNMAPPED};
-use crate::bind::{BindState, BoundBuffer, Dispatch, StageTable};
 use crate::budget::Budget;
 use crate::device::profile::{DeviceProfile, HandleDomain, PointerDomain};
 use crate::device::requirements::VkFeature;
@@ -2700,103 +2697,6 @@ fn from_queries_reads_every_regions_base_and_its_size_by_multi_region() {
     }
 }
 
-/// Through the binder on `Device::from_queries`' profile: a ragged `dispatchThreads` grid of
-/// [`grid_kernel`] is planned as edge regions of fewer threads than Metal's threadgroup, each with
-/// `MultiRegion` 1, and every region, run on the CPU interpreter with the push bytes, the
-/// specialization and the group counts the binder planned, stores Metal's answers for the grid.
-#[test]
-fn the_binders_edge_regions_set_multi_region_on_from_queries_and_store_metals_grid() {
-    let Some(bc) = assemble_text("grid", &grid_kernel("grid")) else {
-        return;
-    };
-    const L: [u32; 3] = [4, 2, 1];
-    const GRID: [u32; 3] = [7, 5, 1];
-    let threads = (GRID[0] * GRID[1]) as usize;
-    let groups = [GRID[0].div_ceil(L[0]), GRID[1].div_ceil(L[1])];
-    let value = GRID[0] | GRID[1] << 8 | groups[0] << 16 | groups[1] << 24;
-    let want: Vec<u8> = (0..threads).flat_map(|_| value.to_le_bytes()).collect();
-    for stem in PROFILES {
-        let desc = crate::pipeline::testing::description(stem).unwrap_or_else(|e| panic!("{e}"));
-        let dev = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
-        let lib = Library::from_air(&bc).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let f = lib
-            .function("grid")
-            .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
-        let pipe = dev
-            .compile_compute_pipeline(&d, &Budget::standard())
-            .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let (_, _, module) =
-            compile_kept(&bc, "grid", dev.profile()).unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let mut table = StageTable::default();
-        table.buffers.insert(
-            0,
-            BoundBuffer::Buffer {
-                length: 4 * threads as u64,
-                offset: 0,
-                gpu_address: OUT,
-                device_address: Some(OUT),
-                attribute_stride: None,
-            },
-        );
-        let mut state = BindState::default();
-        state.stages.insert(Stage::Kernel, table);
-        let plan = pipe
-            .plan(&dev, &state.shape())
-            .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let dispatch = Dispatch::Threads {
-            threads: GRID,
-            threads_per_group: L,
-        };
-        let commands = plan
-            .instantiate_dispatch(&state, &dispatch)
-            .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let keys: BTreeMap<u32, SpecKey> = (pipe.stage.specialization.constants.iter())
-            .map(|c| (c.id, c.key))
-            .collect();
-        let mut out = vec![0u8; 4 * threads];
-        let mut edges = 0;
-        for region in &commands.regions {
-            let mut spec = BTreeMap::new();
-            for e in &region.specialization.entries {
-                let at = e.offset as usize;
-                let mut v = [0u8; 8];
-                v[..e.size as usize]
-                    .copy_from_slice(&region.specialization.data[at..at + e.size as usize]);
-                spec.insert(keys[&e.constant_id], u64::from_le_bytes(v));
-            }
-            let local = [Axis::X, Axis::Y].map(|a| spec.get(&SpecKey::LocalSize(a)).copied());
-            if spec.get(&SpecKey::MultiRegion) == Some(&1)
-                && local != [Some(u64::from(L[0])), Some(u64::from(L[1]))]
-            {
-                edges += 1;
-            }
-            let mut push = Vec::new();
-            if let Some(w) = region.push_constants.first() {
-                push = vec![0u8; w.offset as usize + w.bytes.len()];
-                push[w.offset as usize..].copy_from_slice(&w.bytes);
-            }
-            let res = Resources {
-                buffers: vec![Buffer {
-                    slot: None,
-                    address: Some(OUT),
-                    bytes: out,
-                }],
-                push,
-                spec,
-            };
-            let cfg = Config {
-                workgroups: region.group_count,
-                ..Config::default()
-            };
-            let got = run(&module, &cfg, res).unwrap_or_else(|e| panic!("{stem}: {e}"));
-            out = got.buffers.into_iter().next().expect("out");
-        }
-        assert!(edges > 0, "{stem}: an edge region of fewer threads");
-        assert_eq!(out, want, "{stem}");
-    }
-}
-
 /// A kernel storing, at its position in the grid `y · 7 + x` (the grid is 7 wide), its
 /// threadgroup's threads along `x` and `y` (bits 0-7, 8-15).
 fn partial_kernel() -> String {
@@ -2971,67 +2871,6 @@ fn a_deep_threadgroup_runs_as_one_row_on_from_queries() {
         queries.metal_properties().max_threads_per_threadgroup,
         [1024; 3]
     );
-}
-
-/// Through the binder on `Device::from_queries`' profile of a device that holds 64 threads along
-/// `z` (NVIDIA's): a dispatch of [`deep_kernel`] in threadgroups 320 deep is planned, its region
-/// setting `SpecKey::DeepThreadgroup`, and one 4 deep is planned with it unset.
-#[test]
-fn the_binder_sets_deep_threadgroup_for_a_threadgroup_deeper_than_the_floor() {
-    let Some(bc) = assemble_text("deep", &deep_kernel()) else {
-        return;
-    };
-    let desc = crate::pipeline::testing::description("nvidia-rtx50-linux")
-        .unwrap_or_else(|e| panic!("{e}"));
-    let dev = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
-    let lib = Library::from_air(&bc).unwrap_or_else(|e| panic!("{e}"));
-    let f = FunctionDescriptor::new(lib.function("deep").unwrap_or_else(|e| panic!("{e}")));
-    let compiled = dev
-        .compile_function(&f, &LowerInputs::new(), &Budget::standard())
-        .unwrap_or_else(|e| panic!("{e}"));
-    let d = ComputePipelineDescriptor::new(StageSource::Compiled(compiled));
-    let pipe = dev
-        .compile_compute_pipeline(&d, &Budget::standard())
-        .unwrap_or_else(|e| panic!("{e}"));
-    let mut table = StageTable::default();
-    table.buffers.insert(
-        0,
-        BoundBuffer::Buffer {
-            length: 1 << 20,
-            offset: 0,
-            gpu_address: OUT,
-            device_address: Some(OUT),
-            attribute_stride: None,
-        },
-    );
-    let mut state = BindState::default();
-    state.stages.insert(Stage::Kernel, table);
-    let plan = pipe
-        .plan(&dev, &state.shape())
-        .unwrap_or_else(|e| panic!("{e}"));
-    let id = (pipe.stage.specialization.constants.iter())
-        .find(|c| c.key == SpecKey::DeepThreadgroup)
-        .map(|c| c.id)
-        .expect("the kernel declares DeepThreadgroup");
-    for (threads_per_group, deep) in [([1, 1, 320], true), ([4, 4, 4], false)] {
-        let dispatch = Dispatch::Threadgroups {
-            groups: [2, 1, 1],
-            threads_per_group,
-        };
-        let commands = plan
-            .instantiate_dispatch(&state, &dispatch)
-            .unwrap_or_else(|e| panic!("{threads_per_group:?}: {e}"));
-        assert!(!commands.regions.is_empty());
-        for region in &commands.regions {
-            let entry = (region.specialization.entries.iter())
-                .find(|e| e.constant_id == id)
-                .expect("every region sets DeepThreadgroup");
-            let at = entry.offset as usize;
-            let set =
-                (region.specialization.data[at..at + entry.size as usize].iter()).any(|&b| b != 0);
-            assert_eq!(set, deep, "{threads_per_group:?}");
-        }
-    }
 }
 
 /// A partial-threadgroups variant over a ragged grid, its region flagged `NONUNIFORM`, answers
@@ -3960,67 +3799,6 @@ fn a_seq_cst_fence_is_refused_naming_its_form_under_the_identity_domains() {
             }
             other => panic!("{stem}: {:?}", other.map(|_| ())),
         }
-    }
-}
-
-/// The translator's binder supplies no field the runtime pushes itself under the identity domains:
-/// planning a kernel that samples a texture slot through a sampler slot (owned fixture `sampling`'s
-/// `sample_level`, whose words there are the two resource IDs) is
-/// `Unsupported{IdentityDomains, NotImplemented}`, typed, never an internal invariant. The runtime
-/// binds those words itself and never plans through the binder.
-#[test]
-fn the_binder_refuses_a_texture_and_sampler_slots_resource_ids_typed() {
-    let Some(bc) = assemble("sampling") else {
-        return;
-    };
-    let desc =
-        crate::pipeline::testing::description("moltenvk-m3").unwrap_or_else(|e| panic!("{e}"));
-    let dev = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
-    let lib = Library::from_air(&bc).unwrap_or_else(|e| panic!("{e}"));
-    let f = lib
-        .function("sample_level")
-        .unwrap_or_else(|e| panic!("{e}"));
-    let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
-    let pipe = dev
-        .compile_compute_pipeline(&d, &Budget::standard())
-        .unwrap_or_else(|e| panic!("{e}"));
-    let mut table = StageTable::default();
-    table.buffers.insert(
-        0,
-        BoundBuffer::Buffer {
-            length: 4096,
-            offset: 0,
-            gpu_address: OUT,
-            device_address: Some(OUT),
-            attribute_stride: None,
-        },
-    );
-    table.textures.insert(
-        0,
-        crate::bind::BoundTexture::Texture {
-            facts: crate::bind::TextureFacts::new(
-                crate::metal::TextureType::Type2D,
-                PixelFormat::RGBA8Unorm,
-            ),
-            resource_id: None,
-        },
-    );
-    table.samplers.insert(
-        0,
-        crate::bind::BoundSampler::new(crate::bind::SamplerDescriptor::new()),
-    );
-    let mut state = BindState::default();
-    state.stages.insert(Stage::Kernel, table);
-    match pipe.plan(&dev, &state.shape()) {
-        Err(crate::error::BindError::Unsupported(u)) => {
-            let shown = u.to_string();
-            assert_eq!(
-                (u.feature, u.needs),
-                (Feature::IdentityDomains, Needs::NotImplemented),
-                "{shown}"
-            );
-        }
-        other => panic!("{other:?}"),
     }
 }
 

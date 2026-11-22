@@ -14,18 +14,15 @@
 //! extensions define each format value.
 //!
 //! The hand-written structs mirror Vulkan's: [`SpecializationMapEntry`], [`ComponentMapping`],
-//! [`SamplerDesc`] (the translation-relevant part of `VkSamplerCreateInfo`), and [`DrawCommand`]
-//! (the parameters of one `vkCmdDraw*` call), with [`FormatBlock`] and [`NumericFormat`] for the
-//! registry's format facts.
+//! and [`SamplerDesc`] (the translation-relevant part of `VkSamplerCreateInfo`), with
+//! [`FormatBlock`] and [`NumericFormat`] for the registry's format facts.
 
 // `generated.rs` is written by `scripts/regen-vk-types/` (never hand-edited); the hand-written
-// structs live in `structs.rs`, and `DrawCommand` in `draw.rs`.
+// structs live in `structs.rs`.
 
 // The generated file invokes the macros below, so it is declared after them (textual scoping).
-mod draw;
 mod structs;
 
-pub use draw::DrawCommand;
 pub use generated::*;
 pub use structs::{
     ComponentMapping, FormatBlock, FormatExposure, NumericFormat, NumericType, SamplerDesc,

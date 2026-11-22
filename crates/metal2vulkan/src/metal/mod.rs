@@ -375,26 +375,6 @@ impl TextureSwizzleChannels {
             a: channel(3, self.alpha),
         }
     }
-
-    /// This swizzle of the texel `(0, 0, 0, a)` an `A8Unorm` texture buffer reads, as a swizzle
-    /// of the texel `(a, 0, 0, 1)` its bytes' `R8_UNORM` view reads
-    /// (`metal::format::texel_buffer_alpha_in_red`): each channel taken from red, green or blue is
-    /// zero, one taken from alpha the view's red, and `Zero` and `One` stay.
-    pub(crate) fn alpha_in_red(self) -> TextureSwizzleChannels {
-        let held = |s: TextureSwizzle| match s {
-            TextureSwizzle::Red | TextureSwizzle::Green | TextureSwizzle::Blue => {
-                TextureSwizzle::Zero
-            }
-            TextureSwizzle::Alpha => TextureSwizzle::Red,
-            constant => constant,
-        };
-        TextureSwizzleChannels {
-            red: held(self.red),
-            green: held(self.green),
-            blue: held(self.blue),
-            alpha: held(self.alpha),
-        }
-    }
 }
 
 impl Default for TextureSwizzleChannels {

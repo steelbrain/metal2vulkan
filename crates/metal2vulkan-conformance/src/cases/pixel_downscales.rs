@@ -412,8 +412,8 @@ impl Case for PixelDownscales {
         // These are the kinds a run provoked (see `pixel_samplers`): the device reads the pixel
         // coordinate divided by the size, not Metal's `1/256` cell of it. A venue that announces
         // another reads as divergent there until someone names it with a run. The device's own
-        // filter and sRGB decode (`float-sample-filter`, `srgb-texel-decode`) are native notes the
-        // suite declares for every case (`crate::replay::NATIVE_NOTES`).
+        // sRGB decode (`srgb-texel-decode`) is a native note the suite declares for every case
+        // (`crate::replay::NATIVE_NOTES`).
         //
         // **Each is a declaration and loosens nothing.** Each sits at the notices site alone, so
         // a texel that differs still fails the case wherever it differs.

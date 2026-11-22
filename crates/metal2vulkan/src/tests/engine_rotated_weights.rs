@@ -9,17 +9,12 @@
 //!   `1 - (x + y)` once more than without it, each operation `NoContraction`; a `float` read
 //!   reads lane 1 where it read lane 0.
 //! - A function that reads no weights is the same module under it, and states nothing.
-//! - A draw whose shape draws its triangles rotated (`BindState::rotated_weights`) runs the
-//!   variant where its pipeline reads the weights (`BindError::NeedsVariant` from the base),
-//!   whose plan states it; a pipeline that reads none draws as it is.
 //!
 //! What the weights hold is a Metal probe's (the M3 Max, macOS 27.0.1: the first weight bit for
 //! bit, the others within `2^-15`). Every module passes L3. `llvm-as` assembles the fixtures; a
 //! missing tool skips visibly. No GPU is used.
 
-use std::path::Path;
-
-use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
+use crate::device::{DevicePolicy, DeviceProfile};
 use crate::library::FunctionArtifact;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::link::{link, LinkInputs};
@@ -169,111 +164,5 @@ fn rotated_weights_take_metal_s_weights_from_the_drawn_triangle_s() {
             "{stem}: {:?}",
             extracted_lanes(&a)
         );
-    }
-}
-
-/// A draw that draws its triangles rotated runs the variant of a pipeline that reads the weights,
-/// whose plan states it and draws; one that reads none draws as it is.
-#[test]
-fn a_rotated_draw_runs_the_rotated_weights_variant() {
-    use crate::bind::{BindState, DrawCall};
-    use crate::budget::Budget;
-    use crate::error::BindError;
-    use crate::library::Library;
-    use crate::metal::PixelFormat;
-    use crate::pipeline::descriptor::{
-        ColorAttachmentDescriptor, FunctionDescriptor, RenderPipelineDescriptor, StageSource,
-    };
-    let Some(bc) = fixture("rt6_provoking") else {
-        return;
-    };
-    let budget = Budget::standard();
-    let lib = Library::from_air(&bc).expect("library");
-    let function =
-        |name| StageSource::Function(FunctionDescriptor::new(lib.function(name).expect(name)));
-    let triangle = DrawCall::Primitives {
-        vertex_start: 0,
-        vertex_count: 3,
-        instance_count: 1,
-        base_instance: 0,
-    };
-    let state = BindState {
-        rotated_weights: true,
-        ..Default::default()
-    };
-    for stem in ["moltenvk-m3", "amd-780m-radv"] {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../metal2vulkan-validation/profiles")
-            .join(format!("{stem}.json"));
-        let text = std::fs::read_to_string(path).expect("profile");
-        let desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-        let dev = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).expect("device");
-        for (fragment, reads) in [("pv_both", true), ("pv_flat", false)] {
-            let what = format!("{stem} {fragment}");
-            let mut d = RenderPipelineDescriptor::new(function("pv_vertex"));
-            d.fragment = Some(function(fragment));
-            for (i, format) in [
-                PixelFormat::RGBA32Float,
-                PixelFormat::RGBA32Float,
-                PixelFormat::RGBA32Uint,
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                d.color_attachments[i] = Some(ColorAttachmentDescriptor::new(format));
-            }
-            let base = dev
-                .compile_render_pipeline(&d, &budget)
-                .unwrap_or_else(|e| panic!("{what}: {e}"));
-            assert_eq!(base.graphics.reads_barycentric_coord, reads, "{what}");
-            let plan = base
-                .plan(&dev, &state.shape())
-                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            assert_eq!(plan.variant.rotated_weights, reads, "{what}");
-            if !reads {
-                plan.instantiate_draw(&state, &triangle)
-                    .unwrap_or_else(|e| panic!("{what}: {e:?}"));
-                continue;
-            }
-            assert_eq!(
-                plan.instantiate_draw(&state, &triangle),
-                Err(BindError::NeedsVariant {
-                    variant: Box::new(plan.variant.clone())
-                }),
-                "{what}"
-            );
-            let key = plan.variant.clone();
-            let v = dev
-                .compile_render_variant(&d, &key, &budget)
-                .unwrap_or_else(|e| panic!("{what}: {e}"));
-            for m in &v.stages {
-                check_words_valid(&m.spirv, &v.requirements, dev.profile())
-                    .unwrap_or_else(|e| panic!("{what} {:?}: L3: {e}", m.stage));
-            }
-            assert!(
-                v.dependencies
-                    .iter()
-                    .any(|x| x.fact == RuntimeFact::RotatedWeights),
-                "{what}"
-            );
-            let plan = v
-                .plan(&dev, &state.shape())
-                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            assert_eq!(plan.variant, key, "{what}");
-            plan.instantiate_draw(&state, &triangle)
-                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            // Drawn as it is, the variant asks for the base again.
-            let plan = v
-                .plan(&dev, &BindState::default().shape())
-                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
-            assert!(!plan.variant.rotated_weights, "{what}");
-            assert!(
-                matches!(
-                    plan.instantiate_draw(&BindState::default(), &triangle),
-                    Err(BindError::NeedsVariant { .. })
-                ),
-                "{what}"
-            );
-        }
     }
 }

@@ -32,11 +32,10 @@
 
 use std::path::Path;
 
-use crate::bind::BindState;
 use crate::budget::Budget;
 use crate::device::requirements::{VkExtension, VkFeature, VkProperty};
 use crate::device::{Device, DeviceDescription, DevicePolicy};
-use crate::error::{Capability, Error, Feature, LowerFamily, Needs, Unsupported};
+use crate::error::{Capability, Error, Feature, Unsupported};
 use crate::library::Library;
 use crate::metal::{PixelFormat, VertexFormat};
 use crate::pipeline::artifact::PrecisionNote;
@@ -44,12 +43,8 @@ use crate::pipeline::descriptor::{
     ColorAttachmentDescriptor, FunctionDescriptor, RenderPipelineDescriptor, StageSource,
     VertexAttributeDescriptor, VertexBufferLayoutDescriptor, VertexDescriptor,
 };
-use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::lower_inputs::LoweringInputs;
-use crate::pipeline::sym::SpecKey;
-use crate::pipeline::testing::{
-    compile, engine_dir, llvm_assemble, moltenvk_msl_compile, AssembleError, Scratch,
-};
+use crate::pipeline::testing::{engine_dir, llvm_assemble, moltenvk_msl_compile, AssembleError};
 use crate::pipeline::RenderPipeline;
 use crate::spirv::testing::check_words_valid;
 
@@ -627,103 +622,5 @@ fn a_center_varying_at_sample_rate_needs_the_interpolation_functions() {
                 "{what}"
             );
         }
-    }
-}
-
-/// The value of the planned specialization constant `key` of `p`.
-pub(super) fn planned(p: &RenderPipeline, plan: &crate::bind::BindingPlan, key: SpecKey) -> u32 {
-    let id = p
-        .stages
-        .iter()
-        .flat_map(|m| m.specialization.constants.iter())
-        .find(|c| c.key == key)
-        .unwrap_or_else(|| panic!("no {key:?} constant"))
-        .id;
-    let e = plan
-        .specialization
-        .entries
-        .iter()
-        .find(|e| e.constant_id == id)
-        .unwrap_or_else(|| panic!("no {key:?} entry"));
-    let at = e.offset as usize;
-    u32::from_le_bytes(
-        plan.specialization.data[at..at + 4]
-            .try_into()
-            .expect("4 bytes"),
-    )
-}
-
-/// `get_num_samples()` (`air.get_num_samples.i32` with operand 0, the owned fixture
-/// `engine/spc_num_samples`) reads the `SampleCount` specialization constant, default 1,
-/// and states `RuntimeFact::SampleCount`; a render pipeline's plan sets it to the pipeline's
-/// sample count, at one and at four samples. Another operand has no established meaning and is
-/// refused.
-#[test]
-fn get_num_samples_reads_the_pipeline_sample_count() {
-    let Some(ms) = fixture() else { return };
-    let path = engine_dir().join("spc_num_samples.ll");
-    let bc = match llvm_assemble(&path) {
-        Ok(b) => b,
-        Err(AssembleError::Missing(why)) => {
-            eprintln!("SKIPPED: {why}");
-            return;
-        }
-        Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected spc_num_samples.ll: {why}"),
-    };
-    let lib = Library::from_air(&bc).expect("library");
-    let mut checked = 0;
-    for stem in ["moltenvk-m3", "lavapipe"] {
-        let dev =
-            Device::from_queries(description(stem), DevicePolicy::RESIDENT_TABLES).expect("device");
-        let a = compile(&bc, "spc_num_samples", dev.profile()).expect("spc_num_samples");
-        assert!(a.facts.contains(&RuntimeFact::SampleCount), "{stem}");
-        for samples in [1, 4] {
-            let what = format!("{stem} at {samples}");
-            let stage = |l: &Library, name: &str| {
-                StageSource::Function(FunctionDescriptor::new(l.function(name).expect("function")))
-            };
-            let mut d = RenderPipelineDescriptor::new(stage(&ms, VERTEX));
-            d.fragment = Some(stage(&lib, "spc_num_samples"));
-            d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::R32Uint));
-            d.raster_sample_count = samples;
-            let p = match dev.compile_render_pipeline(&d, &Budget::standard()) {
-                Err(Error::Unsupported(u)) if u.feature == Feature::RasterSampleCount => {
-                    assert!(samples > 1 && stem != "moltenvk-m3", "{what}: {u:?}");
-                    eprintln!("{what}: not a framebuffer sample count of an integer attachment");
-                    continue;
-                }
-                p => p.unwrap_or_else(|e| panic!("{what}: {e}")),
-            };
-            validate(&p, &dev, &what);
-            let plan = p.plan(&dev, &BindState::default().shape()).expect("plan");
-            assert_eq!(planned(&p, &plan, SpecKey::SampleCount), samples, "{what}");
-            checked += 1;
-        }
-    }
-    assert_eq!(
-        checked, 3,
-        "moltenvk-m3 at one and four samples, lavapipe at one"
-    );
-    // The same call with operand 1.
-    let text = std::fs::read_to_string(&path).expect("fixture text");
-    let other = text.replace(
-        "@air.get_num_samples.i32(i32 0)",
-        "@air.get_num_samples.i32(i32 1)",
-    );
-    assert_ne!(other, text);
-    let scratch = Scratch::new("m2v-num-samples");
-    let dir = scratch.path();
-    let ll = dir.join("num_samples_one.ll");
-    std::fs::write(&ll, other).expect("write");
-    let bc = llvm_assemble(&ll);
-    let bc = bc.expect("assembled");
-    let p = Device::from_queries(description("lavapipe"), DevicePolicy::RESIDENT_TABLES)
-        .expect("device");
-    match compile(&bc, "spc_num_samples", p.profile()) {
-        Err(Error::Unsupported(u)) => {
-            assert_eq!(u.feature, Feature::Lowering(LowerFamily::Fragment));
-            assert_eq!(u.needs, Needs::NotImplemented);
-        }
-        other => panic!("operand 1: {:?}", other.map(|_| ())),
     }
 }

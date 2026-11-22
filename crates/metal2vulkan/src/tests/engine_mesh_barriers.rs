@@ -12,11 +12,7 @@
 //!
 //! `llvm-as` assembles the fixtures; a missing tool skips visibly.
 
-use super::engine_mesh::{device, fixture, mesh_profiles};
-use crate::bind::{BindState, DrawCall};
-use crate::budget::Budget;
-use crate::library::Library;
-use crate::pipeline::descriptor::{FunctionDescriptor, MeshPipelineDescriptor, StageSource};
+use super::engine_mesh::{fixture, mesh_profiles};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::sym::Stage;
 use crate::pipeline::testing::typed_module;
@@ -93,81 +89,6 @@ fn object_and_mesh_functions_wait_at_their_barriers_predicated() {
             );
             crate::spirv::testing::check_words_valid(&a.module.words, &a.module.requirements, p)
                 .unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-        }
-    }
-}
-
-/// An object function whose body waits at a threadgroup barrier draws a `drawMeshThreads` that
-/// leaves a partial object threadgroup: its pipeline records
-/// `PartialObjectThreadgroups`, and both whole and partial draws instantiate, a partial one at the
-/// threadgroups its threads fill, rounded up. `icb_object_threadgroup_object`'s barriers stand
-/// under its thread 0's condition, the fixture's in uniform control flow.
-#[test]
-fn a_partial_object_threadgroup_of_a_body_with_a_barrier_draws() {
-    let (Some(icb), Some(partial)) = (
-        fixture("icb_object_threadgroup"),
-        fixture("mesh_partial_barrier"),
-    ) else {
-        return;
-    };
-    let icb = Library::from_air(&icb).expect("library");
-    let partial = Library::from_air(&partial).expect("library");
-    let function = |lib: &Library, name: &str| {
-        StageSource::Function(FunctionDescriptor::new(
-            lib.function(name).expect("function"),
-        ))
-    };
-    let pipelines = [
-        (
-            &icb,
-            "icb_object_threadgroup_object",
-            "icb_object_threadgroup_mesh",
-        ),
-        (
-            &partial,
-            "mesh_partial_barrier_uniform",
-            "mesh_partial_barrier_mesh",
-        ),
-    ];
-    let draw = |threads| DrawCall::MeshThreads {
-        threads,
-        threads_per_object_group: [4, 1, 1],
-        threads_per_mesh_group: [8, 1, 1],
-    };
-    for (stem, _) in mesh_profiles() {
-        let dev = device(&stem);
-        for (lib, object, mesh) in pipelines {
-            let what = format!("{stem} {object}");
-            let mut d = MeshPipelineDescriptor::new(function(lib, mesh));
-            d.object = Some(function(lib, object));
-            d.rasterization_enabled = false;
-            let made = dev
-                .compile_mesh_pipeline(&d, &Budget::standard())
-                .unwrap_or_else(|e| panic!("{what}: {e}"));
-            assert!(
-                made.dependencies
-                    .iter()
-                    .any(|d| d.fact == RuntimeFact::PartialObjectThreadgroups),
-                "{what}"
-            );
-            let state = BindState::default();
-            let plan = made
-                .plan(&dev, &state.shape())
-                .unwrap_or_else(|e| panic!("{what}: plan: {e}"));
-            plan.instantiate_draw(&state, &draw([8, 1, 1]))
-                .unwrap_or_else(|e| panic!("{what}: whole object threadgroups: {e}"));
-            let cmds = plan
-                .instantiate_draw(&state, &draw([6, 1, 1]))
-                .unwrap_or_else(|e| panic!("{what}: a partial object threadgroup: {e}"));
-            let groups = match &cmds.draw {
-                crate::vk::DrawCommand::DrawMeshTasks {
-                    group_count_x,
-                    group_count_y,
-                    group_count_z,
-                } => [*group_count_x, *group_count_y, *group_count_z],
-                other => panic!("{what}: {other:?}"),
-            };
-            assert_eq!(groups, [2, 1, 1], "{what}");
         }
     }
 }

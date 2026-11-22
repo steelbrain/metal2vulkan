@@ -1687,25 +1687,6 @@ pub fn define_lookup(mb: &mut ModuleBuilder, t: Table, form: Lookup) -> BResult<
     fb.finish()
 }
 
-/// The search [`lookup`] emits, on the host: the element of `id` in `table`, a slice of
-/// `(resource_id, element)` entries sorted by id whose first entry is the null entry. The
-/// emitter's reference model, which every table a binder builds must satisfy.
-pub fn lookup_host(table: &[(u64, u32)], id: u64) -> u32 {
-    let (mut base, mut len) = (0usize, table.len());
-    for _ in 0..SEARCH_STEPS {
-        let half = len >> 1;
-        let mid = base + half;
-        if table.get(mid).is_some_and(|(k, _)| *k <= id) {
-            base = mid;
-        }
-        len -= half;
-    }
-    match table.get(base) {
-        Some((k, e)) if *k == id => *e,
-        _ => NEUTRAL_ELEMENT,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1876,19 +1857,6 @@ mod tests {
             .map_or(NEUTRAL_ELEMENT, |i| t[i].1)
     }
 
-    /// The host model finds every entry of sorted tables up to [`TABLE_CAPACITY`] entries in
-    /// [`SEARCH_STEPS`] steps, and maps every absent id (and the null id) to the neutral element.
-    #[test]
-    fn the_search_finds_every_entry_up_to_the_capacity() {
-        assert_eq!(1u64 << SEARCH_STEPS, u64::from(TABLE_CAPACITY));
-        for n in [1, 2, 3, 4, 5, 16, 17, 100, 4097, TABLE_CAPACITY as usize] {
-            let t = table(n);
-            for id in keys(&t) {
-                assert_eq!(lookup_host(&t, id), reference(&t, id), "n {n} id {id:#x}");
-            }
-        }
-    }
-
     const KEYS: u32 = 8;
 
     /// A kernel that looks up the [`KEYS`] ids (low, high word pairs) at the start of the
@@ -1948,7 +1916,7 @@ mod tests {
 
     /// The emitted search is the host model: over the CPU interpreter, every key of tables of
     /// several sizes up to [`TABLE_CAPACITY`] entries (the null id, present ids, absent ids between
-    /// and beyond them) gets [`lookup_host`]'s element, through an entry array (`u64` ids) and a
+    /// and beyond them) gets [`reference`]'s element, through an entry array (`u64` ids) and a
     /// word view. [`Lookup::Flagged`] also carries a found entry's [`FLAG_OUT_OF_BOUNDS_ALPHA_ONE`]
     /// in [`HANDLE_ALPHA_ONE`] where it carries the alpha, its texel class where it carries that,
     /// and its [`FLAG_RED_BLUE`] in [`HANDLE_RED_BLUE`] where it carries that, carrying no other
@@ -2149,7 +2117,7 @@ mod tests {
                         u32::from_le_bytes(io[at..at + 4].try_into().expect("word"))
                     };
                     for (i, id) in chunk.iter().enumerate() {
-                        let e = lookup_host(&t, *id);
+                        let e = reference(&t, *id);
                         let carried = |on: bool, flag: u32, bit: u32| match on {
                             true if flags(e) & flag != 0 => bit,
                             _ => 0,
@@ -2227,7 +2195,7 @@ mod tests {
                 for (i, id) in chunk.iter().enumerate() {
                     let at = 4 * (2 * KEYS as usize + i);
                     let got = u32::from_le_bytes(io[at..at + 4].try_into().expect("word"));
-                    let e = lookup_host(&t, *id);
+                    let e = reference(&t, *id);
                     let carried = |on: bool, flag: u32, bit: u32| match on {
                         true if flags(e) & flag != 0 => bit,
                         _ => 0,

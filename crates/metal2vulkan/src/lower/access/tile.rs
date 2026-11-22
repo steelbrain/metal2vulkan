@@ -20,8 +20,8 @@
 //! (`lower::dispatch`, measured for the threadgroups the binder alone runs, up to 32x32).
 //!
 //! **Tile staging.** The tile's cells are the threadgroup arena's imageblock region: its extent is
-//! the tile size (`SpecKey::ImageblockWidth`/`Height`, which the binder specializes from
-//! `BindState::imageblock_size`), and a cell holds each attachment's texel at its layout's offset
+//! the tile size (`SpecKey::ImageblockWidth`/`Height`, which the consumer specializes from the
+//! pass's tile size), and a cell holds each attachment's texel at its layout's offset
 //! (`memory::plan`: the aliased layout's, or the implicit layout's). The entry is a new function
 //! ([`wrap_entry`]) that loads the tile's pixels of every attachment the function reaches into the
 //! cells (a cell past the render area, `SpecKey::RenderAreaWidth`/`Height`, is zeroed: Metal leaves
@@ -1013,9 +1013,6 @@ fn image_decl(s: &TileSlot) -> ImageDecl {
         level_views: None,
         extended: None,
         x_channel: false,
-        in_place: false,
-        planes_sampler: None,
-        rows: false,
         parts: None,
     }
 }

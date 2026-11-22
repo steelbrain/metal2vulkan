@@ -56,8 +56,8 @@ pub struct GraphicsState {
     /// Metal's `maxVertexAmplificationCount` (1 without vertex amplification): a draw with this
     /// pipeline amplifies each vertex by a count in `[1, max_vertex_amplification_count]`, or,
     /// above 1, by a larger count too, as plain Metal draws one. Above 1 the pipeline is a
-    /// multiview pipeline: the consumer creates it, and begins its render pass instance, with the
-    /// view mask its render plan states (`BindingPlan::views`).
+    /// multiview pipeline: the consumer creates it, and begins its render pass instance, with a
+    /// view mask of its amplification count's views.
     pub max_vertex_amplification_count: u32,
     /// A stage declares `Layer`: the vertex function chooses its render target slice, or the
     /// fragment function reads it. Such a pipeline cannot be multiview
@@ -267,7 +267,7 @@ impl BandPrimitive {
 /// stage `TESSELLATION_EVALUATION`: the half extent of the draw's Vulkan viewport 0, its height
 /// negative as a Y-flipped viewport's is, half the width in framebuffer pixels, and for triangles
 /// 1 where the draw's front face is `CLOCKWISE` and -1 where it is `COUNTER_CLOCKWISE` (0 for
-/// lines; the binder writes it from `BindState::line_band`). Create the pipeline in Vulkan's
+/// lines; the consumer writes it per draw). Create the pipeline in Vulkan's
 /// default tessellation domain origin, `UPPER_LEFT`.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

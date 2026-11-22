@@ -10,33 +10,26 @@
 //! fixtures are committed as LLVM text, so the example assembles them with `llvm-as` (LLVM 21 or
 //! newer) from `PATH` first, as a consumer holding `.ll` would.
 //!
-//! It compiles a kernel for the committed `moltenvk-m3` profile under the resident-table domains,
-//! the policy the translator's binder plans (and the same kernel as a bare
-//! module's entry, linked alone), prints its pipeline interface, layout, and binding plan,
-//! instantiates one dispatch, round-trips the pipeline through its cache encoding, answers a
-//! pipeline-input request, shows a typed refusal on `runtime-floor`, dispatches a kernel with
-//! `[[stage_in]]`, and compiles, plans, and draws a render pipeline and a tessellation pipeline. `tests/api_preview_example.rs` runs it in the gate and checks that
-//! every code block of `docs/API.md` is quoted from it.
+//! It compiles a kernel for the committed `moltenvk-m3` profile under the runtime's policy (and the
+//! same kernel as a bare module's entry, linked alone), prints its pipeline interface and layout,
+//! round-trips the pipeline through its cache encoding, answers a pipeline-input request, shows a
+//! typed refusal on `runtime-floor`, compiles a kernel with `[[stage_in]]`, and compiles a render
+//! pipeline and a tessellation pipeline. `tests/api_preview_example.rs` runs it in the gate and
+//! checks that every code block of `docs/API.md` is quoted from it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use metal2vulkan::bind::{
-    BindState, BoundBuffer, BoundSampler, BoundTexture, Dispatch, DrawCall, SamplerDescriptor,
-    StageInRegion, StageTable, TessellationFactorBuffer, TessellationFactors, TextureFacts,
-};
 use metal2vulkan::cache::PipelineArtifact;
 use metal2vulkan::device::{Device, DeviceDescription, DevicePolicy};
-use metal2vulkan::error::{BindError, Error, Needs, RuntimeInput};
+use metal2vulkan::error::{Error, Needs, RuntimeInput};
 use metal2vulkan::library::{
     CompiledFunction, FunctionConstantValue, FunctionConstantValues, Library,
 };
-use metal2vulkan::metal::{
-    AttributeFormat, DataType, PixelFormat, StepFunction, TextureType, VertexFormat,
-};
+use metal2vulkan::metal::{AttributeFormat, DataType, PixelFormat, StepFunction, VertexFormat};
 use metal2vulkan::pipeline::{
     ColorAttachmentDescriptor, ComputePipeline, ComputePipelineDescriptor, EntryDescriptor,
-    EntryRef, FunctionDescriptor, LoweringInputs, RenderPipelineDescriptor, Stage,
+    EntryRef, FunctionDescriptor, LoweringInputs, RenderPipelineDescriptor,
     StageInputAttributeDescriptor, StageInputDescriptor, StageInputLayoutDescriptor, StageSource,
     TessellationDescriptor, VertexAttributeDescriptor, VertexBufferLayoutDescriptor,
     VertexDescriptor,
@@ -77,34 +70,12 @@ fn profile_json(stem: &str) -> Result<String> {
 }
 
 /// The device a runtime compiles for on committed profile `stem`: the default policy, the
-/// identity domains. The runtime binds what such a device's pipelines push itself.
+/// identity domains.
 fn runtime_device(stem: &str) -> Result<Device> {
     let json = profile_json(stem)?;
     let description = DeviceDescription::from_khronos_json(&json, None)?;
     let device = Device::from_queries(description, DevicePolicy::default())?;
     Ok(device)
-}
-
-/// The tour's device for committed profile `stem`: the resident-table domains, the policy the
-/// translator's binder plans (step 5 and the stage-in, render and tessellation walks), which a
-/// runtime's device does not take ([`runtime_device`]).
-fn committed_device(stem: &str) -> Result<Device> {
-    let json = profile_json(stem)?;
-    let description = DeviceDescription::from_khronos_json(&json, None)?;
-    let device = Device::from_queries(description, DevicePolicy::RESIDENT_TABLES)?;
-    Ok(device)
-}
-
-/// A buffer bound at `offset` in a `length`-byte allocation whose Metal `gpuAddress` and Vulkan
-/// device address are both `0x1_0000`, as the runtime makes them.
-fn buffer(length: u64, offset: u64) -> BoundBuffer {
-    BoundBuffer::Buffer {
-        length,
-        offset,
-        gpu_address: 0x1_0000,
-        device_address: Some(0x1_0000),
-        attribute_stride: None,
-    }
 }
 
 /// Lowercase hex of a digest.
@@ -113,14 +84,8 @@ fn hex(digest: &[u8]) -> String {
 }
 
 pub fn main() -> Result<()> {
-    // 1. A device: what the consumer enabled, and its policy. A runtime's device takes the
-    // default policy; the tour's takes the resident-table domains, which its binding plans need.
-    let runtime = runtime_device("moltenvk-m3")?;
-    println!(
-        "runtime's device: profile {}",
-        hex(&runtime.profile().fingerprint())
-    );
-    let device = committed_device("moltenvk-m3")?;
+    // 1. A device: what the consumer enabled, and its policy, the runtime's default.
+    let device = runtime_device("moltenvk-m3")?;
     let enables = device.required_enables();
     println!(
         "device: profile {}, {} features and {} extensions to enable",
@@ -193,43 +158,7 @@ pub fn main() -> Result<()> {
     println!("  precision notes: {:?}", pipeline.stage.precision_notes);
     println!("  Metal info: {:?}", pipeline.metal_info);
 
-    // 5. What is bound (Metal-shaped), the plan for its shape, and one dispatch.
-    let mut table = StageTable::default();
-    table.buffers.insert(0, buffer(4096, 0));
-    let facts = TextureFacts::new(TextureType::Type2D, PixelFormat::RGBA8Unorm);
-    let texture = BoundTexture::Texture {
-        facts,
-        resource_id: None,
-    };
-    table.textures.insert(0, texture);
-    let sampler = BoundSampler::new(SamplerDescriptor::new());
-    table.samplers.insert(0, sampler);
-    let mut state = BindState::default();
-    state.stages.insert(Stage::Kernel, table);
-
-    let plan = pipeline.plan(&device, &state.shape())?;
-    assert!(plan.variant.is_empty(), "this shape needs no other variant");
-    for write in &plan.descriptors {
-        println!(
-            "  write set {} binding {}[{}] {:?}: {:?}",
-            write.set, write.binding, write.array_element, write.ty, write.source
-        );
-    }
-    let dispatch = Dispatch::Threads {
-        threads: [100, 1, 1],
-        threads_per_group: [32, 1, 1],
-    };
-    let commands = plan.instantiate_dispatch(&state, &dispatch)?;
-    for region in &commands.regions {
-        println!(
-            "  region: {:?} groups, specialization {:?}",
-            region.group_count, region.specialization
-        );
-    }
-    println!("  descriptor ranges: {:?}", commands.descriptor_ranges);
-    println!("  push holes: {:?}", commands.push_holes);
-
-    // 6. The cache: a pipeline encodes under its key and decodes for the same device.
+    // 5. The cache: a pipeline encodes under its key and decodes for the same device.
     let bytes = pipeline.to_bytes();
     let cached = ComputePipeline::from_bytes_for_key(&bytes, &pipeline.key, &device)?;
     assert_eq!(cached, pipeline);
@@ -255,7 +184,7 @@ pub fn main() -> Result<()> {
         bytes.len()
     );
 
-    // 7. A function-constant value, supplied by index. A constant left undefined compiles too, as
+    // 6. A function-constant value, supplied by index. A constant left undefined compiles too, as
     // Metal's does: `is_function_constant_defined` names it false, and a value of it alone is zero.
     let library = Library::from_air(&fixture_bitcode("kernel_vector_function_constant")?)?;
     let function = library.function("kernel_vector_function_constant")?;
@@ -270,9 +199,9 @@ pub fn main() -> Result<()> {
     assert_ne!(undefined.key, specialized.key);
     println!("function constant supplied: {:?}", specialized.key);
 
-    // 8. A typed refusal: fragment function `sample_min_lod` clamps its level of detail, which
+    // 7. A typed refusal: fragment function `sample_min_lod` clamps its level of detail, which
     // needs `shaderResourceMinLod`; the `runtime-floor` profile lacks it.
-    let floor = committed_device("runtime-floor")?;
+    let floor = runtime_device("runtime-floor")?;
     let min_lod = FunctionDescriptor::new(sampling.function("sample_min_lod")?);
     match floor.compile_function(&min_lod, &LoweringInputs::new(), &Budget::standard()) {
         Err(Error::Unsupported(refusal)) => match (&refusal.feature, &refusal.needs) {
@@ -290,8 +219,8 @@ pub fn main() -> Result<()> {
     tessellation(&device)
 }
 
-/// A kernel with `[[stage_in]]` on `device`: the stage-input descriptor it asks for, the kernel
-/// compiled on its own under it, and a dispatch that needs the encoder's stage-in region.
+/// A kernel with `[[stage_in]]` on `device`: the stage-input descriptor it asks for, and the kernel
+/// compiled on its own under it.
 fn stage_in(device: &Device, budget: &Budget) -> Result<()> {
     let library = Library::from_air(&fixture_bitcode("kernel_stage_in")?)?;
     let kernel = FunctionDescriptor::new(library.function("stage_in_region")?);
@@ -318,30 +247,10 @@ fn stage_in(device: &Device, budget: &Budget) -> Result<()> {
     let mut linked = descriptor.clone();
     linked.kernel = StageSource::Compiled(compiled);
     assert_eq!(device.compile_compute_pipeline(&linked, budget)?, pipeline);
-
-    let mut table = StageTable::default();
-    table.buffers.insert(0, buffer(4096, 0));
-    table.buffers.insert(1, buffer(256, 0));
-    let mut state = BindState::default();
-    state.stages.insert(Stage::Kernel, table);
-    let plan = pipeline.plan(device, &state.shape())?;
-    let dispatch = Dispatch::Threads {
-        threads: [64, 1, 1],
-        threads_per_group: [32, 1, 1],
-    };
-    match plan.instantiate_dispatch(&state, &dispatch) {
-        Err(BindError::MissingStageInRegion) => {}
-        other => return Err(format!("expected a missing stage-in region: {other:?}").into()),
-    }
-    state.stage_in_region = Some(StageInRegion::new([0, 0, 0], [64, 1, 1]));
-    let commands = plan.instantiate_dispatch(&state, &dispatch)?;
-    for region in &commands.regions {
-        println!("  region push constants: {:?}", region.push_constants);
-    }
     Ok(())
 }
 
-/// A render pipeline on `device`: compile, plan, and one draw.
+/// A render pipeline on `device`: its stages and its vertex input.
 fn render(device: &Device) -> Result<()> {
     let library = Library::from_air(&fixture_bitcode("stage_io")?)?;
     let vertex = FunctionDescriptor::new(library.function("stage_io_vertex")?);
@@ -378,27 +287,10 @@ fn render(device: &Device) -> Result<()> {
         );
     }
     println!("  vertex input: {:?}", pipeline.vertex_input);
-
-    let mut table = StageTable::default();
-    table.buffers.insert(0, buffer(24 * 64, 0));
-    table.buffers.insert(1, buffer(256, 16));
-    let mut state = BindState::default();
-    state.stages.insert(Stage::Vertex, table);
-    let plan = pipeline.plan(device, &state.shape())?;
-    let draw = DrawCall::Primitives {
-        vertex_start: 0,
-        vertex_count: 6,
-        instance_count: 1,
-        base_instance: 0,
-    };
-    let commands = plan.instantiate_draw(&state, &draw)?;
-    println!("  draw: {:?}", commands.draw);
-    println!("  vertex buffer offsets: {:?}", commands.buffer_offsets);
-    println!("  push constants: {:?}", commands.push_constants);
     Ok(())
 }
 
-/// A tessellation pipeline on `device`: a post-tessellation vertex function, and a patch draw.
+/// A tessellation pipeline on `device`: a post-tessellation vertex function.
 fn tessellation(device: &Device) -> Result<()> {
     let library = Library::from_air(&fixture_bitcode("tessellation")?)?;
     let vertex = FunctionDescriptor::new(library.function("tess_quad_buffer")?);
@@ -408,25 +300,5 @@ fn tessellation(device: &Device) -> Result<()> {
     let stages: Vec<_> = pipeline.stages.iter().map(|stage| stage.stage).collect();
     println!("tessellation pipeline {:?}: {stages:?}", pipeline.key);
     println!("  {:?}", pipeline.graphics.tessellation);
-
-    let mut table = StageTable::default();
-    table.buffers.insert(0, buffer(4096, 0));
-    let mut state = BindState::default();
-    state.stages.insert(Stage::Vertex, table);
-    let factors = TessellationFactorBuffer::new(4096, 0, 0);
-    state.tessellation_factors = TessellationFactors::new(Some(factors), 1.0);
-    let plan = pipeline.plan(device, &state.shape())?;
-    let draw = DrawCall::Patches {
-        control_points: 4,
-        patch_start: 0,
-        patch_count: 16,
-        patch_index: None,
-        instance_count: 1,
-        base_instance: 0,
-        control_point_index: None,
-    };
-    let commands = plan.instantiate_draw(&state, &draw)?;
-    println!("  draw: {:?}", commands.draw);
-    println!("  push constants: {:?}", commands.push_constants);
     Ok(())
 }

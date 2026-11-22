@@ -30,8 +30,9 @@
 //!   linear filter under the sampler's address modes: its sample equals a linear sampler's with
 //!   the same modes on all 4,096 lanes of each run, under `clamp_to_edge`, `repeat`,
 //!   `mirrored_repeat`, `clamp_to_zero`, and one mirrored axis beside a clamped one. The
-//!   emulation takes the linear 2D sample there ([`routines::Quad`]) over the footprint's inner
-//!   taps, which are the linear filter's (the bicubic and linear footprints share `q`).
+//!   emulation takes the linear 2D sample there ([`routines::Plane`]'s `bilinear` form) over the
+//!   footprint's inner taps, which are the linear filter's (the bicubic and linear footprints
+//!   share `q`).
 //! - On a level of at least four texels each way, a mirrored axis of a format Metal filters
 //!   bicubically reads texel 1 at fraction 0 whatever the coordinate: with both axes mirrored
 //!   every lane is texel `(1, 1)` exactly, and with one the sample varies with the other axis
@@ -354,7 +355,6 @@ pub(super) struct Tys {
     pub(super) f32_: TypeId,
     i32_: TypeId,
     pub(super) u32_: TypeId,
-    pub(super) bool_: TypeId,
     pub(super) vec4: TypeId,
 }
 
@@ -370,13 +370,13 @@ impl Tys {
             width: 32,
             signed: false,
         })?;
-        let bool_ = m.ty(SType::Bool)?;
+        // Declared here, so the module keeps the order of its type declarations.
+        m.ty(SType::Bool)?;
         let vec4 = m.ty(SType::Vector { elem: f32_, len: 4 })?;
         Ok(Tys {
             f32_,
             i32_,
             u32_,
-            bool_,
             vec4,
         })
     }
@@ -1096,25 +1096,6 @@ pub(super) fn footprint_of_image(
         _ => None,
     };
     footprint_at(fb, t, &at, (size, base, image), bits, taps)
-}
-
-/// [`footprint_of_image`] of an image whose base-level size `size` (a `uvec2`) the caller states:
-/// an in-place texture's (`super::in_place`), whose taps read the base level of its one level.
-pub(super) fn footprint_sized(
-    fb: &mut FunctionBuilder<'_>,
-    t: &Tys,
-    (coord, layer, offset): (SValue, Option<SValue>, Option<(SValue, u8)>),
-    (size, image): (SValue, CombinedImage),
-    bits: Bits,
-    (taps, parent): (&Taps<'_>, Option<OffsetBase>),
-) -> BResult<Footprint> {
-    let at = At {
-        coord,
-        layer,
-        parent,
-        offset,
-    };
-    footprint_at(fb, t, &at, (size, None, image), bits, taps)
 }
 
 /// The footprint of sample `s` over `taps` on an image of level-0 size `size` (image facts

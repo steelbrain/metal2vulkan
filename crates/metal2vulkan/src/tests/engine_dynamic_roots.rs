@@ -26,7 +26,7 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::bind::status::{ExecutionStatus, StatusBits, StatusWord};
+use crate::bind::status::StatusWord;
 use crate::device::profile::DeviceProfile;
 use crate::device::requirements::VkFeature;
 use crate::device::DevicePolicy;
@@ -38,8 +38,12 @@ use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, SlotClass, Slo
 use crate::pipeline::testing::{
     compile, device_f, link_and_validate, llvm_assemble, typed_module, AssembleError, PROFILE_F,
 };
-use crate::spirv::interp::{run, Buffer, Config, InterpError, Resources};
+use crate::spirv::interp::{run, Buffer, Config, Resources};
 use crate::spirv::ir::{Inst, StorageClass, Type, TypedModule};
+
+/// The `ExecutionStatus` buffer's bytes, every word 0 at the start: through its last word.
+const STATUS_BYTES: usize =
+    crate::bind::status::StatusWord::SeqCstFences.byte_offset() as usize + 4;
 
 const HEADER: &str = "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\ntarget triple = \"air64_v28-apple-macosx26.0.0\"\n\n";
 
@@ -128,7 +132,6 @@ const CHASE: &str = "  %k = load i32, ptr addrspace(1) %2, align 8\n\
 struct Leaf {
     name: &'static str,
     bytes: u64,
-    align: u64,
     body: &'static str,
     /// The stored bytes, for a store.
     store: Option<&'static [u8]>,
@@ -138,28 +141,24 @@ const LEAVES: [Leaf; 4] = [
     Leaf {
         name: "dyn_load_i32",
         bytes: 4,
-        align: 4,
         body: "  %v = load i32, ptr addrspace(1) %q, align 4\n  store i32 %v, ptr addrspace(1) %1, align 4\n",
         store: None,
     },
     Leaf {
         name: "dyn_load_i8",
         bytes: 1,
-        align: 1,
         body: "  %v = load i8, ptr addrspace(1) %q, align 1\n  store i8 %v, ptr addrspace(1) %1, align 4\n",
         store: None,
     },
     Leaf {
         name: "dyn_store_i32",
         bytes: 4,
-        align: 4,
         body: "  store i32 305419896, ptr addrspace(1) %q, align 4\n",
         store: Some(&[0x78, 0x56, 0x34, 0x12]),
     },
     Leaf {
         name: "dyn_store_i16",
         bytes: 2,
-        align: 1,
         body: "  store i16 -21829, ptr addrspace(1) %q, align 1\n",
         store: Some(&[0xBB, 0xAA]),
     },
@@ -257,162 +256,6 @@ fn status_words(bytes: &[u8]) -> Vec<u32> {
         .collect()
 }
 
-/// The offsets the chase kernels try: in bounds, at both ends, just outside, and wrapped (as a
-/// 32-bit or 64-bit displacement), then 24 seeded random ones drawn around the same edges and
-/// from the whole 64-bit range (the interpreter traps any access outside a bound buffer, so a
-/// wrapped offset that escaped containment would fail the run, not only the comparison).
-fn offsets() -> Vec<u64> {
-    let mut v = vec![0, 1, 4, 5, 30, 60, 61, 62, 63, 64, 65, 68, 128];
-    v.extend([
-        u64::MAX,
-        u64::MAX - 3,
-        (-4i64) as u64,
-        0xFFFF_FFF0,
-        0xFFFF_FFFC,
-        0xFFFF_FFFF,
-        0x1_0000_0000,
-        0x1_0000_0004,
-        1 << 63,
-    ]);
-    let mut x = 0x9E37_79B9_7F4A_7C15u64;
-    for i in 0..24u64 {
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        let small = x % 96;
-        v.push(match i % 4 {
-            0 => x,
-            1 => 0x1_0000_0000u64.wrapping_sub(48).wrapping_add(small),
-            2 => (small as i64 - 48) as u64,
-            _ => small,
-        });
-    }
-    v
-}
-
-/// A loaded pointer resolves to its allocation (a pointer into its middle included), every leaf is
-/// exact in bounds and contained out of bounds at any 64-bit offset, and accesses through root 0
-/// (null, or an address outside the resident set) are contained and counted.
-#[test]
-fn a_loaded_pointer_is_exact_in_bounds_and_contained_elsewhere() {
-    // Element k of `ptrs`: allocation 0, allocation 1 at byte 16, a miss, null.
-    let targets: [(Option<u64>, u64); 4] = [
-        (Some(0), guest(0)),
-        (Some(1), guest(1) + 16),
-        (None, guest(9)),
-        (None, 0),
-    ];
-    let ptrs: Vec<u8> = targets.iter().flat_map(|(_, g)| g.to_le_bytes()).collect();
-    for leaf in &LEAVES {
-        let Some(bc) = assemble_text(
-            leaf.name,
-            &kernel(leaf.name, &format!("{CHASE}{}", leaf.body)),
-        ) else {
-            return;
-        };
-        for (what, p) in profiles() {
-            let what = format!("{} {what}", leaf.name);
-            let a = compile(&bc, leaf.name, &p).unwrap_or_else(|e| panic!("{what}: {e}"));
-            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-            assert!(a.interface.needs_pointer_translation, "{what}");
-            let (plan, m) = typed_module(&bc, leaf.name, &p).expect("module");
-            assert!(plan.facts.contains(&RuntimeFact::ExecutionStatus), "{what}");
-            // The slots stay descriptor views: no wide pointer reaches them.
-            for s in 0..3 {
-                match a.interface.slots.get(&SlotRef {
-                    stage: Stage::Kernel,
-                    class: SlotClass::Buffer,
-                    index: s,
-                }) {
-                    Some(SlotInterface::Buffer(b)) => {
-                        assert!(matches!(b.form, BufferForm::Descriptor), "{what} {s}")
-                    }
-                    None if s == 1 && leaf.store.is_some() => {}
-                    other => panic!("{what} slot {s}: {other:?}"),
-                }
-            }
-            let resident = [
-                (host(0), guest(0), ALLOC),
-                (host(1), guest(1), ALLOC),
-                (host(2), guest(2), ALLOC),
-            ];
-            for (k, (alloc, g)) in targets.iter().enumerate() {
-                for off in offsets() {
-                    // Metal leaves a misaligned access undefined.
-                    if off % leaf.align != 0 {
-                        continue;
-                    }
-                    let mut params = vec![0u8; 16];
-                    params[..4].copy_from_slice(&(k as u32).to_le_bytes());
-                    params[8..].copy_from_slice(&off.to_le_bytes());
-                    let data: Vec<Vec<u8>> = (0..3).map(pattern).collect();
-                    let res = Resources {
-                        buffers: vec![
-                            slot_buffer(0, ptrs.clone()),
-                            slot_buffer(1, vec![0; 16]),
-                            slot_buffer(2, params),
-                            addressed(TABLE, root_table(&[(0, 0, 0, 0); 3], &resident)),
-                            addressed(SINK, vec![0; 64]),
-                            addressed(STATUS, vec![0; ExecutionStatus::BYTES]),
-                            addressed(host(0), data[0].clone()),
-                            addressed(host(1), data[1].clone()),
-                            addressed(host(2), data[2].clone()),
-                        ],
-                        push: push_bytes(&plan),
-                        spec: Default::default(),
-                    };
-                    let case = format!("{what} k={k} off={off:#x}");
-                    let out = match run(&m, &Config::default(), res) {
-                        Ok(o) => o,
-                        Err(InterpError::Trap(t)) => panic!("{case}: trapped {t:?}"),
-                        Err(e) => panic!("{case}: {e}"),
-                    };
-                    // The byte offset inside the allocation, when the access is inside it.
-                    let at = alloc.and_then(|a| {
-                        let rel = (g - guest(a)).wrapping_add(off);
-                        (ALLOC >= leaf.bytes && rel <= ALLOC - leaf.bytes)
-                            .then_some((a as usize, rel as usize))
-                    });
-                    match leaf.store {
-                        None => {
-                            let mut want = vec![0u8; 16];
-                            if let Some((a, rel)) = at {
-                                let n = leaf.bytes as usize;
-                                want[..n].copy_from_slice(&data[a][rel..rel + n]);
-                            }
-                            assert_eq!(out.buffers[1], want, "{case}");
-                        }
-                        Some(bytes) => {
-                            for (i, d) in data.iter().enumerate() {
-                                let mut want = d.clone();
-                                if let Some((a, rel)) = at {
-                                    if a == i {
-                                        want[rel..rel + bytes.len()].copy_from_slice(bytes);
-                                    }
-                                }
-                                assert_eq!(out.buffers[6 + i], want, "{case}: allocation {i}");
-                            }
-                        }
-                    }
-                    let status = status_words(&out.buffers[5]);
-                    let missed = alloc.is_none();
-                    assert_eq!(
-                        status[StatusWord::ResidentMisses.index() as usize],
-                        u32::from(missed),
-                        "{case}: miss count"
-                    );
-                    assert_eq!(
-                        StatusBits(status[StatusWord::Status.index() as usize])
-                            .contains(StatusBits::RESIDENT_MISS),
-                        missed,
-                        "{case}: miss bit"
-                    );
-                }
-            }
-        }
-    }
-}
-
 /// The resident-set search (its loop of ⌈log₂ N⌉ steps) finds every address of every entry of sets
 /// of 0 to 33 entries, a pointer one past an entry's end included (its accesses are out of bounds, not
 /// misses), and misses addresses in the gaps, below the first entry, and above the last.
@@ -448,7 +291,7 @@ fn inttoptr_resolves_every_resident_address() {
                 slot_buffer(2, addr.to_le_bytes().to_vec()),
                 addressed(TABLE, root_table(&[(0, 0, 0, 0); 3], &resident)),
                 addressed(SINK, vec![0; 64]),
-                addressed(STATUS, vec![0; ExecutionStatus::BYTES]),
+                addressed(STATUS, vec![0; STATUS_BYTES]),
             ];
             for k in 0..n {
                 buffers.push(addressed(host(k), pattern(k)));
@@ -512,7 +355,7 @@ fn inttoptr_resolves_addresses_of_large_sets() {
                 slot_buffer(2, addr.to_le_bytes().to_vec()),
                 addressed(TABLE, table.clone()),
                 addressed(SINK, vec![0; 64]),
-                addressed(STATUS, vec![0; ExecutionStatus::BYTES]),
+                addressed(STATUS, vec![0; STATUS_BYTES]),
             ];
             if let Some((k, _)) = want {
                 buffers.push(addressed(host(k), pattern(k)));
@@ -608,7 +451,7 @@ fn a_parameter_merged_with_loaded_pointers_walks_a_list() {
             },
             node(guest(2), 17),
         ];
-        let status = ExecutionStatus::initial().to_vec();
+        let status = vec![0; STATUS_BYTES];
         for steps in [1u32, 2, 3, 6] {
             let resident = [
                 (host(0), guest(0), ALLOC),
@@ -737,7 +580,7 @@ fn loaded_pointers_compare_by_metal_address() {
             let mut head_alloc = vec![0xEEu8; 16];
             head_alloc.extend(node(guest(0), 7));
             let nodes = [node(guest(1), 11), node(guest(2), 13), node(last, 17)];
-            let status = ExecutionStatus::initial().to_vec();
+            let status = vec![0; STATUS_BYTES];
             // The head's allocation is resident too (a bound argument), below the nodes.
             let resident = [
                 (head_host, head_guest, head_alloc.len() as u64),
@@ -829,7 +672,6 @@ fn volatile_accesses_through_a_loaded_pointer_are_exact() {
             Leaf {
                 name: "dyn_volatile_load",
                 bytes: 4,
-                align: 4,
                 body: "  %v = load volatile i32, ptr addrspace(1) %q, align 4\n  store i32 %v, ptr addrspace(1) %1, align 4\n",
                 store: None,
             },
@@ -839,7 +681,6 @@ fn volatile_accesses_through_a_loaded_pointer_are_exact() {
             Leaf {
                 name: "dyn_volatile_store",
                 bytes: 4,
-                align: 4,
                 body: "  store volatile i32 305419896, ptr addrspace(1) %q, align 4\n",
                 store: Some(&[0x78, 0x56, 0x34, 0x12]),
             },
@@ -849,7 +690,6 @@ fn volatile_accesses_through_a_loaded_pointer_are_exact() {
             Leaf {
                 name: "dyn_volatile_copy_from",
                 bytes: 4,
-                align: 4,
                 body: "  call void @llvm.memcpy.p1.p1.i64(ptr addrspace(1) align 4 %1, ptr addrspace(1) align 4 %q, i64 4, i1 true)\n",
                 store: None,
             },
@@ -860,7 +700,6 @@ fn volatile_accesses_through_a_loaded_pointer_are_exact() {
             Leaf {
                 name: "dyn_volatile_copy_to",
                 bytes: 4,
-                align: 4,
                 body: "  call void @llvm.memcpy.p1.p1.i64(ptr addrspace(1) align 4 %q, ptr addrspace(1) align 4 %2, i64 4, i1 true)\n",
                 store: Some(&[1, 0, 0, 0]),
             },
@@ -898,7 +737,7 @@ fn volatile_accesses_through_a_loaded_pointer_are_exact() {
                         slot_buffer(2, params),
                         addressed(TABLE, root_table(&[(0, 0, 0, 0); 3], &resident)),
                         addressed(SINK, vec![0; 64]),
-                        addressed(STATUS, vec![0; ExecutionStatus::BYTES]),
+                        addressed(STATUS, vec![0; STATUS_BYTES]),
                         addressed(host(0), data[0].clone()),
                         addressed(host(1), data[1].clone()),
                     ],
@@ -964,7 +803,7 @@ fn a_volatile_pointer_load_through_a_loaded_pointer_is_exact() {
                 slot_buffer(2, params.clone()),
                 addressed(TABLE, root_table(&[(0, 0, 0, 0); 3], &resident)),
                 addressed(SINK, vec![0; 64]),
-                addressed(STATUS, vec![0; ExecutionStatus::BYTES]),
+                addressed(STATUS, vec![0; STATUS_BYTES]),
                 addressed(host(0), data[0].clone()),
                 addressed(host(1), data[1].clone()),
             ],

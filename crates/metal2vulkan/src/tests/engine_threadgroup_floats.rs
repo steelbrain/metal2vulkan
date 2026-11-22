@@ -18,12 +18,8 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::bind::{BindState, BoundBuffer, StageTable};
-use crate::budget::Budget;
 use crate::device::profile::DeviceProfile;
 use crate::device::{Device, DevicePolicy};
-use crate::error::{BindError, Feature};
-use crate::library::Library;
 use crate::lower::select::Plan;
 use crate::memory::arena::TgWords;
 use crate::pipeline::interface::PushLoc;
@@ -31,7 +27,6 @@ use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey,
 use crate::pipeline::testing::{
     compile, description, link_and_validate, llvm_assemble, typed_module, AssembleError,
 };
-use crate::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, StageSource};
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources, SubgroupSize};
 use crate::spirv::ir::TypedModule;
 
@@ -545,69 +540,6 @@ fn no_threadgroup_access_is_contained_through_from_queries() {
             want,
             "{what}"
         );
-    }
-}
-
-/// The array is Metal's allocation: through `from_queries`, a region filling `maxComputeSharedMemorySize` is planned and one 16 bytes longer is refused
-/// (`ThreadgroupMemorySize`). A static arena two words short of the limit is an array of its own
-/// words.
-#[test]
-fn the_float_array_is_metals_allocation() {
-    let Some(bc) = assemble("tg_region", &region_kernel()) else {
-        return;
-    };
-    for stem in PROFILES {
-        let dev = queried_device(stem);
-        let what = stem;
-        let lib = Library::from_air(&bc).expect("library");
-        let f = lib.function("tg_region").expect("function");
-        let d = ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(f)));
-        let pipe = dev
-            .compile_compute_pipeline(&d, &Budget::standard())
-            .unwrap_or_else(|e| panic!("{what}: {e}"));
-        assert_eq!(
-            pipe.metal_info.static_threadgroup_memory_length, 0,
-            "{what}"
-        );
-        let state = |len: u32| {
-            let mut t = StageTable::default();
-            t.buffers.insert(
-                0,
-                BoundBuffer::Buffer {
-                    length: 192 * 4,
-                    offset: 0,
-                    gpu_address: 0,
-                    device_address: None,
-                    attribute_stride: None,
-                },
-            );
-            t.threadgroup_lengths.insert(0, len);
-            let mut s = BindState::default();
-            s.stages.insert(Stage::Kernel, t);
-            s
-        };
-        let max = dev.profile().fields().limits.max_compute_shared_memory_size;
-        assert!(
-            pipe.plan(&dev, &state(max).shape()).is_ok(),
-            "{what}: exactly full"
-        );
-        match pipe.plan(&dev, &state(max + 16).shape()) {
-            Err(BindError::Unsupported(u)) => {
-                assert_eq!(u.feature, Feature::ThreadgroupMemorySize, "{what}");
-            }
-            other => panic!("{what}: {other:?}"),
-        }
-        let prof = queried(stem);
-        let words = prof.fields().limits.max_compute_shared_memory_size / 4;
-        let what = format!("a static arena of {} words on {stem}", words - 2);
-        let Some(big) = assemble("tg_static", &static_kernel(words - 2)) else {
-            return;
-        };
-        let a = compile(&big, "tg_static", &prof).unwrap_or_else(|e| panic!("{what}: {e}"));
-        link_and_validate(&a, &prof).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-        let s = shape(&a.module.words);
-        assert_eq!(s.float_arrays, vec![Some(32)], "{what}: {s:?}");
-        assert_eq!(s.lengths, vec![words - 2], "{what}: {s:?}");
     }
 }
 

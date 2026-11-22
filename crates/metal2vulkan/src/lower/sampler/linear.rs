@@ -1,5 +1,5 @@
 //! What the device-sampled filters share with the emulated ones the device has no form for
-//! (`extended`, `heap_raw`, `in_place`, `bicubic`): the census words of a filter's footprint and
+//! (`extended`, `heap_raw`, `bicubic`): the census words of a filter's footprint and
 //! of a runtime sampler's word, the rule of an axis whose two taps read one texel ([`merged`]), and
 //! the samplers that read one texel of one level ([`unfiltered`]).
 //!
@@ -11,8 +11,7 @@
 //! (`PackedTexels::YCbCr2048`), `8192` (`PackedTexels::YCbCr8192`), or `8192` signed within
 //! `[-2, 2]` (`PackedTexels::YCbCrExtended8192`). Metal's 2D linear sample sums the steps on the
 //! grid, each term truncated; the device's sampler filters the view's texels its own way
-//! (`PrecisionNote::DeviceSampling`). A device whose memory is the host's reads a slot's planes in
-//! place, Metal's filter exactly (`in_place`).
+//! (`PrecisionNote::DeviceSampling`).
 
 use crate::air::abi::{Filter, MipFilter, SamplerState};
 use crate::lower::select::{NoteOn, NoteTest};

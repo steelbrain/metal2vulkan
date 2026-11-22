@@ -63,7 +63,7 @@
 //!   partial object threadgroup's draw or a kernel's ragged grid on its partial-threadgroups
 //!   variant (below).
 //!
-//! With `MultiRegion = 0` (single-region `Threadgroups` and every `ThreadgroupsIndirect`) the push
+//! With `MultiRegion = 0` (a single-region `dispatchThreadgroups:` and every indirect one) the push
 //! field is not read: the region base is 0, `L = (sx, sy, sz)`, `threadgroups_per_grid =
 //! NumWorkgroups`, and `threads_per_grid = NumWorkgroups · L`, so GPU-written indirect arguments
 //! work. With `MultiRegion = 1` (the edge regions of `dispatchThreads` and group-count splits,
@@ -1201,12 +1201,6 @@ pub fn region_bytes(base: [u32; 3], threads: [u32; 3], l: [u32; 3]) -> Option<[u
         chunk.copy_from_slice(&w.to_le_bytes());
     }
     Some(out)
-}
-
-/// The `DispatchRegion` bytes of a draw of the object threadgroups `threads` fill at nominal
-/// size `l`, the last along an axis running only the threads left ([`NONUNIFORM`]).
-pub fn partial_region_bytes(threads: [u32; 3], l: [u32; 3]) -> Option<[u8; 32]> {
-    nonuniform_region_bytes([0; 3], threads, l)
 }
 
 /// [`region_bytes`] of a region flagged [`NONUNIFORM`]: its threadgroups the ones `threads` fill

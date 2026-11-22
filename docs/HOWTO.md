@@ -33,10 +33,10 @@ walks the flow in the order a consumer meets it:
 2. [A library](API.md#2-a-library): parse a metallib or AIR bitcode.
 3. [A compute pipeline](API.md#3-a-compute-pipeline) or
    [a render pipeline](API.md#4-a-render-pipeline), under a `Budget`.
-4. [The interface and the plan](API.md#5-the-interface-and-the-plan): the layout, what each slot
-   binds, what a dispatch or draw needs.
-5. [At bind time](API.md#6-at-bind-time): descriptor writes and push-constant bytes from what is
-   bound.
+4. [The interface](API.md#5-the-interface): the layout, what each slot binds, what a dispatch or
+   draw needs.
+5. [At bind time](API.md#6-at-bind-time): a dispatch's regions, the levels a slot reads, and
+   indirect command buffers.
 
 Every `air.simd_*` operation keeps Metal's 32-lane simdgroup; there is no option to use the
 driver's subgroup width instead.

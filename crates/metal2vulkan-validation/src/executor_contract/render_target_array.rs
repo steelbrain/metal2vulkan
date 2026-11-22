@@ -1,6 +1,6 @@
 //! The render pass's render target array length both executors draw a case with: the Metal oracle's
-//! `MTLRenderPassDescriptor.renderTargetArrayLength` and the engine candidate's
-//! `BindState::render_target_array_length`, derived once, so the two agree.
+//! `MTLRenderPassDescriptor.renderTargetArrayLength` and the runtime candidate's
+//! `RenderPassDescriptor::render_target_array_length`, derived once, so the two agree.
 
 use crate::air::meta::{parse_air_fragment_meta, parse_air_vertex_meta, FragRole, VertOutRole};
 use crate::case::Stage;
