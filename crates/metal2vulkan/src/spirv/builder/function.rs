@@ -228,6 +228,22 @@ impl<'m> FunctionBuilder<'m> {
         self.m.inserts.get(&y).copied()
     }
 
+    /// Record that vector `y`, of `f32` lanes, is the construct of `parts`
+    /// ([`FunctionBuilder::vector_parts`]).
+    pub(super) fn note_vector_parts(&mut self, y: Value, parts: &[Value]) {
+        self.m.vector_part_bytes = self
+            .m
+            .vector_part_bytes
+            .saturating_add(std::mem::size_of_val(parts));
+        self.m.vector_parts.insert(y, parts.into());
+    }
+
+    /// The parts, scalars or vectors, of `f32` vector `y` where the builder made it by
+    /// `OpCompositeConstruct`, in lane order: each dominates `y`.
+    pub fn vector_parts(&self, y: Value) -> Option<Vec<Value>> {
+        self.m.vector_parts.get(&y).map(|parts| parts.to_vec())
+    }
+
     /// Record how struct `y` holds its members, or which member of a struct it reads
     /// ([`FunctionBuilder::member_source`]).
     pub(super) fn note_struct(&mut self, y: Value, op: StructOp) {

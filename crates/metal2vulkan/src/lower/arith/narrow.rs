@@ -538,10 +538,11 @@ pub fn to_bits(fb: &mut FunctionBuilder<'_>, f: Form, x: Value) -> BResult<Value
 /// The format bits of `x` (form `f`, format `fmt`) when they are known without encoding the
 /// value ([`encode`]), cleared above each lane's 16 bits: the bits `x` was decoded from
 /// ([`from_bits`] notes them) or computed with earlier in the open block, a constant's bits
-/// computed at translation time ([`constant_bits`]), or, for a vector built by lane inserts
-/// ([`note_insert`]), the inserts repeated on the lanes' known bits. A member extracted from a
-/// struct the module built from it (a texel's `{T, i8}`, `FunctionBuilder::member_source`) is
-/// that value, and has its known bits. `None` otherwise.
+/// computed at translation time ([`constant_bits`]), or, for a vector the builder constructed of
+/// parts ([`constructed_bits`]), the construct of the parts' known bits, and for a vector built
+/// by lane inserts ([`note_insert`]), the inserts repeated on the lanes' known bits. A member
+/// extracted from a struct the module built from it (a texel's `{T, i8}`,
+/// `FunctionBuilder::member_source`) is that value, and has its known bits. `None` otherwise.
 fn known_bits(
     fb: &mut FunctionBuilder<'_>,
     fmt: NarrowFmt,
@@ -559,9 +560,77 @@ fn known_bits(
         return Ok(Some(k));
     }
     if f.lanes > 1 {
+        if let Some(b) = constructed_bits(fb, fmt, f, x)? {
+            return Ok(Some(b));
+        }
         return inserted_bits(fb, fmt, f, x);
     }
     Ok(None)
+}
+
+/// Where one part of a vector construct gets its bits from, for [`constructed_bits`].
+enum PartBits {
+    /// Noted bits, and their dirty lanes.
+    Noted(Value, u32),
+    /// A constant's lanes' bits.
+    Const(Vec<u64>),
+    /// Lane `.2` of a vector's noted bits (dirty in the lanes `.1` has a bit for).
+    Of(Value, u32, u32),
+}
+
+/// The bits of vector `x` (form `f`) built by one `OpCompositeConstruct` of parts
+/// (`FunctionBuilder::vector_parts`) whose bits are each known (noted, a constant's, or a lane of
+/// a vector's noted bits): the construct of the parts' bits, so a vector the lowering joins from
+/// decoded lanes (a pulled attribute's fetch, a packed float's unpack, a chunked bitcast's lanes)
+/// keeps every lane's bits. Each lane then holds the bits of the lane `x` holds, so they are
+/// `x`'s bits. Checked before anything is emitted; `None` (nothing emitted) when a part's bits are
+/// unknown.
+fn constructed_bits(
+    fb: &mut FunctionBuilder<'_>,
+    fmt: NarrowFmt,
+    f: Form,
+    x: Value,
+) -> BResult<Option<Value>> {
+    let Some(parts) = fb.vector_parts(x) else {
+        return Ok(None);
+    };
+    let mut known = Vec::with_capacity(parts.len());
+    for mut p in parts {
+        while let Some(member) = fb.member_source(p) {
+            p = member;
+        }
+        let lanes = vector_lanes(fb, p)?.unwrap_or(1);
+        let part = Form { lanes, ..f };
+        let bits = if let Some((b, d)) = fb.bits_of(fmt, p) {
+            PartBits::Noted(b, d)
+        } else if let Some(k) = constant_lanes(fb, part, p)? {
+            PartBits::Const(k)
+        } else if let (1, Some((w, j))) = (lanes, fb.lane_of(p)) {
+            match fb.bits_of(fmt, w) {
+                Some((wb, wd)) => PartBits::Of(wb, wd, j),
+                None => return Ok(None),
+            }
+        } else {
+            return Ok(None);
+        };
+        known.push((bits, part));
+    }
+    let (mut part_bits, mut dirty, mut at) = (Vec::with_capacity(known.len()), 0u32, 0u32);
+    for (bits, part) in known {
+        let (b, d) = match bits {
+            PartBits::Noted(b, d) => (b, d),
+            PartBits::Const(k) => (materialize(fb, part, &k)?, 0),
+            PartBits::Of(wb, wd, j) => (fb.composite_extract(wb, &[j])?, wd >> j & 1),
+        };
+        let own = u32::MAX >> (32 - u32::from(part.lanes).clamp(1, 32));
+        dirty |= (d & own).checked_shl(at).unwrap_or(0);
+        at += u32::from(part.lanes);
+        part_bits.push(b);
+    }
+    let t = ty(fb, u32_form(f))?;
+    let rb = fb.composite_construct(t, &part_bits)?;
+    fb.note_bits(fmt, x, rb, dirty, false);
+    clean(fb, fmt, f, x, rb, dirty).map(Some)
 }
 
 /// `bits` (the noted bits of `x`, dirty in the lanes `dirty` has a bit for) cleared above each

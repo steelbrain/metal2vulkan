@@ -588,3 +588,95 @@ fn a_step_by_thread_position_records_the_region() {
         );
     }
 }
+
+/// A `half` attribute read into the kernel's `half2` and reinterpreted unchanged keeps the field's
+/// own bits, as Metal's fetch does: `stage_in_fetch`'s `as_type<ushort>(in.h.x)` and `.y` reuse
+/// the bits the fetch widened, through the vector the fetch constructs of its lanes
+/// (`narrow::to_bits`), so its module encodes no `half` (no `OpFConvert` to a 16-bit float, no
+/// `PackHalf2x16`) on any committed profile, with the attribute's format `Half2` (both lanes read)
+/// or `Half` (the second lane missing, `0`). An encode there narrows the device's widening of a
+/// NaN field to the device's NaN: the RTX 5080 Laptop read `0x7E01` and `0xFE01` as `0x7FFF`
+/// (job m3-max-68835).
+#[test]
+fn a_half_attribute_reinterpreted_unchanged_encodes_no_half() {
+    use crate::lower::arith::narrow::quantize_form;
+    let Some(bc) = fixture() else { return };
+    let (mut compiled, mut encoding) = (Vec::new(), Vec::new());
+    for format in [AttributeFormat::Half2, AttributeFormat::Half] {
+        let mut d = fetch_descriptor(
+            (StepFunction::ThreadPositionInGridX, 1),
+            (StepFunction::ThreadPositionInGridY, 1),
+            IndexType::UInt16,
+        );
+        d.attributes
+            .insert(3, StageInputAttributeDescriptor::new(format, 16, 1));
+        for (stem, p) in committed_profiles().expect("profiles") {
+            let consts = FunctionConstantValues::defaults();
+            let a = match compile_bitcode(
+                &bc,
+                EntryRef::Name("stage_in_fetch"),
+                &consts,
+                &p,
+                &inputs(&d),
+                &mut meter(),
+                SPIRV_WORDS,
+            ) {
+                Ok(a) => a,
+                Err(Error::Unsupported(u)) if u.needs != Needs::NotImplemented => continue,
+                Err(e) => panic!("{stem} {format:?}: {e}"),
+            };
+            let encodes = half_encodes(&a.module.words);
+            if encodes > 0 {
+                encoding.push((stem.clone(), format, encodes));
+            }
+            compiled.push((stem, format, quantize_form(&p)));
+        }
+    }
+    // Each `half` form of the profiles is among the modules: with `shaderFloat16` under the float
+    // controls and without them, and without it.
+    let forms: std::collections::BTreeSet<_> =
+        compiled.iter().map(|(_, _, q)| format!("{q:?}")).collect();
+    assert_eq!(forms.len(), 3, "a profile of each form: {compiled:?}");
+    assert!(
+        encoding.is_empty(),
+        "{} of {} modules encode a half: {encoding:?}",
+        encoding.len(),
+        compiled.len()
+    );
+}
+
+/// The module's encodes of a `half` to its bits by the device: its `OpFConvert`s to a 16-bit
+/// float (or a vector of them) and its `GLSL.std.450 PackHalf2x16`s.
+fn half_encodes(words: &[u32]) -> usize {
+    use crate::spirv::ir::GlslOp;
+    use crate::spirv_binary::{parse_bytes, Operand};
+    use crate::spv::Op;
+    let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+    let parsed = parse_bytes(&bytes).expect("parse");
+    let id = |o: Option<&Operand>| match o {
+        Some(Operand::Word(w) | Operand::IdRef(w)) => Some(*w),
+        _ => None,
+    };
+    let pack = GlslOp::PackHalf2x16.to_spirv() as u32;
+    let mut halves = std::collections::HashSet::new();
+    let mut encodes = 0;
+    for i in &parsed.instructions {
+        match i.opcode {
+            Op::TypeFloat if id(i.operands.first()) == Some(16) => halves.extend(i.result_id),
+            Op::TypeVector if id(i.operands.first()).is_some_and(|e| halves.contains(&e)) => {
+                halves.extend(i.result_id)
+            }
+            Op::FConvert if i.result_type.is_some_and(|t| halves.contains(&t)) => encodes += 1,
+            Op::ExtInst
+                if matches!(
+                    i.operands.get(1),
+                    Some(Operand::LiteralExtInstInteger(n)) if *n == pack
+                ) =>
+            {
+                encodes += 1
+            }
+            _ => {}
+        }
+    }
+    encodes
+}

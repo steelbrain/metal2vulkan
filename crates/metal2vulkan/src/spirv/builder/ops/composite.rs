@@ -23,6 +23,12 @@ impl FunctionBuilder<'_> {
         }
         let ty_def = self.mb().types().get(ty)?.clone();
         let is_struct = matches!(ty_def, Type::Struct { .. });
+        let f32_lanes = match ty_def {
+            Type::Vector { elem, .. } => {
+                matches!(self.mb().types().get(elem)?, Type::Float { width: 32 })
+            }
+            _ => false,
+        };
         let expected: Vec<TypeId> = match ty_def {
             Type::Vector { elem, len } => {
                 if parts.len() < 2 {
@@ -72,6 +78,8 @@ impl FunctionBuilder<'_> {
         )?;
         if is_struct {
             self.note_struct(y, StructOp::Construct(parts.into()));
+        } else if f32_lanes {
+            self.note_vector_parts(y, parts);
         }
         Ok(y)
     }

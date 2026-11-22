@@ -111,6 +111,13 @@ pub struct ModuleBuilder {
     /// The vector, lane value, and lane index of each narrow lane insert the lowering noted
     /// (`FunctionBuilder::note_insert`).
     pub(super) inserts: HashMap<Value, (Value, Value, u32)>,
+    /// The parts of each `OpCompositeConstruct` of a vector of `f32` lanes, the type a narrow
+    /// float is held in, by result (`FunctionBuilder::vector_parts`), so a narrow vector's bits
+    /// can be read from its parts' (`lower::arith::narrow::to_bits`). Nothing here changes the IR.
+    pub(super) vector_parts: HashMap<Value, Box<[Value]>>,
+    /// The heap bytes of [`ModuleBuilder::vector_parts`]' part lists, for
+    /// [`ModuleBuilder::footprint`].
+    pub(super) vector_part_bytes: usize,
     /// The value and constant each 32-bit unsigned sum of a value and a constant the lowering
     /// noted adds (`FunctionBuilder::note_sum`). Nothing here changes the IR.
     pub(super) sums: HashMap<Value, (Value, u32)>,
@@ -325,6 +332,8 @@ impl ModuleBuilder {
             + map_bytes(&self.bits)
             + map_bytes(&self.lanes)
             + map_bytes(&self.inserts)
+            + map_bytes(&self.vector_parts)
+            + self.vector_part_bytes
             + map_bytes(&self.sums)
             + map_bytes(&self.structs)
             + self.struct_bytes

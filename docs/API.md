@@ -2202,8 +2202,10 @@ bound.
   the device's, where Metal widens every `half` NaN to `0x7fc00000` and moves one it does not
   widen with its bits. And wherever a `half` is encoded to its bits (a store, a reinterpretation, a
   texel's bits) where they are not the bits it was read from (a `half` moved unchanged from its
-  read keeps them, through a struct's member, a containment check and the choice among a
-  pointer's candidate buffers too), on every device, since the encode is
+  read keeps them, through a struct's member, a vector the translation joins from read lanes (a
+  stage-in or pulled vertex attribute's fetch, a packed float's unpack, a bitcast's lanes), a
+  containment check and the choice among a pointer's candidate buffers too), on every device,
+  since the encode is
   the device's narrowing (its conversion with `shaderFloat16`, `PackHalf2x16` without): a NaN's
   bits the device's, where Metal keeps a `half` NaN's sign and payload. And wherever the entry
   reaches a `float` constant whose bits are a signalling NaN (every exponent bit set, the quiet bit

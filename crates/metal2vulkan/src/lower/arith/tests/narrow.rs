@@ -215,6 +215,64 @@ fn narrow_members_move_as_bits_through_structs() {
     }
 }
 
+/// A narrow vector the builder constructs of decoded lanes (`FunctionBuilder::vector_parts`), as a
+/// pulled attribute's fetch, a packed float's unpack and a chunked bitcast join them, is those
+/// lanes with their bits (`narrow::to_bits`): stored unchanged, every lane keeps its bits, a NaN's
+/// sign and payload and a signalling NaN included, through a construct of four decoded lanes, of
+/// two beside the constants `0` and `1.0` (a fetch's missing lanes), and through the parent's
+/// own load of a vector, which constructs it from its lanes. An encode of the device's widening
+/// would answer the interpreter's canonical NaN (`0x7E00`) instead.
+#[test]
+fn a_constructed_narrow_vector_keeps_its_lanes_bits() {
+    let codes = [
+        0x7E01u64, 0xFE01, 0x7C01, 0xFDFF, 0x7C00, 0x8000, 0x0001, 0x3C00,
+    ];
+    let quads: Vec<Case> = (0..codes.len())
+        .map(|i| (0..4).map(|k| vec![codes[(i + k) % codes.len()]]).collect())
+        .collect();
+    let four = |fb: &mut FunctionBuilder<'_>, x: &[Value]| -> BResult<Value> {
+        let t = ops::ty(fb, vec(half(), 4))?;
+        fb.composite_construct(t, x)
+    };
+    check_accept(
+        "four decoded lanes",
+        &[half(); 4],
+        vec(half(), 4),
+        &four,
+        &quads,
+        &|c| Some(c.iter().map(|lane| lane[0]).collect()),
+        &|g, w| g == w,
+    );
+    let padded = |fb: &mut FunctionBuilder<'_>, x: &[Value]| -> BResult<Value> {
+        let zero = ops::fsplat(fb, float(32), 0.0)?;
+        let one = ops::fsplat(fb, float(32), 1.0)?;
+        let t = ops::ty(fb, vec(half(), 4))?;
+        fb.composite_construct(t, &[x[0], x[1], zero, one])
+    };
+    check_accept(
+        "two decoded lanes and the constants 0 and 1.0",
+        &[half(); 2],
+        vec(half(), 4),
+        &padded,
+        &quads.iter().map(|c| c[..2].to_vec()).collect::<Vec<_>>(),
+        &|c| Some(vec![c[0][0], c[1][0], 0, 0x3C00]),
+        &|g, w| g == w,
+    );
+    let loaded: Vec<Case> = quads
+        .iter()
+        .map(|c| vec![c.iter().map(|lane| lane[0]).collect()])
+        .collect();
+    check_accept(
+        "a loaded vector",
+        &[vec(half(), 4)],
+        vec(half(), 4),
+        &|_, x| Ok(x[0]),
+        &loaded,
+        &|c| Some(c[0].clone()),
+        &|g, w| g == w,
+    );
+}
+
 /// One half round trip through its format bits, `to_bits` then `from_bits` (their types and
 /// constants shared with the kernel's own load and store), is the device's narrowing and widening
 /// alone: at most 40 words. A load also decodes
