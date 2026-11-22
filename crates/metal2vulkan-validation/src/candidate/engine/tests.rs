@@ -1287,9 +1287,9 @@ fn addressed_allocations_take_metal_addresses() {
 /// texture, an argument-buffer member, a color target or nothing; and a rasterization-disabled
 /// vertex case, which renders into the oracle's sink; a depth/stencil attachment of one aspect, of
 /// one sample or more, observed or not; a fragment pass with no attachment, of one sample or more;
-/// and an attribute buffer's out-of-bounds target. A case with anything else (a depth/stencil
-/// attachment of both aspects, layered rendering, a patch draw through a patch index buffer, or an
-/// index buffer's out-of-bounds target) stays on the executor's own context.
+/// a layered pass; and an attribute buffer's out-of-bounds target. A case with anything else (a
+/// depth/stencil attachment of both aspects, a patch draw through a patch index buffer, or an index
+/// buffer's out-of-bounds target) stays on the executor's own context.
 #[test]
 fn a_plain_draw_and_only_one_runs_through_the_runtime() {
     use super::graphics::tests::two_stage_case;
@@ -1486,16 +1486,18 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
         };
         assert!(runs_render_through_runtime(&attachmentless));
     }
+    // A layered pass, of one slice.
+    let layered = RenderCase {
+        render_target_array_length: 1,
+        ..plain.clone()
+    };
+    assert!(runs_render_through_runtime(&layered));
     let others = [
         RenderCase {
             depth_stencil: Some(LiteralDepthStencil {
                 stencil: Some(vec![0; 4]),
                 ..depth.clone()
             }),
-            ..plain.clone()
-        },
-        RenderCase {
-            render_target_array_length: 1,
             ..plain.clone()
         },
         bounded(
