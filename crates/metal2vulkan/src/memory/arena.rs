@@ -672,23 +672,6 @@ impl ArenaMem {
     fn atomic_words(&self) -> bool {
         self.0.arena == Arena::Payload && self.1.coherence != Coherence::Plain
     }
-
-    /// Write `select(inb, value, old)` at word `word` of the private arena, `old` the word it
-    /// holds, read and written through one pointer (`lower::access::local`'s guarded store).
-    pub fn write_or_keep(
-        &self,
-        fb: &mut FunctionBuilder<'_>,
-        word: Value,
-        inb: Value,
-        value: Value,
-    ) -> BResult<()> {
-        let p = self.ptr(fb, word)?;
-        let load = self.access(fb, false)?;
-        let old = fb.load(p, load)?;
-        let x = fb.select(inb, value, old)?;
-        let store = self.access(fb, true)?;
-        fb.store(p, x, store)
-    }
 }
 
 impl WordMem for ArenaMem {

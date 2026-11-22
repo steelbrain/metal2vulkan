@@ -78,10 +78,8 @@
 //! check; an in-shader check
 //! guards a view's atomic with `if_(inb)` (its result is 0 out of bounds, where Metal's is
 //! unmeasured); a device-address atomic out of bounds (a static slot's or a wide pointer's, checked
-//! against the root entry's size) operates on the write-only sink and yields 0; a threadgroup
-//! arena atomic, where the arena is contained, sits in `if_(inb)` against the arena's exact size;
-//! a thread atomic is a load and a store of the private arena, contained as they are (out of
-//! bounds it yields 0 and rewrites word 0 as it was). A wide pointer's atomic through root 0 (null
+//! against the root entry's size) operates on the write-only sink and yields 0; an arena atomic
+//! sits in `if_(inb)` against the arena's exact size. A wide pointer's atomic through root 0 (null
 //! or a resident-set miss) is counted under isolation, as a wide leaf access is. A wide atomic's
 //! address is naturally aligned (`(bind_offset + offset) & ~(n - 1)`), as Metal atomic objects are.
 //!

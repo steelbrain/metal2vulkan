@@ -7,9 +7,8 @@
 //! without the two stores at `k`.
 //!
 //! At `N` 4 the arena is a `Private` array; at `N` 2100 the two arrays pass the translator's floor
-//! and the arena is the runtime's device memory (`crate::arena`), which the counters show. Each
-//! contained store always runs, at its index where it is in bounds; otherwise it rewrites the
-//! arena's word 0, or the array's element 0, with the bits it holds (the translator's
+//! and the arena is the runtime's device memory (`crate::arena`), which the counters show. A
+//! contained store runs only where its index is in bounds (the translator's
 //! `lower::access::local` and `memory::alloca`).
 //!
 //! - In bounds, `k = (5 t + 1) mod N`, every thread's two words are Metal's: the same steps in MSL
@@ -24,8 +23,8 @@
 //!   typed `b: [4 x float]`, `1.0` into the rest, and `2.5` at byte offset `4 k` of `a` and at
 //!   `b[k]`, `k` past both, then writes `a[0]`'s and `b[0]`'s bits and byte `(5 t) mod 16` of `a`.
 //!   `nan_kept` is the same kernel without the two stores at `k`. Both answer the NaN's bits as
-//!   `in` held them: the typed array's store selects between a float and its old value, and a
-//!   device whose select or float move changed a NaN's payload would show it here.
+//!   `in` held them: a device whose contained store or float move changed a NaN's payload would
+//!   show it here.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 

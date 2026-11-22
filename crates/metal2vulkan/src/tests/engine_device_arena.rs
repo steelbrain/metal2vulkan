@@ -21,11 +21,7 @@
 //! store at a run-time index, a `float4` load (four words) at a run-time index, and a word load
 //! at a constant index. Each word is an access chain from the slot's words, placed once
 //! (`EmitCx::arena_slot`), and a load or store, so each shape stays within its bound on every
-//! identity profile and adds no block: a store whose bytes are out of bounds rewrites word 0 as
-//! it was. That makes a store the load's equal: it reads the word it writes through the access
-//! chain it writes through, and selects between its value and the word it read, so its bound is
-//! the word load's, 12, where a store in a branch needed 11 and two blocks. The table of the first
-//! profile is printed.
+//! identity profile. The table of the first profile is printed.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
@@ -207,7 +203,7 @@ const SHAPES: &[Shape] = &[
             )
         },
         value: None,
-        bound: 12,
+        bound: 11,
     },
     Shape {
         name: "float4 load at a run-time index",
@@ -298,17 +294,17 @@ fn shapes_module() -> (String, Vec<(String, String)>) {
     (text, names)
 }
 
-/// Each shape's instructions and blocks for one access on profile `p`, or `None` where the profile
-/// keeps the arena out of device memory.
+/// Each shape's instructions for one access on profile `p`, or `None` where the profile keeps the
+/// arena out of device memory.
 fn measure(
     bc: &[u8],
     names: &[(String, String)],
     stem: &str,
     p: &crate::device::DeviceProfile,
-) -> Option<Vec<(u64, usize)>> {
+) -> Option<Vec<u64>> {
     let mut costs = Vec::new();
     for (one, two) in names {
-        let mut weights = [(0u64, 0usize); 2];
+        let mut weights = [0u64; 2];
         for (w, n) in weights.iter_mut().zip([one, two]) {
             let (a, plan, module) =
                 compile_kept(bc, n, p).unwrap_or_else(|e| panic!("{stem} {n}: {e}"));
@@ -316,20 +312,15 @@ fn measure(
             if !plan.families.access.local.private_device {
                 return None;
             }
-            let weight = entry_weight(&module, &mut meter()).expect("a weight");
-            *w = (weight, module.blocks().len());
+            *w = entry_weight(&module, &mut meter()).expect("a weight");
         }
-        costs.push((
-            weights[1].0.saturating_sub(weights[0].0),
-            weights[1].1.saturating_sub(weights[0].1),
-        ));
+        costs.push(weights[1].saturating_sub(weights[0]));
     }
     Some(costs)
 }
 
-/// Each access of the arena's words costs at most its shape's bound and adds no block, a store at
-/// a run-time index included (out of bounds it rewrites word 0 as it was), on every identity
-/// profile that keeps the arena in device memory.
+/// Each access of the arena's words costs at most its shape's bound, on every identity profile
+/// that keeps the arena in device memory.
 #[test]
 fn an_arena_word_is_one_access_chain_and_one_load_or_store() {
     let (text, names) = shapes_module();
@@ -343,19 +334,18 @@ fn an_arena_word_is_one_access_chain_and_one_load_or_store() {
         };
         if !printed {
             printed = true;
-            eprintln!("one arena access on {stem}: instructions, blocks");
-            for (shape, (cost, blocks)) in SHAPES.iter().zip(&costs) {
-                eprintln!("  {:<40} {cost:>4} {blocks:>2}", shape.name);
+            eprintln!("one arena access on {stem}: instructions");
+            for (shape, cost) in SHAPES.iter().zip(&costs) {
+                eprintln!("  {:<40} {cost:>4}", shape.name);
             }
         }
-        for (shape, &(cost, blocks)) in SHAPES.iter().zip(&costs) {
+        for (shape, cost) in SHAPES.iter().zip(&costs) {
             assert!(
-                cost <= shape.bound,
+                *cost <= shape.bound,
                 "{stem}: {} costs {cost} instructions, over {}",
                 shape.name,
                 shape.bound
             );
-            assert_eq!(blocks, 0, "{stem}: {} adds blocks", shape.name);
         }
     }
     assert!(

@@ -708,29 +708,6 @@ pub(crate) struct KeptMem {
     pub(crate) kept: Option<KeptCells>,
 }
 
-impl KeptMem {
-    /// [`ArenaMem::write_or_keep`] of word `word`, a word the kept cells exclude not written.
-    pub(crate) fn write_or_keep(
-        &self,
-        fb: &mut FunctionBuilder<'_>,
-        word: SValue,
-        inb: SValue,
-        value: SValue,
-    ) -> BResult<()> {
-        let Some(cells) = self.kept else {
-            return self.mem.write_or_keep(fb, word, inb, value);
-        };
-        let kept = cells.kept(fb, word)?;
-        let mem = self.mem;
-        let then: ArmFn<'_, ()> = Box::new(move |fb, _| {
-            mem.write_or_keep(fb, word, inb, value)?;
-            Ok(ArmEnd::FallThrough(Vec::new()))
-        });
-        fb.if_(&mut (), kept, then, None)?;
-        Ok(())
-    }
-}
-
 impl WordMem for KeptMem {
     fn read(&mut self, fb: &mut FunctionBuilder<'_>, word: SValue) -> BResult<SValue> {
         let v = self.mem.read(fb, word)?;
