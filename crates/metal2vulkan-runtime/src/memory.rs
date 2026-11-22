@@ -284,6 +284,11 @@ pub struct AllocationInfo {
     /// The host mapping of its first byte, which lives as long as the allocation, for a Shared
     /// allocation; `None` for a Private one, which has no host mapping.
     pub contents: Option<NonNull<u8>>,
+    /// The host time its make began ([`host_time`](crate::host_time)).
+    pub make_start: u64,
+    /// The make's length in nanoseconds, from [`make_start`](Self::make_start) until the
+    /// allocation was made, before [`BlockMappings::map`] is called.
+    pub make_nanos: u64,
 }
 
 // SAFETY: plain data, as `BlockInfo`.
@@ -312,7 +317,8 @@ pub trait BlockMappings: Send + Sync {
     /// ahead of need, on the thread in [`Device::new`](crate::Device::new) for each class's first,
     /// and inside [`Device::take_block`](crate::Device::take_block), on the consumer's thread, for
     /// a take that no free range fits. Never under the pool's lock. It makes no call into the
-    /// runtime and drops no runtime handle.
+    /// runtime and drops no runtime handle. `allocation` states when the make began and how long
+    /// it took ([`AllocationInfo::make_start`], [`AllocationInfo::make_nanos`]).
     fn map(&self, allocation: &AllocationInfo) -> bool;
 
     /// Returns only once every mapping of `allocation` the consumer made is gone and none of its
@@ -611,6 +617,9 @@ struct Allocation {
     idle_since: u64,
     /// What its free waits for, noted when it became idle.
     wait: Wait,
+    /// The host time its make began and the make's length in nanoseconds
+    /// ([`AllocationInfo::make_start`]).
+    made: (u64, u64),
     /// A spilled allocation whose last block came back: no take lands in it, its bytes are not
     /// the class's free bytes, and the idle rule frees it next, so the next allocation tries
     /// device-local memory again.
@@ -1178,6 +1187,7 @@ impl Pool {
         let started = crate::host_time();
         let mut allocation = make_allocation(core, class, len.max(ALLOCATION_LEN), Some(site))?;
         let made = crate::host_time();
+        allocation.made = (started, made.saturating_sub(started));
         let bytes = allocation.len;
         (self.counters).timed(Part::TakeMake, bytes, made.saturating_sub(started), true);
         let mapped = self.map(&allocation, class, true);
@@ -1574,6 +1584,8 @@ impl Allocation {
             len: self.len,
             gpu_address: self.address,
             contents: self.mapping.map(Mapping::get),
+            make_start: self.made.0,
+            make_nanos: self.made.1,
         }
     }
 }
@@ -1630,13 +1642,9 @@ pub(crate) fn buffer_alignment(device: &ash::Device) -> u64 {
 /// `None` where it was not made or not mapped.
 fn ahead(core: &Core, class: MemoryClass) -> Option<Allocation> {
     let started = crate::host_time();
-    let allocation = make_allocation(core, class, ALLOCATION_LEN, None).ok()?;
-    (core.counters).timed(
-        Part::MakerMake,
-        allocation.len,
-        crate::host_time() - started,
-        true,
-    );
+    let mut allocation = make_allocation(core, class, ALLOCATION_LEN, None).ok()?;
+    allocation.made = (started, crate::host_time() - started);
+    (core.counters).timed(Part::MakerMake, allocation.len, allocation.made.1, true);
     if !core.pool.map(&allocation, class, false) {
         free_allocation(core, allocation);
         return None;
@@ -2021,6 +2029,7 @@ fn make_allocation(
         placed: 0,
         texture: false,
         idle_since: crate::host_time(),
+        made: (0, 0),
         wait: Wait::Progress(0),
         retiring: false,
         reused: false,

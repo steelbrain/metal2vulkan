@@ -481,10 +481,11 @@ A consumer that maps the pool's memory itself, into a guest for instance, passes
 `DeviceOptions::block_mappings`. Its hooks run per allocation, not per block:
 
 - `BlockMappings::map(allocation)` runs once for every allocation of the pool, before any block of
-  it goes out, with the allocation's number, class, length, device address and host mapping. It
-  runs where the allocation is made: in `Device::new` for each class's first, on the block-maker
-  thread for one made ahead of need (`Metrics::allocations_mapped`), and inside the take, on the
-  consumer's thread, for a take that no free range fits (`Metrics::allocations_mapped_on_takes`).
+  it goes out, with the allocation's number, class, length, device address and host mapping, and
+  the host time its make began with the make's length (`make_start`, `make_nanos`). It runs where
+  the allocation is made: in `Device::new` for each class's first, on the block-maker thread for
+  one made ahead of need (`Metrics::allocations_mapped`), and inside the take, on the consumer's
+  thread, for a take that no free range fits (`Metrics::allocations_mapped_on_takes`).
   It answers false where the consumer has no place for the allocation: the runtime frees it and
   hands out none of its blocks, and a take that made it returns `Limit::AllocationNotMapped`
   (`Metrics::allocation_map_refusals`).

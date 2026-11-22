@@ -155,6 +155,8 @@ mod on_device {
         gpu_address: u64,
         contents: Option<usize>,
         thread: Option<String>,
+        /// Whether its make began no later than the map, and took time.
+        timed: bool,
     }
 
     #[derive(Clone, Debug)]
@@ -176,6 +178,7 @@ mod on_device {
                 gpu_address: allocation.gpu_address,
                 contents: allocation.contents.map(|c| c.as_ptr() as usize),
                 thread: thread::current().name().map(str::to_string),
+                timed: allocation.make_start <= crate::host_time() && allocation.make_nanos > 0,
             });
             true
         }
@@ -216,6 +219,10 @@ mod on_device {
                     panic!("{name}: block {:?} of an allocation not mapped", block.id)
                 });
             assert_eq!(allocation.class, block.class, "{name}");
+            assert!(
+                allocation.timed,
+                "{name}: {allocation:?}'s make, before its map"
+            );
             assert!(
                 block.offset + block.len <= allocation.len,
                 "{name}: block {:?} at {} of {} bytes in {} bytes",

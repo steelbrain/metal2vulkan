@@ -1297,6 +1297,8 @@ field	metal2vulkan-runtime::AllocationInfo.contents	pub contents: Option<NonNull
 field	metal2vulkan-runtime::AllocationInfo.gpu_address	pub gpu_address: u64
 field	metal2vulkan-runtime::AllocationInfo.id	pub id: AllocationId
 field	metal2vulkan-runtime::AllocationInfo.len	pub len: u64
+field	metal2vulkan-runtime::AllocationInfo.make_nanos	pub make_nanos: u64
+field	metal2vulkan-runtime::AllocationInfo.make_start	pub make_start: u64
 field	metal2vulkan-runtime::BlockInfo.allocation	pub allocation: AllocationId
 field	metal2vulkan-runtime::BlockInfo.class	pub class: MemoryClass
 field	metal2vulkan-runtime::BlockInfo.contents	pub contents: Option<NonNull<u8>>
