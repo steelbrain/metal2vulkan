@@ -22,7 +22,10 @@
 //! at a constant index. Each word is an access chain from the slot's words, placed once
 //! (`EmitCx::arena_slot`), and a load or store, so each shape stays within its bound on every
 //! identity profile and adds no block: a store whose bytes are out of bounds rewrites word 0 as
-//! it was. The table of the first profile is printed.
+//! it was. That makes a store the load's equal: it reads the word it writes through the access
+//! chain it writes through, and selects between its value and the word it read, so its bound is
+//! the word load's, 12, where a store in a branch needed 11 and two blocks. The table of the first
+//! profile is printed.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
@@ -204,7 +207,7 @@ const SHAPES: &[Shape] = &[
             )
         },
         value: None,
-        bound: 11,
+        bound: 12,
     },
     Shape {
         name: "float4 load at a run-time index",

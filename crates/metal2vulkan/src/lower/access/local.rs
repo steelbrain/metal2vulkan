@@ -2095,10 +2095,10 @@ pub(super) fn emit_access_at(
 }
 
 /// The words of a contained store into the private arena (the module docs): each word written at
-/// `select(inb, word, 0)` as `select(inb, value, old)`, `old` read from that word first, and each
-/// partial word's mask taken as `select(inb, mask, 0)`, so a store whose bytes are out of bounds
-/// rewrites word 0 with its own bits. It offers no narrow or whole-word units, so every store is
-/// of words.
+/// `select(inb, word, 0)` as `select(inb, value, old)`, `old` read from that word first through
+/// the pointer the write takes (`KeptMem::write_or_keep`), and each partial word's mask taken as
+/// `select(inb, mask, 0)`, so a store whose bytes are out of bounds rewrites word 0 with its own
+/// bits. It offers no narrow or whole-word units, so every store is of words.
 struct Guarded<'m> {
     mem: &'m mut KeptMem,
     inb: SValue,
@@ -2112,9 +2112,7 @@ impl WordMem for Guarded<'_> {
     fn write(&mut self, fb: &mut FunctionBuilder<'_>, word: SValue, value: SValue) -> BResult<()> {
         let zero = k32(fb, 0)?;
         let at = fb.select(self.inb, word, zero)?;
-        let old = self.mem.read(fb, at)?;
-        let x = fb.select(self.inb, value, old)?;
-        self.mem.write(fb, at, x)
+        self.mem.write_or_keep(fb, at, self.inb, value)
     }
 
     fn write_bits(
