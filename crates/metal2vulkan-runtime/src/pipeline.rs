@@ -66,6 +66,7 @@ use crate::encoder::{
 use crate::error::{Error, Gap, IndirectCommandsKind, KernelInputKind, Refusal, StageInKind};
 use crate::hazard::Access;
 use crate::kernel_map::KernelKey;
+use crate::piece::Rate;
 use crate::reaper::{Free, Job};
 use crate::ring::CHUNK;
 use crate::sampler::{canonical, constexpr_notes, hold_constexpr, release_constexpr};
@@ -185,6 +186,9 @@ pub(crate) struct Compiled {
     /// [`ComputePipelineState::finish_pipeline`] makes, or its creation for a kernel past the
     /// stage bound; none where its descriptor holds no key of a `VkPipeline`.
     main: Option<DispatchVariant>,
+    /// The GPU run of one threadgroup of its dispatches, which bounds the pieces their command
+    /// buffers go in (`crate::piece`), shared by every state of the content.
+    pub(crate) rate: Rate,
 }
 
 /// What Metal's compute state answers of a content beside its threads, from its whole module's
@@ -1189,6 +1193,7 @@ impl Compiled {
             notes,
             answers,
             main: None,
+            rate: Rate::default(),
         }
     }
 }

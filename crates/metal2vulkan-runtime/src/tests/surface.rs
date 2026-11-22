@@ -1106,6 +1106,11 @@ mod on_device {
         let out = (device.new_texture(&d, Some(first + 1)))
             .unwrap_or_else(|error| panic!("{label}: the output: {error}"));
         let pair = |target: &crate::Buffer| -> u64 {
+            // Each kernel's rate 1 ps a threadgroup, the test's own input, so the two dispatches
+            // share one piece (`crate::piece`) and the barriers counted are the pair's own.
+            for state in [add, invert] {
+                state.inner.compiled.rate.set_for_test(1);
+            }
             let before = counters.metrics().barriers;
             let command_buffer = queue.command_buffer().expect("a command buffer");
             let mut encoder =

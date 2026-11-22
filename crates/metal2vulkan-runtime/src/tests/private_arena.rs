@@ -134,6 +134,11 @@ entry:
         kernels: &[&ComputePipelineState],
         outs: &[Buffer],
     ) -> (u64, crate::Metrics) {
+        // Each kernel's rate 1 ps a threadgroup, the test's own input, so the dispatches share one
+        // piece (`crate::piece`) and the barriers counted are the dispatches' own.
+        for kernel in kernels {
+            kernel.inner.compiled.rate.set_for_test(1);
+        }
         let counters = device.counters();
         let before = counters.metrics();
         let queue = device.new_command_queue(1).expect("a queue");

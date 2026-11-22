@@ -191,8 +191,11 @@ pub(crate) mod on_device {
                 size: [4, 5, 6],
             };
             let mut per_dispatch = Vec::new();
-            // No region, a region set before each dispatch, and the setter with no dispatch.
+            // No region, a region set before each dispatch, and the setter with no dispatch. The
+            // kernel's rate 1 ps a threadgroup, the test's own input, so each arm's dispatches
+            // share one piece (`crate::piece`): no arm pays for a cut the others do not.
             for (set, dispatched) in [(false, true), (true, true), (true, false)] {
+                state.inner.compiled.rate.set_for_test(1);
                 let command_buffer = queue.command_buffer().expect("a command buffer");
                 let mut encoder = command_buffer
                     .compute_command_encoder(DispatchType::Serial)
@@ -361,11 +364,14 @@ pub(crate) mod on_device {
             let expected: Vec<u32> = (0..WORDS as u32).map(chained).collect();
             assert_eq!(words(&x), expected, "{name}: dependent");
 
-            // Independent: each dispatch has a buffer of its own.
+            // Independent: each dispatch has a buffer of its own. The kernel's rate 1 ps a
+            // threadgroup, the test's own input, so the dispatches share one piece
+            // (`crate::piece`) and the barriers counted are the hazards' alone; so too below.
             let buffers: Vec<Buffer> = (0..count).map(|_| arena.buffer()).collect();
             for buffer in &buffers {
                 write_words(buffer, |index| index);
             }
+            state.inner.compiled.rate.set_for_test(1);
             let before = device.counters().metrics();
             let command_buffer = queue.command_buffer().expect("a command buffer");
             let mut encoder = command_buffer
@@ -389,6 +395,7 @@ pub(crate) mod on_device {
 
             // Concurrent: barriers where asked for, and none at the hazards.
             write_words(&x, |index| index);
+            state.inner.compiled.rate.set_for_test(1);
             let before = device.counters().metrics();
             let command_buffer = queue.command_buffer().expect("a command buffer");
             let mut encoder = command_buffer
@@ -438,8 +445,11 @@ pub(crate) mod on_device {
                     .unwrap_or_else(|error| panic!("{name}: {error}"))
             };
             // Two dispatches of `step`, each over one buffer: the barriers they take, the
-            // segment's end among them.
+            // segment's end among them. The kernel's rate 1 ps a threadgroup, the test's own
+            // input, so the two dispatches share one piece (`crate::piece`) and the barriers
+            // counted are the hazards' and the one segment end's alone.
             let barriers = |buffers: [&Buffer; 2]| -> u64 {
+                state.inner.compiled.rate.set_for_test(1);
                 let before = device.counters().metrics();
                 let command_buffer = queue.command_buffer().expect("a command buffer");
                 let mut encoder = command_buffer
