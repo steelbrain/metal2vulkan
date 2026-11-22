@@ -20,7 +20,6 @@ use std::sync::Arc;
 
 use crate::budget::SPIRV_WORDS;
 use crate::device::profile::BufferAccess;
-use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
 use crate::error::{Error, Feature, LowerFamily, Needs};
 use crate::library::{FunctionArtifact, FunctionConstantValues};

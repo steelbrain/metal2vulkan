@@ -3,10 +3,9 @@
 //! profile, pass L3 and record no `RasterizationRateMap` note. On the CPU interpreter, which keeps
 //! `float` denormals as lavapipe does, the kernel answers what `rate_map_data`'s shader decoders
 //! compute with denormals kept ([`kept_integer`]), for every layer and two past a map's, inside
-//! the screen, at and around each multiple of 32, past both extents and, under the in-shader
-//! containment encoding, at far coordinates; where no denormal arises, that is Metal's answer
-//! (`shader_screen_to_physical_integer` and `shader_physical_to_screen_integer`, measured on an
-//! Apple M3 Max).
+//! the screen, at and around each multiple of 32, past both extents and at far coordinates; where
+//! no denormal arises, that is Metal's answer (`shader_screen_to_physical_integer` and
+//! `shader_physical_to_screen_integer`, measured on an Apple M3 Max).
 
 use super::*;
 
@@ -49,8 +48,8 @@ fn same_answer(got: [u32; 4], want: [u32; 4]) -> bool {
 }
 
 /// The coordinates every map is decoded at: the first granule's, each multiple of 32 and its
-/// neighbours past both extents, and (`far`) coordinates whose index reads far past the words.
-fn integer_points(screen: [u32; 2], far: bool) -> Vec<[u32; 2]> {
+/// neighbours past both extents, and coordinates whose index reads far past the words.
+fn integer_points(screen: [u32; 2]) -> Vec<[u32; 2]> {
     let reach = screen[0].max(screen[1]) + 96;
     let mut out: Vec<[u32; 2]> = (0..34).map(|i| [i, 33 - i]).collect();
     for edge in (32..reach).step_by(32) {
@@ -58,9 +57,7 @@ fn integer_points(screen: [u32; 2], far: bool) -> Vec<[u32; 2]> {
             out.push([c, reach - c + i as u32]);
         }
     }
-    if far {
-        out.extend([[16_383, 1 << 20], [1 << 24, 7], [u32::MAX, 1 << 31]]);
-    }
+    out.extend([[16_383, 1 << 20], [1 << 24, 7], [u32::MAX, 1 << 31]]);
     out
 }
 
@@ -80,65 +77,61 @@ fn the_integer_maps_answer_as_metal() {
     };
     let (mut metals, mut apart) = (0, 0);
     for stem in PROFILES {
-        for robust in [true, false] {
-            let what = format!("{stem} robust={robust}");
-            let p = profile_with(stem, robust);
-            for entry in ["rate_map_integer", "rate_map_integer_pixel"] {
-                let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{what} {entry}: {e}"));
-                assert!(
-                    !a.precision.contains(&PrecisionNote::RasterizationRateMap),
-                    "{what} {entry}: {:?}",
-                    a.precision
-                );
-                link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what} {entry}: L3: {e}"));
-            }
-            let (plan, m) = typed_module(&bc, "rate_map_integer", &p).expect("module");
-            for (name, map) in maps() {
-                let words = map.words();
-                // Robust descriptors contain a far read on a device, which the interpreter traps
-                // on (the module docs), so with them only the near points run.
-                let pts = integer_points(map.screen_size(), !robust);
-                for layer in 0..map.layer_count() + 2 {
-                    let res = Resources {
-                        buffers: vec![
-                            bound(0, &map.to_bytes()),
-                            bound(1, &uints(&pts)),
-                            bound(2, &vec![0u8; pts.len() * 16]),
-                            bound(3, &layer.to_le_bytes()),
-                        ],
-                        push: push_bytes(&plan),
-                        spec: Default::default(),
-                    };
-                    let cfg = Config {
-                        workgroups: [pts.len() as u32, 1, 1],
-                        ..Config::default()
-                    };
-                    let out = run(&m, &cfg, res).unwrap_or_else(|e| panic!("{what}: {e:?}"));
-                    for (i, &c) in pts.iter().enumerate() {
-                        let mut got = [0u32; 4];
-                        for (k, b) in out.buffers[2][i * 16..i * 16 + 16].chunks(4).enumerate() {
-                            got[k] = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
-                        }
-                        let [s, t] = [true, false].map(|to| kept_integer(words, layer, c, to));
-                        let want = [s[0], s[1], t[0], t[1]];
+        let what = stem;
+        let p = profile_with(stem);
+        for entry in ["rate_map_integer", "rate_map_integer_pixel"] {
+            let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{what} {entry}: {e}"));
+            assert!(
+                !a.precision.contains(&PrecisionNote::RasterizationRateMap),
+                "{what} {entry}: {:?}",
+                a.precision
+            );
+            link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what} {entry}: L3: {e}"));
+        }
+        let (plan, m) = typed_module(&bc, "rate_map_integer", &p).expect("module");
+        for (name, map) in maps() {
+            let words = map.words();
+            let pts = integer_points(map.screen_size());
+            for layer in 0..map.layer_count() + 2 {
+                let res = Resources {
+                    buffers: vec![
+                        bound(0, &map.to_bytes()),
+                        bound(1, &uints(&pts)),
+                        bound(2, &vec![0u8; pts.len() * 16]),
+                        bound(3, &layer.to_le_bytes()),
+                    ],
+                    push: push_bytes(&plan),
+                    spec: Default::default(),
+                };
+                let cfg = Config {
+                    workgroups: [pts.len() as u32, 1, 1],
+                    ..Config::default()
+                };
+                let out = run(&m, &cfg, res).unwrap_or_else(|e| panic!("{what}: {e:?}"));
+                for (i, &c) in pts.iter().enumerate() {
+                    let mut got = [0u32; 4];
+                    for (k, b) in out.buffers[2][i * 16..i * 16 + 16].chunks(4).enumerate() {
+                        got[k] = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+                    }
+                    let [s, t] = [true, false].map(|to| kept_integer(words, layer, c, to));
+                    let want = [s[0], s[1], t[0], t[1]];
+                    assert!(
+                        same_answer(got, want),
+                        "{what}: {name} layer {layer} at {c:?}: {got:x?}, kept {want:x?}"
+                    );
+                    let [s, t] = [
+                        format::shader_screen_to_physical_integer(words, layer, c),
+                        format::shader_physical_to_screen_integer(words, layer, c),
+                    ];
+                    if same_answer(want, [s[0], s[1], t[0], t[1]]) {
+                        metals += 1;
+                    } else {
                         assert!(
-                            same_answer(got, want),
-                            "{what}: {name} layer {layer} at {c:?}: {got:x?}, kept {want:x?}"
+                            layer >= map.layer_count(),
+                            "{what}: {name} layer {layer} at {c:?}: {want:x?}, Metal's \
+                             {s:?} {t:x?}"
                         );
-                        let [s, t] = [
-                            format::shader_screen_to_physical_integer(words, layer, c),
-                            format::shader_physical_to_screen_integer(words, layer, c),
-                        ];
-                        if same_answer(want, [s[0], s[1], t[0], t[1]]) {
-                            metals += 1;
-                        } else {
-                            assert!(
-                                layer >= map.layer_count(),
-                                "{what}: {name} layer {layer} at {c:?}: {want:x?}, Metal's \
-                                 {s:?} {t:x?}"
-                            );
-                            apart += 1;
-                        }
+                        apart += 1;
                     }
                 }
             }
@@ -191,7 +184,7 @@ fn the_translated_integer_maps_answer_metals_recorded_answers() {
     }
     let mut compared = 0usize;
     for stem in PROFILES {
-        let p = profile_with(stem, false);
+        let p = profile_with(stem);
         let (plan, m) = typed_module(&bc, "rate_map_integer", &p).expect("module");
         for (&(id, layer), recorded) in &points {
             let map = &maps[id];
