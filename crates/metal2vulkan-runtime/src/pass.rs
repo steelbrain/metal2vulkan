@@ -223,9 +223,10 @@ pub struct RenderPassColorAttachmentDescriptor {
     /// attachment's pixel format and one sample, and its level the attachment level's width and
     /// height; another is [`Gap::RenderPass`] of [`RenderPassKind::Resolve`]. Metal resolves into
     /// a texture of any usage, and so does the runtime into a colour texture whose format the
-    /// device's optimal image renders; into one made without `RenderTarget` usage whose image has
-    /// no attachment usage, such as a texture over a buffer in place, it is [`Gap::RenderPass`]
-    /// of [`RenderPassKind::ResolveUsage`].
+    /// device's optimal image renders, and into one in place over a buffer whose format the
+    /// device's linear tiling renders; into one made without `RenderTarget` usage whose image has
+    /// no attachment usage, such as a texture in place over a buffer whose linear tiling does not
+    /// render its format, it is [`Gap::RenderPass`] of [`RenderPassKind::ResolveUsage`].
     pub resolve_texture: Option<Texture>,
     /// `resolveLevel`: the resolve texture's mipmap level resolved into.
     pub resolve_level: u32,

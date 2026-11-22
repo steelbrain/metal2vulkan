@@ -20,10 +20,15 @@
 //!   cleared to (0.25, 0.5, 0.75, 1) resolves into a one-sample Shared texture of `ShaderRead`
 //!   usage, and of `ShaderRead | ShaderWrite`, whose image took the attachment usage, and reads
 //!   the clear colour within one code; so does a 900 x 900 pass of every load `Load`, its colour
-//!   beside a 4-sample `Depth32Float_Stencil8`, of what an earlier pass cleared. A depth resolve
-//!   into a `Depth32Float` texture of `ShaderRead` usage is the gap `ResolveUsage`, and so is a
-//!   resolve into a `ShaderRead` texture over a Shared buffer whose linear image lies in place,
-//!   which stays in place, with no attachment usage.
+//!   beside a 4-sample `Depth32Float_Stencil8`, of what an earlier pass cleared. So does a 600 x
+//!   600 such pass into a `ShaderRead` texture over a Managed and over a Shared buffer, at tight
+//!   rows, at its row rounded up to the device's linear alignment (where it lies in place on
+//!   every device) and at 2,560 bytes: in place, its linear image took the attachment usage where
+//!   the device's linear tiling renders the format, and the pass copies nothing (a Managed
+//!   buffer's synchronize aside); the buffer reads the clear within one code and keeps the bytes
+//!   past each row's texels. Where the linear tiling does not render the format, a resolve into
+//!   such a texture in place is the gap `ResolveUsage`, and so is a depth resolve into a
+//!   `Depth32Float` texture of `ShaderRead` usage.
 //! - Under a device cfg, on every device of the cfg's kind, whether it has
 //!   `shaderStorageImageMultisample` or not: a 4-sample `RGBA8Unorm` texture made for shader
 //!   reads, shader writes and rendering, as Metal makes one, has no storage usage in its image and
@@ -79,8 +84,8 @@ mod on_device {
     use crate::{
         ClearColor, CullMode, DepthStencilDescriptor, Device, Error, Gap, IndexClass, LoadAction,
         MemoryClass, MultisampleDepthResolveFilter, MultisampleStencilResolveFilter, PixelFormat,
-        PrecisionNote, PrimitiveType, Refusal, Region, RenderPassKind, StorageMode, StoreAction,
-        Texture, TextureDescriptor, TextureType, TextureUsage,
+        PrecisionNote, PrimitiveType, Refusal, Region, RenderPassKind, Resource, StorageMode,
+        StoreAction, Texture, TextureDescriptor, TextureType, TextureUsage,
     };
     use ash::vk;
 
@@ -592,9 +597,8 @@ mod on_device {
     /// Probe `resolve_texture_usage.m`'s case, which Metal resolves: a 4-sample
     /// `BGRA8Unorm_sRGB` attachment cleared to (0.25, 0.5, 0.75, 1) resolves into a one-sample
     /// Shared texture of `ShaderRead` usage, and of `ShaderRead | ShaderWrite`, whose image took
-    /// the attachment usage. And the resolves the runtime does not build into a texture of no
-    /// `RenderTarget` usage: a depth one, and one into a texture over a Shared buffer in place,
-    /// whose linear image takes no attachment usage.
+    /// the attachment usage. And the resolve the runtime does not build into a texture of no
+    /// `RenderTarget` usage: a depth one.
     #[test]
     fn every_device_resolves_into_a_texture_of_shader_read_usage() {
         each_device("resolve_usage", |name, _, device| {
@@ -655,43 +659,7 @@ mod on_device {
                 "{name}: a depth resolve into a ShaderRead texture"
             );
 
-            // A resolve into a texture over a Shared buffer.
-            let format = PixelFormat::RGBA8Unorm;
-            let align = (device.minimum_linear_texture_alignment(format))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let pitch = u64::from(SIDE * 4).next_multiple_of(align);
-            let len = u64::from(SIDE) * pitch;
-            let block = (device.take_block(MemoryClass::Shared, len))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let buffer = (device.new_buffer(block.id, 0, len, None))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let mut td = TextureDescriptor::new(TextureType::Type2D, format, SIDE, SIDE);
-            td.usage = TextureUsage::SHADER_READ;
-            let first = IndexClass::Texture.range().start;
-            (device.grant_indices(IndexClass::Texture, first, 1)).expect("a grant");
-            let index = Some(first);
-            let over = (buffer.new_texture(&td, index, 0, pitch))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            if over.copied_over().is_some() {
-                println!("{name}: the texture over the buffer is copied, not in place");
-            } else {
-                let image = over.object().image_usage();
-                assert!(
-                    !image.contains(vk::ImageUsageFlags::COLOR_ATTACHMENT),
-                    "{name}: in place over the buffer, the image's usage {:#x}",
-                    image.as_raw()
-                );
-                let mut p = pass(&color, None);
-                p.color_attachments[0].store_action = StoreAction::MultisampleResolve;
-                p.color_attachments[0].resolve_texture = Some(over.clone());
-                assert_eq!(
-                    refused(&device, &p).map(|e| e.to_string()),
-                    Some(gap(RenderPassKind::ResolveUsage).to_string()),
-                    "{name}: a resolve into a ShaderRead texture in place over a buffer"
-                );
-                println!("{name}: in place over a buffer, a resolve into it is ResolveUsage");
-            }
-            drop((samples, color, depth, over, buffer, block));
+            drop((samples, color, depth));
         });
     }
 
@@ -741,6 +709,171 @@ mod on_device {
             cleared(name, &read_at(&into, WALK, 4, 0, 0));
             drop((color, depth, into));
             println!("{name}: the 900 x 900 loaded pass resolved into a ShaderRead texture");
+        });
+    }
+
+    /// The pass of a guest's walk into a texture over a buffer, which Metal resolves (probe
+    /// `resolve_texture_usage.m`'s `over` and `over-padded`): 600 x 600, a 4-sample
+    /// `BGRA8Unorm_sRGB` colour beside a 4-sample `Depth32Float_Stencil8` depth and stencil,
+    /// every load `Load`, the colour resolved into a one-sample `BGRA8Unorm_sRGB` texture of
+    /// `ShaderRead` usage over a Managed buffer and over a Shared one, at offset 0, its rows
+    /// 2,400 bytes apart (tight), its row rounded up to the device's linear alignment, and 2,560.
+    /// At the rounded row the texture lies in place on every device. In place, its linear image
+    /// took the attachment usage where the device's linear tiling renders its format, and the
+    /// pass copies nothing; copied, the copies are counted. The buffer's bytes read the clear
+    /// within one code, and the bytes past each row's texels keep the host's. Where the linear
+    /// tiling does not render the format, a resolve into the texture in place is `ResolveUsage`.
+    #[test]
+    fn every_device_resolves_a_loaded_pass_into_a_shader_read_texture_over_a_buffer() {
+        const WALK: u32 = 600;
+        const ROW: u64 = WALK as u64 * 4;
+        each_device("resolve_over", |name, _, device| {
+            let format = PixelFormat::BGRA8UnormSRGB;
+            let color = four_of(name, &device, format, WALK)
+                .unwrap_or_else(|error| panic!("{name}: Vulkan requires 4 samples: {error}"));
+            let Ok(depth) = four_of(name, &device, PixelFormat::Depth32FloatStencil8, WALK) else {
+                println!("{name}: no 4-sample Depth32Float_Stencil8");
+                return;
+            };
+            let attached = |load: LoadAction| {
+                let mut p = pass(&color, None);
+                p.color_attachments[0].load_action = load;
+                p.depth_attachment.texture = Some(depth.clone());
+                p.depth_attachment.load_action = load;
+                p.depth_attachment.store_action = StoreAction::Store;
+                p.stencil_attachment.texture = Some(depth.clone());
+                p.stencil_attachment.load_action = load;
+                p.stencil_attachment.store_action = StoreAction::Store;
+                p
+            };
+            let mut first = attached(LoadAction::Clear);
+            first.color_attachments[0].clear_color = CLEAR;
+            first.color_attachments[0].store_action = StoreAction::Store;
+            let align = (device.minimum_linear_texture_alignment(format))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let rounded = ROW.next_multiple_of(align);
+            let mut pitches = vec![ROW, rounded, 2_560];
+            pitches.dedup();
+            let mut index = IndexClass::Texture.range().start;
+            (device.grant_indices(IndexClass::Texture, index, 2 * pitches.len() as u32))
+                .expect("a grant");
+            let queue = device.new_command_queue(1).expect("a queue");
+            for pitch in pitches {
+                for managed in [true, false] {
+                    let kind = if managed { "Managed" } else { "Shared" };
+                    let len = u64::from(WALK) * pitch;
+                    let block = (device.take_block(MemoryClass::Shared, len))
+                        .unwrap_or_else(|error| panic!("{name}: {error}"));
+                    let buffer = match managed {
+                        true => crate::tests::managed::on_device::new_managed(
+                            &device, block.id, 0, len, 0,
+                        ),
+                        false => device.new_buffer(block.id, 0, len, None),
+                    }
+                    .unwrap_or_else(|error| panic!("{name}: {kind}: {error}"));
+                    let contents = buffer.contents().expect("host bytes");
+                    // SAFETY: the buffer's bytes, which no command uses yet.
+                    unsafe { contents.as_ptr().write_bytes(0xee, len as usize) };
+                    if managed {
+                        (buffer.did_modify_range(0, len)).expect("a modified range");
+                    }
+                    let mut td = TextureDescriptor::new(TextureType::Type2D, format, WALK, WALK);
+                    td.usage = TextureUsage::SHADER_READ;
+                    let over = (buffer.new_texture(&td, Some(index), 0, pitch))
+                        .unwrap_or_else(|error| panic!("{name}: {kind} at {pitch}: {error}"));
+                    index += 1;
+                    let in_place = over.copied_over().is_none();
+                    assert!(
+                        in_place || pitch != rounded,
+                        "{name}: {kind}: at its row rounded up to {align}, in place"
+                    );
+                    let renders = over
+                        .object()
+                        .image_usage()
+                        .contains(vk::ImageUsageFlags::COLOR_ATTACHMENT);
+                    let (linear, _) = device.core().format_features(TextureObject::format(&over));
+                    let tiling = linear.contains(vk::FormatFeatureFlags2::COLOR_ATTACHMENT);
+                    let form = match in_place {
+                        true => "in place",
+                        false => "copied",
+                    };
+                    let mut walk = attached(LoadAction::Load);
+                    walk.color_attachments[0].store_action = StoreAction::MultisampleResolve;
+                    walk.color_attachments[0].resolve_texture = Some(over.clone());
+                    let command_buffer = queue.command_buffer().expect("a command buffer");
+                    let encoder = (command_buffer.render_command_encoder(&first))
+                        .unwrap_or_else(|error| panic!("{name}: {error}"));
+                    encoder.end_encoding();
+                    if in_place && !tiling {
+                        assert!(!renders, "{name}: {kind} at {pitch}: no attachment usage");
+                        assert_eq!(
+                            (command_buffer.render_command_encoder(&walk).err())
+                                .map(|e| e.to_string()),
+                            Some(gap(RenderPassKind::ResolveUsage).to_string()),
+                            "{name}: {kind} at {pitch}: in place, its tiling renders no {format:?}"
+                        );
+                        run(name, &command_buffer);
+                        println!(
+                            "resolve_over: {name}: {kind} pitch {pitch}: in place, its linear \
+                             tiling renders no {format:?}: ResolveUsage"
+                        );
+                        continue;
+                    }
+                    assert!(
+                        renders,
+                        "{name}: {kind} at {pitch}: {form}, the attachment usage"
+                    );
+                    let before = device.counters().metrics();
+                    let encoder = (command_buffer.render_command_encoder(&walk))
+                        .unwrap_or_else(|error| panic!("{name}: {kind} at {pitch}: {error}"));
+                    encoder.end_encoding();
+                    if managed {
+                        let mut blit = command_buffer.blit_command_encoder().expect("a blit");
+                        (blit.synchronize_resource(Resource::Buffer(&buffer)))
+                            .unwrap_or_else(|error| panic!("{name}: {error}"));
+                        blit.end_encoding();
+                    }
+                    run(name, &command_buffer);
+                    let after = device.counters().metrics();
+                    assert_eq!(after.resolves - before.resolves, 1, "{name}: one resolve");
+                    let copied = after.bytes_copied - before.bytes_copied;
+                    // A Managed buffer's synchronize copies its device copy, where it has one.
+                    let synchronized = managed && !device.has_unified_memory();
+                    assert!(
+                        ((copied == 0 || synchronized) && in_place) || (copied > 0 && !in_place),
+                        "{name}: {kind} at {pitch}: {form}, {copied} bytes copied"
+                    );
+                    // SAFETY: the buffer's bytes, which no command uses now.
+                    let held =
+                        unsafe { std::slice::from_raw_parts(contents.as_ptr(), len as usize) };
+                    let (row, pitch_bytes) = (ROW as usize, pitch as usize);
+                    let texels: Vec<u8> = (held.chunks(pitch_bytes))
+                        .flat_map(|r| r[..row].iter().copied())
+                        .collect();
+                    let past = (held.chunks(pitch_bytes)).flat_map(|r| &r[row..]);
+                    let changed = past.filter(|&&byte| byte != 0xee).count();
+                    cleared(name, &texels);
+                    assert_eq!(
+                        changed, 0,
+                        "{name}: {kind} at {pitch}: bytes past the texels"
+                    );
+                    let fnv = (texels.iter()).fold(0xcbf2_9ce4_8422_2325u64, |hash, &byte| {
+                        (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
+                    });
+                    println!(
+                        "resolve_over: {name}: {kind} pitch {pitch}: {form}, resolved; texels fnv \
+                         {fnv:016x} (0,0)={:02x}{:02x}{:02x}{:02x}; {changed} of {} bytes past \
+                         the texels changed; bytes copied {copied}",
+                        texels[0],
+                        texels[1],
+                        texels[2],
+                        texels[3],
+                        (pitch - ROW) * u64::from(WALK)
+                    );
+                    drop((over, buffer, block));
+                }
+            }
+            drop((color, depth));
         });
     }
 }

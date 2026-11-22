@@ -1388,7 +1388,7 @@ impl Device {
         source: Source<'_>,
     ) -> Result<Texture, Error> {
         let d = *descriptor;
-        let (shape, plan, usage) = self.prepare(&d)?;
+        let (shape, mut plan, usage) = self.prepare(&d)?;
         let index = match reach {
             Reach::Index(index) if reached(d.pixel_format, usage) != index.is_some() => {
                 return Err(Error::Refused(Refusal::TextureIndex { index }));
@@ -1416,7 +1416,8 @@ impl Device {
                 (Some(named), vk::ImageLayout::UNDEFINED, plan.home)
             }
             Source::Over(buffer, offset, bytes_per_row) => {
-                let checked = check_over(core, &d, &shape, &plan, buffer, *offset, *bytes_per_row)?;
+                let checked =
+                    check_over(core, &d, &shape, &mut plan, buffer, *offset, *bytes_per_row)?;
                 laid = checked.ok();
                 let named = Named {
                     buffer: Arc::clone(buffer.object()),
@@ -1439,6 +1440,9 @@ impl Device {
         let placed = matches!(source, Source::Plain | Source::Managed(..));
         // Over a dma-buf's import in place, the import's buffer and the image's offset in it.
         let mut acquired = None;
+        // In place, where its linear image takes the attachment usage for resolves, the bytes
+        // from its first texel a resolve into it may reach (`render_reach`).
+        let mut resolve_reach = None;
         let (bind, mut block) = match source {
             Source::Plain | Source::Managed(..) => (Bind::Pooled, None),
             Source::Heap(block, heap, offset) => {
@@ -1481,6 +1485,8 @@ impl Device {
                 let rows = u64::from(d.height) * bytes_per_row;
                 let reach = (usage.contains(TextureUsage::RENDER_TARGET))
                     .then(|| render_reach(rows, buffer.length() - offset));
+                resolve_reach =
+                    (plan.linear_resolves).then(|| render_reach(rows, buffer.length() - offset));
                 let bind = Bind::InPlace {
                     memory: memory.device_memory(),
                     base: memory.base(),
@@ -1520,6 +1526,21 @@ impl Device {
         // (`Plan::linear_usage`); any other keeps its home, shader-read-only or general, which a
         // pass moves it from to the feedback layout and back.
         let laid_over = named.as_ref().is_some_and(|n| n.form == Form::InPlace);
+        // A pass resolves into a linear image in place where its subresource lies within its
+        // own rows and the buffer, as a resolve may write back any byte of it (Vulkan's
+        // multisample resolve operations); else it takes no attachment use, and stays in place.
+        let resolved = laid_over
+            && resolve_reach.is_some_and(|reach| {
+                let color = vk::ImageSubresource {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    mip_level: 0,
+                    array_layer: 0,
+                };
+                // SAFETY: the image is the device's, linear, of one level and layer of a colour
+                // format.
+                let layout = unsafe { core.device.get_image_subresource_layout(image, color) };
+                in_reach(layout.size, Some(reach))
+            });
         let attachment_reads = plan.attachment_reads && !laid_over;
         // On a device without the feedback loop, a draw reads such an image through its shadow.
         let shadowing = (attachment_reads && core.feedback.is_none()).then(|| {
@@ -1541,10 +1562,12 @@ impl Device {
             shadow: false,
             aspects: plan.aspects,
             format: plan.format,
-            // A linear image in place takes no attachment usage for a resolve alone.
-            usage: match laid_over {
-                true => plan.usage,
-                false => plan.image_usage(),
+            // A linear image in place takes the attachment usage for its resolves where they stay
+            // within reach.
+            usage: match (laid_over, resolved) {
+                (true, true) => plan.usage | vk::ImageUsageFlags::COLOR_ATTACHMENT,
+                (true, false) => plan.usage,
+                (false, _) => plan.image_usage(),
             },
             view_formats: plan.view_formats.clone(),
             cube: plan.cube,
@@ -1682,9 +1705,15 @@ struct Plan {
     /// one-sample colour texture, 2D, a 2D array, a cube or a cube array, made without
     /// `RenderTarget` usage, where the format's features hold the attachment and the device's image
     /// format query makes the image with it at the texture's extent ([`plan`]). A linear image in
-    /// place over a buffer, of `linear_usage`, takes no attachment usage for a resolve alone, so it
-    /// stays in place.
+    /// place over a buffer takes it on its own terms (`linear_resolves`).
     resolves: bool,
+    /// The linear image of a texture in place over a buffer of the runtime's own memory takes the
+    /// colour attachment usage too, so that a pass resolves into it as into the optimal image of
+    /// `resolves`: where the plan resolves, the device's linear tiling features hold the
+    /// attachment and its image format query makes the linear image with it at the texture's
+    /// extent ([`check_over`]). Its layout is the one it has without it on every venue counted
+    /// (`RenderPassKind::ResolveUsage`), so no texture leaves its place for it.
+    linear_resolves: bool,
 }
 
 impl Plan {
@@ -1700,11 +1729,15 @@ impl Plan {
     /// The usage of a linear image of the plan, over a buffer in place: without the feedback
     /// usage, as no pass moves it to the feedback layout, and without the sampled usage where
     /// shaders do not read the texture, as a colour render target takes it for attachment reads
-    /// alone.
+    /// alone; with the colour attachment usage where a pass resolves into it
+    /// (`linear_resolves`).
     fn linear_usage(&self) -> vk::ImageUsageFlags {
         let mut usage = self.usage & !vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
         if !self.read {
             usage &= !vk::ImageUsageFlags::SAMPLED;
+        }
+        if self.linear_resolves {
+            usage |= vk::ImageUsageFlags::COLOR_ATTACHMENT;
         }
         usage
     }
@@ -1749,6 +1782,7 @@ impl Plan {
             storage: false,
             attachment_reads: false,
             resolves: false,
+            linear_resolves: false,
             view_formats: self.view_formats.clone(),
             ..*self
         }
@@ -1840,12 +1874,14 @@ fn check_places(
 /// the answer: memory that did not spill, of a block of the runtime's own or a dma-buf's one
 /// import, for a format and usage the device makes linear images of (for that dma-buf, where the
 /// image binds in its memory), with every format feature its optimal image has that the usage
-/// uses. Where the texture is the counted copy, why ([`OverCause`]).
+/// uses. Where the texture is the counted copy, why ([`OverCause`]). Where it lies in place in a
+/// block of the runtime's own, whether its linear image takes the colour attachment usage for
+/// a pass's resolves (`Plan::linear_resolves`).
 fn check_over(
     core: &Core,
     d: &TextureDescriptor,
     shape: &Shape,
-    plan: &Plan,
+    plan: &mut Plan,
     buffer: &Buffer,
     offset: u64,
     bytes_per_row: u64,
@@ -1901,10 +1937,20 @@ fn check_over(
         (None, Some(own)) => return Ok(Err(memory_cause(own))),
     };
     let spilled = copy.is_none() && block.memory.spilled();
-    let extent = linear_extent(core, shape, plan, laid.handle())
-        .is_some_and(|max| d.width <= max.width && d.height <= max.height);
+    let fits = |max: Option<vk::Extent3D>| {
+        max.is_some_and(|max| d.width <= max.width && d.height <= max.height)
+    };
+    let extent = fits(linear_extent(core, shape, plan, laid.handle()));
     let (linear, optimal) = core.format_features(plan.format);
     let features = linear.contains(optimal & kept_features(plan.usage));
+    // In place in a block of the runtime's own, its linear image takes the colour attachment
+    // usage where the plan resolves, its tiling's features hold the attachment and the query
+    // makes the image with it; else it is made without it, and stays in place.
+    let attached = linear.contains(vk::FormatFeatureFlags2::COLOR_ATTACHMENT);
+    if !spilled && extent && features && plan.resolves && attached && matches!(laid, Laid::Own) {
+        plan.linear_resolves = true;
+        plan.linear_resolves = fits(linear_extent(core, shape, plan, None));
+    }
     Ok(if spilled {
         Err(OverCause::Spilled)
     } else if !extent {
@@ -2572,6 +2618,7 @@ fn form(core: &Core, d: &TextureDescriptor, usage: TextureUsage) -> Result<Plan,
         view_formats: Vec::new(),
         cube: false,
         resolves: false,
+        linear_resolves: false,
     })
 }
 
@@ -4504,13 +4551,16 @@ pub(crate) trait TextureObject {
     /// attachment, as [`attachment`]
     /// views them, of any usage, as Metal resolves into a texture of any usage: where its image
     /// has an attachment usage, which `RenderTarget` usage gives it and a one-sample colour
-    /// texture takes where its format renders (`Plan::resolves`).
+    /// texture takes where its format renders (`Plan::resolves`), its linear image in place over
+    /// a buffer of the runtime's own memory included (`Plan::linear_resolves`).
     ///
     /// Err: [`Gap::RenderPass`] of [`RenderPassKind::ResolveUsage`] for a texture whose image has
     /// none: a depth or stencil texture made without `RenderTarget` usage, a colour texture of a
     /// type but 2D, a 2D array, a cube or a cube array or whose format the device's optimal image
-    /// does not render, and a texture over a buffer whose linear image lies in place; as
-    /// [`attachment`] for the rest.
+    /// does not render, and a texture in place over a buffer whose linear image takes none: over
+    /// a dma-buf's import, of a format the device's linear tiling does not render or whose
+    /// linear image its query does not make with the usage, or whose subresource reaches past its
+    /// own rows or its buffer; as [`attachment`] for the rest.
     ///
     /// [`attachment`]: TextureObject::attachment
     fn resolve_attachment(&self, level: u32, slice: u32, layers: u32) -> Result<Attachment, Error> {

@@ -3552,11 +3552,22 @@ cache is answered compile-required on both.
   attachment's pixel format and one sample, and its level the attachment level's width and
   height. Metal resolves into a texture of any usage, and so does the runtime into a one-sample
   colour texture, 2D, a 2D array, a cube or a cube array, whose image is optimal: such a texture
-  takes the attachment usage on every device where its format renders, whatever Metal's usage. A
-  resolve into a texture made without `RenderTarget` usage whose image has no attachment usage is a
-  known gap (`RenderPassKind::ResolveUsage`): a depth or stencil texture, a colour texture of
-  another type or of a format the device's optimal image does not render, and a texture over a
-  buffer in place, whose linear image takes no attachment usage for a resolve alone. Refused as
+  takes the attachment usage on every device where its format renders, whatever Metal's usage.
+  So does the linear image of a texture in place over a buffer of the runtime's own memory, where
+  the device's linear tiling renders its format and its image format query makes the image with
+  the usage, which left its layout as it was on every venue counted. A resolve into a texture made
+  without `RenderTarget` usage whose image has no attachment usage is a known gap
+  (`RenderPassKind::ResolveUsage`): a depth or stencil texture, a colour texture of another type
+  or of a format the device's optimal image does not render, and a texture in place over a buffer
+  whose linear image takes none. On the RTX 3090 and on KosmicKrisp that is every texture in place
+  over a buffer, as their linear tiling features hold the attachment for no format (and a pitch of
+  the row rounded up to the alignment answer, 128 and 16, lies in place). Elsewhere it is one over
+  a dma-buf's import, one of a format the device's linear tiling does not render, and one whose
+  subresource reaches past its own rows or its buffer, as a resolve "may read and write back any
+  memory locations within the image subresource bound for that attachment" (Vulkan's multisample
+  resolve operations): on every venue counted, a buffer that ends at the texture's last texel
+  where its rows are padded.
+  Such a texture stays in place, never copied to gain the usage. Refused as
   Metal refuses it: a resolving action with no resolve texture (`Refusal::ResolveTexture`, also
   where an encoder sets it later) and an integer format's resolve (`Refusal::ResolveFormat`).
   `Metrics::resolves` counts the attachments passes resolved.
@@ -3955,9 +3966,13 @@ cache is answered compile-required on both.
   without `RenderTarget` usage whose image has no attachment usage (`ResolveUsage`: Metal
   resolves into a texture of any usage; Vulkan only into a view with the attachment usage,
   `VUID-VkRenderingInfo-colorAttachmentCount-09476`, which a one-sample colour texture of an
-  optimal image takes where its format renders, and a depth or stencil texture or a texture over
-  a buffer in place does not; the usage grows a 1920 x 1080 `RGBA8Unorm` image of one level 1.0056
-  times on the Radeon 780M, `RenderPassKind::ResolveUsage` has the measure),
+  optimal image takes where its format renders, and a texture's linear image in place over a
+  buffer of the runtime's own memory where the device's linear tiling renders its format, and a
+  depth or stencil texture does not, nor a texture in place on the RTX 3090 or KosmicKrisp, whose
+  linear tiling features hold the attachment for no format, over a dma-buf's import, or whose
+  subresource reaches past its own rows or its buffer, which a resolve may write back whole; the
+  usage grows a 1920 x 1080 `RGBA8Unorm` optimal image of one level 1.0056 times on the Radeon
+  780M and changes no linear image's layout, `RenderPassKind::ResolveUsage` has the measures),
   a depth or stencil resolve the device's resolve modes do not offer (`ResolveFilter`: `Min` or
   `Max` where `supportedDepthResolveModes` lacks it, the stencil filter `DepthResolvedSample`,
   which no Vulkan resolve mode is, and two aspects paired where `independentResolve` or

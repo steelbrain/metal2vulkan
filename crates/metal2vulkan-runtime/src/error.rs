@@ -1792,13 +1792,22 @@ pub enum RenderPassKind {
     /// usage) whose image has no attachment usage: a depth or stencil texture; a colour texture of
     /// a type but 2D, a 2D array, a cube or a cube array, or whose format the device's optimal
     /// image does not render, by its format features or its image format query at the texture's
-    /// extent; or a texture over a buffer whose linear image lies in place, which takes no
-    /// attachment usage for a resolve alone, so it stays in place and is never copied to gain one.
+    /// extent; or a texture in place over a buffer whose linear image takes none: over a dma-buf's
+    /// import; of a format the device's linear tiling does not render, by its linear features or
+    /// its image format query at the texture's extent (on the RTX 3090 and KosmicKrisp, every
+    /// format); or whose
+    /// subresource reaches past its own rows or its buffer, as a resolve "may read and write back
+    /// any memory locations within the image subresource bound for that attachment" (Vulkan's
+    /// multisample resolve operations). Such a texture stays in place, and is never copied to
+    /// gain the usage.
     /// Metal resolves into a texture of any usage: probe `resolve_texture_usage.m` in the
     /// conformance crate (an Apple M3 Max, macOS 27.0.1, job m3-max-59768) resolved a 4-sample
     /// `BGRA8Unorm_sRGB` attachment into a texture of `ShaderRead` usage and of `ShaderRead |
     /// ShaderWrite` usage, plain and under Metal's validation layer, each reading the texels of a
-    /// `RenderTarget` one. Vulkan resolves only into a view with the attachment usage
+    /// `RenderTarget` one; and (job m3-max-66994) a 600 x 600 pass that loads its colour, depth
+    /// and stencil into a `ShaderRead` texture over a Shared buffer, its rows 2,400 and 2,560
+    /// bytes apart, whose buffer then read the resolved texels and kept every byte past them.
+    /// Vulkan resolves only into a view with the attachment usage
     /// (VUID-VkRenderingInfo-colorAttachmentCount-09476), so every one-sample colour texture of an
     /// optimal image, 2D, a 2D array, a cube or a cube array, takes that usage on every device
     /// where its format renders, whatever Metal's usage. It grows memory on RADV: of optimal
@@ -1808,8 +1817,17 @@ pub enum RenderPassKind {
     /// 780M (every 1920 x 1080 one; `RGBA8Unorm` of one level from 8,847,360 to 8,896,512 bytes,
     /// 1.0056 times) and 14 of 36 on the RX 550 (8,847,360 to 8,882,200), alignments equal, and
     /// none on the Iris Xe, the RTX 3090, llvmpipe or KosmicKrisp (jobs m3-max-59774, m3-max-59775
-    /// and m3-max-59776). No depth format was measured, so a depth or stencil texture takes no
-    /// attachment usage for a resolve alone.
+    /// and m3-max-59776). A texture's linear image in place over a buffer of the runtime's own
+    /// memory takes it too, where the device's linear tiling renders its format and its query
+    /// makes the image with it: of each colour format a texture over a buffer is made of, at 600 x
+    /// 600 and 1920 x 1080, of `ShaderRead` and `ShaderRead | ShaderWrite` usage, adding the
+    /// attachment usage changed no linear image's row pitch, offset, size, alignment or memory
+    /// types on the Radeon 780M, the RX 550, the RX 7900 XTX, the Iris Xe, the RTX 3090 (where
+    /// its query makes the image) and llvmpipe, so no texture leaves its place for it; the linear
+    /// tiling features of the RTX 3090 and of KosmicKrisp hold the attachment for none of them, so
+    /// there no such texture takes it (jobs m3-max-67028, m3-max-67035, m3-max-67029,
+    /// m3-max-67030, m3-max-67031, m3-max-67021 and m3-max-67032). No depth format was measured,
+    /// so a depth or stencil texture takes no attachment usage for a resolve alone.
     ResolveUsage,
     /// A depth or stencil resolve the device's resolve modes do not offer
     /// (`VkPhysicalDeviceDepthStencilResolveProperties`): a depth attachment's `Min` or `Max`
