@@ -251,19 +251,21 @@ mod on_device {
     /// handles drop after the commit, in three forms: while the command buffer waits on an event
     /// (committed, not submitted), while long work committed ahead of it on its queue runs, and
     /// 20 ms into a pass of about `PASS_RUN` of dispatches, while it samples them: as many as the
-    /// GPU span of the first form's one dispatch gives, at most `SAMPLINGS`, the drop asserted
-    /// before the pass's GPU end. The heap's range and each form's GPU span beside the drop's
-    /// host time are printed, so a fault's address and time can be placed. A texture's going
-    /// waits for the command buffers committed before its release (`crate::memory::Wait`): each
-    /// completes with no error, and its pass reads the textures as they were.
+    /// shorter GPU span of the first two forms' one dispatch gives (the first holds the kernel's
+    /// first use: on lavapipe about 25 times a dispatch of the pass), at most `SAMPLINGS`, the
+    /// drop asserted before the pass's GPU end. The heap's range and each form's GPU span beside
+    /// the drop's host time are printed, so a fault's address and time can be placed. A
+    /// texture's going waits for the command buffers committed before its release
+    /// (`crate::memory::Wait`): each completes with no error, and its pass reads the textures as
+    /// they were.
     #[cfg(any(m2v_cpu_icd, all(m2v_gpu, m2v_gpu_hazards)))]
     #[test]
     fn every_device_keeps_heap_textures_read_through_their_indices_past_their_release() {
         /// The most dispatches of the pass that samples while its textures drop: about 200 ms on
         /// an RTX 3090.
         const SAMPLINGS: u32 = 40_000;
-        /// The GPU run, in nanoseconds, that pass is sized to, from the GPU span of the first
-        /// form's one dispatch: on a CPU device under load the fixed `SAMPLINGS` ran past the
+        /// The GPU run, in nanoseconds, that pass is sized to, from the GPU spans of the first
+        /// two forms' one dispatch: on a CPU device under load the fixed `SAMPLINGS` ran past the
         /// tests' patience.
         const PASS_RUN: u64 = 200_000_000;
         use crate::tests::command::on_device::shared_event;
@@ -352,7 +354,7 @@ mod on_device {
             let count = dispatches_for(name, &queue, &ahead_state, &busy, 200_000_000);
             let event = shared_event(&device);
             let mut unlike = Vec::new();
-            let mut samplings = SAMPLINGS;
+            let (mut samplings, mut one) = (SAMPLINGS, u64::MAX);
             for (round, form) in ["at an event wait", "behind long work", "while it runs"]
                 .into_iter()
                 .enumerate()
@@ -414,12 +416,13 @@ mod on_device {
                     "{name}: {form}: dropped at {dropped}, the pass's GPU span {start}..{end}; \
                      loss {loss:?}, error {error:?}, read {read:?}"
                 );
-                if round == 0 && end > start {
-                    samplings = u32::try_from(PASS_RUN / (end - start))
+                if round < 2 && end > start {
+                    one = one.min(end - start);
+                    samplings = u32::try_from(PASS_RUN / one)
                         .map_or(SAMPLINGS, |count| count.clamp(1, SAMPLINGS));
                     println!(
-                        "{name}: one sampling dispatch's GPU span {} ns: the pass while it runs \
-                         takes {samplings} dispatches",
+                        "{name}: {form}: one sampling dispatch's GPU span {} ns: the pass while it \
+                         runs takes {samplings} dispatches",
                         end - start
                     );
                 }
