@@ -279,10 +279,10 @@ source_filename = "private_sinks.metal"
   %pk = getelementptr inbounds i32, ptr addrspace(1) %in, i32 %i1
   %k = load i32, ptr addrspace(1) %pk, align 4
   %w = shl i32 %k, 2
-  %pa2 = getelementptr inbounds i8, ptr %a, i32 %w
-  store float 2.500000e+00, ptr %pa2, align 4
-  %pb2 = getelementptr inbounds [4 x float], ptr %b, i32 0, i32 %k
-  store float 2.500000e+00, ptr %pb2, align 4
+  %pak = getelementptr inbounds i8, ptr %a, i32 %w
+  store float 2.500000e+00, ptr %pak, align 4
+  %pbk = getelementptr inbounds [4 x float], ptr %b, i32 0, i32 %k
+  store float 2.500000e+00, ptr %pbk, align 4
 "
         } else {
             ""
