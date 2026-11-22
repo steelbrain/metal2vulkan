@@ -21,8 +21,10 @@
 //!   (`source::use_source_index`), and parses a whole shard only for a source the index does not
 //!   locate; the report counts both.
 //! - **The profiles.** The profiles of the expectation file's header, each a committed profile
-//!   as stated, derived under the default policy as every census row is. A device run compiles for the opened device,
-//!   restricted to what the executor enables; this compiles for the committed profile.
+//!   as the runtime's device describes it (`engine::runtime_description`: read at the runtime's
+//!   Vulkan version, restricted to what the runtime enables of it), derived under the default
+//!   policy as every census row is. A device run compiles for the opened device, restricted to
+//!   what the executor enables, which is the same set.
 //! - **The baseline.** The committed expectation file ([`EXPECTATIONS`] under the corpus root):
 //!   one line per case, its cell on each profile ([`Cell`]): `compiled` or the executor's
 //!   stable refusal label (`NotSupported::outcome`).
@@ -136,9 +138,10 @@ pub struct CensusProfile {
 }
 
 impl CensusProfile {
-    /// The committed profile `profile`, under the default policy.
+    /// The committed profile `profile` as the runtime's device describes it, under the default
+    /// policy.
     pub fn load(profile: &ProfileStem) -> Result<CensusProfile, String> {
-        let description = crate::engine::load_description(&profile.stem)?;
+        let description = crate::engine::runtime_description(&profile.stem)?;
         let device = WorkerDevice::new(description, DevicePolicy::default())
             .map_err(|error| format!("{}: {error}", profile.label()))?;
         let key = profile_key(&CensusKey::engine(

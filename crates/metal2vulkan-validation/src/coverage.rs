@@ -63,7 +63,8 @@ impl SubgroupShape {
 /// in-shader check of descriptor views (`DeviceProfile::checks_buffers_in_shader`), image
 /// robustness the in-shader clamp and guard of images (`robust_image_access`). A tier-table
 /// profile's robustness-off leg removes them ([`Leg::RobustnessOff`]), and the engine executor's
-/// own context enables exactly the ones its device's description states.
+/// own context enables the ones its device's description states that the runtime enables on some
+/// device (the image ones), all or none.
 pub const ROBUSTNESS_FEATURES: [VkFeature; 4] = [
     VkFeature::RobustBufferAccess,
     VkFeature::RobustBufferAccess2,

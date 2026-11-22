@@ -11,18 +11,12 @@
 //! enabled ([`Available::exposing`]), since chaining a structure of an absent extension below its
 //! core version is invalid usage.
 //!
-//! Two lists decide what is enabled:
-//!
-//! - [`old_engine_list`]: the old executor's list, unchanged, the base every engine context
-//!   enables (so its opened profile, and its rows, do not move; the pinned chains of
-//!   `tests::every_committed_profiles_context_enables_its_pinned_chain` hold it).
-//! - [`engine_list`] (engine contexts, on top of the old list): the product's
-//!   `DeviceDescription::recommended_enables` for the device's queried description, less what no
-//!   encoding reads ([`NOT_ENABLED`]), with every robustness feature the description states
-//!   (`coverage::ROBUSTNESS_FEATURES`), so the opened profile compiles the robust containment
-//!   encodings the device states. Extended dynamic state is enabled where
-//!   the device lists it: a render pipeline states it as a requirement, and the render executor
-//!   records its states.
+//! One list decides what is enabled, [`engine_list`]: what the runtime enables of the device's
+//! queried description (`engine::runtime_enables`, of the runtime's own set,
+//! `metal2vulkan_runtime::floor::enable_set`), so a context runs no form the runtime never enables
+//! (the pinned chains of `tests::every_committed_profiles_context_enables_its_pinned_chain` hold
+//! it). Extended dynamic state is enabled where the device lists it: a render pipeline states it as
+//! a requirement, and the render executor records its states.
 //!
 //! What a context enabled is read back from the enabled chain, member by member, through the
 //! one table ([`MEMBERS`]) that also writes it: [`enabled_set`] in the engine's vocabulary
@@ -1167,19 +1161,6 @@ members! {
     PortabilitySubset.portability_subset.point_polygons => Some(F::PointPolygons);
 }
 
-/// The engine's vocabulary features [`engine_list`] never enables, each with why. None of
-/// them is a pipeline requirement, and the product reads none of them. Their extensions stay
-/// enabled where the product recommends them: an extension enabled without its feature members
-/// changes nothing the product reads. `extendedDynamicState` is not here: a render pipeline
-/// requires it where it makes a state dynamic, and the render executor records every such state but
-/// a per-bind stride. The robustness features are not here either: the product reads them to choose
-/// the containment encoding, and a context enables every one its description states.
-pub(super) const NOT_ENABLED: &[(VkFeature, &str)] = &[(
-    F::NullDescriptor,
-    "no encoding reads it; it shares `VK_EXT_robustness2`'s structure with the robust-access \
-         members, which the description decides",
-)];
-
 /// One device extension a context can enable, with its name in the engine's vocabulary.
 struct ExtensionName {
     name: &'static CStr,
@@ -1379,23 +1360,6 @@ impl Enables {
         }
     }
 
-    /// Chain `structure` and enable the extension `available` exposes it by (with what that
-    /// extension requires), or none where the context's version has it as core. `false` when
-    /// the device does not expose it.
-    fn expose(&mut self, structure: Structure, available: &Available) -> bool {
-        let Some(extension) = available.exposing(structure) else {
-            return false;
-        };
-        if !structure.is_base() {
-            self.linked.insert(structure);
-        }
-        if let Some(name) = extension {
-            self.extensions.insert(name);
-            self.extensions.extend(structure.requires_at(self.version));
-        }
-        true
-    }
-
     /// Chain `structure` when the context's version has it as core or an extension already
     /// enabled exposes it (with what that extension requires), enabling nothing more. `false`
     /// when neither does.
@@ -1419,13 +1383,6 @@ impl Enables {
         exposed
     }
 
-    /// Enable `member` when `supported` has it and the device exposes its structure.
-    fn copy(&mut self, member: &Member, supported: &FeatureChain, available: &Available) {
-        if member.is_set(supported) && self.expose(member.structure, available) {
-            member.set(&mut self.chain);
-        }
-    }
-
     /// The `ppEnabledExtensionNames` pointers, valid for the `'static` names.
     pub(super) fn extension_names(&self) -> Vec<*const c_char> {
         self.extensions.iter().map(|name| name.as_ptr()).collect()
@@ -1437,83 +1394,6 @@ fn member_of(feature: VkFeature) -> Option<&'static Member> {
     MEMBERS
         .iter()
         .find(|member| member.feature == Some(feature))
-}
-
-/// The member of `MEMBERS` that is field `name` of `structure`.
-fn named_member(structure: Structure, name: &str) -> Option<&'static Member> {
-    MEMBERS
-        .iter()
-        .find(|member| member.structure == structure && member.name == name)
-}
-
-/// The old executor's enable list, as it stood before the engine had its own: the members
-/// every module under test declared (censused over the corpus), plus the portability subset
-/// (everything a portable implementation says it has), `VK_EXT_shader_stencil_export`, and
-/// `maintenance5` (which defines an unwritten `PointSize` for the old executor's point draws;
-/// its extension requires `VK_KHR_dynamic_rendering` on 1.2). Unchanged since: it is the base of
-/// every engine context's list ([`engine_list`]), so a change here moves every opened
-/// profile.
-pub(super) fn old_engine_list(supported: &FeatureChain, available: &Available) -> Enables {
-    let mut enables = Enables::new(available.version);
-    for feature in [
-        F::SamplerAnisotropy,
-        F::SampleRateShading,
-        F::TessellationShader,
-        F::ShaderInt16,
-        F::ShaderInt64,
-        F::ShaderClipDistance,
-        F::ShaderCullDistance,
-        F::ShaderStorageImageExtendedFormats,
-        F::ImageCubeArray,
-        F::GeometryShader,
-        F::FragmentStoresAndAtomics,
-        F::VertexPipelineStoresAndAtomics,
-        F::StorageInputOutput16,
-        F::StorageBuffer16BitAccess,
-        F::UniformAndStorageBuffer16BitAccess,
-        F::StoragePushConstant16,
-        F::StorageBuffer8BitAccess,
-        F::UniformAndStorageBuffer8BitAccess,
-        F::StoragePushConstant8,
-        F::ShaderFloat16,
-        F::ShaderInt8,
-        F::ShaderSubgroupExtendedTypes,
-        F::ShaderOutputViewportIndex,
-        F::ShaderOutputLayer,
-        F::BufferDeviceAddress,
-        F::FragmentShaderPixelInterlock,
-        F::ShaderDemoteToHelperInvocation,
-        F::ShaderBufferFloat32AtomicAdd,
-        F::ShaderSharedFloat32AtomicAdd,
-        F::FragmentShaderBarycentric,
-    ] {
-        let member = member_of(feature).expect("every listed feature has a member");
-        enables.copy(member, supported, available);
-    }
-    // The members the engine's vocabulary does not name.
-    for (structure, name) in [
-        (Structure::V11, "variable_pointers"),
-        (Structure::V11, "variable_pointers_storage_buffer"),
-        (Structure::FloatControls2, "shader_float_controls2"),
-    ] {
-        let member = named_member(structure, name).expect("every named member is listed");
-        enables.copy(member, supported, available);
-    }
-    let maintenance5 = MEMBERS
-        .iter()
-        .find(|member| member.structure == Structure::Maintenance5)
-        .expect("maintenance5 is listed");
-    enables.copy(maintenance5, supported, available);
-    if enables.expose(Structure::PortabilitySubset, available) {
-        // Ask a portable implementation for exactly what it says it has (only the members:
-        // `unlink` already cleared the query's link).
-        enables.chain.portability_subset = supported.portability_subset;
-    }
-    let stencil_export = c"VK_EXT_shader_stencil_export";
-    if available.has(stencil_export) {
-        enables.extensions.insert(stencil_export);
-    }
-    enables
 }
 
 /// What the runtime probe's context enabled beyond the engine's list
@@ -1556,31 +1436,30 @@ pub(super) fn enable_runtime_probe(
     }
 }
 
-/// The engine's enable list: on top of `enables`, the product's
-/// `DeviceDescription::recommended_enables` for `description` (the device's own queried
-/// description, at the context's API 1.2, or the profile a restriction reports) under the default
-/// policy the opened device is derived with, less [`NOT_ENABLED`], with every robustness feature
-/// ([`ROBUSTNESS_FEATURES`]) the description states. Each recommended extension is enabled by the
-/// first name the device lists for it, each recommended feature by its member (chaining its
-/// structure through an enabled extension), and each member no vocabulary names
-/// (`textureCompressionASTC_HDR` and the rest, by their registry names, `Member::registry`)
-/// where an enabled extension exposes its structure and the device supports it.
+/// The engine's enable list: what the runtime enables of `description` (the device's own queried
+/// description, at the context's API version, or the profile a restriction reports),
+/// `engine::runtime_enables`, with its robustness features ([`ROBUSTNESS_FEATURES`]) all or none.
+/// Each of its extensions is enabled by the first name the device lists for it, and each of its
+/// features by its member (chaining its structure through an enabled extension). Nothing else is
+/// enabled: no feature or extension outside the runtime's set
+/// (`metal2vulkan_runtime::floor::enable_set`), and no member the engine's vocabulary does not
+/// name.
 ///
-/// A stated robustness feature the feature chain does not report, or whose structure no enabled
-/// extension exposes, is not an error: no robustness feature is enabled then, and the stated ones
-/// are [`Enables::unmet_robustness`], so the context opens and every run on it is a typed refusal
-/// rather than a run of the in-shader encoding. Any other disagreement between
-/// the product's description and this device's own lists (a recommended extension with no listed
-/// name, a recommended feature with no member, one the feature chain does not report, or one
-/// whose structure no enabled extension exposes) is an error: the context is not opened on a list
-/// that would silently drop it.
+/// A robustness feature of the set the feature chain does not report, or whose structure no
+/// enabled extension exposes, is not an error: no robustness feature is enabled then, and the
+/// stated ones are [`Enables::unmet_robustness`], so the context opens and every run on it is a
+/// typed refusal rather than a run of the in-shader encoding. Any other disagreement between the
+/// product's description and this device's own lists (an extension of the set with no listed
+/// name, a feature with no member, one the feature chain does not report, or one whose structure
+/// no enabled extension exposes) is an error: the context is not opened on a list that would
+/// silently drop it.
 pub(super) fn engine_list(
-    mut enables: Enables,
     description: &DeviceDescription,
     supported: &FeatureChain,
     available: &Available,
 ) -> Result<Enables, String> {
-    let recommended = description.recommended_enables();
+    let mut enables = Enables::new(available.version);
+    let recommended = crate::engine::runtime_enables(description);
     for &extension in &recommended.extensions {
         let name = EXTENSIONS
             .iter()
@@ -1592,9 +1471,6 @@ pub(super) fn engine_list(
     }
     let mut robustness = Vec::new();
     for &feature in &recommended.features {
-        if NOT_ENABLED.iter().any(|(excluded, _)| *excluded == feature) {
-            continue;
-        }
         // Core functionality without a member at the context's version (extended dynamic state
         // from 1.3): nothing to enable.
         if !feature.exposure().has_member(enables.version) {
@@ -1619,8 +1495,7 @@ pub(super) fn engine_list(
         }
         member.set(&mut enables.chain);
     }
-    // The stated robustness features, all or none: `robustBufferAccess2` without
-    // `robustBufferAccess` is invalid usage, and a context missing any runs nothing anyway.
+    // The stated robustness features, all or none: a context missing any runs nothing anyway.
     let members = robustness
         .iter()
         .map(|&feature| {
@@ -1632,12 +1507,6 @@ pub(super) fn engine_list(
     enables.unmet_robustness = members.iter().filter_map(|member| member.err()).collect();
     if enables.unmet_robustness.is_empty() {
         for member in members.into_iter().flatten() {
-            member.set(&mut enables.chain);
-        }
-    }
-    for member in MEMBERS.iter().filter(|member| member.feature.is_none()) {
-        let extension_structure = !member.structure.extensions().is_empty();
-        if extension_structure && member.is_set(supported) && enables.link(member.structure) {
             member.set(&mut enables.chain);
         }
     }

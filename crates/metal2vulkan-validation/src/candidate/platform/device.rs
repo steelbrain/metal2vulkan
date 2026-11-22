@@ -24,7 +24,7 @@ use std::sync::{Mutex, OnceLock};
 /// (`device_facts::RECORDED_LAYERS`). Every context runs under `VK_LAYER_KHRONOS_validation` with
 /// core and synchronization validation, and a message sink ([`VulkanContext::take_messages`])
 /// that fails the row: every engine candidate run and every L4 acceptance run. It enables the
-/// engine's list on top of the base list ([`enables::engine_list`]).
+/// engine's list ([`enables::engine_list`]): what the runtime enables of the device.
 pub(super) use crate::candidate::device_facts::RECORDED_LAYERS;
 
 /// The validation layer every engine run enables.
@@ -1646,9 +1646,9 @@ impl VulkanContext {
         // SAFETY: `physical` was enumerated from `instance`, created at API `version`, and
         // `available` is what the device lists, at the version the instance and device share.
         let supported = unsafe { FeatureChain::query(&instance, physical, &available) };
-        // What the device supports, in the product's vocabulary: the engine's list is the
-        // product's recommendation for it, and the opened description is it restricted to what
-        // was enabled.
+        // What the device supports, in the product's vocabulary: the engine's list is what the
+        // runtime enables of it, and the opened description is it restricted to what was
+        // enabled.
         // SAFETY: `physical` was enumerated from `instance`, which was created with API
         // `version`, the version passed here; the query only calls physical-device entry points.
         let mut description = unsafe { DeviceDescription::query(&instance, physical, version) }
@@ -1685,7 +1685,6 @@ impl VulkanContext {
             }
         }
         let mut enables = enables::engine_list(
-            enables::old_engine_list(&supported, &available),
             description.as_ref().map_err(Clone::clone)?,
             &supported,
             &available,

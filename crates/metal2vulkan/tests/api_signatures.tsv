@@ -3381,6 +3381,7 @@ fn	metal2vulkan-air::intrinsics::undecoded_feature	pub fn undecoded_feature(name
 fn	metal2vulkan-air::specialize	pub fn specialize(d: Decoded, r: &SpecRequest, m: &mut Meter) -> Result<Entry, Error>
 fn	metal2vulkan-air::specialize_dynamic	pub fn specialize_dynamic(d: Decoded, r: &SpecRequest, (linked, dynamic): (&[LinkedModule], &DynamicLinks), m: &mut Meter) -> Result<Entry, Error>
 fn	metal2vulkan-air::specialize_linked	pub fn specialize_linked(d: Decoded, r: &SpecRequest, linked: &[LinkedModule], m: &mut Meter) -> Result<Entry, Error>
+fn	metal2vulkan-runtime::floor::enable_set	pub fn enable_set() -> EnableSet
 fn	metal2vulkan-runtime::host_time	pub fn host_time() -> u64
 fn	metal2vulkan-runtime::serve_stage	pub fn serve_stage(instance: &Instance, mut options: DeviceOptions, mut from_parent: impl Read, mut to_parent: impl Write) -> io::Result<()>
 fn	metal2vulkan::ash_interop::sampler_create_info	pub fn sampler_create_info<'a>(desc: &vk::SamplerDesc, reduction: &'a mut ash::vk::SamplerReductionModeCreateInfo<'static>, border: &'a mut ash::vk::SamplerBorderColorComponentMappingCreateInfoEXT<'static>) -> ash::vk::SamplerCreateInfo<'a>

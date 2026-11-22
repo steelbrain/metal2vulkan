@@ -790,17 +790,33 @@ pub(crate) const ENABLED: &[&[Feature]] = &[
     INDIRECT_COMMAND_FEATURES,
 ];
 
+/// Each feature of a table device creation enables ([`ENABLED`]) that the translator names, with
+/// its name.
+fn named_features() -> impl Iterator<Item = (&'static Feature, VkFeature)> {
+    (ENABLED.iter().copied().flatten())
+        .filter_map(|feature| feature.translator.map(|name| (feature, name)))
+}
+
+/// Every extension device creation may enable, each where its own rule says.
+pub(crate) fn creation_extensions() -> impl Iterator<Item = &'static CStr> {
+    (DEVICE_EXTENSIONS.iter())
+        .chain(OPTIONAL_EXTENSIONS)
+        .chain(ATTACHMENT_READ_EXTENSIONS)
+        .chain(BORDER_SWIZZLE_EXTENSIONS)
+        .chain(BARYCENTRIC_EXTENSIONS)
+        .chain(INDIRECT_COMMANDS)
+        .copied()
+}
+
 /// What the translator's description of the device states as enabled: each feature of
 /// `capabilities` device creation enables ([`ENABLED`]) that the translator names, and each
 /// enabled extension it names.
 pub(crate) fn shader_enables(capabilities: &Capabilities) -> EnableSet {
     let mut features = capabilities.features;
     let mut enables = EnableSet::new();
-    for feature in ENABLED.iter().copied().flatten() {
-        if let Some(name) = feature.translator {
-            if *(feature.field)(&mut features) == vk::TRUE {
-                enables.features.insert(name);
-            }
+    for (feature, name) in named_features() {
+        if *(feature.field)(&mut features) == vk::TRUE {
+            enables.features.insert(name);
         }
     }
     enables.extensions.extend(
@@ -809,6 +825,25 @@ pub(crate) fn shader_enables(capabilities: &Capabilities) -> EnableSet {
             .iter()
             .filter_map(|&name| shader_extension(name)),
     );
+    enables
+}
+
+/// Every feature and extension of the translator's vocabulary that device creation enables on
+/// some device: each feature of a table creation enables that the translator names, and each
+/// extension creation may enable that the translator names. It is the union of what the
+/// translator's description of any device the runtime makes states as enabled, so a description
+/// restricted to it states nothing creation never enables; on one device creation enables the part
+/// of it the device reports, by the floor's rules.
+///
+/// Metal has no counterpart.
+pub fn enable_set() -> EnableSet {
+    let mut enables = EnableSet::new();
+    enables
+        .features
+        .extend(named_features().map(|(_, name)| name));
+    enables
+        .extensions
+        .extend(creation_extensions().filter_map(shader_extension));
     enables
 }
 

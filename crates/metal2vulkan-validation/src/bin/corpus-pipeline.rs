@@ -305,9 +305,10 @@ fn run() -> Result<(), String> {
     )
 }
 
-/// The compile device of an engine sweep of profile `stem`, created under the default policy.
+/// The compile device of an engine sweep of profile `stem` as the runtime's device describes it
+/// (`engine::runtime_description`), created under the default policy.
 fn compile_device(stem: &str) -> Result<WorkerDevice, String> {
-    let description = engine::load_description(stem)?;
+    let description = engine::runtime_description(stem)?;
     WorkerDevice::new(description, metal2vulkan::device::DevicePolicy::default())
         .map_err(|error| format!("{stem}: {error}"))
 }

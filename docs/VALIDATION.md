@@ -381,6 +381,25 @@ worker under the 20-second and 500-MiB ceilings, resumable in bounded batches (`
 | `bitcode-reader` | The bitcode reader's decode compared with `llvm-dis`, and the intrinsic census |
 | focused audits (`rasterization-rate-maps`, `sample-rate`, `ulong-textures`, `fragment-varyings`, `linked-functions`, `tile-functions`, `mesh-draws`) | One structural family, selected by current facts, translated in batches |
 
+The translation, specialization and authored-compile audits, and `corpus-pipeline`, compile for a
+committed profile as the runtime's device describes it (`engine::runtime_description`): read at
+the runtime's Vulkan version and restricted to what the runtime enables of it
+(`engine::runtime_enables`, of `metal2vulkan_runtime::floor::enable_set`). Every Vulkan context
+the executor opens enables the same set. It is the runtime's tables applied to what the profile
+states, which differs from the runtime's own answer for a device in four places:
+
+- The runtime enables the border swizzle's two features together or not at all; a profile that
+  states `borderColorSwizzle` without `borderColorSwizzleFromImage` (the NVIDIA ones) keeps
+  `borderColorSwizzle` here, where the runtime enables neither.
+- The runtime enables the attachment feedback loop only where the device's descriptor limits hold
+  the attachment reads; this keeps it wherever the profile states it.
+- A profile below the runtime's floor (`moltenvk-m3`, which states `nullDescriptor` and `logicOp`
+  false) is compiled for the set's intersection with what it states, not for the runtime's answer,
+  which is to refuse the device.
+- A context at API 1.2 (every context without a profile restriction) reaches the features the
+  runtime's version has as core through their extensions, and has none that only that version
+  brings without an extension.
+
 ```sh
 cargo run -p metal2vulkan-validation --release --bin corpus-triage -- \
   --audit authoring-capabilities --limit 100000
@@ -450,7 +469,8 @@ cargo run -p metal2vulkan-validation --release --bin corpus-vulkan -- \
 - **The Vulkan candidate** (`corpus-vulkan`, on Linux) translates the
   case through the public API in a killable compile worker, executes exactly what the binder plans,
   and compares the observations with Metal's. Every context runs under the validation layer and
-  enables every robustness feature the device states.
+  enables what the runtime enables of the device: no buffer robustness, and the image robustness
+  the device states.
 - **Through the runtime.** On Linux, without a profile restriction, every kernel case the engine
   maps (buffers, device buffer arrays included, bound textures and samplers, argument buffers of
   buffers, textures and samplers, threadgroup memory, function constants and linked functions,

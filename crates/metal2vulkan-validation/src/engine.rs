@@ -10,7 +10,10 @@
 //! error taxonomy, never a second list of reasons.
 
 use crate::l3::L3Failure;
-use metal2vulkan::device::{DevicePolicy, DeviceProfile, Requirements};
+use metal2vulkan::device::{
+    ApiVersion, DeviceDescription, DevicePolicy, DeviceProfile, EnableSet, Requirements,
+    VkExtension,
+};
 use metal2vulkan::error::{
     CanonError, Capability, Error, ErrorClass, Feature, InputError, InputErrorKind, InternalKind,
     Limit, Location, Needs, RuntimeInput,
@@ -20,7 +23,7 @@ use metal2vulkan::pipeline::{CompileReport, EntryDescriptor, EntryRef, LoweringI
 use metal2vulkan::Budget;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -989,16 +992,62 @@ pub fn load_profile(stem: &str) -> Result<DeviceProfile, String> {
     Ok(load_device(stem)?.profile().clone())
 }
 
-/// The engine's `Device` for committed profile `stem` under the default policy (the runtime's):
-/// what the public compile API compiles against (its profile is [`load_profile`]'s).
+/// The engine's `Device` for committed profile `stem` under the default policy (the runtime's),
+/// made of [`runtime_description`]: what the public compile API compiles against (its profile is
+/// [`load_profile`]'s).
 pub fn load_device(stem: &str) -> Result<metal2vulkan::device::Device, String> {
-    metal2vulkan::device::Device::from_queries(load_description(stem)?, DevicePolicy::default())
+    metal2vulkan::device::Device::from_queries(runtime_description(stem)?, DevicePolicy::default())
         .map_err(|error| format!("{stem}: {error}"))
 }
 
-/// The `DeviceDescription` of committed profile `stem`, as the Khronos JSON reader builds it:
+/// Committed profile `stem` as the runtime's device describes it: read at the runtime's Vulkan
+/// version (`metal2vulkan_runtime::floor::VERSION`, [`crate::acceptance::read_at`]) and restricted
+/// to what the runtime enables of it ([`runtime_enables`]). What every census compiles for, and
 /// what a compile worker rebuilds [`load_device`]'s `Device` from.
-pub fn load_description(stem: &str) -> Result<metal2vulkan::device::DeviceDescription, String> {
+pub fn runtime_description(stem: &str) -> Result<DeviceDescription, String> {
+    let read = crate::acceptance::read_at(&load_description(stem)?, runtime_version());
+    let enables = runtime_enables(&read);
+    read.with_enabled(&enables)
+        .map_err(|error| format!("{stem}: the runtime's enables: {error}"))
+}
+
+/// The Vulkan version the runtime requires of every device and makes its descriptions at.
+fn runtime_version() -> ApiVersion {
+    ApiVersion::from_packed(metal2vulkan_runtime::floor::VERSION)
+}
+
+/// What the runtime enables of a device `description` states, in the translator's vocabulary:
+/// `description`'s recommended enables (`DeviceDescription::recommended_enables`) of the features
+/// the runtime enables on some device (`metal2vulkan_runtime::floor::enable_set`) and of those
+/// its version has as core with nothing to enable (extended dynamic state), with the set's
+/// extensions and each extension that exposes one of those features below its core version (a
+/// context below the runtime's version reaches them so). The one definition of what a validation
+/// context enables and of what a census compiles for: no feature or extension outside the
+/// runtime's set.
+///
+/// It is the runtime's tables applied to what `description` states, not the runtime's answer for
+/// one device: where the runtime enables a group all or none (the border swizzle's two features),
+/// by the device's limits (the attachment feedback loop), or not at all (a device below its floor),
+/// this keeps each member of the set `description` states.
+pub fn runtime_enables(description: &DeviceDescription) -> EnableSet {
+    let runtime = metal2vulkan_runtime::floor::enable_set();
+    let api = description.api_version;
+    let mut kept = description.clone();
+    kept.features.retain(|&feature| {
+        runtime.features.contains(&feature) || !feature.exposure().has_member(runtime_version())
+    });
+    let exposing: BTreeSet<VkExtension> = (kept.features.iter())
+        .flat_map(|feature| feature.exposure().extensions_at(api))
+        .copied()
+        .collect();
+    kept.extensions
+        .retain(|extension| runtime.extensions.contains(extension) || exposing.contains(extension));
+    kept.recommended_enables()
+}
+
+/// The `DeviceDescription` of committed profile `stem`, as the Khronos JSON reader builds it: what
+/// the device states, before [`runtime_description`] restricts it.
+pub fn load_description(stem: &str) -> Result<DeviceDescription, String> {
     let committed = committed_profiles()?;
     if !committed.iter().any(|known| known == stem) {
         return Err(format!(
@@ -1009,8 +1058,7 @@ pub fn load_description(stem: &str) -> Result<metal2vulkan::device::DeviceDescri
     let path = profiles_dir().join(format!("{stem}.json"));
     let text =
         std::fs::read_to_string(&path).map_err(|error| format!("{}: {error}", path.display()))?;
-    metal2vulkan::device::DeviceDescription::from_khronos_json(&text, None)
-        .map_err(|error| format!("{stem}: {error}"))
+    DeviceDescription::from_khronos_json(&text, None).map_err(|error| format!("{stem}: {error}"))
 }
 
 #[cfg(test)]

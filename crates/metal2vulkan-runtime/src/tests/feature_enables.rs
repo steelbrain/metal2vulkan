@@ -6,9 +6,8 @@
 
 use super::floor::{at_the_floor, table};
 use crate::floor::{
-    decide, shader_enables, shader_extension, vulkan_name, Capabilities, Queried,
-    ATTACHMENT_READ_EXTENSIONS, BARYCENTRIC_EXTENSIONS, BORDER_SWIZZLE_EXTENSIONS,
-    DEVICE_EXTENSIONS, ENABLED, INDIRECT_COMMANDS, OPTIONAL_EXTENSIONS,
+    creation_extensions, decide, enable_set, shader_enables, shader_extension, vulkan_name,
+    Capabilities, Queried, DEVICE_EXTENSIONS, ENABLED, SAMPLERS, SAMPLER_ARRAYS, TEXTURES,
 };
 use ash::vk;
 use metal2vulkan::device::{
@@ -31,18 +30,6 @@ fn vocabulary(member: &str) -> Option<VkFeature> {
         .iter()
         .copied()
         .find(|feature| format!("{feature:?}") == name)
-}
-
-/// Every extension device creation may enable.
-fn creation_extensions() -> BTreeSet<&'static CStr> {
-    (DEVICE_EXTENSIONS.iter())
-        .chain(OPTIONAL_EXTENSIONS)
-        .chain(ATTACHMENT_READ_EXTENSIONS)
-        .chain(BORDER_SWIZZLE_EXTENSIONS)
-        .chain(BARYCENTRIC_EXTENSIONS)
-        .chain(INDIRECT_COMMANDS)
-        .copied()
-        .collect()
 }
 
 /// The data rows of the README's table headed `header` under its subsection `title`.
@@ -109,10 +96,7 @@ fn every_feature_creation_enables_reaches_the_translator() {
     for feature in ENABLED.iter().copied().flatten() {
         *(feature.field)(&mut device.features) = vk::TRUE;
     }
-    device.extensions = creation_extensions()
-        .into_iter()
-        .map(CStr::to_owned)
-        .collect();
+    device.extensions = creation_extensions().map(CStr::to_owned).collect();
     let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));
     let enables = shader_enables(&capabilities);
     let mut named = 0;
@@ -144,6 +128,29 @@ fn every_feature_creation_enables_reaches_the_translator() {
         met, unstated,
         "the `Enabled, not stated` features that creation enables"
     );
+}
+
+/// The enable set is what the translator's description states as enabled on a device that
+/// reports every feature of creation's tables, lists every extension creation may enable and has
+/// the descriptor room of the attachment reads: it holds nothing creation never enables, and
+/// leaves out nothing creation enables that the translator names.
+#[test]
+fn the_enable_set_is_what_creation_enables_on_a_device_with_everything() {
+    let mut device = at_the_floor();
+    for feature in ENABLED.iter().copied().flatten() {
+        *(feature.field)(&mut device.features) = vk::TRUE;
+    }
+    device.extensions = creation_extensions().map(CStr::to_owned).collect();
+    let descriptors = &mut device.vulkan12;
+    descriptors.max_per_stage_descriptor_update_after_bind_sampled_images = 3 * TEXTURES;
+    descriptors.max_descriptor_set_update_after_bind_sampled_images = 3 * TEXTURES;
+    descriptors.max_per_stage_update_after_bind_resources =
+        5 * TEXTURES + device.limits.max_color_attachments;
+    descriptors.max_update_after_bind_descriptors_in_all_pools =
+        5 * TEXTURES + SAMPLER_ARRAYS * SAMPLERS;
+    let capabilities = decide(&device).unwrap_or_else(|below| panic!("{below}"));
+    assert!(capabilities.feedback_loop, "the attachment reads' room");
+    assert_eq!(shader_enables(&capabilities), enable_set());
 }
 
 /// Each extension device creation may enable reaches the translator's description where the
