@@ -21,7 +21,8 @@
 //!   usage, and of `ShaderRead | ShaderWrite`, whose image took the attachment usage, and reads
 //!   the clear colour within one code; so does a 900 x 900 pass of every load `Load`, its colour
 //!   beside a 4-sample `Depth32Float_Stencil8`, of what an earlier pass cleared. So does a 600 x
-//!   600 such pass into a `ShaderRead` texture over a Managed and over a Shared buffer, at tight
+//!   600 such pass into a `ShaderRead` texture over a Managed and over a Shared buffer (and over a
+//!   Shared one that ends at the texture's last texel, past which nothing is written), at tight
 //!   rows, at its row rounded up to the device's linear alignment (where it lies in place on
 //!   every device) and at 2,560 bytes: in place, its linear image took the attachment usage where
 //!   the device's linear tiling renders the format, and the pass copies nothing; where it took
@@ -719,8 +720,10 @@ mod on_device {
     /// `resolve_texture_usage.m`'s `over` and `over-padded`): 600 x 600, a 4-sample
     /// `BGRA8Unorm_sRGB` colour beside a 4-sample `Depth32Float_Stencil8` depth and stencil,
     /// every load `Load`, the colour resolved into a one-sample `BGRA8Unorm_sRGB` texture of
-    /// `ShaderRead` usage over a Managed buffer and over a Shared one, at offset 0, its rows
-    /// 2,400 bytes apart (tight), its row rounded up to the device's linear alignment, and 2,560.
+    /// `ShaderRead` usage over a Managed buffer, over a Shared one and over a Shared one that ends
+    /// at the texture's last texel (whose linear image's subresource reaches past it where the rows
+    /// are padded), at offset 0, its rows 2,400 bytes apart (tight), its row rounded up to the
+    /// device's linear alignment, and 2,560; no resolve writes a byte of the block past the buffer.
     /// At the rounded row the texture lies in place on every device. In place, its linear image
     /// took the attachment usage where the device's linear tiling renders its format, and the
     /// pass copies nothing; where it took none, the pass resolves into the texture's resolve
@@ -797,14 +800,24 @@ mod on_device {
             let mut pitches = vec![ROW, rounded, 2_560];
             pitches.dedup();
             let mut index = IndexClass::Texture.range().start;
-            (device.grant_indices(IndexClass::Texture, index, 4 * pitches.len() as u32))
+            (device.grant_indices(IndexClass::Texture, index, 6 * pitches.len() as u32))
                 .expect("a grant");
             let queue = device.new_command_queue(1).expect("a queue");
             for pitch in pitches {
-                for managed in [true, false] {
-                    let kind = if managed { "Managed" } else { "Shared" };
-                    let len = u64::from(WALK) * pitch;
-                    let block = (device.take_block(MemoryClass::Shared, len))
+                let shapes = [
+                    ("Managed", true, false),
+                    ("Shared", false, false),
+                    ("Shared, ending at its last texel,", false, true),
+                ];
+                for (kind, managed, short) in shapes {
+                    // A buffer that ends at the texture's last texel, where its rows are padded:
+                    // the linear image's subresource reaches past it (`render_reach`).
+                    let len = match short {
+                        true => u64::from(WALK - 1) * pitch + ROW,
+                        false => u64::from(WALK) * pitch,
+                    };
+                    // The block's 256 bytes past the buffer, which no resolve writes.
+                    let block = (device.take_block(MemoryClass::Shared, len + 256))
                         .unwrap_or_else(|error| panic!("{name}: {error}"));
                     let buffer = match managed {
                         true => crate::tests::managed::on_device::new_managed(
@@ -813,6 +826,10 @@ mod on_device {
                         false => device.new_buffer(block.id, 0, len, None),
                     }
                     .unwrap_or_else(|error| panic!("{name}: {kind}: {error}"));
+                    let tail = (device.new_buffer(block.id, len, 256, None)).expect("a buffer");
+                    let tail_bytes = tail.contents().expect("host bytes");
+                    // SAFETY: the bytes past the buffer, which no command uses yet.
+                    unsafe { tail_bytes.as_ptr().write_bytes(0xee, 256) };
                     let contents = buffer.contents().expect("host bytes");
                     // SAFETY: the buffer's bytes, which no command uses yet.
                     unsafe { contents.as_ptr().write_bytes(0xee, len as usize) };
@@ -826,7 +843,7 @@ mod on_device {
                     index += 1;
                     let in_place = over.copied_over().is_none();
                     assert!(
-                        in_place || pitch != rounded,
+                        in_place || pitch != rounded || short,
                         "{name}: {kind}: at its row rounded up to {align}, in place"
                     );
                     let renders = over
@@ -918,7 +935,7 @@ mod on_device {
                         texels[1],
                         texels[2],
                         texels[3],
-                        (pitch - ROW) * u64::from(WALK),
+                        len - u64::from(WALK) * ROW,
                         centre[0],
                         centre[1],
                         centre[2],
@@ -1062,7 +1079,16 @@ mod on_device {
                         );
                         drop((view, viewed));
                     }
-                    drop((over, buffer, block));
+                    // SAFETY: the bytes past the buffer, which no command uses now.
+                    let past_buffer =
+                        unsafe { std::slice::from_raw_parts(tail_bytes.as_ptr(), 256) };
+                    let past_buffer = past_buffer.iter().filter(|&&byte| byte != 0xee).count();
+                    assert_eq!(past_buffer, 0, "{name}: {kind} at {pitch}: past the buffer");
+                    println!(
+                        "resolve_over: {name}: {kind} pitch {pitch}: {past_buffer} of 256 bytes \
+                         past the buffer changed"
+                    );
+                    drop((over, buffer, tail, block));
                 }
             }
             drop((color, depth, seen));
