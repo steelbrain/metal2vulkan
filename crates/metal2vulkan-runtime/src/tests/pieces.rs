@@ -8,7 +8,8 @@
 //! shares a resource or a fence with a cut command buffer goes after its last (unless it signals
 //! the event a later piece waits for, when it runs beside it, as Metal's does), the queue's own
 //! next waits for every piece, a cut command buffer is scheduled at its first piece and kept by an
-//! abandon, and an idle queue's commit waits for no more than the two pieces on the device
+//! abandon, an empty or ended command buffer behind pieces waiting for room retires after them,
+//! and an idle queue's commit waits for no more than the two pieces on the device
 //! behind five queues' backlogs. Without the gate: the cuts counted, a kernel of unknown rate in
 //! a piece of its own whose run sets its rate, a dispatch past the bound uncut, a blit encoder
 //! after a full piece cut, and a command buffer of one piece, committed behind another queue's
@@ -450,6 +451,96 @@ mod on_device {
             busy.open();
             completed(name, &command_buffer);
             assert_eq!(word(&x), stepped(4), "{name}: every piece ran");
+        });
+    }
+
+    /// Behind a cut command buffer whose later pieces wait for room, a command buffer of its
+    /// queue that holds nothing for the GPU, or one ended before it went (enqueued, its queue
+    /// abandoned, then committed), is not held for room (`WorkState::hold`): it retires behind
+    /// the pieces, after them, as the room comes. The window is shown open first: two of the
+    /// four pieces submitted, the head held for room (`Metrics::held_for_room`). Its commit and
+    /// both completions are waited for on another thread, within `BOUND` each; past it the test
+    /// ends its process, as a submit thread that spins holding the work lock lets no handle drop.
+    #[test]
+    fn every_device_retires_an_empty_or_ended_command_buffer_behind_pieces_waiting_for_room() {
+        use std::sync::{mpsc, Mutex};
+        const BOUND: Duration = Duration::from_secs(10);
+        each_device("pieces_hold_empty", |name, _, device| {
+            let mut arena = Arena::new(&device);
+            let state = step(&device);
+            for form in ["empty", "ended"] {
+                let (x, y) = (arena.buffer(), arena.buffer());
+                let queue = queue(&device);
+                let busy = Busy::new(&device);
+                let retired: Arc<Mutex<Vec<&'static str>>> = Arc::default();
+                let log = |command_buffer: &CommandBuffer, label: &'static str| {
+                    let retired = Arc::clone(&retired);
+                    (command_buffer.add_completed_handler(move |_| {
+                        retired.lock().expect("the log").push(label);
+                    }))
+                    .expect("a completed handler");
+                };
+                let (from, before) = (sent(&device, &queue), device.counters().metrics());
+                state.inner.compiled.rate.set_for_test(RATE);
+                let pieces = queue.command_buffer().expect("a command buffer");
+                steps(&pieces, &state, &x, 4).end_encoding();
+                log(&pieces, "pieces");
+                pieces.commit().expect("a commit");
+                within(name, || order(&device, &pieces).len() == from + 2);
+                within(name, || {
+                    device.counters().metrics().held_for_room > before.held_for_room
+                });
+                let behind = queue.command_buffer().expect("a command buffer");
+                log(&behind, form);
+                if form == "ended" {
+                    fill(&behind, &y, 9);
+                    behind.enqueue().expect("an enqueue");
+                    queue.abandon();
+                }
+                println!(
+                    "{name}: {form}: committed behind {} of 4 pieces submitted, held for room {}",
+                    order(&device, &pieces).len() - from,
+                    device.counters().metrics().held_for_room - before.held_for_room
+                );
+                let (tell, told) = mpsc::channel();
+                let watcher = {
+                    let (pieces, behind) = (pieces.clone(), behind.clone());
+                    thread::spawn(move || {
+                        let committed = behind.commit();
+                        let _ = tell.send(format!("committed {committed:?}"));
+                        let done = [&pieces, &behind].map(|cb| cb.wait_until_completed());
+                        let _ = tell.send(format!("completed {done:?}"));
+                    })
+                };
+                for wait in ["its commit", "both completions"] {
+                    match told.recv_timeout(BOUND) {
+                        Ok(line) => println!("{name}: {form}: {line}"),
+                        Err(_) => {
+                            eprintln!(
+                                "{name}: {form}: {wait} not within {BOUND:?}: the submit thread \
+                                 holds the work lock behind a head waiting for room"
+                            );
+                            std::process::exit(101);
+                        }
+                    }
+                    if wait == "its commit" {
+                        busy.open();
+                    }
+                }
+                watcher.join().expect("the watcher");
+                assert_eq!(
+                    (pieces.error(), word(&x)),
+                    (None, stepped(4)),
+                    "{name}: {form}: every piece ran"
+                );
+                within(name, || retired.lock().expect("the log").len() == 2);
+                assert_eq!(
+                    *retired.lock().expect("the log"),
+                    ["pieces", form],
+                    "{name}: {form}: it retires behind the pieces"
+                );
+                drop(busy);
+            }
         });
     }
 
