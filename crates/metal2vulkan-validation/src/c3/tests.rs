@@ -76,7 +76,7 @@ fn three_venues() -> Venues {
         VenueKind::NativeGpu,
         RADV,
         Population::MetalQualified,
-        "amd-rdna3-radv",
+        "amd-780m-radv",
     ));
     venues
 }
@@ -2830,14 +2830,14 @@ fn a_device_gap_reads_c1s_entry_and_its_sign_off() {
     };
 
     for class in [ListClass::DeviceLacks, ListClass::NearEquivalent] {
-        let report = judge(vec![c1_entry("amd-rdna3-radv", class, awaiting.clone())]);
+        let report = judge(vec![c1_entry("amd-780m-radv", class, awaiting.clone())]);
         let slot = slot(&report, RADV);
         assert_eq!(verdict_of(slot, &fetch), Verdict::DeviceGap);
         assert!(slot.holds());
         assert_eq!(
             report.device_gaps,
             [DeviceGapRow {
-                profile: "amd-rdna3-radv".into(),
+                profile: "amd-780m-radv".into(),
                 outcome: "device_capability_missing".into(),
                 key: "FramebufferFetch needs Feature(RasterizationOrderColorAttachmentAccess)"
                     .into(),
@@ -2856,7 +2856,7 @@ fn a_device_gap_reads_c1s_entry_and_its_sign_off() {
         date: "2026-10-03".into(),
     };
     let report = judge(vec![c1_entry(
-        "amd-rdna3-radv",
+        "amd-780m-radv",
         ListClass::DeviceLacks,
         signed,
     )]);
@@ -2874,7 +2874,7 @@ fn a_device_gap_reads_c1s_entry_and_its_sign_off() {
         ),
         (
             vec![c1_entry(
-                "amd-rdna3-radv",
+                "amd-780m-radv",
                 ListClass::OldOutputWrong,
                 awaiting.clone(),
             )],
@@ -2887,7 +2887,7 @@ fn a_device_gap_reads_c1s_entry_and_its_sign_off() {
         assert!(!stated.holds());
         assert!(report.device_gaps.is_empty());
         let expected = proposed.then(|| GapProposal {
-            profile: "amd-rdna3-radv".into(),
+            profile: "amd-780m-radv".into(),
             outcome: "device_capability_missing".into(),
             key: "FramebufferFetch needs Feature(RasterizationOrderColorAttachmentAccess)".into(),
             cases: 1,
@@ -3144,7 +3144,7 @@ fn metal_qualified() -> Venues {
             VenueKind::NativeGpu,
             RADV,
             Population::MetalQualified,
-            "amd-rdna3-radv",
+            "amd-780m-radv",
         )],
     }
 }

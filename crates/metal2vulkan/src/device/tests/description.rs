@@ -6,7 +6,6 @@ const COMMITTED: &[&str] = &[
     "amd-780m-hawkpoint-radv",
     "amd-780m-radv",
     "amd-rdna2-apu-radv",
-    "amd-rdna3-radv",
     "gate-lavapipe",
     "gate-lavapipe-x86_64",
     "intel-arl-anv",
@@ -395,7 +394,7 @@ fn portability_stride_alignment_follows_exposure() {
         "lavapipe",
         "nvidia-rtx50-linux",
         "runtime-floor",
-        "amd-rdna3-radv",
+        "amd-780m-radv",
     ] {
         assert_eq!(
             profile(stem)
@@ -646,7 +645,7 @@ fn maintenance8_reads_its_extension_structure() {
     assert!(d.extensions.contains(&VkExtension::KhrMaintenance8));
     for (stem, expected) in [
         ("amd-rdna2-apu-radv", true),
-        ("amd-rdna3-radv", true),
+        ("amd-780m-radv", true),
         ("intel-arl-anv", true),
         ("intel-irisxe-anv", true),
         ("lavapipe", true),
@@ -694,7 +693,7 @@ fn border_color_swizzle_and_format_extensions_are_read() {
     assert!(d.has(VkFeature::BorderColorSwizzleFromImage));
     assert!(d.extensions.contains(&VkExtension::ExtBorderColorSwizzle));
     assert!(d.extensions.contains(&VkExtension::ExtCustomBorderColor));
-    for stem in ["amd-rdna3-radv", "intel-arl-anv", "lavapipe"] {
+    for stem in ["amd-780m-radv", "intel-arl-anv", "lavapipe"] {
         assert!(
             profile(stem).has(VkFeature::BorderColorSwizzleFromImage),
             "{stem}"

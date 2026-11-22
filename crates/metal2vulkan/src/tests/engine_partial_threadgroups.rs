@@ -43,7 +43,7 @@ use crate::spirv::testing::barriers::workgroup_barriers;
 /// and one whose simdgroups are emulated (`lavapipe`).
 const PROFILES: [&str; 5] = [
     "moltenvk-m3",
-    "amd-rdna3-radv",
+    "amd-780m-radv",
     "nvidia-rtx50-linux",
     "intel-irisxe-rplp-anv",
     "lavapipe",

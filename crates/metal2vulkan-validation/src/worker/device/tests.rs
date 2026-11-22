@@ -583,14 +583,14 @@ fn a_refusal_names_the_device_it_was_refused_on() {
         }
     );
     // Restricted, as the parent asked.
-    let restricted_to = restricted(DeviceType::Gpu, "amd-rdna3-radv");
+    let restricted_to = restricted(DeviceType::Gpu, "amd-780m-radv");
     let named_restricted = DeviceOutput {
-        refused_on: Some(opened(Some("amd-rdna3-radv"))),
+        refused_on: Some(opened(Some("amd-780m-radv"))),
         ..output(refusal.clone())
     };
     assert_eq!(
         outcome(&named_restricted, &restricted_to).refused_on,
-        Some(opened(Some("amd-rdna3-radv")))
+        Some(opened(Some("amd-780m-radv")))
     );
     // Another restriction than the parent's.
     for (report, input) in [(&named, &restricted_to), (&named_restricted, &stated)] {

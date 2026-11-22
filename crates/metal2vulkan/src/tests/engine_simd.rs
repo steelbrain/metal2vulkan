@@ -3,7 +3,7 @@
 //! The owned fixtures `engine/simd_ops` and `engine/quad_shuffle` go through the whole
 //! pipeline and run on the CPU interpreter with a modelled subgroup (the CI tier): the `Direct`
 //! tier at 32 lanes on `moltenvk-m3`, and the `Cluster32` tier at 64 lanes on a wave64-only
-//! device (the committed `amd-rdna3-radv` description with `minSubgroupSize` 64, the shape of
+//! device (the committed `amd-780m-radv` description with `minSubgroupSize` 64, the shape of
 //! AMD GCN). Every kernel's output is checked against expectations derived from
 //! `thread_index_in_threadgroup` alone, in both scheduling orders, for several local sizes and
 //! for divergent lanes. On every committed profile each kernel compiles, links, and passes L3,
@@ -48,7 +48,7 @@ fn assemble(stem: &str) -> Option<Vec<u8>> {
 /// narrowed to 64 (the `Cluster32` tier).
 pub(super) fn wave64() -> DeviceProfile {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles/amd-rdna3-radv.json");
+        .join("../metal2vulkan-validation/profiles/amd-780m-radv.json");
     let text = std::fs::read_to_string(&path).expect("read the RDNA3 description");
     let narrowed = text.replace("\"minSubgroupSize\": 32", "\"minSubgroupSize\": 64");
     assert_ne!(narrowed, text, "the description names minSubgroupSize");

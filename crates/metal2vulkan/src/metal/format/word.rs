@@ -397,7 +397,7 @@ mod tests {
             Some(WordAttachment::Rgb9e5)
         );
         let radv = profile(
-            "amd-rdna3-radv",
+            "amd-780m-radv",
             crate::device::DevicePolicy::RESIDENT_TABLES,
         )
         .unwrap();

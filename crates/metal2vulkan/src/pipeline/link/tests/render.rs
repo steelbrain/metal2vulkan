@@ -197,7 +197,7 @@ fn color_writes_are_the_pipelines() {
         ColorAttachmentDescriptor::new(PixelFormat::RGBA16Float),
         false,
     );
-    for stem in ["lavapipe", "amd-rdna3-radv", "moltenvk-m3"] {
+    for stem in ["lavapipe", "amd-780m-radv", "moltenvk-m3"] {
         let p = profile(stem);
         let writes = |inputs: &LinkInputs| match inputs {
             LinkInputs::Render(r) => {
@@ -989,7 +989,7 @@ fn static_strides_under_dynamic_strides_cover_their_attributes() {
 fn graphics_state_maps_the_descriptor() {
     use crate::pipeline::descriptor::ColorAttachmentDescriptor;
     // Profiles whose format tables list the attachment formats (the floor profiles carry none).
-    for stem in ["moltenvk-m3", "lavapipe", "amd-rdna3-radv"] {
+    for stem in ["moltenvk-m3", "lavapipe", "amd-780m-radv"] {
         let p = profile(stem);
         let mut r = RenderLinkInputs::new();
         r.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
@@ -1297,7 +1297,7 @@ fn a_framebuffer_fetch_links_into_the_sample_count_it_was_compiled_for() {
     let sa = artifact(per_sample, None);
     let plain = artifact(iface(fr, vec![], vec![]), None);
     let recompile = Error::NeedsInput(RuntimeInput::Multisampled);
-    for stem in ["moltenvk-m3", "lavapipe", "amd-rdna3-radv"] {
+    for stem in ["moltenvk-m3", "lavapipe", "amd-780m-radv"] {
         let p = profile(stem);
         let mut r = RenderLinkInputs::new();
         r.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm));
@@ -1363,7 +1363,7 @@ fn a_color_attachment_the_fragment_does_not_write_keeps_its_contents() {
     let u4 = io_ty(IoNumeric::Uint, 4);
     let partial = ColorWriteMask::RED | ColorWriteMask::ALPHA;
     let none = vk::ColorComponentFlags::empty();
-    for stem in ["moltenvk-m3", "lavapipe", "amd-rdna3-radv"] {
+    for stem in ["moltenvk-m3", "lavapipe", "amd-780m-radv"] {
         let p = profile(stem);
         let mut r = RenderLinkInputs::new();
         let mut masked = ColorAttachmentDescriptor::new(PixelFormat::RGBA8Unorm);

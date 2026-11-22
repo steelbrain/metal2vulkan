@@ -146,7 +146,7 @@ fn multiview_tessellation_needs_its_feature() {
         other => panic!("{other:?}"),
     }
     control_plan(None, stage(), 1, &m3).expect("one view");
-    control_plan(None, stage(), 2, &profile("amd-rdna3-radv")).expect("radv");
+    control_plan(None, stage(), 2, &profile("amd-780m-radv")).expect("radv");
 }
 
 /// A fragment stage reading `[[primitive_id]]` behind an evaluation stage is not implemented.

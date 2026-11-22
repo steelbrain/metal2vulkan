@@ -539,7 +539,7 @@ fn the_soak_profiles_run_at_their_devices_widths() {
             .collect::<Vec<_>>()
     };
     assert_eq!(lanes("moltenvk-m3"), [32]);
-    assert_eq!(lanes("amd-rdna3-radv"), [32, 64]);
+    assert_eq!(lanes("amd-780m-radv"), [32, 64]);
     assert_eq!(lanes("lavapipe"), [8]);
     assert_eq!(lanes("runtime-floor"), [8]);
 }

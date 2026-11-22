@@ -2314,7 +2314,7 @@ fn a_pressured_kernel_takes_the_emulated_tier_in_place_of_the_widest_mode() {
     assert_eq!(plan.subgroup.size, None, "pressured");
     assert!(!plan.subgroup.full_subgroups, "pressured");
     assert!(plan.families.simd.predication.is_some(), "pressured");
-    for other in ["nvidia-rtx5080-laptop", "amd-rdna3-radv"] {
+    for other in ["nvidia-rtx5080-laptop", "amd-780m-radv"] {
         direct("pressured", &pressured, other);
     }
     // 48 KiB, the profile's `maxComputeSharedMemorySize`: no room for a simdgroup's 128 bytes.

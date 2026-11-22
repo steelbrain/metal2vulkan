@@ -13,7 +13,7 @@ use crate::pipeline::testing::{
 };
 
 const PROFILES: [&str; 4] = [
-    "amd-rdna3-radv",
+    "amd-780m-radv",
     "nvidia-rtx5080-laptop",
     "lavapipe",
     "moltenvk-m3",

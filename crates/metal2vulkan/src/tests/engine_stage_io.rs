@@ -892,7 +892,7 @@ fn a_half_color_output_records_its_precision() {
         return;
     };
     // Profiles with sample-rate shading, which the function's sample input needs.
-    for stem in ["moltenvk-m3", "amd-rdna3-radv", "lavapipe"] {
+    for stem in ["moltenvk-m3", "amd-780m-radv", "lavapipe"] {
         let p = prof(stem);
         let half = compile(&bc, "stage_io_fragment_point", &p).expect("half");
         assert!(!half.precision.contains(&fast), "{stem}");
@@ -976,7 +976,7 @@ fn a_half_color_output_is_declared_32_bit_on_every_device() {
     use crate::lower::select::LowerInputs;
     use crate::pipeline::testing::compile_with;
     let Some(bc) = fixture() else { return };
-    for stem in ["moltenvk-m3", "amd-rdna3-radv", "lavapipe"] {
+    for stem in ["moltenvk-m3", "amd-780m-radv", "lavapipe"] {
         let p = prof(stem);
         let half = compile(&bc, "stage_io_fragment_point", &p).expect("half");
         let words = validate(&half, &alone(&half, &p), &p);
@@ -1045,7 +1045,7 @@ fn a_half_output_without_fast_math_is_noted_where_its_attachment_blends() {
         ("one and one", all, blend(F::ONE, F::ONE, O::ADD), true),
         ("min", all, blend(F::ONE, F::ONE, O::MIN), true),
     ];
-    for stem in ["moltenvk-m3", "amd-rdna3-radv", "lavapipe"] {
+    for stem in ["moltenvk-m3", "amd-780m-radv", "lavapipe"] {
         let p = prof(stem);
         let f = compile(&disabled, "stage_io_fragment_point", &p).expect("half");
         assert_eq!(f.interface.io.half_blend_colors, [0], "{stem}");
@@ -1098,7 +1098,7 @@ fn a_half_output_with_fast_math_is_noted_where_its_attachment_stores() {
         ("no channel written", none, None, false),
         ("no channel written, blended", none, over, false),
     ];
-    for stem in ["moltenvk-m3", "amd-rdna3-radv", "lavapipe"] {
+    for stem in ["moltenvk-m3", "amd-780m-radv", "lavapipe"] {
         let p = prof(stem);
         let f = compile(&bc, "stage_io_fragment_point", &p).expect("half");
         assert_eq!(f.interface.io.half_fast_colors, [0], "{stem}");

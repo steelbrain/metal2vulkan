@@ -3511,7 +3511,7 @@ fn a_merged_fragment_reads_its_argument_buffer_through_its_command_s_table() {
         VertexAttributeDescriptor::new(metal::VertexFormat::UInt, 0, 1),
     );
     d.vertex_descriptor = Some(input);
-    for stem in ["moltenvk-m3", "amd-rdna3-radv", "lavapipe"] {
+    for stem in ["moltenvk-m3", "amd-780m-radv", "lavapipe"] {
         let dev = device(stem);
         let base = dev
             .compile_render_variant(&d, &VariantKey::new(), &Budget::standard())

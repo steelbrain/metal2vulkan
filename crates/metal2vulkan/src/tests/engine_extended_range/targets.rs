@@ -39,7 +39,7 @@ use crate::vk;
 
 /// The committed profiles of the venues: each desktop driver's and MoltenVK's.
 const VENUES: [&str; 5] = [
-    "amd-rdna3-radv",
+    "amd-780m-radv",
     "intel-irisxe-rplp-anv",
     "lavapipe",
     "moltenvk-m3",

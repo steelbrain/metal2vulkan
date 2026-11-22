@@ -695,7 +695,7 @@ fn int64_buffer_atomics_are_exact_through_device_addresses() {
     for stem in [
         "lavapipe",
         "nvidia-pascal-linux",
-        "amd-rdna3-radv",
+        "amd-780m-radv",
         "intel-arl-anv",
     ] {
         let prof = p(stem);
@@ -756,7 +756,7 @@ fn result_less_ulong_min_max_atomics_are_exact() {
     for stem in [
         "lavapipe",
         "nvidia-pascal-linux",
-        "amd-rdna3-radv",
+        "amd-780m-radv",
         "intel-arl-anv",
     ] {
         let prof = p(stem);

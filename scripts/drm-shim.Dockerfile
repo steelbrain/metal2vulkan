@@ -12,7 +12,7 @@
 #   nothing executes. `scripts/linux-gate` selects the shim, the GPU, and the ICD;
 #   `scripts/drm-shim-exec` applies them to one process.
 # - MESA_VERSION is 26.2.3: the release the RADV and ANV profiles were captured on
-#   (amd-rdna3-radv, amd-rdna2-apu-radv, intel-arl-anv; intel-irisxe-anv on 26.2.2), and the first
+#   (amd-rdna2-apu-radv, intel-arl-anv; intel-irisxe-anv on 26.2.2), and the first
 #   pinned release whose nouveau shim answers Ada and Blackwell (26.1.0's answers chipsets up to
 #   Ampere, so NVK took a later chip for Fermi and refused it). Re-read the facts below on a bump.
 # - What the pin's sources say:

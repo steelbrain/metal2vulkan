@@ -41,7 +41,7 @@ fn fixture(stem: &str) -> Option<Vec<u8>> {
 }
 
 /// The profiles the tests compile for: with `fragmentShaderBarycentric` (`BaryCoordKHR`).
-const PROFILES: [&str; 3] = ["moltenvk-m3", "amd-rdna3-radv", "nvidia-rtx50-linux"];
+const PROFILES: [&str; 3] = ["moltenvk-m3", "amd-780m-radv", "nvidia-rtx50-linux"];
 
 /// Link `a` alone, relocate it, and run L3; its relocated words.
 fn validate(a: &FunctionArtifact, p: &DeviceProfile) -> Vec<u32> {
@@ -201,7 +201,7 @@ fn a_rotated_draw_runs_the_rotated_weights_variant() {
         rotated_weights: true,
         ..Default::default()
     };
-    for stem in ["moltenvk-m3", "amd-rdna3-radv"] {
+    for stem in ["moltenvk-m3", "amd-780m-radv"] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../metal2vulkan-validation/profiles")
             .join(format!("{stem}.json"));

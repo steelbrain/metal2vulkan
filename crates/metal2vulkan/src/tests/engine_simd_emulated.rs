@@ -2631,7 +2631,7 @@ fn a_one_row_dispatch_drops_the_lockstep_simdgroup_barriers() {
 /// subgroup size range narrowed to 64, where a simdgroup is half a subgroup (`Cluster32`).
 fn wave64() -> Device {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles/amd-rdna3-radv.json");
+        .join("../metal2vulkan-validation/profiles/amd-780m-radv.json");
     let text = std::fs::read_to_string(path).expect("profile");
     let narrowed = text.replace("\"minSubgroupSize\": 32", "\"minSubgroupSize\": 64");
     assert_ne!(narrowed, text, "the description names minSubgroupSize");

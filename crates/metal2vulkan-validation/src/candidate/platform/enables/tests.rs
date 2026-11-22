@@ -748,7 +748,7 @@ fn depth_range_unrestricted_is_not_enabled_where_the_device_lists_it() {
     use metal2vulkan::device::VkExtension as X;
     let name = c"VK_EXT_depth_range_unrestricted";
     for (stem, listed) in [
-        ("amd-rdna3-radv", true),
+        ("amd-780m-radv", true),
         ("lavapipe", true),
         ("moltenvk-m3", false),
     ] {

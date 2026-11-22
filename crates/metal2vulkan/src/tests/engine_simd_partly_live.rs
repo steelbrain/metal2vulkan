@@ -431,7 +431,7 @@ fn check(dispatches: &[Dispatch<'_>]) {
 /// narrowed to 64, whose kernels' simdgroups are 32-lane clusters (`Cluster32`).
 fn wave64() -> DeviceProfile {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles/amd-rdna3-radv.json");
+        .join("../metal2vulkan-validation/profiles/amd-780m-radv.json");
     let text = std::fs::read_to_string(&path).expect("read the RDNA3 description");
     let narrowed = text.replace("\"minSubgroupSize\": 32", "\"minSubgroupSize\": 64");
     assert_ne!(narrowed, text, "the description names minSubgroupSize");
@@ -1059,7 +1059,7 @@ fn multiply_adds_without_fast_flags_keep_their_signed_zeros() {
         }
     }
     let (mut declared, mut noted) = (0, 0);
-    for stem in ["lavapipe", "runtime-floor", "moltenvk-m3", "amd-rdna3-radv"] {
+    for stem in ["lavapipe", "runtime-floor", "moltenvk-m3", "amd-780m-radv"] {
         let p = emulating(stem);
         let supported = p.fields().float_controls.f32.signed_zero_inf_nan_preserve;
         for (name, bc, needs) in &kernels {

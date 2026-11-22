@@ -158,7 +158,7 @@ fn memory_profiles_follow_bda_and_int64() {
         "runtime-floor",
         "moltenvk-m3",
         "nvidia-rtx50-linux",
-        "amd-rdna3-radv",
+        "amd-780m-radv",
         "intel-arl-anv",
         "lavapipe",
     ] {
@@ -258,7 +258,7 @@ fn vertex_layer_and_viewport_outputs_follow_the_features_not_the_extension() {
 #[test]
 fn robustness2_selects_the_rba2_encoding() {
     assert_eq!(
-        device("amd-rdna3-radv").profile().fields().robustness,
+        device("amd-780m-radv").profile().fields().robustness,
         Robustness::Rba2
     );
     // MoltenVK exposes VK_EXT_robustness2 but reports robustBufferAccess2 = false.
@@ -401,9 +401,7 @@ fn streamed_fingerprint_equals_the_hash_of_the_rendering() {
 /// translation reads: at most in the device's identity (vendor, device, driver version, type) and
 /// its allocation sizes, as two captures of one GPU under its two `deviceID`s do
 /// (`amd-780m-hawkpoint-radv` and `amd-780m-radv`, the Radeon 780M of Hawk Point and of Phoenix),
-/// and as one GPU family on one driver does (`amd-780m-radv` and `amd-rdna3-radv`, the Radeon 780M
-/// and the Radeon RX 7900 XTX under one RADV build; `intel-irisxe-rplp-anv` and
-/// `intel-uhd770-rpls-anv`).
+/// and as one GPU family on one driver does (`intel-irisxe-rplp-anv` and `intel-uhd770-rpls-anv`).
 #[test]
 fn fingerprints_distinguish_committed_profiles() {
     let translated = |stem: &str| {
@@ -433,7 +431,6 @@ fn fingerprints_distinguish_committed_profiles() {
                 "amd-780m-hawkpoint-radv".to_string(),
                 "amd-780m-radv".to_string()
             ),
-            ("amd-780m-radv".to_string(), "amd-rdna3-radv".to_string()),
             (
                 "intel-irisxe-rplp-anv".to_string(),
                 "intel-uhd770-rpls-anv".to_string()
@@ -717,7 +714,6 @@ fn the_profile_holds_the_largest_whole_point_size() {
         ("nvidia-rtx5080-laptop", 2047),
         ("nvidia-rtx50-linux", 2047),
         ("amd-780m-radv", 8191),
-        ("amd-rdna3-radv", 8191),
         ("intel-irisxe-rplp-anv", 255),
         ("lavapipe", 256),
         ("moltenvk-m3", 511),

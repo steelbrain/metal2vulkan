@@ -214,7 +214,7 @@ fn a_constexpr_anisotropic_sample_takes_metals_filter() {
         let Some(bc) = assemble(&what, &constexpr_fragment(words(MipFilter::Linear, aniso))) else {
             return;
         };
-        for stem in ["lavapipe", "amd-rdna3-radv", "intel-irisxe-anv"] {
+        for stem in ["lavapipe", "amd-780m-radv", "intel-irisxe-anv"] {
             let what = format!("{what}, {stem}");
             let a = ok(&bc, "k", &p(stem));
             assert_eq!(count(&a, OP_IMAGE_SAMPLE_IMPLICIT_LOD), 0, "{what}");
@@ -283,7 +283,7 @@ fn a_runtime_slot_takes_metals_filter_where_its_word_states_anisotropy() {
             .iter()
             .any(|n| n.note == PrecisionNote::AnisotropicFilter)
     };
-    for stem in ["lavapipe", "amd-rdna3-radv"] {
+    for stem in ["lavapipe", "amd-780m-radv"] {
         let base = ok(&bc, "k", &p(stem));
         assert!(base.facts.contains(&fact), "{stem}: {:?}", base.facts);
         assert!(!degree(&base), "{stem}: {:?}", base.interface.read_keys());
@@ -530,7 +530,7 @@ fn an_anisotropic_sample_out_of_reach_records_the_device_filter() {
         let Some(bc) = assemble(name, &text) else {
             return;
         };
-        for stem in ["lavapipe", "amd-rdna3-radv", "intel-irisxe-anv"] {
+        for stem in ["lavapipe", "amd-780m-radv", "intel-irisxe-anv"] {
             let what = format!("{name}, {stem}");
             let a = ok(&bc, "k", &p(stem));
             assert!(
@@ -713,7 +713,7 @@ fn a_cubes_explicit_gradients_take_metals_level_and_taps() {
         let explicit = if taps { WRITTEN_TAPS as usize } else { 2 };
         let mut shader = Vec::new();
         let mut device = vec![("moltenvk-m3", full("moltenvk-m3"))];
-        for stem in ["lavapipe", "amd-rdna3-radv", "intel-irisxe-anv"] {
+        for stem in ["lavapipe", "amd-780m-radv", "intel-irisxe-anv"] {
             match taps {
                 true => shader.push((stem, p(stem))),
                 false => device.push((stem, p(stem))),

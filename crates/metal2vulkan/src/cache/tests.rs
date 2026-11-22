@@ -418,7 +418,7 @@ fn the_ulong_atomic_view_fact_round_trips() {
     let Some(bc) = fixture("unk_ulong_atomics") else {
         return;
     };
-    let dev = device("amd-rdna3-radv");
+    let dev = device("amd-780m-radv");
     let f = Library::from_air(&bc)
         .expect("library")
         .function("unk_ulong_atomic_rw")

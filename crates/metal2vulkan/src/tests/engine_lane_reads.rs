@@ -134,7 +134,6 @@ fn a_per_lane_constant_read_takes_its_storage_view_on_every_device() {
         ("nvidia-rtx5080-laptop", Some(0x2204)),
         ("nvidia-rtx5080-laptop", Some(0x1e87)),
         ("amd-780m-radv", None),
-        ("amd-rdna3-radv", None),
     ] {
         let p = profile(stem, id);
         for (entry, form) in [

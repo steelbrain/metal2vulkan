@@ -956,7 +956,7 @@ fn a_fragment_slot_bound_in_a_twin_joins_the_render_variant() {
     };
     let (mut ran, mut twinned) = (0, 0);
     for (stem, dev) in devices() {
-        if !["lavapipe", "moltenvk-m3", "amd-rdna3-radv"].contains(&stem.as_str()) {
+        if !["lavapipe", "moltenvk-m3", "amd-780m-radv"].contains(&stem.as_str()) {
             continue;
         }
         ran += 1;

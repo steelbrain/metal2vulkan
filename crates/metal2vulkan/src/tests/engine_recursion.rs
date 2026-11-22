@@ -872,7 +872,7 @@ fn stacks_past_the_device_s_function_storage_are_refused() {
     let Some(bitcode) = module() else {
         return;
     };
-    let (nv, radv, kib) = ("nvidia-rtx5080-laptop", "amd-rdna3-radv", 1024);
+    let (nv, radv, kib) = ("nvidia-rtx5080-laptop", "amd-780m-radv", 1024);
     let cases = [
         (nv, DIRECT, 2048, 2049 * 8, 16 * kib),
         (nv, TABLE, 341, 2 * 3 * 342 * 8, 16 * kib),

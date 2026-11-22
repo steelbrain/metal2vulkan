@@ -42,7 +42,7 @@ use crate::spirv::testing::barriers::workgroup_barriers;
 const PROFILES: [&str; 6] = [
     "moltenvk-m3",
     "intel-irisxe-rplp-anv",
-    "amd-rdna3-radv",
+    "amd-780m-radv",
     "nvidia-rtx50-linux",
     "lavapipe",
     "runtime-floor",

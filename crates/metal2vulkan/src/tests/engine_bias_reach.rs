@@ -329,7 +329,7 @@ fn a_bias_without_the_samplers_own_is_the_bias_operand() {
             fixtures.push((what, bc, "k"));
         }
     }
-    for stem in ["moltenvk-m3", "amd-rdna3-radv", "lavapipe", "runtime-floor"] {
+    for stem in ["moltenvk-m3", "amd-780m-radv", "lavapipe", "runtime-floor"] {
         let prof = p(stem);
         let property = VkProperty::DeviceSampling;
         for (what, bc, entry) in &fixtures {
@@ -361,12 +361,12 @@ fn a_bias_without_the_samplers_own_is_the_bias_operand() {
 
 /// Through a constexpr sampler with a bias of its own, a constant bias whose sum with the
 /// sampler's is within the limit is the `Bias` operand alone (no derivatives, no note); past it,
-/// the scaled derivatives alone. The sampler's own bias counts: on amd-rdna3-radv (limit 16) a
+/// the scaled derivatives alone. The sampler's own bias counts: on amd-780m-radv (limit 16) a
 /// constexpr sampler bias of 10 with a shader bias of 4 is within, with 8 or -30 past. (MoltenVK's portability subset withholds a sampler bias, so it refuses such
 /// a sampler.)
 #[test]
 fn a_constant_bias_is_decided_at_compile_time_with_the_samplers_own() {
-    let radv = p("amd-rdna3-radv");
+    let radv = p("amd-780m-radv");
     assert_eq!(max_bias(&radv), 16.0);
     // Half 10.0 is 0x4900.
     for (what, bias, half_bias, past) in [
@@ -493,7 +493,7 @@ const WRITTEN_TAPS: u32 = 2;
 /// blending the sampler's linear mip filter's two levels), `AnisotropicFilter` recorded.
 #[test]
 fn an_anisotropic_sampler_takes_the_axis_gradients() {
-    for stem in ["amd-rdna3-radv", "lavapipe"] {
+    for stem in ["amd-780m-radv", "lavapipe"] {
         for withheld in [false, true] {
             let prof = {
                 let mut desc = crate::pipeline::testing::description(stem).expect(stem);

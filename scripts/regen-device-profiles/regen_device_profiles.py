@@ -461,21 +461,6 @@ SOURCES = [
         "sha256": "36cdb075156f5255ec0ece4e91eaf8fe2ae8c1dfa1f7013aca196a27f387d73b",
     },
     {
-        # RDNA3, measured on a card we run, with each color attachment format's own sample counts
-        # (a gpuinfo report states none).
-        "name": "amd-rdna3-radv",
-        "kind": "vulkaninfo",
-        "sha256": "edd6b17c17333d3602880d56c7f60e45959acbf70afc845c3ede2f04aeb42dbe",
-        "profile": "VP_VULKANINFO_AMD_Radeon_RX_7900_XTX_(RADV_NAVI31)_26_2_6",
-        "command": "vulkaninfo --json",
-        "host": ("AMD Radeon RX 7900 XTX (Navi 31), CachyOS: mesa and vulkan-radeon 26.2.6, "
-                 "vulkan-icd-loader and vulkan-tools 1.4.363.0"),
-        "formats": {
-            "command": "corpus-vulkan --capture-formats OUT --device-type gpu",
-            "sha256": "6a903d024a11a4336650c134c4f5f5692a76c24921267028d9de63787e90ba77",
-        },
-    },
-    {
         "name": "amd-rdna2-apu-radv",
         "kind": "gpuinfo",
         "report": 51886,

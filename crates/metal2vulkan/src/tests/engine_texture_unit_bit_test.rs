@@ -14,7 +14,7 @@ use crate::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, StageSource
 
 const ENTRY: &str = "kernel_texture_unit_bit_test";
 
-const PROFILES: [&str; 3] = ["lavapipe", "amd-rdna3-radv", "moltenvk-m3"];
+const PROFILES: [&str; 3] = ["lavapipe", "amd-780m-radv", "moltenvk-m3"];
 
 fn fixture() -> Option<Vec<u8>> {
     match llvm_assemble(&fixtures_dir().join(format!("{ENTRY}.ll"))) {

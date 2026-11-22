@@ -1436,7 +1436,6 @@ fn the_generated_commands_path_holds_to_what_the_device_states() {
             "amd-780m-hawkpoint-radv",
             "amd-780m-radv",
             "amd-rdna2-apu-radv",
-            "amd-rdna3-radv",
             "gate-lavapipe",
             "gate-lavapipe-x86_64",
             "intel-arl-anv",

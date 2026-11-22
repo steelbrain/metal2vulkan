@@ -51,7 +51,6 @@ const GOLDEN: &str = "\
 amd-780m-hawkpoint-radv: -,C,C,C,C,C,xW | -,D,D,D,D,D,D | -,L,D,D,D,D,D
 amd-780m-radv: -,C,C,C,C,C,xW | -,D,D,D,D,D,D | -,L,D,D,D,D,D
 amd-rdna2-apu-radv: -,C,C,C,C,C,xW | -,D,D,D,D,D,D | -,L,D,D,D,D,D
-amd-rdna3-radv: -,C,C,C,C,C,xW | -,D,D,D,D,D,D | -,L,D,D,D,D,D
 gate-lavapipe: -,xO,xO,xO,xO,xO,xM | -,P,P,P,P,P,xW | -,L,E,E,E,E,E
 gate-lavapipe-x86_64: -,xO,xO,xO,xO,xO,xM | -,P,P,P,P,P,xW | -,L,E,E,E,E,E
 intel-arl-anv: -,D,D,D,D,D,D | -,D,D,D,D,D,D | -,L,D,D,D,D,D
@@ -427,7 +426,6 @@ fn no_profile_answers_more_than_an_apple_gpu() {
         ("nvidia-pascal-linux", [1536, 49152, 8, 32768]),
         ("nvidia-rtx50-linux", [1024, 49152, 8, 32768]),
         ("nvidia-rtx5080-laptop", [1024, 49152, 8, 32768]),
-        ("amd-rdna3-radv", [1024, 65536, 8, 16384]),
         ("amd-rdna2-apu-radv", [1024, 65536, 8, 16384]),
         ("amd-780m-radv", [1024, 65536, 8, 16384]),
         ("intel-arl-anv", [1024, 49152, 16, 16384]),

@@ -31,7 +31,7 @@ fn fixture() -> Option<Vec<u8>> {
     }
 }
 
-const PROFILES: [&str; 3] = ["lavapipe", "amd-rdna3-radv", "moltenvk-m3"];
+const PROFILES: [&str; 3] = ["lavapipe", "amd-780m-radv", "moltenvk-m3"];
 
 /// Kernel `entry`'s pipeline on profile `stem`.
 fn compiled(library: &Library, stem: &str, entry: &str) -> Result<(), Error> {

@@ -115,7 +115,7 @@ fn a_depth_output_is_clamped_where_vulkan_stores_it_unclamped() {
         return;
     };
     let inputs = LoweringInputs::new();
-    for stem in ["amd-rdna3-radv", "lavapipe", "nvidia-rtx50-linux"] {
+    for stem in ["amd-780m-radv", "lavapipe", "nvidia-rtx50-linux"] {
         let (unrestricted, restricted) = (profile(stem, true), profile(stem, false));
         for entry in ["rfb_full", "rfb_position"] {
             let with = compile_with(&bc, entry, &unrestricted, &inputs)
@@ -163,7 +163,7 @@ fn a_positive_nan_depth_kills_on_every_profile() {
     };
     let inputs = LoweringInputs::new();
     for stem in [
-        "amd-rdna3-radv",
+        "amd-780m-radv",
         "lavapipe",
         "nvidia-rtx50-linux",
         "moltenvk-m3",
@@ -200,7 +200,7 @@ fn a_depth_clamp_range_variant_clamps_the_depth_to_the_draws_range() {
     let mut ranged = LoweringInputs::new();
     ranged.depth_clamp_range = true;
     for stem in [
-        "amd-rdna3-radv",
+        "amd-780m-radv",
         "lavapipe",
         "nvidia-rtx50-linux",
         "moltenvk-m3",

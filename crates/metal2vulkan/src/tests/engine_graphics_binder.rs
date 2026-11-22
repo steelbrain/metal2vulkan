@@ -228,7 +228,7 @@ fn a_render_pipeline_plans_and_draws() {
     };
     let mut planned = 0;
     let mut narrowed = 0;
-    for stem in ["moltenvk-m3", "lavapipe", "amd-rdna3-radv"] {
+    for stem in ["moltenvk-m3", "lavapipe", "amd-780m-radv"] {
         let dev = device(stem);
         let p = render_pipeline(&dev, &bc).unwrap_or_else(|e| panic!("{stem}: {e}"));
         let state = render_state(16);
@@ -678,7 +678,7 @@ fn an_unbindable_vertex_buffer_is_pulled_in_the_variant() {
         instance_count: 2,
         base_instance: 5,
     };
-    for stem in ["moltenvk-m3", "lavapipe", "amd-rdna3-radv"] {
+    for stem in ["moltenvk-m3", "lavapipe", "amd-780m-radv"] {
         let dev = device(stem);
         let d = render_descriptor(&bc);
         let p = dev

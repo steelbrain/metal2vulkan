@@ -168,7 +168,7 @@ fn device_accesses_claim_at_most_the_proven_alignment() {
     for stem in [
         "lavapipe",
         "moltenvk-m3",
-        "amd-rdna3-radv",
+        "amd-780m-radv",
         "nvidia-rtx50-linux",
     ] {
         assert!(

@@ -1068,7 +1068,7 @@ fn what_the_control_stage_cannot_do_is_refused_typed() {
         }
         other => panic!("{:?}", other.map(|_| ())),
     }
-    let radv = device("amd-rdna3-radv");
+    let radv = device("amd-780m-radv");
     let p = radv
         .compile_render_pipeline(&d, &budget)
         .expect("radv has multiview tessellation");

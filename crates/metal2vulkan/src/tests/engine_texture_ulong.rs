@@ -638,7 +638,7 @@ fn a_device_lacking_only_the_r64_atomic_format_bit_refuses_typed() {
         return;
     };
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles/amd-rdna3-radv.json");
+        .join("../metal2vulkan-validation/profiles/amd-780m-radv.json");
     let text = std::fs::read_to_string(path).expect("profile");
     for (usage, buffer) in [
         (FormatUsage::StorageImageAtomic, false),
@@ -827,7 +827,7 @@ fn a_swizzled_texture_buffer_read_as_ulong_is_refused() {
     let Some(bc) = fixture("unk_ulong_rw") else {
         return;
     };
-    let dev = device("amd-rdna3-radv");
+    let dev = device("amd-780m-radv");
     let rw = pipeline(&dev, &bc, "unk_ulong_rw");
     let state = |swizzle| {
         let mut t = ulong_state(&[]);
@@ -869,7 +869,7 @@ fn the_binder_views_an_atomically_updated_ulong_texture_as_r64() {
     let Some(bc) = fixture("unk_ulong_atomics") else {
         return;
     };
-    let dev = device("amd-rdna3-radv");
+    let dev = device("amd-780m-radv");
     let rw = pipeline(&dev, &bc, "unk_ulong_atomic_rw");
     let plan = rw
         .plan(

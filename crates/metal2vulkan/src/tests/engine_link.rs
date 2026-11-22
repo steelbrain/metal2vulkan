@@ -40,7 +40,7 @@ use crate::spirv::testing::{check_words_valid, committed_profiles, spirv_dis};
 use crate::vk;
 
 /// Profiles whose format tables list the fixture's vertex and attachment formats.
-const PROFILES: [&str; 3] = ["moltenvk-m3", "lavapipe", "amd-rdna3-radv"];
+const PROFILES: [&str; 3] = ["moltenvk-m3", "lavapipe", "amd-780m-radv"];
 
 fn assemble(name: &str) -> Option<Vec<u8>> {
     match llvm_assemble(&engine_dir().join(name)) {
@@ -635,7 +635,7 @@ fn half_float_writes_note_the_nan_encoding_where_the_device_rewrites_it() {
     for (stem, float_note, half_note) in [
         ("lavapipe", true, true),
         ("gate-lavapipe-x86_64", true, true),
-        ("amd-rdna3-radv", true, true),
+        ("amd-780m-radv", true, true),
         ("intel-irisxe-rplp-anv", true, true),
         ("nvidia-rtx50-linux", true, true),
         ("nvidia-rtx5080-laptop", true, true),

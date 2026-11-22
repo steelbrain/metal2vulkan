@@ -56,7 +56,6 @@ fn the_widest_pin_rule_picks_each_shuffle_kernel_s_tier_per_profile() {
         ("intel-irisxe-anv", Stage::Widest),
         ("intel-uhd770-rpls-anv", Stage::Widest),
         ("intel-arl-anv", Stage::Widest),
-        ("amd-rdna3-radv", Stage::Pins),
         ("amd-780m-radv", Stage::Pins),
         ("nvidia-rtx50-linux", Stage::Pins),
         ("nvidia-pascal-linux", Stage::Pins),

@@ -171,7 +171,7 @@ fn unrestricted(p: &DeviceProfile) -> bool {
 #[test]
 fn the_extension_is_read_from_the_device_description() {
     for (stem, listed) in [
-        ("amd-rdna3-radv", true),
+        ("amd-780m-radv", true),
         ("lavapipe", true),
         ("moltenvk-m3", false),
         ("intel-irisxe-anv", false),
@@ -192,7 +192,7 @@ fn depth_comparisons_record_the_restricted_range_without_the_extension() {
     let profiles = [
         (
             "radv",
-            profile("amd-rdna3-radv", DevicePolicy::RESIDENT_TABLES).expect("radv"),
+            profile("amd-780m-radv", DevicePolicy::RESIDENT_TABLES).expect("radv"),
         ),
         (
             "anv",

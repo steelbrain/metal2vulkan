@@ -181,7 +181,7 @@ fn a_pointer_copied_into_a_pool_as_data_answers_as_metal_or_is_refused() {
 #[test]
 fn a_context_s_argument_buffer_beside_a_pool_compiles() {
     let Some(bc) = fixture() else { return };
-    for stem in ["lavapipe", "amd-rdna3-radv", "moltenvk-m3"] {
+    for stem in ["lavapipe", "amd-780m-radv", "moltenvk-m3"] {
         let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
         let a = compile(&bc, "pooled_context", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
         link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));

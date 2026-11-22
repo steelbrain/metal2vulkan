@@ -53,7 +53,6 @@ fn an_extended_range_blend_needs_rasterization_order_fetch() {
         ("lavapipe", true),
         ("gate-lavapipe-x86_64", true),
         ("moltenvk-m3", false),
-        ("amd-rdna3-radv", false),
         ("amd-780m-radv", false),
         ("intel-arl-anv", false),
         ("intel-irisxe-anv", false),

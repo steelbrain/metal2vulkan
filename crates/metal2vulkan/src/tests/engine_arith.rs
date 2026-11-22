@@ -34,7 +34,7 @@ use crate::pipeline::testing::{
 use crate::spirv::interp::{run, Buffer, Config, Resources};
 
 /// The profiles: the M1 set plus one with 64-bit floats.
-const PROFILES: [&str; 3] = ["moltenvk-m3", "runtime-floor", "amd-rdna3-radv"];
+const PROFILES: [&str; 3] = ["moltenvk-m3", "runtime-floor", "amd-780m-radv"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Need {
@@ -1465,9 +1465,9 @@ fn wide_divisions_share_one_routine_per_form() {
             0,
         ),
         (
-            "amd-rdna3-radv",
+            "amd-780m-radv",
             profile(
-                "amd-rdna3-radv",
+                "amd-780m-radv",
                 crate::device::DevicePolicy::RESIDENT_TABLES,
             )
             .expect("profile"),
@@ -1649,7 +1649,7 @@ fn a_half_fused_multiply_add_is_the_devices_16_bit_fma_on_from_queries() {
     };
     let mut sixteen = Vec::new();
     for stem in [
-        "amd-rdna3-radv",
+        "amd-780m-radv",
         "intel-irisxe-anv",
         "nvidia-rtx50-linux",
         "lavapipe",
@@ -1693,7 +1693,7 @@ fn a_half_fused_multiply_add_is_the_devices_16_bit_fma_on_from_queries() {
     }
     assert_eq!(
         sixteen,
-        ["amd-rdna3-radv", "intel-irisxe-anv", "nvidia-rtx50-linux"],
+        ["amd-780m-radv", "intel-irisxe-anv", "nvidia-rtx50-linux"],
         "the profiles under the 16-bit float controls"
     );
 }
@@ -1821,7 +1821,7 @@ fn dot_is_the_devices_op_dot_on_every_profile() {
                 && w.get(4) == Some(&(crate::spv::GlslStd450Op::Fma as u32))
         }) + count_op(words, crate::spv::Op::FmaKHR)
     };
-    for stem in ["moltenvk-m3", "amd-rdna3-radv", "lavapipe", "runtime-floor"] {
+    for stem in ["moltenvk-m3", "amd-780m-radv", "lavapipe", "runtime-floor"] {
         {
             let policy = DevicePolicy::RESIDENT_TABLES;
             let p = profile(stem, policy).expect("profile");
@@ -2729,7 +2729,7 @@ fn narrow_float_module_growth_is_bounded() {
 /// `shaderFloat16` whose float controls do not make the conversion Metal's (moltenvk-m3) rounds
 /// through the conversion of `x` itself and its widening, declaring no 16-bit float mode or
 /// `RoundingModeRTE`. A profile whose float controls make that conversion Metal's
-/// (amd-rdna3-radv) holds the chain at 16 bits (`spirv::half_hold`): the `float` sum it narrows
+/// (amd-780m-radv) holds the chain at 16 bits (`spirv::half_hold`): the `float` sum it narrows
 /// is the 16-bit sum, each operation reads the previous one's 16-bit result, and the last is
 /// widened once, in an entry declaring `RoundingModeRTE`, `DenormPreserve` and
 /// `SignedZeroInfNanPreserve` for 16 bits and the modes its independence ties to them
@@ -2870,7 +2870,7 @@ fn half_rounding_follows_the_operation() {
 /// (`NativeHalfQuantize`); an integer converted to `half` rounds by integer arithmetic with
 /// neither. On a profile whose driver computes a 16-bit `Fma` as Metal's `half` `fma`
 /// (moltenvk-m3), a fused sum rounds nothing itself: the device's `Fma` rounds it. On a profile
-/// with `shaderFloat16` (moltenvk-m3, amd-rdna3-radv) no rounding holds either: each is the
+/// with `shaderFloat16` (moltenvk-m3, amd-780m-radv) no rounding holds either: each is the
 /// conversion and its widening.
 #[test]
 fn a_half_rounding_without_float16_is_the_quantize_alone() {
@@ -4624,7 +4624,7 @@ fn mix_is_the_devices_fmix_on_every_profile() {
     for stem in PROFILES
         .iter()
         .copied()
-        .chain(["lavapipe", "amd-rdna3-radv"])
+        .chain(["lavapipe", "amd-780m-radv"])
     {
         let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         for kk in &ks {

@@ -8,7 +8,7 @@
 //! keeps no private memory.
 //!
 //! - Every device's Function storage is the floor, 16 KiB, which holds with no note: an array of
-//!   16 KiB, the constant table, a kernel without private memory (`amd-rdna3-radv`). Past it a
+//!   16 KiB, the constant table, a kernel without private memory (`amd-780m-radv`). Past it a
 //!   kernel is refused needing it, and a vertex or fragment function runs, recording
 //!   `PrecisionNote::FunctionStorageAssumed`, up to the 192 KiB Metal was measured to hold; 64
 //!   bytes more is refused needing that.
@@ -208,7 +208,7 @@ fn notes_on(
 /// alike. A kernel of 4112 words does not fit.
 #[test]
 fn private_memory_within_the_floor_records_nothing() {
-    let stem = "amd-rdna3-radv";
+    let stem = "amd-780m-radv";
     let assumed = PrecisionNote::FunctionStorageAssumed;
     for entry in ["words", "vwords", "fwords", "lookup", "plain"] {
         let Some(fits) = notes(stem, 4096, entry) else {
@@ -227,7 +227,7 @@ fn private_memory_within_the_floor_records_nothing() {
 /// is refused needing it, of the floor's 16 KiB.
 #[test]
 fn render_stages_past_the_floor_of_a_device_not_measured_run_noted_up_to_metal_s() {
-    let stem = "amd-rdna3-radv";
+    let stem = "amd-780m-radv";
     let assumed = PrecisionNote::FunctionStorageAssumed;
     for entry in ["vwords", "fwords"] {
         for n in [4352, 25600, 49152] {
@@ -313,7 +313,7 @@ fn an_array_reached_only_at_constant_indices_counts_nothing() {
         !fits.contains(&PrecisionNote::FunctionStorageAssumed),
         "{fits:?}"
     );
-    let floor = notes("amd-rdna3-radv", n, "fixed").expect("assembled");
+    let floor = notes("amd-780m-radv", n, "fixed").expect("assembled");
     let floor = floor.unwrap_or_else(|e| panic!("on the floor: {e}"));
     assert!(
         !floor.contains(&PrecisionNote::FunctionStorageAssumed),
@@ -391,7 +391,7 @@ fn an_array_its_bounded_indices_reach_in_part_keeps_only_that_part() {
         return;
     };
     let unbounded = reached("add i32 %gid, 0").expect("assembled");
-    for stem in ["nvidia-rtx5080-laptop", "amd-rdna3-radv"] {
+    for stem in ["nvidia-rtx5080-laptop", "amd-780m-radv"] {
         let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         let a = compile(&bounded, "reached", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
         link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
@@ -436,7 +436,7 @@ fn a_tile_kernel_holds_only_the_corner_its_tile_sizes_reach() {
     let none = FunctionConstantValues::defaults();
     let linked = [LinkedSource::new("postfix", &functions, &none)];
     let p = profile(
-        "amd-rdna3-radv",
+        "amd-780m-radv",
         crate::device::DevicePolicy::RESIDENT_TABLES,
     )
     .expect("profile");

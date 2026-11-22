@@ -557,7 +557,7 @@ entry:
 
 /// A uniform view is sized for a descriptor base aligned to `max(minUniformBufferOffsetAlignment,
 /// 16)`. A window starting at byte 0 is bound from the multiple of that alignment at or below the
-/// bind offset, so its residual is any value below it: on `amd-rdna3-radv` (an alignment of 4)
+/// bind offset, so its residual is any value below it: on `amd-780m-radv` (an alignment of 4)
 /// residuals 12 and 15 put the struct's last byte in words 4 and 5, past the 16 bytes an alignment
 /// of 4 alone would declare. The view covers them and reads both ends exactly, with
 /// `uniformBufferStandardLayout` (`u32[]`) and without (`uvec4[]`).
@@ -567,7 +567,7 @@ fn a_uniform_view_covers_every_residual_of_a_sixteen_aligned_base() {
         return;
     };
     let data = [0x5Au8, 8, 7, 6, 5, 0xC3];
-    for stem in ["amd-rdna3-radv", "moltenvk-m3"] {
+    for stem in ["amd-780m-radv", "moltenvk-m3"] {
         for standard in [true, false] {
             let what = format!("{stem} standard={standard}");
             let p = profile_with(stem, true, standard);
@@ -2195,7 +2195,7 @@ fn every_view_of_a_written_slot_stays_writable() {
     let profiles: [(&str, &[VkFeature]); 4] = [
         ("moltenvk-m3", &[]),
         ("lavapipe", &[]),
-        ("amd-rdna3-radv", &[]),
+        ("amd-780m-radv", &[]),
         ("moltenvk-m3", &[VkFeature::StorageBuffer8BitAccess]),
     ];
     for (stem, removed) in profiles {

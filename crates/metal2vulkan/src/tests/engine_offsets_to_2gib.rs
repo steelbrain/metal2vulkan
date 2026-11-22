@@ -72,7 +72,7 @@ fn accesses_up_to_2_gib_land_at_their_own_words() {
     };
     for (stem, p) in identity_profiles()
         .iter()
-        .filter(|(s, _)| s == "lavapipe" || s == "amd-rdna3-radv")
+        .filter(|(s, _)| s == "lavapipe" || s == "amd-780m-radv")
     {
         let (_, plan, module) =
             compile_kept(&bc, FIXTURE, p).unwrap_or_else(|e| panic!("{stem}: {e}"));

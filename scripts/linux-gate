@@ -80,10 +80,10 @@
 #   layer, and the command sees lavapipe; only a process started
 #   through scripts/drm-shim-exec sees the shimmed driver, so cargo and rustc never load the
 #   shim. Example:
-#     scripts/linux-gate --cpus 2 --recipe drm-shim --driver radv --chip navi31 -- bash -c \
+#     scripts/linux-gate --cpus 2 --recipe drm-shim --driver radv --chip rembrandt -- bash -c \
 #       'cargo build --release -p metal2vulkan-validation --bin corpus-pipeline &&
 #        scripts/drm-shim-exec "$CARGO_TARGET_DIR/release/corpus-pipeline" \
-#          --profile amd-rdna3-radv --device-type gpu --fixtures'
+#          --profile amd-rdna2-apu-radv --device-type gpu --fixtures'
 # - The command container gets one capability beyond Docker's default, SYS_PTRACE, for kcmp: the
 #   per-attempt memory accounting compares a worker's address space with its parent's, so a member
 #   still running in its parent's memory is charged once. Docker's default seccomp
