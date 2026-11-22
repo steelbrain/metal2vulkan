@@ -199,11 +199,6 @@ pub struct GraphicsTemplate {
     /// instance.
     #[cfg_attr(feature = "serde", serde(default))]
     pub(crate) indirect_first_instance_missing: bool,
-    /// The device enables `robustBufferAccess2`, under which Vulkan bounds an index fetch past
-    /// the bound index buffer range (`VUID-vkCmdDrawIndexed-robustBufferAccess2-08798` applies
-    /// only without it): a direct indexed draw past its index buffer is drawn, not clamped.
-    #[cfg_attr(feature = "serde", serde(default))]
-    pub(crate) robust_index_fetch: bool,
     /// A mesh render pipeline's mesh stage: its draws are mesh draws, each of its own
     /// specialization.
     #[cfg_attr(feature = "serde", serde(default))]

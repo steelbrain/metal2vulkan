@@ -98,8 +98,9 @@
 //!   `[[barycentric_coord]]` runs the variant that takes Metal's weights back from the drawn
 //!   triangle's (`VariantKey::rotated_weights`, `LoweringInputs::rotated_weights`).
 //! - **Draws.** A Metal draw maps to the Vulkan draw of the same arguments; an indirect draw is
-//!   GPU-side unless a stage reads `BaseVertexInstance` from push constants or the plan is
-//!   multiview, in which case `indirect_needs_arguments` asks for the CPU read.
+//!   GPU-side unless a stage reads `BaseVertexInstance` from push constants, the plan is
+//!   multiview or the draw is indexed, in which case `indirect_needs_arguments` asks for the CPU
+//!   read.
 //!   `VerticesPerPrimitive` (a vertex function that writes the primitive ID,
 //!   `LoweringInputs::primitive_id_varying`) is the draw's primitive type's vertices per
 //!   primitive (`BindState::primitive_type`; `MissingPrimitiveType` without one), a direct or
@@ -128,17 +129,15 @@
 //!   at a time: the plan's variant says which.
 //! - **Index buffer bounds**. A direct indexed draw whose indices run past where Metal's fetch
 //!   stops reading its index buffer (`IndexBufferRef::fetch_end`: the length rounded up to 4 bytes;
-//!   Metal's API validation rejects the draw, and Apple's GPUs read index 0 past there) is drawn
-//!   unchanged where the device enables `robustBufferAccess2`, which bounds the index fetch, and
-//!   otherwise clamped to the indices wholly before there, since Vulkan then requires every index
-//!   inside the bound range (`VUID-vkCmdDrawIndexed-robustBufferAccess2-08798`);
-//!   `DrawCommands::index_overrun` records which. Vulkan names no index for a fetch past the bound
-//!   range even under `robustBufferAccess2`, so the runtime draws such a draw from a copy of its
-//!   indices padded with zeros, which leaves no overrun here. The check is on the CPU: no shader
-//!   reads anything for it. An indexed indirect draw's counts are in GPU memory, so where the
-//!   device lacks `robustBufferAccess2` (or the index offset is at or past the buffer's length) it
-//!   asks for its arguments on the CPU (`indirect_needs_arguments`), and the direct draw is bounded
-//!   as above.
+//!   Metal's API validation rejects the draw, and Apple's GPUs read index 0 past there) is clamped
+//!   to the indices wholly before there, since Vulkan requires every index inside the bound range
+//!   without `robustBufferAccess2`, which the translator leaves no fetch to
+//!   (`VUID-vkCmdDrawIndexed-robustBufferAccess2-08798`); `DrawCommands::index_overrun` records
+//!   it. Vulkan names no index for a fetch past the bound range even under `robustBufferAccess2`,
+//!   so the runtime draws such a draw from a copy of its indices padded with zeros, which leaves no
+//!   overrun here. The check is on the CPU: no shader reads anything for it. An indexed indirect
+//!   draw's counts are in GPU memory, so it asks for its arguments on the CPU
+//!   (`indirect_needs_arguments`), and the direct draw is bounded as above.
 //! - **Tessellation**. A tessellation pipeline's Metal stages are its evaluation stage (the vertex
 //!   function, whose push range, bindings, and uses name `TESSELLATION_EVALUATION`) and its
 //!   fragment stage; its synthesized vertex and control stages bind nothing of Metal's. The control
@@ -279,8 +278,8 @@ pub enum DrawCall {
         base_instance: u32,
     },
     /// `drawPrimitives:indirectBuffer:…`, or the indexed form when `indexed` is set (its index
-    /// type, buffer, and index offset). Where nothing bounds the indexed form's index fetch it
-    /// asks for its arguments on the CPU ([`DrawCommands::indirect_needs_arguments`]).
+    /// type, buffer, and index offset). The indexed form, whose index fetch nothing bounds, asks
+    /// for its arguments on the CPU ([`DrawCommands::indirect_needs_arguments`]).
     Indirect {
         indirect: IndirectRef,
         indexed: Option<(vk::IndexType, IndexBufferRef, u64)>,
@@ -482,21 +481,11 @@ impl Default for DrawCommands {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum IndexOverrun {
-    /// Drawn: the device enables `robustBufferAccess2`, under which Vulkan bounds the index fetch
-    /// by the bound index buffer range, so `draw` is the Metal draw's. A position in the
-    /// buffer's padding past the bound range of an unsized binding reads the padding's bytes. One
-    /// past the `VkBuffer` is taken to read zero, to which Vulkan adds the vertex offset: an
-    /// inference from `VK_KHR_robustness2`'s description of out-of-bounds reads, since the
-    /// specification names no index value for the fetch.
-    Robust {
-        /// The index positions past the buffer.
-        past_end: u32,
-    },
     /// Not drawn: without `robustBufferAccess2` every index a Vulkan draw reads must lie inside
     /// the bound index buffer range (`VUID-vkCmdDrawIndexed-robustBufferAccess2-08798`), so
     /// `draw` takes only the indices wholly before [`IndexBufferRef::fetch_end`]. A draw with
-    /// no index before there is clamped with the feature too, since its index offset may lie past the
-    /// `VkBuffer`, where it cannot be bound: it draws no index, bound at offset 0.
+    /// no index before there draws no index, bound at offset 0, since its index offset may lie
+    /// past the `VkBuffer`, where it cannot be bound.
     Clamped {
         /// The index positions past the buffer, which `draw` leaves out.
         past_end: u32,
@@ -1692,11 +1681,6 @@ fn plan(p: &RenderPipeline, device: &Device, shape: &BindShape) -> Result<Bindin
                 .enabled
                 .features
                 .contains(&VkFeature::DrawIndirectFirstInstance),
-            robust_index_fetch: profile
-                .fields()
-                .enabled
-                .features
-                .contains(&VkFeature::RobustBufferAccess2),
             tessellation: factor_template(
                 p,
                 (
@@ -1856,7 +1840,7 @@ fn vk_draw(draw: &DrawCall, overrun: Option<IndexOverrun>) -> (vk::DrawCommand, 
             let clamped = matches!(overrun, Some(IndexOverrun::Clamped { .. }));
             let index_count = match overrun {
                 Some(IndexOverrun::Clamped { past_end }) => index_count.saturating_sub(past_end),
-                Some(IndexOverrun::Robust { .. }) | None => index_count,
+                None => index_count,
             };
             let unbindable = clamped || index_offset >= index_buffer.length;
             let index_buffer_offset = if index_count == 0 && unbindable {
@@ -2951,7 +2935,7 @@ fn instantiate(
         object_fold: object_fold_out,
         discards_command_buffer: discards_out,
     } = out;
-    let overrun = index_overrun(t.robust_index_fetch, draw);
+    let overrun = index_overrun(draw);
     let (command, base) = vk_draw(draw, overrun);
     let deindexed = match t.deindexed {
         Some(ty) => Some(deindexed_draw(ty, draw, overrun, state.primitive_type)?),
@@ -3230,7 +3214,7 @@ fn instantiate(
         }
         _ => None,
     };
-    let index_unbounded = indirect_indices_unbounded(t.robust_index_fetch, draw);
+    let index_unbounded = indirect_indices_unbounded(draw);
     let amplifications = amplification_writes(t)?;
     let specialization = mesh.map(|m| m.specialization);
     // The de-indexed form reads its indices in the vertex stage, by address, and binds no index
@@ -3482,10 +3466,9 @@ fn hull(a: Window, b: Window) -> Window {
 
 /// The index positions of a direct indexed draw that lie past its index buffer: those whose bytes
 /// do not lie wholly before [`IndexBufferRef::fetch_end`]. `None` when there are none, for any
-/// other draw, and for an index type without a fixed size. They are drawn (`Robust`) where the
-/// device enables `robustBufferAccess2` (`robust`) and the first index lies before there, so the
-/// draw's index offset can be bound; otherwise the draw is `Clamped` to the indices before there.
-fn index_overrun(robust: bool, draw: &DrawCall) -> Option<IndexOverrun> {
+/// other draw, and for an index type without a fixed size. The draw is `Clamped` to the indices
+/// before there.
+fn index_overrun(draw: &DrawCall) -> Option<IndexOverrun> {
     let DrawCall::Indexed {
         index_type,
         index_buffer,
@@ -3502,28 +3485,25 @@ fn index_overrun(robust: bool, draw: &DrawCall) -> Option<IndexOverrun> {
         .checked_sub(index_offset)
         .map_or(0, |bytes| bytes / size);
     let inside = u32::try_from(inside).unwrap_or(u32::MAX).min(index_count);
-    let past_end = index_count - inside;
-    match (past_end, robust && inside > 0) {
-        (0, _) => None,
-        (past_end, true) => Some(IndexOverrun::Robust { past_end }),
-        (past_end, false) => Some(IndexOverrun::Clamped { past_end }),
+    match index_count - inside {
+        0 => None,
+        past_end => Some(IndexOverrun::Clamped { past_end }),
     }
 }
 
-/// Whether nothing bounds the index fetch of an indexed indirect draw, whose counts are in GPU
-/// memory: without `robustBufferAccess2` (`robust`) Vulkan requires every index inside the bound
-/// range (`VUID-VkDrawIndexedIndirectCommand-robustBufferAccess2-08798`), which the binder cannot
-/// check, and an index offset at or past the buffer's length may lie past the `VkBuffer`, where it
-/// cannot be bound (`VUID-vkCmdBindIndexBuffer-offset-08782`). Its arguments are then read on the
-/// CPU, and the direct draw is bounded by [`index_overrun`].
-fn indirect_indices_unbounded(robust: bool, draw: &DrawCall) -> bool {
-    match *draw {
+/// Whether nothing bounds the index fetch of `draw`, an indexed indirect draw, whose counts are in
+/// GPU memory: without `robustBufferAccess2` Vulkan requires every index inside the bound range
+/// (`VUID-VkDrawIndexedIndirectCommand-robustBufferAccess2-08798`), which the binder cannot
+/// check. Its arguments are then read on the CPU, and the direct draw is bounded by
+/// [`index_overrun`].
+fn indirect_indices_unbounded(draw: &DrawCall) -> bool {
+    matches!(
+        draw,
         DrawCall::Indirect {
-            indexed: Some((_, index_buffer, index_offset)),
+            indexed: Some(_),
             ..
-        } => !robust || index_offset >= index_buffer.length,
-        _ => false,
-    }
+        }
+    )
 }
 
 /// The read of a draw's `len` bytes of indirect arguments (`DRAW_INDIRECT`), from its argument
@@ -3547,9 +3527,8 @@ fn indirect_use(len: u64) -> ResourceUse {
 /// (`DRAW_INDIRECT`; 16 bytes, 20 indexed; a mesh draw's are its pipeline's to decide,
 /// `instantiate`), all read.
 /// Ranges are relative to the draw's index offset, patch index offset, control-point index offset,
-/// and argument offset. A direct draw whose indices run past the buffer (`overrun`) reads the bytes
-/// from the index offset to [`IndexBufferRef::fetch_end`] when it is `Robust`, and only the indices
-/// it draws when it is `Clamped` (none, from offset 0, when it draws none).
+/// and argument offset. A direct draw whose indices run past the buffer (`overrun`, `Clamped`)
+/// reads only the indices it draws (none, from offset 0, when it draws none).
 fn draw_uses(
     uses: &mut Vec<ResourceUse>,
     draw: &DrawCall,
@@ -3630,23 +3609,16 @@ fn draw_uses(
         | DrawCall::MeshThreadgroupsIndirect { .. } => {}
         DrawCall::Indexed {
             index_type,
-            index_buffer,
             index_count,
-            index_offset,
             ..
-        } => uses.push(index(index_bytes(index_type).map(|size| {
-            ByteRange {
-                offset: 0,
-                len: match overrun {
-                    None => u64::from(index_count) * size,
-                    Some(IndexOverrun::Robust { .. }) => index_buffer
-                        .fetch_end(index_offset)
-                        .saturating_sub(index_offset),
-                    Some(IndexOverrun::Clamped { past_end }) => {
-                        u64::from(index_count.saturating_sub(past_end)) * size
-                    }
-                },
-            }
+        } => uses.push(index(index_bytes(index_type).map(|size| ByteRange {
+            offset: 0,
+            len: match overrun {
+                None => u64::from(index_count) * size,
+                Some(IndexOverrun::Clamped { past_end }) => {
+                    u64::from(index_count.saturating_sub(past_end)) * size
+                }
+            },
         }))),
         DrawCall::Indirect { indexed: None, .. } | DrawCall::PatchesIndirect { .. } => {
             uses.push(indirect_use(16))

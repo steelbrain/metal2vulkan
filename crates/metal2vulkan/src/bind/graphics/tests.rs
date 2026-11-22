@@ -471,12 +471,10 @@ fn indexed_in(
 
 /// The index positions past the buffer are those whose bytes do not lie wholly inside it, counted
 /// from the index offset in each index size; a draw to the buffer's last byte has none. They are
-/// drawn where the device bounds the fetch (`robustBufferAccess2`) and the first index lies inside
-/// the buffer, and clamped otherwise; other draws and sizeless index types have none.
+/// clamped; other draws and sizeless index types have none.
 #[test]
 fn index_positions_past_the_buffer_are_counted_from_the_index_offset() {
     use vk::IndexType as T;
-    let robust = |past_end| Some(IndexOverrun::Robust { past_end });
     let clamped = |past_end| Some(IndexOverrun::Clamped { past_end });
     for (draw, past) in [
         // 12 halves from byte 64 of 88 bytes end at its last byte.
@@ -503,27 +501,16 @@ fn index_positions_past_the_buffer_are_counted_from_the_index_offset() {
             Some(u32::MAX - 2),
         ),
     ] {
-        assert_eq!(
-            index_overrun(false, &draw),
-            past.and_then(clamped),
-            "{draw:?}"
-        );
-        assert_eq!(
-            index_overrun(true, &draw),
-            past.and_then(robust),
-            "{draw:?}"
-        );
+        assert_eq!(index_overrun(&draw), past.and_then(clamped), "{draw:?}");
     }
-    // No index inside the buffer: an offset at or past its end cannot be bound, so it is clamped
-    // with the feature too. The rounding to 4 bytes applies only from an offset before the
-    // length.
+    // No index inside the buffer: an offset at or past its end cannot be bound, so the draw is
+    // clamped to none. The rounding to 4 bytes applies only from an offset before the length.
     for draw in [
         indexed_in(T::UINT32, 64, 64, 3),
         indexed_in(T::UINT32, 64, 4096, 3),
         indexed_in(T::UINT16, 66, 66, 3),
     ] {
-        assert_eq!(index_overrun(true, &draw), clamped(3), "{draw:?}");
-        assert_eq!(index_overrun(false, &draw), clamped(3), "{draw:?}");
+        assert_eq!(index_overrun(&draw), clamped(3), "{draw:?}");
     }
     let sizeless = indexed_in(T::NONE_KHR, 4, 0, 64);
     let indirect = DrawCall::Indirect {
@@ -531,13 +518,13 @@ fn index_positions_past_the_buffer_are_counted_from_the_index_offset() {
         indexed: Some((T::UINT32, IndexBufferRef::new(2, 4), 0)),
     };
     for draw in [sizeless, indirect, primitives(0, 3, (0, 1))] {
-        assert_eq!(index_overrun(false, &draw), None, "{draw:?}");
+        assert_eq!(index_overrun(&draw), None, "{draw:?}");
     }
 }
 
 /// A clamped draw draws its indices inside the buffer from the same offset, and one with none binds
-/// the buffer at offset 0 and draws no index; a robust draw is the Metal draw's. Uses follow: a
-/// clamped draw reads the indices it draws, a robust one the buffer from the index offset.
+/// the buffer at offset 0 and draws no index. Uses follow: a clamped draw reads the indices it
+/// draws.
 #[test]
 fn an_overrunning_draw_draws_and_reads_as_its_overrun_states() {
     let draw = indexed_in(vk::IndexType::UINT16, 89, 64, 15);
@@ -559,16 +546,12 @@ fn an_overrunning_draw_draws_and_reads_as_its_overrun_states() {
     };
     // 14 halves lie before byte 92, the length rounded up to 4 (`fetch_end`).
     let clamped = Some(IndexOverrun::Clamped { past_end: 1 });
-    let robust = Some(IndexOverrun::Robust { past_end: 1 });
-    assert_eq!(index_overrun(false, &draw), clamped);
-    assert_eq!(index_overrun(true, &draw), robust);
+    assert_eq!(index_overrun(&draw), clamped);
     assert_eq!(
         vk_draw(&draw, clamped),
         (vk_indexed(64, 14), [(-5i32) as u32, 1])
     );
     assert_eq!(draw_uses(&draw, clamped, None), vec![index(28)]);
-    assert_eq!(vk_draw(&draw, robust).0, vk_indexed(64, 15));
-    assert_eq!(draw_uses(&draw, robust, None), vec![index(28)]);
     assert_eq!(vk_draw(&draw, None).0, vk_indexed(64, 15));
     assert_eq!(draw_uses(&draw, None, None), vec![index(30)]);
     let past = indexed_in(vk::IndexType::UINT16, 64, 64, 4);
@@ -577,11 +560,11 @@ fn an_overrunning_draw_draws_and_reads_as_its_overrun_states() {
     assert_eq!(draw_uses(&past, none, None), vec![index(0)]);
 }
 
-/// End to end on a synthetic template: instantiation records the overrun and draws it as the
-/// device's index robustness allows, and leaves a draw inside the buffer unchanged.
+/// End to end on a synthetic template: instantiation records the overrun and draws the indices
+/// inside the buffer, and leaves a draw inside the buffer unchanged.
 #[test]
 fn instantiation_bounds_a_draw_by_its_index_buffer() {
-    let template = |robust_index_fetch| GraphicsTemplate {
+    let t = GraphicsTemplate {
         buffers: Vec::new(),
         stages: Vec::new(),
         vertex_buffers: Vec::new(),
@@ -593,7 +576,6 @@ fn instantiation_bounds_a_draw_by_its_index_buffer() {
         amplifications: Vec::new(),
         tessellation: None,
         indirect_first_instance_missing: false,
-        robust_index_fetch,
         mesh: None,
         deindexed: None,
         private_list: false,
@@ -606,28 +588,22 @@ fn instantiation_bounds_a_draw_by_its_index_buffer() {
         vk::DrawCommand::DrawIndexed { index_count, .. } => index_count,
         _ => panic!("an indexed draw: {:?}", cmds.draw),
     };
-    for robust in [false, true] {
-        let t = template(robust);
-        let cmds = instantiate(&t, &state, &inside).expect("inside");
-        assert_eq!((count(&cmds), cmds.index_overrun), (10, None));
-        let cmds = instantiate(&t, &state, &past).expect("past");
-        let expected = if robust {
-            (10, Some(IndexOverrun::Robust { past_end: 2 }))
-        } else {
-            (8, Some(IndexOverrun::Clamped { past_end: 2 }))
-        };
-        assert_eq!((count(&cmds), cmds.index_overrun), expected);
-        assert!(!cmds.indirect_needs_arguments);
-    }
+    let cmds = instantiate(&t, &state, &inside).expect("inside");
+    assert_eq!((count(&cmds), cmds.index_overrun), (10, None));
+    let cmds = instantiate(&t, &state, &past).expect("past");
+    assert_eq!(
+        (count(&cmds), cmds.index_overrun),
+        (8, Some(IndexOverrun::Clamped { past_end: 2 }))
+    );
+    assert!(!cmds.indirect_needs_arguments);
 }
 
 /// A draw of no index binds the buffer at offset 0 where its own offset is at or past the buffer's
 /// length, which may lie past the `VkBuffer` (`VUID-vkCmdBindIndexBuffer-offset-08782`), for every
-/// index type and with or without `robustBufferAccess2`; it records no overrun. One whose offset
-/// lies inside the buffer keeps it.
+/// index type; it records no overrun. One whose offset lies inside the buffer keeps it.
 #[test]
 fn a_draw_of_no_index_binds_inside_the_buffer() {
-    let template = |robust_index_fetch| GraphicsTemplate {
+    let t = GraphicsTemplate {
         buffers: Vec::new(),
         stages: Vec::new(),
         vertex_buffers: Vec::new(),
@@ -639,7 +615,6 @@ fn a_draw_of_no_index_binds_inside_the_buffer() {
         amplifications: Vec::new(),
         tessellation: None,
         indirect_first_instance_missing: false,
-        robust_index_fetch,
         mesh: None,
         deindexed: None,
         private_list: false,
@@ -660,30 +635,26 @@ fn a_draw_of_no_index_binds_inside_the_buffer() {
         vk::IndexType::UINT32,
         vk::IndexType::NONE_KHR,
     ] {
-        for robust in [false, true] {
-            let t = template(robust);
-            for (offset, at) in [
-                (32, 32),
-                (60, 60),
-                (64, 0),
-                (66, 0),
-                (4096, 0),
-                (u64::MAX, 0),
-            ] {
-                let draw = indexed_in(ty, 64, offset, 0);
-                let cmds = instantiate(&t, &state, &draw).expect("draw");
-                assert_eq!(bound(&cmds), (at, 0), "{ty:?} {robust} {offset}");
-                assert_eq!(cmds.index_overrun, None, "{ty:?} {robust} {offset}");
-                assert_eq!(vk_draw(&draw, None).0, cmds.draw);
-            }
+        for (offset, at) in [
+            (32, 32),
+            (60, 60),
+            (64, 0),
+            (66, 0),
+            (4096, 0),
+            (u64::MAX, 0),
+        ] {
+            let draw = indexed_in(ty, 64, offset, 0);
+            let cmds = instantiate(&t, &state, &draw).expect("draw");
+            assert_eq!(bound(&cmds), (at, 0), "{ty:?} {offset}");
+            assert_eq!(cmds.index_overrun, None, "{ty:?} {offset}");
+            assert_eq!(vk_draw(&draw, None).0, cmds.draw);
         }
     }
 }
 
-/// An indexed indirect draw, whose counts are in GPU memory, asks for its arguments on the CPU
-/// where nothing bounds its index fetch: on a device without `robustBufferAccess2`, or with an
-/// index offset at or past the buffer's length. Elsewhere it stays GPU-side, and a draw without
-/// indices is unaffected.
+/// An indexed indirect draw, whose counts are in GPU memory and whose index fetch nothing bounds,
+/// asks for its arguments on the CPU, at any index offset. A draw without indices stays
+/// GPU-side.
 #[test]
 fn an_unbounded_indexed_indirect_draw_reads_its_arguments() {
     let indirect = |indexed| DrawCall::Indirect {
@@ -691,24 +662,17 @@ fn an_unbounded_indexed_indirect_draw_reads_its_arguments() {
         indexed,
     };
     let at = |offset| Some((vk::IndexType::UINT32, IndexBufferRef::new(2, 64), offset));
-    for (robust, draw, unbounded) in [
-        (false, indirect(at(0)), true),
-        (false, indirect(at(60)), true),
-        (true, indirect(at(0)), false),
-        (true, indirect(at(60)), false),
-        (true, indirect(at(64)), true),
-        (true, indirect(at(4096)), true),
-        (false, indirect(None), false),
-        (true, indirect(None), false),
-        (false, indexed_in(vk::IndexType::UINT32, 64, 0, 99), false),
+    for (draw, unbounded) in [
+        (indirect(at(0)), true),
+        (indirect(at(60)), true),
+        (indirect(at(64)), true),
+        (indirect(at(4096)), true),
+        (indirect(None), false),
+        (indexed_in(vk::IndexType::UINT32, 64, 0, 99), false),
     ] {
-        assert_eq!(
-            indirect_indices_unbounded(robust, &draw),
-            unbounded,
-            "{robust} {draw:?}"
-        );
+        assert_eq!(indirect_indices_unbounded(&draw), unbounded, "{draw:?}");
     }
-    let template = |robust_index_fetch, indirect_first_instance_missing| GraphicsTemplate {
+    let template = |indirect_first_instance_missing| GraphicsTemplate {
         buffers: Vec::new(),
         stages: Vec::new(),
         vertex_buffers: Vec::new(),
@@ -720,27 +684,24 @@ fn an_unbounded_indexed_indirect_draw_reads_its_arguments() {
         amplifications: Vec::new(),
         tessellation: None,
         indirect_first_instance_missing,
-        robust_index_fetch,
         mesh: None,
         deindexed: None,
         private_list: false,
         line_band: None,
     };
     let state = BindState::default();
-    for robust in [false, true] {
-        let t = template(robust, false);
-        let cmds = instantiate(&t, &state, &indirect(at(8))).expect("indexed");
-        assert_eq!(cmds.indirect_needs_arguments, !robust);
-        assert_eq!(cmds.index_overrun, None);
-        let cmds = instantiate(&t, &state, &indirect(at(64))).expect("indexed past");
-        assert!(cmds.indirect_needs_arguments);
-        let cmds = instantiate(&t, &state, &indirect(None)).expect("indirect");
-        assert!(!cmds.indirect_needs_arguments);
-        // Another reason asks for the CPU read too.
-        let t = template(robust, true);
-        let cmds = instantiate(&t, &state, &indirect(at(8))).expect("indexed");
-        assert!(cmds.indirect_needs_arguments);
-    }
+    let t = template(false);
+    let cmds = instantiate(&t, &state, &indirect(at(8))).expect("indexed");
+    assert!(cmds.indirect_needs_arguments);
+    assert_eq!(cmds.index_overrun, None);
+    let cmds = instantiate(&t, &state, &indirect(at(64))).expect("indexed past");
+    assert!(cmds.indirect_needs_arguments);
+    let cmds = instantiate(&t, &state, &indirect(None)).expect("indirect");
+    assert!(!cmds.indirect_needs_arguments);
+    // Another reason asks for the CPU read too.
+    let t = template(true);
+    let cmds = instantiate(&t, &state, &indirect(None)).expect("indirect");
+    assert!(cmds.indirect_needs_arguments);
 }
 
 /// Instantiation binds each vertex buffer at its offset (which must be a multiple of the
@@ -772,7 +733,6 @@ fn draws_bind_vertex_buffers_at_aligned_offsets_with_their_windows() {
         amplifications: Vec::new(),
         tessellation: None,
         indirect_first_instance_missing: false,
-        robust_index_fetch: false,
         mesh: None,
         deindexed: None,
         private_list: false,
@@ -860,7 +820,6 @@ fn inline_vertex_bytes_bind_the_strides_a_dynamic_layout_reads() {
         amplifications: Vec::new(),
         tessellation: None,
         indirect_first_instance_missing: false,
-        robust_index_fetch: false,
         mesh: None,
         deindexed: None,
         private_list: false,
@@ -1446,7 +1405,6 @@ fn mesh_template(flat: bool, multiples: Vec<u32>) -> GraphicsTemplate {
         amplifications: Vec::new(),
         tessellation: None,
         indirect_first_instance_missing: false,
-        robust_index_fetch: true,
         mesh: Some(MeshTemplate {
             spec: layout,
             fixed: vec![(SpecKey::Presence(fragment_buffer), 1)],

@@ -471,52 +471,17 @@ fn an_indirect_draw_without_draw_indirect_first_instance_reads_its_arguments() {
     }
 }
 
-/// Every committed profile as a device, by stem, with whether the device enables
-/// `robustBufferAccess2`, read from what it enables rather than from its name.
-fn devices_by_robustness() -> Vec<(String, Device, bool)> {
-    use crate::device::requirements::VkFeature;
-    devices()
-        .into_iter()
-        .map(|(stem, dev)| {
-            let robust = dev
-                .profile()
-                .fields()
-                .enabled
-                .features
-                .contains(&VkFeature::RobustBufferAccess2);
-            (stem, dev, robust)
-        })
-        .collect()
-}
-
-/// A direct indexed draw whose indices run past its index buffer's length is drawn unchanged where
-/// the device enables `robustBufferAccess2`, which bounds the index fetch, and is clamped to the
-/// indices inside the buffer where it does not, since Vulkan then requires every index inside the
-/// bound range (`VUID-vkCmdDrawIndexed-robustBufferAccess2-08798`); `index_overrun` records which.
-/// A draw to the buffer's last byte is unchanged, and one with no index inside the buffer draws
-/// none on either. The feature decides, not the profile: lavapipe without it clamps. Checked on
-/// every committed profile that compiles the pipeline.
+/// A direct indexed draw whose indices run past its index buffer's length is clamped to the
+/// indices inside the buffer, since Vulkan requires every index inside the bound range without
+/// `robustBufferAccess2` (`VUID-vkCmdDrawIndexed-robustBufferAccess2-08798`); `index_overrun`
+/// records it. A draw to the buffer's last byte is unchanged, and one with no index inside the
+/// buffer draws none. Checked on every committed profile that compiles the pipeline, those that
+/// state `robustBufferAccess2` among them.
 #[test]
 fn an_indexed_draw_past_its_index_buffer_is_bounded() {
     let Some(bc) = fixture("stage_io") else {
         return;
     };
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles/lavapipe.json");
-    let text = std::fs::read_to_string(path).expect("profile");
-    let edited = text.replace(
-        "\"robustBufferAccess2\": true",
-        "\"robustBufferAccess2\": false",
-    );
-    assert_ne!(edited, text, "lavapipe states the feature");
-    let without = DeviceDescription::from_khronos_json(&edited, None).expect("description");
-    let without = Device::from_queries(without, DevicePolicy::RESIDENT_TABLES).expect("device");
-    let mut devices = devices_by_robustness();
-    devices.push((
-        "lavapipe without robustBufferAccess2".into(),
-        without,
-        false,
-    ));
     let draw = |length, index_offset, index_count| DrawCall::Indexed {
         index_type: vk::IndexType::UINT16,
         index_buffer: IndexBufferRef::new(9, length),
@@ -535,13 +500,13 @@ fn an_indexed_draw_past_its_index_buffer_is_bounded() {
         } => (index_buffer_offset, index_count, vertex_offset),
         other => panic!("an indexed draw: {other:?}"),
     };
-    let mut seen = [false; 2];
-    for (stem, dev, robust) in devices {
+    let mut checked = 0;
+    for (stem, dev) in devices() {
         // `vk12-floor` and `roadmap-2022` refuse the pipeline's depth attachment.
         let Ok(p) = render_pipeline(&dev, &bc) else {
             continue;
         };
-        seen[usize::from(robust)] = true;
+        checked += 1;
         let state = render_state(16);
         let plan = p.plan(&dev, &state.shape()).expect("plan");
         // 12 halves from byte 64 of 88 bytes: to the buffer's last byte.
@@ -561,21 +526,12 @@ fn an_indexed_draw_past_its_index_buffer_is_bounded() {
         let cmds = plan
             .instantiate_draw(&state, &draw(88, 64, 15))
             .expect("past");
-        if robust {
-            assert_eq!(
-                cmds.index_overrun,
-                Some(IndexOverrun::Robust { past_end: 3 }),
-                "{stem}"
-            );
-            assert_eq!(drawn(&cmds), (64, 15, 7), "{stem}");
-        } else {
-            assert_eq!(
-                cmds.index_overrun,
-                Some(IndexOverrun::Clamped { past_end: 3 }),
-                "{stem}"
-            );
-            assert_eq!(drawn(&cmds), (64, 12, 7), "{stem}");
-        }
+        assert_eq!(
+            cmds.index_overrun,
+            Some(IndexOverrun::Clamped { past_end: 3 }),
+            "{stem}"
+        );
+        assert_eq!(drawn(&cmds), (64, 12, 7), "{stem}");
         assert_eq!(uses(&cmds), vec![(UseTarget::IndexBuffer, Some((0, 24)))]);
         // An index offset at the buffer's end: no index inside it.
         let cmds = plan
@@ -598,45 +554,28 @@ fn an_indexed_draw_past_its_index_buffer_is_bounded() {
             assert_eq!(uses(&cmds), vec![(UseTarget::IndexBuffer, Some((0, 0)))]);
         }
     }
-    assert_eq!(seen, [true, true], "both forms are checked");
+    assert!(checked > 0);
 }
 
-/// An indexed indirect draw's counts are in GPU memory, so where the device lacks
-/// `robustBufferAccess2` (`VUID-VkDrawIndexedIndirectCommand-robustBufferAccess2-08798`), or its
-/// index offset is at or past the buffer's length, it asks for its arguments on the CPU, whose
-/// direct draw the binder bounds. Where the device has the feature it stays GPU-side unless
-/// something else asks for the read, as for the same draw without indices. Checked on every
-/// committed profile that compiles the pipeline, and on lavapipe without the feature.
+/// An indexed indirect draw's counts are in GPU memory and nothing bounds its index fetch
+/// (`VUID-VkDrawIndexedIndirectCommand-robustBufferAccess2-08798`), so it asks for its arguments
+/// on the CPU, whose direct draw the binder bounds, at any index offset, where the same draw
+/// without indices stays GPU-side unless something else asks for the read. Checked on every
+/// committed profile that compiles the pipeline.
 #[test]
 fn an_indexed_indirect_draw_reads_its_arguments_where_nothing_bounds_its_indices() {
     let Some(bc) = fixture("stage_io") else {
         return;
     };
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles/lavapipe.json");
-    let text = std::fs::read_to_string(path).expect("profile");
-    let edited = text.replace(
-        "\"robustBufferAccess2\": true",
-        "\"robustBufferAccess2\": false",
-    );
-    assert_ne!(edited, text, "lavapipe states the feature");
-    let without = DeviceDescription::from_khronos_json(&edited, None).expect("description");
-    let without = Device::from_queries(without, DevicePolicy::RESIDENT_TABLES).expect("device");
-    let mut devices = devices_by_robustness();
-    devices.push((
-        "lavapipe without robustBufferAccess2".into(),
-        without,
-        false,
-    ));
     let indirect = |indexed| DrawCall::Indirect {
         indirect: IndirectRef::new(4, 32),
         indexed,
     };
     let at = |offset| Some((vk::IndexType::UINT16, IndexBufferRef::new(9, 256), offset));
-    // Whether a robust profile kept an indexed indirect draw on the GPU, and whether a profile
-    // without the feature read one on the CPU that it would otherwise have kept there.
-    let mut seen = [false; 2];
-    for (stem, dev, robust) in devices {
+    // Whether a profile read an indexed indirect draw on the CPU that it would otherwise have
+    // kept on the GPU.
+    let mut seen = false;
+    for (stem, dev) in devices() {
         let Ok(p) = render_pipeline(&dev, &bc) else {
             continue;
         };
@@ -648,13 +587,14 @@ fn an_indexed_indirect_draw_reads_its_arguments_where_nothing_bounds_its_indices
                 .indirect_needs_arguments
         };
         let otherwise = read(indirect(None));
-        assert_eq!(read(indirect(at(64))), otherwise || !robust, "{stem}");
+        assert!(read(indirect(at(64))), "{stem}");
         assert!(read(indirect(at(256))), "{stem}: an offset at the end");
-        if !otherwise {
-            seen[usize::from(robust)] = true;
-        }
+        seen |= !otherwise;
     }
-    assert_eq!(seen, [true, true], "both forms are checked");
+    assert!(
+        seen,
+        "an indexed draw is read where the same draw without indices is not"
+    );
 }
 
 /// A vertex buffer bound at an offset its attributes' alignment does not divide is pulled in the

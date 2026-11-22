@@ -9672,7 +9672,6 @@ variant	metal2vulkan::bind::HeapSource::Used	Used(u32)
 variant	metal2vulkan::bind::ImageSource::Neutral	Neutral(NeutralResource)
 variant	metal2vulkan::bind::ImageSource::Texture	Texture { slot: SlotRef, view: ImageViewDesc }
 variant	metal2vulkan::bind::IndexOverrun::Clamped	Clamped { past_end: u32 }
-variant	metal2vulkan::bind::IndexOverrun::Robust	Robust { past_end: u32 }
 variant	metal2vulkan::bind::IndirectArgs::Buffer	Buffer(IndirectRef)
 variant	metal2vulkan::bind::IndirectArgs::Replay	Replay
 variant	metal2vulkan::bind::MergePhase::Blocks	Blocks
