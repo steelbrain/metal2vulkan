@@ -140,8 +140,11 @@ impl Work {
                 if self.kernels.is_empty() {
                     self.kernels = list.len()..list.len();
                 }
-                // SAFETY: the command buffer keeps the state `kernel` is of until it retires,
-                // after the list's last use (`crate::command::retire`).
+                // SAFETY: `kernel` is the content of the state the encoder bound, which the
+                // command buffer's kept objects hold, counted (`Building::lend_pipeline`), in
+                // `pipelines`; `list` is the same objects' `kernels`, emptied before `pipelines`
+                // releases anything, and dropped first (`ByKind`). The copy is read only through
+                // `list` (`Work::ran`), so never after its state is released.
                 let compiled = unsafe { kernel.uncounted() };
                 list.push(Kernel { compiled, groups });
                 self.kernels.end = list.len();

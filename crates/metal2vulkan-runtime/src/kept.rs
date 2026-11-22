@@ -230,13 +230,15 @@ impl DerefMut for Objects {
 /// The lists of each kind a recording keeps.
 #[derive(Default)]
 pub(crate) struct ByKind {
+    /// Its pieces' kernels (`crate::piece::Kernels`), each the content of a state `pipelines`
+    /// keeps, held with no count: emptied before `pipelines` is, as it is dropped first, so no
+    /// copy outlives its state.
+    pub(crate) kernels: Kernels,
     pub(crate) buffers: Kept<Buffer>,
     pub(crate) textures: Kept<Texture>,
     pub(crate) samplers: Kept<SamplerState>,
     pub(crate) pipelines: Kept<ComputePipelineState>,
     pub(crate) render_pipelines: Kept<RenderPipelineState>,
-    /// Its pieces' kernels, of the states `pipelines` keeps (`crate::piece::Kernels`).
-    pub(crate) kernels: Kernels,
 }
 
 impl ByKind {
@@ -262,15 +264,15 @@ impl ByKind {
     /// Releases every object, keeping each list's capacity, within [`KEPT_BOUND`], for the next
     /// recording.
     pub(crate) fn clear(&mut self) {
+        match self.kernels.capacity() > KEPT_BOUND {
+            true => self.kernels = Kernels::new(),
+            false => self.kernels.clear(),
+        }
         self.buffers.clear();
         self.textures.clear();
         self.samplers.clear();
         self.pipelines.clear();
         self.render_pipelines.clear();
-        match self.kernels.capacity() > KEPT_BOUND {
-            true => self.kernels = Kernels::new(),
-            false => self.kernels.clear(),
-        }
     }
 }
 
