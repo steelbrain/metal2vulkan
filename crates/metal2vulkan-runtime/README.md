@@ -997,9 +997,11 @@ the Direct3D 11 texture's payload until it is freed.
   application's responsibility to synchronize device and non-device access to the payload as
   defined in Host Access to Device Memory Objects" (Vulkan 1.4, Host External Memory). The host
   reaches a linear image only in a host-accessible layout, which such an image cannot be made in.
-  In a guest walk on an M3 Max on Mesa's Mac driver (rt at b4058db961), whose guest pages are
-  imported by address (15 steps), these copies came to 5.71 GB. On average that is 11.7% of a
-  1080p frame's bytes a frame: under 1% in steady animation, and 24% to 152% while apps open.
+  In a guest walk on an M3 Max on Mesa's Mac driver (rt at 306d357141, job m3-max-66271), whose
+  guest pages are imported by address (20 steps, 5,969 presents in 481 s), these copies came to
+  4.67 GB, 97.2% of the walk's 4.81 GB of over-copies, every one over a no-copy buffer on a guest
+  program's own pages. On average that is 9.7% of a 1080p frame's bytes a present, and from 0.44%
+  to 45.7% a present in the steps that present more than once.
 - A texture over a buffer in a dma-buf's one import is the counted copy too on a device that
   offers no linear image for a dma-buf import without a dedicated allocation (Imported blocks).
   On the Radeon 780M (RADV) the external image query refuses the dma-buf handle with linear
