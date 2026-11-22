@@ -5,6 +5,8 @@ use super::tier_table::*;
 use super::*;
 use crate::case::out_of_bounds::{ContainmentForm, OutOfBoundsResource, OutOfBoundsTarget};
 use crate::case::AuthoredCase;
+use crate::executor_contract::out_of_bounds::tests::Label as _;
+use metal2vulkan::device::DeviceProfile;
 use std::collections::BTreeMap;
 
 const RADV: HostClass = HostClass(vk::DriverId::MESA_RADV);
@@ -173,69 +175,6 @@ fn a_v34_containment_reads_without_its_device_addresses() {
         "device-addresses": true
     }))
     .is_err());
-}
-
-/// A tessellation pipeline's census: its evaluation stage is the post-tessellation
-/// vertex function's module, as the per-function census counts it, and the synthesized vertex
-/// and control stages, which run no Metal function, are left out.
-#[test]
-fn a_tessellation_pipeline_census_is_its_functions() {
-    use metal2vulkan::device::{Device, DevicePolicy};
-    use metal2vulkan::library::Library;
-    use metal2vulkan::pipeline::{FunctionDescriptor, RenderPipelineDescriptor, StageSource};
-    use metal2vulkan::Budget;
-    use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
-    let bitcode = match llvm_assemble(&engine_dir().join("tessellation.ll")) {
-        Ok(bytes) => bytes,
-        Err(AssembleError::Missing(why)) => {
-            eprintln!("SKIPPED: {why}");
-            return;
-        }
-        Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected tessellation.ll: {why}"),
-    };
-    let path = crate::engine::profiles_dir().join("moltenvk-m3.json");
-    let text = std::fs::read_to_string(&path).unwrap();
-    let device = Device::from_queries(
-        DeviceDescription::from_khronos_json(&text, None).unwrap(),
-        DevicePolicy::default(),
-    )
-    .unwrap();
-    let library = Library::from_air(&bitcode).unwrap();
-    let mut d = RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(
-        library.function("tess_quad_buffer").unwrap(),
-    )));
-    d.rasterization_enabled = false;
-    let pipeline = device
-        .compile_render_pipeline(&d, &Budget::standard())
-        .unwrap();
-    let stages: Vec<vk::ShaderStage> = pipeline.stages.iter().map(|m| m.stage).collect();
-    assert_eq!(
-        stages,
-        [
-            vk::ShaderStage::VERTEX,
-            vk::ShaderStage::TESSELLATION_CONTROL,
-            vk::ShaderStage::TESSELLATION_EVALUATION
-        ]
-    );
-    let profile = device.profile();
-    let census = ModuleCensus::of_pipeline_modules(&pipeline.stages, profile).unwrap();
-    assert_eq!(
-        census,
-        [ModuleCensus::of_stage_module_under(&pipeline.stages[2], profile, None).unwrap()]
-    );
-    assert_eq!(census[0].stage, Stage::Vertex);
-    assert!(census[0].containment.is_some());
-    assert_eq!(
-        ModuleCensus::of_stage_module_under(&pipeline.stages[1], profile, None),
-        None
-    );
-    // Every other pipeline's modules are each counted.
-    assert_eq!(
-        ModuleCensus::of_pipeline_modules(&pipeline.stages[..1], profile).unwrap(),
-        [ModuleCensus::of_stage_module_under(&pipeline.stages[0], profile, None).unwrap()]
-    );
-    let error = ModuleCensus::of_pipeline_modules(&pipeline.stages[..2], profile).unwrap_err();
-    assert!(error.contains("TESSELLATION_CONTROL"), "{error}");
 }
 
 /// The tier table holds every committed profile as stated and, where it states a robustness

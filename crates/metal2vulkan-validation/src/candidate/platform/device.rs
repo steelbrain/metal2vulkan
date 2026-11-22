@@ -4,10 +4,8 @@ use super::enables::{self, Available, FeatureChain};
 use super::ignored_drivers::IgnoredDrivers;
 use super::loader_word::LoaderWord;
 use super::profiles::{
-    self, ActiveTool, ProfileRestriction, ProfilesLayer, ProfilesSettings, RestrictionError,
-    PROFILES_LAYER,
+    self, ProfileRestriction, ProfilesLayer, ProfilesSettings, RestrictionError, PROFILES_LAYER,
 };
-use crate::coverage::ExecutionClass;
 use crate::gpu::wait::{self, SubmissionBackend};
 use crate::gpu::DeviceType;
 use ash::{vk, Device, Entry, Instance};
@@ -20,18 +18,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-/// What a row's environment records as its context's `layers`
-/// (`device_facts::RECORDED_LAYERS`). Every context runs under `VK_LAYER_KHRONOS_validation` with
-/// core and synchronization validation, and a message sink ([`VulkanContext::take_messages`])
-/// that fails the row: every engine candidate run and every L4 acceptance run. It enables the
-/// engine's list ([`enables::engine_list`]): what the runtime enables of the device.
-pub(super) use crate::candidate::device_facts::RECORDED_LAYERS;
-
-/// The validation layer every engine run enables.
+/// The validation layer every context enables. Every context runs under it with core and
+/// synchronization validation, and a message sink ([`VulkanContext::take_messages`]) that fails
+/// the row of an L4 acceptance run. It enables the engine's list ([`enables::engine_list`]): what
+/// the runtime enables of the device.
 pub(super) const VALIDATION_LAYER: &CStr = c"VK_LAYER_KHRONOS_validation";
 
 /// Run `body` against this thread's Vulkan context for `device_type`, under the validation layer
-/// ([`RECORDED_LAYERS`]), creating the device on first use. One device of each type serves every
+/// (`device_facts::RECORDED_LAYERS`), creating the device on first use. One device of each type serves every
 /// call on the thread: device creation dominates the cost of a single case, and a corpus sweep
 /// makes thousands of calls. The layer must be installed: without it this fails, and nothing
 /// runs unvalidated.
@@ -267,85 +261,15 @@ fn device_selection_never_crosses_device_kinds() {
     assert!(select_physical_device(DeviceType::Cpu, old_cpu).is_err());
 }
 
-/// The commands that record the extended dynamic states: Vulkan 1.3's core entry points in a
-/// context at 1.3 or later, where the functionality is core without a feature (a profile of that
-/// version need not list the extension), else `VK_EXT_extended_dynamic_state`'s, where the context
-/// enabled it, with `VK_EXT_extended_dynamic_state2`'s primitive restart where it enabled that too.
-/// vk.xml aliases each command of the extensions to the core one, so the tables hold the same
-/// signatures.
-#[derive(Clone, Copy)]
-pub(super) struct ExtendedDynamicState {
-    pub(super) cull_mode: vk::PFN_vkCmdSetCullMode,
-    pub(super) front_face: vk::PFN_vkCmdSetFrontFace,
-    pub(super) primitive_topology: vk::PFN_vkCmdSetPrimitiveTopology,
-    pub(super) depth_test_enable: vk::PFN_vkCmdSetDepthTestEnable,
-    pub(super) depth_write_enable: vk::PFN_vkCmdSetDepthWriteEnable,
-    pub(super) depth_compare_op: vk::PFN_vkCmdSetDepthCompareOp,
-    pub(super) stencil_test_enable: vk::PFN_vkCmdSetStencilTestEnable,
-    pub(super) stencil_op: vk::PFN_vkCmdSetStencilOp,
-    /// `vkCmdSetPrimitiveRestartEnable`, Vulkan 1.3's core command or
-    /// `VK_EXT_extended_dynamic_state2`'s where the context enabled it, for a pipeline that makes
-    /// the topology and restart dynamic.
-    pub(super) primitive_restart_enable: Option<vk::PFN_vkCmdSetPrimitiveRestartEnable>,
-}
-
-impl ExtendedDynamicState {
-    /// Vulkan 1.3's commands, which `device` loaded when it was created.
-    fn core(device: &Device) -> ExtendedDynamicState {
-        let f = device.fp_v1_3();
-        ExtendedDynamicState {
-            cull_mode: f.cmd_set_cull_mode,
-            front_face: f.cmd_set_front_face,
-            primitive_topology: f.cmd_set_primitive_topology,
-            depth_test_enable: f.cmd_set_depth_test_enable,
-            depth_write_enable: f.cmd_set_depth_write_enable,
-            depth_compare_op: f.cmd_set_depth_compare_op,
-            stencil_test_enable: f.cmd_set_stencil_test_enable,
-            stencil_op: f.cmd_set_stencil_op,
-            primitive_restart_enable: Some(f.cmd_set_primitive_restart_enable),
-        }
-    }
-
-    /// `VK_EXT_extended_dynamic_state`'s commands, from `extension`'s table, with
-    /// `VK_EXT_extended_dynamic_state2`'s restart from `second`'s where the context enabled it.
-    fn extension(
-        extension: &ash::ext::extended_dynamic_state::Device,
-        second: Option<&ash::ext::extended_dynamic_state2::Device>,
-    ) -> ExtendedDynamicState {
-        let f = extension.fp();
-        ExtendedDynamicState {
-            cull_mode: f.cmd_set_cull_mode_ext,
-            front_face: f.cmd_set_front_face_ext,
-            primitive_topology: f.cmd_set_primitive_topology_ext,
-            depth_test_enable: f.cmd_set_depth_test_enable_ext,
-            depth_write_enable: f.cmd_set_depth_write_enable_ext,
-            depth_compare_op: f.cmd_set_depth_compare_op_ext,
-            stencil_test_enable: f.cmd_set_stencil_test_enable_ext,
-            stencil_op: f.cmd_set_stencil_op_ext,
-            primitive_restart_enable: second.map(|s| s.fp().cmd_set_primitive_restart_enable_ext),
-        }
-    }
-}
-
 pub(super) struct VulkanContext {
     /// The backend every wait on this device reports in a hang record.
     pub(super) backend: SubmissionBackend,
     _entry: Entry,
     pub(super) instance: Instance,
     pub(super) device: Device,
-    /// The commands of the extended dynamic states, where the context has them
-    /// ([`ExtendedDynamicState`]): the render executor records a pipeline's extended dynamic
-    /// states through them.
-    pub(super) extended_dynamic_state: Option<ExtendedDynamicState>,
     pub(super) physical: vk::PhysicalDevice,
     pub(super) queue_family: u32,
     pub(super) queue: vk::Queue,
-    pub(super) sampler_anisotropy: bool,
-    shader_subgroup_extended_types: bool,
-    multisample_array_image: bool,
-    pub(super) max_sampler_anisotropy: f32,
-    pub(super) storage_buffer_alignment: u64,
-    pub(super) max_storage_buffer_range: u64,
     /// What this device enabled, in the engine's vocabulary.
     pub(super) enabled: EnableSet,
     /// The profile of this device as opened: its queried properties, limits, formats, and float
@@ -363,19 +287,9 @@ pub(super) struct VulkanContext {
     queried_description: Result<metal2vulkan::device::DeviceDescription, String>,
     /// The ICD's `VkPhysicalDeviceDriverProperties`, the backend identity of every row.
     pub(super) driver: DriverIdentity,
-    /// The class of the device that executes ([`ExecutionClass::of_description`] of its queried
-    /// identity): the device every census names, also under a restriction, whose description
-    /// ([`VulkanContext::opened_description`]) is P's and may name no device.
-    pub(super) execution_class: Option<ExecutionClass>,
-    /// The tools active on the device (`vkGetPhysicalDeviceToolPropertiesEXT`), recorded with
-    /// every row.
-    pub(super) tools: Vec<ActiveTool>,
     /// The committed profile `VK_LAYER_KHRONOS_profiles` restricts the device to, checked
     /// ([`profiles::check_restricted`]).
     pub(super) restriction: Option<&'static ProfileRestriction>,
-    /// The extensions the restricted context hides ([`ProfileRestriction::hidden`]; empty when
-    /// unrestricted).
-    hidden: BTreeSet<String>,
     /// The robustness features the context could not enable
     /// (`enables::Enables::unmet_robustness`): every run on the context is refused naming them.
     pub(super) unmet_robustness: BTreeSet<VkFeature>,
@@ -423,10 +337,7 @@ pub fn echo_validation_messages() {
 /// it, its warning of a pipeline whose primitive restart is dynamic ([`expecting_diagnostics`]);
 /// and on a device whose driver runs the set layouts its support query refuses
 /// ([`MessageSink::unsupported_sets`]), the layer's report of such a layout
-/// (`candidate/unsupported_set.rs`) fails nothing. Nor, for a row that draws a pipeline whose
-/// vertex stage stores its slice clamped to the pass's pushed length into a pass of at most one
-/// layer ([`MessageSink::clamped_layer`]), does the layer's false alarm of that `Layer` write
-/// ([`CLAMPED_LAYER`]), which the row's environment counts ([`record_withheld`]).
+/// (`candidate/unsupported_set.rs`) fails nothing.
 pub(super) struct MessageSink {
     messages: Mutex<Vec<Recorded>>,
     /// The warnings MoltenVK reports as it makes every pipeline of the opened device, whatever its
@@ -438,82 +349,6 @@ pub(super) struct MessageSink {
     /// `vkGetDescriptorSetLayoutSupport` refuses ([`makes_layouts_past_support`]: a heap's set 1
     /// on MoltenVK), set once the opened description is known.
     unsupported_sets: AtomicBool,
-    /// Whether the row draws a pipeline whose vertex stage stores its slice clamped to the pass's
-    /// pushed length into a pass of at most one layer, so the layer's [`CLAMPED_LAYER`] is a false
-    /// alarm the sink withholds ([`VulkanContext::expect_clamped_layer`]).
-    clamped_layer: AtomicBool,
-    /// How many [`CLAMPED_LAYER`] messages the sink withheld for the row, which its environment
-    /// records ([`record_withheld`]).
-    withheld: AtomicUsize,
-}
-
-/// A validation-layer message that is a false alarm for a row of a structure the executor states
-/// ([`MessageSink::clamped_layer`]): withheld only where its severity is `WARNING` of the
-/// validation type and its id name, number and whole text are these.
-struct LayerFalseAlarm {
-    id_name: &'static str,
-    id: i32,
-    text: &'static str,
-}
-
-/// The validation layer's report of a draw whose vertex stage writes `Layer` into a framebuffer of
-/// one layer, whatever value it writes: its id name, number and text for `vkCmdDraw`, the draw the
-/// render executor records, as `VK_LAYER_KHRONOS_validation` 1.4.363 reports it (a minimal draw
-/// of a vertex shader that writes `Layer = 0`, job m3-max-61934). The Vulkan spec leaves the
-/// framebuffer undefined only where "the Layer value is less than 0 or greater than or equal to
-/// the number of layers in the framebuffer" (Layered Rendering). A pipeline whose vertex stage
-/// stores its `[[render_target_array_index]]` clamped to the pass's pushed length
-/// (`RuntimeFact::RenderTargetArrayLength` without `layer_dropped`), drawn in a pass of at most
-/// one layer, pushes the length 1 and so stores 0, which `candidate::tests::engine_render`'s
-/// `an_index_past_a_one_layer_pass_renders_the_pass_s_slice` draws and reads Metal's answer of.
-/// That test also asserts that the layer still reports this message, so the exception goes when
-/// the layer stops reporting it. The render executor's rows are its only reach: the runtime
-/// renders through dynamic rendering, under which the layer reports no such message.
-const CLAMPED_LAYER: LayerFalseAlarm = LayerFalseAlarm {
-    id_name: "Undefined-Value-Layer-Written",
-    id: 0x1fc5_5805,
-    text:
-        "vkCmdDraw(): Shader stage VK_SHADER_STAGE_VERTEX_BIT writes to Layer (gl_Layer) but the \
-           framebuffer was created with VkFramebufferCreateInfo::layer of 1, this write will have \
-           an undefined value set to it.",
-};
-
-impl LayerFalseAlarm {
-    /// Whether the layer's message of `severity`, `types` and `data` is this one.
-    fn is(
-        &self,
-        severity: vk::DebugUtilsMessageSeverityFlagsEXT,
-        types: vk::DebugUtilsMessageTypeFlagsEXT,
-        data: &vk::DebugUtilsMessengerCallbackDataEXT<'_>,
-    ) -> bool {
-        if severity != vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
-            || !types.contains(vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION)
-            || data.message_id_number != self.id
-            || data.p_message_id_name.is_null()
-            || data.p_message.is_null()
-        {
-            return false;
-        }
-        // SAFETY: non-null strings of the callback data are NUL-terminated (Vulkan spec).
-        let (id_name, text) = unsafe {
-            (
-                CStr::from_ptr(data.p_message_id_name),
-                CStr::from_ptr(data.p_message),
-            )
-        };
-        id_name.to_bytes() == self.id_name.as_bytes() && text.to_bytes() == self.text.as_bytes()
-    }
-}
-
-/// Record in a row's `environment` how many [`CLAMPED_LAYER`] messages the sink withheld for it,
-/// by the message's id name, where it withheld any.
-pub(super) fn record_withheld(environment: &mut serde_json::Value, withheld: usize) {
-    if let (true, Some(object)) = (withheld > 0, environment.as_object_mut()) {
-        object.insert(
-            "withheld_validation_messages".into(),
-            serde_json::json!({ CLAMPED_LAYER.id_name: withheld }),
-        );
-    }
 }
 
 /// A message MoltenVK reports through `VK_EXT_debug_utils` where Vulkan states nothing wrong, at
@@ -694,10 +529,6 @@ unsafe extern "system" fn record_validation_message(
     // SAFETY: `user` is the `&'static MessageSink` the messenger was created with, and the layer
     // passes a live callback-data struct.
     let (sink, data) = unsafe { (&*user.cast::<MessageSink>(), &*data) };
-    if sink.clamped_layer.load(Ordering::Relaxed) && CLAMPED_LAYER.is(severity, types, data) {
-        sink.withheld.fetch_add(1, Ordering::Relaxed);
-        return vk::FALSE;
-    }
     let text = |pointer: *const std::ffi::c_char| {
         if pointer.is_null() {
             String::new()
@@ -837,8 +668,6 @@ fn only_errors_and_validation_warnings_fail_a_row() {
         messages: Mutex::new(Vec::new()),
         making: OnceLock::new(),
         unsupported_sets: AtomicBool::new(false),
-        clamped_layer: AtomicBool::new(false),
-        withheld: AtomicUsize::new(0),
     };
     for n in 0..100 {
         sink.record("error", "VUID-test".into(), format!("m{n}"));
@@ -858,8 +687,6 @@ fn the_loaders_reports_of_ignored_drivers_fail_no_row() {
         messages: Mutex::new(Vec::new()),
         making: OnceLock::new(),
         unsupported_sets: AtomicBool::new(false),
-        clamped_layer: AtomicBool::new(false),
-        withheld: AtomicUsize::new(0),
     };
     let loader = "Loader Message";
     let no_create = "loader_scanned_icd_add: Could not get 'vkCreateInstance' via \
@@ -896,8 +723,6 @@ fn an_expected_diagnostic_fails_no_row_inside_its_call_alone() {
         messages: Mutex::new(Vec::new()),
         making: OnceLock::new(),
         unsupported_sets: AtomicBool::new(false),
-        clamped_layer: AtomicBool::new(false),
-        withheld: AtomicUsize::new(0),
     };
     let user = std::ptr::from_ref(&sink) as usize;
     let report = |severity: S, text: &str| {
@@ -935,60 +760,6 @@ fn an_expected_diagnostic_fails_no_row_inside_its_call_alone() {
     });
     report(S::WARNING, &warning.text);
     assert_eq!(sink.take().len(), 1, "after the call");
-}
-
-/// The callback withholds the layer's false alarm of a clamped `Layer` write only for a row that
-/// states the clamped store ([`MessageSink::clamped_layer`]), and counts each one it withholds:
-/// the same message for another row, another id number, an error of the same text, or another
-/// draw's text fails the row.
-#[test]
-fn the_clamped_layer_warning_fails_no_row_of_a_clamped_store_alone() {
-    use std::ffi::CString;
-    use vk::DebugUtilsMessageSeverityFlagsEXT as S;
-    use vk::DebugUtilsMessageTypeFlagsEXT as T;
-    let sink = MessageSink {
-        messages: Mutex::new(Vec::new()),
-        making: OnceLock::new(),
-        unsupported_sets: AtomicBool::new(false),
-        clamped_layer: AtomicBool::new(false),
-        withheld: AtomicUsize::new(0),
-    };
-    let user = std::ptr::from_ref(&sink) as usize;
-    let report = |severity: S, id: i32, text: &str| {
-        let id_name = CString::new(CLAMPED_LAYER.id_name).unwrap();
-        let text = CString::new(text).unwrap();
-        let data = vk::DebugUtilsMessengerCallbackDataEXT::default()
-            .message_id_name(&id_name)
-            .message_id_number(id)
-            .message(&text);
-        // SAFETY: the callback data and its strings live for the call, and `user` is the sink,
-        // alive for the test.
-        unsafe {
-            record_validation_message(
-                severity,
-                T::VALIDATION,
-                &data,
-                user as *mut std::ffi::c_void,
-            )
-        };
-    };
-    let (id, text) = (CLAMPED_LAYER.id, CLAMPED_LAYER.text);
-    report(S::WARNING, id, text);
-    assert_eq!(sink.take().len(), 1, "a row that states no clamped store");
-    sink.clamped_layer.store(true, Ordering::Relaxed);
-    report(S::WARNING, id, text);
-    report(S::WARNING, id, text);
-    assert!(sink.take().is_empty(), "withheld");
-    assert_eq!(sink.withheld.load(Ordering::Relaxed), 2);
-    report(S::WARNING, id + 1, text);
-    report(S::ERROR, id, text);
-    report(
-        S::WARNING,
-        id,
-        &text.replace("vkCmdDraw", "vkCmdDrawIndexed"),
-    );
-    assert_eq!(sink.take().len(), 3, "another number, severity or text");
-    assert_eq!(sink.withheld.load(Ordering::Relaxed), 2);
 }
 
 /// Refuse unless `VK_LAYER_KHRONOS_validation` is installed with the three instance extensions a
@@ -1459,53 +1230,6 @@ fn native_probe(
     described
 }
 
-/// A restriction the device cannot take: this process is restricted to a profile that states
-/// capabilities the device `device_type` selects, as it is, lacks. What a typed refusal of it
-/// records: the profile and the members, the device as the native probe describes it, and its
-/// identity as a context's environment records it.
-pub(super) struct RefusedRestriction {
-    pub(super) restriction: &'static ProfileRestriction,
-    pub(super) gaps: Vec<String>,
-    pub(super) native: DeviceDescription,
-    pub(super) identity: serde_json::Value,
-}
-
-/// The restricted context's first check ([`profiles::check_within`]), made before any context
-/// opens: `Some` when this process is restricted to a profile the device lacks capabilities of,
-/// `None` when it is unrestricted or the device takes the profile. A context makes the same check
-/// and fails without a record; an engine executor asks here first, so that the refusal is
-/// typed and recorded with the device's facts. Every other failure of the check is an error, as
-/// in the context.
-pub(super) fn refused_restriction(
-    device_type: DeviceType,
-) -> Result<Option<RefusedRestriction>, String> {
-    let Some(restriction) = profiles::current_restriction() else {
-        return Ok(None);
-    };
-    if device_type == DeviceType::Gpu {
-        crate::gpu::tripwire::refuse_if_tripped()?;
-    }
-    let entry = load_entry()?;
-    let available = unsafe { entry.enumerate_instance_extension_properties(None) }
-        .map_err(|error| format!("enumerate Vulkan instance extensions: {error}"))?;
-    let portability = available.iter().any(|extension| {
-        extension_name(&extension.extension_name) == ash::khr::portability_enumeration::NAME
-    });
-    require_profiles_layer(&entry)?;
-    let version = restriction.context_version();
-    let (native, identity) = native_probe(&entry, device_type, portability, version)?;
-    match profiles::check_within(restriction, &native, version) {
-        Ok(()) => Ok(None),
-        Err(RestrictionError::Exceeds { gaps, .. }) => Ok(Some(RefusedRestriction {
-            restriction,
-            gaps,
-            native,
-            identity,
-        })),
-        Err(error) => Err(error.to_string()),
-    }
-}
-
 /// The device extensions the device `device_type` selects presents under `restriction`, read
 /// through an instance whose profiles layer restricts it and hides nothing, then destroyed: P's
 /// extensions and the ones the layer adds for P's version.
@@ -1581,8 +1305,6 @@ impl VulkanContext {
             messages: Mutex::new(Vec::new()),
             making: OnceLock::new(),
             unsupported_sets: AtomicBool::new(false),
-            clamped_layer: AtomicBool::new(false),
-            withheld: AtomicUsize::new(0),
         }));
         let messenger_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
             .message_severity(
@@ -1656,12 +1378,6 @@ impl VulkanContext {
             .map_err(|error| format!("query the device: {error}"));
         // The device as it is, which a venue's run holds to the venue's profile.
         let queried_description = description.clone();
-        // The device that executes, from the queried identity: under a restriction the layer
-        // keeps it from the device, and `check_restricted` proves it the native device's.
-        let execution_class = description
-            .as_ref()
-            .ok()
-            .and_then(ExecutionClass::of_description);
         // A restricted context runs only where, through the layer, the device reports P: checked
         // before the device is created. It translates for P (`check_restricted`).
         if let (Some(restriction), Some(native)) = (restriction, &native) {
@@ -1725,42 +1441,10 @@ impl VulkanContext {
             reason = "the loader word was recorded from the handle just returned"
         )]
         let queue = unsafe { device.get_device_queue(queue_family, 0) };
-        let extended_dynamic_state = match enables::dynamic_state_commands(
-            enables.version,
-            enables
-                .extensions
-                .contains(ash::ext::extended_dynamic_state::NAME),
-        ) {
-            Some(enables::DynamicStateCommands::Core) => Some(ExtendedDynamicState::core(&device)),
-            Some(enables::DynamicStateCommands::Extension) => {
-                #[expect(
-                    clippy::disallowed_methods,
-                    reason = "the loader word was recorded from the handle just returned"
-                )]
-                let extension = ash::ext::extended_dynamic_state::Device::new(&instance, &device);
-                let second = if enables
-                    .extensions
-                    .contains(ash::ext::extended_dynamic_state2::NAME)
-                {
-                    #[expect(
-                        clippy::disallowed_methods,
-                        reason = "the loader word was recorded from the handle just returned"
-                    )]
-                    let second = ash::ext::extended_dynamic_state2::Device::new(&instance, &device);
-                    Some(second)
-                } else {
-                    None
-                };
-                Some(ExtendedDynamicState::extension(&extension, second.as_ref()))
-            }
-            None => None,
-        };
         let mut driver_properties = vk::PhysicalDeviceDriverProperties::default();
         let mut properties =
             vk::PhysicalDeviceProperties2::default().push_next(&mut driver_properties);
         unsafe { instance.get_physical_device_properties2(physical, &mut properties) };
-        let limits = properties.properties.limits;
-        let max_sampler_anisotropy = limits.max_sampler_anisotropy;
         let driver = DriverIdentity {
             driver_id: driver_properties.driver_id.as_raw(),
             driver_name: extension_name(&driver_properties.driver_name)
@@ -1792,35 +1476,20 @@ impl VulkanContext {
         let opened = opened_description
             .clone()
             .and_then(crate::acceptance::derived_profile);
-        let on = |value: vk::Bool32| value == vk::TRUE;
-        // The portability subset's `multisampleArrayImage`, recorded in the row environment
-        // (false where the device lists no subset).
-        let multisample_array_image = available.has(ash::khr::portability_subset::NAME)
-            && on(supported.portability_subset.multisample_array_image);
         Ok(Self {
             backend: SubmissionBackend::vulkan(device_type),
             _entry: entry,
             instance,
             device,
-            extended_dynamic_state,
             physical,
             queue_family,
             queue,
-            sampler_anisotropy: on(enables.chain.core.sampler_anisotropy),
-            shader_subgroup_extended_types: on(supported.v12.shader_subgroup_extended_types),
-            multisample_array_image,
-            max_sampler_anisotropy,
-            storage_buffer_alignment: limits.min_storage_buffer_offset_alignment,
-            max_storage_buffer_range: u64::from(limits.max_storage_buffer_range),
             enabled,
             opened,
             opened_description,
             queried_description,
             driver,
-            execution_class,
-            tools,
             restriction,
-            hidden,
             unmet_robustness: enables.unmet_robustness,
             runtime_probe,
             messenger,
@@ -1884,109 +1553,6 @@ impl VulkanContext {
     /// Everything the validation layer reported since the last call, and clear the sink.
     pub(super) fn take_messages(&self) -> Vec<String> {
         self.messages.take()
-    }
-
-    /// Withhold [`CLAMPED_LAYER`] from the sink while the row draws, where `clamped`: its
-    /// pipeline's vertex stage stores its slice clamped to the pass's pushed length, in a pass of
-    /// at most one layer. The count starts at 0.
-    pub(super) fn expect_clamped_layer(&self, clamped: bool) {
-        self.messages.withheld.store(0, Ordering::Relaxed);
-        self.messages
-            .clamped_layer
-            .store(clamped, Ordering::Relaxed);
-    }
-
-    /// How many [`CLAMPED_LAYER`] messages the sink withheld since
-    /// [`VulkanContext::expect_clamped_layer`], which stops withholding them.
-    pub(super) fn take_withheld(&self) -> usize {
-        self.messages.clamped_layer.store(false, Ordering::Relaxed);
-        self.messages.withheld.swap(0, Ordering::Relaxed)
-    }
-
-    /// What the environment records of robustness: the robustness features the context enabled,
-    /// and those it could not.
-    pub(super) fn robustness(&self) -> serde_json::Value {
-        serde_json::json!({
-            "enabled": crate::coverage::ROBUSTNESS_FEATURES
-                .iter()
-                .filter(|feature| self.enabled.features.contains(feature))
-                .map(|feature| format!("{feature:?}"))
-                .collect::<Vec<_>>(),
-            "unmet": self
-                .unmet_robustness
-                .iter()
-                .map(|feature| format!("{feature:?}"))
-                .collect::<Vec<_>>(),
-        })
-    }
-
-    /// What the environment records of the profiles layer: `null` unrestricted, else the layer's
-    /// tool as the device reports it and the committed profile it restricts to.
-    pub(super) fn profiles_layer(&self) -> serde_json::Value {
-        match self.restriction {
-            None => serde_json::Value::Null,
-            Some(restriction) => serde_json::json!({
-                "tool": profiles::profiles_tool(&self.tools),
-                "profile": restriction.stem,
-                "profile_name": restriction.profile_name,
-                "profile_sha256": restriction.sha256,
-                "hidden_extensions": self.hidden,
-            }),
-        }
-    }
-
-    pub(super) fn environment(&self) -> serde_json::Value {
-        let properties = unsafe { self.instance.get_physical_device_properties(self.physical) };
-        let device = unsafe { CStr::from_ptr(properties.device_name.as_ptr()) }
-            .to_string_lossy()
-            .into_owned();
-        serde_json::json!({
-            "device": device,
-            "device_id": properties.device_id,
-            "vendor_id": properties.vendor_id,
-            "driver_version": properties.driver_version,
-            "api_version": properties.api_version,
-            "shader_subgroup_extended_types": self.shader_subgroup_extended_types,
-            "multisample_array_image": self.multisample_array_image,
-            "sampler_anisotropy": self.sampler_anisotropy,
-            "max_sampler_anisotropy": self.max_sampler_anisotropy,
-            "storage_buffer_alignment": self.storage_buffer_alignment,
-            "max_storage_buffer_range": self.max_storage_buffer_range,
-            "architecture": std::env::consts::ARCH,
-            "os": std::env::consts::OS,
-            "tools": self.tools,
-        })
-    }
-
-    pub(super) fn memory_type(
-        &self,
-        bits: u32,
-        required: vk::MemoryPropertyFlags,
-    ) -> Result<u32, String> {
-        let properties = unsafe {
-            self.instance
-                .get_physical_device_memory_properties(self.physical)
-        };
-        (0..properties.memory_type_count)
-            .find(|index| {
-                bits & (1 << index) != 0
-                    && properties.memory_types[*index as usize]
-                        .property_flags
-                        .contains(required)
-            })
-            .ok_or_else(|| {
-                format!(
-                    "no Vulkan memory type satisfies property flags {:#x}",
-                    required.as_raw()
-                )
-            })
-    }
-}
-
-impl VulkanContext {
-    /// Wait, under the hang protocol, for `fence` of a submission `operation` just made.
-    pub(super) fn wait_for_fence(&self, fence: vk::Fence, operation: &str) -> Result<(), String> {
-        wait::vulkan::wait_for_fence(&self.device, fence, self.backend, operation)
     }
 }
 

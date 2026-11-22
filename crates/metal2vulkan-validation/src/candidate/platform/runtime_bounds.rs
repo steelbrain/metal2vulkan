@@ -9,7 +9,7 @@
 //! runtime's test `every_device_s_kernel_modules_are_the_translator_s_lowerings_of_their_variants`
 //! holds it). The run does not decide which of them the dispatch takes. A variant the translator
 //! refuses is one no dispatch runs. Each lowered variant's facts give the run's out-of-bounds
-//! facts as the executor's own context reads a module's (`engine::out_of_bounds_run`); where two
+//! facts as `engine::out_of_bounds_run` reads a module's; where two
 //! variants give different ones, which module a dispatch runs would decide the case, so it is
 //! refused before it runs (`NotSupported::Uncontained`, naming the first variant whose facts
 //! differ from the first lowered one's).
@@ -17,7 +17,7 @@
 //! A render state's modules are the translator's compile of its descriptor
 //! (`Device::compile_render_pipeline`), whose stages' inputs are the ones the runtime lowers each
 //! stage under (`Device::render_pipeline_key`, of the variant key the runtime's state takes), read
-//! as the executor's own context reads its draw's (`engine::draw_out_of_bounds_run`).
+//! as `engine::draw_out_of_bounds_run` reads a draw's.
 
 use crate::candidate::engine::graphics::RenderCase;
 use crate::candidate::engine::{

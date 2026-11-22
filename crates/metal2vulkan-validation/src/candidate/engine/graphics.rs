@@ -46,7 +46,6 @@ use crate::check::admission::{ExecutorError, NotSupported};
 use crate::check::interface::AirInterface;
 use crate::companion::Companion;
 use crate::executor_contract::buffer_slots::vertex_input_slots;
-use crate::executor_contract::multisample::AttachmentTransfer;
 use crate::executor_contract::render_target_array::render_target_array_length;
 use crate::executor_contract::tessellation as patches;
 use crate::executor_contract::DrawDepthStencil;
@@ -231,17 +230,11 @@ pub struct RenderCase {
     /// The render pass's sample count, the case's: `None` for one sample, as every case drew before
     /// the count was authorable; the pipeline's `rasterSampleCount`
     /// ([`RenderTemplate::raster_sample_count`]), and every attachment holds that many samples
-    /// of each pixel ([`RenderCase::attachment_transfer`]).
+    /// of each pixel.
     pub raster_sample_count: Option<u32>,
 }
 
 impl RenderCase {
-    /// How the executor fills and reads the pass's attachments: by copies for one sample, sample by
-    /// sample for more.
-    pub fn attachment_transfer(&self) -> AttachmentTransfer {
-        AttachmentTransfer::of(self.raster_sample_count.unwrap_or(1))
-    }
-
     /// Each stage the pipeline has, with its function.
     pub fn stages(&self) -> impl Iterator<Item = (ShaderStage, &RenderFunction)> {
         std::iter::once((ShaderStage::Vertex, &self.vertex)).chain(
@@ -697,69 +690,6 @@ pub fn index_type(index_type: crate::case::IndexType) -> metal2vulkan::vk::Index
     }
 }
 
-/// The index buffer bytes and the draw the executor's own context draws for a case's `draw` of
-/// the index buffer `bytes` ([`RenderCase::index_buffer`]), as the runtime draws it
-/// (`DrawSource::padded`): where the draw's positions run past where Metal's fetch stops reading
-/// the buffer (`IndexBufferRef::fetch_end`), a copy of its whole indices before there, zero at
-/// every position past them, drawn from its start, and how many positions the copy pads; else the
-/// bytes and the draw unchanged, padding none. Vulkan states no index for a fetch past the bound
-/// range, even under `robustBufferAccess2`, so only a draw whose positions lie inside it reads
-/// Metal's index 0 there on every device. The executor's buffer is zero from its length on
-/// (`padded`), which the copy keeps for a partial last index.
-pub fn padded_index_draw(
-    draw: DrawCall,
-    bytes: &[u8],
-) -> Result<(Vec<u8>, DrawCall, Option<u64>), String> {
-    let DrawCall::Indexed {
-        index_type,
-        index_buffer,
-        index_count,
-        index_offset,
-        instance_count,
-        base_vertex,
-        base_instance,
-    } = draw
-    else {
-        return Ok((bytes.to_vec(), draw, None));
-    };
-    let size: u64 = if index_type == metal2vulkan::vk::IndexType::UINT16 {
-        2
-    } else if index_type == metal2vulkan::vk::IndexType::UINT32 {
-        4
-    } else {
-        return Err(format!("an index type of no authored size: {index_type:?}"));
-    };
-    let inside = index_buffer
-        .fetch_end(index_offset)
-        .saturating_sub(index_offset)
-        / size;
-    let count = u64::from(index_count);
-    if count <= inside {
-        return Ok((bytes.to_vec(), draw, None));
-    }
-    let positions = usize::try_from(count * size)
-        .map_err(|_| format!("{count} index positions of {size} bytes"))?;
-    let copied = (inside * size).min(index_buffer.length.saturating_sub(index_offset));
-    let from = usize::try_from(index_offset).map_err(|_| "an index offset past usize")?;
-    let to = from + usize::try_from(copied).map_err(|_| "an index copy past usize")?;
-    let mut padded = vec![0; positions];
-    padded[..to - from].copy_from_slice(
-        bytes
-            .get(from..to)
-            .ok_or("an index buffer shorter than its length")?,
-    );
-    let draw = DrawCall::Indexed {
-        index_type,
-        index_buffer: IndexBufferRef::new(index_buffer.token, count * size),
-        index_count,
-        index_offset: 0,
-        instance_count,
-        base_vertex,
-        base_instance,
-    };
-    Ok((padded, draw, Some(count - inside)))
-}
-
 /// The patch draw of a case's tessellation `draw` of the function whose AIR-layer interface is
 /// `interface`, as the Metal oracle draws it (`executor_contract::tessellation`): the pipeline's
 /// tessellation state of the draw's partition mode and winding, its factor bytes, and `drawPatches`
@@ -831,36 +761,6 @@ pub fn vertex_format(format: AttributeFormat) -> metal::VertexFormat {
 /// The topology class of a draw's primitive (`inputPrimitiveTopology`, as the oracle sets it).
 pub fn topology_class(primitive: Primitive) -> metal::PrimitiveTopologyClass {
     primitive.topology_class()
-}
-
-/// The Vulkan input assembly of a draw's primitive, the consumer's pipeline state within the
-/// class the pipeline was compiled for: its topology and whether it restarts primitives, as the
-/// product maps Metal's primitive type (`metal::state::input_assembly`).
-pub fn input_assembly(primitive: Primitive) -> (metal2vulkan::vk::PrimitiveTopology, bool) {
-    metal2vulkan::metal::state::input_assembly(
-        crate::case::indirect_commands::metal_primitive_type(primitive),
-    )
-}
-
-/// The Vulkan cull mode of the encoder's Metal one: Vulkan's front face is the encoder's
-/// default winding (clockwise) under the executor's negative-height viewport, so each Metal face
-/// is the Vulkan face of its name.
-pub fn cull_mode_flags(mode: metal::CullMode) -> Result<metal2vulkan::vk::CullModeFlags, String> {
-    use metal2vulkan::vk::CullModeFlags as Flags;
-    match mode {
-        metal::CullMode::None => Ok(Flags::NONE),
-        metal::CullMode::Front => Ok(Flags::FRONT),
-        metal::CullMode::Back => Ok(Flags::BACK),
-    }
-}
-
-/// The Vulkan input assembly of what a draw assembles: [`input_assembly`] of its primitive, or a
-/// tessellation pipeline's patch list, whose patches never restart.
-pub fn assembly_input(assembly: &Assembly) -> (metal2vulkan::vk::PrimitiveTopology, bool) {
-    match assembly {
-        Assembly::Primitives(primitive) => input_assembly(*primitive),
-        Assembly::Patches { .. } => (metal2vulkan::vk::PrimitiveTopology::PATCH_LIST, false),
-    }
 }
 
 /// The `MTLRenderPipelineDescriptor` the Metal oracle creates, without its functions: the vertex
@@ -1120,12 +1020,6 @@ pub fn stage_table(
             .insert(index, resources::bound_sampler(sampler));
     }
     Ok(table)
-}
-
-/// The id of each argument-buffer sampler of `case`, by `(stage, owner, field offset)`: its
-/// [`argument_buffers::sampler_id`] by its position in stage order.
-pub fn sampler_ids(case: &RenderCase) -> Result<BTreeMap<(ShaderStage, u32, u32), u64>, String> {
-    argument_buffers::sampler_ids(case.argument_buffer_samplers().map(|(key, _)| key))
 }
 
 /// The consumer token of each argument-buffer texture of `case`, by `(stage, owner, field

@@ -448,29 +448,6 @@ fn promoted(name: &CStr) -> Option<ApiVersion> {
     }
 }
 
-/// Where a context takes the commands that record the extended dynamic states.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum DynamicStateCommands {
-    /// Vulkan 1.3's core entry points: the functionality is core from 1.3, without a feature.
-    Core,
-    /// `VK_EXT_extended_dynamic_state`'s, which the context enabled.
-    Extension,
-}
-
-/// Where a context at `version` takes the extended dynamic states' commands, if it has them: the
-/// core ones from Vulkan 1.3 (a context restricted to a 1.3 profile, which need not list the
-/// extension), else the extension's where the context `enabled` it.
-pub(super) fn dynamic_state_commands(
-    version: ApiVersion,
-    enabled: bool,
-) -> Option<DynamicStateCommands> {
-    if version >= ApiVersion::V1_3 {
-        Some(DynamicStateCommands::Core)
-    } else {
-        enabled.then_some(DynamicStateCommands::Extension)
-    }
-}
-
 /// The device extensions a physical device lists, as a context at `version` sees them.
 #[derive(Clone, Debug)]
 pub(super) struct Available {

@@ -80,8 +80,7 @@ pub fn embed(
 /// one as a texture of its authored type, format, extent, sample count, and contents, by its key
 /// (its `binding` is its owner's index, which only labels it), each owner grown with zeros to
 /// cover its 8-byte field; a texture buffer among them, which a run through the runtime makes over
-/// a buffer of its bytes (`platform::runtime_textures`), and the executor's own context refuses
-/// ([`used_texture`]). A key authored twice is refused.
+/// a buffer of its bytes (`platform::runtime_textures`). A key authored twice is refused.
 pub fn embed_textures(
     buffers: &mut BTreeMap<u32, Vec<u8>>,
     literal: &[LiteralArgumentBufferTexture],
@@ -270,10 +269,8 @@ pub fn used_buffer(
 /// ([`texture_tokens`]): a `Texture` of its facts ([`resources::texture_facts`]), a texture
 /// buffer's of Metal's `TextureBuffer` type, whose resource id is [`resource_id`] of its token,
 /// resident for reading and writing in `stages` as the Metal oracle's `useResource` makes it.
-/// The binder's planned heap makes no texture buffer a member (the translator's `bind::heap`), so
-/// the executor's own context refuses a case that holds one
-/// ([`own_context_refuses_members`](super::own_context_refuses_members)); a run through the
-/// runtime draws it, and the authored compile census compiles its pipeline for this bind shape.
+/// A run through the runtime draws it, and the authored compile census compiles its pipeline for
+/// this bind shape.
 pub fn used_texture(
     token: u32,
     texture: &LiteralTexture,

@@ -2,12 +2,11 @@
 //! bound or in an argument buffer, and with buffers in an argument buffer, on a device: the owned
 //! `texture_ops`, `sampling`, `msf_mip_levels`, `selected_member_texture`,
 //! `argument_sampler_sample`, `ob2_loaded_pointer` and `depth_fill_read` kernels and the public
-//! `texture_array_width` kernel, planned by the binder and executed on the executor's own context
-//! under `VK_LAYER_KHRONOS_validation`, against expectations derived from their MSL; the cases
-//! the runtime makes run through it too on Linux ([`runs`]). `G-linux`'s `m2v_cpu_icd` step runs
+//! `texture_array_width` kernel, run through the runtime under `VK_LAYER_KHRONOS_validation`,
+//! against expectations derived from their MSL ([`runs`]). `G-linux`'s `m2v_cpu_icd` step runs
 //! these on lavapipe. Every kernel is loop-free.
 
-use super::engine_compute::run;
+use super::engine_compute::run_through_runtime as run;
 use crate::candidate::engine::{resources, ComputeCase, ComputeOutput, ComputeRun};
 use crate::case::mips::level_dimensions;
 use crate::case::{
@@ -100,26 +99,15 @@ fn fixture(name: &str) -> Vec<u8> {
 /// A run of a case.
 type Run = fn(&ComputeCase, &[u8]) -> Result<ComputeRun, ExecutorError>;
 
-/// The runs a case the runtime makes takes: on the executor's own context, and on Linux through
-/// the runtime (`engine_compute::run_through_runtime`), each named.
-#[cfg(target_os = "linux")]
-fn runs() -> [(&'static str, Run); 2] {
-    [
-        ("own context", run),
-        ("runtime", super::engine_compute::run_through_runtime),
-    ]
-}
-
-/// The runs a case the runtime makes takes: on the executor's own context alone, off Linux.
-#[cfg(not(target_os = "linux"))]
+/// The runs a case takes: through the runtime (`engine_compute::run_through_runtime`), named.
 fn runs() -> [(&'static str, Run); 1] {
-    [("own context", run)]
+    [("runtime", run)]
 }
 
 /// Each element of a texture array is the texture bound at its own slot: the public
 /// `texture_array_width` kernel (`array<texture2d<float>, 2> [[texture(0)]]`) writes the width of
 /// element 1, which is 7 texels wide where element 0 is 2.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn a_texture_array_element_is_the_texture_at_its_slot() {
     let element = |width: u32| {
@@ -156,7 +144,7 @@ fn a_texture_array_element_is_the_texture_at_its_slot() {
 }
 
 /// A `read_write` texture read, written, fenced, and read again, observed as a texture region.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn a_read_write_texture_sees_its_own_fenced_write() {
     let initial = [10u32, 20, 30, 40, 1, 1, 1, 1];
@@ -190,7 +178,7 @@ fn a_read_write_texture_sees_its_own_fenced_write() {
 }
 
 /// Cube and cube-array reads by face and layer, and their size queries.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn cube_and_cube_array_faces_read_the_authored_layers() {
     let face = |layer: u32| [layer as f32, layer as f32 + 0.5, 0.0, 1.0];
@@ -253,7 +241,7 @@ fn mipmapped(
 
 /// The first channel of what `msf_mip_levels`'s kernel `entry` samples through its nearest
 /// sampler with a nearest mip filter at each level of `texture` (thread `i` at `level(i)`), on
-/// this executor's own context; the kernel writes `stride` `float4`s a thread.
+/// the runtime; the kernel writes `stride` `float4`s a thread.
 fn nearest_at_each_level(entry: &str, texture: LiteralTexture, stride: usize) -> Vec<f32> {
     let levels = texture.mip_levels;
     let length = 16 * stride * levels as usize;
@@ -282,7 +270,7 @@ fn nearest_at_each_level(entry: &str, texture: LiteralTexture, stride: usize) ->
 /// each level, nearest, and read the value that level holds (a 2D array's and a cube's in its
 /// layer). The `r8_unorm` 2D texture's 1-byte level 2 starts past padding: its 3x3 level 1 ends
 /// off the 4-byte alignment a copy's offset needs.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn each_level_of_a_mipmapped_texture_holds_its_own_texels() {
     let level_and_layer = |level: u32, layer: u32| level as f32 + 100.0 * layer as f32;
@@ -325,7 +313,7 @@ fn each_level_of_a_mipmapped_texture_holds_its_own_texels() {
 /// A depth texture read and a multisampled integer texture read of one sample, which this
 /// executor initializes per sample, and so does a run through the runtime, by a draw that writes
 /// each sample through an unsigned-integer view (`platform::runtime_multisample`).
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn depth_and_multisampled_textures_read_their_authored_texels() {
     let samples: Vec<u8> = (0..4i32)
@@ -365,11 +353,10 @@ fn depth_and_multisampled_textures_read_their_authored_texels() {
 }
 
 /// A sample count the device's image format properties do not allow is refused typed, as the
-/// device's (`not_enabled`), on each run ([`runs`]): the executor's own context before any image
-/// is created, never created as invalid usage (`VUID-VkImageCreateInfo-samples-02258`), and the
-/// run through the runtime at the texture the runtime refuses (`Limit::TextureSamples`, from the
-/// same query). The CPU ICDs the gate runs allow no 2-sample images (lavapipe allows 1, 4, and 8).
-#[cfg(all(m2v_cpu_icd, any(target_os = "linux", target_os = "macos")))]
+/// device's (`not_enabled`), on each run ([`runs`]): through the runtime, at the texture the
+/// runtime refuses (`Limit::TextureSamples`, from the image format query), never created as
+/// invalid usage (`VUID-VkImageCreateInfo-samples-02258`). The CPU ICDs the gate runs allow no 2-sample images (lavapipe allows 1, 4, and 8).
+#[cfg(all(m2v_cpu_icd, target_os = "linux"))]
 #[test]
 fn a_sample_count_the_device_lacks_is_refused_as_not_enabled() {
     let samples: Vec<u8> = (0..2i32)
@@ -417,7 +404,7 @@ fn a_sample_count_the_device_lacks_is_refused_as_not_enabled() {
 
 /// A runtime sampler bound with a sampled texture, at an explicit level past the texture's one
 /// level: nearest, clamped, normalized coordinates select texel `gid`.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn a_runtime_sampler_samples_the_bound_texture() {
     let texels: Vec<f32> = (0..4)
@@ -458,7 +445,7 @@ fn a_runtime_sampler_samples_the_bound_texture() {
 /// kernel reads texel `t >> 1` of `second` for an odd `t` and of `first` for an even one, and
 /// writes its red channel times the owner's `scale` (2) plus the chosen texture's width (4 or 8).
 /// Each texture is the one whose `gpuResourceID` its owner holds at its field.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn an_argument_buffer_texture_is_the_texture_at_its_field() {
     let halves = |reds: &[u16]| -> Vec<u8> {
@@ -519,10 +506,9 @@ fn an_argument_buffer_texture_is_the_texture_at_its_field() {
 /// A sampler of an argument buffer beside the texture it samples: the owned
 /// `argument_sampler_sample` kernel samples the member texture at `(0.25g + 0.125, 0.25g +
 /// 0.125)` through the member sampler, nearest and normalized, so thread `g` reads texel
-/// `(g, g)` of the 4x4 texture, whose red is `x + 4y`: the executor's own context and, on Linux,
-/// the runtime, which samples through the element of the sampler arrays the member's resource ID
+/// `(g, g)` of the 4x4 texture, whose red is `x + 4y`: the runtime samples through the element of the sampler arrays the member's resource ID
 /// names.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn an_argument_buffer_sampler_samples_its_member_texture() {
     let texels: Vec<f32> = (0..16)
@@ -581,7 +567,7 @@ fn an_argument_buffer_sampler_samples_its_member_texture() {
 /// stores `0xB0000000 | t` at word `idx[8 + t]` of it. Every index is inside the buffer's 16
 /// words: the loads read words 0 to 7, the stores write words 8 to 15. The loads are observed in
 /// `out`, the stores in the member buffer itself.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn an_argument_buffer_buffer_is_the_buffer_at_its_field() {
     let indices: Vec<u32> = (0..16).collect();
@@ -637,7 +623,7 @@ fn an_argument_buffer_buffer_is_the_buffer_at_its_field() {
 /// `depth_fill_read` reads every depth back as authored, row 1 below row 0. A depth outside
 /// `[0, 1]`, which a draw would clamp, is refused through the runtime as the requirement the case
 /// checker raises from the case's literals (`ToolingRequirement::DepthOutsideUnitRange`).
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn a_float_depth_texture_is_filled_by_a_draw_and_reads_back_as_authored() {
     let depths = [
@@ -680,7 +666,7 @@ fn a_float_depth_texture_is_filled_by_a_draw_and_reads_back_as_authored() {
         use crate::requirement::ToolingRequirement;
         let mut outside = depths;
         outside[5] = 2.0;
-        match super::engine_compute::run_through_runtime(&case(&outside), &bitcode) {
+        match run(&case(&outside), &bitcode) {
             Err(ExecutorError::NotSupported(NotSupported::Requirements(requirements))) => {
                 assert_eq!(
                     requirements,

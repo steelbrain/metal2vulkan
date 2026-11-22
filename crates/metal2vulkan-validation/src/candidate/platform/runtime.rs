@@ -2,7 +2,7 @@
 //!
 //! Every kernel case the engine maps runs here (`engine::run_on_context`), as a consumer runs it,
 //! on the runtime's public API alone: its instance, the loader's first physical device of the
-//! requested kind (as the executor's own context selects one), a device with the default
+//! requested kind, a device with the default
 //! options, a library and a function from the row's AIR with the case's constants and linked
 //! functions, one compute pipeline state, one Shared buffer per bound buffer and per
 //! argument-buffer buffer, each bound and argument-buffer texture and sampler as the Metal oracle
@@ -17,7 +17,7 @@
 //! own variables enable before the instance is made: core and synchronization validation, every
 //! message reported, each error and warning written to the process's log, removed once read. A
 //! device that lists no active validation tool fails the run; so does any message in the log once
-//! the device is gone, as a message fails a row of the executor's own context. A process
+//! the device is gone. A process
 //! restricted to a committed profile (`--profiles-layer P`) also stacks `VK_LAYER_KHRONOS_profiles`
 //! below it, through the loader's variable and the layer's own, and runs only on a device that
 //! reports exactly P (`runtime_restriction`).
@@ -137,7 +137,7 @@ pub(super) fn under_validation(on: impl FnOnce() -> Result<RunAttempt, String>) 
 /// ran, if any: one log per process, at one path, so the layer writes the run's messages there
 /// whether it reads its variables at each instance or once, a log of an earlier run gone first.
 /// The layer's variables are put back as they were once `on` returns, so an instance the process
-/// makes after it (`corpus-pipeline`'s own context for its next render row) reads none of them.
+/// makes after it (`corpus-pipeline`'s Vulkan context for its next render row) reads none of them.
 pub(super) fn validated<T>(on: impl FnOnce() -> T) -> (T, Option<String>) {
     let log = validation_log();
     let _ = std::fs::remove_file(&log);
@@ -305,8 +305,7 @@ pub(super) struct Identity {
     restricted_to: Option<String>,
 }
 
-/// The loader's first physical device of `device_type`'s kind, as the executor's own context
-/// selects one: a CPU implementation for a CPU run, a discrete, integrated or virtual GPU for a
+/// The loader's first physical device of `device_type`'s kind: a CPU implementation for a CPU run, a discrete, integrated or virtual GPU for a
 /// GPU run, never one for the other; its identity records the profile `restricted_to`.
 pub(super) fn select(
     instance: &rt::Instance,
@@ -363,7 +362,7 @@ pub(super) fn select(
 }
 
 /// The environment of a row of `executor` on the device `identity` names, with the tools active
-/// on it: its identity as the executor's own context records it, the executor, the validation it
+/// on it: its identity, the executor, the validation it
 /// ran under, and the profiles layer's record (`runtime_restriction::Layered::record`).
 pub(super) fn environment(
     identity: &Identity,
@@ -392,9 +391,8 @@ pub(super) fn environment(
 
 /// The runtime's `error` as the executor's: the translator's refusal as the product's, a pixel
 /// format the runtime makes no image of on this device and a sample count it makes no texture of
-/// (`Limit::TextureSamples`, from the image format query) as the device's (`NotEnabled`, as the
-/// executor's own context records a format or a sample count its query lacks), every other error
-/// a failure ([`execute_runtime`]).
+/// (`Limit::TextureSamples`, from the image format query) as the device's (`NotEnabled`), every
+/// other error a failure ([`execute_runtime`]).
 pub(super) fn runtime_error(what: &str, error: rt::Error) -> ExecutorError {
     match error {
         rt::Error::Translation { error, .. } => product_refusal(&error),
@@ -1002,8 +1000,8 @@ mod tests {
     use super::{rt, runtime_error};
     use crate::check::admission::{ExecutorError, NotSupported};
 
-    /// A pixel format the runtime makes no image of on the device is the device's refusal, as the
-    /// executor's own context records a format its query lacks; another gap of the runtime fails
+    /// A pixel format the runtime makes no image of on the device is the device's refusal
+    /// (`NotEnabled`); another gap of the runtime fails
     /// the row, as the case's structure classifies it as one the runtime runs.
     #[test]
     fn a_format_the_runtime_makes_no_image_of_is_the_devices_refusal() {

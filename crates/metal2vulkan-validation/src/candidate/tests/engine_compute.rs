@@ -1,14 +1,12 @@
-//! The engine compute candidate on a device: the binder's plan executed through Vulkan under
-//! `VK_LAYER_KHRONOS_validation`, with the status read before the output. `G-linux`'s `m2v_cpu_icd`
-//! step runs these on lavapipe. The modules carry no execution bound: the looping kernels run as
-//! compiled on both lanes, GPU and CPU ICD alike.
+//! The engine compute candidate on a device: a kernel case run through the runtime under
+//! `VK_LAYER_KHRONOS_validation`. `G-linux`'s `m2v_cpu_icd` step runs these on lavapipe. The
+//! modules carry no execution bound: the looping kernels run as compiled on both lanes, GPU and CPU
+//! ICD alike.
 
 use super::*;
 use crate::acceptance::LinkedLibrary;
 use crate::candidate::engine::tests::{assemble, buffer_table_kernel, counting_kernel};
-use crate::candidate::engine::{
-    compile_case, ComputeCase, ComputeOutput, ComputeRun, LinkedModule,
-};
+use crate::candidate::engine::{ComputeCase, ComputeOutput, ComputeRun, LinkedModule};
 use crate::check::admission::ExecutorError;
 use metal2vulkan::bind::Dispatch;
 use metal2vulkan::library::FunctionConstantValues;
@@ -38,6 +36,7 @@ pub(crate) fn case(entry: &str, buffer: Vec<u8>, dispatch: Dispatch) -> ComputeC
     }
 }
 
+#[cfg(target_os = "linux")]
 fn one_thread() -> Dispatch {
     Dispatch::Threads {
         threads: [1, 1, 1],
@@ -45,110 +44,12 @@ fn one_thread() -> Dispatch {
     }
 }
 
-pub(crate) fn run(case: &ComputeCase, bitcode: &[u8]) -> Result<ComputeRun, ExecutorError> {
-    run_linked(case, bitcode, &[])
-}
-
-/// [`run`] of a kernel that links the functions of `linked`, compiled in the device tests' compile
-/// worker ([`compile_worker`]) by the request the tools send it, with its visible-function tables
-/// encoded from the handles the compile gave.
-fn run_linked(
-    case: &ComputeCase,
-    bitcode: &[u8],
-    linked: &[LinkedModule],
-) -> Result<ComputeRun, ExecutorError> {
-    platform::execute_engine(
-        crate::gpu::TEST_DEVICE,
-        "engine-test",
-        case,
-        |device, shape| {
-            compile_case(
-                compile_worker(),
-                device,
-                &crate::acceptance::retained(bitcode),
-                linked,
-                case,
-                shape,
-            )
-        },
-    )
-    .result
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-fn a_store_runs_through_the_binder_under_the_validation_layer() {
-    let bitcode = llvm_assemble(&engine_dir().join("store_const.ll")).unwrap();
-    let run = run(&case("store_const", vec![0xab; 8], one_thread()), &bitcode).unwrap();
-    let mut expected = vec![0xab; 8];
-    expected[..4].copy_from_slice(&42u32.to_le_bytes());
-    assert_eq!(run.output, expected);
-    assert_eq!(
-        run.status,
-        Some(metal2vulkan::bind::StatusReport::default())
-    );
-    assert_eq!(run.environment["executor"], "engine-compute");
-    assert_eq!(run.translator_fingerprint.len(), 64);
-}
-
-/// A kernel that calls visible functions it does not define runs with the functions its case
-/// links: `linked_scale` and `linked_blend` of the public functions library and `linked_offset` of
-/// the kernel's own, linked statically by the compile, compute the values the MSL states (`3 *
-/// tid + (tid & 7)` and `tid * 0.5 + 1`).
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-#[test]
-fn a_kernel_runs_with_its_linked_visible_functions() {
-    let caller = llvm_assemble(&engine_dir().join("linked_visible_caller.ll")).unwrap();
-    let functions = llvm_assemble(&engine_dir().join("linked_visible_functions.ll")).unwrap();
-    let names = |names: &[&str]| LinkedLibrary {
-        functions: names.iter().map(|name| (*name).to_owned()).collect(),
-    };
-    let linked = [
-        LinkedModule {
-            module_sha256: "functions".into(),
-            bitcode: functions,
-            library: names(&["linked_blend", "linked_scale"]),
-        },
-        LinkedModule {
-            module_sha256: "caller".into(),
-            bitcode: caller.clone(),
-            library: names(&["linked_offset"]),
-        },
-    ];
-    const THREADS: u32 = 16;
-    let bytes = vec![0; 4 * THREADS as usize];
-    let mut kernel = case(
-        "linked_visible_caller",
-        bytes.clone(),
-        Dispatch::Threads {
-            threads: [THREADS, 1, 1],
-            threads_per_group: [THREADS, 1, 1],
-        },
-    );
-    kernel.buffers.insert(1, bytes.clone());
-    let words = run_linked(&kernel, &caller, &linked).unwrap().output;
-    let expected = (0..THREADS)
-        .flat_map(|tid| (3 * tid + (tid & 7)).to_le_bytes())
-        .collect::<Vec<_>>();
-    assert_eq!(words, expected);
-    kernel.output = ComputeOutput::Buffer {
-        binding: 1,
-        offset: 0,
-        length: bytes.len() as u64,
-    };
-    let floats = run_linked(&kernel, &caller, &linked).unwrap().output;
-    let expected = (0..THREADS)
-        .flat_map(|tid| (tid as f32 * 0.5 + 1.0).to_le_bytes())
-        .collect::<Vec<_>>();
-    assert_eq!(floats, expected);
-}
-
 /// A kernel runs with the public linked modules, each found by its `.ll` text's hash and linked as
 /// the executor links a case's (`linked_modules`): its text assembled. `linked_mps_callbacks` reads
 /// element `tid` of its second and third buffers through `prefixSecondary_f` and `prefixTertiary_f`
 /// and stores `(a, b, c, a + b + c + popcount(tid))` through `postfixPrimary_4xf` at element `4
 /// tid` of its last buffer, which the callback loads from the kernel's table of buffer addresses.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn a_kernel_runs_with_the_public_linked_modules() {
     use crate::candidate::engine::linked_modules;
@@ -204,7 +105,7 @@ fn a_kernel_runs_with_the_public_linked_modules() {
         offset: 0,
         length: 16 * u64::from(THREADS),
     };
-    let words = run_linked(&kernel, &caller, &linked).unwrap().output;
+    let words = run_on_runtime(&kernel, &caller, &linked).unwrap().output;
     let expected = (0..THREADS)
         .flat_map(|tid| {
             let (a, b, c) = (tid as f32, 100.0 + tid as f32, 1000.0 + 2.0 * tid as f32);
@@ -216,17 +117,16 @@ fn a_kernel_runs_with_the_public_linked_modules() {
 }
 
 /// A loop runs to completion as compiled, with no execution bound, on both lanes.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn a_loop_runs_to_completion_as_compiled() {
     let bitcode = assemble(&counting_kernel()).expect("llvm-as on the device lane");
-    let ok = run(&case("count", vec![0; 4], one_thread()), &bitcode).unwrap();
+    let ok = run_through_runtime(&case("count", vec![0; 4], one_thread()), &bitcode).unwrap();
     assert_eq!(ok.output, 4u32.to_le_bytes());
 }
 
-/// `dispatchThreads` with a partial edge group: the binder splits it into regions, and every
-/// thread sees Metal's grid builtins.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// `dispatchThreads` with a partial edge group: every thread sees Metal's grid builtins.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_partial_threadgroup_edge_computes_metals_grid_builtins() {
     let text = format!(
@@ -257,7 +157,7 @@ entry:\n\
         threads: [threads, 1, 1],
         threads_per_group: [2, 1, 1],
     };
-    let run = run(
+    let run = run_through_runtime(
         &case("grid_ids", vec![0xff; 4 * threads as usize], dispatch),
         &bitcode,
     )
@@ -270,7 +170,7 @@ entry:\n\
 
 /// A device buffer array: its elements are the buffers at consecutive slots, and the function reads
 /// them as its buffer table: `out[1] = tab[0][0] + tab[1][1]`.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn a_device_buffer_array_binds_its_elements_at_consecutive_slots() {
     let bitcode = assemble(&buffer_table_kernel()).expect("llvm-as on the device lane");
@@ -278,7 +178,7 @@ fn a_device_buffer_array_binds_its_elements_at_consecutive_slots() {
     let word = |value: u32| value.to_le_bytes().to_vec();
     table.buffers.insert(1, [word(40), word(1)].concat());
     table.buffers.insert(2, [word(3), word(2)].concat());
-    let run = run(&table, &bitcode).unwrap();
+    let run = run_through_runtime(&table, &bitcode).unwrap();
     assert_eq!(run.output, [vec![0xff; 4], word(42)].concat());
 }
 
@@ -286,7 +186,7 @@ fn a_device_buffer_array_binds_its_elements_at_consecutive_slots() {
 /// written into the owner at its field and reached through the resident set. The public fixture
 /// walks `root -> next` with `steps = 2` (7 + 11 + 11 = 29 in every lane). Its loop runs as
 /// compiled on both lanes.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn an_argument_buffer_pointer_reaches_its_pointee() {
     let fixture = metal2vulkan_devtools::fixtures_dir().join("kernel_device_pointer_chain_phi.ll");
@@ -313,16 +213,15 @@ fn an_argument_buffer_pointer_reaches_its_pointee() {
         offset: 0,
         length: 16,
     };
-    let run = run(&walk, &bitcode).unwrap();
+    let run = run_through_runtime(&walk, &bitcode).unwrap();
     assert_eq!(run.output, [29u32.to_le_bytes(); 4].concat());
 }
 
-/// The public loaded-pointer case's buffer (`ob2_loaded_pointer`): an argument buffer holds the
-/// address of a 16-byte buffer, which the kernel stores past (words 4 to 63) through the pointer it
-/// loads. The candidate allocates that buffer inside a guard of the case's reach; the dynamic
-/// root's in-shader check skips every store, so the buffer keeps its words and the census counts no
-/// changed guard or padding byte.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// The public loaded-pointer case's buffer (`ob2_loaded_pointer`) through the runtime: an argument
+/// buffer holds the address of a 16-byte buffer, which the kernel stores past (words 4 to 63)
+/// through the pointer it loads. The buffer is a guarded target; the in-shader check skips every
+/// store, so the buffer keeps its words and the census counts no changed guard or padding byte.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_loaded_pointers_buffer_written_past_its_end_is_guarded() {
     use crate::case::out_of_bounds::{ContainmentForm, OutOfBoundsResource, OutOfBoundsTarget};
@@ -358,7 +257,7 @@ fn a_loaded_pointers_buffer_written_past_its_end_is_guarded() {
         offset: 0,
         length: 16,
     };
-    let run = run(&stores, &bitcode).unwrap();
+    let run = run_through_runtime(&stores, &bitcode).unwrap();
     assert_eq!(run.output, words(&own));
     let targets = run
         .census
@@ -438,7 +337,7 @@ fn a_device_buffer_accessed_past_its_end_is_contained_through_the_runtime() {
     }
 }
 
-/// [`run`] through the runtime ([`run_on_runtime`] with no linked module).
+/// `case`'s kernel `bitcode` run through the runtime ([`run_on_runtime`] with no linked module).
 #[cfg(target_os = "linux")]
 pub(crate) fn run_through_runtime(
     case: &ComputeCase,
@@ -447,8 +346,8 @@ pub(crate) fn run_through_runtime(
     run_on_runtime(case, bitcode, &[])
 }
 
-/// [`run_linked`] through the runtime (`platform::execute_runtime`): the kernel and the modules it
-/// links as the engine hands them over, its buffers as the case holds them, each texture made
+/// `case`'s kernel `bitcode`, linking the functions of `linked`, run through the runtime
+/// (`platform::execute_runtime`): the kernel and the modules it links as the engine hands them over, its buffers as the case holds them, each texture made
 /// with its role's usage, and no float reduction.
 #[cfg(target_os = "linux")]
 fn run_on_runtime(
@@ -516,8 +415,7 @@ fn a_store_runs_through_the_runtime_under_the_validation_layer() {
 }
 
 /// A kernel that calls visible functions it does not define runs through the runtime with the
-/// functions its case links, as [`a_kernel_runs_with_its_linked_visible_functions`] runs it on the
-/// executor's own context.
+/// functions its case links.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_kernel_runs_through_the_runtime_with_its_linked_visible_functions() {

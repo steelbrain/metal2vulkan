@@ -108,25 +108,20 @@ fn a_refusal_is_classed_by_its_type() {
     );
 }
 
-/// A product refusal records whether the binder refused what the case binds (`at_bind`), from the
-/// executor's own path: the binder's typed `Unsupported` is at bind, a compile's is not. A record
-/// of a build before the field reads `None`, its phase unknown, and a record of this build keeps
-/// `false` explicitly, so the two are never confused.
+/// A product refusal records whether the binder refused what the case binds (`at_bind`): a
+/// compile's refusal is not at bind. A record of a build before the field reads `None`, its phase
+/// unknown, and a record of this build keeps `false` explicitly, so the two are never confused.
 #[test]
 fn a_product_refusal_records_whether_the_binder_refused() {
-    use crate::candidate::engine::{bind_refusal, product_refusal};
+    use crate::candidate::engine::product_refusal;
     use crate::check::admission::ExecutorError;
-    use metal2vulkan::error::{BindError, Error, Feature, Unsupported};
+    use metal2vulkan::error::{Error, Feature, Unsupported};
     let unsupported = Unsupported::not_implemented(Feature::Imageblocks);
-    let refused = |error: ExecutorError| match error {
+    let compiled = match product_refusal(&Error::Unsupported(unsupported)) {
         ExecutorError::NotSupported(not_supported) => Refusal::of(&not_supported),
         other => panic!("{other}"),
     };
-    let bound = refused(bind_refusal(&BindError::Unsupported(unsupported.clone())));
-    let compiled = refused(product_refusal(&Error::Unsupported(unsupported)));
-    assert_eq!(bound.class, RefusalClass::Product);
-    assert_eq!(bound.outcome, compiled.outcome);
-    assert_eq!(bound.product.as_ref().unwrap().at_bind, Some(true));
+    assert_eq!(compiled.class, RefusalClass::Product);
     assert_eq!(compiled.product.as_ref().unwrap().at_bind, Some(false));
     let written = serde_json::to_value(&compiled).unwrap();
     assert_eq!(written["product"]["at_bind"], false);

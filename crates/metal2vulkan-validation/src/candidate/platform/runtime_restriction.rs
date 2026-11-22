@@ -3,10 +3,10 @@
 //!
 //! The runtime makes its own instance, so the layer is stacked below the validation layer through
 //! the loader's variable (`VK_INSTANCE_LAYERS`), and configured through the variables its settings
-//! library reads ([`ProfilesSettings::environment`]): the settings the executor's own context
-//! passes as `VkLayerSettingEXT`. The variables are set while an instance under them lives and
+//! library reads ([`ProfilesSettings::environment`]), one per `VkLayerSettingEXT` the layer
+//! takes. The variables are set while an instance under them lives and
 //! removed after it, so no other instance of the process reads them. Before the run's device is
-//! made, as that context checks:
+//! made:
 //!
 //! - the layer is installed, and the device as it is, read through an instance whose layer has its
 //!   emulation off, has every capability P states ([`profiles::check_within`]); where it lacks one
@@ -89,7 +89,7 @@ impl Layered {
     }
 
     /// What a row's environment records of the profiles layer: `null` unrestricted, else the
-    /// layer's tool among `tools`, P and the extensions the run hid, as the own context records it.
+    /// layer's tool among `tools`, P and the extensions the run hid.
     pub(super) fn record(&self, tools: &[ActiveTool]) -> serde_json::Value {
         let Some(Restricted {
             restriction,

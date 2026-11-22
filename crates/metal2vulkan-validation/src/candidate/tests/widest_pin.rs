@@ -1,16 +1,13 @@
-//! The widest-pin rule's two forms on the GPU the cfg selects: the owned shuffle kernels of
-//! `engine/wps_shuffles` compiled from the opened device's queried description, and again from it
-//! with the rule's trigger cleared (its smallest subgroup size raised to its largest, so the rule's
-//! `min < 32` fails and the kernel pins its subgroups instead). Each form runs through the engine
-//! compute candidate under the validation layer, and each integer kernel's output is the CPU's
-//! answer exactly in both. Where the queried description does not fire the rule there is no second
-//! form to run, and the test says so and skips. It times nothing.
+//! The widest-pin rule's integer kernels on the GPU the cfg selects: the owned shuffle kernels of
+//! `engine/wps_shuffles`, each run through the runtime under the validation layer, give the CPU's
+//! answer exactly. Whether the rule fires for a kernel on this device is read from the module the
+//! translator compiles for the opened device's queried description (its strategy census), and
+//! printed. It times nothing.
 
 use super::engine_compute::case;
 use super::*;
-use crate::candidate::engine::{compile_case, ComputeOutput, ComputeRun};
+use crate::candidate::engine::{ComputeOutput, ComputeRun};
 use crate::check::admission::ExecutorError;
-use crate::worker::compile::WorkerDevice;
 use metal2vulkan::bind::Dispatch;
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 
@@ -58,14 +55,8 @@ fn expected(k: u32, s: u32, input: &[u32]) -> Vec<u32> {
     a.concat()
 }
 
-/// Run `entry` over `input` with its pipeline compiled for `target`, or, given `None`, for the
-/// opened device.
-fn run(
-    entry: &str,
-    bitcode: &[u8],
-    input: &[u32],
-    target: Option<&WorkerDevice>,
-) -> Result<ComputeRun, ExecutorError> {
+/// Run `entry` over `input` through the runtime.
+fn run(entry: &str, bitcode: &[u8], input: &[u32]) -> Result<ComputeRun, ExecutorError> {
     let bytes: Vec<u8> = input.iter().flat_map(|w| w.to_le_bytes()).collect();
     let mut kernel = case(
         entry,
@@ -81,22 +72,7 @@ fn run(
         offset: 0,
         length: bytes.len() as u64,
     };
-    platform::execute_engine(
-        crate::gpu::TEST_DEVICE,
-        "engine-test",
-        &kernel,
-        |opened, shape| {
-            compile_case(
-                compile_worker(),
-                target.unwrap_or(opened),
-                &crate::acceptance::retained(bitcode),
-                &[],
-                &kernel,
-                shape,
-            )
-        },
-    )
-    .result
+    super::engine_compute::run_through_runtime(&kernel, bitcode)
 }
 
 fn words(bytes: &[u8]) -> Vec<u32> {
@@ -108,51 +84,39 @@ fn words(bytes: &[u8]) -> Vec<u32> {
         .collect()
 }
 
-/// Whether `run`'s kernel ran on the rule's emulated form, and the subgroup size it pinned.
-fn form(run: &ComputeRun) -> (bool, Option<u32>) {
-    let module = &run.census.modules[0];
-    (
-        module.strategies.contains(WIDEST_PIN),
-        module.subgroup.and_then(|shape| shape.required_size),
-    )
+/// Whether the translator lowers `entry` of `bitcode` in the rule's emulated form for the opened
+/// device's queried description.
+fn fires(entry: &str, bitcode: &[u8]) -> bool {
+    use metal2vulkan::library::Library;
+    use metal2vulkan::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, StageSource};
+    let opened = platform::opened_worker_device(crate::gpu::TEST_DEVICE).unwrap();
+    let function = Library::from_air(bitcode)
+        .and_then(|library| library.function(entry))
+        .unwrap();
+    let descriptor =
+        ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(function)));
+    let compiled = opened
+        .device()
+        .compile_compute_pipeline(&descriptor, &metal2vulkan::Budget::standard())
+        .unwrap();
+    compiled.stage.strategies.entries.contains_key(WIDEST_PIN)
 }
 
 #[test]
-fn the_widest_pin_rule_s_two_forms_give_the_integer_kernels_their_exact_answers() {
-    let test = "the_widest_pin_rule_s_two_forms_give_the_integer_kernels_their_exact_answers";
-    let opened = platform::opened_worker_device(crate::gpu::TEST_DEVICE).unwrap();
-    let mut description = opened.description().clone();
-    let (min, max) = (description.subgroup.min_size, description.subgroup.max_size);
-    description.subgroup.min_size = max;
-    let cleared = WorkerDevice::new(description, *opened.policy()).unwrap();
+fn the_widest_pin_rule_s_integer_kernels_give_their_exact_answers_through_the_runtime() {
     let bitcode = llvm_assemble(&engine_dir().join("wps_shuffles.ll")).unwrap();
     for (k, s) in KERNELS {
         let entry = format!("wps_uint_k{k}_s{s}");
         let input = input(THREADS * k);
         let answer = expected(k, s, &input);
-        let picked = run(&entry, &bitcode, &input, None).unwrap();
-        if !form(&picked).0 {
-            eprintln!(
-                "SKIP {test}: the widest-pin rule does not fire for {entry} on this device \
-                 (subgroup sizes {min} to {max}; it fires below 32 to 32 with subgroup size \
-                 control), so it has no second form here"
-            );
-            return;
-        }
-        assert_eq!(form(&picked), (true, None), "{entry}: the rule's form");
-        assert!(
-            words(&picked.output) == answer,
-            "{entry}: the rule's emulated form's output"
+        eprintln!(
+            "{entry}: the widest-pin rule fires on this device: {}",
+            fires(&entry, &bitcode)
         );
-        let other = run(&entry, &bitcode, &input, Some(&cleared)).unwrap();
-        assert_eq!(
-            form(&other),
-            (false, Some(32)),
-            "{entry}: the trigger cleared"
-        );
+        let ran = run(&entry, &bitcode, &input).unwrap();
         assert!(
-            words(&other.output) == answer,
-            "{entry}: the pinned form's output"
+            words(&ran.output) == answer,
+            "{entry}: the runtime's output"
         );
     }
 }

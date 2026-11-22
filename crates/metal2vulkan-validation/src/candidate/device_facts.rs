@@ -1,5 +1,5 @@
 //! What an engine row records of the Vulkan device that ran it beside its identity: the tools
-//! active on it and the layers it ran under. The executor's own context reads its tools here.
+//! active on it and the layers it ran under.
 
 use ash::vk;
 use std::ffi::{c_char, CStr};

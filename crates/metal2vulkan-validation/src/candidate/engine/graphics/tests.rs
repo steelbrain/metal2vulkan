@@ -805,10 +805,6 @@ fn a_tessellation_case_maps_onto_the_oracles_patch_draw() {
     );
     assert_eq!(render.cull_mode, metal::CullMode::Back);
     assert_eq!(
-        cull_mode_flags(render.cull_mode),
-        Ok(metal2vulkan::vk::CullModeFlags::BACK)
-    );
-    assert_eq!(
         render.draw,
         DrawCall::Patches {
             control_points: 3,
@@ -848,10 +844,6 @@ fn a_tessellation_case_maps_onto_the_oracles_patch_draw() {
     assert_eq!(
         layouts[&28].step_function,
         metal::VertexStepFunction::PerPatch
-    );
-    assert_eq!(
-        assembly_input(&render.assembly),
-        (vk::PrimitiveTopology::PATCH_LIST, false)
     );
     let shape = render_shape(&render, true, BufferRanges::default()).unwrap();
     assert!(shape.tessellation_factor_buffer);
@@ -1259,7 +1251,9 @@ fn render_cases_bind_argument_buffer_buffers_and_texture_arrays() {
         state.shape()
     );
     let sampler = (ShaderStage::Fragment, key.0, sampler_field);
-    let samplers = sampler_ids(&render).unwrap();
+    let samplers =
+        argument_buffers::sampler_ids(render.argument_buffer_samplers().map(|(key, _)| key))
+            .unwrap();
     assert_eq!(
         samplers,
         BTreeMap::from([(sampler, sampler_id(0).unwrap())])
@@ -1414,14 +1408,6 @@ fn public_render_cases_plan_or_refuse_typed() {
                 )) => continue,
                 Err(other) => panic!("{}: {other:?}", case.name),
             };
-            // A texture buffer an argument buffer holds is the executor's own context's typed
-            // refusal, before any plan; the runtime draws it.
-            let members = render
-                .stages()
-                .flat_map(|(_, function)| function.resources.argument_buffer_textures.values());
-            if crate::candidate::engine::own_context_refuses_members(members) {
-                continue;
-            }
             let companion = render
                 .companion
                 .as_ref()
@@ -1512,7 +1498,6 @@ fn public_tessellation_cases_plan_their_patch_draws() {
                 case.name
             );
             assert_eq!(render.cull_mode, shared::cull_mode(draw), "{}", case.name);
-            assert!(cull_mode_flags(render.cull_mode).is_ok(), "{}", case.name);
             let companion = match render.companion.as_ref() {
                 Some(companion) => Some(companion.opaque_bitcode().unwrap()),
                 None => {
@@ -1854,35 +1839,9 @@ fn public_framebuffer_fetch_cases_plan_input_attachments_without_an_ordered_form
     }
 }
 
-/// A draw's input assembly restarts exactly the strips, as Metal does, within the topology class
-/// the oracle compiles the pipeline for.
-#[test]
-fn a_draw_restarts_exactly_its_strips_within_its_class() {
-    for primitive in [
-        Primitive::Point,
-        Primitive::Line,
-        Primitive::LineStrip,
-        Primitive::Triangle,
-        Primitive::TriangleStrip,
-    ] {
-        let (topology, restart) = input_assembly(primitive);
-        let strip = matches!(primitive, Primitive::LineStrip | Primitive::TriangleStrip);
-        assert_eq!(restart, strip, "{primitive:?}");
-        let class = match topology {
-            vk::PrimitiveTopology::POINT_LIST => metal::PrimitiveTopologyClass::Point,
-            vk::PrimitiveTopology::LINE_LIST | vk::PrimitiveTopology::LINE_STRIP => {
-                metal::PrimitiveTopologyClass::Line
-            }
-            _ => metal::PrimitiveTopologyClass::Triangle,
-        };
-        assert_eq!(class, topology_class(primitive), "{primitive:?}");
-    }
-}
-
 /// A render case of one sample draws as before: its template names no sample count (so the pipeline
 /// keeps Metal's default of one, and the template crosses the compile worker's exchange in the
-/// bytes it always did), and its attachments are uploaded and read back by copies. A multisampled
-/// case's template carries its count, and its attachments are filled and read sample by sample.
+/// bytes it always did). A multisampled case's template carries its count.
 #[test]
 fn a_render_case_of_one_sample_draws_as_it_always_did() {
     let target = |samples: u32| ColorTarget {
@@ -1893,7 +1852,6 @@ fn a_render_case_of_one_sample_draws_as_it_always_did() {
     };
     let single = two_stage_case("v", "f", vec![], BTreeMap::from([(0, target(1))]), 3);
     assert_eq!(single.raster_sample_count, None);
-    assert_eq!(single.attachment_transfer(), AttachmentTransfer::Copy);
     let template = render_template(&single);
     assert_eq!(template.raster_sample_count, None);
     let text = serde_json::to_string(&template).unwrap();
@@ -1907,10 +1865,6 @@ fn a_render_case_of_one_sample_draws_as_it_always_did() {
         color_targets: BTreeMap::from([(0, target(4))]),
         ..single
     };
-    assert_eq!(
-        multisampled.attachment_transfer(),
-        AttachmentTransfer::PerSample { samples: 4 }
-    );
     let template = render_template(&multisampled);
     assert_eq!(template.raster_sample_count, Some(4));
     let text = serde_json::to_string(&template).unwrap();

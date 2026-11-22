@@ -20,9 +20,9 @@
 //!
 //! Pipeline-creation time (over 5 s is a bug) is measured wherever validation creates an engine
 //! pipeline on a driver: `corpus-pipeline`'s L4 sweep reports it per row, and the engine
-//! candidate executors fail a run whose creation breaches it ([`creation_within_ceiling`]);
+//! candidate's compute executor fails a run whose creation breaches it ([`creation_within`]);
 //! [`PIPELINE_CREATION_CEILING`] is the ceiling, and a kernel case may declare a bound of its own
-//! for its pipeline ([`creation_within`], `AuthoredCase::creation_bound`). Each times its own
+//! for its pipeline (`AuthoredCase::creation_bound`). Each times its own
 //! `vkCreate*Pipelines` calls by a [`CreationClock`]: the call's wall time less the time its thread
 //! waited, runnable, for a CPU, so a host loaded by other processes does not move the measure by
 //! that wait (its threads' turns on the cores the call shares, which slow the call's own work, stay
@@ -45,15 +45,9 @@ pub const PIPELINE_CREATION_CEILING: Duration = Duration::from_secs(5);
 
 /// A `vkCreate*Pipelines` call of `what` that took `created` (a [`CreationClock`]'s reading, or a
 /// time the runtime reports for its own makings, `Execution::pipeline_creation`, which is their
-/// wall time): an error above [`PIPELINE_CREATION_CEILING`], which is a failing result like a
-/// translation over 20 s, never an observation.
-pub fn creation_within_ceiling(what: &str, created: Duration) -> Result<(), String> {
-    creation_within(what, created, PIPELINE_CREATION_CEILING)
-}
-
-/// [`creation_within_ceiling`] of a case's own pipeline, held to `bound`: the case's own
-/// (`AuthoredCase::creation_bound`, above the ceiling), or [`PIPELINE_CREATION_CEILING`] where it
-/// declares none.
+/// wall time), held to `bound`: a case's own (`AuthoredCase::creation_bound`, above the ceiling),
+/// or [`PIPELINE_CREATION_CEILING`] where it declares none. Past it is an error, a failing result
+/// like a translation over 20 s, never an observation.
 pub fn creation_within(what: &str, created: Duration, bound: Duration) -> Result<(), String> {
     if created > bound {
         let of = match bound == PIPELINE_CREATION_CEILING {
@@ -401,17 +395,18 @@ mod tests {
     /// ceiling.
     #[test]
     fn pipeline_creation_above_five_seconds_is_an_error() {
-        assert!(creation_within_ceiling("the pipeline", PIPELINE_CREATION_CEILING).is_ok());
+        let ceiling = PIPELINE_CREATION_CEILING;
+        assert!(creation_within("the pipeline", ceiling, ceiling).is_ok());
         let over = PIPELINE_CREATION_CEILING + Duration::from_millis(1);
-        let error = creation_within_ceiling("the graphics pipeline", over).unwrap_err();
+        let error = creation_within("the graphics pipeline", over, ceiling).unwrap_err();
         assert!(error.contains("the graphics pipeline"), "{error}");
         assert!(error.contains("5001 ms"), "{error}");
         assert!(error.contains("5 s"), "{error}");
-        // Both executors apply it with `?` right after `vkCreate*Pipelines`
-        // (`platform::compute::create_pipelines`, `platform::render::create_pipeline`): the run
-        // fails, never becoming a refusal or an observation.
+        // The compute executor applies it with `?` to the runtime's count of its pipelines'
+        // creation (`platform::runtime`): the run fails, never becoming a refusal or an
+        // observation.
         let run = || -> Result<(), crate::check::admission::ExecutorError> {
-            creation_within_ceiling("the graphics pipeline", over)?;
+            creation_within("the graphics pipeline", over, ceiling)?;
             Ok(())
         };
         match run() {

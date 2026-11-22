@@ -3,8 +3,7 @@
 //! A texture that declares `mip_levels` above 1 has that many levels on both sides: the Metal
 //! oracle makes it with that `mipmapLevelCount` and writes each level with
 //! `replaceRegion:mipmapLevel:slice:`, and the engine's candidate makes its runtime texture
-//! with the same level count and writes each level with `replace_region` at that level (on its
-//! own context, an image of that many levels, each level copied in from its bytes). Its bytes
+//! with the same level count and writes each level with `replace_region` at that level. Its bytes
 //! are every level's in order, level 0 first, each laid out as a one-level texture of that
 //! level's extent ([`level_dimensions`]): its slices in order, each slice's images and rows
 //! tightly packed. Each axis Metal halves (the width; a 2D, 2D array or cube texture's height; a

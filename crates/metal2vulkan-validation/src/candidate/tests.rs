@@ -4,19 +4,19 @@ use super::*;
 // (`metal2vulkan_devtools::fuzz`) on the engine on either device, its modules as compiled. The
 // product's own tests run the same generators on the CPU interpreter in the ordinary gate
 // (`src/tests/fuzz_interp.rs`).
-#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod access_fuzz;
-#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod gpu_fuzz;
-#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod inline_fuzz;
-#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod irreducible_fuzz;
-#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod pointer_select_fuzz;
-#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod structured_fuzz;
-#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod workgroup_fuzz;
 
 // These execute on a Vulkan device: a real GPU under `--cfg m2v_gpu` or a CPU ICD under
@@ -24,24 +24,24 @@ mod workgroup_fuzz;
 // L4 driver acceptance: creates engine pipelines, dispatches nothing.
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod acceptance_pipelines;
-// The engine compute candidate: binder-planned dispatches under the validation layer, cyclic
+// The engine compute candidate: dispatches through the runtime under the validation layer, cyclic
 // ones included, on either device.
-#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 pub(crate) mod engine_compute;
 // The same candidate with textures, texture buffers, and samplers.
-#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod engine_textures;
-// The engine render candidate: owned vertex/fragment draws, the looping fragment included, on
-// either device.
-#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+// The engine render candidate: owned vertex/fragment draws through the runtime, the looping
+// fragment included, on either device.
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 pub(crate) mod engine_render;
 // The loop kernels whose exits read values their own trips defined, and the loop a thread leaves
 // early, on either device, with the stores of an undefined value their modules ran.
-#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+#[cfg(all(any(m2v_gpu, m2v_cpu_icd), target_os = "linux"))]
 mod loop_exits;
 mod pipeline_contracts;
 // The widest-pin rule's emulated form against its pinned form on a GPU: exact integer answers.
-#[cfg(m2v_gpu)]
+#[cfg(all(m2v_gpu, target_os = "linux"))]
 mod widest_pin;
 
 /// The compile worker the device tests compile through: this test binary

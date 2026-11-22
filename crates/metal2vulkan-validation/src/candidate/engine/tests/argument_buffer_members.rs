@@ -5,12 +5,12 @@
 
 use super::{b64, device, kernel_case, map_kernel};
 use crate::candidate::engine::argument_buffers::{
-    field_words, owner_bytes, resource_id, sampler_id,
+    field_words, owner_bytes, resource_id, sampler_id, sampler_ids,
 };
 use crate::candidate::engine::resources::argument_sampler_descriptor;
 use crate::candidate::engine::{
-    bind_state, compute_shape, require_case_families, sampler_ids, texture_tokens, variants,
-    BufferAddress, ComputeOutput,
+    bind_state, compute_shape, require_case_families, texture_tokens, variants, BufferAddress,
+    ComputeOutput,
 };
 use crate::case::{
     ArgumentBufferBufferResource, ArgumentBufferSamplerResource, ArgumentBufferTextureResource,
@@ -437,7 +437,7 @@ fn an_argument_buffer_sampler_maps_by_its_field() {
     assert!(field_words(
         &BTreeMap::new(),
         &texture_tokens(&mapped).unwrap(),
-        &sampler_ids(&mapped).unwrap(),
+        &sampler_ids(mapped.argument_buffer_samplers.keys().copied()).unwrap(),
     )
     .is_err());
 }
@@ -491,7 +491,7 @@ fn an_argument_buffer_sampler_is_the_sampler_table_entry_its_owner_names() {
     )
     .unwrap();
     assert_eq!(state.shape(), shape);
-    let id = sampler_ids(&mapped).unwrap()[&(0, 8)];
+    let id = sampler_ids(mapped.argument_buffer_samplers.keys().copied()).unwrap()[&(0, 8)];
     assert_eq!(id, sampler_id(0).unwrap());
     assert_ne!(id, resource_id(texture_tokens(&mapped).unwrap()[&(0, 0)]));
     assert_eq!(state.argument_samplers.len(), 1);
@@ -532,7 +532,7 @@ fn an_argument_buffer_sampler_is_the_sampler_table_entry_its_owner_names() {
     let fields = field_words(
         &BTreeMap::new(),
         &texture_tokens(&mapped).unwrap(),
-        &sampler_ids(&mapped).unwrap(),
+        &sampler_ids(mapped.argument_buffer_samplers.keys().copied()).unwrap(),
     )
     .unwrap();
     let owner = owner_bytes(&mapped.buffers, 0, &fields).unwrap();

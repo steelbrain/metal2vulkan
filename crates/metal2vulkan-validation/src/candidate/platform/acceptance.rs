@@ -1,10 +1,10 @@
 //! Driver acceptance (L4) of a render row: create its pipeline from the binder layout its
-//! artifact carries, time `vkCreateGraphicsPipelines`, and destroy everything. Nothing is bound, recorded, or
-//! submitted, so no shader executes. The context runs under `VK_LAYER_KHRONOS_validation`; any
-//! message it reports makes the row [`Acceptance::InvalidUsage`]. The layout half
-//! ([`LayoutObjects`], [`unmet_requirements`]) is shared with the engine executors, and a
-//! render pipeline (a rasterization-disabled vertex function or a rasterizing draw) is created by
-//! the render executor's own builder ([`super::graphics_pipeline`]): its render pass from the
+//! artifact carries, time `vkCreateGraphicsPipelines`, and destroy everything. Nothing is bound,
+//! recorded, or submitted, so no shader executes. The context runs under
+//! `VK_LAYER_KHRONOS_validation`; any message it reports makes the row
+//! [`Acceptance::InvalidUsage`]. Its layouts are [`LayoutObjects`], what the device lacks is
+//! [`unmet_requirements`], and a render pipeline (a rasterization-disabled vertex function or a
+//! rasterizing draw) is created by [`super::graphics_pipeline`]: its render pass from the
 //! graphics state (color, framebuffer-fetch, and depth/stencil attachments), its vertex input
 //! (divisors, dynamic strides), and every dynamic state it declares, at each stage's default
 //! specialization, the compiled topology, and Metal's default depth-stencil state. A kernel row
@@ -19,16 +19,12 @@ use metal2vulkan::device::Requirements;
 use metal2vulkan::pipeline::{PipelineLayout, RenderPipeline, StageModule};
 
 /// The descriptor-set layouts (with their immutable samplers) and the pipeline layout of one
-/// binder `PipelineLayout`, destroyed on every exit path, and what a pool that allocates one set
-/// of each layout needs ([`LayoutObjects::pool_sizes`], [`LayoutObjects::pool_flags`]).
+/// binder `PipelineLayout`, destroyed on every exit path.
 pub(super) struct LayoutObjects<'a> {
     device: &'a ash::Device,
     samplers: Vec<vk::Sampler>,
     pub(super) set_layouts: Vec<vk::DescriptorSetLayout>,
     pub(super) pipeline_layout: vk::PipelineLayout,
-    /// The pool sizes and flags of [`pool_requirements`].
-    pub(super) pool_sizes: Vec<vk::DescriptorPoolSize>,
-    pub(super) pool_flags: vk::DescriptorPoolCreateFlags,
 }
 
 impl Drop for LayoutObjects<'_> {
@@ -92,6 +88,31 @@ pub fn create_acceptance_pipeline(
         })
     })
     .map_err(AcceptanceError::DeviceUnavailable)?
+}
+
+/// The `Device` the context `device_type` opens, as `corpus-pipeline` compiles a row for a
+/// committed profile: its queried description restricted to what it enabled
+/// (`DeviceDescription::with_enabled`), under the default policy. What a device test compiles a
+/// render row for, so its profile is the opened device's, never a committed one.
+#[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+pub fn opened_worker_device(
+    device_type: DeviceType,
+) -> Result<crate::worker::compile::WorkerDevice, crate::check::admission::ExecutorError> {
+    use crate::check::admission::ExecutorError;
+    with_validated_context(device_type, |context| {
+        Ok(context
+            .opened_description
+            .clone()
+            .map_err(ExecutorError::Failed)
+            .and_then(|description| {
+                crate::worker::compile::WorkerDevice::new(
+                    description,
+                    metal2vulkan::device::DevicePolicy::default(),
+                )
+                .map_err(|error| crate::candidate::engine::product_refusal(&error))
+            }))
+    })
+    .map_err(ExecutorError::Failed)?
 }
 
 /// What of `requirements` the context did not enable or its device does not provide, one name
@@ -248,54 +269,15 @@ impl<'a> LayoutObjects<'a> {
                 set.set
             )));
         }
-        let (pool_sizes, pool_flags) = pool_requirements(layout).map_err(LayoutError::Shape)?;
         let mut objects = LayoutObjects {
             device,
             samplers: Vec::new(),
             set_layouts: Vec::new(),
             pipeline_layout: vk::PipelineLayout::null(),
-            pool_sizes,
-            pool_flags,
         };
         create_layouts(&mut objects, layout).map_err(LayoutError::Refused)?;
         Ok(objects)
     }
-}
-
-/// What a descriptor pool that allocates one set of each of `layout`'s sets needs: every
-/// binding's descriptor count summed per descriptor type (types in ascending raw order, none
-/// empty), since a set consumes each binding's whole count whether the plan writes it or not (a
-/// heap array's capacity, an immutable heap sampler); and `UPDATE_AFTER_BIND` when some set layout
-/// is `UPDATE_AFTER_BIND_POOL`, which only such a pool allocates
-/// (VUID-VkDescriptorSetAllocateInfo-pSetLayouts-03044). A count that overflows is an error.
-pub(super) fn pool_requirements(
-    layout: &PipelineLayout,
-) -> Result<(Vec<vk::DescriptorPoolSize>, vk::DescriptorPoolCreateFlags), String> {
-    let mut counts: std::collections::BTreeMap<i32, u32> = std::collections::BTreeMap::new();
-    let mut flags = vk::DescriptorPoolCreateFlags::empty();
-    for set in &layout.sets {
-        let set_flags: vk::DescriptorSetLayoutCreateFlags = set.flags.into();
-        if set_flags.contains(vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL) {
-            flags |= vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND;
-        }
-        for binding in &set.bindings {
-            let ty: vk::DescriptorType = binding.ty.into();
-            let count = counts.entry(ty.as_raw()).or_default();
-            *count = count
-                .checked_add(binding.count)
-                .ok_or("the layout's descriptor count overflows")?;
-        }
-    }
-    let sizes = counts
-        .into_iter()
-        .filter(|&(_, count)| count > 0)
-        .map(|(ty, count)| {
-            vk::DescriptorPoolSize::default()
-                .ty(vk::DescriptorType::from_raw(ty))
-                .descriptor_count(count)
-        })
-        .collect();
-    Ok((sizes, flags))
 }
 
 /// Fill `objects` with the layouts of `layout`, whose sets are at their own indices. An error is
@@ -370,117 +352,4 @@ fn create_layouts(objects: &mut LayoutObjects<'_>, layout: &PipelineLayout) -> R
     objects.pipeline_layout = unsafe { objects.device.create_pipeline_layout(&info, None) }
         .map_err(|error| format!("create pipeline layout: {error}"))?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::pool_requirements;
-    use crate::candidate::engine::tests::{assemble, counting_kernel};
-    use ash::vk;
-    use metal2vulkan::device::{Device, DeviceDescription, DevicePolicy};
-    use metal2vulkan::library::Library;
-    use metal2vulkan::pipeline::{
-        BindingSource, ComputePipeline, ComputePipelineDescriptor, FunctionDescriptor, HandleClass,
-        ImageAccess, SampledType, StageSource,
-    };
-    use metal2vulkan::Budget;
-    use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
-
-    fn compile(device: &Device, bitcode: &[u8], entry: &str) -> ComputePipeline {
-        let function = Library::from_air(bitcode)
-            .and_then(|library| library.function(entry))
-            .unwrap();
-        let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
-            FunctionDescriptor::new(function),
-        ));
-        device
-            .compile_compute_pipeline(&descriptor, &Budget::standard())
-            .unwrap()
-    }
-
-    /// A pool sized from the plan's writes cannot allocate a heap pipeline's sets (set 1's arrays
-    /// take the layout's whole capacity, most elements unwritten, and only an update-after-bind
-    /// pool allocates it). The pool is the layout's: on `moltenvk-m3`, `argument_buffer_read` of
-    /// the owned `handles` fixture needs the sum of every binding's count by type, from an
-    /// update-after-bind pool, its set-1 arrays each the heap capacity: the sampled float group's
-    /// and its unsigned integer twin's (the class a float read reaches a raw member through) alike.
-    /// A kernel without a heap needs a plain pool. The heap arrays are the resident-table
-    /// domains' handle table, which the executor's own context compiles under.
-    #[test]
-    fn descriptor_pools_hold_every_binding_of_the_layout() {
-        let path = crate::engine::profiles_dir().join("moltenvk-m3.json");
-        let text = std::fs::read_to_string(path).unwrap();
-        let description = DeviceDescription::from_khronos_json(&text, None).unwrap();
-        let device = Device::from_queries(description, DevicePolicy::RESIDENT_TABLES).unwrap();
-        let handles = match llvm_assemble(&engine_dir().join("handles.ll")) {
-            Ok(bitcode) => bitcode,
-            Err(AssembleError::Missing(why)) => {
-                eprintln!("SKIPPED: {why}");
-                return;
-            }
-            Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected handles.ll: {why}"),
-        };
-        let heap = compile(&device, &handles, "argument_buffer_read");
-        let (sizes, flags) = pool_requirements(&heap.layout).unwrap();
-        assert!(flags == vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND);
-        let mut expected = std::collections::BTreeMap::<i32, u32>::new();
-        for binding in heap.layout.sets.iter().flat_map(|set| &set.bindings) {
-            let ty: vk::DescriptorType = binding.ty.into();
-            *expected.entry(ty.as_raw()).or_default() += binding.count;
-        }
-        let set1 = &heap.layout.sets[1].bindings;
-        let capacity = set1[0].count;
-        assert!(capacity > 1, "{capacity}");
-        // Every heap array is the capacity: a sampled float group's twin is its group's.
-        assert!(set1.iter().all(|b| b.count == capacity), "{set1:?}");
-        let sampled = |ty: SampledType| {
-            set1.iter().find(|b| match b.source {
-                BindingSource::Heap(HandleClass::Image(c)) => {
-                    c.access == ImageAccess::Sampled && !c.multisampled && c.sampled_type == ty
-                }
-                _ => false,
-            })
-        };
-        let (Some(float), Some(twin)) = (sampled(SampledType::Float), sampled(SampledType::Uint))
-        else {
-            panic!("no sampled float group with its unsigned twin: {set1:?}");
-        };
-        let shape = |b: &metal2vulkan::pipeline::DescriptorBinding| match b.source {
-            BindingSource::Heap(HandleClass::Image(c)) => (c.dim, c.arrayed),
-            _ => unreachable!(),
-        };
-        assert_eq!(shape(float), shape(twin));
-        assert_eq!(float.count, twin.count);
-        // The sampled images are set 0's and the heap's arrays of them, each the capacity.
-        let set0: u32 = heap.layout.sets[0]
-            .bindings
-            .iter()
-            .filter(|b| vk::DescriptorType::from(b.ty) == vk::DescriptorType::SAMPLED_IMAGE)
-            .map(|b| b.count)
-            .sum();
-        let arrays = set1
-            .iter()
-            .filter(|b| vk::DescriptorType::from(b.ty) == vk::DescriptorType::SAMPLED_IMAGE)
-            .count() as u32;
-        assert_eq!(
-            expected.get(&vk::DescriptorType::SAMPLED_IMAGE.as_raw()),
-            Some(&(set0 + arrays * capacity))
-        );
-        assert_eq!(
-            sizes
-                .iter()
-                .map(|size| (size.ty.as_raw(), size.descriptor_count))
-                .collect::<Vec<_>>(),
-            expected.into_iter().collect::<Vec<_>>()
-        );
-
-        let Some(plain) = assemble(&counting_kernel()) else {
-            return;
-        };
-        let plain = compile(&device, &plain, "count");
-        let (sizes, flags) = pool_requirements(&plain.layout).unwrap();
-        assert!(flags.is_empty());
-        assert!(!sizes.is_empty());
-        assert!(sizes.iter().all(|size| size.descriptor_count > 0));
-    }
 }

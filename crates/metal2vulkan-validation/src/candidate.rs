@@ -159,34 +159,6 @@ mod platform {
         }
     }
 
-    pub fn execute_engine(
-        _device: DeviceType,
-        _case_id: &str,
-        _case: &super::engine::ComputeCase,
-        _compile: impl FnOnce(
-            &crate::worker::compile::WorkerDevice,
-            &metal2vulkan::bind::BindShape,
-        ) -> Result<metal2vulkan::pipeline::ComputePipeline, ExecutorError>,
-    ) -> super::engine::RunAttempt {
-        super::engine::RunAttempt::of(Err(
-            "candidate execution is supported only on Linux and macOS".into(),
-        ))
-    }
-
-    pub fn execute_engine_render(
-        _device: DeviceType,
-        _case_id: &str,
-        _case: &super::engine::graphics::RenderCase,
-        _compile: impl FnOnce(
-            &crate::worker::compile::WorkerDevice,
-            &metal2vulkan::bind::BindShape,
-        ) -> Result<metal2vulkan::pipeline::RenderPipeline, ExecutorError>,
-    ) -> super::engine::RunAttempt {
-        super::engine::RunAttempt::of(Err(
-            "candidate execution is supported only on Linux and macOS".into(),
-        ))
-    }
-
     pub fn execute_runtime(
         _device: DeviceType,
         _case_id: &str,

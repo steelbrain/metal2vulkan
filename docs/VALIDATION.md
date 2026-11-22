@@ -522,8 +522,7 @@ cargo run -p metal2vulkan-validation --release --bin corpus-vulkan -- \
   run on Metal alone. A command buffer of the runtime's form carries `indirect_indexed_draws`, a
   gap of this executor, which maps no indirect command buffer, so the checker takes no case of
   it. A pixel format the runtime makes no image of on the device, and a sample count it makes no
-  texture of (`Limit::TextureSamples`), records `not_enabled`, as the executor's own context
-  records a format or a sample count its query lacks. A vertex or fragment case of any
+  texture of (`Limit::TextureSamples`), records `not_enabled`. A vertex or fragment case of any
   sample count draws through the runtime the same way (`engine::runs_render_through_runtime`): its own
   stage's buffers, bound textures and samplers, argument buffers of buffers, textures and samplers
   (made, written and used as a kernel's), function constants and linked functions, its
@@ -546,8 +545,10 @@ cargo run -p metal2vulkan-validation --release --bin corpus-vulkan -- \
   `not_supported{uncontained:unchecked vertex_input}`. A rasterization-disabled vertex case renders
   into the oracle's 1x1 `R8Unorm` attachment, and a fragment case of no attachment into the
   oracle's pass of none: `renderTargetWidth` and `renderTargetHeight` 1, `defaultRasterSampleCount`
-  the case's samples. Layered rendering, a patch index buffer or an out-of-bounds target other
-  than an attribute buffer keeps the case on the executor's own context. A vertex buffer's dynamic stride carries `dynamic_vertex_stride` and a fragment
+  the case's samples. A depth/stencil attachment of both aspects, a patch draw through a patch or
+  control-point index buffer, or an out-of-bounds target other than an attribute buffer is refused
+  `not_supported{executor_not_implemented}`: the runtime route makes no such draw. A vertex
+  buffer's dynamic stride carries `dynamic_vertex_stride` and a fragment
   function's imageblock `fragment_imageblock`, each the runtime's limit. An indexed
   draw past its index buffer, which the runtime refuses as Metal's validation does
   (`Refusal::IndexBufferOffset`), carries `index_buffer_past_end`, and a depth/stencil attachment

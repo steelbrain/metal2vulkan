@@ -5,7 +5,7 @@ use super::*;
 use crate::check::admission::ExecutorError;
 
 /// The layer's settings reach a runtime instance as the variables its settings library reads:
-/// one per setting the own context passes as `VkLayerSettingEXT`, named
+/// one per `VkLayerSettingEXT` setting the layer takes, named
 /// `VK_KHRONOS_PROFILES_<SETTING>`, a flag as `true` or `false` and a list joined by commas, none
 /// empty (the library reads an empty variable as unset), and the layer's reports kept off the
 /// standard output a device worker reports on.

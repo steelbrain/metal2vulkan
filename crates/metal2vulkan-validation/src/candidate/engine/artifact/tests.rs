@@ -19,13 +19,6 @@ fn digest(byte: u8) -> Hash256 {
 fn a_case_artifact_is_its_parts_by_subject() {
     let empty = CaseArtifact::default();
     assert_eq!(empty.sha256(), None);
-    assert_eq!(
-        empty.executed(),
-        ExecutedArtifact {
-            runtime_version: metal2vulkan::cache::RUNTIME_VERSION,
-            sha256: None,
-        }
-    );
 
     let other = "another".to_owned();
     let mut a = CaseArtifact::default();

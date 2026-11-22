@@ -1,7 +1,7 @@
 //! The guards a candidate keeps around a case's out-of-bounds targets: where each guarded target
 //! ([`out_of_bounds::guarded`]) lies, how far its guard reaches, what a run changed there, and how
-//! those counts join the run's out-of-bounds facts, for the executor's own context and the runs
-//! through the runtime (`platform`, each target in an allocation of its own).
+//! those counts join the run's out-of-bounds facts, for the runs through the runtime (`platform`,
+//! each target in an allocation of its own).
 
 use super::ComputeCase;
 use crate::case::out_of_bounds::{OutOfBoundsResource, OutOfBoundsTarget};

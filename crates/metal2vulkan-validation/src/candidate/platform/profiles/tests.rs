@@ -499,24 +499,16 @@ fn every_kept_member_is_a_bounded_capability_member() {
     }
 }
 
-/// A restriction the device cannot take is a typed refusal, recorded with the device as it is,
-/// never a failure without a record (which a re-record would retry without end). Pascal's committed
-/// profile against the RTX 50 description refuses the three members the RTX 5080's restricted
-/// context refused; the checks before the context reads the device agree; and the refusal is a
-/// device refusal whose record is well formed, in the restricted slot, with the translator
-/// fingerprint its own environment's profile fingerprint derives (the currency rule's product
-/// check).
+/// The members a restriction the device cannot take names: Pascal's committed profile against the
+/// RTX 50 description refuses the three members the RTX 5080's restricted context refused, and the
+/// checks before the context reads the device agree. The runtime route's refusal of such a run,
+/// recorded with the device as it is, is
+/// `runtime_restriction::tests::a_restricted_run_on_a_device_without_the_profile_is_a_recorded_refusal`.
 #[test]
-fn a_restriction_the_device_cannot_take_is_a_recorded_refusal() {
-    use crate::candidate::engine::{engine_fingerprint_of, engine_slot, ENGINE_EXECUTOR_ABI};
-    use crate::check::admission::{ExecutorError, NotSupported};
-    use crate::refusal::{Refusal, RefusalClass, RefusalObservation};
-
-    let restriction: &'static ProfileRestriction = Box::leak(Box::new(
-        ProfileRestriction::committed("nvidia-pascal-linux").unwrap(),
-    ));
+fn a_restriction_the_device_cannot_take_names_its_members() {
+    let restriction = ProfileRestriction::committed("nvidia-pascal-linux").unwrap();
     let native = committed("nvidia-rtx50-linux");
-    let Err(RestrictionError::Exceeds { gaps, .. }) = check_within(restriction, &native, AT_1_2)
+    let Err(RestrictionError::Exceeds { gaps, .. }) = check_within(&restriction, &native, AT_1_2)
     else {
         panic!("the RTX 50 description takes Pascal's profile");
     };
@@ -529,72 +521,6 @@ fn a_restriction_the_device_cannot_take_is_a_recorded_refusal() {
     }
     assert_eq!(gaps_of("nvidia-pascal-linux", &native), gaps);
     assert_eq!(gaps_of("nvidia-rtx50-linux", &native), Vec::<String>::new());
-
-    let refused = super::super::device::RefusedRestriction {
-        restriction,
-        gaps: gaps.clone(),
-        native,
-        identity: serde_json::json!({
-            "device": "a GPU",
-            "device_id": 1,
-            "vendor_id": 0x10de,
-            "driver_version": 2,
-            "api_version": 3,
-            "driver_id": 4,
-            "driver_name": "a driver",
-            "driver_info": "1.0",
-        }),
-    };
-    let attempt = super::super::compute::restriction_refusal(&refused, "engine-compute");
-    let not_supported = match attempt.result {
-        Err(ExecutorError::NotSupported(not_supported)) => not_supported,
-        other => panic!("{:?}", other.err()),
-    };
-    assert_eq!(
-        not_supported,
-        NotSupported::Restriction {
-            profile: "nvidia-pascal-linux".into(),
-            gaps: gaps.clone(),
-        }
-    );
-    assert_eq!(
-        not_supported.outcome(),
-        "not_supported{profile_exceeds_device}"
-    );
-    assert!(not_supported
-        .to_string()
-        .contains("profile nvidia-pascal-linux states 3 capabilities the device lacks"));
-    let opened = attempt.refused_on.expect("the refusal names the device");
-    let environment = &opened.environment;
-    assert_eq!(environment["device"], "a GPU");
-    assert_eq!(environment["executor"], "engine-compute");
-    assert_eq!(
-        environment["profiles_layer"]["profile"],
-        "nvidia-pascal-linux"
-    );
-    let hex = environment["profile_fingerprint"].as_str().unwrap();
-    let mut fingerprint = [0u8; 32];
-    for (byte, pair) in fingerprint.iter_mut().zip(hex.as_bytes().chunks(2)) {
-        *byte = u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap();
-    }
-    assert_eq!(
-        engine_fingerprint_of(&fingerprint),
-        opened.translator_fingerprint
-    );
-    let record = RefusalObservation {
-        timing: Some(crate::observation::test_timing()),
-        case_id: "a".repeat(64),
-        air_sha256: "b".repeat(64),
-        input_sha256: "c".repeat(64),
-        translator_fingerprint: opened.translator_fingerprint.clone(),
-        environment_id: engine_slot("nvidia-rtx5080-laptop", Some("nvidia-pascal-linux")),
-        environment: opened.environment.clone(),
-        executor_abi: ENGINE_EXECUTOR_ABI.into(),
-        refusal: Refusal::of(&not_supported),
-        artifact: None,
-    };
-    record.validate_content().unwrap();
-    assert_eq!(record.refusal.class, RefusalClass::Device);
 }
 
 /// A venue run stops on its device's identity or translation key, never on a description member

@@ -149,14 +149,6 @@ impl CaseArtifact {
                 .collect(),
         )
     }
-
-    /// What a run with this artifact executed under this product's runtime.
-    pub fn executed(&self) -> ExecutedArtifact {
-        ExecutedArtifact {
-            runtime_version: metal2vulkan::cache::RUNTIME_VERSION,
-            sha256: self.sha256(),
-        }
-    }
 }
 
 /// A length-prefixed byte string.

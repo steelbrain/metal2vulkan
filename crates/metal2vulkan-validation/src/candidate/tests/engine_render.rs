@@ -1,17 +1,17 @@
-//! The engine render candidate on a device: owned vertex and fragment fixtures drawn through
-//! one `RenderPipeline` under `VK_LAYER_KHRONOS_validation`, and authored graphics cases drawn with
-//! their generated companions, against expectations derived from the MSL and Metal's conventions
+//! The engine render candidate on a device: owned vertex and fragment fixtures and authored
+//! graphics cases with their generated companions, drawn through the runtime under
+//! `VK_LAYER_KHRONOS_validation`, against expectations derived from the MSL and Metal's conventions
 //! (y-up clip space, pixel-center coverage). `G-linux`'s `m2v_cpu_icd` step runs these on lavapipe.
 //! The looping fragment runs as compiled on both lanes.
 
 use super::*;
 use crate::candidate::engine::graphics::tests::{
-    checked_companion, draw_request, two_stage_case, RenderLibraries, WITHOUT_SLICE,
+    checked_companion, two_stage_case, RenderLibraries, WITHOUT_SLICE,
 };
 use crate::candidate::engine::graphics::{
     render_case, ColorTarget, RenderCase, RenderOutput, VertexBuffer,
 };
-use crate::candidate::engine::{compile_render, ComputeRun};
+use crate::candidate::engine::ComputeRun;
 use crate::case::{
     AttributeFormat, AttributeInput, AuthoredCase, Draw, OutputSelection, Primitive, Stage,
     TextureFormat, VertexObservation,
@@ -21,26 +21,18 @@ use base64::Engine as _;
 use metal2vulkan_devtools::{fixtures_dir, llvm_assemble};
 use std::collections::BTreeMap;
 
-/// Draw `case`, compiled in the device tests' compile worker ([`compile_worker`]) by the request
-/// the tools send it.
+/// Draw `case` of the stages of `libraries` through the runtime ([`run_on_runtime`]): the case's
+/// own function's library, and the other stage's, where the case has one.
 fn run(case: &RenderCase, libraries: RenderLibraries<'_>) -> Result<ComputeRun, ExecutorError> {
-    platform::execute_engine_render(
-        crate::gpu::TEST_DEVICE,
-        "engine-render-test",
-        case,
-        |device, shape| {
-            let (request, bitcode) = draw_request(case, libraries, shape);
-            let sources = bitcode
-                .into_iter()
-                .map(crate::acceptance::retained)
-                .collect::<Vec<_>>();
-            compile_render(compile_worker(), device, &request, &sources)
-        },
-    )
-    .result
+    match (case.companion_stage(), libraries.fragment) {
+        (Some(metal2vulkan::pipeline::Stage::Vertex), Some(fragment)) => {
+            run_on_runtime(case, fragment, Some(libraries.vertex))
+        }
+        (_, fragment) => run_on_runtime(case, libraries.vertex, fragment),
+    }
 }
 
-/// [`run`] through the runtime (`platform::execute_runtime_render`): the case's own function's
+/// `case` drawn through the runtime (`platform::execute_runtime_render`): the case's own function's
 /// AIR and its companion's as the engine hands them over, its own stage's buffers as the case
 /// holds them, each texture, bound or in an argument buffer, made with its role's usage, and no
 /// float reduction.
@@ -161,7 +153,7 @@ fn whole_target(case: &mut RenderCase) {
 
 /// A vertex function and a separately compiled fragment function drawn through one pipeline:
 /// the negative-height viewport puts Metal's y-up quadrant in the top rows.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn a_constant_fragment_colors_the_quadrant_metal_draws() {
     let mut case = two_stage_case(
@@ -183,11 +175,7 @@ fn a_constant_fragment_colors_the_quadrant_metal_draws() {
     )
     .unwrap();
     assert_eq!(run.output, top_right([0.25, 0.5, 0.75, 1.0]));
-    assert_eq!(
-        run.status,
-        Some(metal2vulkan::bind::StatusReport::default())
-    );
-    assert_eq!(run.environment["executor"], "engine-render");
+    assert_eq!(run.environment["executor"], "runtime-render");
 }
 
 /// `rt6_layered_vertex` (engine `rt6_layered`) writes index 3, from its buffer, in a pass of
@@ -200,7 +188,7 @@ fn a_constant_fragment_colors_the_quadrant_metal_draws() {
 /// write as undefined; the sink withholds exactly that message for this row, and the row's
 /// environment counts it (`platform::device`'s `CLAMPED_LAYER`). When the layer stops reporting
 /// it, this test fails, and the exception goes with it.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn an_index_past_a_one_layer_pass_renders_the_pass_s_slice() {
     let library = llvm_assemble(&metal2vulkan_devtools::engine_dir().join("rt6_layered.ll"))
@@ -240,7 +228,7 @@ fn an_index_past_a_one_layer_pass_renders_the_pass_s_slice() {
 
 /// A varying written by the vertex stage reaches the fragment stage of another library by its
 /// user key; a value equal at every vertex interpolates to itself.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn a_vertex_varying_reaches_the_fragment_stage() {
     let mut case = two_stage_case(
@@ -292,7 +280,7 @@ fn authored_quad_target(case: &mut AuthoredCase) {
 /// triangle's `uv` varying interpolates to `((x + 1) / 2, (y + 1) / 2)` at each pixel center of
 /// Metal's y-up clip space, so row 0 (the top) reads `v = 0.875`, and the case's function writes
 /// `(u, v, 0.5, 1)` there.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn a_fragment_case_draws_through_its_generated_passthrough_vertex() {
     let fragment = public("fragment_varying_color.ll");
@@ -318,27 +306,14 @@ fn a_fragment_case_draws_through_its_generated_passthrough_vertex() {
         .flat_map(|&v| centers.iter().flat_map(move |&u| [u, v, 0.5, 1.0]))
         .collect();
     assert_eq!(run.output, floats(&expected));
-    assert_eq!(
-        run.status,
-        Some(metal2vulkan::bind::StatusReport::default())
-    );
-    #[cfg(target_os = "linux")]
-    {
-        assert!(crate::candidate::engine::runs_render_through_runtime(&case));
-        let through = run_on_runtime(&case, &fragment, Some(&companion)).unwrap();
-        assert_eq!(through.output, floats(&expected));
-        assert_eq!(through.status, None);
-        assert_eq!(through.spv_sha256, None);
-    }
 }
 
 /// A fragment function samples the texture an argument buffer holds through the sampler beside it
 /// (`tail_argument_samplers`' `argument_sampler_fragment`, `m.t.sample(m.s, in.uv)`): at each of
 /// the 2x2 target's pixel centers the passthrough companion's `uv` is `(0.25 or 0.75, 0.75)` on
 /// row 0 and `(0.25 or 0.75, 0.25)` on row 1, so the nearest sampler reads the texture's row 1 into
-/// the target's row 0 and its row 0 into row 1, on the executor's own context and through the
-/// runtime, whose owner holds the member texture's and sampler's `gpuResourceID`s.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// the target's row 0 and its row 0 into row 1, through the runtime, whose owner holds the member texture's and sampler's `gpuResourceID`s.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_fragment_samples_the_texture_an_argument_buffer_holds_through_its_sampler() {
     use crate::case::{
@@ -403,12 +378,6 @@ fn a_fragment_samples_the_texture_an_argument_buffer_holds_through_its_sampler()
     )
     .unwrap();
     assert_eq!(run.output, expected);
-    #[cfg(target_os = "linux")]
-    {
-        assert!(crate::candidate::engine::runs_render_through_runtime(&case));
-        let through = run_on_runtime(&case, &fragment, Some(&companion)).unwrap();
-        assert_eq!(through.output, expected);
-    }
 }
 
 /// A fragment case with a depth/stencil attachment of one aspect draws it as the executor's own
@@ -419,9 +388,9 @@ fn a_fragment_samples_the_texture_an_argument_buffer_holds_through_its_sampler()
 /// runtime renders into in no one pass, so `render_case` refuses it as the runtime's limit
 /// (`SeparateDepthStencil`). A fragment function's stencil output, `fragment_depth_stencil`'s 7,
 /// is the fragment's stencil reference on a device that lists `VK_EXT_shader_stencil_export`
-/// (lavapipe lists it), where the runtime stores what the executor's own context stores, 7; on
+/// (lavapipe lists it), where the runtime stores 7; on
 /// one that does not, the runtime refuses the state at creation naming `StencilExport`.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn a_fragment_case_writes_its_depth_and_stencil_attachment() {
     let fragment = public("fragment_depth_stencil.ll");
@@ -480,36 +449,20 @@ fn a_fragment_case_writes_its_depth_and_stencil_attachment() {
             authored.output = output;
             let (case, companion) = with_companion(&authored, &own);
             assert!(crate::candidate::engine::runs_render_through_runtime(&case));
-            let drawn = run(
-                &case,
-                RenderLibraries {
-                    vertex: &companion,
-                    fragment: Some(&own),
-                },
-            )
-            .unwrap();
             let through = run_on_runtime(&case, &own, Some(&companion)).unwrap();
-            assert_eq!(through.output, drawn.output, "{entry}");
-            if aspect {
-                assert_eq!(through.output, 0.125f32.to_le_bytes().to_vec());
-            }
+            // The depth the function writes; a stencil no function writes keeps its initial byte
+            // under the encoder's default state (always pass, keep).
+            let expected = match aspect {
+                true => 0.125f32.to_le_bytes().to_vec(),
+                false => vec![0xab],
+            };
+            assert_eq!(through.output, expected, "{entry}");
         }
         authored.depth_stencil = depth_stencil(false, true);
         let (case, companion) = with_companion(&authored, &fragment);
         assert!(crate::candidate::engine::runs_render_through_runtime(&case));
         match run_on_runtime(&case, &fragment, Some(&companion)) {
-            Ok(through) => {
-                let drawn = run(
-                    &case,
-                    RenderLibraries {
-                        vertex: &companion,
-                        fragment: Some(&fragment),
-                    },
-                )
-                .unwrap();
-                assert_eq!(through.output, drawn.output, "fragment_depth_stencil");
-                assert_eq!(through.output, [7], "fragment_depth_stencil");
-            }
+            Ok(through) => assert_eq!(through.output, [7], "fragment_depth_stencil"),
             Err(error @ ExecutorError::NotSupported(_)) => {
                 assert!(error.to_string().contains("StencilExport"), "{error}")
             }
@@ -521,7 +474,7 @@ fn a_fragment_case_writes_its_depth_and_stencil_attachment() {
 /// A vertex case observed through a varying and through its position, each drawn into its
 /// generated observer fragment: the quadrant's pixels hold the varying padded to `(v, 0, 1)`, or
 /// the window position `(x + 0.5, y + 0.5, z, 1 / w)`; the rest keep their initial -1.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn an_observed_vertex_case_draws_into_its_generated_observer() {
     let vertex = public("vertex_varying_triangle.ll");
@@ -578,15 +531,6 @@ fn an_observed_vertex_case_draws_into_its_generated_observer() {
         )
         .unwrap();
         assert_eq!(run.output, expected, "{observation:?}");
-        #[cfg(target_os = "linux")]
-        {
-            assert!(crate::candidate::engine::runs_render_through_runtime(&case));
-            let through = run_on_runtime(&case, &vertex, Some(&companion)).unwrap();
-            assert_eq!(
-                through.output, expected,
-                "{observation:?} through the runtime"
-            );
-        }
     }
 }
 
@@ -595,7 +539,7 @@ fn an_observed_vertex_case_draws_into_its_generated_observer() {
 /// sample mask `0x5`, so samples 0 and 2 take its color and samples 1 and 3 keep their own
 /// authored contents. Through the runtime the target is filled and read back sample by sample
 /// (`platform::runtime_multisample`) and holds the same words.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn each_sample_of_a_multisampled_target_keeps_its_own_contents() {
     let fragment = public("engine/sample_rate.ll");
@@ -616,12 +560,6 @@ fn each_sample_of_a_multisampled_target_keeps_its_own_contents() {
     let (case, companion) = with_companion(&authored, &fragment);
     let written = [1.0, 0.0, 1.0, 1.0];
     let expected = floats(&[written, sample(1.0), written, sample(3.0)].concat());
-    #[cfg(target_os = "linux")]
-    {
-        assert!(crate::candidate::engine::runs_render_through_runtime(&case));
-        let through = run_on_runtime(&case, &fragment, Some(&companion)).unwrap();
-        assert_eq!(through.output, expected, "through the runtime");
-    }
     let run = run(
         &case,
         RenderLibraries {
@@ -630,7 +568,7 @@ fn each_sample_of_a_multisampled_target_keeps_its_own_contents() {
         },
     )
     .unwrap();
-    assert_eq!(run.output, expected, "on the executor's own context");
+    assert_eq!(run.output, expected, "through the runtime");
 }
 
 /// A fragment case of no attachment draws into the oracle's 1x1 pass at its samples:
@@ -638,7 +576,7 @@ fn each_sample_of_a_multisampled_target_keeps_its_own_contents() {
 /// run 8 words on, so at 1 and at 4 samples each sample runs once and reads its own bit. Through
 /// the runtime the pass is `renderTargetWidth` by `renderTargetHeight` at
 /// `defaultRasterSampleCount`, and its words are the executor's own.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn a_fragment_pass_of_no_attachment_runs_each_sample_once() {
     let fragment = public("engine/coverage_natural.ll");
@@ -689,15 +627,6 @@ fn a_fragment_pass_of_no_attachment_runs_each_sample_once() {
                 "{samples}: {sample}"
             );
         }
-        #[cfg(target_os = "linux")]
-        {
-            assert!(crate::candidate::engine::runs_render_through_runtime(&case));
-            let through = run_on_runtime(&case, &fragment, Some(&companion)).unwrap();
-            assert_eq!(
-                through.output, drawn.output,
-                "{samples} through the runtime"
-            );
-        }
     }
 }
 
@@ -708,7 +637,7 @@ fn a_fragment_pass_of_no_attachment_runs_each_sample_once() {
 /// `(patch, 1, 2, 3)`). Without culling both halves are tagged; with back faces culled exactly one
 /// patch survives, a different one for each output winding, and the culled half keeps the target's
 /// fill. Through the runtime, each draw gives the executor's own bytes.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn a_back_culled_patch_and_its_mirror_leave_exactly_one_drawn() {
     use crate::case::{CullMode, TessellationDraw, TessellationFactors, TessellationWinding};
@@ -773,12 +702,6 @@ fn a_back_culled_patch_and_its_mirror_leave_exactly_one_drawn() {
         )
         .unwrap()
         .output;
-        #[cfg(target_os = "linux")]
-        {
-            assert!(crate::candidate::engine::runs_render_through_runtime(&case));
-            let through = run_on_runtime(&case, &vertex, Some(&companion)).unwrap();
-            assert_eq!(through.output, output, "through the runtime");
-        }
         output
     };
     assert_eq!(draw(&authored), tagged(Some(0), Some(1)));
@@ -810,7 +733,7 @@ fn a_back_culled_patch_and_its_mirror_leave_exactly_one_drawn() {
 /// (`platform::graphics_pipeline::fetch_between_draws`), and its fragment module notes
 /// `PrecisionNote::UnorderedFetchWithinDraw`: one instance halves the attachment exactly, and
 /// three, one draw, leave each texel some order's `2^-k` of its contents, `k` in 1 to 3.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn a_framebuffer_fetch_halves_its_attachment_once_per_overlapping_instance() {
     use metal2vulkan::pipeline::PrecisionNote;
@@ -861,10 +784,6 @@ fn a_framebuffer_fetch_halves_its_attachment_once_per_overlapping_instance() {
                 eprintln!(
                     "ENGINE-FETCH {instances} instance(s): unordered within the draw: {unordered}"
                 );
-                assert_eq!(
-                    run.status,
-                    Some(metal2vulkan::bind::StatusReport::default())
-                );
             }
             Err(other) => panic!("{instances} instance(s): {other}"),
         }
@@ -873,7 +792,7 @@ fn a_framebuffer_fetch_halves_its_attachment_once_per_overlapping_instance() {
 
 /// The authored narrow-attribute case's mapping, drawn: a rasterization-disabled vertex function
 /// reads a `uchar` and a `ushort2` attribute and stores their sum.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn a_rasterization_disabled_vertex_draw_stores_through_its_buffer() {
     let authored =
@@ -895,17 +814,11 @@ fn a_rasterization_disabled_vertex_draw_stores_through_its_buffer() {
     )
     .unwrap();
     assert_eq!(run.output, (2u32 + 3 + 4).to_le_bytes());
-    #[cfg(target_os = "linux")]
-    {
-        assert!(crate::candidate::engine::runs_render_through_runtime(&case));
-        let through = run_on_runtime(&case, &vertex, None).unwrap();
-        assert_eq!(through.output, (2u32 + 3 + 4).to_le_bytes());
-    }
 }
 
 /// A fragment function that loops `n` times (`n` from its constant buffer) draws once, as
 /// compiled, with no execution bound and no headroom probe, on both lanes.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 #[test]
 fn a_looping_fragment_draws_as_compiled() {
     use crate::candidate::engine::tests::counting_kernel;

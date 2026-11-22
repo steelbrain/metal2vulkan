@@ -1274,35 +1274,6 @@ fn the_executor_reads_and_enables_each_promoted_feature_where_the_product_reads_
     }
 }
 
-/// A context records the extended dynamic states exactly where the product reads the functionality
-/// as present: through Vulkan 1.3's core commands from 1.3, where it is core without a feature and
-/// a profile need not list the extension, and below 1.3 through `VK_EXT_extended_dynamic_state`'s
-/// where the context enabled it.
-#[test]
-fn a_context_has_the_extended_dynamic_states_where_the_product_reads_them() {
-    let feature = VkFeature::ExtendedDynamicState;
-    for version in [ApiVersion::V1_2, ApiVersion::V1_3, V1_4] {
-        for enabled in [false, true] {
-            let extensions = if enabled {
-                BTreeSet::from([VkExtension::ExtExtendedDynamicState])
-            } else {
-                BTreeSet::new()
-            };
-            let commands = dynamic_state_commands(version, enabled);
-            assert_eq!(
-                commands.is_some(),
-                feature.exposure().exposed(version, &extensions),
-                "{version:?} {enabled}"
-            );
-            assert_eq!(
-                commands == Some(DynamicStateCommands::Core),
-                !feature.exposure().has_member(version),
-                "{version:?} {enabled}"
-            );
-        }
-    }
-}
-
 /// The runtime probe's context enables each extension it measures exactly where the device lists
 /// it, with `VK_KHR_image_format_list` beside the modifier extension only below Vulkan 1.2, where
 /// that requirement is not core.

@@ -1,6 +1,39 @@
 use super::*;
 use crate::case::out_of_bounds::OutOfBounds;
 
+/// A mechanism as the tests compare it: `<medium>:<check>`.
+pub(crate) trait Label {
+    fn label(self) -> String;
+}
+
+impl Label for Mechanism {
+    fn label(self) -> String {
+        let medium = match self.medium {
+            Medium::DescriptorView => "descriptor-view",
+            Medium::DeviceAddress => "device-address",
+            Medium::Arena => "arena",
+            Medium::TexelBuffer => "texel-buffer",
+            Medium::Image => "image",
+            Medium::TypedObject => "typed-object",
+            Medium::HandleTable => "handle-table",
+            Medium::ResourceId => "resource-id",
+            Medium::VertexInput => "vertex-input",
+            Medium::IndexBuffer => "index-buffer",
+            Medium::HandleArray => "handle-array",
+        };
+        let check = match self.check {
+            Check::Shader => "shader",
+            Check::ShaderReads => "shader-reads",
+            Check::Robust => "robust",
+            Check::Robust2 => "robust2",
+            Check::Binder => "binder",
+            Check::Padded => "padded",
+            Check::Unchecked => "unchecked",
+        };
+        format!("{medium}:{check}")
+    }
+}
+
 /// A kernel case reading `src` (binding 0, 16 bytes) out of bounds into `out` (binding 1, 32
 /// bytes): bytes 16..32 of the output are the out-of-bounds reads of target 0.
 fn case(form: ContainmentForm) -> AuthoredCase {

@@ -19,8 +19,6 @@ use metal2vulkan::pipeline::{GraphicsState, RenderPipeline, VertexStride};
 use std::ffi::CString;
 use std::time::Duration;
 
-use super::METAL_DEFAULT_FRONT_FACE;
-
 /// Why no graphics pipeline (or render pass) was created.
 #[derive(Debug)]
 pub(super) enum GraphicsError {
@@ -135,10 +133,9 @@ pub(super) fn has_depth(format: vk::Format) -> bool {
 /// (`VK_ATTACHMENT_UNUSED` for an absent one), in `COLOR_ATTACHMENT_OPTIMAL` (`GENERAL` for an
 /// attachment a framebuffer-fetch input also reads, as the input attachment of the same index,
 /// with the by-region self-dependency of [`FETCH_SELF_DEPENDENCY`]), then the depth/stencil
-/// attachment ([`depth_stencil_format`]) in `DEPTH_STENCIL_ATTACHMENT_OPTIMAL`.
-/// A subpass that reads input attachments records each draw after a barrier of that dependency
-/// ([`fetch_between_draws`]). Every attachment is loaded before and stored after the subpass. The framebuffer's views are the present color attachments in index
-/// order, then the depth/stencil one.
+/// attachment ([`depth_stencil_format`]) in `DEPTH_STENCIL_ATTACHMENT_OPTIMAL`. Every attachment
+/// is loaded before and stored after the subpass. The framebuffer's views are the present color
+/// attachments in index order, then the depth/stencil one.
 pub(super) fn create_render_pass(
     device: &ash::Device,
     graphics: &GraphicsState,
@@ -295,42 +292,6 @@ pub(super) const FETCH_SELF_DEPENDENCY: (vk::PipelineStageFlags, vk::AccessFlags
     ),
 );
 
-/// Whether `graphics` reads input attachments, which are ordered between draws alone on every
-/// device (`PrecisionNote::UnorderedFetchWithinDraw`). The
-/// contract has the consumer order each draw of it after the color writes of the draws before,
-/// and each draw that writes a color after their reads, by a barrier of the subpass's dependency
-/// on itself; the executor records one before each of its draws ([`fetch_between_draws`]), after
-/// the load operations too, as the runtime does.
-pub(super) fn fetches_between_draws(graphics: &GraphicsState) -> bool {
-    !graphics.input_attachments.is_empty()
-}
-
-/// Record, into `command`, inside a render pass of [`create_render_pass`] whose subpass reads
-/// input attachments, the barrier of its [`FETCH_SELF_DEPENDENCY`]: the draws after it read and
-/// write the colors after the draws before it wrote and read them.
-///
-/// # Safety
-///
-/// `command` is recording inside such a render pass instance, on `device`.
-pub(super) unsafe fn fetch_between_draws(device: &ash::Device, command: vk::CommandBuffer) {
-    let (stages, src, dst) = FETCH_SELF_DEPENDENCY;
-    let barrier = vk::MemoryBarrier::default()
-        .src_access_mask(src)
-        .dst_access_mask(dst);
-    // SAFETY: the caller's contract; the subpass depends on itself by region with these scopes.
-    unsafe {
-        device.cmd_pipeline_barrier(
-            command,
-            stages,
-            stages,
-            vk::DependencyFlags::BY_REGION,
-            &[barrier],
-            &[],
-            &[],
-        );
-    }
-}
-
 /// One stage's specialization: its map entries and packed data.
 pub(super) type Specialization = (Vec<vk::SpecializationMapEntry>, Vec<u8>);
 
@@ -351,7 +312,8 @@ pub(super) struct Consumer<'a> {
     pub depth_stencil: vk::PipelineDepthStencilStateCreateInfo<'a>,
     /// The encoder's cull mode.
     pub cull_mode: vk::CullModeFlags,
-    /// The encoder's front-facing winding ([`front_face`]).
+    /// The encoder's front-facing winding: Metal's clockwise default is
+    /// [`super::METAL_DEFAULT_FRONT_FACE`] under a flipped viewport.
     pub front_face: vk::FrontFace,
 }
 
@@ -385,17 +347,6 @@ pub(super) fn metal_depth_stencil(
         .stencil_test_enable(mapped.stencil_test_enable)
         .front(face(mapped.front, state.front_reference))
         .back(face(mapped.back, state.back_reference))
-}
-
-/// The front face of `state`'s front-facing winding: Metal's clockwise default is
-/// [`METAL_DEFAULT_FRONT_FACE`] under the executor's flipped viewport, and its counter-clockwise
-/// winding the other face.
-pub(super) fn front_face(state: &DrawDepthStencil) -> vk::FrontFace {
-    if state.winding == metal2vulkan::metal::Winding::CounterClockwise {
-        vk::FrontFace::COUNTER_CLOCKWISE
-    } else {
-        METAL_DEFAULT_FRONT_FACE
-    }
 }
 
 /// Create the graphics pipeline of `pipeline` as `consumer` decides it: the pipeline and the
@@ -682,7 +633,6 @@ mod tests {
         );
         assert_eq!(face(state.front), replace);
         assert_eq!(face(state.back), replace);
-        assert!(front_face(&both) == METAL_DEFAULT_FRONT_FACE);
         assert_eq!(
             tests(&metal_depth_stencil(&derived(
                 Some(DepthCompare::Always),
@@ -756,6 +706,5 @@ mod tests {
                 0xC0
             )
         );
-        assert!(front_face(&authored) == vk::FrontFace::COUNTER_CLOCKWISE);
     }
 }

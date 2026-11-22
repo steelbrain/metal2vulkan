@@ -78,26 +78,6 @@ fn compile(device: &Device, bitcode: &[u8], entry: &str) -> ComputePipeline {
         .unwrap()
 }
 
-/// The status buffer starts zero (no fuel words), and an indirect overflow or a resident-set miss
-/// stops the run's output from being evidence.
-#[test]
-fn the_status_starts_zero_and_stops_non_evidence() {
-    let bytes = ExecutionStatus::initial();
-    assert!(bytes.iter().all(|&b| b == 0));
-    assert!(status_verdict(&bytes).is_ok());
-    let with_status = |bits: u32| {
-        let mut bytes = bytes;
-        bytes[..4].copy_from_slice(&bits.to_le_bytes());
-        bytes
-    };
-    let missed_bit = with_status(metal2vulkan::bind::StatusBits::RESIDENT_MISS.0);
-    assert!(status_verdict(&missed_bit).is_err());
-    let mut missed = bytes;
-    let at = metal2vulkan::bind::StatusWord::ResidentMisses.byte_offset() as usize;
-    missed[at..at + 4].copy_from_slice(&3u32.to_le_bytes());
-    assert!(status_verdict(&missed).is_err());
-}
-
 /// A difference under notes is a noted difference unless the C3 reviewed list holds its case under
 /// an answer gap the case's structure meets: then it stays a mismatch naming the gap. Judged over
 /// the committed list's every answer gap over a public fixture and its committed case, and a
@@ -430,25 +410,6 @@ fn the_cases_own_function_links_and_its_libraries_follow_the_stages() {
 
     let kernel = map_kernel(&kernel_case()).unwrap();
     let shape = BindShape::default();
-    let (request, given) = compute_request(&case, &linked, &kernel, &shape);
-    assert_eq!(
-        request,
-        PipelineRequest::BoundCompute {
-            function: linking(&kernel.entry),
-            shape: shape.clone(),
-            dispatch: Some(kernel.dispatch),
-        }
-    );
-    assert_eq!(given, expected_libraries(&[&case]));
-    let json = serde_json::to_value(&request).unwrap();
-    assert_eq!(
-        serde_json::from_value::<PipelineRequest>(json).unwrap(),
-        request
-    );
-    assert_eq!(
-        request.linked_ranges(),
-        [std::ops::Range { start: 1, end: 3 }]
-    );
     // The authored compile census's: the kernel as the runtime compiles it for the dispatch.
     let (request, given) = kernel_request(&case, &linked, &kernel);
     assert_eq!(
@@ -1243,44 +1204,6 @@ fn committed_command_buffer_and_pipeline_state_cases_refuse_by_their_requirement
     }
 }
 
-/// An allocation's guest address names a buffer whatever device address it has: NVIDIA's lie
-/// below 2^32 (a vertex buffer at 0x5020000 on an RTX 3090), where a guest address equal to it
-/// was a nil buffer's offset to a record, and RADV's sign-extended upper half
-/// (0xffff800100040000 on a Radeon 780M) lies among the records, from 2^63. One offset for all,
-/// on the address read as signed, keeps them apart and in [2^32, 2^63); an address it cannot move
-/// there is refused.
-#[test]
-fn addressed_allocations_take_metal_addresses() {
-    use metal2vulkan::bind::indirect_commands::{records_address, BufferBinding};
-    let metal = |address: BufferAddress| {
-        let names = BufferBinding {
-            address: address.guest,
-            attribute_stride: None,
-        }
-        .names_buffer();
-        names && address.guest < records_address(0)
-    };
-    let low = BufferAddress::addressed(0x502_0000).unwrap();
-    assert_eq!(low.host, Some(0x502_0000));
-    assert!(metal(low), "{low:x?}");
-    let next = BufferAddress::addressed(0x502_0000 + 256).unwrap();
-    assert_eq!(next.guest - low.guest, 256);
-    let radv = BufferAddress::addressed(0xffff_8001_0004_0000).unwrap();
-    assert!(metal(radv) && radv.guest < low.guest, "{radv:x?}");
-    // The top of the device's space and its bottom stay next to each other.
-    let top = BufferAddress::addressed(u64::MAX).unwrap();
-    let bottom = BufferAddress::addressed(0).unwrap();
-    assert!(metal(top) && metal(bottom), "{top:x?} {bottom:x?}");
-    assert_eq!(bottom.guest - top.guest, 1);
-    let lowest = BufferAddress::addressed(0xffff_8000_0000_0000).unwrap();
-    assert_eq!(lowest.guest, BufferBinding::MIN_BUFFER_ADDRESS);
-    let highest = BufferAddress::addressed(records_address(0) - BufferAddress::GUEST_OFFSET - 1);
-    assert_eq!(highest.unwrap().guest, records_address(0) - 1);
-    assert!(BufferAddress::addressed(0xffff_7fff_ffff_ffff).is_err());
-    assert!(BufferAddress::addressed(records_address(0) - BufferAddress::GUEST_OFFSET).is_err());
-    assert!(BufferAddress::addressed(records_address(1)).is_err());
-}
-
 /// The runtime draws a vertex or fragment case of any sample count, its own stage's buffers,
 /// textures and samplers, argument-buffer members, vertex buffers, color targets, and one direct
 /// or indexed draw of primitives or one patch draw with no index buffer, observing a buffer, a
@@ -1289,7 +1212,7 @@ fn addressed_allocations_take_metal_addresses() {
 /// one sample or more, observed or not; a fragment pass with no attachment, of one sample or more;
 /// a layered pass; and an attribute buffer's out-of-bounds target. A case with anything else (a
 /// depth/stencil attachment of both aspects, a patch draw through a patch index buffer, or an index
-/// buffer's out-of-bounds target) stays on the executor's own context.
+/// buffer's out-of-bounds target) is refused before it runs.
 #[test]
 fn a_plain_draw_and_only_one_runs_through_the_runtime() {
     use super::graphics::tests::two_stage_case;
@@ -1418,7 +1341,7 @@ fn a_plain_draw_and_only_one_runs_through_the_runtime() {
         assert!(runs_render_through_runtime(&observed));
     }
     // A depth/stencil attachment of one aspect, of one sample or more, observed or not, with or
-    // without a color target; one of both aspects stays on the executor's own context.
+    // without a color target; one of both aspects is refused before it runs.
     let depth = LiteralDepthStencil {
         dimensions: [2, 2],
         samples: 1,

@@ -3,8 +3,8 @@
 //! The generators and their Rust reference models live in the dev-tools crate
 //! (`metal2vulkan_devtools::fuzz`); the `*_fuzz.rs` test modules next to this one run them on
 //! [`device::Engine`] (`--cfg m2v_cpu_icd` or `--cfg m2v_gpu`): the engine on the test's
-//! Vulkan device through the binder, the candidate executor's own path
-//! (`platform::execute_engine`: the validation layer on, the status read before the output).
+//! Vulkan device through the runtime, the candidate executor's path
+//! (`platform::execute_runtime`: the validation layer on).
 //! The modules carry no execution bound, so cyclic programs run on a GPU as compiled: this is the
 //! GPU lane (Q-fuzz). A program that does not end is not cancelled: the finite device wait ends
 //! only the test's wait (the test fails), the hang tripwire only refuses later device opens, and
@@ -70,12 +70,11 @@ pub(super) mod device {
         }
 
         /// Assemble `kernel`, map it onto the candidate's [`ComputeCase`], and run it through
-        /// the binder on the test's device.
+        /// the runtime on the test's device.
         fn execute(&mut self, kernel: &Kernel<'_>) -> Result<Run, String> {
             let bitcode = assemble(kernel.entry, kernel.air)?;
             let case = compute_case(kernel)?;
-            let run = run(&format!("fuzz-{}", kernel.entry), &case, &bitcode)
-                .map_err(|error| error.to_string())?;
+            let run = run(&case, &bitcode).map_err(|error| error.to_string())?;
             if run.output.len() != kernel.output_init.len() {
                 return Err(format!(
                     "read back {} bytes, wanted {}",
@@ -100,26 +99,14 @@ pub(super) mod device {
         })
     }
 
-    /// One engine dispatch of `case` (`bitcode`'s entry) on the test's device, compiled in
-    /// the device tests' compile worker for the bind shape the dispatch plans, labelled `label` for
-    /// the hang protocol.
+    /// One dispatch of `case` (`bitcode`'s entry) through the runtime on the test's device
+    /// (`engine_compute::run_through_runtime`).
     pub(in crate::candidate::tests) fn run(
-        label: &str,
         case: &ComputeCase,
         bitcode: &[u8],
     ) -> Result<crate::candidate::engine::ComputeRun, ExecutorError> {
         super::device_wait();
-        platform::execute_engine(crate::gpu::TEST_DEVICE, label, case, |device, shape| {
-            crate::candidate::engine::compile_case(
-                super::super::compile_worker(),
-                device,
-                &crate::acceptance::retained(bitcode),
-                &[],
-                case,
-                shape,
-            )
-        })
-        .result
+        super::super::engine_compute::run_through_runtime(case, bitcode)
     }
 
     /// `kernel` as one candidate dispatch: buffer 0 the output, each input at its index, a

@@ -307,8 +307,8 @@ pub(super) fn current_restriction() -> Option<&'static ProfileRestriction> {
     RESTRICTION.get_or_init(|| None).as_ref()
 }
 
-/// The committed profile of [`current_restriction`]: what an engine device worker must
-/// restrict its own contexts to before it opens a device.
+/// The committed profile of [`current_restriction`]: what an engine device worker restricts the
+/// runtime's device to (`runtime_restriction`).
 pub fn requested_restriction() -> Option<String> {
     current_restriction().map(|restriction| restriction.stem.clone())
 }

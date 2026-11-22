@@ -132,35 +132,6 @@ pub struct Mechanism {
     pub check: Check,
 }
 
-impl Mechanism {
-    /// `<medium>:<check>`, as the coverage report prints it.
-    pub fn label(self) -> String {
-        let medium = match self.medium {
-            Medium::DescriptorView => "descriptor-view",
-            Medium::DeviceAddress => "device-address",
-            Medium::Arena => "arena",
-            Medium::TexelBuffer => "texel-buffer",
-            Medium::Image => "image",
-            Medium::TypedObject => "typed-object",
-            Medium::HandleTable => "handle-table",
-            Medium::ResourceId => "resource-id",
-            Medium::VertexInput => "vertex-input",
-            Medium::IndexBuffer => "index-buffer",
-            Medium::HandleArray => "handle-array",
-        };
-        let check = match self.check {
-            Check::Shader => "shader",
-            Check::ShaderReads => "shader-reads",
-            Check::Robust => "robust",
-            Check::Robust2 => "robust2",
-            Check::Binder => "binder",
-            Check::Padded => "padded",
-            Check::Unchecked => "unchecked",
-        };
-        format!("{medium}:{check}")
-    }
-}
-
 /// One target as a candidate run contained it: what the census records of an out-of-bounds run.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -956,4 +927,4 @@ pub fn threadgroup_reach(case: &AuthoredCase, binding: u32) -> u32 {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

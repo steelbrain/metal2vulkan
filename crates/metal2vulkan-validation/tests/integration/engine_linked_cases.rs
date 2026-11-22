@@ -6,12 +6,11 @@
 //! it compiles for. No device is opened: the GPU run (Metal and the candidate) is the operator's.
 
 use base64::Engine as _;
-use metal2vulkan::bind::BufferRanges;
 use metal2vulkan::device::DevicePolicy;
 use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
 use metal2vulkan_validation::acceptance::{retained, LinkedLibrary};
 use metal2vulkan_validation::candidate::engine::{
-    compile_case, compute_case, compute_shape, linked_modules, prepare_case, LinkedModule,
+    compute_case, kernel_request, linked_modules, prepare_case, LinkedModule,
 };
 use metal2vulkan_validation::case::AuthoredCase;
 use metal2vulkan_validation::check::admission::{admit, ExecutionRequest};
@@ -20,7 +19,9 @@ use metal2vulkan_validation::gpu::DeviceType;
 use metal2vulkan_validation::hash::sha256_bytes;
 use metal2vulkan_validation::l3::{check_words_l3, L3Failure};
 use metal2vulkan_validation::library_module::{merge_library_module_shards, LibraryModuleRow};
-use metal2vulkan_validation::worker::compile::{CompileWorker, WorkerDevice};
+use metal2vulkan_validation::worker::compile::{
+    compile_compute_request, CompileWorker, WorkerDevice,
+};
 use metal2vulkan_validation::ScratchDir;
 
 /// The fixture `stem`'s text and its bitcode, or `None` without `llvm-as`.
@@ -150,17 +151,13 @@ fn a_case_with_visible_function_references_compiles_linked_through_the_worker() 
         let device =
             WorkerDevice::new(load_description(stem).unwrap(), DevicePolicy::default()).unwrap();
         let profile = device.device().profile();
-        let addressed = profile.descriptors().buffer_device_address;
-        let shape = compute_shape(&compute, addressed, BufferRanges::of(profile.limits())).unwrap();
-        let pipeline = compile_case(
-            &worker,
-            &device,
-            &retained(&caller),
-            &linked,
-            &compute,
-            &shape,
-        )
-        .unwrap_or_else(|error| panic!("{stem}: {error}"));
+        let compile = |linked: &[LinkedModule]| {
+            let (request, libraries) = kernel_request(&retained(&caller), linked, &compute);
+            compile_compute_request(&worker, &device, &libraries, &request)
+                .unwrap_or_else(|error| panic!("{stem}: {error:?}"))
+                .result
+        };
+        let pipeline = compile(&linked).unwrap_or_else(|error| panic!("{stem}: {error:?}"));
         match check_words_l3(&pipeline.stage.spirv, &pipeline.requirements, profile) {
             Ok(()) => {}
             Err(L3Failure::Tooling(why)) => eprintln!("SKIPPED spirv-val on {stem}: {why}"),
@@ -168,10 +165,10 @@ fn a_case_with_visible_function_references_compiles_linked_through_the_worker() 
         }
         // Without the linked modules the same compile is the product's typed refusal of the
         // unresolved reference, never a candidate-side one.
-        match compile_case(&worker, &device, &retained(&caller), &[], &compute, &shape) {
+        match compile(&[]) {
             Err(error) => assert!(
-                error.to_string().contains("LinkedFunction"),
-                "{stem}: {error}"
+                format!("{error:?}").contains("LinkedFunction"),
+                "{stem}: {error:?}"
             ),
             Ok(_) => panic!("{stem}: the caller compiled without its linked functions"),
         }

@@ -493,8 +493,8 @@ struct Targets {
 
 /// A depth/stencil attachment of one aspect, as the oracle makes it (Metal's separate
 /// `Depth32Float` and `Stencil8`): the runtime renders into no separate depth and stencil textures
-/// in one pass (`Gap::RenderPass` of `DepthStencilViews`), so a case of both stays on the
-/// executor's own context (`engine::runs_render_through_runtime`). A multisampled stencil aspect
+/// in one pass (`Gap::RenderPass` of `DepthStencilViews`), so a case of both is refused before it
+/// runs (`engine::runs_render_through_runtime`). A multisampled stencil aspect
 /// holds one value in every sample, which the pass clears it to (`clear`).
 struct DepthStencil {
     texture: rt::Texture,

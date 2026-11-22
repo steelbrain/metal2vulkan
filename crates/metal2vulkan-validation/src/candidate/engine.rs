@@ -1,21 +1,15 @@
 //! The engine candidate.
 //!
-//! The executor dogfoods the product's consumer path end to end: the opened Vulkan device is
-//! queried (`DeviceDescription::query`, restricted to what the context enabled,
-//! `DeviceDescription::with_enabled`) into a `Device`, a kernel case's AIR goes through
-//! `Library` → `Function` → `compile_function` → `compile_compute_pipeline` with the inputs its
-//! bind shape decides ([`variants`]), and the dispatch is planned by the binder
-//! (`ComputePipeline::plan`, `BindingPlan::instantiate_dispatch`): descriptor writes (buffers,
-//! textures, texel buffers, samplers), ranges, push bytes and holes, neutral stand-ins, the root
-//! table, per-region specialization and group counts. A vertex case compiles and draws through
-//! one `RenderPipeline` the same way, a fragment case and an observed vertex case with their
-//! generated companion stage ([`graphics`]). The case's own function links the functions its
-//! visible-function references name, from the modules the Metal oracle links
+//! The executor runs each case as a consumer runs it, through the runtime
+//! (`metal2vulkan-runtime`) on its public API alone, on the runtime's device of the requested
+//! kind: a kernel case as one dispatch (`platform::runtime`), a vertex or fragment case as one
+//! draw (`platform::runtime_render`, [`graphics`]). The case's own function links the functions
+//! its visible-function references name, from the modules the Metal oracle links
 //! ([`linked_modules`]). Each element of a texture array is the texture at its own Metal slot
-//! ([`resources::bound_textures`]), and an argument-buffer buffer of either executor is a used
-//! resource whose address its owner holds ([`argument_buffers`]); an argument-buffer texture is a
-//! used texture whose resource id its owner holds, a member of the plan's heap. Nothing about the
-//! layout is re-derived here.
+//! ([`resources::bound_textures`]), and an argument-buffer buffer is a used resource whose address
+//! its owner holds ([`argument_buffers`]); an argument-buffer texture is a used texture whose
+//! resource id its owner holds. A draw of a structure the runtime route does not make, and an
+//! object or mesh case, are typed refusals (`run_prepared`).
 //!
 //! Safety and evidence rules, in the order they apply:
 //!
@@ -25,18 +19,14 @@
 //!   A submitted shader that does not end is not cancelled: the finite device wait ends only the
 //!   host's wait (the row fails), the per-run timeout ends only the host process, and the hang
 //!   tripwire only refuses later runs; the OS or driver GPU timeout is what stops the shader;
-//! - the `ExecutionStatus` buffer starts zero ([`ExecutionStatus::initial`]) and is read before
-//!   any output ([`status_verdict`]): an indirect overflow or a resident-set miss is never
-//!   evidence;
-//! - the context runs under `VK_LAYER_KHRONOS_validation` (core and synchronization); any
-//!   message it reports fails the row.
+//! - the runtime's device runs under `VK_LAYER_KHRONOS_validation` (core and synchronization);
+//!   any message it reports fails the row.
 //!
-//! This module is the device-free half (case mapping, the status rule, identity);
-//! the Vulkan half is `platform::{compute,render,plan_resources}`. Every pipeline compiles in a
-//! killable compile worker ([`compile_case`], [`compile_render_case`]), never in the process that
-//! holds the device, and the device half of a tool's run is itself a child, the device worker
-//! (`run_on_device`, `worker::device`): a driver fault ends the worker and comes back as a typed
-//! `ExecutorError::DeviceCrash`.
+//! This module is the device-free half (case mapping, identity, and the authored compile census's
+//! compile, [`case_compile`]); the Vulkan half is `platform::{runtime,runtime_render}`. The census
+//! compiles in a killable compile worker, and the device half of a tool's run is itself a child,
+//! the device worker (`run_on_device`, `worker::device`): a driver fault ends the worker and comes
+//! back as a typed `ExecutorError::DeviceCrash`.
 
 use crate::acceptance::{LinkedLibrary, PipelineRequest, RequestFunction};
 use crate::c3::{AnswerGap, ReviewedList, VenueProfile, Venues, VENUE_PROFILE};
@@ -76,18 +66,16 @@ use crate::worker::device::{DeviceInput, DeviceOutcome, DeviceRun, OpenedDevice,
 use crate::worker::WorkerFailure;
 use base64::Engine as _;
 use metal2vulkan::bind::{
-    BindShape, BindState, BoundBuffer, BufferRanges, Dispatch, DrawCall, ExecutionStatus,
-    StageTable, StatusReport,
+    BindShape, BindState, BoundBuffer, BufferRanges, Dispatch, DrawCall, StageTable, StatusReport,
 };
 use metal2vulkan::cache::Hash256;
 use metal2vulkan::device::DeviceProfile;
-use metal2vulkan::error::{BindError, Error};
+use metal2vulkan::error::Error;
 use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
 use metal2vulkan::metal::RenderStages;
 use metal2vulkan::pipeline::Stage as ShaderStage;
 use metal2vulkan::pipeline::{ComputePipeline, RenderPipeline};
 use std::borrow::Cow;
-use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Duration;
@@ -562,18 +550,9 @@ pub fn texture_tokens(case: &ComputeCase) -> Result<BTreeMap<(u32, u32), u32>, S
     )
 }
 
-/// The id of each argument-buffer sampler of `case`, by its key
-/// ([`argument_buffers::sampler_ids`]).
-pub fn sampler_ids(case: &ComputeCase) -> Result<BTreeMap<(u32, u32), u64>, String> {
-    argument_buffers::sampler_ids(case.argument_buffer_samplers.keys().copied())
-}
-
 /// A bound buffer's addresses: the Metal `gpuAddress` the guest sees and the host Vulkan device
-/// address when the buffer has one. With device addresses an allocation's guest address is its
-/// device address, read as a signed number, moved up by [`BufferAddress::GUEST_OFFSET`]
-/// ([`BufferAddress::addressed`]): a Metal address whatever the device hands out, which the
-/// product translates through the resident set as it does the runtime's own address space.
-/// Without them the guest address is a distinct synthetic base.
+/// address when the buffer has one. Without device addresses the guest address is a distinct
+/// synthetic base ([`BufferAddress::synthetic`], [`BufferAddress::synthetic_used`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BufferAddress {
     pub guest: u64,
@@ -581,42 +560,6 @@ pub struct BufferAddress {
 }
 
 impl BufferAddress {
-    /// How far above its device address, read as a signed number, an allocation's guest address
-    /// lies: 2^47 + 2^32. Vulkan bounds no device address, and devices hand out different ones:
-    /// NVIDIA's lie under 2^32 (0x5020000 for a vertex buffer on an RTX 3090 and 0x4af0000 on an
-    /// RTX 5080 Laptop GPU, 615.71.09), below the lowest address that names a buffer
-    /// (`BufferBinding::MIN_BUFFER_ADDRESS`, 2^32; below it a record's address is a nil buffer's
-    /// offset, as on Apple silicon, whose buffers all lie above it), and RADV gives the upper half
-    /// of its 48-bit space sign-extended (0xffff800100040000 on a Radeon 780M), where the records
-    /// of indirect command buffers lie (`records_address`, from 2^63). Read as signed, every
-    /// 48-bit sign-extended address and every address under 2^63 less this offset moves into
-    /// [2^32, 2^63), where Metal's buffers lie. One offset for every allocation keeps their guest
-    /// ranges as disjoint as their device ranges.
-    pub const GUEST_OFFSET: u64 =
-        (1 << 47) + metal2vulkan::bind::indirect_commands::BufferBinding::MIN_BUFFER_ADDRESS;
-
-    /// The addresses of an allocation at device address `host`: its guest address
-    /// [`GUEST_OFFSET`](Self::GUEST_OFFSET) above it, read as a signed number. Refused where that
-    /// guest address would lie below 2^32 (a device address sign-extended past 48 bits) or reach
-    /// 2^63, where the records of indirect command buffers and the synthetic windows of
-    /// [`BufferAddress::synthetic_used`] lie.
-    pub fn addressed(host: u64) -> Result<BufferAddress, String> {
-        let lowest = metal2vulkan::bind::indirect_commands::BufferBinding::MIN_BUFFER_ADDRESS;
-        match host
-            .cast_signed()
-            .checked_add(Self::GUEST_OFFSET.cast_signed())
-        {
-            Some(guest) if guest >= lowest.cast_signed() => Ok(BufferAddress {
-                guest: guest.cast_unsigned(),
-                host: Some(host),
-            }),
-            _ => Err(format!(
-                "device address {host:#x} has no guest address in [2^32, 2^63), where Metal's \
-                 buffers lie"
-            )),
-        }
-    }
-
     /// The synthetic guest base of Metal buffer `index` on a device without device addresses:
     /// disjoint 4-GiB windows, never 0.
     pub fn synthetic(index: u32) -> BufferAddress {
@@ -635,31 +578,6 @@ impl BufferAddress {
             host: None,
         }
     }
-}
-
-/// Read the `ExecutionStatus` bytes after the run, before any output ([`report_verdict`]).
-pub fn status_verdict(bytes: &[u8; ExecutionStatus::BYTES]) -> Result<StatusReport, ExecutorError> {
-    report_verdict(ExecutionStatus::decode(bytes))
-}
-
-/// The verdict on a run's status report, read before any output: a device replay that refused a
-/// command, a clamped indirect count, or a resident-set miss means the run is not a semantic
-/// observation, a failure.
-pub fn report_verdict(report: StatusReport) -> Result<StatusReport, ExecutorError> {
-    if report.replay_fault {
-        return Err(ExecutorError::Failed(format!(
-            "the device replay dispatched nothing for command(s) it refused ({:#x}); the output \
-             is not evidence",
-            report.replay_faults.0
-        )));
-    }
-    if report.resident_miss || report.resident_misses != 0 {
-        return Err(ExecutorError::Failed(format!(
-            "{} access(es) missed the resident set; the output is not evidence",
-            report.resident_misses
-        )));
-    }
-    Ok(report)
 }
 
 /// The translator fingerprint of engine observations: the product and the profile the case
@@ -861,8 +779,7 @@ pub struct RuntimeKernel<'a> {
     pub reductions: &'a std::collections::BTreeSet<&'static str>,
 }
 
-/// Whether `case` draws through the runtime
-/// (`platform::execute_runtime_render`) in place of the executor's own context: a vertex or
+/// Whether the runtime route draws `case` (`platform::execute_runtime_render`): a vertex or
 /// fragment case of any sample count (`raster_sample_count`; each attachment of more samples
 /// filled and read back sample by sample, `platform::runtime_multisample`), its own stage's
 /// buffers, bound textures (made as a kernel case's run makes them, `platform::runtime_textures`)
@@ -1102,31 +1019,6 @@ pub(crate) fn draw_out_of_bounds_run(
     )
 }
 
-/// Whether a draw that read `padding` index positions past where Metal's fetch stops reading its
-/// index buffer from a zero-padded copy of its indices contains them as `run`'s index buffer
-/// target states: the padded copy, of at least one such position. The executor's context holds
-/// the draw to it; a run without that target agrees with any draw.
-pub(crate) fn index_padding_agrees(
-    run: Option<&OutOfBoundsRun>,
-    padding: Option<u64>,
-) -> Result<(), ExecutorError> {
-    let Some(target) = run.and_then(|run| {
-        run.targets
-            .iter()
-            .find(|target| target.resource == OutOfBoundsResource::IndexBuffer)
-    }) else {
-        return Ok(());
-    };
-    match (target.mechanism.check, padding) {
-        (out_of_bounds::Check::Padded, Some(positions)) if positions > 0 => Ok(()),
-        _ => Err(ExecutorError::Failed(format!(
-            "the draw reads {padding:?} padded index positions past the index buffer, not as {} \
-             contains them",
-            target.mechanism.label()
-        ))),
-    }
-}
-
 /// A product refusal as the executor reports it: a typed outcome, or a failure when the outcome
 /// is a defect (panic, internal, invalid output).
 pub fn product_refusal(error: &Error) -> ExecutorError {
@@ -1136,16 +1028,6 @@ pub fn product_refusal(error: &Error) -> ExecutorError {
 /// [`product_refusal`] of an error a compile worker reported as its typed outcome and detail.
 pub fn outcome_refusal(outcome: Outcome, detail: String) -> ExecutorError {
     refusal_at(outcome, detail, false)
-}
-
-/// [`product_refusal`] of the binder's typed refusal of what the case binds (its resources, its
-/// dispatch): `at_bind`, which its refusal record keeps.
-pub fn bound_refusal(error: &Error) -> ExecutorError {
-    refusal_at(
-        Outcome::from(error),
-        bounded_detail(&error.to_string()),
-        true,
-    )
 }
 
 fn refusal_at(outcome: Outcome, detail: String, at_bind: bool) -> ExecutorError {
@@ -1222,28 +1104,10 @@ fn linking(
     }
 }
 
-/// The compile request for `case`'s kernel from `library` (its source row's,
-/// [`RowSource::of_row`]; the worker assembles a row that retains no bitcode) with the lowering
-/// inputs the bind shape `shape` and the case's dispatch decide (`PipelineRequest::BoundCompute`),
-/// linking the functions of `linked`, and its libraries in [`PipelineRequest::libraries`] order: `library`, then each of
-/// `linked`'s.
-pub fn compute_request<'a>(
-    library: &RowSource<'a>,
-    linked: &[LinkedModule],
-    case: &ComputeCase,
-    shape: &BindShape,
-) -> (PipelineRequest, Vec<RowSource<'a>>) {
-    let request = PipelineRequest::BoundCompute {
-        function: linking(&case.entry, &case.constants, linked),
-        shape: shape.clone(),
-        dispatch: Some(case.dispatch),
-    };
-    (request, with_linked(&[library], linked))
-}
-
 /// The compile request for `case`'s kernel from `library` as the runtime compiles it for the
 /// case's dispatch (`PipelineRequest::Kernel`, its threadgroup size), linking the functions of
-/// `linked`, and its libraries as [`compute_request`] orders them: the authored compile census's.
+/// `linked`, and its libraries in [`PipelineRequest::libraries`] order (`library`, then each of
+/// `linked`'s): the authored compile census's.
 pub fn kernel_request<'a>(
     library: &RowSource<'a>,
     linked: &[LinkedModule],
@@ -1274,8 +1138,8 @@ pub fn companion_source(case: &graphics::RenderCase) -> Option<RowSource<'static
 /// drawn together (`PipelineRequest::Draw`); each list ends with `linked`'s libraries. The case's
 /// own function (the fragment function a passthrough vertex companion draws, the vertex function an
 /// observer fragment companion observes) links the functions of `linked`; the companion links
-/// nothing. A fragment function that is no companion's (which only owned device tests build,
-/// through [`compile_render`]) is a failure, as is a companion without its source.
+/// nothing. A fragment function that is no companion's (which only owned device tests build) is a
+/// failure, as is a companion without its source.
 pub fn render_request<'a>(
     library: &RowSource<'a>,
     companion: Option<&RowSource<'a>>,
@@ -1350,34 +1214,6 @@ fn not_compiled(refusal: NotCompiled) -> ExecutorError {
     }
 }
 
-/// Compile `case`'s kernel from `library` for `device` in a killable compile worker, as
-/// [`compute_request`] asks: the product's typed refusal is [`outcome_refusal`]'s, and a stop at
-/// the worker boundary (the deadline, the memory limit, a crashed worker, an artifact that does not
-/// load for `device`) fails the run.
-pub fn compile_case(
-    worker: &CompileWorker,
-    device: &WorkerDevice,
-    library: &RowSource<'_>,
-    linked: &[LinkedModule],
-    case: &ComputeCase,
-    shape: &BindShape,
-) -> Result<ComputePipeline, ExecutorError> {
-    let (request, libraries) = compute_request(library, linked, case, shape);
-    compile_request(worker, device, &libraries, &request)
-}
-
-/// Compile `request`, a kernel's, from `libraries` in `worker`.
-fn compile_request(
-    worker: &CompileWorker,
-    device: &WorkerDevice,
-    libraries: &[RowSource<'_>],
-    request: &PipelineRequest,
-) -> Result<ComputePipeline, ExecutorError> {
-    compute_attempt(worker, device, libraries, request)
-        .result
-        .map_err(ExecutorError::from)
-}
-
 /// Why a compile of one of a case's pipelines in a compile worker gave no pipeline: a stop at the
 /// worker boundary, or the worker's refusal. The executor reads each as its [`ExecutorError`]
 /// ([`From`]: `worker_stopped`, `not_compiled`); the authored compile census keeps them typed.
@@ -1426,7 +1262,7 @@ impl<P> CompileAttempt<P> {
     }
 }
 
-/// [`compile_request`] with its failure typed and its measure ([`CompileAttempt`]).
+/// [`compile_compute_request`] with its failure typed and its measure ([`CompileAttempt`]).
 fn compute_attempt(
     worker: &CompileWorker,
     device: &WorkerDevice,
@@ -1436,7 +1272,7 @@ fn compute_attempt(
     CompileAttempt::of(compile_compute_request(worker, device, libraries, request))
 }
 
-/// [`compile_render`] with its failure typed and its measure ([`CompileAttempt`]).
+/// [`compile_render_request`] with its failure typed and its measure ([`CompileAttempt`]).
 fn render_attempt(
     worker: &CompileWorker,
     device: &WorkerDevice,
@@ -1444,37 +1280,6 @@ fn render_attempt(
     libraries: &[RowSource<'_>],
 ) -> CompileAttempt<RenderPipeline> {
     CompileAttempt::of(compile_render_request(worker, device, libraries, request))
-}
-
-/// Compile `case`'s pipeline for `device` in a killable compile worker, as [`render_request`]
-/// asks; the worker assembles a source that retains no bitcode (the companion's text, a public
-/// fixture's). Refusals and stops are classified as for [`compile_case`].
-pub fn compile_render_case(
-    worker: &CompileWorker,
-    device: &WorkerDevice,
-    library: &RowSource<'_>,
-    companion: Option<&RowSource<'_>>,
-    linked: &[LinkedModule],
-    case: &graphics::RenderCase,
-    shape: &BindShape,
-) -> Result<RenderPipeline, ExecutorError> {
-    let (request, libraries) = render_request(library, companion, linked, case, Some(shape))?;
-    compile_render(worker, device, &request, &libraries)
-}
-
-/// Compile `request`, a draw, from `libraries` (in [`PipelineRequest::libraries`] order) for
-/// `device` in a killable compile worker. [`compile_render_case`] asks for [`render_request`]'s
-/// draw; the owned device tests ask for a vertex and a fragment function of two owned libraries,
-/// which no authored case draws. Refusals and stops are classified as for [`compile_case`].
-pub fn compile_render(
-    worker: &CompileWorker,
-    device: &WorkerDevice,
-    request: &PipelineRequest,
-    libraries: &[RowSource<'_>],
-) -> Result<RenderPipeline, ExecutorError> {
-    render_attempt(worker, device, request, libraries)
-        .result
-        .map_err(ExecutorError::from)
 }
 
 /// The `BindShape` the executor binds `case` with on a device that has device addresses exactly
@@ -1508,22 +1313,6 @@ pub fn synthetic_used_addresses(
     case: &ComputeCase,
 ) -> Result<BTreeMap<(u32, u32), BufferAddress>, String> {
     argument_buffers::synthetic_addresses(case.argument_buffer_buffers.keys().copied())
-}
-
-/// A binder refusal as the executor reports it: an `Unsupported` is the product's typed outcome,
-/// an internal disagreement between pipeline and binder is a failure, and so is a dispatch that
-/// asks for another variant than the one compiled for it; every other refusal of the bind state on
-/// this device is [`NotSupported::Bind`].
-pub fn bind_refusal(error: &BindError) -> ExecutorError {
-    match error {
-        BindError::Unsupported(unsupported) => {
-            bound_refusal(&Error::Unsupported(unsupported.clone()))
-        }
-        BindError::Internal(_) | BindError::NeedsVariant { .. } => {
-            ExecutorError::Failed(format!("binder: {error}"))
-        }
-        _ => NotSupported::Bind(bounded_detail(&error.to_string())).into(),
-    }
 }
 
 /// Admit `case` for the engine candidate on `device_type`, then open that device and execute
@@ -1717,18 +1506,15 @@ impl CaseCompile<'_> {
     }
 }
 
-/// The pipeline a run of `prepared` compiles on `device` before it reads any device output, with
-/// the request the executor builds for it, compiled as the runtime compiles it (through no binding
-/// plan): the case's own pipeline ([`kernel_request`] for the case's dispatch, [`render_request`]
-/// with its generated companion and no shape, or a mesh draw's, `mesh::mesh_request`), and the
-/// bind shape a run plans it for ([`compute_shape`], [`graphics::render_shape`]'s, or
-/// `mesh::mesh_shape`'s), which the artifact's digest holds the plan of. The bind shapes depend
-/// on the device only through whether it has device addresses, which the executor reads from what
-/// its context enabled and this from `device`'s description: the same fact for an opened device,
-/// whose description is restricted to what was enabled; and through its profile's range limits
-/// (`BufferRanges::of`), which both read from the device's profile. The authored compile census
-/// compiles it on each committed profile; the executor builds the same request through
-/// [`compile_case`] and [`compile_render_case`].
+/// The pipeline a run of `prepared` compiles on `device` before it reads any device output,
+/// compiled as the runtime compiles it (through no binding plan): the case's own pipeline
+/// ([`kernel_request`] for the case's dispatch, [`render_request`] with its generated companion
+/// and no shape, or a mesh draw's, `mesh::mesh_request`), and the bind shape the artifact's digest
+/// holds the plan of ([`compute_shape`], [`graphics::render_shape`]'s, or `mesh::mesh_shape`'s).
+/// The bind shapes depend on the device only through whether it has device addresses, read from
+/// `device`'s description (for an opened device, restricted to what was enabled), and through its
+/// profile's range limits (`BufferRanges::of`). The authored compile census compiles it on each
+/// committed profile.
 pub fn case_compile<'a>(
     prepared: &'a PreparedCase,
     device: &WorkerDevice,
@@ -1809,9 +1595,9 @@ pub(crate) fn run_on_device(input: &DeviceInput) -> DeviceOutcome {
     // opened device each take the figure from it by construction: a case that never reached a
     // device (its preparation failed) is the only outcome without one, and it is neither.
     match prepare_on_device(input) {
-        Ok((prepared, worker)) => {
+        Ok(prepared) => {
             let clock = crate::budgets::CreationClock::start();
-            let attempt = run_on_context(&prepared, &worker);
+            let attempt = run_prepared(&prepared);
             let timing = CaseTiming::of_one(clock.read());
             DeviceOutcome {
                 result: attempt.result.map(|run| DeviceRun {
@@ -1871,8 +1657,8 @@ fn checked_venue(input: &DeviceInput) -> Result<Option<VenueProfile>, ExecutorEr
 }
 
 /// The device worker's admission and preparation of `input`'s case, checked against the parent's
-/// input digest, and the compile worker it compiles in.
-fn prepare_on_device(input: &DeviceInput) -> Result<(PreparedCase, CompileWorker), ExecutorError> {
+/// input digest.
+fn prepare_on_device(input: &DeviceInput) -> Result<PreparedCase, ExecutorError> {
     let admitted = admit(
         &input.root,
         input.case.clone(),
@@ -1889,112 +1675,33 @@ fn prepare_on_device(input: &DeviceInput) -> Result<(PreparedCase, CompileWorker
         )
         .into());
     }
-    Ok((prepared, CompileWorker::current()?))
+    Ok(prepared)
 }
 
-/// Whether the executor's own context refuses a case whose argument buffers hold `members`: a
-/// texture buffer among them, which a run through the runtime makes over a buffer of its bytes
-/// (`platform::runtime_textures`) and the binder's planned heap holds no member of (the
-/// translator's `bind::heap`), so a handle loaded from its field would miss
-/// ([`argument_buffers::used_texture`]).
-pub fn own_context_refuses_members<'a>(
-    mut members: impl Iterator<Item = &'a LiteralTexture>,
-) -> bool {
-    members.any(|texture| texture.texture_type == crate::case::TextureType::Buffer)
-}
-
-/// Compile (in `worker`), bind, and execute one prepared case on the executor's context: a
-/// kernel case as one dispatch, a vertex or fragment case as one draw. The run's row or refusal
-/// records what it compiled, by content ([`artifact::CaseArtifact`]).
-fn run_on_context(prepared: &PreparedCase, worker: &CompileWorker) -> RunAttempt {
-    let case = &prepared.checked.primary.case;
-    // The worker assembles a row that retains no bitcode (a public fixture), and a companion.
-    let library = RowSource::of_row(&prepared.checked.primary.source);
-    let linked = &prepared.linked;
-    // A case the runtime runs, run so, restricted to this process's profile or not. Every
-    // kernel case the engine maps is one (`compute_case` dispatches it by threads). It records no
-    // artifact: the runtime keeps what it compiled to itself.
-    if let Mapped::Compute(compute) = &prepared.mapped {
-        return run_on_runtime(prepared, compute);
-    }
-    if let Mapped::Render(render) = &prepared.mapped {
-        if runs_render_through_runtime(render) {
-            return run_render_on_runtime(prepared, render);
+/// Run one prepared case on its device through the runtime: a kernel case as one dispatch
+/// ([`run_on_runtime`]), a vertex or fragment case as one draw ([`run_render_on_runtime`]). A
+/// render case of a structure the runtime route does not draw ([`runs_render_through_runtime`])
+/// and a mesh case are typed refusals.
+fn run_prepared(prepared: &PreparedCase) -> RunAttempt {
+    match &prepared.mapped {
+        Mapped::Compute(compute) => run_on_runtime(prepared, compute),
+        Mapped::Render(render) if runs_render_through_runtime(render) => {
+            run_render_on_runtime(prepared, render)
         }
-    }
-    let refused = match &prepared.mapped {
-        Mapped::Compute(compute) => {
-            own_context_refuses_members(compute.argument_buffer_textures.values())
-        }
-        Mapped::Render(render) => own_context_refuses_members(
-            render
-                .stages()
-                .flat_map(|(_, function)| function.resources.argument_buffer_textures.values()),
-        ),
-        // A mesh draw's functions take no argument buffer here (`mesh::mesh_shape`).
-        Mapped::Mesh(_) => false,
-    };
-    if refused {
-        return RunAttempt::of(Err(ExecutorError::NotSupported(
-            NotSupported::NotImplemented(
-                "engine candidate: a texture buffer an argument buffer holds, off the runtime: \
-                 the binder's planned heap holds no texture buffer member"
-                    .into(),
-            ),
-        )));
-    }
-    let artifact = RefCell::new(artifact::CaseArtifact::default());
-    let mut attempt = match &prepared.mapped {
-        Mapped::Compute(compute) => super::platform::execute_engine(
-            prepared.device,
-            &case.case_id,
-            compute,
-            |target, shape| {
-                let compiled = compile_case(worker, target, &library, linked, compute, shape)?;
-                artifact
-                    .borrow_mut()
-                    .record(&compiled, target.device(), shape)?;
-                Ok(compiled)
-            },
-        ),
-        Mapped::Render(render) => {
-            let companion = companion_source(render);
-            super::platform::execute_engine_render(
-                prepared.device,
-                &case.case_id,
-                render,
-                |target, shape| {
-                    let compiled = compile_render_case(
-                        worker,
-                        target,
-                        &library,
-                        companion.as_ref(),
-                        linked,
-                        render,
-                        shape,
-                    )?;
-                    artifact
-                        .borrow_mut()
-                        .record(&compiled, target.device(), shape)?;
-                    Ok(compiled)
-                },
-            )
-        }
+        Mapped::Render(_) => RunAttempt::of(Err(NotSupported::NotImplemented(
+            "engine candidate: a draw the runtime route does not make: a depth/stencil attachment \
+             of both aspects, a patch draw through a patch or control-point index buffer, or an \
+             out-of-bounds target other than an attribute buffer"
+                .into(),
+        )
+        .into())),
         // A run's preparation refuses a mesh case before it maps (`prepare_case`); only the
         // compile census prepares one (`prepare_compile`).
         Mapped::Mesh(_) => RunAttempt::of(Err(NotSupported::Requirements(
             [ToolingRequirement::MeshRenderPipeline].into(),
         )
         .into())),
-    };
-    let executed = artifact.into_inner().executed();
-    if let Ok(run) = &mut attempt.result {
-        run.census.artifact = Some(executed.clone());
     }
-    if let Some(opened) = &mut attempt.refused_on {
-        opened.artifact = Some(executed);
-    }
-    attempt
 }
 
 /// [`execute_case`] of a case [`prepare_case`] accepted: the device half in a device worker

@@ -91,7 +91,12 @@ fn accepted(acceptance: Result<Acceptance, crate::acceptance::AcceptanceError>) 
     match acceptance {
         Ok(Acceptance::Created { create }) => {
             assert!(
-                crate::budgets::creation_within_ceiling("the pipeline", create).is_ok(),
+                crate::budgets::creation_within(
+                    "the pipeline",
+                    create,
+                    crate::budgets::PIPELINE_CREATION_CEILING
+                )
+                .is_ok(),
                 "{create:?}"
             );
         }

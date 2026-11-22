@@ -11,7 +11,7 @@ use crate::check::loop_free::DecodedModule;
 use crate::engine::{bounded_detail, Outcome};
 use crate::executor_contract::out_of_bounds::{self, Mechanism};
 use crate::literal::LiteralResources;
-use metal2vulkan::device::{Device, DevicePolicy};
+use metal2vulkan::device::{Device, DevicePolicy, DeviceProfile};
 use metal2vulkan::error::Error;
 use metal2vulkan::library::FunctionConstantValues;
 use metal2vulkan::pipeline::{EntryDescriptor, EntryRef, LoweringInputs};
@@ -293,4 +293,108 @@ pub fn compile_module(
         },
         out_of_bounds,
     })
+}
+
+impl Containment {
+    /// The encodings of a module of SPIR-V `words` compiled for `profile`.
+    pub(crate) fn of_compile(profile: &DeviceProfile, words: &[u32]) -> Containment {
+        let declared = Declared::of(words);
+        Containment {
+            buffers: if !declared.buffers {
+                BufferEncoding::Unused
+            } else {
+                BufferEncoding::Checked
+            },
+            images: if !declared.images {
+                ImageEncoding::Unused
+            } else if profile.device_reads_texels(false) {
+                ImageEncoding::Robust
+            } else if profile.device_drops_texel_writes(false) {
+                ImageEncoding::RobustWrites
+            } else {
+                ImageEncoding::Checked
+            },
+        }
+    }
+
+    /// `buffers:<b>,images:<i>`, as the report prints it.
+    pub(crate) fn label(self) -> String {
+        format!(
+            "buffers:{},images:{}",
+            match self.buffers {
+                BufferEncoding::Unused => "unused",
+                BufferEncoding::Checked => "checked",
+                BufferEncoding::Robust => "robust",
+            },
+            match self.images {
+                ImageEncoding::Unused => "unused",
+                ImageEncoding::Checked => "checked",
+                ImageEncoding::RobustWrites => "robust_writes",
+                ImageEncoding::Robust => "robust",
+            },
+        )
+    }
+}
+
+/// The resources a SPIR-V module declares that a containment encoding can apply to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Declared {
+    /// A variable in the `StorageBuffer` or `Uniform` storage class, or a texel buffer
+    /// (`OpTypeImage` of `Dim` `Buffer`, contained by buffer robustness).
+    pub(crate) buffers: bool,
+    /// An image type other than a texel buffer's (`OpTypeImage` of a `Dim` other than `Buffer`),
+    /// contained by image robustness.
+    pub(crate) images: bool,
+}
+
+impl Declared {
+    /// What `words` declare. Words that do not parse as instructions after the header declare
+    /// both: the reading that never merges one encoding into another.
+    pub(crate) fn of(words: &[u32]) -> Declared {
+        const OP_TYPE_IMAGE: u32 = 25;
+        const OP_VARIABLE: u32 = 59;
+        const DIM_BUFFER: u32 = 5;
+        const UNIFORM: u32 = 2;
+        const STORAGE_BUFFER: u32 = 12;
+        let mut out = Declared {
+            buffers: false,
+            images: false,
+        };
+        let mut at = 5;
+        while let Some(&word) = words.get(at) {
+            let count = (word >> 16) as usize;
+            let Some(operands) = words.get(at + 1..at + count).filter(|_| count > 0) else {
+                break;
+            };
+            match word & 0xffff {
+                OP_TYPE_IMAGE if operands.get(2) == Some(&DIM_BUFFER) => out.buffers = true,
+                OP_TYPE_IMAGE => out.images = true,
+                OP_VARIABLE => {
+                    out.buffers |= matches!(operands.get(2), Some(&(UNIFORM | STORAGE_BUFFER)));
+                }
+                _ => {}
+            }
+            at += count;
+        }
+        if at != words.len() || words.len() < 5 {
+            return Declared {
+                buffers: true,
+                images: true,
+            };
+        }
+        out
+    }
+}
+
+impl ExecutionClass {
+    /// The class of a device, or `None` for a description that names no device (a capability
+    /// profile, such as `runtime-floor`, that no host is).
+    pub(crate) fn of_description(description: &DeviceDescription) -> Option<ExecutionClass> {
+        if description.device_type == Some(vk::PhysicalDeviceType::CPU) {
+            return Some(ExecutionClass::CpuIcd);
+        }
+        description
+            .driver_id
+            .map(|driver| ExecutionClass::Host(HostClass(driver)))
+    }
 }

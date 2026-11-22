@@ -1,14 +1,14 @@
 //! The loop kernels of `metal2vulkan_devtools::loop_kernels` on the test's Vulkan device: each
-//! runs through the engine compute candidate under the validation layer, in one threadgroup, and
-//! every thread's word is the one its source gives. The kernels whose exits read values their own
-//! trips defined (one loop of three exits, and an outer loop of four whose inner loop leaves both)
-//! run with trip bounds that reach every exit, and their modules store an undefined value at a
-//! loop trip's top (`spirv::carry`): the test counts those stores in the SPIR-V the dispatch ran,
+//! runs through the runtime under the validation layer, in one threadgroup, and every thread's
+//! word is the one its source gives. The kernels whose exits read values their own trips defined
+//! (one loop of three exits, and an outer loop of four whose inner loop leaves both) run with trip
+//! bounds that reach every exit, and their modules store an undefined value at a loop trip's top
+//! (`spirv::carry`): the test counts those stores in the module the translator compiles for the
+//! kernel (`Device::compile_compute_pipeline` for `runtime-floor`, the runtime's own module of it),
 //! prints the count and requires one. The loop whose threads leave a barrier loop early is walked
 //! predicated, so its module holds no such store. It times nothing.
 
-use super::*;
-use crate::candidate::engine::{compile_case, ComputeCase, ComputeOutput};
+use crate::candidate::engine::{ComputeCase, ComputeOutput};
 use metal2vulkan::bind::Dispatch;
 use metal2vulkan::library::FunctionConstantValues;
 use metal2vulkan_devtools::loop_kernels::{self, BOUNDS, LOOP_LEAVER, NESTED_EXITS, TRIP_EXITS};
@@ -56,9 +56,9 @@ fn undefined_stores(spirv: &[u32]) -> usize {
         .count()
 }
 
-/// One dispatch of kernel `entry` of `bitcode` in one threadgroup of `n` threads, `limits` in
-/// buffer 0 and `n` poisoned words in buffer 1: the words it wrote, and the stores of an undefined
-/// value in the SPIR-V its pipeline ran.
+/// One dispatch of kernel `entry` of `bitcode` through the runtime in one threadgroup of `n`
+/// threads, `limits` in buffer 0 and `n` poisoned words in buffer 1: the words it wrote, and the
+/// stores of an undefined value in the module the translator compiles for the kernel.
 fn run(entry: &str, bitcode: &[u8], n: u32, limits: [u32; 2]) -> (Vec<u32>, usize) {
     super::gpu_fuzz::device_wait();
     let poison: Vec<u8> = (0..n).flat_map(|_| POISON.to_le_bytes()).collect();
@@ -88,28 +88,30 @@ fn run(entry: &str, bitcode: &[u8], n: u32, limits: [u32; 2]) -> (Vec<u32>, usiz
             length,
         },
     };
-    let mut stores = None;
-    let run = platform::execute_engine(
-        crate::gpu::TEST_DEVICE,
-        &format!("loop-exits-{entry}"),
-        &case,
-        |device, shape| {
-            let pipeline = compile_case(
-                compile_worker(),
-                device,
-                &crate::acceptance::retained(bitcode),
-                &[],
-                &case,
-                shape,
-            )?;
-            stores = Some(undefined_stores(&pipeline.stage.spirv));
-            Ok(pipeline)
-        },
+    let run = super::engine_compute::run_through_runtime(&case, bitcode)
+        .unwrap_or_else(|error| panic!("{entry} over {n} threads, limits {limits:?}: {error}"));
+    (
+        words(&run.output),
+        undefined_stores(&compiled(entry, bitcode)),
     )
-    .result
-    .unwrap_or_else(|error| panic!("{entry} over {n} threads, limits {limits:?}: {error}"));
-    let stores = stores.expect("the dispatch compiled its pipeline");
-    (words(&run.output), stores)
+}
+
+/// The SPIR-V words of kernel `entry` of `bitcode` as the translator compiles it for
+/// `runtime-floor`, with no function-constant value.
+fn compiled(entry: &str, bitcode: &[u8]) -> std::sync::Arc<[u32]> {
+    use metal2vulkan::library::Library;
+    use metal2vulkan::pipeline::{ComputePipelineDescriptor, FunctionDescriptor, StageSource};
+    let device = crate::engine::load_device("runtime-floor").expect("the runtime-floor profile");
+    let function = Library::from_air(bitcode)
+        .and_then(|library| library.function(entry))
+        .unwrap_or_else(|error| panic!("{entry}: {error}"));
+    let descriptor =
+        ComputePipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(function)));
+    device
+        .compile_compute_pipeline(&descriptor, &metal2vulkan::Budget::standard())
+        .unwrap_or_else(|error| panic!("compile {entry}: {error}"))
+        .stage
+        .spirv
 }
 
 /// What thread `t` of a kernel writes for `limits`.
