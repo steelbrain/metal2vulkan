@@ -35,6 +35,9 @@
 //!   swapchain destroyed as the guide says, and a second made on the surface.
 //! - One command buffer presents two drawables, each signalling a semaphore of its own; the same
 //!   semaphore for both, and the same drawable twice, are refused.
+//! - Behind the busy gate, a command buffer that only presents retires after the pieces of its
+//!   queue's cut command buffer waiting for room, and a cut command buffer that presents goes as
+//!   the room another queue's pieces hold comes.
 //! - What a drawable's texture is not is refused: another descriptor, format or usage than the
 //!   swapchain's images, an acquire or a present of a texture that is not a drawable's, a present
 //!   of a drawable not acquired, a second acquire, and a second present; a command buffer dropped
@@ -969,6 +972,147 @@ mod on_device {
                 unsafe { device.raw().device.destroy_semaphore(ready, None) };
             }
             println!("{name}: two drawables presented from one command buffer");
+        });
+    }
+
+    /// A command buffer that presents is never held for room (`WorkState::hold`), and the submit
+    /// thread does not come back to it for ever: behind a cut command buffer of its queue whose
+    /// later pieces wait for room, one that only presents the drawable retires after the pieces
+    /// ("behind"); and a cut command buffer that presents, its first piece waiting for the room
+    /// another queue's pieces hold, goes as the room comes ("cut"). Behind the busy gate the
+    /// window is shown open first: two of the four pieces holding the room submitted, their head
+    /// held for room (`Metrics::held_for_room`). The presenting command buffer's commit and both
+    /// completions are waited for on another thread within `BOUND` each; past it the test ends
+    /// its process, as a submit thread that spins holding the work lock lets no handle drop. The
+    /// presents name no semaphore.
+    #[test]
+    fn every_device_retires_a_presenting_command_buffer_behind_pieces_waiting_for_room() {
+        use crate::tests::command::on_device::{word, Busy};
+        use crate::tests::compute::on_device::step;
+        use crate::{CommandQueue, DispatchType};
+        use std::sync::mpsc;
+        const BOUND: Duration = Duration::from_secs(10);
+        /// A kernel's rate of 3 ms a threadgroup, in picoseconds, the test's own input: each
+        /// dispatch is a piece, and the device's room holds two (`tests::pieces`).
+        const RATE: u64 = 3_000_000_000;
+        each_device("present_hold", |name, _, device| {
+            (device.grant_indices(IndexClass::Texture, 4096, 2)).expect("a grant");
+            let counters = device.counters();
+            let state = step(&device);
+            let mut arena = Arena::new(&device);
+            let info = swapchain(USAGE);
+            let stand_in = StandIn::new(&device, &info);
+            let render = descriptor(TextureUsage::RENDER_TARGET);
+            // SAFETY: the stand-in is made with `info` on the device, in the undefined layout,
+            // and is destroyed once every command buffer that used it has completed.
+            let drawable =
+                unsafe { device.new_drawable_texture(&render, Some(4097), stand_in.image, &info) }
+                    .unwrap_or_else(|error| panic!("{name}: a drawable's texture: {error}"));
+            // A command buffer of `queue` of four steps (`x = x * 2 + 1`) over `x`, four pieces.
+            let pieces = |queue: &CommandQueue, x: &Buffer| {
+                state.inner.compiled.rate.set_for_test(RATE);
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = (command_buffer.compute_command_encoder(DispatchType::Serial))
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&state).expect("a state");
+                encoder.set_buffer(Some(x), 0, 0).expect("a buffer");
+                for _ in 0..4 {
+                    (encoder.dispatch_threadgroups([1, 1, 1], [64, 1, 1])).expect("a dispatch");
+                }
+                encoder.end_encoding();
+                command_buffer
+            };
+            // The submissions so far of `of`'s queue.
+            let own = |of: &CommandBuffer| {
+                let sent = device.core().work.submitted_by(of.queue());
+                sent.into_iter().filter(|&own| own).count()
+            };
+            for form in ["behind", "cut"] {
+                // SAFETY: the stand-in is the test's, in the present layout (or undefined before
+                // the first form), and nothing reads it.
+                unsafe { drawable.drawable_acquired() }
+                    .unwrap_or_else(|error| panic!("{name}: an acquire: {error}"));
+                let queue = device.new_command_queue(4).expect("a queue");
+                let other = device.new_command_queue(4).expect("a queue");
+                let (x, y) = (arena.buffer(), arena.buffer());
+                let busy = Busy::new(&device);
+                let retired: Arc<Mutex<Vec<&'static str>>> = Arc::default();
+                let log = |command_buffer: &CommandBuffer, label: &'static str| {
+                    let retired = Arc::clone(&retired);
+                    (command_buffer.add_completed_handler(move |_| {
+                        retired.lock().expect("the log").push(label);
+                    }))
+                    .expect("a completed handler");
+                };
+                let before = counters.metrics();
+                let room = pieces(if form == "behind" { &queue } else { &other }, &x);
+                log(&room, "pieces");
+                room.commit().expect("a commit");
+                within(name, || own(&room) == 2);
+                within(name, || {
+                    counters.metrics().held_for_room > before.held_for_room
+                });
+                let presenting = match form {
+                    "behind" => queue.command_buffer().expect("a command buffer"),
+                    _ => pieces(&queue, &y),
+                };
+                log(&presenting, form);
+                // SAFETY: no semaphore is named, and the drawable is acquired.
+                unsafe { presenting.present_drawable(&drawable, vk::Semaphore::null()) }
+                    .unwrap_or_else(|error| panic!("{name}: {form}: a present: {error}"));
+                println!(
+                    "{name}: {form}: committed with {} of 4 pieces submitted, held for room {}",
+                    own(&room),
+                    counters.metrics().held_for_room - before.held_for_room
+                );
+                let (tell, told) = mpsc::channel();
+                let watcher = {
+                    let (room, presenting) = (room.clone(), presenting.clone());
+                    thread::spawn(move || {
+                        let committed = presenting.commit();
+                        let _ = tell.send(format!("committed {committed:?}"));
+                        let done = [&room, &presenting].map(|cb| cb.wait_until_completed());
+                        let _ = tell.send(format!("completed {done:?}"));
+                    })
+                };
+                for wait in ["its commit", "both completions"] {
+                    match told.recv_timeout(BOUND) {
+                        Ok(line) => println!("{name}: {form}: {line}"),
+                        Err(_) => {
+                            eprintln!(
+                                "{name}: {form}: {wait} not within {BOUND:?}: the submit thread \
+                                 holds the work lock behind a head waiting for room"
+                            );
+                            std::process::exit(101);
+                        }
+                    }
+                    if wait == "its commit" {
+                        busy.open();
+                    }
+                }
+                watcher.join().expect("the watcher");
+                let errors = (room.error(), presenting.error());
+                assert_eq!(errors, (None, None), "{name}: {form}: both completed");
+                within(name, || retired.lock().expect("the log").len() == 2);
+                let steps = (word(&x), (form == "cut").then(|| word(&y)));
+                assert_eq!(
+                    steps,
+                    (15, (form == "cut").then_some(15)),
+                    "{name}: {form}: every step ran"
+                );
+                if form == "behind" {
+                    assert_eq!(
+                        *retired.lock().expect("the log"),
+                        ["pieces", form],
+                        "{name}: {form}: it retires behind the pieces of its queue"
+                    );
+                }
+                drop(busy);
+            }
+            drop(drawable);
+            // SAFETY: every submission that used the image has completed, and nothing uses it
+            // again.
+            unsafe { stand_in.destroy(&device) };
         });
     }
 
