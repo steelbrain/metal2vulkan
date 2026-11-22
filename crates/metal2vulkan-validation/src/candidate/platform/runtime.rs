@@ -308,14 +308,18 @@ fn environment(identity: &Identity, tools: &[ActiveTool], executor: &str) -> ser
 }
 
 /// The runtime's `error` as the executor's: the translator's refusal as the product's, a pixel
-/// format the runtime makes no image of on this device as the device's (`NotEnabled`, as the
-/// executor's own context records a format its query lacks), every other error a failure
-/// ([`execute_runtime`]).
+/// format the runtime makes no image of on this device and a sample count it makes no texture of
+/// (`Limit::TextureSamples`, from the image format query) as the device's (`NotEnabled`, as the
+/// executor's own context records a format or a sample count its query lacks), every other error
+/// a failure ([`execute_runtime`]).
 pub(super) fn runtime_error(what: &str, error: rt::Error) -> ExecutorError {
     match error {
         rt::Error::Translation { error, .. } => product_refusal(&error),
         rt::Error::Unsupported(gap @ rt::Gap::TextureFormat { .. }) => {
             ExecutorError::NotSupported(NotSupported::NotEnabled(vec![format!("{what}: {gap}")]))
+        }
+        rt::Error::Limit(limit @ rt::Limit::TextureSamples { .. }) => {
+            ExecutorError::NotSupported(NotSupported::NotEnabled(vec![format!("{what}: {limit}")]))
         }
         rt::Error::Unsupported(gap) => ExecutorError::Failed(format!(
             "{what}: the runtime refused a case its structure classifies as one it runs \

@@ -364,12 +364,14 @@ fn depth_and_multisampled_textures_read_their_authored_texels() {
     }
 }
 
-/// A sample count the device's image format properties do not allow is refused typed before any
-/// image is created, never created as invalid usage (`VUID-VkImageCreateInfo-samples-02258`):
-/// the CPU ICDs the gate runs allow no 2-sample images (lavapipe allows 1, 4, and 8).
+/// A sample count the device's image format properties do not allow is refused typed, as the
+/// device's (`not_enabled`), on each run ([`runs`]): the executor's own context before any image
+/// is created, never created as invalid usage (`VUID-VkImageCreateInfo-samples-02258`), and the
+/// run through the runtime at the texture the runtime refuses (`Limit::TextureSamples`, from the
+/// same query). The CPU ICDs the gate runs allow no 2-sample images (lavapipe allows 1, 4, and 8).
 #[cfg(all(m2v_cpu_icd, any(target_os = "linux", target_os = "macos")))]
 #[test]
-fn a_sample_count_the_device_lacks_is_refused_before_any_image() {
+fn a_sample_count_the_device_lacks_is_refused_as_not_enabled() {
     let samples: Vec<u8> = (0..2i32)
         .flat_map(|sample| [sample, 7 * sample, -sample, 1])
         .flat_map(i32::to_le_bytes)
@@ -398,16 +400,18 @@ fn a_sample_count_the_device_lacks_is_refused_before_any_image() {
         [1, 1, 1],
         buffer_output(8),
     );
-    match run(&case, &fixture("texture_ops.ll")) {
-        Err(crate::check::admission::ExecutorError::NotSupported(
-            crate::check::admission::NotSupported::NotEnabled(missing),
-        )) => assert!(
-            missing
-                .iter()
-                .any(|m| m.contains("texture 1") && m.contains("with 2 sample(s)")),
-            "{missing:?}"
-        ),
-        other => panic!("a 2-sample texture must be refused typed: {other:?}"),
+    let bitcode = fixture("texture_ops.ll");
+    for (name, run) in runs() {
+        match run(&case, &bitcode) {
+            Err(crate::check::admission::ExecutorError::NotSupported(
+                crate::check::admission::NotSupported::NotEnabled(missing),
+            )) => assert!(
+                missing.iter().any(|m| m.contains("texture 1")
+                    && (m.contains("with 2 sample(s)") || m.contains("a sample count of 2 "))),
+                "{name}: {missing:?}"
+            ),
+            other => panic!("{name}: a 2-sample texture must be refused typed: {other:?}"),
+        }
     }
 }
 

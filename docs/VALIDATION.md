@@ -512,8 +512,9 @@ cargo run -p metal2vulkan-validation --release --bin corpus-vulkan -- \
   runtime gives no `gpuResourceID`, `argument_buffer_pipeline_state`: each the runtime's limit,
   run on Metal alone. A command buffer of the runtime's form carries `indirect_indexed_draws`, a
   gap of this executor, which maps no indirect command buffer, so the checker takes no case of
-  it. A pixel format the runtime makes no image of on the device records `not_enabled`, as
-  the executor's own context records a format its query lacks. A vertex or fragment case of any
+  it. A pixel format the runtime makes no image of on the device, and a sample count it makes no
+  texture of (`Limit::TextureSamples`), records `not_enabled`, as the executor's own context
+  records a format or a sample count its query lacks. A vertex or fragment case of any
   sample count draws through the runtime the same way (`engine::runs_render_through_runtime`): its own
   stage's buffers, bound textures and samplers, argument buffers of buffers, textures and samplers
   (made, written and used as a kernel's), function constants and linked functions, its
