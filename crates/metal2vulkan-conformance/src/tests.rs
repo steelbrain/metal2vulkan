@@ -5164,53 +5164,6 @@ fn a_divergence_that_is_a_notice_names_the_notice_each_side_announced() {
     );
 }
 
-/// A multisampled sparse texture on a device without `sparseResidencyNSamples` is the **device's**
-/// gap, never a refusal of ours and never a ledger row.
-///
-/// This pins the cross-crate chain that made four unlisted refusals appear on lavapipe: the
-/// runtime's `sparse_refusal` names the Vulkan capability the device lacks
-/// (`Needs::DeviceCapability`), and the suite reads it as the venue's own gap. It used to say
-/// `Needs::NotRepresentable` -- "no Vulkan mechanism exists on any device" -- which the suite could
-/// only score as a gap of ours, so a device that simply does not have the feature produced a
-/// refusal with no bug behind it to write down.
-///
-/// Measured on lavapipe through `vulkaninfo` in the Linux container (2026-10-23): `sparseBinding`
-/// true, its one queue family carries `QUEUE_SPARSE_BINDING_BIT`, `sparseResidencyImage2D` and
-/// `3D` true, and `sparseResidency2Samples`, `4Samples`, `8Samples` and `16Samples` all **false**.
-/// So a multisampled sparse texture reaches the sample-count check there, and nothing about it is
-/// ours.
-#[test]
-fn a_multisampled_sparse_texture_without_the_sample_count_is_the_devices_gap() {
-    use metal2vulkan::error::{Feature, Needs, SparseNeed, Unsupported};
-    for count in [2u32, 4, 8, 16] {
-        let needs = Unsupported::device_capability(
-            Feature::SparseTextures {
-                missing: SparseNeed::SparseResidencySamples(count),
-            },
-            "x",
-        );
-        assert!(
-            crate::verdict::device_gap_of(&needs).is_some(),
-            "a device without sparseResidency{count}Samples is the device's gap"
-        );
-    }
-    // And what the runtime has not built stays ours, by the same reading: the two must not be
-    // confused in either direction.
-    assert!(crate::verdict::device_gap_of(&Unsupported::not_implemented(
-        Feature::SparseTextures {
-            missing: SparseNeed::SparseMetadata,
-        }
-    ))
-    .is_none());
-    // The vocabulary can now say both, which is the whole point: `NotRepresentable` claims no
-    // Vulkan form exists anywhere and reads as our unbuilt work, so it must not be the word for a
-    // feature bit a device happens not to have.
-    assert!(matches!(
-        Unsupported::device_capability(Feature::Format, "sparseResidency4Samples").needs,
-        Needs::DeviceCapability("sparseResidency4Samples")
-    ));
-}
-
 /// Every case states the inputs its own recording's answers were taken from, and the cases that
 /// no longer do are exactly the ones named here.
 ///

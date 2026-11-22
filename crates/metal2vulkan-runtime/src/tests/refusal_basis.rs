@@ -50,17 +50,8 @@ fn a_translation_error_answers_the_basis_of_what_it_needs() {
     let depth_clamp = vec![vec![Capability::Feature(VkFeature::DepthClamp)]];
     let cases = [
         (refusal(Needs::AnyOf(depth_clamp)), Some(Device)),
-        (
-            refusal(Needs::DeviceCapability("sparseBinding")),
-            Some(Device),
-        ),
         (refusal(Needs::NotRepresentable), Some(Device)),
         (refusal(Needs::NotImplemented), Some(Ours)),
-        (refusal(Needs::MetalGpuFamily(1010)), Some(MetalDocumented)),
-        (
-            refusal(Needs::MetalRefuses(&["Apple M3 Max, macOS 27.0.1"])),
-            Some(MetalMeasured),
-        ),
         (
             Error::translation(Translator::LimitExceeded(Limit::SpirvWords)),
             Some(Ours),

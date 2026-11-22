@@ -90,7 +90,7 @@ fn committed_devices() -> Vec<(String, Device)> {
 /// does not, never given as words it cannot run.
 #[test]
 fn the_modules_are_valid_where_the_device_has_what_they_need() {
-    let feature = Feature::SeparateMultisampledDepthStencil;
+    let feature = Feature::StencilExport;
     let mut draws = 0;
     for (name, device) in committed_devices() {
         let profile = device.profile();

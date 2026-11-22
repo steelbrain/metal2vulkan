@@ -69,7 +69,6 @@ feature	StencilExport	rare	stencil from the shader
 feature	SampleRateShading	rare	per-sample shading
 feature	PullModelInterpolation	rare	interpolant inputs read at the centroid, a sample or an offset
 feature	DivergentInterpolation	rare	an interpolant read at a sample or an offset in a branch, a loop or after a discard
-feature	SamplePositions	rare	custom sample positions on a device that takes none at the pass's sample count
 feature	PixelCoverageAtSampleRate	rare	coverage read at sample rate
 feature	InterfaceComponents	rare	too many varyings or attachments for a device
 feature	UnmatchedVarying	none	a Metal link error
@@ -110,24 +109,11 @@ feature	DepthClipClamp	app	depth clamp on a device without depthClamp
 feature	DepthBiasClamp	app	depth bias clamp on a device without depthBiasClamp
 feature	ConstantAlphaBlendFactor	app	blend-alpha factors on a portability-subset device without them
 feature	SparseTexture	rare	sparse residency reads
-feature	TextureSize	app	a texture past a device's image limits
-feature	TextureSampleCount	app	a sample count a device lacks for the texture
-feature	TextureView	app	a texture view Vulkan cannot make exactly
 feature	TextureSwizzle	app	texture swizzles whose Metal behaviour is unmeasured
-feature	MipmapGeneration	app	generateMipmapsForTexture: of a format or chain neither the device's blits nor the compute filter can run
-feature	HostMemory	system	newBufferWithBytesNoCopy: where the device cannot import the memory
-feature	GpuTimes	rare	GPU times on a queue without timestamps
-feature	ViewFormatReinterpretation	app	a view of another component layout on a portability subset (MoltenVK)
-feature	SeparateMultisampledDepthStencil	rare	separate multisampled depth and stencil textures
 feature	PostDepthCoverage	rare	the coverage after early depth and stencil tests on a device without VK_EXT_post_depth_coverage
 feature	PrivateMemory	rare	very large per-thread arrays
-feature	SparseTextures	rare	sparse heaps on a device without sparse images
-feature	TimelineSemaphores	none	a device below the runtime's floor
 feature	Reflection	rare	reflection of argument kinds Metal's answer is unmeasured for
-feature	HeapTextureTiling	app	textures in Shared heaps on a device whose optimal images take no host memory
 feature	ViewportDepthRange	rare	viewport depth outside [0, 1]
-feature	UndeclaredTextureUsage	app	a shader write to a texture made without ShaderWrite, which plain Metal runs
-feature	RenderTargetSize	rare	a render area past a device's framebuffer limits
 feature	IndirectRenderState	rare	render state set by a kernel on an indirect command
 feature	GlobalBuiltinInFragment	rare	Metal 3.1 global built-ins in fragment functions
 feature	(computed)	none	helpers that build a refusal for a feature their callers name: see the "via a helper" rows

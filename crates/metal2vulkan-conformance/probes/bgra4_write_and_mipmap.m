@@ -11,8 +11,7 @@
 //      (`ChannelWrite::HalfUnorm`), but this format was never drawn into, so a fragment function
 //      writing it stores what the device computes rather than Metal's code. Six committed profiles
 //      render the format directly (RADV x2, lavapipe x2, ANV x2), so the rule is reachable there.
-//   2. **`generateMipmapsForTexture:`** (refused `NotImplemented(MipmapGeneration)` in
-//      `mipmap_plan::not_implemented`, and absent from `mipmap_answers.txt`). Its four 4-bit fields
+//   2. **`generateMipmapsForTexture:`** (absent from `mipmap_answers.txt`). Its four 4-bit fields
 //      from bit 0 are `ABGR4Unorm`'s, in a channel order neither Metal's filter nor
 //      `bind::mipmap_filter`'s rule reads -- but that is an argument about our kernel, not a
 //      measurement of Metal, which is why the refusal stands until this runs.

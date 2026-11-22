@@ -192,8 +192,6 @@ surface! {
         enum RefusalBasis N;
         enum Capability N;
         enum Feature N;
-        enum SparseNeed N;
-        enum LinearNeed N;
         enum LowerFamily N;
         enum PrivateRenderField N;
         enum ExtendedRangeBlend N;

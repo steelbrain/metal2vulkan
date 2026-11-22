@@ -272,13 +272,6 @@ pub fn device_gap_of(unsupported: &Unsupported) -> Option<String> {
             "{:?} needs any of {alternatives:?}",
             unsupported.feature
         )),
-        // A Vulkan capability the compile layer's vocabulary does not name, which only the
-        // runtime needs: a sparse heap's residency, as `timelineSemaphore` would be. The device's
-        // own gap by construction — a device with it runs the input — so it belongs here and not
-        // among the refusals.
-        Needs::DeviceCapability(capability) => {
-            Some(format!("{:?} needs {capability}", unsupported.feature))
-        }
         // Everything else is ours to answer for: a form the translator or the runtime has not
         // built, and one Metal itself refuses, are not the device's gap.
         _ => None,

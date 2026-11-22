@@ -286,14 +286,6 @@ fn tails_wide_and_short() -> SparseHeapCase {
 /// verdict is a whole-case outcome produced only where a run **aborts**, and this case records each
 /// texture's answer and goes on. Here the gap has its own row and the type sweep stays readable.
 ///
-/// It still reads as `Refused` rather than `LacksFeature` on such a venue, and that is a product
-/// bug rather than anything this case can arrange: the runtime refuses with
-/// `Unsupported { feature: SparseTextures { missing: SparseResidencySamples(2) }, needs:
-/// NotRepresentable }`, and `verdict::device_gap_of` counts only `Needs::AnyOf` and the two driver
-/// defects as a device's gap. `NotRepresentable` means "no Vulkan 1.2+ mechanism exists for these
-/// semantics", which is not what is true here: the mechanism exists and the device has not got it,
-/// which is `Needs::AnyOf`.
-///
 /// A multisampled sparse texture is one level and a render target, which is what Metal describes
 /// one of.
 fn tails_multisampled() -> SparseHeapCase {

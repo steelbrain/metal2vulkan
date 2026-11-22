@@ -904,7 +904,6 @@ enum	metal2vulkan::error::InputErrorKind	#[derive(Clone, Debug, PartialEq, Eq)] 
 enum	metal2vulkan::error::InternalKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum InternalKind
 enum	metal2vulkan::error::IntrinsicError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum IntrinsicError
 enum	metal2vulkan::error::Limit	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum Limit
-enum	metal2vulkan::error::LinearNeed	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum LinearNeed
 enum	metal2vulkan::error::LinkProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum LinkProblem
 enum	metal2vulkan::error::LowerFamily	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum LowerFamily
 enum	metal2vulkan::error::MeshPipelineProblem	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MeshPipelineProblem
@@ -914,7 +913,6 @@ enum	metal2vulkan::error::PrivateRenderField	#[derive(Clone, Copy, Debug, Partia
 enum	metal2vulkan::error::RefusalBasis	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RefusalBasis
 enum	metal2vulkan::error::Retry	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Retry
 enum	metal2vulkan::error::RuntimeInput	#[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum RuntimeInput
-enum	metal2vulkan::error::SparseNeed	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum SparseNeed
 enum	metal2vulkan::error::VerifyError	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum VerifyError
 enum	metal2vulkan::library::FunctionStage	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum FunctionStage
 enum	metal2vulkan::library::LibraryType	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum LibraryType
@@ -7144,8 +7142,6 @@ method	metal2vulkan::error::Location::render_pipeline	pub fn render_pipeline() -
 method	metal2vulkan::error::Location::with_attachment	pub fn with_attachment(self, attachment: Attachment) -> Location
 method	metal2vulkan::error::Needs::basis	pub fn basis(&self) -> RefusalBasis
 method	metal2vulkan::error::Unsupported::at	pub fn at(mut self, location: Location) -> Unsupported
-method	metal2vulkan::error::Unsupported::device_capability	pub fn device_capability(feature: Feature, capability: &'static str) -> Unsupported
-method	metal2vulkan::error::Unsupported::metal_gpu_family	pub fn metal_gpu_family(feature: Feature, family: i64) -> Unsupported
 method	metal2vulkan::error::Unsupported::naming	pub fn naming(mut self, symbol: DiagName) -> Unsupported
 method	metal2vulkan::error::Unsupported::needs	pub fn needs(feature: Feature, capability: Capability) -> Unsupported
 method	metal2vulkan::error::Unsupported::needs_any_of	pub fn needs_any_of(feature: Feature, alternatives: Vec<Vec<Capability>>) -> Unsupported
@@ -10552,11 +10548,8 @@ variant	metal2vulkan::error::Feature::GatherExtended	GatherExtended
 variant	metal2vulkan::error::Feature::GenericPointer	GenericPointer(GenericPointer)
 variant	metal2vulkan::error::Feature::GlobalBuiltinInFragment	GlobalBuiltinInFragment
 variant	metal2vulkan::error::Feature::GpuEncodedIndirectCommands	GpuEncodedIndirectCommands
-variant	metal2vulkan::error::Feature::GpuTimes	GpuTimes
 variant	metal2vulkan::error::Feature::GroupCount	GroupCount { axis: Option<Axis> }
 variant	metal2vulkan::error::Feature::HandleAsPointer	HandleAsPointer
-variant	metal2vulkan::error::Feature::HeapTextureTiling	HeapTextureTiling { missing: LinearNeed }
-variant	metal2vulkan::error::Feature::HostMemory	HostMemory
 variant	metal2vulkan::error::Feature::IdentityDomains	IdentityDomains
 variant	metal2vulkan::error::Feature::ImageAtomics	ImageAtomics
 variant	metal2vulkan::error::Feature::Imageblocks	Imageblocks
@@ -10578,7 +10571,6 @@ variant	metal2vulkan::error::Feature::LocalSize	LocalSize { axis: Option<Axis> }
 variant	metal2vulkan::error::Feature::Lowering	Lowering(LowerFamily)
 variant	metal2vulkan::error::Feature::MeshShading	MeshShading
 variant	metal2vulkan::error::Feature::MinLodClamp	MinLodClamp
-variant	metal2vulkan::error::Feature::MipmapGeneration	MipmapGeneration
 variant	metal2vulkan::error::Feature::ModuleRecord	ModuleRecord { code: u32 }
 variant	metal2vulkan::error::Feature::PixelCoverageAtSampleRate	PixelCoverageAtSampleRate
 variant	metal2vulkan::error::Feature::PixelSamplerCompare	PixelSamplerCompare
@@ -10599,8 +10591,6 @@ variant	metal2vulkan::error::Feature::RasterizationRateMap	RasterizationRateMap
 variant	metal2vulkan::error::Feature::RayTracing	RayTracing
 variant	metal2vulkan::error::Feature::Recursion	Recursion
 variant	metal2vulkan::error::Feature::Reflection	Reflection
-variant	metal2vulkan::error::Feature::RenderTargetSize	RenderTargetSize
-variant	metal2vulkan::error::Feature::SamplePositions	SamplePositions
 variant	metal2vulkan::error::Feature::SampleRateShading	SampleRateShading
 variant	metal2vulkan::error::Feature::SamplerAddressMode	SamplerAddressMode
 variant	metal2vulkan::error::Feature::SamplerAnisotropy	SamplerAnisotropy
@@ -10608,13 +10598,11 @@ variant	metal2vulkan::error::Feature::SamplerBicubicFilter	SamplerBicubicFilter
 variant	metal2vulkan::error::Feature::SamplerBorderColor	SamplerBorderColor
 variant	metal2vulkan::error::Feature::SamplerCompare	SamplerCompare
 variant	metal2vulkan::error::Feature::SamplerLodBias	SamplerLodBias
-variant	metal2vulkan::error::Feature::SeparateMultisampledDepthStencil	SeparateMultisampledDepthStencil
 variant	metal2vulkan::error::Feature::SeqCstFence	SeqCstFence
 variant	metal2vulkan::error::Feature::SimdWidth	SimdWidth
 variant	metal2vulkan::error::Feature::SimdgroupMatrix	SimdgroupMatrix
 variant	metal2vulkan::error::Feature::SimdgroupMatrix16x16x16	SimdgroupMatrix16x16x16
 variant	metal2vulkan::error::Feature::SparseTexture	SparseTexture { slot: SlotRef }
-variant	metal2vulkan::error::Feature::SparseTextures	SparseTextures { missing: SparseNeed }
 variant	metal2vulkan::error::Feature::Stage	Stage(u8)
 variant	metal2vulkan::error::Feature::StageStoresAndAtomics	StageStoresAndAtomics
 variant	metal2vulkan::error::Feature::StaticInitializer	StaticInitializer
@@ -10627,23 +10615,17 @@ variant	metal2vulkan::error::Feature::Tensors	Tensors
 variant	metal2vulkan::error::Feature::Tessellation	Tessellation
 variant	metal2vulkan::error::Feature::TexelBuffer	TexelBuffer
 variant	metal2vulkan::error::Feature::TexelOffset	TexelOffset
-variant	metal2vulkan::error::Feature::TextureSampleCount	TextureSampleCount
-variant	metal2vulkan::error::Feature::TextureSize	TextureSize
 variant	metal2vulkan::error::Feature::TextureSwizzle	TextureSwizzle
-variant	metal2vulkan::error::Feature::TextureView	TextureView
 variant	metal2vulkan::error::Feature::ThreadgroupMemorySize	ThreadgroupMemorySize
 variant	metal2vulkan::error::Feature::TileShading	TileShading
-variant	metal2vulkan::error::Feature::TimelineSemaphores	TimelineSemaphores { max_value_difference: u64 }
 variant	metal2vulkan::error::Feature::TriangleFillLines	TriangleFillLines
 variant	metal2vulkan::error::Feature::TriangleFillPoints	TriangleFillPoints
 variant	metal2vulkan::error::Feature::Type	Type { code: u32 }
-variant	metal2vulkan::error::Feature::UndeclaredTextureUsage	UndeclaredTextureUsage
 variant	metal2vulkan::error::Feature::UnknownIntrinsic	UnknownIntrinsic
 variant	metal2vulkan::error::Feature::UnmatchedVarying	UnmatchedVarying
 variant	metal2vulkan::error::Feature::VertexAmplification	VertexAmplification
 variant	metal2vulkan::error::Feature::VertexInputLayout	VertexInputLayout
 variant	metal2vulkan::error::Feature::VertexStepRate	VertexStepRate
-variant	metal2vulkan::error::Feature::ViewFormatReinterpretation	ViewFormatReinterpretation
 variant	metal2vulkan::error::Feature::VulkanVersion	VulkanVersion
 variant	metal2vulkan::error::Feature::WideLines	WideLines
 variant	metal2vulkan::error::Feature::WideSwitchLiteral	WideSwitchLiteral
@@ -10687,13 +10669,6 @@ variant	metal2vulkan::error::Limit::PrivateArenaBytes	PrivateArenaBytes
 variant	metal2vulkan::error::Limit::SpirvWords	SpirvWords
 variant	metal2vulkan::error::Limit::TypeCount	TypeCount
 variant	metal2vulkan::error::Limit::WorkUnits	WorkUnits
-variant	metal2vulkan::error::LinearNeed::ArrayLayers	ArrayLayers { required: u32, available: u32 }
-variant	metal2vulkan::error::LinearNeed::Extent	Extent { required: u32, available: u32 }
-variant	metal2vulkan::error::LinearNeed::Features	Features { format: vk::Format, features: vk::FormatFeatureFlags2 }
-variant	metal2vulkan::error::LinearNeed::Image	Image
-variant	metal2vulkan::error::LinearNeed::MemoryType	MemoryType
-variant	metal2vulkan::error::LinearNeed::MipLevels	MipLevels { required: u32, available: u32 }
-variant	metal2vulkan::error::LinearNeed::SampleCount	SampleCount(u32)
 variant	metal2vulkan::error::LinkProblem::Ambiguous	Ambiguous
 variant	metal2vulkan::error::LinkProblem::DataLayout	DataLayout
 variant	metal2vulkan::error::LinkProblem::NotVisible	NotVisible
@@ -10721,9 +10696,6 @@ variant	metal2vulkan::error::MeshPipelineProblem::RequiredWithoutObjectFunction	
 variant	metal2vulkan::error::MetalAnswer::EndsProcess	EndsProcess
 variant	metal2vulkan::error::MetalAnswer::NilWithError	NilWithError
 variant	metal2vulkan::error::Needs::AnyOf	AnyOf(Vec<Vec<Capability>>)
-variant	metal2vulkan::error::Needs::DeviceCapability	DeviceCapability(&'static str)
-variant	metal2vulkan::error::Needs::MetalGpuFamily	MetalGpuFamily(i64)
-variant	metal2vulkan::error::Needs::MetalRefuses	MetalRefuses(&'static [&'static str])
 variant	metal2vulkan::error::Needs::NotImplemented	NotImplemented
 variant	metal2vulkan::error::Needs::NotRepresentable	NotRepresentable
 variant	metal2vulkan::error::PrivateRenderField::AlphaTest	AlphaTest
@@ -10759,13 +10731,6 @@ variant	metal2vulkan::error::RuntimeInput::TileAttachments	TileAttachments
 variant	metal2vulkan::error::RuntimeInput::UniformVaryings	UniformVaryings
 variant	metal2vulkan::error::RuntimeInput::VertexDescriptor	VertexDescriptor { attribute: u32 }
 variant	metal2vulkan::error::RuntimeInput::ViewportIndex	ViewportIndex
-variant	metal2vulkan::error::SparseNeed::SparseBinding	SparseBinding
-variant	metal2vulkan::error::SparseNeed::SparseBindingQueue	SparseBindingQueue
-variant	metal2vulkan::error::SparseNeed::SparseImageFormat	SparseImageFormat
-variant	metal2vulkan::error::SparseNeed::SparseMetadata	SparseMetadata
-variant	metal2vulkan::error::SparseNeed::SparseResidencyImage2D	SparseResidencyImage2D
-variant	metal2vulkan::error::SparseNeed::SparseResidencyImage3D	SparseResidencyImage3D
-variant	metal2vulkan::error::SparseNeed::SparseResidencySamples	SparseResidencySamples(u32)
 variant	metal2vulkan::error::VerifyError::Budget	Budget(Error)
 variant	metal2vulkan::error::VerifyError::ExceedsProfile	ExceedsProfile(Capability)
 variant	metal2vulkan::error::VerifyError::Rule	Rule(Violation)

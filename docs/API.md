@@ -871,7 +871,7 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   8-bit sRGB format, every pixel; for a packed 16-bit format each field's mean of the samples'
   codes, a tie rounded down (a one-bit field's up), within one code of Metal's, which averages its
   tile's finer values. A device whose word's format renders one sample at that
-  count refuses the texture (`TextureSampleCount`).
+  count refuses the texture (the runtime's `Limit::TextureSamples`).
 - A fragment function that reads a color attachment (framebuffer fetch) reads it as an input
   attachment, ordered by rasterization-order attachment access wherever the device has it. On a
   device without it the input attachment has no rasterization-order access
@@ -1642,8 +1642,6 @@ match floor.compile_function(&min_lod, &LoweringInputs::new(), &Budget::standard
 - `AnyOf`: alternative sets of device capabilities; a device that enables every capability of one
   set compiles it.
 - `NotImplemented`: a gap of this version. `NotRepresentable`: no Vulkan mechanism exists.
-- `MetalGpuFamily`: a Metal GPU family the device does not claim, where Metal itself refuses the
-  input without it.
 
 `location` and `symbol` are diagnostics only. A render pipeline's refusal of one attachment's
 state names it (`location.attachment()`). [REFUSALS.md](REFUSALS.md) lists every refusal in the

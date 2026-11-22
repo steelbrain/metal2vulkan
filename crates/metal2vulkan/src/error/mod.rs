@@ -13,12 +13,9 @@
 //!   [`Needs::AnyOf`] lists alternative sets of device [`Capability`]s (a device that enables
 //!   every capability of one set compiles it), [`Needs::NotImplemented`] is a gap of this
 //!   translator version on every device, and [`Needs::NotRepresentable`] has no Vulkan 1.2+
-//!   mechanism. The runtime adds
-//!   [`Needs::MetalGpuFamily`]: Metal's own refusal
-//!   on a device without the family, and [`Needs::MetalRefuses`]: Metal's own refusal of the
-//!   form on the devices it was measured on. The translator does not return different output in place
-//!   of a refusal; where an output accepts a documented difference from Metal, its stage lists it
-//!   as a [`PrecisionNote`](crate::pipeline::PrecisionNote).
+//!   mechanism. The translator does not return different output in place of a refusal; where an
+//!   output accepts a documented difference from Metal, its stage lists it as a
+//!   [`PrecisionNote`](crate::pipeline::PrecisionNote).
 //! - [`Error::NeedsInput`]: the compile needs a pipeline input the call did not supply
 //!   ([`RuntimeInput`]): a function-constant value, a storage texture's format, a linked
 //!   function, a vertex or stage-input descriptor entry. Supply it and compile again.
@@ -346,28 +343,6 @@ impl Unsupported {
         }
     }
 
-    /// Refused as Metal refuses it on a device that does not claim the Metal GPU `family`
-    /// (`MTLGPUFamily`'s raw value), as this device does not ([`Needs::MetalGpuFamily`]).
-    pub fn metal_gpu_family(feature: Feature, family: i64) -> Unsupported {
-        Unsupported {
-            feature,
-            needs: Needs::MetalGpuFamily(family),
-            location: None,
-            symbol: None,
-        }
-    }
-
-    /// Run on a device with `capability`, which this device does not have and which the compile
-    /// layer's vocabulary does not name ([`Needs::DeviceCapability`]).
-    pub fn device_capability(feature: Feature, capability: &'static str) -> Unsupported {
-        Unsupported {
-            feature,
-            needs: Needs::DeviceCapability(capability),
-            location: None,
-            symbol: None,
-        }
-    }
-
     /// Translatable if the device had every capability of any one alternative.
     pub fn needs_any_of(feature: Feature, alternatives: Vec<Vec<Capability>>) -> Unsupported {
         Unsupported {
@@ -450,58 +425,20 @@ impl fmt::Display for Unsupported {
 pub enum Needs {
     /// Enabling every capability of any one alternative would make it translatable.
     AnyOf(Vec<Vec<Capability>>),
-    /// A device capability the compile layer's vocabulary does not name, which this device does
-    /// not have: named by its Vulkan member name (`"sparseResidencyImage2D"`) or, where it is not
-    /// one member, in words. **The device's own gap**, not unbuilt work of ours: a device with the
-    /// capability runs the input.
-    ///
-    /// Why a variant of its own rather than [`Needs::AnyOf`]. `AnyOf` names its capabilities as
-    /// [`Capability`], and `Capability::Feature`'s vocabulary — [`VkFeature::ALL`], generated from
-    /// the exposure table — *is* the compile profile's feature set, so anything named there enters
-    /// every profile, cache key and digest. A capability only the **runtime** needs is deliberately
-    /// outside it: a sparse heap's `sparseBinding` and `sparseResidency*`, its queue family's
-    /// sparse bit, and the sparse image formats a device lists, as `timelineSemaphore` would be
-    /// (`sparse::device`). Before this variant there was no way for such a refusal to say "the
-    /// device lacks it": the remaining words were [`Needs::NotImplemented`], which claims we have
-    /// not built the thing, and [`Needs::NotRepresentable`], which claims no Vulkan mechanism
-    /// exists for it on any device. Both are false of a device that simply does not have a Vulkan
-    /// 1.0 feature, and both read to a consumer as our unbuilt work.
-    ///
-    /// No compile profile, cache key or digest holds it; only the runtime refuses so.
-    DeviceCapability(&'static str),
     /// Not implemented by this translator version on any device.
     NotImplemented,
     /// No Vulkan 1.2+ mechanism exists for these semantics.
     NotRepresentable,
-    /// A device that claims this Metal GPU family (`MTLGPUFamily`'s raw value, 1010 for Apple10),
-    /// which the device does not: Metal itself refuses the input on a device without the family,
-    /// so the refusal is Metal's own answer rather than a gap. Only the runtime refuses so, by the
-    /// families its device claims (`supportsFamily:`); no compile profile, cache key or digest
-    /// holds it.
-    MetalGpuFamily(i64),
-    /// Metal itself refuses this form on every device named here, each as its GPU and macOS
-    /// version (`"Apple M4, macOS 27.0.1"`; the devices it was measured on), so the refusal is
-    /// Metal's own answer rather than a gap. No GPU family is known to take the form. Only the
-    /// runtime refuses so, on a device whose Metal answer the measured ones stand for (one that
-    /// does not claim a family past theirs); elsewhere the form is [`Needs::NotImplemented`]. No
-    /// compile profile, cache key or digest holds it.
-    MetalRefuses(&'static [&'static str]),
 }
 
 impl Needs {
     /// Where the belief that the input must be refused comes from: the device's lack
-    /// ([`Needs::AnyOf`], [`Needs::DeviceCapability`]) or every Vulkan device's
-    /// ([`Needs::NotRepresentable`]), this translator's gap ([`Needs::NotImplemented`]), or Metal's
-    /// own refusal, in its GPU family's feature list ([`Needs::MetalGpuFamily`]) or measured on
-    /// the devices it names ([`Needs::MetalRefuses`]).
+    /// ([`Needs::AnyOf`]) or every Vulkan device's ([`Needs::NotRepresentable`]), or this
+    /// translator's gap ([`Needs::NotImplemented`]).
     pub fn basis(&self) -> RefusalBasis {
         match self {
-            Needs::AnyOf(_) | Needs::DeviceCapability(_) | Needs::NotRepresentable => {
-                RefusalBasis::Device
-            }
+            Needs::AnyOf(_) | Needs::NotRepresentable => RefusalBasis::Device,
             Needs::NotImplemented => RefusalBasis::Ours,
-            Needs::MetalGpuFamily(_) => RefusalBasis::MetalDocumented,
-            Needs::MetalRefuses(_) => RefusalBasis::MetalMeasured,
         }
     }
 }
@@ -743,11 +680,6 @@ pub enum Feature {
     /// than any device's answer. The same reads in the first block, before any discard, are
     /// lowered.
     DivergentInterpolation,
-    /// A render pass's custom sample positions (`setSamplePositions:count:`) on a device that
-    /// takes no custom sample locations at the pass's sample count, which is the count the grid
-    /// is programmed at (`VkProperty::SampleLocationSampleCount`, named by the refusal). Only the
-    /// runtime refuses so; the device's own lack, not the caller's error and not a gap.
-    SamplePositions,
     /// The pixel's coverage (`[[sample_mask]]` read) in a fragment function that runs once per
     /// sample: Metal hands every invocation the whole pixel's coverage, while a Vulkan invocation
     /// under sample shading sees only the bits of the samples it shades, and nothing gathers a
@@ -917,80 +849,20 @@ pub enum Feature {
     // The runtime's refusals of texture objects and texture commands. Each depends on the Vulkan
     // device or on a Metal measurement, so another device or a later measurement can lift it;
     // what no Vulkan device can ever have is the runtime's Apple-only class instead.
-    /// A texture whose extent, array layers, or level count is past what the device takes for its
-    /// format, type, and usage (`Capability::Limit` names the device limit where one applies).
-    TextureSize,
-    /// A texture sample count the device does not take for its format, type, and usage.
-    TextureSampleCount,
-    /// A texture view Vulkan cannot make exactly on this image: a format reinterpretation outside
-    /// Vulkan's compatibility classes, or a view type the image cannot take.
-    TextureView,
     /// A texture swizzle whose Metal behavior is not measured.
     TextureSwizzle,
-    /// `generateMipmapsForTexture:` that cannot run on the device: a format neither the device's
-    /// blits filter nor the compute filter computes, or limits the filter's chain does not fit.
-    MipmapGeneration,
-    /// A buffer over the caller's host memory without a copy (`newBufferWithBytesNoCopy:`): it
-    /// needs `VK_EXT_external_memory_host`, a memory type the pointer and the buffer both allow,
-    /// and a range aligned to the device's import alignment; a driver may also refuse the memory.
-    HostMemory,
-    /// A command buffer's GPU times (`GPUStartTime`, `GPUEndTime`) on a device whose queue
-    /// family writes no timestamps (`timestampValidBits` 0).
-    GpuTimes,
-    /// A texture view whose format has other components, or components of other widths, than
-    /// its texture's (`RGBA8Unorm` as `R32Uint`), on a device whose `VK_KHR_portability_subset`
-    /// withholds `imageViewFormatReinterpretation`, or that the runtime adopted without being
-    /// told it enabled it (the runtime's `RawDevice::view_format_reinterpretation`), where the
-    /// runtime's shadow of the view's texels cannot serve it: a view of a sparse texture or a
-    /// heap's texture, formats whose copies would not keep every bit, or a command that writes
-    /// the texture both through such a view and through another alias of it.
-    ViewFormatReinterpretation,
-    /// A render pass whose depth and stencil attachments are separate multisampled textures that
-    /// it loads or may store, on a device without maintenance8: Vulkan copies a multisampled depth or stencil aspect between images of different formats only through a
-    /// colour image of maintenance8's depth-stencil/colour table.
-    SeparateMultisampledDepthStencil,
     /// A stage whose private memory (its `thread` variables and arrays, and the constants it
     /// holds per thread) takes more Function storage a thread than the device holds correctly
     /// (`VkLimit::FunctionStorageBytesPerThread`): its measured value, or on a device not measured
     /// the floor of 16 KiB, and for a vertex or fragment function there the 192 KiB Metal was
     /// measured to hold. A stage with a call stack is refused as `Recursion` instead.
     PrivateMemory,
-    /// A sparse heap (`MTLHeapTypeSparse`), or a texture made from one, on a device without what
-    /// a sparse resident image of it needs, which `missing` names.
-    SparseTextures {
-        missing: SparseNeed,
-    },
-    /// Command buffers and events, which the runtime completes and signals through timeline
-    /// semaphores (core in Vulkan 1.2), on a device whose `maxTimelineSemaphoreValueDifference`
-    /// (`max_value_difference`) is below the `2^31 - 1` Vulkan requires of every device: the
-    /// device is not conformant, and the runtime refuses it at creation, before its first signal.
-    TimelineSemaphores {
-        max_value_difference: u64,
-    },
     /// Reflection of an argument whose answer Metal's has not been measured for (`reflection`):
     /// a type the MSL type grammar does not cover, a binding kind no probe has asked Metal about
     /// (explicit imageblocks and imageblock data, argument-buffer function tables, acceleration
     /// structures and render pipeline states), or, in a library's answer, an index a function
     /// constant computes. The symbol names the argument's type.
     Reflection,
-    /// A texture of a heap whose memory the device's optimal images do not take (a `Shared` heap
-    /// on a device whose optimal images take no host-visible memory, as the RTX 3090's), which
-    /// the runtime makes a linear image in the heap's memory, on a device whose linear images
-    /// lack what the texture needs: `missing` names it.
-    HeapTextureTiling {
-        missing: LinearNeed,
-    },
-    /// A shader write to a texture made without `ShaderWrite` (or `ShaderAtomic`), or a read of
-    /// one made without `ShaderRead`, which plain Metal runs, where the texture's image lacks the
-    /// storage or sampled usage: the runtime adds it only where it costs the image nothing (the
-    /// same memory size and alignment), so that no valid program's texture loses its
-    /// compression. The exact route is a shadow image with the usage, copied around the commands
-    /// that use the texture so.
-    UndeclaredTextureUsage,
-    /// A render pass whose render area or layers are past the device's framebuffer limits
-    /// (`Capability::Limit` names `MaxFramebufferWidth`, `MaxFramebufferHeight` or
-    /// `MaxFramebufferLayers`). Metal renders passes up to 16384 pixels a side and 2048 layers.
-    RenderTargetSize,
     /// A `depth_stencil_state` a function reads from an argument buffer or takes as a parameter,
     /// the state of an indirect render command, which no record holds. (A render command's state
     /// setters, `render_command::set_cull_mode` and the rest, are `GpuEncodedIndirectCommands`, as
@@ -1085,59 +957,6 @@ pub enum PrivateRenderField {
     /// translation has not built: refused at the pipeline's making where the write's slot
     /// declares such a format, and at the draw where the bound texture decides and is one.
     TextureWriteRounding,
-}
-
-/// What a device's linear images lack for a texture of a heap whose memory its optimal images do
-/// not take (`Feature::HeapTextureTiling`). The limits are those
-/// `vkGetPhysicalDeviceImageFormatProperties2` reports for a linear image of the texture's
-/// format, type, usage and flags.
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum LinearNeed {
-    /// A memory type of the heap's storage that the device's linear images take: neither its
-    /// optimal nor its linear images take one.
-    MemoryType,
-    /// A linear image of the texture's format, type, usage and flags at all: the device reports
-    /// none (the RTX 3090 makes no linear cube, 3D or depth image).
-    Image,
-    /// `features` of `format`'s linear tiling, which its optimal tiling has and the texture's
-    /// usage relies on (`linearTilingFeatures`).
-    Features {
-        format: vk::Format,
-        features: vk::FormatFeatureFlags2,
-    },
-    /// An extent of `required` texels along an axis where the device's linear images hold
-    /// `available`.
-    Extent { required: u32, available: u32 },
-    /// `required` mip levels where the device's linear images hold `available`.
-    MipLevels { required: u32, available: u32 },
-    /// `required` array layers (slices, or six faces a cube) where the device's linear images
-    /// hold `available`.
-    ArrayLayers { required: u32, available: u32 },
-    /// The texture's sample count.
-    SampleCount(u32),
-}
-
-/// What a device lacks for a sparse resident image (`Feature::SparseTextures`).
-#[non_exhaustive]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum SparseNeed {
-    /// `sparseBinding`.
-    SparseBinding,
-    /// A queue family with `VK_QUEUE_SPARSE_BINDING_BIT` where the runtime submits.
-    SparseBindingQueue,
-    /// `sparseResidencyImage2D`: a 2D, 2D array, cube, cube array or 2D multisample texture.
-    SparseResidencyImage2D,
-    /// `sparseResidencyImage3D`: a 3D texture.
-    SparseResidencyImage3D,
-    /// `sparseResidency2Samples` to `sparseResidency16Samples`, for this sample count.
-    SparseResidencySamples(u32),
-    /// Sparse residency of the texture's format, type, sample count and usage:
-    /// `vkGetPhysicalDeviceSparseImageFormatProperties` lists none for its aspects.
-    SparseImageFormat,
-    /// A sparse image whose memory needs a metadata aspect bound
-    /// (`VK_SPARSE_MEMORY_BIND_METADATA_BIT`), which the runtime does not bind.
-    SparseMetadata,
 }
 
 /// A family of AIR operations the translator lowers, as `Feature::Lowering` names it in a

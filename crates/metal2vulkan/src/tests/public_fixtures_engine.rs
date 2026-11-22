@@ -110,7 +110,6 @@ pub(super) fn refusal(e: &Error) -> Option<String> {
                 Needs::AnyOf(alts) => format!("AnyOf{alts:?}"),
                 Needs::NotImplemented => "NotImplemented".to_owned(),
                 Needs::NotRepresentable => "NotRepresentable".to_owned(),
-                other => format!("{other:?}"),
             };
             format!("Unsupported{{{:?}; {needs}}}", u.feature)
         }
