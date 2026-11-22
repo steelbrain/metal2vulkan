@@ -1466,16 +1466,18 @@ pub enum Gap {
         /// What the pass sets beside the plane, or into it.
         kind: LinearPlanePassKind,
     },
-    /// A pipeline of a function whose module weighs more than the compiled stage bound
-    /// (`metal2vulkan::pipeline::COMPILED_STAGE_WEIGHT`, the heaviest measured to compile within
-    /// host-sized memory), which this process never compiles, that the device does not make:
-    /// what `cause` names. A kernel's `VkPipeline` is made from its helper's cache data alone
-    /// ([`Device::fill_stage`](crate::Device::fill_stage)). Metal's counterpart is the pipeline
-    /// state's make, which Metal's compiler service compiles.
+    /// A pipeline the device does not make for its heaviest stage's weight, for what `cause`
+    /// names: a kernel whose module weighs more than the compiled stage bound
+    /// (`metal2vulkan::pipeline::COMPILED_STAGE_WEIGHT`, 39,014), which this process never
+    /// compiles, its `VkPipeline` made from its helper's cache data alone
+    /// ([`Device::fill_stage`](crate::Device::fill_stage)), or a render pipeline with a stage that
+    /// weighs more than 99,109, the render stages' own bound, as no helper compiles a render stage.
+    /// Metal's counterpart is the pipeline state's make, which Metal's compiler service compiles.
     ///
-    /// Basis: device (ANV, Mesa 26.2.6, took 3.65 GiB to compile a stage of entry weight 99,109
-    /// and passed 16 GiB on one of 532,213; a driver whose helper's compile met its cap or time,
-    /// or that keeps no pipeline cache data, gives no data to make the pipeline from).
+    /// Basis: device (on the Iris Xe of RPL-P, ANV, Mesa 26.2.6, the consumer's helper compiles of
+    /// entry weights 186,065 to 424,132 passed its 3 GiB cap, job m3-max-65807; a driver whose
+    /// helper's compile met its cap or time, or that keeps no pipeline cache data, gives no data to
+    /// make the pipeline from).
     StageSize {
         /// The heaviest stage's entry weight (`ModuleStats::entry_weight`).
         weight: u64,
@@ -1501,7 +1503,8 @@ pub enum StageGap {
     /// The device's driver writes no pipeline cache header, so its cache data holds no compile
     /// another process can hand it: lavapipe's (an empty cache's data is 20 bytes in Mesa 26.2.4).
     NoPipelineCache,
-    /// A render pipeline's vertex or fragment stage: no helper compiles render stages.
+    /// A render pipeline's vertex or fragment stage past the render stages' bound, 99,109: no
+    /// helper compiles render stages.
     RenderStage,
 }
 

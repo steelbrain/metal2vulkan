@@ -1018,12 +1018,16 @@ impl RenderCompiled {
         if let Some(kind) = unbuilt(&pipeline, translator.profile().enabled()) {
             return Err(Error::Unsupported(Gap::RenderPipeline { kind }));
         }
-        // A stage past the stage bound is compiled in no process of the runtime's, and no helper
-        // compiles a render stage.
+        // No helper compiles a render stage: one past the kernels' bound compiles here, counted,
+        // and one past the render stages' own bound is refused.
         let heaviest = (pipeline.stages.iter())
             .map(|stage| stage.stats.entry_weight)
             .max();
         if let Some(weight) = heaviest.filter(|&weight| weight > crate::stage::bound()) {
+            core.counters.render_past_kernel_bound(weight);
+        }
+        if let Some(weight) = heaviest.filter(|&weight| weight > crate::stage::RENDER_STAGE_WEIGHT)
+        {
             return Err(Error::Unsupported(Gap::StageSize {
                 weight,
                 cause: StageGap::RenderStage,

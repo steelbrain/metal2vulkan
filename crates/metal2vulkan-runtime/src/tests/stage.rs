@@ -428,4 +428,34 @@ mod on_device {
             );
         }
     }
+
+    /// With the kernels' stage bound below every stage's weight, a render state is still made in
+    /// this process, as a render stage is refused only past the render stages' own bound, and it
+    /// is counted: one translated render pipeline past the kernels' bound, at its heaviest stage's
+    /// weight.
+    #[test]
+    fn a_render_state_past_the_kernel_bound_is_made_in_process_and_counted() {
+        use crate::tests::draw::on_device::{descriptor, examples, state};
+        let Some(library) = examples() else {
+            return;
+        };
+        crate::stage::TEST_BOUND.store(1, Relaxed);
+        let d = descriptor(&library, "colored_fragment", crate::PixelFormat::RGBA8Unorm);
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let device = on(name, physical, None, 0);
+            state(name, &device, &d);
+            let m = device.counters().metrics();
+            assert_eq!(m.render_makes_past_kernel_bound, 1, "{name}");
+            assert!(m.render_weight_past_kernel_bound_max > 1, "{name}: {m:?}");
+            state(name, &device, &d);
+            let again = device.counters().metrics();
+            assert_eq!(
+                again.render_makes_past_kernel_bound, 1,
+                "{name}: the state is translated once"
+            );
+        }
+    }
 }

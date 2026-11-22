@@ -181,9 +181,9 @@ pub(crate) struct Heavy {
     digest: [u8; 32],
 }
 
-/// The entry weight past which a stage is compiled only in the consumer's helper: the translator's
+/// The entry weight past which a kernel is compiled only in the consumer's helper: the translator's
 /// `COMPILED_STAGE_WEIGHT`, or, in a device test, one the test sets (`TEST_BOUND`), so a small
-/// kernel passes it.
+/// kernel passes it. A render stage is weighed against [`RENDER_STAGE_WEIGHT`].
 pub(crate) fn bound() -> u64 {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     if let Some(bound) =
@@ -193,6 +193,17 @@ pub(crate) fn bound() -> u64 {
     }
     metal2vulkan::pipeline::COMPILED_STAGE_WEIGHT
 }
+
+/// The heaviest entry weight of a render pipeline's stage this process makes: no helper compiles a
+/// render stage, so one that weighs more is refused (`Gap::StageSize`, `StageGap::RenderStage`),
+/// and one at or under it compiles in this process with no cap, past the kernels' [`bound`] too.
+/// The two numbers measure two things: where a kernel leaves this process, and where a render
+/// stage is refused because nothing else can compile it. They are one number again when a helper
+/// compiles render stages. Measured cold and alone in a process of its own, the heaviest render
+/// stage of a real program, of entry weight 35,063 beside a vertex stage of 431 (39,424 as
+/// lavapipe's profile weighs it), grew the process by 316 MiB in 3.8 s on ANV (Mesa 26.2.6, the
+/// Iris Xe of RPL-P; job m3-max-66048); no render stage between 39,424 and this weight is measured.
+pub(crate) const RENDER_STAGE_WEIGHT: u64 = 99_109;
 
 /// The stage bound a device test sets; none where zero ([`bound`]).
 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]

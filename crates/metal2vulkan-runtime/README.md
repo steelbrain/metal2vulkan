@@ -2787,13 +2787,29 @@ or does not check is rebuilt from the generations' names, with young counted ful
 
 A driver's compiler takes memory that grows faster than the stage, in the process that creates the
 pipeline. The translator states each module's entry weight (`ModuleStats::entry_weight`: the
-entry's instructions, each call counted as its callee's body); `COMPILED_STAGE_WEIGHT`, 99,109, is
-the heaviest measured to compile within host-sized memory on the slowest compiler measured (ANV,
-Mesa 26.2.6, on the Iris Xe of RPL-P: 132 s and a 3.65 GiB peak resident set; one of 532,213 passed
-16 GiB). No Vulkan query states how large a stage a device's compiler takes, so the bound is one
-for every device. A kernel past it is never compiled in the process that runs the program: each
-of its `VkPipeline`s is compiled in a helper process the consumer starts, caps and times, and is
-created here from that compile's cache data alone.
+entry's instructions, each call counted as its callee's body), and the stage bound is
+`COMPILED_STAGE_WEIGHT`, 39,014: the heaviest kernel measured to compile in its creating process
+within 512 MiB of that process's resident growth on every driver measured. Made cold (no pipeline
+cache, the driver's shader cache off) and alone in a process of its own, a real program's kernel
+of that weight grew the process by 350 MiB in 6.8 s on ANV (Mesa 26.2.6, the Iris Xe of RPL-P;
+job m3-max-66048), 148 MiB in 1.8 s on NVIDIA's driver (620.70.06, an RTX 3090; job
+m3-max-66050) and 80 MiB in 0.55 s on RADV (Mesa 26.2.6, a Radeon 780M; job m3-max-66049). Above
+it, on the same Iris Xe, an older build's kernels of entry weights 73,814, 75,886 and 99,109 took
+peak resident sets of 1.76, 2.24 and 3.65 GiB in 45 s, 47 s and 132 s (job m3-max-26147). No
+Vulkan query states how large a stage a device's compiler takes, so the bound is one for every
+device; it rises when a heavier kernel is measured to compile within 512 MiB. A kernel past the
+bound is never compiled in the process that runs the program: each of its
+`VkPipeline`s is compiled in a helper process the consumer starts, caps and times, and is created
+here from that compile's cache data alone.
+
+Render stages have a bound of their own, 99,109, as no helper compiles a render stage: a render
+pipeline with a stage past it is refused (Known gaps of render pipeline states), and one at or
+under it compiles in the process that runs the program with no cap, past the kernels' bound too.
+The two numbers measure two things: where a kernel leaves the process, and where a render stage is
+refused because nothing else can compile it. They are one number again when a helper compiles
+render stages. `Metrics::render_makes_past_kernel_bound` counts the render pipelines translated
+with a stage past the kernels' bound, and `Metrics::render_weight_past_kernel_bound_max` holds the
+heaviest such stage's weight.
 
 - The make of such a `VkPipeline` (at the state's creation, a `prepare_dispatch` call or a
   dispatch) reads the pipeline's entry under `stages/` in the cache directory. With data, it
@@ -3264,9 +3280,18 @@ cache is answered compile-required on both.
 
 ### Known gaps of render pipeline states
 
-- A render pipeline whose vertex or fragment stage weighs more than the stage bound (Kernels past
-  the stage bound) is refused (`Gap::StageSize`, `StageGap::RenderStage`) where Metal makes it: no
-  helper compiles a render stage.
+- A render pipeline whose vertex or fragment stage weighs more than 99,109, the render stages'
+  bound (Kernels past the stage bound), is refused (`Gap::StageSize`, `StageGap::RenderStage`)
+  where Metal makes it: no helper compiles a render stage.
+- A render pipeline whose heaviest stage weighs more than the kernels' bound
+  (`COMPILED_STAGE_WEIGHT`, 39,014) and at most 99,109 compiles in the process that runs the
+  program, with no cap, where a kernel that heavy compiles only in the consumer's capped helper
+  (`Metrics::render_makes_past_kernel_bound` counts them). No render stage that heavy is measured.
+  The heaviest render stage measured of a real program, of entry weight 35,063 beside a vertex
+  stage of 431 (39,424 as lavapipe's profile weighs it), made cold and alone in a process of its
+  own, grew the process by 316 MiB in 3.8 s on ANV (Mesa 26.2.6, the Iris Xe of RPL-P; job
+  m3-max-66048), 180 MiB in 2.5 s on NVIDIA's driver (620.70.06, an RTX 3090; job m3-max-66050)
+  and 58 MiB in 0.6 s on RADV (Mesa 26.2.6, a Radeon 780M; job m3-max-66049).
 - Refused at creation by `Gap::RenderPipeline`, naming its `RenderPipelineKind`: depth and
   stencil attachment formats that differ, as of separate depth and stencil textures
   (`DepthStencilFormats`: Vulkan's pipeline takes one format for both,

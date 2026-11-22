@@ -620,7 +620,7 @@ const-value	metal2vulkan::bind::indirect_commands::WRITTEN_FLAG_BYTES	4
 const-value	metal2vulkan::metal::format::BICUBIC_TEXELS_UNBOUND	crate::metal::bicubic::BicubicTexels::NEUTRAL.0
 const-value	metal2vulkan::metal::sampler::NOT_MIPMAPPED_MAX_LOD	0.25
 const-value	metal2vulkan::metal::vertex::MAX_VERTEX_ALIGNMENT	4
-const-value	metal2vulkan::pipeline::COMPILED_STAGE_WEIGHT	99_109
+const-value	metal2vulkan::pipeline::COMPILED_STAGE_WEIGHT	39_014
 const-value	metal2vulkan::pipeline::DEEP_THREADGROUP	64
 const-value	metal2vulkan::pipeline::GRID_TILE_THREADS	256
 const-value	metal2vulkan::pipeline::NONUNIFORM	1
@@ -1731,8 +1731,10 @@ field	metal2vulkan-runtime::Metrics.pushes	pub pushes: u64
 field	metal2vulkan-runtime::Metrics.pushes_held	pub pushes_held: u64
 field	metal2vulkan-runtime::Metrics.queue_lock_wait_max_nanos	pub queue_lock_wait_max_nanos: u64
 field	metal2vulkan-runtime::Metrics.queue_lock_wait_nanos	pub queue_lock_wait_nanos: u64
+field	metal2vulkan-runtime::Metrics.render_makes_past_kernel_bound	pub render_makes_past_kernel_bound: u64
 field	metal2vulkan-runtime::Metrics.render_records_read	pub render_records_read: u64
 field	metal2vulkan-runtime::Metrics.render_records_stale	pub render_records_stale: u64
+field	metal2vulkan-runtime::Metrics.render_weight_past_kernel_bound_max	pub render_weight_past_kernel_bound_max: u64
 field	metal2vulkan-runtime::Metrics.resolves	pub resolves: u64
 field	metal2vulkan-runtime::Metrics.ring_block_allocations	pub ring_block_allocations: SiteAllocations
 field	metal2vulkan-runtime::Metrics.ring_writes	pub ring_writes: u64

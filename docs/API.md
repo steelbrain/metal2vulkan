@@ -526,11 +526,12 @@ assert!(stats.reachable_blocks <= stats.blocks);
   search (a loop), each emitted once and called at every access.
 - `entry_weight` is what a driver compiles once it has inlined every call: the entry's
   instructions with each call counted as its callee's body, after repeated regions are rolled
-  into loops. A stage past `pipeline::COMPILED_STAGE_WEIGHT` (99,109, the heaviest measured to
-  compile within host-sized memory on the slowest compiler measured) is one whose creation may
-  take the host's memory: the translator makes it all the same, and `metal2vulkan-runtime`
-  compiles such a kernel only in a helper process the consumer caps (its README, "Kernels past
-  the stage bound"). A kernel past the bound only because it emulates its SIMD groups is planned
+  into loops. A kernel past `pipeline::COMPILED_STAGE_WEIGHT` (39,014, the heaviest kernel
+  measured to compile within 512 MiB of its creating process's resident growth on every driver
+  measured) is one whose creation may take the host's memory: the translator makes it all the
+  same, and `metal2vulkan-runtime` compiles such a kernel only in a helper process the consumer
+  caps (its README, "Kernels past the stage bound", which gives the figures and the render
+  stages' own bound). A kernel past the bound only because it emulates its SIMD groups is planned
   again keeping the device's widest subgroup mode pinned, where that plan is lighter.
 - Compare one module against the next of the same shader, not one shader against another. Measured
   cost per block differed several-fold between a synthetic module and a real workload, so a

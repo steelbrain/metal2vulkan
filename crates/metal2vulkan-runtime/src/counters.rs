@@ -696,6 +696,8 @@ struct Atomics {
     preprocess_regions_remade: AtomicU64,
     stage_fills: AtomicU64,
     pipelines_from_stage_fills: AtomicU64,
+    render_makes_past_kernel_bound: AtomicU64,
+    render_weight_past_kernel_bound_max: AtomicU64,
     visibility_interrupts_refused: AtomicU64,
     accumulated_visibility_refused: AtomicU64,
     overlapping_copies_refused: AtomicU64,
@@ -853,6 +855,15 @@ impl Counters {
             Metric::AccumulatedVisibilityRefused => &a.accumulated_visibility_refused,
             Metric::OverlappingCopiesRefused => &a.overlapping_copies_refused,
         }
+    }
+
+    /// One more render pipeline translated whose heaviest stage, of entry weight `weight`, is past
+    /// the kernels' stage bound.
+    pub(crate) fn render_past_kernel_bound(&self, weight: u64) {
+        let a = &self.atomics;
+        a.render_makes_past_kernel_bound.fetch_add(1, Relaxed);
+        a.render_weight_past_kernel_bound_max
+            .fetch_max(weight, Relaxed);
     }
 
     /// One more first-use wait at `site`: an encoding call that made the `VkPipeline` it needed,
@@ -1705,6 +1716,10 @@ impl Counters {
             preprocess_regions_remade: a.preprocess_regions_remade.load(Relaxed),
             stage_fills: a.stage_fills.load(Relaxed),
             pipelines_from_stage_fills: a.pipelines_from_stage_fills.load(Relaxed),
+            render_makes_past_kernel_bound: a.render_makes_past_kernel_bound.load(Relaxed),
+            render_weight_past_kernel_bound_max: a
+                .render_weight_past_kernel_bound_max
+                .load(Relaxed),
             visibility_interrupts_refused: a.visibility_interrupts_refused.load(Relaxed),
             accumulated_visibility_refused: a.accumulated_visibility_refused.load(Relaxed),
             overlapping_copies_refused: a.overlapping_copies_refused.load(Relaxed),
@@ -2530,6 +2545,18 @@ pub struct Metrics {
     /// so the driver compiled nothing for them in this process. Each is counted in
     /// [`pipelines_created`](Self::pipelines_created) too.
     pub pipelines_from_stage_fills: u64,
+    /// No Metal counterpart: render pipelines translated whose heaviest stage weighs more than
+    /// the kernels' stage bound (`metal2vulkan::pipeline::COMPILED_STAGE_WEIGHT`), each a make
+    /// of a state the device had not translated: past that bound a kernel compiles only in the
+    /// consumer's capped helper, and a render stage compiles in this process with no cap up to
+    /// the render stages' own bound, 99,109, past which it is refused
+    /// ([`Gap::StageSize`](crate::Gap::StageSize)); the refused are counted too.
+    pub render_makes_past_kernel_bound: u64,
+    /// No Metal counterpart: the heaviest stage's entry weight of the
+    /// [`render_makes_past_kernel_bound`](Self::render_makes_past_kernel_bound), 0 where there are
+    /// none; a maximum since the device was made, so the difference of two reads does not apply
+    /// to it.
+    pub render_weight_past_kernel_bound_max: u64,
     /// Commands a render encoder refused because they would end its pass's rendering while a
     /// `Boolean` or `Counting` visibility result's query counts the draws
     /// ([`DrawKind::VisibilityResultInterrupt`](crate::DrawKind::VisibilityResultInterrupt)):
