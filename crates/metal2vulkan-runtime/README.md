@@ -1112,6 +1112,18 @@ the Direct3D 11 texture's payload until it is freed.
 
   rt's Shared units are the driver's own memory on every device, so these holds are what the
   consumer sees beside each one made or freed.
+- On the AMD kernel driver (amdgpu) a Shared allocation's make gathers its pages inside the
+  driver's create, under the reservation of the device's page tables, which every submit, import,
+  map and close on the device also takes. With the host's free memory low the kernel compacts
+  memory first, and those calls wait behind it. On a Radeon 780M (RADV of Mesa 26.2.6, Linux
+  7.3.3), with the host's free memory at 303 to 318 MiB before each set of makes, beside 8 GiB of
+  resident shared memory and 21 GiB of page cache, 16 MiB makes met 5.2 and 6.9 compaction stalls
+  each on average in two passes, and the longest submit held behind one took 13.87 ms (a
+  standalone program, job m3-max-66343). In a guest walk on a 780M (rt at 4e9aad67d5, job
+  m3-max-66278) the long 16 MiB makes met 5 to 18 compaction stalls each, and 8 of the 9 submits
+  of 5.3 to 22.6 ms waited behind a make. The runtime keeps its one unit length on every device,
+  since a shorter unit would move makes onto the take path (a take longer than a unit allocates
+  on the caller's thread), and it keeps no memory to avoid the call.
 - On a full discrete card a Private block the consumer takes goes to another memory type, host
   memory where the card has no other device-local type, and the kernels that read a Managed
   buffer's device copy placed there read it across the host link:
