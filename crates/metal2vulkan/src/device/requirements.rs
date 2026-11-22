@@ -446,9 +446,9 @@ pub enum VkExtension {
     // Appended.
     /// `VK_EXT_depth_range_unrestricted` (never promoted): among others, a copy into a depth
     /// aspect keeps a value outside `[0, 1]`, which Metal's `Depth32Float` textures hold. No
-    /// module requires it; a module whose depth comparisons the device makes on a device without
-    /// it enabled records `PrecisionNote::RestrictedDepthRange`, and the consumer announces an
-    /// upload into a depth image there (`restricted-depth-upload`).
+    /// module requires it and the translator reads it nowhere: a module whose depth comparisons
+    /// the device makes records `PrecisionNote::RestrictedDepthRange` on every device, and the
+    /// consumer announces an upload into a depth image (`restricted-depth-upload`).
     ExtDepthRangeUnrestricted,
     // Appended.
     /// `VK_EXT_depth_bias_control` (never promoted): a depth bias's representation and exactness.

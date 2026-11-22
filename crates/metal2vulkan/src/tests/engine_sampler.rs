@@ -486,7 +486,7 @@ fn runtime_pixel_accesses_hand_the_device_the_scaled_coordinate() {
 /// states pixel coordinates. An argument buffer's pixel sampler records no `DeviceDenormals`:
 /// `ArgumentPixelSamplerScaling`, which the runtime announces only while a pixel state lives,
 /// records its centre's reading. The depth comparison
-/// records `RestrictedDepthRange`, as MoltenVK exposes no `VK_EXT_depth_range_unrestricted`. An
+/// records `RestrictedDepthRange`, as on every device. An
 /// argument buffer's raw texture sampled through the runtime slot holds its filter's
 /// `BicubicFilterArithmetic` only under the bound sampler's word (`SpecKey::BoundSamplerWord`)
 /// where its handles can name a raw texture (`SpecKey::HeapRawTextures`).

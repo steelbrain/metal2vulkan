@@ -2861,7 +2861,6 @@ fn output(cx: &mut SelectCx<'_>, o: &OutputBinding, ty: AirTypeId) -> Result<Lin
             }
             cx.families.stage_io.depth_clamp = Some(DepthClamp {
                 object: link.object,
-                clamps: clamps_fragment_depth(cx),
                 range,
             });
             cx.families.fragment.depth_output = true;
@@ -3063,17 +3062,4 @@ fn float_color(e: &crate::air::Entry, ty: AirTypeId) -> bool {
         other => other,
     };
     matches!(scalar, Some(Type::Float))
-}
-
-/// Whether a fragment function's depth output is clamped to `[0, 1]` as Metal stores it
-/// (`DepthClamp::clamps`; five stores' words with a positive NaN's kill, two for the kill
-/// alone): where the profile enables `VK_EXT_depth_range_unrestricted`, under which Vulkan no
-/// longer clamps it (RADV, NVIDIA and x86 lavapipe store 1.5 and -0.5 unclamped, measured).
-/// Without the extension Vulkan clamps it to `[0, 1]` itself.
-fn clamps_fragment_depth(cx: &SelectCx<'_>) -> bool {
-    cx.profile
-        .fields()
-        .enabled
-        .extensions
-        .contains(&VkExtension::ExtDepthRangeUnrestricted)
 }

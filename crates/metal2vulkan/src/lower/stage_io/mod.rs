@@ -538,14 +538,13 @@ pub struct RotatedSecond {
 }
 
 /// How a fragment function's returns store its depth output as Metal does (`clamp_depth`): its
-/// `FragDepth` object, and whether they clamp it to `[0, 1]`, where Vulkan no longer does
-/// (`VK_EXT_depth_range_unrestricted`). Every return kills a positive NaN where it can. Under
-/// `range` (`LoweringInputs::depth_clamp_range`) they clamp it to `[0, 1]` on every profile and
-/// then to the draw's range, a negative NaN storing 0.
+/// `FragDepth` object. Every return kills a positive NaN where it can; Vulkan clamps the value to
+/// `[0, 1]` itself, as no runtime enables `VK_EXT_depth_range_unrestricted`. Under `range`
+/// (`LoweringInputs::depth_clamp_range`) they clamp it to `[0, 1]` and then to the draw's range,
+/// a negative NaN storing 0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DepthClamp {
     pub object: usize,
-    pub clamps: bool,
     pub range: bool,
 }
 
@@ -1776,7 +1775,7 @@ pub fn emit_return(
                             true => Some(cx.push_field(fb, PushField::DepthClampRange)?),
                             false => None,
                         };
-                        clamp_depth(fb, part, kill, d.clamps || d.range, range)?
+                        clamp_depth(fb, part, kill, range)?
                     }
                     None => part,
                 };
@@ -2378,8 +2377,8 @@ fn nan_drop(cx: &mut EmitCx<'_>) -> BResult<Option<NanDrop>> {
 /// [zmin, zmax], then zf is undefined following this step", and a NaN lies in no range; only
 /// `depthClampZeroOne`, which no profile enables, keeps a float depth unchanged), and a device
 /// that clamps the depth itself stores a NaN as anything (ANV: 0, its color written). In a
-/// function looping over its covered samples the value passes unchanged. The selects run only where the plan `clamps`,
-/// the device storing the value unclamped; elsewhere its own clamp gives Metal's answers.
+/// function looping over its covered samples the value passes unchanged. Without `range` the
+/// device's own clamp to `[0, 1]` gives Metal's answers, so only the kill runs.
 ///
 /// Under `range`, `PushField::DepthClampRange`'s `[low, high]`, the value is then clamped to the
 /// draw's depth clamp range, as Metal's clamp mode stores it, but a negative NaN stores 0 (a Metal
@@ -2389,7 +2388,6 @@ fn clamp_depth(
     fb: &mut FunctionBuilder<'_>,
     depth: SValue,
     kill: Option<NanDrop>,
-    clamps: bool,
     range: Option<SValue>,
 ) -> BResult<SValue> {
     let u32_ = fb.module().ty(SType::Int {
@@ -2426,9 +2424,9 @@ fn clamp_depth(
             }
         }
     }
-    if !clamps {
+    let Some(range) = range else {
         return Ok(depth);
-    }
+    };
     let negative = fb.binary(BinOp::UGreaterThanEqual, bits, sign)?;
     let past_one = fb.binary(BinOp::UGreaterThan, bits, one_bits)?;
     let at_most_inf = fb.binary(BinOp::ULessThanEqual, bits, inf_bits)?;
@@ -2437,9 +2435,6 @@ fn clamp_depth(
     let one = f(fb, 1.0)?;
     let high = fb.select(over, one, depth)?;
     let clamped = fb.select(negative, zero, high)?;
-    let Some(range) = range else {
-        return Ok(clamped);
-    };
     let bound = |fb: &mut FunctionBuilder<'_>, i: u32| -> BResult<SValue> {
         let bits = fb.composite_extract(range, &[i])?;
         fb.convert(ConvOp::Bitcast, bits, f32_)

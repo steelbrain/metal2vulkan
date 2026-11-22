@@ -2073,8 +2073,8 @@ bound.
   function's color output where the device's conversion stores its NaN, but one every return of
   which holds such a constant records nothing.
 - `metal2vulkan-degrade-restricted-depth-range` (precision). `PrecisionNote::RestrictedDepthRange`:
-  The device compares a depth texture's texels on a device without `VK_EXT_depth_range_unrestricted`
-  enabled (MoltenVK on the M3 Max, ANV on the Iris Xe, RADV), where Vulkan gives a depth image no
+  The device compares a depth texture's texels, on every device: without
+  `VK_EXT_depth_range_unrestricted`, which no runtime enables, Vulkan gives a depth image no
   value outside `[0, 1]`, whatever its driver is measured to keep: an upload into a 32-bit float
   depth is refused (`Gap::FloatDepthUpload`), and a render write is clamped to the viewport's
   depth range. A

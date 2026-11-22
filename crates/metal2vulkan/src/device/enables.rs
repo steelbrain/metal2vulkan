@@ -348,7 +348,6 @@ fn facts(ext: VkExtension) -> ExtensionFacts {
         | E::KhrWorkgroupMemoryExplicitLayout
         | E::KhrMaintenance8
         | E::KhrShaderFma
-        | E::ExtDepthRangeUnrestricted
         | E::ExtDepthClipEnable
         | E::ExtDepthClampControl
         | E::ExtSampleLocations
@@ -395,6 +394,9 @@ fn facts(ext: VkExtension) -> ExtensionFacts {
         // Described, never enabled: a depth bias counts the device's own unit
         // (`metal::state::depth_bias`), so the core reads none of its features.
         E::ExtDepthBiasControl => fact(false, None, &[]),
+        // Described, never enabled: a depth comparison records `RestrictedDepthRange` on every
+        // device (`lower::texture::depth_comparison`), and Vulkan clamps a fragment depth itself.
+        E::ExtDepthRangeUnrestricted => fact(false, None, &[]),
         E::KhrDynamicRendering => fact(false, Some(3), &[]),
         // Object and mesh functions. `VK_KHR_spirv_1_4` is core at the 1.2 floor.
         E::ExtMeshShader => fact(true, None, &[]),

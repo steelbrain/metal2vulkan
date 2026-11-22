@@ -2578,8 +2578,8 @@ fn select_one(
             return Err(Unsupported::not_implemented(Feature::ArgumentBufferTextures).into())
         }
     };
-    // A depth comparison, the device's, reads the texture's depth image, which a device without
-    // `VK_EXT_depth_range_unrestricted` may hold clamped.
+    // A depth comparison, the device's, reads the texture's depth image, which Vulkan may hold
+    // clamped (no runtime enables `VK_EXT_depth_range_unrestricted`).
     if shape.depth && compare {
         crate::lower::texture::depth_comparison(cx);
     }

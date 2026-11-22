@@ -3,19 +3,15 @@
 //! `rfb_position` write none):
 //!
 //! - On every profile, `rfb_depth` kills the invocation of a positive NaN, which fails Metal's
-//!   depth test: one `if` whose arm kills.
-//! - On a profile that enables `VK_EXT_depth_range_unrestricted` (RADV, lavapipe, NVIDIA), under
-//!   which Vulkan stores the depth unclamped, it also selects +0 or 1 by the depth's bits: three
-//!   unsigned compares, a logical and and two selects more than the same device's module without
-//!   the extension, and a bounded number of words (measured, 36 on each).
-//! - A function that writes no depth is the same module with the extension and without it.
+//!   depth test: one `if` whose arm kills. Vulkan clamps the depth to `[0, 1]` itself, as no
+//!   runtime enables `VK_EXT_depth_range_unrestricted`.
 //! - Every module passes L3 (`spirv-val` and requirements within the profile).
 //!
 //! - Under `LoweringInputs::depth_clamp_range` `rfb_depth` states `RuntimeFact::DepthClampRange`,
 //!   reads `PushField::DepthClampRange` (8 bytes of the push window) and clamps the depth to it
-//!   after the `[0, 1]` selects, which it then runs on every profile: one ordered less-than and one
-//!   ordered greater-than more than without the input, and its kill. The functions that write no
-//!   depth are the same module under it.
+//!   after selecting +0 or 1 by the depth's bits: one ordered less-than and one ordered
+//!   greater-than more than without the input, and its kill. The functions that write no depth
+//!   are the same module under it.
 //!
 //! What the depth stores is Metal probes 3 and 3b's. `llvm-as` assembles the fixture; a missing
 //! tool skips visibly. No GPU is used.
@@ -23,7 +19,6 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::device::requirements::VkExtension;
 use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
 use crate::library::FunctionArtifact;
 use crate::pipeline::link::{link, LinkInputs};
@@ -42,31 +37,6 @@ fn fixture() -> Option<Vec<u8>> {
         }
         Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected rfb_viewports.ll: {why}"),
     }
-}
-
-/// The profile of the committed description `stem`, with `VK_EXT_depth_range_unrestricted`
-/// removed from its extensions unless `unrestricted`.
-fn profile(stem: &str, unrestricted: bool) -> DeviceProfile {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../metal2vulkan-validation/profiles")
-        .join(format!("{stem}.json"));
-    let text = std::fs::read_to_string(path).expect("profile");
-    let mut desc = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    if !unrestricted {
-        desc.extensions
-            .remove(&VkExtension::ExtDepthRangeUnrestricted);
-    }
-    let p = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
-        .expect("device")
-        .profile()
-        .clone();
-    let enabled = p
-        .fields()
-        .enabled
-        .extensions
-        .contains(&VkExtension::ExtDepthRangeUnrestricted);
-    assert_eq!(enabled, unrestricted, "{stem}");
-    p
 }
 
 /// Link `a` alone, relocate it, and run L3; its relocated words.
@@ -90,10 +60,6 @@ fn opcodes(words: &[u32]) -> BTreeMap<u32, usize> {
     counts
 }
 
-/// The clamp's selects, by opcode, and how many of each they add to the kill:
-/// `OpUGreaterThanEqual`, `OpUGreaterThan`, `OpULessThanEqual`, `OpLogicalAnd`, `OpSelect`.
-const SELECTS: [(u32, usize); 5] = [(174, 1), (172, 1), (178, 1), (167, 1), (169, 2)];
-
 /// `OpKill` and `OpTerminateInvocation`, one of which the kill is.
 const KILLS: [u32; 2] = [252, 4416];
 
@@ -107,54 +73,8 @@ fn kills(c: &BTreeMap<u32, usize>) -> usize {
     KILLS.iter().map(|op| count(c, *op)).sum()
 }
 
-/// `rfb_depth` adds the clamp's selects where the extension is enabled, and nothing else
-/// changes; the functions that write no depth are unchanged.
-#[test]
-fn a_depth_output_is_clamped_where_vulkan_stores_it_unclamped() {
-    let Some(bc) = fixture() else {
-        return;
-    };
-    let inputs = LoweringInputs::new();
-    for stem in ["amd-780m-radv", "lavapipe", "nvidia-rtx50-linux"] {
-        let (unrestricted, restricted) = (profile(stem, true), profile(stem, false));
-        for entry in ["rfb_full", "rfb_position"] {
-            let with = compile_with(&bc, entry, &unrestricted, &inputs)
-                .unwrap_or_else(|e| panic!("{stem} {entry}: {e}"));
-            let without = compile_with(&bc, entry, &restricted, &inputs)
-                .unwrap_or_else(|e| panic!("{stem} {entry}: {e}"));
-            assert_eq!(
-                validate(&with, &unrestricted),
-                validate(&without, &restricted),
-                "{stem} {entry}"
-            );
-        }
-        let with = compile_with(&bc, "rfb_depth", &unrestricted, &inputs)
-            .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let without = compile_with(&bc, "rfb_depth", &restricted, &inputs)
-            .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let (with, without) = (
-            validate(&with, &unrestricted),
-            validate(&without, &restricted),
-        );
-        let (a, b) = (opcodes(&with), opcodes(&without));
-        for (op, more) in SELECTS {
-            assert_eq!(count(&a, op), count(&b, op) + more, "{stem}: opcode {op}");
-        }
-        assert_eq!((kills(&a), kills(&b)), (1, 1), "{stem}: the kill");
-        // Otherwise only the constants the selects use are added.
-        for op in a.keys().chain(b.keys()) {
-            if !SELECTS.iter().any(|(c, _)| c == op) {
-                assert!(count(&a, *op) >= count(&b, *op), "{stem}: opcode {op}");
-            }
-        }
-        let added = with.len() as i64 - without.len() as i64;
-        println!("{stem}: the selects add {added} words to {}", without.len());
-        assert!((20..=64).contains(&added), "{stem}: {added}");
-    }
-}
-
-/// A positive NaN depth kills the invocation on every profile, whether its device clamps the
-/// depth or not (ANV stores a NaN as 0 and writes its color, where Metal's depth test fails it):
+/// A positive NaN depth kills the invocation on every profile (ANV stores a NaN as 0 and writes
+/// its color, where Metal's depth test fails it):
 /// one kill in `rfb_depth`, none in the functions that write no depth.
 #[test]
 fn a_positive_nan_depth_kills_on_every_profile() {
@@ -186,8 +106,7 @@ fn a_positive_nan_depth_kills_on_every_profile() {
 const RANGE_COMPARES: [u32; 2] = [184, 186];
 
 /// Under `depth_clamp_range`, `rfb_depth` states the fact, reads the push field and clamps its
-/// depth to the range on every profile, whether its device clamps the depth or not; the
-/// functions that write no depth are unchanged.
+/// depth to the range on every profile; the functions that write no depth are unchanged.
 #[test]
 fn a_depth_clamp_range_variant_clamps_the_depth_to_the_draws_range() {
     use crate::pipeline::facts::RuntimeFact;
@@ -248,7 +167,7 @@ fn a_depth_clamp_range_variant_clamps_the_depth_to_the_draws_range() {
         for op in RANGE_COMPARES {
             assert_eq!(count(&a, op), count(&b, op) + 1, "{stem}: opcode {op}");
         }
-        // The `[0, 1]` selects run on every profile under the input.
+        // The `[0, 1]` selects run under the input.
         assert!(count(&a, 169) >= 5, "{stem}: {} selects", count(&a, 169));
         assert_eq!((kills(&a), kills(&b)), (1, 1), "{stem}: the kill");
     }

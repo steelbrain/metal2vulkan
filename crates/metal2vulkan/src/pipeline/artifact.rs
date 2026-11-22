@@ -812,15 +812,14 @@ pub enum PrecisionNote {
     /// of whose lanes is a NaN. Validation derives no tolerance and no explanation from
     /// it, as for `DeviceDenormals`.
     DeviceNanEncoding,
-    /// The device compares a depth texture's texels (a sample or a gather with comparison) on a
-    /// device without `VK_EXT_depth_range_unrestricted` enabled (narrowed to comparisons). Metal's
-    /// `Depth32Float` texels hold any `float`, and the device's comparison reads them from the
-    /// texture's depth image, which without the extension Vulkan gives no value outside `[0, 1]`:
-    /// a copy may take none (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), so a consumer clamps
-    /// its uploads, and a render write is clamped to the viewport's depth range. A comparison whose
-    /// texel Metal holds outside `[0, 1]` can then differ, on every such device, whatever its
-    /// driver is measured to keep (MoltenVK). Values within `[0, 1]`, and every texel on a device
-    /// with the extension enabled, are exact. A function that reads, samples or gathers a depth
+    /// The device compares a depth texture's texels (a sample or a gather with comparison), on
+    /// every device (narrowed to comparisons). Metal's `Depth32Float` texels hold any `float`,
+    /// and the device's comparison reads them from the texture's depth image, which Vulkan gives
+    /// no value outside `[0, 1]` without `VK_EXT_depth_range_unrestricted`, which no runtime
+    /// enables: a copy may take none (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), so a consumer
+    /// clamps its uploads, and a render write is clamped to the viewport's depth range. A
+    /// comparison whose texel Metal holds outside `[0, 1]` can then differ, whatever the driver is
+    /// measured to keep (MoltenVK). Values within `[0, 1]` are exact. A function that reads, samples or gathers a depth
     /// texture without comparing records nothing: its interface's `TextureSlot::access` states
     /// the use, and a consumer that uploads a value into a depth image its device clamps announces
     /// that upload (docs/API.md section 5).

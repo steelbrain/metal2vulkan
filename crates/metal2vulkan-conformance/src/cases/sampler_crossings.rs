@@ -955,11 +955,11 @@ impl Case for SamplerCrossings {
         // the device's own answer, which the suite declares for every case
         // (`crate::replay::NATIVE_NOTES`).
         //
-        // The `compare-filters` row's `Depth32Float` texture: on a device without
-        // `VK_EXT_depth_range_unrestricted` (MoltenVK on the M3 Max) the comparing stage records
-        // that its texels hold no value outside [0, 1] (`restricted-depth-range`). Its depths all
-        // lie in [0, 1], so the note moves no sample: measured there, the notices site is the
-        // whole of the difference.
+        // The `compare-filters` row's `Depth32Float` texture: on every device (no runtime enables
+        // `VK_EXT_depth_range_unrestricted`) the comparing stage records that its texels hold no
+        // value outside [0, 1] (`restricted-depth-range`). Its depths all lie in [0, 1], so the
+        // note moves no sample: measured on MoltenVK on the M3 Max, the notices site is the whole
+        // of the difference.
         //
         // Every row samples through the runtime sampler at `[[sampler(0)]]`, which the runtime's
         // pipelines note as scaled (`crate::replay::pixel_sampler_scaling_notice` holds why).
