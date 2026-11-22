@@ -2599,6 +2599,15 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   qualifier, which Metal's reflection answers (`MTLBinding.access`): a `read_write` slot the
   kernel only writes is `WriteOnly`. A texture an argument buffer, a heap or a resource ID
   reaches is in no slot.
+- `ComputePipelineState::buffer_accesses` answers each buffer slot the kernel uses, by index,
+  with the access a dispatch of the state marks in its hazards for the buffer bound there, read
+  from the same interface, as a `BindingAccess`: `WriteOnly` where the kernel writes the buffer
+  and does not read it, `ReadWrite` where it does both (an atomic, or a store of part of a word,
+  which reads the word), `ReadOnly` otherwise. The access is what the kernel's operations do, not
+  the argument's declaration, which Metal's reflection answers (`MTLBinding.access`: `ReadOnly`
+  for a `constant` or `const device` buffer, `ReadWrite` for a `device` one): a `device` buffer
+  the kernel only writes is `WriteOnly`. A buffer an argument buffer, a heap or an address
+  reaches is in no slot, and neither is a function table.
 - A state answers Metal's `staticThreadgroupMemoryLength`
   (`ComputePipelineState::static_threadgroup_memory_length`), rounded up to 16 bytes as Metal
   reports it, without the threadgroup memory the runtime adds beside it, and `threadExecutionWidth`

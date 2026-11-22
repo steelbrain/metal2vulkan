@@ -1797,6 +1797,23 @@ impl ComputePipelineState {
             .collect()
     }
 
+    /// No Metal counterpart as such: each buffer slot the kernel uses, by index, ascending, with
+    /// the access a dispatch of the state marks in its encoder's hazards for the buffer bound
+    /// there, read from the same interface: `WriteOnly` where the kernel writes the buffer and
+    /// does not read it, `ReadWrite` where it does both (an atomic does both, and so does a store
+    /// of part of a word, which reads the word), `ReadOnly` otherwise. It is what the kernel's
+    /// operations do, not the argument's declaration: a `device` buffer the kernel only writes is
+    /// `WriteOnly`. A buffer an argument buffer, a heap or an address reaches is in no slot, and so
+    /// is a function table. Metal's counterpart is reflection's `MTLBinding.access` of a buffer
+    /// binding, the declared access, which is `ReadOnly` for a `constant` or `const device`
+    /// buffer and `ReadWrite` for a `device` one; the consumer builds reflection itself.
+    pub fn buffer_accesses(&self) -> Vec<(u32, BindingAccess)> {
+        let interface = &self.inner.compiled.whole.interface;
+        (interface.buffers.iter())
+            .map(|&(slot, access)| (slot, access.binding()))
+            .collect()
+    }
+
     /// No Metal counterpart: where the kernel's answers may differ from Metal's on this device,
     /// fixed per operation by the translator, for every module the state runs: those made with
     /// the state (an observing kernel's one-row module among them), its variants among them: the

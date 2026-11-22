@@ -10,6 +10,7 @@ mod bicubic_draw;
 mod blit;
 mod blit_options;
 mod border;
+mod buffer_accesses;
 mod cache;
 mod choice;
 mod command;

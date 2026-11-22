@@ -6564,6 +6564,7 @@ method	metal2vulkan-runtime::ComputePipelineDescriptor::lowering_inputs	pub fn l
 method	metal2vulkan-runtime::ComputePipelineDescriptor::new	pub fn new(kernel: StageSource) -> ComputePipelineDescriptor
 method	metal2vulkan-runtime::ComputePipelineDescriptor::reflection	pub fn reflection(&self, budget: &crate::Budget) -> Result<ComputePipelineReflection, Error>
 method	metal2vulkan-runtime::ComputePipelineDescriptor::slot_writes	pub fn slot_writes(&self, budget: &crate::Budget) -> Result<SlotWrites, Error>
+method	metal2vulkan-runtime::ComputePipelineState::buffer_accesses	pub fn buffer_accesses(&self) -> Vec<(u32, BindingAccess)>
 method	metal2vulkan-runtime::ComputePipelineState::dispatch_variant	pub fn dispatch_variant(&self, dispatch: Dispatch, threads_per_threadgroup: [u32; 3], threadgroup_memory_lengths: &[(u32, u32)]) -> Option<(DispatchVariant, bool)>
 method	metal2vulkan-runtime::ComputePipelineState::imageblock_memory_length_for_dimensions	pub fn imageblock_memory_length_for_dimensions(&self, _dimensions: [u32; 3]) -> Result<u64, Error>
 method	metal2vulkan-runtime::ComputePipelineState::max_total_threads_per_threadgroup	pub fn max_total_threads_per_threadgroup(&self) -> u32
