@@ -1442,7 +1442,8 @@ all of a kernel's direct dispatches. The runtime lowers a kernel that does not o
 partition once, as that variant, and runs every direct dispatch of it in its tiles; a kernel that
 observes its partition runs every dispatch, a whole grid, threadgroups, an indirect dispatch or
 a `dispatchThreads` grid that is not a whole number of threadgroups, on its partial-threadgroups
-variant at its own threadgroup size; an indirect dispatch states no grid in its region and takes
+variant at its own threadgroup size, where the variant takes the dispatch's threadgroup memory
+(the variant's predicated walk may add a vote word); an indirect dispatch states no grid in its region and takes
 the single-region form, unflagged. A kernel
 that steps a stage-in attribute by thread position, or reads `[[grid_origin]]` or `[[grid_size]]`,
 needs the encoder's stage-in region:

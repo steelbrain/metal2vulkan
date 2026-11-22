@@ -1047,7 +1047,8 @@ impl ComputeCommandEncoder {
             &Grid::Direct(direct) => Some(direct),
             Grid::Indirect(..) => None,
         };
-        let (choice, module, kernel) = decide(inner, direct, size)?;
+        let memory = (&self.threadgroup_lengths[..], limits.max_shared_memory);
+        let (choice, module, kernel) = decide(inner, direct, size, memory)?;
         let Choice {
             local,
             nominal,
@@ -1284,21 +1285,25 @@ pub(crate) fn size_checked(interface: &Interface, size: [u32; 3]) -> Result<(), 
 }
 
 /// What a dispatch at threadgroup size `size`, direct over `direct` or indirect, of the content
-/// `compiled` runs, decided once for the dispatch and for
+/// `compiled` runs, with the encoder's threadgroup memory lengths `set` against the device's
+/// `max` bytes, decided once for the dispatch and for
 /// [`ComputePipelineState::prepare_dispatch`]: [`choose`]'s choice, then its module, an
 /// observer's partial-threadgroups variant for a ragged grid, and the emulated variant for a
 /// threadgroup that is not whole groups of a module that runs only whole ones (the
 /// partial-threadgroups variant has none), each lowered with the state. An observer's dispatch of
 /// a whole grid, of threadgroups, or indirect, that its whole module would run runs on the
 /// partial-threadgroups variant instead, unflagged, where the variant is lowered and takes the
-/// threadgroup: one module, and one `VkPipeline` a size, runs every dispatch of it. An indirect
-/// dispatch states no grid in its region, so the variant runs it in the single-region form, every
-/// invocation live, as the translator's dispatch regions say (`lower::dispatch`).
-pub(crate) fn decide(
-    compiled: &Compiled,
+/// threadgroup and its threadgroup memory (the lengths `set` with the variant's own, a predicated
+/// walk's vote word included, within `max`): one module, and one `VkPipeline` a size, runs every
+/// dispatch of it the variant takes. An indirect dispatch states no grid in its region, so the
+/// variant runs it in the single-region form, every invocation live, as the translator's dispatch
+/// regions say (`lower::dispatch`).
+pub(crate) fn decide<'a>(
+    compiled: &'a Compiled,
     direct: Option<Direct>,
     size: [u32; 3],
-) -> Result<(Choice, Module, &Kernel), Error> {
+    (set, max): (&[(u32, u32)], u32),
+) -> Result<(Choice, Module, &'a Kernel), Error> {
     let choice = choose(&compiled.form, direct, size);
     let partial_threadgroups = || {
         Error::Unsupported(Gap::PartialThreadgroups {
@@ -1320,7 +1325,9 @@ pub(crate) fn decide(
     let observes = matches!(compiled.form, Form::Sized { .. });
     if observes && choice.module == Module::Whole && short(&compiled.whole).is_none() {
         if let Ok(partial) = compiled.variant_kernel(Which::Partial, partial_threadgroups) {
-            if short(partial).is_none() {
+            if short(partial).is_none()
+                && threadgroup_memory(partial, set, choice.local, max).is_ok()
+            {
                 let choice = Choice {
                     module: Module::Partial,
                     ..choice

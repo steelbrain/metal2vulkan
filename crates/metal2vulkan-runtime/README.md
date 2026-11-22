@@ -2572,8 +2572,11 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   whole number of threadgroups, runs the variant at its own size, every region but a ragged grid's
   unflagged, so one `VkPipeline` of a size runs them all (`Metrics::partial_variant_whole_grids`
   counts the dispatches of whole threadgroups). A dispatch runs the plain module where the variant
-  is refused, or where the threadgroup is not whole SIMD groups of a kernel that runs only whole
-  ones (below). The translator gives a kernel no order of the
+  is refused, where its threadgroup memory, the lengths set with the variant's own, passes the
+  device's `maxComputeSharedMemorySize` once the variant's predicated walk adds its 4-byte vote
+  word (a barrier in a loop; the plain module holds none), or where the threadgroup is not whole
+  SIMD groups of a kernel that runs only whole ones (below); a ragged grid of such a kernel is
+  refused as `Limit::ThreadgroupMemory`. The translator gives a kernel no order of the
   accesses Apple's SIMD-group lockstep orders (docs/API.md, accepted differences), so only the
   kernel's own barriers, fences, atomics of threadgroup or SIMD-group scope, SIMD-group and quad
   functions, threadgroup memory and builtins of the partition observe it.

@@ -390,7 +390,8 @@ pub(crate) enum Form {
     Square,
     /// The kernel observes its partition: a dispatch runs at its own threadgroup size, every one,
     /// direct or indirect, on the partial-threadgroups variant, lowered with the state where the
-    /// content has a function to lower it from (`encoder::decide`).
+    /// content has a function to lower it from, wherever the variant takes the dispatch's
+    /// threadgroup and threadgroup memory (`encoder::decide`).
     Sized { partial: Option<Box<Lowered>> },
 }
 
@@ -811,10 +812,11 @@ impl crate::Device {
     /// variant, whose 256-wide tile's `VkPipeline`, or an image-only kernel's 16x16 workgroups'
     /// one, is made here too, and one that does as its plain module and its partial-threadgroups
     /// variant, with the one `VkPipeline` its dispatches run, whole grids, ragged and indirect
-    /// ones, at the descriptor's `requiredThreadsPerThreadgroup` where it sets one, or else at
-    /// `[N, 1, 1]` where the state declares a bound of threads (the descriptor's
-    /// `maxTotalThreadsPerThreadgroup`, or the
-    /// kernel's `[[max_total_threads_per_threadgroup(n)]]`), `N` the state's
+    /// ones (the plain module's where the variant's threadgroup memory, a predicated walk's vote
+    /// word with it, is past the device's), at the descriptor's `requiredThreadsPerThreadgroup`
+    /// where it sets one, or else at `[N, 1, 1]` where the state declares a bound of threads (the
+    /// descriptor's `maxTotalThreadsPerThreadgroup`, or the kernel's
+    /// `[[max_total_threads_per_threadgroup(n)]]`), `N` the state's
     /// `maxTotalThreadsPerThreadgroup`, and the kernel takes no threadgroup memory length from
     /// the encoder. A kernel whose tier runs only whole SIMD groups has its
     /// emulated-SIMD-group variant lowered here too. The translator answers whether the kernel
@@ -1057,10 +1059,11 @@ impl Compiled {
         // below its 1024; the device's own limit is no declared bound. The `VkPipeline` its
         // dispatches of that size run is made, where the module takes no threadgroup memory length
         // from the encoder: the partial-threadgroups variant's, which runs whole grids, ragged and
-        // indirect ones alike, or the whole module's where the content has no such variant. A make
-        // that fails here is made again by the dispatch that needs it, which reports its own error;
-        // a make refused for the stage bound refuses the state's, which the consumer's helper then
-        // fills.
+        // indirect ones alike, or the whole module's where the content has no such variant or the
+        // variant's threadgroup memory, a predicated walk's vote word with it, is past the
+        // device's (`encoder::decide`). A make that fails here is made again by the dispatch that
+        // needs it, which reports its own error; a make refused for the stage bound refuses the
+        // state's, which the consumer's helper then fills.
         let interface = &compiled.whole.interface;
         let declared = descriptor.max_total_threads_per_threadgroup.is_some()
             || interface.metal_max_total_threads < METAL_MAX_THREADS;
@@ -1940,11 +1943,12 @@ impl Compiled {
         if size_checked(interface, size).is_err() || !interface.has_effects {
             return None;
         }
-        let (choice, module, kernel) = decide(self, dispatch.direct(size), size).ok()?;
+        let max = self.core.limits.max_shared_memory;
+        let (choice, module, kernel) =
+            decide(self, dispatch.direct(size), size, (set, max)).ok()?;
         if (choice.direct).is_some_and(|(_, groups, _)| groups.contains(&0)) {
             return None;
         }
-        let max = self.core.limits.max_shared_memory;
         let lengths = threadgroup_memory(kernel, set, choice.local, max).ok()?;
         Some((kernel, module, choice.local, lengths))
     }

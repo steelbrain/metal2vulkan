@@ -2262,8 +2262,8 @@ pub struct Metrics {
     /// Dispatches of whole threadgroups, `dispatchThreads` of a whole grid, `dispatchThreadgroups`
     /// or `dispatchThreadgroupsWithIndirectBuffer`, that ran a kernel's partial-threadgroups
     /// variant: a kernel that observes its threadgroup partition runs every dispatch on that one
-    /// module where the variant takes the threadgroup. No Metal counterpart: Metal compiles one
-    /// function.
+    /// module where the variant takes the threadgroup and its threadgroup memory, a predicated
+    /// walk's vote word with it. No Metal counterpart: Metal compiles one function.
     pub partial_variant_whole_grids: u64,
     /// Functions the translator lowered, each a module of a pipeline content the device did not
     /// hold compiled: of a compute content, one for a kernel that does not observe its threadgroup
