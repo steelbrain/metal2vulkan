@@ -2242,7 +2242,7 @@ fn a_venue_profile_is_a_capture_of_the_venues_own_device() {
     };
     // A gpuinfo report of another card.
     let error = refusal("amd-780m-radv", &|venue| {
-        venue.profile = "amd-rdna3-radv".into()
+        venue.profile = "amd-rdna2-apu-radv".into()
     });
     assert!(error.contains("this one's source is gpuinfo"), "{error}");
     // The arm64 gate's capture under the x86 venue: the same driver, another device.

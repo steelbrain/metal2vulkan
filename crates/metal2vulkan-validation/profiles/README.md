@@ -16,7 +16,7 @@ the files of this directory.
 | `below-floor/vk12-floor` | derived from `VP_LUNARG_minimum_requirements_1_2` | Vulkan 1.2 required features, minimum limits, and the unconditional Required Format Support entries only | – | 1.2.131 |
 | `nvidia-rtx50-linux` | gpuinfo report 51770 | NVIDIA GeForce RTX 5080, Linux | 615.71.09 | 1.4.351 |
 | `nvidia-pascal-linux` | gpuinfo report 52074 | NVIDIA GeForce GTX 1060 6GB, Linux | 580.178.04 | 1.4.312 |
-| `amd-rdna3-radv` | gpuinfo report 51898 | AMD Radeon RX 7800 XT (RADV NAVI32) | Mesa 26.2.3 | 1.4.354 |
+| `amd-rdna3-radv` | local `vulkaninfo --json`, plus its supplement | AMD Radeon RX 7900 XTX (RADV NAVI31), CachyOS | Mesa 26.2.6 | 1.4.354 |
 | `amd-rdna2-apu-radv` | gpuinfo report 51886 | AMD Radeon 680M (RADV REMBRANDT) | Mesa 26.2.3 | 1.4.354 |
 | `intel-arl-anv` | gpuinfo report 52029 | Intel(R) Graphics (ARL), ANV | Mesa 26.2.3 | 1.4.354 |
 | `intel-irisxe-anv` | gpuinfo report 51836 | Intel(R) Iris(R) Xe Graphics (TGL GT2), ANV | Mesa 26.2.2 | 1.4.354 |
@@ -39,7 +39,8 @@ the venue's RPL-S device), `nvidia-rtx5080-laptop`. The venue list
 refuses a file that is not such a capture, whose device identity is not the one the venue
 declares for it, or that derives another translation key than the venue's profile. The gpuinfo
 files above are census profiles of devices in the wild; no venue names them. Nor does it
-name `amd-780m-hawkpoint-radv`, the Radeon 780M of Hawk Point: the GPU of `amd-780m-radv` under
+name `amd-rdna3-radv`, a capture of an RX 7900 XTX that no venue runs on, or
+`amd-780m-hawkpoint-radv`, the Radeon 780M of Hawk Point: the GPU of `amd-780m-radv` under
 another `deviceID` (0x1900), whose capture under the same RADV build differs from `amd-780m-radv`'s
 only there, so it takes the 780M's measured driver facts and derives the same translation key.
 
