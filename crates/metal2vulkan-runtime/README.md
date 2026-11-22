@@ -2232,6 +2232,18 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   `frame_5cb_from_idle` moved 0.2% or less, `bind_2000` 2.6% and `waves` 2.9%; the runs of
   `frame_5cb`, `waves`, `constant_private` and the two `sampling_distinct` rows spread past 3%
   within one build, so those rows decide nothing.
+- Each piece is a submission of its own, and the host pays a `vkQueueSubmit2` call's price on
+  the driver for every piece. A guest's compute benchmark over its 371 s timed pass on an Iris Xe
+  (ANV, Mesa 26.2.6), with the pieces (f21db0934c) against the runtime with no pieces
+  (f979769faf), one timed pass each (jobs m3-max-68858 and m3-max-68837): 63,704 submissions
+  against 18,764 (3.4 times), 47.1 s against 15.3 s inside the calls
+  (`Metrics::submit_call_nanos`; about 0.74 ms a call with the pieces), and 49.1 s against
+  15.8 s of the submit thread's CPU time. The GPU's busy time was the same (235.7 s against
+  234.3 s), and so was the score (8,069 against 8,098, 0.36% lower). On an RTX 3090 (NVIDIA
+  620.70.06) the same guest made 14% more submissions with the pieces (23,670 against 20,750),
+  spent 912 ms against 606 ms inside the calls, and scored 6.3% higher (80,706 against 75,949,
+  jobs m3-max-68865 and m3-max-68789; a second run with the pieces, job m3-max-68889, scored
+  80,730).
 - On the Iris Xe (Mesa's ANV), in the harness row `two_queues`, a command buffer of a second
   queue whose event wait the end of a command buffer of the first queue signals, committed right
   after it, starts on the GPU 30.4 µs after the signaller's GPU end at the median, against 9.0 µs
