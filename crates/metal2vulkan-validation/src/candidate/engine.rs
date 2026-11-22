@@ -205,8 +205,8 @@ pub enum ComputeOutput {
 pub struct ComputeRun {
     pub output: Vec<u8>,
     /// SHA-256 of the pipeline's SPIR-V bytes (before specialization), where the executor
-    /// compiled it itself; `None` for a run through the runtime ([`runs_through_runtime`]), which
-    /// keeps its modules to itself.
+    /// compiled it itself; `None` for a run through the runtime, which keeps its modules to
+    /// itself.
     pub spv_sha256: Option<String>,
     /// [`engine_fingerprint`] of the profile the case compiled for, or [`runtime_fingerprint`]
     /// for a run through the runtime.
@@ -695,8 +695,8 @@ pub fn engine_fingerprint_of(profile: &Hash256) -> String {
     sha256_bytes(&bytes)
 }
 
-/// The translator fingerprint of a run through the runtime ([`runs_through_runtime`]): the
-/// product, its semantics version and the runtime crate's sources
+/// The translator fingerprint of a run through the runtime: the product, its semantics version
+/// and the runtime crate's sources
 /// ([`RUNTIME_CRATE_FINGERPRINT`]). The runtime derives what it compiles for from the device it
 /// opened and answers none of it, so no profile is part of it; the row's slot and its recorded
 /// device are.
@@ -708,40 +708,6 @@ pub fn runtime_fingerprint() -> String {
     bytes.extend_from_slice(&metal2vulkan::cache::SEMANTICS_VERSION.to_le_bytes());
     bytes.extend_from_slice(RUNTIME_CRATE_FINGERPRINT.as_bytes());
     sha256_bytes(&bytes)
-}
-
-/// Whether `case` runs through the runtime (`metal2vulkan-runtime`'s public API,
-/// `platform::execute_runtime`) in place of the executor's own context: a kernel case of buffers
-/// (each device buffer array's elements among them), bound textures and samplers, made as the
-/// Metal oracle makes them (`platform::runtime_textures`: a 32-bit float depth, whose bytes the
-/// runtime takes no upload of, filled by a draw, `platform::runtime_depth`, and a multisampled
-/// texture by a draw per slice, `platform::runtime_multisample`, and a texture buffer over a
-/// buffer of its bytes; a sparse texture is the runtime's limit, which stops the candidate
-/// first), argument buffers of buffers, textures (texture buffers among them) and samplers,
-/// threadgroup memory lengths, function constants and linked functions, dispatched by
-/// `dispatchThreads` or `dispatchThreadgroups`, observing any output the mapping makes, its
-/// out-of-bounds targets among them (`platform::runtime_bounds`). Decided by the case's structure
-/// alone: every field the mapping fills is named here, so a new one is decided when it is added.
-pub fn runs_through_runtime(case: &ComputeCase) -> bool {
-    let ComputeCase {
-        entry: _,
-        constants: _,
-        buffers: _,
-        argument_buffer_buffers: _,
-        argument_buffer_textures: _,
-        argument_buffer_samplers: _,
-        textures: _,
-        samplers: _,
-        threadgroup_lengths: _,
-        dispatch,
-        output: _,
-        out_of_bounds: _,
-        creation_bound: _,
-    } = case;
-    matches!(
-        dispatch,
-        Dispatch::Threads { .. } | Dispatch::Threadgroups { .. }
-    )
 }
 
 /// The bytes of each buffer a run through the runtime binds, by Metal index, as the Metal oracle
@@ -799,8 +765,8 @@ fn runtime_reductions(
     Ok(reductions)
 }
 
-/// A run through the runtime ([`runs_through_runtime`]) of `prepared`'s kernel case `compute`:
-/// the row's AIR and each module it links, its buffers as the oracle makes them
+/// A run through the runtime of `prepared`'s kernel case `compute`: the row's AIR and each
+/// module it links, its buffers as the oracle makes them
 /// ([`runtime_buffers`]), and the float reductions it executes ([`runtime_reductions`]), run by
 /// `platform::execute_runtime`.
 fn run_on_runtime(prepared: &PreparedCase, compute: &ComputeCase) -> RunAttempt {
@@ -914,9 +880,9 @@ pub struct RuntimeKernel<'a> {
 /// (`platform::execute_runtime_render`) in place of the executor's own context: a vertex or
 /// fragment case of any sample count (`raster_sample_count`; each attachment of more samples
 /// filled and read back sample by sample, `platform::runtime_multisample`), its own stage's
-/// buffers, bound textures (as [`runs_through_runtime`] makes them) and bound samplers, argument
-/// buffers of buffers, textures and samplers (as [`runs_through_runtime`] makes them), function
-/// constants and linked functions, its vertex buffers, its color targets and a depth/stencil
+/// buffers, bound textures (made as a kernel case's run makes them, `platform::runtime_textures`)
+/// and bound samplers, argument buffers of buffers, textures and samplers (their textures made so
+/// too), function constants and linked functions, its vertex buffers, its color targets and a depth/stencil
 /// attachment of one aspect, or none (a fragment case's pass of no attachment is the oracle's 1x1
 /// at its samples), the encoder's depth-stencil state, cull mode and winding, and
 /// one direct or indexed draw of primitives or one patch draw with no patch or control-point index
@@ -1943,10 +1909,10 @@ fn run_on_context(prepared: &PreparedCase, worker: &CompileWorker) -> RunAttempt
     let library = RowSource::of_row(&prepared.checked.primary.source);
     let linked = &prepared.linked;
     // A case the runtime runs, run so in this process's default run: no profiles-layer
-    // restriction. It records no artifact: the runtime keeps what it compiled to
-    // itself.
+    // restriction. Every kernel case the engine maps is one (`compute_case` dispatches it by
+    // threads). It records no artifact: the runtime keeps what it compiled to itself.
     if let Mapped::Compute(compute) = &prepared.mapped {
-        if runs_through_runtime(compute) && super::requested_restriction().is_none() {
+        if super::requested_restriction().is_none() {
             return run_on_runtime(prepared, compute);
         }
     }

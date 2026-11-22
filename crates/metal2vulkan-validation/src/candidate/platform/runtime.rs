@@ -1,7 +1,7 @@
 //! The engine compute executor through the runtime (`metal2vulkan-runtime`).
 //!
-//! A kernel case the engine routes here (`engine::runs_through_runtime`) runs as a consumer runs
-//! it, on the runtime's public API alone: its instance, the loader's first physical device of the
+//! Every kernel case the engine maps runs here outside a profiles-layer restriction
+//! (`engine::run_on_context`), as a consumer runs it, on the runtime's public API alone: its instance, the loader's first physical device of the
 //! requested kind (as the executor's own context selects one), a device with the default
 //! options, a library and a function from the row's AIR with the case's constants and linked
 //! functions, one compute pipeline state, one Shared buffer per bound buffer and per

@@ -101,7 +101,7 @@ fn fixture(name: &str) -> Vec<u8> {
 type Run = fn(&ComputeCase, &[u8]) -> Result<ComputeRun, ExecutorError>;
 
 /// The runs a case the runtime makes takes: on the executor's own context, and on Linux through
-/// the runtime (`engine::runs_through_runtime`), each named.
+/// the runtime (`engine_compute::run_through_runtime`), each named.
 #[cfg(target_os = "linux")]
 fn runs() -> [(&'static str, Run); 2] {
     [

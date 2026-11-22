@@ -451,13 +451,12 @@ cargo run -p metal2vulkan-validation --release --bin corpus-vulkan -- \
   case through the public API in a killable compile worker, executes exactly what the binder plans,
   and compares the observations with Metal's. Every context runs under the validation layer and
   enables every robustness feature the device states.
-- **Through the runtime.** On Linux, without a profile restriction, a kernel
-  case of buffers (device buffer arrays included), bound textures and samplers, argument buffers
-  of buffers, textures and samplers, threadgroup memory, function constants and linked functions,
-  dispatched by threads or threadgroups and observing a buffer, a texture, an argument-buffer
-  member or nothing, runs through `metal2vulkan-runtime`'s public API instead, as a consumer runs
-  it (`engine::runs_through_runtime` decides it from the case's structure). Each texture is made
-  as the Metal oracle makes it, Shared and written with `replace_region`, at an index the run
+- **Through the runtime.** On Linux, without a profile restriction, every kernel case the engine
+  maps (buffers, device buffer arrays included, bound textures and samplers, argument buffers of
+  buffers, textures and samplers, threadgroup memory, function constants and linked functions,
+  dispatched by threads and observing a buffer, a texture, an argument-buffer member or nothing)
+  runs through `metal2vulkan-runtime`'s public API instead, as a consumer runs it. Each texture is
+  made as the Metal oracle makes it, Shared and written with `replace_region`, at an index the run
   grants. An argument buffer holds each member's `gpuAddress` or `gpuResourceID` at its field, as
   a program writes them, and each member buffer and texture is used for reading and writing
   (`use_resource`). A 32-bit float depth texture, which the runtime takes no upload of, is filled
