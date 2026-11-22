@@ -2039,7 +2039,10 @@ pub(crate) mod on_device {
     /// `x = x * 2 + 1`, two kernels of unknown rate in turn, so a runtime that cuts a command
     /// buffer into pieces of a kernel's rate makes six, more than the device's room takes, and
     /// the rest wait. A copy of what it writes is then committed to an idle queue, and a copy of
-    /// that copy to a third idle queue, with no host wait for either. Once the submit thread has
+    /// that copy to a third idle queue, with no host wait for either. The third queue ran one
+    /// command buffer before the gate, and its expected run is [`BODY_RUN`], the test's own input,
+    /// so the second copy fits the device's room behind the writer's pieces: a queue whose run is
+    /// unknown has room only with one submission in flight. Once the submit thread has
     /// looked past the second copy (an empty command buffer committed after it is scheduled) the
     /// gate opens. Metal submits the first copy at its commit, its queue having nothing ahead of
     /// it, so its hazard tracking orders that copy after the writer and the second copy after it:
@@ -2057,6 +2060,11 @@ pub(crate) mod on_device {
                 queue(&device),
                 queue(&device),
             );
+            let earlier = reading.command_buffer().expect("a command buffer");
+            (earlier.record_for_test(&[], |_, _| {})).expect("a command buffer's commands");
+            earlier.commit().expect("a commit");
+            finished(name, &earlier);
+            earlier.queue().set_run_for_test(BODY_RUN);
             let busy = Busy::new(&device);
             let writer = writing.command_buffer().expect("a command buffer");
             let mut encoder =
