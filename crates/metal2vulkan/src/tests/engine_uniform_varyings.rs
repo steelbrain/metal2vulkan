@@ -181,12 +181,16 @@ fn module() -> Option<Vec<u8>> {
 }
 
 fn device(stem: &str) -> Device {
+    device_with(stem, DevicePolicy::RESIDENT_TABLES)
+}
+
+fn device_with(stem: &str, policy: DevicePolicy) -> Device {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles")
         .join(format!("{stem}.json"));
     let text = std::fs::read_to_string(path).expect("profile");
     let description = DeviceDescription::from_khronos_json(&text, None).expect("description");
-    Device::from_queries(description, DevicePolicy::RESIDENT_TABLES).expect("device")
+    Device::from_queries(description, policy).expect("device")
 }
 
 fn function(bc: &[u8], name: &str) -> FunctionDescriptor {
@@ -250,7 +254,7 @@ fn fixed_function(inputs: &LoweringInputs) -> bool {
 /// stepped per instance or at a constant step is in the vertex function's key exactly where it
 /// makes a varying alike; a pulled one is not, because its element index is already a constant in
 /// the shader. So the key moves with the device: the constant step is a fixed-function binding on
-/// `nvidia-rtx5080-laptop` and `amd-780m-radv` and pulled on `lavapipe` and `moltenvk-m3`, and the
+/// `nvidia-rtx5080-laptop` under the identity domains and pulled under the resident tables, and the
 /// varyings written alike are the same set either way.
 #[test]
 fn a_fragment_reads_flat_what_its_vertex_function_writes_alike_at_every_vertex() {
@@ -258,20 +262,21 @@ fn a_fragment_reads_flat_what_its_vertex_function_writes_alike_at_every_vertex()
         return;
     };
     let budget = Budget::standard();
-    for stem in [
-        "nvidia-rtx5080-laptop",
-        "amd-780m-radv",
-        "lavapipe",
-        "moltenvk-m3",
+    for (stem, policy) in [
+        ("nvidia-rtx5080-laptop", DevicePolicy::default()),
+        ("nvidia-rtx5080-laptop", DevicePolicy::RESIDENT_TABLES),
+        ("amd-780m-radv", DevicePolicy::RESIDENT_TABLES),
+        ("lavapipe", DevicePolicy::RESIDENT_TABLES),
+        ("moltenvk-m3", DevicePolicy::RESIDENT_TABLES),
     ] {
-        let dev = device(stem);
+        let dev = device_with(stem, policy);
         for (step, samples) in [
             (VertexStepFunction::PerVertex, 1),
             (VertexStepFunction::PerInstance, 1),
             (VertexStepFunction::Constant, 1),
             (VertexStepFunction::Constant, 4),
         ] {
-            let what = format!("{stem} {step:?} at {samples}");
+            let what = format!("{stem} {policy:?} {step:?} at {samples}");
             let stepped = step != VertexStepFunction::PerVertex;
             let d = pipeline(&bc, step, samples);
             let k = dev

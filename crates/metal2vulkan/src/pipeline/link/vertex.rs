@@ -25,12 +25,11 @@
 //!    fixed-function input only under robust buffer access (`VUID-vkCmdDraw-None-02721`), and a
 //!    Metal draw may fetch past its buffer, so the fetch moves into the shader behind the check.
 //!    Every later item then finds no fixed-function attribute.
-//!    A layout of Metal's **constant step** is answered there with a divisor of 0 at instance
-//!    rate, or under the identity domains at vertex rate, and this module emits its binding with
-//!    a **stride of 0** ([`binding_stride`]): Vulkan's zero divisor fetches element
-//!    `firstInstance` and a vertex-rate binding element `vertexIndex`, Metal's constant step the
-//!    first element whatever the vertex, instance and base instance, and a stride of 0 is what
-//!    makes those the same bytes for every draw. Items 3, 4 and 6 read the stride the binding
+//!    A layout of Metal's **constant step** is answered there under the identity domains at
+//!    vertex rate (pulled outside them), and this module emits its binding with a **stride of 0**
+//!    ([`binding_stride`]): a vertex-rate binding fetches element `vertexIndex`, Metal's constant
+//!    step the first element whatever the vertex, instance and base instance, and a stride of 0
+//!    is what makes those the same bytes for every draw. Items 3, 4 and 6 read the stride the binding
 //!    carries and not the layout's, so such a binding meets their limits as a stride of 0 does --
 //!    including the portability subset's, which a stride of 0 fails, so the constant step stays
 //!    pulled there, and under the identity domains is refused there;

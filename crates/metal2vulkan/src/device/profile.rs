@@ -588,7 +588,6 @@ pub struct FragmentCaps {
     pub clip_distance: bool,
     pub rasterization_order_color_access: bool,
     pub vertex_attribute_divisor: bool,
-    pub vertex_attribute_zero_divisor: bool,
 }
 
 /// Float-controls support of one width.

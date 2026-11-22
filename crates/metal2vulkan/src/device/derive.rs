@@ -284,7 +284,6 @@ fn derive_fields(desc: &DeviceDescription, policy: &DevicePolicy) -> ProfileFiel
         clip_distance: has(VkFeature::ShaderClipDistance),
         rasterization_order_color_access: has(VkFeature::RasterizationOrderColorAttachmentAccess),
         vertex_attribute_divisor: has(VkFeature::VertexAttributeInstanceRateDivisor),
-        vertex_attribute_zero_divisor: has(VkFeature::VertexAttributeInstanceRateZeroDivisor),
     };
 
     let (vertex_formats, storage_formats, image_formats) = format_tables(desc);

@@ -4747,7 +4747,6 @@ enables that the translator names.
 | `shaderFloat8` | `VkPhysicalDeviceShaderFloat8FeaturesEXT` | an 8-bit float converts in the translator's arithmetic, not through the device's own type |
 | `rasterizationOrderColorAttachmentAccess` | `VkPhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT` | a blend into an extended-range attachment, which the function would compute over its own read of the attachment, is refused (`FramebufferFetch`) |
 | `robustBufferAccess` | `VkPhysicalDeviceFeatures` | a buffer is reached by its device address, and an access through a descriptor view is checked in the shader |
-| `vertexAttributeInstanceRateZeroDivisor` | `VkPhysicalDeviceVertexAttributeDivisorFeaturesKHR` | a constant step function reads its binding at a stride of 0 |
 | `shaderImageInt64Atomics` | `VkPhysicalDeviceShaderImageAtomicInt64FeaturesEXT` | an atomic on a `ulong` texture is refused (`ImageAtomics`) |
 | `shaderStorageImageMultisample` | `VkPhysicalDeviceFeatures` | a multisampled texture read or written as a storage image is refused (`StorageImageMultisample`) |
 | `computeDerivativeGroupLinear` | `VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR` | a derivative in a kernel is refused (`ComputeDerivatives`) |
