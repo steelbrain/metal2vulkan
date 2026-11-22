@@ -1624,6 +1624,7 @@ field	metal2vulkan-runtime::Metrics.export_allocations	pub export_allocations: T
 field	metal2vulkan-runtime::Metrics.export_claims	pub export_claims: Timed
 field	metal2vulkan-runtime::Metrics.export_handles	pub export_handles: Timed
 field	metal2vulkan-runtime::Metrics.export_makes	pub export_makes: Timed
+field	metal2vulkan-runtime::Metrics.exported_blocks_addressed	pub exported_blocks_addressed: u64
 field	metal2vulkan-runtime::Metrics.external_acquires	pub external_acquires: u64
 field	metal2vulkan-runtime::Metrics.external_releases	pub external_releases: u64
 field	metal2vulkan-runtime::Metrics.first_use_line_wait_max_nanos	pub first_use_line_wait_max_nanos: u64

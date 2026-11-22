@@ -1619,8 +1619,11 @@ impl Device {
         }
         // Over an exported block, the submissions keep what changes its bytes
         // (`crate::over::ExportedOvers`).
-        if let Some((_, copy)) = texture.copied_over().filter(|(_, copy)| copy.exported) {
-            core.work.exported_over(&texture.inner, &copy);
+        if let Some((buffer, copy)) = texture.copied_over().filter(|(_, copy)| copy.exported) {
+            if let Some(addressed) = &buffer.held().0.addressed {
+                core.work
+                    .exported_over(&texture.inner, &copy, Arc::clone(addressed));
+            }
         }
         Ok(texture)
     }
@@ -5312,6 +5315,11 @@ impl Device {
             }
             None => None,
         };
+        // A storage element at an index reaches the bytes outside every bound slot, as an
+        // address does (`crate::over::ExportedOvers`).
+        if index.is_some() && elements[1] {
+            buffer.address_out();
+        }
         let named = Named {
             buffer: Arc::clone(buffer.object()),
             places: vec![BytesPlace {

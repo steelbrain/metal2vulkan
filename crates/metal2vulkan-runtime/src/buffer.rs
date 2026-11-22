@@ -492,8 +492,13 @@ impl crate::kept::Handle for Buffer {
 
 impl Buffer {
     /// `gpuAddress`: the block's device address plus the buffer's offset; of a Managed buffer with
-    /// a device copy, the copy block's device address plus the copy's offset.
+    /// a device copy, the copy block's device address plus the copy's offset. The first call that
+    /// answers an address in an exported block counts in
+    /// [`Metrics::exported_blocks_addressed`](crate::Metrics::exported_blocks_addressed): from
+    /// then on a write through an address makes the textures over that block owe their copies in
+    /// ([`Buffer::new_texture`]).
     pub fn gpu_address(&self) -> u64 {
+        BufferObject::address_out(self);
         BufferObject::gpu_address(self)
     }
 
@@ -564,6 +569,16 @@ pub(crate) trait BufferObject {
             Some(copy) => copy.block.memory.address + copy.offset(),
             None => inner.block.memory.address + inner.offset,
         }
+    }
+
+    /// A public call put the bytes shaders reach (a Managed buffer's device copy, where it has
+    /// one) where a shader may write them outside every bound slot: their block is marked where it
+    /// is exported ([`Block::address_out`]).
+    fn address_out(&self) {
+        let inner = self.object();
+        (inner.copy.as_ref())
+            .map_or(&inner.block, |copy| &copy.block)
+            .address_out();
     }
 
     /// [`Buffer::did_modify_range`].

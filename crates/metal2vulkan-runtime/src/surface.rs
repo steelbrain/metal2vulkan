@@ -945,7 +945,7 @@ impl Device {
             .checked_next_multiple_of(multiple)
             .ok_or_else(too_long)?;
         let (starts, end) = lay(spec, plans, pitch).ok_or_else(too_long)?;
-        let (block, export) = self.new_exported_block(spec.handle, end)?;
+        let (block, export) = self.exported_block(spec.handle, end)?;
         let buffer = self.new_buffer(block.id, 0, block.len, None)?;
         let planes = (spec.planes.iter().zip(&starts))
             .map(|(plane, &start)| {

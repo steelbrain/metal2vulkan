@@ -260,6 +260,8 @@ pub(crate) enum Metric {
     SurfacesInPlace,
     /// [`Metrics::surfaces_copied`].
     SurfacesCopied,
+    /// [`Metrics::exported_blocks_addressed`].
+    ExportedBlocksAddressed,
     /// [`Metrics::texture_clear_barriers`].
     TextureClearBarriers,
     /// [`Metrics::attachment_loop_reads`].
@@ -318,6 +320,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::ExternalReleases,
     Metric::SurfacesInPlace,
     Metric::SurfacesCopied,
+    Metric::ExportedBlocksAddressed,
     Metric::TextureClearBarriers,
     Metric::AttachmentLoopReads,
     Metric::SparseBinds,
@@ -687,6 +690,7 @@ struct Atomics {
     external_releases: AtomicU64,
     surfaces_in_place: AtomicU64,
     surfaces_copied: AtomicU64,
+    exported_blocks_addressed: AtomicU64,
     surface_waits: AtomicU64,
     surface_wait_nanos: AtomicU64,
     surface_wait_max_nanos: AtomicU64,
@@ -844,6 +848,7 @@ impl Counters {
             Metric::ExternalReleases => &a.external_releases,
             Metric::SurfacesInPlace => &a.surfaces_in_place,
             Metric::SurfacesCopied => &a.surfaces_copied,
+            Metric::ExportedBlocksAddressed => &a.exported_blocks_addressed,
             Metric::TextureClearBarriers => &a.texture_clear_barriers,
             Metric::AttachmentLoopReads => &a.attachment_loop_reads,
             Metric::SparseBinds => &a.sparse_binds,
@@ -1707,6 +1712,7 @@ impl Counters {
             external_releases: a.external_releases.load(Relaxed),
             surfaces_in_place: a.surfaces_in_place.load(Relaxed),
             surfaces_copied: a.surfaces_copied.load(Relaxed),
+            exported_blocks_addressed: a.exported_blocks_addressed.load(Relaxed),
             surface_waits: a.surface_waits.load(Relaxed),
             surface_wait_nanos: a.surface_wait_nanos.load(Relaxed),
             surface_wait_max_nanos: a.surface_wait_max_nanos.load(Relaxed),
@@ -2506,6 +2512,14 @@ pub struct Metrics {
     /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface),
     /// [`SurfaceForm::Copy`](crate::SurfaceForm::Copy)).
     pub surfaces_copied: u64,
+    /// Exported blocks a public call handed out a device address of, each counted at the first:
+    /// [`Buffer::gpu_address`](crate::Buffer::gpu_address) answering an address in one,
+    /// [`Device::new_exported_block`](crate::Device::new_exported_block), whose handle states its
+    /// block's, and a texture buffer's storage element at an index over its bytes. A write
+    /// through an address makes the textures over an exported block owe their copies in only
+    /// once its address went out; 0 where none went out, as for a surface's block in the copy
+    /// form whose buffer's address nothing read.
+    pub exported_blocks_addressed: u64,
     /// Waits of surfaces made in place for the submission that moves their planes to the general
     /// layout ([`Surface::wait_until_ready`](crate::Surface::wait_until_ready)), on the
     /// consumer's thread: one per call. The make

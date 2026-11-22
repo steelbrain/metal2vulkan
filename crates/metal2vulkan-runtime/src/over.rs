@@ -5,7 +5,8 @@
 //! `vkCmdCopyBufferToImage` or `vkCmdCopyImageToBuffer` region a texture, with no CPU copy. Over a
 //! Managed buffer's device copy, only Metal's Managed events copy ([`ManagedOvers`]); over any
 //! other buffer, the Shared rules, but for a buffer in an exported block, whose leading copy waits
-//! for an event that changes its bytes ([`ExportedOvers`]):
+//! for an event that changes its bytes, a write through an address among them only once an address
+//! of the block went out ([`ExportedOvers`]):
 //!
 //! - **In, once a submission.** The upload that leads a submission copies the bytes into the
 //!   image of every such texture a segment of the submission uses before any command of the
@@ -56,7 +57,7 @@ use crate::texture::{Image, OverCopy, TextureInner, TextureObject};
 use ash::vk;
 use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasherDefault;
-use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, Mutex, Weak};
 
 /// Bytes of memory a resource lies in: `start..end` of block `block`, from the block's first
@@ -138,6 +139,9 @@ pub(crate) struct Overs {
     /// A command of the segment wrote through an address outside its resources, or was recorded
     /// while no such texture lived, its writes untracked.
     unbound: bool,
+    /// A command of the segment was recorded while no such texture lived, its writes untracked
+    /// ([`untracked`](Self::untracked)).
+    untracked: bool,
     /// The textures used whose images a command wrote since their bytes last went back
     /// (`Used::buffer_stale`).
     ahead: usize,
@@ -166,6 +170,7 @@ pub(crate) struct Leans {
     wrote: Written,
     backed: Vec<(Span, u32)>,
     unbound: bool,
+    untracked: bool,
 }
 
 impl Leans {
@@ -185,6 +190,7 @@ impl Leans {
         self.wrote.extend(&later.wrote);
         self.backed.extend_from_slice(&later.backed);
         self.unbound |= later.unbound;
+        self.untracked |= later.untracked;
     }
 }
 
@@ -363,6 +369,13 @@ impl Overs {
                 used.image_stale = true;
             }
         }
+    }
+
+    /// A command recorded while no such texture lived: its writes, untracked, count as a write
+    /// through an address that reaches every block.
+    pub(crate) fn untracked(&mut self) {
+        self.after([], true);
+        self.untracked = true;
     }
 
     /// Whether a texture the segment used has an image ahead of its buffer: a command wrote it
@@ -597,6 +610,9 @@ struct Exported {
     id: u32,
     image: vk::Image,
     memory: Span,
+    /// Whether a public call handed out an address of its block's memory
+    /// (`crate::memory::Block::address_out`): only then does a write through an address reach it.
+    addressed: Arc<AtomicBool>,
     /// An event changed its bytes since its image last took them: the commit number from which
     /// every command buffer runs behind that event (0 for a submitted write).
     owed: Option<u64>,
@@ -609,17 +625,28 @@ struct Exported {
 /// by the upload that leads the next submission that leans on the leading copy for it, and a
 /// submission that only reads it copies nothing. The events: the texture's making; an acquire or a
 /// zero fill of the block, which go ahead of every command buffer committed after them; and a
-/// submitted command's write of memory its texels lie in, a write through an address (every
-/// texture), or another texture's copy back over those bytes. Within a segment the Shared rules
-/// stand.
+/// submitted command's write of memory its texels lie in, a write through an address once an
+/// address of the block went out (every such texture), or another texture's copy back over those
+/// bytes. An address goes out by a public call alone: [`crate::Buffer::gpu_address`] of a buffer
+/// whose bytes shaders reach in the block (a Managed buffer's device copy included), the handle
+/// [`crate::Device::new_exported_block`] answers, which states the block's address, and a texture
+/// buffer's storage element at an index over such bytes. A surface's block in the copy form is
+/// the surface's own, so its address goes out only through its buffer
+/// ([`crate::Surface::buffer`]). Within a segment the Shared rules stand.
 #[derive(Default)]
 pub(crate) struct ExportedOvers {
     entries: Vec<Exported>,
 }
 
 impl ExportedOvers {
-    /// Keeps `texture`, whose copy is `copy`, owing its first copy in.
-    pub(crate) fn add(&mut self, texture: &Arc<TextureInner>, copy: &OverCopy) {
+    /// Keeps `texture`, whose copy is `copy` and whose block's flag is `addressed`, owing its
+    /// first copy in.
+    pub(crate) fn add(
+        &mut self,
+        texture: &Arc<TextureInner>,
+        copy: &OverCopy,
+        addressed: Arc<AtomicBool>,
+    ) {
         self.entries
             .retain(|entry| entry.texture.strong_count() > 0);
         self.entries.push(Exported {
@@ -627,6 +654,7 @@ impl ExportedOvers {
             id: texture.id(),
             image: copy.image,
             memory: copy.memory,
+            addressed,
             owed: Some(0),
         });
     }
@@ -665,13 +693,17 @@ impl ExportedOvers {
     }
 
     /// A submission went whose segments wrote `leans`: each texture whose bytes they changed owes
-    /// its copy in to every later submission.
+    /// its copy in to every later submission. A write through an address reaches the texture's
+    /// bytes only where an address of its block went out before this submission; the flag read
+    /// here covers every call made before the commits it holds, and Metal leaves undefined an
+    /// address taken after a commit and written for that command buffer to read.
     pub(crate) fn wrote(&mut self, leans: &Leans) {
         self.entries
             .retain(|entry| entry.texture.strong_count() > 0);
         for entry in &mut self.entries {
             let memory = entry.memory;
-            let changed = leans.unbound
+            let changed = leans.untracked
+                || (leans.unbound && entry.addressed.load(Relaxed))
                 || leans.wrote.meets(memory)
                 || (leans.backed.iter()).any(|&(span, by)| span.meets(memory) && by != entry.id);
             if changed {

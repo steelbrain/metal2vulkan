@@ -2130,7 +2130,7 @@ impl RenderCommandEncoder {
                 if !buffer.is_of(building.device.core()) {
                     return Err(Error::Refused(Refusal::OtherDevice));
                 }
-                if buffer.gpu_address().wrapping_add(offset) % 2 != 0 {
+                if BufferObject::gpu_address(buffer).wrapping_add(offset) % 2 != 0 {
                     return Err(Error::Refused(Refusal::TessellationFactorOffset { offset }));
                 }
                 // SAFETY: the encoder holds the borrow, and it ends before its command buffer
@@ -2499,7 +2499,7 @@ impl RenderCommandEncoder {
                 } = call
                 {
                     let range = range.map_or(self.facts.nil.2, |(buffer, offset)| {
-                        buffer.gpu_address().wrapping_add(offset)
+                        BufferObject::gpu_address(buffer).wrapping_add(offset)
                     });
                     let draws = &state.inner.compiled.draws;
                     let places = (&mut self.push, &mut self.blocks);
@@ -2790,7 +2790,7 @@ impl RenderCommandEncoder {
             return Err(self.interrupt_refused());
         }
         let part = self.execution_part(buffer)?;
-        let range = range_buffer.gpu_address().wrapping_add(offset);
+        let range = BufferObject::gpu_address(range_buffer).wrapping_add(offset);
         let counts = self.execution_counts(range, buffer.size(), part)?;
         let call = Call::Commands {
             buffer,

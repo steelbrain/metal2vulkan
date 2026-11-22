@@ -1525,7 +1525,7 @@ impl Building {
     ) {
         match self.copies_over() {
             true => self.last().overs.after(reached, unbound),
-            false => self.last().overs.after([], true),
+            false => self.last().overs.untracked(),
         }
     }
 

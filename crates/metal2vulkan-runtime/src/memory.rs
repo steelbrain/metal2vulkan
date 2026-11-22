@@ -495,17 +495,33 @@ pub(crate) struct Block {
     /// this one, so the block-maker thread destroys the sparse buffer before it frees any of
     /// their memory, the last of them holding the release.
     _chunks: Vec<Block>,
+    /// Of an exported block: set once a public call hands out a device address of its memory
+    /// ([`address_out`](Self::address_out)), which the textures over it read at each submission
+    /// (`crate::over::ExportedOvers`).
+    pub(crate) addressed: Option<Arc<AtomicBool>>,
 }
 
 impl Block {
     pub(crate) fn new(memory: Memory, core: Arc<Core>) -> Block {
         note(&core, &memory);
         Block {
+            addressed: memory.exported().then(Arc::default),
             memory,
             core,
             release: Mutex::new(None),
             _under: None,
             _chunks: Vec::new(),
+        }
+    }
+
+    /// A public call handed out a device address of the block's memory, where a shader may write
+    /// through it outside every bound slot: an exported block is marked, and counted at the first
+    /// (`Metrics::exported_blocks_addressed`).
+    pub(crate) fn address_out(&self) {
+        let marked =
+            (self.addressed.as_ref()).is_some_and(|flag| !flag.swap(true, Ordering::Relaxed));
+        if marked {
+            self.core.counters.count(Metric::ExportedBlocksAddressed);
         }
     }
 
@@ -518,6 +534,7 @@ impl Block {
             release: Mutex::new(release),
             _under: None,
             _chunks: Vec::new(),
+            addressed: None,
         }
     }
 
@@ -530,6 +547,7 @@ impl Block {
             release: Mutex::new(None),
             _under: Some(under),
             _chunks: Vec::new(),
+            addressed: None,
         }
     }
 }
@@ -2336,6 +2354,7 @@ pub(crate) fn sparse_block(
         release: Mutex::new(None),
         _under: None,
         _chunks: chunks,
+        addressed: None,
     }
 }
 

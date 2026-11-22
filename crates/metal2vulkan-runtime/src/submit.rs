@@ -593,9 +593,14 @@ impl Work {
     }
 
     /// Keeps `texture`, over a buffer in an exported block in an image of its own whose copy is
-    /// `copy` ([`ExportedOvers`]).
-    pub(crate) fn exported_over(&self, texture: &Arc<TextureInner>, copy: &OverCopy) {
-        self.lock().exported.add(texture, copy);
+    /// `copy`, the block's flag `addressed` ([`ExportedOvers`]).
+    pub(crate) fn exported_over(
+        &self,
+        texture: &Arc<TextureInner>,
+        copy: &OverCopy,
+        addressed: Arc<AtomicBool>,
+    ) {
+        self.lock().exported.add(texture, copy, addressed);
     }
 
     /// Work recorded into the upload changed `range` of `block`'s bytes, ahead of every command
