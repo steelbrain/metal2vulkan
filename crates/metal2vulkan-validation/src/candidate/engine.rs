@@ -255,10 +255,10 @@ impl RunAttempt {
 /// the shared vocabulary that stop this executor for a kernel case
 /// (`executor_contract::case_requirements`: among them function tables, acceleration structures and
 /// intersection-function tables, imageblocks, stage inputs, rate maps, sparse textures and texture
-/// buffers, the runtime's limits) are `NotSupported::Requirements`; it runs buffers, device buffer
-/// arrays, argument-buffer buffers and textures, command buffers and the indirect compute commands
-/// they record, pipeline states (each the case's token in its owner), textures, texture arrays,
-/// samplers and threadgroup lengths, and a case whose literals do not map onto them is
+/// buffers, the runtime's limits, and every indirect command buffer and pipeline state an argument
+/// buffer holds) are `NotSupported::Requirements`; it runs buffers, device buffer arrays,
+/// argument-buffer buffers and textures, textures, texture arrays, samplers and threadgroup
+/// lengths, and a case whose literals do not map onto them is
 /// `NotSupported::NotImplemented` (graphics stages are `candidate::engine::graphics`). A case has no
 /// indirect dispatch to map: its dispatch is a `dispatchThreads` grid, and indirect work is
 /// authored only as indirect command buffers.
@@ -272,10 +272,6 @@ pub fn compute_case(case: &AuthoredCase) -> Result<ComputeCase, NotSupported> {
     }
     require_case_families(case)?;
     for (present, what) in [
-        (
-            !case.command_buffers.is_empty() || !case.pipeline_states.is_empty(),
-            "an indirect command buffer or a pipeline state in an argument buffer",
-        ),
         (case.depth_stencil.is_some(), "a depth/stencil attachment"),
         (!case.vertex_inputs.is_empty(), "vertex inputs"),
         (case.draw.is_some() || case.tessellation.is_some(), "draws"),

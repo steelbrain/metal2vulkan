@@ -645,17 +645,13 @@ pub fn stage_output(
 /// buffer's owner covering each pointer field), its argument buffers' members, its textures
 /// (texture-array elements each at its own slot) and samplers. The one mapping a render case's and
 /// a mesh case's own stage share. A case with an indirect command buffer or a pipeline state in an
-/// argument buffer is not mapped (`NotImplemented`).
+/// argument buffer never reaches it: its requirements stop this executor first
+/// ([`require_case_families`]).
 pub fn stage_resources(
     case: &AuthoredCase,
     literal: &LiteralResources,
 ) -> Result<StageResources, ExecutorError> {
     let gap = |what: &str| NotSupported::NotImplemented(format!("engine candidate: {what}"));
-    if !case.command_buffers.is_empty() || !case.pipeline_states.is_empty() {
-        return Err(
-            gap("an indirect command buffer or a pipeline state in an argument buffer").into(),
-        );
-    }
     let mut resources = StageResources::default();
     for buffer in &literal.buffers {
         if resources

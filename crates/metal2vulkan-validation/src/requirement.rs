@@ -279,6 +279,15 @@ pub enum ToolingRequirement {
     /// into an argument buffer's pipeline-state field, and its indirect commands set no pipeline
     /// state of their own (`IndirectCommandsKind::CommandPipelines`).
     ArgumentBufferPipelineState,
+    /// An indirect command buffer of the one shape the runtime builds, which no runtime limit
+    /// above names (`executor_contract::case_requirements`): render commands of indexed draws
+    /// alone that inherit the pipeline state and bind their own buffers, none of them encoded by
+    /// the host. `Device::new_indirect_command_buffer` makes it, but the engine's candidate maps no
+    /// case's indirect command buffer, so no executor pair evidences such a case: this crate's
+    /// gap ([`Limit::Tooling`]). The case checker raises it from the case's literals, never a
+    /// source's structure, so no census row carries it. Mapping the shape waits on a guest count:
+    /// it is built when a guest reaches an indirect command buffer.
+    IndirectIndexedDraws,
 }
 
 /// Every executor (the requirement leaves no case to author, or none to observe).
@@ -286,7 +295,7 @@ const AUTHORING: &[Executor] = &Executor::ALL;
 const ENGINE: &[Executor] = &[Executor::EngineCandidate];
 
 impl ToolingRequirement {
-    pub const ALL: [Self; 41] = [
+    pub const ALL: [Self; 42] = [
         Self::FunctionConstantLiteral,
         Self::VertexAttributeLiteral,
         Self::TessellationAttributeLiteral,
@@ -328,6 +337,7 @@ impl ToolingRequirement {
         Self::IndirectCommandInheritance,
         Self::HostEncodedIndirectCommands,
         Self::ArgumentBufferPipelineState,
+        Self::IndirectIndexedDraws,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -375,6 +385,7 @@ impl ToolingRequirement {
             Self::IndirectCommandInheritance => "indirect_command_inheritance",
             Self::HostEncodedIndirectCommands => "host_encoded_indirect_commands",
             Self::ArgumentBufferPipelineState => "argument_buffer_pipeline_state",
+            Self::IndirectIndexedDraws => "indirect_indexed_draws",
         }
     }
 
@@ -443,7 +454,8 @@ impl ToolingRequirement {
             | Self::IndirectDrawTypes
             | Self::IndirectCommandInheritance
             | Self::HostEncodedIndirectCommands
-            | Self::ArgumentBufferPipelineState => ENGINE,
+            | Self::ArgumentBufferPipelineState
+            | Self::IndirectIndexedDraws => ENGINE,
         }
     }
 
@@ -700,6 +712,17 @@ mod tests {
         assert!(!requirement.blocks_closure(), "{requirement}");
         assert!(requirement.qualifies_on_metal(), "{requirement}");
         assert_eq!("separate_depth_stencil".parse(), Ok(requirement));
+    }
+
+    /// The runtime's own indirect command shape, which the engine's candidate does not map: a
+    /// tooling gap, so the checker takes no case of it.
+    #[test]
+    fn the_runtime_s_indirect_command_shape_stops_the_candidate_as_a_tooling_gap() {
+        let requirement = ToolingRequirement::IndirectIndexedDraws;
+        assert_eq!(requirement.stops(), [Executor::EngineCandidate]);
+        assert_eq!(requirement.limit(), Limit::Tooling, "{requirement}");
+        assert!(!requirement.qualifies_on_metal(), "{requirement}");
+        assert_eq!("indirect_indexed_draws".parse(), Ok(requirement));
     }
 
     /// The families the runtime builds no call for, or refuses at creation on every device: the

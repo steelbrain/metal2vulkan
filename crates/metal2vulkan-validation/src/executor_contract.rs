@@ -258,21 +258,24 @@ pub fn indirect_command_requirement(
         .then_some(ToolingRequirement::IndirectCommandBuffer)
 }
 
-/// Whether replaying the commands a module encodes observes them. Both executors execute a case's
-/// compute commands and its render commands after its producer: a kernel's dispatch or a vertex or
-/// fragment function's draw, never a tile function's (a render pass's tile dispatch, whose commands
-/// neither models). So the stage is one of those, every operation it encodes is a compute or a
-/// render command's, and one of them selects what a replayed command writes: a kernel buffer, a
-/// dispatch, or a compute pipeline for a replayed dispatch; a vertex buffer, a draw, or a render
-/// pipeline for a replayed draw, whose template is a rasterization-disabled vertex function, an
-/// indexed draw, whose indices are the vertex IDs that template writes by, or a patch draw or an
+/// Whether replaying the commands a module encodes observes them. The Metal oracle executes a
+/// case's compute commands and its render commands after its producer: a kernel's dispatch or a
+/// vertex or fragment function's draw, never a tile function's (a render pass's tile dispatch,
+/// whose commands it does not model). So the stage is one of those, every operation it encodes is a
+/// compute or a render command's, and one of them selects what a replayed command writes: a kernel
+/// buffer, a dispatch, or a compute pipeline for a replayed dispatch; a vertex buffer, a draw, or a
+/// render pipeline for a replayed draw, whose template is a rasterization-disabled vertex function,
+/// an indexed draw, whose indices are the vertex IDs that template writes by, or a patch draw or an
 /// indexed patch draw, whose patches, instances and factors are the domain points a
 /// rasterization-disabled post-tessellation template writes by; an object or mesh buffer or a mesh
 /// draw, whose grid and threadgroups are the positions a rasterization-disabled mesh template
 /// writes by, for a replayed mesh draw; a reset, which leaves a command the host encoded running
 /// nothing; and a copy, which makes a command the one it copies. A barrier, a threadgroup length,
 /// a stage-in region, an imageblock size, or a fragment buffer alone changes no value a replayed
-/// command writes unless its template reads it, which the module does not decide.
+/// command writes unless its template reads it, which the module does not decide. The engine's
+/// candidate executes no command: every indirect command buffer a case holds carries a requirement
+/// that stops it, a runtime limit or, for the shape the runtime builds,
+/// [`ToolingRequirement::IndirectIndexedDraws`] ([`case_requirements`]).
 fn replay_observes_commands(
     calls: &BTreeMap<String, usize>,
     reflection: Option<&ShaderInterface>,
@@ -947,6 +950,16 @@ pub fn case_requirements(case: &AuthoredCase) -> BTreeSet<ToolingRequirement> {
             !case.pipeline_states.is_empty(),
             ToolingRequirement::ArgumentBufferPipelineState,
         ),
+        (
+            case.command_buffers.iter().any(|buffer| {
+                matches!(&buffer.descriptor, CommandDescriptor::Render { draws, .. }
+                    if *draws == INDEXED_DRAWS_ALONE)
+                    && buffer.inherit_pipeline_state
+                    && !buffer.inherit_buffers
+                    && buffer.commands.is_empty()
+            }),
+            ToolingRequirement::IndirectIndexedDraws,
+        ),
     ]
     .into_iter()
     .filter_map(|(present, requirement)| present.then_some(requirement))
@@ -1051,8 +1064,9 @@ pub fn require_executor(
 /// These are not shader-translation gaps: they mean the validation harness cannot yet construct
 /// an observable experiment for an otherwise reflected interface. A vertex function's effect is
 /// its position, a writable resource, or the commands it encodes where replaying them observes
-/// them ([`CommandsOnly::Replayed`]): both executors draw it with rasterization off and then
-/// execute those commands, as a kernel's are, and a case of it must execute them
+/// them ([`CommandsOnly::Replayed`]): the Metal oracle draws it with rasterization off and then
+/// executes those commands, as a kernel's are (the engine's candidate executes none:
+/// [`replay_observes_commands`]), and a case of it must execute them
 /// ([`require_reflection`]). Their contents stay an [`UnobservedEffect`]. A vertex function with
 /// none of these raises [`ToolingRequirement::VertexSideEffectObservation`].
 pub fn unsupported_observation_requirements(

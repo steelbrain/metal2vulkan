@@ -111,6 +111,64 @@ fn assert_engine_refuses(case: &AuthoredCase, requirement: ToolingRequirement) {
     );
 }
 
+/// A command buffer of the one shape the runtime builds (indexed draws alone that inherit the
+/// pipeline state and bind their own buffers, none host-encoded) carries `indirect_indexed_draws`
+/// alone, which the checker cannot evidence and the engine candidate refuses typed; a departure
+/// from the shape carries its runtime limit instead.
+#[test]
+fn the_runtime_s_command_shape_is_a_typed_gap_of_the_engine_candidate() {
+    use crate::case::indirect_commands::{CommandBufferResource, CommandDescriptor, RenderDraws};
+    use crate::executor_contract::{case_requirements, evidence_gap};
+    use ToolingRequirement as R;
+    let mut case = example();
+    case.command_buffers.push(CommandBufferResource {
+        buffer_binding: case.buffers[0].binding,
+        field_offset: 0,
+        capacity: 1,
+        execution_range: [0, 1],
+        inherit_pipeline_state: true,
+        inherit_buffers: false,
+        descriptor: CommandDescriptor::Render {
+            draws: RenderDraws {
+                primitives: false,
+                indexed: true,
+                ..RenderDraws::default()
+            },
+            max_vertex_buffer_bind_count: 1,
+            max_fragment_buffer_bind_count: 0,
+            max_object_buffer_bind_count: 0,
+            max_mesh_buffer_bind_count: 0,
+            support_dynamic_attribute_stride: false,
+        },
+        commands: vec![],
+        execute: None,
+    });
+    let requirements = case_requirements(&case);
+    assert_eq!(requirements, [R::IndirectIndexedDraws].into());
+    assert_eq!(
+        evidence_gap(&requirements).as_deref(),
+        Some("engine_candidate: indirect_indexed_draws (the candidate is stopped)")
+    );
+    assert_engine_refuses(&case, R::IndirectIndexedDraws);
+    let departs = |change: &dyn Fn(&mut CommandBufferResource), limit: R| {
+        let mut variant = case.clone();
+        change(&mut variant.command_buffers[0]);
+        assert_eq!(case_requirements(&variant), [limit].into(), "{limit}");
+    };
+    departs(
+        &|buffer| buffer.inherit_buffers = true,
+        R::IndirectCommandInheritance,
+    );
+    departs(
+        &|buffer| {
+            if let CommandDescriptor::Render { draws, .. } = &mut buffer.descriptor {
+                draws.primitives = true;
+            }
+        },
+        R::IndirectDrawTypes,
+    );
+}
+
 #[test]
 fn pipeline_handles_require_unique_tokens_and_hash_the_template() {
     use crate::case::indirect_commands::PipelineResource;
