@@ -243,6 +243,11 @@ in its memory.
   on an RTX 3090 (NVIDIA's Linux driver) a pipeline state's creation beside a Shared allocation's
   making took 6 to 8 ms at 16 MiB and 40 to 45 ms at 256 MiB; on an RTX 2080 a compute
   pipeline's creation waited out the whole 3.4 ms of a 16 MiB Shared allocation made beside it.
+  It holds another thread's `vkAllocateMemory` too: on the RTX 3090 (620.70.06, a standalone
+  program), a 2,621,440-byte exported block's allocation begun 1 ms into a 547 MiB Shared
+  allocation took 85.3 ms (57.8 µs alone), begun 1 ms into that allocation's free 111.4 ms, and
+  begun 1 ms into a 547 MiB Private allocation 15.3 ms; two exported blocks' allocations begun
+  together took 1.7 to 3.0 times their two times alone.
   `Metrics::consumer_allocation_nanos` and `consumer_allocation_max_nanos` count the time of
   allocations made on the consumer's threads, and `maker_allocation_nanos` those of the
   block-maker thread. Eight of the consumer's sites are
