@@ -521,7 +521,6 @@ fn atomic_op(op: AtomicOp, n: Num, old: u64, x: u64) -> IResult<u64> {
         AtomicOp::And => old & x,
         AtomicOp::Or => old | x,
         AtomicOp::Xor => old ^ x,
-        AtomicOp::FAdd => float::add(w, old, x)?,
     })
 }
 

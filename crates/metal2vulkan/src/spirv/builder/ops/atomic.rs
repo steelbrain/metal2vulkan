@@ -176,7 +176,6 @@ impl FunctionBuilder<'_> {
         let p = self.atomic_ptr(o, ptr)?;
         let ok = match op {
             AtomicOp::Exchange => true,
-            AtomicOp::FAdd => p.is_float(),
             _ => p.is_int(),
         };
         if !ok {

@@ -809,13 +809,13 @@ fn device_places_are_block_members_at_offset_zero() {
         let place = f.device_place(a64, t.f32_).expect("place");
         let one = cval(f, t.f32_, 0x3f80_0000);
         f.atomic(
-            AtomicOp::FAdd,
+            AtomicOp::Exchange,
             place,
             Scope::Device,
             Semantics::RELAXED,
             one,
         )
-        .expect("float add on a place");
+        .expect("float exchange on a place");
     });
 }
 
@@ -959,16 +959,6 @@ fn atomics_need_atomic_classes_and_matching_values() {
             i
         ),
         op_err(Op::AtomicIAdd, OperandRule::Mismatch(3))
-    );
-    assert_eq!(
-        f.atomic(
-            AtomicOp::FAdd,
-            counter,
-            Scope::Device,
-            Semantics::RELAXED,
-            u
-        ),
-        op_err(Op::AtomicFAddEXT, OperandRule::Category(0))
     );
     let local = f.local_var(t.u32_, None).expect("var");
     let local = f.var_ptr(local).expect("pointer");

@@ -526,7 +526,9 @@ fn msl_4_1_orders_reach_spirv() {
             "a27_wide_and_float",
             vec![
                 ("OpAtomicUMax", vec![1, 0]),
-                ("OpAtomicFAddEXT", vec![1, 0x8 | every]),
+                // The float add's compare-and-swap loop: its acquiring read, then the exchange.
+                ("OpAtomicLoad", vec![1, 0x2 | 0x40]),
+                ("OpAtomicCompareExchange", vec![1, 0x8 | every, 0]),
             ],
         ),
         (

@@ -189,10 +189,8 @@ fn float_atomics() {
         for (p, scope) in [(p, Scope::Device), (pw, Scope::Workgroup)] {
             f.atomic_load(p, scope, r).expect("load");
             f.atomic_store(p, scope, r, x).expect("store");
-            for op in [AtomicOp::Exchange, AtomicOp::FAdd] {
-                f.atomic(op, p, scope, r, x)
-                    .unwrap_or_else(|e| panic!("{op:?}: {e}"));
-            }
+            f.atomic(AtomicOp::Exchange, p, scope, r, x)
+                .expect("exchange");
         }
     });
     assert_spirv_valid(finish_compute(b, main));

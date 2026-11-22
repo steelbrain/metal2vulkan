@@ -5,9 +5,8 @@
 //! address of an rvalue", Q1's three atomic-subtraction cases). Every device-address pointer is
 //! therefore the member of a one-member `Block` at the address (`FunctionBuilder::device_place`).
 //!
-//! - The committed `kernel_atomic_xor_and_subtract` fixture (a native float add through a device
-//!   address on `moltenvk-m3`) has every atomic of its final words on a place, on every committed
-//!   profile.
+//! - The committed `kernel_atomic_xor_and_subtract` fixture has every atomic of its final words on
+//!   a place, on every committed profile.
 //! - Its `moltenvk-m3` module, a PSB leaf's word atomics and sub-word store, and a dynamic root's
 //!   store with its resident-miss count convert to MSL as MoltenVK converts them and compile with
 //!   `xcrun metal` (compile only; nothing runs on a GPU).
@@ -142,8 +141,8 @@ fn the_atomic_fixture_has_every_atomic_on_a_place_on_every_profile() {
     }
 }
 
-/// Q1's failure: on `moltenvk-m3` the fixture's `air.atomic.global.sub.f32` is a native float add
-/// through a device address, and MoltenVK's MSL of the module compiles.
+/// Q1's failure: on `moltenvk-m3` the fixture's `air.atomic.global.sub.f32` is a compare-and-swap
+/// loop, and MoltenVK's MSL of the module compiles.
 #[test]
 fn the_atomic_fixture_compiles_as_moltenvk_msl() {
     let Some(bc) = fixture() else {
@@ -157,8 +156,9 @@ fn the_atomic_fixture_compiles_as_moltenvk_msl() {
         &LowerInputs::new(),
     );
     assert!(
-        has_opcode(&words, crate::spv::Op::AtomicFAddEXT),
-        "the float subtraction is a native float add on moltenvk-m3"
+        has_opcode(&words, crate::spv::Op::AtomicCompareExchange)
+            && !has_opcode(&words, crate::spv::Op::AtomicFAddEXT),
+        "the float subtraction is a compare-and-swap loop on moltenvk-m3"
     );
     compiles_as_moltenvk_msl(&words, "kernel_atomic_xor_and_subtract", 6);
 }

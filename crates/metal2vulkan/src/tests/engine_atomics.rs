@@ -323,12 +323,6 @@ fn f(x: f32) -> u32 {
     x.to_bits()
 }
 
-/// Whether `p` lowers a buffer's `f32` add natively: the float-add feature and device addresses.
-fn native_float_add(p: &DeviceProfile) -> bool {
-    p.fields().leaf.buffer_float32_atomic_add
-        && p.fields().buffer_access == crate::device::profile::BufferAccess::Addressed
-}
-
 /// Every operation, 64 contending invocations, both orders.
 #[test]
 fn buffer_atomics_are_exact_under_contention() {
@@ -340,39 +334,19 @@ fn buffer_atomics_are_exact_under_contention() {
         let prof = p(stem);
         l3(&bc, "counters", &prof, stem);
         let a = compile(&bc, "counters", &prof).expect("compile");
-        // Float add and sub are native through the slot's device address where the profile has
-        // the float-add feature; min, max, and elsewhere add and sub are compare-and-swap loops,
-        // which need no status buffer.
-        let native = native_float_add(&prof);
-        let loops = if native { 2 } else { 4 };
+        // Float add, sub, min and max are compare-and-swap loops, which need no status buffer,
+        // on the slot's descriptor view.
         assert!(!a.facts.contains(&RuntimeFact::ExecutionStatus), "{stem}");
-        let psb = a
-            .facts
-            .iter()
-            .any(|f| matches!(f, RuntimeFact::DeviceAddresses { .. }));
-        assert_eq!(psb, native, "{stem}");
+        assert!(
+            !a.facts
+                .iter()
+                .any(|f| matches!(f, RuntimeFact::DeviceAddresses { .. })),
+            "{stem}"
+        );
         let (plan, m) = typed_module(&bc, "counters", &prof).expect("module");
-        // Every atomic reaches the one slot, through its device address where the float add is
-        // native.
-        let reach = |name: &str| {
-            if native {
-                format!("{name}.psb")
-            } else {
-                name.to_owned()
-            }
-        };
-        assert_eq!(
-            uses(&plan, &reach("access.atomic.buffer.float_cas")),
-            loops,
-            "{stem}"
-        );
-        assert_eq!(
-            uses(&plan, &reach("access.atomic.buffer.float_add")),
-            4 - loops,
-            "{stem}"
-        );
+        assert_eq!(uses(&plan, "access.atomic.buffer.float_cas"), 4, "{stem}");
         // Eight integer operations and the float exchange.
-        assert_eq!(uses(&plan, &reach("access.atomic.buffer.rmw")), 9, "{stem}");
+        assert_eq!(uses(&plan, "access.atomic.buffer.rmw"), 9, "{stem}");
         let mut init = vec![0u32; 16 + 3 * N as usize];
         init[2] = u32::MAX;
         init[5] = u32::MAX;
@@ -1162,34 +1136,10 @@ fn llvm_atomics_are_exact_under_contention() {
         let prof = p(stem);
         l3(&bc, "llvm_rmw", &prof, stem);
         let (plan, m) = typed_module(&bc, "llvm_rmw", &prof).expect("module");
-        let native = native_float_add(&prof);
-        let loops = if native { 2 } else { 4 };
-        // Every atomic reaches the one slot, through its device address where the float add is
-        // native.
-        let reach = |name: &str| {
-            if native {
-                format!("{name}.psb")
-            } else {
-                name.to_owned()
-            }
-        };
-        assert_eq!(
-            uses(&plan, &reach("access.atomic.buffer.float_cas")),
-            loops,
-            "{stem}"
-        );
-        assert_eq!(
-            uses(&plan, &reach("access.atomic.buffer.float_add")),
-            4 - loops,
-            "{stem}"
-        );
-        assert_eq!(uses(&plan, &reach("access.atomic.buffer.cas")), 3, "{stem}");
-        assert_eq!(uses(&plan, &reach("access.atomic.buffer.rmw")), 4, "{stem}");
-        assert_eq!(
-            uses(&plan, &reach("access.atomic.buffer.cmpxchg")),
-            1,
-            "{stem}"
-        );
+        assert_eq!(uses(&plan, "access.atomic.buffer.float_cas"), 4, "{stem}");
+        assert_eq!(uses(&plan, "access.atomic.buffer.cas"), 3, "{stem}");
+        assert_eq!(uses(&plan, "access.atomic.buffer.rmw"), 4, "{stem}");
+        assert_eq!(uses(&plan, "access.atomic.buffer.cmpxchg"), 1, "{stem}");
         let mut init = vec![0u32; 16 + 5 * N as usize];
         init[2] = u32::MAX;
         init[3] = 0x1234_5678;

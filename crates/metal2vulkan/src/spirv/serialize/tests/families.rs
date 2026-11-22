@@ -537,8 +537,14 @@ fn device_places() {
             f.atomic(AtomicOp::IAdd, wide, Scope::Device, Semantics::RELAXED, one)
                 .expect("u64 atomic");
             let float = f.device_place(*addr, t.f32_).expect("f32 place");
-            f.atomic(AtomicOp::FAdd, float, Scope::Device, Semantics::RELAXED, *x)
-                .expect("float add");
+            f.atomic(
+                AtomicOp::Exchange,
+                float,
+                Scope::Device,
+                Semantics::RELAXED,
+                *x,
+            )
+            .expect("float exchange");
         },
     );
     assert_spirv_valid(m);

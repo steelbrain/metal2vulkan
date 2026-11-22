@@ -1003,14 +1003,14 @@ impl Deriver<'_> {
             Inst::AtomicLoad { ptr, scope, sem } => {
                 self.scope(*scope);
                 self.semantics(*sem);
-                self.atomic(*ptr, None)?;
+                self.atomic(*ptr)?;
             }
             Inst::AtomicStore {
                 ptr, scope, sem, ..
             } => {
                 self.scope(*scope);
                 self.semantics(*sem);
-                self.atomic(*ptr, None)?;
+                self.atomic(*ptr)?;
             }
             Inst::Atomic {
                 op,
@@ -1021,7 +1021,7 @@ impl Deriver<'_> {
             } => {
                 self.scope(*scope);
                 self.semantics(*sem);
-                self.atomic(*ptr, Some(*op))?;
+                self.atomic(*ptr)?;
             }
             Inst::AtomicCompareExchange {
                 ptr,
@@ -1033,7 +1033,7 @@ impl Deriver<'_> {
                 self.scope(*scope);
                 self.semantics(*equal);
                 self.semantics(*unequal);
-                self.atomic(*ptr, None)?;
+                self.atomic(*ptr)?;
             }
             Inst::ControlBarrier { exec, mem, sem } => {
                 self.scope(*exec);
@@ -1305,10 +1305,8 @@ impl Deriver<'_> {
     }
 
     /// Features an atomic on `ptr` needs: 64-bit integer and float atomics per storage class, and
-    /// the stage's store feature for descriptor-backed memory. `op` is the read-modify-write
-    /// operation (`None` for loads, stores, exchanges of the plain kind, steps, and
-    /// compare-exchange).
-    fn atomic(&mut self, ptr: Value, op: Option<AtomicOp>) -> BResult<()> {
+    /// the stage's store feature for descriptor-backed memory.
+    fn atomic(&mut self, ptr: Value) -> BResult<()> {
         let (class, pointee) = self.pointer_of(ptr)?;
         let buffer = matches!(
             class,
@@ -1326,73 +1324,33 @@ impl Deriver<'_> {
                     _ => VkFeature::ShaderBufferInt64Atomics,
                 });
             }
-            Type::Float { width } => self.float_atomic(class, width, op)?,
+            Type::Float { width } => self.float_atomic(class, width)?,
             _ => {}
         }
         Ok(())
     }
 
-    fn float_atomic(
-        &mut self,
-        class: StorageClass,
-        width: u8,
-        op: Option<AtomicOp>,
-    ) -> BResult<()> {
+    /// The feature a float atomic (a load, a store, an exchange or a compare-exchange) on a
+    /// pointer of `class` to a float of `width` bits needs.
+    fn float_atomic(&mut self, class: StorageClass, width: u8) -> BResult<()> {
         use VkFeature as F;
-        // [plain (load/store/exchange), add] per (class, width).
-        let set = match (class, width) {
-            (StorageClass::Workgroup, 16) => [
-                F::ShaderSharedFloat16Atomics,
-                F::ShaderSharedFloat16AtomicAdd,
-            ],
-            (StorageClass::Workgroup, 32) => [
-                F::ShaderSharedFloat32Atomics,
-                F::ShaderSharedFloat32AtomicAdd,
-            ],
-            (StorageClass::Workgroup, 64) => [
-                F::ShaderSharedFloat64Atomics,
-                F::ShaderSharedFloat64AtomicAdd,
-            ],
-            (StorageClass::Image, 32) => {
-                [F::ShaderImageFloat32Atomics, F::ShaderImageFloat32AtomicAdd]
+        let feature = match (class, width) {
+            (StorageClass::Workgroup, 16) => F::ShaderSharedFloat16Atomics,
+            (StorageClass::Workgroup, 32) => F::ShaderSharedFloat32Atomics,
+            (StorageClass::Workgroup, 64) => F::ShaderSharedFloat64Atomics,
+            (StorageClass::Image, 32) => F::ShaderImageFloat32Atomics,
+            (StorageClass::StorageBuffer | StorageClass::PhysicalStorageBuffer, 16) => {
+                F::ShaderBufferFloat16Atomics
             }
-            (StorageClass::StorageBuffer | StorageClass::PhysicalStorageBuffer, 16) => [
-                F::ShaderBufferFloat16Atomics,
-                F::ShaderBufferFloat16AtomicAdd,
-            ],
-            (StorageClass::StorageBuffer | StorageClass::PhysicalStorageBuffer, 32) => [
-                F::ShaderBufferFloat32Atomics,
-                F::ShaderBufferFloat32AtomicAdd,
-            ],
-            (StorageClass::StorageBuffer | StorageClass::PhysicalStorageBuffer, 64) => [
-                F::ShaderBufferFloat64Atomics,
-                F::ShaderBufferFloat64AtomicAdd,
-            ],
+            (StorageClass::StorageBuffer | StorageClass::PhysicalStorageBuffer, 32) => {
+                F::ShaderBufferFloat32Atomics
+            }
+            (StorageClass::StorageBuffer | StorageClass::PhysicalStorageBuffer, 64) => {
+                F::ShaderBufferFloat64Atomics
+            }
             _ => return Err(BuildError::Type(TypeRule::PointeeForClass(class))),
         };
-        let [plain, add] = set;
-        match op {
-            Some(AtomicOp::FAdd) => {
-                self.feat(add);
-                let (c, e) = match width {
-                    16 => (
-                        Cap::AtomicFloat16AddEXT,
-                        SpirvExtension::ExtShaderAtomicFloat16Add,
-                    ),
-                    32 => (
-                        Cap::AtomicFloat32AddEXT,
-                        SpirvExtension::ExtShaderAtomicFloatAdd,
-                    ),
-                    _ => (
-                        Cap::AtomicFloat64AddEXT,
-                        SpirvExtension::ExtShaderAtomicFloatAdd,
-                    ),
-                };
-                self.cap(c);
-                self.ext(e);
-            }
-            _ => self.feat(plain),
-        }
+        self.feat(feature);
         Ok(())
     }
 

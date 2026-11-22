@@ -572,8 +572,6 @@ fn image_atomics() {
         let tp = f.image_texel_pointer(pf, c2, zero).expect("texel pointer");
         f.atomic(AtomicOp::Exchange, tp, Scope::Device, r, x)
             .expect("float exchange");
-        f.atomic(AtomicOp::FAdd, tp, Scope::Device, r, x)
-            .expect("float add");
     });
     assert_spirv_valid(finish_compute(b, main));
 }

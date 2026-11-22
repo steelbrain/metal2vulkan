@@ -344,8 +344,6 @@ pub enum AtomicOp {
     And,
     Or,
     Xor,
-    /// `OpAtomicFAddEXT` (`SPV_EXT_shader_atomic_float_add`).
-    FAdd,
 }
 
 impl AtomicOp {
@@ -363,7 +361,6 @@ impl AtomicOp {
             AtomicOp::And => Op::AtomicAnd,
             AtomicOp::Or => Op::AtomicOr,
             AtomicOp::Xor => Op::AtomicXor,
-            AtomicOp::FAdd => Op::AtomicFAddEXT,
         }
     }
 }

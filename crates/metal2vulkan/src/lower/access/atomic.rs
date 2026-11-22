@@ -34,15 +34,13 @@
 //! `f32` `xchg`, `load`, and `store` move the bit pattern.
 //!
 //! **Typed atomics through device addresses**. A descriptor view is one `u32` array and the arena
-//! one `u32` array, so an atomic on a `u64` or an `f32` word needs a typed alias only a device
+//! one `u32` array, so an atomic on a `u64` word needs a typed alias only a device
 //! address gives: a `PhysicalStorageBuffer` pointer to the type at the word's address. Such an
 //! atomic moves every slot it reaches to its device address (`AccessPlan::typed_slots`, read by
 //! `finish_slots`), on profiles with device addresses; through a wide pointer it is at a device
 //! address already. Every device-address atomic takes its pointer from one function (`device_ptr`).
-//! A 64-bit atomic is then one `u64` SPIR-V atomic (`Int64Atomics`); `f32` `add` and `sub` (the add
-//! of the negated operand, which IEEE 754 defines as the same operation) are `OpAtomicFAddEXT`
-//! where the profile has `shaderBufferFloat32AtomicAdd`, instead of an execution-bounded loop that
-//! contention could exhaust.
+//! A 64-bit atomic is then one `u64` SPIR-V atomic (`Int64Atomics`). An `f32` atomic is a
+//! compare-and-swap loop on its word's bits in every memory.
 //!
 //! **Narrow atomics** (`narrow`): an LLVM atomic on `i8` or `i16` operates on its field of the
 //! containing `u32` word, in any of these memories: `load`, `and`, `or`, and `xor` are one word
@@ -165,11 +163,6 @@ pub enum AtomicKind {
     CompareExchange,
     /// A read-modify-write as a compare-and-swap loop.
     Cas(CasOp),
-    /// `f32` `add` (or `sub`, as the add of the negated operand) as `OpAtomicFAddEXT` through a
-    /// typed device address.
-    FloatAdd {
-        negate: bool,
-    },
 }
 
 /// The memory an atomic operates on.
@@ -255,7 +248,6 @@ impl AtomicAccess {
             AtomicKind::CompareExchange => "cmpxchg",
             AtomicKind::Cas(op) if op.is_float() => "float_cas",
             AtomicKind::Cas(_) => "cas",
-            AtomicKind::FloatAdd { .. } => "float_add",
         };
         let checked = if checked { ".checked" } else { "" };
         format!("access.atomic.{mem}.{kind}{}{checked}", reach.qualifier()).into()
@@ -636,19 +628,6 @@ pub fn select(
             .into());
         }
     }
-    // `f32` add and sub are native through a typed device address where the profile has the
-    // buffer float-add feature; otherwise, and for the arena, a compare-and-swap loop.
-    let kind = match r.kind {
-        AtomicKind::Cas(op @ (CasOp::FAdd | CasOp::FSub))
-            if !threadgroup && addressed && cx.profile.fields().leaf.buffer_float32_atomic_add =>
-        {
-            AtomicKind::FloatAdd {
-                negate: op == CasOp::FSub,
-            }
-        }
-        k => k,
-    };
-    let typed = wide || matches!(kind, AtomicKind::FloatAdd { .. });
     let value = match r.value {
         Some(v) => Some(value_id(cx, v)?),
         None => None,
@@ -712,7 +691,7 @@ pub fn select(
             super::note_variable(cx, slot, fixed, false);
             // An atomic reaches its word.
             super::note_reach(cx, t.slot, 4);
-            if typed {
+            if wide {
                 // A typed atomic's slot is reached by device address (`finish_slots`).
                 cx.families.access.typed_slots.insert(t.slot);
             }
@@ -724,10 +703,11 @@ pub fn select(
             null,
         }
     };
-    let spin = kind == AtomicKind::Load && r.order == MemoryOrder::Relaxed && spin::is_spin(cx, at);
+    let spin =
+        r.kind == AtomicKind::Load && r.order == MemoryOrder::Relaxed && spin::is_spin(cx, at);
     Ok(Some(AtomicAccess {
         mem,
-        kind,
+        kind: r.kind,
         value,
         float: r.elem == Elem::F32,
         wide,
@@ -829,9 +809,7 @@ fn private_new(
             fb.select(equal, x, old)?
         }
         AtomicKind::Cas(op) => cas_new(fb, op, word, old, x)?,
-        AtomicKind::Rmw(_) | AtomicKind::Load | AtomicKind::FloatAdd { .. } => {
-            return Err(dangling())
-        }
+        AtomicKind::Rmw(_) | AtomicKind::Load => return Err(dangling()),
     })
 }
 
@@ -881,7 +859,7 @@ struct Op {
     failure: Semantics,
     /// The word type.
     word: STypeId,
-    /// The pointee of a typed device-address atomic (`u64` or `f32`), `None` for a word.
+    /// The pointee of a typed device-address atomic (`u64`), `None` for a word.
     typed: Option<STypeId>,
     /// A narrow atomic's width in bits: it operates on a field of the word.
     narrow: Option<u8>,
@@ -1081,16 +1059,6 @@ fn apply(fb: &mut FunctionBuilder<'_>, at: At, o: Op) -> BResult<Option<SValue>>
             )?
         }
         AtomicKind::Cas(op) => cas_loop(fb, p, op, o)?,
-        AtomicKind::FloatAdd { negate } => {
-            let f = f32_ty(fb)?;
-            let x = o.value.ok_or_else(dangling)?;
-            let mut x = fb.convert(ConvOp::Bitcast, x, f)?;
-            if negate {
-                x = fb.unary(UnOp::FNegate, x)?;
-            }
-            let old = fb.atomic(AtomicOp::FAdd, p, o.scope, o.sem, x)?;
-            fb.convert(ConvOp::Bitcast, old, o.word)?
-        }
     }))
 }
 
@@ -1186,11 +1154,7 @@ pub fn emit(
     } else {
         u32_ty(fb)?
     };
-    let typed = match a.kind {
-        _ if a.wide => Some(word),
-        AtomicKind::FloatAdd { .. } => Some(f32_ty(fb)?),
-        _ => None,
-    };
+    let typed = a.wide.then_some(word);
     let bytes = match (a.wide, a.narrow) {
         (true, _) => 8,
         (false, Some(bits)) => u32::from(bits / 8),

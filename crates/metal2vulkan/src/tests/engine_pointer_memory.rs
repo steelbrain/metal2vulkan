@@ -499,21 +499,11 @@ fn atomics_through_a_loaded_pointer_are_exact_and_contained() {
     };
     for (what, p) in profiles() {
         let (plan, m) = checked(&bc, "wide_atomics", &p, &LowerInputs::new(), &what);
-        let native = p.fields().leaf.buffer_float32_atomic_add;
         // add, max, the far add, and the null add.
         assert_eq!(uses(&plan, "access.atomic.wide.rmw"), 4, "{what}");
         assert_eq!(uses(&plan, "access.atomic.wide.cmpxchg"), 1, "{what}");
         assert_eq!(uses(&plan, "access.atomic.wide.cas"), 1, "{what}");
-        assert_eq!(
-            uses(&plan, "access.atomic.wide.float_add"),
-            u32::from(native),
-            "{what}"
-        );
-        assert_eq!(
-            uses(&plan, "access.atomic.wide.float_cas"),
-            2 - u32::from(native),
-            "{what}"
-        );
+        assert_eq!(uses(&plan, "access.atomic.wide.float_cas"), 2, "{what}");
         let mut target = vec![0u32; 16];
         target[1] = (-5i32) as u32;
         target[5] = f(-1.0);
