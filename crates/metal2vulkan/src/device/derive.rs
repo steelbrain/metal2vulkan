@@ -210,7 +210,6 @@ fn derive_fields(desc: &DeviceDescription, policy: &DevicePolicy) -> ProfileFiel
         vertex_stores_and_atomics: has(VkFeature::VertexPipelineStoresAndAtomics),
         fragment_stores_and_atomics: has(VkFeature::FragmentStoresAndAtomics),
         zero_initialize_workgroup_memory: has(VkFeature::ShaderZeroInitializeWorkgroupMemory),
-        fma32: has(VkFeature::ShaderFmaFloat32),
         float8: has(VkFeature::ShaderFloat8),
     };
     let images = ImageCaps {

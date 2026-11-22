@@ -565,7 +565,6 @@ fn pure(inst: &Inst) -> bool {
             | Inst::Convert { .. }
             | Inst::BitFieldInsert { .. }
             | Inst::BitFieldExtract { .. }
-            | Inst::Fma { .. }
             | Inst::CompositeConstruct { .. }
             | Inst::CompositeExtract { .. }
             | Inst::CompositeInsert { .. }

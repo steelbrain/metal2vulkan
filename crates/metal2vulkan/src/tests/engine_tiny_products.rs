@@ -14,14 +14,12 @@
 //! it the tests skip visibly.
 
 use crate::device::{DevicePolicy, DeviceProfile};
-use crate::lower::arith::fma;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
     compile, link_and_validate, llvm_assemble, typed_module, AssembleError,
 };
 use crate::spirv::interp::{run, Buffer, Config, Resources};
 use crate::spirv::testing::committed_profiles_with;
-use std::collections::BTreeSet;
 
 /// Metal's words (`tiny_products_m3.txt`).
 const WORDS: &str = include_str!("tiny_products_m3.txt");
@@ -136,14 +134,13 @@ fn interpret(bc: &[u8], entry: &str, p: &DeviceProfile, threads: &[Thread]) -> V
         .collect()
 }
 
-/// The committed profiles, one per fused multiply-add route: each device may keep denormals, as
-/// the interpreter does.
+/// The first committed profile (every one's fused multiply-add is the device's `Fma`): each device
+/// may keep denormals, as the interpreter does.
 fn keeping() -> Vec<(String, DeviceProfile)> {
-    let mut seen = BTreeSet::new();
     committed_profiles_with(DevicePolicy::RESIDENT_TABLES)
         .expect("profiles")
         .into_iter()
-        .filter(|(_, p)| seen.insert(fma::float_route(p)))
+        .take(1)
         .collect()
 }
 

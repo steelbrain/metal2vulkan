@@ -53,8 +53,7 @@
 //! deciding lanes were clamped axes' negative coordinates, and a repeating or mirrored axis, whose
 //! position is never negative, differs only at sizes of at least `2^13` (mirrored) or `2^14`
 //! (repeating). A product past `f32`'s range gives an unspecified `X`, as before (the footprints
-//! read no non-finite position: `bicubic`). The test is 12 integer instructions on every device;
-//! `OpFmaKHR` for the product's error would take 11, and only where `shaderFmaFloat32` is enabled.
+//! read no non-finite position: `bicubic`). The test is 12 integer instructions on every device.
 //!
 //! **A texel offset on a repeating or mirrored axis** ([`offset_dropped`]). Metal adds a constant
 //! texel offset to the tap and then wraps it, as Vulkan places it, but on a repeating or mirrored

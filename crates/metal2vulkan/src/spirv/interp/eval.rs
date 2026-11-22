@@ -100,20 +100,6 @@ pub(super) fn exec(p: &Prog<'_>, l: &mut Lane, sh: &mut Shared, node: &InstNode)
                 Val::P(_) => return Err(malformed("pointer condition")),
             }
         }
-        // Correctly rounded (`float::fma`, one rounding).
-        Inst::Fma { a, b, c } => {
-            let w = p.t.num_of(*a)?.width;
-            let (va, vb, vc) = (l.get_ref(p, *a)?, l.get_ref(p, *b)?, l.get_ref(p, *c)?);
-            let (xs, ys, zs) = (va.comps()?, vb.comps()?, vc.comps()?);
-            if xs.len() != ys.len() || xs.len() != zs.len() {
-                return Err(malformed("component count mismatch"));
-            }
-            let mut out = Vec::with_capacity(xs.len());
-            for ((x, y), z) in xs.into_iter().zip(ys).zip(zs) {
-                out.push(float::fma(w, x, y, z)?);
-            }
-            Val::from_comps(out)
-        }
         Inst::BitFieldInsert {
             base,
             insert,

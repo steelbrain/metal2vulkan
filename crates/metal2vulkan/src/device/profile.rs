@@ -508,8 +508,6 @@ pub struct LeafCaps {
     pub vertex_stores_and_atomics: bool,
     pub fragment_stores_and_atomics: bool,
     pub zero_initialize_workgroup_memory: bool,
-    /// `OpFmaKHR` on 32-bit floats (`shaderFmaFloat32`): a correctly rounded fused multiply-add.
-    pub fma32: bool,
     /// 8-bit floats of the encodings `Float8E4M3EXT` and `Float8E5M2EXT` (`shaderFloat8`,
     /// `SPV_EXT_float8`): an 8-bit float converts to a wider float through the device's own type.
     pub float8: bool,

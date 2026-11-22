@@ -604,25 +604,6 @@ impl FunctionBuilder<'_> {
         self.emit(Inst::Select { cond, t, f }, ty)
     }
 
-    /// `OpFmaKHR` (`SPV_KHR_fma`): `a * b + c` with one rounding, which Vulkan's precision table
-    /// makes correctly rounded. The three operands share one 16- or 32-bit float scalar or vector
-    /// type, the widths the core emits it at (its feature is `shaderFmaFloat16` or
-    /// `shaderFmaFloat32`). Result: that type.
-    pub fn fma(&mut self, a: Value, b: Value, c: Value) -> BResult<Value> {
-        const OP: crate::spv::Op = crate::spv::Op::FmaKHR;
-        let x = self.want(OP, 0, a, Num::is_float)?;
-        if x.width != 32 && x.width != 16 {
-            return Err(err(OP, OperandRule::Width(0)));
-        }
-        if self.value_ty(b)? != x.ty {
-            return Err(err(OP, OperandRule::Mismatch(1)));
-        }
-        if self.value_ty(c)? != x.ty {
-            return Err(err(OP, OperandRule::Mismatch(2)));
-        }
-        self.emit(Inst::Fma { a, b, c }, x.ty)
-    }
-
     /// `OpBitFieldInsert`: `base` and `insert` share one 32-bit integer type (Vulkan), `offset`
     /// and `count` are integer scalars. Result: the base's type.
     pub fn bit_field_insert(

@@ -2381,8 +2381,8 @@ bound.
   device's 16-bit `OpFDiv`: within 2.5 `half` ulp, its divisor scaled by a power of two into
   `[2^-14, 2^14]`.
 - `metal2vulkan-degrade-native-fma` (precision). `PrecisionNote::NativeFma`: Native device maths: a
-  `float` fused multiply-add on a device without `OpFmaKHR`, or a `half` one where the device has
-  no 16-bit `OpFmaKHR` under the 16-bit float controls, is the device's `GLSL.std.450 Fma` (on the
+  `float` fused multiply-add, or a `half` one outside the 16-bit float controls, is the device's
+  `GLSL.std.450 Fma` (on the
   `half` operands held in `float`, its result rounded to `half`), where Metal's rounds once. On a
   device that computes `half` in 16 bits under the 16-bit float controls, a `half` one is the
   device's 16-bit `Fma` on the `half` operands. Recorded bound: a `half` result

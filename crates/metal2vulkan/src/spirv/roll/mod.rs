@@ -1149,7 +1149,6 @@ fn varying_ok(inst: &Inst, operand: usize) -> bool {
         Inst::Unary { .. }
         | Inst::Binary { .. }
         | Inst::Select { .. }
-        | Inst::Fma { .. }
         | Inst::Convert { .. }
         | Inst::CompositeConstruct { .. }
         | Inst::CompositeExtract { .. }

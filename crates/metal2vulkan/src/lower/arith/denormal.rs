@@ -13,7 +13,7 @@ use crate::lower::arith::math::FloatFn;
 /// noted `DeviceDenormals`. False for a function whose lowering reads its denormals as Metal does
 /// itself (`FloatFn::metal_denormals`) or whose reading is not measured. The functions: `floor`,
 /// `ceil`, `trunc`, `rint`, `sqrt`, `rsqrt`, `fast::rsqrt`, `dot`, `fma` and `llvm.fmuladd`
-/// (`OpFmaKHR`), `fast::atan2`, and `ldexp` on `float`.
+/// (the device's `Fma`), `fast::atan2`, and `ldexp` on `float`.
 ///
 /// `fast::atan2(y, x)` reads a denormal `y` or `x` as the zero of its sign and answers no denormal
 /// (an Apple M3 Max under macOS 27.0.1: every pair of 28 patterns, in entries with and without fast

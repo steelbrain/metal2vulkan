@@ -241,7 +241,7 @@ fn assemble_text(text: &str) -> Option<Vec<u8>> {
 }
 
 /// The float arithmetic of `words`: the results of every `OpFAdd`, `OpFSub` and `OpFMul`, of
-/// every `OpFmaKHR` and every `GLSL.std.450 Fma` whose addend is not a `-0.0` constant (a fused
+/// every `GLSL.std.450 Fma` whose addend is not a `-0.0` constant (a fused
 /// multiply-add; with a `-0.0` addend it is a product rounded on its own), and the results
 /// decorated `NoContraction`.
 struct Arith {

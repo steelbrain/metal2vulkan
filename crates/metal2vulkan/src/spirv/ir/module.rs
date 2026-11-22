@@ -215,8 +215,6 @@ pub enum Inst {
         offset: Value,
         count: Value,
     },
-    /// `OpFmaKHR` (`SPV_KHR_fma`): `a * b + c` rounded once (Vulkan: "Correctly rounded").
-    Fma { a: Value, b: Value, c: Value },
     /// `OpBitFieldSExtract` (`signed`) or `OpBitFieldUExtract`.
     BitFieldExtract {
         signed: bool,
@@ -528,11 +526,6 @@ impl Inst {
                 f(*t);
                 f(*e);
             }
-            Inst::Fma { a, b, c } => {
-                f(*a);
-                f(*b);
-                f(*c);
-            }
             Inst::BitFieldInsert {
                 base,
                 insert,
@@ -754,11 +747,6 @@ impl Inst {
                 f(cond);
                 f(t);
                 f(e);
-            }
-            Inst::Fma { a, b, c } => {
-                f(a);
-                f(b);
-                f(c);
             }
             Inst::BitFieldInsert {
                 base,
@@ -988,7 +976,6 @@ impl Inst {
             | Inst::Select { .. }
             | Inst::BitFieldInsert { .. }
             | Inst::BitFieldExtract { .. }
-            | Inst::Fma { .. }
             | Inst::Convert { .. }
             | Inst::CompositeConstruct { .. }
             | Inst::CompositeExtract { .. }

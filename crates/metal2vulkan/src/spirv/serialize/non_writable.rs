@@ -175,7 +175,6 @@ fn memory_write(inst: &Inst) -> Option<Write> {
         | Inst::Select { .. }
         | Inst::BitFieldInsert { .. }
         | Inst::BitFieldExtract { .. }
-        | Inst::Fma { .. }
         | Inst::Convert { .. }
         | Inst::CompositeConstruct { .. }
         | Inst::CompositeExtract { .. }

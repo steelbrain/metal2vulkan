@@ -201,27 +201,6 @@ fn comparisons_derive_bool_of_the_component_count() {
     });
 }
 
-/// `OpFmaKHR` takes three operands of one 16- or 32-bit float scalar or vector type and gives that
-/// type; the core never emits it at another width (its feature is `shaderFmaFloat16` or
-/// `shaderFmaFloat32`).
-#[test]
-fn fma_khr_takes_three_floats_of_one_16_or_32_bit_type() {
-    in_fn(|f, t| {
-        let (x, v) = (p(f, t.f32_), p(f, t.vec4));
-        let r = f.fma(x, x, x).expect("scalar");
-        assert_eq!(ty(f, r), t.f32_);
-        let r = f.fma(v, v, v).expect("vector");
-        assert_eq!(ty(f, r), t.vec4);
-        let (h, d, u) = (p(f, t.f16), p(f, t.f64_), p(f, t.u32_));
-        let r = f.fma(h, h, h).expect("16-bit scalar");
-        assert_eq!(ty(f, r), t.f16);
-        assert_eq!(f.fma(d, d, d), op_err(Op::FmaKHR, OperandRule::Width(0)));
-        assert_eq!(f.fma(u, u, u), op_err(Op::FmaKHR, OperandRule::Category(0)));
-        assert_eq!(f.fma(x, v, x), op_err(Op::FmaKHR, OperandRule::Mismatch(1)));
-        assert_eq!(f.fma(x, x, v), op_err(Op::FmaKHR, OperandRule::Mismatch(2)));
-    });
-}
-
 #[test]
 fn extended_arithmetic_derives_a_pair_struct() {
     in_fn(|f, t| {

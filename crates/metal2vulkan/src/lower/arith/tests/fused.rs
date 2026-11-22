@@ -10,7 +10,6 @@
 
 use super::*;
 use crate::lower::arith::fma::{self, Fma, Route};
-use std::collections::BTreeSet;
 
 fn floats(lanes: u8) -> Form {
     vec(float(32), lanes)
@@ -263,26 +262,24 @@ fn check_fma(
     );
 }
 
-/// `OpFmaKHR` and the device's `Fma` round the exact `a * b + c` once on the interpreter (whose
-/// `Fma` is IEEE's), on scalars and vectors, specials, signed zeros, denormals, overflow, and the
-/// double-rounding hazards included: the module adds nothing to the device's instruction.
+/// The device's `Fma` rounds the exact `a * b + c` once on the interpreter (whose `Fma` is IEEE's),
+/// on scalars and vectors, specials, signed zeros, denormals, overflow, and the double-rounding
+/// hazards included: the module adds nothing to the device's instruction.
 #[test]
 fn float_fused_multiply_add_is_the_device_s_instruction() {
     let triples = float_triples();
-    for route in [Route::Khr, Route::Native] {
-        for lanes in [1u8, 3] {
-            let fma = Fma {
-                form: floats(lanes),
-                route,
-            };
-            check_fma(
-                &format!("fma {route:?} x{lanes}"),
-                fma,
-                &lane_cases(&triples, lanes),
-                &fma32,
-                false,
-            );
-        }
+    for lanes in [1u8, 3] {
+        let fma = Fma {
+            form: floats(lanes),
+            route: Route::Native,
+        };
+        check_fma(
+            &format!("fma x{lanes}"),
+            fma,
+            &lane_cases(&triples, lanes),
+            &fma32,
+            false,
+        );
     }
 }
 
@@ -549,19 +546,15 @@ fn the_half_reference_rounds_the_exact_sum() {
     assert_eq!(fma16(0x0003, 0x3800, 0), 0x0002);
 }
 
-/// The route follows the profile: `float` by `OpFmaKHR` where `shaderFmaFloat32` is enabled, else
-/// the device's `Fma`; `half` by the device's 16-bit `Fma` where the profile rounds under the
-/// 16-bit float controls, else the device's `float` `Fma` rounded to `half`; `bfloat` and `double`
-/// keep their own lowering.
+/// The route follows the profile: `float` by the device's `Fma` on every profile; `half` by the
+/// device's 16-bit `Fma` where the profile rounds under the 16-bit float controls, else the
+/// device's `float` `Fma` rounded to `half`; `bfloat` and `double` keep their own lowering.
 #[test]
 fn the_fused_multiply_add_route_follows_the_profile() {
-    let mut seen = BTreeSet::new();
     for (stem, p) in committed_profiles().expect("profiles") {
-        let l = &p.fields().leaf;
-        let want = if l.fma32 { Route::Khr } else { Route::Native };
         assert_eq!(
             Fma::by(fma::routes(&p), float(32)).expect("float").route,
-            want,
+            Route::Native,
             "{stem}"
         );
         let half = if crate::lower::arith::narrow::half_controls(&p) {
@@ -576,11 +569,5 @@ fn the_fused_multiply_add_route_follows_the_profile() {
         );
         assert_eq!(Fma::by(fma::routes(&p), bfloat()), None, "{stem}");
         assert_eq!(Fma::by(fma::routes(&p), float(64)), None, "{stem}");
-        seen.insert(want);
     }
-    assert_eq!(
-        seen,
-        BTreeSet::from([Route::Khr, Route::Native]),
-        "every float route is some committed profile's"
-    );
 }

@@ -2717,11 +2717,10 @@ fn half_nan_answers_follow_the_measured_states() {
     }
 }
 
-/// The float facts of a profile whose `float` fused multiply-add is `OpFmaKHR`, whose `half` one
-/// is the device's `float` `Fma`, and whose `float` functions are the device's.
-const KHR_FACTS: super::FloatFacts = super::FloatFacts {
+/// The float facts of a profile whose `half` fused multiply-add is the device's `float` `Fma`, and
+/// whose `float` functions are the device's.
+const DEVICE_FACTS: super::FloatFacts = super::FloatFacts {
     routes: super::fma::Routes {
-        float: super::fma::Route::Khr,
         half: super::fma::Route::Native,
     },
 };
@@ -2745,7 +2744,7 @@ fn float_ldexp_answers_metals_nan_itself() {
     let every = FastMath::ALL
         .iter()
         .fold(FastMath::NONE, |a, (b, _)| a.union(*b));
-    let facts = KHR_FACTS;
+    let facts = DEVICE_FACTS;
     for fmf in [FastMath::NONE, every] {
         let call = super::float_call(FloatFn::Ldexp, false, fmf, form(FloatFmt::F32), facts)
             .expect("float ldexp");
@@ -2783,7 +2782,7 @@ fn precise_pow_notes_its_measured_nan_as_the_devices() {
         held: Held::Float(FloatFmt::F32),
         lanes: 1,
     };
-    let facts = KHR_FACTS;
+    let facts = DEVICE_FACTS;
     let call = super::float_call(FloatFn::Pow, false, FastMath::NONE, f, facts).expect("float pow");
     assert_eq!(call.nan, Some(A::BaseToExponentOne));
     assert!(
@@ -2822,7 +2821,7 @@ fn unary_denormals_are_the_device_s() {
     };
     for op in [FloatFn::Floor, FloatFn::Ceil, FloatFn::Abs, FloatFn::Trunc] {
         for fast in [false, true] {
-            let call = super::float_call(op, fast, FastMath::NONE, f, KHR_FACTS)
+            let call = super::float_call(op, fast, FastMath::NONE, f, DEVICE_FACTS)
                 .unwrap_or_else(|| panic!("{op:?}: no float call"));
             assert!(
                 call.notes.contains(&PrecisionNote::DeviceDenormals),
@@ -2853,7 +2852,7 @@ fn float_sign_operations_are_the_device_instructions() {
         .fold(FastMath::NONE, |a, (b, _)| a.union(*b));
     for fmf in [FastMath::NONE, every] {
         for fast in [false, true] {
-            let call = super::float_call(FloatFn::Abs, fast, fmf, scalar(f), KHR_FACTS)
+            let call = super::float_call(FloatFn::Abs, fast, fmf, scalar(f), DEVICE_FACTS)
                 .expect("float fabs");
             assert_eq!(call.nan, Some(A::Operand), "fast {fast}, {fmf:?}");
             for note in [
@@ -2864,8 +2863,8 @@ fn float_sign_operations_are_the_device_instructions() {
                 assert!(call.notes.contains(&note), "{note:?} {fmf:?}");
             }
         }
-        let call =
-            super::float_call(FloatFn::Abs, false, fmf, scalar(h), KHR_FACTS).expect("half fabs");
+        let call = super::float_call(FloatFn::Abs, false, fmf, scalar(h), DEVICE_FACTS)
+            .expect("half fabs");
         assert_eq!(call.nan, Some(A::CanonicalExact), "{fmf:?}");
     }
     let mut vals = nan_operands();

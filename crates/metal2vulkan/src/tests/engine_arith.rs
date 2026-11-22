@@ -1499,8 +1499,8 @@ fn wide_divisions_share_one_routine_per_form() {
 }
 
 /// `float` and `half` fused multiply-adds (`air.fma`, `llvm.fma`, `llvm.fmuladd`) take the
-/// profile's route, inline: `OpFmaKHR` where `shaderFmaFloat32` is enabled (moltenvk-m3), else the
-/// device's `Fma` (lavapipe, vk12-floor), noted `NativeFma`. A1 case 52343cc4's lane (`a = 1 +
+/// profile's route, inline: the device's `Fma` on every profile (moltenvk-m3, lavapipe,
+/// vk12-floor), noted `NativeFma`. A1 case 52343cc4's lane (`a = 1 +
 /// 2^-23`, `b = 1 - 2^-24`, `c = -RN(a * b)`), on one lane and on a vector's first, gives the
 /// product's rounding error, which an unfused `Fma` loses (the interpreter's `Fma` rounds once); a
 /// `half` triple whose `float` sum is a `half` midpoint gives the once-rounded `half` as the
@@ -1533,13 +1533,11 @@ fn fused_multiply_adds_take_the_profiles_route() {
     let Some(bitcode) = assemble("fma-routes", &fma_module(&ks)) else {
         return;
     };
-    // (profile, OpFmaKHR of the float kernel); its route is the device's `Fma` without them, the
-    // `half` kernel's on every profile.
-    for (stem, khr) in [("moltenvk-m3", 3), ("lavapipe", 0), ("runtime-floor", 0)] {
+    // Every route is the device's `Fma`.
+    for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
         let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         for kk in &ks {
             let float = kk.name == "fma_float_rounds_once";
-            let native = !float || khr == 0;
             let what = format!("{} on {stem}", kk.name);
             let a = compile(&bitcode, kk.name, &p).unwrap_or_else(|e| panic!("{what}: {e:?}"));
             let (_, words) =
@@ -1550,9 +1548,8 @@ fn fused_multiply_adds_take_the_profiles_route() {
             ] {
                 assert!(!a.precision.contains(&n), "{what}: {:?}", a.precision);
             }
-            assert_eq!(
+            assert!(
                 a.precision.contains(&PrecisionNote::NativeFma),
-                native,
                 "{what}: {:?}",
                 a.precision
             );
@@ -1562,7 +1559,7 @@ fn fused_multiply_adds_take_the_profiles_route() {
                     count_op(&words, crate::spv::Op::Function),
                     count_op(&words, crate::spv::Op::FunctionCall)
                 ),
-                (if float { khr } else { 0 }, 1, 0),
+                (0, 1, 0),
                 "{what}: OpFmaKHR, functions, calls"
             );
             let got = interpret(&bitcode, kk.name, &p);
@@ -1852,9 +1849,8 @@ fn dot_is_the_devices_op_dot_on_every_profile() {
 }
 
 /// `air.fast_fmod` on `float` is Metal's `fma(-trunc(x / y), y, x)` (MSL Table 8.2), of the
-/// device's quotient `OpFDiv(x, y)`, on every profile's fused multiply-add: `OpFmaKHR`
-/// (moltenvk-m3) or the device's `Fma` (lavapipe, vk12-floor), inline, the entry the module's one
-/// function. A1 case dd3b3b99's `fmod(1e10, 3)` is Metal's `-512` (its fast quotient one ulp above
+/// device's quotient `OpFDiv(x, y)`, on the device's `Fma` (moltenvk-m3, lavapipe, vk12-floor),
+/// inline, the entry the module's one function. A1 case dd3b3b99's `fmod(1e10, 3)` is Metal's `-512` (its fast quotient one ulp above
 /// the correctly rounded one); on the interpreter's correctly rounded quotient, `3333333248`, the
 /// fused expression gives `256`. The module notes `DeviceArithmetic` (the quotient's rounding).
 #[test]
@@ -1879,11 +1875,7 @@ fn fast_fmod_is_metals_composition() {
     let Some(bitcode) = assemble("fast-fmod", &text) else {
         return;
     };
-    for (stem, khr, functions) in [
-        ("moltenvk-m3", 1, 1),
-        ("lavapipe", 0, 1),
-        ("runtime-floor", 0, 1),
-    ] {
+    for stem in ["moltenvk-m3", "lavapipe", "runtime-floor"] {
         let p = profile(stem, crate::device::DevicePolicy::RESIDENT_TABLES).expect("profile");
         let kk = &ks[0];
         let what = format!("{} on {stem}", kk.name);
@@ -1900,7 +1892,7 @@ fn fast_fmod_is_metals_composition() {
                 count_op(&words, crate::spv::Op::Function),
                 count_op(&words, crate::spv::Op::FRem)
             ),
-            (khr, functions, 0),
+            (0, 1, 0),
             "{what}: OpFmaKHR, functions, OpFRem"
         );
         let got = interpret(&bitcode, kk.name, &p);
@@ -2281,7 +2273,7 @@ fn fast_sincos_is_the_devices_sine_and_cosine() {
     }
 }
 
-/// `float` `+ - *`, a comparison and `OpFmaKHR` record `DeviceDenormals`, the device keeping or
+/// `float` `+ - *`, a comparison and `Fma` record `DeviceDenormals`, the device keeping or
 /// flushing them by its own controls; a remainder, the device's `OpFRem`, records it; `sign`, the
 /// device's `FSign`, records it, and `half` arithmetic does not; `fast::atan2`, whose quotient is
 /// the device's division, records it. Alike on every profile.
@@ -3135,8 +3127,8 @@ fn float_ops_without_fast_flags_preserve_signed_zero_inf_nan() {
     );
 }
 
-/// A `fast` entry's fused multiply-add is the device's instruction on every profile (`OpFmaKHR`,
-/// the device's `Fma`, or a `half` one's 16-bit form), so no kernel declares
+/// A `fast` entry's fused multiply-add is the device's instruction on every profile (the
+/// device's `Fma`, or a `half` one's 16-bit form), so no kernel declares
 /// `SignedZeroInfNanPreserve`, at 32 bits or 64: their operands are bits, their calls `fast`.
 #[test]
 fn fused_multiply_adds_keep_no_zero_signs() {

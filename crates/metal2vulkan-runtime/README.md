@@ -4744,7 +4744,6 @@ enables that the translator names.
 
 | Feature | Structure | Without it |
 |---|---|---|
-| `shaderFmaFloat32` | `VkPhysicalDeviceShaderFmaFeaturesKHR` | a `float` `fma` is the device's `Fma`, within Vulkan's precision rather than rounded once (`PrecisionNote::NativeFma`) |
 | `shaderFloat8` | `VkPhysicalDeviceShaderFloat8FeaturesEXT` | an 8-bit float converts in the translator's arithmetic, not through the device's own type |
 | `rasterizationOrderColorAttachmentAccess` | `VkPhysicalDeviceRasterizationOrderAttachmentAccessFeaturesEXT` | a blend into an extended-range attachment, which the function would compute over its own read of the attachment, is refused (`FramebufferFetch`) |
 | `robustBufferAccess` | `VkPhysicalDeviceFeatures` | a buffer is reached by its device address, and an access through a descriptor view is checked in the shader |

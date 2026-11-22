@@ -50,7 +50,6 @@ pub fn removable(inst: &Inst) -> bool {
         | Inst::Select { .. }
         | Inst::BitFieldInsert { .. }
         | Inst::BitFieldExtract { .. }
-        | Inst::Fma { .. }
         | Inst::Convert { .. }
         | Inst::CompositeConstruct { .. }
         | Inst::CompositeExtract { .. }

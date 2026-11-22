@@ -1424,8 +1424,8 @@ fn has_bit(bits: &[u64], v: Value) -> bool {
         .is_some_and(|w| w & (1 << (v.index() % 64)) != 0)
 }
 
-/// Whether module `m` computes in 16-bit floats: an `OpFAdd`, `OpFSub`, `OpFMul` or `OpFDiv`, an
-/// `OpFmaKHR`, or a `GLSL.std.450 Fma` or `Sqrt` whose result is a 16-bit float or a vector of
+/// Whether module `m` computes in 16-bit floats: an `OpFAdd`, `OpFSub`, `OpFMul` or `OpFDiv`, or a
+/// `GLSL.std.450 Fma` or `Sqrt` whose result is a 16-bit float or a vector of
 /// them, the device's own `half` arithmetic (`super::ops::f16_binary`, `super::fma`,
 /// `super::divide`, `super::math`'s `sqrt`). Under the 16-bit float controls
 /// ([`QuantizeForm::Controlled`]) the entry then declares [`controlled_modes`], which make that

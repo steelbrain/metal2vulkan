@@ -30,9 +30,8 @@
 //! `float`'s is: kept apart unless its flags carry both `contract` and `reassoc`.
 //!
 //! Precision: a `half` rounding keeps half denormals, as Metal does; a `float` or `half` fused
-//! multiply-add (`air.fma`, `llvm.fma`, and `llvm.fmuladd`, which Metal fuses) rounds once where
-//! the profile has `OpFmaKHR` or the device's 16-bit `Fma` is Metal's, and is the device's `Fma`
-//! elsewhere (`PrecisionNote::NativeFma`, [`fma`]); operations whose Vulkan precision is looser
+//! multiply-add (`air.fma`, `llvm.fma`, and `llvm.fmuladd`, which Metal fuses) is the device's
+//! `Fma` (`PrecisionNote::NativeFma`, [`fma`]); operations whose Vulkan precision is looser
 //! than correct rounding add
 //! `PrecisionNote::DeviceArithmetic` (`fdiv`, `frem`, `sqrt`, a `double` or `bfloat` `fma`, `fmod`,
 //! `dot`) or `PrecisionNote::DeviceTranscendentals` (the transcendental functions) to the plan.
@@ -294,8 +293,8 @@ pub enum ArithStrategy {
         form: Form,
         contract: Contraction,
     },
-    /// A fused multiply-add on `float` or `half` lanes ([`fma`]): `OpFmaKHR`, the device's 16-bit
-    /// `Fma` or `OpFmaKHR`, or the device's `Fma`.
+    /// A fused multiply-add on `float` or `half` lanes ([`fma`]): the device's 16-bit `Fma`, or
+    /// the device's `Fma`.
     Fma(fma::Fma),
     /// `air.fast_fmod` on `float`: Metal's `fma(-trunc(x / y), y, x)` of the device's quotient
     /// (`math::fast_fmod`), the fused multiply-add `fma`.
@@ -750,10 +749,10 @@ impl ArithPlan {
         self.extended_range = true;
     }
 
-    /// Record fused multiply-add `fma`, selected: the device's `Fma`, on `float` or on 16-bit
-    /// floats ([`ArithPlan::native_fma`]).
-    pub fn take_fma(&mut self, fma: fma::Fma) {
-        self.native_fma |= matches!(fma.route, fma::Route::Native | fma::Route::F16Native);
+    /// Record a fused multiply-add, selected: the device's `Fma`, on `float` or on 16-bit floats
+    /// ([`ArithPlan::native_fma`]).
+    pub fn take_fma(&mut self) {
+        self.native_fma = true;
     }
 }
 
@@ -1855,8 +1854,11 @@ fn select_float_fn(
         let arith = &mut cx.families.arith;
         arith.fmod |= fmod;
     }
-    if let FloatLowering::Fma(fma) | FloatLowering::FastFmod(fma) = lowered.how {
-        cx.families.arith.take_fma(fma);
+    if matches!(
+        lowered.how,
+        FloatLowering::Fma(_) | FloatLowering::FastFmod(_)
+    ) {
+        cx.families.arith.take_fma();
     }
     let s = match lowered.how {
         FloatLowering::Fma(fma) => ArithStrategy::Fma(fma),
@@ -1876,7 +1878,7 @@ fn select_float_fn(
 
 /// Whether Metal's table reads the `f32` denormals of a float function call lowered as `how`
 /// ([`denormal::covered`]): a fused multiply-add and `fast::fmod` by the device's own `float`
-/// instruction as `fma` (`OpFmaKHR`, or the device's `Fma`), and the function's own row.
+/// instruction as `fma` (the device's `Fma`), and the function's own row.
 fn call_coverage(how: FloatLowering) -> bool {
     match how {
         FloatLowering::Fma(fma) | FloatLowering::FastFmod(fma) => {
@@ -2021,14 +2023,11 @@ fn function_notes(
     notes
 }
 
-/// The note of fused multiply-add `fma`: `NativeFma` where it takes the device's `Fma`
-/// ([`fma::Route::Native`], [`fma::Route::F16Native`]), which [`finish`] records for every such
-/// route a family takes.
-fn native_fma(fma: fma::Fma) -> BTreeSet<PrecisionNote> {
-    match fma.route {
-        fma::Route::Native | fma::Route::F16Native => BTreeSet::from([PrecisionNote::NativeFma]),
-        fma::Route::Khr => BTreeSet::new(),
-    }
+/// The note of a fused multiply-add: `NativeFma`, since every route takes the device's `Fma`
+/// ([`fma::Route::Native`], [`fma::Route::F16Native`]), which [`finish`] records for every one a
+/// family takes.
+fn native_fma() -> BTreeSet<PrecisionNote> {
+    BTreeSet::from([PrecisionNote::NativeFma])
 }
 
 /// The lowering of float function `op` called with the `fast_` prefix if `fast` and with
@@ -2087,16 +2086,16 @@ fn float_call_of(
             // The device's `float` instruction answers the device's NaN, noted; a `half` result's
             // rounding answers the device's `half` NaN on every route, noted where Metal's is
             // measured.
-            let khr = fma.route.device_float();
+            let device = fma.route.device_float();
             let nan = match f.float_fmt() {
                 Some(FloatFmt::Half) => {
                     nan::function_answer(op, fast, every_flag(fmf), FloatFmt::Half)
                 }
-                _ => khr.then_some(nan::NanAnswer::Canonical),
+                _ => device.then_some(nan::NanAnswer::Canonical),
             };
             return Some(FloatCall {
                 how: FloatLowering::Fma(fma),
-                notes: native_fma(fma),
+                notes: native_fma(),
                 nan,
             });
         }
@@ -2137,12 +2136,12 @@ fn float_call_of(
     // ([`coverage_left`]).
     if fast && op == FloatFn::Fmod && f.float_fmt() == Some(FloatFmt::F32) {
         if let Some(fma) = fma::Fma::by(routes, f) {
-            let khr = fma.route.device_float();
+            let device = fma.route.device_float();
             let notes = BTreeSet::from([PrecisionNote::DeviceArithmetic]);
             return Some(FloatCall {
                 how: FloatLowering::FastFmod(fma),
-                notes: notes.into_iter().chain(native_fma(fma)).collect(),
-                nan: khr.then_some(nan::NanAnswer::Canonical),
+                notes: notes.into_iter().chain(native_fma()).collect(),
+                nan: device.then_some(nan::NanAnswer::Canonical),
             });
         }
     }

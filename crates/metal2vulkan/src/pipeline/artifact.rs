@@ -1470,9 +1470,8 @@ pub enum PrecisionNote {
     /// where the quotient rounds to a zero or overflows anyway. Validation derives no tolerance
     /// from it.
     NativeDivision,
-    /// Native device maths: a `float` fused multiply-add on a device without `OpFmaKHR`, or a
-    /// `half` one where the device's 16-bit `Fma` is not measured to be Metal's and the device has
-    /// no 16-bit `OpFmaKHR` under the 16-bit float controls, is the device's `GLSL.std.450 Fma`
+    /// Native device maths: a `float` fused multiply-add, or a `half` one where the device's
+    /// 16-bit `Fma` is not measured to be Metal's, is the device's `GLSL.std.450 Fma`
     /// (on the `half` operands held in `float`, its result rounded to `half`), where Metal's rounds
     /// once. On a device `Device::from_queries` made that computes `half` in 16 bits under the
     /// 16-bit float controls, a `half` one is the device's 16-bit `Fma` on the `half` operands.

@@ -81,7 +81,6 @@ fn leaves_nothing(m: &TypedModule, inst: &Inst) -> bool {
         | Inst::Binary { .. }
         | Inst::Select { .. }
         | Inst::BitFieldInsert { .. }
-        | Inst::Fma { .. }
         | Inst::BitFieldExtract { .. }
         | Inst::Convert { .. }
         | Inst::CompositeConstruct { .. }

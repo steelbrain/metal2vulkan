@@ -1002,8 +1002,8 @@ fn callees(m: &TypedModule, f: FuncId) -> Vec<FuncId> {
 
 /// Check the shape of an interlocked module: the entry is `Begin; call body; End; [if discarded {
 /// kill }]; return` under `mode`, and the body holds no interlock instruction and never kills.
-/// Every other function is a routine the body reaches (a fused multiply-add on a device without
-/// `OpFmaKHR`, say): only the body or another routine calls it, and it neither interlocks nor
+/// Every other function is a routine the body reaches: only the body or another routine calls
+/// it, and it neither interlocks nor
 /// kills. Returns the body.
 fn check_interlocked(m: &TypedModule, mode: ExecMode, what: &str) -> FuncId {
     let entry = m.entry();

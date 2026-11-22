@@ -10,7 +10,6 @@
 //! `PrecisionNote::DeviceDenormals` must answer every row as Metal did. `llvm-as` assembles the module; without it the tests skip visibly.
 
 use crate::device::{DevicePolicy, DeviceProfile};
-use crate::lower::arith::fma;
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
@@ -18,7 +17,6 @@ use crate::pipeline::testing::{
 };
 use crate::spirv::interp::{run, Buffer, Config, Resources};
 use crate::spirv::testing::committed_profiles_with;
-use std::collections::BTreeSet;
 
 /// Metal's words.
 const WORDS: &str = include_str!("metal_denormals_m3.txt");
@@ -255,14 +253,13 @@ fn interpret(bc: &[u8], name: &str, p: &DeviceProfile, rows: &[([u32; 3], [u32; 
         .collect()
 }
 
-/// The committed profiles under `policy`, one per fused multiply-add route: each device may keep
-/// denormals.
+/// The first committed profile under `policy` (every one's fused multiply-add is the device's
+/// `Fma`): each device may keep denormals.
 fn profiles(policy: DevicePolicy) -> Vec<(String, DeviceProfile)> {
-    let mut seen = BTreeSet::new();
     committed_profiles_with(policy)
         .expect("profiles")
         .into_iter()
-        .filter(|(_, p)| seen.insert(fma::float_route(p)))
+        .take(1)
         .collect()
 }
 
@@ -323,8 +320,7 @@ fn run_policy(bc: &[u8], policy: DevicePolicy, what: &str, noted: &[Fun]) -> Vec
     for (stem, p) in profiles(policy) {
         let report = check(bc, &stem, &p);
         eprintln!(
-            "{what} on {stem} ({:?}): DeviceDenormals on {:?}; {} other answers off Metal's",
-            fma::float_route(&p),
+            "{what} on {stem}: DeviceDenormals on {:?}; {} other answers off Metal's",
             report.noted,
             report.wrong.len()
         );

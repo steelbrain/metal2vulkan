@@ -5,8 +5,9 @@
 //!
 //! Every float function of the `air` math table, on `float`, `half`, and `bfloat`, called with and
 //! without the `fast_` prefix and with and without fast-math flags, and every float binary
-//! operator, is compiled alone (its operands loaded from a buffer and its result stored) on one
-//! committed profile per class of the facts the notes read: the `float` fused multiply-add route.
+//! operator, is compiled alone (its operands loaded from a buffer and its result stored) on the
+//! first committed profile: the `float` fused multiply-add, whose route the notes read, is the
+//! device's `Fma` on every profile.
 //! Each artifact's notes are exactly what the exported function answers for that call. The loads
 //! and stores around it record none, but a `half` kernel's widening and rounding, which the module
 //! records once by the profile's own form: its rounding's note (`narrow::native_rounding`), and
@@ -22,14 +23,13 @@
 use crate::air::intrinsics::{AirIntrinsic, Elem, Math, NumTy, Operand};
 use crate::air::ir::{BinOp, FastMath};
 use crate::device::DeviceProfile;
-use crate::lower::arith::fma::{self, Route};
 use crate::lower::arith::{float_binop_notes, float_call_notes, narrow, FloatFmt};
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::testing::{
     compile, llvm_assemble, meter, typed_module, AssembleError, Scratch,
 };
 use crate::spirv::testing::committed_profiles_with;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 /// The float elements: the type token an `air` name spells, the LLVM type, and the format.
 const ELEMS: [(Elem, &str, &str, FloatFmt); 3] = [
@@ -282,35 +282,19 @@ fn assemble(token: &str, chunk: usize, text: &str) -> Option<Vec<u8>> {
     }
 }
 
-/// What the notes of a float operation read of a profile: its `float` fused multiply-add route.
-type NoteClass = Route;
-
-/// The note class of profile `p`.
-fn note_class(p: &DeviceProfile) -> NoteClass {
-    fma::float_route(p)
-}
-
-/// One committed profile per note class (the first by name).
-fn one_profile_per_class() -> BTreeMap<NoteClass, (String, DeviceProfile)> {
-    let mut out = BTreeMap::new();
-    for (stem, p) in
-        committed_profiles_with(crate::device::DevicePolicy::RESIDENT_TABLES).expect("profiles")
-    {
-        out.entry(note_class(&p)).or_insert((stem, p));
-    }
-    let routes: BTreeSet<Route> = out.keys().copied().collect();
-    assert_eq!(
-        routes,
-        BTreeSet::from([Route::Khr, Route::Native]),
-        "every float route is some committed profile's"
-    );
-    out
+/// The first committed profile by name.
+fn first_profile() -> Vec<(String, DeviceProfile)> {
+    committed_profiles_with(crate::device::DevicePolicy::RESIDENT_TABLES)
+        .expect("profiles")
+        .into_iter()
+        .take(1)
+        .collect()
 }
 
 #[test]
 fn exported_float_notes_are_the_ones_a_compile_records() {
-    let profiles = one_profile_per_class();
-    let any = &profiles.values().next().expect("a profile").1;
+    let profiles = first_profile();
+    let any = &profiles.first().expect("a profile").1;
     let mut compared = 0;
     for (elem, token, ll, fmt) in ELEMS {
         // A compile decodes its whole module: small modules keep the test fast.
@@ -318,9 +302,9 @@ fn exported_float_notes_are_the_ones_a_compile_records() {
             let Some(bitcode) = assemble(token, chunk, &module(kernels)) else {
                 return;
             };
-            for (class, (stem, p)) in &profiles {
+            for (stem, p) in &profiles {
                 for k in kernels {
-                    let what = format!("{} on {stem} ({class:?})", k.name);
+                    let what = format!("{} on {stem}", k.name);
                     let want = match &k.op {
                         Op::Copy => Some(BTreeSet::new()),
                         Op::Call { name, math, fmf } => {
@@ -382,7 +366,7 @@ fn exported_float_notes_are_the_ones_a_compile_records() {
 /// No operator records `DeviceNanEncoding`.
 #[test]
 fn a_float_division_is_the_devices_arithmetic_unless_it_is_metals_precise_one() {
-    for (stem, p) in one_profile_per_class().into_values() {
+    for (stem, p) in first_profile() {
         for (_, _, _, fmt) in ELEMS {
             for op in BinOp::ALL {
                 for fmf in [FastMath::NONE, FastMath::ARCP, every_flag()] {
@@ -471,7 +455,7 @@ fn precise_fmod_records_no_precision_note_and_the_roots_the_devices() {
         Some(AirIntrinsic::Math(call)) => call,
         _ => panic!("{name} is a math call"),
     };
-    for (stem, p) in one_profile_per_class().into_values() {
+    for (stem, p) in first_profile() {
         for name in ["air.fmod.f32", "air.fmod.f16"] {
             for fmf in [FastMath::NONE, every_flag()] {
                 let notes = PrecisionNote::of_math_call(parse(name), fmf, &p)

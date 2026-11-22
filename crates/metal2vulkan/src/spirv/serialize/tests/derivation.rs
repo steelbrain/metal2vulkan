@@ -54,52 +54,6 @@ fn int64_atomics_pick_the_storage_class_feature() {
     assert!(!r.features.contains(&VkFeature::ShaderSharedInt64Atomics));
 }
 
-/// `OpFmaKHR` derives `FMAKHR`, `SPV_KHR_fma`, and `shaderFmaFloat32`, whose device extension
-/// `VK_KHR_shader_fma` the closing step adds, and passes `spirv-val`.
-#[test]
-fn fma_khr_derives_its_capability_extension_and_feature() {
-    use crate::device::requirements::SpirvExtension;
-    let mut b = ModuleBuilder::new();
-    let t = tys(&mut b);
-    let buf = ssbo(&mut b, 0, t.f32_, 4);
-    let main = compute(&mut b, |f| {
-        let i = gid_x(f);
-        let p = elem_ptr(f, buf, i);
-        let x = f.load(p, MemAccess::default()).expect("load");
-        let r = f.fma(x, x, x).expect("fma");
-        f.store(p, r, MemAccess::default()).expect("store");
-    });
-    let r = checked(finish_compute(b, main));
-    has(&r, &[Capability::Fmakhr], &[VkFeature::ShaderFmaFloat32]);
-    assert!(
-        r.spirv_extensions.contains(&SpirvExtension::KhrFma),
-        "{r:?}"
-    );
-    assert!(r.extensions.contains(&VkExtension::KhrShaderFma), "{r:?}");
-}
-
-/// `OpFmaKHR` on 16-bit floats derives `shaderFmaFloat16` in place of `shaderFmaFloat32`, beside
-/// the 16-bit float's own `Float16`, and passes `spirv-val`.
-#[test]
-fn fma_khr_on_16_bit_floats_derives_the_16_bit_feature() {
-    let mut b = ModuleBuilder::new();
-    let t = tys(&mut b);
-    let buf = ssbo(&mut b, 0, t.f32_, 4);
-    let main = compute(&mut b, |f| {
-        let i = gid_x(f);
-        let p = elem_ptr(f, buf, i);
-        let x = f.load(p, MemAccess::default()).expect("load");
-        let h = f.convert(ConvOp::FConvert, x, t.f16).expect("narrow");
-        let r = f.fma(h, h, h).expect("fma");
-        let w = f.convert(ConvOp::FConvert, r, t.f32_).expect("widen");
-        f.store(p, w, MemAccess::default()).expect("store");
-    });
-    let r = checked(finish_compute(b, main));
-    has(&r, &[Capability::Fmakhr], &[VkFeature::ShaderFmaFloat16]);
-    assert!(!r.features.contains(&VkFeature::ShaderFmaFloat32), "{r:?}");
-    assert!(r.extensions.contains(&VkExtension::KhrShaderFma), "{r:?}");
-}
-
 #[test]
 fn availability_semantics_select_the_vulkan_memory_model() {
     let mut b = ModuleBuilder::new();

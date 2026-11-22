@@ -1,6 +1,6 @@
 //! The fast functions Metal composes, on the interpreter against Metal's recorded answers (Apple
 //! M3 Max, probe case 08bc6611, compiled with the default fast math): `fast::fmod` as
-//! `fma(-trunc(x / y), y, x)` of the device's quotient on every `float` fused multiply-add route,
+//! `fma(-trunc(x / y), y, x)` of the device's quotient on the device's `float` `Fma`,
 //! and `fast::sqrt` of Metal's own `rsqrt`.
 
 use super::*;
@@ -121,25 +121,28 @@ const FMOD: [(u32, u32, u32); 108] = [
     (0x80400000, 0x7FC00000, 0x7FC00000),
 ];
 
-/// `fast::fmod` (`math::fast_fmod`) on every `float` route of its fused multiply-add, at the
+/// `fast::fmod` (`math::fast_fmod`) on the device's `float` `Fma`, at the
 /// lanes of [`FMOD`], bit for bit: Metal's answer is the expression on its own quotient, its fast
 /// division's, where the module takes the device's division (`PrecisionNote::NativeDivision`),
 /// here the interpreter's correctly rounded one. A lane whose finite answer depends on the
 /// quotient's last bits (a quotient of `2^22` or more in magnitude, whose `trunc` they decide) is
-/// the device's division's and not asserted. The device's division, `OpFmaKHR` and `Fma` keep
+/// the device's division's and not asserted. The device's division and `Fma` keep
 /// denormals (here the interpreter's IEEE ones), so a lane with an `f32` denormal operand or a
 /// zero or denormal answer is the device's and not asserted either.
 #[test]
-fn fast_fmod_answers_as_metal_on_every_route() {
+fn fast_fmod_answers_as_metal_on_the_devices_fma() {
     let f = float(32);
     let cases: Vec<Case> = FMOD
         .iter()
         .map(|(x, y, _)| vec![vec![u64::from(*x)], vec![u64::from(*y)]])
         .collect();
-    for route in [Route::Khr, Route::Native] {
-        let fma = Fma { form: f, route };
+    {
+        let fma = Fma {
+            form: f,
+            route: Route::Native,
+        };
         check_accept(
-            &format!("fast fmod {route:?} against Metal"),
+            "fast fmod against Metal",
             &[f, f],
             f,
             &|fb, x| {
