@@ -17,6 +17,10 @@
 //!   addresses name, and `ab_slot_address` stores each element's Metal address (the slot's
 //!   address, `gpuAddress` plus its bind offset, plus the element's offset) and increments it.
 //!   Nothing else is written.
+//! - A slot pointer stored through another slot (`sp_into_slot`, generated) is stored as its
+//!   address and passes L3; one stored through a pointer loaded from memory
+//!   (`sp_through_loaded`) or into a thread cell whose bytes are read at an offset only the run
+//!   knows, an open cell (`sp_open_cell`), is `Unsupported{Lowering(Access)}`, not implemented.
 //!
 //! `llvm-as` assembles the fixtures; without it the tests skip visibly.
 
@@ -24,12 +28,14 @@ use std::collections::BTreeMap;
 
 use super::engine_word_phases::{bounds_word, identity_profiles, slot_word, ZERO_UNMAPPED};
 use crate::device::profile::DeviceProfile;
+use crate::error::{Error, Feature, LowerFamily, Needs};
 use crate::lower::dispatch::region_bytes;
 use crate::lower::select::Plan;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{Axis, PushField, SlotClass, SlotRef, SpecKey, Stage};
 use crate::pipeline::testing::{
-    compile_kept, engine_dir, link_and_validate, llvm_assemble, AssembleError,
+    compile, compile_kept, engine_dir, link_and_validate, llvm_assemble, llvm_assemble_text,
+    AssembleError,
 };
 use crate::spirv::interp::{run, Buffer, Config, Resources};
 use crate::spirv::ir::TypedModule;
@@ -276,5 +282,101 @@ fn a_texture_behind_an_argument_buffers_pointer_member_is_read_at_the_loaded_add
     };
     for (stem, p) in identity_profiles() {
         compiled(&bc, ("ab_indexed", false), &stem, &p);
+    }
+}
+
+/// Kernels that store a slot pointer, `buf + i`: through another slot (`sp_into_slot`), through a
+/// pointer loaded from the first slot (`sp_through_loaded`), and into a thread cell of two
+/// pointers whose bytes are read back as an integer at an index only the run knows
+/// (`sp_open_cell`).
+const STORED_SLOT_POINTERS: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
+target triple = "air64_v28-apple-macosx26.0.0"
+
+define void @sp_into_slot(ptr addrspace(1) noundef %cells, ptr addrspace(1) noundef %buf, i32 noundef %i) {
+  %z = zext i32 %i to i64
+  %cell = getelementptr inbounds ptr addrspace(1), ptr addrspace(1) %cells, i64 %z
+  %p = getelementptr inbounds i32, ptr addrspace(1) %buf, i64 %z
+  store ptr addrspace(1) %p, ptr addrspace(1) %cell, align 8
+  ret void
+}
+
+define void @sp_through_loaded(ptr addrspace(1) noundef %holder, ptr addrspace(1) noundef %buf, i32 noundef %i) {
+  %cells = load ptr addrspace(1), ptr addrspace(1) %holder, align 8
+  %z = zext i32 %i to i64
+  %cell = getelementptr inbounds ptr addrspace(1), ptr addrspace(1) %cells, i64 %z
+  %p = getelementptr inbounds i32, ptr addrspace(1) %buf, i64 %z
+  store ptr addrspace(1) %p, ptr addrspace(1) %cell, align 8
+  ret void
+}
+
+define void @sp_open_cell(ptr addrspace(1) noundef %out, ptr addrspace(1) noundef %buf, i32 noundef %i) {
+  %cells = alloca [2 x ptr addrspace(1)], align 8
+  %z = zext i32 %i to i64
+  %p = getelementptr inbounds i32, ptr addrspace(1) %buf, i64 %z
+  %q = getelementptr inbounds i32, ptr addrspace(1) %p, i64 1
+  store ptr addrspace(1) %p, ptr %cells, align 8
+  %second = getelementptr inbounds [2 x ptr addrspace(1)], ptr %cells, i64 0, i64 1
+  store ptr addrspace(1) %q, ptr %second, align 8
+  %k = and i64 %z, 1
+  %at = getelementptr inbounds [2 x i64], ptr %cells, i64 0, i64 %k
+  %bits = load i64, ptr %at, align 8
+  %o = getelementptr inbounds i64, ptr addrspace(1) %out, i64 %z
+  store i64 %bits, ptr addrspace(1) %o, align 8
+  ret void
+}
+
+!air.kernel = !{!0, !6, !8}
+!air.version = !{!11}
+!air.language_version = !{!12}
+!0 = !{ptr @sp_into_slot, !1, !2}
+!1 = !{}
+!2 = !{!3, !4, !5}
+!3 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 8, !"air.arg_type_name", !"uint*", !"air.arg_name", !"cells"}
+!4 = !{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"buf"}
+!5 = !{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"i"}
+!6 = !{ptr @sp_through_loaded, !1, !7}
+!7 = !{!13, !4, !5}
+!8 = !{ptr @sp_open_cell, !1, !9}
+!9 = !{!10, !4, !5}
+!10 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 8, !"air.arg_type_name", !"ulong", !"air.arg_name", !"out"}
+!11 = !{i32 2, i32 8, i32 0}
+!12 = !{!"Metal", i32 4, i32 0, i32 0}
+!13 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 8, !"air.arg_type_name", !"uint**", !"air.arg_name", !"holder"}
+"#;
+
+/// A slot pointer stored through another slot is its address, stored as an 8-byte leaf through a
+/// static destination: `sp_into_slot` compiles in the identity form and passes L3. Stored through
+/// a pointer loaded from memory, or into an open thread cell, it is refused, not implemented,
+/// as `Unsupported{Lowering(Access)}` on every profile the identity domains derive.
+#[test]
+fn a_slot_pointer_stored_through_a_loaded_pointer_or_into_an_open_cell_is_refused() {
+    let bc = match llvm_assemble_text(STORED_SLOT_POINTERS) {
+        Ok(bc) => bc,
+        Err(AssembleError::Missing(why)) => {
+            eprintln!("SKIPPED: {why}");
+            return;
+        }
+        Err(e) => panic!("stored slot pointers: {e:?}"),
+    };
+    let profiles = identity_profiles();
+    assert!(
+        !profiles.is_empty(),
+        "no profile the identity domains derive"
+    );
+    for (stem, p) in profiles {
+        compiled(&bc, ("sp_into_slot", true), &stem, &p);
+        for entry in ["sp_through_loaded", "sp_open_cell"] {
+            match compile(&bc, entry, &p) {
+                Err(Error::Unsupported(u)) => assert_eq!(
+                    (u.feature, u.needs),
+                    (
+                        Feature::Lowering(LowerFamily::Access),
+                        Needs::NotImplemented
+                    ),
+                    "{stem}: {entry}"
+                ),
+                other => panic!("{stem}: {entry}: {:?}", other.map(|_| ())),
+            }
+        }
     }
 }

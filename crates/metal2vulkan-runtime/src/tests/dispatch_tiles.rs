@@ -411,4 +411,57 @@ mod on_device {
             );
         });
     }
+
+    /// `tiles_mark`, a tiling kernel, at `requiredThreadsPerThreadgroup` 8 x 8: its state makes
+    /// the tiles' pipeline, which every direct dispatch runs, and not the one an indirect dispatch
+    /// runs, the whole module at that size, though Metal requires every dispatch of the state to
+    /// give it. The indirect dispatch's pipeline is made at its first use: here the
+    /// `prepare_dispatch` call, which makes one. This pins the gap as it is; a make that makes the
+    /// indirect pipeline with the state turns its first `made` true and fails here.
+    #[test]
+    fn every_device_makes_a_tiling_kernel_s_indirect_pipeline_at_its_required_size_at_first_use() {
+        use crate::Dispatch;
+
+        const REQUIRED: [u32; 3] = [8, 8, 1];
+        let Some(library) = library() else {
+            return;
+        };
+        each_device("dispatch tiles required", |name, _, device| {
+            let function = library.function("tiles_mark").expect("the function");
+            let mut descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+                FunctionDescriptor::new(function),
+            ));
+            descriptor.required_threads_per_threadgroup = Some(REQUIRED);
+            let state = (device
+                .new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(form(&state), "tiled", "{name}: the form");
+            let made = |dispatch: Dispatch| {
+                (state.dispatch_variant(dispatch, REQUIRED, &[]))
+                    .map(|(_, made)| made)
+                    .unwrap_or_else(|| panic!("{name}: {dispatch:?}: a key"))
+            };
+            assert!(
+                made(Dispatch::Threadgroups([9, 5, 1])),
+                "{name}: the tiles' pipeline, made with the state"
+            );
+            assert!(
+                !made(Dispatch::Indirect),
+                "{name}: the indirect dispatch's pipeline, made with the state"
+            );
+            let counters = device.counters();
+            let before = counters.metrics();
+            (state.prepare_dispatch(Dispatch::Indirect, REQUIRED, &[])).expect("made ahead");
+            assert_eq!(
+                counters.metrics().made_ahead_variants - before.made_ahead_variants,
+                1,
+                "{name}: the indirect dispatch's pipeline, made by prepare_dispatch"
+            );
+            assert!(made(Dispatch::Indirect), "{name}: made");
+            println!(
+                "dispatch tiles required: {name}: tiles made with the state, the indirect \
+                 dispatch's at {REQUIRED:?} at its first use"
+            );
+        });
+    }
 }

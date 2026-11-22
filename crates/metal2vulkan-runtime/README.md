@@ -2973,14 +2973,20 @@ cache is answered compile-required on both.
     through its device address"): no test yet;
   - a texture argument of a type the identity arrays hold no element of, or whose bound texture's
     state beyond its resource ID the function reads ("texture argument S: a type the identity
-    arrays hold no element of, or state of the bound texture beyond its resource ID"): no test
-    yet;
+    arrays hold no element of, or state of the bound texture beyond its resource ID"), a cube
+    read by face among them: the golden table (`tests/golden_hashes.tsv`) holds the refusal's
+    class for `engine/texture_ops`' `cube_faces`, and no test asserts the text yet;
   - a texture argument sampled through a sampler the identity sampling does not take ("a texture
     argument sampled through a sampler the identity sampling does not take"), and a sampler
     argument whose minimum level or emulated filter the function specializes ("a sampler argument
     whose minimum level or emulated filter the function specializes"): no test yet;
   - other state of a bound texture or sampler beyond its resource ID ("state of a bound texture
-    or sampler beyond its resource ID (F)", `F` the `RuntimeFact`): no test yet;
+    or sampler beyond its resource ID (F)", `F` the `RuntimeFact`), among them an argument
+    buffer's texture that the function only queries (`HeapNumericType`):
+    `tests::engine_heap_binder`'s
+    `a_query_only_argument_buffer_texture_is_refused_naming_its_numeric_type` asserts the text
+    for a 2D texture and a cube array, and the golden table holds the refusal's class for
+    `engine/tail_cases`' `tail_heap_cube_queries`;
   - program-scope constant data past 64 KiB read through memory ("constant data of N bytes read
     through memory"): `tests::engine_identity`'s
     `a_constant_blob_past_the_modules_bound_is_refused_naming_its_size` asserts the text;
