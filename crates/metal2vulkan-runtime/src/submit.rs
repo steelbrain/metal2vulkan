@@ -1650,6 +1650,17 @@ impl WorkState {
             if fifo.blocked && !waits {
                 continue;
             }
+            // A head that would go before an earlier commit of another queue Metal submitted, or
+            // join a group that would, is not staged until that one is submitted
+            // ([`sends_past`](Self::sends_past)).
+            let past = |pending: &Pending| self.sends_past(index, pending);
+            let past = (fifo.group.is_some() && fifo.sends().is_some_and(past))
+                || (fifo.entries.front()).is_some_and(|head| {
+                    head.error.is_none() && head.pending.as_ref().is_some_and(past)
+                });
+            if past && !waits {
+                continue;
+            }
             if let (false, Some(at)) = (waits, fifo.entries.front().and_then(|head| head.held)) {
                 held = held.filter(|&(first, _)| first < at).or(Some((at, index)));
                 continue;
@@ -1729,7 +1740,8 @@ impl WorkState {
                     true => segment.work.run,
                     false => run.unwrap_or(u64::MAX),
                 };
-                let through = fifo.send_through >= head.place && !cut && !self.sends_past(index);
+                let through =
+                    fifo.send_through >= head.place && !cut && !self.sends_past(index, pending);
                 signals && !(self.stop || through || self.has_room(index, run))
             }
         }
@@ -1739,14 +1751,17 @@ impl WorkState {
     /// ([`room`]), no FIFO ranked before it ([`rank`](Self::rank)) wanting room that fits
     /// ([`wants`](Self::wants)): so the queue that waited longest goes first, and a command
     /// buffer passed by another queue's goes before that queue's next. A queue the
-    /// shared-resource rule holds wants nothing, so it holds no other queue back.
+    /// shared-resource rule holds wants nothing, so it holds no other queue back, and one whose
+    /// next submission would go before an earlier commit of another queue Metal submitted has no
+    /// room ([`sends_past`](Self::sends_past)).
     fn has_room(&self, index: usize, run: u64) -> bool {
         let fifo = &self.fifos[index];
-        let me = Self::rank(fifo, self.wants(fifo).map_or(u64::MAX, |(_, seq)| seq));
-        room(&self.in_flight, run)
+        let me = Self::rank(fifo, self.wants(index).map_or(u64::MAX, |(_, seq)| seq));
+        !(fifo.sends()).is_some_and(|first| self.sends_past(index, first))
+            && room(&self.in_flight, run)
             && !(self.fifos.iter().enumerate()).any(|(other, fifo)| {
                 other != index
-                    && (self.wants(fifo)).is_some_and(|(run, seq)| {
+                    && (self.wants(other)).is_some_and(|(run, seq)| {
                         Self::rank(fifo, seq) < me && room(&self.in_flight, run)
                     })
             })
@@ -1762,11 +1777,17 @@ impl WorkState {
         (fifo.turn, seq)
     }
 
-    /// The expected run of what `fifo` would submit with room, and the commit number of its first
-    /// command buffer: its group held, else its head's next piece or the command buffer, where it
-    /// is committed, with something for the GPU, its next segment's waits met, and not held behind
-    /// a cut command buffer it shares with.
-    fn wants(&self, fifo: &Fifo) -> Option<(u64, u64)> {
+    /// The expected run of what the FIFO at `index` would submit with room, and the commit number
+    /// of its first command buffer: its group held, else its head's next piece or the command
+    /// buffer, where it is committed, with something for the GPU, its next segment's waits met,
+    /// and not held behind a cut command buffer it shares with. Nothing where that would go before
+    /// an earlier commit of another queue Metal submitted ([`sends_past`](Self::sends_past)), so
+    /// it holds no queue back.
+    fn wants(&self, index: usize) -> Option<(u64, u64)> {
+        let fifo = &self.fifos[index];
+        if (fifo.sends()).is_some_and(|first| self.sends_past(index, first)) {
+            return None;
+        }
         let head = fifo.head();
         if let Some(group) = &fifo.group {
             let first = (group.leads.first().copied()).or(head.map(|head| head.seq));
@@ -1792,9 +1813,10 @@ impl WorkState {
     /// it saw complete when it began, so held work waits for the round to end.
     fn goes(&self, index: usize) -> bool {
         let fifo = &self.fifos[index];
+        let past = || (fifo.sends()).is_some_and(|first| self.sends_past(index, first));
         fifo.group.as_ref().is_some_and(|group| {
             self.stop
-                || (fifo.send_through >= group.first && !self.sends_past(index))
+                || (fifo.send_through >= group.first && !past())
                 || self.has_room(index, group.run)
         })
     }
@@ -2226,40 +2248,34 @@ impl WorkState {
     fn unheld(&self) -> Option<usize> {
         let rank = |index: usize| {
             let fifo = &self.fifos[index];
-            Self::rank(fifo, self.wants(fifo).map_or(u64::MAX, |(_, seq)| seq))
+            Self::rank(fifo, self.wants(index).map_or(u64::MAX, |(_, seq)| seq))
         };
         (0..self.fifos.len())
             .filter(|&index| self.goes(index))
             .min_by_key(|&index| rank(index))
     }
 
-    /// Whether the FIFO at `index`, sent through by a host wait ([`Work::send`]), sends a command
-    /// buffer, in its group held or as its head, committed after the first command buffer not yet
-    /// submitted of another queue committed to it idle ([`Fifo::idle_first`]), that holds a buffer
-    /// or texture that one holds, by the ids the hazards track them by, or where either reaches
-    /// memory outside its resources. Metal submits such a one at its commit and its hazard
-    /// tracking orders the later after it, so the FIFO then goes through only once that one is
-    /// submitted: until then it waits for the device's room, whose order ([`rank`](Self::rank))
-    /// sends that one first. Nothing else the host wait sends waits for it.
-    fn sends_past(&self, index: usize) -> bool {
-        let fifo = &self.fifos[index];
-        let head = (fifo.entries.front())
-            .filter(|entry| entry.place <= fifo.send_through)
-            .and_then(|entry| entry.pending.as_ref());
-        let sent = || {
-            let grouped = (fifo.group.iter())
-                .flat_map(|group| group.finished.iter().map(|(_, pending, _)| pending));
-            grouped.chain(head)
-        };
+    /// Whether `pending`, a command buffer of the FIFO at `index`, would go before an earlier
+    /// commit of another queue that Metal had submitted at its commit, the first command buffer
+    /// not yet submitted of a queue committed to it idle ([`Fifo::idle_first`]), that holds a
+    /// buffer or texture `pending` holds, by the ids the hazards track them by, or where either
+    /// reaches memory outside its resources. Metal's hazard tracking orders `pending` after that
+    /// one, so `pending` waits for its submission: it is not staged
+    /// ([`next_ready`](Self::next_ready)), its queue wants no room and has none
+    /// ([`wants`](Self::wants), [`has_room`](Self::has_room)), and no host wait sends it through
+    /// ([`goes`](Self::goes), [`waits_for_room`](Self::waits_for_room)). The room's order
+    /// ([`rank`](Self::rank)) then sends that one first. A group is asked by its first command
+    /// buffer ([`Fifo::sends`]): what joined it after that goes with it.
+    fn sends_past(&self, index: usize, pending: &Pending) -> bool {
         (self.fifos.iter().enumerate()).any(|(other, holder)| {
-            let Some(first) = holder.idle_first().filter(|_| other != index) else {
+            let Some(first) =
+                (holder.idle_first()).filter(|first| other != index && first.seq < pending.seq)
+            else {
                 return false;
             };
-            let ids = first.gpu.kept.tracked();
-            sent().any(|pending| {
-                pending.seq > first.seq
-                    && (first.gpu.unbound || pending.gpu.unbound || pending.gpu.kept.meets(&ids))
-            })
+            first.gpu.unbound
+                || pending.gpu.unbound
+                || pending.gpu.kept.meets(&first.gpu.kept.tracked())
         })
     }
 
@@ -2310,6 +2326,15 @@ impl Fifo {
     /// Its head's pending part, where its head is committed.
     fn head(&self) -> Option<&Pending> {
         (self.entries.front()).and_then(|entry| entry.pending.as_ref())
+    }
+
+    /// The first command buffer of its next submission: its group's first, else its head.
+    fn sends(&self) -> Option<&Pending> {
+        match &self.group {
+            Some(group) => (group.finished.first().map(|(_, pending, _)| pending))
+                .or_else(|| self.head().filter(|_| group.partial)),
+            None => self.head(),
+        }
     }
 
     /// Its first command buffer not yet submitted with a part ready for the device, where the
