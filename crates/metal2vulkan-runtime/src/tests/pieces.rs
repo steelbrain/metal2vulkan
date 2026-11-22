@@ -479,9 +479,10 @@ mod on_device {
     /// A command buffer of one piece takes no pair of timestamps past its own, and its kernel's
     /// rate from its own two, which hold no other submission's run: one dispatch of `add`
     /// committed to a queue right behind another queue's command buffer of about 20 ms of
-    /// dispatches, uncut (its kernel's rate the test's own), takes a rate under twice the rate it
-    /// takes alone. The ratio is printed. A start written before the long one ends would put its
-    /// tail in the rate.
+    /// dispatches, uncut (its kernel's rate the test's own), submitted while the long one is on
+    /// the device (its submission seen before the long one's GPU end, and its own end after it),
+    /// takes a rate under twice the rate it takes alone. The ratio is printed. A start written
+    /// before the long one ends would put its tail in the rate.
     #[test]
     fn every_device_rates_a_one_piece_command_buffer_without_the_run_ahead_of_it() {
         each_device("pieces_rate_behind", |name, _, device| {
@@ -529,6 +530,13 @@ mod on_device {
             long_state.inner.compiled.rate.set_for_test(1);
             let ahead = long(&first, &long_state, &words, count, WORDS);
             let behind = one();
+            let second_sent = || {
+                order(&device, &behind)
+                    .into_iter()
+                    .filter(|&own| own)
+                    .count()
+            };
+            let before = second_sent();
             ahead.commit().expect("a commit");
             behind.commit().expect("a commit");
             assert_ne!(
@@ -536,15 +544,26 @@ mod on_device {
                 CommandBufferStatus::Completed,
                 "{name}: the long command buffer still runs as the short one is committed"
             );
+            // The short one's submission, seen on the host clock no earlier than it went.
+            within(name, || second_sent() > before);
+            let sent_at = crate::host_time();
             completed(name, &ahead);
             completed(name, &behind);
-            let run = (ahead.gpu_end_time()).saturating_sub(ahead.gpu_start_time());
+            let (start, end) = (ahead.gpu_start_time(), ahead.gpu_end_time());
+            assert!(
+                sent_at < end && behind.gpu_end_time() >= end,
+                "{name}: the short one, submitted at {sent_at}, behind the long one's \
+                 {start}..{end}: it ends at {}",
+                behind.gpu_end_time()
+            );
             let behind_rate = rate();
             let ratio = behind_rate as f64 / alone.max(1) as f64;
             println!(
                 "pieces_rate_behind: {name}: alone {alone} ps a threadgroup, behind a {} us \
-                 command buffer {behind_rate} ps: ratio {ratio:.2}",
-                run / 1000
+                 command buffer, submitted {} us before its GPU end, {behind_rate} ps: ratio \
+                 {ratio:.2}",
+                (end - start.min(end)) / 1000,
+                (end - sent_at) / 1000
             );
             assert!(
                 behind_rate < alone.saturating_mul(2),
