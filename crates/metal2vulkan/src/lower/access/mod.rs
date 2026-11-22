@@ -1029,13 +1029,14 @@ const SLOT_WORK_BYTES: usize = std::mem::size_of::<Option<SlotLowering>>()
 
 /// The descriptors and push fields of the slots' forms while [`finish_slots`] moves them: the
 /// storage views, and the push fields with each device-address slot's `SlotBindOffset` replaced by
-/// the root table. A move updates it in place.
+/// the field its address is read from ([`slot_address_field`]). A move updates it in place.
 struct Census {
     storage: u32,
     fields: BTreeSet<PushField>,
-    /// Under the identity domains a device-address slot reads its own address
-    /// ([`address_field`]), not the root table.
+    /// Under the identity domains the spilled fields are a parameter block at a pushed address.
     identity: bool,
+    /// A device-address slot reads its own address ([`slot_address_field`]).
+    own_addresses: bool,
     /// The stage's push base, which decides where the fields spill.
     push_base: u32,
 }
@@ -1045,7 +1046,7 @@ impl Census {
     /// pointer reads the root table.
     fn new(
         push: &BTreeSet<PushField>,
-        (dynamic, identity, push_base): (bool, bool, u32),
+        (dynamic, identity, own_addresses, push_base): (bool, bool, bool, u32),
         forms: impl Iterator<Item = (SlotRef, SlotLowering)>,
         m: &mut Meter,
     ) -> Result<Census, Error> {
@@ -1053,26 +1054,21 @@ impl Census {
             storage: 0,
             fields: push.clone(),
             identity,
+            own_addresses,
             push_base,
         };
-        let mut psb = dynamic;
+        if dynamic {
+            c.fields.insert(PushField::RootTableAddress);
+        }
         for (slot, l) in forms {
             m.tick(1)?;
             match l {
                 SlotLowering::View => c.storage = c.storage.saturating_add(1),
                 SlotLowering::Psb { .. } => {
                     c.fields.remove(&PushField::SlotBindOffset(slot));
-                    match identity {
-                        true => {
-                            c.fields.insert(address_field(slot));
-                        }
-                        false => psb = true,
-                    }
+                    c.fields.insert(slot_address_field(own_addresses, slot));
                 }
             }
-        }
-        if psb {
-            c.fields.insert(PushField::RootTableAddress);
         }
         Ok(c)
     }
@@ -1095,10 +1091,18 @@ impl Census {
     fn addressed(&mut self, slot: SlotRef) {
         self.storage = self.storage.saturating_sub(1);
         self.fields.remove(&PushField::SlotBindOffset(slot));
-        self.fields.insert(match self.identity {
-            true => address_field(slot),
-            false => PushField::RootTableAddress,
-        });
+        self.fields
+            .insert(slot_address_field(self.own_addresses, slot));
+    }
+}
+
+/// The push field a device-address slot's address is read from: its own ([`address_field`]) where
+/// `own`, under the identity domains outside a device-replay variant, else the root table, where a
+/// replay variant's slots are its replayed command's (`replay_guest_base`).
+fn slot_address_field(own: bool, slot: SlotRef) -> PushField {
+    match own {
+        true => address_field(slot),
+        false => PushField::RootTableAddress,
     }
 }
 
@@ -1173,6 +1177,7 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
     if replay || cx.inputs.flat_grid || cx.inputs.folded_groups {
         plan_replay(cx, &sources)?;
     }
+    let own_addresses = identity(p) && !replay;
     let shared_slot = |s: SlotRef| {
         memory
             .slots
@@ -1266,6 +1271,7 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
         (
             cx.families.access.dynamic.used,
             identity(p),
+            own_addresses,
             crate::lower::push::base(cx),
         ),
         forms,
@@ -1337,10 +1343,7 @@ fn place_slots(cx: &mut SelectCx<'_>, m: &mut Meter) -> Result<Vec<Option<SlotCh
     let addressed_slot = |cx: &mut SelectCx<'_>, slot: SlotRef| {
         cx.facts.insert(RuntimeFact::DeviceAddresses { slot });
         cx.push.remove(&PushField::SlotBindOffset(slot));
-        cx.push.insert(match identity(cx.profile) {
-            true => address_field(slot),
-            false => PushField::RootTableAddress,
-        });
+        cx.push.insert(slot_address_field(own_addresses, slot));
     };
     for (i, (plan, (l, w))) in (memory.slots.iter())
         .zip(lowering.iter().zip(&windows))

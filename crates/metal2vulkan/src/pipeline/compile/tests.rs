@@ -3498,6 +3498,95 @@ fn a_replayed_draw_reads_its_buffers_through_the_slot_table() {
     }
 }
 
+/// Under the identity domains a device-replay variant (`VariantKey::replay_bindings`) reads every
+/// buffer slot's address from its replayed command's root entry at the stage's
+/// `RootTableAddress`, and pushes neither a buffer's `SlotGuestBase` nor its `SlotBounds`: a vertex
+/// function's buffer arguments (`icb_render_replay_template`), the attribute of the
+/// pulled-vertex-buffer variant (`icb_render_stride_template`, its layout pulled, as a draw
+/// replay pulls every layout), and a kernel's buffers (`icb_replay_template`). Each compiles with
+/// its buffer slots at their device addresses, and every stage passes L3.
+#[test]
+fn a_replay_variant_under_the_identity_domains_reads_its_root_entries() {
+    use crate::cache::VariantKey;
+    use crate::pipeline::interface::{BufferForm, PipelineInterface, SlotInterface};
+    use crate::pipeline::sym::PushField;
+    let dev =
+        Device::from_queries(description("moltenvk-m3"), DevicePolicy::default()).expect("device");
+    let reads_root_entries = |what: &str, interface: &PipelineInterface| {
+        let forms: Vec<BufferForm> = (interface.slots.values())
+            .filter_map(|s| match s {
+                SlotInterface::Buffer(b) => Some(b.form),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !forms.is_empty() && forms.iter().all(|f| *f == BufferForm::Psb),
+            "{what}: {forms:?}"
+        );
+        let fields: Vec<PushField> = (interface.push.iter())
+            .flat_map(|p| p.fields.iter().map(|f| f.field))
+            .collect();
+        assert!(
+            fields.contains(&PushField::RootTableAddress),
+            "{what}: {fields:?}"
+        );
+        assert!(
+            !fields
+                .iter()
+                .any(|f| matches!(f, PushField::SlotGuestBase(_) | PushField::SlotBounds(_))),
+            "{what}: {fields:?}"
+        );
+    };
+    for (stem, pulled) in [
+        ("icb_render_replay_template", false),
+        ("icb_render_stride_template", true),
+    ] {
+        let Some(bc) = fixture(stem) else {
+            return;
+        };
+        let vertex = Library::from_air(&bc)
+            .expect("library")
+            .function(stem)
+            .expect("vertex");
+        let mut d =
+            RenderPipelineDescriptor::new(StageSource::Function(FunctionDescriptor::new(vertex)));
+        d.rasterization_enabled = false;
+        let mut key = VariantKey::new();
+        key.replay_bindings = true;
+        if pulled {
+            d.vertex_descriptor = Some(vertex_descriptor(&[(0, metal::VertexFormat::UInt)]));
+            key.pulled_vertex_buffers.insert(0);
+        }
+        let p = dev
+            .compile_render_variant(&d, &key, &Budget::standard())
+            .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        if pulled {
+            assert!(p.vertex_input.bindings.is_empty(), "{stem}");
+            assert_eq!(p.vertex_input.pulled.len(), 1, "{stem}");
+        }
+        reads_root_entries(stem, &p.interface);
+        for stage in &p.stages {
+            l3(&stage.spirv, &p.requirements, &dev);
+        }
+    }
+    let Some(bc) = fixture("icb_replay_template") else {
+        return;
+    };
+    let lib = Library::from_air(&bc).expect("library");
+    let f = FunctionDescriptor::new(lib.function("icb_replay_template").expect("kernel"));
+    let mut inputs = LoweringInputs::new();
+    inputs.replay_bindings = true;
+    let compiled = dev
+        .compile_function(&f, &inputs, &Budget::standard())
+        .expect("the kernel's replay variant");
+    let d = ComputePipelineDescriptor::new(StageSource::Compiled(compiled));
+    let p = dev
+        .compile_compute_pipeline(&d, &Budget::standard())
+        .expect("its pipeline");
+    reads_root_entries("icb_replay_template", &p.interface);
+    l3(&p.stage.spirv, &p.requirements, &dev);
+}
+
 /// A render pipeline made for indirect command buffers links its vertex input as its vertex stage
 /// is compiled: every `[[stage_in]]` attribute pulled (`RenderLinkInputs::pull_every`), as a
 /// command binds its vertex buffers by address alone. `icb_render_stride_template`'s one

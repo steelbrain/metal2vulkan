@@ -1089,7 +1089,11 @@ for dependency in &pipeline.dependencies {
   word so. A pointer loaded from memory (an argument buffer's pointer member, a `gpuAddress` the
   program stored) and a pointer made from an integer are the device address the word holds,
   unbiased and used directly, unchecked: there is no root table, no `PushField::RootTableAddress`
-  and no search. A texture's or sampler's `SlotGuestBase` is its `gpuResourceID`, unbiased.
+  and no search. A texture's or sampler's `SlotGuestBase` is its `gpuResourceID`, unbiased. A
+  device-replay variant (`VariantKey::replay_bindings`, section 6) pushes no buffer slot's
+  `SlotGuestBase`: it reads each slot's address, unbiased, from its replayed command's root entry
+  (`guest` plus `bind_offset`) in the slot table at its `PushField::RootTableAddress`, and checks
+  no access against `PushField::SlotBounds`.
 - Under the identity domains, a buffer slot that an access may reach at a
   byte offset that is not a translation-time constant (an index the memory plan does not prove
   one value, a looping `memcpy` or `memset`, a pulled fetch) also reads
