@@ -99,6 +99,9 @@ enum Item {
     Upload(Upload),
     /// A Managed buffer's copy-in the submission took (`crate::capture`).
     CopyIn(CopyIn),
+    /// A submission that carries nothing to retire, a piece before its command buffer's last
+    /// (`crate::piece`): its completion leaves the device room for the next (`crate::submit`).
+    Piece,
 }
 
 impl Done {
@@ -243,6 +246,7 @@ impl Done {
                     Item::Command { .. } => "a command buffer",
                     Item::Upload(_) => "an upload",
                     Item::CopyIn(_) => "a copy-in",
+                    Item::Piece => "a piece",
                 };
                 let reached = match reached_by_wait(device, self.progress, oldest.value) {
                     Ok(reached) => reached.to_string(),
@@ -353,6 +357,14 @@ impl Done {
                 },
             });
         }
+        if state.flight.back().is_none_or(|last| last.value != value) {
+            state.flight.push_back(Retiree {
+                value,
+                held,
+                lost: false,
+                item: Item::Piece,
+            });
+        }
         state.watched.extend(watch);
         self.wake(&mut state, &core.device, flight_only);
     }
@@ -436,6 +448,7 @@ impl Retiree {
                 Item::Command { .. } => "a command buffer",
                 Item::Upload(_) => "an upload",
                 Item::CopyIn(_) => "a copy-in",
+                Item::Piece => "a piece",
             },
             self.value,
             if self.lost { ", lost" } else { "" }
@@ -457,6 +470,7 @@ impl Retiree {
             }
             Item::Upload(upload) => upload.retire(core, end),
             Item::CopyIn(copy_in) => copy_in.retire(core, end),
+            Item::Piece => None,
         }
     }
 

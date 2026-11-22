@@ -1039,6 +1039,12 @@ pub(crate) mod on_device {
                 arena.buffer(),
             );
             let (queue, signaller_queue) = (queue(&device), self::queue(&device));
+            // Each queue's expected run 1 ms, the test's own input, so the device has room for the
+            // three submissions at once (`submit::room`).
+            for queue in [&queue, &signaller_queue] {
+                let probe = queue.command_buffer().expect("a command buffer");
+                probe.queue().set_run_for_test(BODY_RUN);
+            }
             let log = Log::default();
             let submitted = |command_buffer: &CommandBuffer| {
                 let before = device.counters().metrics().submissions;
@@ -1119,7 +1125,7 @@ pub(crate) mod on_device {
     /// Links of a chain on two queues, each but the first waiting for the shared event's value the
     /// link before it signals, then copying the words of every link before it from that link's
     /// buffer, writing its own after them, and signalling the next, all behind busy work: each
-    /// queue's expected run 1 ms, so each has room for its links (`submit::room`), every link goes
+    /// queue's expected run 1 ms, so the device has room for the three links (`submit::room`), every link goes
     /// to the driver and reads `Scheduled`, its scheduled handler run, before the first has run,
     /// and the submit thread holds none of them for a value. No semaphore wait is
     /// submitted for a link: once the busy work ends, the links complete in order, and each holds
@@ -1132,7 +1138,7 @@ pub(crate) mod on_device {
     /// held.
     #[test]
     fn every_device_submits_a_shared_event_chain_across_two_queues_before_its_first_link_runs() {
-        const LINKS: u32 = 5;
+        const LINKS: u32 = IN_FLIGHT as u32;
         each_device("event_chain", |name, _, device| {
             let mut arena = Arena::new(&device);
             let buffers: Vec<Buffer> = (0..=LINKS).map(|_| arena.buffer()).collect();
