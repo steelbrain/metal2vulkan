@@ -110,12 +110,12 @@ impl Layered {
 }
 
 /// The layers of a run of `executor` on the device of `device_type` under this process's
-/// restriction, read before the run: `Err` with the attempt's typed refusal where the device lacks
+/// restriction, read before the run: `Err` with the restriction the device refuses where it lacks
 /// a capability P states; a failure of a probe is the outer `Err`.
 pub(super) fn layered(
     device_type: DeviceType,
     executor: &'static str,
-) -> Result<Result<Layered, RunAttempt>, String> {
+) -> Result<Result<Layered, Refused>, String> {
     let Some(restriction) = profiles::current_restriction() else {
         return Ok(Ok(Layered { restricted: None }));
     };
@@ -145,7 +145,11 @@ pub(super) fn layered(
     };
     if !gaps.is_empty() {
         let device = environment(&identity, &tools, executor, serde_json::Value::Null);
-        return Ok(Err(refusal(restriction, gaps, device)));
+        return Ok(Err(Refused {
+            restriction,
+            gaps,
+            device,
+        }));
     }
     let none = BTreeSet::new();
     let presenting = ProfilesSettings::new(ProfilesLayer::Restrict(restriction, &none))?;
@@ -174,34 +178,53 @@ pub(super) fn layered(
     }))
 }
 
-/// The typed refusal of a run restricted to `restriction` on a device that lacks `gaps`, recorded
-/// with `device`, the environment a row on the device as it is records, and the restriction it
-/// refused.
-fn refusal(
-    restriction: &ProfileRestriction,
+/// A restriction the device cannot take: P states `gaps`, capabilities the device as it is lacks.
+pub(super) struct Refused {
+    restriction: &'static ProfileRestriction,
     gaps: Vec<String>,
-    mut device: serde_json::Value,
-) -> RunAttempt {
-    if let Some(environment) = device.as_object_mut() {
-        let layer = serde_json::json!({
-            "profile": restriction.stem,
-            "profile_name": restriction.profile_name,
-            "profile_sha256": restriction.sha256,
-            "refused": gaps,
-        });
-        environment.insert("profiles_layer".into(), layer);
-    }
-    RunAttempt {
-        result: Err(NotSupported::Restriction {
-            profile: restriction.stem.clone(),
+    /// The environment a row on the device as it is records.
+    device: serde_json::Value,
+}
+
+impl Refused {
+    /// The run's typed refusal, recorded with the device as it is and the restriction it refused.
+    pub(super) fn attempt(self) -> RunAttempt {
+        let Refused {
+            restriction,
             gaps,
+            mut device,
+        } = self;
+        if let Some(environment) = device.as_object_mut() {
+            let layer = serde_json::json!({
+                "profile": restriction.stem,
+                "profile_name": restriction.profile_name,
+                "profile_sha256": restriction.sha256,
+                "refused": gaps,
+            });
+            environment.insert("profiles_layer".into(), layer);
         }
-        .into()),
-        refused_on: Some(RefusedOn {
-            environment: device,
-            translator_fingerprint: runtime_fingerprint(),
-            artifact: None,
-        }),
+        RunAttempt {
+            result: Err(NotSupported::Restriction {
+                profile: restriction.stem.clone(),
+                gaps,
+            }
+            .into()),
+            refused_on: Some(RefusedOn {
+                environment: device,
+                translator_fingerprint: runtime_fingerprint(),
+                artifact: None,
+            }),
+        }
+    }
+}
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let exceeds = RestrictionError::Exceeds {
+            profile: self.restriction.stem.clone(),
+            gaps: self.gaps.clone(),
+        };
+        write!(f, "{exceeds}")
     }
 }
 

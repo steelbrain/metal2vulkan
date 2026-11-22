@@ -1,5 +1,5 @@
 //! Whole-corpus driver acceptance: does the Vulkan driver accept the pipeline we produce? Nothing
-//! is bound, nothing is dispatched, nothing is read back.
+//! is bound or submitted, nothing is read back.
 //!
 //! That question has no other asker in this repository. `spirv-val` checks the module against the
 //! SPIR-V specification; the authored cases put a real pipeline on the device but reach only a
@@ -9,24 +9,26 @@
 //! It runs the engine: `--profile P` compiles every kernel (compute pipeline), vertex function
 //! (rasterization-disabled render pipeline, with a vertex descriptor for the attributes it
 //! declares), and fragment function (drawn with its generated passthrough vertex companion into
-//!   the attachments its outputs imply) with the engine's public compile API for profile P
-//!   (`acceptance::row`), and creates the pipeline from the **binder layout the artifact carries**
-//!   (set layouts, push ranges, specialization, subgroup size, vertex input, graphics state). A
-//!   kernel is created from the region the binder plans for one representative dispatch, a
-//!   threadgroup of whole simdgroups (its specialization, stage flags, and required subgroup size,
-//!   and a representative imageblock extent of one cell per thread where it has an explicit
-//!   imageblock; `acceptance::dispatch`), as the executors create it, never at its stage's
-//!   placeholder local size. The binder's typed refusal of that dispatch is `BIND_REFUSED`,
-//!   counted; any other binder error is `BIND_ERROR` and fails the sweep. A render row's stages are
-//!   created at their default specialization, not the graphics plan's (a limit). A fragment
-//!   function's attachments have no more channels than its outputs write. It times each
-//!   `vkCreate*Pipelines` (`budgets::CreationClock`: its wall time less its thread's wait for a
-//!   CPU), with the drivers' shader disk caches off (`budgets::turn_driver_shader_caches_off`); a
-//!   creation above 5 s is a bug. A row's detail
-//!   prints its own stage's module words, which are what the translation sweep (`corpus-triage
-//!   --audit translation`) counts for it, a render row's other stages' apart as `companion_words`,
-//!   and a kernel's representative imageblock extent as `imageblock=WxH`, then the pipeline's
-//!   precision notes as `precision=[...]`. `--driver-caches-on` leaves the drivers' shader disk caches as the environment sets
+//! the attachments its outputs imply) with the engine's public compile API for profile P
+//! (`acceptance::row`). A render row's pipeline is created from the **binder layout the artifact
+//! carries** (set layouts, push ranges, specialization, subgroup size, vertex input, graphics
+//! state), its stages at their default specialization, not the graphics plan's (a limit). A
+//! fragment function's attachments have no more channels than its outputs write. A kernel row is
+//! made as a guest's kernel is, through the runtime (`candidate::create_runtime_kernel`): its
+//! `ComputePipelineState` on the sweep's device, with the row's function-constant values, and one
+//! dispatch of one representative threadgroup (the state's thread execution width of threads, or
+//! its `maxTotalThreadsPerThreadgroup` where fewer) encoded into a command buffer that is never
+//! committed, so the runtime asks the driver for the pipeline that threadgroup runs on. The
+//! runtime's typed refusal (the translator's, a known gap, a device limit) is `RUNTIME_REFUSED`,
+//! counted; a kernel that writes no memory, whose dispatch the runtime runs as Metal's without
+//! effects and makes no pipeline for, is `NO_EFFECT`, counted. The make runs in this process,
+//! held to the per-attempt ceilings, after the row's compile worker compiled it within them. It
+//! times each `vkCreate*Pipelines` (`budgets::CreationClock`: its wall time less its thread's wait
+//! for a CPU; a kernel's, the runtime's own count of its pipeline creation), with the drivers'
+//! shader disk caches off (`budgets::turn_driver_shader_caches_off`); a creation above 5 s is a
+//! bug. A row's detail prints its own stage's module words, which are what the translation sweep
+//! (`corpus-triage --audit translation`) counts for it, a render row's other stages' apart as
+//! `companion_words`, then the pipeline's precision notes as `precision=[...]`. `--driver-caches-on` leaves the drivers' shader disk caches as the environment sets
 //!   them, so a creation may hit what an earlier process compiled: run twice, the second run times
 //!   the warm creation a program's later launches see, beside the cold one the ceiling times (the
 //!   summary's `driver_caches`). `--keep-modules DIR` writes each compiled row's stage modules,
@@ -74,15 +76,13 @@
 //! reports a message about the device, before the loader reads it again (in `vkDestroyDevice` at
 //! exit, where a run faulted after its summary before; `candidate::platform::loader_word`).
 
-use metal2vulkan::bind::ImageblockSize;
 use metal2vulkan::library::FunctionConstantValues;
 use metal2vulkan::pipeline::PrecisionNote;
-use metal2vulkan_validation::acceptance::dispatch::BinderAnswer;
 use metal2vulkan_validation::acceptance::metal_report::MetalCompileFailure;
 use metal2vulkan_validation::acceptance::row::UnmodelledKind;
 use metal2vulkan_validation::acceptance::{
     compile_draw_in_worker, compile_row_in_worker, Acceptance, AcceptanceError, Projection,
-    RowCompile, RowPipeline, RowStage,
+    RowCompile, RowPipeline, RowStage, RuntimeRow,
 };
 use metal2vulkan_validation::budgets::PIPELINE_CREATION_CEILING;
 use metal2vulkan_validation::candidate::engine::graphics::RenderTemplate;
@@ -554,15 +554,12 @@ fn set_label(set: &Specialization) -> String {
 /// module `corpus-triage --audit translation` compiles for the row and counts; then
 /// `companion_words=M` when the pipeline has other stages (a fragment row's generated passthrough
 /// vertex companion, a post-tessellation vertex row's synthesized stages), which the translation
-/// sweep does not compile; then `imageblock=WxH` for a kernel with an explicit imageblock, the
-/// representative extent its pipeline was created with (`acceptance::dispatch`): another extent is
-/// another specialization, which can be refused where this one is created; then `precision=[...]`
-/// when any stage of the pipeline carries a precision note.
+/// sweep does not compile; then `precision=[...]` when any stage of the pipeline carries a
+/// precision note.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RowDetail {
     own: u64,
     companion: u64,
-    imageblock: Option<ImageblockSize>,
     precision: Vec<PrecisionNote>,
 }
 
@@ -571,10 +568,6 @@ impl RowDetail {
         RowDetail {
             own: pipeline.words(),
             companion: pipeline.companion_words(),
-            imageblock: match pipeline {
-                RowPipeline::Compute { creation, .. } => creation.imageblock,
-                RowPipeline::Render { .. } => None,
-            },
             precision: pipeline.precision_notes(),
         }
     }
@@ -585,9 +578,6 @@ impl std::fmt::Display for RowDetail {
         write!(f, "words={}", self.own)?;
         if self.companion > 0 {
             write!(f, " companion_words={}", self.companion)?;
-        }
-        if let Some(extent) = self.imageblock {
-            write!(f, " imageblock={}x{}", extent.width, extent.height)?;
         }
         if !self.precision.is_empty() {
             write!(f, " precision={:?}", self.precision)?;
@@ -610,11 +600,11 @@ struct Tally {
     unmodelled: usize,
     /// The `UNMODELLED` rows by kind (`acceptance::row::UnmodelledKind`).
     unmodelled_kinds: BTreeMap<UnmodelledKind, usize>,
-    /// Kernel rows the binder refused to bind for the representative dispatch with a typed
-    /// refusal the product documents (`BIND_REFUSED`).
-    bind_refused: usize,
-    /// Kernel rows the binder answered with any other error (`BIND_ERROR`), which fail the sweep.
-    bind_errors: usize,
+    /// Kernel rows the runtime refused with its typed error (`RUNTIME_REFUSED`).
+    runtime_refused: usize,
+    /// Kernel rows whose dispatch the runtime ran without effects, making no pipeline
+    /// (`NO_EFFECT`).
+    no_effect: usize,
     stage_not_covered: usize,
     no_bitcode: usize,
     tooling: usize,
@@ -674,6 +664,14 @@ impl Tally {
                 self.invalid_usage += 1;
                 Ok(("INVALID_USAGE", messages.join(" | "), 0))
             }
+            Ok(Acceptance::RuntimeRefused(why)) => {
+                self.runtime_refused += 1;
+                Ok(("RUNTIME_REFUSED", why, 0))
+            }
+            Ok(Acceptance::NoEffect) => {
+                self.no_effect += 1;
+                Ok(("NO_EFFECT", detail.to_string(), 0))
+            }
             Err(AcceptanceError::Unmodelled(why)) => {
                 self.tooling += 1;
                 Ok(("TOOLING", why, 0))
@@ -685,20 +683,6 @@ impl Tally {
             Err(error @ AcceptanceError::DeviceUnavailable(_)) => {
                 Err(format!("{key}: {error}; the sweep stops"))
             }
-        }
-    }
-
-    /// Count the binder's error for a kernel row's representative dispatch and return its
-    /// `(STATUS, detail, create_ms)`: a typed refusal the product documents is `BIND_REFUSED`,
-    /// which the sweep counts; any other binder error is `BIND_ERROR`, which fails it through
-    /// [`Tally::verdict`].
-    fn binder(&mut self, answer: BinderAnswer) -> (&'static str, String, u128) {
-        if answer.documented {
-            self.bind_refused += 1;
-            ("BIND_REFUSED", answer.detail, 0)
-        } else {
-            self.bind_errors += 1;
-            ("BIND_ERROR", answer.detail, 0)
         }
     }
 
@@ -744,28 +728,21 @@ impl Tally {
     }
 
     /// Whether the sweep passed: no refusal, no creation above the ceiling, no message from the
-    /// validation layer, no compile the worker boundary stopped, no binder error other than a
-    /// typed refusal the product documents, and no tooling error other than a modelled limit (of
-    /// the row's inputs or of the creation path).
+    /// validation layer, no compile the worker boundary stopped, and no tooling error other than
+    /// a modelled limit (of the row's inputs or of the creation path).
     fn verdict(&self) -> Result<(), String> {
-        if self.refused
-            + self.over_ceiling
-            + self.invalid_usage
-            + self.errors
-            + self.worker_stopped
-            + self.bind_errors
+        if self.refused + self.over_ceiling + self.invalid_usage + self.errors + self.worker_stopped
             > 0
         {
             return Err(format!(
                 "{} pipelines refused, {} created above the {} s ceiling, {} reported by the \
-                 validation layer, {} compiles stopped at the worker boundary, {} binder errors, \
-                 and {} tooling errors",
+                 validation layer, {} compiles stopped at the worker boundary, and {} tooling \
+                 errors",
                 self.refused,
                 self.over_ceiling,
                 PIPELINE_CREATION_CEILING.as_secs(),
                 self.invalid_usage,
                 self.worker_stopped,
-                self.bind_errors,
                 self.errors
             ));
         }
@@ -929,7 +906,7 @@ fn sweep_new(
         .as_ref()
         .map_or_else(|| "none".to_string(), |listed| listed.0.len().to_string());
     eprintln!(
-        "corpus-pipeline-summary\tengine=new\tprofile={profile}\tprofiles_layer={}\tprojection={projection:?}\tdevice_type={}\trows={}\tcompiled_only={}\tcreated={}\trefused={}\tnot_enabled={}\tnot_compiled={}\tunmodelled={}\tunmodelled_kinds={unmodelled_kinds}\tbind_refused={}\tbind_errors={}\tstage_not_covered={}\tno_bitcode={}\ttooling={}\terrors={}\tcreation_over_ceiling={}\tinvalid_usage={}\tworker_stopped={}\tmetal_failures={metal_failures}\tpartition={partition}\tslowest_creation={slowest_key}\tslowest_creation_ms={slowest_ms}\tslowest_compile={slowest_compile_key}\tslowest_compile_ms={slowest_compile_ms}\tpeak_compile_rss={peak_rss_key}\tpeak_compile_rss_bytes={peak_rss}\tpeak_compile_allocator={peak_allocator_key}\tpeak_compile_allocator_bytes={peak_allocator}\tdriver_caches={}\tspecializations={specializations}\tdraws={draws}",
+        "corpus-pipeline-summary\tengine=new\tprofile={profile}\tprofiles_layer={}\tprojection={projection:?}\tdevice_type={}\trows={}\tcompiled_only={}\tcreated={}\trefused={}\tnot_enabled={}\tnot_compiled={}\tunmodelled={}\tunmodelled_kinds={unmodelled_kinds}\truntime_refused={}\tno_effect={}\tstage_not_covered={}\tno_bitcode={}\ttooling={}\terrors={}\tcreation_over_ceiling={}\tinvalid_usage={}\tworker_stopped={}\tmetal_failures={metal_failures}\tpartition={partition}\tslowest_creation={slowest_key}\tslowest_creation_ms={slowest_ms}\tslowest_compile={slowest_compile_key}\tslowest_compile_ms={slowest_compile_ms}\tpeak_compile_rss={peak_rss_key}\tpeak_compile_rss_bytes={peak_rss}\tpeak_compile_allocator={peak_allocator_key}\tpeak_compile_allocator_bytes={peak_allocator}\tdriver_caches={}\tspecializations={specializations}\tdraws={draws}",
         options.profiles_layer.as_deref().unwrap_or("none"),
         device.map_or("none", DeviceType::as_str),
         tally.rows,
@@ -939,8 +916,8 @@ fn sweep_new(
         tally.not_enabled,
         tally.not_compiled,
         tally.unmodelled,
-        tally.bind_refused,
-        tally.bind_errors,
+        tally.runtime_refused,
+        tally.no_effect,
         tally.stage_not_covered,
         tally.no_bitcode,
         tally.tooling,
@@ -956,8 +933,9 @@ fn sweep_new(
     tally.verdict()
 }
 
-/// Compile one row in a compile worker and create its pipeline: `(STATUS, detail, create_ms)`.
-/// With `keep`, the compiled row's stage modules are written there first ([`keep_modules`]).
+/// Compile one row in a compile worker and create its pipeline (a kernel row's, made through the
+/// runtime from the row's AIR): `(STATUS, detail, create_ms)`. With `keep`, the compiled row's
+/// stage modules are written there first ([`keep_modules`]).
 fn attempt_row(
     device: Option<DeviceType>,
     worker: &CompileWorker,
@@ -968,18 +946,19 @@ fn attempt_row(
     tally: &mut Tally,
 ) -> Result<(&'static str, String, u128), String> {
     let key = row.key.as_str();
-    let (compiled, measured) = match &row.what {
+    let constants = match &row.what {
         RowWork::Function {
-            input,
-            specialization,
-        } => {
+            specialization: Some(set),
+            ..
+        } => set.values(),
+        _ => FunctionConstantValues::defaults(),
+    };
+    let (compiled, measured) = match &row.what {
+        RowWork::Function { input, .. } => {
             let Ok(stage) = RowStage::parse(&row.stage) else {
                 tally.stage_not_covered += 1;
                 return Ok(("STAGE_NOT_COVERED", format!("stage {}", row.stage), 0));
             };
-            let constants = specialization
-                .as_ref()
-                .map_or_else(FunctionConstantValues::defaults, Specialization::values);
             compile_row_in_worker(
                 worker,
                 compiler,
@@ -1044,7 +1023,6 @@ fn attempt_row(
             *tally.unmodelled_kinds.entry(why.kind).or_default() += 1;
             return Ok(("UNMODELLED", why.to_string(), 0));
         }
-        RowCompile::Binder(answer) => return Ok(tally.binder(answer)),
     };
     if let Some(dir) = keep {
         keep_modules(dir, key, &pipeline)?;
@@ -1054,7 +1032,31 @@ fn attempt_row(
         tally.compiled += 1;
         return Ok(("COMPILED", detail.to_string(), 0));
     };
-    let result = metal2vulkan_validation::candidate::create_acceptance_pipeline(device, &pipeline);
+    let result = match (&*pipeline, &row.what) {
+        (RowPipeline::Render { pipeline, .. }, _) => {
+            metal2vulkan_validation::candidate::create_acceptance_pipeline(device, pipeline)
+        }
+        (RowPipeline::Compute { .. }, RowWork::Function { input, .. }) => {
+            let bitcode = match input.source.bitcode() {
+                Ok(bitcode) => bitcode,
+                Err(error) => {
+                    tally.errors += 1;
+                    return Ok(("ERROR", format!("the row's bitcode: {error}"), 0));
+                }
+            };
+            let kernel = RuntimeRow {
+                bitcode: &bitcode,
+                entry: &input.entry,
+                constants: &constants,
+            };
+            metal2vulkan_validation::candidate::create_runtime_kernel(device, &kernel)
+        }
+        (RowPipeline::Compute { .. }, RowWork::Draw { .. }) => {
+            return Err(format!(
+                "{key}: a logged draw compiled to a compute pipeline"
+            ));
+        }
+    };
     tally.record(key, detail, result)
 }
 
@@ -1166,20 +1168,17 @@ mod tests {
     const DETAIL: RowDetail = RowDetail {
         own: 7,
         companion: 0,
-        imageblock: None,
         precision: Vec::new(),
     };
 
-    /// A row's detail prints its own stage's words, what the translation sweep counts for it, the
-    /// other stages' apart, and the representative imageblock extent a kernel with an explicit
-    /// imageblock was created with.
+    /// A row's detail prints its own stage's words, what the translation sweep counts for it, and
+    /// the other stages' apart.
     #[test]
-    fn a_rows_detail_is_its_own_stage_words_its_companions_and_its_imageblock_extent() {
+    fn a_rows_detail_is_its_own_stage_words_and_its_companions() {
         assert_eq!(DETAIL.to_string(), "words=7");
         let fragment = RowDetail {
             own: 1148,
             companion: 276,
-            imageblock: None,
             precision: Vec::new(),
         };
         assert_eq!(fragment.to_string(), "words=1148 companion_words=276");
@@ -1193,18 +1192,6 @@ mod tests {
             .record("fragment", fragment.clone(), created())
             .unwrap();
         assert_eq!(detail, "words=1148 companion_words=276");
-        let imageblock = RowDetail {
-            own: 412,
-            companion: 0,
-            imageblock: Some(ImageblockSize::new(32, 1)),
-            precision: Vec::new(),
-        };
-        assert_eq!(imageblock.to_string(), "words=412 imageblock=32x1");
-        let (status, detail, _) = tally.record("imageblock", imageblock, created()).unwrap();
-        assert_eq!(
-            (status, detail.as_str()),
-            ("OK", "words=412 imageblock=32x1")
-        );
         // A pipeline whose stages carry precision notes names them.
         let noted = RowDetail {
             precision: vec![PrecisionNote::DeviceArithmetic],
@@ -1285,29 +1272,30 @@ mod tests {
             .starts_with("line 1"));
     }
 
-    /// The binder's typed refusal for a kernel row's representative dispatch is counted and passes;
-    /// any other binder error fails the sweep.
+    /// The runtime's typed refusal of a kernel row and a kernel row it makes no pipeline for are
+    /// counted and pass; the driver's refusal of the pipeline it asks for fails the sweep.
     #[test]
-    fn a_documented_binder_refusal_is_counted_and_any_other_binder_error_fails_the_sweep() {
+    fn a_runtime_refusal_and_a_kernel_without_effects_are_counted_and_pass() {
         let mut tally = Tally::default();
-        let (status, detail, _) = tally.binder(BinderAnswer {
-            documented: true,
-            detail: "plan for a threadgroup of 32: Unsupported(..)".into(),
-        });
-        assert_eq!(status, "BIND_REFUSED");
-        assert!(
-            detail.starts_with("plan for a threadgroup of 32"),
-            "{detail}"
-        );
-        assert_eq!((tally.bind_refused, tally.bind_errors), (1, 0));
+        let refusal = "unsupported: the state's imageblock length is not measured against Metal's";
+        let (status, detail, _) = tally
+            .record(
+                "gap",
+                DETAIL,
+                Ok(Acceptance::RuntimeRefused(refusal.into())),
+            )
+            .unwrap();
+        assert_eq!((status, detail.as_str()), ("RUNTIME_REFUSED", refusal));
+        let (status, detail, _) = tally
+            .record("still", DETAIL, Ok(Acceptance::NoEffect))
+            .unwrap();
+        assert_eq!((status, detail.as_str()), ("NO_EFFECT", "words=7"));
+        assert_eq!((tally.runtime_refused, tally.no_effect), (1, 1));
         assert!(tally.verdict().is_ok());
-        let (status, _, _) = tally.binder(BinderAnswer {
-            documented: false,
-            detail: "instantiate a threadgroup of 32: Internal(..)".into(),
-        });
-        assert_eq!(status, "BIND_ERROR");
-        assert_eq!((tally.bind_refused, tally.bind_errors), (1, 1));
-        assert!(tally.verdict().unwrap_err().contains("1 binder errors"));
+        tally
+            .record("refused", DETAIL, Ok(Acceptance::Refused("no".into())))
+            .unwrap();
+        assert!(tally.verdict().unwrap_err().contains("1 pipelines refused"));
     }
 
     #[test]

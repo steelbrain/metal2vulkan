@@ -21,13 +21,23 @@ pub mod exit_status {
     pub const VENUE_MISMATCH: i32 = 7;
 }
 
-/// Create an engine pipeline on `device` from the binder layout its artifact carries, time
-/// the creation, and destroy it. Nothing is bound or dispatched.
+/// Create a render row's pipeline on `device` from the binder layout its artifact carries, time
+/// the creation, and destroy it. Nothing is bound or drawn.
 pub fn create_acceptance_pipeline(
     device: DeviceType,
-    pipeline: &crate::acceptance::RowPipeline,
+    pipeline: &metal2vulkan::pipeline::RenderPipeline,
 ) -> Result<crate::acceptance::Acceptance, crate::acceptance::AcceptanceError> {
     platform::create_acceptance_pipeline(device, pipeline)
+}
+
+/// Make a kernel row's pipeline state through the runtime on `device`, as a guest's kernel is
+/// made, and encode one dispatch of one representative threadgroup of it, never committed, under
+/// the validation layer: what the runtime and the driver answered.
+pub fn create_runtime_kernel(
+    device: DeviceType,
+    row: &crate::acceptance::RuntimeRow<'_>,
+) -> Result<crate::acceptance::Acceptance, crate::acceptance::AcceptanceError> {
+    platform::create_runtime_kernel(device, row)
 }
 
 /// Restrict every Vulkan context this process opens to committed device profile `stem` through
@@ -122,7 +132,16 @@ mod platform {
 
     pub fn create_acceptance_pipeline(
         _device: DeviceType,
-        _pipeline: &crate::acceptance::RowPipeline,
+        _pipeline: &metal2vulkan::pipeline::RenderPipeline,
+    ) -> Result<crate::acceptance::Acceptance, crate::acceptance::AcceptanceError> {
+        Err(crate::acceptance::AcceptanceError::DeviceUnavailable(
+            "pipeline creation is supported only on Linux and macOS".into(),
+        ))
+    }
+
+    pub fn create_runtime_kernel(
+        _device: DeviceType,
+        _row: &crate::acceptance::RuntimeRow<'_>,
     ) -> Result<crate::acceptance::Acceptance, crate::acceptance::AcceptanceError> {
         Err(crate::acceptance::AcceptanceError::DeviceUnavailable(
             "pipeline creation is supported only on Linux and macOS".into(),

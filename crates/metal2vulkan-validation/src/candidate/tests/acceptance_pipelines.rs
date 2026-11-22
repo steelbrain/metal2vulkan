@@ -1,17 +1,20 @@
 //! L4 driver acceptance on a device: the unsafe creation path of [`create_acceptance_pipeline`]
 //! (set layouts, binding flags, specialization, subgroup size, render pass, graphics pipeline) runs
-//! against the lane's Vulkan device. Nothing is bound or dispatched, so no shader executes.
+//! against the lane's Vulkan device for a render row, and a kernel row is made through the runtime
+//! ([`create_runtime_kernel`]). Nothing is bound or submitted, so no shader executes.
 //! `G-linux`'s `m2v_cpu_icd` step runs it on lavapipe.
 //!
-//! Each row compiles for the opened device's own `Device` (its queried description restricted to
-//! what the context enabled, `platform::opened_worker_device`), never for a committed profile
-//! named after the lane, so a lane whose device differs from any committed description still
-//! checks what it would create.
+//! Each render row compiles for the opened device's own `Device` (its queried description
+//! restricted to what the context enabled, `platform::opened_worker_device`), never for a committed
+//! profile named after the lane, so a lane whose device differs from any committed description
+//! still checks what it would create.
 
 use super::*;
 use crate::acceptance::{
     compile_row_in_worker, retained, Acceptance, Projection, RowCompile, RowPipeline, RowStage,
+    RuntimeRow,
 };
+use metal2vulkan::library::FunctionConstantValues;
 use metal2vulkan_devtools::{engine_dir, llvm_assemble};
 
 /// Compile `entry` of the owned fixture `file` as an L4 row under `projection` for the device the
@@ -37,10 +40,40 @@ fn compiled(file: &str, entry: &str, stage: RowStage, projection: Projection) ->
     }
 }
 
-/// The driver created the pipeline within the ceiling, or the device lacks something it needs; a
-/// refusal or a tooling error (including an unavailable device) is a failure.
+/// The driver created the render pipeline within the ceiling, or the device lacks something it
+/// needs; a refusal or a tooling error (including an unavailable device) is a failure.
 fn assert_accepted(pipeline: &RowPipeline) {
-    match create_acceptance_pipeline(crate::gpu::TEST_DEVICE, pipeline) {
+    let RowPipeline::Render { pipeline, .. } = pipeline else {
+        panic!("a kernel row is made through the runtime");
+    };
+    accepted(create_acceptance_pipeline(
+        crate::gpu::TEST_DEVICE,
+        pipeline,
+    ));
+}
+
+/// What the runtime answered for kernel row `entry` of the owned fixture `file`, made on the
+/// lane's device as `corpus-pipeline` makes a kernel row, with no function-constant values. A
+/// device lane has `llvm-as`, so a missing assembler fails the test.
+fn made(file: &str, entry: &str) -> Acceptance {
+    let bitcode = llvm_assemble(&engine_dir().join(file))
+        .unwrap_or_else(|error| panic!("assemble {file}: {error:?}"));
+    let constants = FunctionConstantValues::defaults();
+    let row = RuntimeRow {
+        bitcode: &bitcode,
+        entry,
+        constants: &constants,
+    };
+    let made = create_runtime_kernel(crate::gpu::TEST_DEVICE, &row)
+        .unwrap_or_else(|error| panic!("{entry}: {error}"));
+    eprintln!("{entry}: {made:?}");
+    made
+}
+
+/// `acceptance` is a pipeline created within the ceiling, or a device that lacks something it
+/// needs; anything else fails.
+fn accepted(acceptance: Result<Acceptance, crate::acceptance::AcceptanceError>) {
+    match acceptance {
         Ok(Acceptance::Created { create }) => {
             assert!(
                 crate::budgets::creation_within_ceiling("the pipeline", create).is_ok(),
@@ -52,63 +85,49 @@ fn assert_accepted(pipeline: &RowPipeline) {
         Ok(Acceptance::InvalidUsage(messages)) => {
             panic!("the validation layer reported: {}", messages.join(" | "))
         }
+        Ok(Acceptance::RuntimeRefused(why)) => panic!("the runtime refused the kernel: {why}"),
+        Ok(Acceptance::NoEffect) => panic!("the runtime made no pipeline"),
         Err(error) => panic!("acceptance failed: {error}"),
     }
 }
 
+/// A kernel row is made through the runtime, and the driver creates the pipeline its dispatch
+/// runs on; a vertex function alone is created from the binder layout.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-fn compute_and_vertex_only_pipelines_are_created_from_the_binder_layout() {
-    let row = |file, entry, stage| compiled(file, entry, stage, Projection::Derived);
-    let compute = row("store_const.ll", "store_const", RowStage::Kernel);
-    assert!(matches!(compute, RowPipeline::Compute { .. }));
-    assert_accepted(&compute);
+fn a_kernel_row_is_made_through_the_runtime_and_a_vertex_only_pipeline_is_created() {
+    accepted(Ok(made("store_const.ll", "store_const")));
 
-    let vertex = row("stage_io.ll", "stage_io_vertex_position", RowStage::Vertex);
+    let vertex = compiled(
+        "stage_io.ll",
+        "stage_io_vertex_position",
+        RowStage::Vertex,
+        Projection::Derived,
+    );
     assert!(matches!(vertex, RowPipeline::Render { .. }));
     assert_accepted(&vertex);
 }
 
-/// Create kernel row `entry` of the owned fixture `file` from the region the binder plans for its
-/// representative dispatch, after printing the row's dispatch, its stage's flags and the region's,
-/// the required subgroup size, and the imageblock extent: they show whether the lane's tier
-/// requires full subgroups.
-fn assert_created_from_its_region(file: &str, entry: &str) {
-    let pipeline = compiled(file, entry, RowStage::Kernel, Projection::Derived);
-    let RowPipeline::Compute {
-        pipeline: compute,
-        creation,
-    } = &pipeline
-    else {
-        panic!("{entry}: a kernel row is a compute pipeline");
-    };
-    eprintln!(
-        "{entry}: {:?}, stage flags {:?} (the region's {:?}), required subgroup size {:?}, \
-         imageblock {:?}",
-        creation.dispatch,
-        compute.stage.stage_flags,
-        creation.region.stage_flags,
-        creation.region.required_subgroup_size,
-        creation.imageblock
-    );
-    assert_accepted(&pipeline);
-}
-
-/// A kernel whose simd tier can require full subgroups is created from its region. The 897
+/// A kernel whose simd tier can require full subgroups is made, its representative threadgroup
+/// whole simdgroups of the state's thread execution width. The 897
 /// `VUID-VkPipelineShaderStageCreateInfo-flags-02759` rows were such kernels created at their
 /// stage's placeholder local size of 1.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-fn a_full_subgroup_kernel_row_is_created_from_its_region() {
-    assert_created_from_its_region("simd_ops.ll", "simd_shuffle_k");
+fn a_full_subgroup_kernel_row_is_made_through_the_runtime() {
+    accepted(Ok(made("simd_ops.ll", "simd_shuffle_k")));
 }
 
-/// A kernel with an explicit imageblock is created from its region, whose specialization sets
-/// the representative extent.
+/// A kernel with an explicit imageblock is the runtime's typed refusal, as a guest's is: its
+/// compute encoder does not set an imageblock's extent (`setImageblockWidth:height:`).
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
-fn an_imageblock_kernel_row_is_created_from_its_region() {
-    assert_created_from_its_region("a4_imageblock_extent.ll", "a4_imageblock_extent");
+fn an_imageblock_kernel_row_is_the_runtimes_refusal() {
+    let made = made("a4_imageblock_extent.ll", "a4_imageblock_extent");
+    assert!(
+        matches!(&made, Acceptance::RuntimeRefused(why) if why.contains("mageblock")),
+        "{made:?}"
+    );
 }
 
 /// A post-tessellation vertex function's row is a tessellation pipeline (the synthesized vertex

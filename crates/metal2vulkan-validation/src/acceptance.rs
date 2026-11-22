@@ -1,25 +1,28 @@
 //! Driver acceptance for the engine.
 //!
-//! `corpus-pipeline --profile P` compiles each row through the public compile API
-//! and asks a Vulkan driver to create the pipeline **from the binder layout the artifact
-//! carries** ([`PipelineLayout`](metal2vulkan::pipeline::PipelineLayout), vertex input, stage
-//! modules with their specialization and subgroup facts, the graphics state). Nothing is bound or
-//! dispatched. A row is built as [`PipelineRequest::Row`] says ([`row`]): a kernel's compute
-//! pipeline; a vertex function's rasterization-disabled pipeline with a vertex descriptor for the
-//! attributes it declares; a fragment function's rasterizing pipeline drawn with its generated
-//! passthrough vertex companion ([`crate::companion`], the one the executors draw with).
+//! `corpus-pipeline --profile P` compiles each row through the public compile API. A render row's
+//! pipeline is created by a Vulkan driver **from the binder layout the artifact carries**
+//! ([`PipelineLayout`](metal2vulkan::pipeline::PipelineLayout), vertex input, stage modules with
+//! their specialization and subgroup facts, the graphics state), with nothing bound or drawn. A
+//! kernel row is made as a guest's kernel is, through the runtime: its pipeline state on the
+//! sweep's device and one dispatch of one representative threadgroup encoded, never committed
+//! ([`crate::candidate::create_runtime_kernel`]). A row is built as [`PipelineRequest::Row`] says
+//! ([`row`]): a kernel's compute pipeline; a vertex function's rasterization-disabled pipeline with
+//! a vertex descriptor for the attributes it declares; a fragment function's rasterizing pipeline
+//! drawn with its generated passthrough vertex companion ([`crate::companion`], the one the
+//! executors draw with).
 //! This module is the device-free half: compiling a row and deciding whether the opened device
 //! enabled and provides what the pipeline requires ([`unenabled`] for the API version, features,
 //! and extensions, by the product's `DeviceDescription::required_enables` on the opened
 //! description; [`unmet_device_facts`] for properties, limits, formats, stage create flags, and
 //! float-controls independence, against the opened device's queried profile). The device half is
-//! [`crate::candidate::create_acceptance_pipeline`].
+//! [`crate::candidate::create_acceptance_pipeline`] for a render row and
+//! [`crate::candidate::create_runtime_kernel`] for a kernel row.
 //!
 //! The sweep compiles every row in a killable worker ([`compile_row_in_worker`]), never in the
 //! process that holds the device; [`compile_pipeline`] is the compile the worker runs, and it
 //! derives a row's descriptor and companion from the AIR there too.
 
-pub mod dispatch;
 pub mod metal_report;
 pub mod row;
 
@@ -31,7 +34,6 @@ use crate::worker::compile::{
     compile_compute_request, compile_render_request, CompileWorker, NotCompiled, WorkerDevice,
 };
 use crate::worker::{Measured, WorkerFailure};
-use dispatch::{BinderAnswer, ComputeCreation, NoCreation};
 use metal2vulkan::bind::{BindShape, Dispatch};
 use metal2vulkan::cache::VariantKey;
 use metal2vulkan::device::Independence;
@@ -99,14 +101,14 @@ fn stage_precision_notes(stages: &[StageModule]) -> Vec<PrecisionNote> {
     notes
 }
 
-/// An L4 row compiled for a driver: a kernel with the dispatch region its pipeline is created from
-/// ([`dispatch::plan_compute_row`]), or a render pipeline, created at its stages' default
-/// specializations, of a `row` function.
+/// An L4 row compiled: a kernel's compute pipeline, its module the words the sweep counts (the
+/// driver is asked for the pipeline the runtime makes of the row's AIR,
+/// [`crate::candidate::create_runtime_kernel`]), or a render pipeline, created at its stages'
+/// default specializations, of a `row` function.
 #[derive(Clone, Debug)]
 pub enum RowPipeline {
     Compute {
         pipeline: Box<ComputePipeline>,
-        creation: ComputeCreation,
     },
     Render {
         pipeline: Box<RenderPipeline>,
@@ -115,23 +117,15 @@ pub enum RowPipeline {
 }
 
 impl RowPipeline {
-    /// The row's pipeline as compiled: compute rows from [`compile_row`] have a creation region,
-    /// render rows the stage of their own function.
-    fn of(
-        device: &Device,
-        pipeline: AcceptancePipeline,
-        stage: RowStage,
-    ) -> Result<RowPipeline, NoCreation> {
-        Ok(match pipeline {
-            AcceptancePipeline::Compute(pipeline) => {
-                let creation = dispatch::plan_compute_row(device, &pipeline)?;
-                RowPipeline::Compute { pipeline, creation }
-            }
+    /// The row's pipeline as compiled: a render row's with the stage of its own function.
+    fn of(pipeline: AcceptancePipeline, stage: RowStage) -> RowPipeline {
+        match pipeline {
+            AcceptancePipeline::Compute(pipeline) => RowPipeline::Compute { pipeline },
             AcceptancePipeline::Render(pipeline) => RowPipeline::Render {
                 pipeline,
                 row: stage,
             },
-        })
+        }
     }
 
     /// What the pipeline needs from the device.
@@ -208,25 +202,11 @@ pub enum RowCompile {
     /// a vertex attribute of a type no Metal vertex format reads, or a fragment function no
     /// generated companion draws, by kind. A modelled limit of the tool, never a product verdict.
     Unmodelled(row::Unmodelled),
-    /// The binder's error for a kernel row's representative dispatch ([`dispatch`]): a typed
-    /// refusal the product documents, or an error that fails the sweep.
-    Binder(BinderAnswer),
     /// The worker boundary stopped the compile or its result was unusable (a deadline, the memory
     /// limit, a crashed worker, an artifact that does not load): the outcome
     /// ([`crate::worker::WorkerFailure::outcome`]) and the failure text. A budget breach is a
     /// failing result (AGENTS.md), so it fails the sweep.
     Stopped(Outcome, String),
-}
-
-impl RowCompile {
-    /// A compiled row, or why the tool creates no pipeline from it.
-    fn of(pipeline: Result<RowPipeline, NoCreation>) -> RowCompile {
-        match pipeline {
-            Ok(pipeline) => RowCompile::Compiled(Box::new(pipeline)),
-            Err(NoCreation::Unmodelled(why)) => RowCompile::Unmodelled(why),
-            Err(NoCreation::Binder(answer)) => RowCompile::Binder(answer),
-        }
-    }
 }
 
 /// How an L4 row's vertex function fetches its attributes ([`row`]): the projection the
@@ -524,7 +504,7 @@ pub fn compile_row(
         constants: FunctionConstantValues::defaults(),
     };
     match compile_pipeline(&[bitcode], &request, device, deadline) {
-        Ok(pipeline) => RowCompile::of(RowPipeline::of(device, pipeline, stage)),
+        Ok(pipeline) => RowCompile::Compiled(Box::new(RowPipeline::of(pipeline, stage))),
         Err(PipelineCompileError::Product(error)) => {
             RowCompile::NotCompiled(Outcome::from(&error), bounded_detail(&error.to_string()))
         }
@@ -589,21 +569,20 @@ pub fn compile_row_in_worker(
             )
         }
     };
-    worker_row(device, compiled, stage)
+    worker_row(compiled, stage)
 }
 
 /// What a compile worker answered for a row whose own function is a `stage` function: the
 /// pipeline made ready for a driver, the compile's refusal, or the boundary's stop, with what the
 /// parent measured around the worker when one ran.
 fn worker_row(
-    device: &WorkerDevice,
     compiled: Result<(Result<AcceptancePipeline, NotCompiled>, Measured), WorkerFailure>,
     stage: RowStage,
 ) -> (RowCompile, Option<Measured>) {
     match compiled {
         Ok((result, measured)) => (
             match result {
-                Ok(pipeline) => RowCompile::of(RowPipeline::of(device.device(), pipeline, stage)),
+                Ok(pipeline) => RowCompile::Compiled(Box::new(RowPipeline::of(pipeline, stage))),
                 Err(NotCompiled::Product(outcome, detail)) => {
                     RowCompile::NotCompiled(outcome, detail)
                 }
@@ -646,7 +625,7 @@ pub fn compile_draw_in_worker(
             compiled.measured,
         )
     });
-    worker_row(device, compiled, RowStage::Fragment)
+    worker_row(compiled, RowStage::Fragment)
 }
 
 /// A library's bitcode as a worker input: its bytes, base64 as a retained row stores them.
@@ -925,6 +904,21 @@ pub enum Acceptance {
     /// `VK_LAYER_KHRONOS_validation` reported invalid usage while the pipeline was created:
     /// whatever the driver did, the row is not evidence.
     InvalidUsage(Vec<String>),
+    /// The runtime refused a kernel row with its typed error, as it refuses a guest's kernel: the
+    /// translator's refusal, a known gap, or a limit of the device. No driver was asked.
+    RuntimeRefused(String),
+    /// The runtime made a kernel row's pipeline state and ran its dispatch as Metal's without
+    /// effects (the kernel writes no memory): no driver was asked for a pipeline, as none is for a
+    /// guest's.
+    NoEffect,
+}
+
+/// A kernel row as the runtime makes it ([`crate::candidate::create_runtime_kernel`]): its AIR,
+/// its kernel, and the function-constant values the function is made with.
+pub struct RuntimeRow<'a> {
+    pub bitcode: &'a [u8],
+    pub entry: &'a str,
+    pub constants: &'a FunctionConstantValues,
 }
 
 /// Why an acceptance attempt gave no verdict about a pipeline. The kinds are kept apart because
@@ -1163,8 +1157,7 @@ mod tests {
 
     /// A kernel row reading stage inputs compiles under the stage-input descriptor its AIR implies
     /// (each attribute its own buffer at the executors' slot), and the pipeline binds those
-    /// buffers. Under the resident-table domains, the executor's own context's: the binder plans
-    /// the row, and the identity domains' binder refuses stage input's encoder values.
+    /// buffers.
     #[test]
     fn a_stage_input_kernel_row_compiles_under_its_implied_descriptor() {
         let Some(bitcode) = fixture("kernel_stage_in.ll") else {

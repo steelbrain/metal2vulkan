@@ -80,9 +80,6 @@ pub enum UnmodelledKind {
     /// A kernel stage input: a location that is not a constant, or an IR type no format reads
     /// exactly (`executor_contract::stage_inputs::implied`).
     StageInput,
-    /// A kernel's representative dispatch: no region the binder plans for the encoder's
-    /// defaults runs on the row as compiled (`acceptance::dispatch`).
-    Dispatch,
     /// An object or mesh function: the derivation builds no mesh render pipeline around it yet.
     MeshPipeline,
 }
@@ -97,7 +94,6 @@ impl UnmodelledKind {
             UnmodelledKind::Attachment => "attachment",
             UnmodelledKind::Companion => "companion",
             UnmodelledKind::StageInput => "stage_input",
-            UnmodelledKind::Dispatch => "dispatch",
             UnmodelledKind::MeshPipeline => "mesh_pipeline",
         }
     }

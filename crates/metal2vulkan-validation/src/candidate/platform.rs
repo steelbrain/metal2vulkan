@@ -14,6 +14,7 @@ mod plan_resources;
 mod profiles;
 mod render;
 mod runtime;
+mod runtime_acceptance;
 mod runtime_bounds;
 mod runtime_depth;
 mod runtime_multisample;
@@ -29,6 +30,7 @@ pub use device::{capture_formats, echo_validation_messages, venue_check};
 pub use profiles::{requested_restriction, restrict_devices_to};
 pub use render::execute_engine_render;
 pub use runtime::execute_runtime;
+pub use runtime_acceptance::create_runtime_kernel;
 pub use runtime_probe::probe_runtime;
 pub use runtime_render::execute_runtime_render;
 

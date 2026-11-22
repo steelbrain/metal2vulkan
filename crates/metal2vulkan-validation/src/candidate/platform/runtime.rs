@@ -111,24 +111,15 @@ pub fn execute_runtime(
     })
 }
 
-/// The attempt `on` makes, under the validation layer: one log per process, at one path, so the
-/// layer writes this run's messages there whether it reads its variables at each instance or
-/// once, a log of an earlier run gone first. Any message the layer logged fails the attempt.
+/// The attempt `on` makes, under the validation layer ([`validated`]). Any message the layer
+/// logged fails the attempt.
 pub(super) fn under_validation(on: impl FnOnce() -> Result<RunAttempt, String>) -> RunAttempt {
-    let log = std::env::temp_dir().join(format!(
-        "metal2vulkan-validation-runtime-{}.log",
-        std::process::id()
-    ));
-    let _ = std::fs::remove_file(&log);
-    validate_process(&log);
-    let attempt = match on() {
+    let (attempt, messages) = validated(|| match on() {
         Ok(attempt) => attempt,
         Err(error) => RunAttempt::of(Err(ExecutorError::Failed(error))),
-    };
-    let messages = std::fs::read_to_string(&log);
-    let _ = std::fs::remove_file(&log);
+    });
     match messages {
-        Ok(messages) if !messages.trim().is_empty() => {
+        Some(messages) => {
             let ran = match &attempt.result {
                 Ok(_) => String::new(),
                 Err(error) => format!(" (the run also failed: {error})"),
@@ -138,8 +129,25 @@ pub(super) fn under_validation(on: impl FnOnce() -> Result<RunAttempt, String>) 
                 crate::engine::bounded_detail(&messages)
             ))))
         }
-        _ => attempt,
+        None => attempt,
     }
+}
+
+/// What `on` returns, run under the validation layer, and the messages the layer logged while it
+/// ran, if any: one log per process, at one path, so the layer writes the run's messages there
+/// whether it reads its variables at each instance or once, a log of an earlier run gone first.
+pub(super) fn validated<T>(on: impl FnOnce() -> T) -> (T, Option<String>) {
+    let log = std::env::temp_dir().join(format!(
+        "metal2vulkan-validation-runtime-{}.log",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&log);
+    validate_process(&log);
+    let value = on();
+    let messages = std::fs::read_to_string(&log);
+    let _ = std::fs::remove_file(&log);
+    let messages = messages.ok().filter(|messages| !messages.trim().is_empty());
+    (value, messages)
 }
 
 /// Enable the validation layer for this process's next instance, through the loader's and the
@@ -177,7 +185,7 @@ pub(super) fn attempt_on(
     }
     let layered = match runtime_restriction::layered(device_type, executor)? {
         Ok(layered) => layered,
-        Err(refused) => return Ok(refused),
+        Err(refused) => return Ok(refused.attempt()),
     };
     let attempt = |device: &rt::Device, identity: &Identity, environment: &serde_json::Value| {
         let result = run(device, identity, environment);
@@ -195,7 +203,7 @@ pub(super) fn attempt_on(
 /// identity and environment a row of `executor` records of it, every object of it gone before
 /// this returns, and the device torn down. `Err` where no device of the kind opens under the
 /// layers.
-fn opened<T>(
+pub(super) fn opened<T>(
     instance: &rt::Instance,
     device_type: DeviceType,
     executor: &'static str,
@@ -628,22 +636,35 @@ fn descriptor(
     )))
 }
 
-/// The pipeline state `make` makes, within the per-attempt ceilings: its peak live allocations
-/// within 500 MiB (an allocation past it ends the process), its wall time within 20 s. `make`
-/// numbers the state's samplers with the function it is given: each constexpr sampler at an index
-/// of the run's grant from its bottom ([`sampler_grant`]), one per state words, and a read's or a
-/// write's at nothing.
+/// The pipeline state `make` makes, within the per-attempt ceilings ([`within_ceilings`]), the
+/// runtime's refusal of it as the executor's ([`runtime_error`]).
 pub(super) fn made_within<T>(
     make: impl FnOnce(
         &mut dyn FnMut(&[NumberedSampler]) -> Result<Vec<u32>, rt::Error>,
     ) -> Result<T, rt::Error>,
 ) -> Result<T, ExecutorError> {
+    within_ceilings(make)
+        .map_err(ExecutorError::Failed)?
+        .map_err(|error| runtime_error("the pipeline's make", error))
+}
+
+/// What `make` answers, within the per-attempt ceilings: its peak live allocations within 500 MiB
+/// (an allocation past it ends the process), its wall time within 20 s, either past it the outer
+/// `Err`. `make` numbers the state's samplers with the function it is given: each constexpr
+/// sampler at an index of the run's grant from its bottom ([`sampler_grant`]), one per state
+/// words, and a read's or a write's at nothing; a sampler of another kind is the outer `Err`
+/// once the make returns.
+pub(super) fn within_ceilings<T>(
+    make: impl FnOnce(
+        &mut dyn FnMut(&[NumberedSampler]) -> Result<Vec<u32>, rt::Error>,
+    ) -> Result<T, rt::Error>,
+) -> Result<Result<T, rt::Error>, String> {
     if !crate::worker::alloc::installed() {
-        return Err(ExecutorError::Failed(
+        return Err(
             "the counting allocator is not installed: the pipeline's make cannot be held to its \
              memory ceiling"
                 .into(),
-        ));
+        );
     }
     let mut constexprs: BTreeMap<[u64; 2], u32> = BTreeMap::new();
     let first = rt::IndexClass::Sampler.range().start;
@@ -668,21 +689,24 @@ pub(super) fn made_within<T>(
         crate::worker::alloc::bounded(crate::worker::MEMORY_LIMIT_BYTES, || make(&mut numbered));
     let took = started.elapsed();
     if took > crate::worker::DEADLINE {
-        return Err(ExecutorError::Failed(format!(
+        return Err(format!(
             "the pipeline's make took {} ms, past the {} s ceiling (peak live allocations {} \
              bytes)",
             took.as_millis(),
             crate::worker::DEADLINE.as_secs(),
             peak.unwrap_or(0)
-        )));
+        ));
     }
-    let made = made.map_err(|error| runtime_error("the pipeline's make", error))?;
+    let made = match made {
+        Ok(made) => made,
+        Err(error) => return Ok(Err(error)),
+    };
     match unknown {
-        Some(sampler) => Err(ExecutorError::Failed(format!(
+        Some(sampler) => Err(format!(
             "the pipeline numbers a sampler of a kind a run through the runtime does not know: \
              {sampler}"
-        ))),
-        None => Ok(made),
+        )),
+        None => Ok(Ok(made)),
     }
 }
 

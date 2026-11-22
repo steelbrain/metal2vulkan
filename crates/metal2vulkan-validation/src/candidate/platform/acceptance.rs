@@ -1,5 +1,5 @@
-//! Driver acceptance (L4): create an engine pipeline from the binder layout its artifact
-//! carries, time `vkCreate*Pipelines`, and destroy everything. Nothing is bound, recorded, or
+//! Driver acceptance (L4) of a render row: create its pipeline from the binder layout its
+//! artifact carries, time `vkCreateGraphicsPipelines`, and destroy everything. Nothing is bound, recorded, or
 //! submitted, so no shader executes. The context runs under `VK_LAYER_KHRONOS_validation`; any
 //! message it reports makes the row [`Acceptance::InvalidUsage`]. The layout half
 //! ([`LayoutObjects`], [`unmet_requirements`]) is shared with the engine executors, and a
@@ -7,20 +7,16 @@
 //! the render executor's own builder ([`super::graphics_pipeline`]): its render pass from the
 //! graphics state (color, framebuffer-fetch, and depth/stencil attachments), its vertex input
 //! (divisors, dynamic strides), and every dynamic state it declares, at each stage's default
-//! specialization, the compiled topology, and Metal's default depth-stencil state. A compute
-//! pipeline is created from the dispatch region the binder plans for the row's representative
-//! dispatch (its specialization, stage flags, and required subgroup size), as the executors create
-//! each region's pipeline, never at the stage's placeholder defaults.
+//! specialization, the compiled topology, and Metal's default depth-stencil state. A kernel row
+//! is made through the runtime instead (`runtime_acceptance`).
 
 use super::device::{with_validated_context, VulkanContext};
 use super::graphics_pipeline::{self, GraphicsError};
-use crate::acceptance::{Acceptance, AcceptanceError, RowPipeline};
+use crate::acceptance::{Acceptance, AcceptanceError};
 use crate::gpu::DeviceType;
 use ash::vk;
-use metal2vulkan::bind::DispatchRegion;
 use metal2vulkan::device::Requirements;
-use metal2vulkan::pipeline::{PipelineLayout, StageModule};
-use std::ffi::CString;
+use metal2vulkan::pipeline::{PipelineLayout, RenderPipeline, StageModule};
 
 /// The descriptor-set layouts (with their immutable samplers) and the pipeline layout of one
 /// binder `PipelineLayout`, destroyed on every exit path, and what a pool that allocates one set
@@ -84,7 +80,7 @@ impl Drop for Objects<'_> {
 /// through `with_validated_context`'s error.
 pub fn create_acceptance_pipeline(
     device: DeviceType,
-    pipeline: &RowPipeline,
+    pipeline: &RenderPipeline,
 ) -> Result<Acceptance, AcceptanceError> {
     with_validated_context(device, |context| {
         let created = create(context, pipeline);
@@ -127,13 +123,13 @@ pub(super) fn unmet_requirements(
     missing
 }
 
-fn create(context: &VulkanContext, pipeline: &RowPipeline) -> Result<Acceptance, AcceptanceError> {
-    let stages = pipeline.stages();
-    let layout = match pipeline {
-        RowPipeline::Compute { pipeline, .. } => &pipeline.layout,
-        RowPipeline::Render { pipeline, .. } => &pipeline.layout,
-    };
-    let missing = unmet_requirements(context, pipeline.requirements());
+fn create(
+    context: &VulkanContext,
+    pipeline: &RenderPipeline,
+) -> Result<Acceptance, AcceptanceError> {
+    let stages = &pipeline.stages;
+    let layout = &pipeline.layout;
+    let missing = unmet_requirements(context, &pipeline.requirements);
     if !missing.is_empty() {
         return Ok(Acceptance::NotEnabled(missing));
     }
@@ -161,188 +157,67 @@ fn create(context: &VulkanContext, pipeline: &RowPipeline) -> Result<Acceptance,
             }
         }
     }
-    let entries = stages
-        .iter()
-        .map(|stage| {
-            CString::new(stage.entry_point.as_str())
-                .map_err(|_| AcceptanceError::Tooling("entry point name contains NUL".into()))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let created = stage_creations(pipeline);
-    let specializations: Vec<(Vec<vk::SpecializationMapEntry>, Vec<u8>)> = created
-        .iter()
-        .map(|stage| (stage.map.clone(), stage.data.clone()))
-        .collect();
-    let spec_infos: Vec<vk::SpecializationInfo<'_>> = specializations
-        .iter()
-        .map(|(map, data)| {
-            vk::SpecializationInfo::default()
-                .map_entries(map)
-                .data(data)
-        })
-        .collect();
-    let mut subgroup_sizes: Vec<vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo<'_>> =
-        created
-            .iter()
-            .map(|stage| {
-                vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo::default()
-                    .required_subgroup_size(stage.required_subgroup_size.unwrap_or(0))
-            })
-            .collect();
-    let mut stage_infos = Vec::with_capacity(stages.len());
-    for ((((stage, module), entry), (spec, subgroup)), creation) in stages
-        .iter()
-        .zip(&objects.modules)
-        .zip(&entries)
-        .zip(spec_infos.iter().zip(subgroup_sizes.iter_mut()))
-        .zip(&created)
-    {
-        let mut info = vk::PipelineShaderStageCreateInfo::default()
-            .stage(stage.stage.into())
-            .module(*module)
-            .name(entry)
-            .flags(creation.flags);
-        if !creation.map.is_empty() {
-            info = info.specialization_info(spec);
-        }
-        if creation.required_subgroup_size.is_some() {
-            info = info.push_next(subgroup);
-        }
-        stage_infos.push(info);
-    }
-    let result = match pipeline {
-        RowPipeline::Compute { .. } => {
-            let info = vk::ComputePipelineCreateInfo::default()
-                .stage(stage_infos[0])
-                .layout(objects.layout.pipeline_layout);
-            let clock = crate::budgets::CreationClock::start();
-            // SAFETY: every handle in `info` is live; the result is destroyed with `objects`.
-            let created = unsafe {
-                context
-                    .device
-                    .create_compute_pipelines(vk::PipelineCache::null(), &[info], None)
-            };
-            (created.map_err(|(_, error)| error), clock.read())
-        }
-        RowPipeline::Render { pipeline: p, .. } => {
-            let unmodelled_or_refused = |error: GraphicsError| match error {
-                GraphicsError::Unmodelled(why) => Err(AcceptanceError::Unmodelled(why)),
-                GraphicsError::NotSupported(why) => Ok(Acceptance::NotEnabled(vec![why])),
-                GraphicsError::Refused(why) => Ok(Acceptance::Refused(why)),
-            };
-            if let Err(error) = graphics_pipeline::attachable_depth_stencil_format(
-                &context.instance,
-                context.physical,
-                &p.graphics,
-            ) {
-                return unmodelled_or_refused(error);
-            }
-            objects.render_pass =
-                match graphics_pipeline::create_render_pass(&context.device, &p.graphics) {
-                    Ok(render_pass) => render_pass,
-                    Err(error) => return unmodelled_or_refused(error),
-                };
-            let created = graphics_pipeline::create_graphics_pipeline(
-                &context.device,
-                context.executes_moltenvk(),
-                p,
-                &graphics_pipeline::Consumer {
-                    modules: &objects.modules,
-                    specializations: &specializations,
-                    layout: objects.layout.pipeline_layout,
-                    render_pass: objects.render_pass,
-                    topology: p.graphics.topology.into(),
-                    // The class's list topology, which Metal never restarts.
-                    primitive_restart: false,
-                    depth_stencil: graphics_pipeline::metal_default_depth_stencil(),
-                    // The encoder's defaults: no culling, clockwise front faces.
-                    cull_mode: vk::CullModeFlags::NONE,
-                    front_face: super::METAL_DEFAULT_FRONT_FACE,
-                },
-            );
-            return match created {
-                Ok((created, create)) => {
-                    objects.pipeline = created;
-                    Ok(Acceptance::Created { create })
-                }
-                Err(error) => unmodelled_or_refused(error),
-            };
-        }
+    let specializations: Vec<_> = stages.iter().map(default_specialization).collect();
+    let unmodelled_or_refused = |error: GraphicsError| match error {
+        GraphicsError::Unmodelled(why) => Err(AcceptanceError::Unmodelled(why)),
+        GraphicsError::NotSupported(why) => Ok(Acceptance::NotEnabled(vec![why])),
+        GraphicsError::Refused(why) => Ok(Acceptance::Refused(why)),
     };
-    match result {
-        (Ok(pipelines), create) => {
-            objects.pipeline = pipelines.first().copied().unwrap_or_default();
+    if let Err(error) = graphics_pipeline::attachable_depth_stencil_format(
+        &context.instance,
+        context.physical,
+        &pipeline.graphics,
+    ) {
+        return unmodelled_or_refused(error);
+    }
+    objects.render_pass =
+        match graphics_pipeline::create_render_pass(&context.device, &pipeline.graphics) {
+            Ok(render_pass) => render_pass,
+            Err(error) => return unmodelled_or_refused(error),
+        };
+    let created = graphics_pipeline::create_graphics_pipeline(
+        &context.device,
+        context.executes_moltenvk(),
+        pipeline,
+        &graphics_pipeline::Consumer {
+            modules: &objects.modules,
+            specializations: &specializations,
+            layout: objects.layout.pipeline_layout,
+            render_pass: objects.render_pass,
+            topology: pipeline.graphics.topology.into(),
+            // The class's list topology, which Metal never restarts.
+            primitive_restart: false,
+            depth_stencil: graphics_pipeline::metal_default_depth_stencil(),
+            // The encoder's defaults: no culling, clockwise front faces.
+            cull_mode: vk::CullModeFlags::NONE,
+            front_face: super::METAL_DEFAULT_FRONT_FACE,
+        },
+    );
+    match created {
+        Ok((created, create)) => {
+            objects.pipeline = created;
             Ok(Acceptance::Created { create })
         }
-        (Err(error), _) => Ok(Acceptance::Refused(format!("create pipeline: {error}"))),
+        Err(error) => unmodelled_or_refused(error),
     }
 }
 
-/// How each stage of `pipeline` is created: a compute row's one stage from the region the binder
-/// plans for its representative dispatch, as the executors create each region's pipeline, never at
-/// the stage's placeholder defaults (with which a stage whose simd tier requires full subgroups has
-/// a local size of 1, `VUID-VkPipelineShaderStageCreateInfo-flags-02759`); a render row's stages at
-/// their defaults.
-fn stage_creations(pipeline: &RowPipeline) -> Vec<StageCreation> {
-    match pipeline {
-        RowPipeline::Compute { creation, .. } => vec![StageCreation::of_region(&creation.region)],
-        RowPipeline::Render { .. } => pipeline
-            .stages()
-            .iter()
-            .map(StageCreation::defaults)
-            .collect(),
+/// A render stage's specialization at its defaults: its map and data, every constant at its
+/// default value, packed in id order.
+fn default_specialization(stage: &StageModule) -> (Vec<vk::SpecializationMapEntry>, Vec<u8>) {
+    let mut map = Vec::new();
+    let mut data = Vec::new();
+    for constant in &stage.specialization.constants {
+        let size = constant.size.min(8) as usize;
+        map.push(
+            vk::SpecializationMapEntry::default()
+                .constant_id(constant.id)
+                .offset(data.len() as u32)
+                .size(size),
+        );
+        data.extend_from_slice(&constant.default.to_le_bytes()[..size]);
     }
-}
-
-/// How one stage is created: its specialization map and data, its create flags, and the subgroup
-/// size it requires.
-struct StageCreation {
-    map: Vec<vk::SpecializationMapEntry>,
-    data: Vec<u8>,
-    flags: vk::PipelineShaderStageCreateFlags,
-    required_subgroup_size: Option<u32>,
-}
-
-impl StageCreation {
-    /// A compute stage as the binder's dispatch `region` creates it: the region's specialization
-    /// (the plan's constants, the local size, `MultiRegion`), stage flags, and required subgroup
-    /// size.
-    fn of_region(region: &DispatchRegion) -> StageCreation {
-        StageCreation {
-            map: region
-                .specialization
-                .entries
-                .iter()
-                .map(|&entry| entry.into())
-                .collect(),
-            data: region.specialization.data.clone(),
-            flags: region.stage_flags.into(),
-            required_subgroup_size: region.required_subgroup_size,
-        }
-    }
-
-    /// A render stage at its defaults: every constant at its default value, packed in id order,
-    /// with the stage's own flags and subgroup size.
-    fn defaults(stage: &StageModule) -> StageCreation {
-        let mut map = Vec::new();
-        let mut data = Vec::new();
-        for constant in &stage.specialization.constants {
-            let size = constant.size.min(8) as usize;
-            map.push(
-                vk::SpecializationMapEntry::default()
-                    .constant_id(constant.id)
-                    .offset(data.len() as u32)
-                    .size(size),
-            );
-            data.extend_from_slice(&constant.default.to_le_bytes()[..size]);
-        }
-        StageCreation {
-            map,
-            data,
-            flags: stage.stage_flags.into(),
-            required_subgroup_size: stage.required_subgroup_size,
-        }
-    }
+    (map, data)
 }
 
 /// Why [`LayoutObjects::create`] made no layout.
@@ -499,8 +374,7 @@ fn create_layouts(objects: &mut LayoutObjects<'_>, layout: &PipelineLayout) -> R
 
 #[cfg(test)]
 mod tests {
-    use super::{pool_requirements, stage_creations, StageCreation};
-    use crate::acceptance::{compile_row, Projection, RowCompile, RowPipeline, RowStage};
+    use super::pool_requirements;
     use crate::candidate::engine::tests::{assemble, counting_kernel};
     use ash::vk;
     use metal2vulkan::device::{Device, DeviceDescription, DevicePolicy};
@@ -608,97 +482,5 @@ mod tests {
         assert!(flags.is_empty());
         assert!(!sizes.is_empty());
         assert!(sizes.iter().all(|size| size.descriptor_count > 0));
-    }
-
-    /// A kernel row's one stage is created with exactly the specialization map and data, stage
-    /// flags, and required subgroup size of the region the binder plans for its representative
-    /// dispatch, which are not the stage's defaults: on `moltenvk-m3`, `simd_shuffle_k`'s simd tier
-    /// requires full subgroups, which its defaults' local size of 1 violates
-    /// (`VUID-VkPipelineShaderStageCreateInfo-flags-02759`), and `a4_imageblock_extent`'s region
-    /// also sets its imageblock's extent. Printed per profile: whether the tier requires full
-    /// subgroups.
-    #[test]
-    fn a_kernel_rows_stage_is_created_from_its_planned_region_not_its_defaults() {
-        let full = vk::PipelineShaderStageCreateFlags::REQUIRE_FULL_SUBGROUPS;
-        for profile in ["moltenvk-m3", "lavapipe"] {
-            let device = crate::engine::load_device(profile).unwrap();
-            for (file, entry) in [
-                ("simd_ops.ll", "simd_shuffle_k"),
-                ("a4_imageblock_extent.ll", "a4_imageblock_extent"),
-            ] {
-                let bitcode = match llvm_assemble(&engine_dir().join(file)) {
-                    Ok(bitcode) => bitcode,
-                    Err(AssembleError::Missing(why)) => {
-                        eprintln!("SKIPPED: {why}");
-                        return;
-                    }
-                    Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected {file}: {why}"),
-                };
-                let compiled = compile_row(
-                    &bitcode,
-                    entry,
-                    RowStage::Kernel,
-                    Projection::Derived,
-                    &device,
-                    None,
-                );
-                let RowCompile::Compiled(row) = compiled else {
-                    panic!("{profile} {entry}: {compiled:?}");
-                };
-                let created = stage_creations(&row);
-                let RowPipeline::Compute { pipeline, creation } = &*row else {
-                    panic!("{profile} {entry}: a kernel row is a compute pipeline");
-                };
-                let [stage] = created.as_slice() else {
-                    panic!("{profile} {entry}: {} stages", created.len());
-                };
-                let region = &creation.region;
-                eprintln!(
-                    "{profile} {entry}: flags {:#x}, required subgroup size {:?}",
-                    stage.flags.as_raw(),
-                    stage.required_subgroup_size
-                );
-                assert_eq!(
-                    stage
-                        .map
-                        .iter()
-                        .map(|entry| (entry.constant_id, entry.offset, entry.size))
-                        .collect::<Vec<_>>(),
-                    region
-                        .specialization
-                        .entries
-                        .iter()
-                        .map(|&entry| {
-                            let entry: vk::SpecializationMapEntry = entry.into();
-                            (entry.constant_id, entry.offset, entry.size)
-                        })
-                        .collect::<Vec<_>>(),
-                    "{profile} {entry}"
-                );
-                assert!(!stage.map.is_empty(), "{profile} {entry}");
-                assert_eq!(stage.data, region.specialization.data, "{profile} {entry}");
-                assert_eq!(
-                    stage.flags.as_raw(),
-                    vk::PipelineShaderStageCreateFlags::from(region.stage_flags).as_raw(),
-                    "{profile} {entry}"
-                );
-                assert_eq!(
-                    stage.required_subgroup_size, region.required_subgroup_size,
-                    "{profile} {entry}"
-                );
-                // The defaults leave the local size (and the imageblock's extent) at their
-                // placeholders, which the region specializes.
-                let defaults = StageCreation::defaults(&pipeline.stage);
-                assert_ne!(stage.data, defaults.data, "{profile} {entry}");
-                if (profile, entry) == ("moltenvk-m3", "simd_shuffle_k") {
-                    assert!(stage.flags.contains(full), "{:#x}", stage.flags.as_raw());
-                    assert!(
-                        defaults.flags.contains(full),
-                        "{:#x}",
-                        defaults.flags.as_raw()
-                    );
-                }
-            }
-        }
     }
 }

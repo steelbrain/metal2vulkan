@@ -411,8 +411,15 @@ cargo run --release -p metal2vulkan-validation --bin corpus-triage -- \
 
 Other corpus tools:
 
-- `corpus-pipeline --device-type cpu|gpu --profile P` asks a Vulkan driver to create each
-  translated pipeline, without dispatching anything (driver acceptance).
+- `corpus-pipeline --device-type cpu|gpu --profile P` is driver acceptance (L4), on lavapipe and
+  the real cards. It compiles each row in a compile worker, then asks the device's driver for its
+  pipeline. A render row's pipeline is created from the binder layout its artifact carries, with
+  nothing drawn. A kernel row is made as a guest's kernel is, through the runtime: its
+  `ComputePipelineState` on the device, and one dispatch of one representative threadgroup (the
+  state's thread execution width of threads) encoded into a command buffer that is never
+  committed, so the driver is asked for the pipeline that dispatch runs on and nothing executes.
+  The runtime's typed refusal of a kernel row is `RUNTIME_REFUSED`, and a kernel that writes no
+  memory, which the runtime makes no pipeline for, is `NO_EFFECT`; both are counted.
 - `--profiles-layer P` (on `corpus-vulkan` and `corpus-pipeline`) runs every context through
   `VK_LAYER_KHRONOS_profiles` restricted to a committed profile, to test a profile on a device that
   exceeds it.

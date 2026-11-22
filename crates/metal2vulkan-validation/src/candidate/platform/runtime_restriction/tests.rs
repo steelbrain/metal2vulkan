@@ -74,7 +74,9 @@ fn a_restricted_run_on_a_device_without_the_profile_is_a_recorded_refusal() {
     use crate::candidate::engine::{engine_slot, ENGINE_EXECUTOR_ABI};
     use crate::refusal::{Refusal, RefusalClass, RefusalObservation};
 
-    let restriction = ProfileRestriction::committed("nvidia-pascal-linux").unwrap();
+    let restriction: &'static ProfileRestriction = Box::leak(Box::new(
+        ProfileRestriction::committed("nvidia-pascal-linux").unwrap(),
+    ));
     let gaps =
         vec!["limits.max_compute_work_group_invocations 1536 beyond the device's 1024".into()];
     let device = serde_json::json!({
@@ -84,7 +86,15 @@ fn a_restricted_run_on_a_device_without_the_profile_is_a_recorded_refusal() {
                    "version": "1.0.0"}],
         "profiles_layer": null,
     });
-    let attempt = refusal(&restriction, gaps.clone(), device);
+    let refused = Refused {
+        restriction,
+        gaps: gaps.clone(),
+        device,
+    };
+    assert!(refused
+        .to_string()
+        .contains("profile nvidia-pascal-linux states 1 capabilities the device lacks"));
+    let attempt = refused.attempt();
     let not_supported = match attempt.result {
         Err(ExecutorError::NotSupported(not_supported)) => not_supported,
         other => panic!("{:?}", other.err()),
