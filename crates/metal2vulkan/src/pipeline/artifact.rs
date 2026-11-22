@@ -325,8 +325,9 @@ pub struct ModuleStats {
     /// name as reading or computing alone (an interlock, a ray query) makes it not inert.
     #[cfg_attr(feature = "serde", serde(default))]
     pub inert: bool,
-    /// The entry's weight: its instructions with each call counted as its callee's body, as a
-    /// driver inlines every call, after the repeated regions are rolled. A stage that weighs more
+    /// The entry's weight as the stage bound weighs it: its instructions with each call counted
+    /// as its callee's body, as a driver inlines every call, and each subgroup instruction as 64
+    /// instructions, after the repeated regions are rolled. A stage that weighs more
     /// than [`COMPILED_STAGE_WEIGHT`](crate::pipeline::COMPILED_STAGE_WEIGHT) is one whose
     /// creation may take the host's memory: `metal2vulkan-runtime` compiles it only in a helper
     /// process the consumer caps. 0 for a stage the link makes itself.

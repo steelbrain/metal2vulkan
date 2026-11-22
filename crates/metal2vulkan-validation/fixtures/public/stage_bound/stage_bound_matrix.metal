@@ -6,7 +6,8 @@
 // loop each thread leaves after its own count of iterations, reading another thread's word of its
 // simdgroup and writing its own with no barrier between: a lockstep pair in divergent flow. Emulated
 // simdgroups put it past the stage bound; a device that keeps its widest subgroup mode pinned
-// writes it under the bound.
+// writes it under the bound by its instructions alone, and past it, heavier than the emulated
+// module, by the stage weight, which counts each subgroup instruction of its multiply-adds as 64.
 #include <metal_stdlib>
 using namespace metal;
 

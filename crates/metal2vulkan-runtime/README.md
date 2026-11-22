@@ -2906,9 +2906,9 @@ or does not check is rebuilt from the generations' names, with young counted ful
 ### Kernels past the stage bound
 
 A driver's compiler takes memory that grows faster than the stage, in the process that creates the
-pipeline. The translator states each module's entry weight (`ModuleStats::entry_weight`: the
-entry's instructions, each call counted as its callee's body), and the stage bound is
-`COMPILED_STAGE_WEIGHT`, 39,014: the heaviest kernel measured to compile in its creating process
+pipeline. The translator states each module's weight (`ModuleStats::entry_weight`: the entry's
+instructions, each call counted as its callee's body and each subgroup instruction as 64), and the
+stage bound is `COMPILED_STAGE_WEIGHT`, 39,014: the heaviest kernel measured to compile in its creating process
 within 512 MiB of that process's resident growth on every driver measured. Made cold (no pipeline
 cache, the driver's shader cache off) and alone in a process of its own, a real program's kernel
 of that weight grew the process by 350 MiB in 6.8 s on ANV (Mesa 26.2.6, the Iris Xe of RPL-P;
@@ -2917,10 +2917,18 @@ m3-max-66050) and 80 MiB in 0.55 s on RADV (Mesa 26.2.6, a Radeon 780M; job m3-m
 it, on the same Iris Xe, an older build's kernels of entry weights 73,814, 75,886 and 99,109 took
 peak resident sets of 1.76, 2.24 and 3.65 GiB in 45 s, 47 s and 132 s (job m3-max-26147). No
 Vulkan query states how large a stage a device's compiler takes, so the bound is one for every
-device; it rises when a heavier kernel is measured to compile within 512 MiB. A kernel past the
-bound is never compiled in the process that runs the program: each of its
-`VkPipeline`s is compiled in a helper process the consumer starts, caps and times, and is created
-here from that compile's cache data alone.
+device; it rises when a heavier kernel is measured to compile within 512 MiB. A subgroup
+instruction counts as 64 because a driver's compile grows with one many times faster than with any
+other instruction: a kernel of entry weight 24,814 holding 3,772 subgroup instructions passed
+6 GiB compiling on an RTX 3090 (NVIDIA 620.70.06; job m3-max-67936), where the kernel of 39,014
+above grew the process by 148 MiB. A kernel past the bound is never compiled in the process that
+runs the program: each of its `VkPipeline`s is compiled in a helper process the consumer starts,
+caps and times, and is created here from that compile's cache data alone.
+
+A kernel past the bound only because it emulates its SIMD groups in place of the device's widest
+subgroup mode is planned again keeping that mode pinned: the re-plan takes the pinned module where
+it weighs less than the emulated one by the stage weight; otherwise the emulated one goes on. The
+one taken compiles in the process where it is under the bound, and in the helper where it is not.
 
 Render stages have a bound of their own, 99,109, as no helper compiles a render stage: a render
 pipeline with a stage past it is refused (Known gaps of render pipeline states), and one at or

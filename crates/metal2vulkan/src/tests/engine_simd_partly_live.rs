@@ -710,8 +710,9 @@ fn opcodes(words: &[u32], op: crate::spv::Op) -> usize {
 
 /// On the subgroup tiers only a multiply-add in a block the uniformity analysis cannot prove
 /// uniform takes the live-lane form: `dsm_half_live_loaded`'s two are planned divergent, raise the
-/// class with `Ballot`, and emit one ballot each and two bit extracts per step (the `a` and the `b`
-/// owner); `dsm_uniform`'s two keep their plain shuffles.
+/// class with `Ballot`, and emit one ballot each and, in the loop of their step pairs, three bit
+/// extracts (the `a` pair's owner and each step's `b` owner); `dsm_uniform`'s two keep their plain
+/// shuffles.
 #[test]
 fn only_divergent_multiply_adds_ballot_their_lanes() {
     let (Some(divergent), Some(uniform)) =
@@ -731,7 +732,7 @@ fn only_divergent_multiply_adds_ballot_their_lanes() {
         );
         assert_eq!(
             opcodes(&words, crate::spv::Op::GroupNonUniformBallotBitExtract),
-            2 * 2 * 8,
+            2 * 3,
             "{stem}"
         );
         let (plan, _, words) = on_tier(&uniform, "dsm_uniform", &p, tier);

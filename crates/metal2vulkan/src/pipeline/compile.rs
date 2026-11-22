@@ -1838,6 +1838,25 @@ pub(crate) fn compile_bitcode_bounded(
     })
 }
 
+/// One plan of `bitcode`'s entry with default lowering inputs, keeping the widest mode's pin or
+/// weighing it as `widest` says, and its module emitted and weighed as the stage bound makes each
+/// plan it compares (`stage_bound`), with that weight.
+#[cfg(test)]
+pub(crate) fn emit_bitcode_as(
+    bitcode: &[u8],
+    entry: EntryRef<'_>,
+    p: &DeviceProfile,
+    widest: crate::lower::simd::WidestPin,
+    m: &mut Meter,
+) -> Result<(Plan, TypedModule, u64), Error> {
+    guarded(|| {
+        let consts = FunctionConstantValues::defaults();
+        let inputs = LowerInputs::new();
+        let r = Request::bitcode(bitcode, entry, &consts, &[], &inputs);
+        stage_bound::emit_as(&r, p, widest, m)
+    })
+}
+
 /// Stage `fd` compiled with default lowering inputs as [`compile_stage`] compiles it, or as
 /// [`compile_stage_from`] compiles it reading `entries` where given, under the stage bounds
 /// `bounds` in place of [`StageBounds::MEASURED`]: so a test reaches each bound with a small

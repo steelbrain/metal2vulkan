@@ -2326,25 +2326,26 @@ fn a_pressured_kernel_takes_the_emulated_tier_in_place_of_the_widest_mode() {
 }
 
 /// Every stage is weighed against the compiled bound (here bounds the test sets), whatever the
-/// driver: the pressured kernel of
+/// driver, by the stage weight (`spirv::roll::bound_weight`): the pressured kernel of
 /// `a_pressured_kernel_takes_the_emulated_tier_in_place_of_the_widest_mode`, whose emulated module
-/// passes the bound, is planned again keeping the `Direct` tier's pin to 32 lanes, its answers
-/// Metal's; under a bound its `Direct` module passes too, it is made as it weighs, its stats naming
-/// its entry weight (`ModuleStats::entry_weight`), for the runtime to compile apart.
+/// passes the bound, is planned again, and its module keeping the `Direct` tier's pin to 32 lanes,
+/// which weighs less, is taken, its answers Metal's; under a bound its `Direct` module passes too,
+/// it is made as it weighs, its stats naming its weight (`ModuleStats::entry_weight`), for the
+/// runtime to compile apart.
 #[test]
 fn every_stage_from_queries_keeps_the_widest_pin_or_states_its_weight() {
     use crate::device::Device;
     use crate::lower::simd::{WIDEST_PIN, WIDEST_PIN_FLOOR, WIDEST_PIN_WORDS};
     use crate::pipeline::compile::{compile_bitcode_bounded, StageBounds};
     use crate::pipeline::testing::meter;
-    use crate::spirv::roll::entry_weight;
+    use crate::spirv::roll::bound_weight;
     let half = |t: u32| if t & 31 < 16 { t ^ 1 } else { t };
     let fan = Padding::Fan((WIDEST_PIN_FLOOR / 2 + 16).max(WIDEST_PIN_WORDS as usize + 8));
     let Some(bc) = assemble("device_half", &device_half_padded(fan, None)) else {
         return;
     };
     let entry = EntryRef::Name("device_half");
-    let weight = |module: &TypedModule| entry_weight(module, &mut meter()).expect("weight");
+    let weight = |module: &TypedModule| bound_weight(module, &mut meter()).expect("weight");
     let want: Vec<u32> = (0..64).map(half).collect();
     let desc = crate::pipeline::testing::description("intel-irisxe-rplp-anv").unwrap();
     let queries = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES).unwrap();
@@ -2391,7 +2392,7 @@ fn a_kernel_past_the_stage_bound_gets_one_answer_through_either_path() {
     };
     use crate::pipeline::testing::meter;
     use crate::pipeline::FunctionDescriptor;
-    use crate::spirv::roll::entry_weight;
+    use crate::spirv::roll::bound_weight;
     let fan = Padding::Fan((WIDEST_PIN_FLOOR / 2 + 16).max(WIDEST_PIN_WORDS as usize + 8));
     let Some(bc) = assemble("device_half", &device_half_padded(fan, None)) else {
         return;
@@ -2412,7 +2413,7 @@ fn a_kernel_past_the_stage_bound_gets_one_answer_through_either_path() {
             at(cap),
         );
         let (_, _, module) = compiled.expect("compiled");
-        entry_weight(&module, &mut meter()).expect("weight")
+        bound_weight(&module, &mut meter()).expect("weight")
     };
     let emulated = weight(u64::MAX);
     let pinned = weight(emulated - 1);
@@ -2470,17 +2471,24 @@ fn a_kernel_past_the_stage_bound_gets_one_answer_through_either_path() {
 /// measured stage bounds (`StageBounds::MEASURED`). On the Iris Xe under the identity domains,
 /// whose subgroup size range offers the widest mode's pin and which has maximal reconvergence, the
 /// kernel emulates its simdgroups, a module past the compiled bound, and is planned again keeping
-/// the pin, a module under it. The same description without maximal reconvergence emulates its simdgroups for the
-/// lockstep pair, so it has no pin to keep: it is made as it weighs, past the bound, its stats
-/// naming the emulated module's weight, under any driver (Intel's Windows driver too).
+/// the pin. The pinned module weighs less by the entry weight (`spirv::roll::entry_weight`), under
+/// the bound, and more by the stage weight (`spirv::roll::bound_weight`), its multiply-adds'
+/// subgroup instructions counted as `spirv::roll::SUBGROUP_WEIGHT` each: the re-plan takes the
+/// lighter by the stage weight, the emulated module, made as it weighs, its stats naming its
+/// weight (where the pin was taken whatever it weighed, this fails). The same description without
+/// maximal reconvergence emulates its simdgroups for the lockstep pair, so it has no pin to keep:
+/// it is made as it weighs, past the bound, its stats naming the emulated module's weight, under
+/// any driver (Intel's Windows driver too).
 #[test]
-fn the_stage_bound_fixture_keeps_the_pin_or_states_its_weight() {
+fn the_stage_bound_fixture_takes_the_lighter_module_or_states_its_weight() {
     use crate::device::profile::DeviceProfile;
     use crate::device::{Device, DeviceDescription};
-    use crate::lower::simd::WIDEST_PIN;
-    use crate::pipeline::compile::{compile_bitcode_bounded, compile_bitcode_kept, StageBounds};
+    use crate::lower::simd::{WidestPin, WIDEST_PIN};
+    use crate::pipeline::compile::{
+        compile_bitcode_bounded, compile_bitcode_kept, emit_bitcode_as, StageBounds,
+    };
     use crate::pipeline::testing::meter;
-    use crate::spirv::roll::entry_weight;
+    use crate::spirv::roll::{bound_weight, entry_weight};
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/fixtures/public/stage_bound");
     let bc = match llvm_assemble(&dir.join("stage_bound_matrix.ll")) {
@@ -2492,7 +2500,8 @@ fn the_stage_bound_fixture_keeps_the_pin_or_states_its_weight() {
         Err(AssembleError::Rejected(e)) => panic!("llvm-as rejected the fixture: {e}"),
     };
     let entry = EntryRef::Name("stage_bound_matrix");
-    let weight = |module: &TypedModule| entry_weight(module, &mut meter()).expect("weight");
+    let weight = |module: &TypedModule| bound_weight(module, &mut meter()).expect("weight");
+    let entry_only = |module: &TypedModule| entry_weight(module, &mut meter()).expect("weight");
     let bound = StageBounds::MEASURED.compiled;
     let unbounded = StageBounds { compiled: u64::MAX };
     let inputs = LowerInputs::new();
@@ -2513,14 +2522,30 @@ fn the_stage_bound_fixture_keeps_the_pin_or_states_its_weight() {
         let compiled = compile_bitcode_bounded(&bc, entry, p, &mut meter(), unbounded);
         let (_, plan, module) = compiled.expect("emulated");
         assert_eq!((plan.simd.1, uses(&plan, WIDEST_PIN)), (Tier::Emulated, 1));
-        let emulated = weight(&module);
-        assert!(emulated > bound, "emulated {emulated}");
-        // Under the measured bounds: planned again keeping the pin, under the bound.
-        let (_, plan, module) = kept(p).expect("planned again");
+        let emulated = (entry_only(&module), weight(&module));
+        assert!(emulated.1 > bound, "emulated {emulated:?}");
+        // The plan keeping the pin: under the bound by the entry weight, heavier than the
+        // emulated module by the stage weight.
+        let pinned = emit_bitcode_as(&bc, entry, p, WidestPin::Kept, &mut meter());
+        let (plan, module, stated) = pinned.expect("pinned");
         assert_eq!((plan.simd.1, uses(&plan, WIDEST_PIN)), (Tier::Direct, 0));
         assert_eq!(plan.subgroup.size, Some(32));
-        let pinned = weight(&module);
-        assert!(pinned <= bound, "pinned {pinned}");
+        let pinned = (entry_only(&module), weight(&module));
+        assert_eq!(stated, pinned.1);
+        assert!(
+            pinned.0 <= bound,
+            "pinned {pinned:?}, emulated {emulated:?}"
+        );
+        assert!(
+            pinned.1 > emulated.1,
+            "pinned {pinned:?}, emulated {emulated:?}"
+        );
+        // Under the measured bounds: planned again, and the lighter, the emulated module, made as
+        // it weighs.
+        let (function, plan, module) = kept(p).expect("planned again");
+        assert_eq!((plan.simd.1, uses(&plan, WIDEST_PIN)), (Tier::Emulated, 1));
+        assert_eq!((entry_only(&module), weight(&module)), emulated);
+        assert_eq!(function.module_stats().entry_weight, emulated.1);
     }
     // Without maximal reconvergence: emulated for the lockstep pair, with no pin to keep.
     let cleared = text.replace(

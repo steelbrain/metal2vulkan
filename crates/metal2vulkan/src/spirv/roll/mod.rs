@@ -228,12 +228,26 @@ impl KeyCache {
 /// phis, and its instructions, a call counting as its callee's whole body (SPIRV-Cross writes
 /// every function inlined at each call).
 pub fn entry_weight(m: &TypedModule, meter: &mut Meter) -> Result<u64, Error> {
-    let w = weights(m, meter)?;
+    let w = weights(m, 1, meter)?;
     Ok(w.get(m.entry.func.index()).copied().unwrap_or(0))
 }
 
-/// [`entry_weight`] of every function.
-fn weights(m: &TypedModule, meter: &mut Meter) -> Result<Vec<u64>, Error> {
+/// What the stage bound weighs `m`'s entry at: [`entry_weight`] with each subgroup instruction
+/// (`OpGroupNonUniform*`) counted as [`SUBGROUP_WEIGHT`] instructions. The two weights answer two
+/// questions: [`entry_weight`] what a driver compiles, which decides where the roll writes a
+/// region once, and this one what a driver's compile takes, which grows with every subgroup
+/// instruction many times faster than with any other.
+pub fn bound_weight(m: &TypedModule, meter: &mut Meter) -> Result<u64, Error> {
+    let w = weights(m, SUBGROUP_WEIGHT, meter)?;
+    Ok(w.get(m.entry.func.index()).copied().unwrap_or(0))
+}
+
+/// The instructions one subgroup instruction counts as in [`bound_weight`].
+pub const SUBGROUP_WEIGHT: u64 = 64;
+
+/// The weight of every function: [`entry_weight`]'s, with each subgroup instruction counted as
+/// `group` instructions.
+fn weights(m: &TypedModule, group: u64, meter: &mut Meter) -> Result<Vec<u64>, Error> {
     let n = m.functions.len();
     let mut w = vec![0u64; n];
     // 0: not reached, 1: callees pending, 2: weighed.
@@ -274,7 +288,11 @@ fn weights(m: &TypedModule, meter: &mut Meter) -> Result<Vec<u64>, Error> {
                             .saturating_add(1)
                             .saturating_add(block.phis.len() as u64);
                         for node in &block.insts {
-                            total = total.saturating_add(inst_weight(node, &w));
+                            let one = match node.inst {
+                                Inst::Group { .. } => group,
+                                _ => inst_weight(node, &w),
+                            };
+                            total = total.saturating_add(one);
                         }
                     }
                     if let Some(x) = w.get_mut(f) {
@@ -745,7 +763,7 @@ fn find(
     meter: &mut Meter,
     ledger: &mut usize,
 ) -> Result<Option<Plan>, Error> {
-    let w = weights(m, meter)?;
+    let w = weights(m, 1, meter)?;
     // The entry and every function it calls, heaviest first: a stage's code may sit in a
     // function its entry calls (a fragment function's in the routine its entry point calls
     // between reading its inputs and writing its outputs).

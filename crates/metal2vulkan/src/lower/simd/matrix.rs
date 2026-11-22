@@ -36,7 +36,11 @@
 //!   lane owning `(row, k)` and its `b` cells from the lane owning `(k, col)` with absolute
 //!   shuffles inside its own simdgroup (in a simdgroup only partly taking part, which MSL leaves
 //!   undefined, no read leaves the lanes that take part: `tile_mad`), and accumulates with `Fma`
-//!   in increasing `k` (the `agx2` schedule, shared with [`super::agx`]). Every operand format is
+//!   in increasing `k` (the `agx2` schedule, shared with [`super::agx`]). On a subgroup the reads
+//!   are paired and the steps are a loop: one shuffle of a `vec2` carries a step's two `b` cells,
+//!   one carries the `a` cells of steps `2m` and `2m + 1` (one lane owns both), and the `dim / 2`
+//!   step pairs are the trips of a loop, so a driver compiles each shuffle once per multiply-add
+//!   (its compile's memory grows with every subgroup instruction). Every operand format is
 //!   converted exactly to `f32` first (`half` and `bfloat` are held widened; 8-bit floats decode
 //!   exactly). When every format is `half` each step rounds to `half` (the `f16matmad` form);
 //!   otherwise the sum accumulates in `f32` and rounds once to the result format.
@@ -72,13 +76,14 @@ use crate::memory::leaf::{k32, Leaf, Path};
 use crate::memory::provenance::Reach;
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::sym::Stage;
+use crate::spirv::builder::constructs::{ArmEnd, ArmFn, LoopFn, LoopSpec};
 use crate::spirv::builder::FunctionBuilder;
 use crate::spirv::error::BResult;
 use crate::spirv::ids::Value as SValue;
-use crate::spirv::ir::{BinOp, GlslOp};
+use crate::spirv::ir::{BinOp, GlslOp, MemAccess, Unrolling};
 
 use super::check_operands;
-use super::group::{bin_k, lane, Lane};
+use super::group::{bin_k, lane, shuffle, Lane, Live};
 
 /// The lanes of an 8x8 matrix value.
 const LANES: u32 = 64;
@@ -600,7 +605,8 @@ pub(super) struct TileMad {
 /// on a subgroup, where the multiply-add is [`TileMad::divergent`], through the ballot of the
 /// lanes executing it. MSL makes a multiply-add outside uniform control flow within the
 /// simdgroup undefined (section 2.4), so the product is promised only where the whole simdgroup
-/// takes part.
+/// takes part. On a subgroup the steps are [`paired_steps`]; the emulated tier's exchange reads
+/// each cell alone, the steps written out.
 pub(super) fn tile_mad(
     fb: &mut FunctionBuilder<'_>,
     ln: &Lane,
@@ -618,20 +624,29 @@ pub(super) fn tile_mad(
     let (ka, kb) = kept_bits(dim);
     let a_key = bin_k(fb, BinOp::BitwiseAnd, own, ka)?;
     let b_key = bin_k(fb, BinOp::BitwiseAnd, own, kb)?;
+    if ln.emu.is_none() {
+        let live = if divergent {
+            Some(ln.live_lanes(fb)?)
+        } else {
+            None
+        };
+        let cells = Cells {
+            a_key,
+            b_key,
+            live,
+            a: pair(fb, a)?,
+            b: pair(fb, b)?,
+        };
+        return paired_steps(fb, ln, how, &cells, acc);
+    }
     // Values 0 and 1 are the `a` cells, 2 and 3 the `b` cells.
     let ex = ln.exchange(fb, &[a[0], a[1], b[0], b[1]])?;
-    let live = match (divergent, &ln.emu) {
-        (true, None) => Some(ln.live_lanes(fb)?),
-        _ => None,
-    };
     for k in 0..dim {
         let (va, vb) = owner_bits(dim, k);
         let ao = bin_k(fb, BinOp::BitwiseOr, a_key, va)?;
         let ao = ln.absolute(fb, ao)?;
-        let ao = ln.cell_source(fb, live, ao)?;
         let bo = bin_k(fb, BinOp::BitwiseOr, b_key, vb)?;
         let bo = ln.absolute(fb, bo)?;
-        let bo = ln.cell_source(fb, live, bo)?;
         let av = ln.read(fb, &ex, (k & 1) as usize, ao)?;
         for (j, slot) in acc.iter_mut().enumerate() {
             let bv = ln.read(fb, &ex, 2 + j, bo)?;
@@ -641,6 +656,141 @@ pub(super) fn tile_mad(
     }
     ln.close(fb, ex)?;
     Ok(acc)
+}
+
+/// The calling lane's owner keys ([`kept_bits`]), the lanes taking part where the multiply-add is
+/// [`TileMad::divergent`], and the calling lane's `a` and `b` cells, each pair a `vec2`, of a
+/// multiply-add on a subgroup.
+#[derive(Clone, Copy)]
+struct Cells {
+    a_key: SValue,
+    b_key: SValue,
+    live: Option<Live>,
+    a: SValue,
+    b: SValue,
+}
+
+/// The `vec2` of cells `x`.
+fn pair(fb: &mut FunctionBuilder<'_>, x: [SValue; 2]) -> BResult<SValue> {
+    let f = fb.value_ty(x[0])?;
+    let v2 = fb.vec_of(f, 2)?;
+    fb.composite_construct(v2, &x)
+}
+
+/// The `a` cells of steps `2m` and `2m + 1` (`va` their owner's bits, [`owner_bits`], which keeps
+/// bit 0 of the step out of the `a` owner), as the `vec2` of the owner's two cells.
+fn a_pair(fb: &mut FunctionBuilder<'_>, ln: &Lane, cells: &Cells, va: SValue) -> BResult<SValue> {
+    let ao = fb.binary(BinOp::BitwiseOr, cells.a_key, va)?;
+    let ao = ln.absolute(fb, ao)?;
+    let ao = ln.cell_source(fb, cells.live, ao)?;
+    shuffle(fb, cells.a, ao)
+}
+
+/// One step on `acc`: `av` its `a` cell, `vb` its `b` owner's bits, the step's two `b` cells read
+/// as one `vec2`.
+fn step(
+    fb: &mut FunctionBuilder<'_>,
+    ln: &Lane,
+    how: &TileMad,
+    cells: &Cells,
+    vb: SValue,
+    av: SValue,
+    acc: &mut [SValue; 2],
+) -> BResult<()> {
+    let bo = fb.binary(BinOp::BitwiseOr, cells.b_key, vb)?;
+    let bo = ln.absolute(fb, bo)?;
+    let bo = ln.cell_source(fb, cells.live, bo)?;
+    let b2 = shuffle(fb, cells.b, bo)?;
+    for (j, slot) in acc.iter_mut().enumerate() {
+        let bv = fb.composite_extract(b2, &[j as u32])?;
+        let r = fb.glsl(GlslOp::Fma, &[av, bv, *slot])?;
+        *slot = narrow::round(fb, how.step, r)?;
+    }
+    Ok(())
+}
+
+/// [`owner_bits`] of the step `k` a loop's trip computes.
+fn owner_bits_of(fb: &mut FunctionBuilder<'_>, dim: u32, k: SValue) -> BResult<(SValue, SValue)> {
+    if dim == 4 {
+        let a = bin_k(fb, BinOp::ShiftRightLogical, k, 1)?;
+        let a = bin_k(fb, BinOp::BitwiseAnd, a, 1)?;
+        let b = bin_k(fb, BinOp::ShiftLeftLogical, k, 1)?;
+        Ok((a, b))
+    } else {
+        let a_hi = bin_k(fb, BinOp::BitwiseAnd, k, 4)?;
+        let a_hi = bin_k(fb, BinOp::ShiftLeftLogical, a_hi, 1)?;
+        let a_lo = bin_k(fb, BinOp::ShiftRightLogical, k, 1)?;
+        let a_lo = bin_k(fb, BinOp::BitwiseAnd, a_lo, 1)?;
+        let a = fb.binary(BinOp::BitwiseOr, a_hi, a_lo)?;
+        let b_lo = bin_k(fb, BinOp::BitwiseAnd, k, 3)?;
+        let b_lo = bin_k(fb, BinOp::ShiftLeftLogical, b_lo, 1)?;
+        let b_hi = bin_k(fb, BinOp::BitwiseAnd, k, 4)?;
+        let b_hi = bin_k(fb, BinOp::ShiftLeftLogical, b_hi, 2)?;
+        let b = fb.binary(BinOp::BitwiseOr, b_lo, b_hi)?;
+        Ok((a, b))
+    }
+}
+
+/// The steps of a multiply-add on a subgroup: a loop (`DontUnroll`, as `spirv::roll` writes one)
+/// of `dim / 2` trips, trip `m` taking steps `2m` and `2m + 1`, the sums carried in `Function`
+/// variables. Each step reads the cells the written-out steps read and accumulates them in the
+/// same order.
+fn paired_steps(
+    fb: &mut FunctionBuilder<'_>,
+    ln: &Lane,
+    how: &TileMad,
+    cells: &Cells,
+    acc: [SValue; 2],
+) -> BResult<[SValue; 2]> {
+    let f = fb.value_ty(acc[0])?;
+    let u = fb.uint_ty(32)?;
+    let mut sums = [acc[0]; 2];
+    for (v, x) in sums.iter_mut().zip(acc) {
+        let var = fb.local_var(f, None)?;
+        let p = fb.var_ptr(var)?;
+        fb.store(p, x, MemAccess::default())?;
+        *v = p;
+    }
+    let iv = fb.local_var(u, None)?;
+    let ip = fb.var_ptr(iv)?;
+    let zero = super::group::k(fb, 0)?;
+    fb.store(ip, zero, MemAccess::default())?;
+    let trips = how.dim / 2;
+    let body: LoopFn<'_, ()> = Box::new(move |fb, cx, lc| {
+        let i = fb.load(ip, MemAccess::default())?;
+        let done = bin_k(fb, BinOp::UGreaterThanEqual, i, trips)?;
+        let exit: ArmFn<'_, ()> = Box::new(move |fb, _| {
+            lc.break_(fb)?;
+            Ok(ArmEnd::Exits)
+        });
+        fb.if_(cx, done, exit, None)?;
+        let next = bin_k(fb, BinOp::IAdd, i, 1)?;
+        fb.store(ip, next, MemAccess::default())?;
+        let mut acc = [
+            fb.load(sums[0], MemAccess::default())?,
+            fb.load(sums[1], MemAccess::default())?,
+        ];
+        let k0 = bin_k(fb, BinOp::ShiftLeftLogical, i, 1)?;
+        let (va, vb0) = owner_bits_of(fb, how.dim, k0)?;
+        let av2 = a_pair(fb, ln, cells, va)?;
+        let av = fb.composite_extract(av2, &[0])?;
+        step(fb, ln, how, cells, vb0, av, &mut acc)?;
+        let k1 = bin_k(fb, BinOp::BitwiseOr, k0, 1)?;
+        let (_, vb1) = owner_bits_of(fb, how.dim, k1)?;
+        let av = fb.composite_extract(av2, &[1])?;
+        step(fb, ln, how, cells, vb1, av, &mut acc)?;
+        fb.store(sums[0], acc[0], MemAccess::default())?;
+        fb.store(sums[1], acc[1], MemAccess::default())
+    });
+    let spec = LoopSpec {
+        exit_sel: None,
+        unrolling: Unrolling::DontUnroll,
+    };
+    fb.loop_(&mut (), spec, body)?;
+    Ok([
+        fb.load(sums[0], MemAccess::default())?,
+        fb.load(sums[1], MemAccess::default())?,
+    ])
 }
 
 /// Emit strategy `s` of call `at` and bind its result.
