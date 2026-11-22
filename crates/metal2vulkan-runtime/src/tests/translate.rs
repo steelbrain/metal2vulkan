@@ -413,8 +413,9 @@ mod on_device {
 
     /// `icb_replay_grid_template`, which observes its threadgroup partition (threadgroup memory,
     /// a barrier, and every builtin of the partition), translated at creation, plainly and as its
-    /// partial-threadgroups variant: a whole `dispatchThreads` grid runs its plain module at the
-    /// call's size, a ragged one the variant, with no translation at any dispatch, and a
+    /// partial-threadgroups variant: every direct dispatch, a whole `dispatchThreads` grid, a
+    /// ragged one or threadgroup counts, runs the variant at the call's size, and an indirect one
+    /// the plain module, with no translation at any dispatch, and a
     /// threadgroup count past the device's limit on an axis
     /// runs split, each piece reading Metal's whole grid. Threadgroups deeper than 64, 1 by 1 by
     /// 320 and 2 by 3 by 100, run as one row of their threads on every device, whole, ragged and
@@ -544,14 +545,40 @@ mod on_device {
                 after.translations, created.translations,
                 "{name}: no translation at a dispatch, the first ragged grid's included"
             );
-            // The ragged grid's variant's pipeline, the whole grid's size, the one-thread size;
-            // the deep size, its ragged grid's variant (its indirect dispatch runs the whole one)
-            // and the second deep size.
-            let sizes = 5 + u64::from(past.is_some());
+            // One pipeline for each module and size the runs take: a ragged grid the variant; a
+            // threadgroup of whole SIMD groups of the device's tier the variant where direct and
+            // the plain module where indirect; any other the emulated variant.
+            let simd = &state.inner.compiled.whole.interface.multiples;
+            let whole_simd = |size: [u32; 3]| {
+                let threads = size.iter().product::<u32>();
+                simd.iter()
+                    .all(|&width| threads.is_multiple_of(width.max(1)))
+            };
+            let mut pipelines = std::collections::HashSet::new();
+            let mut on_variant = 0;
+            for &(grid, size, how) in &runs {
+                let ragged = how == How::Threads
+                    && (0..3).any(|axis| !grid[axis].is_multiple_of(size[axis]));
+                let module = match (how, ragged, whole_simd(size)) {
+                    (_, true, _) => "variant",
+                    (_, false, false) => "emulated",
+                    (How::Indirect, false, true) => "plain",
+                    (How::Threads | How::Groups, false, true) => {
+                        on_variant += 1;
+                        "variant"
+                    }
+                };
+                pipelines.insert((module, size));
+            }
             assert_eq!(
                 after.first_use_waits - created.first_use_waits,
-                sizes,
-                "{name}: first-use waits"
+                pipelines.len() as u64,
+                "{name}: first-use waits, one for each of {pipelines:?}"
+            );
+            assert_eq!(
+                after.partial_variant_whole_grids - created.partial_variant_whole_grids,
+                on_variant,
+                "{name}: whole grids on the partial-threadgroups variant"
             );
             println!(
                 "{name}: observing kernel checked over {} runs{}; creation {creation} ns, one lowering {lowering} ns; precision notes {}",
