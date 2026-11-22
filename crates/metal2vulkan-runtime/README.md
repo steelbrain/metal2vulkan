@@ -1830,6 +1830,12 @@ made, with no lock, and never rewritten for layouts.
   backlog, and a backlog whose last piece just completed passes no queue idle longer. A queue's
   backlog waits for as long as other queues that commit only when idle keep the device's room
   taken: Metal promises no order between queues, and the runtime keeps no aging rule for it.
+  Where one queue keeps 20 ms command buffers in flight, each signalling a waiter committed to
+  another queue, that waiter takes a place in the room, so the long queue's next starts one
+  completion round trip after the one before it ends: its GPU idle before each grew to about
+  0.45 ms on the RX 7900 XTX (job m3-max-68440) and the Iris Xe (job m3-max-68441) and 0.6 ms on
+  an RTX 3090 (job m3-max-68465), its GPU time a command buffer by 1.0%, 1.4% and 2.5% (by 0.3%,
+  0.9% and 1.1% where the other queue's command buffers wait for nothing).
   Without room, the ones committed meanwhile are held
   in one group of at most sixteen, each scheduled as it joins; one the group does not take is held
   too, not yet in a group, scheduled as it would be in one (its waits met, in its queue's order,
@@ -1863,8 +1869,13 @@ made, with no lock, and never rewritten for layouts.
   dispatches of a kernel with no measured rate yet, which share a piece of their own, and any
   other, and where a compute or blit encoder opens after a full piece, never before or inside a
   render pass (`Metrics::cuts`). A dispatch's expected run is its kernel's rate, the GPU run of
-  one threadgroup as the pieces that ran the kernel measured with their own timestamps, times its
-  threadgroups; an indirect dispatch, whose threadgroups only the GPU reads, counts as one. So a
+  one threadgroup as the pieces that ran the kernel measured it, times its threadgroups; an
+  indirect dispatch, whose threadgroups only the GPU reads, counts as one. A command buffer of
+  one segment (not cut, and not split at an event) is one piece, timed by its own two timestamps,
+  which hold no other submission's run, and writes no other; the first piece of several runs from
+  the command buffer's start to a timestamp at the piece's end; each other piece, and a first
+  whose dispatches follow a blit or render encoder's commands, is timed by two timestamps of its
+  own. So a
   command buffer of another queue committed while one runs goes between two of its pieces
   (`Metrics::pieces_passed`), unless it holds a buffer or texture the cut one holds (by the ids
   the hazards track them by, a heap's resources by the heap's), waits on a fence the cut one

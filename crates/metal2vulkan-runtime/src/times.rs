@@ -379,6 +379,14 @@ impl StampPools {
         Some(Pair { pool, first: 0 })
     }
 
+    /// For the device tests: the pairs taken and not given back.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn out_for_test(&self) -> usize {
+        let state = lock(&self.state);
+        let made = state.pools.len().saturating_sub(1) * (POOL_QUERIES / 2) as usize;
+        made + state.next as usize - state.free.len()
+    }
+
     /// Gives back `pair`, both its queries reset.
     pub(crate) fn give_back(&self, pair: Pair) {
         lock(&self.state).free.push(pair);

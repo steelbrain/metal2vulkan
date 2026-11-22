@@ -365,8 +365,10 @@ pub(crate) struct Segment {
     pub(crate) managed_reached: Vec<Arc<BufferInner>>,
     /// Its dispatches, which bound it as a piece (`crate::piece`).
     pub(crate) work: Work,
-    /// Its own pair of timestamp queries, from its first dispatch to its end, whose span feeds
-    /// its kernels' rates; None where it dispatches nothing or found no pair.
+    /// Its own pair of timestamp queries, whose span feeds its kernels' rates: from its first
+    /// dispatch to its end; of the first segment, taken only as it splits, its end alone, its run
+    /// starting at the command buffer's own start. None where it dispatches nothing or found no
+    /// pair, and for the only segment, which the command buffer's own pair spans (`retire`).
     pub(crate) stamps: Option<Pair>,
     /// A submission carried it, so its pair was written.
     pub(crate) sent: bool,
@@ -1082,6 +1084,20 @@ impl Building {
 
     /// Starts a new segment after the last one.
     fn split(&mut self) -> Result<(), Error> {
+        // The first segment's run starts at the command buffer's own start, where no other
+        // encoder's commands lead its dispatches: its pair, taken as it ends, gives the end, its
+        // first query written only so the pair reads whole.
+        let first = self.gpu.segments.len() == 1;
+        let last = self.last();
+        let timed = last.stamps.is_some() || last.work.is_empty() || last.work.led();
+        if let (true, false, Some(command)) = (first, timed, last.command) {
+            let core = self.device.core();
+            let pair = core.stamps.take(&core.device, &core.counters);
+            if let Some(pair) = pair {
+                times::write_start(&core.device, command, pair.pool, pair.first);
+            }
+            self.last().stamps = pair;
+        }
         self.close(&[], None)?;
         self.gpu.segments.push(Segment::default());
         Ok(())
@@ -1132,9 +1148,12 @@ impl Building {
     }
 
     /// Writes the start of the current segment's own pair into `command`, its command buffer,
-    /// before its first dispatch, where the device gives a pair.
+    /// before its first dispatch, where the device gives a pair: not in the command buffer's
+    /// first segment where no other encoder's commands lead it, whose run starts at the command
+    /// buffer's own start ([`split`](Self::split)).
     pub(crate) fn stamp_piece(&mut self, command: vk::CommandBuffer) {
-        if self.last().stamps.is_some() {
+        let last = self.gpu.segments.len() - 1;
+        if (last == 0 && !self.last().work.led()) || self.last().stamps.is_some() {
             return;
         }
         let core = self.device.core();
@@ -1742,22 +1761,35 @@ pub(crate) fn retire(
 ) {
     let Completion {
         gpu_times,
+        ticks,
         round,
         spans,
     } = completion;
     // Where its retirement begins, the step before its handlers (`Round::steps`): one clock read.
     let retiring = times::host_time();
-    // Each piece's own run, by its own pair, sets its kernels' rates (`crate::piece`), and its
-    // pair goes back, reset where a submission wrote it.
+    // Each piece's own run sets its kernels' rates (`crate::piece`): the first segment's from the
+    // command buffer's own start, unless another encoder's commands lead its dispatches, to its
+    // own pair's end or, the only one, the command buffer's own end; each other by its own pair.
+    // Each pair goes back, reset where a submission wrote it.
     let mut pieces = 0;
-    for segment in &gpu.segments {
+    if let ([segment], Some((start, end)), None) = (&gpu.segments[..], ticks, error) {
+        if segment.stamps.is_none() && !segment.work.led() {
+            segment.work.ran(core.ticks.span(start, end));
+        }
+    }
+    for (index, segment) in gpu.segments.iter().enumerate() {
         let Some(pair) = segment.stamps else {
             continue;
         };
         if let (true, None) = (segment.sent, error) {
             // SAFETY: the pair's pool is the device's, and only this retirement resets its two
             // queries, after this read.
-            if let Some((start, end)) = unsafe { pair.times(&core.device, &core.counters) } {
+            let read = unsafe { pair.times(&core.device, &core.counters) };
+            let start = |own| match index == 0 && !segment.work.led() {
+                true => ticks.map(|(start, _)| start),
+                false => Some(own),
+            };
+            if let Some((start, end)) = read.and_then(|(own, end)| Some((start(own)?, end))) {
                 let run = core.ticks.span(start, end);
                 segment.work.ran(run);
                 pieces += run;

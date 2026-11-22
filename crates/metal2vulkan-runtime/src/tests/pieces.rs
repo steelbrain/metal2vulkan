@@ -9,8 +9,9 @@
 //! next waits for every piece, a cut command buffer is scheduled at its first piece and kept by an
 //! abandon, and an idle queue's commit waits for no more than the two pieces on the device
 //! behind five queues' backlogs. Without the gate: the cuts counted, a kernel of unknown rate in
-//! a piece of its own whose run sets its rate, a dispatch past the bound uncut, and a blit encoder
-//! after a full piece cut.
+//! a piece of its own whose run sets its rate, a dispatch past the bound uncut, a blit encoder
+//! after a full piece cut, and a command buffer of one piece, committed behind another queue's
+//! long one, taking a rate that holds none of the long one's run.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
@@ -18,6 +19,7 @@ mod on_device {
         each_device, fill, finished, shared_event, within, word, Arena, Busy, BODY_RUN,
     };
     use crate::tests::compute::on_device::{add, step};
+    use crate::tests::gpu_span::on_device::{dispatches_for, long, words, WORDS};
     use crate::{
         Buffer, CommandBuffer, CommandBufferStatus, CommandQueue, ComputeCommandEncoder,
         ComputePipelineState, Device, DispatchType,
@@ -471,6 +473,84 @@ mod on_device {
                 assert_eq!(word(buffer), stepped(8), "{name}");
             }
             assert_eq!(word(&filled), 7, "{name}");
+        });
+    }
+
+    /// A command buffer of one piece takes no pair of timestamps past its own, and its kernel's
+    /// rate from its own two, which hold no other submission's run: one dispatch of `add`
+    /// committed to a queue right behind another queue's command buffer of about 20 ms of
+    /// dispatches, uncut (its kernel's rate the test's own), takes a rate under twice the rate it
+    /// takes alone. The ratio is printed. A start written before the long one ends would put its
+    /// tail in the rate.
+    #[test]
+    fn every_device_rates_a_one_piece_command_buffer_without_the_run_ahead_of_it() {
+        each_device("pieces_rate_behind", |name, _, device| {
+            let (long_state, add) = (step(&device), add(&device));
+            let words = words(&device);
+            let mut arena = Arena::new(&device);
+            let slots = [arena.buffer(), arena.buffer(), arena.buffer()];
+            let (first, second) = (queue(&device), queue(&device));
+            let count = dispatches_for(name, &first, &long_state, &words, 20_000_000);
+            // One dispatch of `add` on the second queue, its rate unknown, so its run sets it.
+            let one = || {
+                add.inner.compiled.rate.set_for_test(u64::MAX);
+                let command_buffer = second.command_buffer().expect("a command buffer");
+                let mut encoder = (command_buffer.compute_command_encoder(DispatchType::Serial))
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&add).expect("a state");
+                for (index, buffer) in (0..).zip(&slots) {
+                    encoder
+                        .set_buffer(Some(buffer), 0, index)
+                        .expect("a buffer");
+                }
+                (encoder.dispatch_threadgroups([1, 1, 1], [64, 1, 1])).expect("a dispatch");
+                encoder.end_encoding();
+                command_buffer
+            };
+            let rate = || (add.inner.compiled.rate.expected(1000)).expect("a rate");
+            // The first meets every first use; the second is the rate alone.
+            for _ in 0..2 {
+                let alone = one();
+                alone.commit().expect("a commit");
+                completed(name, &alone);
+            }
+            let alone = rate();
+            // Recorded, it holds its own pair of timestamps alone (`Building::stamp_piece`).
+            let stamps = &device.core().stamps;
+            let out = stamps.out_for_test();
+            let recorded = one();
+            assert_eq!(
+                stamps.out_for_test() - out,
+                1,
+                "{name}: the pairs a command buffer of one piece takes"
+            );
+            recorded.commit().expect("a commit");
+            completed(name, &recorded);
+            long_state.inner.compiled.rate.set_for_test(1);
+            let ahead = long(&first, &long_state, &words, count, WORDS);
+            let behind = one();
+            ahead.commit().expect("a commit");
+            behind.commit().expect("a commit");
+            assert_ne!(
+                ahead.status(),
+                CommandBufferStatus::Completed,
+                "{name}: the long command buffer still runs as the short one is committed"
+            );
+            completed(name, &ahead);
+            completed(name, &behind);
+            let run = (ahead.gpu_end_time()).saturating_sub(ahead.gpu_start_time());
+            let behind_rate = rate();
+            let ratio = behind_rate as f64 / alone.max(1) as f64;
+            println!(
+                "pieces_rate_behind: {name}: alone {alone} ps a threadgroup, behind a {} us \
+                 command buffer {behind_rate} ps: ratio {ratio:.2}",
+                run / 1000
+            );
+            assert!(
+                behind_rate < alone.saturating_mul(2),
+                "{name}: the rate behind the long command buffer, {behind_rate} ps, against \
+                 {alone} ps alone"
+            );
         });
     }
 }

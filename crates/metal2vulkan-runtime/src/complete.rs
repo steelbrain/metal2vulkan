@@ -539,9 +539,11 @@ impl Round {
 }
 
 /// What the completion thread knows of a command buffer's completion as it retires it: its GPU
-/// times where they were read, its round, and the GPU spans retired before it.
+/// times where they were read, placed on the host clock and as the GPU wrote them, its round,
+/// and the GPU spans retired before it.
 pub(crate) struct Completion<'a> {
     pub(crate) gpu_times: Option<(u64, u64)>,
+    pub(crate) ticks: Option<(u64, u64)>,
     pub(crate) round: &'a Round,
     pub(crate) spans: &'a Spans,
 }
@@ -756,6 +758,7 @@ pub(crate) fn run(core: Arc<Core>) {
                     .map(|(stamps, calibration)| calibration.place(&core.ticks, stamps, seen));
                 let completion = Completion {
                     gpu_times: times,
+                    ticks: stamps,
                     round: &round,
                     spans: &spans,
                 };

@@ -4,8 +4,11 @@
 //! while one runs waits for that piece rather than for the whole command buffer
 //! (`crate::submit`). A dispatch's expected run is its kernel's rate, the run of one of its
 //! threadgroups, times its threadgroups. Each rate comes from the runs of the pieces that ran the
-//! kernel, each piece timed by its own pair of timestamps, so the work of another queue's command
-//! buffer that went between two pieces is in no rate. The rate is scheduling data, as a queue's
+//! kernel: a command buffer of one piece timed by its own two timestamps, which nothing of another
+//! submission passes inside; the first piece of several from the command buffer's start to a
+//! timestamp at the piece's end; each later piece by a pair of its own. So the work of another
+//! queue's command buffer that went between two pieces is in no rate, and a command buffer that
+//! is not cut writes no timestamp past its own two. The rate is scheduling data, as a queue's
 //! expected run is (`QueueInner::expected_run`): it bounds where a piece ends, and never chooses
 //! between two forms of the work.
 
@@ -64,6 +67,9 @@ pub(crate) struct Work {
     /// which counts as one, a dispatch of a kernel of unknown rate beside others, or commands of
     /// a blit or render encoder after its first dispatch.
     blind: bool,
+    /// Commands of a blit or render encoder come before its first dispatch, so a span from the
+    /// command buffer's start would hold them: its own pair starts at its first dispatch.
+    led: bool,
 }
 
 impl Work {
@@ -116,9 +122,15 @@ impl Work {
         }
     }
 
-    /// Commands of another encoder follow its dispatches in the piece.
+    /// Commands of another encoder go in the piece: after its dispatches, or ahead of them.
     pub(crate) fn blind(&mut self) {
         self.blind |= !self.is_empty();
+        self.led |= self.is_empty();
+    }
+
+    /// Whether commands of another encoder came before its first dispatch.
+    pub(crate) fn led(&self) -> bool {
+        self.led
     }
 
     /// The piece ran `nanos` on the GPU: a kernel alone in it takes its rate from that run, and
