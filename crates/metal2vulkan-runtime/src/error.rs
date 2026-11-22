@@ -1794,9 +1794,9 @@ pub enum RenderPassKind {
     /// whose format the device's optimal image does not render, by its format features or its
     /// image format query at the texture's extent; a texture in place over a dma-buf's import (an
     /// imported surface's memory, whose bytes reach its image through the import's acquire); and
-    /// a view of a texture in place over a buffer whose linear image takes no attachment usage
-    /// (where it takes the usage, a view resolves in place, as its texture does). A texture in
-    /// place over a buffer of the
+    /// a view of another pixel format of a texture in place over a buffer whose linear image takes
+    /// no attachment usage (a view of its own format resolves as the texture does; where the linear
+    /// image takes the usage, a view resolves in place). A texture in place over a buffer of the
     /// runtime's own memory whose linear image takes none (of a format the device's linear tiling
     /// does not render, by its linear features or its image format query at the texture's extent,
     /// measured on the RTX 3090 and KosmicKrisp for every format; or whose subresource reaches

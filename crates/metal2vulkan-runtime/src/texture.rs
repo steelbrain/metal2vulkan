@@ -4661,17 +4661,16 @@ pub(crate) trait TextureObject {
     /// over a buffer of the runtime's own memory whose linear image takes none (its linear tiling
     /// does not render its format, or its subresource reaches past its own rows or its buffer),
     /// where its plan's optimal image does, resolves into its resolve image (`Resolved`, made at
-    /// its first resolve) with the copy the pass's end makes of it into the buffer's bytes, a copy
-    /// Metal does not make.
+    /// its first resolve), and so does a view of it of its format, with the copy the pass's end
+    /// makes of it into the buffer's bytes, a copy Metal does not make.
     ///
     /// Err: [`Gap::RenderPass`] of [`RenderPassKind::ResolveUsage`] for a texture whose image has
     /// none and that has no resolve image: a depth or stencil texture made without `RenderTarget`
     /// usage, a colour texture of a type but 2D, a 2D array, a cube or a cube array or whose format
     /// the device's optimal image does not render, a texture in place over a dma-buf's import, and
-    /// a view of a texture in place whose linear image takes none; [`Refusal::AttachmentPlace`]
-    /// past a texture over a buffer's
-    /// one level and slice; [`Error::Vulkan`] where its resolve image cannot be made; as
-    /// [`attachment`] for the rest.
+    /// a view of another format of a texture in place whose linear image takes none;
+    /// [`Refusal::AttachmentPlace`] past a texture over a buffer's one level and slice;
+    /// [`Error::Vulkan`] where its resolve image cannot be made; as [`attachment`] for the rest.
     ///
     /// [`attachment`]: TextureObject::attachment
     fn resolve_attachment(
@@ -4693,12 +4692,16 @@ pub(crate) trait TextureObject {
             })
         };
         let resolving = image.and_then(|image| image.resolving.as_deref());
-        let (Some(resolving), None, Some(named), Some(unit)) =
-            (resolving, &object.view, &object.named, object.unit)
+        let (Some(resolving), Some(named), Some(unit)) = (resolving, &object.named, object.unit)
         else {
             return Err(gap());
         };
         let (d, shape, plan) = &resolving.made;
+        // A view of the texture resolves into its parent's resolve image where it is of its
+        // format: its one level and slice are the parent's.
+        if object.format != plan.format {
+            return Err(gap());
+        }
         let (buffer, region) = named.region(unit, d).ok_or_else(gap)?;
         // As `attachment_view` refuses a place past the texture's one level and slice.
         if level != 0 || slice != 0 || layers != 1 {

@@ -29,7 +29,8 @@
 //!   buffer, one copy of 1,440,000 bytes counted. The buffer reads the clear within one code and
 //!   keeps the bytes past each row's texels; a pass after it in the same command buffer reads the
 //!   clear through the texture; a second resolve into it makes no image and no allocation; a pass
-//!   of a smaller area copies its render area alone, the texels past it untouched. A depth
+//!   of a smaller area copies its render area alone, the texels past it untouched; in place, a view
+//!   of the texture of its format resolves as the texture does. A depth
 //!   resolve into a `Depth32Float` texture of `ShaderRead` usage is the gap `ResolveUsage`.
 //! - Under a device cfg, on every device of the cfg's kind, whether it has
 //!   `shaderStorageImageMultisample` or not: a 4-sample `RGBA8Unorm` texture made for shader
@@ -729,6 +730,7 @@ mod on_device {
     /// at each pixel, its centre the clear within one code. A second resolve into the texture, in
     /// a command buffer of its own, makes no image and no allocation. A pass of a 300 x 300 area
     /// resolves Vulkan's 320 x 320 render area alone, the texels past it keeping the host's bytes.
+    /// In place, a view of the texture of its format resolves as the texture does.
     #[test]
     fn every_device_resolves_a_loaded_pass_into_a_shader_read_texture_over_a_buffer() {
         const WALK: u32 = 600;
@@ -795,7 +797,7 @@ mod on_device {
             let mut pitches = vec![ROW, rounded, 2_560];
             pitches.dedup();
             let mut index = IndexClass::Texture.range().start;
-            (device.grant_indices(IndexClass::Texture, index, 2 * pitches.len() as u32))
+            (device.grant_indices(IndexClass::Texture, index, 4 * pitches.len() as u32))
                 .expect("a grant");
             let queue = device.new_command_queue(1).expect("a queue");
             for pitch in pitches {
@@ -1002,6 +1004,64 @@ mod on_device {
                          resolved {reach} x {reach} texels; {outside} bytes of the texels past \
                          them and {past} past the rows changed; resolve copy bytes {copy_bytes}"
                     );
+                    // A view of it of its format resolves as it does, in place.
+                    if in_place {
+                        // SAFETY: the buffer's bytes, which no command uses now.
+                        unsafe { contents.as_ptr().write_bytes(0xee, len as usize) };
+                        if managed {
+                            (buffer.did_modify_range(0, len)).expect("a modified range");
+                        }
+                        let view = (over.new_texture_view(
+                            format,
+                            td.texture_type,
+                            0..1,
+                            0..1,
+                            Some(index),
+                        ))
+                        .unwrap_or_else(|error| {
+                            panic!("{name}: {kind} at {pitch}: a view: {error}")
+                        });
+                        index += 1;
+                        let mut viewed = walk.clone();
+                        viewed.color_attachments[0].resolve_texture = Some(view.clone());
+                        let command_buffer = queue.command_buffer().expect("a command buffer");
+                        let before = device.counters().metrics();
+                        let encoder = (command_buffer.render_command_encoder(&viewed))
+                            .unwrap_or_else(|e| panic!("{name}: {kind} at {pitch}: a view: {e}"));
+                        encoder.end_encoding();
+                        if managed {
+                            let mut blit = command_buffer.blit_command_encoder().expect("a blit");
+                            (blit.synchronize_resource(Resource::Buffer(&buffer)))
+                                .unwrap_or_else(|error| panic!("{name}: {error}"));
+                            blit.end_encoding();
+                        }
+                        run(name, &command_buffer);
+                        let copies =
+                            device.counters().metrics().resolve_copies - before.resolve_copies;
+                        assert_eq!(
+                            copies,
+                            u64::from(through),
+                            "{name}: {kind} at {pitch}: a view"
+                        );
+                        // SAFETY: the buffer's bytes, which no command uses now.
+                        let held =
+                            unsafe { std::slice::from_raw_parts(contents.as_ptr(), len as usize) };
+                        let texels: Vec<u8> = (held.chunks(pitch_bytes))
+                            .flat_map(|r| r[..row].iter().copied())
+                            .collect();
+                        let past = (held.chunks(pitch_bytes)).flat_map(|r| &r[row..]);
+                        let changed = past.filter(|&&byte| byte != 0xee).count();
+                        cleared(name, &texels);
+                        assert_eq!(
+                            changed, 0,
+                            "{name}: {kind} at {pitch}: a view, past the texels"
+                        );
+                        println!(
+                            "resolve_over: {name}: {kind} pitch {pitch}: a view of its format \
+                             resolved; {changed} bytes past the texels changed; resolve copies {copies}"
+                        );
+                        drop((view, viewed));
+                    }
                     drop((over, buffer, block));
                 }
             }
