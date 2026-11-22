@@ -1058,7 +1058,14 @@ the Direct3D 11 texture's payload until it is freed.
   647 µs held it for 579 µs.
 - NVIDIA's Linux driver allocates host-visible memory at about 0.14 ms per MiB on an RTX 3090 and
   0.2 ms per MiB on an RTX 2080, in every form we tried (plain, with a device address, dedicated,
-  cached or not), against about 0.03 ms per MiB for device-local memory on the 3090. A take longer
+  cached or not), against about 0.03 ms per MiB for device-local memory on the 3090. Device-local
+  memory made dedicated to its buffer allocates 7 to 30 times as fast there and frees 5 to 20 times
+  as fast, with nothing moved to its first use (547 MiB in 0.51 ms against 15.48 ms, freed in
+  0.81 against 15.95 ms; job m3-max-65734). The runtime's pool allocations are plain: they hold
+  textures, which Vulkan keeps out of memory dedicated to a buffer
+  (`VUID-vkBindImageMemory-memory-10926`), and on a Radeon 780M and an Iris Xe a dedicated
+  allocation with its first fill was not faster (up to 8.7% slower; jobs m3-max-65776 and
+  m3-max-65785). A take longer
   than the pool's 16 MiB allocations allocates on the calling thread and pays it there: in one
   consumer's replay stream on the 3090, six Shared takes of 547 MiB took about 70 ms each, and its
   Shared takes past 16 MiB took 1.46 s of the stream's 210 s. The pool keeps no memory to avoid
@@ -1102,6 +1109,13 @@ the Direct3D 11 texture's payload until it is freed.
   RX 550 and the RX 7900 XTX, against 25.5 to 27.4 GB/s under NVIDIA's driver (620.70.06) on the
   RTX 3090 and RTX 2080, and 24 to 27 GB/s for the same `memset` into fresh pages of the host's
   own memory on those hosts; into pages written before, 73 to 97 GB/s on every one of them.
+  So a new long Shared buffer costs at its make what a Mac pays at its first write. In a guest
+  on the runtime, making a new 547 MiB Shared buffer and writing it once took 191.2, 152.6 and
+  146.3 ms for the first three in a process on an RTX 3090 (job m3-max-65737), and 252.3, 110.0
+  and 106.7 ms on a Radeon 780M (job m3-max-65736). On a Mac with a Radeon Pro 5300M (job
+  m3-max-65625) the make took 0.179 ms, its first write pass 221.27 ms and a second pass
+  18.99 ms. A make plus its first write is at or under the Mac's on both cards, except the
+  780M's first in a process.
   `Metrics::long_take_zero_writes` counts the zeroing of takes past the 16 MiB unit. The runtime
   does not use
   `VK_EXT_zero_initialize_device_memory`: under RADV (Mesa 26.2.6) an RX 7900 XTX's memory
