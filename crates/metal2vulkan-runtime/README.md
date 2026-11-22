@@ -930,6 +930,18 @@ the Direct3D 11 texture's payload until it is freed.
 
 ### Known gaps of memory blocks
 
+- On the Radeon 780M (RADV of Mesa 26.2.6) a texture over a buffer in a dma-buf's one import is
+  the counted copy (`over_copies_dma_buf`). The external image query refuses the dma-buf handle
+  with `LINEAR` tiling (`VK_ERROR_FORMAT_NOT_SUPPORTED`) for RGBA8Unorm and RGBA8Uint, for every
+  usage asked: sampled, sampled and storage, either with both copies, and mutable with the sRGB
+  view. The same linear image without the handle is offered, with the `LINEAR` features equal to
+  the optimal ones, and takes the program's own pitch: 7,680 bytes at 1920 wide, 9,984 at 2448
+  wide (rows padded to 256) and 4,096 at 1024 wide, at an alignment of 256 and with no dedicated
+  allocation (job m3-max-68787). With `DRM_FORMAT_MOD_LINEAR` tiling the query offers the
+  dma-buf image for every one of those usages, importable and not dedicated-only, and an image
+  made with that explicit pitch takes it; but its memory requirements require a dedicated
+  allocation, which no image at a texture's place inside a buffer's import has (job
+  m3-max-68847). The runtime asks the `LINEAR` tiling alone.
 - On the Iris Xe (ANV, Mesa 26.2.6) the dma-buf query offers a device-local-only type first, so
   its dma-bufs are refused with `Limit::ImportType`, and a consumer imports those pages by pointer.
   Its sparse buffers import no dma-buf either, so `Device::import_dma_bufs` refuses there, as it
@@ -1680,7 +1692,16 @@ made, with no lock, and never rewritten for layouts.
   2448x3264 RGBA8 at 9,984 bytes a row, against the device's linear row of 9,856, took 206 copies
   of 3,835,938,720 bytes in three frames, 95.2% of the play's pitch-copy bytes; their cost on those
   frames was not resolved: the means read 0.9% more GPU busy time and 2.2% more wall time, with
-  the two pairs of opposite sign (job m3-max-68398). A render
+  the two pairs of opposite sign (job m3-max-68398). In a recorded play of a compute benchmark on
+  the Radeon 780M, with the no-copy buffers the program may own imported as udmabufs over a memfd,
+  the copies of textures over those imports cost each workload this share of its timed GPU time,
+  against the same play over the runtime's own Shared memory (job m3-max-68694): the leading
+  uploads' own GPU time exactly, and the copies inside a command buffer at most the time those
+  command buffers lose against the other play. A background blur: 600 copies of 4,976,640,000
+  bytes, at most 1.94% of 5.238 s. An image workload: 240 copies of 11,955,164,160 bytes, 2.99%
+  exactly and at most 6.94% of 5.044 s. A second image workload: 60 copies of 3,150,950,400
+  bytes, at most 2.68% of 5.294 s. A path tracer: 83 copies of 174,063,616 bytes, at most 2.23% of
+  5.221 s. The benchmark's other workloads took none. A render
   target over a buffer is copied on NVIDIA, whose linear tiling does not take it in place. A
   render target whose advertised subresource ends past its own rows or its buffer is copied too:
   llvmpipe (lavapipe) advertises a linear image's height rounded up to 4 rows and stores whole
