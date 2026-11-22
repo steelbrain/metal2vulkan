@@ -3866,8 +3866,9 @@ cache is answered compile-required on both.
   cannot read through is
   `Gap::Draw` of `FetchedAttachment`: a drawable's texture (its image has no feedback usage and no
   second element; no boot or replay stream fetched one), a texture made with no index, one that is
-  no 2D texture at its first level and slice, a texture of an image another attachment of the pass
-  shares (two planes of one surface), and every attachment on a device without the attachment reads.
+  no 2D texture at its first level and slice (a 2D array texture among them, of one slice too, as a
+  layered pass renders into), a texture of an image another attachment of the pass shares (two
+  planes of one surface), and every attachment on a device without the attachment reads.
 - A pass over a surface plane that renders as a linear colour attachment alone (Exported
   surfaces: an opaque handle's plane in place through
   `VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV`, every plane format measured on the RTX 3090
