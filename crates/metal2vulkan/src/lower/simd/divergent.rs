@@ -26,11 +26,11 @@
 //!   block, crosses the guard's merge and is demoted to a `Function` variable like a
 //!   block-crossing value.
 //! - **Multiply-adds**: a matrix or AGX multiply-add in a divergent block is a synchronization like
-//!   any other; its exchange publishes the live flag, and a cell of a lane that is not live reads
-//!   as zero, which is Metal's answer for a partly live simdgroup's matrix multiply-add
-//!   (`workgroup::Emu::read_cell`), with Metal's `+0` sign. The AGX form shares the rule; its Metal
-//!   reading is unmeasured. Nothing is refused. On the subgroup tiers the same multiply-add ballots
-//!   its live lanes instead (`super::partly_live`).
+//!   any other; its exchange publishes the live flag, and a cell of a lane that is not live is read
+//!   through the calling lane (`workgroup::Emu::read`). MSL makes a matrix multiply-add outside
+//!   uniform control flow within the simdgroup undefined (section 2.4), so a partly live
+//!   simdgroup's product is not promised; the AGX form shares the rule. Nothing is refused. On the
+//!   subgroup tiers the same multiply-add ballots its live lanes instead (`super::partly_live`).
 //!
 //! **Workgroup barriers in every tier**. A threadgroup barrier that part of the workgroup skips
 //! (after a divergent early return, under a thread-dependent condition, or in a loop with a

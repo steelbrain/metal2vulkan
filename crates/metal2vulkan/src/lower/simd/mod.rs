@@ -28,10 +28,10 @@
 //!   on): simdgroup `k` is the linear threads `[32k, 32k + 32)` of `LocalInvocationIndex`, and
 //!   every operation that reads other lanes exchanges them through a workgroup-memory scratch
 //!   between workgroup barriers. An operation outside workgroup-uniform control flow ([`uniform`])
-//!   runs predicated ([`divergent`]). A matrix or AGX multiply-add reads the cells of a lane past
-//!   the thread count, or not live in a divergent block, as zero: Metal's answer for the matrix
-//!   form; the AGX form's is unmeasured. A shuffle, broadcast, or fill from a lane past the thread
-//!   count, or not live in a divergent block, reads all-zero bits, Metal's answer.
+//!   runs predicated ([`divergent`]). A multiply-add's cell, shuffle, broadcast, or fill from a
+//!   lane past the thread count, or not live in a divergent block, reads the calling lane's value
+//!   instead: a thread reads only from an active thread (MSL 4.1 section 6.10.2), so the value is
+//!   not promised.
 //!
 //! **The widest mode.** Where the device's compiler chooses a kernel's SIMD width itself
 //! (`subgroupSizeControl` with `minSubgroupSize` below 32 and `maxSubgroupSize` 32, as ANV's
@@ -84,14 +84,15 @@
 //! operation that reads another lane's value by its index (a matrix or AGX multiply-add's cells; a
 //! simdgroup or quad shuffle, shuffle-xor, relative shuffle, rotation, broadcast by lane, or fill,
 //! [`group::reads_lanes`]) where some lane of its group may not take part ([`partly_live`]) takes
-//! the ballot of the lanes executing it and reads a lane whose bit is clear as all-zero bits (`+0`
-//! cells, Metal's sign), through the calling lane, so no shuffle names an invocation outside the
-//! shuffle's tangle. Zero is Metal's answer for a lane past a kernel's thread count, past a draw's
-//! vertex count, and off in a branch, for every move. A kernel's simdgroups are whole there
-//! (`subgroup::requirement`), so in a uniform block every lane takes part and the plain shuffles
-//! stand. Outside kernels every such operation takes that form, and on `PartialFragment` a source
-//! at or above the subgroup's size, a permanently inactive Metal lane, reads zero without the
-//! ballot's bit extract or a shuffle naming it.
+//! the ballot of the lanes executing it and reads a lane whose bit is clear through the calling
+//! lane, so no shuffle names an invocation outside the shuffle's tangle: SPIR-V makes such a
+//! shuffle's result poison, and a branch or an index that consumes poison is undefined behavior.
+//! What a lane reads in place of one that takes no part is unspecified: a thread reads only from
+//! an active thread (MSL 4.1 section 6.10.2), so the value is not promised. A kernel's simdgroups
+//! are whole there (`subgroup::requirement`), so in a uniform block every lane takes part and the
+//! plain shuffles stand. Outside kernels every such operation takes that form, and on
+//! `PartialFragment` a source at or above the subgroup's size, a permanently inactive Metal lane,
+//! is read through the calling lane without the ballot's bit extract or a shuffle naming it.
 //!
 //! **Helpers**. A fragment function whose group operations read, combine, or count other lanes
 //! declares `RequireFullQuadsKHR`, so each quad starts with its four invocations and its helpers
@@ -292,8 +293,8 @@ pub struct SimdPlan {
     /// the matrix and AGX multiply-adds and the group operations that read a lane's value by its
     /// index ([`group::reads_lanes`]), in a kernel's blocks `uniform::Uniformity` cannot prove
     /// workgroup uniform and in every block of another stage. On a subgroup tier each reads through
-    /// the ballot of the lanes executing it, so a lane that does not take part gives all-zero bits
-    /// and no shuffle names it; [`partly_live`].
+    /// the ballot of the lanes executing it, so a lane that does not take part is read through the
+    /// calling lane and no shuffle names it; [`partly_live`].
     pub partly_live: BTreeSet<ValueId>,
     /// Some operation reads, combines, or counts other lanes of its simdgroup or quad (every
     /// group operation, an AGX multiply-add): in a fragment function its answer counts the
@@ -622,11 +623,12 @@ fn reads_live_lanes(s: &Strategy) -> bool {
 
 /// Record the operations of the body that read another lane where some lane of the group may
 /// not take part (`SimdPlan::partly_live`), before the tier is chosen: on a subgroup tier such an
-/// operation ballots its live lanes and reads a lane that does not take part as all-zero bits,
-/// Metal's answer for a lane past a kernel's thread count or a draw's vertex count, through the
-/// calling lane, so no shuffle names an inactive invocation. The family's operation classes gain
-/// `Ballot` (`OpGroupNonUniformBallot`, `OpGroupNonUniformBallotBitExtract`), and `Shuffle` when a
-/// group operation is among them (a quad instruction's lane is then read by a shuffle).
+/// operation ballots its live lanes and reads a lane that does not take part through the calling
+/// lane, so no shuffle names an inactive invocation (SPIR-V makes that shuffle's result poison);
+/// the value read in its place is not promised (MSL 4.1 section 6.10.2). The family's operation
+/// classes gain `Ballot` (`OpGroupNonUniformBallot`, `OpGroupNonUniformBallotBitExtract`), and
+/// `Shuffle` when a group operation is among them (a quad instruction's lane is then read by a
+/// shuffle).
 ///
 /// A kernel's subgroup is every lane of its simdgroup on the `Direct` and `Cluster32` tiers,
 /// which require full subgroups and a local size that is a multiple of the subgroup size
@@ -634,7 +636,7 @@ fn reads_live_lanes(s: &Strategy) -> bool {
 /// a workgroup-uniform block every lane takes part and no lane is past the thread count: such an
 /// operation keeps its plain shuffles. Uniformity is conservative (a block every lane of a
 /// simdgroup executes, under a branch on the simdgroup index, is divergent to it); the ballot then
-/// has every bit, and the selects keep every value. Another stage's groups are not required whole
+/// has every bit, and the select keeps every source. Another stage's groups are not required whole
 /// (a vertex simdgroup past the draw's vertex count, a fragment's uncovered pixels), and neither
 /// is a kernel's partial threadgroup's last simdgroup (`LoweringInputs::partial_threadgroups`),
 /// so every such operation there ballots its live lanes, and its uniformity is not computed.

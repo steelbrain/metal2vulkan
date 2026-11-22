@@ -298,23 +298,6 @@ pub(super) fn shuffle(fb: &mut FunctionBuilder<'_>, v: SValue, src: SValue) -> B
     fb.group_shuffle(ShuffleOp::Shuffle, v, src)
 }
 
-/// All-zero bits of `like`'s type: the cell a multiply-add reads for a lane that does not take
-/// part (`+0`, Metal's sign), every tier's one constant, and the value an emulated shuffle reads
-/// from a lane past the thread count (`workgroup::Emu::read_lane`).
-pub(super) fn zero_cell(fb: &mut FunctionBuilder<'_>, like: SValue) -> BResult<SValue> {
-    let ty = fb.value_ty(like)?;
-    let zero = fb.module().constant(Constant::Null { ty })?;
-    fb.module().const_value(zero)
-}
-
-/// Where a multiply-add reads one owner lane's cells, or a partly live group operation its
-/// source's value ([`Lane::cell_source`]): the lane a read names, and, on a subgroup whose live
-/// lanes the operation balloted, whether that lane takes part (`None`: it does).
-pub(super) struct CellSource {
-    at: SValue,
-    on: Option<SValue>,
-}
-
 impl Lane {
     /// The Metal lane: `L & 31` in a cluster, `L` otherwise.
     pub(super) fn metal(&self, fb: &mut FunctionBuilder<'_>) -> BResult<SValue> {
@@ -407,21 +390,25 @@ impl Lane {
         Ok(Live { ballot, size })
     }
 
-    /// Where a multiply-add (`matrix::tile_mad`) or a partly live group operation
-    /// ([`Lane::read_from`]) reads lane `src`. On a subgroup with `live` (its
-    /// [`Lane::live_lanes`]) `src` takes part exactly when its ballot bit is set, and an inactive
-    /// `src` is read through the calling lane, which is active, so no shuffle names an inactive
-    /// invocation. On the `PartialFragment` tier a Metal lane at or above the subgroup's size is
-    /// permanently inactive: it takes no part, and the bit extract reads the calling lane's bit
-    /// instead, so no index reaches the size (the bit extract and the shuffle are poison there).
-    /// Without `live` (a block that every lane of a whole subgroup executes), and in the emulated
-    /// tier, whose exchange carries its own active flags, `src` is read as it is.
+    /// The lane a multiply-add (`matrix::tile_mad`) or a partly live group operation
+    /// ([`Lane::read_from`]) reads for lane `src`. On a subgroup with `live` (its
+    /// [`Lane::live_lanes`]) `src` takes part exactly when its ballot bit is set, and a `src` that
+    /// takes no part is read through the calling lane, which does, so no shuffle names an
+    /// invocation outside its tangle: SPIR-V makes such a shuffle's result poison, and a branch or
+    /// an index that consumes poison is undefined behavior. On the `PartialFragment` tier a Metal
+    /// lane at or above the subgroup's size takes no part, and the bit extract reads the calling
+    /// lane's bit instead, so no index reaches the size (the bit extract and the shuffle are
+    /// poison there too). What a lane reads in place of one that takes no part is unspecified:
+    /// MSL leaves such a read undefined (section 6.10.2), and the value is not promised. Without
+    /// `live` (a block that every lane of a whole subgroup executes), and in the emulated tier,
+    /// whose exchange carries its own active flags (`workgroup::Emu::read`), `src` is read as it
+    /// is.
     pub(super) fn cell_source(
         &self,
         fb: &mut FunctionBuilder<'_>,
         live: Option<Live>,
         src: SValue,
-    ) -> BResult<CellSource> {
+    ) -> BResult<SValue> {
         match live {
             Some(live) if self.emu.is_none() => {
                 let on = match live.size {
@@ -433,32 +420,9 @@ impl Lane {
                     }
                     None => fb.group_ballot_bit_extract(live.ballot, src)?,
                 };
-                let at = fb.select(on, src, self.l)?;
-                Ok(CellSource { at, on: Some(on) })
+                fb.select(on, src, self.l)
             }
-            _ => Ok(CellSource { at: src, on: None }),
-        }
-    }
-
-    /// A multiply-add's cell `i` of `ex` as the lane `src` names published it
-    /// (`matrix::tile_mad`). A lane that does not take part reads a [`zero_cell`]: on a subgroup,
-    /// a lane whose ballot bit is clear ([`Lane::cell_source`]); in the emulated tier, one past the
-    /// thread count or not live in a divergent block (`workgroup::Emu::read_cell`).
-    pub(super) fn read_cell(
-        &self,
-        fb: &mut FunctionBuilder<'_>,
-        ex: &Exchange,
-        i: usize,
-        src: &CellSource,
-    ) -> BResult<SValue> {
-        match (ex, &self.emu, src.on) {
-            (Exchange::Workgroup(p), Some(e), _) => e.read_cell(fb, self.l, p, i, src.at),
-            (Exchange::Subgroup(vals), None, Some(on)) => {
-                let x = shuffle(fb, nth(vals, i)?, src.at)?;
-                let zero = zero_cell(fb, x)?;
-                fb.select(on, x, zero)
-            }
-            _ => self.read(fb, ex, i, src.at),
+            _ => Ok(src),
         }
     }
 
@@ -487,9 +451,9 @@ impl Lane {
     }
 
     /// Value `v` of lane `src`. With `live` (a partly live group operation's
-    /// [`Lane::live_lanes`], `super::partly_live`), a lane that does not take part reads all-zero
-    /// bits, Metal's answer, through the calling lane ([`Lane::cell_source`]), so no shuffle names
-    /// an inactive invocation; without it, the plain shuffle.
+    /// [`Lane::live_lanes`], `super::partly_live`), a lane that does not take part is read through
+    /// the calling lane ([`Lane::cell_source`]), so no shuffle names an invocation outside its
+    /// tangle; without it, the plain shuffle.
     fn read_from(
         &self,
         fb: &mut FunctionBuilder<'_>,
@@ -498,20 +462,7 @@ impl Lane {
         src: SValue,
     ) -> BResult<SValue> {
         let at = self.cell_source(fb, live, src)?;
-        self.read_at(fb, v, &at)
-    }
-
-    /// Value `v` at the source [`Lane::cell_source`] gave: all-zero bits where it does not take
-    /// part.
-    fn read_at(&self, fb: &mut FunctionBuilder<'_>, v: SValue, at: &CellSource) -> BResult<SValue> {
-        let x = shuffle(fb, v, at.at)?;
-        match at.on {
-            Some(on) => {
-                let zero = zero_cell(fb, x)?;
-                fb.select(on, x, zero)
-            }
-            None => Ok(x),
-        }
+        shuffle(fb, v, at)
     }
 }
 
@@ -788,8 +739,9 @@ fn simd_op(
 /// only keeps the wrap arithmetic from underflowing (old-engine authored cases
 /// `shift-a-whole-simd-cluster-out-through-the-fill`, `filter_error_map_SIMD`).
 ///
-/// A partly live fill (`live`) reads both values of a source that does not take part as all-zero
-/// bits (Metal's answer past the thread count).
+/// A partly live fill (`live`) reads both values of a source that does not take part through the
+/// calling lane ([`Lane::cell_source`]): MSL leaves the values undefined, and they are not
+/// promised.
 fn fill(
     fb: &mut FunctionBuilder<'_>,
     ln: &Lane,
@@ -801,8 +753,8 @@ fn fill(
     let up = g.op == GroupOp::ShuffleAndFillUp;
     let (src, inside) = fill_source(fb, ln, g, up, d, modulo)?;
     let at = ln.cell_source(fb, live, src)?;
-    let x = ln.read_at(fb, data, &at)?;
-    let y = ln.read_at(fb, fill, &at)?;
+    let x = shuffle(fb, data, at)?;
+    let y = shuffle(fb, fill, at)?;
     fb.select(inside, x, y)
 }
 

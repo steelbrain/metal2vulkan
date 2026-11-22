@@ -25,20 +25,21 @@
 //! partially occupied, as in Metal). A kernel with an operation in any other block is emitted
 //! predicated ([`super::divergent`]): every invocation executes the operation, and the invocations
 //! that do not execute it in the source publish an inactive flag beside their words
-//! (`EmitCx::active`), so the active lanes are the lanes below `N` whose flag is set; a source lane
-//! past `N` reads zero bits, and so does one below `N` that is not active (a multiply-add's cell
-//! reads zero), reductions and prefix sums fold only active lanes (in the tree forms an inactive
-//! lane takes part with the operation's identity, `-0` for a float sum, and in a float min or max,
-//! which is idempotent, with the first active lane's operand instead, so no NaN reaches `NMin` or
-//! `NMax`), and votes, `is_first`, `broadcast_first`, and the quad's first lane and mask read the
-//! active lanes' word. [`vote`] decides whether any invocation of the workgroup is still in a
-//! predicated loop. In workgroup-uniform blocks:
+//! (`EmitCx::active`), so the active lanes are the lanes below `N` whose flag is set; a read of a
+//! source lane that is not active (past `N`, or below it with its flag clear) reads the calling
+//! lane's words ([`Emu::read`]), reductions and prefix sums fold only active lanes (in the tree
+//! forms an inactive lane takes part with the operation's identity, `-0` for a float sum, and in a
+//! float min or max, which is idempotent, with the first active lane's operand instead, so no NaN
+//! reaches `NMin` or `NMax`), and votes, `is_first`, `broadcast_first`, and the quad's first lane
+//! and mask read the active lanes' word. [`vote`] decides whether any invocation of the workgroup
+//! is still in a predicated loop. In workgroup-uniform blocks:
 //!
 //! - shuffles and broadcasts read their source lane's words; a source outside the threadgroup (a
-//!   lane of a partial simdgroup past `N`, whose value Metal leaves undefined) reads all-zero
-//!   bits, Metal's answer ([`Emu::read_lane`], which amends the calling-lane rule), so no read uses
-//!   words no lane wrote; relative shuffles keep Metal's rule of reading the calling lane where the
-//!   source leaves the simdgroup or quad;
+//!   lane of a partial simdgroup past `N`) reads the calling lane's words ([`Emu::read`]), so no
+//!   read uses words no lane wrote; what it reads there is unspecified, since a thread reads only
+//!   from an active thread (MSL 4.1 section 6.10.2), and the value is not promised; relative
+//!   shuffles keep Metal's rule of reading the calling lane where the source leaves the simdgroup
+//!   or quad;
 //! - simdgroup reductions combine the lanes below `N` in a tree of five exchange rounds
 //!   (`tree_fold`): exact for integers, a narrow float sum rounded after each addition, and a float
 //!   sum's association order the tree's (`ReductionOrder` is recorded as in every tier); prefix
@@ -49,9 +50,9 @@
 //!   `is_first` is lane 0 (always below `N`), and `quad_active_threads_mask` the quad's lanes below
 //!   `N`;
 //! - the simdgroup-matrix and AGX multiply-adds publish their four `f32` cells once and read
-//!   them for every step (`matrix::tile_mad`); a lane past `N` takes part with zero cells, as
-//!   does, in a divergent block, a lane that is not live ([`Emu::read_cell`], which amends this
-//!   item's calling-lane rule for the multiply-adds);
+//!   them for every step (`matrix::tile_mad`) through the same rule: a lane past `N`, or in a
+//!   divergent block one that is not live, is read through the calling lane, and the product is
+//!   promised only where the whole simdgroup takes part (MSL 4.1 section 2.4);
 //! - a simdgroup barrier is a workgroup barrier with the Metal flags' memories, which orders a
 //!   superset of the simdgroup's threads; a simdgroup-scope fence orders at workgroup scope for
 //!   the same reason (`sync::barrier`).
@@ -99,8 +100,7 @@ use crate::spirv::ir::{
 use super::agx::AgxStrategy;
 use super::divergent;
 use super::group::{
-    bin_k, fill_source, k, minus_zero_unless, nth, post, pre, quad_tree, zero_cell, Exchange, Lane,
-    SIMD_WIDTH,
+    bin_k, fill_source, k, minus_zero_unless, nth, post, pre, quad_tree, Exchange, Lane, SIMD_WIDTH,
 };
 use super::matrix::MatrixStrategy;
 use super::uniform::Uniformity;
@@ -158,7 +158,7 @@ fn exchange_words(s: &Strategy) -> Option<u32> {
 
 /// The words one lane publishes for strategy `s` in a divergent block of a predicated kernel: its
 /// values and its active flag, which every group operation reads (a vote's lanes, a shuffle's
-/// source, the first active lane) and a multiply-add's cell reads ([`Emu::read_cell`]). A barrier
+/// source, the first active lane) and a multiply-add's cell reads ([`Emu::read`]). A barrier
 /// publishes nothing.
 fn predicated_words(s: &Strategy) -> Option<u32> {
     match s {
@@ -203,12 +203,13 @@ pub fn arena_bytes(arena: Option<u32>, regions: u64) -> u64 {
 /// are all in workgroup-uniform control flow exchanges; any other is planned predicated
 /// (`divergent::plan`, which adds the values its guards separate to the block-crossing values
 /// `cross`; a matrix or AGX multiply-add in a divergent block publishes its live flag, and reads a
-/// lane that is not active as zero cells). The static arena with one simdgroup's scratch must fit
-/// `maxComputeSharedMemorySize` (else `ThreadgroupMemorySize`). A function that exchanges values
-/// sets the plan's exchange width and depends on `RuntimeFact::SimdgroupEmulation`. An entry whose
-/// only tangled instructions are emulated sites and threadgroup barriers the lockstep pass placed
-/// keeps no reconvergence mode. `given` is the body's uniformity when the caller already holds it
-/// (`simd::partly_live`, which keeps its ledger bytes); otherwise it is computed and released here.
+/// lane that is not active through the calling lane). The static arena with one simdgroup's
+/// scratch must fit `maxComputeSharedMemorySize` (else `ThreadgroupMemorySize`). A function that
+/// exchanges values sets the plan's exchange width and depends on
+/// `RuntimeFact::SimdgroupEmulation`. An entry whose only tangled instructions are emulated sites
+/// and threadgroup barriers the lockstep pass placed keeps no reconvergence mode. `given` is the
+/// body's uniformity when the caller already holds it (`simd::partly_live`, which keeps its ledger
+/// bytes); otherwise it is computed and released here.
 ///
 /// A refusal changes nothing of `cx` or `cross`, so a kernel the emulated tier refuses can take
 /// another tier (`simd::widest_pin`'s).
@@ -702,8 +703,11 @@ impl Emu {
     }
 
     /// Value `i` of `p` as lane `src` published it; a lane outside the threadgroup or inactive
-    /// reads the calling lane's. The reductions read through it and keep only active lanes'
-    /// values; a shuffle reads through [`Emu::read_lane`].
+    /// reads the calling lane's. Every read of another lane goes through it: a shuffle's, a
+    /// multiply-add's cells (`matrix::tile_mad`), and the reductions', which keep only active
+    /// lanes' values. What a shuffle or a multiply-add reads in place of a lane that is not active
+    /// is unspecified: a thread reads only from an active thread (MSL 4.1 section 6.10.2), and the
+    /// value is not promised.
     pub fn read(
         &self,
         fb: &mut FunctionBuilder<'_>,
@@ -713,48 +717,6 @@ impl Emu {
         src: SValue,
     ) -> BResult<SValue> {
         self.read_on(fb, lin, p, i, src).map(|(x, _)| x)
-    }
-
-    /// Value `i` of `p` as a shuffle reads it from lane `src`. A lane past the thread count does
-    /// not exist, and reads all-zero bits ([`zero_cell`]): Metal's answer, deterministic across
-    /// runs, inputs, and threadgroup shapes, where it leaves the value undefined. That amends the
-    /// calling-lane rule; it is measured for every move. A lane below the thread count that is not
-    /// active in a divergent block reads all-zero bits too: Metal's answer for every move, whether
-    /// the value was computed before the branch or inside it (amending the calling-lane
-    /// refinement).
-    pub fn read_lane(
-        &self,
-        fb: &mut FunctionBuilder<'_>,
-        lin: SValue,
-        p: &Published,
-        i: usize,
-        src: SValue,
-    ) -> BResult<SValue> {
-        let (first, ty) = p.layout.get(i).copied().ok_or_else(dangling)?;
-        let (at, on) = self.source(fb, lin, p, src)?;
-        let x = self.load_value(fb, at, first, ty)?;
-        let zero = zero_cell(fb, x)?;
-        fb.select(on, x, zero)
-    }
-
-    /// A multiply-add's cell `i` of `p` as lane `src` published it (`matrix::tile_mad`). A lane
-    /// that is not active takes part with a zero cell: one outside the threadgroup, and, in a
-    /// divergent block, one that is not live. Metal leaves a partial or partly live simdgroup's
-    /// product undefined; its answer, deterministic across runs, inputs, and dispatch shapes, is
-    /// the product with those lanes' cells zero, whatever they hold (measured for the matrix form;
-    /// the AGX form shares the rule unmeasured). The zero is `+0`, Metal's sign. That amends the
-    /// calling-lane rule, which [`Emu::read`] keeps, for the multiply-adds.
-    pub fn read_cell(
-        &self,
-        fb: &mut FunctionBuilder<'_>,
-        lin: SValue,
-        p: &Published,
-        i: usize,
-        src: SValue,
-    ) -> BResult<SValue> {
-        let (x, on) = self.read_on(fb, lin, p, i, src)?;
-        let zero = zero_cell(fb, x)?;
-        fb.select(on, x, zero)
     }
 
     /// Value `i` of `p` as lane `src` published it (the calling lane's where `src` is outside the
@@ -927,28 +889,12 @@ fn one(fb: &mut FunctionBuilder<'_>, ln: &Lane, v: SValue, src: SValue) -> BResu
     Ok(x)
 }
 
-/// `v` published, read by a shuffle from lane `src` ([`Emu::read_lane`]: a lane past the thread
-/// count reads all-zero bits), and the exchange closed.
-fn shuffled(
-    fb: &mut FunctionBuilder<'_>,
-    ln: &Lane,
-    e: &Emu,
-    v: SValue,
-    src: SValue,
-) -> BResult<SValue> {
-    let ex = ln.exchange(fb, &[v])?;
-    let x = e.read_lane(fb, ln.l, published(&ex)?, 0, src)?;
-    ln.close(fb, ex)?;
-    Ok(x)
-}
-
 /// A shuffle-and-fill of `g`'s scope (`group::fill_source`): the data and the fill published, each
-/// read from the source lane (one past the thread count reads all-zero bits), and the data taken
-/// where the source is inside the segment.
+/// read from the source lane ([`Emu::read`]), and the data taken where the source is inside the
+/// segment.
 fn shift_and_fill(
     fb: &mut FunctionBuilder<'_>,
     ln: &Lane,
-    e: &Emu,
     g: &GroupPlan,
     a: &[SValue],
 ) -> BResult<SValue> {
@@ -956,9 +902,8 @@ fn shift_and_fill(
     let up = g.op == GroupOp::ShuffleAndFillUp;
     let (src, inside) = fill_source(fb, ln, g, up, d, modulo)?;
     let ex = ln.exchange(fb, &[data, fill])?;
-    let p = published(&ex)?;
-    let x = e.read_lane(fb, ln.l, p, 0, src)?;
-    let y = e.read_lane(fb, ln.l, p, 1, src)?;
+    let x = ln.read(fb, &ex, 0, src)?;
+    let y = ln.read(fb, &ex, 1, src)?;
     ln.close(fb, ex)?;
     fb.select(inside, x, y)
 }
@@ -1378,12 +1323,12 @@ pub(super) fn simd_op(
         G::Broadcast | G::Shuffle => {
             let i = bin_k(fb, BinOp::BitwiseAnd, nth(a, 1)?, last)?;
             let src = fb.binary(BinOp::BitwiseOr, base, i)?;
-            shuffled(fb, ln, e, v()?, src)
+            one(fb, ln, v()?, src)
         }
         G::ShuffleXor => {
             let mask = bin_k(fb, BinOp::BitwiseAnd, nth(a, 1)?, last)?;
             let src = fb.binary(BinOp::BitwiseXor, lin, mask)?;
-            shuffled(fb, ln, e, v()?, src)
+            one(fb, ln, v()?, src)
         }
         // The source is at or below the calling lane, which exists: never past the thread
         // count.
@@ -1401,21 +1346,21 @@ pub(super) fn simd_op(
             let ok = fb.binary(BinOp::ULessThan, t, w)?;
             let from = fb.binary(BinOp::IAdd, lin, d)?;
             let src = fb.select(ok, from, lin)?;
-            shuffled(fb, ln, e, v()?, src)
+            one(fb, ln, v()?, src)
         }
         G::ShuffleRotateDown => {
             let t = fb.binary(BinOp::IAdd, m, nth(a, 1)?)?;
             let t = bin_k(fb, BinOp::BitwiseAnd, t, last)?;
             let src = fb.binary(BinOp::BitwiseOr, base, t)?;
-            shuffled(fb, ln, e, v()?, src)
+            one(fb, ln, v()?, src)
         }
         G::ShuffleRotateUp => {
             let t = fb.binary(BinOp::ISub, m, nth(a, 1)?)?;
             let t = bin_k(fb, BinOp::BitwiseAnd, t, last)?;
             let src = fb.binary(BinOp::BitwiseOr, base, t)?;
-            shuffled(fb, ln, e, v()?, src)
+            one(fb, ln, v()?, src)
         }
-        G::ShuffleAndFillUp | G::ShuffleAndFillDown => shift_and_fill(fb, ln, e, g, a),
+        G::ShuffleAndFillUp | G::ShuffleAndFillDown => shift_and_fill(fb, ln, g, a),
         // In a divergent block the first active lane (none: the calling lane, which is not
         // live); else every lane of the simdgroup below the thread count is active and lane 0 is
         // the first.
@@ -1510,12 +1455,12 @@ pub(super) fn quad_op(
         G::Broadcast | G::Shuffle => {
             let i = operand(fb)?;
             let src = fb.binary(BinOp::BitwiseOr, qbase, i)?;
-            shuffled(fb, ln, e, v()?, src)
+            one(fb, ln, v()?, src)
         }
         G::ShuffleXor => {
             let mask = operand(fb)?;
             let src = fb.binary(BinOp::BitwiseXor, lin, mask)?;
-            shuffled(fb, ln, e, v()?, src)
+            one(fb, ln, v()?, src)
         }
         // At or below the calling lane: never past the thread count.
         G::ShuffleUp => {
@@ -1532,21 +1477,21 @@ pub(super) fn quad_op(
             let ok = fb.binary(BinOp::ULessThan, t, four)?;
             let from = fb.binary(BinOp::IAdd, lin, d)?;
             let src = fb.select(ok, from, lin)?;
-            shuffled(fb, ln, e, v()?, src)
+            one(fb, ln, v()?, src)
         }
         G::ShuffleRotateDown => {
             let t = fb.binary(BinOp::IAdd, q, nth(a, 1)?)?;
             let t = bin_k(fb, BinOp::BitwiseAnd, t, 3)?;
             let src = fb.binary(BinOp::BitwiseOr, qbase, t)?;
-            shuffled(fb, ln, e, v()?, src)
+            one(fb, ln, v()?, src)
         }
         G::ShuffleRotateUp => {
             let t = fb.binary(BinOp::ISub, q, nth(a, 1)?)?;
             let t = bin_k(fb, BinOp::BitwiseAnd, t, 3)?;
             let src = fb.binary(BinOp::BitwiseOr, qbase, t)?;
-            shuffled(fb, ln, e, v()?, src)
+            one(fb, ln, v()?, src)
         }
-        G::ShuffleAndFillUp | G::ShuffleAndFillDown => shift_and_fill(fb, ln, e, g, a),
+        G::ShuffleAndFillUp | G::ShuffleAndFillDown => shift_and_fill(fb, ln, g, a),
         // In a divergent block the quad's first active lane by the published flags (none: the
         // calling lane, which is then not live, reads its own); else the quad's first lane, which
         // is below the thread count, as the calling lane is.

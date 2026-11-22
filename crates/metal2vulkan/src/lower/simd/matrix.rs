@@ -34,12 +34,12 @@
 //!   what a block reads or writes for memory provenance.
 //! - `multiply_accumulate(a, b, c)` = `c + a·b`: per step `k`, a lane reads its `a` cell from the
 //!   lane owning `(row, k)` and its `b` cells from the lane owning `(k, col)` with absolute
-//!   shuffles inside its own simdgroup (a lane that does not take part gives `+0` cells:
-//!   `tile_mad`), and accumulates with `Fma` in increasing `k` (the `agx2` schedule, shared with
-//!   [`super::agx`]). Every operand format is converted exactly to `f32` first (`half` and `bfloat`
-//!   are held widened; 8-bit floats decode exactly). When every format is `half` each step rounds
-//!   to `half` (the `f16matmad` form); otherwise the sum accumulates in `f32` and rounds once to
-//!   the result format.
+//!   shuffles inside its own simdgroup (in a simdgroup only partly taking part, which MSL leaves
+//!   undefined, no read leaves the lanes that take part: `tile_mad`), and accumulates with `Fma`
+//!   in increasing `k` (the `agx2` schedule, shared with [`super::agx`]). Every operand format is
+//!   converted exactly to `f32` first (`half` and `bfloat` are held widened; 8-bit floats decode
+//!   exactly). When every format is `half` each step rounds to `half` (the `f16matmad` form);
+//!   otherwise the sum accumulates in `f32` and rounds once to the result format.
 //!
 //! **Classes.** The multiply-add is `CrossLane(SHUFFLE)` and tangled in both tiers; the other
 //! operations read only the lane (`CrossLane(BASIC)`), so the fragment layout is the one the
@@ -598,9 +598,11 @@ pub(super) struct TileMad {
 /// calling lane's two cells, each accumulating `a[row][k] · b[k][col_j]` read from their owner
 /// lanes with `Fma` in increasing `k`. The cells are `f32` values; `step` rounds each step's
 /// result (a narrow cell form, or an `f32` one, which is exact). A lane that does not take part
-/// contributes zero cells ([`Lane::read_cell`]): in the emulated tier's exchange, and on a
-/// subgroup, where the multiply-add is [`TileMad::divergent`], through the ballot of the lanes
-/// executing it.
+/// is read through the calling lane ([`Lane::cell_source`]): in the emulated tier's exchange, and
+/// on a subgroup, where the multiply-add is [`TileMad::divergent`], through the ballot of the
+/// lanes executing it. MSL makes a multiply-add outside uniform control flow within the
+/// simdgroup undefined (section 2.4), so the product is promised only where the whole simdgroup
+/// takes part.
 pub(super) fn tile_mad(
     fb: &mut FunctionBuilder<'_>,
     ln: &Lane,
@@ -632,9 +634,9 @@ pub(super) fn tile_mad(
         let bo = bin_k(fb, BinOp::BitwiseOr, b_key, vb)?;
         let bo = ln.absolute(fb, bo)?;
         let bo = ln.cell_source(fb, live, bo)?;
-        let av = ln.read_cell(fb, &ex, (k & 1) as usize, &ao)?;
+        let av = ln.read(fb, &ex, (k & 1) as usize, ao)?;
         for (j, slot) in acc.iter_mut().enumerate() {
-            let bv = ln.read_cell(fb, &ex, 2 + j, &bo)?;
+            let bv = ln.read(fb, &ex, 2 + j, bo)?;
             let r = fb.glsl(GlslOp::Fma, &[av, bv, *slot])?;
             *slot = narrow::round(fb, step, r)?;
         }
