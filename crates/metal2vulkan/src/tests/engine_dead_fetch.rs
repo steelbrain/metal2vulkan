@@ -123,7 +123,7 @@ fn a_framebuffer_read_dead_after_specialization_takes_no_fetch_form() {
     let mut misses = std::collections::BTreeMap::<&str, Vec<String>>::new();
     // Pipelines checked dead.
     let mut dead = 0;
-    for (stem, p) in committed_profiles().expect("profiles") {
+    for (stem, _) in committed_profiles().expect("profiles") {
         let dev = device(&stem);
         for entry in ENTRIES {
             for blended in [true, false] {

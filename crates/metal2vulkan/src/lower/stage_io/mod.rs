@@ -174,8 +174,7 @@ use crate::spirv::ir::{
 };
 
 pub(crate) use plan::{
-    amplification_count_form, finish_merged, note_device_point_size, output_types,
-    view_index_enabled,
+    amplification_count_form, finish_merged, note_device_point_size, view_index_enabled,
 };
 pub use plan::{DrawBase, Link, Place, Shape};
 

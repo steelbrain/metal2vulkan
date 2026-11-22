@@ -383,8 +383,8 @@ fn a_mask_of_some_codes_of_a_word_is_refused_on_every_device() {
                             format!("{stem} {pf:?} mask {} {fill} x{samples}", mask.as_raw());
                         match dev.compile_render_pipeline(&d, &Budget::standard()) {
                             Err(Error::Unsupported(u))
-                                if (u.feature, &u.needs)
-                                    == (Feature::FramebufferFetch, &Needs::NotImplemented) =>
+                                if u.feature == Feature::FramebufferFetch
+                                    && u.needs == Needs::NotImplemented =>
                             {
                                 refused += 1;
                             }

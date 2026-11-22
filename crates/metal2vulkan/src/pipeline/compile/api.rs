@@ -965,7 +965,7 @@ impl Device {
         crate::pipeline::private_state::note_vulkan_codes(d, &graphics, &mut stages);
         crate::pipeline::private_state::note_tile_store(d, &mut stages);
         let mut requirements = requirements;
-        if logic_op.is_some() {
+        if logic.is_some() {
             requirements.features.insert(VkFeature::LogicOp);
         }
         let profile = self.profile_fingerprint();
