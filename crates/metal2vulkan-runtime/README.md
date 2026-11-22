@@ -594,6 +594,28 @@ thread frees its memory, which ends the import, and runs `release`, Metal's deal
 (at teardown, on the thread that tears down). Neither `BlockMappings` hook runs for an imported
 block.
 
+Each live import costs every submission host time in the driver, whether that submission uses it
+or not. On Mesa's AMD driver (RADV), every imported or exportable allocation is on a device-wide
+list that each `vkQueueSubmit2` hands to the kernel, and the kernel checks every entry at every
+submission. The runtime's own pooled blocks are not exportable, so they are not on that list. On
+Mesa's Intel driver with i915 (ANV), every allocation, pooled or imported, is in every submission's
+list; that is read from Mesa's source, not measured. Measured with 1 MiB imports held idle beside a
+recorded play, without the validation layer:
+
+| Device | None added | 450 dma-bufs added (`import_dma_buf`) | 450 host pointers added (`import_host_memory`) | Job |
+|---|---|---|---|---|
+| Radeon 780M (RADV, Mesa 26.2.6, Linux 7.3.3) | 20.6 µs | 243.1 µs | 1,458.5 µs | m3-max-68519 |
+| A second Radeon 780M, same driver | 48.8 µs | 273.7 µs | 1,583.0 µs | m3-max-68535 |
+| RTX 2080 (NVIDIA 620.70.06) | 24.9 µs | not imported | 27.5 µs | m3-max-68535 |
+
+Each figure is the time of one `vkQueueSubmit2` call. On the 780M a dma-buf costs about 0.5 µs a
+submission, almost all of it in the kernel. A host-pointer import costs 3.2 to 3.4 µs a submission
+for 1 MiB, as the kernel walks its pages at each submission. On the RTX 2080, 450 host-pointer
+imports add about 0.006 µs each, inside the spread of the runs with none, and its dma-bufs are
+refused by the dma-buf rule above. A buffer placed at an offset in a block it shares with others
+(`Device::new_buffer`) adds nothing to a submission. So a consumer keeps its imports few and large.
+Not measured: the RX 7900 XTX, the Iris Xe, and imports of other sizes.
+
 A texture over a buffer in a dma-buf's one import (`import_dma_buf`) is in place, as over a
 Shared block of the runtime's own (Textures), on a device that offers a linear image for a
 dma-buf import without asking a dedicated allocation. Of the devices run, that is lavapipe alone
