@@ -2742,7 +2742,6 @@ field	metal2vulkan::device::SubgroupModel.fragment	pub fragment: StageSubgroup
 field	metal2vulkan::device::SubgroupModel.kernel	pub kernel: StageSubgroup
 field	metal2vulkan::device::SubgroupModel.max_compute_workgroup_subgroups	pub max_compute_workgroup_subgroups: u32
 field	metal2vulkan::device::SubgroupModel.maximal_reconvergence	pub maximal_reconvergence: bool
-field	metal2vulkan::device::SubgroupModel.quad_all_stages	pub quad_all_stages: bool
 field	metal2vulkan::device::SubgroupModel.quad_control	pub quad_control: bool
 field	metal2vulkan::device::SubgroupModel.uniform_control_flow	pub uniform_control_flow: bool
 field	metal2vulkan::device::SubgroupModel.vertex	pub vertex: StageSubgroup

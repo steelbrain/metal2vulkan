@@ -1335,7 +1335,9 @@ impl Deriver<'_> {
             } => (Cap::GroupNonUniformClustered, SubgroupOp::Clustered),
             GroupInst::Arith { .. } => (Cap::GroupNonUniformArithmetic, SubgroupOp::Arithmetic),
             GroupInst::QuadBroadcast { .. } | GroupInst::QuadSwap { .. } => {
-                if self.model == ExecModel::Vertex {
+                // Vulkan gives quad instructions outside the fragment and compute stages only
+                // with `subgroupQuadOperationsInAllStages`.
+                if !matches!(self.model, ExecModel::Fragment | ExecModel::GLCompute) {
                     self.prop(VkProperty::SubgroupQuadOperationsInAllStages);
                 }
                 (Cap::GroupNonUniformQuad, SubgroupOp::Quad)

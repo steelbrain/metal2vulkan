@@ -333,7 +333,6 @@ fn subgroup_model(desc: &DeviceDescription) -> SubgroupModel {
         vertex: stage(Stage::Vertex),
         fragment: stage(Stage::Fragment),
         kernel: stage(Stage::Kernel),
-        quad_all_stages: sg.quad_operations_in_all_stages,
         maximal_reconvergence: desc.has(VkFeature::ShaderMaximalReconvergence),
         uniform_control_flow: desc.has(VkFeature::ShaderSubgroupUniformControlFlow),
         quad_control: desc.has(VkFeature::ShaderQuadControl),

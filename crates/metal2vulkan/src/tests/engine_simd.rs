@@ -690,6 +690,36 @@ fn vertex_quad_permutes_shuffle_through_the_live_lanes() {
     assert!(shuffled >= 3, "{shuffled} functions compiled");
 }
 
+/// A vertex function's quads hold no quad instruction, so they ask nothing of
+/// `subgroupQuadOperationsInAllStages`, which Vulkan asks of quad instructions outside the
+/// fragment and compute stages: on the Iris Xe's description with the property cleared, each of
+/// `gsm2_vertex_quad_permutes`' vertex functions compiles to a valid module that holds no quad
+/// instruction or capability.
+#[test]
+fn vertex_quads_need_no_quad_operations_in_all_stages() {
+    let Some(bc) = assemble("gsm2_vertex_quad_permutes") else {
+        return;
+    };
+    let mut desc =
+        crate::pipeline::testing::description("intel-irisxe-rplp-anv").expect("description");
+    assert!(desc.subgroup.quad_operations_in_all_stages);
+    desc.subgroup.quad_operations_in_all_stages = false;
+    let p = Device::from_queries(desc, DevicePolicy::RESIDENT_TABLES)
+        .expect("device")
+        .profile()
+        .clone();
+    for entry in [
+        "quad_permutes_in_a_vertex_function",
+        "quad_pair_permutes_in_a_vertex_function",
+        "quad_permutes_in_branches_of_a_vertex_function",
+    ] {
+        let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{entry}: {e}"));
+        let (_, words) = link_and_validate(&a, &p).expect("valid");
+        let text = spirv_dis(&words);
+        assert!(!text.contains("GroupNonUniformQuad"), "{entry}");
+    }
+}
+
 /// A fragment function of simdgroup operations (`fragment_discard_counts`: sums before and after a
 /// discard) records `PrecisionNote::FragmentSimdgroupGrouping` on every committed profile that
 /// compiles it. A fragment that reads only its quad lane (`simd_masks`' `quad_lane_f`)

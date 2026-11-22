@@ -73,7 +73,7 @@ Columns:
 | `IrreducibleConvergent` | An irreducible region containing a convergent instruction | every device (no Vulkan mechanism) | `device` | 1: `crates/metal2vulkan/src/structurize/irreducible.rs (refuse_tangled)` | `rare`: irreducible loops around barriers or simd operations |
 | `ComputeDerivativesWithSimd` | Compute derivatives in a flattened simd tier | every device (no Vulkan mechanism) | `device` | 1: `crates/metal2vulkan/src/lower/dispatch.rs (plan_kernel)` | `rare`: derivatives in a kernel |
 | `ComputeDerivatives` | Derivatives outside fragment without compute-derivative support | devices without VkFeature::ComputeDerivativeGroupLinear; every device (no Vulkan mechanism); every device (not implemented) | `ours` | 4: `crates/metal2vulkan/src/bind/dispatch.rs (check_local)`, `crates/metal2vulkan/src/lower/sync/barrier.rs (select_derivative, 3 sites)` | `rare`: derivatives in a kernel |
-| `QuadOperations` | Quad operations in a stage without quad support | devices without VkLimit::MinSubgroupSize; devices without VkProperty::SubgroupQuadOperationsInAllStages | `device` | 2: `crates/metal2vulkan/src/device/subgroup.rs (subgroup_tier, 2 sites)` | `app`: quad shuffles in kernels on devices without quad operations there |
+| `QuadOperations` | Quad operations in a stage without quad support | devices without VkLimit::MinSubgroupSize | `device` | 1: `crates/metal2vulkan/src/device/subgroup.rs (subgroup_tier)` | `app`: quad shuffles in kernels on devices without quad operations there |
 | `SimdgroupMatrix` | Simdgroup matrix operations | every device (not implemented) | `ours` | 1: `crates/metal2vulkan/src/lower/simd/matrix.rs (not_implemented)` | `rare`: simdgroup matrix kernels |
 | `SimdgroupMatrix16x16x16` | A 16x16x16 simdgroup matrix product (`air.simdgroup_matrix_16x16x16_[widening_]multiply_accumulate`), in any stage | every device (not implemented) | `ours` | 1: `crates/metal2vulkan/src/lower/simd/matrix.rs (select)` | `rare`: 16x16x16 simdgroup matrix products (Metal: Apple10 GPUs and later) |
 | `ArgumentBufferPointers` | Argument buffers holding buffer pointers (dynamic roots) | devices without buffer device addresses (`addressed_needs`) | `device` | 1: `crates/metal2vulkan/src/device/metal.rs (unsupported_features)` | `app`: argument buffers holding buffer pointers |
@@ -404,7 +404,7 @@ Each refusal's sites, with the function that builds it.
 - `feature::IrreducibleConvergent`: `crates/metal2vulkan/src/structurize/irreducible.rs (refuse_tangled)`
 - `feature::ComputeDerivativesWithSimd`: `crates/metal2vulkan/src/lower/dispatch.rs (plan_kernel)`
 - `feature::ComputeDerivatives`: `crates/metal2vulkan/src/bind/dispatch.rs (check_local)`; `crates/metal2vulkan/src/lower/sync/barrier.rs (select_derivative, 3 sites)`
-- `feature::QuadOperations`: `crates/metal2vulkan/src/device/subgroup.rs (subgroup_tier, 2 sites)`
+- `feature::QuadOperations`: `crates/metal2vulkan/src/device/subgroup.rs (subgroup_tier)`
 - `feature::SimdgroupMatrix`: `crates/metal2vulkan/src/lower/simd/matrix.rs (not_implemented)`
 - `feature::SimdgroupMatrix16x16x16`: `crates/metal2vulkan/src/lower/simd/matrix.rs (select)`
 - `feature::ArgumentBufferPointers`: `crates/metal2vulkan/src/device/metal.rs (unsupported_features)`

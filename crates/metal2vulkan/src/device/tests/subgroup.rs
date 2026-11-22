@@ -157,7 +157,6 @@ fn model(stage: StageSubgroup) -> SubgroupModel {
             full_subgroups: true,
             ..stage
         },
-        quad_all_stages: true,
         maximal_reconvergence: false,
         uniform_control_flow: false,
         quad_control: false,
@@ -367,19 +366,6 @@ fn missing_stage_or_operations_are_named() {
     );
     m.vertex.supported = false;
     assert!(tier(&SimdClass::LaneArithmetic, Stage::Vertex, &m).is_err());
-    // Vertex quads need quad operations in all stages.
-    let mut m = model(fixed(32));
-    m.quad_all_stages = false;
-    assert_eq!(
-        tier(&SimdClass::Quad, Stage::Vertex, &m)
-            .unwrap_err()
-            .feature,
-        Feature::QuadOperations
-    );
-    assert_eq!(
-        tier(&SimdClass::Quad, Stage::Fragment, &m),
-        Ok(Tier::Direct)
-    );
 }
 
 /// A class the device has (its compute stage's, which Vulkan always lists) but a stage lacks, as
