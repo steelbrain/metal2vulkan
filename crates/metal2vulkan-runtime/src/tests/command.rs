@@ -87,12 +87,9 @@ fn a_stage_span_lands_in_its_power_of_two_bucket() {
 #[test]
 fn a_command_buffer_joins_a_group_only_within_the_bound_tested_again_at_the_send() {
     let ms = 1_000_000;
-    assert!(joins(10 * ms, 1, Some(ms)), "within the bound");
-    assert!(joins(10 * ms, 1, Some(GROUP_RUN - 10 * ms)), "at the bound");
-    assert!(
-        !joins(10 * ms, 1, Some(GROUP_RUN - 10 * ms + 1)),
-        "past it: alone"
-    );
+    assert!(joins(ms, 1, Some(ms)), "within the bound");
+    assert!(joins(ms, 1, Some(GROUP_RUN - ms)), "at the bound");
+    assert!(!joins(ms, 1, Some(GROUP_RUN - ms + 1)), "past it: alone");
     assert!(!joins(0, 0, None), "an unknown run: alone");
     assert!(
         !joins(u64::MAX, 1, Some(1)),
