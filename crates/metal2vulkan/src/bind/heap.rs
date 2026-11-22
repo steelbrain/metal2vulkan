@@ -1073,8 +1073,6 @@ pub(crate) struct HeapPlanner<'a> {
     /// The function tables' shape and the entries of every directory, when the pipeline has a
     /// directory.
     function_tables: Option<(FunctionTablesShape, u32)>,
-    /// The zero buffer's bytes: the null table's (`neutral::zero_buffer_bytes`).
-    zero_bytes: u32,
     /// Outputs: the tables planned, and the diagnostics.
     planned: Vec<PlannedHandleTable>,
     planned_samplers: Vec<PlannedHandleTable>,
@@ -1392,7 +1390,6 @@ impl<'a> HeapPlanner<'a> {
             snapshots,
             addressed_tables,
             function_tables,
-            zero_bytes: crate::bind::neutral::zero_buffer_bytes(profile),
             planned: Vec::new(),
             planned_samplers: Vec::new(),
             planned_directories: Vec::new(),
