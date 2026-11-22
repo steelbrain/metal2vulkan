@@ -13,7 +13,7 @@ use crate::hazard::{Access, Hazards};
 use crate::kept::{Lent, Objects};
 use crate::memory::Block;
 use crate::over::{self, Overs, Reached};
-use crate::piece::Work;
+use crate::piece::{Kernels, Work};
 use crate::pipeline::{Compiled, ComputePipelineState};
 use crate::queue::QueueInner;
 use crate::record::{self, Reach, Recorder};
@@ -1114,13 +1114,13 @@ impl Building {
         kernel: Option<&Arc<Compiled>>,
         run: Option<u64>,
     ) -> Result<(), Error> {
-        let last = self.last();
+        let (last, kernels) = self.piece();
         // Commands after a signal go in a new segment anyway (`current`).
         if !last.signals.is_empty() {
             return self.split();
         }
         let overs = last.overs.ahead() || last.overs.leaning().next().is_some();
-        if !last.work.full(kernel, run) || overs || !last.managed_wrote.is_empty() {
+        if !last.work.full(kernels, kernel, run) || overs || !last.managed_wrote.is_empty() {
             return Ok(());
         }
         self.split()?;
@@ -1139,7 +1139,15 @@ impl Building {
         unbound: bool,
     ) {
         self.gpu.unbound |= unbound;
-        self.last().work.add(kernel, groups);
+        let (last, kernels) = self.piece();
+        last.work.add(kernels, kernel, groups);
+    }
+
+    /// The last segment, and the list its piece's kernels are in (`crate::piece::Kernels`).
+    fn piece(&mut self) -> (&mut Segment, &mut Kernels) {
+        let Gpu { segments, kept, .. } = &mut self.gpu;
+        let last = segments.len() - 1;
+        (&mut segments[last], &mut kept.kernels)
     }
 
     /// Commands of a blit or render encoder follow: the segment's run tells no rate.
@@ -1774,7 +1782,9 @@ pub(crate) fn retire(
     let mut pieces = 0;
     if let ([segment], Some((start, end)), None) = (&gpu.segments[..], ticks, error) {
         if segment.stamps.is_none() && !segment.work.led() {
-            segment.work.ran(core.ticks.span(start, end));
+            segment
+                .work
+                .ran(&gpu.kept.kernels, core.ticks.span(start, end));
         }
     }
     for (index, segment) in gpu.segments.iter().enumerate() {
@@ -1791,7 +1801,7 @@ pub(crate) fn retire(
             };
             if let Some((start, end)) = read.and_then(|(own, end)| Some((start(own)?, end))) {
                 let run = core.ticks.span(start, end);
-                segment.work.ran(run);
+                segment.work.ran(&gpu.kept.kernels, run);
                 pieces += run;
             }
         }

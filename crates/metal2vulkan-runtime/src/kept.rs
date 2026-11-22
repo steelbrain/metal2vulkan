@@ -11,6 +11,7 @@
 //! buffers ([`Objects`]), so a command buffer allocates and frees none of it.
 
 use crate::buffer::{Buffer, BufferObject};
+use crate::piece::Kernels;
 use crate::pipeline::ComputePipelineState;
 use crate::render::RenderPipelineState;
 use crate::sampler::SamplerState;
@@ -234,6 +235,8 @@ pub(crate) struct ByKind {
     pub(crate) samplers: Kept<SamplerState>,
     pub(crate) pipelines: Kept<ComputePipelineState>,
     pub(crate) render_pipelines: Kept<RenderPipelineState>,
+    /// Its pieces' kernels, of the states `pipelines` keeps (`crate::piece::Kernels`).
+    pub(crate) kernels: Kernels,
 }
 
 impl ByKind {
@@ -264,6 +267,10 @@ impl ByKind {
         self.samplers.clear();
         self.pipelines.clear();
         self.render_pipelines.clear();
+        match self.kernels.capacity() > KEPT_BOUND {
+            true => self.kernels = Kernels::new(),
+            false => self.kernels.clear(),
+        }
     }
 }
 

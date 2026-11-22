@@ -12,9 +12,12 @@
 //! expected run is (`QueueInner::expected_run`): it bounds where a piece ends, and never chooses
 //! between two forms of the work.
 
+use crate::kept::Uncount;
 use crate::pipeline::Compiled;
 use crate::queue::next_run;
 use crate::submit::GROUP_RUN;
+use std::mem::ManuallyDrop;
+use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::Arc;
 
@@ -53,11 +56,25 @@ impl Rate {
     }
 }
 
-/// The dispatches of one piece: each kernel once, with its threadgroups summed, and their expected
-/// run.
+/// A kernel of a piece, with its threadgroups summed: its content as its state holds it, taking
+/// no count ([`Uncount`]), since the command buffer keeps the state it bound until it retires,
+/// after its pieces' runs set their rates (`crate::command::retire`).
+pub(crate) struct Kernel {
+    compiled: ManuallyDrop<Arc<Compiled>>,
+    groups: u64,
+}
+
+/// A command buffer's pieces' kernels, piece by piece: a list its kept objects hold
+/// (`crate::kept::ByKind`), whose capacity goes on to the queue's next recording, so a recording
+/// allocates for them only past what an earlier one left, and frees none.
+pub(crate) type Kernels = Vec<Kernel>;
+
+/// The dispatches of one piece: each kernel once, with its threadgroups summed, in its command
+/// buffer's list ([`Kernels`]), and their expected run.
 #[derive(Default)]
 pub(crate) struct Work {
-    kernels: Vec<(Arc<Compiled>, u64)>,
+    /// Its kernels' places in the list: the last piece's run to the list's end.
+    kernels: Range<usize>,
     /// The expected GPU run of its dispatches, in nanoseconds, summed.
     pub(crate) run: u64,
     /// It holds dispatches of a kernel whose rate was unknown, and of no other kernel, so its run
@@ -82,10 +99,13 @@ impl Work {
     /// where an encoder opens, no kernel and `Some(0)`) begins a new piece: this one holds a
     /// dispatch, and holds a kernel of unknown rate (unless the dispatch is that kernel's too, of
     /// a rate still unknown), or the dispatch's rate is unknown, or the two would pass the bound.
-    pub(crate) fn full(&self, kernel: Option<&Arc<Compiled>>, run: Option<u64>) -> bool {
-        let own = |kernel: &Arc<Compiled>| {
-            (self.kernels.iter()).all(|(kept, _)| Arc::ptr_eq(kept, kernel))
-        };
+    pub(crate) fn full(
+        &self,
+        list: &[Kernel],
+        kernel: Option<&Arc<Compiled>>,
+        run: Option<u64>,
+    ) -> bool {
+        let own = |kernel: &Arc<Compiled>| self.of(list).iter().all(|kept| kept.is(kernel));
         !self.is_empty()
             && match (self.alone, run) {
                 (true, None) => !kernel.is_some_and(own),
@@ -104,22 +124,34 @@ impl Work {
         }
     }
 
-    /// Adds a dispatch of `kernel`: `groups` threadgroups, None for an indirect dispatch.
-    pub(crate) fn add(&mut self, kernel: &Arc<Compiled>, groups: Option<u64>) {
+    /// Adds a dispatch of `kernel`, of the state its command buffer keeps, to the piece, the last
+    /// of `list`'s: `groups` threadgroups, None for an indirect dispatch.
+    pub(crate) fn add(&mut self, list: &mut Kernels, kernel: &Arc<Compiled>, groups: Option<u64>) {
         let expected = Work::expected(kernel, groups);
-        let own = (self.kernels.iter()).all(|(kept, _)| Arc::ptr_eq(kept, kernel));
+        let own = self.of(list).iter().all(|kept| kept.is(kernel));
         self.blind |= groups.is_none() || ((expected.is_none() || self.alone) && !own);
         self.alone |= expected.is_none();
         self.run = self.run.saturating_add(expected.unwrap_or(0));
         let groups = groups.unwrap_or(1);
-        match self
-            .kernels
-            .iter_mut()
-            .find(|(kept, _)| Arc::ptr_eq(kept, kernel))
-        {
-            Some((_, summed)) => *summed = summed.saturating_add(groups),
-            None => self.kernels.push((Arc::clone(kernel), groups)),
+        let range = self.kernels.clone();
+        match (list.get_mut(range)).and_then(|mine| mine.iter_mut().find(|kept| kept.is(kernel))) {
+            Some(kept) => kept.groups = kept.groups.saturating_add(groups),
+            None => {
+                if self.kernels.is_empty() {
+                    self.kernels = list.len()..list.len();
+                }
+                // SAFETY: the command buffer keeps the state `kernel` is of until it retires,
+                // after the list's last use (`crate::command::retire`).
+                let compiled = unsafe { kernel.uncounted() };
+                list.push(Kernel { compiled, groups });
+                self.kernels.end = list.len();
+            }
         }
+    }
+
+    /// Its kernels in `list`, its command buffer's.
+    fn of<'a>(&self, list: &'a [Kernel]) -> &'a [Kernel] {
+        list.get(self.kernels.clone()).unwrap_or_default()
     }
 
     /// Commands of another encoder go in the piece: after its dispatches, or ahead of them.
@@ -135,24 +167,30 @@ impl Work {
 
     /// The piece ran `nanos` on the GPU: a kernel alone in it takes its rate from that run, and
     /// several each scale theirs by the run against what they expected.
-    pub(crate) fn ran(&self, nanos: u64) {
+    pub(crate) fn ran(&self, list: &[Kernel], nanos: u64) {
         if self.blind {
             return;
         }
+        let kernels = self.of(list);
         let picos = u128::from(nanos) * 1000;
         let rate = |kernel: &Compiled| u128::from(kernel.rate.0.load(Relaxed));
-        let expected: u128 = (self.kernels.iter())
-            .map(|(kernel, groups)| rate(kernel) * u128::from(*groups))
+        let expected: u128 = (kernels.iter())
+            .map(|kept| rate(&kept.compiled) * u128::from(kept.groups))
             .sum();
-        for (kernel, groups) in &self.kernels {
-            let picos = match self.kernels.len() {
-                1 => picos / u128::from((*groups).max(1)),
+        for kept in kernels {
+            let picos = match kernels.len() {
+                1 => picos / u128::from(kept.groups.max(1)),
                 _ if expected == 0 => continue,
-                _ => rate(kernel).saturating_mul(picos) / expected,
+                _ => rate(&kept.compiled).saturating_mul(picos) / expected,
             };
-            kernel
-                .rate
-                .ran(u64::try_from(picos).unwrap_or(u64::MAX - 1));
+            (kept.compiled.rate).ran(u64::try_from(picos).unwrap_or(u64::MAX - 1));
         }
+    }
+}
+
+impl Kernel {
+    /// Whether it is `kernel`.
+    fn is(&self, kernel: &Arc<Compiled>) -> bool {
+        Arc::ptr_eq(&self.compiled, kernel)
     }
 }
