@@ -1076,7 +1076,12 @@ the Direct3D 11 texture's payload until it is freed.
   it the import, and importing fresh pages so takes 0.35 to 0.54 times as long as allocating them,
   from 16 to 256 MiB on both cards. No host-visible type outside the card's 246 MiB
   device-local heap is cheaper, and a Shared allocation is the driver's own memory on every
-  device, so the import is not open to it. In another consumer's replay stream on the 2080 (the
+  device, so the import is not open to it. A view of guest pages, one mapping a page and none
+  populated (29.7 MB in 7,261 mappings), imports by host pointer in 6.6 to 6.8 ms median and
+  10.8 ms at most there, on the CPU in the driver with one page fault a page (3.4 to 5.1 ms with
+  the pages present), and its free takes 30 to 31 ms, about 1.03 ms per MiB (a standalone program,
+  job m3-max-66022). Beside another thread's allocation or free such an import waited up to
+  100 ms on the driver's own lock, which the runtime does not choose. In another consumer's replay stream on the 2080 (the
   same driver, rt at c810d2a3df), the first 1138 frames make 304 Shared takes of 9.5 GiB, whose
   allocations took 0.90 to 0.93 s in two plays, under 1% of the play. On three loading frames of
   1.3 to 3.6 s they are 6 to 8.3% of the frame (at most 301 ms of 3.64 s); in the play that
