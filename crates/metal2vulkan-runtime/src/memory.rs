@@ -423,6 +423,12 @@ impl Memory {
         }
     }
 
+    /// Whether it is a dedicated allocation the consumer shares with another API ([`export`],
+    /// [`export_surface`]), Private and never mapped.
+    pub(crate) fn exported(&self) -> bool {
+        matches!(self.own, Some(Own::Export { .. }))
+    }
+
     pub(crate) fn info(&self) -> BlockInfo {
         BlockInfo {
             id: self.id,

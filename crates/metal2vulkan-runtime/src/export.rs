@@ -307,6 +307,10 @@ impl Block {
             // family is enabled (`Device::new_exported_block`).
             unsafe { device.cmd_pipeline_barrier2(command, &dependency) };
         })?;
+        // The other API's writes change the bytes of the textures over the block
+        // (`crate::over::ExportedOvers`).
+        core.work
+            .exported_changed(block.memory.id, (0, block.memory.len));
         core.counters.count(Metric::Barriers);
         core.counters.count(Metric::ExternalAcquires);
         Ok(())

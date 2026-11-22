@@ -808,7 +808,8 @@ wait far longer than those submissions' GPU times waited behind work the runtime
 why (`SurfaceCopy`): `NoModifier`, `Tiling`, `Dedicated`, `Pitch`, `Start` or `MemoryType`. The
 surface is then an exported block (as above) laid by the same rule at the tightest pitch the
 multiples allow, and each plane's texture is a texture over a buffer in it, an image of its own
-that the submissions copy the bytes into and back (`Metrics::over_copies`). A start or pitch the
+that the submissions copy the bytes into and back (`Metrics::over_copies`): in, once after each
+acquire or other change of the bytes (Textures over a buffer, the exported block's rule). A start or pitch the
 driver cannot take falls to the copy form with no error: the answer's `form` is the only sign.
 `Metrics::surfaces_in_place` and `Metrics::surfaces_copied` count each form made.
 
@@ -898,14 +899,21 @@ the Direct3D 11 texture's payload until it is freed.
   - A dma-buf surface on a device without `VK_EXT_image_drm_format_modifier`, or whose
     `DRM_FORMAT_MOD_LINEAR` entry lacks a plane's format or one of its four usages
     (`SurfaceCopy::NoModifier`, `SurfaceCopy::Tiling`): the device offers no in-place form for it.
-    On the Radeon RX 550 (Polaris 12) the driver lists no modifier extension, and its plain
-    `LINEAR` images refuse the dma-buf handle.
+    On the Radeon RX 550 (Polaris 12, RADV of Mesa 26.2.6) the driver lists no modifier extension,
+    and it offers no dma-buf image in `LINEAR` tiling either: its image format query refuses the
+    dma-buf handle with `LINEAR` tiling for every usage, though the `LINEAR` format features of
+    R8, RG8, R16 and RG16 hold sampling, the colour attachment, both copies and storage (jobs
+    m3-max-66247 and m3-max-66261). So neither in-place form exists there; the Radeon 780M and the
+    RX 7900 XTX answer that query alike. Each plane is copied in once a change of its bytes, an
+    acquire among them (the exported block's rule, Textures over a buffer).
   - A dma-buf surface on NVIDIA (`SurfaceCopy::Tiling`): on the RTX 3090 and the RTX 5080 Laptop
     GPU (NVIDIA 620.70.06) the `DRM_FORMAT_MOD_LINEAR` modifier's features carry
     `VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV`, not the colour attachment feature, for
-    every plane format it is listed for, and that bit holds no modifier's image in place
-    (Exported surfaces); the other formats measured have no such modifier there. The opaque fd surface of the same planes is in place where its pitch multiple
-    divides the driver's pitch (above), its planes marked.
+    every plane format it is listed for (R8, RG8, R16 and RG16 among them on the RTX 3090, jobs
+    m3-max-66251 and m3-max-66264), and that bit holds no modifier's image in place
+    (Exported surfaces); the other formats measured have no such modifier there. The opaque fd surface of the same
+    planes is in place where its pitch multiple divides the driver's pitch (above), its planes
+    marked, and is the NVIDIA route a consumer takes.
   - A layout the device cannot meet (`SurfaceCopy::Pitch`, `SurfaceCopy::Start`): a pitch or
     start the consumer asks that the driver's linear images do not take. A pitch multiple of
     4,096 takes `SurfaceCopy::Pitch` on every device measured: the Radeon 780M, the RTX 3090,
@@ -1014,8 +1022,9 @@ the Direct3D 11 texture's payload until it is freed.
 - A texture over a buffer in an exported block is the counted copy of a texture over a buffer on
   every device (`Metrics::over_copies`). The runtime makes no image in an exported block's memory,
   which is dedicated to its buffer. A decoded picture in an exported block is then one copy a
-  plane into the plane's image, made before the first submission that uses the picture; a
-  picture the decoder writes over before any use is not copied. In the video decodes we replay
+  plane into the plane's image, made by the first submission that uses the picture after its
+  acquire; later submissions that only read it copy nothing, and a picture the decoder writes
+  over before any use is not copied. In the video decodes we replay
   (two planes a picture: 3,110,400 bytes for an 8-bit 1920x1080 picture, 24,883,200 for a 16-bit
   3840x2160 one), that is 2 copies and about 8.6 MB a picture used, and a picture's copies take
   0.288 ms of GPU time on the Radeon 780M, 0.294 ms on the RX 550, 0.520 ms on the Iris Xe
@@ -1395,6 +1404,16 @@ made, with no lock, and never rewritten for layouts.
     define which bytes it sees; the bytes at the group's execution are one of the allowed outcomes.
     A guest that waits for a completion before writing has, by that fact, a command buffer not in
     a held group.
+  - Over a buffer in an exported block (`Device::new_exported_block`), the Shared rules inside a
+    segment, and the leading copy only once after each event that changes the bytes: the
+    texture's making, the block's acquire (`Block::external_writes_done`, which
+    `Surface::external_writes_done` makes in the copy form) or a zero fill of its range
+    (`Device::zero_block_range`), each ahead of every command buffer committed after it, and a
+    submitted command's write of the texture's bytes (every such texture for a write through an
+    address) or another texture's copy back over them. The upload that leads the next submission
+    that uses the texture makes it; a submission that only reads the texture copies nothing. The
+    block is Private, so no host write reaches it, and the other API's writes are the consumer's
+    to announce by the acquire.
   - Over a Managed buffer's device copy, only at Metal's own Managed events, each texture keeping
     one flag of each kind: in, after a `did_modify_range` over its range, by the commit that
     captures the range, after its copies into the device copy; and at its making, or where device

@@ -1617,6 +1617,11 @@ impl Device {
             let image = Arc::clone(texture.inner.imaged());
             (buffer.over_entries()).add(texture.inner.id, image, copy, copy.range);
         }
+        // Over an exported block, the submissions keep what changes its bytes
+        // (`crate::over::ExportedOvers`).
+        if let Some((_, copy)) = texture.copied_over().filter(|(_, copy)| copy.exported) {
+            core.work.exported_over(&texture.inner, &copy);
+        }
         Ok(texture)
     }
 }
@@ -4897,6 +4902,7 @@ pub(crate) trait TextureObject {
             bytes: u64::from(d.width) * u64::from(d.height) * u64::from(unit.bytes),
             shared: named.buffer.is_shared(),
             imported: device_copy.is_none() && block.memory.imported(),
+            exported: device_copy.is_none() && block.memory.exported(),
             cause,
         };
         Some((&named.buffer, copy))
@@ -5372,6 +5378,9 @@ pub(crate) struct OverCopy {
     pub(crate) shared: bool,
     /// The bytes shaders reach are in an imported block (`Metrics::over_copies_imported`).
     pub(crate) imported: bool,
+    /// The bytes shaders reach are in an exported block, whose copies in wait for an event that
+    /// changes them (`crate::over::ExportedOvers`).
+    pub(crate) exported: bool,
     /// Why the texture is not in place: the pair of [`Metrics`](crate::Metrics) its copies count
     /// in too.
     pub(crate) cause: OverCause,

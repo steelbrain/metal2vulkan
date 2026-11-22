@@ -25,6 +25,7 @@ mod dispatch_tiles;
 mod dma_bufs;
 mod draw;
 mod export;
+mod exported_overs;
 mod fault;
 mod feature_enables;
 mod fence;

@@ -4,7 +4,8 @@
 //! reach (a Managed buffer's device copy, where it has one) into it and back, one
 //! `vkCmdCopyBufferToImage` or `vkCmdCopyImageToBuffer` region a texture, with no CPU copy. Over a
 //! Managed buffer's device copy, only Metal's Managed events copy ([`ManagedOvers`]); over any
-//! other buffer, the Shared rules:
+//! other buffer, the Shared rules, but for a buffer in an exported block, whose leading copy waits
+//! for an event that changes its bytes ([`ExportedOvers`]):
 //!
 //! - **In, once a submission.** The upload that leads a submission copies the bytes into the
 //!   image of every such texture a segment of the submission uses before any command of the
@@ -56,7 +57,7 @@ use ash::vk;
 use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasherDefault;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 /// Bytes of memory a resource lies in: `start..end` of block `block`, from the block's first
 /// byte. Buffers over the same bytes of a block lie in the same span, whatever their ids.
@@ -586,6 +587,98 @@ pub(crate) struct ManagedOvers {
     entries: Mutex<Vec<Entry>>,
     /// The entries' count, read without the lock.
     count: AtomicUsize,
+}
+
+/// A texture over a buffer in an exported block in an image of its own, as the submissions keep it
+/// ([`ExportedOvers`]).
+struct Exported {
+    /// The texture, whose image is `image` while it lives.
+    texture: Weak<TextureInner>,
+    id: u32,
+    image: vk::Image,
+    memory: Span,
+    /// An event changed its bytes since its image last took them: the commit number from which
+    /// every command buffer runs behind that event (0 for a submitted write).
+    owed: Option<u64>,
+}
+
+/// The textures over a buffer in an exported block ([`crate::Device::new_exported_block`]) in an
+/// image of their own. No host write reaches such a block, which is Private: only the device's
+/// commands and the other API, whose writes [`crate::Block::external_writes_done`] announces,
+/// change its bytes. So such a texture is copied in once after each event that changes its bytes,
+/// by the upload that leads the next submission that leans on the leading copy for it, and a
+/// submission that only reads it copies nothing. The events: the texture's making; an acquire or a
+/// zero fill of the block, which go ahead of every command buffer committed after them; and a
+/// submitted command's write of memory its texels lie in, a write through an address (every
+/// texture), or another texture's copy back over those bytes. Within a segment the Shared rules
+/// stand.
+#[derive(Default)]
+pub(crate) struct ExportedOvers {
+    entries: Vec<Exported>,
+}
+
+impl ExportedOvers {
+    /// Keeps `texture`, whose copy is `copy`, owing its first copy in.
+    pub(crate) fn add(&mut self, texture: &Arc<TextureInner>, copy: &OverCopy) {
+        self.entries
+            .retain(|entry| entry.texture.strong_count() > 0);
+        self.entries.push(Exported {
+            texture: Arc::downgrade(texture),
+            id: texture.id(),
+            image: copy.image,
+            memory: copy.memory,
+            owed: Some(0),
+        });
+    }
+
+    /// Work ahead of every command buffer numbered `number` or later changed the bytes `range`
+    /// of block `block`: each texture over them owes its copy in.
+    pub(crate) fn owe(&mut self, block: BlockId, range: (u64, u64), number: u64) {
+        let span = Span {
+            block,
+            start: range.0,
+            end: range.1,
+        };
+        for entry in &mut self.entries {
+            if entry.memory.meets(span) {
+                entry.owed = Some(entry.owed.map_or(number, |owed| owed.max(number)));
+            }
+        }
+    }
+
+    /// Whether the submission whose last command buffer is numbered `through` copies `copy` in:
+    /// where an event owes it, settled where every such event runs ahead of that command buffer.
+    /// A texture over another block's buffer takes its copy, as the Shared rules have it.
+    pub(crate) fn takes(&mut self, copy: &OverCopy, through: u64) -> bool {
+        let found = (self.entries.iter_mut())
+            .find(|entry| entry.image == copy.image && entry.texture.strong_count() > 0);
+        let Some(entry) = found else {
+            return true;
+        };
+        let Some(owed) = entry.owed else {
+            return false;
+        };
+        if owed <= through {
+            entry.owed = None;
+        }
+        true
+    }
+
+    /// A submission went whose segments wrote `leans`: each texture whose bytes they changed owes
+    /// its copy in to every later submission.
+    pub(crate) fn wrote(&mut self, leans: &Leans) {
+        self.entries
+            .retain(|entry| entry.texture.strong_count() > 0);
+        for entry in &mut self.entries {
+            let memory = entry.memory;
+            let changed = leans.unbound
+                || leans.wrote.meets(memory)
+                || (leans.backed.iter()).any(|&(span, by)| span.meets(memory) && by != entry.id);
+            if changed {
+                entry.owed = Some(entry.owed.unwrap_or(0));
+            }
+        }
+    }
 }
 
 /// Whether two ranges meet.

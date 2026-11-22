@@ -68,8 +68,8 @@ use crate::error::Error;
 use crate::event::EventInner;
 use crate::fault;
 use crate::fill;
-use crate::memory::{Block, Internal};
-use crate::over::{self, Leans};
+use crate::memory::{Block, BlockId, Internal};
+use crate::over::{self, ExportedOvers, Leans};
 use crate::queue::QueueInner;
 use crate::record::{self, Reach, Recorder};
 use crate::staging::{At, Oldest, Region, Stage, Staging, REGION_LEN};
@@ -250,6 +250,9 @@ pub(crate) struct WorkState {
     span_sleepers: u32,
     /// The command buffers scheduled while held for room so far ([`WorkState::hold`]).
     holds: u64,
+    /// The textures over a buffer in an exported block in an image of their own, and what each
+    /// owes its copy in.
+    exported: ExportedOvers,
     /// For the device tests: the progress value of the last submission when the first loss came
     /// ([`Work::stall`]).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -473,7 +476,8 @@ struct Batch {
     /// (`crate::over`).
     leans: Leans,
     /// The copies into those textures' images its upload makes first: one for each texture a
-    /// segment leans on the leading copy for, and, taken as it goes ([`WorkState::close`]), each
+    /// segment leans on the leading copy for (over an exported block, one an event owes,
+    /// `crate::over::ExportedOvers`), and, taken as it goes ([`WorkState::close`]), each
     /// texture over a Managed buffer's device copy a command buffer of it keeps that owes one
     /// (`crate::over::ManagedOvers`).
     overs: Vec<OverCopy>,
@@ -573,6 +577,7 @@ impl Work {
                 loss: None,
                 span_sleepers: 0,
                 holds: 0,
+                exported: ExportedOvers::default(),
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
                 lost_at: 0,
             }),
@@ -585,6 +590,21 @@ impl Work {
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             asking: AtomicBool::new(false),
         }
+    }
+
+    /// Keeps `texture`, over a buffer in an exported block in an image of its own whose copy is
+    /// `copy` ([`ExportedOvers`]).
+    pub(crate) fn exported_over(&self, texture: &Arc<TextureInner>, copy: &OverCopy) {
+        self.lock().exported.add(texture, copy);
+    }
+
+    /// Work recorded into the upload changed `range` of `block`'s bytes, ahead of every command
+    /// buffer committed from now on: the textures over them owe their copies in
+    /// ([`ExportedOvers`]).
+    pub(crate) fn exported_changed(&self, block: BlockId, range: (u64, u64)) {
+        let mut state = self.lock();
+        let number = state.next_seq + 1;
+        state.exported.owe(block, range, number);
     }
 
     pub(crate) fn lock(&self) -> MutexGuard<'_, WorkState> {
@@ -1152,7 +1172,11 @@ impl Work {
     ) -> Result<(), Error> {
         let (buffer, base) = block.memory.range(0);
         let held = Held::Block(Arc::clone(block));
-        self.fill(core, held, buffer, base + offset, base + end)
+        self.fill(core, held, buffer, base + offset, base + end)?;
+        if block.memory.exported() {
+            self.exported_changed(block.memory.id, (offset, end));
+        }
+        Ok(())
     }
 
     /// Records the zero fill of `start..end` of `buffer` into the upload, which keeps `held`, what
@@ -1926,6 +1950,12 @@ impl WorkState {
                 batch.overs.extend(taken);
             }
         }
+        // Over an exported block, a texture takes its copy in only where an event changed its
+        // bytes, and the batch's writes change those they meet (`crate::over::ExportedOvers`).
+        let through = batch.leads.last().copied().unwrap_or(0);
+        let exported = &mut self.exported;
+        (batch.overs).retain(|copy| !copy.exported || exported.takes(copy, through));
+        self.exported.wrote(&batch.leans);
         // The copy-ins captured at or before the number of a command buffer that goes first in
         // it, each ahead of the first such one, and the copies back owed to the textures over
         // their ranges by writes submitted before, which its upload makes first
@@ -1961,7 +1991,6 @@ impl WorkState {
             }
         }
         (self.carried).extend((batch.finished.iter()).map(|(_, pending, _)| (pending.seq, value)));
-        let through = batch.leads.last().copied().unwrap_or(0);
         let uploads = self.take_uploads(core, released, value, through);
         Some((value, uploads, batch))
     }
