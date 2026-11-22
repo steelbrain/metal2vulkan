@@ -58,14 +58,15 @@ fn host_memory_takes_the_first_coherent_listed_type_offered() {
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) mod on_device {
     use crate::memory::Release;
-    use crate::tests::command::on_device::{each_device, finished};
+    use crate::tests::command::on_device::{each_device, finished, within, Busy};
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::texture::TextureObject;
     use crate::{
-        BufferLayout, Device, DeviceOptions, Error, ImportHandle, IndexClass, Limit, MemoryClass,
-        Metrics, PixelFormat, Region, StorageMode, TextureDescriptor, TexturePlace, TextureType,
-        TextureUsage,
+        BufferLayout, CommandBufferError, Device, DeviceLoss, DeviceOptions, Error, ImportHandle,
+        IndexClass, Limit, MemoryClass, Metrics, PixelFormat, Region, StorageMode,
+        TextureDescriptor, TexturePlace, TextureType, TextureUsage,
     };
+    use ash::vk;
     use std::alloc::Layout;
     use std::ptr::NonNull;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -198,6 +199,77 @@ pub(crate) mod on_device {
             );
             println!("stall readings: {name}: {submitting}; {completing}");
         });
+    }
+
+    /// A loss while an import's release waits does not keep the release from running: host
+    /// memory imported into a Shared block that a committed command buffer fills, the block
+    /// dropped, so its release waits for that command buffer. Held on an event nothing signals
+    /// (the submit side's), the command buffer ends at the loss DeviceLost not in flight; behind
+    /// busy work (on the GPU), DeviceLost in flight once the device is idle, which the injected
+    /// loss reaches when the busy work is let go, as a lost device's work ends. Either way the
+    /// release runs. Each case has a device of its own, as a lost device stays lost. The loss is
+    /// the consumer's report (`Device::report_loss`), which takes the runtime's own loss path
+    /// with no GPU fault.
+    #[test]
+    fn every_device_runs_a_waiting_release_after_a_loss() {
+        let loss = DeviceLoss {
+            call: "vkQueuePresentKHR",
+            result: vk::Result::ERROR_DEVICE_LOST,
+            fault: None,
+        };
+        for in_flight in [false, true] {
+            each_device("release_after_loss", |name, _, device| {
+                let Some(alignment) = (device.core().imports.host.as_ref()).map(|(_, at)| *at)
+                else {
+                    println!("release after a loss: {name}: imports no host memory; not run");
+                    return;
+                };
+                let len = (64u64 << 10).next_multiple_of(alignment);
+                let (pointer, mapping) = host_memory(len, alignment);
+                let (release, released) = releasing();
+                // SAFETY: the memory is the test's, mapped until it frees it after the release.
+                let (block, _) = unsafe { device.import_host_memory(pointer, len, release) }
+                    .unwrap_or_else(|error| panic!("{name}: an import: {error}"));
+                let buffer = (device.new_buffer(block.id, 0, len, None)).expect("a buffer");
+                let event = device.new_shared_event().expect("a shared event");
+                let busy = in_flight.then(|| Busy::new(&device));
+                let queue = device.new_command_queue(4).expect("a queue");
+                let filled = queue.command_buffer().expect("a command buffer");
+                if !in_flight {
+                    (filled.encode_wait_for_event(event.as_event(), 1)).expect("a wait");
+                }
+                let mut encoder = filled.blit_command_encoder().expect("an encoder");
+                encoder.fill_buffer(&buffer, 0..len, 0x5a).expect("a fill");
+                encoder.end_encoding();
+                let before = device.counters().metrics().submissions;
+                filled.commit().expect("a commit");
+                if in_flight {
+                    within("the fill's submission", || {
+                        device.counters().metrics().submissions > before
+                    });
+                }
+                drop((buffer, block));
+                thread::sleep(Duration::from_millis(20));
+                let waits = !released.load(Ordering::SeqCst);
+                assert!(waits, "{name}: in flight {in_flight}: the release waits");
+                device.report_loss(loss.clone());
+                if let Some(busy) = &busy {
+                    busy.open();
+                }
+                wait_until(&device, "the release after a loss", || {
+                    released.load(Ordering::SeqCst)
+                });
+                finished(name, &filled);
+                assert_eq!(
+                    filled.error(),
+                    Some(CommandBufferError::DeviceLost { in_flight }),
+                    "{name}"
+                );
+                drop((busy, filled, queue, event, device));
+                free(mapping);
+                println!("release after a loss: {name}: in flight {in_flight}: the release ran");
+            });
+        }
     }
 
     /// Host memory is imported into a Shared block whose contents are the memory: a fill of its
