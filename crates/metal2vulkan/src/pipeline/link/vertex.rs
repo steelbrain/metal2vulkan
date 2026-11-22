@@ -34,22 +34,22 @@
 //!    pulled there, and under the identity domains is refused there;
 //! 3. **alignment**: Metal lets a stride and an attribute offset be any byte multiple on Apple5 and
 //!    later, while Vulkan's fixed-function attribute address must be a multiple of the format's
-//!    component size (of the whole format for a packed one). An attribute whose offset or static
-//!    binding stride is not such a multiple is pulled (the pulled fetch reads bytes), and so is one
-//!    whose static stride breaks the portability subset's rule (a multiple of
+//!    component size (of the whole format for a packed one). A fixed-function attribute whose
+//!    offset or static binding stride is not such a multiple is refused, and so is one whose static
+//!    stride breaks the portability subset's rule (a multiple of
 //!    `minVertexInputBindingStrideAlignment` and at least as large), or that ends past its static
 //!    stride where the subset withholds `vertexAttributeAccessBeyondStride`;
-//! 4. an attribute whose offset or binding stride exceeds `maxVertexInputAttributeOffset` /
-//!    `maxVertexInputBindingStride` is pulled;
-//! 5. while the fixed-function attributes exceed `maxVertexInputAttributes` or their layouts
-//!    `maxVertexInputBindings`, the highest fixed-function attribute is pulled. Locations are
-//!    dense in attribute order, so an attribute's index itself is never a limit;
+//! 4. a fixed-function attribute whose offset or binding stride exceeds
+//!    `maxVertexInputAttributeOffset` / `maxVertexInputBindingStride` is refused, naming the limit;
+//! 5. fixed-function attributes past `maxVertexInputAttributes`, or their layouts past
+//!    `maxVertexInputBindings`, are refused, naming the limit. Locations are dense in attribute
+//!    order, so an attribute's index itself is never a limit;
 //! 6. when the strides are dynamic state (`strides_dynamic`: a fixed-function binding's stride
 //!    is set per bind and the profile has dynamic strides), `vkCmdBindVertexBuffers2` passes
 //!    every binding's stride, static ones included, and a nonzero one must cover every
 //!    attribute the binding fetches (`VUID-vkCmdBindVertexBuffers2-pStrides-06209`): a
 //!    fixed-function attribute of a static layout that ends past the layout's nonzero stride is
-//!    pulled. Pulling it changes no per-bind layout, so the strides stay dynamic;
+//!    refused;
 //! 7. a **pulled-vertex-buffer variant** (`VariantKey::pulled_vertex_buffers`) pulls every
 //!    remaining fixed-function attribute of the layouts it names: the binder asks for it when a
 //!    shape binds such a layout at an offset or with a per-bind stride fixed-function input
@@ -64,11 +64,11 @@
 //!    names, and a command binds its vertex buffers by address alone. The layouts they pull are
 //!    not a pulled-vertex-buffer variant's (`variant_pulled` keeps item 7's).
 //!
-//! Under the identity domains (`Device::from_queries`' profile) items 2 to 6 pull nothing: item 2's
-//! cases are `metal::vertex::attribute_fetch`'s refusals, and an attribute items 3 to 6 would pull
-//! is refused as `Feature::VertexInputLayout`, with the limit it passes where it passes one. What
-//! items 7 and 8 pull is read through the source buffer's device address, as every slot is read
-//! there, at the layout's pushed stride (`PushField::VertexBufferStride`).
+//! Only the identity domains (`Device::from_queries`' profile) fetch in fixed function, and items 2
+//! to 6 pull nothing there: item 2's cases are `metal::vertex::attribute_fetch`'s refusals, and
+//! items 3 to 6 refuse as `Feature::VertexInputLayout`. What items 7 and 8 pull is read through
+//! the source buffer's device address, as every slot is read there, at the layout's pushed stride
+//! (`PushField::VertexBufferStride`).
 //!
 //! A fixed-function entry keeps nothing of the format (`VertexFetch::FixedFunction`): no
 //! instruction of the module names it, so every format the device fetches in fixed function
@@ -196,7 +196,8 @@ fn resolve<'a>(
     pull_every: bool,
 ) -> Result<(BTreeMap<u32, Resolved<'a>>, BTreeSet<u32>), Error> {
     let l = &p.fields().limits;
-    // Under the identity domains nothing is pulled (the module docs).
+    // Only the identity domains fetch in fixed function (item 2), and they pull nothing: what a
+    // fixed-function attribute cannot take is refused (the module docs).
     let identity = crate::lower::access::identity(p);
     if let Some(d) = desc {
         d.check_layouts()?;
@@ -214,9 +215,7 @@ fn resolve<'a>(
             }),
         )?;
         let (vk_format, signed) = class_format(attr.format, numeric, a)?;
-        // A signed format feeds a variable declared `int` under the identity domains alone.
-        let fits = !signed || identity;
-        let mut fetch = fetch_as(vk_format, layout.step_function, layout.step_rate, p)?;
+        let fetch = fetch_as(vk_format, layout.step_function, layout.step_rate, p)?;
         let emitted = binding_stride(fetch, layout);
         let beyond_stride = match (fetch, emitted) {
             (AttributeFetch::FixedFunction { format, .. }, Some(stride)) => {
@@ -259,8 +258,6 @@ fn resolve<'a>(
             if unaligned {
                 return Err(Unsupported::not_implemented(Feature::VertexInputLayout).into());
             }
-        } else if !fits || unaligned || limit.is_some() {
-            fetch = AttributeFetch::Pulled;
         }
         out.insert(
             a,
@@ -272,48 +269,34 @@ fn resolve<'a>(
             },
         );
     }
-    // Pull the highest fixed-function attribute while the fixed-function attributes or their
-    // layouts exceed the device's limits.
-    loop {
-        let fixed: Vec<&Resolved<'_>> = out
-            .values()
-            .filter(|r| matches!(r.fetch, AttributeFetch::FixedFunction { .. }))
-            .collect();
-        let layouts: BTreeSet<u32> = fixed.iter().map(|r| r.attr.buffer_index).collect();
-        let counts = [
-            (
-                VkLimit::MaxVertexInputAttributes,
-                fixed.len(),
-                l.max_vertex_input_attributes,
-            ),
-            (
-                VkLimit::MaxVertexInputBindings,
-                layouts.len(),
-                l.max_vertex_input_bindings,
-            ),
-        ];
-        let over = counts
-            .into_iter()
-            .find(|&(_, count, max)| count as u64 > u64::from(max));
-        let Some((limit, count, max)) = over else {
-            break;
+    // The fixed-function attributes and their layouts within the device's limits (item 5).
+    let fixed: Vec<&Resolved<'_>> = out
+        .values()
+        .filter(|r| matches!(r.fetch, AttributeFetch::FixedFunction { .. }))
+        .collect();
+    let layouts: BTreeSet<u32> = fixed.iter().map(|r| r.attr.buffer_index).collect();
+    let counts = [
+        (
+            VkLimit::MaxVertexInputAttributes,
+            fixed.len(),
+            l.max_vertex_input_attributes,
+        ),
+        (
+            VkLimit::MaxVertexInputBindings,
+            layouts.len(),
+            l.max_vertex_input_bindings,
+        ),
+    ];
+    let over = counts
+        .into_iter()
+        .find(|&(_, count, max)| count as u64 > u64::from(max));
+    if let Some((limit, count, max)) = over {
+        let limit = Capability::Limit {
+            limit,
+            required: count as u64,
+            available: u64::from(max),
         };
-        if identity {
-            let limit = Capability::Limit {
-                limit,
-                required: count as u64,
-                available: u64::from(max),
-            };
-            return Err(Unsupported::needs(Feature::VertexInputLayout, limit).into());
-        }
-        match out
-            .values_mut()
-            .rev()
-            .find(|r| matches!(r.fetch, AttributeFetch::FixedFunction { .. }))
-        {
-            Some(r) => r.fetch = AttributeFetch::Pulled,
-            None => break,
-        }
+        return Err(Unsupported::needs(Feature::VertexInputLayout, limit).into());
     }
     // Static strides under dynamic stride state cover their attributes (item 6).
     let dynamic = strides_dynamic(
@@ -323,16 +306,13 @@ fn resolve<'a>(
             .map(|r| binding_stride(r.fetch, r.layout)),
     );
     if dynamic {
-        for r in out.values_mut() {
+        for r in out.values() {
             if let (AttributeFetch::FixedFunction { format, .. }, Some(stride)) =
                 (r.fetch, binding_stride(r.fetch, r.layout))
             {
                 let size = format.block().map_or(u32::MAX, |b| b.size);
                 if stride != 0 && r.attr.offset.saturating_add(size) > stride {
-                    if identity {
-                        return Err(Unsupported::not_implemented(Feature::VertexInputLayout).into());
-                    }
-                    r.fetch = AttributeFetch::Pulled;
+                    return Err(Unsupported::not_implemented(Feature::VertexInputLayout).into());
                 }
             }
         }
