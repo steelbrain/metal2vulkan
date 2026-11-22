@@ -1714,6 +1714,13 @@ made, with no lock, and never rewritten for layouts.
   (`Gap::TextureView`), and a draw that reads it as an attachment of its own pass is `Gap::Draw`
   of `AttachmentRead`: the swapchain's image lists no other format and has no feedback usage.
   Heap textures are placed only in Private heaps (`Gap::HeapTexture` for a Shared block).
+- A texture of Metal's 4:2:2 chroma-pair formats, `GBGR422` and `BGRG422`, is
+  `Gap::TextureFormat` at every make and at `heap_texture_size_and_align`. Vulkan's 4:2:2 formats
+  (`G8B8G8R8_422_UNORM`, `B8G8R8G8_422_UNORM`) are viewed only through a sampler Y′CbCr
+  conversion, whose chroma reconstruction is the implementation's, so the translator's format
+  table holds these two as a decoded `RGBA8Unorm` twin, which is not a form the runtime makes (a
+  format held otherwise than through its view, above). The conformance cases `chroma_pairs` and
+  `heap-sizes-422` record the refusal on every venue (`known-gaps-rt.tsv`).
 
 ## Sampler states
 
@@ -2940,6 +2947,14 @@ cache is answered compile-required on both.
 
 ### Known gaps of pipeline states
 
+- Ray tracing's bound acceleration structure is not built (ray tracing is out of scope,
+  docs/REFUSALS.md's `RayTracing` row). The runtime makes no acceleration structure, no encoder
+  binds one (`setAccelerationStructure:atBufferIndex:`), and nothing supplies the instance count
+  of a bound instance structure that the translator's intersection reads. Device creation enables
+  neither `rayQuery` nor `accelerationStructure`, so a function that takes an acceleration
+  structure is refused when its state is made, as the translator refuses it on a device without
+  them (`Unsupported{RayTracing}` naming the two features, the translator's
+  `tests::engine_ray_tracing`).
 - A sample at a texel offset the shader computes, on a device without `maintenance8` (Chosen by a
   query): the sample branches over the offset's values, one branch per combination of the 16
   values of each lane the shader computes (256 for a 2D offset), each with its value as

@@ -1110,8 +1110,8 @@ pub fn length_class(length: u64) -> u8 {
 
 /// The range limit of a device's buffer views (`maxStorageBufferRange`, [`BufferRanges::of`]), the
 /// only value a plan compares a bound buffer's length class with (whether every range of the
-/// buffer fits it), which the runtime sets on each stage table ([`StageTable::buffer_ranges`]). A
-/// buffer's shape tells apart only the classes that comparison tells apart
+/// buffer fits it), which the plan's caller sets on each stage table
+/// ([`StageTable::buffer_ranges`]); the runtime builds no stage table. A buffer's shape tells apart only the classes that comparison tells apart
 /// ([`BufferRanges::length_class`]), so buffers of lengths the device's limit does not tell apart
 /// bind one shape and take one plan, as a stream of dispatches over buffers of many sizes binds
 /// them. The default, 0, tells every class apart.
