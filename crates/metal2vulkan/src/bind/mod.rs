@@ -36,9 +36,7 @@
 //! through the binding [`WriteSource::ExecutionStatus`] names where it does not. An indirect
 //! dispatch reads its group counts from Metal's buffer itself ([`IndirectArgs::Buffer`]).
 //! A pass's visibility results are its queries' results copied to their
-//! offsets, a `Boolean` one the device's own nonzero value where a sample passed. A multisampled
-//! depth or stencil aspect moves between images without colour copies through the draws of
-//! [`depth_stencil_copy_modules`]. Compute commands
+//! offsets, a `Boolean` one the device's own nonzero value where a sample passed. Compute commands
 //! a kernel encodes into an indirect command buffer replay on the device where it has device
 //! addresses: the [`replay_preprocess`] of an execution ([`ReplayExecution`]) over registered
 //! [`ReplayVariant`]s, recorded with [`replay_preprocess_module`], writes each command's arguments
@@ -78,7 +76,6 @@ pub(crate) mod argument_buffer;
 pub(crate) mod astc_decode;
 pub(crate) mod chroma_decode;
 pub(crate) mod depth_clamp;
-pub(crate) mod depth_stencil_copy;
 pub(crate) mod dispatch;
 pub(crate) mod etc_decode;
 pub(crate) mod graphics;
@@ -113,9 +110,6 @@ pub use argument_buffer::{
 pub use astc_decode::{AstcDecode, AstcTexels};
 pub use chroma_decode::ChromaDecode;
 pub use depth_clamp::clamped_depth;
-pub use depth_stencil_copy::{
-    depth_stencil_copy_modules, DepthStencilCopy, DepthStencilCopyModules, StencilBit,
-};
 pub use dispatch::{Dispatch, DispatchCommands, DispatchRegion, IndirectArgs};
 pub use etc_decode::{EtcDecode, EtcTexels};
 pub use graphics::{alpha_test_code, DrawCall, DrawCommands, IndexOverrun};

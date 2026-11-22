@@ -64,8 +64,6 @@ assoc-const	metal2vulkan::bind::AstcDecode::BLOCK_BYTES	pub const BLOCK_BYTES: u
 assoc-const	metal2vulkan::bind::ChromaDecode::ALL	pub const ALL: [ChromaDecode; 2]
 assoc-const	metal2vulkan::bind::ChromaDecode::BLOCK_BYTES	pub const BLOCK_BYTES: u32
 assoc-const	metal2vulkan::bind::ChromaDecode::TEXEL_BYTES	pub const TEXEL_BYTES: u32
-assoc-const	metal2vulkan::bind::DepthStencilCopyModules::SET	pub const SET: u32
-assoc-const	metal2vulkan::bind::DepthStencilCopyModules::SOURCE_BINDING	pub const SOURCE_BINDING: u32
 assoc-const	metal2vulkan::bind::DrawMergeModule::HEADER_PUSH	pub const HEADER_PUSH: u32
 assoc-const	metal2vulkan::bind::DrawMergeModule::LOCAL_SIZE	pub const LOCAL_SIZE: u32
 assoc-const	metal2vulkan::bind::DrawMergeModule::PUSH_BYTES	pub const PUSH_BYTES: u32
@@ -124,7 +122,6 @@ assoc-const	metal2vulkan::bind::StatusBits::MESH_GRID_PAST_LIMITS	pub const MESH
 assoc-const	metal2vulkan::bind::StatusBits::REPLAY_FAULT	pub const REPLAY_FAULT: StatusBits
 assoc-const	metal2vulkan::bind::StatusBits::RESIDENT_MISS	pub const RESIDENT_MISS: StatusBits
 assoc-const	metal2vulkan::bind::StatusWord::ALL	pub const ALL: [StatusWord; 4]
-assoc-const	metal2vulkan::bind::StencilBit::ALL	pub const ALL: [StencilBit; 8]
 assoc-const	metal2vulkan::bind::TexelRows::FIRST	pub const FIRST: usize
 assoc-const	metal2vulkan::bind::TexelRows::HEIGHT	pub const HEIGHT: usize
 assoc-const	metal2vulkan::bind::TexelRows::ROW	pub const ROW: usize
@@ -291,8 +288,6 @@ assoc-const-value	metal2vulkan::bind::AstcDecode::BLOCK_BYTES	16
 assoc-const-value	metal2vulkan::bind::ChromaDecode::ALL	[ChromaDecode::Gbgr, ChromaDecode::Bgrg]
 assoc-const-value	metal2vulkan::bind::ChromaDecode::BLOCK_BYTES	4
 assoc-const-value	metal2vulkan::bind::ChromaDecode::TEXEL_BYTES	4
-assoc-const-value	metal2vulkan::bind::DepthStencilCopyModules::SET	0
-assoc-const-value	metal2vulkan::bind::DepthStencilCopyModules::SOURCE_BINDING	0
 assoc-const-value	metal2vulkan::bind::DrawMergeModule::HEADER_PUSH	0
 assoc-const-value	metal2vulkan::bind::DrawMergeModule::LOCAL_SIZE	64
 assoc-const-value	metal2vulkan::bind::DrawMergeModule::PUSH_BYTES	16
@@ -351,7 +346,6 @@ assoc-const-value	metal2vulkan::bind::StatusBits::MESH_GRID_PAST_LIMITS	StatusBi
 assoc-const-value	metal2vulkan::bind::StatusBits::REPLAY_FAULT	StatusBits(1 <<1)
 assoc-const-value	metal2vulkan::bind::StatusBits::RESIDENT_MISS	StatusBits(1 <<0)
 assoc-const-value	metal2vulkan::bind::StatusWord::ALL	[StatusWord::Status, StatusWord::ResidentMisses, StatusWord::ReplayFaults, StatusWord::SeqCstFences]
-assoc-const-value	metal2vulkan::bind::StencilBit::ALL	[StencilBit(0), StencilBit(1), StencilBit(2), StencilBit(3), StencilBit(4), StencilBit(5), StencilBit(6), StencilBit(7)]
 assoc-const-value	metal2vulkan::bind::TexelRows::FIRST	3
 assoc-const-value	metal2vulkan::bind::TexelRows::HEIGHT	1
 assoc-const-value	metal2vulkan::bind::TexelRows::ROW	2
@@ -816,7 +810,6 @@ enum	metal2vulkan::bind::BoundBuffer	#[cfg_attr(feature = "serde", derive(serde:
 enum	metal2vulkan::bind::BoundTexture	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum BoundTexture
 enum	metal2vulkan::bind::BufferShape	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum BufferShape
 enum	metal2vulkan::bind::ChromaDecode	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum ChromaDecode
-enum	metal2vulkan::bind::DepthStencilCopy	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum DepthStencilCopy
 enum	metal2vulkan::bind::Dispatch	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum Dispatch
 enum	metal2vulkan::bind::DrawCall	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum DrawCall
 enum	metal2vulkan::bind::DrawReplayRule	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum DrawReplayRule
@@ -2137,9 +2130,6 @@ field	metal2vulkan::bind::BufferRanges.storage	pub storage: u32
 field	metal2vulkan::bind::BufferRanges.uniform	pub uniform: u32
 field	metal2vulkan::bind::ByteRange.len	pub len: u64
 field	metal2vulkan::bind::ByteRange.offset	pub offset: u64
-field	metal2vulkan::bind::DepthStencilCopyModules.fragment	pub fragment: Arc<[u32]>
-field	metal2vulkan::bind::DepthStencilCopyModules.requirements	pub requirements: Requirements
-field	metal2vulkan::bind::DepthStencilCopyModules.vertex	pub vertex: Arc<[u32]>
 field	metal2vulkan::bind::DescriptorBytes.binding	pub binding: u32
 field	metal2vulkan::bind::DescriptorBytes.bytes	pub bytes: Vec<u8>
 field	metal2vulkan::bind::DescriptorBytes.set	pub set: u32
@@ -3371,7 +3361,6 @@ fn	metal2vulkan-runtime::serve_stage	pub fn serve_stage(instance: &Instance, mut
 fn	metal2vulkan::ash_interop::sampler_create_info	pub fn sampler_create_info<'a>(desc: &vk::SamplerDesc, reduction: &'a mut ash::vk::SamplerReductionModeCreateInfo<'static>, border: &'a mut ash::vk::SamplerBorderColorComponentMappingCreateInfoEXT<'static>) -> ash::vk::SamplerCreateInfo<'a>
 fn	metal2vulkan::bind::alpha_test_code	pub fn alpha_test_code(reference: f32) -> u32
 fn	metal2vulkan::bind::clamped_depth	pub const fn clamped_depth(bits: u32) -> u32
-fn	metal2vulkan::bind::depth_stencil_copy_modules	pub fn depth_stencil_copy_modules(device: &Device, copy: DepthStencilCopy, feature: Feature) -> Result<DepthStencilCopyModules, Error>
 fn	metal2vulkan::bind::draw_merge_module	pub fn draw_merge_module(device: &Device, phase: MergePhase) -> Result<DrawMergeModule, Error>
 fn	metal2vulkan::bind::draw_replay_draw	pub fn draw_replay_draw(commands: &DrawCommands, (plan, key): (&BindingPlan, &VariantKey), merged: bool) -> Result<(), DrawReplayRule>
 fn	metal2vulkan::bind::draw_replay_indexed	pub fn draw_replay_indexed(written: CommandWrites) -> bool
@@ -6936,7 +6925,6 @@ method	metal2vulkan::bind::StageTable::shape	pub fn shape(&self, view_base_align
 method	metal2vulkan::bind::StatusBits::contains	pub const fn contains(self, other: StatusBits) -> bool
 method	metal2vulkan::bind::StatusWord::byte_offset	pub const fn byte_offset(self) -> u32
 method	metal2vulkan::bind::StatusWord::index	pub const fn index(self) -> u32
-method	metal2vulkan::bind::StencilBit::mask	pub fn mask(self) -> u32
 method	metal2vulkan::bind::TessellationFactorBuffer::new	pub fn new(length: u64, offset: u64, instance_stride: u64) -> TessellationFactorBuffer
 method	metal2vulkan::bind::TessellationFactors::new	pub fn new(buffer: Option<TessellationFactorBuffer>, scale: f32) -> TessellationFactors
 method	metal2vulkan::bind::TexelRows::elements	pub fn elements(&self) -> u64
@@ -7694,7 +7682,6 @@ struct	metal2vulkan::bind::BufferRange	#[cfg_attr(feature = "serde", derive(serd
 struct	metal2vulkan::bind::BufferRanges	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct BufferRanges
 struct	metal2vulkan::bind::ByteRange	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ByteRange
 struct	metal2vulkan::bind::ComputeTemplate	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct ComputeTemplate
-struct	metal2vulkan::bind::DepthStencilCopyModules	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct DepthStencilCopyModules
 struct	metal2vulkan::bind::DescriptorBytes	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct DescriptorBytes
 struct	metal2vulkan::bind::DescriptorRange	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct DescriptorRange
 struct	metal2vulkan::bind::DescriptorWrite	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct DescriptorWrite
@@ -7759,7 +7746,6 @@ struct	metal2vulkan::bind::StageShape	#[cfg_attr(feature = "serde", derive(serde
 struct	metal2vulkan::bind::StageTable	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Debug, Default, PartialEq)] #[non_exhaustive] pub struct StageTable
 struct	metal2vulkan::bind::StatusBits	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] pub struct StatusBits(pub u32)
 struct	metal2vulkan::bind::StatusReport	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct StatusReport
-struct	metal2vulkan::bind::StencilBit	#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub struct StencilBit(u8)
 struct	metal2vulkan::bind::TessellationFactorBuffer	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct TessellationFactorBuffer
 struct	metal2vulkan::bind::TessellationFactors	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq)] #[non_exhaustive] pub struct TessellationFactors
 struct	metal2vulkan::bind::TexelRows	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)] #[non_exhaustive] pub struct TexelRows
@@ -9643,13 +9629,6 @@ variant	metal2vulkan::bind::BufferShape::Buffer	Buffer { attribute_stride: Optio
 variant	metal2vulkan::bind::BufferShape::Bytes	Bytes {  attribute_stride: Option<u32> }
 variant	metal2vulkan::bind::ChromaDecode::Bgrg	Bgrg
 variant	metal2vulkan::bind::ChromaDecode::Gbgr	Gbgr
-variant	metal2vulkan::bind::DepthStencilCopy::Depth	Depth
-variant	metal2vulkan::bind::DepthStencilCopy::Depth16Bits	Depth16Bits
-variant	metal2vulkan::bind::DepthStencilCopy::Depth16Code	Depth16Code
-variant	metal2vulkan::bind::DepthStencilCopy::DepthBits	DepthBits
-variant	metal2vulkan::bind::DepthStencilCopy::StencilBits	StencilBits
-variant	metal2vulkan::bind::DepthStencilCopy::StencilExport	StencilExport
-variant	metal2vulkan::bind::DepthStencilCopy::StencilPlane	StencilPlane { bit: StencilBit }
 variant	metal2vulkan::bind::Dispatch::ThreadgroupRange	ThreadgroupRange { groups: [u32; 3], first: [u32; 3], count: [u32; 3], threads_per_group: [u32; 3] }
 variant	metal2vulkan::bind::Dispatch::Threadgroups	Threadgroups { groups: [u32; 3], threads_per_group: [u32; 3] }
 variant	metal2vulkan::bind::Dispatch::ThreadgroupsIndirect	ThreadgroupsIndirect { indirect: IndirectRef, threads_per_group: [u32; 3] }

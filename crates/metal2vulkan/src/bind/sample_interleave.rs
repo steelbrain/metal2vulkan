@@ -29,8 +29,8 @@
 //!   wide image. Dispatch `ceil((width / n) / LOCAL_SIZE)`, `ceil(height / LOCAL_SIZE)`, `n`
 //!   workgroups.
 //! - **The merge** ([`interleave_merge_modules`], buffer to texture): the fullscreen-triangle
-//!   vertex entry ([`merge_vertex_typed_module`], which the depth/stencil copies share) and a `Fragment`
-//!   entry `main` with one sampled 2D image, the wide image in [`PlanesCopy::format`], at
+//!   vertex entry ([`merge_vertex_typed_module`]) and a `Fragment` entry `main` with one sampled
+//!   2D image, the wide image in [`PlanesCopy::format`], at
 //!   [`InterleaveMergeModules::WIDE_BINDING`] of set 0. Each invocation at texel `(x, y)` sample
 //!   `s` fetches wide texel `(x * n + s, y)` and writes it, an unsigned `uvec4`, to the color
 //!   output at `Location` 0. Run at sample rate (`sampleShadingEnable`, `minSampleShading` 1)
@@ -413,7 +413,7 @@ pub fn interleave_merge_modules(
 
 /// The merge's vertex stage as a typed module: one triangle over the viewport, `VertexIndex`
 /// 0, 1, 2 at clip positions (-1, -1), (3, -1), (-1, 3).
-pub(super) fn merge_vertex_typed_module() -> BResult<TypedModule> {
+fn merge_vertex_typed_module() -> BResult<TypedModule> {
     let mut b = ModuleBuilder::new();
     let i32_ = b.ty(Type::Int {
         width: 32,

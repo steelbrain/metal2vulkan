@@ -631,10 +631,6 @@ surface! {
         fn interleave_split_module;
         struct InterleaveMergeModules N;
         struct InterleaveSplitModule N;
-        fn depth_stencil_copy_modules;
-        enum DepthStencilCopy N;
-        struct DepthStencilCopyModules N;
-        struct StencilBit O;
         mod indirect_commands;
     }
     "bind::indirect_commands" => metal2vulkan::bind::indirect_commands {
