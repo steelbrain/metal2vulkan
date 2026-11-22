@@ -875,11 +875,17 @@ On Windows, `Device::import_d3d11_surface(&[D3d11Plane])` takes a picture's plan
 made as Direct3D 11 textures, each by its NT handle (`IDXGIResource1::CreateSharedHandle`), its
 own format and the texture rt makes over it, and returns a `Surface` whose planes rt's shaders
 read and write in place. Each plane is an optimal image of the Direct3D 11 texture's format, of
-the descriptor's width and height, mutable and listing the descriptor's format where the two
-differ (a chroma plane of `R16Uint` under an `RG8Unorm` texture, the same bytes per texel in
-Metal's same view class), on a dedicated import of its handle, counted in
+the descriptor's width and height, on a dedicated import of its handle, counted in
 `Gauges::surface_imports`. Its usage is each of sampled, rendered, copied and storage that the
-import offers and the descriptor's format holds. The consumer keeps and closes the handles.
+import offers and the descriptor's format holds. The image is mutable where it lists more than
+its own format. It lists its own format, the descriptor's (a chroma plane of `R16Uint` under an
+`RG8Unorm` texture, the same bytes per texel in Metal's same view class) and the formats the
+texture lists for views of another format (with `PixelFormatView` usage, those Metal views it as,
+such as an `R8Uint` view of an `R8Unorm` plane), where the import query
+(`vkGetPhysicalDeviceImageFormatProperties2`) takes that list with the image's usage. Where it
+does not, the image lists its own format and the descriptor's where they differ, and a view of a
+format it does not list is `Gap::TextureView` of `TextureViewKind::SurfacePixelFormat`. The
+consumer keeps and closes the handles.
 
 The import submits nothing and waits for nothing. Vulkan 1.4's section 12.5.2 says "When images
 created with external memory handle types listed in the external image implied layouts table are

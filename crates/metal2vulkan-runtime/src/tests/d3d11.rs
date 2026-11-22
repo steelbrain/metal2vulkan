@@ -11,7 +11,10 @@
 //! write did not reach, fails. Then rt writes picture 3 into the planes by a blit and releases
 //! them, and Direct3D 11 reads picture 3 exactly through staging copies (`CopyResource`, `Map`).
 //! While the surface lives, the surface imports gauge holds its two planes; it has no buffer and
-//! no export handle.
+//! no export handle. The same planes made with `PixelFormatView` usage take a swizzled view in
+//! another format of their class (`R8Uint` of the luma, `RG8Uint` of the chroma) exactly where
+//! the import query takes the list of every format the plane's texture views as, else the view
+//! is `Gap::TextureView` of `SurfacePixelFormat`; the query's answers are printed.
 
 #[cfg(all(windows, any(m2v_gpu, m2v_cpu_icd)))]
 mod on_device {
@@ -92,10 +95,12 @@ mod on_device {
     #[cfg(m2v_gpu)]
     mod picture {
         use super::d3d::{self, D3d, SharedTexture};
+        use crate::d3d11::{import_query, plane_list};
         use crate::tests::command::on_device::{each_device, finished, within};
         use crate::{
-            BufferLayout, D3d11Plane, Device, Error, Gap, MemoryClass, PixelFormat, Surface,
-            TextureDescriptor, TexturePlace, TextureType,
+            BufferLayout, D3d11Plane, Device, Error, Gap, IndexClass, MemoryClass, PixelFormat,
+            Surface, TextureDescriptor, TexturePlace, TextureSwizzle, TextureSwizzleChannels,
+            TextureType, TextureUsage, TextureViewKind,
         };
         use ash::vk;
         use std::os::windows::io::AsHandle;
@@ -355,6 +360,107 @@ mod on_device {
                     metrics.external_releases - before.external_releases,
                 );
                 drop(surface);
+            });
+        }
+
+        /// Each plane made with `ShaderRead` and `PixelFormatView` usage, reached through its views
+        /// alone, then a swizzled view of it in another format of its class (`R8Uint` of the luma,
+        /// `RG8Uint` of the chroma): made, in that format, exactly where the import query takes,
+        /// with the image's usage, the list of every format the plane's texture views as; else
+        /// `Gap::TextureView` of `SurfacePixelFormat`. Printed for each plane: the query's answer
+        /// with that list, and with each of its other formats alone beside the image's own.
+        #[test]
+        fn every_device_views_a_direct3d_11_plane_in_another_format_where_its_import_lists_it() {
+            each_device("import_d3d11_surface_views", |name, _, device| {
+                let luid = luid(&device).unwrap_or_else(|| panic!("{name}: no valid LUID"));
+                let d3d = D3d::on_luid(luid)
+                    .unwrap_or_else(|| panic!("{name}: no DXGI adapter of LUID {luid:02x?}"));
+                let textures = PLANES
+                    .each_ref()
+                    .map(|p| d3d.shared_texture(p.width, p.height, p.dxgi));
+                let descriptors = PLANES.each_ref().map(|p| {
+                    let mut d =
+                        TextureDescriptor::new(TextureType::Type2D, p.view, p.width, p.height);
+                    d.usage = TextureUsage::SHADER_READ | TextureUsage::PIXEL_FORMAT_VIEW;
+                    d
+                });
+                let planes: Vec<D3d11Plane<'_>> = (textures.iter().zip(&PLANES))
+                    .zip(&descriptors)
+                    .map(|((texture, plane), descriptor)| D3d11Plane {
+                        handle: texture.handle.as_handle(),
+                        image_format: plane.image,
+                        descriptor: *descriptor,
+                        index: None,
+                    })
+                    .collect();
+                let surface = (device.import_d3d11_surface(&planes))
+                    .unwrap_or_else(|error| panic!("{name}: the import: {error}"));
+                let first = IndexClass::Texture.range().start;
+                let _grant =
+                    (device.grant_indices(IndexClass::Texture, first, 2)).expect("a grant");
+                let swizzle = TextureSwizzleChannels {
+                    red: TextureSwizzle::Red,
+                    green: TextureSwizzle::Red,
+                    blue: TextureSwizzle::Red,
+                    alpha: TextureSwizzle::One,
+                };
+                // Each view's format, and its index.
+                let views = [
+                    (PixelFormat::R8Uint, first),
+                    (PixelFormat::RG8Uint, first + 1),
+                ];
+                for ((texture, plane), (d, (view, at))) in
+                    (surface.planes().iter().zip(&PLANES)).zip(descriptors.iter().zip(views))
+                {
+                    let plan = device.plane_plan(d).expect("the plane's plan");
+                    let mut own = *d;
+                    own.pixel_format = plane.image;
+                    let format = device.plane_plan(&own).expect("the image's plan").format;
+                    let usage = texture.image_usage();
+                    let full = plane_list(format, plan.format, &plan.view_formats);
+                    let answer =
+                        |list: &[vk::Format]| import_query(device.core(), format, usage, list);
+                    let takes = (answer(&full)).is_ok_and(|features| {
+                        features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE)
+                    });
+                    let alone: Vec<String> = (full.iter().filter(|&&listed| listed != format))
+                        .map(|&listed| format!("{listed:?} {:?}", answer(&[format, listed])))
+                        .collect();
+                    let made = texture.new_texture_view_with_swizzle(
+                        view,
+                        TextureType::Type2D,
+                        0..1,
+                        0..1,
+                        swizzle,
+                        Some(at),
+                    );
+                    let label = format!("{name}: {:?} as {:?}", plane.image, plane.view);
+                    match takes {
+                        true => {
+                            let made = made.unwrap_or_else(|error| {
+                                panic!("{label}: the {view:?} view, the list imported: {error}")
+                            });
+                            assert_eq!(made.descriptor().pixel_format, view, "{label}");
+                        }
+                        false => assert!(
+                            matches!(
+                                made.as_ref().err(),
+                                Some(Error::Unsupported(Gap::TextureView {
+                                    kind: TextureViewKind::SurfacePixelFormat,
+                                }))
+                            ),
+                            "{label}: the {view:?} view, the list refused: {:?}",
+                            made.err()
+                        ),
+                    }
+                    println!(
+                        "d3d11-views: {label}: image {format:?}, usage {usage:?}; the import query \
+                         with the list {full:?}: {:?}; with each other format alone beside \
+                         {format:?}: {}; the swizzled {view:?} view made: {takes}",
+                        answer(&full),
+                        alone.join(", "),
+                    );
+                }
             });
         }
 

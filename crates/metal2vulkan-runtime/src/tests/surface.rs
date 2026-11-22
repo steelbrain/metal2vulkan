@@ -23,7 +23,9 @@
 //! plane 0 through a view: its texels exact, and in place one barrier more than a control whose
 //! first kernel writes a buffer of its own, the ordering a resource outside the surface's unit
 //! would not take. The memory type the export names, with its flags, the make's wall time per
-//! surface, and whether the device's buffers import a dma-buf are printed.
+//! surface, and whether the device's buffers import a dma-buf are printed. A luma plane of
+//! `PixelFormatView` usage takes a swizzled `R8Uint` view, through which rt's writes read back
+//! exactly through the plane's own texture.
 //!
 //! The second device stands in for the other API, as in the export tests: a device of another
 //! instance cannot run under the validation layer.
@@ -35,10 +37,11 @@ mod on_device {
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         BufferLayout, ClearColor, CommandQueue, ComputePipelineDescriptor, ComputePipelineState,
-        Device, DispatchType, ExportHandle, FunctionDescriptor, IndexClass, Library, LoadAction,
-        MemoryClass, PixelFormat, PlaneLayout, PlaneSpec, RenderPassDescriptor, StageSource,
-        Surface, SurfaceCopy, SurfaceExport, SurfaceForm, SurfaceSpec, TextureDescriptor,
-        TexturePlace, TextureType, TextureUsage,
+        Device, DispatchType, Error, ExportHandle, FunctionDescriptor, Gap, IndexClass, Library,
+        LoadAction, MemoryClass, PixelFormat, PlaneLayout, PlaneSpec, RenderPassDescriptor,
+        StageSource, Surface, SurfaceCopy, SurfaceExport, SurfaceForm, SurfaceSpec,
+        TextureDescriptor, TexturePlace, TextureSwizzle, TextureSwizzleChannels, TextureType,
+        TextureUsage, TextureViewKind,
     };
     use ash::vk;
     use metal2vulkan_devtools::{fixtures_dir, llvm_assemble, AssembleError};
@@ -1342,6 +1345,135 @@ mod on_device {
                     metrics.held_release_bytes,
                     metrics.held_release_starts,
                 );
+            }
+        });
+    }
+
+    /// A plane's texture viewed in another format of its own list, through a swizzle: for each
+    /// row the device exports, on the 1080p picture, a surface whose luma's texture has
+    /// `ShaderRead` and `PixelFormatView` usage, reached through its views alone, then a swizzled
+    /// `R8Uint` view of the luma (red in every colour channel, alpha one). The view is made, in
+    /// `R8Uint`; only in place may a device answer `Gap::TextureView` of `SurfacePixelFormat`
+    /// instead, where its linear image samples no other format of the luma's list or its export
+    /// does not take that list. Where the view is made, bytes rt writes into the luma through it
+    /// read back exactly through the luma's own texture. Printed: the form and the view's answer.
+    #[test]
+    fn every_device_views_a_surface_plane_in_another_format_through_a_swizzle() {
+        each_device("surface_views", |name, _, device| {
+            let queue = device.new_command_queue(1).expect("a queue");
+            let (picture, planes) = &PICTURES[0];
+            let luma = planes[0];
+            let len = luma.row() * u64::from(luma.height);
+            let (_from_block, from) = shared(&device, len);
+            let (_out_block, out) = shared(&device, len);
+            fill(&from, |bytes| {
+                for (i, byte) in bytes.iter_mut().enumerate() {
+                    *byte = (i * 37 + 11) as u8;
+                }
+            });
+            let first = IndexClass::Texture.range().start;
+            let _grant = (device.grant_indices(IndexClass::Texture, first, 1)).expect("a grant");
+            let swizzle = TextureSwizzleChannels {
+                red: TextureSwizzle::Red,
+                green: TextureSwizzle::Red,
+                blue: TextureSwizzle::Red,
+                alpha: TextureSwizzle::One,
+            };
+            for row in &ROWS {
+                let handle = row.handle;
+                let foreign = device
+                    .extensions()
+                    .iter()
+                    .any(|n| n.as_c_str() == ash::ext::queue_family_foreign::NAME);
+                let label = format!("{name}: {} {handle:?} {picture}", row.name);
+                if !device.core().exports.offers(handle) || (handle.foreign() && !foreign) {
+                    println!("surface-views: {label}: not exported");
+                    continue;
+                }
+                let specs = [0, 1].map(|i| {
+                    let p = planes[i];
+                    let mut descriptor =
+                        TextureDescriptor::new(TextureType::Type2D, p.format, p.width, p.height);
+                    descriptor.usage = match i {
+                        0 => TextureUsage::SHADER_READ | TextureUsage::PIXEL_FORMAT_VIEW,
+                        _ => TextureUsage::RENDER_TARGET | TextureUsage::SHADER_READ,
+                    };
+                    PlaneSpec {
+                        descriptor,
+                        index: None,
+                        rows_below: row.rows_below(planes)[i],
+                    }
+                });
+                let spec = SurfaceSpec {
+                    handle,
+                    pitch_multiple: row.pitch_multiple,
+                    start_multiple: row.start_multiple,
+                    planes: &specs,
+                };
+                let (surface, export) = (device.new_exported_surface(&spec))
+                    .unwrap_or_else(|error| panic!("{label}: {error}"));
+                let form = export.form;
+                let view = surface.planes()[0].new_texture_view_with_swizzle(
+                    PixelFormat::R8Uint,
+                    TextureType::Type2D,
+                    0..1,
+                    0..1,
+                    swizzle,
+                    Some(first),
+                );
+                let view = match view {
+                    Ok(view) => view,
+                    Err(Error::Unsupported(Gap::TextureView {
+                        kind: TextureViewKind::SurfacePixelFormat,
+                    })) if matches!(form, SurfaceForm::InPlace) => {
+                        println!(
+                            "surface-views: {label}: form {form:?}: the swizzled R8Uint view of \
+                             the R8Unorm plane refused: SurfacePixelFormat"
+                        );
+                        continue;
+                    }
+                    Err(error) => {
+                        panic!("{label}: form {form:?}: the swizzled R8Uint view: {error}")
+                    }
+                };
+                assert_eq!(
+                    view.descriptor().pixel_format,
+                    PixelFormat::R8Uint,
+                    "{label}"
+                );
+                fill(&out, |bytes| bytes.fill(0));
+                let layout = BufferLayout {
+                    offset: 0,
+                    bytes_per_row: luma.row(),
+                    bytes_per_image: 0,
+                };
+                let size = [luma.width, luma.height, 1];
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
+                (encoder.copy_from_buffer(&from, layout, size, &view, TexturePlace::default()))
+                    .unwrap_or_else(|error| panic!("{label}: the write through the view: {error}"));
+                (encoder.copy_from_texture_to_buffer(
+                    &surface.planes()[0],
+                    TexturePlace::default(),
+                    size,
+                    &out,
+                    layout,
+                ))
+                .unwrap_or_else(|error| panic!("{label}: the read through the plane: {error}"));
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                finished(&label, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{label}");
+                assert!(
+                    bytes_of(&out) == bytes_of(&from),
+                    "{label}: the bytes written through the view, read through the plane"
+                );
+                println!(
+                    "surface-views: {label}: form {form:?}: the swizzled R8Uint view of the \
+                     R8Unorm plane made; {len} bytes written through it read back exactly through \
+                     the plane"
+                );
+                drop((view, surface));
             }
         });
     }

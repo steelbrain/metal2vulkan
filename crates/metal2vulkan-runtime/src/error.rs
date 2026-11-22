@@ -1877,10 +1877,11 @@ pub enum TextureViewKind {
     /// Another pixel format Metal takes that the texture's image does not list: the device holds
     /// it in no viewed form of the image format's compatibility class.
     PixelFormat,
-    /// Another pixel format Metal takes that a surface plane's image in place does not list
-    /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)): the device's
-    /// linear image does not hold that format. None was counted: reims's pl8rt boot makes 0
-    /// views of another format over its surface textures.
+    /// Another pixel format Metal takes that a surface plane's image does not list: in place
+    /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)), the device's
+    /// linear image does not sample that format or its export does not take the list; over a
+    /// Direct3D 11 texture (`Device::import_d3d11_surface`, on Windows), the import does not take
+    /// the list of every format the plane's texture views as.
     SurfacePixelFormat,
     /// Another texture type than the casts built
     /// ([`Texture::new_texture_view`](crate::Texture::new_texture_view)).

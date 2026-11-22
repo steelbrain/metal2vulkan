@@ -61,13 +61,23 @@ impl Device {
     /// made (a video decoder's, or a draw's), as a surface whose planes are textures rt's shaders
     /// read and write in place, as Metal reads an IOSurface's plane through a texture over it
     /// (`newTextureWithDescriptor:iosurface:plane:`). Each plane is its own texture and its own
-    /// handle: an optimal image of the plane's [`image_format`](D3d11Plane::image_format),
-    /// mutable, listing it and the descriptor's format, on a dedicated import of the handle
-    /// (`VkImportMemoryWin32HandleInfoKHR`, `VkMemoryDedicatedAllocateInfo`) into the first
-    /// device-local type that the handle's properties (`vkGetMemoryWin32HandlePropertiesKHR`) and
-    /// the image's requirements both list, else the first both list. The plane's texture is in the
-    /// descriptor's format, a view of the image's. Each import counts in
-    /// [`Gauges::surface_imports`](crate::Gauges::surface_imports) while its texture lives.
+    /// handle: an optimal image of the plane's [`image_format`](D3d11Plane::image_format), on a
+    /// dedicated import of the handle (`VkImportMemoryWin32HandleInfoKHR`,
+    /// `VkMemoryDedicatedAllocateInfo`) into the first device-local type that the handle's
+    /// properties (`vkGetMemoryWin32HandlePropertiesKHR`) and the image's requirements both list,
+    /// else the first both list. The plane's texture is in the descriptor's format, a view of the
+    /// image's. Each import counts in [`Gauges::surface_imports`](crate::Gauges::surface_imports)
+    /// while its texture lives.
+    ///
+    /// **Views of another format.** The image is mutable where it lists more than its own
+    /// format. It lists its own format, the descriptor's and those the descriptor's texture
+    /// lists for views of another format
+    /// ([`Texture::new_texture_view`](crate::Texture::new_texture_view): its sRGB sibling, and
+    /// with `PixelFormatView` usage the formats Metal views it as) where the import query
+    /// (`vkGetPhysicalDeviceImageFormatProperties2`) takes that list with the image's usage.
+    /// Where it does not, the image lists its own format and the descriptor's where they differ,
+    /// and a view of a format it does not list is [`Gap::TextureView`] of
+    /// [`TextureViewKind::SurfacePixelFormat`](crate::TextureViewKind::SurfacePixelFormat).
     ///
     /// **Layout.** The call makes no submission and waits for nothing: no move out of the
     /// undefined layout comes before a plane's first use. Vulkan 1.4, section 12.5.2 (Image
@@ -170,10 +180,13 @@ impl Device {
             }));
         }
         let (format, view) = (image_plan.format, plan.format);
-        let list: Vec<vk::Format> = match format == view {
+        // The image's own format and the descriptor's, where they differ: the list the usage is
+        // decided with.
+        let pair: Vec<vk::Format> = match format == view {
             true => Vec::new(),
             false => vec![format, view],
         };
+        let full = plane_list(format, view, &plan.view_formats);
         let (instance, physical) = (core.instance.vk(), core.physical);
         let mut view_features = vk::FormatProperties2::default();
         // SAFETY: `physical` is `instance`'s.
@@ -192,45 +205,23 @@ impl Device {
             };
             held.contains(feature)
         };
-        let imports = |usage: vk::ImageUsageFlags| {
-            let mut external =
-                vk::PhysicalDeviceExternalImageFormatInfo::default().handle_type(HANDLE);
-            let mut listed = vk::ImageFormatListCreateInfo::default().view_formats(&list);
-            let mut info = vk::PhysicalDeviceImageFormatInfo2::default()
-                .format(format)
-                .ty(vk::ImageType::TYPE_2D)
-                .tiling(vk::ImageTiling::OPTIMAL)
-                .usage(usage)
-                .push_next(&mut external);
-            if !list.is_empty() {
-                info = info
-                    .flags(vk::ImageCreateFlags::MUTABLE_FORMAT)
-                    .push_next(&mut listed);
-            }
-            let mut external_out = vk::ExternalImageFormatProperties::default();
-            let mut out = vk::ImageFormatProperties2::default().push_next(&mut external_out);
-            // SAFETY: `physical` is `instance`'s, and the handle's extension is enabled.
-            let answer = unsafe {
-                instance.get_physical_device_image_format_properties2(physical, &info, &mut out)
-            };
-            let features = external_out
-                .external_memory_properties
-                .external_memory_features;
-            answer.is_ok() && features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE)
+        let imports = |usage: vk::ImageUsageFlags, list: &[vk::Format]| {
+            (import_query(core, format, usage, list))
+                .is_ok_and(|features| features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE))
         };
         let wanted = WANTED | plan.usage;
         let usage = (0..32)
             .map(|bit| vk::ImageUsageFlags::from_raw(1u32 << bit))
-            .filter(|&bit| wanted.contains(bit) && holds(bit) && imports(bit))
+            .filter(|&bit| wanted.contains(bit) && holds(bit) && imports(bit, &pair))
             .fold(vk::ImageUsageFlags::empty(), |all, bit| all | bit);
-        if usage.is_empty() || !imports(usage) {
+        if usage.is_empty() || !imports(usage, &pair) {
             return Err(Error::Limit(Limit::NoImport { handle }));
         }
         // With the feedback usage where the plane asks it and the import offers it with the
         // rest, so a draw reads it as an attachment of its own pass through the loop; else
         // through its shadow.
         let looped = usage | vk::ImageUsageFlags::ATTACHMENT_FEEDBACK_LOOP_EXT;
-        let usage = match plan.looped && imports(looped) {
+        let usage = match plan.looped && imports(looped, &pair) {
             true => looped,
             false => usage,
         };
@@ -241,6 +232,13 @@ impl Device {
                 missing: missing.as_raw(),
             }));
         }
+        // Every format the plane's texture views as, where the import takes that list with the
+        // usage; else the pair, and a view of a format the pair does not list is refused at
+        // the view (`TextureViewKind::SurfacePixelFormat`).
+        let list = match full.len() > pair.len() && imports(usage, &full) {
+            true => full,
+            false => pair,
+        };
         let device = &core.device;
         let mut external = vk::ExternalMemoryImageCreateInfo::default().handle_types(HANDLE);
         let mut listed = vk::ImageFormatListCreateInfo::default().view_formats(&list);
@@ -348,4 +346,58 @@ impl Device {
             linear_attachment: false,
         })
     }
+}
+
+/// The formats a plane's image lists where the import takes them: its own `format`, the
+/// descriptor's `view`, and `view_formats`, which the descriptor's texture lists for views of
+/// another format (its own first), each once. Empty where that is the image's own format alone:
+/// the image is then not mutable.
+pub(crate) fn plane_list(
+    format: vk::Format,
+    view: vk::Format,
+    view_formats: &[vk::Format],
+) -> Vec<vk::Format> {
+    let mut list = vec![format];
+    for &listed in [view].iter().chain(view_formats) {
+        if !list.contains(&listed) {
+            list.push(listed);
+        }
+    }
+    if list.len() == 1 {
+        list.clear();
+    }
+    list
+}
+
+/// What `vkGetPhysicalDeviceImageFormatProperties2` answers of an optimal 2D image of `format`
+/// and `usage` imported from a Direct3D 11 texture, mutable and listing `list` where it is not
+/// empty: the handle's external memory features, or the query's error.
+pub(crate) fn import_query(
+    core: &Core,
+    format: vk::Format,
+    usage: vk::ImageUsageFlags,
+    list: &[vk::Format],
+) -> Result<vk::ExternalMemoryFeatureFlags, vk::Result> {
+    let (instance, physical) = (core.instance.vk(), core.physical);
+    let mut external = vk::PhysicalDeviceExternalImageFormatInfo::default().handle_type(HANDLE);
+    let mut listed = vk::ImageFormatListCreateInfo::default().view_formats(list);
+    let mut info = vk::PhysicalDeviceImageFormatInfo2::default()
+        .format(format)
+        .ty(vk::ImageType::TYPE_2D)
+        .tiling(vk::ImageTiling::OPTIMAL)
+        .usage(usage)
+        .push_next(&mut external);
+    if !list.is_empty() {
+        info = info
+            .flags(vk::ImageCreateFlags::MUTABLE_FORMAT)
+            .push_next(&mut listed);
+    }
+    let mut external_out = vk::ExternalImageFormatProperties::default();
+    let mut out = vk::ImageFormatProperties2::default().push_next(&mut external_out);
+    // SAFETY: `physical` is `instance`'s, and the handle's extension is enabled (the caller holds
+    // the device's `VK_KHR_external_memory_win32`).
+    unsafe { instance.get_physical_device_image_format_properties2(physical, &info, &mut out) }?;
+    Ok(external_out
+        .external_memory_properties
+        .external_memory_features)
 }
