@@ -800,10 +800,12 @@ fn needs_storage(required: u64, available: u64) -> Result<(), Error> {
     )))
 }
 
-/// The kernels at depth 8 pass L3 on every committed profile that reads tables from argument
-/// buffers (the direct one on every profile), and compute there what they compute on the first.
-/// Their stacks fit every device's Function storage, the floor of a device not measured among
-/// them, which holds them with no note (`PrecisionNote::FunctionStorageAssumed` is past it).
+/// The kernels at depth 8 pass L3 on every committed profile, and the table kernel computes what
+/// it computes on the first on each but the runtime's floor: there its module reads through a
+/// device address, which this CPU dispatch does not back (it binds buffers by slot alone, and the
+/// read traps). Their stacks fit every device's Function storage, the floor of a device not
+/// measured among them, which holds them with no note (`PrecisionNote::FunctionStorageAssumed` is
+/// past it).
 #[test]
 fn recursive_kernels_validate_and_agree_on_every_profile() {
     let Some(bitcode) = module() else {
@@ -826,6 +828,9 @@ fn recursive_kernels_validate_and_agree_on_every_profile() {
     for (stem, p) in committed_profiles().expect("profiles") {
         for entry in [TABLE, BIG] {
             check(&stem, entry, &p);
+        }
+        if stem == "runtime-floor" {
+            continue;
         }
         let m = typed(&bitcode, TABLE, 8, &p);
         assert_eq!(dispatch(&m, &ds, 2, Some(&tables)), want, "{stem}");
