@@ -1572,6 +1572,8 @@ field	metal2vulkan-runtime::Metrics.pipeline_cache_lock_wait_max_nanos	pub pipel
 field	metal2vulkan-runtime::Metrics.pipeline_cache_lock_wait_nanos	pub pipeline_cache_lock_wait_nanos: u64
 field	metal2vulkan-runtime::Metrics.pipeline_cache_lock_waits	pub pipeline_cache_lock_waits: u64
 field	metal2vulkan-runtime::Metrics.pipeline_cache_looks_skipped	pub pipeline_cache_looks_skipped: u64
+field	metal2vulkan-runtime::Metrics.pipeline_cache_writes_skipped	pub pipeline_cache_writes_skipped: u64
+field	metal2vulkan-runtime::Metrics.pipeline_caches_replaced	pub pipeline_caches_replaced: u64
 field	metal2vulkan-runtime::Metrics.pipeline_creation_nanos	pub pipeline_creation_nanos: u64
 field	metal2vulkan-runtime::Metrics.pipelines_created	pub pipelines_created: u64
 field	metal2vulkan-runtime::Metrics.pipelines_from_stage_fills	pub pipelines_from_stage_fills: u64

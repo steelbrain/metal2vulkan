@@ -1995,13 +1995,18 @@ mod on_device {
     /// The pipeline cache filled past its bound: at the look after a creation takes it past, the
     /// reaper replaces it with a fresh one, which the gauge falls to, keeps the old one while it is
     /// held, and destroys it at the first look after it is let go; creations go on through the
-    /// fresh cache, and the next write replaces the blob with the fresh cache's data alone.
+    /// fresh cache, and the next write replaces the blob with the fresh cache's data alone. The
+    /// replacement counts once in `Metrics::pipeline_caches_replaced`. Then a creation grows the
+    /// cache while another holds creation open, so no look comes before the teardown, and with
+    /// the bound lowered past the cache the teardown's write is skipped, counted once in
+    /// `Metrics::pipeline_cache_writes_skipped`, and the blob keeps the fresh cache's data.
     #[test]
     fn every_device_replaces_its_pipeline_cache_past_its_bound() {
-        let (Some(first), Some(second), Some(third)) = (
+        let (Some(first), Some(second), Some(third), Some(fourth)) = (
             descriptor("a1_bool_from_float"),
             descriptor("a1_sign_and_division"),
             descriptor("a1_sign_and_division_precise"),
+            descriptor("ob1_storage_buffer"),
         ) else {
             return;
         };
@@ -2044,6 +2049,8 @@ mod on_device {
                 first_blob,
                 "{name}: no write at the replacement"
             );
+            let replaced = counters.metrics().pipeline_caches_replaced;
+            assert_eq!(replaced, 1, "{name}: one replacement counted");
             drop(held);
             caches.set_bound(crate::cache::PIPELINE_CACHE_BOUND);
             let c = state_and_look(name, &device, &third);
@@ -2059,12 +2066,35 @@ mod on_device {
                 24 + now,
                 "{name}: the blob holds the fresh cache"
             );
-            drop((a, b, c));
+            // Creation held open keeps the reaper from looking until the teardown stops it.
+            let core = std::sync::Arc::clone(device.core());
+            let blob = caches.blob().expect("a cache directory").to_path_buf();
+            let open = crate::cache::creation(&core);
+            let pipelines = counters.metrics().pipelines_created;
+            let d = state(name, &device, &fourth);
+            assert!(
+                counters.metrics().pipelines_created > pipelines,
+                "{name}: the fourth state made its VkPipeline"
+            );
+            caches.set_bound(1);
+            drop((a, b, c, d));
             drop(device);
+            drop(open);
+            assert_eq!(
+                counters.metrics().pipeline_cache_writes_skipped,
+                0,
+                "{name}"
+            );
+            drop(core);
+            let skipped = counters.metrics().pipeline_cache_writes_skipped;
+            assert_eq!(skipped, 1, "{name}: the teardown's write skipped");
+            let kept = std::fs::metadata(&blob).map_or(0, |meta| meta.len());
+            assert_eq!(kept, 24 + now, "{name}: the blob keeps the fresh cache");
             within("the teardown", || counters.gauges() == Gauges::default());
             let _ = std::fs::remove_dir_all(&dir);
             println!(
-                "{name}: {full} bytes past a bound of {}, replaced by {fresh}, grown to {now}",
+                "{name}: {full} bytes past a bound of {}, replaced by {fresh}, grown to {now}; \
+                 replacements {replaced}, writes skipped at the teardown {skipped}",
                 full - 1
             );
         }

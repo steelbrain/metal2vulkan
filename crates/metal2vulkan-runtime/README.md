@@ -206,7 +206,9 @@ timestamps of their own (`runtime_command_buffer_gpu_nanos`);
 the copies of textures over a buffer that no linear image holds are split by cause
 (`over_copies_pitch` and the rest, in Textures below); the exported blocks a public call handed
 out a device address of, each counted at the first (`exported_blocks_addressed`, the exported
-block's rule in Textures below), 0 where none went out;
+block's rule in Textures below), 0 where none went out; the pipeline cache's replacements past its
+bound and its blob writes skipped past it (`pipeline_caches_replaced`,
+`pipeline_cache_writes_skipped`, The cache directory below);
 `gauges()` are live counts per kind of resource, every one zero after teardown, and
 `handles_out`, 1 while a handle of the device is out (Teardown). They are relaxed atomics, always
 on. What an encoder's commands count arrives when the encoder ends.
@@ -2775,10 +2777,13 @@ loses only the pipelines made since the last; no creation waits for a write.
 
 The cache holds at most 32 MiB when the reaper looks (about five times the 6.25 MB of pipeline data
 a long recorded session made): one past it is replaced by a fresh, empty cache that creations take
-from then on, and is destroyed once no creation holds it. The next write replaces the blob with
-the fresh cache's data, so the blob holds at most 32 MiB too, with no second file and no
-generations. `Gauges::pipeline_cache_bytes` is the cache's size at the reaper's last look, and is
-zero once the device is torn down. With no directory the cache is the same, made empty, and
+from then on, and is destroyed once no creation holds it, each replacement counted in
+`Metrics::pipeline_caches_replaced`. The next write replaces the blob with the fresh cache's data,
+so the blob holds at most 32 MiB too, with no second file and no generations. A write of data past
+32 MiB, the teardown's of a cache that grew past it after the reaper's last look, is skipped and
+counted in `Metrics::pipeline_cache_writes_skipped`; the blob keeps what it held.
+`Gauges::pipeline_cache_bytes` is the cache's size at the reaper's last look, and is zero once the
+device is torn down. With no directory the cache is the same, made empty, and
 nothing is written.
 
 **The lowerings** live in two generations, `g<N>/` (young) and `g<N-1>/` (old), each holding at most

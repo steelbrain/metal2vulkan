@@ -228,6 +228,10 @@ pub(crate) enum Metric {
     CreationsBeforeSeed,
     /// [`Metrics::cache_writes_dropped`].
     CacheWritesDropped,
+    /// [`Metrics::pipeline_caches_replaced`].
+    PipelineCachesReplaced,
+    /// [`Metrics::pipeline_cache_writes_skipped`].
+    PipelineCacheWritesSkipped,
     /// [`Metrics::ring_writes`].
     RingWrites,
     /// [`Metrics::pushes`].
@@ -304,6 +308,8 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::RenderRecordsStale,
     Metric::CreationsBeforeSeed,
     Metric::CacheWritesDropped,
+    Metric::PipelineCachesReplaced,
+    Metric::PipelineCacheWritesSkipped,
     Metric::RingWrites,
     Metric::Pushes,
     Metric::PushesHeld,
@@ -652,6 +658,8 @@ struct Atomics {
     pipeline_cache_lock_wait_nanos: AtomicU64,
     pipeline_cache_lock_wait_max_nanos: AtomicU64,
     cache_writes_dropped: AtomicU64,
+    pipeline_caches_replaced: AtomicU64,
+    pipeline_cache_writes_skipped: AtomicU64,
     ring_writes: AtomicU64,
     pushes: AtomicU64,
     pushes_held: AtomicU64,
@@ -832,6 +840,8 @@ impl Counters {
             Metric::RenderRecordsStale => &a.render_records_stale,
             Metric::CreationsBeforeSeed => &a.creations_before_seed,
             Metric::CacheWritesDropped => &a.cache_writes_dropped,
+            Metric::PipelineCachesReplaced => &a.pipeline_caches_replaced,
+            Metric::PipelineCacheWritesSkipped => &a.pipeline_cache_writes_skipped,
             Metric::RingWrites => &a.ring_writes,
             Metric::Pushes => &a.pushes,
             Metric::PushesHeld => &a.pushes_held,
@@ -1651,6 +1661,8 @@ impl Counters {
             pipeline_cache_lock_wait_nanos: a.pipeline_cache_lock_wait_nanos.load(Relaxed),
             pipeline_cache_lock_wait_max_nanos: a.pipeline_cache_lock_wait_max_nanos.load(Relaxed),
             cache_writes_dropped: a.cache_writes_dropped.load(Relaxed),
+            pipeline_caches_replaced: a.pipeline_caches_replaced.load(Relaxed),
+            pipeline_cache_writes_skipped: a.pipeline_cache_writes_skipped.load(Relaxed),
             cache_bytes_written: a.cache_bytes_written.load(Relaxed),
             ring_writes: a.ring_writes.load(Relaxed),
             pushes: a.pushes.load(Relaxed),
@@ -2260,6 +2272,16 @@ pub struct Metrics {
     /// 8 MiB alone is kept where none waits). A later device lowers it again. Metal has no
     /// counterpart: Metal's compiler service keeps its own cache.
     pub cache_writes_dropped: u64,
+    /// The reaper's replacements of the device's `VkPipelineCache` by a fresh, empty one, at a
+    /// look that found the cache past its bound of 32 MiB: creations take the fresh one from then
+    /// on, so the pipelines the old one held compile again where made again. Metal has no
+    /// counterpart: Metal's compiler service keeps its own cache.
+    pub pipeline_caches_replaced: u64,
+    /// Writes of the pipeline cache's data over the device's blob skipped because the data was
+    /// past the bound of 32 MiB, as at the device's teardown where the cache grew past it after
+    /// the reaper's last look: the blob keeps what it held, and a later device seeds from that.
+    /// Metal has no counterpart.
+    pub pipeline_cache_writes_skipped: u64,
     /// Bytes written to the cache directory ([`DeviceOptions::pipeline_cache_dir`]): lowered
     /// kernels, and the device's pipeline cache blob each time it is written: once creation is
     /// quiet where the cache grew by more than an eighth since the last write, and at the

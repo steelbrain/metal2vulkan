@@ -38,9 +38,11 @@
 //!
 //! The cache holds at most [`PIPELINE_CACHE_BOUND`]: a cache past it when the reaper looks is
 //! replaced by a fresh, empty one that creations take from then on, and destroyed once no creation
-//! holds it; the next write replaces the blob with the fresh cache's data, so the blob holds at
-//! most the bound too, with no second file. [`Gauges::pipeline_cache_bytes`] is the cache's size
-//! at the reaper's last look. Without a directory the cache is the same, and nothing is on disk.
+//! holds it (counted in `Metrics::pipeline_caches_replaced`); the next write replaces the blob with
+//! the fresh cache's data, so the blob holds at most the bound too, with no second file. A write
+//! of data past the bound, the teardown's of a cache that grew past it after the last look, is
+//! skipped (`Metrics::pipeline_cache_writes_skipped`). [`Gauges::pipeline_cache_bytes`] is the
+//! cache's size at the reaper's last look. Without a directory the cache is the same, and nothing is on disk.
 //!
 //! **The lowerings.** The store keeps one file per lowered function (a kernel, or a render
 //! pipeline's vertex or fragment function) under `translations/`, named by the hex of its
@@ -1673,6 +1675,7 @@ impl Caches {
             pipelines.written = fresh_size;
             drop(pipelines);
             counters.set(Gauge::PipelineCacheBytes, fresh_size);
+            counters.count(Metric::PipelineCachesReplaced);
             return None;
         }
         let written = lock(&self.pipelines).written;
@@ -1709,10 +1712,11 @@ impl Caches {
     }
 
     /// Writes `data`, the cache's data the driver gave at size `size`, over the device's blob at
-    /// `path`, where it is within the bound.
+    /// `path`, where it is within the bound; past it, the write is skipped and counted.
     fn write(&self, path: &Path, data: &[u8], size: u64, counters: &Counters) {
         let len = data.len() as u64;
         if len > self.bound.load(Relaxed) {
+            counters.count(Metric::PipelineCacheWritesSkipped);
             return;
         }
         if write_whole(path, &[&frame(data), data]).is_ok() {
