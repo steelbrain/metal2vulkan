@@ -1065,8 +1065,8 @@ pub fn require_executor(
 /// an observable experiment for an otherwise reflected interface. A vertex function's effect is
 /// its position, a writable resource, or the commands it encodes where replaying them observes
 /// them ([`CommandsOnly::Replayed`]): the Metal oracle draws it with rasterization off and then
-/// executes those commands, as a kernel's are (the engine's candidate executes none:
-/// [`replay_observes_commands`]), and a case of it must execute them
+/// executes those commands, as a kernel's are (the engine's candidate executes none: every
+/// indirect command buffer stops it, [`case_requirements`]), and a case of it must execute them
 /// ([`require_reflection`]). Their contents stay an [`UnobservedEffect`]. A vertex function with
 /// none of these raises [`ToolingRequirement::VertexSideEffectObservation`].
 pub fn unsupported_observation_requirements(
@@ -3178,10 +3178,10 @@ entry:
             ToolingRequirement::RasterizationDisabledRenderTarget,
         );
         // What the runtime builds of an indirect command buffer: kernel-encoded indexed draws that
-        // inherit the pipeline state and bind their own buffers, which raise nothing here. Its
-        // compute commands, its other draw types, its other inheritance and a command the host
-        // encodes are each the runtime's limit, and so is a pipeline state an argument buffer
-        // holds.
+        // inherit the pipeline state and bind their own buffers, which the engine's candidate does
+        // not map. Its compute commands, its other draw types, its other inheritance and a command
+        // the host encodes are each the runtime's limit, and so is a pipeline state an argument
+        // buffer holds.
         use crate::case::indirect_commands::{CommandDescriptor, HostCommand, RenderDraws};
         let indexed = crate::case::indirect_commands::CommandBufferResource {
             inherit_pipeline_state: true,
@@ -3197,7 +3197,7 @@ entry:
         };
         let mut encoding = kernel.clone();
         encoding.command_buffers = vec![indexed.clone()];
-        assert!(case_requirements(&encoding).is_empty());
+        only(&encoding, ToolingRequirement::IndirectIndexedDraws);
         encoding.command_buffers = vec![command_buffer(None)];
         only(&encoding, ToolingRequirement::IndirectComputeCommands);
         for draws in [

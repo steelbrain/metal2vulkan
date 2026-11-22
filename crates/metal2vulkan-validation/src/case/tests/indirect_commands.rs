@@ -113,8 +113,9 @@ fn assert_engine_refuses(case: &AuthoredCase, requirement: ToolingRequirement) {
 
 /// A command buffer of the one shape the runtime builds (indexed draws alone that inherit the
 /// pipeline state and bind their own buffers, none host-encoded) carries `indirect_indexed_draws`
-/// alone, which the checker cannot evidence and the engine candidate refuses typed; a departure
-/// from the shape carries its runtime limit instead.
+/// alone (`executor_contract::tests::engine_case_families_follow_the_case_literals` holds each
+/// departure from the shape to its runtime limit), which the checker cannot evidence and the
+/// engine candidate refuses typed.
 #[test]
 fn the_runtime_s_command_shape_is_a_typed_gap_of_the_engine_candidate() {
     use crate::case::indirect_commands::{CommandBufferResource, CommandDescriptor, RenderDraws};
@@ -150,23 +151,6 @@ fn the_runtime_s_command_shape_is_a_typed_gap_of_the_engine_candidate() {
         Some("engine_candidate: indirect_indexed_draws (the candidate is stopped)")
     );
     assert_engine_refuses(&case, R::IndirectIndexedDraws);
-    let departs = |change: &dyn Fn(&mut CommandBufferResource), limit: R| {
-        let mut variant = case.clone();
-        change(&mut variant.command_buffers[0]);
-        assert_eq!(case_requirements(&variant), [limit].into(), "{limit}");
-    };
-    departs(
-        &|buffer| buffer.inherit_buffers = true,
-        R::IndirectCommandInheritance,
-    );
-    departs(
-        &|buffer| {
-            if let CommandDescriptor::Render { draws, .. } = &mut buffer.descriptor {
-                draws.primitives = true;
-            }
-        },
-        R::IndirectDrawTypes,
-    );
 }
 
 #[test]
