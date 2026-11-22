@@ -2240,10 +2240,11 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   (`Metrics::submit_call_nanos`; about 0.74 ms a call with the pieces), and 49.1 s against
   15.8 s of the submit thread's CPU time. The GPU's busy time was the same (235.7 s against
   234.3 s), and so was the score (8,069 against 8,098, 0.36% lower). On an RTX 3090 (NVIDIA
-  620.70.06) the same guest made 14% more submissions with the pieces (23,670 against 20,750),
-  spent 912 ms against 606 ms inside the calls, and scored 6.3% higher (80,706 against 75,949,
-  jobs m3-max-68865 and m3-max-68789; a second run with the pieces, job m3-max-68889, scored
-  80,730).
+  620.70.06), two runs of each build alternated, the same guest made 14% to 15% more submissions
+  with the pieces (23,670 and 23,489 against 20,750 and 20,406) and spent 912 and 923 ms against
+  606 and 666 ms inside the calls; the score did not move beyond the base runs' own spread
+  (80,706 and 80,730 with the pieces, 75,949 and 80,946 without; jobs m3-max-68865,
+  m3-max-68889, m3-max-68789 and m3-max-68954).
 - On the Iris Xe (Mesa's ANV), in the harness row `two_queues`, a command buffer of a second
   queue whose event wait the end of a command buffer of the first queue signals, committed right
   after it, starts on the GPU 30.4 µs after the signaller's GPU end at the median, against 9.0 µs
