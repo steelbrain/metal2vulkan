@@ -262,6 +262,14 @@ pub enum PipelineRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dispatch: Option<Dispatch>,
     },
+    /// Kernel `function` as the runtime compiles it for a dispatch of threadgroups of
+    /// `threads_per_threadgroup` (`candidate::engine::variants::compile_kernel`): its plain module,
+    /// or its emulated-simdgroups variant where that threadgroup ends in a partial simdgroup. The
+    /// authored compile census's kernel.
+    Kernel {
+        function: RequestFunction,
+        threads_per_threadgroup: [u32; 3],
+    },
     /// The L4 row `entry`, a `stage` function with the function-constant values `constants`
     /// (none, the default: Metal's undefined, the plain census's compile), built as [`row`]
     /// derives it from the library's AIR under those values, its vertex attributes fetched under
@@ -300,16 +308,12 @@ pub enum PipelineRequest {
     /// descriptor `template`, of its object function where it has one, its mesh function, and its
     /// fragment function where it has one, each from the stage library its
     /// [`MeshFunction::library`] names (the case's, then its generated companion's): the engine
-    /// candidate's mesh draw (`engine::mesh::mesh_request`). With a bind `shape`, the pipeline is
-    /// the variant that shape decides (`variants::compile_mesh_for_shape`), as the runtime
-    /// compiles a mesh draw's.
+    /// candidate's mesh draw (`engine::mesh::mesh_request`), as the runtime compiles a mesh draw's.
     MeshDraw {
         object: Option<MeshFunction>,
         mesh: MeshFunction,
         fragment: Option<MeshFunction>,
         template: MeshTemplate,
-        #[serde(default)]
-        shape: Option<BindShape>,
     },
 }
 
@@ -375,6 +379,7 @@ impl PipelineRequest {
                 .unwrap_or(1),
             PipelineRequest::Compute { .. }
             | PipelineRequest::BoundCompute { .. }
+            | PipelineRequest::Kernel { .. }
             | PipelineRequest::Row { .. }
             | PipelineRequest::VertexDraw { .. } => 1,
         }
@@ -385,6 +390,7 @@ impl PipelineRequest {
         match self {
             PipelineRequest::Compute { .. } | PipelineRequest::Row { .. } => Vec::new(),
             PipelineRequest::BoundCompute { function, .. }
+            | PipelineRequest::Kernel { function, .. }
             | PipelineRequest::VertexDraw { function, .. } => vec![function],
             PipelineRequest::Draw {
                 vertex, fragment, ..
@@ -653,7 +659,8 @@ pub fn retained(bitcode: &[u8]) -> RowSource<'static> {
 
 /// Compile `request` from `libraries` for `device` through the public API (`Library::from_air`,
 /// `Library::function`, then `Device::compile_compute_pipeline`, with `compile_function` under
-/// the bind's inputs first for a [`PipelineRequest::BoundCompute`], or
+/// the bind's inputs first for a [`PipelineRequest::BoundCompute`] and under the runtime's for a
+/// [`PipelineRequest::Kernel`], or
 /// `Device::compile_render_pipeline` / `compile_render_variant`) under the standard budget with
 /// `deadline`. The request's functions come from `libraries` as [`PipelineRequest::libraries`]
 /// orders them, each with the functions it links (from its [`PipelineRequest::linked_ranges`]);
@@ -739,6 +746,19 @@ fn compile_counted(
             )?;
             AcceptancePipeline::Compute(Box::new(pipeline))
         }
+        PipelineRequest::Kernel {
+            function: kernel,
+            threads_per_threadgroup,
+        } => {
+            let kernel = function(0, Stage::Kernel, kernel, linked(0))?;
+            let pipeline = crate::candidate::engine::variants::compile_kernel(
+                device,
+                &kernel,
+                *threads_per_threadgroup,
+                &budget,
+            )?;
+            AcceptancePipeline::Compute(Box::new(pipeline))
+        }
         PipelineRequest::VertexDraw {
             function: vertex,
             template,
@@ -767,7 +787,6 @@ fn compile_counted(
             mesh,
             fragment,
             template,
-            shape,
         } => {
             let mut stages = 0;
             let mut stage = |f: &MeshFunction, stage: Stage| {
@@ -785,18 +804,7 @@ fn compile_counted(
                 .map(|fragment| stage(fragment, Stage::Fragment))
                 .transpose()?;
             let descriptor = template.descriptor(object, mesh, fragment)?;
-            let pipeline = match shape {
-                None => device.compile_mesh_pipeline(&descriptor, &budget)?,
-                Some(shape) => {
-                    crate::candidate::engine::variants::compile_mesh_for_shape(
-                        device,
-                        &descriptor,
-                        shape,
-                        &budget,
-                    )?
-                    .0
-                }
-            };
+            let pipeline = device.compile_mesh_pipeline(&descriptor, &budget)?;
             AcceptancePipeline::Render(Box::new(pipeline))
         }
         PipelineRequest::Row {

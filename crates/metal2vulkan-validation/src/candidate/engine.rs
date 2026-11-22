@@ -1242,6 +1242,21 @@ pub fn compute_request<'a>(
     (request, with_linked(&[library], linked))
 }
 
+/// The compile request for `case`'s kernel from `library` as the runtime compiles it for the
+/// case's dispatch (`PipelineRequest::Kernel`, its threadgroup size), linking the functions of
+/// `linked`, and its libraries as [`compute_request`] orders them: the authored compile census's.
+pub fn kernel_request<'a>(
+    library: &RowSource<'a>,
+    linked: &[LinkedModule],
+    case: &ComputeCase,
+) -> (PipelineRequest, Vec<RowSource<'a>>) {
+    let request = PipelineRequest::Kernel {
+        function: linking(&case.entry, &case.constants, linked),
+        threads_per_threadgroup: case.dispatch.threads_per_group(),
+    };
+    (request, with_linked(&[library], linked))
+}
+
 /// The source of `case`'s generated companion, when it has one: its opaque AIR text, which the
 /// compile worker assembles.
 pub fn companion_source(case: &graphics::RenderCase) -> Option<RowSource<'static>> {
@@ -1252,7 +1267,8 @@ pub fn companion_source(case: &graphics::RenderCase) -> Option<RowSource<'static
 
 /// The compile request for `case`'s pipeline with the inputs the bind shape `shape` decides
 /// (storage-texture formats of either stage, pulled vertex buffers,
-/// `variants::compile_render_for_shape`), and its libraries in [`PipelineRequest::libraries`]
+/// `variants::compile_render_for_shape`), or with none as the runtime compiles it where `shape`
+/// is `None` (`Device::compile_render_pipeline`), and its libraries in [`PipelineRequest::libraries`]
 /// order: a vertex function alone from `library` as the Metal oracle's rasterization-disabled draw
 /// (`PipelineRequest::VertexDraw` of [`graphics::render_template`]), or the case's function from
 /// `library` and its generated companion's from `companion` ([`companion_source`]) in stage order,
@@ -1266,9 +1282,10 @@ pub fn render_request<'a>(
     companion: Option<&RowSource<'a>>,
     linked: &[LinkedModule],
     case: &graphics::RenderCase,
-    shape: &BindShape,
+    shape: Option<&BindShape>,
 ) -> Result<(PipelineRequest, Vec<RowSource<'a>>), ExecutorError> {
     let template = graphics::render_template(case);
+    let shape = shape.cloned();
     let own =
         |function: &graphics::RenderFunction| linking(&function.entry, &function.constants, linked);
     let generated = |function: &graphics::RenderFunction| {
@@ -1279,7 +1296,7 @@ pub fn render_request<'a>(
             let request = PipelineRequest::VertexDraw {
                 function: own(&case.vertex),
                 template,
-                shape: Some(shape.clone()),
+                shape,
             };
             Ok((request, with_linked(&[library], linked)))
         }
@@ -1301,7 +1318,7 @@ pub fn render_request<'a>(
                 vertex,
                 fragment,
                 template,
-                shape: Some(shape.clone()),
+                shape,
             };
             Ok((request, with_linked(&stages, linked)))
         }
@@ -1442,7 +1459,7 @@ pub fn compile_render_case(
     case: &graphics::RenderCase,
     shape: &BindShape,
 ) -> Result<RenderPipeline, ExecutorError> {
-    let (request, libraries) = render_request(library, companion, linked, case, shape)?;
+    let (request, libraries) = render_request(library, companion, linked, case, Some(shape))?;
     compile_render(worker, device, &request, &libraries)
 }
 
@@ -1641,7 +1658,7 @@ fn prepare(
 }
 
 /// The one pipeline a run of a prepared case compiles, with the request and libraries the executor
-/// builds for it.
+/// builds for it as the runtime compiles it.
 pub struct CaseCompile<'a> {
     pipeline: PlannedPipeline<'a>,
 }
@@ -1663,7 +1680,7 @@ enum PlannedPipeline<'a> {
 }
 
 impl CaseCompile<'_> {
-    /// Compile in `worker` for `device` as the executor compiles it and record it in `artifact` as
+    /// Compile in `worker` for `device` as the runtime compiles it and record it in `artifact` as
     /// the executor's run records it (the pipeline's content and its plan for the run's bind
     /// shape), keeping only whether it compiled and what the worker measured: the pipeline is
     /// dropped here.
@@ -1702,9 +1719,11 @@ impl CaseCompile<'_> {
 }
 
 /// The pipeline a run of `prepared` compiles on `device` before it reads any device output, with
-/// the request the executor builds for it: the case's own pipeline ([`compute_request`] for the
-/// bind shape [`compute_shape`] gives, [`render_request`] with its generated companion for
-/// [`graphics::render_shape`]'s, or a mesh draw's, `mesh::mesh_request`). The bind shapes depend
+/// the request the executor builds for it, compiled as the runtime compiles it (through no binding
+/// plan): the case's own pipeline ([`kernel_request`] for the case's dispatch, [`render_request`]
+/// with its generated companion and no shape, or a mesh draw's, `mesh::mesh_request`), and the
+/// bind shape a run plans it for ([`compute_shape`], [`graphics::render_shape`]'s, or
+/// `mesh::mesh_shape`'s), which the artifact's digest holds the plan of. The bind shapes depend
 /// on the device only through whether it has device addresses, which the executor reads from what
 /// its context enabled and this from `device`'s description: the same fact for an opened device,
 /// whose description is restricted to what was enabled; and through its profile's range limits
@@ -1723,7 +1742,7 @@ pub fn case_compile<'a>(
     let pipeline = match &prepared.mapped {
         Mapped::Compute(compute) => {
             let shape = compute_shape(compute, addressed, ranges).map_err(ExecutorError::Failed)?;
-            let (request, libraries) = compute_request(&library, linked, compute, &shape);
+            let (request, libraries) = kernel_request(&library, linked, compute);
             PlannedPipeline::Compute {
                 request,
                 libraries,
@@ -1735,7 +1754,7 @@ pub fn case_compile<'a>(
                 graphics::render_shape(render, addressed, ranges).map_err(ExecutorError::Failed)?;
             let companion = companion_source(render);
             let (request, libraries) =
-                render_request(&library, companion.as_ref(), linked, render, &shape)?;
+                render_request(&library, companion.as_ref(), linked, render, None)?;
             PlannedPipeline::Render {
                 request,
                 libraries,
@@ -1748,7 +1767,7 @@ pub fn case_compile<'a>(
                 .companion
                 .as_ref()
                 .map(|generated| RowSource::Text(Cow::Owned(generated.air_text(Spelling::Opaque))));
-            let (request, libraries) = mesh::mesh_request(&library, companion, mesh, &shape)?;
+            let (request, libraries) = mesh::mesh_request(&library, companion, mesh)?;
             PlannedPipeline::Render {
                 request,
                 libraries,

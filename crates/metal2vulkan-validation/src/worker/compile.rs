@@ -244,8 +244,8 @@ pub fn compile_compute(
     compile(worker, device, std::slice::from_ref(library), &request)
 }
 
-/// Compile `request`, a compute pipeline's (`PipelineRequest::BoundCompute`, or an L4 kernel row's
-/// `PipelineRequest::Row`), from `libraries` as [`PipelineRequest::libraries`] orders them (the
+/// Compile `request`, a compute pipeline's (`PipelineRequest::BoundCompute`,
+/// `PipelineRequest::Kernel`, or an L4 kernel row's `PipelineRequest::Row`), from `libraries` as [`PipelineRequest::libraries`] orders them (the
 /// kernel's, then those of the functions it links) for `device`, in a killable worker.
 pub fn compile_compute_request(
     worker: &CompileWorker,

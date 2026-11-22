@@ -23,6 +23,11 @@
 //! candidate (`acceptance::PipelineRequest::BoundCompute`, and `VertexDraw` or `Draw` with a
 //! shape): the whole loop runs under the worker's one deadline and memory limit, and the device
 //! process only plans the returned pipeline for the same shape. Everything here is device-free.
+//!
+//! The authored compile census compiles as the runtime does instead, through no plan: a kernel
+//! with [`compile_kernel`] (`acceptance::PipelineRequest::Kernel`), a render or mesh pipeline as
+//! `Device::compile_render_pipeline` and `Device::compile_mesh_pipeline` compile it (a draw or
+//! mesh draw request without a shape).
 
 use metal2vulkan::bind::{BindShape, Dispatch, TextureShape};
 use metal2vulkan::cache::VariantKey;
@@ -31,8 +36,8 @@ use metal2vulkan::error::{Error, InternalError, InternalKind, RuntimeInput};
 use metal2vulkan::metal::format::storage_image_choice;
 use metal2vulkan::metal::PixelFormat;
 use metal2vulkan::pipeline::{
-    ComputePipeline, ComputePipelineDescriptor, FunctionDescriptor, MeshPipelineDescriptor,
-    RenderPipeline, RenderPipelineDescriptor, StageSource,
+    ComputePipeline, ComputePipelineDescriptor, FunctionDescriptor, KernelVariant, LoweringInputs,
+    RenderPipeline, RenderPipelineDescriptor, RuntimeFact, StageSource,
 };
 use metal2vulkan::pipeline::{SlotClass, SlotRef, Stage};
 use metal2vulkan::Budget;
@@ -125,6 +130,40 @@ pub fn compile_compute_for_shape(
     })
 }
 
+/// Compile `function` into a compute pipeline for `device` under `budget` as the runtime compiles
+/// it for a dispatch of threadgroups of `threads_per_threadgroup`: its plain module
+/// (`LoweringInputs::new`), or its emulated-simdgroups variant
+/// (`KernelVariant::EmulatedSimdgroups`) where the threadgroup's threads are not a multiple of a
+/// `RuntimeFact::LocalSizeConstraint` the plain module states (a partial simdgroup its
+/// flattened simd tier cannot run), as the runtime's encoder chooses the module a dispatch runs.
+pub fn compile_kernel(
+    device: &Device,
+    function: &FunctionDescriptor,
+    threads_per_threadgroup: [u32; 3],
+    budget: &Budget,
+) -> Result<ComputePipeline, Error> {
+    let compile = |inputs: &LoweringInputs| {
+        let compiled = device.compile_function(function, inputs, budget)?;
+        let descriptor = ComputePipelineDescriptor::new(StageSource::Compiled(compiled));
+        device.compile_compute_pipeline(&descriptor, budget)
+    };
+    let plain = LoweringInputs::new();
+    let pipeline = compile(&plain)?;
+    let threads = threads_per_threadgroup
+        .iter()
+        .map(|&axis| u64::from(axis))
+        .product::<u64>();
+    let partial = pipeline.dependencies.iter().any(|dependency| {
+        matches!(dependency.fact, RuntimeFact::LocalSizeConstraint { multiple }
+            if !threads.is_multiple_of(u64::from(multiple.max(1))))
+    });
+    if partial {
+        compile(&plain.kernel_variant(KernelVariant::EmulatedSimdgroups))
+    } else {
+        Ok(pipeline)
+    }
+}
+
 /// [`compile_for_bind_state`] of a kernel pipeline `compile` builds under a key, settling on the
 /// variant the plan of `shape` asks for, or the one `dispatch` runs on when given (its plan's
 /// `dispatch_variant`).
@@ -165,24 +204,6 @@ pub fn compile_render_for_shape(
         device.profile(),
         |key| device.compile_render_variant(descriptor, key, budget),
         |pipeline| Some(pipeline.plan(device, shape).ok()?.variant),
-    )
-}
-
-/// The mesh render pipeline `descriptor` compiled for the bind shape `shape` as the runtime compiles
-/// a mesh draw's: [`compile_for_bind_state`] of `Device::compile_mesh_variant`, each storage
-/// texture's representation from its bound format, until the variant its plan for `shape` asks
-/// for is the one compiled.
-pub fn compile_mesh_for_shape(
-    device: &Device,
-    descriptor: &MeshPipelineDescriptor,
-    shape: &BindShape,
-    budget: &Budget,
-) -> Result<(RenderPipeline, VariantKey), Error> {
-    compile_for_bind_state(
-        |slot| bound_format(shape, slot),
-        device.profile(),
-        |key| device.compile_mesh_variant(descriptor, key, budget),
-        |pipeline| pipeline.plan(device, shape).ok().map(|plan| plan.variant),
     )
 }
 
@@ -331,7 +352,8 @@ mod tests {
     /// A dispatch whose threadgroup has a partial simdgroup compiles the kernel's
     /// emulated-simdgroups variant on a device whose subgroups run whole simdgroups
     /// (moltenvk-m3), whose plan states that key and instantiates the dispatch; a full
-    /// threadgroup, and a compile for no dispatch, keep the shape's key.
+    /// threadgroup, and a compile for no dispatch, keep the shape's key. The runtime's choice
+    /// ([`compile_kernel`]) compiles the same pipeline for each, through no plan.
     #[test]
     fn a_partial_simdgroup_dispatch_compiles_the_emulated_variant() {
         use metal2vulkan::bind::{BindState, BoundBuffer, StageTable};
@@ -373,6 +395,9 @@ mod tests {
                 compile_compute_for_shape(&device, &function, &shape, Some(&dispatch(n)), &budget)
                     .unwrap();
             assert!(key.emulated_simdgroups, "{n}");
+            let kernel =
+                compile_kernel(&device, &function, dispatch(n).threads_per_group(), &budget);
+            assert_eq!(kernel.unwrap(), pipeline, "{n}");
             let plan = pipeline.plan(&device, &shape).unwrap();
             assert!(compiled_for(&key, &plan.variant), "{n}");
             assert!(
@@ -384,6 +409,13 @@ mod tests {
             let (pipeline, key) =
                 compile_compute_for_shape(&device, &function, &shape, d.as_ref(), &budget).unwrap();
             assert!(key.is_empty(), "{d:?}");
+            let kernel = compile_kernel(
+                &device,
+                &function,
+                dispatch(32).threads_per_group(),
+                &budget,
+            );
+            assert_eq!(kernel.unwrap(), pipeline, "{d:?}");
             let plan = pipeline.plan(&device, &shape).unwrap();
             assert!(plan.instantiate_dispatch(&state, &dispatch(32)).is_ok());
             assert!(matches!(

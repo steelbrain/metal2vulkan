@@ -12,7 +12,8 @@
 //!   (`engine::prepare_compile`: its run's preparation, except that an object or mesh case, whose
 //!   mesh render pipeline the executor does not draw, is prepared to compile it), and the one
 //!   pipeline a run compiles before it reads device output, the case's own, comes from
-//!   `engine::case_compile`. It compiles in a compile worker (the 20-s and 500-MiB per-attempt
+//!   `engine::case_compile`, compiled as the runtime compiles it: a kernel for its dispatch's
+//!   threadgroup size, a draw through no binding plan's variant. It compiles in a compile worker (the 20-s and 500-MiB per-attempt
 //!   ceilings, a process-group kill).
 //! - **The bounds.** Each case is admitted, prepared, and compiled in its own case worker
 //!   ([`CaseWorkers`]) under the 500-MiB ceiling, so the census's process holds only the
@@ -89,7 +90,10 @@ mod tests;
 ///    (`engine::prepare_compile`).
 /// 7: a cell holds no uncovered count: a run compiles only its case's own pipeline
 ///    (`engine::case_compile`).
-pub const AUTHORED_COMPILE_CENSUS_VERSION: u32 = 7;
+/// 8: a case's pipeline compiles as the runtime compiles it (`engine::case_compile`): a kernel
+///    under the module its dispatch's threadgroup size chooses (`variants::compile_kernel`), a
+///    draw or mesh draw with no binding plan's variant.
+pub const AUTHORED_COMPILE_CENSUS_VERSION: u32 = 8;
 
 /// The expectation file's name under the corpus root (`validation/corpus`).
 pub const EXPECTATIONS: &str = "authored-compile.tsv";

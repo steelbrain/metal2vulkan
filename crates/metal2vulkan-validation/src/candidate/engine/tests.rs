@@ -449,10 +449,26 @@ fn the_cases_own_function_links_and_its_libraries_follow_the_stages() {
         request.linked_ranges(),
         [std::ops::Range { start: 1, end: 3 }]
     );
+    // The authored compile census's: the kernel as the runtime compiles it for the dispatch.
+    let (request, given) = kernel_request(&case, &linked, &kernel);
+    assert_eq!(
+        request,
+        PipelineRequest::Kernel {
+            function: linking(&kernel.entry),
+            threads_per_threadgroup: kernel.dispatch.threads_per_group(),
+        }
+    );
+    assert_eq!(given, expected_libraries(&[&case]));
+    let json = serde_json::to_value(&request).unwrap();
+    assert_eq!(
+        serde_json::from_value::<PipelineRequest>(json).unwrap(),
+        request
+    );
 
     let mut vertex_case = two_stage_case("shade", "unused", vec![], BTreeMap::new(), 3);
     vertex_case.fragment = None;
-    let (request, given) = render_request(&case, None, &linked, &vertex_case, &shape).unwrap();
+    let (request, given) =
+        render_request(&case, None, &linked, &vertex_case, Some(&shape)).unwrap();
     assert_eq!(
         request,
         PipelineRequest::VertexDraw {
@@ -475,8 +491,14 @@ fn the_cases_own_function_links_and_its_libraries_follow_the_stages() {
     let mut fragment_case =
         two_stage_case(passthrough.entry(), "shade", vec![], BTreeMap::new(), 3);
     fragment_case.companion = Some(passthrough.clone());
-    let (request, given) =
-        render_request(&case, Some(&companion), &linked, &fragment_case, &shape).unwrap();
+    let (request, given) = render_request(
+        &case,
+        Some(&companion),
+        &linked,
+        &fragment_case,
+        Some(&shape),
+    )
+    .unwrap();
     assert_eq!(
         request,
         PipelineRequest::Draw {
@@ -495,8 +517,14 @@ fn the_cases_own_function_links_and_its_libraries_follow_the_stages() {
     });
     let mut observed_case = two_stage_case("shade", observer.entry(), vec![], BTreeMap::new(), 3);
     observed_case.companion = Some(observer.clone());
-    let (request, given) =
-        render_request(&case, Some(&companion), &linked, &observed_case, &shape).unwrap();
+    let (request, given) = render_request(
+        &case,
+        Some(&companion),
+        &linked,
+        &observed_case,
+        Some(&shape),
+    )
+    .unwrap();
     assert_eq!(
         request,
         PipelineRequest::Draw {
@@ -521,11 +549,11 @@ fn the_cases_own_function_links_and_its_libraries_follow_the_stages() {
     // A fragment function that is no companion's, and a companion without its source.
     let owned = two_stage_case("shade", "colour", vec![], BTreeMap::new(), 3);
     assert!(matches!(
-        render_request(&case, Some(&companion), &linked, &owned, &shape),
+        render_request(&case, Some(&companion), &linked, &owned, Some(&shape)),
         Err(ExecutorError::Failed(_))
     ));
     assert!(matches!(
-        render_request(&case, None, &linked, &observed_case, &shape),
+        render_request(&case, None, &linked, &observed_case, Some(&shape)),
         Err(ExecutorError::Failed(_))
     ));
 

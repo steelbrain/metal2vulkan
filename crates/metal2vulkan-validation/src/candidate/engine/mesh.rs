@@ -13,8 +13,8 @@
 //!
 //! The compile worker compiles its pipeline device-free as the runtime compiles it
 //! ([`mesh_request`]): the oracle's descriptor ([`MeshTemplate`]) of its functions, each from the
-//! case's library or its companion's, for the bind shape of its own stage's resources
-//! ([`mesh_shape`]).
+//! case's library or its companion's (`Device::compile_mesh_pipeline`); the artifact of the
+//! compile digests its plan for the bind shape of its own stage's resources ([`mesh_shape`]).
 
 use super::graphics::{self, ColorTarget, RenderFunction, RenderOutput, StageResources};
 use super::{function_constants, lengths_classed, require_case_families, resources, BufferAddress};
@@ -243,8 +243,8 @@ impl MeshTemplate {
 /// synthetic guest addresses (and, when `addressed`, a host address), textures and samplers
 /// ([`graphics::stage_table`]); a partner binds none; classing lengths under `ranges`
 /// ([`lengths_classed`]), so its plan is the runtime's
-/// of the same binds. What the compile worker compiles the draw for
-/// (`variants::compile_mesh_for_shape`).
+/// of the same binds. What the compile's artifact plans the draw's pipeline for
+/// (`artifact::CaseArtifact::record`).
 /// A case whose own function takes an argument buffer is not built here (`NotImplemented`).
 pub fn mesh_shape(
     mesh: &MeshCase,
@@ -281,14 +281,13 @@ pub fn mesh_shape(
     Ok(lengths_classed(state, ranges).shape())
 }
 
-/// The compile request for `mesh`'s pipeline for the bind shape `shape`, and its libraries in
+/// The compile request for `mesh`'s pipeline, and its libraries in
 /// `PipelineRequest::libraries` order: `library`, the case's, then `companion`, its generated
 /// stages' source, where a stage is generated (`MeshCase::generated`). No function links any.
 pub fn mesh_request<'a>(
     library: &RowSource<'a>,
     companion: Option<RowSource<'a>>,
     mesh: &MeshCase,
-    shape: &BindShape,
 ) -> Result<(PipelineRequest, Vec<RowSource<'a>>), ExecutorError> {
     let function = |stage: ShaderStage, function: &RenderFunction| MeshFunction {
         library: usize::from(mesh.generated.contains(&stage)),
@@ -315,7 +314,6 @@ pub fn mesh_request<'a>(
             .as_ref()
             .map(|fragment| function(ShaderStage::Fragment, fragment)),
         template: MeshTemplate::of(mesh),
-        shape: Some(shape.clone()),
     };
     Ok((request, libraries))
 }

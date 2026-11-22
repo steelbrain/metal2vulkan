@@ -377,7 +377,7 @@ worker under the 20-second and 500-MiB ceilings, resumable in bounded batches (`
 | `translation --profile P...` | Each row translated for each committed profile, recorded as a typed outcome class under the current product fingerprint (`--current-fingerprint`, `--retry-failures`, `--hash-file PATH` select rows). It fails when a row breaks a ceiling |
 | `budgets --profile P...` | The budget gates from recorded rows: no row above 20 s or 500 MiB, no stopped worker, and each row's ledger peak at least 0.7 of its allocator peak |
 | `specialization --profile P...` | Rows translated under planned function-constant value sets and the pipeline inputs their AIR states, not only with none |
-| `authored-compile [--bless \| --bless-additions \| --case ID]` | Every committed authored case compiled, with the requests its executor builds, on each profile of `corpus/authored-compile.tsv`; it fails on any changed cell. The table is re-blessed on `development` |
+| `authored-compile [--bless \| --bless-additions \| --case ID]` | Every committed authored case compiled, with the requests its executor builds, as the runtime compiles them (a kernel for its dispatch's threadgroup size, a draw with no binding plan's variant), on each profile of `corpus/authored-compile.tsv`; it fails on any changed cell. The table is re-blessed on `development` |
 | `bitcode-reader` | The bitcode reader's decode compared with `llvm-dis`, and the intrinsic census |
 | focused audits (`rasterization-rate-maps`, `sample-rate`, `ulong-textures`, `fragment-varyings`, `linked-functions`, `tile-functions`, `mesh-draws`) | One structural family, selected by current facts, translated in batches |
 
