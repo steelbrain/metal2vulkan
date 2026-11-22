@@ -241,17 +241,6 @@ fn prof_with(stem: &str, change: impl FnOnce(&mut DeviceDescription)) -> DeviceP
         .clone()
 }
 
-/// The committed profiles, and each without buffer robustness (the in-shader containment check).
-fn profiles_both_encodings() -> Vec<(String, DeviceProfile)> {
-    let mut out = Vec::new();
-    for stem in PROFILES {
-        out.push((stem.to_owned(), prof(stem)));
-        let bare = prof_with(stem, |_| {});
-        out.push((format!("{stem} without robustness"), bare));
-    }
-    out
-}
-
 /// Relocate `a` under the numbering link gives it alone and run L3.
 fn validate(a: &FunctionArtifact, p: &DeviceProfile) {
     let t = link(&[a], &LinkInputs::standalone(), p)
@@ -475,7 +464,8 @@ fn integer_formats_feed_float_attributes() {
             VertexFetch::pulled(d, &desc.layouts[&d.buffer_index]),
         );
     }
-    for (stem, p) in profiles_both_encodings() {
+    for stem in PROFILES {
+        let p = prof(stem);
         let proj = vertex_fetch_projection(Some(&desc), &classes(), &p)
             .unwrap_or_else(|e| panic!("{stem}: {e}"));
         assert_eq!(proj.attributes, pulled_all.attributes, "{stem}");
@@ -514,7 +504,8 @@ fn integer_formats_feed_float_attributes() {
 #[test]
 fn a_source_buffer_shares_its_arguments_slot() {
     let Some(bc) = fixture() else { return };
-    for (stem, p) in profiles_both_encodings() {
+    for stem in PROFILES {
+        let p = prof(stem);
         let alone = compile_with(&bc, &p, all_pulled(1)).unwrap_or_else(|e| panic!("{stem}: {e}"));
         let scale = buffer_slot(&alone, 1).expect("scale's slot");
         assert!(
