@@ -252,7 +252,7 @@ mod on_device {
         let took = start.elapsed().as_nanos();
         let (block, index) = made?;
         drop(block);
-        wait_until(&device, "the release", || released.load(Ordering::SeqCst));
+        wait_until(device, "the release", || released.load(Ordering::SeqCst));
         drop(pages);
         Ok((took, index))
     }
@@ -518,7 +518,7 @@ mod on_device {
         let took = start.elapsed().as_nanos();
         let (block, _) = made.unwrap_or_else(|error| panic!("an import: {error}"));
         drop(block);
-        wait_until(&device, "the release", || released.load(Ordering::SeqCst));
+        wait_until(device, "the release", || released.load(Ordering::SeqCst));
         took
     }
 
