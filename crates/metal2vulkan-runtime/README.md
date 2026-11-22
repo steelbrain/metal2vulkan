@@ -3052,9 +3052,16 @@ cache is answered compile-required on both.
   (`Gap::StageSize`) where Metal makes it. A dispatch of it waits for the consumer's helper, where
   Metal compiles in the program's process.
 - On a host whose Vulkan driver is ANV, Mesa's Intel driver, a guest's kernels of entry weight
-  355,578 to 424,132 are refused (`Gap::StageSize`) where Metal makes them: their helper's compile
-  passes an 8 GiB cap. On the Iris Xe of RPL-P under the packaged Mesa 26.2.6, the helpers of the
-  two kernels measured passed 8 GiB 34 s and 51 s into their compiles (job m3-max-65470). A Mesa
+  186,065 to 424,132 are refused (`Gap::StageSize`) where Metal makes them: their helper's compile
+  passes the consumer's 3 GiB cap. On the Iris Xe of RPL-P under the packaged Mesa 26.2.6, the cold
+  launch of a 3D modelling program made 2 of its 8 heavy kernels (entry weights 121,523 and
+  128,372, helper peaks 2,620 and 2,763 MiB) and refused 6 (186,065 to 424,132, helper peaks 3,091
+  to 3,334 MiB; job m3-max-65807). Each refused make returns its error to the guest's Metal call:
+  the synchronous form answers nil with the error, the asynchronous forms call their handler with
+  it. A program that waits for a kernel with no exit for a failed make waits forever: that program
+  showed its first sample line 143 s after launch and never advanced, with no error shown, while
+  the guest stayed usable. Under an 8 GiB cap, the helpers of the two heaviest (355,578 and
+  424,132) passed 8 GiB 34 s and 51 s into their compiles (job m3-max-65470). A Mesa
   26.2.6 build that adds count prints and a heap census let the lighter one run on: it was past
   18 GiB resident and unfinished at 840 s (job m3-max-65511). The stock driver's time past 8 GiB is
   not measured. Both costs are in Mesa's Intel compiler and grow with the product of two of the
