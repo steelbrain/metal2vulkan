@@ -364,6 +364,11 @@ pub struct Report {
     /// The frame and the call (its position in the stream) where the backend first skipped
     /// something (`Backend::skips`): the play is no verdict past it.
     pub first_skip: Option<(u64, u64)>,
+    /// Where the play stopped after its last frame (`Player::until_frame`): the command buffers
+    /// committed by then that still wait on events no call played signals, in commit order. The
+    /// stream's later calls may signal them; at the stream's end such a command buffer is an
+    /// invalid stream.
+    pub held: Vec<u64>,
 }
 
 /// The CPU's writes into Managed textures (`replaceRegion:...` and any other call on a texture
@@ -760,6 +765,13 @@ impl Report {
         for (ids, counters) in &self.completed {
             let ids: String = ids.iter().map(|id| format!(" #{id}")).collect();
             lines.push(format!("completed{ids}{}", counted(counters)));
+        }
+        if !self.held.is_empty() {
+            let ids: String = self.held.iter().map(|id| format!(" #{id}")).collect();
+            lines.push(format!(
+                "held{ids}: committed before the play stopped after its last frame, waiting on \
+                 events no call played signals"
+            ));
         }
         for shown in &self.shown {
             let shape = shown.shape.map_or("shape unknown".to_owned(), |shape| {
@@ -1175,8 +1187,10 @@ impl<'b, B: Backend> Player<'b, B> {
     }
 
     /// The player that stops after frame `last`'s `m2v.present`, counted from 0 as
-    /// `Report::frames` counts them: it completes the work committed so far and reports as at the
-    /// stream's end.
+    /// `Report::frames` counts them: it completes the work committed so far that can complete and
+    /// reports as at the stream's end. A command buffer committed by then that waits on an event
+    /// no call played signals is held (`Report::held`), not an invalid stream: the calls past the
+    /// stop may signal it.
     pub fn until_frame(mut self, last: usize) -> Self {
         self.last_frame = Some(last);
         self
@@ -1234,7 +1248,7 @@ impl<'b, B: Backend> Player<'b, B> {
         }
         let result = self.read_ahead(stream);
         let result = result.and_then(|()| self.all(stream, &mut left_out));
-        let ended = result.and_then(|()| self.finish());
+        let ended = result.and_then(|stopped| self.finish(stopped));
         let ended = ended.and_then(|()| self.dump_completed(&mut left_out));
         let now = self.backend.counters();
         let mut executed = grown(&now, &start);
@@ -1253,14 +1267,20 @@ impl<'b, B: Backend> Player<'b, B> {
         (self.report, ended)
     }
 
-    fn all(&mut self, stream: &mut StreamReader, left_out: &mut Counters) -> Result<(), PlayError> {
+    /// Play the calls to the stream's end or to the last frame: whether the play stopped after
+    /// its last frame (`until_frame`).
+    fn all(
+        &mut self,
+        stream: &mut StreamReader,
+        left_out: &mut Counters,
+    ) -> Result<bool, PlayError> {
         loop {
             self.frame_began.get_or_insert_with(std::time::Instant::now);
             let began = std::time::Instant::now();
             let next = stream.next_call()?;
             self.times.stream += since(began);
             let Some(call) = next else {
-                break;
+                return Ok(false);
             };
             let issued = self.issued(&call);
             let (frame, skips) = (self.report.frames.len() as u64, self.backend.skips());
@@ -1281,10 +1301,9 @@ impl<'b, B: Backend> Player<'b, B> {
             }
             self.dump_completed(left_out)?;
             if (self.last_frame).is_some_and(|last| self.report.frames.len() > last) {
-                break;
+                return Ok(true);
             }
         }
-        Ok(())
     }
 
     /// Note the dispatch each `m2v.privateBytes` record names, which comes before it, and
@@ -1421,9 +1440,15 @@ impl<'b, B: Backend> Player<'b, B> {
         call
     }
 
-    fn finish(&mut self) -> Result<(), PlayError> {
+    /// Complete what can complete. A command buffer still held on an event is the stream's error
+    /// at its end, and where the play `stopped` after its last frame, held (`Report::held`).
+    fn finish(&mut self, stopped: bool) -> Result<(), PlayError> {
         self.drain()?;
         if self.committed.is_empty() {
+            return Ok(());
+        }
+        if stopped {
+            self.report.held = self.committed.clone();
             return Ok(());
         }
         Err(invalid(format!(

@@ -14,7 +14,8 @@
 //! telling the runtime how the recording device kept Managed buffers where the stream has no
 //! `m2v.deviceIdentity` record (one copy: unified memory; two copies: a GPU copy; with neither, a
 //! Managed buffer stops the play), `--until-frame` stopping the play after frame `F`'s present
-//! (frames counted from 0), and `--check-presents` checking the texture each listed frame's
+//! (frames counted from 0; a command buffer committed by then and held on an event no call played
+//! signals is named on a `held` line, not an invalid stream), and `--check-presents` checking the texture each listed frame's
 //! present shows, at that present, as a recorded check of it would (a `check` line of the
 //! frame, compared by `compare-plays`, and the bytes read kept as `DIR/presents/frame-F.bytes`,
 //! which `compare-plays` sizes where two plays' digests differ; its readback's time is the

@@ -499,8 +499,11 @@ leaves every frame it finished. Every line it writes to `report.txt`, the frame 
 its standard error too, so a caller that loses the directory keeps the report.
 It takes no `m2v.privateBytes` snapshot: each such dispatch plays as it is, counted on the
 `unsnapshotted` line, so two plays do the same work and their times and memory compare. With `--until-frame F` it stops after frame `F`'s present (frames
-counted from 0), completes the work committed so far, reports as at the stream's end and says
-`until-frame F`. With `--check-presents F,...` it checks, at the `m2v.present` of each listed frame (counted from
+counted from 0), completes the work committed so far that can complete, reports as at the stream's end and says
+`until-frame F`. A command buffer committed by then that waits on an event no call played
+signals stays held, as the calls past the stop may signal it: the report names it on a
+`held #ID ...` line and the play ends as it would without it, where at the stream's end such a
+command buffer is an invalid stream. With `--check-presents F,...` it checks, at the `m2v.present` of each listed frame (counted from
 0), the texture the present shows, as an `m2v.check` of it with no recorded checksum would: a
 `check ID frame F SHA256 unrecorded` line, which `compare-plays` reads as the frame's digest
 (below); it also writes the bytes it read to `presents/frame-F.bytes` in the `--out` directory

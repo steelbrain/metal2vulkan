@@ -2090,6 +2090,57 @@ fn a_play_stops_after_its_last_frame_and_writes_each_frame_as_it_ends() {
     );
 }
 
+/// A play that stops after its last frame, a command buffer committed and held there on an event
+/// only a later call signals, ends at the stop with that command buffer named held; played on, the
+/// signal lets it complete. A stream that ends with it held, under a last frame past the end too,
+/// is an invalid stream.
+#[test]
+fn a_play_stopped_after_its_last_frame_names_the_command_buffers_held_there() {
+    let held = |w: &mut StreamWriter<File>| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        w.call("newSharedEvent", 1, 3, &[], &[])?;
+        w.call("commandBuffer", 2, 4, &[], &[])?;
+        w.call(
+            "encodeWaitForEvent:value:",
+            4,
+            0,
+            &[Value::Object(3), Value::Uint(1)],
+            &[],
+        )?;
+        w.call("commit", 4, 0, &[], &[])?;
+        w.call("m2v.present", 1, 0, &[Value::Nil], &[])
+    };
+    let signalled = |w: &mut StreamWriter<File>| {
+        held(w)?;
+        w.call("setSignaledValue:", 3, 0, &[Value::Uint(1)], &[])?;
+        w.call("m2v.present", 1, 0, &[Value::Nil], &[])
+    };
+    let mut kept = Kept::default();
+    let (report, ended) = played_through(&mut kept, Some(0), signalled);
+    ended.unwrap();
+    assert_eq!(report.frames.len(), 1);
+    assert_eq!(report.held, [4]);
+    assert!(kept.waits.is_empty(), "{:?}", kept.waits);
+    let line =
+        "held #4: committed before the play stopped after its last frame, waiting on events \
+                no call played signals";
+    let lines = report.lines_but_frames();
+    assert!(lines.iter().any(|l| l == line), "{lines:?}");
+
+    let mut kept = Kept::default();
+    let (report, ended) = played(&mut kept, signalled);
+    ended.unwrap();
+    assert!(report.held.is_empty(), "{:?}", report.held);
+    assert_eq!(kept.waits, [4]);
+
+    for last in [None, Some(5)] {
+        let (report, ended) = played_through(&mut Kept::default(), last, held);
+        assert!(matches!(ended, Err(PlayError::Invalid(_))), "{ended:?}");
+        assert!(report.held.is_empty(), "{:?}", report.held);
+    }
+}
+
 /// A frame's end counts the GPU's busy time as the union of the intervals of the command buffers
 /// the frame waited for, where two overlap once, and its line says where the wall time went.
 #[test]
