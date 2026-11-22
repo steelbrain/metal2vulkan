@@ -455,6 +455,8 @@ pub(crate) enum Gauge {
     PrivatePlacedBytes,
     /// [`Gauges::import_bytes`].
     ImportBytes,
+    /// [`Gauges::export_bytes`].
+    ExportBytes,
     /// [`Gauges::surface_import_bytes`].
     SurfaceImportBytes,
     /// [`Gauges::releases_waiting`].
@@ -751,6 +753,7 @@ struct Atomics {
     shared_placed_bytes: AtomicU64,
     private_placed_bytes: AtomicU64,
     import_bytes: AtomicU64,
+    export_bytes: AtomicU64,
     surface_import_bytes: AtomicU64,
     releases_waiting: AtomicU64,
     indirect_command_buffers: AtomicU64,
@@ -1110,6 +1113,18 @@ impl Counters {
         self.fall_by(Gauge::ImportBytes, bytes);
     }
 
+    /// One more export of `bytes` ([`Gauges::exports`] and [`Gauges::export_bytes`]).
+    pub(crate) fn exported(&self, bytes: u64) {
+        self.rise(Gauge::Exports);
+        self.rise_by(Gauge::ExportBytes, bytes);
+    }
+
+    /// One export of `bytes` freed.
+    pub(crate) fn export_freed(&self, bytes: u64) {
+        self.fall(Gauge::Exports);
+        self.fall_by(Gauge::ExportBytes, bytes);
+    }
+
     /// One more surface plane import of `bytes` ([`Gauges::surface_imports`] and
     /// [`Gauges::surface_import_bytes`]).
     pub(crate) fn surface_imported(&self, bytes: u64) {
@@ -1445,6 +1460,7 @@ impl Counters {
             Gauge::SharedPlacedBytes => &a.shared_placed_bytes,
             Gauge::PrivatePlacedBytes => &a.private_placed_bytes,
             Gauge::ImportBytes => &a.import_bytes,
+            Gauge::ExportBytes => &a.export_bytes,
             Gauge::SurfaceImportBytes => &a.surface_import_bytes,
             Gauge::ReleasesWaiting => &a.releases_waiting,
             Gauge::IndirectCommandBuffers => &a.indirect_command_buffers,
@@ -1761,6 +1777,7 @@ impl Counters {
             shared_placed_bytes: a.shared_placed_bytes.load(Relaxed),
             private_placed_bytes: a.private_placed_bytes.load(Relaxed),
             import_bytes: a.import_bytes.load(Relaxed),
+            export_bytes: a.export_bytes.load(Relaxed),
             surface_import_bytes: a.surface_import_bytes.load(Relaxed),
             releases_waiting: a.releases_waiting.load(Relaxed),
             indirect_command_buffers: a.indirect_command_buffers.load(Relaxed),
@@ -2871,6 +2888,13 @@ pub struct Gauges {
     pub private_placed_bytes: u64,
     /// Bytes of the imports [`imports`](Self::imports) counts, as each was allocated.
     pub import_bytes: u64,
+    /// Bytes of the exports [`exports`](Self::exports) counts, each the size its
+    /// [`Export`](crate::Export) names, as it was allocated: an exported block's allocation (a
+    /// copy form surface's block among them) and an opaque handle's surface allocation in place.
+    /// A dma-buf's surface in place counts in
+    /// [`surface_import_bytes`](Self::surface_import_bytes) instead. Metal has no counterpart, as
+    /// it has none of exports.
+    pub export_bytes: u64,
     /// Bytes of the surface plane imports [`surface_imports`](Self::surface_imports) counts, as
     /// each was allocated.
     pub surface_import_bytes: u64,

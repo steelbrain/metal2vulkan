@@ -287,7 +287,7 @@ impl Block {
     pub fn external_writes_done(&self) -> Result<(), Error> {
         crate::command::not_in_scheduled_handler()?;
         let (core, block) = self.held()?;
-        let Some(Own::Export(handle)) = block.memory.own else {
+        let Some(Own::Export { handle, .. }) = block.memory.own else {
             return Err(Error::Refused(Refusal::NotExported { block: self.id }));
         };
         let (buffer, _) = block.memory.range(0);

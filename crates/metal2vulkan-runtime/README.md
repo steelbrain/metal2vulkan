@@ -359,8 +359,9 @@ in its memory.
   taken and not given back, so a class's allocation bytes less its placed and idle bytes are the
   free ranges between blocks; `shared_buffer_bytes` and `private_buffer_bytes` count live buffers'
   lengths by their block's class, `texture_block_bytes` the placed textures' image sizes and
-  `texture_own_bytes` textures' allocations of their own, and `import_bytes` and
-  `surface_import_bytes` the imports' and the surface plane imports' bytes; `releases_waiting`
+  `texture_own_bytes` textures' allocations of their own, and `import_bytes`, `export_bytes` and
+  `surface_import_bytes` the imports', the exports' (exported blocks, and an opaque handle's
+  surfaces in place) and the surface plane imports' bytes; `releases_waiting`
   counts the releases of textures and sampler states that wait for work in flight (Set 1 and
   index grants). The texture blocks
   and the allocations holding the consumer's Private blocks are counted apart, as nothing moves
@@ -635,8 +636,9 @@ extensions, which device creation enables where listed, and its buffers export i
 `Limit::NoExport`, before anything is allocated.
 
 Each export is one `VkDeviceMemory` allocation and counts against the device's allocations;
-`Gauges::exports` counts those live. The block lives until its last handle and its last buffer,
-command buffer or upload are gone; then the block-maker thread frees its memory. An import of the
+`Gauges::exports` counts those live and `Gauges::export_bytes` their allocations' bytes. The block
+lives until its last handle and its last buffer, command buffer or upload are gone; then the
+block-maker thread frees its memory. An import of the
 handle may outlive the block, unused. Neither `BlockMappings` hook runs for an exported block, and
 its bytes are undefined until written, as a taken block's are. No image is made in its memory,
 which is dedicated to its buffer (`VUID-vkBindImageMemory-memory-10926`): a texture over a buffer
@@ -723,12 +725,12 @@ writes reach with no copy. What a consumer passes to get it, by handle:
   attachment alone (below). The pitch is the driver's own for each plane's `LINEAR` image: the
   planes' pitches must be equal and a multiple of `pitch_multiple` and of the texels, and each
   start a multiple of its image's alignment, past the plane before's requirement. The images are
-  bound in one exportable allocation that holds no buffer, counted in `Gauges::exports`. Measured
-  for NV12 and P010 at 1080p and 2160p: the RTX 3090 (NVIDIA 620.70.06) lays a `LINEAR` image's
-  rows at the row rounded up to 128 bytes, at an alignment of 128, so those surfaces are in place
-  at a pitch multiple of 1 or 4 with a start multiple of 1, and at multiples of 256 the 1080p NV12
-  surface is copied (`SurfaceCopy::Pitch`: its rows are 1,920 bytes) while the 2160p and P010
-  ones are in place. The Radeon 780M and RX 550 (RADV, Mesa 26.2.6) round rows up to 256, at an
+  bound in one exportable allocation that holds no buffer, counted in `Gauges::exports` and its
+  bytes in `Gauges::export_bytes`. Measured for NV12 and P010 at 1080p and 2160p: the RTX 3090
+  (NVIDIA 620.70.06) lays a `LINEAR` image's rows at the row rounded up to 128 bytes, at an
+  alignment of 128, so those surfaces are in place at a pitch multiple of 1 or 4 with a start
+  multiple of 1, and at multiples of 256 the 1080p NV12 surface is copied (`SurfaceCopy::Pitch`:
+  its rows are 1,920 bytes) while the 2160p and P010 ones are in place. The Radeon 780M and RX 550 (RADV, Mesa 26.2.6) round rows up to 256, at an
   alignment of 256, and take every one of them in place at either.
 
 A tiling offers a plane's usage where the handle's image format query

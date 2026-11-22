@@ -1926,7 +1926,7 @@ fn memory_cause(own: Own) -> OverCause {
         },
         #[cfg(unix)]
         Own::Sparse { .. } | Own::Chunk => OverCause::DmaBufs,
-        Own::Export(_) => OverCause::Dedicated,
+        Own::Export { .. } => OverCause::Dedicated,
         Own::Surface { .. } => OverCause::Surface,
     }
 }

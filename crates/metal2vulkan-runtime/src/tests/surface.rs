@@ -529,13 +529,24 @@ mod on_device {
                         start_multiple: row.start_multiple,
                         planes: &specs,
                     };
-                    let before = counters.metrics();
+                    let (before, gauges) = (counters.metrics(), counters.gauges());
                     let began = Instant::now();
                     let (surface, export) = (device.new_exported_surface(&spec))
                         .unwrap_or_else(|error| panic!("{label}: {error}"));
                     let made = began.elapsed();
                     let form = export.form;
                     let after = counters.metrics();
+                    // The export's bytes: the opaque handle's allocation in place and the copy
+                    // form's exported block; a dma-buf's in place are its planes' imports.
+                    let exported = match (form, handle) {
+                        (SurfaceForm::InPlace, ExportHandle::DmaBuf) => 0,
+                        _ => export.export.size,
+                    };
+                    assert_eq!(
+                        counters.gauges().export_bytes,
+                        gauges.export_bytes + exported,
+                        "{label}: the surface's export bytes counted"
+                    );
                     // The make submits nothing and waits for nothing.
                     assert_eq!(
                         (after.submissions, after.surface_waits),
@@ -844,7 +855,10 @@ mod on_device {
             drop(queue);
             within("the surfaces' frees", || {
                 let gauges = counters.gauges();
-                gauges.surface_imports == 0 && gauges.exports == 0 && gauges.surface_buffers == 0
+                gauges.surface_imports == 0
+                    && gauges.exports == 0
+                    && gauges.export_bytes == 0
+                    && gauges.surface_buffers == 0
             });
         });
     }
@@ -1169,12 +1183,13 @@ mod on_device {
         drop((view, out));
     }
 
-    /// The gauges a surface's memory and planes count in, which its free brings back: exports,
-    /// surface imports and their bytes, surface buffers, textures.
-    fn surface_gauges(device: &Device) -> [u64; 5] {
+    /// The gauges a surface's memory and planes count in, which its free brings back: exports and
+    /// their bytes, surface imports and their bytes, surface buffers, textures.
+    fn surface_gauges(device: &Device) -> [u64; 6] {
         let gauges = device.counters().gauges();
         [
             gauges.exports,
+            gauges.export_bytes,
             gauges.surface_imports,
             gauges.surface_import_bytes,
             gauges.surface_buffers,
@@ -1256,8 +1271,8 @@ mod on_device {
                 // 32 surfaces acquired and never used, dropped together.
                 let surfaces: Vec<Surface> = (0..32).map(|_| acquired()).collect();
                 assert_eq!(
-                    surface_gauges(&device)[4],
-                    base[4] + 64,
+                    surface_gauges(&device)[5],
+                    base[5] + 64,
                     "{label}: the planes' textures counted"
                 );
                 let before = sends(&device);
@@ -1315,9 +1330,9 @@ mod on_device {
                 println!(
                     "surface-drop: {label}: form {form:?}; submissions and held releases that \
                      started one: 32 drops of surfaces never used {burst:?}, a read surface's \
-                     drop {used:?}, a drop after a second acquire {again:?}; 200 rounds: exports, \
-                     surface imports, their bytes, surface buffers, textures {:?} at round 100 \
-                     and {:?} at 200, blocks {} and {}; the device's held releases {} of {} bytes, \
+                     drop {used:?}, a drop after a second acquire {again:?}; 200 rounds: \
+                     exports, their bytes, surface imports, theirs, surface buffers, textures \
+                     {:?} at round 100 and {:?} at 200, blocks {} and {}; the device's held releases {} of {} bytes, \
                      {} starts",
                     at[0].0,
                     at[1].0,

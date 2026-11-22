@@ -1103,7 +1103,7 @@ impl BlitCommandEncoder {
             return Err(Error::Refused(Refusal::OtherDevice));
         }
         let (block, _) = buffer.held();
-        let Some(Own::Export(handle)) = block.memory.own else {
+        let Some(Own::Export { handle, .. }) = block.memory.own else {
             return Err(Error::Refused(Refusal::NotExported {
                 block: block.memory.id,
             }));

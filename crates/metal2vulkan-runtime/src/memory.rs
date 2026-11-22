@@ -359,8 +359,12 @@ pub(crate) enum Own {
         handle: crate::ImportHandle,
         memory_type: u32,
     },
-    /// A dedicated allocation the consumer shares by a handle of this kind ([`export`]).
-    Export(crate::ExportHandle),
+    /// A dedicated allocation the consumer shares by a handle of `handle`'s kind ([`export`],
+    /// [`export_surface`]), of `bytes`, its allocation size.
+    Export {
+        handle: crate::ExportHandle,
+        bytes: u64,
+    },
     /// An exported surface's buffer ([`crate::Surface::buffer`]): on one more import of its
     /// dma-buf, an allocation of its own (`import`), or on the opaque handle's one allocation,
     /// which the block under it holds and frees ([`surface_view`]).
@@ -532,7 +536,7 @@ fn note(core: &Core, memory: &Memory) {
     let kind = match memory.own {
         None => return,
         Some(Own::Import { .. }) => RangeKind::Import,
-        Some(Own::Export(_)) => RangeKind::Export,
+        Some(Own::Export { .. }) => RangeKind::Export,
         Some(Own::Surface { .. }) => RangeKind::Surface,
         #[cfg(unix)]
         Some(Own::Sparse { .. }) => RangeKind::Sparse,
@@ -2420,7 +2424,7 @@ pub(crate) unsafe fn export(
     let address = vk::BufferDeviceAddressInfo::default().buffer(buffer);
     // SAFETY: the buffer has device-address usage and is bound.
     let address = unsafe { device.get_buffer_device_address(&address) };
-    core.counters.rise(Gauge::Exports);
+    core.counters.exported(needs.size);
     let memory = Memory {
         id,
         class: MemoryClass::Private,
@@ -2433,7 +2437,10 @@ pub(crate) unsafe fn export(
         mapping: None,
         device_local: core.device_local & (1 << index) != 0,
         spilled: false,
-        own: Some(Own::Export(handle)),
+        own: Some(Own::Export {
+            handle,
+            bytes: needs.size,
+        }),
     };
     Ok((memory, needs.size))
 }
@@ -2480,7 +2487,7 @@ pub(crate) unsafe fn export_surface(
             return Err(error);
         }
     };
-    core.counters.rise(Gauge::Exports);
+    core.counters.exported(len);
     Ok(Memory {
         id,
         class: MemoryClass::Private,
@@ -2493,7 +2500,7 @@ pub(crate) unsafe fn export_surface(
         mapping: None,
         device_local: core.device_local & (1 << index) != 0,
         spilled: false,
-        own: Some(Own::Export(handle)),
+        own: Some(Own::Export { handle, bytes: len }),
     })
 }
 
@@ -2630,7 +2637,7 @@ fn free_own(core: &Core, memory: &Memory, release: Option<Release>) {
     unsafe { free(&core.device, memory.memory) };
     core.counters.fall(Gauge::Blocks);
     match memory.own {
-        Some(Own::Export(_)) => core.counters.fall(Gauge::Exports),
+        Some(Own::Export { bytes, .. }) => core.counters.export_freed(bytes),
         Some(Own::Surface { .. }) => {
             core.counters.fall(Gauge::SurfaceBuffers);
             #[cfg(unix)]

@@ -1533,6 +1533,7 @@ field	metal2vulkan-runtime::Gauges.command_buffers	pub command_buffers: u64
 field	metal2vulkan-runtime::Gauges.descriptor_slots	pub descriptor_slots: u64
 field	metal2vulkan-runtime::Gauges.device_samplers	pub device_samplers: u64
 field	metal2vulkan-runtime::Gauges.events	pub events: u64
+field	metal2vulkan-runtime::Gauges.export_bytes	pub export_bytes: u64
 field	metal2vulkan-runtime::Gauges.exports	pub exports: u64
 field	metal2vulkan-runtime::Gauges.handles_out	pub handles_out: u64
 field	metal2vulkan-runtime::Gauges.import_bytes	pub import_bytes: u64

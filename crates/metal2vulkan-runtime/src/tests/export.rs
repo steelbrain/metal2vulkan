@@ -1,6 +1,6 @@
 //! Exports, under a device cfg, on every device of the cfg's kind: each handle the device exports
-//! gives a Private block of its own, counted live in `Gauges::exports` until its memory is freed,
-//! its make timed whole and by step (`Metrics::export_makes`, `export_allocations`,
+//! gives a Private block of its own, counted live in `Gauges::exports` and its allocation's bytes
+//! in `Gauges::export_bytes` until its memory is freed, its make timed whole and by step (`Metrics::export_makes`, `export_allocations`,
 //! `export_handles`, `export_claims`: one call each, of the allocation's bytes, the steps within
 //! the whole), which rt writes and releases (`BlitCommandEncoder::release_to_external`) twice, with no acquire
 //! between, and whose handle a second device of the same physical device imports, reading rt's
@@ -265,10 +265,11 @@ mod on_device {
                     "{name}: {handle:?}"
                 );
                 assert!(export.size >= LEN, "{name}: {handle:?}: {}", export.size);
+                let gauges = counters.gauges();
                 assert_eq!(
-                    counters.gauges().exports,
-                    before.exports + 1,
-                    "{name}: {handle:?}"
+                    (gauges.exports, gauges.export_bytes),
+                    (before.exports + 1, before.export_bytes + export.size),
+                    "{name}: {handle:?}: the export and its allocation's bytes counted"
                 );
 
                 // rt writes the block and releases it to the other API, twice: the second write
@@ -408,11 +409,12 @@ mod on_device {
                 drop(other);
 
                 drop((queue, buffer, block));
-                // The exports gauge falls with the export's memory, as the Blocks gauge does; the
+                // The exports gauges fall with the export's memory, as the Blocks gauge does; the
                 // Blocks gauge also moves with what the block-maker thread makes beside the test
-                // (the pool's units, the parameter ring's next block), so only this one is read.
+                // (the pool's units, the parameter ring's next block), so only these are read.
                 within("the export's free", || {
-                    counters.gauges().exports == before.exports
+                    let gauges = counters.gauges();
+                    (gauges.exports, gauges.export_bytes) == (before.exports, before.export_bytes)
                 });
                 exported += 1;
                 println!(
@@ -502,9 +504,10 @@ mod on_device {
 
     /// Submissions beside 64 live exports (the consumer's cap of surface caches): a small fill
     /// submitted on the presenting queue, waited for by a fence, with no export and with 64 live,
-    /// in rounds that take turns, the exports counted live in `Gauges::exports` and freed between
-    /// rounds. What the exports cost each submission is the harness's own row
-    /// `export_submit_cost`, timed alone without the validation layer.
+    /// in rounds that take turns, the exports counted live in `Gauges::exports` and their
+    /// allocations' bytes in `Gauges::export_bytes`, and freed between rounds. What the exports
+    /// cost each submission is the harness's own row `export_submit_cost`, timed alone without
+    /// the validation layer.
     #[test]
     fn every_device_submits_beside_64_live_exports() {
         const EXPORTS: usize = 64;
@@ -566,11 +569,18 @@ mod on_device {
                 let exports: Vec<_> = (0..EXPORTS)
                     .map(|_| (device.new_exported_block(handle, 1 << 16)).expect("an export"))
                     .collect();
-                assert_eq!(device.counters().gauges().exports, EXPORTS as u64, "{name}");
+                let bytes = exports.iter().map(|(_, export)| export.size).sum::<u64>();
+                let gauges = device.counters().gauges();
+                assert_eq!(
+                    (gauges.exports, gauges.export_bytes),
+                    (EXPORTS as u64, bytes),
+                    "{name}"
+                );
                 submits();
                 drop(exports);
                 within("the exports' frees", || {
-                    device.counters().gauges().exports == 0
+                    let gauges = device.counters().gauges();
+                    (gauges.exports, gauges.export_bytes) == (0, 0)
                 });
             }
             // SAFETY: nothing is pending.
