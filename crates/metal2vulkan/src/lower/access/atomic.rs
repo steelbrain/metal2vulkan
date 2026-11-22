@@ -222,7 +222,7 @@ pub struct AtomicAccess {
 impl AtomicAccess {
     /// The census name (`access.atomic.<memory>.<kind>[<reach>][.checked]`) in the finished plan
     /// `slots`: `.checked` when an access is checked in the shader as emitted (a buffer target by
-    /// [`AccessPlan::check`]: its view's encoding, or a device-address slot's own check), and a
+    /// [`AccessPlan::check`]: a view's in-shader check, or a device-address slot's own), and a
     /// buffer atomic qualified by the reach of its targets ([`BufferReach`]).
     pub fn name(&self, slots: &AccessPlan) -> Cow<'static, str> {
         let (mem, reach, checked) = match &self.mem {
@@ -672,11 +672,9 @@ pub fn select(
             ptr: super::dynamic::plan_deref(cx, r.ptr)?,
         }
     } else {
-        let (mut targets, null) = static_roots(cx, r.ptr, m)?;
-        let check = Check::InShader;
+        let (targets, null) = static_roots(cx, r.ptr, m)?;
         let fixed = super::fixed_offset(cx, r.ptr);
-        for t in &mut targets {
-            t.check = check;
+        for t in &targets {
             let plan = cx
                 .memory
                 .slots

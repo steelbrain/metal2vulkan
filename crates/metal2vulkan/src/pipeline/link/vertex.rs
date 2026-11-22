@@ -81,8 +81,8 @@
 //!
 //! The projection is part of the vertex function's compile key; link recomputes it from the
 //! function's stage-IO contract and refuses a stage compiled under another one
-//! ([`vertex_input_state`]), so a stage compiled with fixed-function input for a profile without
-//! buffer robustness never links against a vertex descriptor there.
+//! ([`vertex_input_state`]), so a stage compiled with fixed-function input under the identity
+//! domains never links against a vertex descriptor outside them.
 
 use std::collections::{BTreeMap, BTreeSet};
 

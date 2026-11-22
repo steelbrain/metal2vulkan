@@ -103,8 +103,8 @@ pub enum Endpoint {
     Buffer(Access),
     /// An arena; the access's leaf is replaced per unit.
     Arena(LocalAccess),
-    /// The constant blob (a source only).
-    Blob { ptr: LocalPtr, checked: bool },
+    /// The constant blob (a source only), its loads checked in the shader.
+    Blob { ptr: LocalPtr },
     /// A wide (dynamic-root) pointer's allocation; the access's leaf is replaced per unit.
     Wide(WideAccess),
 }
@@ -386,7 +386,6 @@ pub fn endpoint(
         blob::use_blob(cx)?;
         return Ok(Endpoint::Blob {
             ptr: blob::blob_ptr(cx, v)?,
-            checked: true,
         });
     }
     match local::home_of(cx, v) {
@@ -416,12 +415,12 @@ pub fn endpoint(
     }
     // A source may also point into the constant blob (its `BLOB_ROOT` candidate); the blob is
     // constant, so a destination may not. The targets are placed as a load's or a store's are.
-    let (mut targets, null, blob) = super::blob_roots(cx, v, write, m)?;
+    let (targets, null, blob) = super::blob_roots(cx, v, write, m)?;
     // A copy's chunks take their own leaves when it is emitted, words among them. A chunk's
     // offset is the endpoint's plus a constant where the copy is unrolled; a looping copy's
     // chunks are noted apart (`select`).
     let fixed = super::fixed_offset(cx, v);
-    super::place_targets(cx, &mut targets, (write, fixed), 4)?;
+    super::place_targets(cx, &targets, (write, fixed), 4)?;
     Ok(Endpoint::Buffer(Access {
         ptr: operand(cx, v)?,
         value: None,
@@ -762,7 +761,6 @@ pub enum Base<'a> {
     },
     Blob {
         off: SValue,
-        checked: bool,
     },
     /// A wide pointer `p` and its resolved allocation.
     Wide {
@@ -800,9 +798,8 @@ fn base_live<'a>(
                 LocalPtr::Offset(o) => k32(fb, o)?,
             },
         },
-        Endpoint::Blob { ptr, checked } => Base::Blob {
+        Endpoint::Blob { ptr } => Base::Blob {
             off: blob::ptr_value(cx, fb, *ptr)?,
-            checked: *checked,
         },
         Endpoint::Wide(a) => {
             let p = cx.operand(fb, a.ptr)?;
@@ -916,9 +913,9 @@ pub fn read(
                 None => Err(cx.fail("an arena load without a value")),
             }
         }
-        Base::Blob { off, checked } => {
+        Base::Blob { off } => {
             let off = plus(cx, fb, off, d)?;
-            blob::load_at(cx, fb, &leaf, off, checked)
+            blob::load_at(cx, fb, &leaf, off)
         }
         Base::Wide { b, .. } => {
             let d = wide_delta(fb, d)?;

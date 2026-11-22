@@ -839,7 +839,7 @@ fn lookup(
                 return Err(refuse());
             }
             IdLoad::Static(super::access_with_leaf(
-                cx, ptr, None, leaf, targets, null, None,
+                cx, ptr, None, leaf, targets, null, false,
             )?)
         }
     };

@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use crate::air::ir::InstId;
 use crate::lower::emit::EmitCx;
-use crate::memory::contain::{self, Check};
+use crate::memory::contain;
 use crate::memory::leaf::{self, k32, u32_op, Leaf, Units, WordMem, WordOps};
 use crate::memory::views::{self, UnitViews, View};
 use crate::pipeline::sym::PushField;
@@ -362,21 +362,11 @@ pub(super) fn prepare(
     };
     let residual = cx.push_field(fb, PushField::SlotBindOffset(choice.slot))?;
     let off = u32_op(fb, BinOp::IAdd, residual, m)?;
-    let inb = match t.check {
-        Check::None => None,
-        Check::InShader => {
-            let size = views::storage_bytes(fb, view)?;
-            Some(contain::in_bounds(fb, off, size, u64::from(n))?)
-        }
-    };
-    let (off, guard_store) = match inb {
-        // Read at a clamped offset (word 0 exists: a bound range is never empty).
-        Some(inb) => {
-            let zero = k32(fb, 0)?;
-            (fb.select(inb, off, zero)?, true)
-        }
-        None => (off, false),
-    };
+    let size = views::storage_bytes(fb, view)?;
+    let inb = contain::in_bounds(fb, off, size, u64::from(n))?;
+    // Read at a clamped offset (word 0 exists: a bound range is never empty).
+    let zero = k32(fb, 0)?;
+    let off = fb.select(inb, off, zero)?;
     let units = cx
         .decl
         .families
@@ -388,8 +378,8 @@ pub(super) fn prepare(
     Ok(Prepared {
         mem: Mem::View(ViewMem(view, ops, units)),
         off,
-        inb,
-        guard_store,
+        inb: Some(inb),
+        guard_store: true,
         reads_zero: false,
     })
 }
@@ -497,13 +487,13 @@ pub(super) fn access_at(
     let leaf = a.leaf;
     // A pointer that may point into the blob reads it under `BLOB_ROOT` (never stored).
     let blob = match a.blob {
-        Some(check) => match cx.decl.families.access.blob {
-            Some(decl) => Some((decl, check == Check::InShader)),
+        true => match cx.decl.families.access.blob {
+            Some(decl) => Some(decl),
             None => return Err(cx.fail("the constant blob is not declared")),
         },
-        None => None,
+        false => None,
     };
-    if let Some((decl, checked)) = blob {
+    if let Some(decl) = blob {
         if stored.is_some() {
             return Err(cx.fail("a store through a pointer into the constant blob"));
         }
@@ -516,7 +506,7 @@ pub(super) fn access_at(
         }
         let arm: ArmFn<'_, ()> = Box::new(move |fb, _| {
             Ok(ArmEnd::FallThrough(vec![super::blob::load_decl(
-                fb, decl, &leaf, m, checked,
+                fb, decl, &leaf, m,
             )?]))
         });
         cases.push((vec![BLOB_ROOT], arm));

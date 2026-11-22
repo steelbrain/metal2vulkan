@@ -84,7 +84,6 @@ use crate::lower::select::{FamilyPlans, Plan, SelectCx};
 use crate::lower::stage_io;
 use crate::lower::stage_io::fetch::{self, Encoding, PulledRead, Step, Stride};
 use crate::lower::strategy::FamilyStrategy;
-use crate::memory::contain::Check;
 use crate::memory::leaf::k32;
 use crate::metal::VertexStepFunction;
 use crate::pipeline::facts::RuntimeFact;
@@ -141,7 +140,6 @@ pub struct PatchRead {
     pub element: Element,
     /// The value's form.
     pub form: Form,
-    pub check: Check,
 }
 
 impl PatchRead {
@@ -156,7 +154,6 @@ impl PatchRead {
             step: Step::Constant,
             stride: Stride::Push(PushField::VertexBufferStride(self.buffer)),
             form: self.form,
-            check: self.check,
         };
         same.words().saturating_add(32)
     }
@@ -579,7 +576,6 @@ fn pulled_read(
             .pulled
             .insert(at, PulledInput::new(attribute, ty, fetch));
     }
-    let check = Check::InShader;
     let e = eval(cx)?;
     match element {
         Element::Patch => e.patch = true,
@@ -594,7 +590,6 @@ fn pulled_read(
         offset,
         element,
         form,
-        check,
     })
 }
 
@@ -865,7 +860,7 @@ fn fetch_at(
         None => None,
     };
     let m = fetch::displacement(fb, element, r.offset)?;
-    let read = pulled::prepare(cx, fb, r.buffer, m, r.encoding.bytes(), r.check)?;
+    let read = pulled::prepare(cx, fb, r.buffer, m, r.encoding.bytes())?;
     fetch::fetch_from(fb, read, r.encoding, r.form)
 }
 

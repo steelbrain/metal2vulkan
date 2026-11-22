@@ -27,11 +27,11 @@ enum Elem {
 }
 
 /// Where the harness reads the data: the storage view `kslot(0)` at the residual parameter plus
-/// the displacement, or `[[buffer(PSB_BUFFER)]]` by device address through the root table at
-/// [`TABLE`] (`access::pulled::psb_read`), contained or not.
+/// the displacement, checked in the shader, or `[[buffer(PSB_BUFFER)]]` by device address through
+/// the root table at [`TABLE`] (`access::pulled::psb_read`), contained or not.
 #[derive(Clone, Copy, Debug)]
 enum Source {
-    View(Check),
+    View,
     Psb { contained: bool },
 }
 
@@ -52,8 +52,8 @@ fn kslot(index: u32) -> ResourceSlot {
 
 /// A compute module fetching `encoding` into `form` from buffer 0 with the parameters of
 /// buffer 1 (`index`, `base`, `stride`, `residual`), writing each lane's bits to buffer 2.
-fn module(encoding: Encoding, form: Form, elem: Elem, offset: u32, check: Check) -> TypedModule {
-    module_from(Source::View(check), encoding, form, elem, offset)
+fn module(encoding: Encoding, form: Form, elem: Elem, offset: u32) -> TypedModule {
+    module_from(Source::View, encoding, form, elem, offset)
 }
 
 /// [`module`] reading from `source`.
@@ -83,9 +83,9 @@ fn module_from(
     };
     let m = displacement(fb, element.map(|e| (e, stride)), offset).expect("displacement");
     let v = match source {
-        Source::View(check) => {
-            let read = pulled::view_read(fb, data, check, residual, m, encoding.bytes())
-                .expect("view read");
+        Source::View => {
+            let read =
+                pulled::view_read(fb, data, residual, m, encoding.bytes()).expect("view read");
             fetch_from(fb, read, encoding, form).expect("fetch")
         }
         Source::Psb { contained } => {
@@ -312,11 +312,9 @@ fn every_format_decodes_exactly_at_an_unaligned_offset() {
             [int(32, 4), int(8, 3)]
         };
         for form in forms {
-            for check in [Check::None, Check::InShader] {
-                let m = module(e, form, Elem::Direct, 2, check);
-                let got = run(&m, &data, [3, 0, 18, 5], form.lanes);
-                check_lanes(&format!("{format:?} {form:?} {check:?}"), form, &got, want);
-            }
+            let m = module(e, form, Elem::Direct, 2);
+            let got = run(&m, &data, [3, 0, 18, 5], form.lanes);
+            check_lanes(&format!("{format:?} {form:?}"), form, &got, want);
         }
     }
 }
@@ -338,7 +336,7 @@ fn a_half_parameter_rounds_float_formats() {
     ] {
         let e = encoding(format).expect("encoding");
         let form = half_form(2);
-        let m = module(e, form, Elem::Constant, at as u32, Check::InShader);
+        let m = module(e, form, Elem::Constant, at as u32);
         let got = run(&m, &data, [0, 0, 0, 0], 2);
         let want = reference(e, &data[at..]);
         if format == VertexFormat::Half2 {
@@ -415,17 +413,10 @@ fn integer_formats_read_into_float_parameters_take_their_values() {
         }
         data.resize(data.len() + 16, 0xEE);
         for form in [float(4), half_form(4), float(2)] {
-            for check in [Check::None, Check::InShader] {
-                let m = module(e, form, Elem::Direct, 0, check);
-                for (r, want) in rows.iter().enumerate() {
-                    let got = run(&m, &data, [r as u32, 0, stride as u32, 0], form.lanes);
-                    check_lanes(
-                        &format!("{format:?} {form:?} {check:?} row {r}"),
-                        form,
-                        &got,
-                        *want,
-                    );
-                }
+            let m = module(e, form, Elem::Direct, 0);
+            for (r, want) in rows.iter().enumerate() {
+                let got = run(&m, &data, [r as u32, 0, stride as u32, 0], form.lanes);
+                check_lanes(&format!("{format:?} {form:?} row {r}"), form, &got, *want);
             }
         }
     }
@@ -436,7 +427,7 @@ fn integer_formats_read_into_float_parameters_take_their_values() {
         .iter()
         .flat_map(|v| v.to_le_bytes())
         .collect();
-    let m = module(e, half_form(4), Elem::Constant, 0, Check::InShader);
+    let m = module(e, half_form(4), Elem::Constant, 0);
     let got = run(&m, &data, [0, 0, 0, 0], 4);
     assert_eq!(
         got,
@@ -454,7 +445,7 @@ fn each_step_fetches_its_element() {
     let form = int(32, 1);
     let word = |byte: u32| 1000 + byte / 4;
     // [index, base, stride, residual], attribute offset, expected byte.
-    let direct = module(e, form, Elem::Direct, 4, Check::InShader);
+    let direct = module(e, form, Elem::Direct, 4);
     assert_eq!(
         run(&direct, &data, [5, 0, 12, 8], 1),
         [word(8 + 5 * 12 + 4)]
@@ -468,14 +459,14 @@ fn each_step_fetches_its_element() {
         (2, 7, 0, 3),
         (4, 13, 1, 4),
     ] {
-        let m = module(e, form, Elem::Divided(rate), 0, Check::InShader);
+        let m = module(e, form, Elem::Divided(rate), 0);
         assert_eq!(
             run(&m, &data, [instance, base, 8, 0], 1),
             [word(element * 8)],
             "rate {rate} instance {instance} base {base}"
         );
     }
-    let constant = module(e, form, Elem::Constant, 20, Check::InShader);
+    let constant = module(e, form, Elem::Constant, 20);
     for index in [0, 3, 1000] {
         assert_eq!(run(&constant, &data, [index, 5, 8, 4], 1), [word(24)]);
     }
@@ -489,7 +480,7 @@ fn an_out_of_bounds_element_reads_zero() {
     let data = pattern(32, 9);
     let e = encoding(VertexFormat::Float3).expect("encoding");
     let form = float(4);
-    let m = module(e, form, Elem::Direct, 0, Check::InShader);
+    let m = module(e, form, Elem::Direct, 0);
     let zero = reference(e, &[0; 12]);
     for (index, stride, residual) in [
         (2u32, 12u32, 0u32),
@@ -640,16 +631,14 @@ fn a_normalized_decode_is_a_product_by_the_reciprocal() {
     let formats = normalized_encodings();
     assert_eq!(formats.len(), 19, "{formats:?}");
     for (format, e) in formats {
-        for check in [Check::None, Check::InShader] {
-            let m = module(e, float(4), Elem::Direct, 0, check);
-            let ops = opcodes(m);
-            assert!(ops.contains(&(crate::spv::Op::FMul as u32)), "{format:?}");
-            for op in [crate::spv::Op::UDiv, crate::spv::Op::FDiv] {
-                assert!(
-                    !ops.contains(&(op as u32)),
-                    "{format:?} {check:?} decodes with {op:?}"
-                );
-            }
+        let m = module(e, float(4), Elem::Direct, 0);
+        let ops = opcodes(m);
+        assert!(ops.contains(&(crate::spv::Op::FMul as u32)), "{format:?}");
+        for op in [crate::spv::Op::UDiv, crate::spv::Op::FDiv] {
+            assert!(
+                !ops.contains(&(op as u32)),
+                "{format:?} decodes with {op:?}"
+            );
         }
     }
 }
@@ -678,7 +667,7 @@ fn every_normalized_byte_is_the_reciprocal_product() {
         (VertexFormat::UChar4NormalizedBGRA, false, [2, 1, 0, 3]),
     ] {
         let e = encoding(format).expect("encoding");
-        let m = module(e, float(4), Elem::Direct, 0, Check::InShader);
+        let m = module(e, float(4), Elem::Direct, 0);
         for i in 0..64u32 {
             let got = run(&m, &data, [i, 0, 4, 0], 4);
             let want = order.map(|k| {
@@ -721,7 +710,7 @@ fn every_ten_and_two_bit_code_is_the_reciprocal_product() {
         (VertexFormat::Int1010102Normalized, true),
     ] {
         let e = encoding(format).expect("encoding");
-        let m = module(e, float(4), Elem::Direct, 0, Check::InShader);
+        let m = module(e, float(4), Elem::Direct, 0);
         for (i, w) in words.iter().enumerate() {
             let got = run(&m, &data, [i as u32, 0, 4, 0], 4);
             let want = [(0, 10u32), (10, 10), (20, 10), (30, 2)].map(|(at, bits)| {
@@ -845,24 +834,19 @@ fn a_narrow_floats_widening_carries_the_fields_nan_bits() {
     // mantissa: two 11-bit fields of six mantissa bits and a 10-bit one of five.
     let rg11b10 = 0x7FFu32 | 0x7FF << 11 | 0x3FF << 22;
     data[8..12].copy_from_slice(&rg11b10.to_le_bytes());
-    for check in [Check::None, Check::InShader] {
-        let e = encoding(VertexFormat::Half4).expect("encoding");
-        let m = module(e, float(4), Elem::Constant, 0, check);
-        let got = run(&m, &data, [0, 0, 0, 0], 4);
-        let want = halves.map(widened);
-        assert!(widens(&got, &want), "Half4 into float4 {check:?}: {got:x?}");
-        // The same codes into a `half` parameter, held widened.
-        let m = module(e, half_form(4), Elem::Constant, 0, check);
-        let got = run(&m, &data, [0, 0, 0, 0], 4);
-        assert!(widens(&got, &want), "Half4 into half4 {check:?}: {got:x?}");
-        let e = encoding(VertexFormat::FloatRG11B10).expect("encoding");
-        let m = module(e, float(4), Elem::Constant, 8, check);
-        let got = run(&m, &data, [0, 0, 0, 0], 4);
-        // Each field's mantissa in the top of the `f32` one: six bits, six, then five.
-        let want = [0x7FFE_0000, 0x7FFE_0000, 0x7FFC_0000, 1.0f32.to_bits()];
-        assert!(
-            widens(&got, &want),
-            "FloatRG11B10 into float4 {check:?}: {got:x?}"
-        );
-    }
+    let e = encoding(VertexFormat::Half4).expect("encoding");
+    let m = module(e, float(4), Elem::Constant, 0);
+    let got = run(&m, &data, [0, 0, 0, 0], 4);
+    let want = halves.map(widened);
+    assert!(widens(&got, &want), "Half4 into float4: {got:x?}");
+    // The same codes into a `half` parameter, held widened.
+    let m = module(e, half_form(4), Elem::Constant, 0);
+    let got = run(&m, &data, [0, 0, 0, 0], 4);
+    assert!(widens(&got, &want), "Half4 into half4: {got:x?}");
+    let e = encoding(VertexFormat::FloatRG11B10).expect("encoding");
+    let m = module(e, float(4), Elem::Constant, 8);
+    let got = run(&m, &data, [0, 0, 0, 0], 4);
+    // Each field's mantissa in the top of the `f32` one: six bits, six, then five.
+    let want = [0x7FFE_0000, 0x7FFE_0000, 0x7FFC_0000, 1.0f32.to_bits()];
+    assert!(widens(&got, &want), "FloatRG11B10 into float4: {got:x?}");
 }

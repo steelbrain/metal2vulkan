@@ -491,7 +491,7 @@ fn store_pointer(
     if in_blob {
         return Err(refuse());
     }
-    let to = super::access_with_leaf(cx, ptr, None, leaf, targets, null, None)?;
+    let to = super::access_with_leaf(cx, ptr, None, leaf, targets, null, false)?;
     let words = !cx.profile.fields().leaf.int64;
     Ok(PointerValue::StorePointer {
         to: Box::new(to),

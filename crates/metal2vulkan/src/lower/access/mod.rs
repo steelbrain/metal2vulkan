@@ -14,8 +14,8 @@
 //! descriptor-relative byte offset is the slot's `SlotBindOffset` residual plus the pointer's
 //! offset. A pointer with several candidate slots is dispatched by a switch-at-use on its root; the
 //! default arm is the null root, whose load is 0 and whose store is dropped. Containment is the
-//! profile's encoding (`memory::contain`): none with robust descriptors, else the normative check
-//! against the storage view's bound size (`OpArrayLength`, the padded range).
+//! normative check (`memory::contain`) against the storage view's bound size (`OpArrayLength`,
+//! the padded range).
 //!
 //! **Slots** ([`finish_slots`]). An accessed slot is a storage view. A storage slot whose range is
 //! not provably within `maxStorageBufferRange` declares `RuntimeFact::BufferRangeLimit`. On
@@ -30,8 +30,8 @@
 //! census name reads the finished plan ([`AccessPlan::check`], [`BufferReach`]): an access that
 //! reaches a device-address slot or a wide pointer's allocation is named apart from a descriptor
 //! access of the same strategy (`.psb`, or `.psb_and_view` when it may reach both), and `.checked`
-//! names the check its targets take as emitted, a device-address slot's in-shader one whatever the
-//! profile's encoding. A strategy whose side may be an arena or buffer memory names that side's
+//! names the check its targets take as emitted. A strategy whose side may be an arena or buffer
+//! memory names that side's
 //! [`SideReach`] (`.arena`), and a memory intrinsic names each side apart (`.to_<reach>`,
 //! `.from_<reach>`, `copy::MemOp::name`).
 //!
@@ -269,8 +269,6 @@ pub struct Target {
     pub slot: usize,
     /// Its root number (the switch-at-use literal).
     pub root: u32,
-    /// Its containment check.
-    pub check: Check,
 }
 
 /// A leaf load or store through a static-root pointer.
@@ -288,9 +286,9 @@ pub struct Access {
     pub coherence: Option<Coherence>,
     /// A volatile access: every word it loads or stores carries `Volatile`.
     pub volatile: bool,
-    /// The pointer may point into the constant blob (a load only): the blob's containment check,
-    /// read under [`BLOB_ROOT`] in the switch-at-use.
-    pub blob: Option<Check>,
+    /// The pointer may point into the constant blob (a load only): the blob, read under
+    /// [`BLOB_ROOT`] in the switch-at-use, checked in the shader.
+    pub blob: bool,
 }
 
 impl Access {
@@ -298,20 +296,15 @@ impl Access {
         let per = self
             .targets
             .iter()
-            .map(|t| {
+            .map(|_| {
                 // The residual or root-table reads, and the containment check (the PSB form,
                 // which a slot may take after selection, costs the most).
-                leaf_words(&self.leaf)
-                    + match t.check {
-                        Check::None => 24,
-                        Check::InShader => 64,
-                    }
-                    + 160
+                leaf_words(&self.leaf) + 64 + 160
             })
             .fold(0u32, u32::saturating_add);
         let blob = match self.blob {
-            Some(_) => leaf_words(&self.leaf).saturating_add(96),
-            None => 0,
+            true => leaf_words(&self.leaf).saturating_add(96),
+            false => 0,
         };
         per.saturating_add(blob)
             .saturating_add(16u32.saturating_mul(self.targets.len() as u32 + 2))
@@ -326,7 +319,7 @@ impl Access {
     /// The buffer memory the access reaches in the finished plan `slots`: its targets' slots, and
     /// the constant blob's view when the pointer may point there.
     pub fn reach(&self, slots: &AccessPlan) -> BufferReach {
-        let blob = if self.blob.is_some() {
+        let blob = if self.blob {
             BufferReach::VIEWS
         } else {
             BufferReach::NONE
@@ -358,10 +351,9 @@ impl Access {
     }
 }
 
-/// How a strategy's accesses reach buffer memory: through descriptor views, which the profile's
-/// containment encoding contains (no check with robust descriptors, the in-shader check otherwise),
-/// by device address (a `BufferForm::Psb` slot, or a wide pointer's root entry), which is checked
-/// in the shader whatever the profile (unless containment is off), or both. Arenas and typed
+/// How a strategy's accesses reach buffer memory: through descriptor views, which the shader
+/// checks, by device address (a `BufferForm::Psb` slot, or a wide pointer's root entry), which is
+/// checked in the shader unless containment is off, or both. Arenas and typed
 /// objects are neither: their containment is their own ([`SideReach`]).
 ///
 /// The census names a strategy that may reach either by its reach ([`BufferReach::qualify`]), so
@@ -466,14 +458,12 @@ impl AccessPlan {
         )
     }
 
-    /// The containment check target `t` takes as emitted (`emit::prepare`): its view's, the
-    /// profile's encoding (`t.check`), or for a device-address slot the in-shader check, which
-    /// robust buffer access does not replace, unless containment is off (`psb_contained`).
+    /// The containment check target `t` takes as emitted (`emit::prepare`): the in-shader check,
+    /// unless it is a device-address slot and containment is off (`psb_contained`).
     pub fn check(&self, t: &Target) -> Check {
         match (self.by_address(t), self.psb_contained) {
-            (false, _) => t.check,
-            (true, true) => Check::InShader,
             (true, false) => Check::None,
+            _ => Check::InShader,
         }
     }
 
@@ -1984,49 +1974,44 @@ fn select_access(
     align: Option<crate::air::ir::Align>,
     m: &mut Meter,
 ) -> Result<Access, Error> {
-    let (targets, null, blob_check) = blob_roots(cx, ptr, value.is_some(), m)?;
+    let (targets, null, blob) = blob_roots(cx, ptr, value.is_some(), m)?;
     let align = align.map_or(1, |a| a.bytes());
     let proven = cx.memory.proven_align(cx.entry, ptr);
     let leaf = leaf::leaf_of(cx.entry, cx.profile, &cx.memory.layouts, ty, align, proven)?;
-    access_with_leaf(cx, ptr, value, leaf, targets, null, blob_check)
+    access_with_leaf(cx, ptr, value, leaf, targets, null, blob)
 }
 
 /// The candidate targets of static-root pointer `ptr` ([`buffer_roots`]), accessed as a write
-/// when `write`, and the constant blob's containment check when `ptr` may point into the blob,
-/// which the function then reads. The blob is constant: a write through such a pointer is
-/// refused. Loads, stores, and memory intrinsics' endpoints (`copy::endpoint`) share it.
+/// when `write`, and whether `ptr` may point into the constant blob, which the function then
+/// reads. The blob is constant: a write through such a pointer is refused. Loads, stores, and
+/// memory intrinsics' endpoints (`copy::endpoint`) share it.
 fn blob_roots(
     cx: &mut SelectCx<'_>,
     ptr: Value,
     write: bool,
     m: &mut Meter,
-) -> Result<(Vec<Target>, bool, Option<Check>), Error> {
+) -> Result<(Vec<Target>, bool, bool), Error> {
     let (targets, null, in_blob) = buffer_roots(cx, ptr, m)?;
     if in_blob && write {
         return Err(refuse());
     }
-    let blob_check = if in_blob {
+    if in_blob {
         blob::use_blob(cx)?;
-        Some(Check::InShader)
-    } else {
-        None
-    };
-    Ok((targets, null, blob_check))
+    }
+    Ok((targets, null, in_blob))
 }
 
-/// Give each of `targets` the profile's containment check and read its slot's `SlotBindOffset`.
-/// Every static-root access places its targets here
+/// Read the `SlotBindOffset` of each of `targets`' slots. Every static-root access places its
+/// targets here
 /// ([`access_with_leaf`], `copy::endpoint`), each at a byte offset that is a translation-time
 /// constant only where `fixed` ([`note_variable`]).
 fn place_targets(
     cx: &mut SelectCx<'_>,
-    targets: &mut [Target],
+    targets: &[Target],
     (write, fixed): (bool, bool),
     reach: u32,
 ) -> Result<(), Error> {
-    let check = Check::InShader;
     for t in targets {
-        t.check = check;
         let plan = cx
             .memory
             .slots
@@ -2091,14 +2076,14 @@ fn access_with_leaf(
     ptr: Value,
     value: Option<Value>,
     leaf: Leaf,
-    mut targets: Vec<Target>,
+    targets: Vec<Target>,
     null: bool,
-    blob_check: Option<Check>,
+    blob: bool,
 ) -> Result<Access, Error> {
     let fixed = fixed_offset(cx, ptr);
     place_targets(
         cx,
-        &mut targets,
+        &targets,
         (value.is_some(), fixed),
         leaf_reach(cx.profile, &leaf),
     )?;
@@ -2131,7 +2116,7 @@ fn access_with_leaf(
         null,
         coherence: None,
         volatile: false,
-        blob: blob_check,
+        blob,
     })
 }
 

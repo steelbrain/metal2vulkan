@@ -28,7 +28,7 @@ use crate::memory::handles::{self, DomainKind};
 use crate::memory::plan::MemoryPlan;
 use crate::memory::provenance::{self, HandleClass, OffsetRange, Repr, Root, RootSetId};
 
-use super::{blob, refuse, slot_root, Check, Target};
+use super::{blob, refuse, slot_root, Target};
 
 /// The facts of every root set a buffer pointer of the function names, by set.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -280,7 +280,6 @@ fn read(e: &Entry, mp: &MemoryPlan, roots: &[Root], m: &mut Meter) -> Result<Set
                         Some(plan) => targets.push(Target {
                             slot,
                             root: slot_root(plan.slot.index),
-                            check: Check::None,
                         }),
                     },
                 },

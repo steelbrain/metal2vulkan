@@ -36,13 +36,11 @@ use super::local::LocalPtr;
 use super::root_sets::SetFacts;
 use super::{is_ptr_ty, operand, refuse, GepTerms};
 
-/// A leaf load from the blob.
+/// A leaf load from the blob, checked in the shader against the blob's length.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlobLoad {
     pub ptr: LocalPtr,
     pub leaf: Leaf,
-    /// The in-shader containment check.
-    pub checked: bool,
 }
 
 /// The blob strategies.
@@ -74,8 +72,7 @@ impl BlobStrategy {
             BlobStrategy::Gep { .. } => "access.blob.gep",
             BlobStrategy::Copy { .. } => "access.blob.pointer_copy",
             BlobStrategy::Select { .. } => "access.blob.pointer_select",
-            BlobStrategy::Load(l) if l.checked => "access.blob.load.checked",
-            BlobStrategy::Load(_) => "access.blob.load",
+            BlobStrategy::Load(_) => "access.blob.load.checked",
         }
     }
 
@@ -87,11 +84,7 @@ impl BlobStrategy {
             }
             BlobStrategy::Copy { .. } => 4,
             BlobStrategy::Select { .. } => 6,
-            BlobStrategy::Load(l) => l
-                .leaf
-                .cost()
-                .saturating_add(if l.checked { 64 } else { 0 })
-                .saturating_add(16),
+            BlobStrategy::Load(l) => l.leaf.cost().saturating_add(64).saturating_add(16),
         }
     }
 }
@@ -200,7 +193,6 @@ pub fn load(
     Ok(BlobLoad {
         ptr: blob_ptr(cx, ptr)?,
         leaf,
-        checked: true,
     })
 }
 
@@ -298,36 +290,31 @@ pub fn ptr_value(
     }
 }
 
-/// Load `leaf` at blob byte offset `off`, contained when `checked`.
+/// Load `leaf` at blob byte offset `off`, contained.
 pub fn load_at(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     leaf: &Leaf,
     off: SValue,
-    checked: bool,
 ) -> BResult<SValue> {
     let Some(decl) = cx.decl.families.access.blob else {
         return Err(cx.fail("the constant blob is not declared"));
     };
-    load_decl(fb, decl, leaf, off, checked)
+    load_decl(fb, decl, leaf, off)
 }
 
-/// Load `leaf` at byte offset `off` of the declared blob `decl`: a bound blob's view contained
-/// when `checked`, the module's words always.
+/// Load `leaf` at byte offset `off` of the declared blob `decl`, contained: a bound blob's view
+/// and the module's words alike.
 pub fn load_decl(
     fb: &mut FunctionBuilder<'_>,
     decl: BlobDecl,
     leaf: &Leaf,
     off: SValue,
-    checked: bool,
 ) -> BResult<SValue> {
     // The blob is read-only: its words are the same on every load, which stay plain.
     match decl {
         BlobDecl::Bound(view) => {
             let mut mem = ViewMem(view, WordOps::default(), views::UnitViews::NONE);
-            if !checked {
-                return leaf::load(fb, &mut mem, leaf, off);
-            }
             let size = views::storage_bytes(fb, view)?;
             contained(fb, &mut mem, leaf, off, size)
         }
@@ -389,7 +376,7 @@ pub fn emit(
         }
         BlobStrategy::Load(l) => {
             let off = ptr_value(cx, fb, l.ptr)?;
-            load_at(cx, fb, &l.leaf, off, l.checked)?
+            load_at(cx, fb, &l.leaf, off)?
         }
     };
     cx.define(vid, r);

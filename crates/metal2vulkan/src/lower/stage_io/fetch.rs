@@ -50,9 +50,9 @@
 //! alignment the shader can rely on: Metal's minimum alignment of a layout stride and an
 //! attribute offset is 1 byte on Apple5 and later (4 bytes only on Apple2-Apple4; Metal feature
 //! set tables), and the projection pulls the attributes whose offset or stride fixed-function input
-//! could not align (and every attribute where the profile has no buffer robustness). They are
-//! contained like any descriptor access (the normative in-shader check when the profile has no
-//! buffer robustness, reading at offset 0 and yielding zero bytes out of bounds) and decoded
+//! could not align (and every attribute outside the identity domains). They are contained like
+//! any descriptor access (the normative in-shader check, reading at offset 0 and yielding zero
+//! bytes out of bounds) and decoded
 //! ([`Encoding`]): integers zero- or sign-extended by the format's signedness, normalized integers
 //! by the device's product of the code and its maximum's reciprocal (`c · float(1 / (2^b - 1))`,
 //! signed `max(c · float(1 / (2^(b-1) - 1)), -1)`, within one `f32` ulp of Metal's correctly
@@ -98,7 +98,6 @@ use crate::lower::arith::{narrow, ops, FloatFmt, Form, Held};
 use crate::lower::dispatch;
 use crate::lower::emit::EmitCx;
 use crate::lower::select::SelectCx;
-use crate::memory::contain::Check;
 use crate::memory::leaf::{k32, Leaf, Path};
 use crate::metal::{VertexFormat, VertexStepFunction};
 use crate::pipeline::facts::RuntimeFact;
@@ -434,7 +433,6 @@ pub struct PulledRead {
     pub stride: Stride,
     /// The parameter's form.
     pub form: Form,
-    pub check: Check,
 }
 
 impl PulledRead {
@@ -632,7 +630,6 @@ pub(super) fn select(
         step,
         stride: Stride::Push(PushField::VertexBufferStride(buffer)),
         form,
-        check: Check::InShader,
     })
 }
 
@@ -1009,7 +1006,7 @@ pub(super) fn emit(
             let within = fb.glsl(GlslOp::UMin, &[at, last])?;
             let n = k32(fb, index.bytes)?;
             let m = fb.binary(BinOp::IMul, within, n)?;
-            let read = pulled::prepare(cx, fb, index.buffer, m, index.bytes, r.check)?;
+            let read = pulled::prepare(cx, fb, index.buffer, m, index.bytes)?;
             let element = read.load(fb, &index.leaf())?;
             Some(fb.binary(BinOp::IAdd, element, origin)?)
         }
@@ -1073,8 +1070,8 @@ pub(super) fn emit(
     };
     let m = displacement(fb, element, r.offset)?;
     let read = match fits {
-        Some(fits) => pulled::prepare_within(cx, fb, r.buffer, m, fits, n, r.check)?,
-        None => pulled::prepare(cx, fb, r.buffer, m, n, r.check)?,
+        Some(fits) => pulled::prepare_within(cx, fb, r.buffer, m, fits, n)?,
+        None => pulled::prepare(cx, fb, r.buffer, m, n)?,
     };
     fetch_from(fb, read, r.encoding, r.form)
 }

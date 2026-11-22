@@ -27,7 +27,7 @@
 //! device address, and a shared slot takes the device address the argument's wide pointers or typed
 //! atomics need. A device-replay variant (`LowerInputs.replay_bindings`) reads it, as every other
 //! slot, through its root entry in the replayed command's slot table. The fetch reads a storage view at the bind residual plus its Metal displacement,
-//! contained by the profile's encoding, and a device address through the slot's root entry (`psb`,
+//! checked in the shader, and a device address through the slot's root entry (`psb`,
 //! window start 0), always contained unless containment is off. Under the identity domains every
 //! source buffer is its device address, which the fetch reads from the slot's own pushed address
 //! (`SlotGuestBase`) plus its displacement, read as signed, checked against the slot's buffer
@@ -37,7 +37,7 @@
 use crate::error::{Error, Feature, LowerFamily, Unsupported};
 use crate::lower::emit::EmitCx;
 use crate::lower::stage_io::fetch;
-use crate::memory::contain::{self, Check};
+use crate::memory::contain;
 use crate::memory::leaf::{self, k32, Leaf, WordMem};
 use crate::memory::views::{self, View};
 use crate::pipeline::interface::{
@@ -210,47 +210,35 @@ impl SourceRead {
 }
 
 /// An `n`-byte read of storage view `view` at the bind residual `residual` plus the Metal
-/// displacement `m` (wrapping `u32`), contained by `check`: out of bounds it reads at offset 0 (a
+/// displacement `m` (wrapping `u32`), checked in the shader: out of bounds it reads at offset 0 (a
 /// bound range is never empty and is padded to 16 bytes, so the at most 16 bytes of a vertex format
 /// exist there) and yields zero.
 pub fn view_read(
     fb: &mut FunctionBuilder<'_>,
     view: View,
-    check: Check,
     residual: SValue,
     m: SValue,
     n: u32,
 ) -> BResult<SourceRead> {
     let off = fb.binary(BinOp::IAdd, residual, m)?;
-    view_read_at(fb, view, check, off, n)
+    view_read_at(fb, view, off, n)
 }
 
 /// [`view_read`] at the view's own byte offset `off`.
 fn view_read_at(
     fb: &mut FunctionBuilder<'_>,
     view: View,
-    check: Check,
     off: SValue,
     n: u32,
 ) -> BResult<SourceRead> {
-    let inb = match check {
-        Check::None => None,
-        Check::InShader => {
-            let size = views::storage_bytes(fb, view)?;
-            Some(contain::in_bounds(fb, off, size, u64::from(n))?)
-        }
-    };
-    let off = match inb {
-        Some(inb) => {
-            let zero = k32(fb, 0)?;
-            fb.select(inb, off, zero)?
-        }
-        None => off,
-    };
+    let size = views::storage_bytes(fb, view)?;
+    let inb = contain::in_bounds(fb, off, size, u64::from(n))?;
+    let zero = k32(fb, 0)?;
+    let off = fb.select(inb, off, zero)?;
     Ok(SourceRead {
         mem: SourceMem(Mem::View(view)),
         off,
-        inb,
+        inb: Some(inb),
     })
 }
 
@@ -304,17 +292,16 @@ fn address_read(
 }
 
 /// Prepare an `n`-byte read of source buffer `buffer` at the `u32` Metal displacement `m` from
-/// its bind offset, in the form [`super::finish_slots`] chose; a view is contained by `check`.
+/// its bind offset, in the form [`super::finish_slots`] chose; a view is checked in the shader.
 pub fn prepare(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     buffer: u32,
     m: SValue,
     n: u32,
-    check: Check,
 ) -> BResult<SourceRead> {
     match source(cx, fb, buffer)? {
-        Source::View { view, residual } => view_read(fb, view, check, residual, m, n),
+        Source::View { view, residual } => view_read(fb, view, residual, m, n),
         Source::Psb {
             table,
             start,
@@ -339,7 +326,6 @@ pub fn prepare_within(
     m: SValue,
     fits: SValue,
     n: u32,
-    check: Check,
 ) -> BResult<SourceRead> {
     let (read, fits) = match source(cx, fb, buffer)? {
         Source::View { view, residual } => {
@@ -351,7 +337,7 @@ pub fn prepare_within(
             let view_fits = fb.binary(BinOp::LogicalAnd, kept, ends)?;
             let fits = fb.binary(BinOp::LogicalAnd, fits, view_fits)?;
             let off = fb.select(fits, off, residual)?;
-            (view_read_at(fb, view, check, off, n)?, fits)
+            (view_read_at(fb, view, off, n)?, fits)
         }
         Source::Psb {
             table,

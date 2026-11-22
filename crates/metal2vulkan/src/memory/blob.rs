@@ -17,10 +17,9 @@
 //!
 //! A pointer into the blob is its `u32` byte offset from the blob's start: a constant global's
 //! address is its blob offset, and GEPs, casts, and `select` are integer operations (the arena
-//! pointer form). Loads are word-composed leaves (`memory::leaf`). A bound blob's containment is
-//! the descriptor encoding: none with robust descriptors, otherwise the normative check against the
-//! bound size (`OpArrayLength · 4`). The module's words are checked against their length on every
-//! load: no robustness covers `Private` memory.
+//! pointer form). Loads are word-composed leaves (`memory::leaf`). A bound blob's loads take the
+//! normative check against the bound size (`OpArrayLength · 4`), and the module's words are
+//! checked against their length on every load: no robustness covers `Private` memory.
 
 use std::sync::Arc;
 
