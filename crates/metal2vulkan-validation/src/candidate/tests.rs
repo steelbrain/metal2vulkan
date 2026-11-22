@@ -35,6 +35,10 @@ mod engine_textures;
 // either device.
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 pub(crate) mod engine_render;
+// The loop kernels whose exits read values their own trips defined, and the loop a thread leaves
+// early, on either device, with the stores of an undefined value their modules ran.
+#[cfg(any(m2v_gpu, m2v_cpu_icd))]
+mod loop_exits;
 mod pipeline_contracts;
 // The widest-pin rule's emulated form against its pinned form on a GPU: exact integer answers.
 #[cfg(m2v_gpu)]

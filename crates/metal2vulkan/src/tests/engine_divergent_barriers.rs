@@ -21,6 +21,8 @@
 
 use std::collections::BTreeMap;
 
+use metal2vulkan_devtools::loop_kernels;
+
 use crate::device::subgroup::Tier;
 use crate::device::DevicePolicy;
 use crate::lower::select::Plan;
@@ -62,52 +64,9 @@ fn assemble_file(path: &std::path::Path, what: &str) -> Option<Vec<u8>> {
 
 /// `body` (the kernel `name`'s definition, parameters `%limits`, `%out`, `%t`) in a module with
 /// the threadgroup arrays `@a` and `@b`, the barrier and simd declarations, and the kernel's AIR
-/// metadata, assembled.
+/// metadata (`loop_kernels::module`), assembled.
 pub(super) fn kernel(name: &str, body: &str) -> Option<Vec<u8>> {
-    let text = format!(
-        r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
-target triple = "air64_v28-apple-macosx26.0.0"
-
-@a = internal unnamed_addr addrspace(3) global [128 x i32] undef, align 4
-@b = internal unnamed_addr addrspace(3) global [128 x i32] undef, align 4
-
-define void @{name}(ptr addrspace(1) noundef readonly %limits, ptr addrspace(1) noundef %out, i32 noundef %t) #0 {{
-{body}
-}}
-
-declare void @air.wg.barrier(i32, i32) #1
-declare i32 @air.simd_sum.u.i32(i32) #1
-
-attributes #0 = {{ convergent mustprogress nounwind willreturn "frame-pointer"="all" "min-legal-vector-width"="0" "no-builtins" "stack-protector-buffer-size"="8" }}
-attributes #1 = {{ convergent mustprogress nounwind willreturn }}
-
-!llvm.module.flags = !{{!0, !1, !2, !3, !4, !5, !6, !7, !8}}
-!air.kernel = !{{!9}}
-!air.compile_options = !{{!15, !16}}
-!air.version = !{{!19}}
-!air.language_version = !{{!20}}
-
-!0 = !{{i32 2, !"SDK Version", [2 x i32] [i32 26, i32 5]}}
-!1 = !{{i32 1, !"wchar_size", i32 4}}
-!2 = !{{i32 7, !"frame-pointer", i32 2}}
-!3 = !{{i32 7, !"air.max_device_buffers", i32 31}}
-!4 = !{{i32 7, !"air.max_constant_buffers", i32 31}}
-!5 = !{{i32 7, !"air.max_threadgroup_buffers", i32 31}}
-!6 = !{{i32 7, !"air.max_textures", i32 128}}
-!7 = !{{i32 7, !"air.max_read_write_textures", i32 8}}
-!8 = !{{i32 7, !"air.max_samplers", i32 16}}
-!9 = !{{ptr @{name}, !10, !11}}
-!10 = !{{}}
-!11 = !{{!12, !13, !14}}
-!12 = !{{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"limits"}}
-!13 = !{{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}}
-!14 = !{{i32 2, !"air.thread_index_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}}
-!15 = !{{!"air.compile.denorms_disable"}}
-!16 = !{{!"air.compile.fast_math_enable"}}
-!19 = !{{i32 2, i32 8, i32 0}}
-!20 = !{{!"Metal", i32 4, i32 0, i32 0}}
-"#
-    );
+    let text = loop_kernels::module(name, body);
     let scratch = Scratch::new(&format!("m2v-divergent-barriers-{name}"));
     let dir = scratch.path();
     let path = dir.join("kernel.ll");
@@ -221,36 +180,6 @@ done:
   store i32 %r, ptr addrspace(1) %po, align 4
   ret void"#;
 
-/// `i = 0; do { a[t] = 16t + i; barrier; x = a[t ^ 4]; barrier; v = (x + i) | 1 << 31; i++; }
-/// while (i <= (t & 3)); out[t] = v;`: a loop with a per-thread trip count whose last trip's value
-/// is read after it. Thread `t` leaves the loop after `(t & 3) + 1` trips and the walk runs the
-/// other trips for it, not live; it reads `v` of its own last trip.
-const LOOP_LEAVER: &str = r#"entry:
-  %k = and i32 %t, 3
-  %tz = zext i32 %t to i64
-  %pa = getelementptr inbounds [128 x i32], ptr addrspace(3) @a, i64 0, i64 %tz
-  %p = xor i32 %t, 4
-  %pz = zext i32 %p to i64
-  %pp = getelementptr inbounds [128 x i32], ptr addrspace(3) @a, i64 0, i64 %pz
-  %w0 = shl i32 %t, 4
-  br label %body
-body:
-  %i = phi i32 [ 0, %entry ], [ %i1, %body ]
-  %w = add i32 %w0, %i
-  store i32 %w, ptr addrspace(3) %pa, align 4
-  tail call void @air.wg.barrier(i32 2, i32 1) #1
-  %x = load i32, ptr addrspace(3) %pp, align 4
-  tail call void @air.wg.barrier(i32 2, i32 1) #1
-  %v0 = add i32 %x, %i
-  %v = or i32 %v0, -2147483648
-  %i1 = add i32 %i, 1
-  %more = icmp ule i32 %i1, %k
-  br i1 %more, label %body, label %done
-done:
-  %po = getelementptr inbounds i32, ptr addrspace(1) %out, i64 %tz
-  store i32 %v, ptr addrspace(1) %po, align 4
-  ret void"#;
-
 /// `s = simd_sum(1); if (t < limits[0]) { a[t] = s + t; barrier; out[t] = a[(t + 1) %
 /// limits[0]]; } else out[t] = 0xE0000000 | t;`: a simdgroup operation every thread runs, then a
 /// threadgroup barrier under a thread-dependent condition (on an emulating profile the kernel's
@@ -330,7 +259,7 @@ fn expected(kernel: &str, c: Case, t: u32) -> u32 {
             }
         }
         "loop_barrier_k" => (0..(t & 3)).map(|i| ((t ^ 4) << 4) + i).sum(),
-        "loop_leaver_k" => (((t ^ 4) << 4) + 2 * (t & 3)) | 1 << 31,
+        "loop_leaver_k" => loop_kernels::loop_leaver(t),
         "continue_barrier_k" => {
             if t & 3 == 3 {
                 0
@@ -520,7 +449,7 @@ fn divergent_barriers_run_predicated_on_every_profile() {
 /// after the loop: no store at a later trip's top, which it runs not live, ends that value.
 #[test]
 fn a_thread_that_leaves_a_vote_loop_early_keeps_its_last_trips_value() {
-    let Some(bc) = kernel("loop_leaver_k", LOOP_LEAVER) else {
+    let Some(bc) = kernel("loop_leaver_k", loop_kernels::LOOP_LEAVER) else {
         return;
     };
     for stem in PROFILES {

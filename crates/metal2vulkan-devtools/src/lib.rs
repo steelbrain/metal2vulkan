@@ -6,7 +6,8 @@
 //! checks reproduce, and the generated-program fuzzers ([`fuzz`]) the product's CPU-interpreter
 //! tests and validation's device tests both run, the extended-range bicubic table both check
 //! ([`xr_bicubic`]), the store-buffering litmus kernel both compile
-//! ([`litmus`]), the inputs and answer of the vector word-phase fixture the product's
+//! ([`litmus`]), the loop kernels whose trips leave values read after the loop and their answers
+//! both run ([`loop_kernels`]), the inputs and answer of the vector word-phase fixture the product's
 //! interpreter test, the runtime's device test and the conformance suite all hold
 //! ([`vector_word_phases`]), the dispatches and answer of the threadgroup-memory fixture the
 //! runtime's device test and the conformance suite both hold ([`threadgroup_start`]), and the
@@ -34,6 +35,7 @@ pub mod fuzz;
 pub mod instructions;
 pub mod linked_signatures;
 pub mod litmus;
+pub mod loop_kernels;
 pub mod metallib;
 pub mod scratch;
 pub mod spirv;

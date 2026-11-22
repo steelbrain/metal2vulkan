@@ -25,14 +25,19 @@
 //! following hold, read from the function's blocks, their merges and terminators, and the accesses
 //! of `v`:
 //!
+//! - **`v` is written and read whole.** Every use of `v`'s pointer is a load through it or a store
+//!   through it: no access chain is made from it, and no other instruction, phi or terminator
+//!   takes it (a call, an atomic, a copy, a store of the pointer itself). A variable written by
+//!   parts (an arena, an array written element by element, what a lowering keeps per thread
+//!   across a barrier) holds what earlier trips wrote into it, which such a store would wipe; it
+//!   is left as it is, marked or not.
 //! - **The loop's body holds every whole store of `v`.** The body is the header and the blocks
 //!   that reach its continue target without passing the header. A whole store is an `OpStore`
 //!   through `v`'s own pointer, or `v`'s initializer, which counts as a store in the function's
 //!   first block.
 //! - **`v` is live into the body's first block**, the block the header branches to (the header
-//!   holds only its merge and its branch): a read of `v` is reachable from the block's top before
-//!   a whole store. A read is a load through `v` or a pointer into it, a store of such a pointer,
-//!   or any other instruction that takes one.
+//!   holds only its merge and its branch): a load through `v` is reachable from the block's top
+//!   before a whole store.
 //! - **The first block does not read `v` before it stores it.**
 //!
 //! The stores go at the top of the first block: variable after variable in the function's order
@@ -153,6 +158,9 @@ fn hold(meter: &mut Meter, held: &mut usize, bytes: usize) -> Result<(), Error> 
     Ok(())
 }
 
+#[cfg(test)]
+mod tests;
+
 fn tick(meter: &mut Meter, units: usize) -> Result<(), Error> {
     meter.tick(u32::try_from(units).unwrap_or(u32::MAX))?;
     Ok(())
@@ -210,16 +218,11 @@ fn select(
     }
     let u32_of = |i: usize| u32::try_from(i).unwrap_or(NONE);
     // What the tables below hold, charged before they are built.
-    let (mut edges, mut insts, mut chains) = (0usize, 0usize, 0usize);
+    let (mut edges, mut insts) = (0usize, 0usize);
     for i in 0..n {
         let b = block_of(m, func, i)?;
         b.term.for_each_target(|_| edges += 1);
         insts += b.insts.len();
-        chains += b
-            .insts
-            .iter()
-            .filter(|node| matches!(node.inst, Inst::AccessChain { .. }))
-            .count();
     }
     tick(meter, n.saturating_add(insts))?;
     let vec = std::mem::size_of::<Vec<u32>>();
@@ -230,8 +233,7 @@ fn select(
         .saturating_add(n.saturating_mul(1 + 3 * 4 + 2 * vec))
         .saturating_add(edges.saturating_mul(2 * 4))
         .saturating_add(insts.saturating_mul(std::mem::size_of::<Event>() + 4))
-        .saturating_add(chains.saturating_mul(2 * std::mem::size_of::<Value>() + MAP_ENTRY))
-        .saturating_add(marked.len().saturating_mul(MAP_ENTRY + 2 * vec));
+        .saturating_add(marked.len().saturating_mul(MAP_ENTRY + 2 * vec + 1));
     hold(meter, held, bytes)?;
 
     // Local block numbers, in layout order.
@@ -328,33 +330,35 @@ fn select(
             .is_some_and(|of| of.binary_search(&l).is_ok())
     };
 
-    // The marked variables' pointers and the pointers into them.
-    let mut root: BTreeMap<Value, u32> = marked
+    // The marked variables' pointers, and the variables some use of whose pointer is neither a
+    // load nor a store through it (written or read by parts, or the pointer passed on).
+    let own: BTreeMap<Value, u32> = marked
         .iter()
         .enumerate()
         .map(|(k, v)| (v.value, u32_of(k)))
         .collect();
-    let chain_list: Vec<(Value, Value)> = func
-        .blocks
-        .iter()
-        .filter_map(|b| m.blocks.get(b.index()))
-        .flat_map(|b| b.insts.iter())
-        .filter_map(|node| match (&node.inst, node.result) {
-            (Inst::AccessChain { base, .. }, Some(r)) => Some((*base, r)),
-            _ => None,
-        })
-        .collect();
-    loop {
-        let before = root.len();
-        tick(meter, chain_list.len())?;
-        for (base, r) in &chain_list {
-            if let Some(&k) = root.get(base) {
-                root.insert(*r, k);
+    let mut parts = vec![false; marked.len()];
+    let mut by_parts = |v: Value| {
+        if let Some(x) = own.get(&v).and_then(|&k| parts.get_mut(k as usize)) {
+            *x = true;
+        }
+    };
+    tick(meter, n.saturating_add(insts))?;
+    for i in 0..n {
+        let b = block_of(m, func, i)?;
+        for phi in &b.phis {
+            for (v, _) in &phi.incoming {
+                by_parts(*v);
             }
         }
-        if root.len() == before {
-            break;
+        for node in &b.insts {
+            match &node.inst {
+                Inst::Load { .. } => {}
+                Inst::Store { value, .. } => by_parts(*value),
+                other => other.for_each_value(&mut by_parts),
+            }
         }
+        b.term.for_each_value(&mut by_parts);
     }
 
     // Each marked variable's reads and whole stores, block by block.
@@ -378,26 +382,16 @@ fn select(
         for node in &block_of(m, func, i)?.insts {
             match &node.inst {
                 Inst::Load { ptr, .. } => {
-                    if let Some(&k) = root.get(ptr) {
+                    if let Some(&k) = own.get(ptr) {
                         note(k, true);
                     }
                 }
-                Inst::Store { ptr, value, .. } => {
-                    if let Some(&k) = root.get(value) {
-                        note(k, true);
-                    }
-                    if let Some(&k) = root.get(ptr) {
-                        if marked.get(k as usize).is_some_and(|v| v.value == *ptr) {
-                            note(k, false);
-                        }
+                Inst::Store { ptr, .. } => {
+                    if let Some(&k) = own.get(ptr) {
+                        note(k, false);
                     }
                 }
-                Inst::AccessChain { .. } => {}
-                other => other.for_each_value(|v| {
-                    if let Some(&k) = root.get(&v) {
-                        note(k, true);
-                    }
-                }),
+                _ => {}
             }
         }
     }
@@ -412,6 +406,9 @@ fn select(
         let Some(&s0) = a.stores.first() else {
             continue;
         };
+        if parts.get(k).copied().unwrap_or(true) {
+            continue;
+        }
         let k = u32_of(k);
         stack.clear();
         for e in &a.events {
