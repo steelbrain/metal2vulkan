@@ -2,9 +2,9 @@
 //! recently used kept; an entry cut short, of another key or another driver's header is a miss and
 //! removed; a memory breach holds up to the memory ceiling it was kept under; the wire reads its
 //! own version alone; and on a device, a kernel past the bound is refused until its helper fills
-//! its entry, then made from that entry alone, leaving the device's own pipeline cache as it was,
-//! and a breach refuses it with no helper asked again, a memory breach on a device given its
-//! ceiling or a lower one.
+//! its entry, then made from that entry alone, leaving the device's own pipeline cache as it was
+//! and its content holding no shader module, and a breach refuses it with no helper asked again,
+//! a memory breach on a device given its ceiling or a lower one.
 
 use crate::stage::{keep_entry, read_entry, read_frame, write_frame, Entry, Framing, StageBounds};
 use crate::StageBreach;
@@ -267,8 +267,8 @@ mod on_device {
     use super::Scratch;
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
-        serve_stage, ComputePipelineDescriptor, Device, DeviceOptions, Error, FunctionDescriptor,
-        Gap, Library, StageBreach, StageGap, StageSource,
+        serve_stage, ComputePipelineDescriptor, Device, DeviceOptions, Dispatch, Error,
+        FunctionDescriptor, Gap, Library, StageBreach, StageGap, StageRequest, StageSource,
     };
     use metal2vulkan_devtools::{engine_dir, llvm_assemble, AssembleError};
     use std::path::Path;
@@ -314,7 +314,9 @@ mod on_device {
     /// helper served over two pipes on a thread of the test fills its entry, and the make made
     /// again creates the `VkPipeline` from that entry alone, with the fail-on-compile-required
     /// flag, counted, leaving the device's own pipeline cache's data as it was; the fill answers
-    /// the helper's device creation and compile times. A breach recorded for the request refuses a
+    /// the helper's device creation and compile times. The content holds no shader module: a
+    /// later variant, an indirect dispatch's at its own size, is refused unfilled with a request of
+    /// its own, and once filled is made from its entry. A breach recorded for the request refuses a
     /// later device's make, with no helper asked. A memory breach kept under ceiling 0 is a miss
     /// on a device given ceiling 1, which asks for the same fill, and one kept there refuses there.
     #[test]
@@ -368,18 +370,22 @@ mod on_device {
             let core = device.core();
             // SAFETY: the device is the caches'.
             let shared = unsafe { core.caches.data(&core.device) }.map(|data| data.len());
-            let (helper_in, to_helper) = std::io::pipe().expect("a pipe");
-            let (from_helper, helper_out) = std::io::pipe().expect("a pipe");
             let helpers: &crate::Instance = &instance;
-            let served = std::thread::scope(|scope| {
-                let helper = scope.spawn(move || {
-                    serve_stage(helpers, DeviceOptions::default(), helper_in, helper_out)
+            // A helper served over two pipes on a thread of the test fills `request`'s entry.
+            let fill = |request: &StageRequest| {
+                let (helper_in, to_helper) = std::io::pipe().expect("a pipe");
+                let (from_helper, helper_out) = std::io::pipe().expect("a pipe");
+                let served = std::thread::scope(|scope| {
+                    let helper = scope.spawn(move || {
+                        serve_stage(helpers, DeviceOptions::default(), helper_in, helper_out)
+                    });
+                    let filled = device.fill_stage(request, to_helper, from_helper);
+                    (filled, helper.join().expect("the helper's thread"))
                 });
-                let filled = device.fill_stage(&request, to_helper, from_helper);
-                (filled, helper.join().expect("the helper's thread"))
-            });
-            let spans = (served.0).unwrap_or_else(|fill| panic!("{name}: the fill: {fill}"));
-            served.1.expect("the helper's pipes");
+                served.1.expect("the helper's pipes");
+                (served.0).unwrap_or_else(|fill| panic!("{name}: the fill: {fill}"))
+            };
+            let spans = fill(&request);
             // The helper's own times: its device's creation and its compile, each a span.
             assert!(spans.device_nanos > 0, "{name}: {spans:?}");
             assert!(spans.compile_nanos > 0, "{name}: {spans:?}");
@@ -391,6 +397,27 @@ mod on_device {
             // SAFETY: as above.
             let after = unsafe { core.caches.data(&core.device) }.map(|data| data.len());
             assert_eq!(after, shared, "{name}: the device's own pipeline cache");
+            // The content holds no shader module: its make made one of its own and destroyed it
+            // once the create returned.
+            let whole = &state.inner.compiled.whole;
+            assert!(!whole.holds_module(), "{name}: the content's shader module");
+            // A later variant, an indirect dispatch's at its own threadgroup size, asks for a
+            // fill of its own, and once filled is made from its entry, with a module of its own.
+            let (dispatch, size) = (Dispatch::Indirect, [8, 1, 1]);
+            let later = match state.prepare_dispatch(dispatch, size, &[]) {
+                Err(Error::StageUnfilled(later)) => later,
+                other => panic!("{name}: {other:?}"),
+            };
+            assert_ne!(later, request, "{name}: the later variant's pipeline");
+            fill(&later);
+            (state.prepare_dispatch(dispatch, size, &[]))
+                .unwrap_or_else(|error| panic!("{name}: the later variant: {error}"));
+            let made = state.dispatch_variant(dispatch, size, &[]);
+            assert_eq!(made.map(|(_, made)| made), Some(true), "{name}");
+            let metrics = counters.metrics();
+            assert_eq!(metrics.stage_fills, 2, "{name}");
+            assert_eq!(metrics.pipelines_from_stage_fills, 2, "{name}");
+            assert!(!whole.holds_module(), "{name}: the content's shader module");
             drop(state);
             drop(device);
             let breached = |device: &Device| {

@@ -2137,6 +2137,12 @@ impl Kernel {
         unsafe { core.device.create_shader_module(&info, None) }
     }
 
+    /// For the device tests: whether the kernel holds a shader module of its own.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn holds_module(&self) -> bool {
+        self.module != vk::ShaderModule::null()
+    }
+
     /// The `VkPipeline` of `variant`, made now where it is not yet: the calling thread waits for
     /// it, a first-use wait, so what is recorded never depends on when a compile finishes. Where
     /// another thread is making it, the call waits for that make, also a first-use wait counted in
