@@ -2976,6 +2976,57 @@ state's execution width; at 1,024, its `max_total_threads_per_threadgroup`, the 
 consumer's 3,072 MiB cap after 46 s and the pipeline was refused (job m3-max-68473, twice of two).
 So a kernel whose fill fits at its execution width can be refused at a larger threadgroup.
 
+Of the private corpus's kernels, compiled for every committed profile with no device (job
+m3-max-68532; 11,253 or 11,254 kernels weighed a profile, 11,097 on `runtime-floor`), 26 pass the
+bound on some profile: 25 on each NVIDIA, AMD and Intel profile, 26 on `moltenvk-m3` and the three
+lavapipe profiles, and 24 on `runtime-floor`. Twenty-four are twelve pairs: two libraries hold the
+same twelve kernels, one key of each pair from each library, at equal weights but for one pair, 2
+apart. Their weights on the Intel and lavapipe profiles, then on the NVIDIA and AMD profiles
+(`runtime-floor` weighs each 8 to 17 above the first, `moltenvk-m3` 2 or 3 above the second):
+
+| Kernels | Intel, lavapipe | NVIDIA, AMD |
+|---|---|---|
+| b89e2e87392d4527, 21ab571c48816f4a | 171,236 | 205,223 |
+| c9ac4cd28a074782, 12f7547e1a367fca | 116,124 | 139,779 |
+| ffe1c513f3097c07, 44de5d661ac9f084 | 115,445 | 139,234 |
+| 63f3407fadae3c59, 06c69bd9d4785c5d | 114,806 | 138,519 |
+| fa025740f639f290, b1bdbf2280554df2 | 112,021 | 137,254 |
+| e01f66611db622cf, 1ea600db518b8efe | 109,954 | 135,729 |
+| c21fc56a2e064db6, aec6a678f3c13513 | 61,753, 61,751 | 71,477, 71,475 |
+| c789b188f267c141, 55aef611427f981e | 60,869 | 70,593 |
+| d34b295f5b14bc68, a15721e0338a51bc | 59,259 | 71,970 |
+| f10654d23bd63211, 081b131a2661e77a | 58,461 | 71,527 |
+| a03b1caa0bf2c0ae, 5b09c39e51c47af9 | 46,491 | 56,163 |
+| bdff31bae4f6e84a, 444fb5872c37b388 | 46,483 | 56,155 |
+
+The other two pass it on fewer profiles: efdb5f0a79f197f9 weighs 39,347 on the Intel profiles,
+40,872 on the lavapipe ones, 41,157 on the AMD ones and `nvidia-rtx50-linux` and
+`nvidia-rtx5080-laptop`, 41,180 on `nvidia-pascal-linux` and 42,142 on `moltenvk-m3`, and is not
+past the bound on `runtime-floor`; 69a35b6f29ddeaa0 weighs 42,445 on `moltenvk-m3` and the lavapipe
+profiles and is past it on no other profile.
+
+The heaviest of them, b89e2e87392d4527, and d34b295f5b14bc68 with its pair a15721e0338a51bc (the
+pair's modules differ by 199 words at equal weights), were filled once each in the helper under the
+consumer's 3,072 MiB cap, from an empty driver shader cache and an empty cache directory, at the
+state's execution width, 32, and at 1,024, its `max_total_threads_per_threadgroup`. The peak is the
+helper process's resident set. On the RTX 3090 and the RX 7900 XTX the module asked for is the
+partial-threadgroup one with a required subgroup size of 32; on the Iris Xe it is the emulated one.
+
+| Card | Kernel | Module words, weight | Width 32 | Width 1,024 |
+|---|---|---|---|---|
+| RTX 3090 (NVIDIA 620.70.06; job m3-max-68749) | b89e2e87392d4527 | 462,898, 213,304 | made: 1,350 MiB, 32.8 s | made: 1,991 MiB, 48.5 s |
+| | d34b295f5b14bc68 | 157,833, 76,943 | made: 787 MiB, 13.5 s | made: 1,034 MiB, 22.9 s |
+| | a15721e0338a51bc | 158,032, 76,943 | made: 788 MiB, 13.5 s | made: 1,033 MiB, 22.8 s |
+| RX 7900 XTX (RADV, Mesa 26.2.6; job m3-max-68750) | b89e2e87392d4527 | 462,898, 213,304 | made: 1,192 MiB, 15.7 s | made: 1,401 MiB, 17.9 s |
+| | d34b295f5b14bc68 | 157,833, 76,943 | made: 527 MiB, 4.3 s | made: 618 MiB, 5.2 s |
+| | a15721e0338a51bc | 158,032, 76,943 | made: 530 MiB, 4.3 s | made: 621 MiB, 5.2 s |
+| Iris Xe of RPL-P (ANV, Mesa 26.2.6; job m3-max-68748) | b89e2e87392d4527 | 906,327, 171,236 | refused: past the cap after 190.3 s, peak 3,129 MiB | not made: the helper ended on SIGSEGV after 48.8 s at 1,291 MiB |
+| | d34b295f5b14bc68 | 307,371, 59,259 | refused: past the cap after 35.7 s, peak 3,112 MiB | refused: past the cap after 50.3 s |
+| | a15721e0338a51bc | 307,570, 59,259 | refused: past the cap after 35.8 s, peak 3,098 MiB | refused: past the cap after 56.8 s, peak 3,104 MiB |
+
+So on the RTX 3090 and the RX 7900 XTX these kernels are made at 1,024 threads a threadgroup within
+the cap, and on the Iris Xe none of them is made at either width.
+
 Render stages have a bound of their own, 99,109, as no helper compiles a render stage: a render
 pipeline with a stage past it is refused (Known gaps of render pipeline states), and one at or
 under it compiles in the process that runs the program with no cap, past the kernels' bound too.
