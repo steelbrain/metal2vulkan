@@ -2264,6 +2264,12 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   arguments, reads zero in every threadgroup until the program writes it, as an Apple GPU reads it
   (the translator's null initializers, docs/API.md, "Threadgroup memory before the program writes
   it").
+- On the Intel UHD 630 under Windows (driver 101.2145), a kernel whose thread memory is in the
+  private arena can return 1 or 2 wrong results in 512 from one long dispatch of its whole grid,
+  intermittently: 2 failing runs of 31 alone at one build and 0 of 31 at the next (m3-max-68291,
+  m3-max-68314), and 1 failing suite run of 11 (m3-max-68142). No other device the suites run on
+  shows it, no split dispatch has shown it, and a kernel that checks each of its reads met no wrong
+  one in 5 runs (m3-max-68367). The cause is unproven and ranks as the driver's.
 
 ## Compute encoders
 
