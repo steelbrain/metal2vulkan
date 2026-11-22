@@ -7,7 +7,7 @@ use super::*;
 use crate::bitcode::PointeeTable;
 use crate::budget::{Budget, Meter};
 use crate::container::{ContainerConstant, FunctionPublicMetadata, FunctionStage, LibraryFunction};
-use crate::error::{AbiError, DiagName, ErrorClass, InputErrorKind, Location};
+use crate::error::{AbiError, DiagName, InputErrorKind, Location};
 use crate::error::{Error, Feature, Limit};
 use crate::ir::build::ModuleBuilder;
 use crate::ir::{
@@ -4731,17 +4731,17 @@ fn container_metadata_is_cross_checked() {
         let err = check(&mut abi, &m, &library_function(stage, vec![])).unwrap_err();
         assert_eq!(abi_kind(err), AbiError::ContainerMismatch);
     }
-    // Unmodeled stages are unsupported, not a mismatch.
+    // Unmodeled stages are unsupported, not a mismatch, and refused as every other construct the
+    // front end does not implement is: `Error::Unsupported`, not an input error.
     for (stage, tag) in [
         (FunctionStage::Intersection, 6),
         (FunctionStage::Other(9), 9),
     ] {
         let err = check(&mut abi, &m, &library_function(stage, vec![])).unwrap_err();
-        let Error::InvalidInput(i) = err else {
-            panic!("not an input error: {err:?}")
+        let Error::Unsupported(refusal) = err else {
+            panic!("not a refusal: {err:?}")
         };
-        assert_eq!(i.kind, InputErrorKind::Unsupported(Feature::Stage(tag)));
-        assert_eq!(i.class(), ErrorClass::Unsupported);
+        assert_eq!(refusal.feature, Feature::Stage(tag));
     }
     // A `CNST` index no constant declares.
     let err = check(&mut abi, &m, &kernel(vec![cnst_raw(0, 37)])).unwrap_err();

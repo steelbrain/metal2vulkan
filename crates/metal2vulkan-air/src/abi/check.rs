@@ -611,10 +611,11 @@ fn control_point_function(m: &Module, f: FuncId, fields: usize, site: &Site) -> 
 
 /// `Unsupported(Stage)` for a container `TYPE` tag outside the modeled stages.
 fn unsupported_stage(tag: u8) -> Error {
-    Error::InvalidInput(InputError::new(
+    InputError::new(
         InputErrorKind::Unsupported(Feature::Stage(tag)),
         Location::module(),
-    ))
+    )
+    .into()
 }
 
 /// Cross-check against a metallib function's container metadata (see
