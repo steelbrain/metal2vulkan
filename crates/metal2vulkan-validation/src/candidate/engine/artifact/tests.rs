@@ -116,7 +116,7 @@ fn the_runtime_sources_are_the_committed_ones() {
 
     let compile = "compile-time translation, reached only from the compile-time parts of mixed runtime files; what it produces is in the pipeline the artifact digests";
     let values = "the compiled pipeline's value types; the artifact digests their values";
-    let spirv = "the SPIR-V builder: at run time it builds only the device replay's preprocess module, which no engine run executes";
+    let spirv = "the SPIR-V builder: the binder's files reach it only through the merged draw's reads (bind/replay), which the compile emits into the merged variant; what they emit is in the pipeline the artifact digests";
     let packed = "compile-time translation, reached only through lower/arith/pack.rs's pack and unpack intrinsics, which the compile emits; the runtime's YCbCr write takes that file's sRGB encode (srgb_encode), which reaches none of it";
     let not_runtime = BTreeMap::from([
         ("metal2vulkan-air/src/abi/mod.rs", compile),
@@ -174,8 +174,6 @@ fn the_runtime_sources_are_the_committed_ones() {
         ("metal2vulkan/src/spirv/error.rs", spirv),
         ("metal2vulkan/src/spirv/ids.rs", spirv),
         ("metal2vulkan/src/spirv/ir/mod.rs", spirv),
-        ("metal2vulkan/src/spirv/serialize/mod.rs", spirv),
-        ("metal2vulkan/src/spirv/verify/mod.rs", spirv),
         ("metal2vulkan/src/spv.rs", "the SPIR-V grammar's opcodes and enumerants with their values, generated from Khronos's grammar: a value is fixed by the specification, and regenerating only adds or drops names, which no run can observe"),
     ]);
     // The resolver the classifier's key test holds its inputs closed with, across the product and
