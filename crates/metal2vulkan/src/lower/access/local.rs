@@ -46,13 +46,22 @@
 //! intrinsics', pointer cells' and imageblock's alike, nor a typed threadgroup object's index, and
 //! one past the memory is undefined, as in Metal (no robustness feature covers arenas). Contained,
 //! with `inb` the normative check against the arena's exact byte
-//! size, a load reads at `select(inb, off, 0)` and yields `select(inb, v, 0)`, and a store sits in
-//! a builder-closed `if_(inb)`. A dereference of a null private pointer (undefined in Metal) reads
+//! size, a load reads at `select(inb, off, 0)` and yields `select(inb, v, 0)`. A store into the
+//! private arena, wherever it lives (a `Private` array or a slot in device memory), always runs
+//! ([`Guarded`]): each word it writes is written at `select(inb, word, 0)` as `select(inb, value,
+//! old)`, `old` the word it replaces, read first, and a partial word's mask is `select(inb, mask,
+//! 0)`, so an out-of-bounds store rewrites word 0 with its own bits and adds no block. The private
+//! arena is the thread's own, so no other invocation writes word 0 between the read and the write.
+//! A store into the threadgroup or payload arena, which invocations share, sits in a
+//! builder-closed `if_(inb)`: rewriting a word's old value there would undo another invocation's
+//! write. A dereference of a null private pointer (undefined in Metal) reads
 //! or writes the kept first word, or an object's bytes at a field's offset: inside the arena. A
 //! typed access's dynamic indices are **bounded** (`memory::alloca`), so the access never leaves
 //! its object: a thread's own
-//! object's (an alloca's) are checked against their levels' lengths, a load past a level reading
-//! zero and a store past one sitting in a builder-closed `if_` that drops it; a threadgroup
+//! object's (an alloca's) are checked against their levels' lengths, each index past its level
+//! taken as 0, a load past a level reading zero and a store past one writing `select(ok, v, old)`,
+//! `old` the element at the taken indices, read first: the element's own value, so it adds no
+//! block and changes nothing. A threadgroup
 //! object's, where threadgroup memory is contained ([`contained`]), and a constant object's are
 //! each clamped to the level's last element. A constant index is in range by
 //! construction. Each dynamic index is the defining `getelementptr`'s own operand where the GEP's
@@ -109,7 +118,7 @@ use crate::memory::alloca::{self, Init, Shape, Step, Strides, TypedPath, TypedTy
 use crate::memory::arena::{self, Arena, ArenaDecl, ArenaMem, TgDecl, TgShape, TgWords};
 use crate::memory::contain;
 use crate::memory::fragment;
-use crate::memory::leaf::{self, k32, Leaf, WordOps};
+use crate::memory::leaf::{self, k32, Leaf, WordMem, WordOps};
 use crate::memory::plan::ArenaObject;
 use crate::memory::provenance::{map_entry_bytes, ConstForm, OffsetRange, PrivForm, Repr, Root};
 use crate::pipeline::facts::RuntimeFact;
@@ -196,8 +205,9 @@ pub struct TypedAccess {
 
 impl TypedAccess {
     /// A contained access of a thread's own typed object (an alloca) is checked: a load past a
-    /// level reads zero and a store past one is dropped, so a store never changes an element it
-    /// does not address, as Metal's store past the array changes none of the array's. A threadgroup
+    /// level reads zero and a store past one writes back the element it reaches with each index
+    /// past its level taken as 0, as that element was, so a store never changes an element it does
+    /// not address, as Metal's store past the array changes none of the array's. A threadgroup
     /// or constant object's contained access clamps each index to its level's last element
     /// (`memory::alloca`).
     pub fn checked(&self) -> bool {
@@ -208,7 +218,8 @@ impl TypedAccess {
         let chain = 8u32.saturating_add(self.path.steps.len() as u32);
         let levels = self.path.dynamic().count() as u32;
         let dynamic = 24 * levels;
-        // A checked access's value select or store guard, beside its per-level checks.
+        // A checked access's value select (a store's also its old element's load), beside its
+        // per-level checks.
         let clamp = match (self.clamped, self.checked()) {
             (false, _) => 0,
             (true, false) => 32 * levels,
@@ -2062,6 +2073,12 @@ pub(super) fn emit_access_at(
             let z = leaf::zero(fb, &leaf)?;
             fb.select(inb, v, z).map(Some)
         }
+        Some(v) if a.arena == Arena::Private => {
+            let mut guarded = Guarded { mem: &mut mem, inb };
+            leaf::store(fb, &mut guarded, &leaf, off, v)?;
+            Ok(None)
+        }
+        // A store into memory invocations share keeps its branch (the module docs).
         Some(v) => {
             let then: ArmFn<'_, ()> = Box::new(move |fb, _| {
                 let mut mem = KeptMem {
@@ -2074,6 +2091,44 @@ pub(super) fn emit_access_at(
             fb.if_(&mut (), inb, then, None)?;
             Ok(None)
         }
+    }
+}
+
+/// The words of a contained store into the private arena (the module docs): each word written at
+/// `select(inb, word, 0)` as `select(inb, value, old)`, `old` read from that word first, and each
+/// partial word's mask taken as `select(inb, mask, 0)`, so a store whose bytes are out of bounds
+/// rewrites word 0 with its own bits. It offers no narrow or whole-word units, so every store is
+/// of words.
+struct Guarded<'m> {
+    mem: &'m mut KeptMem,
+    inb: SValue,
+}
+
+impl WordMem for Guarded<'_> {
+    fn read(&mut self, fb: &mut FunctionBuilder<'_>, word: SValue) -> BResult<SValue> {
+        self.mem.read(fb, word)
+    }
+
+    fn write(&mut self, fb: &mut FunctionBuilder<'_>, word: SValue, value: SValue) -> BResult<()> {
+        let zero = k32(fb, 0)?;
+        let at = fb.select(self.inb, word, zero)?;
+        let old = self.mem.read(fb, at)?;
+        let x = fb.select(self.inb, value, old)?;
+        self.mem.write(fb, at, x)
+    }
+
+    fn write_bits(
+        &mut self,
+        fb: &mut FunctionBuilder<'_>,
+        word: SValue,
+        mask: SValue,
+        bits: SValue,
+    ) -> BResult<()> {
+        let zero = k32(fb, 0)?;
+        let at = fb.select(self.inb, word, zero)?;
+        let mask = fb.select(self.inb, mask, zero)?;
+        let bits = fb.select(self.inb, bits, zero)?;
+        self.mem.write_bits(fb, at, mask, bits)
     }
 }
 
@@ -2132,15 +2187,13 @@ fn float_words(
 /// ([`TypedAccess::checked`]). Each dynamic index is the defining GEP's operand where they line up
 /// (`TypedAccess::indices`), or is recovered from the pointer's offset level by level (`(rem -
 /// start) / stride`, the next level's `rem` being `(rem - start) % stride`, `memory::alloca`).
-/// When `a.clamped`, a checked access's condition is every level's `idx < len`, a load reading
-/// each level at `select(idx < len, idx, 0)` (a store's chain is built under the condition); any
-/// other access clamps each index to its level's last element, `min(idx, len - 1)`. Either way the
-/// chain never leaves the object.
+/// When `a.clamped`, a checked access's condition is every level's `idx < len`, a load or store
+/// reaching each level at `select(idx < len, idx, 0)`; any other access clamps each index to its
+/// level's last element, `min(idx, len - 1)`. Either way the chain never leaves the object.
 fn chain_indices(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
     a: &TypedAccess,
-    load: bool,
 ) -> BResult<(Vec<SValue>, Option<SValue>)> {
     let levels = a.path.dynamic().count();
     let mut rem = match (levels, &a.indices) {
@@ -2218,19 +2271,15 @@ fn chain_indices(
             None => in_range,
             Some(all) => fb.binary(BinOp::LogicalAnd, all, in_range)?,
         });
-        out.push(if load {
-            let zero = k32(fb, 0)?;
-            fb.select(in_range, idx, zero)?
-        } else {
-            idx
-        });
+        let zero = k32(fb, 0)?;
+        out.push(fb.select(in_range, idx, zero)?);
     }
     Ok((out, ok))
 }
 
 /// Load or store (`stored`) typed access `a` through an access chain of its path, contained when
 /// `a.clamped` ([`chain_indices`]): a checked load past a level yields zero and a checked store
-/// past one is dropped.
+/// past one writes back the element its indices taken as 0 reach, as it was (the module docs).
 fn emit_typed(
     cx: &mut EmitCx<'_>,
     fb: &mut FunctionBuilder<'_>,
@@ -2249,7 +2298,7 @@ fn emit_typed(
     let Some(g) = found else {
         return Err(cx.fail(format!("typed object {:?} is not declared", a.home)));
     };
-    let (mut idx, ok) = chain_indices(cx, fb, a, stored.is_none())?;
+    let (mut idx, ok) = chain_indices(cx, fb, a)?;
     // One held element of a matrix's fragment is that lane of it.
     if let Some(alloca::FragmentPart::Lane(i)) = a.part {
         idx.push(k32(fb, i)?);
@@ -2306,12 +2355,10 @@ fn emit_typed(
             Ok(None)
         }
         (Some(v), Some(ok)) => {
-            let then: ArmFn<'_, ()> = Box::new(move |fb, _| {
-                let p = fb.access_chain(base, &idx)?;
-                fb.store(p, v, store_access)?;
-                Ok(ArmEnd::FallThrough(Vec::new()))
-            });
-            fb.if_(&mut (), ok, then, None)?;
+            let p = fb.access_chain(base, &idx)?;
+            let old = fb.load(p, load_access)?;
+            let v = fb.select(ok, v, old)?;
+            fb.store(p, v, store_access)?;
             Ok(None)
         }
     }

@@ -9,11 +9,11 @@
 //! - Byte stores into threadgroup memory by neighbouring invocations of different subgroups
 //!   preserve each other (two word atomics).
 //! - An alloca whose accesses are punned lives in the private arena, word-composed and
-//!   byte-exact.
+//!   byte-exact; a store out of its bounds rewrites word 0 as it was, with no block.
 //! - Typed allocas and closed constant globals are `Private` arrays indexed by access chains; their
-//!   dynamic indices are bounded (a typed alloca's out-of-range load
-//!   is 0 and its out-of-range store is dropped; a constant global's out-of-range load reads the
-//!   level's last element) and unclamped without it.
+//!   dynamic indices are bounded (a typed alloca's out-of-range load is 0 and its out-of-range
+//!   store rewrites the element at index 0 as it was, with no block; a constant global's
+//!   out-of-range load reads the level's last element) and unclamped without it.
 //!
 //! `llvm-as` assembles the kernels; without it the tests skip visibly.
 
@@ -563,7 +563,7 @@ fn typed_alloca_body() -> String {
 }
 
 /// A typed alloca is a `Private` array indexed by access chains; its dynamic indices are checked
-/// under isolation (an out-of-range load is 0, an out-of-range store is dropped) and exact in
+/// under isolation (an out-of-range load is 0, an out-of-range store changes nothing) and exact in
 /// range, including a 12-byte (non-power-of-two) stride. Without isolation no check is emitted.
 #[test]
 fn typed_alloca_indices_are_clamped_under_isolation() {
@@ -596,6 +596,93 @@ fn typed_alloca_indices_are_clamped_under_isolation() {
                 let v0 = a[((t & 7) ^ 5) as usize];
                 let x = if t < 8 { a[t as usize] } else { 0 };
                 [v0, x + 3 * (t & 3) + 2]
+            })
+            .collect();
+        assert_eq!(run_both(&m, &res).expect("run"), want, "{stem}");
+    }
+}
+
+/// A kernel `@name(out, t)` over the punned `a: [4 x i32]` (a byte load at a run-time offset
+/// places it in the private arena) and the typed `b: [4 x i32]`, each initialized to `10 + i`;
+/// where `stores`, `t` is stored at word `t` of each (out of bounds from `t = 4`), at a run-time
+/// byte offset into `a` and a run-time index into `b`. Thread `t` writes `a`'s and `b`'s words and
+/// the loaded byte to `out[9t..9t + 9]`.
+fn sink_kernel(name: &str, stores: bool) -> String {
+    let mut s =
+        String::from("  %a = alloca [4 x i32], align 4\n  %b = alloca [4 x i32], align 4\n");
+    for (x, i) in [
+        ("a", 0),
+        ("a", 1),
+        ("a", 2),
+        ("a", 3),
+        ("b", 0),
+        ("b", 1),
+        ("b", 2),
+        ("b", 3),
+    ] {
+        s += &format!(
+            "  %i{x}{i} = getelementptr inbounds [4 x i32], ptr %{x}, i32 0, i32 {i}\n  store i32 {}, ptr %i{x}{i}, align 4\n",
+            10 + i
+        );
+    }
+    s += "  %k = and i32 %t, 15\n  %pk = getelementptr inbounds i8, ptr %a, i32 %k\n  %byte = load i8, ptr %pk, align 1\n";
+    if stores {
+        s += "  %w = shl i32 %t, 2\n  %pa = getelementptr inbounds i8, ptr %a, i32 %w\n  store i32 %t, ptr %pa, align 4\n  %pb = getelementptr inbounds [4 x i32], ptr %b, i32 0, i32 %t\n  store i32 %t, ptr %pb, align 4\n";
+    }
+    s += "  %base = mul i32 %t, 9\n";
+    for (j, (x, i)) in [
+        ("a", 0),
+        ("a", 1),
+        ("a", 2),
+        ("a", 3),
+        ("b", 0),
+        ("b", 1),
+        ("b", 2),
+        ("b", 3),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        s += &format!(
+            "  %r{x}{i} = load i32, ptr %i{x}{i}, align 4\n  %o{j} = add i32 %base, {j}\n  %q{j} = getelementptr inbounds i32, ptr addrspace(1) %out, i32 %o{j}\n  store i32 %r{x}{i}, ptr addrspace(1) %q{j}, align 4\n"
+        );
+    }
+    s += "  %bw = zext i8 %byte to i32\n  %o8 = add i32 %base, 8\n  %q8 = getelementptr inbounds i32, ptr addrspace(1) %out, i32 %o8\n  store i32 %bw, ptr addrspace(1) %q8, align 4\n";
+    format!(
+        "define void @{name}(ptr addrspace(1) %out, i32 %t) {{\n{s}  ret void\n}}\n\n{}",
+        KERNEL_MD.replace("NAME", name)
+    )
+}
+
+/// A contained store at a run-time offset always runs and adds no block: where its bytes are out
+/// of bounds, into the private arena it rewrites word 0 with word 0's own bits, and into a typed
+/// alloca it rewrites the element at index 0 as it was, so neither changes a byte. `sunk`, with
+/// the stores, has as many blocks as `kept`, without them, and thread `t` reads `t` at word `t`
+/// of each object below 4 and `10 + i` at every other word `i`.
+#[test]
+fn a_run_time_store_rewrites_what_it_does_not_address_and_adds_no_block() {
+    let Some(sunk) = assemble("sunk", &sink_kernel("sunk", true)) else {
+        return;
+    };
+    let Some(kept) = assemble("kept", &sink_kernel("kept", false)) else {
+        return;
+    };
+    for stem in PROFILES {
+        let prof = p(stem);
+        l3(&sunk, "sunk", &prof, stem);
+        let (plan, m) = typed_module(&sunk, "sunk", &prof).expect("module");
+        let (_, without) = typed_module(&kept, "kept", &prof).expect("module");
+        let local = &plan.families.access.local;
+        assert_eq!(local.private, Some(16), "{stem}: a in the private arena");
+        assert_eq!(local.typed.len(), 1, "{stem}: b typed");
+        assert_eq!(m.blocks().len(), without.blocks().len(), "{stem}");
+        let res = resources(&plan, 0, 9 * 32, 32, &[]);
+        let want: Vec<u32> = (0..32u32)
+            .flat_map(|t| {
+                let word = move |i: u32| if i == t { t } else { 10 + i };
+                let k = t & 15;
+                let byte = if k % 4 == 0 { 10 + k / 4 } else { 0 };
+                (0..4).map(word).chain((0..4).map(word)).chain([byte])
             })
             .collect();
         assert_eq!(run_both(&m, &res).expect("run"), want, "{stem}");

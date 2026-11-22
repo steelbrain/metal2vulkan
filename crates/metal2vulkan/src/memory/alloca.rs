@@ -29,9 +29,10 @@
 //! undefined in Metal, whose own answer is whatever its memory holds at the address:
 //!
 //! - in a thread's own object (an alloca) the access is checked, every dynamic level's `idx < len`:
-//!   a load past a level reads zero, and a store past one is dropped, so it changes no element of
-//!   the object, as Metal's store past an array changes none of the array's elements (it lands
-//!   past them);
+//!   a load past a level reads zero, and a store past one writes back, as it was, the element its
+//!   indices reach with each one past its level taken as 0 (`select(ok, v, old)`, `old` read
+//!   first), so it adds no block and changes no element of the object, as Metal's store past an
+//!   array changes none of the array's elements (it lands past them);
 //! - in a threadgroup or constant object each dynamic level's index is `min(idx, len - 1)`: an
 //!   index past it reaches the level's last element, a load reading that element and a store
 //!   writing it.

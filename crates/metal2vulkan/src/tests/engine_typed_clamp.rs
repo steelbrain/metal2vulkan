@@ -9,9 +9,9 @@
 //!   offset, and every enclosing array level is recovered with them.
 //! - An out-of-range dynamic index, from a buffer (past the end, and -1), on a load of a constant
 //!   object reaches its level's last element. On a typed alloca the access is checked: the load
-//!   reads zero and the store is dropped. The neighbouring object is untouched, and an in-range
-//!   index on each kind reads every element as stored. A threadgroup object's accesses are not
-//!   contained: one past the object is undefined, as in Metal.
+//!   reads zero and the store rewrites element 0 as it was. The neighbouring object is untouched,
+//!   and an in-range index on each kind reads every element as stored. A threadgroup object's
+//!   accesses are not contained: one past the object is undefined, as in Metal.
 //! - The tiled matrix product of a kernel's two `float[16][16]` threadgroup tiles, every access
 //!   lined up, answers the CPU's fused multiply-adds in the kernel's order bit for bit.
 //!
@@ -339,9 +339,9 @@ const SECOND: u32 = 0x4200_0000;
 const STORED: u32 = 0x4300_0000;
 
 /// An out-of-range dynamic index never leaves its object. A constant object's load reaches the
-/// level's last element; a typed alloca's are checked, the load reading zero and the store dropped,
-/// so the alloca's last element keeps its value. The neighbouring object keeps its elements, and
-/// every in-range element reads back as stored.
+/// level's last element; a typed alloca's are checked, the load reading zero and the store
+/// rewriting element 0 as it was, so every element of the alloca keeps its value. The neighbouring
+/// object keeps its elements, and every in-range element reads back as stored.
 #[test]
 fn an_out_of_range_index_stays_inside_its_object() {
     // Two typed allocas of the thread's own, filled by constant-index stores.
@@ -408,7 +408,7 @@ entry:
             if got.is_empty() {
                 return;
             }
-            // A checked store was dropped and a checked load read zero; a clamped out-of-range
+            // A checked store changed nothing and a checked load read zero; a clamped out-of-range
             // load reads the first object's last element. The second object is untouched.
             let last = FIRST + 7;
             let loaded = if checked { 0 } else { last };

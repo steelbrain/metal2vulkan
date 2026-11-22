@@ -76,6 +76,7 @@ mod pixel_interlock;
 mod places;
 mod present;
 mod private_arena;
+mod private_sinks;
 mod push_window;
 mod quad_control;
 mod raster;
