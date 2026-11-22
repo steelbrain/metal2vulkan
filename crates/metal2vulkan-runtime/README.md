@@ -1654,7 +1654,11 @@ made, with no lock, and never rewritten for layouts.
   image's memory alignment, takes them: NVIDIA lays a linear image's rows at the row
   rounded to 128 bytes, AMD to 256, so a pitch rounded to 256 is copied on NVIDIA; the Iris Xe
   lays them at the row itself (the answer is the texel's bytes), so a pitch rounded past the row
-  is copied there. A render
+  is copied there. In a recorded play of a compute workload on the RTX 5080 Laptop, 80 textures of
+  2448x3264 RGBA8 at 9,984 bytes a row, against the device's linear row of 9,856, took 206 copies
+  of 3,835,938,720 bytes in three frames, 95.2% of the play's pitch-copy bytes; their cost on those
+  frames was not resolved: the means read 0.9% more GPU busy time and 2.2% more wall time, with
+  the two pairs of opposite sign (job m3-max-68398). A render
   target over a buffer is copied on NVIDIA, whose linear tiling does not take it in place. A
   render target whose advertised subresource ends past its own rows or its buffer is copied too:
   llvmpipe (lavapipe) advertises a linear image's height rounded up to 4 rows and stores whole
