@@ -68,8 +68,8 @@ pub(crate) enum Stage {
     GpuEndToHandler,
 }
 
-/// A part of the consumer's takes, buffer makes and exported block makes the runtime times,
-/// counted on its own in [`Metrics`].
+/// A part of the consumer's takes, buffer makes, exported block makes, texture makes and exported
+/// surface makes the runtime times, counted on its own in [`Metrics`].
 #[derive(Clone, Copy)]
 pub(crate) enum Part {
     /// [`Metrics::takes`].
@@ -94,10 +94,24 @@ pub(crate) enum Part {
     ExportHandle,
     /// [`Metrics::export_claims`].
     ExportClaim,
+    /// [`Metrics::texture_place_lock_waits`].
+    TexturePlaceLock,
+    /// [`Metrics::home_lock_waits`].
+    HomeLock,
+    /// [`Metrics::image_creates`].
+    ImageCreate,
+    /// [`Metrics::image_binds`].
+    ImageBind,
+    /// [`Metrics::image_view_creates`].
+    ImageViewCreate,
+    /// [`Metrics::surface_allocations`].
+    SurfaceAllocation,
+    /// [`Metrics::surface_handles`].
+    SurfaceHandle,
 }
 
 /// The number of [`Part`]s.
-const PARTS: usize = Part::ExportClaim as usize + 1;
+const PARTS: usize = Part::SurfaceHandle as usize + 1;
 
 /// Where a first-use wait made the `VkPipeline` it waited for ([`Metrics::first_use_waits`]).
 #[derive(Clone, Copy)]
@@ -1161,6 +1175,14 @@ impl Counters {
         }
     }
 
+    /// `call`'s answer, the call timed as one of `part` of `bytes` bytes that made no allocation.
+    pub(crate) fn time<T>(&self, part: Part, bytes: u64, call: impl FnOnce() -> T) -> T {
+        let started = crate::host_time();
+        let answer = call();
+        self.timed(part, bytes, crate::host_time() - started, false);
+        answer
+    }
+
     /// A call that waited `nanos` nanoseconds for the block-maker thread's make of an internal it
     /// needs ([`Metrics::maker_waits`]).
     pub(crate) fn maker_wait(&self, nanos: u64) {
@@ -1697,6 +1719,13 @@ impl Counters {
             export_allocations: part(Part::ExportAllocation),
             export_handles: part(Part::ExportHandle),
             export_claims: part(Part::ExportClaim),
+            texture_place_lock_waits: part(Part::TexturePlaceLock),
+            home_lock_waits: part(Part::HomeLock),
+            image_creates: part(Part::ImageCreate),
+            image_binds: part(Part::ImageBind),
+            image_view_creates: part(Part::ImageViewCreate),
+            surface_allocations: part(Part::SurfaceAllocation),
+            surface_handles: part(Part::SurfaceHandle),
         }
     }
 
@@ -2566,11 +2595,34 @@ pub struct Metrics {
     /// Of those makes, each claim of the made block, which enters it in the device's map of
     /// claims; their bytes the allocations'.
     pub export_claims: Timed,
+    /// Each wait of a texture's placement at its index for the arrays' lock, which every
+    /// placement and vacating of an index takes; no bytes.
+    pub texture_place_lock_waits: Timed,
+    /// Each wait for the submit side's work lock of a new texture's or shadow's entry, or an
+    /// acquired drawable's, in the next commit's upload, which moves it to its home layout; no
+    /// bytes.
+    pub home_lock_waits: Timed,
+    /// Each `vkCreateImage` of a texture's or a shadow's make and of an exported surface's
+    /// planes; their bytes the images' memory requirements'.
+    pub image_creates: Timed,
+    /// Each `vkBindImageMemory` of those images; their bytes the images' memory requirements'.
+    pub image_binds: Timed,
+    /// Each `vkCreateImageView`: a texture's own views (a drawable's and a surface plane's among
+    /// them), a texture view's, a shadow's and a render target's attachment views; no bytes.
+    pub image_view_creates: Timed,
+    /// Of the in-place makes of
+    /// [`Device::new_exported_surface`](crate::Device::new_exported_surface), each
+    /// `vkAllocateMemory` of the surface's exportable memory; their bytes the allocations'.
+    pub surface_allocations: Timed,
+    /// Of those makes, each export of the memory's handle (`vkGetMemoryFdKHR`,
+    /// `vkGetMemoryWin32HandleKHR`): one for an opaque handle, and for a dma-buf one for each
+    /// plane's import and two more; their bytes the allocation's.
+    pub surface_handles: Timed,
 }
 
-/// No Metal counterpart: the calls of one part of the consumer's takes, buffer makes and exported
-/// block makes ([`Metrics::takes`] and the others'), each timed alone with
-/// [`host_time`](crate::host_time).
+/// No Metal counterpart: the calls of one part of the consumer's takes, buffer makes, exported
+/// block makes, texture makes and exported surface makes ([`Metrics::takes`] and the others'),
+/// each timed alone with [`host_time`](crate::host_time).
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Timed {
@@ -2587,9 +2639,10 @@ pub struct Timed {
     /// [`longest_nanos`](Self::longest_nanos), from the same call.
     pub longest_bytes: u64,
     /// Whether the longest call made an allocation of its own: for
-    /// [`Metrics::takes`], a take no free range fit; every take make, maker make, export make and
-    /// export allocation is one ([`Metrics::take_makes`], [`Metrics::maker_makes`],
-    /// [`Metrics::export_makes`], [`Metrics::export_allocations`]); false for the other parts.
+    /// [`Metrics::takes`], a take no free range fit; every take make, maker make, export make,
+    /// export allocation and surface allocation is one ([`Metrics::take_makes`],
+    /// [`Metrics::maker_makes`], [`Metrics::export_makes`], [`Metrics::export_allocations`],
+    /// [`Metrics::surface_allocations`]); false for the other parts.
     /// From the same call as [`longest_nanos`](Self::longest_nanos).
     pub longest_made: bool,
     /// Those longer than 1 ms.

@@ -25,7 +25,7 @@ use crate::block::Block;
 use crate::buffer::{Buffer, BufferObject};
 #[cfg(unix)]
 use crate::counters::Gauge;
-use crate::counters::Metric;
+use crate::counters::{Metric, Part};
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Gap, Limit, Refusal};
 use crate::export::{Export, ExportHandle};
@@ -659,13 +659,13 @@ struct Made {
 /// Makes a plane's image of `format`, `usage` and view-format `list`, external as `handle`, in
 /// `tiling`: for a dma-buf, `DRM_FORMAT_MOD_LINEAR` with the implicit list where `at` is `None`,
 /// else the explicit layout at `at` (offset, pitch). Its requirements and its subresource layout
-/// come with it.
+/// come with it. Timed in [`Metrics::image_creates`](crate::Metrics::image_creates).
 ///
 /// # Safety
 ///
 /// The device makes such an image ([`Query::plane`] accepted it), its extensions enabled.
 unsafe fn make_image(
-    device: &ash::Device,
+    core: &Core,
     descriptor: &TextureDescriptor,
     (format, usage, list): (vk::Format, vk::ImageUsageFlags, &[vk::Format]),
     handle: ExportHandle,
@@ -723,8 +723,11 @@ unsafe fn make_image(
             None => info.push_next(&mut implicit),
         };
     }
+    let device = &core.device;
+    let started = host_time();
     // SAFETY: the caller's contract.
     let image = unsafe { device.create_image(&info, None) }?;
+    let created = host_time() - started;
     let mut dedicated = vk::MemoryDedicatedRequirements::default();
     let mut needs = vk::MemoryRequirements2::default().push_next(&mut dedicated);
     // SAFETY: the image is the device's.
@@ -734,6 +737,8 @@ unsafe fn make_image(
             &mut needs,
         )
     };
+    let bytes = needs.memory_requirements.size;
+    (core.counters).timed(Part::ImageCreate, bytes, created, false);
     let sub = vk::ImageSubresource {
         aspect_mask: aspect,
         mip_level: 0,
@@ -1006,7 +1011,7 @@ impl Device {
             // SAFETY: the query accepted the image; the handle's extensions are enabled.
             let image = unsafe {
                 make_image(
-                    device,
+                    core,
                     &plane.descriptor,
                     (plan.format, usage, &list),
                     spec.handle,
@@ -1063,10 +1068,11 @@ impl Device {
         let block = Arc::new(memory::Block::new(memory, Arc::clone(core)));
         step!("allocate");
         for at in 0..made.len() {
-            let (image, start) = (made[at].image, starts[at]);
+            let (image, start, size) = (made[at].image, starts[at], made[at].needs.size);
             // SAFETY: the allocation holds the image's size from its start, at its alignment, in a
             // type its requirements list, exportable as a handle the image was made for.
-            if let Err(result) = unsafe { device.bind_image_memory(image, raw, start) } {
+            let bind = || unsafe { device.bind_image_memory(image, raw, start) };
+            if let Err(result) = core.counters.time(Part::ImageBind, size, bind) {
                 destroy(device, made);
                 return Err(Error::Vulkan {
                     call: "vkBindImageMemory",
@@ -1075,7 +1081,11 @@ impl Device {
             }
         }
         step!("bind");
-        let fd = match core.exports.handle(raw, spec.handle) {
+        let bytes = block.memory.len;
+        let exported = core.counters.time(Part::SurfaceHandle, bytes, || {
+            core.exports.handle(raw, spec.handle)
+        });
+        let fd = match exported {
             Ok(fd) => fd,
             Err(error) => {
                 destroy(device, made);
@@ -1148,7 +1158,7 @@ impl Device {
             // SAFETY: the query accepted the image; the extensions are enabled.
             let implicit = unsafe {
                 make_image(
-                    device,
+                    core,
                     &plane.descriptor,
                     (plan.format, usage, &list),
                     spec.handle,
@@ -1181,7 +1191,7 @@ impl Device {
             // SAFETY: as above; the layout is the driver's to refuse.
             let stated = unsafe {
                 make_image(
-                    device,
+                    core,
                     &plane.descriptor,
                     parts,
                     spec.handle,
@@ -1197,7 +1207,7 @@ impl Device {
                     // SAFETY: as above.
                     let at_zero = unsafe {
                         make_image(
-                            device,
+                            core,
                             &plane.descriptor,
                             parts,
                             spec.handle,
@@ -1258,6 +1268,7 @@ impl Device {
             .push_next(&mut export)
             .push_next(&mut flags);
         step!("layout");
+        let started = host_time();
         // SAFETY: an exportable allocation of a type every image takes, bound to nothing.
         let block = match unsafe {
             memory::allocate(device, &core.counters, core.max_allocations, &info, None)
@@ -1267,6 +1278,11 @@ impl Device {
                 destroy(device, made);
                 return Err(error);
             }
+        };
+        (core.counters).timed(Part::SurfaceAllocation, len, host_time() - started, true);
+        let exported = || {
+            let handle = || core.exports.handle(block, spec.handle);
+            core.counters.time(Part::SurfaceHandle, len, handle)
         };
         step!("allocate");
         let free_block = || {
@@ -1302,7 +1318,7 @@ impl Device {
         for at in 0..made.len() {
             let (image, image_bits, size) =
                 (made[at].image, made[at].needs.memory_type_bits, sizes[at]);
-            let fd = match core.exports.handle(block, spec.handle) {
+            let fd = match exported() {
                 Ok(fd) => fd,
                 Err(error) => return undo(imported, made, error),
             };
@@ -1356,17 +1372,19 @@ impl Device {
             imported.push(memory);
             step!("import");
             // SAFETY: the memory is the image's dedicated import, of its size and a type it lists.
-            if let Err(result) = unsafe { device.bind_image_memory(image, memory, 0) } {
+            let bind = || unsafe { device.bind_image_memory(image, memory, 0) };
+            let bound = (core.counters).time(Part::ImageBind, made[at].needs.size, bind);
+            if let Err(result) = bound {
                 return undo(imported, made, vulkan("vkBindImageMemory")(result));
             }
             step!("bind");
         }
-        let handle = match core.exports.handle(block, spec.handle) {
+        let handle = match exported() {
             Ok(fd) => fd,
             Err(error) => return undo(imported, made, error),
         };
         // The runtime's own fd, which the surface's buffer's import duplicates.
-        let spare = match core.exports.handle(block, spec.handle) {
+        let spare = match exported() {
             Ok(fd) => fd,
             Err(error) => return undo(imported, made, error),
         };

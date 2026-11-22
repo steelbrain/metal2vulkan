@@ -56,6 +56,7 @@ mod linear_planes;
 mod locks;
 mod lost_writes;
 mod lowered;
+mod make_parts;
 mod maker_yield;
 mod managed;
 mod memory;

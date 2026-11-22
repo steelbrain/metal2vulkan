@@ -41,7 +41,7 @@
 use crate::arrays::{Owner, ResourceId};
 use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::copy_out;
-use crate::counters::{Counters, Gauge, Metric, OverCause, Site};
+use crate::counters::{Counters, Gauge, Metric, OverCause, Part, Site};
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Gap, Limit, Refusal, RenderPassKind, TextureViewKind};
 use crate::hazard::HeapId;
@@ -1301,7 +1301,7 @@ impl Device {
         let mut made = Made::default();
         // SAFETY: the image is the device's and bound (the caller's contract), of the plan's
         // format, and has the plan's usage.
-        let views = unsafe { made.views(&core.device, image, &shape, &plan, plan.usage) };
+        let views = unsafe { made.views(core, image, &shape, &plan, plan.usage) };
         if views.is_err() {
             // SAFETY: nothing else holds the views; `made` holds no image.
             unsafe { made.destroy(core) };
@@ -2630,13 +2630,14 @@ pub(crate) fn components(
 
 /// An image view of `range` of `image`, of `view_type` and `format`, with `components`, and with
 /// `usage` where its format is another than the image's (`VkImageViewUsageCreateInfo`: the image's
-/// usage that the format's features hold), else the image's.
+/// usage that the format's features hold), else the image's. Timed in
+/// [`Metrics::image_view_creates`](crate::Metrics::image_view_creates).
 ///
 /// # Safety
 ///
 /// `image` is the device's and bound, and takes such a view: its format, usage and range.
 unsafe fn image_view(
-    device: &ash::Device,
+    core: &Core,
     image: vk::Image,
     view_type: vk::ImageViewType,
     format: vk::Format,
@@ -2656,7 +2657,10 @@ unsafe fn image_view(
         info = info.push_next(&mut usage_info);
     }
     // SAFETY: the caller's contract.
-    unsafe { device.create_image_view(&info, None) }.map_err(Error::vulkan("vkCreateImageView"))
+    let made = (core.counters).time(Part::ImageViewCreate, 0, || unsafe {
+        core.device.create_image_view(&info, None)
+    });
+    made.map_err(Error::vulkan("vkCreateImageView"))
 }
 
 /// Every level and layer of an image of `aspects`.
@@ -2879,9 +2883,11 @@ impl Made {
             }
             Bind::Pooled | Bind::Heap { .. } => info,
         };
+        let started = crate::host_time();
         // SAFETY: the caller's contract: the device makes such an image.
         let image =
             unsafe { device.create_image(&info, None) }.map_err(Error::vulkan("vkCreateImage"))?;
+        let created = crate::host_time() - started;
         self.image = Some(image);
         let mut dedicated = vk::MemoryDedicatedRequirements::default();
         let mut needs = vk::MemoryRequirements2::default().push_next(&mut dedicated);
@@ -2889,6 +2895,7 @@ impl Made {
         // SAFETY: the image is the device's.
         unsafe { device.get_image_memory_requirements2(&of, &mut needs) };
         let requirements = needs.memory_requirements;
+        (core.counters).timed(Part::ImageCreate, requirements.size, created, false);
         let bits = requirements.memory_type_bits;
         // A place in a texture block where the image takes the blocks' memory type and the device
         // does not require an allocation of its own for it (preferring one is no reason): one of
@@ -3008,11 +3015,13 @@ impl Made {
         self.backing = Some(backing);
         // SAFETY: the place or allocation holds the image's size at its alignment, in memory of a
         // type its requirements allow.
-        unsafe { device.bind_image_memory(image, memory, offset) }
-            .map_err(Error::vulkan("vkBindImageMemory"))?;
+        let bound = (core.counters).time(Part::ImageBind, requirements.size, || unsafe {
+            device.bind_image_memory(image, memory, offset)
+        });
+        bound.map_err(Error::vulkan("vkBindImageMemory"))?;
         // SAFETY: the image is bound, of the plan's format, and has `info`'s usage.
         let usage = info.usage;
-        let (sampled, storage) = unsafe { self.views(device, image, shape, plan, usage) }?;
+        let (sampled, storage) = unsafe { self.views(core, image, shape, plan, usage) }?;
         Ok((image, backing, requirements.size, sampled, storage))
     }
 
@@ -3025,7 +3034,7 @@ impl Made {
     /// among it where the plan has a storage view.
     unsafe fn views(
         &mut self,
-        device: &ash::Device,
+        core: &Core,
         image: vk::Image,
         shape: &Shape,
         plan: &Plan,
@@ -3036,7 +3045,7 @@ impl Made {
             // SAFETY: the caller's contract.
             let range = whole(aspect);
             let view =
-                unsafe { image_view(device, image, view_type, format, components, range, None) }?;
+                unsafe { image_view(core, image, view_type, format, components, range, None) }?;
             self.views.push(view);
             Ok::<_, Error>(view)
         };
@@ -3817,7 +3826,7 @@ impl Texture {
             // the range: the texture's levels and layers hold the view's.
             unsafe {
                 image_view(
-                    &core.device,
+                    core,
                     image,
                     view_type,
                     format,
@@ -4365,7 +4374,7 @@ pub(crate) trait TextureObject {
             // the sampled view's range, and of the sampled usage.
             let made = unsafe {
                 image_view(
-                    &core.device,
+                    core,
                     shadow,
                     at.view_type,
                     self.object().format,
@@ -4581,7 +4590,7 @@ pub(crate) trait TextureObject {
                 // render target usage or its resolves gave it (the caller's check).
                 let view = unsafe {
                     image_view(
-                        &core.device,
+                        core,
                         image.image,
                         kind,
                         self.object().format,
@@ -5482,8 +5491,7 @@ impl Device {
         let mut views = Made::default();
         // SAFETY: the image is the device's and bound, of the plan's format or mutable with it
         // listed, with the plan's usage and more, which the plan's format's features hold.
-        let made_views =
-            unsafe { views.views(&core.device, made.image, &shape, &plan, made.usage) };
+        let made_views = unsafe { views.views(core, made.image, &shape, &plan, made.usage) };
         let (sampled, storage) = match made_views {
             Ok(made_views) => made_views,
             Err(error) => {

@@ -36,7 +36,7 @@
 //! take 1 to 65,535, an index valid in both texture arrays; samplers 1 to 3,999. Index 0 is nil
 //! and never granted.
 
-use crate::counters::{Counters, Gauge, Metric};
+use crate::counters::{Counters, Gauge, Metric, Part};
 use crate::device::lock;
 use crate::error::{Error, Limit, Refusal};
 use crate::floor::{BelowFloor, Missing, SAMPLERS, SAMPLER_ARRAYS, TEXTURES};
@@ -366,7 +366,7 @@ impl Arrays {
         ),
         looped: Option<vk::ImageView>,
     ) -> Result<Owner, Error> {
-        let mut grants = lock(&self.grants);
+        let mut grants = counters.time(Part::TexturePlaceLock, 0, || lock(&self.grants));
         let Placed { owner, displaced } = grants.place(IndexClass::Texture, index)?;
         if !displaced {
             counters.rise(Gauge::DescriptorSlots);

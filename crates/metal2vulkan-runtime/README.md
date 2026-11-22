@@ -271,7 +271,15 @@ in its memory.
   made its block), `export_allocations` (its `vkAllocateMemory`, exportable and dedicated to its
   buffer), `export_handles` (the handle's export, `vkGetMemoryFdKHR` or
   `vkGetMemoryWin32HandleKHR`) and `export_claims` (the block's claim, which enters the device's
-  map of claims); the rest of a make is the buffer's creation, the binding and the address.
+  map of claims); the rest of a make is the buffer's creation, the binding and the address. A
+  texture's make is timed by step: `image_creates` (`vkCreateImage`, a surface plane's too),
+  `image_binds` (`vkBindImageMemory`), `image_view_creates` (every `vkCreateImageView`),
+  `texture_place_lock_waits` (its placement's wait for the arrays' lock, at an index) and
+  `home_lock_waits` (its entry's wait for the work lock in the next commit's upload, which moves
+  it to its home layout). A texture block it takes is among the `takes`; its place in a block,
+  found under the texture blocks' lock, is not timed. An exported surface's in-place make adds
+  `surface_allocations` (its exportable `vkAllocateMemory`) and `surface_handles` (each export of
+  its handle).
 - The runtime's fixed-size internals are made by the block-maker thread, never on a caller's
   thread and never inside `Device::new`: its first work once `Device::new` starts it is the zero
   source (64 KiB), the parameter ring's first block (2 MiB) and the staging region (16 MiB). The

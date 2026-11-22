@@ -1665,8 +1665,12 @@ field	metal2vulkan-runtime::Metrics.held_release_starts	pub held_release_starts:
 field	metal2vulkan-runtime::Metrics.held_releases	pub held_releases: u64
 field	metal2vulkan-runtime::Metrics.held_start_gap_nanos	pub held_start_gap_nanos: u64
 field	metal2vulkan-runtime::Metrics.held_starts	pub held_starts: u64
+field	metal2vulkan-runtime::Metrics.home_lock_waits	pub home_lock_waits: Timed
 field	metal2vulkan-runtime::Metrics.idle_frees_by_age	pub idle_frees_by_age: [u64; 6]
 field	metal2vulkan-runtime::Metrics.idle_reuses_by_age	pub idle_reuses_by_age: [u64; 7]
+field	metal2vulkan-runtime::Metrics.image_binds	pub image_binds: Timed
+field	metal2vulkan-runtime::Metrics.image_creates	pub image_creates: Timed
+field	metal2vulkan-runtime::Metrics.image_view_creates	pub image_view_creates: Timed
 field	metal2vulkan-runtime::Metrics.long_take_zero_writes	pub long_take_zero_writes: Timed
 field	metal2vulkan-runtime::Metrics.made_ahead_variant_nanos	pub made_ahead_variant_nanos: u64
 field	metal2vulkan-runtime::Metrics.made_ahead_variants	pub made_ahead_variants: u64
@@ -1754,6 +1758,8 @@ field	metal2vulkan-runtime::Metrics.submit_call_nanos	pub submit_call_nanos: u64
 field	metal2vulkan-runtime::Metrics.submit_call_nanos_during_frees	pub submit_call_nanos_during_frees: u64
 field	metal2vulkan-runtime::Metrics.submit_calls_over_100_ms	pub submit_calls_over_100_ms: u64
 field	metal2vulkan-runtime::Metrics.submit_infos	pub submit_infos: u64
+field	metal2vulkan-runtime::Metrics.surface_allocations	pub surface_allocations: Timed
+field	metal2vulkan-runtime::Metrics.surface_handles	pub surface_handles: Timed
 field	metal2vulkan-runtime::Metrics.surface_wait_max_nanos	pub surface_wait_max_nanos: u64
 field	metal2vulkan-runtime::Metrics.surface_wait_nanos	pub surface_wait_nanos: u64
 field	metal2vulkan-runtime::Metrics.surface_wait_submissions	pub surface_wait_submissions: u64
@@ -1771,6 +1777,7 @@ field	metal2vulkan-runtime::Metrics.texture_block_allocations	pub texture_block_
 field	metal2vulkan-runtime::Metrics.texture_clear_barriers	pub texture_clear_barriers: u64
 field	metal2vulkan-runtime::Metrics.texture_clear_bytes	pub texture_clear_bytes: u64
 field	metal2vulkan-runtime::Metrics.texture_clears	pub texture_clears: u64
+field	metal2vulkan-runtime::Metrics.texture_place_lock_waits	pub texture_place_lock_waits: Timed
 field	metal2vulkan-runtime::Metrics.translation_nanos	pub translation_nanos: u64
 field	metal2vulkan-runtime::Metrics.translations	pub translations: u64
 field	metal2vulkan-runtime::Metrics.translations_loaded	pub translations_loaded: u64

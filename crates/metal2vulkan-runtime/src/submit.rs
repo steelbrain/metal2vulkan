@@ -62,7 +62,7 @@ use crate::buffer::{BufferInner, BufferObject, DeviceCopy};
 use crate::capture::{self, Changes, CopyIn, Modified};
 use crate::command::{self, CbInner, CommandBufferError, DeviceLoss, Handler, Pending, Segment};
 use crate::complete;
-use crate::counters::{Counters, Gauge, Metric, Site};
+use crate::counters::{Counters, Gauge, Metric, Part, Site};
 use crate::device::{lock, Core};
 use crate::error::Error;
 use crate::event::EventInner;
@@ -1034,7 +1034,7 @@ impl Work {
         if image.copies_zeros() {
             fill::zeros(core)?;
         }
-        let mut state = self.lock();
+        let mut state = (core.counters).time(Part::HomeLock, 0, || self.lock());
         if state.closed {
             return Err(Error::Quiesced);
         }

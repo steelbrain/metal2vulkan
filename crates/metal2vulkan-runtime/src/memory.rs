@@ -2450,7 +2450,8 @@ pub(crate) unsafe fn export(
 /// device addresses, counted against the device's allocations ([`allocate`]), and its numbers. It
 /// holds no buffer: the surface's plane images are bound in it, and its block's buffer is null
 /// and its address 0. The surface's buffer, where the consumer asks for one, is bound in it later
-/// ([`surface_view`]). Counted as an export.
+/// ([`surface_view`]). Counted as an export; its `vkAllocateMemory` timed in
+/// [`Metrics::surface_allocations`](crate::Metrics::surface_allocations).
 ///
 /// Err: [`Limit::BlockLen`] past the device's longest allocation; [`Limit::MemoryAllocations`];
 /// [`Limit::BlockIds`]; [`Error::Vulkan`] where the allocation fails.
@@ -2476,8 +2477,11 @@ pub(crate) unsafe fn export_surface(
         .memory_type_index(index)
         .push_next(&mut export)
         .push_next(&mut flags);
+    let started = crate::host_time();
     // SAFETY: the caller's; the type is the images'.
     let memory = unsafe { allocate(device, &core.counters, core.max_allocations, &info, None) }?;
+    let nanos = crate::host_time() - started;
+    (core.counters).timed(Part::SurfaceAllocation, len, nanos, true);
     let (id, allocation) = match core.pool.own_numbers() {
         Ok(numbers) => numbers,
         Err(error) => {
