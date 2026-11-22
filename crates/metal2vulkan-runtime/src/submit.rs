@@ -265,6 +265,9 @@ pub(crate) struct WorkState {
     /// ([`Work::stall`]).
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     lost_at: u64,
+    /// For the device tests: the queue of each submission of the queues' work, in order.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    order: Vec<usize>,
 }
 
 struct Fifo {
@@ -272,11 +275,12 @@ struct Fifo {
     entries: VecDeque<Entry>,
     /// The group staged and not yet submitted.
     group: Option<Batch>,
-    /// The progress values of the queue's submissions not yet seen complete, in order, each with
-    /// its expected run.
-    in_flight: VecDeque<(u64, u64)>,
+    /// The progress values of the queue's submissions not yet seen complete, in order: what its
+    /// command buffers with no submission of their own retire behind, and whether it stands for
+    /// the device's room as a queue with nothing in flight ([`WorkState::rank`]).
+    in_flight: VecDeque<u64>,
     /// When it last submitted ([`WorkState::turns`]), 0 before: the device's room goes first to
-    /// the queue that waited longest ([`WorkState::has_room`]).
+    /// the queue that waited longest ([`WorkState::rank`]).
     turn: u64,
     /// Its head is held behind every piece of a cut command buffer of another queue committed
     /// before it, with which it shares a resource ([`WorkState::block_shared`]).
@@ -596,6 +600,8 @@ impl Work {
                 exported: ExportedOvers::default(),
                 #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
                 lost_at: 0,
+                #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+                order: Vec::new(),
             }),
             changed: Condvar::new(),
             spans: Condvar::new(),
@@ -1156,6 +1162,16 @@ impl Work {
         (state.region.as_ref()).map_or_else(Vec::new, |region| region.ring.live())
     }
 
+    /// For the device tests: of the submissions of the queues' work so far, in order, which were
+    /// `queue`'s.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn submitted_by(&self, queue: &QueueInner) -> Vec<bool> {
+        let at = std::ptr::from_ref(queue) as usize;
+        (self.lock().order.iter())
+            .map(|&queue| queue == at)
+            .collect()
+    }
+
     /// For the device tests: `queue`'s submissions not seen complete when the submit thread last
     /// looked, and whether it holds a group not yet submitted.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -1678,37 +1694,58 @@ impl WorkState {
     }
 
     /// Whether the FIFO at `index` has room on the device for a submission expected to run `run`
-    /// ([`room`]), no FIFO that last submitted before it wanting room that fits
+    /// ([`room`]), no FIFO ranked before it ([`rank`](Self::rank)) wanting room that fits
     /// ([`wants`](Self::wants)): so the queue that waited longest goes first, and a command
-    /// buffer passed by another queue's goes before that queue's next.
+    /// buffer passed by another queue's goes before that queue's next. A queue the
+    /// shared-resource rule holds wants nothing, so it holds no other queue back.
     fn has_room(&self, index: usize, run: u64) -> bool {
-        let turn = self.fifos[index].turn;
+        let fifo = &self.fifos[index];
+        let me = self.rank(fifo, self.wants(fifo).map_or(u64::MAX, |(_, seq)| seq));
         room(&self.in_flight, run)
             && !(self.fifos.iter().enumerate()).any(|(other, fifo)| {
                 other != index
-                    && fifo.turn < turn
-                    && (self.wants(fifo)).is_some_and(|run| room(&self.in_flight, run))
+                    && (self.wants(fifo)).is_some_and(|(run, seq)| {
+                        self.rank(fifo, seq) < me && room(&self.in_flight, run)
+                    })
             })
     }
 
-    /// The expected run of what `fifo` would submit with room: its group held, else its head's
-    /// next piece or the command buffer, where it is committed, with something for the GPU, its
-    /// next segment's waits met, and not held behind a cut command buffer it shares with.
-    fn wants(&self, fifo: &Fifo) -> Option<u64> {
+    /// Where `fifo` stands for the device's room, for work of its committed at `seq`: by its last
+    /// submission, the earliest first, a queue with nothing in flight standing as one that never
+    /// submitted, then by commit order. So of queues with nothing in flight the earliest commit
+    /// goes first, as its submission at its commit would have gone, and one with nothing in flight
+    /// goes before a queue's backlog, as it would have gone at its commit with room for itself.
+    fn rank(&self, fifo: &Fifo, seq: u64) -> (u64, u64) {
+        let turn = if fifo.in_flight.is_empty() {
+            0
+        } else {
+            fifo.turn
+        };
+        (turn, seq)
+    }
+
+    /// The expected run of what `fifo` would submit with room, and the commit number of its first
+    /// command buffer: its group held, else its head's next piece or the command buffer, where it
+    /// is committed, with something for the GPU, its next segment's waits met, and not held behind
+    /// a cut command buffer it shares with.
+    fn wants(&self, fifo: &Fifo) -> Option<(u64, u64)> {
+        let head = fifo.head();
         if let Some(group) = &fifo.group {
-            return Some(group.run);
+            let first = (group.leads.first().copied()).or(head.map(|head| head.seq));
+            return Some((group.run, first.unwrap_or(u64::MAX)));
         }
-        let head = fifo.entries.front().filter(|_| !fifo.blocked)?;
-        let pending = head.pending.as_ref().filter(|_| head.error.is_none())?;
+        let entry = fifo.entries.front().filter(|_| !fifo.blocked)?;
+        let pending = entry.pending.as_ref().filter(|_| entry.error.is_none())?;
         let empty = pending.gpu.is_empty() && !self.changes.captured.waits_for(pending.seq);
         let segment = &pending.gpu.segments[pending.next];
         if empty || !ready(segment) {
             return None;
         }
-        Some(match pending.gpu.cut {
+        let run = match pending.gpu.cut {
             true => segment.work.run,
             false => fifo.queue.expected_run().unwrap_or(u64::MAX),
-        })
+        };
+        Some((run, pending.seq))
     }
 
     /// Whether the FIFO at `index` holds a group that goes now: at teardown, where a host wait is
@@ -1820,7 +1857,7 @@ impl WorkState {
             self.in_flight.pop_front();
         }
         self.fifos.retain_mut(|fifo| {
-            while (fifo.in_flight.front()).is_some_and(|&(value, _)| value <= completed) {
+            while (fifo.in_flight.front()).is_some_and(|&value| value <= completed) {
                 fifo.in_flight.pop_front();
             }
             !(fifo.entries.is_empty() && fifo.group.is_none() && fifo.in_flight.is_empty())
@@ -2115,10 +2152,12 @@ impl WorkState {
         batch.take(taken);
         self.progress += 1;
         let value = self.progress;
-        fifo.in_flight.push_back((value, batch.run));
+        fifo.in_flight.push_back(value);
         self.in_flight.push_back((value, batch.run));
         self.turns += 1;
         fifo.turn = self.turns;
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        self.order.push(Arc::as_ptr(&fifo.queue) as usize);
         if batch.partial {
             if let Some(Entry {
                 pending: Some(pending),
@@ -2141,11 +2180,15 @@ impl WorkState {
     }
 
     /// The FIFO whose group goes at the end of a pass ([`goes`](Self::goes)): of those that go,
-    /// the one that last submitted first.
+    /// the one ranked first ([`rank`](Self::rank)).
     fn unheld(&self) -> Option<usize> {
+        let rank = |index: usize| {
+            let fifo = &self.fifos[index];
+            self.rank(fifo, self.wants(fifo).map_or(u64::MAX, |(_, seq)| seq))
+        };
         (0..self.fifos.len())
             .filter(|&index| self.goes(index))
-            .min_by_key(|&index| self.fifos[index].turn)
+            .min_by_key(|&index| rank(index))
     }
 }
 
@@ -2220,7 +2263,7 @@ impl Fifo {
                 // Behind its queue's work, and, where it waits on a fence, behind the last
                 // submission that updates it, as Metal's fence wait holds a command buffer with no
                 // work too (`crate::fence`).
-                let in_flight = self.in_flight.back().map_or(0, |&(value, _)| value);
+                let in_flight = self.in_flight.back().copied().unwrap_or(0);
                 let waited = pending.gpu.fences.waited_through();
                 pending.value = pending.value.max(in_flight).max(self.behind).max(waited);
                 self.behind = pending.value;

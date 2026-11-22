@@ -490,7 +490,7 @@ impl CommandBuffer {
         let mut state = self.state();
         let building = state.open()?;
         if cut {
-            building.cut(Some(0))?;
+            building.cut(None, Some(0))?;
         }
         if !compute {
             building.other_commands();
@@ -1086,20 +1086,24 @@ impl Building {
         Ok(())
     }
 
-    /// Before a dispatch expected to run `run` (None: its kernel's rate unknown), and with
-    /// `Some(0)` where a compute or blit encoder opens: where the segment's dispatches are a full
+    /// Before a dispatch of `kernel` expected to run `run` (None: its rate unknown), and with no
+    /// kernel and `Some(0)` where a compute or blit encoder opens: where the segment's dispatches are a full
     /// piece ([`Work::full`]), the commands after begin a new segment, the command buffer's next
     /// piece, counted (`Metrics::cuts`). Not where a texture over a buffer in an image of its own,
     /// or over a Managed buffer's device copy, was used in the segment: a cut there would add a
     /// copy (`crate::over`).
-    pub(crate) fn cut(&mut self, run: Option<u64>) -> Result<(), Error> {
+    pub(crate) fn cut(
+        &mut self,
+        kernel: Option<&Arc<Compiled>>,
+        run: Option<u64>,
+    ) -> Result<(), Error> {
         let last = self.last();
         // Commands after a signal go in a new segment anyway (`current`).
         if !last.signals.is_empty() {
             return self.split();
         }
         let overs = last.overs.ahead() || last.overs.leaning().next().is_some();
-        if !last.work.full(run) || overs || !last.managed_wrote.is_empty() {
+        if !last.work.full(kernel, run) || overs || !last.managed_wrote.is_empty() {
             return Ok(());
         }
         self.split()?;

@@ -1081,7 +1081,7 @@ impl ComputeCommandEncoder {
         // piece (`crate::piece`).
         let groups = direct.map(|(_, groups, _)| groups.iter().map(|&n| u64::from(n)).product());
         let building = recording(&mut self.building);
-        building.cut(Work::expected(inner, groups))?;
+        building.cut(Some(inner), Work::expected(inner, groups))?;
         let unbound = interface.reads_unbound || interface.writes_unbound;
         building.dispatched(inner, groups, unbound);
         if self.facts.module != Some(module) {

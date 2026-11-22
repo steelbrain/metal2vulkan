@@ -35,6 +35,13 @@ impl Rate {
         (rate != u64::MAX).then(|| u64::try_from(nanos).unwrap_or(u64::MAX))
     }
 
+    /// For the device tests: the rate is `picos` exactly, the test's own input in place of what
+    /// the pieces measured, until a piece that ran the kernel completes.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn set_for_test(&self, picos: u64) {
+        self.0.store(picos, Relaxed);
+    }
+
     /// A piece measured `picos` for each threadgroup of this kernel.
     fn ran(&self, picos: u64) {
         let _ = self.0.try_update(Relaxed, Relaxed, |rate| {
@@ -50,8 +57,8 @@ pub(crate) struct Work {
     kernels: Vec<(Arc<Compiled>, u64)>,
     /// The expected GPU run of its dispatches, in nanoseconds, summed.
     pub(crate) run: u64,
-    /// It holds a dispatch of a kernel whose rate was unknown: that dispatch is its only one, so
-    /// its run sets the kernel's rate.
+    /// It holds dispatches of a kernel whose rate was unknown, and of no other kernel, so its run
+    /// sets that kernel's rate.
     alone: bool,
     /// Its run tells no rate: it holds an indirect dispatch, whose threadgroups the GPU reads and
     /// which counts as one, a dispatch of a kernel of unknown rate beside others, or commands of
@@ -65,12 +72,20 @@ impl Work {
         self.kernels.is_empty()
     }
 
-    /// Whether a dispatch expected to run `run` (None: its kernel's rate unknown) begins a new
-    /// piece: this one holds a dispatch, and holds one of unknown rate, or has none to give, or
-    /// would pass the bound with it.
-    pub(crate) fn full(&self, run: Option<u64>) -> bool {
+    /// Whether a dispatch of `kernel` expected to run `run` (None: its kernel's rate unknown;
+    /// where an encoder opens, no kernel and `Some(0)`) begins a new piece: this one holds a
+    /// dispatch, and holds a kernel of unknown rate (unless the dispatch is that kernel's too, of
+    /// a rate still unknown), or the dispatch's rate is unknown, or the two would pass the bound.
+    pub(crate) fn full(&self, kernel: Option<&Arc<Compiled>>, run: Option<u64>) -> bool {
+        let own = |kernel: &Arc<Compiled>| {
+            (self.kernels.iter()).all(|(kept, _)| Arc::ptr_eq(kept, kernel))
+        };
         !self.is_empty()
-            && (self.alone || run.is_none_or(|run| self.run.saturating_add(run) > GROUP_RUN))
+            && match (self.alone, run) {
+                (true, None) => !kernel.is_some_and(own),
+                (true, Some(_)) | (false, None) => true,
+                (false, Some(run)) => self.run.saturating_add(run) > GROUP_RUN,
+            }
     }
 
     /// The expected run of a dispatch of `kernel` of `groups` threadgroups; None where its rate
@@ -86,7 +101,8 @@ impl Work {
     /// Adds a dispatch of `kernel`: `groups` threadgroups, None for an indirect dispatch.
     pub(crate) fn add(&mut self, kernel: &Arc<Compiled>, groups: Option<u64>) {
         let expected = Work::expected(kernel, groups);
-        self.blind |= groups.is_none() || (expected.is_none() && !self.is_empty());
+        let own = (self.kernels.iter()).all(|(kept, _)| Arc::ptr_eq(kept, kernel));
+        self.blind |= groups.is_none() || ((expected.is_none() || self.alone) && !own);
         self.alone |= expected.is_none();
         self.run = self.run.saturating_add(expected.unwrap_or(0));
         let groups = groups.unwrap_or(1);
