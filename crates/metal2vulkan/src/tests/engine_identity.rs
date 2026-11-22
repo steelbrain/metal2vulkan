@@ -1079,36 +1079,245 @@ fn an_argument_buffer_textures_sample_takes_its_sampler_from_the_identity_arrays
     }
 }
 
-/// Under the identity domains constexpr samplers a lane chooses among beside an argument buffer's
-/// texture (`engine_handles::chosen_sampler_kernel`) are a switch over the candidates on every
-/// profile, each arm sampling as through that sampler alone at its pushed index
-/// (`PushField::ConstexprSampler`, one for each candidate), never an array of their samplers: each
-/// compiles and passes L3, and the resident-table domains compile them as before.
-#[test]
-fn an_argument_buffer_texture_through_chosen_constexpr_samplers_is_a_switch_over_them() {
-    use super::engine_handles::{chosen_sampler_kernel, CHOSEN_SAMPLERS};
-    let chosen = format!(
-        "target datalayout = \"e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32\"\n\
-target triple = \"air64_v28-apple-macosx26.0.0\"\n\n{}",
-        chosen_sampler_kernel(&[0, 1, 2], None)
-    );
-    let Some(chosen) = assemble_text("chosen", &chosen) else {
-        return;
+/// What [`chosen_heap`] does with the texture its argument buffer holds, through the constexpr
+/// sampler its lane chooses.
+#[derive(Clone, Copy, Debug)]
+enum Chosen {
+    /// A kernel's sample of a `texture2d<float>` at level 0.
+    Float,
+    /// A kernel's sample of a `texture2d<uint>` at level 0.
+    Integer,
+    /// A kernel's `sample_compare` of a `depth2d<float>` against 0.5 at level 0.
+    Compare,
+    /// A fragment's sample of a `texture2d<float>` at its implicit level, at its position over 16,
+    /// its lane its position's `x`.
+    Fragment,
+}
+
+/// A function `chosen` that does `chosen` with the texture its argument buffer (buffer 0) holds,
+/// at `(1.375, 0.5)` in a kernel, through the constexpr sampler of words `words[lane % n]` (each a
+/// constexpr sampler of the module, listed in order, so their handles are consecutive), and
+/// writes the result to buffer 1's lane (a kernel's `float4` or `uint4`) or its color attachment.
+fn chosen_heap(words: &[u64], chosen: Chosen) -> String {
+    let n = words.len();
+    let mut choose = format!("  %sel = urem i32 %lane, {n}\n");
+    let mut sampler = format!("@s{}", n - 1);
+    for k in (0..n - 1).rev() {
+        choose += &format!(
+            "  %c{k} = icmp eq i32 %sel, {k}\n  %p{k} = select i1 %c{k}, ptr addrspace(2) @s{k}, ptr addrspace(2) {sampler}\n"
+        );
+        sampler = format!("%p{k}");
+    }
+    let globals: String = (words.iter().enumerate())
+        .map(|(i, w)| {
+            format!("@s{i} = internal addrspace(2) constant [2 x i64] [i64 {w}, i64 0], align 8\n")
+        })
+        .collect();
+    let list: Vec<String> = (0..n).map(|i| format!("!{}", 20 + i)).collect();
+    let states: String = (0..n)
+        .map(|i| {
+            format!(
+                "!{} = !{{!\"air.sampler_state\", ptr addrspace(2) @s{i}}}\n",
+                20 + i
+            )
+        })
+        .collect();
+    let at_zero = "<2 x float> <float 1.375, float 0.5>, i1 true, <2 x i32> zeroinitializer, i1 true, float 0.0, float 0.0, i32 0";
+    let float = "declare { <4 x float>, i8 } @air.sample_texture_2d.v4f32(ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32)";
+    let (texture, elem, sample, declare) = match chosen {
+        Chosen::Float => (
+            "texture2d<float, sample>",
+            ("float", "float"),
+            format!(
+                "  %r = call {{ <4 x float>, i8 }} @air.sample_texture_2d.v4f32(ptr addrspace(1) %t, ptr addrspace(2) {sampler}, {at_zero})\n  %v = extractvalue {{ <4 x float>, i8 }} %r, 0\n"
+            ),
+            float,
+        ),
+        Chosen::Integer => (
+            "texture2d<uint, sample>",
+            ("i32", "uint"),
+            format!(
+                "  %r = call {{ <4 x i32>, i8 }} @air.sample_texture_2d.u.v4i32(ptr addrspace(1) %t, ptr addrspace(2) {sampler}, {at_zero})\n  %v = extractvalue {{ <4 x i32>, i8 }} %r, 0\n"
+            ),
+            "declare { <4 x i32>, i8 } @air.sample_texture_2d.u.v4i32(ptr addrspace(1), ptr addrspace(2), <2 x float>, i1, <2 x i32>, i1, float, float, i32)",
+        ),
+        Chosen::Compare => (
+            "depth2d<float, sample>",
+            ("float", "float"),
+            format!(
+                "  %r = call {{ float, i8 }} @air.sample_compare_depth_2d.f32(ptr addrspace(1) %t, ptr addrspace(2) {sampler}, i32 1, <2 x float> <float 1.375, float 0.5>, float 0.5, i1 true, <2 x i32> zeroinitializer, i1 true, float 0.0, float 0.0, i32 0)\n  %x = extractvalue {{ float, i8 }} %r, 0\n  %v = insertelement <4 x float> zeroinitializer, float %x, i64 0\n"
+            ),
+            "declare { float, i8 } @air.sample_compare_depth_2d.f32(ptr addrspace(1), ptr addrspace(2), i32, <2 x float>, float, i1, <2 x i32>, i1, float, float, i32)",
+        ),
+        Chosen::Fragment => (
+            "texture2d<float, sample>",
+            ("float", "float"),
+            format!(
+                "  %xy = shufflevector <4 x float> %pos, <4 x float> poison, <2 x i32> <i32 0, i32 1>\n  %uv = fmul <2 x float> %xy, splat (float 6.250000e-02)\n  %r = call {{ <4 x float>, i8 }} @air.sample_texture_2d.v4f32(ptr addrspace(1) %t, ptr addrspace(2) {sampler}, <2 x float> %uv, i1 true, <2 x i32> zeroinitializer, i1 false, float 0.0, float 0.0, i32 0)\n  %v = extractvalue {{ <4 x float>, i8 }} %r, 0\n"
+            ),
+            float,
+        ),
     };
-    for stem in PROFILES {
-        let default =
-            profile(stem, DevicePolicy::RESIDENT_TABLES).unwrap_or_else(|e| panic!("{e}"));
-        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
-        let what = format!("{stem}: chosen");
-        compile(&chosen, "chosen", &default)
-            .unwrap_or_else(|e| panic!("{what}: resident-table domains: {e}"));
-        let (a, plan, _) =
-            compile_kept(&chosen, "chosen", &p).unwrap_or_else(|e| panic!("{what}: {e}"));
-        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
-        let pushed = (plan.push.fields.iter())
-            .filter(|f| matches!(f.field, PushField::ConstexprSampler(_)))
-            .count();
-        assert_eq!(pushed, CHOSEN_SAMPLERS.len(), "{what}");
+    let held = format!(
+        r#"!3 = !{{i32 {index}, !"air.indirect_buffer", !"air.buffer_size", i32 8, !"air.location_index", i32 0, i32 1, !"air.read", !"air.address_space", i32 2, !"air.struct_type_info", !4, !"air.arg_type_size", i32 8, !"air.arg_type_align_size", i32 8, !"air.arg_type_name", !"M", !"air.arg_name", !"m"}}
+!4 = !{{i32 0, i32 8, i32 0, !"{texture}", !"t", !"air.indirect_argument", !5}}
+!5 = !{{i32 0, !"air.texture", !"air.location_index", i32 0, i32 1, !"air.sample", !"air.arg_type_name", !"{texture}", !"air.arg_name", !"t"}}"#,
+        index = u32::from(matches!(chosen, Chosen::Fragment)),
+    );
+    let (ty, msl) = elem;
+    let (function, stage) = match chosen {
+        Chosen::Fragment => (
+            format!(
+                r#"define <4 x float> @chosen(<4 x float> %pos, ptr addrspace(2) %m) {{
+  %x0 = extractelement <4 x float> %pos, i64 0
+  %lane = fptoui float %x0 to i32
+  %pt = getelementptr inbounds %struct.M, ptr addrspace(2) %m, i64 0, i32 0
+  %t = load ptr addrspace(1), ptr addrspace(2) %pt, align 8
+{choose}{sample}  ret <4 x float> %v
+}}"#
+            ),
+            r#"!air.fragment = !{!0}
+!0 = !{ptr @chosen, !1, !2}
+!1 = !{!9}
+!2 = !{!8, !3}
+!8 = !{i32 0, !"air.position", !"air.center", !"air.no_perspective", !"air.arg_type_name", !"float4", !"air.arg_name", !"pos"}
+!9 = !{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"float4"}"#
+                .to_owned(),
+        ),
+        _ => (
+            format!(
+                r#"define void @chosen(ptr addrspace(2) %m, ptr addrspace(1) %out, i32 %lane) {{
+  %pt = getelementptr inbounds %struct.M, ptr addrspace(2) %m, i64 0, i32 0
+  %t = load ptr addrspace(1), ptr addrspace(2) %pt, align 8
+{choose}{sample}  %o = getelementptr inbounds <4 x {ty}>, ptr addrspace(1) %out, i32 %lane
+  store <4 x {ty}> %v, ptr addrspace(1) %o, align 16
+  ret void
+}}"#
+            ),
+            format!(
+                r#"!air.kernel = !{{!0}}
+!0 = !{{ptr @chosen, !1, !2}}
+!1 = !{{}}
+!2 = !{{!3, !6, !8}}
+!6 = !{{i32 1, !"air.buffer", !"air.location_index", i32 1, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 16, !"air.arg_type_align_size", i32 16, !"air.arg_type_name", !"{msl}4", !"air.arg_name", !"out"}}
+!8 = !{{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"lane"}}"#
+            ),
+        ),
+    };
+    format!(
+        r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
+target triple = "air64_v28-apple-macosx26.0.0"
+
+%struct.M = type {{ ptr addrspace(1) }}
+{globals}
+{function}
+{declare}
+{stage}
+!air.version = !{{!11}}
+!air.language_version = !{{!12}}
+!air.sampler_states = !{{{}}}
+{held}
+!11 = !{{i32 2, i32 8, i32 0}}
+!12 = !{{!"Metal", i32 4, i32 0, i32 0}}
+{states}"#,
+        list.join(", ")
+    )
+}
+
+/// Under the identity domains constexpr samplers of consecutive handles that a lane chooses among
+/// beside an argument buffer's texture ([`chosen_heap`]) are one sample where their samplings
+/// differ only in the sampler: a kernel's sample of a float class through [`CHOSEN_SAMPLERS`]
+/// (`engine_handles`) reads the set-1 sampler array of its use, `NonUniform`, at the pushed index
+/// of the candidate the handle names (`sampler.sampler_array.sample`): one sampled image and one
+/// sample, no switch, one `PushField::ConstexprSampler` per candidate. The switch over the
+/// candidates stays, a sampled image per candidate, for pixel coordinates (two linear pixel
+/// samplers that differ in their border color), an integer texture, a comparison and a fragment's
+/// implicit level. The resident-table domains take their set-0 array for all but the fragment's,
+/// so the candidates' samplings are alike there and only the identity domains' rule keeps the
+/// switch. Each compiles and passes L3 on every committed profile.
+#[test]
+fn chosen_constexpr_samplers_beside_an_argument_buffer_texture_are_one_sample_where_alike() {
+    use super::engine_handles::{
+        chosen_sampler, count, uses, CHOSEN_SAMPLERS, OP_IMAGE_SAMPLE_DREF_EXPLICIT_LOD,
+        OP_IMAGE_SAMPLE_EXPLICIT_LOD, OP_SAMPLED_IMAGE, OP_SWITCH,
+    };
+    use crate::spirv::testing::committed_profiles_with;
+    const PIXEL: u64 = 1 << 15;
+    const OPAQUE_WHITE: u64 = 2 << 56;
+    // `less` in place of the words' `never`.
+    let compare = |w: u64| (w & !(0xf << 16)) | 1 << 16;
+    let nearest = [
+        chosen_sampler(1, 0),
+        chosen_sampler(2, 0),
+        chosen_sampler(3, 0),
+    ];
+    // Each case: its name, what it samples, its candidates, and whether it is one sample.
+    let cases: [(&str, Chosen, Vec<u64>, bool); 5] = [
+        ("float", Chosen::Float, CHOSEN_SAMPLERS.to_vec(), true),
+        (
+            "pixel",
+            Chosen::Float,
+            vec![
+                chosen_sampler(0, 1) | PIXEL,
+                chosen_sampler(0, 1) | PIXEL | OPAQUE_WHITE,
+            ],
+            false,
+        ),
+        ("integer", Chosen::Integer, nearest.to_vec(), false),
+        (
+            "compare",
+            Chosen::Compare,
+            nearest.iter().map(|w| compare(*w)).collect(),
+            false,
+        ),
+        (
+            "fragment",
+            Chosen::Fragment,
+            CHOSEN_SAMPLERS.to_vec(),
+            false,
+        ),
+    ];
+    let profiles = committed_profiles_with(DevicePolicy::default()).expect("profiles");
+    for (name, chosen, words, one) in cases {
+        let Some(bc) = assemble_text(name, &chosen_heap(&words, chosen)) else {
+            return;
+        };
+        let n = words.len();
+        let sample = match chosen {
+            Chosen::Compare => OP_IMAGE_SAMPLE_DREF_EXPLICIT_LOD,
+            _ => OP_IMAGE_SAMPLE_EXPLICIT_LOD,
+        };
+        for stem in PROFILES {
+            let default =
+                profile(stem, DevicePolicy::RESIDENT_TABLES).unwrap_or_else(|e| panic!("{e}"));
+            let a = compile(&bc, "chosen", &default)
+                .unwrap_or_else(|e| panic!("{stem}: {name}: resident-table domains: {e}"));
+            let array = !matches!(chosen, Chosen::Fragment);
+            assert_eq!(
+                uses(&a, "sampler.sampler_array.sample"),
+                u32::from(array),
+                "{stem}: {name}: resident-table domains"
+            );
+        }
+        for (stem, p) in &profiles {
+            let what = format!("{stem}: {name}");
+            let (a, plan, _) =
+                compile_kept(&bc, "chosen", p).unwrap_or_else(|e| panic!("{what}: {e}"));
+            link_and_validate(&a, p).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+            let pushed = (plan.push.fields.iter())
+                .filter(|f| matches!(f.field, PushField::ConstexprSampler(_)))
+                .count();
+            assert_eq!(pushed, n, "{what}");
+            let arrays = uses(&a, "sampler.sampler_array.sample");
+            let (images, switches) = (count(&a, OP_SAMPLED_IMAGE), count(&a, OP_SWITCH));
+            if one {
+                assert_eq!((arrays, images, switches), (1, 1, 0), "{what}");
+                assert_eq!(count(&a, sample), 1, "{what}");
+            } else {
+                assert_eq!((arrays, images), (0, n), "{what}");
+                assert!(switches > 0, "{what}");
+            }
+        }
     }
 }
 

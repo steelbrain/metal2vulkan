@@ -694,10 +694,43 @@ pub(super) fn sampled_image(
             };
             Ok((si, image, element.live))
         }
+        // Under the identity domains the heap element through the set-1 sampler array's element
+        // at the pushed index of the candidate the handle names.
         Source::HeapArray {
             handle,
             sampler,
             key,
+            ..
+        } if cx.plan.families.access.identity => {
+            let Some(use_) = (cx.plan.families.sampler.heap_array_identity)
+                .get(&key)
+                .copied()
+            else {
+                return Err(cx.fail(format!(
+                    "constexpr sampler array {key:?} has no identity use"
+                )));
+            };
+            let Some(g) = cx.decl.families.sampler.identity.get(&use_).copied() else {
+                return Err(cx.fail(format!("the sampler array of {use_:?} is not declared")));
+            };
+            let element = heap_element(cx, fb, key.group, handle)?;
+            let index = identity_element(cx, fb, sampler, key, use_)?;
+            let base = fb.module().global_value(g)?;
+            let p = fb.access_chain_non_uniform(base, index)?;
+            let sampler = fb.load(p, MemAccess::default())?;
+            let si = fb.sampled_image(element.img, sampler)?;
+            let image = CombinedImage {
+                plane: super::plane_of(element.decl.dim),
+                arrayed: element.decl.arrayed,
+                texel: element.decl.texel,
+            };
+            Ok((si, image, element.live))
+        }
+        Source::HeapArray {
+            handle,
+            sampler,
+            key,
+            ..
         } => {
             let Some(g) = cx.decl.families.sampler.heap_arrays.get(&key).copied() else {
                 return Err(cx.fail(format!("constexpr sampler array {key:?} is not declared")));
@@ -747,6 +780,46 @@ pub(super) fn array_element(
     let zero = fb.u32_const(0)?;
     let zero = fb.module().const_value(zero)?;
     Ok((fb.select(named, i, zero)?, named))
+}
+
+/// Under the identity domains, the index in the set-1 sampler array of `use_` of the candidate of
+/// constexpr sampler array `key` that sampler handle `sampler` names: that candidate's pushed index
+/// (`PushField::ConstexprSampler`), selected among the candidates' at run time, the first's where
+/// the handle names none (whose result `sampling_value` makes zero).
+fn identity_element(
+    cx: &mut EmitCx<'_>,
+    fb: &mut FunctionBuilder<'_>,
+    sampler: ValueId,
+    key: super::HeapArrayKey,
+    use_: SamplerUse,
+) -> BResult<SValue> {
+    let samplers = usize::try_from(key.array)
+        .ok()
+        .and_then(|a| cx.plan.families.sampler.arrays.get(a))
+        .map(|a| a.samplers.clone());
+    let Some(samplers) = samplers else {
+        return Err(cx.fail(format!("constexpr sampler array {key:?} is not planned")));
+    };
+    let (element, _) = array_element(cx, fb, sampler, key)?;
+    let mut index = None;
+    for (k, words) in (0u32..).zip(samplers) {
+        let c = CombinedSampler::new(
+            SamplerRef::Constexpr(words),
+            use_.compare,
+            use_.integer_texture,
+        );
+        let pushed = cx.push_field(fb, crate::pipeline::sym::PushField::ConstexprSampler(c))?;
+        index = Some(match index {
+            None => pushed,
+            Some(v) => {
+                let k = fb.u32_const(k)?;
+                let k = fb.module().const_value(k)?;
+                let is = fb.binary(BinOp::IEqual, element, k)?;
+                fb.select(is, pushed, v)?
+            }
+        });
+    }
+    index.ok_or_else(|| cx.fail("a sampler array without samplers"))
 }
 
 /// The word (`metal::sampler::SamplerWord`) of the constexpr sampler at the element of sampling

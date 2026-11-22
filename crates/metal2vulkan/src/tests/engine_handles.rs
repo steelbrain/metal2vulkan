@@ -140,7 +140,7 @@ fn insts(words: &[u32]) -> Vec<(u16, usize)> {
     out
 }
 
-fn count(a: &FunctionArtifact, op: u16) -> usize {
+pub(super) fn count(a: &FunctionArtifact, op: u16) -> usize {
     insts(&a.module.words)
         .iter()
         .filter(|(o, _)| *o == op)
@@ -198,17 +198,17 @@ fn texture_slots(a: &FunctionArtifact) -> Vec<u32> {
         .collect()
 }
 
-fn uses(a: &FunctionArtifact, name: &str) -> u32 {
+pub(super) fn uses(a: &FunctionArtifact, name: &str) -> u32 {
     a.strategies.entries.get(name).map_or(0, |u| u.uses)
 }
 
-const OP_SWITCH: u16 = 251;
+pub(super) const OP_SWITCH: u16 = 251;
 const OP_SELECTION_MERGE: u16 = 247;
 const OP_LABEL: u16 = 248;
 const OP_DPDX: u16 = 207;
 const OP_DPDY: u16 = 208;
 const OP_IMAGE_SAMPLE_IMPLICIT_LOD: u16 = 87;
-const OP_IMAGE_SAMPLE_EXPLICIT_LOD: u16 = 88;
+pub(super) const OP_IMAGE_SAMPLE_EXPLICIT_LOD: u16 = 88;
 const OP_IMAGE_QUERY_LOD: u16 = 105;
 
 /// Every handle entry compiles, links, and validates on every committed profile.
@@ -2672,7 +2672,7 @@ fn an_imageblock_slice_writes_an_argument_buffer_texture() {
     assert_eq!(u.needs, Needs::NotImplemented);
 }
 
-const OP_IMAGE_SAMPLE_DREF_EXPLICIT_LOD: u16 = 90;
+pub(super) const OP_IMAGE_SAMPLE_DREF_EXPLICIT_LOD: u16 = 90;
 const OP_IMAGE_GATHER: u16 = 96;
 const OP_IMAGE_DREF_GATHER: u16 = 97;
 
@@ -2885,7 +2885,7 @@ fn an_argument_buffer_depth_texture_compares_through_the_depth_comparison_class(
     assert!(compiled > 0, "no committed profile has the sampled heap");
 }
 
-const OP_SAMPLED_IMAGE: u16 = 86;
+pub(super) const OP_SAMPLED_IMAGE: u16 = 86;
 const OP_IMAGE_FETCH: u16 = 95;
 
 /// A constexpr sampler's words: linear filters, no mip filter, normalized coordinates clamped to

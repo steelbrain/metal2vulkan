@@ -1978,8 +1978,9 @@ fn identity_refusal(plan: &Plan) -> Option<String> {
     // resource ID, and a 2D texture slot's bicubic sample at normalized coordinates, the bound
     // format's treatment read from its push field (`PushField::BicubicTexels`): no bicubic sample
     // at pixel coordinates, bicubic sample of a 1D texture (`Routine::Line`), or specialization of
-    // a slot's state. Constexpr samplers a lane chooses among are a switch over them, never an
-    // array of their samplers (`sampler::select::select_heap_array`). A two-plane texture's
+    // a slot's state. Constexpr samplers a lane chooses among beside an argument buffer's texture
+    // read the set-1 sampler array at the chosen candidate's pushed index
+    // (`SamplerPlan::heap_array_identity`) or are a switch over them. A two-plane texture's
     // sample read in place (`Routine::Quad`) never reaches here: its slot's
     // `PushField::YCbCrInPlace` is refused first, as an encoder value the identity domains do not
     // source.

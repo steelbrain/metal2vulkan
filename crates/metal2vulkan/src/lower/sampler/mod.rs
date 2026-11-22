@@ -19,15 +19,17 @@
 //! sampler, is one sampling through a set-0 array of their samplers (`ResourceKind::SamplerArray`,
 //! one immutable sampler per candidate, its element `NonUniform` and at the handle's distance from
 //! the first candidate's; a handle outside it reads zero), where the device indexes a sampler array
-//! by a value that may differ between invocations (`shaderSampledImageArrayNonUniformIndexing`),
-//! outside the identity domains. Any other sampler of several static candidates beside a heap
-//! image is a switch-at-use over them, one arm per candidate, each the heap element through that
-//! candidate's heap sampler. Under the identity domains a heap image has no heap sampler binding:
-//! its runtime or constexpr sampler is the element of the set-1 sampler array of its use that a
-//! texture slot's sampling reads there ([`IdentitySampling`]), at the index the sampler slot's
-//! pushed resource ID holds or at the constexpr sampler's pushed index
-//! (`PushField::ConstexprSampler`), and a sampler of several constexpr candidates is the switch
-//! over them.
+//! by a value that may differ between invocations (`shaderSampledImageArrayNonUniformIndexing`).
+//! Any other sampler of several static candidates beside a heap image is a switch-at-use over
+//! them, one arm per candidate, each the heap element through that candidate's heap sampler. Under
+//! the identity domains a heap image has no heap sampler binding: its runtime or constexpr sampler
+//! is the element of the set-1 sampler array of its use that a texture slot's sampling reads there
+//! ([`IdentitySampling`]), at the index the sampler slot's pushed resource ID holds or at the
+//! constexpr sampler's pushed index (`PushField::ConstexprSampler`). There a constexpr sampler
+//! array is no binding: its sampling reads the set-1 array's element, `NonUniform`, at the pushed
+//! index of the candidate the handle names, selected among the candidates'
+//! (`emit::identity_element`), where it reads a float class without comparison and in normalized
+//! coordinates; the switch over the candidates stays for the rest.
 //!
 //! **Argument buffers' samplers** (the sampler half). A heap image sampled through a sampler loaded
 //! from an argument buffer reads `OpSampledImage` of its heap element and of the heap sampler's
@@ -313,6 +315,11 @@ pub(crate) const ELEMENT_WORDS: u32 = 5 + 5 + 6;
 /// result or zero (a handle outside the array is the switch's null arm) with its constant.
 pub(crate) const ARRAY_WORDS: u32 = 2 * ELEMENT_WORDS + 3 * 4 + 5 + 4 + 6 + 4;
 
+/// The SPIR-V words the identity domains' selection of a constexpr sampler array's element adds
+/// for each candidate (`emit::identity_element`): its pushed index's read, and its comparison and
+/// select with their constants.
+pub(crate) const IDENTITY_ELEMENT_WORDS: u32 = 12 + TABLE_ELEMENT_WORDS;
+
 /// An upper estimate of the SPIR-V words of an argument-buffer sampler's cubic test past its
 /// entry's word: the mask, the test, the selection construct, and the status mark (the push field's
 /// load, the address, the pointer, the bit, and the atomic `OR`).
@@ -341,6 +348,9 @@ pub enum Source {
         handle: ValueId,
         sampler: ValueId,
         key: HeapArrayKey,
+        /// Under the identity domains the candidates whose pushed indices the element's selection
+        /// reads one by one (`emit::identity_element`); 0 outside them.
+        pushed: u32,
     },
 }
 
@@ -1005,7 +1015,9 @@ impl Sampling {
         let heap = match self.source {
             Source::Combined(_) => 0,
             Source::Heap { .. } => 32,
-            Source::HeapArray { .. } => 32 + ARRAY_WORDS,
+            Source::HeapArray { pushed, .. } => {
+                32 + ARRAY_WORDS + pushed.saturating_mul(IDENTITY_ELEMENT_WORDS)
+            }
             Source::HeapSampler { .. } => 56 + 2 * ENTRY_FIELD_WORDS + CUBIC_REACH_WORDS,
         };
         let residency = if self.residency {
@@ -1200,6 +1212,9 @@ pub struct SamplerPlan {
     /// The use each one's binding is made for, set by [`finish`]: one binding per distinct array
     /// and use.
     pub heap_array_decls: BTreeMap<HeapArrayKey, SamplerUse>,
+    /// Under the identity domains, the set-1 sampler array's use each one reads, set by
+    /// [`finish`] in place of its binding, each candidate's index pushed.
+    pub heap_array_identity: BTreeMap<HeapArrayKey, SamplerUse>,
     /// The texture slots a bicubic sample reads, each with its `BicubicTexels` specialization,
     /// or under the identity domains its `PushField::BicubicTexels` field.
     pub bicubic: BTreeSet<u32>,
@@ -1426,6 +1441,7 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     // One constexpr sampler array binding per distinct array and use (`declare`), each element a
     // sampler of the stage.
     let mut heap_array_decls = BTreeMap::new();
+    let mut heap_array_identity = BTreeMap::new();
     for key in &cx.families.sampler.heap_arrays {
         let h = cx
             .families
@@ -1442,6 +1458,21 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             .ok_or_else(|| invariant("a constexpr sampler array out of range"))?;
         for words in &array.samplers {
             constexpr_desc(*words, use_, cx.profile)?;
+        }
+        // Under the identity domains no binding: each candidate is the set-1 sampler array's
+        // element at its pushed index, as a constexpr sampler beside a heap image is.
+        if crate::lower::access::identity(cx.profile) {
+            for &words in &array.samplers {
+                let c = CombinedSampler::new(
+                    SamplerRef::Constexpr(words),
+                    key.compare,
+                    use_.integer_texture,
+                );
+                cx.push
+                    .insert(crate::pipeline::sym::PushField::ConstexprSampler(c));
+            }
+            heap_array_identity.insert(*key, use_);
+            continue;
         }
         heap_array_decls.insert(*key, use_);
     }
@@ -1543,6 +1574,7 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     cx.families.sampler.heap_identity = heap_identity;
     cx.families.sampler.heap_sampler_decls = heap_sampler_decls;
     cx.families.sampler.heap_array_decls = heap_array_decls;
+    cx.families.sampler.heap_array_identity = heap_array_identity;
     cx.descriptors = cx.descriptors.plus(&counts);
     Ok(())
 }
@@ -1736,7 +1768,8 @@ pub fn declare(
     // heap element's, and a slot's word is its pushed resource ID's (`emit::sampler_word`).
     let sampling = &plan.families.sampler;
     let slot_uses = sampling.identity.values().map(|i| i.use_);
-    for use_ in slot_uses.chain(sampling.heap_identity.values().copied()) {
+    let heap_uses = (sampling.heap_identity.values()).chain(sampling.heap_array_identity.values());
+    for use_ in slot_uses.chain(heap_uses.copied()) {
         if d.identity.contains_key(&use_) {
             continue;
         }

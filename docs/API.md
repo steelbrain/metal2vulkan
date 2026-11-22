@@ -1144,9 +1144,13 @@ for dependency in &pipeline.dependencies {
   array's constexpr samplers by its slot. The module takes this form where the candidates' handles
   are consecutive, each candidate's sampling is the same but for its sampler, and the device indexes
   a sampler array by a value that may differ between invocations
-  (`shaderSampledImageArrayNonUniformIndexing`, which heap textures already need); otherwise, and
-  always under the identity domains (whose stages bind no set-0 sampler), it switches over the
-  candidates, one sampling per candidate, each through the constexpr sampler the consumer pushes.
+  (`shaderSampledImageArrayNonUniformIndexing`, which heap textures already need); otherwise it
+  switches over the candidates, one sampling per candidate. Under the identity domains, whose
+  stages bind no set-0 sampler, the same form samples once through the set-1 sampler array of the
+  use, at the index the consumer pushes for the candidate the handle names (one
+  `PushField::ConstexprSampler` per candidate), where the sampling also reads a float class
+  without comparison and in normalized coordinates; otherwise it switches over the candidates,
+  each through the constexpr sampler the consumer pushes.
 - Each binding's `variables` is the most variables one stage's entry point uses at it (those its
   `OpEntryPoint` lists): a function that reaches a buffer through several types uses a variable of
   each type at the buffer's binding. A set-0 uniform or storage buffer binding may be created as its dynamic type

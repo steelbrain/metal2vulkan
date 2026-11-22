@@ -556,9 +556,13 @@ fn select_heap_switch(
 /// value that may differ between invocations (`shaderSampledImageArrayNonUniformIndexing`, which
 /// the heap's own image array already needs); the use is not tangled; and each candidate's
 /// sampling is the same but for its sampler and the state its raw emulation follows. `None`
-/// otherwise, and under the identity domains, whose constexpr sampler is the set-1 sampler array's
-/// element at its pushed index (`PushField::ConstexprSampler`) and no set-0 array holds: the
-/// switch over the candidates stays, each arm through its own.
+/// otherwise. Under the identity domains no set-0 array holds: the sampling reads the set-1
+/// sampler array of its use at the pushed index (`PushField::ConstexprSampler`) of the candidate
+/// the handle names (`emit::identity_element`), and only where the sampling reads a float class,
+/// without comparison and in normalized coordinates; the switch over the candidates stays for the
+/// rest. No raw emulation arises there (the element is read in the class the shader declares,
+/// [`select_heap_raw`]), and none through Metal's bicubic filter, which an argument buffer's
+/// texture refuses (`bicubic::check`).
 fn select_heap_array(
     cx: &mut SelectCx<'_>,
     call: Call<'_>,
@@ -568,10 +572,7 @@ fn select_heap_array(
     m: &mut Meter,
 ) -> Result<Option<TextureStrategy>, Error> {
     use super::heap_raw::State;
-    if cands.len() < 2
-        || !cx.profile.fields().descriptors.non_uniform_sampled_image
-        || crate::lower::access::identity(cx.profile)
-    {
+    if cands.len() < 2 || !cx.profile.fields().descriptors.non_uniform_sampled_image {
         return Ok(None);
     }
     if !cands
@@ -635,6 +636,16 @@ fn select_heap_array(
     if arms.iter().any(|x| shape(x).as_ref() != Some(&one)) {
         return Ok(None);
     }
+    let identity = crate::lower::access::identity(cx.profile);
+    if identity {
+        let compare = matches!(one.source, Source::Heap { key, .. } if key.compare);
+        let float = float_class(cx, call.t, heap.0)?;
+        let pixel =
+            !matches!(one.pixel, Pixel::None) || matches!(one.op, SampleOp::PixelFetch { .. });
+        if compare || !float || pixel {
+            return Ok(None);
+        }
+    }
     let mut samplers = Vec::with_capacity(arms.len());
     for x in &arms {
         match x.source {
@@ -681,6 +692,7 @@ fn select_heap_array(
         handle,
         sampler: smp_handle,
         key,
+        pushed: if identity { elements } else { 0 },
     };
     cx.families.sampler.heap = before;
     cx.families.sampler.heap_arrays.insert(key);
@@ -709,16 +721,7 @@ fn select_heap_raw(
         return Ok(None);
     }
     let shape = call.t.image;
-    let float = match call.t.texel {
-        Some(_) => texel(call.t, 4)?.1 == TexelClass::Float,
-        None => cx
-            .families
-            .texture
-            .heap
-            .get(&group)
-            .and_then(|h| h.texel)
-            .is_none_or(|c| c == TexelClass::Float),
-    };
+    let float = float_class(cx, call.t, group)?;
     if shape.ms || shape.depth || shape.dim == ImageDim::Buffer || !float {
         return Ok(None);
     }
@@ -740,6 +743,17 @@ fn select_heap_raw(
             });
     }
     Ok(raw)
+}
+
+/// Whether heap sampling call `t` of heap group `group` reads a float class: its texel's, or
+/// where it reads none (a level query) the group's, where an access states one.
+fn float_class(cx: &SelectCx<'_>, t: &Texture, group: u32) -> Result<bool, Error> {
+    Ok(match t.texel {
+        Some(_) => texel(t, 4)?.1 == TexelClass::Float,
+        None => (cx.families.texture.heap.get(&group))
+            .and_then(|h| h.texel)
+            .is_none_or(|c| c == TexelClass::Float),
+    })
 }
 
 /// The emulation of [`select_heap_raw`]'s call, where it is built as a slot's extended-range

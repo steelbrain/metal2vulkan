@@ -24,6 +24,27 @@ mod on_device {
     };
     use metal2vulkan_devtools::{fixtures_dir, llvm_assemble, AssembleError};
 
+    /// The SPIR-V opcodes `OpImageSampleExplicitLod` and `OpSwitch`.
+    const OP_IMAGE_SAMPLE_EXPLICIT_LOD: u32 = 88;
+    const OP_SWITCH: u32 = 251;
+
+    /// How many samples at an explicit level and how many switches the module holds that
+    /// `device`'s translator gives the kernel of `descriptor`.
+    fn samples_and_switches(
+        name: &str,
+        device: &Device,
+        descriptor: &ComputePipelineDescriptor,
+    ) -> (usize, usize) {
+        let pipeline = (device.translator())
+            .compile_compute_pipeline(descriptor, &metal2vulkan::Budget::standard())
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let ops: Vec<u32> = (crate::tests::spirv_instructions(&pipeline.stage.spirv).iter())
+            .map(|inst| inst[0] & 0xffff)
+            .collect();
+        let of = |op: u32| ops.iter().filter(|o| **o == op).count();
+        (of(OP_IMAGE_SAMPLE_EXPLICIT_LOD), of(OP_SWITCH))
+    }
+
     /// The side of each texture: one texel per thread of a 2 by 2 grid.
     const SIDE: u32 = 2;
     /// The constexpr sampler's index the test gives `hs_sample`.
@@ -406,9 +427,10 @@ mod on_device {
     /// the 4 by 1 texture its argument buffer holds (red, green, blue, white) at `x = xs[i]`
     /// through `samplers[which[i]]`, a program-scope table of four constexpr nearest samplers
     /// (repeat, clamp to edge, mirrored repeat, clamp to zero) read at the index `which[i] = s`
-    /// only the run knows, and writes the texel. Under the identity domains the four candidates
-    /// are a switch over them, each arm sampling through its constexpr sampler's index. The
-    /// answers are Metal's, measured on an Apple M3 Max under macOS 27.0.1
+    /// only the run knows, and writes the texel. The four candidates differ only in the sampler, so
+    /// the device's translator gives the kernel one sample, through the set-1 sampler array at the
+    /// pushed index of the candidate `which[i]` names, and no switch, which the test reads from the
+    /// module and prints. The answers are Metal's, measured on an Apple M3 Max under macOS 27.0.1
     /// (`metal2vulkan-conformance/probes/sampler_table.m`): by coordinate (texel units -0.5, 4.5,
     /// -1.5, 2.5 and 5.5), through the four samplers in order, white, red, red, zero; red, white,
     /// white, zero; blue, red, green, zero; blue four times; green, white, blue, zero.
@@ -444,6 +466,8 @@ mod on_device {
             let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
                 FunctionDescriptor::new(function),
             ));
+            let form = samples_and_switches(name, &device, &descriptor);
+            assert_eq!(form, (1, 0), "{name}: the module's samples and switches");
             let state = (device.new_compute_pipeline_state(&descriptor, |samplers| {
                 assert_eq!(samplers.len(), 4, "{name}: {samplers:?}");
                 Ok((1..=4).collect())
@@ -501,7 +525,9 @@ mod on_device {
             }
             drop((command_buffer, queue, state, t));
             println!(
-                "{name}: an argument buffer's texture sampled through a table of constexpr samplers"
+                "{name}: an argument buffer's texture sampled through a table of constexpr samplers \
+                 as one sample through the sampler array ({} sample, {} switches)",
+                form.0, form.1
             );
         });
     }
