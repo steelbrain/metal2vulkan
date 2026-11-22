@@ -2208,13 +2208,15 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   0.4 ms after its commit, mid-way through a running 60 ms command buffer, whose own run did not
   change (job m3-max-68129). The runtime starts it at the next piece's boundary.
 - The pieces cost host instructions on every command buffer, cut or not. Measured with the
-  compute harness on an RTX 3090 against the same runtime with no pieces (f979769faf), four runs
-  of each build in random order (job m3-max-68794), the thread that encodes and commits ran 1,239
-  more instructions a command buffer in `burst_2000` (2.5%; all threads together ran 513 fewer),
-  1,609 in `burst_160` (3.5%), 1,633 in `burst_160_shared` (2.7%), 1,843 in `frame_5cb` (2.8%)
-  and 4,566 in `burst_2000x5` (4.4%), whose command buffers open five compute encoders of one
-  dispatch each: about 830 more for each encoder past the first. The rows of one command buffer
-  a run (`waves`, `constant_private` and the two `sampling_distinct` rows) ran 952 to 1,166 more.
+  compute harness on an RTX 3090 against the runtime with no pieces (f979769faf; the build with
+  them, fa77a9035b, also fetches a kernel's stage input, a change to pipeline creation and to no
+  encoder's path), four runs of each build in random order (job m3-max-68794), the thread that
+  encodes and commits ran 1,239 more instructions a command buffer in `burst_2000` (2.5%; all
+  threads together ran 513 fewer), 1,609 in `burst_160` (3.5%), 1,633 in `burst_160_shared`
+  (2.7%), 1,843 in `frame_5cb` (2.8%) and 4,566 in `burst_2000x5` (4.4%), whose command buffers
+  open five compute encoders of one dispatch each: about 830 more for each encoder past the
+  first. The rows of one command buffer a run (`waves`, `constant_private` and the two
+  `sampling_distinct` rows) ran 952 to 1,166 more.
   On an RX 7900 XTX (job m3-max-68607) the rise was 964 in `burst_2000` and 883 in `burst_160`;
   with parts of the path put back to their form with no pieces (the step's scan for shared
   resources, the room's ranking of what is ready, the scan as a group closes, the cut test where
