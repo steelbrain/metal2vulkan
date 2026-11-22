@@ -97,6 +97,7 @@ mod on_device {
         use super::d3d::{self, D3d, SharedTexture};
         use crate::d3d11::{import_query, plane_list};
         use crate::tests::command::on_device::{each_device, finished, within};
+        use crate::texture::TextureObject;
         use crate::{
             BufferLayout, D3d11Plane, Device, Error, Gap, IndexClass, MemoryClass, PixelFormat,
             Surface, TextureDescriptor, TexturePlace, TextureSwizzle, TextureSwizzleChannels,
@@ -416,15 +417,24 @@ mod on_device {
                     let mut own = *d;
                     own.pixel_format = plane.image;
                     let format = device.plane_plan(&own).expect("the image's plan").format;
-                    let usage = texture.image_usage();
+                    let usage = texture.object().image_usage();
                     let full = plane_list(format, plan.format, &plan.view_formats);
                     let answer =
                         |list: &[vk::Format]| import_query(device.core(), format, usage, list);
                     let takes = (answer(&full)).is_ok_and(|features| {
                         features.contains(vk::ExternalMemoryFeatureFlags::IMPORTABLE)
                     });
+                    // The answer as the query gives it: the external memory features' bits, or
+                    // the `VkResult`.
+                    let said = |list: &[vk::Format]| match answer(list) {
+                        Ok(features) => format!("features {:#x}", features.as_raw()),
+                        Err(result) => format!("VkResult {}", result.as_raw()),
+                    };
+                    let raw = |list: &[vk::Format]| -> Vec<i32> {
+                        list.iter().map(|listed| listed.as_raw()).collect()
+                    };
                     let alone: Vec<String> = (full.iter().filter(|&&listed| listed != format))
-                        .map(|&listed| format!("{listed:?} {:?}", answer(&[format, listed])))
+                        .map(|&listed| format!("{} {}", listed.as_raw(), said(&[format, listed])))
                         .collect();
                     let made = texture.new_texture_view_with_swizzle(
                         view,
@@ -454,10 +464,13 @@ mod on_device {
                         ),
                     }
                     println!(
-                        "d3d11-views: {label}: image {format:?}, usage {usage:?}; the import query \
-                         with the list {full:?}: {:?}; with each other format alone beside \
-                         {format:?}: {}; the swizzled {view:?} view made: {takes}",
-                        answer(&full),
+                        "d3d11-views: {label}: image VkFormat {}, usage {:#x}; the import query \
+                         with the list {:?}: {}; with each other format alone beside the image's \
+                         own: {}; the swizzled {view:?} view made: {takes}",
+                        format.as_raw(),
+                        usage.as_raw(),
+                        raw(&full),
+                        said(&full),
                         alone.join(", "),
                     );
                 }
