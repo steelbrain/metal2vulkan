@@ -50,7 +50,6 @@ use crate::pipeline::{
 use crate::spirv::interp::{run_with_images, Buffer, Config, Image, Order, Resources};
 use crate::spirv::ir::TypedModule;
 use crate::spirv::testing::committed_profiles;
-use crate::vk;
 
 const OP_TYPE_INT: u16 = 21;
 const OP_TYPE_IMAGE: u16 = 25;

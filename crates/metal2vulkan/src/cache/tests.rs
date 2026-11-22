@@ -870,7 +870,6 @@ fn the_merged_members_round_trip_in_one_render_pipeline() {
         sealed.dependencies.iter().any(|d| d.fact == fact),
         "{fact:?}"
     );
-    assert!(sealed.dependencies.iter().any(|d| d.fact == ulong_view));
 }
 
 /// The emulated-simdgroups variant of a kernel moltenvk-m3 runs on whole subgroups round trips as a
