@@ -53,8 +53,9 @@ fn a_report_names_the_recording_range_the_play_used() {
         let (code, text) = report(dir.path(), &first, run, extra);
         assert_eq!(code, Some(2), "{text}");
         let lines = text.lines().map(str::to_owned).collect::<Vec<_>>();
-        assert!(lines[2].starts_with("error device-type: "), "{text}");
-        lines[0].clone()
+        assert_eq!(lines[0], "mode full: every call", "{text}");
+        assert!(lines[3].starts_with("error device-type: "), "{text}");
+        lines[1].clone()
     };
     assert_eq!(
         line("unstated", &[]),
@@ -72,10 +73,11 @@ fn a_report_names_the_recording_range_the_play_used() {
     std::fs::write(dir.path().join("s.range"), "frames 3\n").unwrap();
     let (code, text) = report(dir.path(), &first, "bad", &[]);
     assert_eq!(code, Some(2), "{text}");
-    assert!(text.starts_with("error range: "), "{text}");
+    let second = text.lines().nth(1).unwrap_or_default();
+    assert!(second.starts_with("error range: "), "{text}");
 }
 
-/// The line after the range says whether the stream has the host's display library beside it,
+/// The line after the range (the report's third, after the mode line) says whether the stream has the host's display library beside it,
 /// `NAME.display.metallib`, and its length, SHA-256 and git blob id.
 #[test]
 fn a_report_names_the_display_library_beside_the_stream() {
@@ -88,7 +90,7 @@ fn a_report_names_the_display_library_beside_the_stream() {
     let line = |run: &str| {
         let (code, text) = report(dir.path(), &first, run, &[]);
         assert_eq!(code, Some(2), "{text}");
-        text.lines().nth(1).unwrap_or_default().to_owned()
+        text.lines().nth(2).unwrap_or_default().to_owned()
     };
     assert_eq!(
         line("none"),
