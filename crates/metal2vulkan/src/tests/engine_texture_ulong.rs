@@ -490,13 +490,15 @@ fn ulong_atomics_are_refused_on_every_device() {
     let Some(bc) = fixture("unk_ulong_atomics") else {
         return;
     };
-    let refusal = Unsupported::not_implemented(Feature::ImageAtomics);
+    let refusal = |u: &Unsupported| {
+        u.feature == Feature::ImageAtomics && matches!(u.needs, Needs::NotImplemented)
+    };
     let profiles = profiles();
     let mut refused = 0;
     for (stem, p) in &profiles {
         for entry in ["unk_ulong_atomics", "unk_ulong_atomic_rw"] {
             match compile(&bc, entry, p) {
-                Err(Error::Unsupported(u)) if u == refusal => refused += 1,
+                Err(Error::Unsupported(u)) if refusal(&u) => refused += 1,
                 Err(Error::Unsupported(u))
                     if entry == "unk_ulong_atomic_rw" && matches!(u.needs, Needs::AnyOf(_)) => {}
                 other => panic!("{stem}: {entry}: {:?}", other.map(|_| ())),

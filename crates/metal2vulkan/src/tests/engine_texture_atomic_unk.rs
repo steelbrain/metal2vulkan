@@ -29,7 +29,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::device::profile::DeviceProfile;
 use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
-use crate::error::{Error, Feature, Needs, Unsupported};
+use crate::error::{Error, Feature, Needs};
 use crate::library::FunctionArtifact;
 use crate::pipeline::testing::{
     compile, engine_dir, link_and_validate, llvm_assemble, AssembleError,
@@ -143,7 +143,9 @@ fn artifact(
         }
         Err(Error::Unsupported(u)) if matches!(u.needs, Needs::AnyOf(_)) => None,
         // A `ulong` texture's atomics, on every device.
-        Err(Error::Unsupported(u)) if u == Unsupported::not_implemented(Feature::ImageAtomics) => {
+        Err(Error::Unsupported(u))
+            if u.feature == Feature::ImageAtomics && matches!(u.needs, Needs::NotImplemented) =>
+        {
             None
         }
         Err(e) => panic!("{stem}: {entry}: {e}"),
