@@ -999,6 +999,13 @@ stages are task and mesh shaders, which need `VK_EXT_mesh_shader` with `meshShad
 pipeline and each of its object and mesh functions (`Unsupported{MeshShading}`, naming what it
 lacks).
 
+An object or mesh function that calls a SIMD-group, quad-group or SIMD-group matrix function is
+refused on every device (`Unsupported{SubgroupOperations}`, `QuadOperations` or `SimdgroupMatrix`,
+naming the stage's `VkProperty::SubgroupStage`), a device that lists the task and mesh stages in
+`subgroupSupportedStages` included: the translator models no subgroup facts for those stages. Metal
+gives both stages `[[thread_index_in_simdgroup]]`, which compiles, the lane derived from the linear
+thread index as a kernel's is.
+
 The mesh lowering is only compiled and validated: no mesh draw it makes has been compared with
 Metal on a GPU, and the runtime makes no mesh pipeline (its README's known gaps of render pipeline
 states). What follows is what the lowering emits.
