@@ -842,7 +842,9 @@ impl FeatureChain {
 /// One `VkBool32` member of a [`FeatureChain`] structure.
 pub(super) struct Member {
     pub(super) structure: Structure,
-    /// The member's field in its structure (ash's name for the `VkBool32`).
+    /// The member's field in its structure (ash's name for the `VkBool32`), which the tests
+    /// name members by.
+    #[cfg(test)]
     pub(super) name: &'static str,
     /// The engine's name for the member, when its vocabulary has one.
     pub(super) feature: Option<VkFeature>,
@@ -876,6 +878,7 @@ macro_rules! members {
         /// feature and names what was enabled.
         pub(super) const MEMBERS: &[Member] = &[$(Member {
             structure: Structure::$structure,
+            #[cfg(test)]
             name: stringify!($member),
             feature: $feature,
             #[cfg(test)]
