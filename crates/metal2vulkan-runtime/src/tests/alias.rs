@@ -302,7 +302,7 @@ mod on_device {
             let p = place(name, &device, heap, (0, format, 64, 64), FIRST);
             let r = place_at(name, &device, (heap, apart), (1, format, 64, 64), FIRST + 2);
             for t in [&p, &r] {
-                let place = (t.texture.object().place()).expect("a heap texture's placement");
+                let place = (t.texture.object().placement()).expect("a heap texture's placement");
                 assert!(!place.linked(), "{name}: no links");
             }
             let mut buffers = Buffers::new(name, &device, 2);

@@ -3922,7 +3922,7 @@ impl TextureInner {
 
 impl TextureInner {
     /// Its image's placement in its heap, where it was placed in one (`crate::alias`).
-    pub(crate) fn place(&self) -> Option<&Arc<Placement>> {
+    pub(crate) fn placement(&self) -> Option<&Arc<Placement>> {
         self.place.as_ref()
     }
 

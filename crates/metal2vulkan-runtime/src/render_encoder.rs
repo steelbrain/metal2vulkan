@@ -848,7 +848,7 @@ fn begin(
     // (`crate::alias`).
     let places = (pass.targets().map(|t| &t.texture))
         .chain(resolves().map(|r| &r.texture))
-        .map(|texture| (TextureObject::object(texture).place(), Access::Write));
+        .map(|texture| (TextureObject::object(texture).placement(), Access::Write));
     building.places(places)?;
     building.overs_before(overs(), false)?;
     let opens = building.opens_command_buffer();
@@ -1944,7 +1944,7 @@ impl RenderCommandEncoder {
                 }
                 building.keep(buffer);
                 let id = [buffer.id(), buffer.tracked_id()];
-                let place = buffer.object().place().cloned();
+                let place = buffer.object().placement().cloned();
                 (
                     id,
                     buffer.is_shared(),
@@ -1968,7 +1968,7 @@ impl RenderCommandEncoder {
                     texture.storage_gap(true, false),
                     Some(lent),
                     None,
-                    texture.object().place().cloned(),
+                    texture.object().placement().cloned(),
                 )
             }
             Resource::IndirectCommandBuffer(commands) => {
@@ -3186,10 +3186,16 @@ impl RenderCommandEncoder {
         let draws = &state.inner.compiled.draws;
         let tables = &self.tables;
         let bound = (draws.buffers.iter()).map(|&(table, slot, access)| {
-            (tables[table].buffer(slot).and_then(|b| b.place()), access)
+            (
+                tables[table].buffer(slot).and_then(|b| b.placement()),
+                access,
+            )
         });
         let textures = (draws.textures.iter()).map(|&(table, slot, access)| {
-            (tables[table].texture(slot).and_then(|t| t.place()), access)
+            (
+                tables[table].texture(slot).and_then(|t| t.placement()),
+                access,
+            )
         });
         let declared =
             (self.declared.each.iter()).map(|(_, access, .., place)| (place.as_ref(), *access));

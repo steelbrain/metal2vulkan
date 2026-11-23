@@ -119,7 +119,7 @@ impl Drop for DeviceCopy {
 
 impl BufferInner {
     /// Its bytes' placement in its heap, where it was placed in one (`crate::alias`).
-    pub(crate) fn place(&self) -> Option<&Arc<Placement>> {
+    pub(crate) fn placement(&self) -> Option<&Arc<Placement>> {
         self.place.as_ref()
     }
 

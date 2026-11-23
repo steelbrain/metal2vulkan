@@ -224,8 +224,8 @@ impl BlitCommandEncoder {
         // (`crate::alias`).
         building.places(
             [
-                (source.object().place(), Access::Read),
-                (destination.object().place(), Access::Write),
+                (source.object().placement(), Access::Read),
+                (destination.object().placement(), Access::Write),
             ]
             .into_iter(),
         )?;
@@ -460,8 +460,8 @@ impl BlitCommandEncoder {
         // A write of a heap buffer leaves the textures over its bytes stale (`crate::alias`).
         building.places(
             [
-                (source.object().place(), Access::Read),
-                (destination.object().place(), Access::Write),
+                (source.object().placement(), Access::Read),
+                (destination.object().placement(), Access::Write),
             ]
             .into_iter(),
         )?;
@@ -572,8 +572,8 @@ impl BlitCommandEncoder {
         };
         building.places(
             [
-                (texture.object().place(), into),
-                (buffer.object().place(), out),
+                (texture.object().placement(), into),
+                (buffer.object().placement(), out),
             ]
             .into_iter(),
         )?;
@@ -704,7 +704,7 @@ impl BlitCommandEncoder {
         building.managed_backs(backs)?;
         building.wrote_managed(buffer);
         // A write of a heap buffer leaves the textures over its bytes stale (`crate::alias`).
-        building.places([(buffer.object().place(), Access::Write)].into_iter())?;
+        building.places([(buffer.object().placement(), Access::Write)].into_iter())?;
         let overs = [(Reached::Buffer(buffer.span()), Access::Write)];
         building.overs_before(overs, false)?;
         let command = building.ordered_command()?;
@@ -858,7 +858,7 @@ impl BlitCommandEncoder {
         building.wrote_texture_managed(texture);
         // Its levels past the first are written: a heap texture an alias's write left stale
         // moves from undefined first (`crate::alias`).
-        building.places([(texture.object().place(), Access::ReadWrite)].into_iter())?;
+        building.places([(texture.object().placement(), Access::ReadWrite)].into_iter())?;
         let overs = [(Reached::Texture(texture.object()), Access::ReadWrite)];
         building.overs_before(overs, false)?;
         let command = building.ordered_command()?;
