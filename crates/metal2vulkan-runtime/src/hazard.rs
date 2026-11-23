@@ -10,6 +10,7 @@ use crate::device::Core;
 use crate::memory::BlockId;
 use metal2vulkan::metal::BindingAccess;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::sync::{Arc, Mutex, Weak};
 
 /// How a dispatch uses a resource.
@@ -195,6 +196,15 @@ impl HeapId {
     pub(crate) fn places(&self) -> &Mutex<Vec<Weak<Placement>>> {
         &self.places
     }
+
+    /// A placement of the heap gained its first link (`gained`) or lost its last.
+    pub(crate) fn linked(&self, gained: bool) {
+        let linked = &self.core.heap_ids.linked;
+        match gained {
+            true => linked.fetch_add(1, Relaxed),
+            false => linked.fetch_sub(1, Relaxed),
+        };
+    }
 }
 
 impl Drop for HeapId {
@@ -210,6 +220,9 @@ impl Drop for HeapId {
 #[derive(Default)]
 pub(crate) struct HeapIds {
     state: Mutex<HeapIdState>,
+    /// The device's heap placements with links (`crate::alias`): while none has, a command's
+    /// uses look at no placement.
+    linked: AtomicUsize,
 }
 
 #[derive(Default)]
@@ -222,6 +235,11 @@ struct HeapIdState {
 const HEAP_IDS_PRUNE: usize = 64;
 
 impl HeapIds {
+    /// Whether a heap placement of the device has links.
+    pub(crate) fn any_linked(&self) -> bool {
+        self.linked.load(Relaxed) != 0
+    }
+
     /// The id of the heap at `offset` in `block`, a new one where no resource of it lives.
     pub(crate) fn of(&self, core: &Arc<Core>, block: BlockId, offset: u64) -> Arc<HeapId> {
         let mut state = crate::device::lock(&self.state);

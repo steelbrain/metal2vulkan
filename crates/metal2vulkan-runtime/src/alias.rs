@@ -124,7 +124,9 @@ impl Placement {
                 place: Arc::downgrade(&place),
                 stale: Arc::clone(&place.stale),
             });
-            other.linked.store(true, Relaxed);
+            if !other.linked.swap(true, Relaxed) {
+                heap.linked(true);
+            }
             links.push(Link {
                 place: Arc::downgrade(other),
                 stale: Arc::clone(&other.stale),
@@ -133,6 +135,7 @@ impl Placement {
         if !links.is_empty() {
             place.stale.store(moved.is_some(), Relaxed);
             place.linked.store(true, Relaxed);
+            heap.linked(true);
             *lock(&place.links) = links;
         }
         places.push(Arc::downgrade(&place));
@@ -169,10 +172,16 @@ impl Drop for Placement {
                 .filter_map(|link| link.place.upgrade())
                 .collect()
         };
+        if *self.linked.get_mut() {
+            self.heap.linked(false);
+        }
         for other in &met {
             let mut links = lock(&other.links);
             links.retain(|link| !std::ptr::eq(link.place.as_ptr(), me));
-            other.linked.store(!links.is_empty(), Relaxed);
+            let linked = !links.is_empty();
+            if other.linked.swap(linked, Relaxed) && !linked {
+                self.heap.linked(false);
+            }
         }
     }
 }
@@ -295,10 +304,6 @@ pub(crate) struct Aliased {
 }
 
 impl Aliased {
-    pub(crate) fn is_empty(&self) -> bool {
-        self.checks.is_empty() && self.writes.is_empty()
-    }
-
     /// For the device tests: its checks.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn checks(&self) -> usize {

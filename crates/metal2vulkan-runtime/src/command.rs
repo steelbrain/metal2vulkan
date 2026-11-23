@@ -233,8 +233,9 @@ pub(crate) struct Building {
     /// The drawables it presents, each with the consumer's semaphore its end signals
     /// ([`CommandBuffer::present_drawable`]).
     presents: Vec<(Texture, vk::Semaphore)>,
-    /// What its commands did to the heap placements with links they touched (`crate::alias`).
-    marks: Marks,
+    /// What its commands did to the heap placements with links they touched (`crate::alias`),
+    /// from the first such touch.
+    marks: Option<Box<Marks>>,
 }
 
 /// The push constant bytes a command buffer holds, from offset 0, as its pushes left them.
@@ -343,9 +344,10 @@ pub(crate) struct Segment {
     /// Windows): its submission acquires them from `VK_QUEUE_FAMILY_EXTERNAL` at its start and
     /// releases them to it at its end (`crate::submit`).
     pub(crate) planes: Vec<Arc<Image>>,
-    /// The checks at its head and its writes of heap placements with links (`crate::alias`):
-    /// staged, a command buffer of moves leads it where the checks find one owed.
-    pub(crate) aliased: Aliased,
+    /// The checks at its head and its writes of heap placements with links (`crate::alias`),
+    /// where it has any: staged, a command buffer of moves leads it where the checks find one
+    /// owed.
+    pub(crate) aliased: Option<Box<Aliased>>,
 }
 
 pub(crate) struct Handlers {
@@ -432,7 +434,7 @@ impl CommandBuffer {
                         vertex: Vec::new(),
                         tally: Tally::default(),
                         presents: Vec::new(),
-                        marks: Marks::default(),
+                        marks: None,
                     }),
                     ended: None,
                     times: Times::default(),
@@ -903,7 +905,7 @@ impl CommandBuffer {
         let state = self.state();
         let building = (state.building.as_ref()).expect("a command buffer not yet committed");
         (building.gpu.segments.iter())
-            .map(|segment| segment.aliased.checks())
+            .map(|segment| segment.aliased.as_ref().map_or(0, |part| part.checks()))
             .collect()
     }
 
@@ -1144,12 +1146,23 @@ impl Building {
             self.split()?;
         }
         let mut segment = self.gpu.segments.len() - 1;
-        if !rendering && self.last().command.is_some() && self.marks.splits(uses, segment) {
+        let marks = self.marks.get_or_insert_with(Box::default);
+        if !rendering && self.gpu.segments[segment].command.is_some() && marks.splits(uses, segment)
+        {
             self.split()?;
             segment += 1;
         }
-        let part = &mut self.gpu.segments[segment].aliased;
-        Ok(self.marks.used(uses, segment, part))
+        let part = self.gpu.segments[segment]
+            .aliased
+            .get_or_insert_with(Box::default);
+        let marks = self.marks.get_or_insert_with(Box::default);
+        Ok(marks.used(uses, segment, part))
+    }
+
+    /// Whether a heap placement of the device has links (`crate::alias`): where none has, a
+    /// command's uses look at no placement.
+    pub(crate) fn aliased(&self) -> bool {
+        self.device.core().heap_ids.any_linked()
     }
 
     /// [`aliases`](Self::aliases) and [`record_moves`](Self::record_moves) for a command outside a

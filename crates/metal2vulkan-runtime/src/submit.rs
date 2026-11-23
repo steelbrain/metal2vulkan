@@ -1920,8 +1920,8 @@ impl WorkState {
             image.keep_plane(&mut group.planes);
         }
         // The moves its checks find owed lead it, in its submit info (`crate::alias`).
-        if !segment.aliased.is_empty() {
-            match alias::stage(core, &mut pending.gpu.recorder, &segment.aliased) {
+        if let Some(part) = &segment.aliased {
+            match alias::stage(core, &mut pending.gpu.recorder, part) {
                 Ok(Some(lead)) => group.segments.push(Staged {
                     command: Some(vk::CommandBufferSubmitInfo::default().command_buffer(lead)),
                     ..Staged::default()

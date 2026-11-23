@@ -1224,7 +1224,9 @@ impl ComputeCommandEncoder {
             let building = recording(&mut self.building);
             // Heap textures it writes that an alias's write left stale move from undefined first
             // (`crate::alias`).
-            building.places(accesses.places(interface))?;
+            if building.aliased() {
+                building.places(accesses.places(interface))?;
+            }
             // Textures over a buffer in an image of their own take their copies first
             // (`crate::over`): looked for where one is bound or declared, the kernel reaches
             // memory outside its resources, or such an image is ahead of its buffer, and among

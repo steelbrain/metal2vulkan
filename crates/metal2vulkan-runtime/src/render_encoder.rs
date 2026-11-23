@@ -846,10 +846,12 @@ fn begin(
     });
     // Heap textures it renders into that an alias's write left stale move from undefined first
     // (`crate::alias`).
-    let places = (pass.targets().map(|t| &t.texture))
-        .chain(resolves().map(|r| &r.texture))
-        .map(|texture| (TextureObject::object(texture).placement(), Access::Write));
-    building.places(places)?;
+    if building.aliased() {
+        let places = (pass.targets().map(|t| &t.texture))
+            .chain(resolves().map(|r| &r.texture))
+            .map(|texture| (TextureObject::object(texture).placement(), Access::Write));
+        building.places(places)?;
+    }
     building.overs_before(overs(), false)?;
     let opens = building.opens_command_buffer();
     let command = building.ordered_command()?;
@@ -3180,6 +3182,9 @@ impl RenderCommandEncoder {
     /// rendering's end and its new beginning. Refused as another command that ends the rendering
     /// is while a visibility result's query counts the draws.
     fn draw_aliases(&mut self) -> Result<(), Error> {
+        if !self.core.heap_ids.any_linked() {
+            return Ok(());
+        }
         let Some(state) = &self.pipeline else {
             return Ok(());
         };
