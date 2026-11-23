@@ -32,6 +32,7 @@ mod fence;
 mod fetch;
 mod filter_nest;
 mod first_use_sites;
+mod float_depth;
 mod floor;
 mod function_tables;
 mod gpu_span;

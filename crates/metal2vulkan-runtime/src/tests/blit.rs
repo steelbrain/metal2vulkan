@@ -1011,7 +1011,7 @@ fn a_layout_metal_stops_is_refused_and_one_a_copy_command_cannot_address_is_a_ga
         )),
         alignment(PixelFormat::RGBA8Unorm, 0, 16, 66)
     );
-    // No plain copy of the image's bytes, and no upload of a 32-bit float depth.
+    // No plain copy of the image's bytes; a 32-bit float depth copies both ways.
     let mut msaa = descriptor(
         TextureType::Type2DMultisample,
         PixelFormat::RGBA8Unorm,
@@ -1046,13 +1046,14 @@ fn a_layout_metal_stops_is_refused_and_one_a_copy_command_cannot_address_is_a_ga
             into_image,
         )
     };
-    assert_eq!(
-        gap(float_copy(true)),
-        Gap::FloatDepthUpload {
-            pixel_format: PixelFormat::Depth32Float
-        }
-    );
-    assert!(float_copy(false).is_ok());
+    for into_image in [true, false] {
+        let copy = buffer_copied(float_copy(into_image));
+        assert_eq!(
+            copy.unit.aspect,
+            vk::ImageAspectFlags::DEPTH,
+            "{into_image}"
+        );
+    }
     assert!(matches!(
         refused(buffer_copy(
             &rgba,

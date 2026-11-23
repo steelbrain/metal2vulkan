@@ -1078,11 +1078,11 @@ mod tests {
             ExecutorError::NotSupported(NotSupported::NotEnabled(gaps))
                 if gaps.len() == 1 && gaps[0].starts_with("texture 1: ")
         ));
-        let depth = rt::Error::Unsupported(rt::Gap::FloatDepthUpload {
-            pixel_format: rt::PixelFormat::Depth32Float,
+        let bytes = rt::Error::Unsupported(rt::Gap::TextureBytes {
+            pixel_format: rt::PixelFormat::Depth32FloatStencil8,
         });
         assert!(matches!(
-            runtime_error("texture 0 level 0", depth),
+            runtime_error("texture 0 level 0", bytes),
             ExecutorError::Failed(_)
         ));
     }

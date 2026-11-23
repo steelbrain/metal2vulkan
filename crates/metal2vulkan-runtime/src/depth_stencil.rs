@@ -109,10 +109,11 @@ impl DepthStencilState {
     ///
     /// A negative or NaN depth, which Metal's test compares by its magnitude, takes no note: the
     /// runtime enables no `VK_EXT_depth_range_unrestricted` and refuses a clear depth outside
-    /// `[0, 1]` (`RenderPassKind::ClearDepth`), a viewport's depth range past it
-    /// (`DrawKind::Viewport`) and a 32-bit float depth upload (`Gap::FloatDepthUpload`), so a depth
-    /// attachment holds such a value only where Vulkan leaves a depth past the viewport's range
-    /// undefined.
+    /// `[0, 1]` (`RenderPassKind::ClearDepth`) and a viewport's depth range past it
+    /// (`DrawKind::Viewport`), so a depth attachment holds such a value only where Vulkan leaves a
+    /// depth past the viewport's range undefined, or where an upload put one there, which is the
+    /// device's under the upload's own note
+    /// ([`Texture::FLOAT_DEPTH_UPLOAD_NOTE`](crate::Texture::FLOAT_DEPTH_UPLOAD_NOTE)).
     pub fn precision_note(&self) -> Option<PrecisionNote> {
         let tests = self.inner.tests;
         (tests.depth_test || tests.depth_write).then_some(PrecisionNote::DepthDenormals)

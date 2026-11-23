@@ -508,26 +508,24 @@ mod on_device {
             d.array_length = 2;
             trip(11).run(&name, &make(&d, Some(4103)), 8);
 
-            // A 32-bit float depth texture: its bytes come out, and none go in.
+            // A 32-bit float depth texture: depths within `[0, 1]` go in and come back bit for bit
+            // (any other is the device's, `Texture::FLOAT_DEPTH_UPLOAD_NOTE`).
             let d = descriptor(TextureType::Type2D, PixelFormat::Depth32Float, [8, 8, 1]);
             let depth = make(&d, Some(4100));
             let whole = Region {
                 origin: [0; 3],
                 size: [8, 8, 1],
             };
+            let written: Vec<u8> = (0..64u8)
+                .flat_map(|i| (f32::from(i) / 63.0).to_le_bytes())
+                .collect();
+            (depth.replace_region(whole, 0, 0, crate::HostBytes::from(&written[..]), 32, 256))
+                .unwrap_or_else(|error| panic!("{name}: depth replace_region: {error}"));
             let mut read = vec![0u8; 256];
             depth
                 .get_bytes(&mut read, 32, 256, whole, 0, 0)
                 .unwrap_or_else(|error| panic!("{name}: depth get_bytes: {error}"));
-            assert!(
-                matches!(
-                    depth.replace_region(whole, 0, 0, crate::HostBytes::from(&read[..]), 32, 256),
-                    Err(Error::Unsupported(Gap::FloatDepthUpload {
-                        pixel_format: PixelFormat::Depth32Float
-                    }))
-                ),
-                "{name}"
-            );
+            assert_eq!(read, written, "{name}: the depth's bytes");
 
             // A block-compressed texture, where the device makes one: rows of 4 x 4 blocks.
             let d = descriptor(TextureType::Type2D, PixelFormat::BC1RGBA, [8, 8, 1]);

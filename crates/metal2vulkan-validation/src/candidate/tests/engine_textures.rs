@@ -626,11 +626,11 @@ fn an_argument_buffer_buffer_is_the_buffer_at_its_field() {
     }
 }
 
-/// A 32-bit float depth texture, which the runtime takes no upload of (`Gap::FloatDepthUpload`):
-/// through the runtime the run fills it by a draw of the owned `depth_fill` pair, and on both runs
-/// `depth_fill_read` reads every depth back as authored, row 1 below row 0. A depth outside
-/// `[0, 1]`, which a draw would clamp, is refused through the runtime as the requirement the case
-/// checker raises from the case's literals (`ToolingRequirement::DepthOutsideUnitRange`).
+/// A 32-bit float depth texture: through the runtime the run fills it by a draw of the owned
+/// `depth_fill` pair, and on both runs `depth_fill_read` reads every depth back as authored, row 1
+/// below row 0. A depth outside `[0, 1]`, which a draw would clamp, is refused through the runtime
+/// as the requirement the case checker raises from the case's literals
+/// (`ToolingRequirement::DepthOutsideUnitRange`).
 #[cfg(target_os = "linux")]
 #[test]
 fn a_float_depth_texture_is_filled_by_a_draw_and_reads_back_as_authored() {

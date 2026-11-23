@@ -182,6 +182,8 @@ impl UlpTable {
 /// - `RestrictedDepthRange`: unbounded: without `VK_EXT_depth_range_unrestricted` a depth image
 ///   takes no texel outside `[0, 1]`, so a comparison of one Metal holds there can answer
 ///   otherwise.
+/// - `RestrictedDepthUpload`: unbounded: a depth uploaded outside `[0, 1]` is the device's, which
+///   Vulkan does not define without `VK_EXT_depth_range_unrestricted`.
 /// - `CubeGradientFootprint`: unbounded: Apple's approximate length and truncated level against the
 ///   device's can select another level or filter near a boundary, which changes whole texels, not
 ///   lanes.
@@ -331,7 +333,8 @@ pub fn allowance(note: PrecisionNote) -> Allowance {
         | N::DeviceLineRasterization
         | N::DeviceFragmentRuns
         | N::DeviceOcclusionCount
-        | N::VertexSimdgroupGrouping => Allowance::Unbounded,
+        | N::VertexSimdgroupGrouping
+        | N::RestrictedDepthUpload => Allowance::Unbounded,
     }
 }
 

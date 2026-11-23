@@ -4,9 +4,8 @@
 //!   texel) or the stencil (1) of `Depth32Float_Stencil8`, the depth of `Depth16Unorm` and the
 //!   stencil of `Stencil8`, as Metal takes the option of a format of that aspect alone (the
 //!   conformance crate's `buffer-depth-samples` rows). `None` of a format of both, a plane option of
-//!   a format without its aspect and one of a multisample texture are `Gap::TextureBytes`; a copy
-//!   into the depth of `Depth32Float_Stencil8` is `Gap::FloatDepthUpload`, as one into
-//!   `Depth32Float` is.
+//!   a format without its aspect and one of a multisample texture are `Gap::TextureBytes`; the
+//!   depth of `Depth32Float_Stencil8` copies both ways, as `Depth32Float`'s does.
 //! - Under a device cfg, on every device of the cfg's kind: a pass clears a `Depth32Float_Stencil8`
 //!   texture's depth to 0.25 and its stencil to 0x5a; a copy of `StencilFromDepthStencil` writes a
 //!   region's stencil from a buffer; copies of each plane option read the whole level back, the
@@ -121,14 +120,12 @@ fn a_plane_option_copies_the_aspect_it_names_where_the_format_has_it() {
             );
         }
     }
-    assert_eq!(
-        plane(copy(both, d32s8, 1, Depth, false)),
-        (A::DEPTH.as_raw(), 4)
-    );
-    assert_eq!(
-        gap(copy(both, d32s8, 1, Depth, true)),
-        Gap::FloatDepthUpload { pixel_format: both }
-    );
+    for into_image in [false, true] {
+        assert_eq!(
+            plane(copy(both, d32s8, 1, Depth, into_image)),
+            (A::DEPTH.as_raw(), 4)
+        );
+    }
 }
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]

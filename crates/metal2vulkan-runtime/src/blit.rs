@@ -308,12 +308,13 @@ impl BlitCommandEncoder {
     /// those bytes ([`Buffer::new_texture`]) whose rows meet the region's, which Metal leaves
     /// undefined, copies as [`copy_from_texture`](Self::copy_from_texture) copies two textures over
     /// one buffer whose bytes meet: in slabs, as from the source before the copy; the region on
-    /// its own texels copies nothing.
+    /// its own texels copies nothing. Into a 32-bit float depth it carries
+    /// [`Texture::FLOAT_DEPTH_UPLOAD_NOTE`].
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's buffer or texture;
     /// [`Refusal::TextureRegion`]; [`Refusal::BufferCopyLayout`] for a layout Metal's validation
     /// stops; [`Gap::BufferCopyAlignment`] for one no copy command in the floor addresses;
-    /// [`Gap::TextureBytes`]; [`Gap::FloatDepthUpload`]; [`Gap::OverlappingCopy`], counted, for
+    /// [`Gap::TextureBytes`]; [`Gap::OverlappingCopy`], counted, for
     /// rows of a texture in place that meet the region's where no axis cuts them so, and for a
     /// texture placed in a heap whose memory meets the region's bytes; [`Error::Vulkan`] where the
     /// command buffer cannot record.
@@ -333,11 +334,12 @@ impl BlitCommandEncoder {
     /// `toTexture:destinationSlice:destinationLevel:destinationOrigin:options:`: as
     /// [`copy_from_buffer`](Self::copy_from_buffer), into the aspect `option` names, one
     /// `vkCmdCopyBufferToImage` region of that aspect alone. Metal takes a plane option of a
-    /// format of depth and stencil both, and of a format of the option's aspect alone.
+    /// format of depth and stencil both, and of a format of the option's aspect alone. Into a
+    /// 32-bit float depth it carries [`Texture::FLOAT_DEPTH_UPLOAD_NOTE`].
     ///
     /// Err: as [`copy_from_buffer`](Self::copy_from_buffer)'s; [`Gap::TextureBytes`] for a plane
     /// option of a format without its aspect, for `None` of a format of depth and stencil both,
-    /// and for a multisample texture; [`Gap::FloatDepthUpload`] for a 32-bit float depth.
+    /// and for a multisample texture.
     pub fn copy_from_buffer_with_options(
         &mut self,
         source: &Buffer,
@@ -359,7 +361,7 @@ impl BlitCommandEncoder {
     /// [`copy_from_texture`](Self::copy_from_texture)'s do. The command buffer keeps the texture
     /// and the buffer until it retires.
     ///
-    /// Err: as [`copy_from_buffer`](Self::copy_from_buffer)'s, but for [`Gap::FloatDepthUpload`].
+    /// Err: as [`copy_from_buffer`](Self::copy_from_buffer)'s.
     pub fn copy_from_texture_to_buffer(
         &mut self,
         source: &Texture,
@@ -385,8 +387,7 @@ impl BlitCommandEncoder {
     /// `option` names, one `vkCmdCopyImageToBuffer` region of that aspect alone, as
     /// [`copy_from_buffer_with_options`](Self::copy_from_buffer_with_options) takes it.
     ///
-    /// Err: as [`copy_from_buffer_with_options`](Self::copy_from_buffer_with_options)'s, but for
-    /// [`Gap::FloatDepthUpload`].
+    /// Err: as [`copy_from_buffer_with_options`](Self::copy_from_buffer_with_options)'s.
     pub fn copy_from_texture_to_buffer_with_options(
         &mut self,
         source: &Texture,
@@ -1565,7 +1566,7 @@ impl BufferCopy {
 /// offset of whole texel blocks, a multiple of 4 for a depth or stencil aspect, for each image,
 /// and a row stride of whole blocks ([`Gap::BufferCopyAlignment`]).
 ///
-/// Err: [`Gap::TextureBytes`]; [`Gap::FloatDepthUpload`]; [`Refusal::TextureRegion`];
+/// Err: [`Gap::TextureBytes`]; [`Refusal::TextureRegion`];
 /// [`Refusal::BufferCopyLayout`]; [`Gap::BufferCopyAlignment`].
 pub(crate) fn buffer_copy(
     texture: &Side<'_>,
@@ -1579,9 +1580,6 @@ pub(crate) fn buffer_copy(
     let Some(unit) = texture.unit else {
         return Err(Error::Unsupported(Gap::TextureBytes { pixel_format }));
     };
-    if into_image && unit.float_depth() {
-        return Err(Error::Unsupported(Gap::FloatDepthUpload { pixel_format }));
-    }
     let mut size = size;
     if size[1] == 0
         && matches!(

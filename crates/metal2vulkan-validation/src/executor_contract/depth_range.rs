@@ -1,7 +1,8 @@
 //! The 32-bit float depths a case gives a depth image, and whether the engine's candidate can put
-//! them there as Metal holds them: Metal's `Depth32Float` texel holds any `float`, and the runtime
-//! takes no upload of a 32-bit float depth (`metal2vulkan_runtime::Gap::FloatDepthUpload`), so
-//! the candidate fills one by a draw, which writes depths clamped to the viewport's `[0, 1]`. A
+//! them there as Metal holds them: Metal's `Depth32Float` texel holds any `float`, the runtime's
+//! upload leaves a depth outside `[0, 1]` the device's
+//! (`metal2vulkan_runtime::Texture::FLOAT_DEPTH_UPLOAD_NOTE`), and the candidate fills one by a
+//! draw, which writes depths clamped to the viewport's `[0, 1]`. A
 //! case whose depth texels or initial depth hold a value outside it stops the candidate on every
 //! device ([`ToolingRequirement::DepthOutsideUnitRange`], the runtime's limit): it neither uploads
 //! the value nor clamps it silently (an answer that is not the case's). The Metal oracle runs every

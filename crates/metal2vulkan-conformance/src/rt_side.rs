@@ -19,8 +19,9 @@
 //! [`metal2vulkan_runtime::RenderPipelineState::precision_notes`]), and so do a texture of a
 //! block-compressed format ([`metal2vulkan_runtime::Texture::precision_note`]) and a sampler state that
 //! reads an opaque-black border ([`metal2vulkan_runtime::SamplerState::precision_note`]). This side
-//! announces the notes of each state its case dispatched or drew with, and of each texture and
-//! sampler state it made, by the codes the suite's allowances name (`metal2vulkan-degrade-<kind>`).
+//! announces the notes of each state its case dispatched or drew with, of each texture and
+//! sampler state it made, and of each upload into a 32-bit float depth (`upload_note`), by the
+//! codes the suite's allowances name (`metal2vulkan-degrade-<kind>`).
 
 use crate::case::{
     Answer, ArgumentSlot, Bindings, Failure, Handle, SamplerSpec, ShaderSource, Side,
@@ -422,6 +423,22 @@ impl<'a> RtSide<'a> {
         keep(&mut self.textures, texture)
     }
 
+    /// `replace_region` of `bytes` into `texture`, with its static note where it reaches a 32-bit
+    /// float depth ([`upload_note`]), which [`Side::announced`] answers.
+    fn replace(
+        &mut self,
+        texture: &rt::Texture,
+        (region, level, slice): (rt::Region, u32, u32),
+        bytes: &[u8],
+        pitches: (u64, u64),
+    ) -> Answer<()> {
+        (texture.replace_region(region, level, slice, bytes.into(), pitches.0, pitches.1))
+            .map_err(|error| Failure::of_rt(&error))?;
+        let note = upload_note(texture, rt::BlitOption::None);
+        self.encoder_notes.extend(note);
+        Ok(())
+    }
+
     fn held(&self, handle: Handle) -> Answer<&rt::Buffer> {
         (self.buffers.get(handle.0 as usize))
             .map(|(buffer, _)| buffer)
@@ -498,6 +515,17 @@ impl<'a> RtSide<'a> {
         self.dispatched.insert(at);
         Ok(keep(&mut self.command_buffers, command_buffer))
     }
+}
+
+/// The static note of an upload into `texture` of `option`, where it reaches a 32-bit float depth:
+/// `Depth32Float`'s, or `Depth32Float_Stencil8`'s under its depth option
+/// ([`rt::Texture::FLOAT_DEPTH_UPLOAD_NOTE`]).
+fn upload_note(texture: &rt::Texture, option: rt::BlitOption) -> Option<rt::PrecisionNote> {
+    let pixel_format = texture.descriptor().pixel_format;
+    let depth = pixel_format == PixelFormat::Depth32Float
+        || (pixel_format == PixelFormat::Depth32FloatStencil8
+            && option == rt::BlitOption::DepthFromDepthStencil);
+    depth.then_some(rt::Texture::FLOAT_DEPTH_UPLOAD_NOTE)
 }
 
 /// `value` kept in `kept`, by its handle.
@@ -744,7 +772,7 @@ impl Side for RtSide<'_> {
             origin: [0, 0, 0],
             size: [size[0], size[1], 1],
         };
-        (texture.replace_region(region, 0, 0, bytes.into(), row_pitch.into(), 0)).map_err(of_rt)?;
+        self.replace(&texture, (region, 0, 0), bytes, (row_pitch.into(), 0))?;
         Ok(self.keep_texture(texture))
     }
 
@@ -1221,8 +1249,7 @@ impl Side for RtSide<'_> {
                 origin: [0, 0, 0],
                 size: [spec.size[0], spec.size[1], 1],
             };
-            (texture.replace_region(region, 0, 0, bytes.into(), spec.row_pitch.into(), 0))
-                .map_err(of_rt)?;
+            self.replace(&texture, (region, 0, 0), bytes, (spec.row_pitch.into(), 0))?;
         }
         Ok(self.keep_texture(texture))
     }
@@ -1294,15 +1321,9 @@ impl Side for RtSide<'_> {
                 origin: [x, y, z],
                 size: [w, h, d.max(1)],
             };
-            (texture.replace_region(
-                region,
-                upload.level,
-                upload.slice,
-                upload.bytes.into(),
-                upload.row_pitch.into(),
-                upload.image_pitch.into(),
-            ))
-            .map_err(of_rt)?;
+            let at = (region, upload.level, upload.slice);
+            let pitches = (upload.row_pitch.into(), upload.image_pitch.into());
+            self.replace(&texture, at, upload.bytes, pitches)?;
         }
         Ok(self.keep_texture(texture))
     }
@@ -1412,15 +1433,8 @@ impl Side for RtSide<'_> {
             origin: [0, 0, 0],
             size: [size[0], size[1], 1],
         };
-        (self.held_texture(texture)?.replace_region(
-            region,
-            0,
-            0,
-            bytes.into(),
-            row_pitch.into(),
-            0,
-        ))
-        .map_err(|error| Failure::of_rt(&error))
+        let texture = self.held_texture(texture)?.clone();
+        self.replace(&texture, (region, 0, 0), bytes, (row_pitch.into(), 0))
     }
 
     fn render(&mut self, work: &[crate::render::RenderWork]) -> Answer<crate::case::PassOutcome> {

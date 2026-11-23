@@ -1691,10 +1691,18 @@ made, with no lock, and never rewritten for layouts.
   driver (101.2145) answers neither bit for any format: there a texture buffer a function writes
   or reads through `access::read_write` is refused, but at a slot a texture atomic updates, and
   one it reads through `access::read` runs.
-- `replace_region` takes no bytes into a 32-bit float depth (`Gap::FloatDepthUpload`): Metal
-  keeps any `float` there, Vulkan copies no depth outside `[0, 1]` into a depth aspect without
-  `VK_EXT_depth_range_unrestricted` (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), which the floor
-  does not require, and no recorded stream uploads one.
+- An upload into a 32-bit float depth (`Depth32Float`, or the depth of `Depth32Float_Stencil8`)
+  by `replace_region`, `upload_region` or a blit's `copy_from_buffer` is the device's copy into
+  the depth aspect, on every device, under the static note `PrecisionNote::RestrictedDepthUpload`
+  (`Texture::FLOAT_DEPTH_UPLOAD_NOTE`). A value within `[0, 1]` is copied exactly. Metal keeps
+  every `float` there bit for bit, and its depth comparisons compare it unclamped: measured on an
+  Apple M3 Max under macOS 27.0.1, and an AMD Radeon Pro 5300M and an Intel UHD Graphics 630
+  under macOS 26.7.1, for negative values, values above 1, denormals, infinities and NaNs. Vulkan
+  takes no value outside `[0, 1]` into a depth aspect without `VK_EXT_depth_range_unrestricted`
+  (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), which the floor does not require and the
+  runtime enables on no device, and the runtime reads no uploaded value: so on every device,
+  whether or not it offers the extension, a value outside `[0, 1]` is the device's own, and so is
+  every read, sample, comparison and copy of it.
 - Their bytes are not copied for a format of depth and stencil both or a multisample texture
   (`Gap::TextureBytes`).
 - `Device::pixel_format_info` answers as an Apple M3 Max under macOS 27.0.1, which describes
@@ -2570,8 +2578,7 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   though Metal takes them: an image's offset in the `VkBuffer` shaders reach that is no multiple of
   a texel block's bytes, or of 4 for a depth or stencil aspect, and a row stride of no whole number
   of a compressed format's blocks; also what `replace_region` and `get_bytes` refuse
-  (`Gap::TextureBytes`, and `Gap::FloatDepthUpload` into a texture), but for a plane option's copy
-  of a format of depth and stencil both.
+  (`Gap::TextureBytes`), but for a plane option's copy of a format of depth and stencil both.
 - `copy_from_buffer_to_buffer` is `copyFromBuffer:sourceOffset:toBuffer:destinationOffset:size:`:
   one `vkCmdCopyBuffer` region between the bytes shaders reach (a Managed buffer's device copy,
   where the device keeps one), between the same two barriers as a fill, a copy into a Shared

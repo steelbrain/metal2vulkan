@@ -142,7 +142,6 @@ impl Gap {
             Gap::CubicSampler => RefusalBasis::Ours,
             Gap::LodClamps => RefusalBasis::Ours,
             Gap::TextureBytes { .. } => RefusalBasis::Ours,
-            Gap::FloatDepthUpload { .. } => RefusalBasis::Ours,
             Gap::TextureCopy { .. } => RefusalBasis::Ours,
             Gap::OverlappingCopy { .. } => RefusalBasis::Ours,
             Gap::TextureOverBuffer { .. } => RefusalBasis::Ours,

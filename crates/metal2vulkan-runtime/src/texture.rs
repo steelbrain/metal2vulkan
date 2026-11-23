@@ -925,12 +925,6 @@ pub(crate) struct CopyUnit {
 }
 
 impl CopyUnit {
-    /// Whether the unit is a 32-bit float depth, which no upload takes
-    /// ([`Gap::FloatDepthUpload`]).
-    pub(crate) fn float_depth(&self) -> bool {
-        self.aspect == vk::ImageAspectFlags::DEPTH && self.bytes == 4
-    }
-
     /// What a copy's offset in a buffer is a multiple of: the element's bytes, and 4 for a depth
     /// or stencil aspect.
     fn offset_align(&self) -> u64 {
@@ -4160,6 +4154,16 @@ impl Texture {
         compressed.then_some(PrecisionNote::CompressedTexelDecode)
     }
 
+    /// No Metal counterpart: the static note of an upload into a 32-bit float depth
+    /// (`Depth32Float`, or the depth of `Depth32Float_Stencil8`) by [`Texture::replace_region`],
+    /// [`Texture::upload_region`] or a blit's copy from a buffer
+    /// ([`BlitCommandEncoder::copy_from_buffer`](crate::BlitCommandEncoder::copy_from_buffer)):
+    /// the device's copy into the depth aspect, which Vulkan defines for a value within `[0, 1]`
+    /// alone (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), where Metal keeps every `float`. The
+    /// runtime enables no `VK_EXT_depth_range_unrestricted` and reads no uploaded value, so on
+    /// every device a texel uploaded outside `[0, 1]` is the device's.
+    pub const FLOAT_DEPTH_UPLOAD_NOTE: PrecisionNote = PrecisionNote::RestrictedDepthUpload;
+
     /// `replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:`: the bytes of
     /// `region` of `level` and `slice` (a 3D texture's slice is 0), rows `bytes_per_row` and
     /// images `bytes_per_image` apart in `bytes`, a compressed format's rows being rows of
@@ -4174,13 +4178,13 @@ impl Texture {
     /// instead, as Metal writes a Managed texture's CPU copy, and then
     /// [`Texture::upload_region`] copies them into the image; nothing is staged or counted. A
     /// texture over a buffer ([`Buffer::new_texture`]) takes them in the buffer, which is its
-    /// image's memory; nothing is staged, copied or counted.
+    /// image's memory; nothing is staged, copied or counted. Into a 32-bit float depth it carries
+    /// [`Texture::FLOAT_DEPTH_UPLOAD_NOTE`].
     ///
     /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler;
     /// [`Refusal::TextureBytesPrivate`]; [`Refusal::TextureRegion`] for a level, slice or
     /// region outside the texture or off its format's block grid;
-    /// [`Refusal::TextureBytesLayout`]; [`Gap::TextureBytes`]; [`Gap::FloatDepthUpload`] for a
-    /// 32-bit float depth; [`Limit::MemoryAllocations`] where the region's block or a staging
+    /// [`Refusal::TextureBytesLayout`]; [`Gap::TextureBytes`]; [`Limit::MemoryAllocations`] where the region's block or a staging
     /// buffer's memory would take the device past its count; [`Error::Vulkan`] where either
     /// cannot be made, and with `VK_ERROR_DEVICE_LOST` where the device is lost while the call
     /// waits; [`Error::Quiesced`]; over a Managed buffer, what [`Buffer::did_modify_range`]
@@ -4203,11 +4207,6 @@ impl Texture {
         else {
             return Ok(());
         };
-        if copy.unit.float_depth() {
-            return Err(Error::Unsupported(Gap::FloatDepthUpload {
-                pixel_format: inner.descriptor.pixel_format,
-            }));
-        }
         if let Some((host, place)) = inner.named_host(region, level, slice)? {
             // SAFETY: `copy` checked that each row lies in `bytes`, and the texture's creation
             // that each row of its place lies in the named buffer.
@@ -4265,14 +4264,14 @@ impl Texture {
     /// until it completes, so the consumer may release the texture and the buffer once the call
     /// returns.
     /// [`Texture::replace_region`] on such a texture writes the named bytes, then calls this. An
-    /// empty region copies nothing.
+    /// empty region copies nothing. Into a 32-bit float depth it carries
+    /// [`Texture::FLOAT_DEPTH_UPLOAD_NOTE`].
     ///
     /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler;
     /// [`Refusal::ManagedTextureBytes`] for a texture without named bytes, or a depth or
     /// stencil region whose first byte is not a multiple of 4 in the buffer;
     /// [`Refusal::TextureRegion`] for a level, slice or region outside the texture or off its
-    /// format's block grid; [`Gap::FloatDepthUpload`] for a 32-bit float depth;
-    /// [`Error::Quiesced`], and [`Error::Vulkan`] where the upload's command buffer cannot be
+    /// format's block grid; [`Error::Quiesced`], and [`Error::Vulkan`] where the upload's command buffer cannot be
     /// made.
     pub fn upload_region(&self, region: Region, level: u32, slice: u32) -> Result<(), Error> {
         crate::command::not_in_scheduled_handler()?;
@@ -4290,11 +4289,6 @@ impl Texture {
         let Some((copy, bytes, place, start)) = inner.named(region, level, slice)? else {
             return Ok(());
         };
-        if copy.unit.float_depth() {
-            return Err(Error::Unsupported(Gap::FloatDepthUpload {
-                pixel_format: inner.descriptor.pixel_format,
-            }));
-        }
         let [bw, bh] = copy.unit.block.map(u64::from);
         let row_length = place.bytes_per_row / u64::from(copy.unit.bytes) * bw;
         let image_height = match copy.images > 1 {

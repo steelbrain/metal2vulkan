@@ -89,6 +89,7 @@ fn every_precision_note_has_its_table_row() {
         (N::DeviceFragmentRuns, Allowance::Unbounded),
         (N::DeviceOcclusionCount, Allowance::Unbounded),
         (N::VertexSimdgroupGrouping, Allowance::Unbounded),
+        (N::RestrictedDepthUpload, Allowance::Unbounded),
     ];
     for (note, expected) in rows {
         assert_eq!(allowance(note), expected, "{note:?}");

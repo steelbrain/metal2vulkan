@@ -10,13 +10,15 @@
 //! 2. for a Private query, a heap of `align + size` bytes takes a texture of the descriptor at
 //!    offset `align`;
 //! 3. there, where the runtime moves the format's bytes, level 0's first slice written from a
-//!    buffer reads back unchanged.
+//!    buffer reads back unchanged: a `Depth32Float` slice's bytes are depths within `[0, 1]`, the
+//!    only ones a copy into a depth aspect keeps on every device
+//!    (`Texture::FLOAT_DEPTH_UPLOAD_NOTE`), and any other's a pattern of bytes.
 //!
 //! A Shared, Managed or Memoryless query is held to the first alone: the runtime places a heap
 //! texture in a Private block only (`Gap::HeapTexture`), and placing the descriptor in a Private
 //! heap would answer another query. A query whose bytes the runtime does not move, which its copy
-//! answers `Gap::TextureBytes` (depth and stencil both, or multisample) or `Gap::FloatDepthUpload`
-//! (`Depth32Float`) for, is held to the first two.
+//! answers `Gap::TextureBytes` (depth and stencil both, or multisample) for, is held to the first
+//! two.
 
 use super::{waited_for, work, RtDevice, WAIT};
 use crate::case::{Answer, Failure};
@@ -82,7 +84,12 @@ fn round_trip(
         level: 0,
         planes: 0,
     });
-    let written: Vec<u8> = (0..level.bytes).map(|at| (at % 251) as u8 ^ 0x5a).collect();
+    let written: Vec<u8> = match descriptor.pixel_format {
+        rt::PixelFormat::Depth32Float => (0..level.bytes / 4)
+            .flat_map(|at| ((at % 251) as f32 / 250.0).to_le_bytes())
+            .collect(),
+        _ => (0..level.bytes).map(|at| (at % 251) as u8 ^ 0x5a).collect(),
+    };
     let (source, _source_blocks) = work::buffer_of(on, level.bytes, Storage::Shared)?;
     work::write(&source, &written)?;
     let (read, _read_blocks) = work::buffer_of(on, level.bytes, Storage::Shared)?;
@@ -102,9 +109,7 @@ fn round_trip(
     let mut encoder = command_buffer.blit_command_encoder().map_err(failed)?;
     match encoder.copy_from_buffer(&source, layout, extent, texture, place) {
         Ok(()) => {}
-        Err(rt::Error::Unsupported(
-            rt::Gap::TextureBytes { .. } | rt::Gap::FloatDepthUpload { .. },
-        )) => {
+        Err(rt::Error::Unsupported(rt::Gap::TextureBytes { .. })) => {
             encoder.end_encoding();
             return Ok(());
         }

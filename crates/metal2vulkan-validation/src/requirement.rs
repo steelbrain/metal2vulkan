@@ -127,15 +127,15 @@ pub enum ToolingRequirement {
     /// (`executor_contract::depth_range`): a `Depth32Float` texture's texels (a texture-array
     /// element's or an argument buffer's texture's among them) or a depth attachment's initial
     /// depth holds a NaN, a negative value other than `-0.0`, or a value above 1.0, which Metal's
-    /// texel keeps. The runtime takes no upload of a 32-bit float depth on any device
-    /// (`metal2vulkan_runtime::Gap::FloatDepthUpload`, which its own texture and blit tests hold
-    /// both ways), and a draw, the one way a guest fills such a texture through it, writes depths
-    /// clamped to the viewport's `[0, 1]`: no call of the runtime puts such a value where Metal
-    /// holds it, so the limit is the runtime's ([`Limit::Runtime`]) and the engine's candidate
-    /// does not run the case. The case checker raises it from the case's literals on every device
-    /// (`executor_contract::case_requirements`), never a source's structure, so no census row
-    /// carries it. The Metal oracle runs it, so a case of it stays Metal-qualified
-    /// ([`Self::qualifies_on_metal`]).
+    /// texel keeps. The runtime's upload of a 32-bit float depth leaves such a value the device's
+    /// on every device (`metal2vulkan_runtime::Texture::FLOAT_DEPTH_UPLOAD_NOTE`: Vulkan defines no
+    /// copy of one into a depth aspect without `VK_EXT_depth_range_unrestricted`, which it does not
+    /// enable), and a draw writes depths clamped to the viewport's `[0, 1]`: no call of the runtime
+    /// puts such a value where Metal holds it on every device, so the limit is the runtime's
+    /// ([`Limit::Runtime`]) and the engine's candidate does not run the case. The case checker
+    /// raises it from the case's literals on every device (`executor_contract::case_requirements`),
+    /// never a source's structure, so no census row carries it. The Metal oracle runs it, so a case
+    /// of it stays Metal-qualified ([`Self::qualifies_on_metal`]).
     DepthOutsideUnitRange,
     /// An object or mesh function's row or case (`executor_contract::mesh`), or a case that runs a
     /// pipeline template of one: the engine's candidate draws no mesh render pipeline. The runtime

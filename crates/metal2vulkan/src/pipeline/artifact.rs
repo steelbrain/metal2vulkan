@@ -805,13 +805,13 @@ pub enum PrecisionNote {
     /// every device (narrowed to comparisons). Metal's `Depth32Float` texels hold any `float`,
     /// and the device's comparison reads them from the texture's depth image, which Vulkan gives
     /// no value outside `[0, 1]` without `VK_EXT_depth_range_unrestricted`, which no runtime
-    /// enables: a copy may take none (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), so a consumer
-    /// clamps its uploads, and a render write is clamped to the viewport's depth range. A
-    /// comparison whose texel Metal holds outside `[0, 1]` can then differ, whatever the driver is
-    /// measured to keep (MoltenVK). Values within `[0, 1]` are exact. A function that reads, samples or gathers a depth
-    /// texture without comparing records nothing: its interface's `TextureSlot::access` states
-    /// the use, and a consumer that uploads a value into a depth image its device clamps announces
-    /// that upload (docs/API.md section 5).
+    /// enables: a copy may take none (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), so an upload
+    /// of one is the device's (`RestrictedDepthUpload`), and a render write is clamped to the
+    /// viewport's depth range. A comparison whose texel Metal holds outside `[0, 1]` can then
+    /// differ, whatever the driver is measured to keep (MoltenVK). Values within `[0, 1]` are
+    /// exact. A function that reads, samples or gathers a depth texture without comparing records
+    /// nothing: its interface's `TextureSlot::access` states the use, and a consumer's upload into
+    /// a depth image carries its own note (`RestrictedDepthUpload`).
     RestrictedDepthRange,
     /// An explicit-gradient sample of a cube texture takes Metal's footprint in a form a Vulkan
     /// device reads alike, but for what is not reproduced. Metal (measured on the Apple M3 Max
@@ -2074,6 +2074,24 @@ pub enum PrecisionNote {
     ///
     /// Validation derives no tolerance from it: a difference stays a noted difference for review.
     VertexSimdgroupGrouping,
+    /// An upload of bytes into a 32-bit float depth (`Depth32Float`, or the depth of
+    /// `Depth32Float_Stencil8`): `replaceRegion:`, a Managed texture's upload and a blit's copy
+    /// from a buffer, each the device's copy into the depth aspect (`vkCmdCopyBufferToImage`), on
+    /// every device. Metal keeps every `float` there bit for bit, negative values, values above
+    /// 1, denormals, infinities and NaNs among them, and its depth comparisons then compare them
+    /// unclamped (measured on an Apple M3 Max under macOS 27.0.1, and an AMD Radeon Pro 5300M and
+    /// an Intel UHD Graphics 630 under macOS 26.7.1). Vulkan takes no value outside `[0, 1]` into
+    /// a depth aspect without `VK_EXT_depth_range_unrestricted`
+    /// (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), which no runtime enables: a texel uploaded
+    /// outside `[0, 1]` is the device's, and so is every later read, sample, comparison and copy
+    /// of it. A value within `[0, 1]` is copied exactly, a denormal as `DepthDenormals` says.
+    /// Static per operation, decided by the format and never by the bytes: no pipeline stage
+    /// records it; `metal2vulkan-runtime`'s texture carries it
+    /// (`Texture::FLOAT_DEPTH_UPLOAD_NOTE`).
+    ///
+    /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
+    /// explains.
+    RestrictedDepthUpload,
 }
 
 /// Which lowering strategies a module used, with their word costs.

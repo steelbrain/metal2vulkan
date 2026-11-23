@@ -952,9 +952,10 @@ impl Case for SamplerCrossings {
         //
         // The `compare-filters` row's `Depth32Float` texture: on every device (no runtime enables
         // `VK_EXT_depth_range_unrestricted`) the comparing stage records that its texels hold no
-        // value outside [0, 1] (`restricted-depth-range`). Its depths all lie in [0, 1], so the
-        // note moves no sample: measured on MoltenVK on the M3 Max, the notices site is the whole
-        // of the difference.
+        // value outside [0, 1] (`restricted-depth-range`), and its upload carries the note of an
+        // upload into a 32-bit float depth (`restricted-depth-upload`). Its depths all lie in
+        // [0, 1], so neither note moves a sample: measured on MoltenVK on the M3 Max, the notices
+        // site is the whole of the difference.
         //
         // Every row samples through the runtime sampler at `[[sampler(0)]]`, which the runtime's
         // pipelines note as scaled (`crate::replay::pixel_sampler_scaling_notice` holds why).
@@ -970,9 +971,10 @@ impl Case for SamplerCrossings {
             allowances.push(crate::replay::swizzled_border_notice());
         }
         if matches!(self.family, Family::CompareFilters) {
-            allowances.push(crate::replay::notice_allowance(
-                crate::degradation::Degradation::RestrictedDepthRange.code(),
-            ));
+            use crate::degradation::Degradation as D;
+            for kind in [D::RestrictedDepthRange, D::RestrictedDepthUpload] {
+                allowances.push(crate::replay::notice_allowance(kind.code()));
+            }
         }
         allowances
     }

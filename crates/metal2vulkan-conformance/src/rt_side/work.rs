@@ -364,7 +364,8 @@ fn make(on: &RtDevice, made: &[Made], resource: &Resource) -> Answer<Made> {
 struct Run<'a> {
     on: &'a RtDevice,
     queue: &'a rt::CommandQueue,
-    /// The static notes of the textures the program made.
+    /// The static notes of the textures the program made and of its uploads into a 32-bit float
+    /// depth (`super::upload_note`).
     notes: &'a mut BTreeSet<rt::PrecisionNote>,
     made: Vec<Made>,
     /// The program's declarations, which a [`Step::Make`] reads to make a released resource again.
@@ -379,7 +380,8 @@ struct Run<'a> {
 }
 
 /// Run `work` on `on`'s device through `queue`, answering what it read, with the static note of
-/// each texture it makes (`Texture::precision_note`) in `notes`.
+/// each texture it makes (`Texture::precision_note`) and of each upload into a 32-bit float depth
+/// (`super::upload_note`) in `notes`.
 pub(super) fn run(
     on: &RtDevice,
     queue: &rt::CommandQueue,
@@ -532,7 +534,9 @@ impl Run<'_> {
                 let option = Self::option(*plane).unwrap_or_default();
                 (self.encoder()?)
                     .copy_from_buffer_with_options(&source, layout, size, &destination, to, option)
-                    .map_err(of_rt)
+                    .map_err(of_rt)?;
+                self.notes.extend(super::upload_note(&destination, option));
+                Ok(())
             }
             Step::CopyBufferToTextureWithoutOptions {
                 buffer,
@@ -558,7 +562,10 @@ impl Run<'_> {
                 (self
                     .encoder()?
                     .copy_from_buffer(&source, layout, size, &destination, to))
-                .map_err(of_rt)
+                .map_err(of_rt)?;
+                let option = rt::BlitOption::None;
+                self.notes.extend(super::upload_note(&destination, option));
+                Ok(())
             }
             Step::CopyTextureToBuffer {
                 texture,
@@ -739,7 +746,10 @@ impl Run<'_> {
                     *bytes_per_row,
                     *bytes_per_image,
                 ))
-                .map_err(of_rt)
+                .map_err(of_rt)?;
+                let option = rt::BlitOption::None;
+                self.notes.extend(super::upload_note(&texture, option));
+                Ok(())
             }
             Step::GetBytes {
                 texture,

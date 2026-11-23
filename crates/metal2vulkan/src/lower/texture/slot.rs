@@ -1225,8 +1225,8 @@ fn tiled_shape(shape: ImageShape) -> bool {
 /// The device's comparison reads the texture's depth image, so the function records
 /// `PrecisionNote::RestrictedDepthRange` on every device. Its reads, samples and gathers record
 /// nothing:
-/// the interface's `TextureSlot::access` states them, and the consumer announces an upload its
-/// depth image clamps (`restricted-depth-upload`), which every read of it then reads. No module
+/// the interface's `TextureSlot::access` states them, and the consumer announces an upload into
+/// the depth image (`restricted-depth-upload`), which every read of it then reads. No module
 /// requires the extension, since every value within `[0, 1]` is exact without it.
 pub(crate) fn depth_comparison(cx: &mut SelectCx<'_>) {
     cx.precision.insert(PrecisionNote::RestrictedDepthRange);

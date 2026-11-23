@@ -1456,6 +1456,8 @@ the translated module, the pixel format, the descriptor or the state, on every d
   samples through a constexpr sampler whose address mode reads an opaque-black border;
 - `Texture::precision_note`: `CompressedTexelDecode` where the texture's own pixel format is
   block-compressed;
+- `Texture::FLOAT_DEPTH_UPLOAD_NOTE` (`RestrictedDepthUpload`, of an upload into a 32-bit float
+  depth by `replace_region`, `upload_region` or a blit's `copy_from_buffer`);
 - `SamplerState::precision_note`: `SwizzledOpaqueBlackBorder` where an address mode reads an
   opaque-black border;
 - `DepthStencilState::precision_note`: `DepthDenormals` where the state tests or writes depth;
@@ -1832,10 +1834,23 @@ bound.
 - `metal2vulkan-degrade-restricted-depth-range` (precision). `PrecisionNote::RestrictedDepthRange`:
   The device compares a depth texture's texels, on every device: without
   `VK_EXT_depth_range_unrestricted`, which no runtime enables, Vulkan gives a depth image no
-  value outside `[0, 1]`, whatever its driver is measured to keep: an upload into a 32-bit float
-  depth is refused (`Gap::FloatDepthUpload`), and a render write is clamped to the viewport's
-  depth range. A
-  comparison of a texel Metal holds outside `[0, 1]` can differ; one within it is exact.
+  value outside `[0, 1]`, whatever its driver is measured to keep: an upload of one is the
+  device's (`metal2vulkan-degrade-restricted-depth-upload`), and a render write is clamped to the
+  viewport's depth range. A comparison of a texel Metal holds outside `[0, 1]` can differ; one
+  within it is exact.
+- `metal2vulkan-degrade-restricted-depth-upload` (precision).
+  `PrecisionNote::RestrictedDepthUpload`: An upload into a 32-bit float depth (`Depth32Float`, or
+  the depth of `Depth32Float_Stencil8`), the device's copy into the depth aspect
+  (`vkCmdCopyBufferToImage`), on every device. On `metal2vulkan-runtime` it is the static note
+  `Texture::FLOAT_DEPTH_UPLOAD_NOTE` of `replace_region`, `upload_region` and a blit's
+  `copy_from_buffer` into one, decided by the format, never by the bytes. Metal keeps every
+  `float` there bit for bit, and its comparisons compare it unclamped (measured on an Apple M3 Max
+  under macOS 27.0.1, and an AMD Radeon Pro 5300M and an Intel UHD Graphics 630 under macOS
+  26.7.1: negative values, values above 1, denormals, infinities and NaNs). Vulkan takes no value
+  outside `[0, 1]` into a depth aspect without `VK_EXT_depth_range_unrestricted`
+  (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), which no runtime enables. Cost: a depth uploaded
+  outside `[0, 1]` is the device's, and so is every read, sample, comparison and copy of it; one
+  within it is copied exactly, a denormal as `metal2vulkan-degrade-depth-denormals` says.
 - `metal2vulkan-degrade-cube-gradient-footprint` (precision).
   `PrecisionNote::CubeGradientFootprint`: An explicit-gradient sample of a cube texture takes
   Metal's footprint in the form Vulkan's rule reads, in every stage on every device. Cost: the

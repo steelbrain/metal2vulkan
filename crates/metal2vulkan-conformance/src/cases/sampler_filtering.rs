@@ -882,9 +882,11 @@ impl Case for SamplerFiltering {
         // A `compare` row's comparing stage records that its texels hold no value outside
         // [0, 1] (`restricted-depth-range`). Every texel of the family lies in [0, 1], so it moves
         // no sample: measured on the M3 Max, the notices site is the whole of the difference of
-        // each of the eight rows.
+        // each of the eight rows. Its texture's upload carries the note of an upload into a 32-bit
+        // float depth (`restricted-depth-upload`), which moves none of those texels either.
         if matches!(self.family, Family::Compare(_)) {
             named.push(notice_allowance(Degradation::RestrictedDepthRange.code()));
+            named.push(notice_allowance(Degradation::RestrictedDepthUpload.code()));
         }
         named
     }

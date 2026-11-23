@@ -171,6 +171,8 @@ pub enum Degradation {
     DeviceOcclusionCount,
     /// `metal2vulkan-degrade-vertex-simdgroup-grouping`.
     VertexSimdgroupGrouping,
+    /// `metal2vulkan-degrade-restricted-depth-upload`.
+    RestrictedDepthUpload,
 }
 
 impl Degradation {
@@ -256,6 +258,7 @@ impl Degradation {
         Degradation::DeviceFragmentRuns,
         Degradation::DeviceOcclusionCount,
         Degradation::VertexSimdgroupGrouping,
+        Degradation::RestrictedDepthUpload,
     ];
 
     /// The kind's code, `metal2vulkan-degrade-<kind>`.
@@ -383,6 +386,7 @@ impl Degradation {
             Degradation::VertexSimdgroupGrouping => {
                 "metal2vulkan-degrade-vertex-simdgroup-grouping"
             }
+            Degradation::RestrictedDepthUpload => "metal2vulkan-degrade-restricted-depth-upload",
         }
     }
 
@@ -471,6 +475,7 @@ impl Degradation {
             PrecisionNote::DeviceFragmentRuns => Degradation::DeviceFragmentRuns,
             PrecisionNote::DeviceOcclusionCount => Degradation::DeviceOcclusionCount,
             PrecisionNote::VertexSimdgroupGrouping => Degradation::VertexSimdgroupGrouping,
+            PrecisionNote::RestrictedDepthUpload => Degradation::RestrictedDepthUpload,
         }
     }
 }

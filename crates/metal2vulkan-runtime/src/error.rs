@@ -1231,18 +1231,6 @@ pub enum Gap {
         /// The texture's pixel format.
         pixel_format: PixelFormat,
     },
-    /// [`Texture::replace_region`](crate::Texture::replace_region) or
-    /// [`BlitCommandEncoder::copy_from_buffer`](crate::BlitCommandEncoder::copy_from_buffer) into a
-    /// 32-bit float depth (`Depth32Float`). Metal keeps any `float` there; Vulkan copies no depth
-    /// outside `[0, 1]` into a depth aspect without `VK_EXT_depth_range_unrestricted`, which the
-    /// floor does not require (the Intel devices measured lack it), and no recorded stream uploads
-    /// one.
-    ///
-    /// Basis: ours (no upload of a 32-bit float depth is built).
-    FloatDepthUpload {
-        /// The texture's pixel format.
-        pixel_format: PixelFormat,
-    },
     /// [`BlitCommandEncoder::copy_from_texture`](crate::BlitCommandEncoder::copy_from_texture)
     /// that the floor's `vkCmdCopyImage` does not make: a multisample texture; a format of depth
     /// and stencil both; one pixel format held in two Vulkan formats, which the two textures'
@@ -2731,10 +2719,6 @@ impl fmt::Display for Gap {
             Gap::TextureBytes { pixel_format } => write!(
                 f,
                 "bytes are not copied to or from this texture of {pixel_format:?}"
-            ),
-            Gap::FloatDepthUpload { pixel_format } => write!(
-                f,
-                "bytes are not uploaded into the 32-bit float depth of this texture of {pixel_format:?}"
             ),
             Gap::TextureCopy {
                 source,

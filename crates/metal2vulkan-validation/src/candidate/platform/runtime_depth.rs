@@ -1,7 +1,6 @@
 //! The fill of a 32-bit float depth texture a run through the runtime binds
-//! ([`super::runtime_textures`]). The runtime takes no upload of one
-//! (`metal2vulkan_runtime::Gap::FloatDepthUpload`), so the run renders the case's depths into it,
-//! as a guest fills one: one command buffer holds a pass per level and slice, each one draw of the
+//! ([`super::runtime_textures`]). The run renders the case's depths into it, as a guest fills one
+//! by rendering: one command buffer holds a pass per level and slice, each one draw of the
 //! owned `depth_fill` pair over the whole level (`fixtures/public/engine/depth_fill.metal`), whose
 //! fragment writes the depth at each pixel from a buffer of the level's texels under an
 //! always-passing depth test that writes. A render write is clamped to the viewport's `[0, 1]`, so

@@ -33,7 +33,7 @@ Columns:
 | Devices below the runtime's floor | 8 | 8 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Refusal` | 84 | 84 | 0 | 0 | 0 | 0 | 0 |
 | The runtime's `Limit` | 17 | 17 | 0 | 0 | 0 | 0 | 0 |
-| The runtime's `Gap` | 33 | 33 | 0 | 0 | 0 | 0 | 0 |
+| The runtime's `Gap` | 32 | 32 | 0 | 0 | 0 | 0 | 0 |
 
 ## Totals by basis
 
@@ -46,7 +46,7 @@ Columns:
 | Devices below the runtime's floor | 0 | 0 | 0 | 8 | 0 | 0 | 0 | 0 |
 | The runtime's `Refusal` | 22 | 25 | 0 | 0 | 37 | 0 | 0 | 0 |
 | The runtime's `Limit` | 0 | 0 | 0 | 13 | 4 | 0 | 0 | 0 |
-| The runtime's `Gap` | 0 | 0 | 0 | 3 | 30 | 0 | 0 | 0 |
+| The runtime's `Gap` | 0 | 0 | 0 | 3 | 29 | 0 | 0 | 0 |
 
 ## 1. Translator and front-end refusals (`Unsupported`: a `Feature` and its `Needs`)
 
@@ -350,7 +350,6 @@ Columns:
 | `CubicSampler` | A sampler state whose minification or magnification filter is cubic (`Device::new_sampler_state`) | every device (a public call's own check of its arguments) | `ours`: the translator's identity domains do not filter bicubically, and Vulkan's cubic filter is not Metal's | 1: `crates/metal2vulkan-runtime/src/sampler.rs (new_sampler_state)` | `-` |
 | `LodClamps` | A sampler state bound with LOD clamps its samples read otherwise through (`ComputeCommandEncoder::set_sampler_state_with_lod_clamps` and the... | every device (a public call's own check of its arguments) | `ours`: no replay stream binds such clamps: every bind-time clamp the streams make reads as its state's own | 1: `crates/metal2vulkan-runtime/src/sampler.rs (clamps_at_bind)` | `-` |
 | `TextureBytes` | `Texture::replace_region`, `Texture::get_bytes` or a blit copy between a buffer and a texture (`BlitCommandEncoder::copy_from_buffer`) of a... | every device (a public call's own check of its arguments) | `ours`: no copy between such an image and bytes is built, nor a texture buffer's copy as a buffer copy; no recorded stream copies a texture buffer | 5: `crates/metal2vulkan-runtime/src/blit.rs (buffer_copy, 2 sites)`, `crates/metal2vulkan-runtime/src/blit.rs (with_option)` (+2) | `-` |
-| `FloatDepthUpload` | `Texture::replace_region` or `BlitCommandEncoder::copy_from_buffer` into a 32-bit float depth (`Depth32Float`) | every device (a public call's own check of its arguments) | `ours`: no upload of a 32-bit float depth is built | 3: `crates/metal2vulkan-runtime/src/blit.rs (buffer_copy)`, `crates/metal2vulkan-runtime/src/texture.rs (replace_region)` (+1) | `-` |
 | `TextureCopy` | `BlitCommandEncoder::copy_from_texture` that the floor's `vkCmdCopyImage` does not make | every device (a public call's own check of its arguments) | `ours`: Vulkan 1.3 copies none of these with one command; each is built when a replay stream makes one | 2: `crates/metal2vulkan-runtime/src/blit.rs (copy_from_texture)`, `crates/metal2vulkan-runtime/src/blit.rs (texture_copy)` | `-` |
 | `OverlappingCopy` | A blit copy whose source and destination share memory where no copy command orders it as from the source before the copy, which Metal leaves... | every device (a public call's own check of its arguments) | `ours`: no copy command reads bytes it writes, `VUID-vkCmdCopyImage-pRegions-00124` and its twins; the first shapes are built, cut on two levels, when a replay stream or a walk counts one | 2: `crates/metal2vulkan-runtime/src/blit.rs (buffer_copy)`, `crates/metal2vulkan-runtime/src/blit.rs (copy_from_texture)` | `-` |
 | `TextureOverBuffer` | A texture over a buffer (`Buffer::new_texture`) the runtime does not make | every device (a public call's own check of its arguments) | `ours`: the in-place linear image and the copy form take one 2D color image, and a texture buffer's view the texel-buffer offset alignment of Vulkan 1.3 | 4: `crates/metal2vulkan-runtime/src/texture.rs (check_over)`, `crates/metal2vulkan-runtime/src/texture.rs (error)` (+2) | `-` |
@@ -631,7 +630,6 @@ Each refusal's sites, with the function that builds it.
 - `rt:Gap::CubicSampler`: `crates/metal2vulkan-runtime/src/sampler.rs (new_sampler_state)`
 - `rt:Gap::LodClamps`: `crates/metal2vulkan-runtime/src/sampler.rs (clamps_at_bind)`
 - `rt:Gap::TextureBytes`: `crates/metal2vulkan-runtime/src/blit.rs (buffer_copy, 2 sites)`; `crates/metal2vulkan-runtime/src/blit.rs (with_option)`; `crates/metal2vulkan-runtime/src/texture.rs (check_places)`; `crates/metal2vulkan-runtime/src/texture.rs (copy)`
-- `rt:Gap::FloatDepthUpload`: `crates/metal2vulkan-runtime/src/blit.rs (buffer_copy)`; `crates/metal2vulkan-runtime/src/texture.rs (replace_region)`; `crates/metal2vulkan-runtime/src/texture.rs (upload_region)`
 - `rt:Gap::TextureCopy`: `crates/metal2vulkan-runtime/src/blit.rs (copy_from_texture)`; `crates/metal2vulkan-runtime/src/blit.rs (texture_copy)`
 - `rt:Gap::OverlappingCopy`: `crates/metal2vulkan-runtime/src/blit.rs (buffer_copy)`; `crates/metal2vulkan-runtime/src/blit.rs (copy_from_texture)`
 - `rt:Gap::TextureOverBuffer`: `crates/metal2vulkan-runtime/src/texture.rs (check_over)`; `crates/metal2vulkan-runtime/src/texture.rs (error)`; `crates/metal2vulkan-runtime/src/texture.rs (over_texel)`; `crates/metal2vulkan-runtime/src/texture.rs (texel_texture)`

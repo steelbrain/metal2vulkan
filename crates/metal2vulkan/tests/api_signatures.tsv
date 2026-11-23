@@ -60,6 +60,7 @@ assoc-const	metal2vulkan-runtime::RenderCommandEncoder::VISIBILITY_NOTE	pub cons
 assoc-const	metal2vulkan-runtime::ResourceUsage::READ	pub const READ: ResourceUsage
 assoc-const	metal2vulkan-runtime::ResourceUsage::SAMPLE	pub const SAMPLE: ResourceUsage
 assoc-const	metal2vulkan-runtime::ResourceUsage::WRITE	pub const WRITE: ResourceUsage
+assoc-const	metal2vulkan-runtime::Texture::FLOAT_DEPTH_UPLOAD_NOTE	pub const FLOAT_DEPTH_UPLOAD_NOTE: PrecisionNote
 assoc-const	metal2vulkan-runtime::TextureSwizzleChannels::DEFAULT	pub const DEFAULT: TextureSwizzleChannels
 assoc-const	metal2vulkan::bind::AstcDecode::BLOCK_BYTES	pub const BLOCK_BYTES: u32
 assoc-const	metal2vulkan::bind::indirect_commands::BufferBinding::MIN_BUFFER_ADDRESS	pub const MIN_BUFFER_ADDRESS: u64
@@ -211,6 +212,7 @@ assoc-const-value	metal2vulkan-runtime::RenderCommandEncoder::VISIBILITY_NOTE	Pr
 assoc-const-value	metal2vulkan-runtime::ResourceUsage::READ	ResourceUsage(1)
 assoc-const-value	metal2vulkan-runtime::ResourceUsage::SAMPLE	ResourceUsage(4)
 assoc-const-value	metal2vulkan-runtime::ResourceUsage::WRITE	ResourceUsage(2)
+assoc-const-value	metal2vulkan-runtime::Texture::FLOAT_DEPTH_UPLOAD_NOTE	PrecisionNote::RestrictedDepthUpload
 assoc-const-value	metal2vulkan-runtime::TextureSwizzleChannels::DEFAULT	TextureSwizzleChannels
 assoc-const-value	metal2vulkan::bind::AstcDecode::BLOCK_BYTES	16
 assoc-const-value	metal2vulkan::bind::indirect_commands::BufferBinding::MIN_BUFFER_ADDRESS	1 <<32
@@ -8362,7 +8364,6 @@ variant	metal2vulkan-runtime::Gap::CubicSampler	CubicSampler
 variant	metal2vulkan-runtime::Gap::D3d11SurfaceBuffer	D3d11SurfaceBuffer
 variant	metal2vulkan-runtime::Gap::Draw	Draw { kind: DrawKind }
 variant	metal2vulkan-runtime::Gap::FillAlignment	FillAlignment { start: u64, end: u64 }
-variant	metal2vulkan-runtime::Gap::FloatDepthUpload	FloatDepthUpload { pixel_format: PixelFormat }
 variant	metal2vulkan-runtime::Gap::HeapTexture	HeapTexture { pixel_format: PixelFormat }
 variant	metal2vulkan-runtime::Gap::ImageblockLength	ImageblockLength
 variant	metal2vulkan-runtime::Gap::IndirectCommandBuffers	IndirectCommandBuffers { kind: IndirectCommandsKind }
@@ -8514,6 +8515,7 @@ variant	metal2vulkan-runtime::PrecisionNote::QuadsCountedBeforeDiscard	QuadsCoun
 variant	metal2vulkan-runtime::PrecisionNote::QuadsSplitByClipping	QuadsSplitByClipping
 variant	metal2vulkan-runtime::PrecisionNote::ReductionOrder	ReductionOrder
 variant	metal2vulkan-runtime::PrecisionNote::RestrictedDepthRange	RestrictedDepthRange
+variant	metal2vulkan-runtime::PrecisionNote::RestrictedDepthUpload	RestrictedDepthUpload
 variant	metal2vulkan-runtime::PrecisionNote::RotatedBlendRounding	RotatedBlendRounding
 variant	metal2vulkan-runtime::PrecisionNote::SharedExponentKept	SharedExponentKept
 variant	metal2vulkan-runtime::PrecisionNote::SimdgroupAccessOrder	SimdgroupAccessOrder
@@ -9817,6 +9819,7 @@ variant	metal2vulkan::pipeline::PrecisionNote::QuadsCountedBeforeDiscard	QuadsCo
 variant	metal2vulkan::pipeline::PrecisionNote::QuadsSplitByClipping	QuadsSplitByClipping
 variant	metal2vulkan::pipeline::PrecisionNote::ReductionOrder	ReductionOrder
 variant	metal2vulkan::pipeline::PrecisionNote::RestrictedDepthRange	RestrictedDepthRange
+variant	metal2vulkan::pipeline::PrecisionNote::RestrictedDepthUpload	RestrictedDepthUpload
 variant	metal2vulkan::pipeline::PrecisionNote::RotatedBlendRounding	RotatedBlendRounding
 variant	metal2vulkan::pipeline::PrecisionNote::SharedExponentKept	SharedExponentKept
 variant	metal2vulkan::pipeline::PrecisionNote::SimdgroupAccessOrder	SimdgroupAccessOrder

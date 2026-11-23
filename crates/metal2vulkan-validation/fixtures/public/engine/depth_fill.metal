@@ -1,7 +1,7 @@
 // metal-fast-math: off
 // Owned fixture: the validation executor's fill of a 32-bit float depth texture through the
-// runtime, which takes no upload of one (`Gap::FloatDepthUpload`): one draw writes every texel of
-// one level and slice from a buffer, as a guest fills a depth texture by rendering into it.
+// runtime: one draw writes every texel of one level and slice from a buffer, as a guest fills a
+// depth texture by rendering into it.
 //
 //  * depth_fill_vertex: one triangle over the whole target, vertex v at clip position
 //    (2 (v << 1 & 2) - 1, 2 (v & 2) - 1, 0, 1).
