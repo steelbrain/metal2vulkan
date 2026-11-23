@@ -102,9 +102,10 @@
 //! declares `MaximallyReconvergesKHR` (section 9.31, "Helper Invocations"), as every such entry
 //! does (**Reconvergence**, below): a profile with `shaderQuadControl` has maximal reconvergence,
 //! which every device with the one supports (`Device::from_queries` refuses a description listing
-//! the one without the other). A quad reduction or vote
-//! there reads its quad through quad instructions alone. A profile without `shaderQuadControl`
-//! refuses such a function.
+//! the one without the other). A quad reduction, prefix sum or product, vote, ballot, active mask,
+//! `is_first` or first active lane's broadcast there reads its quad through quad instructions
+//! alone: AMD's open Linux driver leaves a partly covered quad's helper out of a ballot even under
+//! `MaximallyReconvergesKHR`. A profile without `shaderQuadControl` refuses such a function.
 //!
 //! In compute the flattened tiers derive every Metal thread builtin from the subgroup partition
 //! (`lower::dispatch`), so simdgroup `k` is exactly the linear threads `[32k, 32k + 32)` and a
@@ -119,14 +120,15 @@
 //! `OpGroupNonUniformQuadBroadcast` for constant masks and lanes where the stage takes Vulkan's
 //! quad instructions (else the shuffles from the same lanes), reductions, prefix sums and products
 //! over the quad's four lanes in Metal's order, each lane read by a shuffle under its bit of the
-//! ballot of the active lanes (a fragment's reduction by `OpGroupNonUniformQuadBroadcast` under
-//! `OpGroupNonUniformQuadAnyKHR` of its quad lane, **Helpers** above), and the ballot word for
-//! votes (a fragment's by `OpGroupNonUniformQuadAllKHR` and `…AnyKHR`), `is_first`, the active
-//! mask, and `quad_ballot` (the quad's four bits, quad lane `j` at bit `j`). A simdgroup's
-//! `simd_active_threads_mask` is
-//! the ballot of `true`, held as the 64-bit ballot is. A fragment's `[[thread_index_in_quadgroup]]`
-//! is the subgroup lane's low two bits ([`select_param`]), or, on a profile without the fragment
-//! quad tier, the pixel's place in its aligned 2x2 block, read from `FragCoord`.
+//! ballot of the active lanes, and the ballot word for votes, `is_first`, the first active lane's
+//! broadcast, the active mask, and `quad_ballot` (the quad's four bits, quad lane `j` at bit `j`).
+//! A fragment's (**Helpers** above) read lane `j` by `OpGroupNonUniformQuadBroadcast` under
+//! `OpGroupNonUniformQuadAnyKHR` of "the quad lane is `j`", take the active lanes' bits from those
+//! votes (of the predicate too, for `quad_ballot`), and vote by `OpGroupNonUniformQuadAllKHR` and
+//! `…AnyKHR`. A simdgroup's `simd_active_threads_mask` is the ballot of `true`, held as the 64-bit
+//! ballot is. A fragment's `[[thread_index_in_quadgroup]]` is the subgroup lane's low two bits
+//! ([`select_param`]), or, on a profile without the fragment quad tier, the pixel's place in its
+//! aligned 2x2 block, read from `FragCoord`.
 //!
 //! **Values** are held as `lower::arith` holds them: narrow integers zero-extended in a `u32`,
 //! `half` and `bfloat` widened in an `f32`. Moving lanes is exact on the container. A signed
@@ -215,8 +217,9 @@ pub struct GroupPlan {
     /// outside kernels, where a quad may lack a lane.
     pub quad_instructions: bool,
     /// The function is a fragment function, whose quads hold helpers ([`full_quads`]): a quad
-    /// reduction or vote reads its quad through quad instructions, which Vulkan runs over the
-    /// quad's helpers whatever the entry's reconvergence (section 9.31, "Helper Invocations").
+    /// operation that counts or combines its quad's lanes reads its quad through quad
+    /// instructions, which Vulkan runs over the quad's helpers whatever the entry's reconvergence
+    /// (section 9.31, "Helper Invocations").
     pub helpers: bool,
 }
 
