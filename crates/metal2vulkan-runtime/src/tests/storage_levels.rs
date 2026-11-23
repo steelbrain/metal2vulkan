@@ -162,7 +162,7 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
             };
             call(encoder.set_compute_pipeline_state(&state));
             call(encoder.set_texture(Some(&texture), 0));
-            for level in 0..3 {
+            for level in 0..3u32 {
                 call(encoder.set_bytes(&level.to_le_bytes(), 0));
                 call(encoder.dispatch_threads([side(level), side(level), 1], [1, 1, 1]));
             }
