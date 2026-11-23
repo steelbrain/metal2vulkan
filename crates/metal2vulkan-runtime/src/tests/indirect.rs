@@ -35,6 +35,11 @@
 //!     otherwise).
 //!   - a kernel's reset of command 1 and a blit's reset of command 3 leave commands 0 and 2 to
 //!     draw; an optimize records nothing; a blit reset past the commands is refused.
+//!   - the words past an argument buffer whose first member is the commands' word, indexed by a
+//!     signed run-time index (`engine/icb_encoder_tail.ll`): a kernel's threads read and write
+//!     words there, the encoder's own bytes kept; a vertex function with rasterization disabled
+//!     rebinds each command's vertex and fragment buffer 0 from the addresses there, and the
+//!     commands draw as the same draws direct through those buffers.
 //!   - a command's slots go unchecked on both sides: a vertex function that reads four elements
 //!     before its slot's address, inside the buffer, reads the buffer's bytes there, and one that
 //!     reads past the end of the buffer its command named reads the bytes past it, each drawing
@@ -1271,6 +1276,149 @@ mod on_device {
             }
             assert_eq!(got, want, "{name}: each vertex's word and id");
             println!("{name}: an attribute pulled at its stride; a stride per bind refused");
+        });
+    }
+
+    /// The bytes of Shared `buffer`, `len` of them, once the work that wrote them has finished.
+    fn bytes(buffer: &Buffer, len: usize) -> Vec<u8> {
+        let contents = buffer.contents().expect("a Shared buffer");
+        // SAFETY: the buffer holds `len` bytes, which the finished work wrote and whose writes
+        // reach the host.
+        unsafe { std::slice::from_raw_parts(contents.as_ptr().cast::<u8>(), len) }.to_vec()
+    }
+
+    /// The encoder `icb_encoder_tail`'s functions take: the commands' word, then `counts`, then
+    /// `tail`, the words past the structure.
+    fn encoder_tail(commands: &IndirectCommandBuffer, counts: [u32; 2], tail: &[u8]) -> Vec<u8> {
+        let mut bytes = commands.gpu_resource_id().to_le_bytes().to_vec();
+        bytes.extend(words(&counts));
+        bytes.extend_from_slice(tail);
+        bytes
+    }
+
+    /// `tail_count` (`icb_encoder_tail`) indexes the words past an encoder whose first member is
+    /// the commands' word by a signed run-time index: thread `t` writes entry `2t` as entry
+    /// `2t + 1` plus 7. Each written word is that sum, each other word and the encoder's own bytes
+    /// keep theirs.
+    #[test]
+    fn every_device_reads_and_writes_the_words_past_an_encoder() {
+        let Some(tail) = library(&engine_dir().join("icb_encoder_tail.ll")) else {
+            return;
+        };
+        each_device("icb_encoder_count", |name, _, device| {
+            let Some(commands) = commands(name, &device, &descriptor(1, 1), N) else {
+                return;
+            };
+            let kernel = kernel(name, &device, &tail, "tail_count");
+            let entries: Vec<u32> = (0..2 * N).map(|e| 0x100 * e + 0x55).collect();
+            let start = encoder_tail(&commands, [2, 7], &words(&entries));
+            let mut buffers = Buffers::new(&device);
+            let encoder = buffers.of(&device, &start);
+            let queue = device.new_command_queue(4).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut e = ok(
+                name,
+                command_buffer.compute_command_encoder(DispatchType::Serial),
+            );
+            ok(name, e.set_compute_pipeline_state(&kernel));
+            ok(name, e.set_buffer(Some(&encoder), 0, 0));
+            ok(name, e.dispatch_threads([N, 1, 1], [N, 1, 1]));
+            e.end_encoding();
+            run(name, &command_buffer);
+            let mut want = entries.clone();
+            for t in 0..N as usize {
+                want[2 * t] = entries[2 * t + 1] + 7;
+            }
+            assert_eq!(
+                bytes(&encoder, start.len()),
+                encoder_tail(&commands, [2, 7], &words(&want)),
+                "{name}: the words past the encoder"
+            );
+            println!("{name}: {N} words written past an encoder, each the word after it plus 7");
+        });
+    }
+
+    /// `tail_bind` (`icb_encoder_tail`), a vertex function with rasterization disabled drawn as
+    /// `N` instances of a point, binds command `iid`'s vertex buffer 0 and fragment buffer 0 to
+    /// the addresses past its encoder at entries `2 iid` and `2 iid + 1`, which a signed run-time
+    /// index reads, over the commands `icb_indexed_16` encoded: command `i` then draws its
+    /// triangles as the same draw direct with the scene's mark and tint of command `N - 1 - i`.
+    #[test]
+    fn every_device_binds_commands_from_the_words_past_an_encoder() {
+        let Some(indexed) = library(&engine_dir().join("icb_merged_indexed.ll")) else {
+            return;
+        };
+        let Some(tail) = library(&engine_dir().join("icb_encoder_tail.ll")) else {
+            return;
+        };
+        each_device("icb_encoder_bind", |name, _, device| {
+            let Some(commands) = commands(name, &device, &descriptor(3, 1), N) else {
+                return;
+            };
+            let drawing = flagged(
+                name,
+                &device,
+                &indexed,
+                ("icb_indexed_vertex", "icb_indexed_fragment"),
+            );
+            let mut buffers = Buffers::new(&device);
+            let s = Scene::new(&device, &mut buffers, &commands);
+            let kernel = kernel(name, &device, &indexed, "icb_indexed_16");
+            encode(name, &device, &kernel, &commands, (&s, &s.xy, 0), N);
+            let picked = |i: u32| N - 1 - i;
+            let addresses: Vec<u64> = (0..N)
+                .flat_map(|i| {
+                    let at = 4 * u64::from(picked(i));
+                    [s.marks.gpu_address() + at, s.tints.gpu_address() + at]
+                })
+                .collect();
+            let tail_bytes: Vec<u8> = addresses.iter().flat_map(|a| a.to_le_bytes()).collect();
+            let encoder = buffers.of(&device, &encoder_tail(&commands, [2, 0], &tail_bytes));
+            let mut d = RenderPipelineDescriptor::new(function(&tail, "tail_bind"));
+            d.color_attachments[0] = Some(ColorAttachmentDescriptor::new(PixelFormat::RGBA32Uint));
+            d.rasterization_enabled = false;
+            let producer = state(name, &device, &d);
+            drawn(name, &device, &producer, |e| {
+                ok(name, e.set_vertex_buffer(Some(&encoder), 0, 0));
+                ok(
+                    name,
+                    e.use_resource(
+                        Resource::IndirectCommandBuffer(&commands),
+                        ResourceUsage::WRITE,
+                    ),
+                );
+                ok(name, e.draw_primitives(PrimitiveType::Point, 0, 1, N, 0));
+            });
+            let executed = drawn(name, &device, &drawing, |e| {
+                ok(name, e.execute_commands_in_buffer(&commands, 0..N))
+            });
+            let direct = drawn(name, &device, &drawing, |e| {
+                for i in 0..N {
+                    let at = 4 * u64::from(picked(i));
+                    ok(name, e.set_vertex_buffer(Some(&s.marks), at, 0));
+                    ok(name, e.set_vertex_buffer(Some(&s.frame), 0, 1));
+                    ok(name, e.set_vertex_buffer(Some(&s.xy), 0, 2));
+                    ok(name, e.set_fragment_buffer(Some(&s.tints), at, 0));
+                    let indices = IndexBuffer {
+                        buffer: &s.indices,
+                        offset: 2 * u64::from(first(i)),
+                        index_type: IndexType::UInt16,
+                    };
+                    let triangles = PrimitiveType::Triangle;
+                    let base = 4 * i as i32;
+                    ok(
+                        name,
+                        e.draw_indexed_primitives(triangles, 6, indices, 1, base, i),
+                    );
+                }
+            });
+            assert_eq!(executed, direct, "{name}: the rebound commands");
+            let rows: Vec<u32> = (0..2 * N).map(|row| MARK + picked(row / 2)).collect();
+            assert_eq!(marks(name, &executed), rows, "{name}");
+            println!(
+                "{name}: {N} commands rebound from the addresses past an encoder draw as their \
+                 draws direct"
+            );
         });
     }
 
