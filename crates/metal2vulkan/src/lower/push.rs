@@ -35,16 +35,13 @@
 //! A driver that uploads a stage's push bytes up to the highest one it reads then uploads at least
 //! 28 bytes past the other fields, which holds every load it widens from them, and the tail's own
 //! load, one or two words, is never widened. The stage reads the tail in its first block and tests
-//! whether it holds a value the consumer never pushes there ([`tail_never_pushed`]), so no
-//! optimizer drops the tail's read while it keeps the read of any other pushed field. A kernel
-//! returns where the test holds ([`return_never_pushed`]): its entry also returns invocations
-//! before its body where its dispatch passes its grid (`dispatch::emit_entry`). In a render stage
-//! each other pushed field's value is its member where the test fails and the null of its type
-//! where it holds ([`fold_never_pushed`]), and no branch makes the body depend on the tail: a
-//! fragment stage has no other return at its entry, and AMD's open driver (2025.Q2.1) dies making
-//! one whose body runs under a never-taken return there and holds a loop of convergent
-//! instructions under `MaximallyReconvergesKHR`. A stage that pushes one field of one or two words
-//! has no other load to widen and no tail. The hole moves no field the stage reads
+//! whether it holds a value the consumer never pushes there ([`tail_never_pushed`]); each other
+//! pushed field's value is its member where the test fails and the null of its type where it holds
+//! ([`fold_never_pushed`]), so no optimizer drops the tail's read while it keeps the read of any
+//! other pushed field. No branch makes the body depend on the tail: AMD's open driver (2025.Q2.1)
+//! dies making a fragment stage whose body runs under a never-taken return there and holds a loop
+//! of convergent instructions under `MaximallyReconvergesKHR`. A stage that pushes one field of one
+//! or two words has no other load to widen and no tail. The hole moves no field the stage reads
 //! and adds no read where the tail is a field of its own, so the words a driver keeps in registers
 //! are the same.
 //!
@@ -439,10 +436,9 @@ pub fn check_floor(placement: &PushPlacement, bytes: u32) -> Result<(), String> 
 /// In the open block of a function whose push block holds the stage's tail `field` ([`tail`]),
 /// `value` its member as the block read it: whether it holds the value the consumer never pushes
 /// there: the tail word non-zero, a two-word field with both words all ones, an address all ones.
-/// `None` for a tail of another shape, which has no such value. A kernel returns where the test
-/// holds ([`return_never_pushed`]); a render stage folds it into each other pushed field's value
-/// ([`fold_never_pushed`]). Either way no optimizer drops the read while it keeps any other push
-/// read.
+/// `None` for a tail of another shape, which has no such value. The function folds the test into
+/// each other pushed field's value ([`fold_never_pushed`]), so no optimizer drops the read while
+/// it keeps any other push read, and no branch makes the body depend on it.
 pub(crate) fn tail_never_pushed(
     fb: &mut crate::spirv::builder::FunctionBuilder<'_>,
     value: crate::spirv::ids::Value,
@@ -477,23 +473,7 @@ pub(crate) fn tail_never_pushed(
     Ok(Some(set))
 }
 
-/// A kernel's tail test `never` ([`tail_never_pushed`]): return from the function where it holds.
-/// The branch is never taken; the return keeps the read from any optimizer, as everything the
-/// function does after it depends on it.
-pub(crate) fn return_never_pushed(
-    fb: &mut crate::spirv::builder::FunctionBuilder<'_>,
-    never: crate::spirv::ids::Value,
-) -> crate::spirv::error::BResult<()> {
-    use crate::spirv::builder::constructs::{ArmEnd, ArmFn};
-    let leave: ArmFn<'_, ()> = Box::new(|fb, _| {
-        fb.ret(None)?;
-        Ok(ArmEnd::Exits)
-    });
-    fb.if_(&mut (), never, leave, None)?;
-    Ok(())
-}
-
-/// A render stage's `value`, a pushed field's value as its member was read, where the stage's tail does not hold
+/// `value`, a pushed field's value as its member was read, where the stage's tail does not hold
 /// the value the consumer never pushes there (`never`, [`tail_never_pushed`]), else the null of
 /// its type: the value the consumer's push gives, through a select whose condition is the tail's
 /// test, so the field's every use reads the tail too.
