@@ -528,17 +528,18 @@ pub enum Refusal {
         /// The index given.
         index: Option<u32>,
     },
-    /// A texture made without an index bound to a function's texture slot
-    /// ([`ComputeCommandEncoder::set_texture`](crate::ComputeCommandEncoder::set_texture),
-    /// [`RenderCommandEncoder::set_vertex_texture`](crate::RenderCommandEncoder::set_vertex_texture),
-    /// [`RenderCommandEncoder::set_fragment_texture`](crate::RenderCommandEncoder::set_fragment_texture)):
-    /// one shaders reach through its views alone
+    /// A texture shaders reach through its views alone, made without an index of its own
     /// ([`Device::new_texture_for_views`](crate::Device::new_texture_for_views), a surface's or a
     /// Direct3D 11 surface's plane made with no index, [`PlaneSpec::index`](crate::PlaneSpec)),
-    /// or one no shader reaches (a depth or stencil target made for neither shader reads nor
-    /// writes). A slot reads the texture at its index, and such a texture has none: every read
-    /// would answer the null descriptor's zeros. Bind a view of it, which has an index of its
-    /// own. Metal has no counterpart: Metal gives every texture a resource ID.
+    /// bound to a function's texture slot
+    /// ([`ComputeCommandEncoder::set_texture`](crate::ComputeCommandEncoder::set_texture),
+    /// [`RenderCommandEncoder::set_vertex_texture`](crate::RenderCommandEncoder::set_vertex_texture),
+    /// [`RenderCommandEncoder::set_fragment_texture`](crate::RenderCommandEncoder::set_fragment_texture)).
+    /// A slot reads the texture at its index, and this one has none: every read would answer the
+    /// null descriptor's zeros. Bind a view of it, which has an index of its own. A texture no
+    /// shader reaches (a depth or stencil target whose usage asks neither shader reads nor
+    /// writes) has no index either, and binds, as Metal's does: its usage asks no shader read of
+    /// it. Metal has no counterpart: Metal gives every texture a resource ID.
     ///
     /// Basis: ours (a slot pushes its texture's index, an element of set 1's texture arrays).
     TextureWithoutIndex {
@@ -2565,8 +2566,8 @@ impl fmt::Display for Refusal {
             ),
             Refusal::TextureWithoutIndex { index } => write!(
                 f,
-                "the texture bound at texture index {index} was made without an index, so no \
-                 slot reaches it; bind a view of it"
+                "the texture bound at texture index {index} is reached through its views alone, \
+                 with no index of its own; bind a view of it"
             ),
             Refusal::TextureZeroExtent => f.write_str("a texture has a width, height or depth of 0"),
             Refusal::TextureExtentForType => {

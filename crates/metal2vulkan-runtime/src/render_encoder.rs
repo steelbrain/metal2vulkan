@@ -1038,8 +1038,9 @@ impl RenderCommandEncoder {
     /// vertex function reads, and the channel widths an integer write saturates to where the
     /// function takes them. The command buffer keeps the texture until it retires.
     ///
-    /// Err: [`Refusal::TextureArgumentIndex`] for an index of 128 or more;
-    /// [`Refusal::OtherDevice`] for another device's texture.
+    /// Err, binding nothing: [`Refusal::TextureArgumentIndex`] for an index of 128 or more;
+    /// [`Refusal::OtherDevice`] for another device's texture; [`Refusal::TextureWithoutIndex`]
+    /// for a texture shaders reach through its views alone.
     pub fn set_vertex_texture(
         &mut self,
         texture: Option<&Texture>,
@@ -1078,6 +1079,9 @@ impl RenderCommandEncoder {
                 let building = self.building();
                 if !texture.is_of(building.device.core()) {
                     return Err(Error::Refused(Refusal::OtherDevice));
+                }
+                if texture.views_alone() {
+                    return Err(Error::Refused(Refusal::TextureWithoutIndex { index }));
                 }
                 // SAFETY: the encoder's table holds the borrow, and it ends before its command
                 // buffer commits.

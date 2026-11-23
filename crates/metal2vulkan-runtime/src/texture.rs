@@ -1079,8 +1079,9 @@ impl Device {
     /// the consumer makes as its views: the textures Metal makes over one IOSurface plane
     /// (`newTextureWithDescriptor:iosurface:plane:`), for one. Copies, uploads and readbacks reach
     /// it as they reach any texture. Where Metal gives every texture an index, this one has none:
-    /// its [`Texture::gpu_resource_id`] answers index 0, and a slot that binds it reads Metal's
-    /// nil texture.
+    /// its [`Texture::gpu_resource_id`] answers index 0, which a shader reads as Metal's nil
+    /// texture, and where its usage reaches shaders, a bind of it to a function's texture slot is
+    /// refused ([`Refusal::TextureWithoutIndex`]).
     ///
     /// Err: as [`Device::new_texture`], but for [`Refusal::TextureIndex`] and
     /// [`Refusal::IndicesNotGranted`].
@@ -4156,8 +4157,14 @@ impl Texture {
         homed
     }
 
-    /// `gpuResourceID`: its index (0 for a texture no shader reaches) and the translator's
-    /// `TextureWord` of its pixel format and swizzle.
+    /// `gpuResourceID`: its index and the translator's `TextureWord` of its pixel format and
+    /// swizzle. The index is 0 for a texture made without one: a texture no shader reaches, and
+    /// one shaders reach through its views alone ([`Device::new_texture_for_views`]), where Metal
+    /// gives every texture an index of its own. A shader that reads an ID of index 0, from an
+    /// argument buffer or any bytes it reads as an ID, reads element 0 of set 1's texture arrays,
+    /// the null descriptor, as Metal's nil texture: zeros, sizes of 0, and writes dropped. A bind
+    /// of a texture reached through its views alone to a function's texture slot is refused
+    /// ([`Refusal::TextureWithoutIndex`]); nothing refuses its ID written into bytes.
     pub fn gpu_resource_id(&self) -> ResourceId {
         TextureObject::gpu_resource_id(self)
     }
@@ -4489,6 +4496,14 @@ pub(crate) trait TextureObject {
     /// Whether `core` is the device this texture was made on.
     fn is_of(&self, core: &Arc<Core>) -> bool {
         Arc::ptr_eq(&self.object().core, core)
+    }
+
+    /// Whether shaders reach it through its views alone: its usage reaches shaders and it has no
+    /// index of its own ([`Device::new_texture_for_views`]), so no slot reaches it
+    /// ([`Refusal::TextureWithoutIndex`]). A texture no shader reaches has no index either.
+    fn views_alone(&self) -> bool {
+        let d = &self.object().descriptor;
+        self.object().index.is_none() && reached(d.pixel_format, usage_taken(d))
     }
 
     /// Its image. A texture buffer has none: every call that reaches this refuses one first
@@ -5227,7 +5242,7 @@ pub(crate) trait TextureObject {
         }
     }
 
-    /// `gpuResourceID`: its index (0 for a texture no shader reaches) and the translator's
+    /// `gpuResourceID`: its index (0 for a texture made without one) and the translator's
     /// `TextureWord` of its pixel format and swizzle.
     fn gpu_resource_id(&self) -> ResourceId {
         ResourceId {

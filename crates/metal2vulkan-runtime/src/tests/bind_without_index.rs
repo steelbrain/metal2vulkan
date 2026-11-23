@@ -3,9 +3,9 @@
 //! Under a device cfg, on every device of the cfg's kind: a texture reached through its views
 //! alone (`Device::new_texture_for_views`) bound to a compute encoder's texture slot, or to a
 //! render encoder's vertex or fragment slot, is `Refusal::TextureWithoutIndex` with the slot's
-//! index, and so is a depth target no shader reaches, which is made without an index too.
-//! Unbinding the slot (`None`), a view of the texture at an index of its own, and a texture made
-//! at an index each bind, and the command buffer completes with no error.
+//! index. Unbinding the slot (`None`), a view of the texture at an index of its own, a texture
+//! made at an index, and a depth target no shader reaches, which has no index either, each bind,
+//! and the command buffer completes with no error.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
@@ -27,7 +27,7 @@ mod on_device {
     }
 
     #[test]
-    fn a_texture_made_without_an_index_binds_to_no_texture_slot() {
+    fn a_texture_reached_through_its_views_alone_binds_to_no_texture_slot() {
         each_device("bind_without_index", |name, _, device| {
             (device.grant_indices(IndexClass::Texture, 4096, 2))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -58,14 +58,14 @@ mod on_device {
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let compute_answers = [
                 answer(compute.set_texture(Some(&unindexed), 3)),
-                answer(compute.set_texture(Some(&depth), 4)),
                 answer(compute.set_texture(None, 3)),
                 answer(compute.set_texture(Some(&view), 3)),
                 answer(compute.set_texture(Some(&indexed), 4)),
+                answer(compute.set_texture(Some(&depth), 5)),
             ];
             assert_eq!(
                 compute_answers,
-                [without(3), without(4), None, None, None],
+                [without(3), None, None, None, None],
                 "{name}: compute"
             );
             compute.end_encoding();
@@ -80,30 +80,23 @@ mod on_device {
             let render_answers = [
                 answer(render.set_vertex_texture(Some(&unindexed), 5)),
                 answer(render.set_fragment_texture(Some(&unindexed), 6)),
-                answer(render.set_fragment_texture(Some(&depth), 7)),
                 answer(render.set_vertex_texture(None, 5)),
                 answer(render.set_fragment_texture(None, 6)),
                 answer(render.set_vertex_texture(Some(&view), 5)),
                 answer(render.set_fragment_texture(Some(&view), 6)),
                 answer(render.set_fragment_texture(Some(&indexed), 7)),
+                answer(render.set_fragment_texture(Some(&depth), 8)),
             ];
             assert_eq!(
                 render_answers,
-                [
-                    without(5),
-                    without(6),
-                    without(7),
-                    None,
-                    None,
-                    None,
-                    None,
-                    None
-                ],
+                [without(5), without(6), None, None, None, None, None, None],
                 "{name}: render"
             );
             render.end_encoding();
             run(name, &command_buffer);
-            println!("{name}: each bind of a texture made without an index refused with its slot");
+            println!(
+                "{name}: each bind of a texture reached through its views refused with its slot"
+            );
             drop((
                 command_buffer,
                 queue,

@@ -1394,7 +1394,9 @@ made, with no lock, and never rewritten for layouts.
   is cube-compatible with six layers a cube, and its view is a cube array view (`imageCubeArray`,
   in the floor).
 - `Texture::gpu_resource_id` is its index (0 without one) and the translator's `TextureWord` of
-  its format and swizzle (`docs/RESOURCE-ID.md`), so the guest computes the ID itself.
+  its format and swizzle (`docs/RESOURCE-ID.md`), so the guest computes the ID itself. An ID of
+  index 0 that a shader reads from bytes (an argument buffer's texture) reads the null descriptor,
+  as Metal's nil texture; nothing refuses it there.
 - `Texture::replace_region` and `Texture::get_bytes` take a Shared or Managed texture
   (`Refusal::TextureBytesPrivate` otherwise), a region inside a level and slice on the format's
   block grid (`Refusal::TextureRegion`), and rows and images apart as Metal's calls take them,
@@ -1626,8 +1628,10 @@ made, with no lock, and never rewritten for layouts.
   IOSurface plane (`newTextureWithDescriptor:iosurface:plane:`), each with a `gpuResourceID` of
   its own, are its views at their own indices, two such textures two views. Copies,
   `replace_region` and `get_bytes` reach it as they reach any texture. What differs: Metal gives
-  every texture an index, and this one has none, so its `gpu_resource_id` answers index 0 and a
-  slot that binds it reads Metal's nil texture. `new_texture` still refuses a texture shaders
+  every texture an index, and this one has none, so its `gpu_resource_id` answers index 0, which
+  a shader reads as Metal's nil texture, and where its usage reaches shaders a bind of it to a
+  function's texture slot (`set_texture`, `set_vertex_texture`, `set_fragment_texture`) is
+  `Refusal::TextureWithoutIndex`: bind a view. `new_texture` still refuses a texture shaders
   reach made without an index (`Refusal::TextureIndex`).
   `Device::new_heap_texture_for_views(descriptor, heap, offset)` is the same texture placed in a
   heap, as `newTextureWithDescriptor:offset:` places one: its image is bound at `offset` in the
@@ -2415,8 +2419,10 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   While it is open, the encoder holds the command buffer's recording: another encoder, an encode
   call, `enqueue` and `commit` are refused (`Refusal::EncoderOpen`). `end_encoding`, or dropping
   the encoder, gives it back.
-- `set_texture` (128 slots, `Refusal::TextureArgumentIndex` past them) and `set_sampler_state`
-  (16 slots, `Refusal::SamplerArgumentIndex`) bind as Metal's calls do; `use_resource` takes a
+- `set_texture` (128 slots, `Refusal::TextureArgumentIndex` past them;
+  `Refusal::TextureWithoutIndex` for a texture reached through its views alone, which has no
+  index a slot could push) and `set_sampler_state` (16 slots, `Refusal::SamplerArgumentIndex`)
+  bind as Metal's calls do; `use_resource` takes a
   texture as it takes a buffer. A dispatch pushes, for each texture and sampler slot its kernel
   reads, the bound object's `gpuResourceID` (0 for none), whose index names its elements of set
   1; for a texture slot an integer write saturates through, the channel widths of the bound
