@@ -3096,6 +3096,7 @@ impl Backend for NewRuntime {
             ("passes", metrics.passes),
             ("barriers", metrics.barriers),
             ("bytes_copied", metrics.bytes_copied),
+            ("heap_moves", metrics.heap_moves),
             ("over_copies", metrics.over_copies),
             ("over_copy_bytes", metrics.over_copy_bytes),
             ("over_copies_imported", metrics.over_copies_imported),
