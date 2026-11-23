@@ -9,7 +9,9 @@
 //! either stage, is a skipped object (`draws`); and a render command the runtime answers with a
 //! typed gap, a draw it does not build and a visibility result mode in an `Accumulate` pass among
 //! them, or a visibility result mode it refuses as Metal's validation does (`render_commands`, by
-//! the gap, or `Refused(KIND)` by the refusal's kind, with the first frame and call of each).
+//! the gap, or `Refused(KIND)` by the refusal's kind, with the first frame and call of each),
+//! `setTessellationFactorScale:` at a scale other than Metal's 1 among them
+//! (`TessellationFactorScale`, `factor_scale`).
 //!
 //! Visibility results play as the runtime's: the pass's `visibilityResultBuffer` and
 //! `visibilityResultType`, and each `setVisibilityResultMode:offset:`, whose counts the runtime
@@ -189,6 +191,22 @@ fn stencil_resolve_filter(
         1 => rt::MultisampleStencilResolveFilter::DepthResolvedSample,
         other => return Err(refuse(call, format!("stencil resolve filter {other}"))),
     })
+}
+
+/// `setTessellationFactorScale:`'s scale, as the skipped render command's kind: none at Metal's
+/// default of 1, which plays as nothing; `TessellationFactorScale` for any other scale.
+///
+/// Metal reads the scale only in a patch draw through a post-tessellation pipeline state whose
+/// `tessellationFactorScaleEnabled` is set, and the runtime refuses every such state at its making
+/// (`RenderPipelineKind::Tessellation`; its render encoder has no scale setter), so no state the
+/// play draws through reads it. That holds only while the runtime refuses those states: once it
+/// builds the scale, its encoder takes the setter and the player passes the scale on.
+pub(super) fn factor_scale(call: &Call) -> Result<Option<String>, PlayError> {
+    match arg(call, 0)?.as_f64() {
+        Some(1.0) => Ok(None),
+        Some(_) => Ok(Some("TessellationFactorScale".into())),
+        None => Err(refuse(call, "argument 0 is no float")),
+    }
 }
 
 /// `MTLStoreAction`.
@@ -1016,6 +1034,12 @@ impl NewRuntime {
                     None => return Err(refuse(call, "argument 0 is no float")),
                 };
                 self.render(id).encoder.set_line_width(width);
+                Ok(())
+            }
+            "setTessellationFactorScale:" => {
+                if let Some(kind) = factor_scale(call)? {
+                    self.render_command_skipped(kind);
+                }
                 Ok(())
             }
             // A render encoder's residency declarations, through the runtime's, with `stages:` or

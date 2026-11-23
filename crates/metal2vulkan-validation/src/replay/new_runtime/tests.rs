@@ -188,6 +188,32 @@ fn a_record_without_the_tessellation_key_is_unrecorded() {
     );
 }
 
+/// A tessellation factor scale of 1, Metal's default, plays as nothing, as a float or a double;
+/// any other scale is a skipped render command of its own kind; a scale that is no float is
+/// refused.
+#[test]
+fn a_tessellation_factor_scale_other_than_1_is_a_skipped_render_command() {
+    let call = |scale: Value| Call {
+        selector: "setTessellationFactorScale:".into(),
+        receiver: 4,
+        result: 0,
+        args: vec![scale],
+        answers: Vec::new(),
+    };
+    let read = |scale| super::render::factor_scale(&call(scale));
+    assert_eq!(read(Value::F32(1.0)).unwrap(), None);
+    assert_eq!(read(Value::F64(1.0)).unwrap(), None);
+    assert_eq!(
+        read(Value::F32(2.0)).unwrap().as_deref(),
+        Some("TessellationFactorScale")
+    );
+    assert_eq!(
+        read(Value::F32(0.5)).unwrap().as_deref(),
+        Some("TessellationFactorScale")
+    );
+    assert!(read(Value::Uint(1)).is_err());
+}
+
 /// A fault's access is placed among the stream's buffers and heaps: in a live buffer and the live
 /// heap it lies in, by address, with its offset in each; in a released buffer, with the frame and
 /// call of its release, newest first; outside all of them where none meets its range, which is

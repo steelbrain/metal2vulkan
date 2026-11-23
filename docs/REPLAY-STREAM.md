@@ -749,7 +749,12 @@ records as text, and
     buffer, an offset off a multiple of 8 or past the buffer, at a byte of the buffer's allocation
     off a multiple of 8, or one the encoder took before), whose mode stays as it was
     (`skipped_render_commands`, and a line for each gap, or `Refused(KIND)` for each kind of
-    refusal, with its first frame and call);
+    refusal, with its first frame and call). `setTessellationFactorScale:` at Metal's default of
+    1 plays as nothing, and at any other scale is a skipped render command
+    (`TessellationFactorScale`): Metal reads the scale only in a patch draw through a
+    post-tessellation pipeline state that enables it, and the runtime refuses every such state
+    (`RenderPipeline { kind: Tessellation }`), which the report counts as a skipped render
+    pipeline state;
   - blit commands that name a skipped object (`skipped_blits`), and by kind:
     `synchronizeTexture:slice:level:` (`skipped_texture_syncs`), and the pieces of a copy from
     the guest's RAM that are not whole 4-byte words at a 4-byte offset, into a buffer with no
