@@ -283,6 +283,8 @@ pub(crate) enum Metric {
     ExternalAcquires,
     /// [`Metrics::external_releases`].
     ExternalReleases,
+    /// [`Metrics::d3d11_plane_submissions`].
+    D3d11PlaneSubmissions,
     /// [`Metrics::surfaces_in_place`].
     SurfacesInPlace,
     /// [`Metrics::surfaces_copied`].
@@ -352,6 +354,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::WaitsBehindCounter,
     Metric::ExternalAcquires,
     Metric::ExternalReleases,
+    Metric::D3d11PlaneSubmissions,
     Metric::SurfacesInPlace,
     Metric::SurfacesCopied,
     Metric::ExportedBlocksAddressed,
@@ -769,6 +772,7 @@ struct Atomics {
     waits_behind_counter: AtomicU64,
     external_acquires: AtomicU64,
     external_releases: AtomicU64,
+    d3d11_plane_submissions: AtomicU64,
     surfaces_in_place: AtomicU64,
     surfaces_copied: AtomicU64,
     exported_blocks_addressed: AtomicU64,
@@ -938,6 +942,7 @@ impl Counters {
             Metric::WaitsBehindCounter => &a.waits_behind_counter,
             Metric::ExternalAcquires => &a.external_acquires,
             Metric::ExternalReleases => &a.external_releases,
+            Metric::D3d11PlaneSubmissions => &a.d3d11_plane_submissions,
             Metric::SurfacesInPlace => &a.surfaces_in_place,
             Metric::SurfacesCopied => &a.surfaces_copied,
             Metric::ExportedBlocksAddressed => &a.exported_blocks_addressed,
@@ -1868,6 +1873,7 @@ impl Counters {
             waits_behind_counter: a.waits_behind_counter.load(Relaxed),
             external_acquires: a.external_acquires.load(Relaxed),
             external_releases: a.external_releases.load(Relaxed),
+            d3d11_plane_submissions: a.d3d11_plane_submissions.load(Relaxed),
             surfaces_in_place: a.surfaces_in_place.load(Relaxed),
             surfaces_copied: a.surfaces_copied.load(Relaxed),
             exported_blocks_addressed: a.exported_blocks_addressed.load(Relaxed),
@@ -2752,6 +2758,15 @@ pub struct Metrics {
     /// one barrier each, in the command buffer's work, also counted in
     /// [`barriers`](Self::barriers).
     pub external_releases: u64,
+    /// Submissions whose command buffers keep a plane of a Direct3D 11 surface
+    /// (`Device::import_d3d11_surface`, on Windows): each acquires those planes from
+    /// `VK_QUEUE_FAMILY_EXTERNAL` in a command buffer of the runtime's own at its start and
+    /// releases them to it in another at its end, both in the general layout, so Direct3D 11
+    /// owns the planes' memory between the runtime's submissions. Each acquire and release is
+    /// one barrier, also counted in [`external_acquires`](Self::external_acquires),
+    /// [`external_releases`](Self::external_releases) and [`barriers`](Self::barriers). No
+    /// Metal counterpart: an IOSurface needs no hand-over between APIs.
+    pub d3d11_plane_submissions: u64,
     /// Surfaces made in place
     /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface),
     /// [`SurfaceForm::InPlace`](crate::SurfaceForm::InPlace)).
