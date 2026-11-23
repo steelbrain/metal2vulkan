@@ -197,7 +197,7 @@ impl HeapId {
         &self.places
     }
 
-    /// A placement of the heap gained its first link (`gained`) or lost its last.
+    /// A placement of the heap began to take part (`gained`) or ceased to (`crate::alias`).
     pub(crate) fn linked(&self, gained: bool) {
         let linked = &self.core.heap_ids.linked;
         match gained {
@@ -220,7 +220,7 @@ impl Drop for HeapId {
 #[derive(Default)]
 pub(crate) struct HeapIds {
     state: Mutex<HeapIdState>,
-    /// The device's heap placements with links (`crate::alias`): while none has, a command's
+    /// The device's heap placements that take part (`crate::alias`): while none does, a command's
     /// uses look at no placement.
     linked: AtomicUsize,
 }

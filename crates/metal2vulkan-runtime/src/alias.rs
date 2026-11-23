@@ -15,7 +15,9 @@
 //! A use that writes a placement makes its texture links stale. A stale texture's next use that
 //! writes it moves its whole image from undefined to its home layout first, in a barrier that
 //! orders every earlier command before it and every later one after it. Reads move nothing. A
-//! buffer is never moved; its writes make its texture links stale.
+//! buffer is never moved; its writes make its texture links stale. A stale texture takes part
+//! until that write, whether or not a link is left: the release of what wrote over its bytes
+//! leaves them written over.
 //!
 //! Inside a command buffer, encode order is the order its commands run in: [`Marks`] keeps what
 //! the command buffer did to the placements it touched, and a write of one that a link was
@@ -151,8 +153,9 @@ pub(crate) struct Placement {
     /// The placements of its heap whose bytes meet its, a buffer's textures alone, changed under
     /// its heap's lock.
     links: Mutex<Links>,
-    /// It takes part ([`Links::take_part`]): the one test a placement that does not pays, read
-    /// without the lock.
+    /// It takes part: it has a link ([`Links::take_part`]), or it is a stale texture
+    /// ([`Placement::owes_move`]). The one test a placement that does not pays, read without the
+    /// lock, and changed under its links' lock.
     linked: AtomicBool,
     /// As the submit thread has staged the segments: a link was written since its own last write,
     /// or it was placed over another's bytes and is not yet written. A texture's alone is read.
@@ -224,10 +227,17 @@ impl Placement {
         place
     }
 
-    /// Whether it takes part: a texture whose bytes another placement of its heap meets, or a
-    /// buffer whose bytes a texture's meet.
+    /// Whether it takes part: a texture whose bytes another placement of its heap meets, or
+    /// whose next write owes a move ([`owes_move`](Self::owes_move)), or a buffer whose bytes a
+    /// texture's meet.
     pub(crate) fn linked(&self) -> bool {
         self.linked.load(Relaxed)
+    }
+
+    /// A texture that is stale, as the submit thread has staged the segments: its next write
+    /// moves it, whether or not a link is left.
+    fn owes_move(&self) -> bool {
+        self.moved.is_some() && self.stale.load(Relaxed)
     }
 
     /// Placed over another's bytes: its first move from the layout it is made in waits for every
@@ -259,7 +269,7 @@ impl Drop for Placement {
         for other in &met {
             let mut links = lock(&other.links);
             links.drop_to(me, texture);
-            let linked = links.take_part();
+            let linked = links.take_part() || other.owes_move();
             if other.linked.swap(linked, Relaxed) && !linked {
                 self.heap.linked(false);
             }
@@ -422,8 +432,13 @@ pub(crate) fn stage(
         .collect();
     for place in &part.writes {
         place.stale.store(false, Relaxed);
-        for link in lock(&place.links).textures.iter() {
+        let links = lock(&place.links);
+        for link in links.textures.iter() {
             link.stale.store(true, Relaxed);
+        }
+        // A texture that took part only for the move it owed takes none once written.
+        if !links.take_part() && place.linked.swap(false, Relaxed) {
+            place.heap.linked(false);
         }
     }
     if moves.is_empty() {
