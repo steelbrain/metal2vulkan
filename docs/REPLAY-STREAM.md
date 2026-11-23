@@ -457,7 +457,11 @@ and the (name id, value) answer pairs.
   - `newComputePipelineStateWithDescriptor:options:reflection:error:`: `{label, function,
     threadgroupSizeIsMultipleOfExecutionWidth, maxTotalThreadsPerThreadgroup, maxCallStackDepth,
     supportIndirectCommandBuffers, stageInput, linked, libraries: {preloaded, loaded},
-    openClMode}`.
+    openClMode}`. `stageInput` is nil where the descriptor has none, or `{layouts, attributes,
+    indexType, indexBufferIndex}`: the layouts and attributes in the vertex descriptor's form,
+    Metal's raw step functions and attribute formats, and the index type and index buffer as
+    Metal's `MTLStageInputOutputDescriptor` holds them. A player gives it to the pipeline; an
+    attribute's buffer that no layout names takes Metal's unset layout.
 - **Keys that are not Metal's property names:**
 
 | key | Metal's |

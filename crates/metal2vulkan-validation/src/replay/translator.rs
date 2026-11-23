@@ -1,6 +1,7 @@
 //! What a call describes in the translator's types, which every backend takes: a sampler
-//! descriptor, function constant values, a depth-stencil descriptor and a render pipeline
-//! descriptor; and the keys of a render pass descriptor's setter records.
+//! descriptor, function constant values, a depth-stencil descriptor, a render pipeline
+//! descriptor and a compute pipeline's stage input; and the keys of a render pass descriptor's
+//! setter records.
 
 use super::args::{metal, narrow, refuse, Fields};
 use super::player::PlayError;
@@ -11,7 +12,8 @@ use metal2vulkan::library::{FunctionConstantValue, FunctionConstantValues};
 use metal2vulkan::metal::state::{DepthStencilDescriptor, StencilDescriptor};
 use metal2vulkan::metal::PixelFormat;
 use metal2vulkan::pipeline::{
-    ColorAttachmentDescriptor, RenderPipelineDescriptor, StageSource, TessellationDescriptor,
+    ColorAttachmentDescriptor, RenderPipelineDescriptor, StageInputAttributeDescriptor,
+    StageInputDescriptor, StageInputLayoutDescriptor, StageSource, TessellationDescriptor,
     VertexAttributeDescriptor, VertexBufferLayoutDescriptor, VertexDescriptor,
 };
 
@@ -243,6 +245,55 @@ fn vertex_descriptor(call: &Call, f: &Fields) -> Result<VertexDescriptor, PlayEr
             .or_insert_with(|| VertexBufferLayoutDescriptor::new(Some(0)));
     }
     Ok(out)
+}
+
+/// A compute pipeline descriptor's `stageInput`, nil or `{layouts, attributes, indexType,
+/// indexBufferIndex}`, as the translator's: the layouts and attributes each at its index, as the
+/// vertex descriptor's (a stride of 2^64 - 1 is `MTLBufferLayoutStrideDynamic`), and a layout of
+/// Metal's unset form (stride 0, per vertex, step rate 1), as Metal's array holds one, for each
+/// buffer an attribute reads that no layout names. Nil is no stage input.
+pub(super) fn stage_input(
+    call: &Call,
+    f: &Fields,
+) -> Result<Option<StageInputDescriptor>, PlayError> {
+    let known = ["layouts", "attributes", "indexType", "indexBufferIndex"];
+    let Some(s) = f.fields("stageInput", &known)? else {
+        return Ok(None);
+    };
+    let mut out = StageInputDescriptor::new();
+    for layout in s.list("layouts")?.unwrap_or_default() {
+        let known = ["bufferIndex", "stride", "stepFunction", "stepRate"];
+        let l = Fields::of(call, layout, &known)?;
+        let stride = match l.required("stride", Fields::uint)? {
+            DYNAMIC_STRIDE => None,
+            stride => Some(narrow(call, stride, "stride")?),
+        };
+        let mut made = StageInputLayoutDescriptor::new(stride);
+        made.step_function = l.required("stepFunction", Fields::metal)?;
+        made.step_rate = l.required("stepRate", Fields::count)?;
+        out.layouts
+            .insert(l.required("bufferIndex", Fields::count)?, made);
+    }
+    for attribute in s.list("attributes")?.unwrap_or_default() {
+        let known = ["attributeIndex", "format", "offset", "bufferIndex"];
+        let a = Fields::of(call, attribute, &known)?;
+        let made = StageInputAttributeDescriptor::new(
+            a.required("format", Fields::metal)?,
+            a.required("offset", Fields::count)?,
+            a.required("bufferIndex", Fields::count)?,
+        );
+        out.attributes
+            .insert(a.required("attributeIndex", Fields::count)?, made);
+    }
+    let read: Vec<u32> = out.attributes.values().map(|a| a.buffer_index).collect();
+    for buffer in read {
+        out.layouts
+            .entry(buffer)
+            .or_insert_with(|| StageInputLayoutDescriptor::new(Some(0)));
+    }
+    out.index_type = s.required("indexType", Fields::metal)?;
+    out.index_buffer_index = s.required("indexBufferIndex", Fields::count)?;
+    Ok(Some(out))
 }
 
 const PRIVATE_KEYS: [&str; 7] = [

@@ -319,6 +319,93 @@ fn a_render_pipeline_record_s_tessellation_state_and_depths_are_read() {
     assert!(matches!(read(&outer), Err(PlayError::Refused { .. })));
 }
 
+/// A compute pipeline record's stage input is the kernel's: its layouts and attributes at their
+/// indices, a dynamic stride as none, Metal's unset layout for a buffer an attribute reads that
+/// no layout names, and the index type and buffer; nil is no stage input, and a key the form
+/// does not hold is refused.
+#[test]
+fn a_compute_pipeline_record_s_stage_input_is_read() {
+    use super::args::Fields;
+    use super::translator::stage_input;
+    use metal2vulkan::metal::{AttributeFormat, IndexType, StepFunction};
+    use metal2vulkan::pipeline::{
+        StageInputAttributeDescriptor, StageInputDescriptor, StageInputLayoutDescriptor,
+    };
+    let call = |stage_input: Value| Call {
+        selector: "newComputePipelineStateWithDescriptor:options:reflection:error:".into(),
+        receiver: 1,
+        result: 2,
+        args: vec![map(&[("label", Value::Nil), ("stageInput", stage_input)])],
+        answers: Vec::new(),
+    };
+    let read = |call: &Call| -> Result<Option<StageInputDescriptor>, PlayError> {
+        stage_input(call, &Fields::arg(call, 0, &["label", "stageInput"])?)
+    };
+    let layout = |buffer: u64, stride: u64, step: u64| {
+        map(&[
+            ("bufferIndex", Value::Uint(buffer)),
+            ("stride", Value::Uint(stride)),
+            ("stepFunction", Value::Uint(step)),
+            ("stepRate", Value::Uint(1)),
+        ])
+    };
+    let attribute = |index: u64, format: u64, offset: u64, buffer: u64| {
+        map(&[
+            ("attributeIndex", Value::Uint(index)),
+            ("format", Value::Uint(format)),
+            ("offset", Value::Uint(offset)),
+            ("bufferIndex", Value::Uint(buffer)),
+        ])
+    };
+    let form = |layouts: Vec<Value>, attributes: Vec<Value>, extra: Option<(&str, Value)>| {
+        let mut keys = vec![
+            ("layouts", Value::List(layouts)),
+            ("attributes", Value::List(attributes)),
+            ("indexType", Value::Uint(1)),
+            ("indexBufferIndex", Value::Uint(3)),
+        ];
+        keys.extend(extra);
+        map(&keys)
+    };
+    // A half3 at buffer 1 (stride 8) and a float3 at buffer 10 (dynamic stride), each a thread
+    // position in the grid's x; attribute 2 reads buffer 4, which no layout names.
+    let recorded = call(form(
+        vec![layout(1, 8, 5), layout(10, u64::MAX, 5)],
+        vec![
+            attribute(0, 26, 0, 1),
+            attribute(1, 30, 4, 10),
+            attribute(2, 30, 0, 4),
+        ],
+        None,
+    ));
+    let mut expected = StageInputDescriptor::new();
+    let mut eight = StageInputLayoutDescriptor::new(Some(8));
+    eight.step_function = StepFunction::ThreadPositionInGridX;
+    let mut dynamic = StageInputLayoutDescriptor::new(None);
+    dynamic.step_function = StepFunction::ThreadPositionInGridX;
+    expected.layouts.insert(1, eight);
+    expected.layouts.insert(10, dynamic);
+    expected
+        .layouts
+        .insert(4, StageInputLayoutDescriptor::new(Some(0)));
+    let half3 = StageInputAttributeDescriptor::new(AttributeFormat::Half3, 0, 1);
+    expected.attributes.insert(0, half3);
+    let float3 = StageInputAttributeDescriptor::new(AttributeFormat::Float3, 4, 10);
+    expected.attributes.insert(1, float3);
+    let unlaid = StageInputAttributeDescriptor::new(AttributeFormat::Float3, 0, 4);
+    expected.attributes.insert(2, unlaid);
+    expected.index_type = IndexType::UInt32;
+    expected.index_buffer_index = 3;
+    assert_eq!(read(&recorded).unwrap(), Some(expected));
+    assert_eq!(read(&call(Value::Nil)).unwrap(), None);
+    let extra = call(form(
+        Vec::new(),
+        Vec::new(),
+        Some(("stepRate", Value::Uint(1))),
+    ));
+    assert!(matches!(read(&extra), Err(PlayError::Refused { .. })));
+}
+
 /// The header's flags, the same in every segment, are the stream's; a segment with another bit,
 /// or with flags unlike the first segment's, is refused.
 #[test]

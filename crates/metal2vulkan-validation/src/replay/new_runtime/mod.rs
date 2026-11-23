@@ -1929,9 +1929,6 @@ impl NewRuntime {
         )?;
         let function = self.function_of(call, id)?;
         let kernel = function.descriptor.with_linked(linked);
-        if f.get("stageInput").is_some() {
-            return Err(refuse(call, "a stage input"));
-        }
         if let Some(libraries) = f.fields("libraries", &["preloaded", "loaded"])? {
             for key in ["preloaded", "loaded"] {
                 if !libraries.list(key)?.unwrap_or_default().is_empty() {
@@ -1941,6 +1938,7 @@ impl NewRuntime {
         }
         f.only("openClMode", Fields::bool, false)?;
         let mut d = rt::ComputePipelineDescriptor::new(rt::StageSource::Function(kernel));
+        d.stage_input = translator::stage_input(call, &f)?;
         if let Some(multiple) = f.bool("threadgroupSizeIsMultipleOfExecutionWidth")? {
             d.threadgroup_size_is_multiple_of_execution_width = multiple;
         }
