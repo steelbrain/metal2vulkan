@@ -15,7 +15,7 @@ Every public item of the macOS 27.2 SDK (Xcode 27.2, 27B52)'s Metal headers, by 
 | out of scope | 424 | 5 |
 | all | 2135 | 68 |
 
-Implemented by the runtime: 280; by the translator's values: 356. Missing by size: S 182, M 204, L 313, XL 376.
+Implemented by the runtime: 279; by the translator's values: 357. Missing by size: S 182, M 204, L 313, XL 376.
 
 ## Missing, in build order
 
@@ -1612,7 +1612,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
-| `MTLFunctionHandle` | protocol | implemented | `FunctionHandle` (runtime) |
+| `MTLFunctionHandle` | protocol | implemented | `FunctionHandle` (translator) |
 | `MTLFunctionHandle.functionType` | property | missing | S: a handle's function type (the runtime's `FunctionHandle` names its function) |
 | `MTLFunctionHandle.name` | property | missing | S: the runtime's `FunctionHandle` is the word a table entry holds; the consumer keeps the function it asked of |
 | `MTLFunctionHandle.device` | property | missing | S: the runtime's `FunctionHandle` is the word a table entry holds; the consumer keeps the function it asked of |
@@ -2659,7 +2659,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | Item | Kind | Status | Counterpart or note |
 |---|---|---|---|
 | `MTLVisibleFunctionTableDescriptor` | class | implemented | `VisibleFunctionTableDescriptor` (runtime) |
-| `MTLVisibleFunctionTableDescriptor.visibleFunctionTableDescriptor` | class method | implemented | `VisibleFunctionTableDescriptor::default` (runtime) |
+| `MTLVisibleFunctionTableDescriptor.visibleFunctionTableDescriptor` | class method | implemented | `VisibleFunctionTableDescriptor` (runtime): its `Default`, Metal's |
 | `MTLVisibleFunctionTableDescriptor.functionCount` | property | implemented | `VisibleFunctionTableDescriptor.function_count` (runtime) |
 | `MTLVisibleFunctionTable` | protocol | implemented | `VisibleFunctionTable` (runtime) |
 | `MTLVisibleFunctionTable.gpuResourceID` | property | implemented | `VisibleFunctionTable::gpu_resource_id` (runtime) |

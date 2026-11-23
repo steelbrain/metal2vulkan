@@ -1236,7 +1236,7 @@ MTLFunctionDescriptor.h	MTLFunctionDescriptor	property	constantValues		I	transla
 MTLFunctionDescriptor.h	MTLFunctionDescriptor	property	options		M			a function's options (`MTLFunctionOptions`)	S	library-objects
 MTLFunctionDescriptor.h	MTLFunctionDescriptor	property	binaryArchives		M			binary archives searched for one function's compile (`PipelineOptions.binary_archives` serves pipelines)	S	archive
 MTLFunctionDescriptor.h	MTLIntersectionFunctionDescriptor	class	MTLIntersectionFunctionDescriptor		O			ray tracing		
-MTLFunctionHandle.h	MTLFunctionHandle	protocol	MTLFunctionHandle		I	runtime	FunctionHandle			
+MTLFunctionHandle.h	MTLFunctionHandle	protocol	MTLFunctionHandle		I	translator	FunctionHandle			
 MTLFunctionHandle.h	MTLFunctionHandle	property	functionType		M			a handle's function type (the runtime's `FunctionHandle` names its function)	S	function-handles
 MTLFunctionHandle.h	MTLFunctionHandle	property	name		M			the runtime's `FunctionHandle` is the word a table entry holds; the consumer keeps the function it asked of	S	function-handles
 MTLFunctionHandle.h	MTLFunctionHandle	property	device		M			the runtime's `FunctionHandle` is the word a table entry holds; the consumer keeps the function it asked of	S	function-handles
@@ -2128,7 +2128,7 @@ MTLVertexDescriptor.h	MTLVertexDescriptor	property	layouts		I	translator	VertexD
 MTLVertexDescriptor.h	MTLVertexDescriptor	property	attributes		I	translator	VertexDescriptor.attributes			
 MTLVertexDescriptor.h	MTLVertexDescriptor	method	reset		I	translator	VertexDescriptor::new	a plain value: assign a new one		
 MTLVisibleFunctionTable.h	MTLVisibleFunctionTableDescriptor	class	MTLVisibleFunctionTableDescriptor		I	runtime	VisibleFunctionTableDescriptor			
-MTLVisibleFunctionTable.h	MTLVisibleFunctionTableDescriptor	class method	visibleFunctionTableDescriptor		I	runtime	VisibleFunctionTableDescriptor::default			
+MTLVisibleFunctionTable.h	MTLVisibleFunctionTableDescriptor	class method	visibleFunctionTableDescriptor		I	runtime	VisibleFunctionTableDescriptor	its `Default`, Metal's		
 MTLVisibleFunctionTable.h	MTLVisibleFunctionTableDescriptor	property	functionCount		I	runtime	VisibleFunctionTableDescriptor.function_count			
 MTLVisibleFunctionTable.h	MTLVisibleFunctionTable	protocol	MTLVisibleFunctionTable		I	runtime	VisibleFunctionTable			
 MTLVisibleFunctionTable.h	MTLVisibleFunctionTable	property	gpuResourceID		I	runtime	VisibleFunctionTable::gpu_resource_id			

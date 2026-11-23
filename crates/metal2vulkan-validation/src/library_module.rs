@@ -1781,6 +1781,14 @@ mod tests {
                         "prefixTertiary_f".to_string()
                     ]
                 ),
+                (
+                    "public/linked/visible_table_ops.ll",
+                    vec![
+                        "table_add".to_string(),
+                        "table_mul".to_string(),
+                        "table_sub".to_string()
+                    ]
+                ),
             ]
         );
         let scratch = ScratchDir::new("public-linked-module").unwrap();
