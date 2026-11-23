@@ -4420,7 +4420,8 @@ cache is answered compile-required on both.
   the same where it is computed from constants, `constant` memory, the draw's instance, base
   vertex and base instance, and attributes fetched per instance, never from `[[vertex_id]]` or
   another per-vertex input (`StageIo::uniform_outputs`): `constant uint *layers` read at
-  `[[instance_id]]` is, a `device` buffer read at `[[vertex_id]]` is not.
+  `[[instance_id]]` is, a `device` buffer read at `[[vertex_id]]` is not. An index the function
+  declares and never writes, which Metal gives no value, is stored as 0, the same at every vertex.
 - A `Clear` pass of one layer that encodes no draw clears Metal's render area rounded up to 32
   pixels a side, where a Mac clears the whole level and slice of a texture it keeps losslessly
   compressed, which no Vulkan query tells. A pass whose attachments differ in size reaches the

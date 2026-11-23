@@ -2014,6 +2014,14 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         if matches!(o.role, OutputRole::PointSize) {
             point_size = true;
         }
+        // A viewport or slice index the vertex function never writes is stored as 0 wherever it
+        // is stored.
+        let unwritten = cx.stage == Stage::Vertex
+            && matches!(
+                o.role,
+                OutputRole::RenderTargetArrayIndex | OutputRole::ViewportArrayIndex
+            )
+            && super::returns_undefined(cx.entry, o.field);
         // The private alpha test reads color 0's alpha as the function returns it, whatever the
         // pipeline stores of it.
         if let (Stage::Fragment, Some(function)) = (cx.stage, cx.inputs.alpha_test) {
@@ -2090,6 +2098,7 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
                     rotated: false,
                     alpha_red: false,
                     offset: offset(PushField::AmplificationLayerOffset),
+                    unwritten,
                 });
                 continue;
             }
@@ -2197,6 +2206,7 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
                 rotated: false,
                 alpha_red: false,
                 offset: offset(PushField::AmplificationViewportOffset),
+                unwritten,
             });
             continue;
         }
@@ -2291,6 +2301,7 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             rotated,
             alpha_red,
             offset: added,
+            unwritten,
         });
         if let Some((index, count, _)) = raw {
             cx.push.insert(count);
@@ -2307,6 +2318,7 @@ pub fn entry(cx: &mut SelectCx<'_>) -> Result<(), Error> {
                 rotated: false,
                 alpha_red: false,
                 offset: added,
+                unwritten,
             });
         }
     }

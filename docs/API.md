@@ -919,14 +919,15 @@ Where Metal's rules differ from Vulkan's, the pipeline gives Metal's answer:
   (VUID-VkPipelineShaderStageCreateInfo-stage-02596 and -02597), so a vertex function whose index
   is not shown the same is refused, `NotImplemented(LayeredRendering)`. One shown the same on a
   device without the output is refused needing it, as `Unsupported(LayeredRendering)`, or as
-  `Unsupported(VertexAmplification)` for an index the amplification's offset alone sets. The
-  stored `Layer` is 0 at or past the pass's length, which each draw pushes, so in a pass of one
-  layer every index renders slice 0, as Metal's does. A device without
-  `multiViewport` draws through one viewport, so there the vertex function stores no viewport
-  index at all; a draw that selects among more than one viewport there is refused at the draw,
-  `Unsupported(LayeredRendering)` needing `multiViewport`. A fragment function that reads an
-  index no stage writes, on a device that can declare neither builtin, reads 0, Metal's value
-  with no vertex write.
+  `Unsupported(VertexAmplification)` for an index the amplification's offset alone sets. An index
+  the function declares and never writes (`undef` in every value it returns), which Metal gives no
+  value, is stored as 0, the same at every vertex. The stored `Layer` is 0 at or past the pass's
+  length, which each draw pushes, so in a pass of one layer every index renders slice 0, as
+  Metal's does. A device without `multiViewport` draws through one viewport, so there the vertex
+  function stores no viewport index at all; a draw that selects among more than one viewport
+  there is refused at the draw, `Unsupported(LayeredRendering)` needing `multiViewport`. A
+  fragment function that reads an index no stage writes, on a device that can declare neither
+  builtin, reads 0, Metal's value with no vertex write.
 - `[[primitive_id]]` counts the draw's primitives in each instance from 0; vertex start, base
   vertex and base instance do not move it. A fragment stage declares `PrimitiveId` through
   `geometryShader` or `tessellationShader`. Without both it reads a flat varying the vertex

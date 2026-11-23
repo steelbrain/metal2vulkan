@@ -83,11 +83,14 @@
 //!   every vertex of a primitive, as its structure shows (`StageIo::uniform_outputs`), and the
 //!   device stores the builtin from a vertex function (`shaderOutputLayer`,
 //!   `shaderOutputViewportIndex`). One written alike on a device without the output is refused
-//!   needing it; one not shown alike is refused as not implemented (`plan::index_store`). On a
-//!   device without `multiViewport` a draw has one viewport, so every index selects viewport 0 and
-//!   no `ViewportIndex` is stored at all: the raw varying alone. A fragment function that reads an
-//!   index no stage can have written (no varying input names it, and the device declares neither
-//!   builtin) reads 0, Metal's value with no vertex write (`StageIo::zero_indices`).
+//!   needing it; one not shown alike is refused as not implemented (`plan::index_store`). An index
+//!   the function declares and never writes (`undef` or `poison` at every return,
+//!   [`returns_undefined`]) has no value in Metal; it is stored as 0, the same at every vertex
+//!   (`PlannedOutput::unwritten`). On a device without `multiViewport` a draw has one viewport, so
+//!   every index selects viewport 0 and no `ViewportIndex` is stored at all: the raw varying alone.
+//!   A fragment function that reads an index no stage can have written (no varying input names it,
+//!   and the device declares neither builtin) reads 0, Metal's value with no vertex write
+//!   (`StageIo::zero_indices`).
 //!
 //! Reading an input ([`param_value`]) loads the variable and brings it to the parameter's lowered
 //! representation: a narrow integer is masked to its width (a signed-integer attribute format
@@ -327,6 +330,11 @@ pub struct PlannedOutput {
     /// function's viewport and render target slice indices, in their builtins and raw varyings
     /// alike.
     pub offset: Option<PushField>,
+    /// A vertex function's viewport or render target slice index it never writes
+    /// ([`returns_undefined`]): the part is 0, the index Metal gives no value, so `Layer` and
+    /// `ViewportIndex` hold the same value at every vertex of a primitive, as Vulkan asks
+    /// (VUID-VkPipelineShaderStageCreateInfo-stage-02596 and -02597).
+    pub unwritten: bool,
 }
 
 /// An output a vertex function compiled under `LoweringInputs::amplification_draws` stores
@@ -633,8 +641,39 @@ pub fn select_return(cx: &mut SelectCx<'_>, _at: InstId, v: Option<Value>) -> Re
 /// constant struct. The output then stores no NaN, so no device's encoding of one can show. Any
 /// other value may hold one, and so may an entry that returns none.
 pub(crate) fn returns_no_nan(cx: &SelectCx<'_>, field: u32) -> bool {
-    use crate::air::ir::{Const, InstKind, Type};
-    let e = cx.entry;
+    returns_every(
+        cx.entry,
+        field,
+        |m| matches!(m, Some(Member::Held(v)) if crate::lower::texture::holds_no_nan(cx, v)),
+    )
+}
+
+/// Whether entry `e` writes no value to output field `field` (the whole value where it returns no
+/// struct) at any return: every value it returns holds the field as `undef` or `poison`
+/// ([`Member::Undefined`]). Metal gives such an output no value.
+pub(crate) fn returns_undefined(e: &crate::air::Entry, field: u32) -> bool {
+    returns_every(e, field, |m| matches!(m, Some(Member::Undefined)))
+}
+
+/// What a value an entry returns holds as one output field ([`returned_member`]).
+enum Member {
+    /// A value: the one an insertion into the returned struct writes there, or a member of a
+    /// constant struct.
+    Held(Value),
+    /// No value: an `undef` or `poison` constant inserted there, a member of one, or a member of
+    /// one no insertion writes.
+    Undefined,
+}
+
+/// Whether entry `e` returns at least one value and every value it returns holds output field
+/// `field` as `holds` accepts ([`returned_member`]; `None` where its insertions or its constant
+/// do not state it).
+fn returns_every(
+    e: &crate::air::Entry,
+    field: u32,
+    holds: impl Fn(Option<Member>) -> bool,
+) -> bool {
+    use crate::air::ir::{InstKind, Type};
     let Some(func) = e.module.func(e.func) else {
         return false;
     };
@@ -647,48 +686,68 @@ pub(crate) fn returns_no_nan(cx: &SelectCx<'_>, field: u32) -> bool {
         }
         _ => false,
     };
-    let consts = e.module.consts();
-    // The value field `field` of the returned value `v` holds, where its insertions or its
-    // constant state it.
-    let member = |mut v: Value| -> Option<Value> {
-        if !returns_struct {
-            return Some(v);
-        }
-        for _ in 0..=body.insts.len() {
-            match v {
-                Value::Inst(i) => match body.insts.get(i).map(|x| &x.kind) {
-                    Some(InstKind::InsertValue { agg, val, indices }) => match indices[..] {
-                        [f] if f == field => return Some(*val),
-                        [f, ..] if f == field => return None,
-                        _ => v = *agg,
-                    },
-                    _ => return None,
-                },
-                Value::Const(c) => {
-                    return match consts.get(c).map(|k| &k.value) {
-                        Some(Const::Aggregate(elems)) => {
-                            elems.get(field as usize).map(|&k| Value::Const(k))
-                        }
-                        _ => None,
-                    };
-                }
-                Value::Arg(_) => return None,
-            }
-        }
-        None
-    };
     let mut returns = 0;
     for inst in body.insts.values() {
         let InstKind::Ret(returned) = &inst.kind else {
             continue;
         };
-        let held = (*returned).and_then(member);
-        if !held.is_some_and(|v| crate::lower::texture::holds_no_nan(cx, v)) {
+        let member = (*returned).and_then(|v| returned_member(e, body, returns_struct, v, field));
+        if !holds(member) {
             return false;
         }
         returns += 1;
     }
     returns > 0
+}
+
+/// What field `field` of value `v` that entry `e` (whose body is `body`, returning a struct where
+/// `returns_struct`) returns holds, where its insertions or its constant state it: `None` for a
+/// field written in part, or computed by any other instruction.
+fn returned_member(
+    e: &crate::air::Entry,
+    body: &crate::air::ir::Body,
+    returns_struct: bool,
+    mut v: Value,
+    field: u32,
+) -> Option<Member> {
+    use crate::air::ir::{Const, InstKind};
+    let consts = e.module.consts();
+    let undefined = |c| {
+        matches!(
+            consts.get(c).map(|k| &k.value),
+            Some(Const::Undef | Const::Poison)
+        )
+    };
+    let held = |v: Value| match v {
+        Value::Const(c) if undefined(c) => Member::Undefined,
+        v => Member::Held(v),
+    };
+    if !returns_struct {
+        return Some(held(v));
+    }
+    for _ in 0..=body.insts.len() {
+        match v {
+            Value::Inst(i) => match body.insts.get(i).map(|x| &x.kind) {
+                Some(InstKind::InsertValue { agg, val, indices }) => match indices[..] {
+                    [f] if f == field => return Some(held(*val)),
+                    [f, ..] if f == field => return None,
+                    _ => v = *agg,
+                },
+                _ => return None,
+            },
+            Value::Const(c) if undefined(c) => return Some(Member::Undefined),
+            Value::Const(c) => {
+                return match consts.get(c).map(|k| &k.value) {
+                    Some(Const::Aggregate(elems)) => {
+                        elems.get(field as usize).map(|&k| held(Value::Const(k)))
+                    }
+                    _ => None,
+                };
+            }
+            Value::Arg(_) => return None,
+        }
+    }
+    None
 }
 
 /// The varyings vertex function `e`, compiled under `inputs`, writes the same value at every
@@ -700,7 +759,8 @@ pub(crate) fn returns_no_nan(cx: &SelectCx<'_>, field: u32) -> bool {
 /// among those vertices (`simd::uniform::Among::Primitive`), computed only from constants,
 /// `constant` memory read through uniform pointers, the draw's instance, base vertex, base
 /// instance, amplification and patch, and the vertex attributes `inputs` fetches per instance or
-/// at a constant step. Decided from the structure of the specialized entry alone, never from a
+/// at a constant step; or the field is an index the function never writes ([`returns_undefined`]),
+/// which is stored as 0. Decided from the structure of the specialized entry alone, never from a
 /// name. Empty for every other stage.
 pub(crate) fn uniform_varyings(
     e: &crate::air::Entry,
@@ -821,9 +881,14 @@ pub(crate) fn uniform_varyings(
         false
     };
     for (field, key) in fields {
+        // An index the function never writes is stored as 0 at every return
+        // (`PlannedOutput::unwritten`).
+        let index =
+            key == VaryingKey::render_target_array_index() || key == VaryingKey::viewport_index();
         if returns
             .iter()
             .all(|&(b, v)| u.is_uniform(b) && member(v, field))
+            || (index && returns_undefined(e, field))
         {
             out.insert(key);
         }
@@ -2132,6 +2197,7 @@ fn output_part(
     o: &PlannedOutput,
 ) -> BResult<SValue> {
     let part = match returned {
+        _ if o.unwritten => ops::splat(fb, o.link.form, 0)?,
         // A `bool` vector field is held as `u32` lanes of 0 and 1.
         Returned::Struct if o.link.form.is_bool() && o.link.form.lanes > 1 => {
             let x = fb.composite_extract(x, &[o.field])?;
