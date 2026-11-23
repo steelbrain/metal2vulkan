@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1331 |
 | distinct SDK items the Metal leg reaches, of any status | 812 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7987 |
+| ledger rows (a case whose gap is recorded) | 7991 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -10077,6 +10077,10 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `reconvergence-handle-choices` | The device's own answer (rule 1): the AMD GPU's trilinear sample of the second source, whose values 21 + n are 16 or more, is one step of a half (1/64) from Met… |
 | `reconvergence-handle-choices` | The device's own answer (rule 1): the AMD GPU's trilinear sample of the second source, whose values 21 + n are 16 or more, is one step of a half (1/64) from Met… |
 | `reconvergence-handle-choices` | The device's own answer (rule 1): the AMD GPU's trilinear sample of the second source, whose values 21 + n are 16 or more, is one step of a half (1/64) from Met… |
+| `reconvergence-handle-choices` | The device's own answer (rule 1): the Iris Xe's trilinear sample of the second source, whose values 21 + n are 16 or more, is one step of a half (1/64) from Met… |
+| `reconvergence-handle-choices` | The device's own answer (rule 1): the Iris Xe's trilinear sample of the second source, whose values 21 + n are 16 or more, is one step of a half (1/64) from Met… |
+| `reconvergence-handle-choices` | The device's own answer (rule 1): the Iris Xe's trilinear sample of the second source, whose values 21 + n are 16 or more, is one step of a half (1/64) from Met… |
+| `reconvergence-handle-choices` | The device's own answer (rule 1): the Iris Xe's trilinear sample of the second source, whose values 21 + n are 16 or more, is one step of a half (1/64) from Met… |
 | `reconvergence-handle-choices` | The device's own answer (rule 1): llvmpipe's trilinear sample of the R16Float mip chain at a level of detail of q + log2(1.5) answers other bits than Metal's in… |
 | `reconvergence-handle-choices` | The device's own answer (rule 1): llvmpipe's trilinear sample of the R16Float mip chain at a level of detail of q + log2(1.5) answers other bits than Metal's in… |
 | `reconvergence-handle-choices` | The device's own answer (rule 1): llvmpipe's trilinear sample of the R16Float mip chain at a level of detail of q + log2(1.5) answers other bits than Metal's in… |
