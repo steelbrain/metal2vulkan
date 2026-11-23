@@ -42,7 +42,7 @@ Its limits, measured rather than asserted:
 | committed recordings | 1325 |
 | distinct SDK items the Metal leg reaches, of any status | 811 |
 | of those, reached only where this cannot name the family | 5 |
-| ledger rows (a case whose gap is recorded) | 7990 |
+| ledger rows (a case whose gap is recorded) | 7978 |
 | declared crossings of the option space (pairs put to Metal at once) | 26 |
 | declared crossings that are no pair of it (a boolean or numeric field, or one type in two slots) | 30 |
 
@@ -8950,18 +8950,6 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `visibility-counting-accumulate-revisit` | Gap::Draw (AccumulatedVisibilityResults): the rt README, Known gaps of render encoders, "a `Boolean` or `Counting` visibility result mode in a pass whose `visib… |
 | `visibility-counting-revisit` | Metal's own refusal (Refusal::VisibilityResultOffsetTaken): Apple's page for setVisibilityResultMode(_:offset:) says "You can set a specific offset value only o… |
 | `visibility-counting-revisit-after-disabled` | Metal's own refusal (Refusal::VisibilityResultOffsetTaken): Apple's page for setVisibilityResultMode(_:offset:) says "You can set a specific offset value only o… |
-| `visible-tables-compute-a-private-function-has-no-handle` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no visible function table). rt refuses it (the k… |
-| `visible-tables-compute-an-unlinked-function-has-no-handle` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no visible function table). rt refuses it (the k… |
-| `visible-tables-compute-count-3-two-entries-written` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no visible function table). rt refuses it (the k… |
-| `visible-tables-compute-every-entry-nil` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no visible function table). rt refuses it (the k… |
-| `visible-tables-compute-one-entry-nil` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no visible function table). rt refuses it (the k… |
-| `visible-tables-compute-size-0` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no visible function table). rt refuses it (the k… |
-| `visible-tables-compute-size-1` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no visible function table). rt refuses it (the k… |
-| `visible-tables-compute-size-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no visible function table). rt refuses it (the k… |
-| `visible-tables-compute-size-2-swapped` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no visible function table). rt refuses it (the k… |
-| `visible-tables-compute-size-3` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no visible function table). rt refuses it (the k… |
-| `visible-tables-compute-table-unbound` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no visible function table). rt refuses it (the k… |
-| `visible-tables-compute-whole-range` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no visible function table). rt refuses it (the k… |
 | `visible-tables-stage-fragment` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no visible function table). rt refuses it (a ren… |
 | `visible-tables-stage-mesh` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no visible function table). rt refuses it (a ren… |
 | `visible-tables-stage-object` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no visible function table). rt refuses it (a ren… |
