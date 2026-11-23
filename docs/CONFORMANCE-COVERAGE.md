@@ -30,11 +30,11 @@ Its limits, measured rather than asserted:
 
 | | |
 |---|---|
-| implemented Metal items | 636 |
+| implemented Metal items | 637 |
 | of those, unreachable: `objc2-metal` binds no name for them | 1 |
-| so reachable by some case | 635 |
+| so reachable by some case | 636 |
 | of the reachable, exercised by the suite's Metal leg | 558 |
-| of the reachable, not exercised | 77 |
+| of the reachable, not exercised | 78 |
 | share of the reachable exercised | 88% |
 | of those exercised, no case reaching it loosens anything | 338 |
 | of those exercised, a case reaching it loosens some site | 220 |
@@ -364,8 +364,8 @@ Every container with an implemented item, by how much of it the suite reaches. *
 | `MTLArgument` | 17 | 0 | 0 | 17 |  |
 | `MTLRasterizationRateLayerDescriptor` | 9 | 0 | 2 | 7 | `rate_map_degenerate_forms`, `rate_map_sweeps`, `rate_maps` |
 | `MTLRenderCommandEncoder` | 64 | 0 | 58 | 6 | `alpha_coverage_pairs`, `blend_interactions`, `blend_sweeps`, `blit_indirect_commands`… |
+| `MTLDevice` | 27 | 0 | 22 | 5 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
 | the header's free functions | 4 | 0 | 0 | 4 |  |
-| `MTLDevice` | 26 | 0 | 22 | 4 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
 | `MTLComputeCommandEncoder` | 29 | 0 | 26 | 3 | `argument_encoders`, `astc_textures`, `attribute_formats`, `attribute_strides`… |
 | `MTLFunctionConstantValues` | 5 | 0 | 2 | 3 | `function_constants_half3`, `function_facts`, `library_facts` |
 | `MTLLibrary` | 10 | 0 | 7 | 3 | `alpha_coverage_pairs`, `argument_encoder_crossings`, `argument_encoders`, `astc_textures`… |
@@ -454,7 +454,7 @@ A container is one Objective-C type; the SDK header it sits in is the family of 
 |---|---|---|---|
 | `MTLArgument.h` | 77 | 59 | 18 |
 | `MTLRasterizationRate.h` | 25 | 12 | 13 |
-| `MTLDevice.h` | 36 | 30 | 6 |
+| `MTLDevice.h` | 37 | 30 | 7 |
 | `MTLRenderCommandEncoder.h` | 64 | 58 | 6 |
 | `MTLLibrary.h` | 40 | 35 | 5 |
 | `MTLRenderPipeline.h` | 102 | 97 | 5 |
@@ -1044,6 +1044,7 @@ One row per implemented item of the SDK, in the coverage map's order. *exercised
 | `supportsTextureSampleCount:` | no | — | — |
 | `minimumLinearTextureAlignmentForPixelFormat:` | yes | `device_queries` | 5 |
 | `minimumTextureBufferAlignmentForPixelFormat:` | no | — | — |
+| `maxThreadgroupMemoryLength` | no | — | — |
 | `newIndirectCommandBufferWithDescriptor:maxCommandCount:options:` | yes | `blit_indirect_commands`, `indirect_command_depth`, `indirect_commands`, `indirect_ranges`, `mesh_commands` | 23 |
 | `newEvent` | yes | `event_orders` | 5 |
 | `newSharedEvent` | yes | `event_orders`, `fence_orders`, `shared_events` | 13 |
