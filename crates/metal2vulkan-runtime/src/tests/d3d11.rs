@@ -4,14 +4,15 @@
 //! Direct3D 11 textures on the DXGI adapter of the device's LUID (luma `R8_UNORM` at 64x32, chroma
 //! `R16_UINT` at 32x16, which rt's texture views as `RG8Unorm`), imported by their NT handles
 //! with no submission. Direct3D 11 draws picture 1 (one triangle a plane, its pixel shader
-//! computing each texel's bytes, then an event query waited for), rt acquires the planes
-//! (`external_writes_done`) and blits them into a Shared buffer, whose bytes are picture 1's
-//! exactly. Direct3D 11 draws picture 2, each of whose bytes differs from picture 1's, and rt's
+//! computing each texel's bytes, then an event query waited for), and rt blits the planes into
+//! a Shared buffer, whose bytes are picture 1's exactly. Direct3D 11 draws picture 2, each of whose bytes differs from picture 1's, and rt's
 //! next read is picture 2's exactly and matches picture 1 at no byte: the negative control, which
 //! a copy taken at the import, or a read of bytes the second draw did not reach, fails. Then rt
-//! writes picture 3 into the planes by a blit and releases them, and Direct3D 11 reads picture 3
-//! exactly through staging copies (`CopyResource`, `Map`). Each of rt's three submissions keeps
-//! the planes, and each counts once in `Metrics::d3d11_plane_submissions`.
+//! writes picture 3 into the planes by a blit, and Direct3D 11 reads picture 3 exactly through
+//! staging copies (`CopyResource`, `Map`). Each of rt's three submissions keeps the planes,
+//! acquires them from `VK_QUEUE_FAMILY_EXTERNAL` at its start and releases them at its end: three
+//! in `Metrics::d3d11_plane_submissions`, three acquires and three releases, the consumer's
+//! `external_writes_done` and `release_surface_to_external` calls, still made, recording none.
 //! While the surface lives, the surface imports gauge holds its two planes; it has no buffer and
 //! no export handle. The same planes made with `PixelFormatView` usage take a swizzled view in
 //! another format of their class (`R8Uint` of the luma, `RG8Uint` of the chroma) exactly where
@@ -385,19 +386,23 @@ mod on_device {
                     "{name}: D3D11's read against picture 2"
                 );
                 let metrics = counters.metrics();
-                let kept = metrics.d3d11_plane_submissions - before.d3d11_plane_submissions;
+                let handed = [
+                    metrics.d3d11_plane_submissions - before.d3d11_plane_submissions,
+                    metrics.external_acquires - before.external_acquires,
+                    metrics.external_releases - before.external_releases,
+                ];
                 println!(
                     "d3d11: {name}: imported two planes (R8_UNORM 64x32, R16_UINT 32x16 viewed as \
                      RG8Unorm) with no submission; pictures 1 and 2 drawn by D3D11 read exact by \
                      rt, the second unlike the first at every byte; picture 3 written by rt read \
-                     exact by D3D11; {} acquires, {} releases; {kept} of rt's 3 submissions \
-                     that keep the planes counted",
-                    metrics.external_acquires - before.external_acquires,
-                    metrics.external_releases - before.external_releases,
+                     exact by D3D11; of rt's 3 submissions that keep the planes: counted, \
+                     acquires, releases {handed:?}"
                 );
                 assert_eq!(
-                    kept, 3,
-                    "{name}: each of rt's submissions that keep the planes counted"
+                    handed,
+                    [3, 3, 3],
+                    "{name}: each of rt's submissions that keep the planes counted, acquiring and \
+                     releasing them once"
                 );
                 drop(surface);
             });
@@ -527,17 +532,14 @@ mod on_device {
             ]
         }
 
-        /// A surface of Direct3D 11 planes let go of while its acquire is not yet submitted is
-        /// freed with no later call, as a picture imported and acquired but never used is: 32
-        /// pictures' planes, each pair imported and acquired (`external_writes_done`), dropped
-        /// together, their gauges back with no other call, through one submission for the whole
-        /// burst; a picture whose acquire the submission of a command buffer that read it
-        /// carried, dropped once that command buffer completed, freed with no submission added;
-        /// one acquired again after such a read and dropped, freed through one submission; then
-        /// 200 rounds of import, acquire, a read on every other round and drop, each freed before
-        /// the next, the gauges the same at rounds 100 and 200. Without the drop's send the
-        /// acquires' upload holds the planes' imports, and with them the Direct3D 11 textures'
-        /// memory, until a later call, and the waits for the frees time out.
+        /// A surface of Direct3D 11 planes is freed at its drop with no other call and no
+        /// submission: `external_writes_done` records nothing for it, each submission that uses
+        /// the planes acquiring them itself, so no upload holds a plane. 32 pictures' planes, each
+        /// pair imported and `external_writes_done` called, dropped together; a picture a command
+        /// buffer read, dropped once that command buffer completed; one whose
+        /// `external_writes_done` is called again after such a read, dropped; then 200 rounds of
+        /// import, `external_writes_done`, a read on every other round and drop, each freed before
+        /// the next, the gauges the same at rounds 100 and 200.
         #[test]
         fn every_device_frees_direct3d_11_planes_at_the_surface_drop() {
             each_device("import_d3d11_surface_drop", |name, _, device| {
@@ -585,7 +587,7 @@ mod on_device {
                     [now[0] - before[0], now[1] - before[1]]
                 };
 
-                // 32 pictures acquired and never used, dropped together.
+                // 32 pictures never used, dropped together.
                 let pictures: Vec<[SharedTexture; 2]> = (0..32).map(|_| pair()).collect();
                 let surfaces: Vec<Surface> = pictures.iter().map(acquired).collect();
                 assert_eq!(
@@ -597,14 +599,10 @@ mod on_device {
                 drop(surfaces);
                 freed("32 pictures never used");
                 let burst = since(before);
-                assert_eq!(
-                    burst,
-                    [1, 1],
-                    "{name}: one submission, one held release starting it, for the 32 drops"
-                );
+                assert_eq!(burst, [0, 0], "{name}: the 32 drops send nothing");
                 drop(pictures);
 
-                // The acquire carried by a read's submission: the drop sends nothing.
+                // Read by a command buffer: the drop sends nothing.
                 let textures = pair();
                 let surface = acquired(&textures);
                 rt_read(name, &device, &surface);
@@ -618,15 +616,19 @@ mod on_device {
                     "{name}: the drop of a picture read sends nothing"
                 );
 
-                // Acquired again after a read: the drop sends that acquire.
+                // `external_writes_done` again after a read: the drop sends nothing.
                 let surface = acquired(&textures);
                 rt_read(name, &device, &surface);
                 surface.external_writes_done().expect("the second acquire");
                 let before = sends();
                 drop(surface);
-                freed("a picture acquired again after its read");
+                freed("a picture whose writes were done again after its read");
                 let again = since(before);
-                assert_eq!(again, [1, 1], "{name}: the drop sends the second acquire");
+                assert_eq!(
+                    again,
+                    [0, 0],
+                    "{name}: the drop after the second call sends nothing"
+                );
 
                 // 200 rounds, each freed before the next.
                 let mut at = Vec::new();
@@ -646,7 +648,8 @@ mod on_device {
                 println!(
                     "d3d11-drop: {name}: submissions and held releases that started one: 32 drops \
                      of pictures never used {burst:?}, a read picture's drop {used:?}, a drop \
-                     after a second acquire {again:?}; 200 rounds: surface imports, their bytes, \
+                     after a second external_writes_done {again:?}; 200 rounds: surface imports, \
+                     their bytes, \
                      textures {:?} at round 100 and {:?} at 200, blocks {} and {}; the device's \
                      held releases {} of {} bytes, {} starts",
                     at[0].0,

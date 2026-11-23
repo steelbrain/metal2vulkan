@@ -2751,21 +2751,30 @@ pub struct Metrics {
     /// Also one for each texture in place over a buffer in a dma-buf's import
     /// (`Device::import_dma_buf`, on Unix), whose move home acquires its image and the buffer's
     /// range under it from the foreign queue family, in the barrier of the upload's moves home.
+    /// Also one for each submission that uses a Direct3D 11 plane
+    /// ([`d3d11_plane_submissions`](Self::d3d11_plane_submissions)), in a command buffer of its
+    /// own.
     pub external_acquires: u64,
     /// Releases of exported blocks and surfaces to another API recorded
     /// ([`BlitCommandEncoder::release_to_external`](crate::BlitCommandEncoder::release_to_external),
     /// [`BlitCommandEncoder::release_surface_to_external`](crate::BlitCommandEncoder::release_surface_to_external)):
     /// one barrier each, in the command buffer's work, also counted in
-    /// [`barriers`](Self::barriers).
+    /// [`barriers`](Self::barriers). Also one for each submission that uses a Direct3D 11 plane
+    /// ([`d3d11_plane_submissions`](Self::d3d11_plane_submissions)), in a command buffer of its
+    /// own.
     pub external_releases: u64,
     /// Submissions whose command buffers keep a plane of a Direct3D 11 surface
-    /// (`Device::import_d3d11_surface`, on Windows): each acquires those planes from
-    /// `VK_QUEUE_FAMILY_EXTERNAL` in a command buffer of the runtime's own at its start and
-    /// releases them to it in another at its end, both in the general layout, so Direct3D 11
-    /// owns the planes' memory between the runtime's submissions. Each acquire and release is
-    /// one barrier, also counted in [`external_acquires`](Self::external_acquires),
-    /// [`external_releases`](Self::external_releases) and [`barriers`](Self::barriers). No
-    /// Metal counterpart: an IOSurface needs no hand-over between APIs.
+    /// (`Device::import_d3d11_surface`, on Windows), or whose uploads copy into or out of one:
+    /// each acquires those planes from `VK_QUEUE_FAMILY_EXTERNAL` in a command buffer of the
+    /// runtime's own ahead of everything and releases them to it in another after everything,
+    /// which takes the submission's last signals, both in the general layout, so Direct3D 11
+    /// owns the planes' memory between the runtime's submissions. A group that goes member by
+    /// member counts once, its first `vkQueueSubmit2` acquiring and its last releasing. Each
+    /// acquire and release is one barrier, also counted in
+    /// [`external_acquires`](Self::external_acquires),
+    /// [`external_releases`](Self::external_releases) and [`barriers`](Self::barriers), and each
+    /// command buffer in [`runtime_command_buffers`](Self::runtime_command_buffers). No Metal
+    /// counterpart: an IOSurface needs no hand-over between APIs.
     pub d3d11_plane_submissions: u64,
     /// Surfaces made in place
     /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface),

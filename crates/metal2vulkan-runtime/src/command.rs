@@ -336,6 +336,10 @@ pub(crate) struct Segment {
     /// upload that leads its submission takes the copies back owed to them by writes submitted
     /// before it (`crate::over::ManagedOvers`).
     pub(crate) managed_reached: Vec<Arc<BufferInner>>,
+    /// The images of the Direct3D 11 planes its commands use (`Device::import_d3d11_surface`, on
+    /// Windows): its submission acquires them from `VK_QUEUE_FAMILY_EXTERNAL` at its start and
+    /// releases them to it at its end (`crate::submit`).
+    pub(crate) planes: Vec<Arc<Image>>,
 }
 
 pub(crate) struct Handlers {
@@ -1020,10 +1024,17 @@ impl Building {
         }
     }
 
-    /// Starts a new segment after the last one.
+    /// Starts a new segment after the last one. A segment that signals passes its Direct3D 11
+    /// planes on: one kept after the signal is kept for the command that splits
+    /// ([`keep_texture`](Self::keep_texture)).
     fn split(&mut self) -> Result<(), Error> {
         self.close(&[], None)?;
-        self.gpu.segments.push(Segment::default());
+        let last = self.last();
+        let mut next = Segment::default();
+        if !last.signals.is_empty() {
+            next.planes.clone_from(&last.planes);
+        }
+        self.gpu.segments.push(next);
         Ok(())
     }
 
@@ -1351,11 +1362,14 @@ impl Building {
     }
 
     /// Keeps `texture` until the command buffer retires, as Metal's command buffer retains every
-    /// object its encoders bind: each object once, a view apart from its parent.
+    /// object its encoders bind: each object once, a view apart from its parent. A Direct3D 11
+    /// plane's image is kept by the current segment too, whose submission hands it over
+    /// ([`Segment::planes`]).
     pub(crate) fn keep_texture(&mut self, texture: &Texture) {
         if self.gpu.kept.textures.hold(texture) {
             self.gpu.managed |= texture.managed_over().is_some();
         }
+        texture.keep_plane(&mut self.last().planes);
     }
 
     /// Keeps `texture` as [`keep_texture`](Self::keep_texture) does, and lends it for a binding

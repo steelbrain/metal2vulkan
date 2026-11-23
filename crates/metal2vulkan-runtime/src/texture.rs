@@ -710,6 +710,43 @@ impl Zeroing {
 }
 
 impl Image {
+    /// Adds the image to `planes` where it is a Direct3D 11 texture's plane
+    /// (`Device::import_d3d11_surface`, on Windows) not yet there: each submission that reaches
+    /// such an image hands it over at its start and its end ([`handed`](Self::handed)).
+    pub(crate) fn keep_plane(self: &Arc<Image>, planes: &mut Vec<Arc<Image>>) {
+        let plane = matches!(self._under, Some(Under::Surface { d3d11: true, .. }));
+        if plane && !planes.iter().any(|kept| Arc::ptr_eq(kept, self)) {
+            planes.push(Arc::clone(self));
+        }
+    }
+
+    /// A Direct3D 11 plane's hand-over between `VK_QUEUE_FAMILY_EXTERNAL` and the runtime's
+    /// queue family `family`, the general layout kept
+    /// (`VUID-VkImageMemoryBarrier-srcQueueFamilyIndex-12332`, `...-dstQueueFamilyIndex-12331`):
+    /// its acquire (`acquire`), made visible to every later command, or its release, after every
+    /// earlier command's writes.
+    pub(crate) fn handed(&self, family: u32, acquire: bool) -> vk::ImageMemoryBarrier2<'static> {
+        let (all, access) = (
+            vk::PipelineStageFlags2::ALL_COMMANDS,
+            vk::AccessFlags2::MEMORY_READ | vk::AccessFlags2::MEMORY_WRITE,
+        );
+        let barrier = vk::ImageMemoryBarrier2::default()
+            .old_layout(vk::ImageLayout::GENERAL)
+            .new_layout(vk::ImageLayout::GENERAL)
+            .image(self.image)
+            .subresource_range(whole(self.aspects));
+        match acquire {
+            true => (barrier.src_queue_family_index(vk::QUEUE_FAMILY_EXTERNAL))
+                .dst_queue_family_index(family)
+                .dst_stage_mask(all)
+                .dst_access_mask(access),
+            false => (barrier.src_queue_family_index(family))
+                .dst_queue_family_index(vk::QUEUE_FAMILY_EXTERNAL)
+                .src_stage_mask(all)
+                .src_access_mask(vk::AccessFlags2::MEMORY_WRITE),
+        }
+    }
+
     /// The image's move from the layout it is made in to its home layout, where no upload has
     /// recorded it yet: recorded once, by the upload that is to hold the image (a drawable's once
     /// for each acquire, [`Work::home`](crate::submit::Work::home)), with its zeroing between
@@ -6098,5 +6135,12 @@ impl Texture {
     /// The texture's image, for an upload to hold.
     pub(crate) fn held_image(&self) -> Arc<Image> {
         Arc::clone(self.inner.imaged())
+    }
+
+    /// Adds its image to `planes` where it is a Direct3D 11 plane's ([`Image::keep_plane`]).
+    pub(crate) fn keep_plane(&self, planes: &mut Vec<Arc<Image>>) {
+        if let Some(image) = self.inner.image_of() {
+            image.keep_plane(planes);
+        }
     }
 }

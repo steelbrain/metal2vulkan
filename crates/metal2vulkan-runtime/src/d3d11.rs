@@ -4,7 +4,8 @@
 //!
 //! The import makes no submission and waits for nothing: Vulkan takes such an image as already
 //! in the general layout once Direct3D 11 has accessed it (section 12.5.2, below), so no move out
-//! of the undefined layout comes before its first use.
+//! of the undefined layout comes before its first use. Each submission that uses a plane takes it
+//! from `VK_QUEUE_FAMILY_EXTERNAL` at its start and gives it back at its end (`crate::submit`).
 
 use crate::counters::Gauge;
 use crate::device::{Core, Device};
@@ -86,15 +87,25 @@ impl Device {
     /// they must be in the layout specified in the table, and can be assumed to be in that layout
     /// when they are accessed in Vulkan after external access", and its Table 17 gives
     /// `VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT` the layout `VK_IMAGE_LAYOUT_GENERAL`.
-    /// [`Surface::external_writes_done`] acquires each plane from `VK_QUEUE_FAMILY_EXTERNAL`
-    /// from and to the general layout (`VUID-VkImageMemoryBarrier-srcQueueFamilyIndex-12332`),
-    /// and [`release_surface_to_external`](crate::BlitCommandEncoder::release_surface_to_external)
-    /// releases them to it in the general layout (`...-dstQueueFamilyIndex-12331`). No keyed
-    /// mutex is used: the consumer orders the two APIs' work by its waits.
     ///
-    /// **The consumer's precondition.** Direct3D 11 has written each plane before rt's first use
-    /// of it, and the consumer calls [`Surface::external_writes_done`] once that work has
-    /// completed and before it commits the command buffers that read it. A plane rt uses before
+    /// **Ownership.** Each submission whose command buffers or uploads use a plane acquires it
+    /// from `VK_QUEUE_FAMILY_EXTERNAL` in a command buffer of rt's own ahead of everything, from
+    /// and to the general layout (`VUID-VkImageMemoryBarrier-srcQueueFamilyIndex-12332`), and
+    /// releases it to that family in another after everything, in the general layout
+    /// (`...-dstQueueFamilyIndex-12331`), which takes the submission's last signals, so it adds
+    /// no submit info: Direct3D 11 owns the planes' memory between rt's submissions, each counted
+    /// in [`Metrics::d3d11_plane_submissions`](crate::Metrics::d3d11_plane_submissions).
+    /// [`Surface::external_writes_done`] and
+    /// [`release_surface_to_external`](crate::BlitCommandEncoder::release_surface_to_external)
+    /// record nothing for such a surface. No keyed mutex is used, by rt or on the textures: each
+    /// is made with `D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE`, not
+    /// `D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX`, whose mutex the device that makes the texture and
+    /// each device that opens it must acquire before rendering to it; the consumer orders the two
+    /// APIs' work by its waits.
+    ///
+    /// **The consumer's precondition.** Direct3D 11's work that accesses a plane has completed
+    /// before the consumer commits the command buffers that use it, and rt's command buffers that
+    /// use a plane have completed before Direct3D 11 accesses it again. A plane rt uses before
     /// any Direct3D 11 access has undefined contents, as a Metal texture nothing wrote does.
     ///
     /// The surface has no buffer: [`Surface::buffer`] is [`Gap::D3d11SurfaceBuffer`], as its

@@ -1154,7 +1154,10 @@ impl BlitCommandEncoder {
     /// images copied back into the block first. The contract is the block's: from the call until
     /// the consumer's next write into the surface through the runtime or the next
     /// [`Surface::external_writes_done`](crate::Surface::external_writes_done), the consumer
-    /// encodes no read of its planes.
+    /// encodes no read of its planes. For a Direct3D 11 import (`Device::import_d3d11_surface`,
+    /// on Windows) the call records nothing: each submission that uses its planes releases them
+    /// itself
+    /// ([`Metrics::d3d11_plane_submissions`](crate::Metrics::d3d11_plane_submissions)).
     ///
     /// Err: [`Refusal::OtherDevice`] for another device's surface; [`Error::Vulkan`] where the
     /// command buffer cannot record.
@@ -1165,6 +1168,10 @@ impl BlitCommandEncoder {
         let (core, building) = self.parts();
         if !surface.is_of(core) {
             return Err(Error::Refused(Refusal::OtherDevice));
+        }
+        // Each submission that uses a Direct3D 11 import's planes releases them itself.
+        if surface.handle().is_none() {
+            return Ok(());
         }
         for texture in surface.planes() {
             building.keep_texture(texture);

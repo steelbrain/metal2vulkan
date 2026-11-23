@@ -1648,13 +1648,19 @@ impl Surface {
     /// buffer committed after it: one barrier of the planes and the buffer, counted in
     /// [`Metrics::external_acquires`](crate::Metrics::external_acquires). In the copy form it is
     /// the block's acquire, and the submissions copy the bytes into the planes' images. The
-    /// contract is the block's.
+    /// contract is the block's. For a Direct3D 11 import (`Device::import_d3d11_surface`, on
+    /// Windows) the call records nothing: each submission that uses its planes acquires them
+    /// itself ([`Metrics::d3d11_plane_submissions`](crate::Metrics::d3d11_plane_submissions)).
     ///
     /// Err: [`Refusal::InScheduledHandler`] in a scheduled handler; [`Error::Quiesced`]; and
     /// [`Error::Vulkan`] where the upload's command buffer cannot be made.
     pub fn external_writes_done(&self) -> Result<(), Error> {
         if let Kind::Copy(block, _) = &self.kind {
             return block.external_writes_done();
+        }
+        // Each submission that uses a Direct3D 11 import's planes acquires them itself.
+        if self.handle.is_none() {
+            return Ok(());
         }
         crate::command::not_in_scheduled_handler()?;
         let core = self.device.core();

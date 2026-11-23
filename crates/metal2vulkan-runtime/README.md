@@ -947,14 +947,24 @@ The import submits nothing and waits for nothing. Vulkan 1.4's section 12.5.2 sa
 created with external memory handle types listed in the external image implied layouts table are
 accessed outside of Vulkan, they must be in the layout specified in the table, and can be assumed
 to be in that layout when they are accessed in Vulkan after external access", and the table's row
-for `VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT` is `VK_IMAGE_LAYOUT_GENERAL`. So the
-consumer's precondition is that Direct3D 11 has written each plane before rt's first use of it,
-and that `Surface::external_writes_done()` follows that work's completion: it records each
-plane's acquire from `VK_QUEUE_FAMILY_EXTERNAL` in the general layout, and
-`BlitCommandEncoder::release_surface_to_external(&surface)` each plane's release to it, as for an
-exported surface. No keyed mutex is used; the consumer orders the two APIs' work by its waits. A
-plane rt uses before any Direct3D 11 access has undefined contents, as a Metal texture nothing
-wrote does. The surface has no buffer: `Surface::buffer()` is `Gap::D3d11SurfaceBuffer`, as its
+for `VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT` is `VK_IMAGE_LAYOUT_GENERAL`. Each
+submission whose command buffers or uploads use a plane acquires it from
+`VK_QUEUE_FAMILY_EXTERNAL` in a command buffer of rt's own ahead of everything, and releases it
+to that family in another after everything, both in the general layout: one barrier each, counted
+in `Metrics::external_acquires` and `Metrics::external_releases`, the submission in
+`Metrics::d3d11_plane_submissions` and the two command buffers in
+`Metrics::runtime_command_buffers`. The release takes the submission's last signals, so it adds
+no `VkSubmitInfo2`, and no submission or wait is added. Direct3D 11 thus owns the planes' memory
+between rt's submissions, and `Surface::external_writes_done()` and
+`BlitCommandEncoder::release_surface_to_external(&surface)` record nothing for such a surface. So
+the consumer's precondition is that Direct3D 11's work that accesses a plane has completed before
+the consumer commits the command buffers that use it, and that those command buffers have
+completed before Direct3D 11 accesses it again. No keyed mutex is used, by rt or on the textures:
+each is made with `D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE`, not
+`D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX`, whose mutex the device that makes the texture and each
+device that opens it must acquire before rendering to it; the consumer orders the two APIs' work
+by its waits. A plane rt uses before any Direct3D 11 access has undefined contents, as a Metal
+texture nothing wrote does. The surface has no buffer: `Surface::buffer()` is `Gap::D3d11SurfaceBuffer`, as its
 planes lie in memories of their own, and `Surface::handle()` is `None`. No move goes ahead of the
 planes' first use, so `Surface::wait_until_ready()` returns at once. The planes' imports are freed
 as an exported surface's memory is (above); rt keeps no handle of its own, and each import holds

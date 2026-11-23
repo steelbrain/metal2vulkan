@@ -438,6 +438,42 @@ impl Upload {
         barrier(moves.as_slice(), &[]);
         core.counters.count(Metric::TextureClearBarriers);
     }
+
+    /// A new upload that hands `planes`, Direct3D 11 planes' images, over ([`Image::handed`]) in
+    /// one barrier counted in `core`'s counters, its command buffer ended; with the first failed
+    /// call, which loses the device.
+    fn hand_over(
+        core: &Core,
+        planes: &[Arc<Image>],
+        acquire: bool,
+    ) -> (Option<Upload>, Result<(), DeviceLoss>) {
+        let upload = match Upload::begin(core, 0) {
+            Ok(upload) => upload,
+            Err(Error::Vulkan { call, result }) => {
+                return (None, Err(DeviceLoss::of(call)(result)))
+            }
+            Err(error) => unreachable!("an upload's begin fails only in a Vulkan call: {error}"),
+        };
+        let device = &core.device;
+        let barriers: Vec<_> = (planes.iter())
+            .map(|image| image.handed(core.family, acquire))
+            .collect();
+        let dependency = vk::DependencyInfo::default().image_memory_barriers(&barriers);
+        // SAFETY: the upload's command buffer is recording, and only the submit thread has it;
+        // each image is the device's, held by the submission until it retires, and general
+        // between commands.
+        unsafe { device.cmd_pipeline_barrier2(upload.command, &dependency) };
+        core.counters.count(Metric::Barriers);
+        core.counters.count(match acquire {
+            true => Metric::ExternalAcquires,
+            false => Metric::ExternalReleases,
+        });
+        times::end_own(device, upload.command, upload.stamps);
+        // SAFETY: as above.
+        let ended = unsafe { device.end_command_buffer(upload.command) }
+            .map_err(DeviceLoss::of("vkEndCommandBuffer"));
+        (Some(upload), ended)
+    }
 }
 
 /// One queue's group: what one `vkQueueSubmit2` submits of it.
@@ -494,6 +530,8 @@ struct Batch {
     /// The Managed buffers with textures over their device copies its segments reach, to which
     /// its upload takes the copies back owed by writes submitted before (`crate::over`).
     reached: Vec<Arc<BufferInner>>,
+    /// The images of the Direct3D 11 planes its segments use (`Segment::planes`).
+    planes: Vec<Arc<Image>>,
 }
 
 /// One part of a submit info: a segment's or an upload's commands and its signals, and for a
@@ -1835,6 +1873,7 @@ impl WorkState {
             written: Vec::new(),
             wrote: Vec::new(),
             reached: Vec::new(),
+            planes: Vec::new(),
         });
         if leads {
             group.run = group.run.saturating_add(run.unwrap_or(u64::MAX));
@@ -1862,6 +1901,9 @@ impl WorkState {
             if !group.overs.iter().any(|kept| kept.image == copy.image) {
                 group.overs.push(copy);
             }
+        }
+        for image in &segment.planes {
+            image.keep_plane(&mut group.planes);
         }
         let staged = stage(segment, &mut group.watch);
         let at = (pending.seq, pending.next);
@@ -2379,6 +2421,7 @@ impl Batch {
             written: Vec::new(),
             wrote: Vec::new(),
             reached: Vec::new(),
+            planes: Vec::new(),
         }
     }
 }
@@ -2456,6 +2499,7 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
         apart,
         held,
         copy_ins,
+        mut planes,
         ..
     } = batch;
     let device = &core.device;
@@ -2518,6 +2562,30 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
         let ended = unsafe { device.end_command_buffer(last.command) };
         ok = ok.and(ended.map_err(DeviceLoss::of("vkEndCommandBuffer")));
     }
+    // Each Direct3D 11 plane its command buffers or uploads use is the runtime's from the
+    // submission's start to its end: acquired from `VK_QUEUE_FAMILY_EXTERNAL` in a command buffer
+    // of its own ahead of everything, and released to it in another after everything, which holds
+    // the images (`Metrics::d3d11_plane_submissions`).
+    for upload in &uploads {
+        for held in &upload.held {
+            if let Held::Texture(image) = held {
+                image.keep_plane(&mut planes);
+            }
+        }
+    }
+    let (head, tail) = match planes.is_empty() {
+        true => (None, None),
+        false => {
+            let (head, began) = Upload::hand_over(core, &planes, true);
+            let (tail, ended) = Upload::hand_over(core, &planes, false);
+            ok = ok.and(began).and(ended);
+            (head, tail)
+        }
+    };
+    if let Some(head) = head {
+        uploads.insert(0, head);
+        core.counters.count(Metric::D3d11PlaneSubmissions);
+    }
     let ahead = uploads.len();
     segments.splice(
         0..0,
@@ -2545,6 +2613,26 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
         part.retain(|staged| staged.command.is_some() || !staged.signals.is_empty());
     }
     parts.retain(|part| !part.is_empty());
+    // The release goes after every segment and takes its last signals, so it adds no submit info
+    // (`infos`).
+    if let Some(mut tail) = tail {
+        let last = parts.last_mut().and_then(Vec::pop).unwrap_or_default();
+        let release = Staged {
+            waits: Vec::new(),
+            command: Some(vk::CommandBufferSubmitInfo::default().command_buffer(tail.command)),
+            signals: last.signals,
+        };
+        let last = Staged {
+            signals: Vec::new(),
+            ..last
+        };
+        match parts.last_mut() {
+            Some(part) => part.extend([last, release]),
+            None => parts.push(vec![last, release]),
+        }
+        tail.held.extend(planes.into_iter().map(Held::Texture));
+        uploads.push(tail);
+    }
     let progress = vk::SemaphoreSubmitInfo::default()
         .semaphore(core.done.progress)
         .value(value)
