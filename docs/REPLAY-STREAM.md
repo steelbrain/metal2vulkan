@@ -116,7 +116,9 @@ and the (name id, value) answer pairs.
 - **Ids** are nonzero u64s, unique across the whole stream and never reused, so an object that
   several processes use (a surface's buffer, a shared event) has one id.
 - An object is made by the call whose result names it and dies at `release` (receiver: the id;
-  its last reference). Releasing a device releases everything it made.
+  its last reference). Releasing a device releases everything it made; a later `release` of one
+  of those objects releases nothing more (Metal's objects keep their device, so a program may
+  release its device before them).
 - **Devices:** `MTLCreateSystemDefaultDevice`, one per device the recording's host made; every
   guest process may share one. The player serves every recorded device from one runtime device.
 - **Device identity:** `m2v.deviceIdentity` (receiver: the device; no arguments) follows each

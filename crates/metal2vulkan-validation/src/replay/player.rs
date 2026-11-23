@@ -919,6 +919,9 @@ pub struct Player<'b, B: Backend> {
     kinds: HashMap<u64, Kind>,
     /// Each live object's device and the number of objects made before it.
     owner: HashMap<u64, (u64, u64)>,
+    /// The objects a device's release dropped with it that the stream has not released since:
+    /// Metal's objects keep their device, so a program may release them after it.
+    dropped: HashSet<u64>,
     made_count: u64,
     pending: HashMap<u64, Pending>,
     /// The committed command buffers not yet waited for, in commit order.
@@ -1168,6 +1171,7 @@ impl<'b, B: Backend> Player<'b, B> {
             escaped: HashMap::new(),
             kinds: HashMap::new(),
             owner: HashMap::new(),
+            dropped: HashSet::new(),
             made_count: 0,
             pending: HashMap::new(),
             committed: Vec::new(),
@@ -2111,10 +2115,14 @@ impl<'b, B: Backend> Player<'b, B> {
         done
     }
 
-    /// Drop `object`: a device with everything it made, a command buffer once it completed.
+    /// Drop `object`: a device with everything it made, a command buffer once it completed. The
+    /// release of an object its device's release dropped already plays as nothing.
     fn release(&mut self, object: u64) -> Result<(), PlayError> {
         let kind = self.kinds.remove(&object);
         if kind.is_none() {
+            if self.dropped.remove(&object) {
+                return Ok(());
+            }
             return Err(invalid(format!("release of #{object}, made by no call")));
         }
         if kind == Some(Kind::Device) {
@@ -2125,6 +2133,7 @@ impl<'b, B: Backend> Player<'b, B> {
             owned.sort_unstable();
             for (_, id) in owned.into_iter().rev() {
                 self.kinds.remove(&id);
+                self.dropped.insert(id);
                 self.drop_object(id)?;
             }
         }
