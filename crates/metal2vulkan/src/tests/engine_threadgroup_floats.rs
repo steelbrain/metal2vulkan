@@ -656,3 +656,55 @@ fn a_constant_threadgroup_offset_outside_the_arena_loads_zero_and_stores_nothing
         }
     }
 }
+
+/// Thread `t` of 64 stores `t + 100` at word `t` of a static arena, and after a barrier adds 1
+/// by an atomic at a constant offset outside it; `out[t]` is the atomic's result, and after a
+/// second barrier `out[64 + t]` is word `t` again.
+const ATOMIC_OUTSIDE: &str = r#"  %w = and i32 %t, 63
+  %v = add i32 %w, 100
+  %pa = getelementptr inbounds i32, ptr addrspace(3) @g, i32 %w
+  store i32 %v, ptr addrspace(3) %pa, align 4
+  tail call void @air.wg.barrier(i32 2, i32 1)
+  %past = getelementptr inbounds [64 x float], ptr addrspace(3) @g, i64 0, i64 4294967295
+  %old = tail call i32 @air.atomic.local.add.u.i32(ptr addrspace(3) %past, i32 1, i32 0, i32 1, i1 true)
+  tail call void @air.wg.barrier(i32 2, i32 1)
+  %z = load i32, ptr addrspace(3) %pa, align 4
+  %o = getelementptr inbounds i32, ptr addrspace(1) %out, i32 %t
+  store i32 %old, ptr addrspace(1) %o, align 4
+  %t64 = add i32 %t, 64
+  %o2 = getelementptr inbounds i32, ptr addrspace(1) %out, i32 %t64
+  store i32 %z, ptr addrspace(1) %o2, align 4
+  ret void
+"#;
+
+/// A threadgroup atomic at a constant offset outside the arena ([`ATOMIC_OUTSIDE`]) writes
+/// nothing and yields zero, through `from_queries`: the module builds and passes L3, every
+/// thread's atomic answers 0, and no word of the arena takes its add.
+#[test]
+fn a_constant_threadgroup_atomic_outside_the_arena_writes_nothing_and_yields_zero() {
+    let kernel = format!(
+        "@g = internal addrspace(3) global [64 x float] undef, align 16\n\n\
+define void @tg_atomic(ptr addrspace(1) %out, i32 %t) {{\n{}}}\n\
+declare i32 @air.atomic.local.add.u.i32(ptr addrspace(3), i32, i32, i32, i1)\n{}\
+!2 = !{{!3, !4}}\n!3 = {}\n!4 = {}\n",
+        ATOMIC_OUTSIDE,
+        TAIL.replace("NAME", "tg_atomic"),
+        OUT_MD.replace("IX", "0"),
+        TID_MD.replace("IX", "1"),
+    );
+    let Some(bc) = assemble("tg_atomic", &kernel) else {
+        return;
+    };
+    let want: Vec<u32> = std::iter::repeat_n(0, 64).chain(100..164).collect();
+    for stem in PROFILES {
+        let prof = queried(stem);
+        let what = format!("tg_atomic on {stem}");
+        let a = compile(&bc, "tg_atomic", &prof).unwrap_or_else(|e| panic!("{what}: {e}"));
+        link_and_validate(&a, &prof).unwrap_or_else(|e| panic!("{what}: L3: {e}"));
+        let (plan, m) = typed_module(&bc, "tg_atomic", &prof).expect("module");
+        let tg = plan.families.access.local.tg.as_ref().expect("an arena");
+        assert_eq!(tg.words, TgWords::Composed, "{what}");
+        let got = run_both(&m, &resources_of(&plan, &[], want.len()));
+        assert_eq!(got, want, "{what}");
+    }
+}
