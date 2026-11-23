@@ -2025,7 +2025,8 @@ mod tests {
     /// **A row loosens the notices site, and a `Private` texture's row its `fresh` site on a venue
     /// that presents no texture compression, and nothing else.** On a venue that presents the
     /// compression (MoltenVK, lavapipe) every byte compares exactly: the one value declaration,
-    /// [`crate::replay::without_compression`], justifies nothing there.
+    /// [`crate::replay::without_compression`], justifies nothing there. The notices a row declares
+    /// are a block-compressed texture's decode and, for the `Depth32Float` row alone, its upload.
     #[test]
     fn a_row_loosens_the_notices_site_and_a_private_texture_s_fresh_site() {
         let notices = format!("case/{}/*", crate::replay::NOTICES_SITE);
@@ -2042,10 +2043,19 @@ mod tests {
         for row in TEXTURES {
             let private = row.storage == Storage::Private;
             let compressed = row.shape.block.1 > 1;
+            let depth = row.shape.format == DEPTH32FLOAT.format;
             let allowances = FreshTexture { row }.allowances();
             assert_eq!(
                 allowances.len(),
-                usize::from(private) + usize::from(compressed),
+                usize::from(private) + usize::from(compressed) + usize::from(depth),
+                "{}",
+                row.case
+            );
+            assert_eq!(
+                allowances.contains(&crate::replay::notice_allowance(
+                    crate::degradation::Degradation::RestrictedDepthUpload.code()
+                )),
+                depth,
                 "{}",
                 row.case
             );
