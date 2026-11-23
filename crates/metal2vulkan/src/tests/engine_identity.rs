@@ -872,6 +872,10 @@ fn a_storage_cube_written_by_face_is_the_2d_array_element_of_its_faces() {
                     let region = region_bytes([0; 3], L, L).expect("packs");
                     push[o..o + 32].copy_from_slice(&region);
                 }
+                // 0: the images' channels are 32-bit, so each lane stores as written.
+                PushField::TextureIntegerChannels(_) => {
+                    push[o..o + 4].copy_from_slice(&0u32.to_le_bytes())
+                }
                 other => panic!("{stem}: unexpected push field {other:?}"),
             }
         }
