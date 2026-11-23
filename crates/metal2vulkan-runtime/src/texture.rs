@@ -4161,7 +4161,8 @@ impl Texture {
     /// the device's copy into the depth aspect, which Vulkan defines for a value within `[0, 1]`
     /// alone (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), where Metal keeps every `float`. The
     /// runtime enables no `VK_EXT_depth_range_unrestricted` and reads no uploaded value, so on
-    /// every device a texel uploaded outside `[0, 1]` is the device's.
+    /// every device a texel uploaded outside `[0, 1]` is the device's, and a denormal or `-0.0`
+    /// may be stored as `+0.0` (docs/API.md's catalogue names what the devices measured keep).
     pub const FLOAT_DEPTH_UPLOAD_NOTE: PrecisionNote = PrecisionNote::RestrictedDepthUpload;
 
     /// `replaceRegion:mipmapLevel:slice:withBytes:bytesPerRow:bytesPerImage:`: the bytes of

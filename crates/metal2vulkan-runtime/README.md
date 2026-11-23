@@ -1694,15 +1694,20 @@ made, with no lock, and never rewritten for layouts.
 - An upload into a 32-bit float depth (`Depth32Float`, or the depth of `Depth32Float_Stencil8`)
   by `replace_region`, `upload_region` or a blit's `copy_from_buffer` is the device's copy into
   the depth aspect, on every device, under the static note `PrecisionNote::RestrictedDepthUpload`
-  (`Texture::FLOAT_DEPTH_UPLOAD_NOTE`). A value within `[0, 1]` is copied exactly. Metal keeps
-  every `float` there bit for bit, and its depth comparisons compare it unclamped: measured on an
+  (`Texture::FLOAT_DEPTH_UPLOAD_NOTE`). A value within `[0, 1]` is copied exactly, except a
+  denormal or `-0.0`, which a device may store as `+0.0`. Metal keeps every `float` there bit for
+  bit, and its depth comparisons compare it unclamped: measured on an
   Apple M3 Max under macOS 27.0.1, and an AMD Radeon Pro 5300M and an Intel UHD Graphics 630
   under macOS 26.7.1, for negative values, values above 1, denormals, infinities and NaNs. Vulkan
   takes no value outside `[0, 1]` into a depth aspect without `VK_EXT_depth_range_unrestricted`
   (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), which the floor does not require and the
   runtime enables on no device, and the runtime reads no uploaded value: so on every device,
   whether or not it offers the extension, a value outside `[0, 1]` is the device's own, and so is
-  every read, sample, comparison and copy of it.
+  every read, sample, comparison and copy of it. Measured: NVIDIA's driver (620.70.06, an RTX
+  3090) keeps every value bit for bit, as Metal does; RADV and ANV (Mesa 26.2.6, a Radeon 780M and
+  an Iris Xe) clamp it to `[0, 1]`, store a NaN of either sign, a denormal and `-0.0` as `+0.0`,
+  and compare what they stored, so a shadow map uploaded outside `[0, 1]` compares otherwise
+  there.
 - Their bytes are not copied for a format of depth and stencil both or a multisample texture
   (`Gap::TextureBytes`).
 - `Device::pixel_format_info` answers as an Apple M3 Max under macOS 27.0.1, which describes

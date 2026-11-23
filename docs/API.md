@@ -1848,9 +1848,16 @@ bound.
   under macOS 27.0.1, and an AMD Radeon Pro 5300M and an Intel UHD Graphics 630 under macOS
   26.7.1: negative values, values above 1, denormals, infinities and NaNs). Vulkan takes no value
   outside `[0, 1]` into a depth aspect without `VK_EXT_depth_range_unrestricted`
-  (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), which no runtime enables. Cost: a depth uploaded
-  outside `[0, 1]` is the device's, and so is every read, sample, comparison and copy of it; one
-  within it is copied exactly, a denormal as `metal2vulkan-degrade-depth-denormals` says.
+  (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), which no runtime enables. Measured on a
+  Private 4 x 4 texture by a blit's copy (16 values: `-0.0`, three denormals of either sign, -1,
+  -0.25, 2, the next float above 1, 1e30, both infinities, three NaNs, 0.25 and 0.5): NVIDIA's
+  driver (620.70.06, an RTX 3090) keeps every value bit for bit and compares it unclamped, as
+  Metal does; RADV (Mesa 26.2.6, the Radeon 780M) and ANV (Mesa 26.2.6, the Iris Xe) store a value
+  below 0, `-inf` and a NaN of either sign as `+0.0`, one above 1 and `+inf` as 1.0, and a
+  denormal and `-0.0` as `+0.0`, and compare what they stored; the validation layer reports none
+  of these copies. Cost: a depth uploaded outside `[0, 1]` is the device's, and so is every read,
+  sample, comparison and copy of it; one within it is copied exactly, except a denormal or
+  `-0.0`, which a device may store as `+0.0` (`metal2vulkan-degrade-depth-denormals`).
 - `metal2vulkan-degrade-cube-gradient-footprint` (precision).
   `PrecisionNote::CubeGradientFootprint`: An explicit-gradient sample of a cube texture takes
   Metal's footprint in the form Vulkan's rule reads, in every stage on every device. Cost: the

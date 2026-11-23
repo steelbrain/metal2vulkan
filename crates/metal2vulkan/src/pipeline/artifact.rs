@@ -2084,10 +2084,13 @@ pub enum PrecisionNote {
     /// a depth aspect without `VK_EXT_depth_range_unrestricted`
     /// (`VUID-vkCmdCopyBufferToImage-pRegions-07931`), which no runtime enables: a texel uploaded
     /// outside `[0, 1]` is the device's, and so is every later read, sample, comparison and copy
-    /// of it. A value within `[0, 1]` is copied exactly, a denormal as `DepthDenormals` says.
-    /// Static per operation, decided by the format and never by the bytes: no pipeline stage
-    /// records it; `metal2vulkan-runtime`'s texture carries it
-    /// (`Texture::FLOAT_DEPTH_UPLOAD_NOTE`).
+    /// of it. A value within `[0, 1]` is copied exactly, except a denormal or `-0.0`, which a
+    /// device may store as `+0.0`. Measured: NVIDIA's driver (620.70.06, an RTX 3090) keeps every
+    /// value bit for bit and compares it as Metal does; RADV and ANV (Mesa 26.2.6, a Radeon 780M
+    /// and an Iris Xe) clamp a value to `[0, 1]`, store a NaN of either sign, a denormal and `-0.0`
+    /// as `+0.0`, and compare what they stored. Static per operation, decided by the format and
+    /// never by the bytes: no pipeline stage records it; `metal2vulkan-runtime`'s texture carries
+    /// it (`Texture::FLOAT_DEPTH_UPLOAD_NOTE`).
     ///
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
