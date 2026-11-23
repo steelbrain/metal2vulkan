@@ -48,7 +48,7 @@
 //! every channel.
 //!
 //! Nothing here can fault a GPU: one triangle (or 64 small ones) a draw over one 64 by 64 target,
-//! and every loop in the fixtures is bounded by a constant or by a data word below 7.
+//! and no loop in the fixtures runs more than eight iterations.
 
 use crate::case::{call, drawn_or_refused, made, Abort, Case, Failure, Input, MetalSource, Side};
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
