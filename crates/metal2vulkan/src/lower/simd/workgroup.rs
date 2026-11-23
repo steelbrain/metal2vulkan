@@ -71,7 +71,8 @@
 //! **Reconvergence**. The emulated operations exchange through workgroup memory between workgroup
 //! barriers in workgroup-uniform control flow (predicated where the source diverges), so no result
 //! depends on how subgroups reconverge: an entry whose only tangled instructions are emulated ones
-//! declares no reconvergence mode and records `Reconvergence::Guaranteed`.
+//! declares no reconvergence mode, not even in a re-entered loop (`super::reentry`), and records
+//! `Reconvergence::Guaranteed`.
 
 use crate::air::intrinsics::{GroupOp, MemFlags};
 use crate::air::ir::ValueId;
@@ -308,6 +309,7 @@ pub fn check(
     if !other_tangled {
         cx.families.simd.mode = ReconvergenceMode::None;
         cx.families.simd.implementation_defined = false;
+        cx.families.simd.reentry = None;
     }
     cx.families.simd.exchange_words = words;
     cx.families.simd.guarded_barriers = crate::lower::access::identity(cx.profile);

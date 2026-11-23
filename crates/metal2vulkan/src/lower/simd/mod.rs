@@ -182,14 +182,21 @@
 //! threadgroup barrier the lockstep pass inserted stands where the whole threadgroup runs together
 //! and depends on no reconvergence (`sync::barrier::BarrierPlan::uniform_placed`): an entry whose
 //! only tangled instructions are such barriers declares no mode and records `Guaranteed`, as does
-//! an emulated kernel whose others are emulated sites (`workgroup::check`). A fragment's
-//! derivatives, implicit-LOD samples and LOD queries (`SelectCx::derivatives`) are Metal's only
-//! where the quad reaches them together (MSL 6.11.1.1), which SPIR-V's own reconvergence gives
-//! but in a loop a back edge re-enters from inside a selection: a fragment entry whose other
-//! tangled instructions depend on no reconvergence takes the mode, and records
-//! `ImplementationDefined` where the profile has no maximal reconvergence, only where its module
-//! holds one of them in such a loop (`quad_loop`); elsewhere it declares no mode and records
-//! `Guaranteed`.
+//! an emulated kernel whose others are emulated sites (`workgroup::check`). Three kinds stand
+//! where their invocations reach them together, which SPIR-V's own reconvergence gives but in a
+//! loop a back edge re-enters from inside a selection: a fragment's derivatives, implicit-LOD
+//! samples and LOD queries (`SelectCx::derivatives`), which are Metal's only where the quad
+//! reaches them together (MSL 6.11.1.1); a program's threadgroup barrier
+//! (`sync::barrier::BarrierPlan::threadgroup`), which every thread of the threadgroup executes;
+//! and a kernel's tangled instruction in a block every invocation of the workgroup executes
+//! together (`uniform::Uniformity` under the kernel's unit axes; a kernel compiled for partial
+//! threadgroups has none). An entry whose every group operation stands in a block the pass proves
+//! uniform for the threadgroup, with no re-entered loop around it, states no mode and records
+//! `Guaranteed`, its threadgroup barriers and a fragment's derivatives counting alike. Where one
+//! of them stands in such a loop the entry takes the mode, and records `ImplementationDefined`
+//! where the profile has no maximal reconvergence (`reentry`). The pass proves no loop uniform
+//! whose exit differs between invocations, even where a threadgroup barrier on every path through
+//! it makes every invocation run it as often: a group operation in such a loop keeps the mode.
 
 pub mod agx;
 pub mod divergent;
@@ -197,7 +204,7 @@ mod group;
 pub mod lockstep;
 pub mod matrix;
 pub mod pressure;
-pub mod quad_loop;
+pub mod reentry;
 #[cfg(test)]
 mod tests;
 pub mod uniform;
@@ -328,12 +335,14 @@ pub struct SimdPlan {
     pub mode: ReconvergenceMode,
     /// A tangled instruction runs without maximal reconvergence on this profile.
     pub implementation_defined: bool,
-    /// A fragment entry whose only tangled instructions that depend on reconvergence take
-    /// derivatives (`SelectCx::derivatives`): the mode and `implementation_defined` the profile
-    /// gives a tangled entry, which the entry takes only where its module holds such an
-    /// instruction in a loop a back edge re-enters from inside a selection
-    /// ([`quad_loop::settle`]). Elsewhere it states no mode and its reconvergence is guaranteed.
-    pub quad_loops: Option<(ReconvergenceMode, bool)>,
+    /// An entry whose only tangled instructions that depend on reconvergence stand where their
+    /// invocations reach them together (a fragment's derivatives, a threadgroup barrier, a
+    /// kernel's instruction in a workgroup-uniform block; the module docs, "Reconvergence"): the
+    /// mode and `implementation_defined` the profile gives a tangled entry, which the entry takes
+    /// only where its module holds a tangled instruction in a loop a back edge re-enters from
+    /// inside a selection ([`reentry::settle`]). Elsewhere it states no mode and its
+    /// reconvergence is guaranteed.
+    pub reentry: Option<(ReconvergenceMode, bool)>,
     /// In the `Emulated` tier, the words each lane publishes to the scratch in the widest
     /// exchange of the function; 0 when no operation exchanges values.
     pub exchange_words: u32,
@@ -488,7 +497,15 @@ pub fn raise(c: SimdClass, ops: OpBits) -> SimdClass {
 /// is raised with the `Cluster32` classes instead. `tier` chooses between `Direct` and
 /// `Cluster32` by subgroup size alone, so the final class selects the tier whose classes it
 /// holds, or the refusal `select` then reports.
-pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
+///
+/// `uniform` is a kernel's workgroup uniformity where `partly_live` computed it; a kernel compiled
+/// without partial threadgroups whose tangled instructions it does not prove together computes it
+/// here.
+pub fn finish(
+    cx: &mut SelectCx<'_>,
+    uniform: Option<&uniform::Uniformity>,
+    m: &mut Meter,
+) -> Result<(), Error> {
     // A fragment function's simdgroups are the pixels the device's rasterizer packs into a
     // subgroup, so an operation over the simdgroup's members combines a simdgroup Metal allows, not
     // the reference's. So does a quad operation beside a helper query in a function that discards,
@@ -545,23 +562,27 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             .into());
         }
     }
-    // A fragment's derivatives, implicit levels and LOD queries depend on reconvergence only in a
-    // loop a back edge re-enters from inside a selection, which the emitted module shows
-    // (`quad_loop::settle`).
+    // A tangled instruction its invocations reach together wherever SPIR-V reconverges them
+    // depends on reconvergence only in a loop a back edge re-enters from inside a selection,
+    // which the emitted module shows (`reentry::settle`).
+    let together = together(cx, uniform, m)?;
     let barriers = &cx.families.barrier;
     let fragment = cx.stage == Stage::Fragment;
-    let (mut others, mut derivatives) = (false, false);
+    let (mut others, mut reached) = (false, false);
     for &v in &cx.tangled {
         if !crate::lower::sync::barrier::reconverges(barriers, v) {
             continue;
         }
-        if fragment && cx.derivatives.contains(&v) {
-            derivatives = true;
+        if (fragment && cx.derivatives.contains(&v))
+            || barriers.threadgroup.contains(&v)
+            || together.contains(&v)
+        {
+            reached = true;
         } else {
             others = true;
         }
     }
-    if others || derivatives {
+    if others || reached {
         let model = &cx.profile.fields().subgroup;
         let (mode, defined) = if model.maximal_reconvergence {
             (ReconvergenceMode::Maximal, false)
@@ -574,7 +595,7 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             cx.families.simd.mode = mode;
             cx.families.simd.implementation_defined = defined;
         } else {
-            cx.families.simd.quad_loops = Some((mode, defined));
+            cx.families.simd.reentry = Some((mode, defined));
         }
     }
     Ok(())
@@ -728,6 +749,46 @@ fn reads_live_lanes(s: &Strategy) -> bool {
         Strategy::Simd(SimdStrategy::Group(g)) => group::reads_lanes(g),
         _ => is_multiply_add(s),
     }
+}
+
+/// The tangled instructions of a kernel compiled without partial threadgroups that stand in a block
+/// every invocation of its workgroup executes together, the same number of times (`uniform`,
+/// under the kernel's unit axes: `divergent::workgroup_uniformity`): from `uniform` where
+/// `partly_live` computed it, else computed here where some tangled instruction is neither a
+/// threadgroup barrier nor one the lockstep pass placed. Empty for every other function.
+fn together(
+    cx: &SelectCx<'_>,
+    uniform: Option<&uniform::Uniformity>,
+    m: &mut Meter,
+) -> Result<BTreeSet<ValueId>, Error> {
+    let mut together = BTreeSet::new();
+    let barriers = &cx.families.barrier;
+    let wanted = cx.tangled.iter().any(|&v| {
+        crate::lower::sync::barrier::reconverges(barriers, v) && !barriers.threadgroup.contains(&v)
+    });
+    if cx.stage != Stage::Kernel || cx.inputs.partial_threadgroups || !wanted {
+        return Ok(together);
+    }
+    let computed = match uniform {
+        Some(_) => None,
+        None => Some(divergent::workgroup_uniformity(cx, m)?),
+    };
+    if let Some(u) = uniform.or(computed.as_ref()) {
+        for (b, block) in cx.body.blocks.iter() {
+            if !u.is_uniform(b) {
+                continue;
+            }
+            for id in block.inst_ids() {
+                if let Some(v) = cx.values.inst(id).filter(|v| cx.tangled.contains(v)) {
+                    together.insert(v);
+                }
+            }
+        }
+    }
+    if let Some(u) = &computed {
+        m.release(u.ledger_bytes());
+    }
+    Ok(together)
 }
 
 /// Record the operations of the body that read another lane where some lane of the group may

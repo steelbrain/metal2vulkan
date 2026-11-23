@@ -224,9 +224,15 @@ pub struct BarrierPlan {
     /// placement proved the whole threadgroup reaches together
     /// (`uniform::Uniformity::under_barriers`), so, though tangled, none depends on how subgroups
     /// reconverge, as the emulated tier's exchanges between workgroup barriers in workgroup-uniform
-    /// control flow do not. A program's barrier is not among them: it keeps the profile's
-    /// reconvergence.
+    /// control flow do not. A program's barrier is not among them: it is in [`threadgroup`].
+    ///
+    /// [`threadgroup`]: Self::threadgroup
     pub uniform_placed: std::collections::BTreeSet<ValueId>,
+    /// Every threadgroup barrier, the program's and the lockstep pass's. Metal requires every
+    /// thread of the threadgroup to execute each, the same number of times, so its invocations
+    /// reach it together wherever SPIR-V reconverges them: everywhere but a loop a back edge
+    /// re-enters from inside a selection (`lower::simd::reentry`).
+    pub threadgroup: std::collections::BTreeSet<ValueId>,
     /// `lower::simd::lockstep` inserted a simdgroup barrier: the simd class takes it at
     /// [`lockstep_class`], once the program's own operations have set theirs.
     pub lockstep_simdgroup: bool,
@@ -424,8 +430,11 @@ fn select_barrier(
         require_seq_cst(cx)?;
     }
     cx.tangled.insert(id);
-    if origin != Origin::Program && scope == Scope::Workgroup {
-        cx.families.barrier.uniform_placed.insert(id);
+    if scope == Scope::Workgroup {
+        cx.families.barrier.threadgroup.insert(id);
+        if origin != Origin::Program {
+            cx.families.barrier.uniform_placed.insert(id);
+        }
     }
     Ok(BarrierStrategy::Barrier(Barrier {
         scope,

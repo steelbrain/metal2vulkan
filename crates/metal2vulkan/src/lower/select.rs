@@ -1654,7 +1654,7 @@ fn finish(
     // the simd class selects the tier; the emulated tier reads a kernel's same analysis below.
     let uniformity = simd::partly_live(&mut cx, &sel.strategy, m)?;
     simd::whole_quads(&mut cx, &sel.strategy, m)?;
-    simd::finish(&mut cx)?;
+    simd::finish(&mut cx, uniformity.as_ref(), m)?;
     tessellation::finish(&mut cx)?;
     sync::barrier::finish(&mut cx)?;
     sync::memory_model::finish(&mut cx)?;

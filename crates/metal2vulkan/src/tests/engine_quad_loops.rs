@@ -1,5 +1,5 @@
 //! A fragment function whose only tangled instructions take derivatives (`dfdx`, implicit-LOD
-//! samples, LOD queries) and its reconvergence (`lower::simd::quad_loop`): it states no mode and
+//! samples, LOD queries) and its reconvergence (`lower::simd::reentry`): it states no mode and
 //! records `Guaranteed` with no `DeviceReconvergence` on every committed profile, but where one of
 //! them lies in a loop a back edge re-enters from inside a selection, where it takes the mode the
 //! profile gives a tangled entry and, without maximal reconvergence, the note. A fragment
@@ -158,7 +158,7 @@ fn reading(
         mode,
         a.reconvergence,
         noted,
-        crate::lower::simd::quad_loop::reentered(&m),
+        crate::lower::simd::reentry::reentered(&m),
     )
 }
 

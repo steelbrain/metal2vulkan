@@ -1462,8 +1462,10 @@ runtime's `Error::basis` answers a translation error so.
 `precision_notes` (a `PrecisionNote`, each documenting its bound), and `reconvergence` says
 whether subgroup reconvergence after divergence matches Metal's
 (`Reconvergence::ImplementationDefined` where the profile lacks maximal reconvergence and the
-stage holds a group operation or barrier that depends on it, or a fragment function's derivative,
-implicit-LOD sample or LOD query in a loop that a back edge re-enters from inside a selection). A
+stage holds a group operation or barrier that depends on it; a fragment function's derivative,
+implicit-LOD sample or LOD query, a threadgroup barrier, and a kernel's group operation in a block
+the translator proves uniform for the threadgroup depend on it only in a loop that a back edge
+re-enters from inside a selection). A
 note that holds only under some bound values is in `specialized_notes`;
 `stage.precision_notes_bound(&specialization, &|key| bound(key))` gives the notes a pipeline
 created under `specialization` reaches where a draw or dispatch binds the values `bound` gives.
@@ -1568,13 +1570,26 @@ bound.
   divergent control flow the device decides which lanes run it together, where Metal's lanes
   reconverge maximally, so such an operation may see other lanes active than Metal's. Under
   subgroup-uniform control flow (`shaderSubgroupUniformControlFlow`) the lanes reconverge where
-  control flow is uniform. A fragment function's derivatives, implicit-LOD samples and LOD
-  queries count only inside a loop that a back edge re-enters from inside a selection (a
-  `continue` there, or two latches): Metal leaves derivatives undefined within nonuniform control
-  flow, SPIR-V reconverges the quad wherever it rejoins at a merge, and only maximal
-  reconvergence rejoins it at such a loop's next iteration. Elsewhere such an entry states no
-  reconvergence mode on any device and records no note. Static per stage: recorded for any such
-  instruction in the entry.
+  control flow is uniform. Three kinds count only inside a loop that a back edge re-enters from
+  inside a selection (a `continue` there, or two latches), where only maximal reconvergence
+  rejoins the lanes for the next iteration; SPIR-V reconverges them wherever they rejoin at a
+  merge:
+  - a fragment function's derivatives, implicit-LOD samples and LOD queries, which Metal leaves
+    undefined within nonuniform control flow;
+  - a threadgroup barrier, which Metal requires every thread of the threadgroup to reach;
+  - a kernel's group operation in a block the translator proves uniform for the threadgroup:
+    every enclosing condition and every enclosing loop's exit is the same for every thread
+    (literals, constants, `constant` buffer fields and per-threadgroup values, and what is
+    computed from them), and no thread skips the block by a `break`, `continue` or `return`.
+    A loop whose exit differs between threads is not proven uniform, even where a barrier on
+    every path makes every thread run it as often. A kernel compiled for partial threadgroups
+    has no such block.
+
+  An entry whose every group operation stands in a block the pass proves uniform for the
+  threadgroup, with no re-entered loop around it, states no mode and records
+  `Reconvergence::Guaranteed`; so does an entry whose other tangled instructions are of the first
+  two kinds, none in such a loop. Such an entry states no reconvergence mode on any device and
+  records no note. Static per stage: recorded for any such instruction in the entry.
 - `metal2vulkan-degrade-simdgroup-access-order` (precision). `SimdgroupAccessOrder`: A kernel
   holds two accesses of threadgroup or device memory, at least one a write, that different threads
   of one SIMD-group may make to the same bytes between two barriers, and no barrier or atomic

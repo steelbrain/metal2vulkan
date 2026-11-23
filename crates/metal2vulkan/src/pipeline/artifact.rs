@@ -478,8 +478,9 @@ pub struct ComputePipelineMetalInfo {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Reconvergence {
     /// Maximal reconvergence (or no tangled operation depends on it: among a fragment function's
-    /// derivatives, implicit-LOD samples and LOD queries, only one in a loop a back edge re-enters
-    /// from inside a selection does).
+    /// derivatives, implicit-LOD samples and LOD queries, a threadgroup barrier, and a kernel's
+    /// operation in a block every thread of the threadgroup runs together, only one in a loop a
+    /// back edge re-enters from inside a selection does).
     Guaranteed,
     /// Reconvergence after divergence is implementation-defined on this profile.
     ImplementationDefined,
@@ -1877,11 +1878,16 @@ pub enum PrecisionNote {
     /// which lanes run it together, where Metal's lanes reconverge maximally, so such an operation
     /// may see other lanes active than Metal's. Under subgroup-uniform control flow
     /// (`shaderSubgroupUniformControlFlow`) the lanes reconverge where control flow is uniform.
-    /// A fragment function's derivatives, implicit-LOD samples and LOD queries, which Metal
-    /// leaves undefined within nonuniform control flow, count only inside a loop that a back
-    /// edge re-enters from inside a selection (a `continue` there, or two latches), where SPIR-V
-    /// reconverges the quad for the next iteration only under maximal reconvergence. Static per
-    /// stage: recorded for any such instruction in the entry, as the stage's `reconvergence` is.
+    /// Three kinds count only inside a loop that a back edge re-enters from inside a selection (a
+    /// `continue` there, or two latches), where SPIR-V reconverges the lanes for the next
+    /// iteration only under maximal reconvergence: a fragment function's derivatives, implicit-LOD
+    /// samples and LOD queries, which Metal leaves undefined within nonuniform control flow; a
+    /// threadgroup barrier, which Metal requires every thread of the threadgroup to reach; and a
+    /// kernel's operation in a block every thread of the threadgroup runs together (every
+    /// enclosing condition and loop exit the same for every thread, none skipping the block by a
+    /// `break`, `continue` or `return`; a kernel compiled for partial threadgroups has none).
+    /// Static per stage: recorded for any such instruction in the entry, as the stage's
+    /// `reconvergence` is.
     ///
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.
