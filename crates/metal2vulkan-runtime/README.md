@@ -1510,7 +1510,9 @@ made, with no lock, and never rewritten for layouts.
   zeroed, and a range past the heap's end refused (`Refusal::HeapBufferPlace`). The heap is the
   one at its offset in its block, and every buffer and texture placed in it takes its id in the
   compute encoders' hazard sets (below). A buffer the consumer places with `Device::new_buffer`
-  is no heap's, and keeps its own.
+  is no heap's, and keeps its own. Placing costs the runtime a look at what already lives in the
+  heap: a new heap buffer looks at the heap's live textures, a new heap texture at all its live
+  placements, and a release takes out only its own entry.
 - `Buffer::new_texture(descriptor, index, offset, bytes_per_row)` is
   `newTextureWithDescriptor:offset:bytesPerRow:`: a texture whose texels are the buffer's bytes
   from `offset`, rows `bytes_per_row` apart, of the buffer's storage mode. Any pitch of whole texels at least a row long is taken; rows closer than a row or not a
