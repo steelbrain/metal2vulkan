@@ -4618,6 +4618,14 @@ cache is answered compile-required on both.
   RX 550 and 5.2 µs on the XTX in a pass that loads an image the last pass moved home from the
   feedback layout with no draw between, 370.6 and 19.6 µs after the pass's clear (the table's),
   and 477.3 and 22.7 µs after a draw over the image in the pass.
+- Where the device has the feedback loop, a colour render target's image takes the feedback usage
+  whether or not a draw reads it. Under AMD's open Linux driver (AMDVLK 2025.Q2.1) on the Radeon
+  780M that usage costs draws that read no attachment GPU time: 64 draws over a 512 × 512
+  `RGBA16Float` target of shader-read and shader-write usage (the harness's `draw_full`) take
+  413.8 µs against 404.7 µs on an image without it (2.2%, m3-max-72026 and m3-max-72033), and the
+  same draws into a target of render-target usage alone take the same time either way. The loop's
+  flag on every render pipeline costs no time measured there (m3-max-72033) or on RADV
+  (m3-max-72020).
 - On a device that does not report `attachmentFeedbackLoopLayout` (expected of the UHD 630
   among the lab's, Windows driver 101.2145: no public report of that card on Windows lists
   `VK_EXT_attachment_feedback_loop_layout`), a draw reads an attachment through a copy into the image's shadow, which Metal does not make: at
@@ -5361,7 +5369,9 @@ second elements beside the floor's arrays: 65,536 sampled images more than the l
 where the device also lists the extension marked "with the feedback loop" above and reports the
 feature below, which device creation then enables, and neither otherwise
 (`floor::Capabilities::feedback_loop`). A device that reads attachments without them reads
-through a copy of the image into its shadow (Render encoders), a known gap.
+through a copy of the image into its shadow (Render encoders), a known gap. AMD's Windows driver
+is expected to take the loop, not verified in the lab (public reports of it list
+`VK_EXT_attachment_feedback_loop_layout` from 2.0.250 on).
 
 | Attachment-read feature | Structure | Used for |
 |---|---|---|
