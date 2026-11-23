@@ -1579,7 +1579,8 @@ fn emulated_operations_do_not_depend_on_reconvergence() {
 }
 
 /// On lavapipe without maximal reconvergence (its description with `shaderMaximalReconvergence`
-/// cleared, as the runtime lane withholds the feature): the shuffles of `dsm2_shuffle_past_n` run
+/// cleared, as the runtime lane withholds the feature, and with it `shaderQuadControl`, which no
+/// device offers without it): the shuffles of `dsm2_shuffle_past_n` run
 /// on the emulated tier (8-lane subgroups cannot hold Metal's simdgroups), every tangled
 /// instruction is an emulated site, and the kernel's reconvergence is `Guaranteed`, compiled alone
 /// and as the compute pipeline the runtime makes.
@@ -1591,10 +1592,15 @@ fn emulated_shuffles_keep_metals_reconvergence_without_maximal_reconvergence() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../metal2vulkan-validation/profiles/lavapipe.json");
     let text = std::fs::read_to_string(path).expect("profile");
-    let cleared = text.replace(
-        "\"shaderMaximalReconvergence\": true",
-        "\"shaderMaximalReconvergence\": false",
-    );
+    let cleared = text
+        .replace(
+            "\"shaderMaximalReconvergence\": true",
+            "\"shaderMaximalReconvergence\": false",
+        )
+        .replace(
+            "\"shaderQuadControl\": true",
+            "\"shaderQuadControl\": false",
+        );
     assert_ne!(
         cleared, text,
         "the description names shaderMaximalReconvergence"

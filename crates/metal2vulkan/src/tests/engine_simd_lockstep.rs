@@ -2540,11 +2540,17 @@ fn the_stage_bound_fixture_takes_the_lighter_module_or_states_its_weight() {
         assert_eq!((entry_only(&module), weight(&module)), emulated);
         assert_eq!(function.module_stats().entry_weight, emulated.1);
     }
-    // Without maximal reconvergence: emulated for the lockstep pair, with no pin to keep.
-    let cleared = text.replace(
-        "\"shaderMaximalReconvergence\": true",
-        "\"shaderMaximalReconvergence\": false",
-    );
+    // Without maximal reconvergence (and so without quad control, which no device offers without
+    // it): emulated for the lockstep pair, with no pin to keep.
+    let cleared = text
+        .replace(
+            "\"shaderMaximalReconvergence\": true",
+            "\"shaderMaximalReconvergence\": false",
+        )
+        .replace(
+            "\"shaderQuadControl\": true",
+            "\"shaderQuadControl\": false",
+        );
     assert_ne!(
         cleared, text,
         "the description names shaderMaximalReconvergence"
