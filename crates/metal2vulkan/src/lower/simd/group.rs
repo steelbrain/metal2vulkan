@@ -995,15 +995,26 @@ fn quad_lanes(
 }
 
 /// Quad lane `src`'s `x` in a fragment's quad ([`quad_lanes`]), or the calling lane's own `x`
-/// where lane `src` takes no part: MSL leaves such a read undefined (section 6.10.2).
+/// where lane `src` takes no part: MSL leaves such a read undefined (section 6.10.2). In a whole
+/// quad ([`Lane::whole`]) every lane takes part, and `src`, a quad lane, picks its lane by its two
+/// bits: three selects.
 fn quad_read(fb: &mut FunctionBuilder<'_>, ln: &Lane, x: SValue, src: SValue) -> BResult<SValue> {
+    let lanes = quad_lanes(fb, ln, x)?;
+    if ln.whole {
+        let lane = |j: usize| lanes.get(j).map(|&(y, _)| y).ok_or_else(dangling);
+        let zero = k(fb, 0)?;
+        let odd = bin_k(fb, BinOp::BitwiseAnd, src, 1)?;
+        let odd = fb.binary(BinOp::INotEqual, odd, zero)?;
+        let low = bin_k(fb, BinOp::BitwiseAnd, src, 2)?;
+        let low = fb.binary(BinOp::IEqual, low, zero)?;
+        let top = fb.select(odd, lane(1)?, lane(0)?)?;
+        let bottom = fb.select(odd, lane(3)?, lane(2)?)?;
+        return fb.select(low, top, bottom);
+    }
     let mut r = x;
-    for (j, (y, on)) in (0..).zip(quad_lanes(fb, ln, x)?) {
+    for (j, (y, on)) in (0..).zip(lanes) {
         let me = bin_k(fb, BinOp::IEqual, src, j)?;
-        let hit = match ln.whole {
-            true => me,
-            false => fb.binary(BinOp::LogicalAnd, me, on)?,
-        };
+        let hit = fb.binary(BinOp::LogicalAnd, me, on)?;
         r = fb.select(hit, y, r)?;
     }
     Ok(r)
