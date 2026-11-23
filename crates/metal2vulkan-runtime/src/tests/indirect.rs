@@ -75,6 +75,7 @@ fn draws(fields: Vec<(DrawPlace, usize, FieldValue)>) -> Draws {
         own_pixel: Vec::new(),
         fetched: Vec::new(),
         bicubic: Vec::new(),
+        levels: Vec::new(),
         bindings: Vec::new(),
         reads_unbound: false,
         writes_unbound: false,
