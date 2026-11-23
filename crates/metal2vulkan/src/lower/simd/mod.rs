@@ -129,7 +129,12 @@
 //! (the calling lane's own value where the lane they name takes no part), take the active lanes'
 //! bits from those votes (of the predicate too, for `quad_ballot`), and vote by
 //! `OpGroupNonUniformQuadAllKHR` and `…AnyKHR`; the operations of one block, which run on the
-//! same active lanes, share the four votes and the lanes read of each value. A simdgroup's
+//! same active lanes, share the four votes and the lanes read of each value. In a block every
+//! invocation executes together, every lane of the quad takes part ([`whole_quads`]), so there it
+//! takes no vote: the active mask is the constant `0xF`, `is_first` is quad lane 0, the first
+//! lane's broadcast is `OpGroupNonUniformQuadBroadcast` of lane 0, `quad_ballot` gathers each
+//! lane's bit by a horizontal and a vertical `OpGroupNonUniformQuadSwap`, and a broadcast or
+//! shuffle-xor by a constant lane or mask is its quad instruction. A simdgroup's
 //! `simd_active_threads_mask` is the ballot of `true`, held as the 64-bit ballot is. A fragment's
 //! `[[thread_index_in_quadgroup]]` is the subgroup lane's low two bits
 //! ([`select_param`]), or, on a profile without the fragment quad tier, the pixel's place in its
