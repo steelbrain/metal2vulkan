@@ -669,7 +669,10 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
                             ..
                         })),
                     ) => {
-                        println!("{name}: {kind}: not extended, refused");
+                        println!(
+                            "{name}: {kind}: not extended, refused; the dispatch added {added} \
+                             to extended_view_dispatches"
+                        );
                         continue;
                     }
                     (extended, other) => {
@@ -703,7 +706,10 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
                         "{name}: {kind}: read {got}, {want}"
                     );
                 }
-                println!("{name}: {kind}: written through its unorm view, read decoded");
+                println!(
+                    "{name}: {kind}: written through its unorm view, each texel's bytes {codes:?}, \
+                     read decoded {got:?}; the write added {added} to extended_view_dispatches"
+                );
             }
         });
     }
