@@ -2568,6 +2568,80 @@ fn the_window_pushes_a_kernel_s_slot_addresses_below_its_tail_word() {
     }
 }
 
+/// On `PROFILES` and in `runtime-floor`'s window, [`many_of`]`(3)` pushes its 4 slot addresses
+/// below its tail word, and its straight-line module returns once: the tail's test, a compare of
+/// the word's load, is the condition of one select per other pushed field and of no branch
+/// (`EmitCx::fold_tail`), so the body depends on the tail through those values alone. AMD's open
+/// driver (2025.Q2.1) dies making a fragment stage whose body runs under a never-taken return
+/// there and holds a loop of convergent instructions under `MaximallyReconvergesKHR`.
+#[test]
+fn the_floor_s_tail_folds_into_the_other_pushed_fields_with_no_branch() {
+    use crate::spirv::ir::{BinOp, Inst, Terminator, Type};
+    let reads = 3;
+    let Some(bc) = assemble_text("many", &many_of(reads)) else {
+        return;
+    };
+    for stem in PROFILES.iter().copied().chain(["runtime-floor"]) {
+        let desc = crate::pipeline::testing::description(stem).unwrap_or_else(|e| panic!("{e}"));
+        let device = Device::from_queries(desc, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let p = device.profile();
+        let (a, plan, m) = compile_kept(&bc, "many", p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        assert!(plan.push.tail_word.is_some(), "{stem}: no tail word");
+        let pushed = (plan.push.fields.iter())
+            .filter(|f| matches!(f.loc, PushLoc::Push { .. }))
+            .count();
+        assert_eq!(pushed, (reads + 1) as usize, "{stem}");
+        let insts: Vec<_> = m.blocks().iter().flat_map(|b| &b.insts).collect();
+        let push_load = |v: crate::spirv::ids::Value| {
+            insts.iter().any(|n| match (&n.inst, n.result) {
+                (Inst::Load { ptr, .. }, Some(r)) if r == v => {
+                    matches!(
+                        m.value(*ptr).and_then(|d| m.types().get(d.ty)),
+                        Ok(Type::Pointer {
+                            class: crate::spirv::ir::StorageClass::PushConstant,
+                            ..
+                        })
+                    )
+                }
+                _ => false,
+            })
+        };
+        // The tail's tests: a compare of a push load that some select takes as its condition.
+        let tests: Vec<_> = (insts.iter())
+            .filter_map(|n| match (&n.inst, n.result) {
+                (
+                    Inst::Binary {
+                        op: BinOp::INotEqual,
+                        a,
+                        ..
+                    },
+                    Some(r),
+                ) if push_load(*a) => Some(r),
+                _ => None,
+            })
+            .filter(|c| {
+                (insts.iter()).any(|n| matches!(n.inst, Inst::Select { cond, .. } if cond == *c))
+            })
+            .collect();
+        assert_eq!(tests.len(), 1, "{stem}: the tail's tests");
+        let test = tests[0];
+        let selects = (insts.iter())
+            .filter(|n| matches!(n.inst, Inst::Select { cond, .. } if cond == test))
+            .count();
+        assert_eq!(selects, pushed, "{stem}: one select per other pushed field");
+        let branches = (m.blocks().iter())
+            .filter(|b| matches!(b.term, Terminator::CondBranch { cond, .. } if cond == test))
+            .count();
+        assert_eq!(branches, 0, "{stem}: a branch on the tail");
+        let returns = (m.blocks().iter())
+            .filter(|b| matches!(b.term, Terminator::Return))
+            .count();
+        assert_eq!(returns, 1, "{stem}: the module's returns");
+        println!("{stem}: the tail folds into {selects} pushed fields; one return");
+    }
+}
+
 /// A kernel storing, at its position in the grid `y · grid.x + x`, the grid's threads along `x` and
 /// `y` (bits 0-7, 8-15) and its threadgroups along `x` and `y` (bits 16-23, 24-31).
 fn grid_kernel(name: &str) -> String {

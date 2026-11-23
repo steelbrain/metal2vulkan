@@ -34,11 +34,16 @@
 //! (`PushPlacement::tail_word`).
 //! A driver that uploads a stage's push bytes up to the highest one it reads then uploads at least
 //! 28 bytes past the other fields, which holds every load it widens from them, and the tail's own
-//! load, one or two words, is never widened. The stage reads the tail in its first block and
-//! returns where it holds a value the consumer never pushes there ([`emit_tail_guard`]), so no
-//! optimizer drops the read. A stage that pushes one field of one or two words has no other load
-//! to widen and no tail. The hole moves no field the stage reads and adds no read where the tail
-//! is a field of its own, so the words a driver keeps in registers are the same.
+//! load, one or two words, is never widened. The stage reads the tail in its first block and tests
+//! whether it holds a value the consumer never pushes there ([`tail_never_pushed`]); each other
+//! pushed field's value is its member where the test fails and the null of its type where it holds
+//! ([`fold_never_pushed`]), so no optimizer drops the tail's read while it keeps the read of any
+//! other pushed field. No branch makes the body depend on the tail: AMD's open driver (2025.Q2.1)
+//! dies making a fragment stage whose body runs under a never-taken return there and holds a loop
+//! of convergent instructions under `MaximallyReconvergesKHR`. A stage that pushes one field of one
+//! or two words has no other load to widen and no tail. The hole moves no field the stage reads
+//! and adds no read where the tail is a field of its own, so the words a driver keeps in registers
+//! are the same.
 //!
 //! Field shapes are chosen so that the `ArgumentTable`'s std140 and std430 layouts agree (scalars,
 //! 2-vectors, and 16-byte-strided arrays only), so the table is a valid uniform block on every
@@ -120,7 +125,7 @@ pub const fn vertex_end(bytes: u32) -> u32 {
 pub const HOLE_BYTES: u32 = 24;
 
 /// Whether a field of kind `field` can be a floor stage's tail: one or two words whose value the
-/// consumer never pushes with every bit set, which the stage returns on ([`emit_tail_guard`]). A
+/// consumer never pushes with every bit set, which the stage tests for ([`tail_never_pushed`]). A
 /// slot's bounds hold a length of at most 2 GiB, and the zero range is at a multiple of 16
 /// (`PushField::SlotBounds`, `PushField::ZeroAddress`).
 pub const fn tail_kind(field: PushField) -> bool {
@@ -429,16 +434,16 @@ pub fn check_floor(placement: &PushPlacement, bytes: u32) -> Result<(), String> 
 }
 
 /// In the open block of a function whose push block holds the stage's tail `field` ([`tail`]),
-/// `value` its member as the block read it: return from the function where it holds the value the
-/// consumer never pushes there: the tail word non-zero, a two-word field with both words all
-/// ones, an address all ones. The branch is never taken; the return keeps the read from any
-/// optimizer, as everything the function does after it depends on it.
-pub(crate) fn emit_tail_guard(
+/// `value` its member as the block read it: whether it holds the value the consumer never pushes
+/// there: the tail word non-zero, a two-word field with both words all ones, an address all ones.
+/// `None` for a tail of another shape, which has no such value. The function folds the test into
+/// each other pushed field's value ([`fold_never_pushed`]), so no optimizer drops the read while
+/// it keeps any other push read, and no branch makes the body depend on it.
+pub(crate) fn tail_never_pushed(
     fb: &mut crate::spirv::builder::FunctionBuilder<'_>,
     value: crate::spirv::ids::Value,
     field: PushField,
-) -> crate::spirv::error::BResult<()> {
-    use crate::spirv::builder::constructs::{ArmEnd, ArmFn};
+) -> crate::spirv::error::BResult<Option<crate::spirv::ids::Value>> {
     use crate::spirv::ir::{BinOp, ConstBits, Constant};
     let set = match (field, shape(field)) {
         (PushField::TailWord, _) => {
@@ -463,14 +468,25 @@ pub(crate) fn emit_tail_guard(
             let ones = fb.module().const_value(ones)?;
             fb.binary(BinOp::IEqual, value, ones)?
         }
-        (_, FieldShape::U32 | FieldShape::UVec4Array(_)) => return Ok(()),
+        (_, FieldShape::U32 | FieldShape::UVec4Array(_)) => return Ok(None),
     };
-    let leave: ArmFn<'_, ()> = Box::new(|fb, _| {
-        fb.ret(None)?;
-        Ok(ArmEnd::Exits)
-    });
-    fb.if_(&mut (), set, leave, None)?;
-    Ok(())
+    Ok(Some(set))
+}
+
+/// `value`, a pushed field's value as its member was read, where the stage's tail does not hold
+/// the value the consumer never pushes there (`never`, [`tail_never_pushed`]), else the null of
+/// its type: the value the consumer's push gives, through a select whose condition is the tail's
+/// test, so the field's every use reads the tail too.
+pub(crate) fn fold_never_pushed(
+    fb: &mut crate::spirv::builder::FunctionBuilder<'_>,
+    never: crate::spirv::ids::Value,
+    value: crate::spirv::ids::Value,
+) -> crate::spirv::error::BResult<crate::spirv::ids::Value> {
+    use crate::spirv::ir::Constant;
+    let ty = fb.value_ty(value)?;
+    let null = fb.module().constant(Constant::Null { ty })?;
+    let null = fb.module().const_value(null)?;
+    fb.select(never, null, value)
 }
 
 #[cfg(test)]

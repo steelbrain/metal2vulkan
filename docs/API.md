@@ -169,10 +169,10 @@ and so do the command line, the compile worker and every validation tool. It hol
   zero word `PushField::TailWord` at `PushPlacement::tail_word`, with which its `push_range` ends;
   a function that pushes one field of 8 bytes or fewer has none. A driver that uploads a stage's
   push bytes up to the highest one the stage reads then holds every load it widens from the other
-  fields. The function returns at its start where its tail holds what the consumer never pushes
-  there (a tail word other than zero, bounds whose two words are both all ones, a zero-range
-  address of all ones), so the consumer pushes the tail word zero with the other fields; the
-  bytes of the hole are not read. A kernel that reads a grid builtin reads `PushField::DispatchRegion` on
+  fields. The function reads its tail at its start, and each of its other pushed fields reads as
+  null where the tail holds what the consumer never pushes there (a tail word other than zero,
+  bounds whose two words are both all ones, a zero-range address of all ones), so the consumer
+  pushes the tail word zero with the other fields; the bytes of the hole are not read. A kernel that reads a grid builtin reads `PushField::DispatchRegion` on
   every dispatch: a dispatch the host knows states Metal's grid and its piece's first threadgroup
   there, and an indirect dispatch a zero grid, whose kernel takes `NumWorkgroups` times its
   workgroup size. It reads its first threadgroup from every region (0 where the
