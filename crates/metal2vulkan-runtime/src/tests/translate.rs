@@ -4493,21 +4493,20 @@ $REGION_META!4 = !{i32 $OUT, !"air.buffer", !"air.location_index", i32 0, i32 1,
         });
     }
 
-    /// An inclusive scan of a threadgroup's threads over a declared array of `$WORDS` words of
-    /// threadgroup memory: thread `t` stores `t + 1` at word `t`, then for each stride `s` of 1, 2,
-    /// 4 and on below `threads_per_threadgroup`, past a barrier adds word `t - s` where `t >= s`,
-    /// and past another barrier stores its sum at word `t`; it writes its last sum to `out[g]`, `g`
-    /// its position in the grid. The loop holds the barriers, so the partial-threadgroups
-    /// variant's predicated walk votes in it, and its trip count is the threadgroup's threads,
-    /// which a partial threadgroup has fewer of.
+    /// An inclusive scan of a threadgroup's threads over threadgroup memory at `$BASE`: thread `t`
+    /// stores `t + 1` at word `t`, then for each stride `s` of 1, 2, 4 and on below
+    /// `threads_per_threadgroup`, past a barrier adds word `t - s` where `t >= s`, and past another
+    /// barrier stores its sum at word `t`; it writes its last sum to `out[g]`, `g` its position in
+    /// the grid. The loop holds the barriers, so the partial-threadgroups variant's predicated walk
+    /// votes in it, and its trip count is the threadgroup's threads, which a partial threadgroup
+    /// has fewer of. `$NAME`, its memory and its region are filled by [`scan_kernel`].
     const SCAN: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
 target triple = "air64_v28-apple-macosx26.0.0"
-@tg = internal addrspace(3) global [$WORDS x i32] undef, align 4
-
-define void @scan_static(ptr addrspace(1) %out, i32 %t, i32 %g, <3 x i32> %size) {
+$GLOBAL
+define void @$NAME($PARAMSptr addrspace(1) %out, i32 %t, i32 %g, <3 x i32> %size) {
 entry:
   %n = extractelement <3 x i32> %size, i64 0
-  %pt = getelementptr inbounds i32, ptr addrspace(3) @tg, i32 %t
+  %pt = getelementptr inbounds i32, ptr addrspace(3) $BASE, i32 %t
   %v0 = add i32 %t, 1
   store i32 %v0, ptr addrspace(3) %pt, align 4
   br label %head
@@ -4523,7 +4522,7 @@ body:
   %has = icmp uge i32 %t, %s
   %back = sub i32 %t, %s
   %at = select i1 %has, i32 %back, i32 %t
-  %pa = getelementptr inbounds i32, ptr addrspace(3) @tg, i32 %at
+  %pa = getelementptr inbounds i32, ptr addrspace(3) $BASE, i32 %at
   %x = load i32, ptr addrspace(3) %pa, align 4
   %add = select i1 %has, i32 %x, i32 0
   %acc2 = add i32 %acc, %add
@@ -4543,79 +4542,162 @@ declare void @air.wg.barrier(i32, i32)
 !air.kernel = !{!0}
 !air.version = !{!7}
 !air.language_version = !{!8}
-!0 = !{ptr @scan_static, !1, !2}
+!0 = !{ptr @$NAME, !1, !2}
 !1 = !{}
-!2 = !{!3, !4, !5, !6}
-!3 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}
-!4 = !{i32 1, !"air.thread_index_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}
-!5 = !{i32 2, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"g"}
-!6 = !{i32 3, !"air.threads_per_threadgroup", !"air.arg_type_name", !"uint3", !"air.arg_name", !"size"}
+!2 = !{$REGION!3, !4, !5, !6}
+$REGION_META!3 = !{i32 $OUT, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 1, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"out"}
+!4 = !{i32 $T, !"air.thread_index_in_threadgroup", !"air.arg_type_name", !"uint", !"air.arg_name", !"t"}
+!5 = !{i32 $G, !"air.thread_position_in_grid", !"air.arg_type_name", !"uint", !"air.arg_name", !"g"}
+!6 = !{i32 $S, !"air.threads_per_threadgroup", !"air.arg_type_name", !"uint3", !"air.arg_name", !"size"}
 !7 = !{i32 2, i32 8, i32 0}
 !8 = !{!"Metal", i32 4, i32 0, i32 0}
 "#;
 
-    /// [`SCAN`] at 1,024 threads, Metal's largest threadgroup, over declared threadgroup memory
-    /// of the device's `maxComputeSharedMemorySize`, of 4 bytes less, and of Metal's own
-    /// `maxThreadgroupMemoryLength` of 32 KiB where the device's limit is larger: each state's
-    /// ragged grid of 25 threads, one partial threadgroup of 25, and its whole grid of 1,024 run
-    /// and answer the program's inclusive sums, `(t + 1)(t + 2) / 2` for thread `t` of its
-    /// threadgroup. Each outcome is printed; the test fails on any that does not run.
+    /// [`SCAN`] as `scan_static`, over a declared array of `words` words, which a guest sizes from
+    /// the limit it is told when it builds the kernel, or with `None` as `scan_length`, over its
+    /// `[[threadgroup(0)]]` region alone, whose length the encoder sets.
+    fn scan_kernel(words: Option<u32>) -> String {
+        let region = r#"!9 = !{i32 0, !"air.buffer", !"air.location_index", i32 0, i32 1, !"air.read_write", !"air.address_space", i32 3, !"air.arg_type_size", i32 4, !"air.arg_type_align_size", i32 4, !"air.arg_type_name", !"uint", !"air.arg_name", !"a"}
+"#;
+        let (name, global, params, base, meta) = match words {
+            Some(words) => (
+                "scan_static",
+                format!("@tg = internal addrspace(3) global [{words} x i32] undef, align 4\n"),
+                "",
+                "@tg",
+                "",
+            ),
+            None => (
+                "scan_length",
+                String::new(),
+                "ptr addrspace(3) %a, ",
+                "%a",
+                region,
+            ),
+        };
+        let first = u32::from(words.is_none());
+        SCAN.replace("$NAME", name)
+            .replace("$GLOBAL", &global)
+            .replace("$PARAMS", params)
+            .replace("$BASE", base)
+            .replace("$REGION_META", meta)
+            .replace("$REGION", if words.is_some() { "" } else { "!9, " })
+            .replace("$OUT", &first.to_string())
+            .replace("$T", &(first + 1).to_string())
+            .replace("$G", &(first + 2).to_string())
+            .replace("$S", &(first + 3).to_string())
+    }
+
+    /// [`SCAN`] at 1,024 threads, Metal's largest threadgroup, in its two shapes ([`scan_kernel`]):
+    /// `scan_static`'s declared array and `scan_length`'s region the encoder sets, each of the
+    /// bytes a guest is told for Metal's `maxThreadgroupMemoryLength`: Metal's own 32 KiB (or the
+    /// device's `maxComputeSharedMemorySize` where smaller), and `room`, the device's limit less
+    /// the predicated walk's 4-byte vote word, rounded down to 16 and at most 32 KiB. Each state's
+    /// ragged grid of 25 threads, one partial threadgroup of 25, and its whole grid of 1,024
+    /// threads: at `room` every one runs and answers the program's inclusive sums,
+    /// `(t + 1)(t + 2) / 2` for thread `t` of its threadgroup. At 32 KiB, where the bytes and the
+    /// word pass the device's limit, the ragged grids are refused, `scan_static`'s as
+    /// `Gap::PartialThreadgroups` (the translator refuses the variant) and `scan_length`'s as
+    /// `Limit::ThreadgroupMemory` of the bytes and the word, and the whole grids run on the plain
+    /// module and answer the sums. Each outcome is printed; the test fails on any other.
     #[test]
-    fn every_device_runs_a_ragged_grid_of_a_1024_thread_observer_whose_memory_is_at_the_limit() {
-        each_device("compute_scan_at_the_limit", |name, _, device| {
+    fn every_device_runs_a_1024_thread_observers_ragged_grid_in_the_limit_less_its_vote_word() {
+        use crate::pipeline::Which;
+
+        each_device("compute_scan_at_the_told_limit", |name, _, device| {
             let limit = device.core().limits.max_shared_memory;
-            let mut sizes = vec![limit, limit - 4];
-            if limit > 32 * 1024 {
-                sizes.push(32 * 1024);
+            let metal = limit.min(32 * 1024);
+            let room = ((limit - 4) / 16 * 16).min(32 * 1024);
+            let mut told = vec![metal];
+            if room != metal {
+                told.push(room);
             }
             let queue = device.new_command_queue(4).expect("a queue");
             let mut buffers = Buffers::new(&device, 1 << 16);
             let mut failed = Vec::new();
-            for bytes in sizes {
-                let text = SCAN.replace("$WORDS", &(bytes / 4).to_string());
-                let bitcode = match metal2vulkan_devtools::llvm_assemble_text(&text) {
-                    Ok(bitcode) => bitcode,
-                    Err(AssembleError::Missing(why)) => {
-                        eprintln!("SKIPPED: {why}");
-                        return;
-                    }
-                    Err(error) => panic!("scan_static: {error:?}"),
-                };
-                let library = Library::from_air(&bitcode).expect("the library");
-                let function = library.function("scan_static").expect("the kernel");
-                let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
-                    FunctionDescriptor::new(function),
-                ));
-                let state = state(name, &device, &descriptor);
-                for grid in [25, 1024] {
-                    let want: Vec<u32> = (0..grid).map(|t| (t + 1) * (t + 2) / 2).collect();
-                    let out = buffers.buffer(4 * 1024);
-                    write(&out, 0, &le_bytes(&[0xEEEE_EEEE; 1024]));
-                    let command_buffer = queue.command_buffer().expect("a command buffer");
-                    let mut encoder = command_buffer
-                        .compute_command_encoder(DispatchType::Serial)
-                        .expect("an encoder");
-                    encoder.set_compute_pipeline_state(&state).expect("a state");
-                    encoder.set_buffer(Some(&out), 0, 0).expect("a buffer");
-                    let dispatched = encoder.dispatch_threads([grid, 1, 1], [1024, 1, 1]);
-                    encoder.end_encoding();
-                    command_buffer.commit().expect("a commit");
-                    finished(name, &command_buffer);
-                    let outcome = match dispatched {
-                        Err(error) => format!("refused: {error:?}"),
-                        Ok(()) if command_buffer.error().is_some() => {
-                            format!("failed: {:?}", command_buffer.error())
-                        }
-                        Ok(()) => match words(&out, 0, grid as usize) == want {
-                            true => "ran, the program's sums".to_owned(),
-                            false => format!("ran, other words: {:?}", words(&out, 0, 8)),
-                        },
+            for bytes in told {
+                for declared in [Some(bytes / 4), None] {
+                    let bitcode =
+                        match metal2vulkan_devtools::llvm_assemble_text(&scan_kernel(declared)) {
+                            Ok(bitcode) => bitcode,
+                            Err(AssembleError::Missing(why)) => {
+                                eprintln!("SKIPPED: {why}");
+                                return;
+                            }
+                            Err(error) => panic!("scan: {error:?}"),
+                        };
+                    let kernel = match declared {
+                        Some(_) => "scan_static",
+                        None => "scan_length",
                     };
-                    println!(
-                        "{name}: {bytes} of {limit} bytes, [{grid}, 1, 1] in [1024, 1, 1]: {outcome}"
-                    );
-                    if outcome != "ran, the program's sums" {
-                        failed.push(format!("{bytes} bytes, grid {grid}: {outcome}"));
+                    let library = Library::from_air(&bitcode).expect("the library");
+                    let function = library.function(kernel).expect("the kernel");
+                    let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+                        FunctionDescriptor::new(function),
+                    ));
+                    let state = state(name, &device, &descriptor);
+                    let compiled = &state.inner.compiled;
+                    let vote = (compiled.variant_kernel(Which::Partial, || {
+                        Error::Unsupported(Gap::PartialThreadgroups {
+                            threads_per_grid: [0; 3],
+                            threads_per_threadgroup: [0; 3],
+                        })
+                    }))
+                    .map(|partial| partial.interface.memory.vote);
+                    let past = bytes + 4 > limit;
+                    for grid in [25, 1024] {
+                        let want: Vec<u32> = (0..grid).map(|t| (t + 1) * (t + 2) / 2).collect();
+                        let out = buffers.buffer(4 * 1024);
+                        write(&out, 0, &le_bytes(&[0xEEEE_EEEE; 1024]));
+                        let command_buffer = queue.command_buffer().expect("a command buffer");
+                        let mut encoder = command_buffer
+                            .compute_command_encoder(DispatchType::Serial)
+                            .expect("an encoder");
+                        encoder.set_compute_pipeline_state(&state).expect("a state");
+                        if declared.is_none() {
+                            encoder
+                                .set_threadgroup_memory_length(bytes, 0)
+                                .expect("a length");
+                        }
+                        encoder.set_buffer(Some(&out), 0, 0).expect("a buffer");
+                        let dispatched = encoder.dispatch_threads([grid, 1, 1], [1024, 1, 1]);
+                        encoder.end_encoding();
+                        command_buffer.commit().expect("a commit");
+                        finished(name, &command_buffer);
+                        let sums = dispatched.is_ok()
+                            && command_buffer.error().is_none()
+                            && words(&out, 0, grid as usize) == want;
+                        let expected = match (past && grid == 25, declared) {
+                            (false, _) => sums,
+                            (true, Some(_)) => matches!(
+                                dispatched,
+                                Err(Error::Unsupported(Gap::PartialThreadgroups {
+                                    threads_per_grid: [25, 1, 1],
+                                    threads_per_threadgroup: [1024, 1, 1],
+                                    ..
+                                }))
+                            ),
+                            (true, None) => matches!(
+                                dispatched,
+                                Err(Error::Limit(Limit::ThreadgroupMemory { length, max }))
+                                    if length == u64::from(bytes) + 4 && max == limit
+                            ),
+                        };
+                        let outcome = match &dispatched {
+                            Err(error) => format!("refused: {error:?}"),
+                            Ok(()) if command_buffer.error().is_some() => {
+                                format!("failed: {:?}", command_buffer.error())
+                            }
+                            Ok(()) if sums => "ran, the program's sums".to_owned(),
+                            Ok(()) => format!("ran, other words: {:?}", words(&out, 0, 8)),
+                        };
+                        println!(
+                            "{name}: {kernel}, {bytes} of {limit} bytes (vote word {vote:?}), \
+                             [{grid}, 1, 1] in [1024, 1, 1]: {outcome}"
+                        );
+                        if !expected {
+                            failed.push(format!("{kernel}, {bytes} bytes, grid {grid}: {outcome}"));
+                        }
                     }
                 }
             }
