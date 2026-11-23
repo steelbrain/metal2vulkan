@@ -150,6 +150,7 @@ pub mod rate_map_sweeps;
 pub mod rate_maps;
 pub mod read_through;
 pub mod read_write_tiers;
+pub mod reconvergence;
 pub mod render_chains;
 pub mod render_depth_stencil_state;
 pub mod render_draw_forms;
@@ -341,6 +342,9 @@ pub fn all() -> Vec<Box<dyn Case>> {
         cases.push(Box::new(case));
     }
     for case in discard_hoist::all() {
+        cases.push(Box::new(case));
+    }
+    for case in reconvergence::all() {
         cases.push(Box::new(case));
     }
     for case in int_attributes::all() {

@@ -334,6 +334,7 @@ one.
 | `argument_encoders` | What an argument encoder says of a layout, which word of an argument buffer each argument landed in, and what the kernel then sampled through it | run on Metal |
 | `function_bindings` | What a kernel's reflection says each argument is: the binding, its subprotocol's fields, and an argument buffer's struct type member by member | run on Metal |
 | `indirect_commands` | What an indirect command buffer's CPU-encoded compute and render commands ran: both dispatch kinds, ordinary and indexed draws, the resets, the barriers, an attribute stride, a stage-in region, and the descriptor properties no execution needs | run on Metal |
+| `reconvergence` | The nearest and trilinear samples at the implicit level of detail and a fine derivative pair, after each construct a fragment reconverges from and through a texture a ternary on two handles chooses; the trilinear sample is a site of its own, since its bits are the device's filter | run on Metal |
 
 A carried answer is our own measurement of this chip, stated in the shape the case emits, and its
 case forbids re-recording with the reason why. Record mode refuses such a case rather than
