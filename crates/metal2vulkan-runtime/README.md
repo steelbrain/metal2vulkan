@@ -4374,6 +4374,13 @@ cache is answered compile-required on both.
   streams' passes render into one or two color attachments and a stencil attachment or a
   `Depth32Float` depth attachment, each a level of a 2D texture of one sample, with `Load`,
   `Clear` and `DontCare` loads and `Store`, `DontCare` and `Unknown` stores.
+- Programmable sample positions are not built. The descriptor has no field for
+  `setSamplePositions:count:`, and the runtime answers no `programmableSamplePositionsSupported`,
+  so every multisample pass rasterizes at Vulkan's standard sample locations
+  (`standardSampleLocations`, under Floor), which are Metal's default positions at 1, 2 and 4
+  samples. Metal rasterizes a pass at the positions the program sets; a pass whose set differs
+  from the defaults samples here at the defaults, with no refusal. Vulkan's form for such
+  positions is `VK_EXT_sample_locations`, which device creation does not enable.
 - Layered rendering refuses: in a pass of `renderTargetArrayLength` 2 or more, an attachment or a
   resolve texture with fewer slices from its own `slice` than the pass's length
   (`Refusal::AttachmentPlace`, naming the last slice the pass would render), a 3D texture's
