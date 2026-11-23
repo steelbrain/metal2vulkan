@@ -71,7 +71,7 @@ impl ComputePipelineState {
     /// entries, whatever the kernel links.
     ///
     /// Err: [`Refusal::BufferTooLong`] for a table whose words pass
-    /// [`MAX_BUFFER_LENGTH`](crate::MAX_BUFFER_LENGTH); [`Error::Quiesced`]; what taking the
+    /// [`MAX_BUFFER_LENGTH`]; [`Error::Quiesced`]; what taking the
     /// words' block returns ([`Device::take_block`](crate::Device::take_block)).
     pub fn new_visible_function_table(
         &self,

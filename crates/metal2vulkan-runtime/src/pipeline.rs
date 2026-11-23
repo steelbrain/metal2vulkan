@@ -746,7 +746,7 @@ pub(crate) struct Interface {
     /// The kernel's specialization constants: each one's id and what sets it.
     pub(crate) constants: Vec<(u32, Constant)>,
     /// The index of each threadgroup memory argument the kernel takes, in the order of
-    /// [`Variant::threadgroup_lengths`].
+    /// [`Variant::lengths`]' words.
     pub(crate) threadgroups: Vec<u32>,
     /// `maxTotalThreadsPerThreadgroup`.
     pub(crate) max_total_threads: u32,
