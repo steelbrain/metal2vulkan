@@ -712,7 +712,8 @@ records as text, and
   mapping, through a blit copy of it into a Shared buffer of the play's own, on a queue of the
   play's own, and waits for the copy.
 - A selector, argument or descriptor key the backend does not implement is a typed refusal naming
-  it; the run stops there and the report keeps what ran.
+  it; the run stops there and the report keeps what ran. Indirect command buffers are among them:
+  the backend makes none and executes none, so a recording that makes one stops at that call.
 - The backend plays compute, render, blits, `synchronizeResource:`, fences, events and queues.
   Visibility results play as the runtime's: a pass's `visibilityResultBuffer` and
   `visibilityResultType`, and each `setVisibilityResultMode:offset:` (`[mode, offset]`), whose
@@ -1091,8 +1092,9 @@ the runtime's does not hold, or the runtime's gap for the pass as Rust prints it
 in a record cut short, `skipped KEY=VALUE ...: no gate result` where the backend skipped
 anything, `gaps KEY=VALUE ...` where it met a typed gap (`gap_pipeline_ids`: the compute and
 render pipeline states whose `gpuResourceID` the player asked, which the runtime does not
-give; bookkeeping: no draw or dispatch is skipped for it, and only an indirect command buffer,
-which the runtime does not build, would read such an ID), where the play
+give; bookkeeping: no draw or dispatch is skipped for it, and only an argument buffer's
+pipeline-state member would read such an ID, which the runtime refuses at the making of a state
+whose function reads it), where the play
 finished its range (it ended without an error, through frame `F`'s present where it plays to
 `F`) and the backend skipped nothing, the matrix's judged metrics, one line each, `M2V-MATRIX
 metric replay-rt/STEM/RANGE/NAME N` (`STEM` the first segment's stem, whitespace made `_`;

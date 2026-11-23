@@ -2988,8 +2988,8 @@ impl Backend for NewRuntime {
         let id = match self.objects.get(&object) {
             Some(Object::Texture(texture)) => texture.gpu_resource_id(),
             Some(Object::Sampler(sampler)) => sampler.gpu_resource_id(),
-            // The runtime gives a pipeline state no resource ID: it builds no indirect command
-            // buffers. The player reports the ID as differing, and the gap is counted.
+            // The runtime gives a pipeline state no resource ID (its README's known gaps). The
+            // player reports the ID as differing, and the gap is counted.
             Some(Object::ComputePipeline(_) | Object::RenderPipeline(_)) => {
                 self.unanswered_pipeline_ids += 1;
                 return Ok(None);
