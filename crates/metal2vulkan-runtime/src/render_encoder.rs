@@ -1944,7 +1944,7 @@ impl RenderCommandEncoder {
                 }
                 building.keep(buffer);
                 let id = [buffer.id(), buffer.tracked_id()];
-                let place = buffer.object().placement().cloned();
+                let place = BufferObject::object(buffer).placement().cloned();
                 (
                     id,
                     buffer.is_shared(),
@@ -1968,7 +1968,7 @@ impl RenderCommandEncoder {
                     texture.storage_gap(true, false),
                     Some(lent),
                     None,
-                    texture.object().placement().cloned(),
+                    TextureObject::object(texture).placement().cloned(),
                 )
             }
             Resource::IndirectCommandBuffer(commands) => {

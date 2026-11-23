@@ -842,7 +842,7 @@ impl ComputeCommandEncoder {
                     None,
                     None,
                     Some(buffer.span()),
-                    buffer.object().placement().cloned(),
+                    BufferObject::object(buffer).placement().cloned(),
                 )
             }
             Resource::Texture(texture) => {
@@ -860,7 +860,7 @@ impl ComputeCommandEncoder {
                     texture.storage_gap(true, false),
                     Some(lent),
                     None,
-                    texture.object().placement().cloned(),
+                    TextureObject::object(texture).placement().cloned(),
                 )
             }
             Resource::IndirectCommandBuffer(commands) => {
@@ -1899,13 +1899,15 @@ impl Accesses<'_> {
     ) -> impl Iterator<Item = (Option<&'b Arc<Placement>>, Access)> + 'b {
         let slots = (interface.buffers.iter()).filter_map(move |&(slot, access)| {
             match self.slots.get(slot as usize) {
-                Some(Slot::Buffer { buffer, .. }) => Some((buffer.object().placement(), access)),
+                Some(Slot::Buffer { buffer, .. }) => {
+                    Some((BufferObject::object(&**buffer).placement(), access))
+                }
                 _ => None,
             }
         });
         let textures = (interface.textures.iter()).filter_map(move |&(slot, access)| {
             let texture = self.textures.get(slot as usize)?.as_deref()?;
-            Some((texture.object().placement(), access))
+            Some((TextureObject::object(texture).placement(), access))
         });
         let declared =
             (self.declared.iter()).map(|(_, access, .., place)| (place.as_ref(), *access));
