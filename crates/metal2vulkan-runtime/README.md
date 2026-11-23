@@ -1887,7 +1887,9 @@ made, with no lock, and never rewritten for layouts.
   its command buffers has retired with its GPU times) has room for two submissions, and its third
   command buffer waits for one seen complete. A queue keeps on the `VkQueue` no more than about 16
   ms of work behind what runs, and one behind it always, and a command buffer of another queue
-  committed later waits behind no more of it. Without room, the ones committed meanwhile are held
+  committed later waits behind no more of it: for work within the 16 ms bound, about 16 ms of
+  it; behind longer command buffers, up to two whole command buffers of it (Known gaps, below).
+  Without room, the ones committed meanwhile are held
   in one group of at most sixteen, each scheduled as it joins; one the group does not take is held
   too, not yet in a group, scheduled as it would be in one (its waits met, in its queue's order,
   its scheduled handlers run: `Metrics::held_for_room`), and so are its queue's later command
@@ -2158,6 +2160,16 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   The call's time grows with the new block it is the first to use: 2.1 and 2.5 ms with a 1 MiB
   block, 9.1 ms with 64 MiB and 28.4 ms with 256 MiB (job m3-max-52745); the probe's later
   submissions spent at most 0.18 ms each.
+- A command buffer committed while another queue's long command buffers run waits behind up to
+  two whole command buffers of that queue. A queue always has room for two submissions, whatever
+  their GPU runs (Queues, above), and the runtime never cuts a command buffer, so the room's 16 ms
+  bounds only work shorter than that. Counted, not timed, on lavapipe: a queue that commits three
+  command buffers of 30 ms each holds two of them, 60 ms, on the `VkQueue` when an idle queue's
+  command buffer is committed (job m3-max-69402). The runtime takes no queue priority. On an Intel
+  Mac (macOS 26.7.1), Metal's UHD 630 also runs the later command buffer after the running ones in
+  commit order (167 to 222 ms later) when no queue is marked, and starts it 0.4 ms after its commit
+  beside the running command buffer when the busy queue is marked to a lower GPU priority (8 of 8,
+  job m3-max-68129); its Radeon Pro 5300M ran both queues' work at once (job m3-max-68137).
 - On NVIDIA each submission pays the driver's latency per submission. The runtime submits each
   command buffer as soon as it can, so short command buffers committed back to back reach the GPU
   in several submissions: on an RTX 2080 (harness row `frame_5cb`: five short command buffers a
