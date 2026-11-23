@@ -1,6 +1,8 @@
 //! The over-copies by cause: each counted copy of a texture over a buffer counts in the `Metrics`
-//! pair of the cause the texture's making decided, and in no other. Device-free, each cause's copy
-//! moves its own pair alone. Under a device cfg, on every device of the cfg's kind, four RGBA8Unorm
+//! pair of the cause the texture's making decided, and in no other, and the counters name each
+//! kind of copied texture (cause, pixel format, size, usage) once, up to their 256 kinds.
+//! Device-free, each cause's copy moves its own pair alone, and the kinds fill past their bound.
+//! Under a device cfg, on every device of the cfg's kind, four RGBA8Unorm
 //! textures over a buffer, each read once by a blit in a command buffer of its own: one whose rows
 //! lie one linear rounding past the device's own pitch, one a texel off its linear image's memory
 //! alignment, a render target of 3 rows whose subresource the device may advertise past them, and
@@ -11,8 +13,8 @@
 //! tiling's features for every color format (Mesa's `lvp_formats.c`), so no texture here is
 //! copied for a format or usage.
 
-use crate::counters::{Counters, OverCause};
-use crate::Metrics;
+use crate::counters::{Counters, OverCause, OverCopyKind, OVER_COPY_KINDS};
+use crate::{Metrics, PixelFormat, TextureUsage};
 
 /// Every cause.
 const CAUSES: [OverCause; 12] = [
@@ -63,6 +65,17 @@ fn moved(before: &Metrics, after: &Metrics) -> Vec<(OverCause, (u64, u64))> {
         .collect()
 }
 
+/// A kind of `cause`: an RGBA8Unorm texture of `width` by 4, read by shaders.
+fn kind(cause: OverCause, width: u32) -> OverCopyKind {
+    OverCopyKind {
+        cause,
+        pixel_format: PixelFormat::RGBA8Unorm,
+        width,
+        height: 4,
+        usage: TextureUsage::SHADER_READ,
+    }
+}
+
 /// One copy of each cause, of a cause's own byte count, moves that cause's pair alone, and the
 /// totals by all of them.
 #[test]
@@ -71,7 +84,7 @@ fn each_cause_counts_in_its_own_pair_alone() {
         let counters = Counters::new();
         let before = counters.metrics();
         let bytes = 64 * (at as u64 + 1);
-        counters.over_copied(bytes, false, cause);
+        counters.over_copied(bytes, false, kind(cause, 16));
         let after = counters.metrics();
         for (other, pair) in moved(&before, &after) {
             let expected = match other == cause {
@@ -89,10 +102,38 @@ fn each_cause_counts_in_its_own_pair_alone() {
     }
 }
 
+/// The counters name each kind once, at its first copy, in that order, up to 256 kinds; a read
+/// from a number answers the kinds from it on. Filled past the bound, a copy of a kind first
+/// copied after the 256th counts as unkept, each time, and a copy of a kept kind never does.
+#[test]
+fn the_counters_name_each_copied_kind_once_up_to_their_bound() {
+    let counters = Counters::new();
+    let kinds: Vec<OverCopyKind> = (0..OVER_COPY_KINDS as u32 + 3)
+        .map(|at| kind(CAUSES[at as usize % CAUSES.len()], 1 + at))
+        .collect();
+    counters.over_copied(64, false, kinds[0]);
+    counters.over_copied(64, true, kinds[1]);
+    counters.over_copied(64, false, kinds[0]);
+    assert_eq!(counters.over_copy_kinds(0), kinds[..2]);
+    assert_eq!(counters.over_copy_kinds(1), kinds[1..2]);
+    assert!(counters.over_copy_kinds(2).is_empty());
+    assert!(counters.over_copy_kinds(3).is_empty());
+    for &kind in &kinds {
+        counters.over_copied(64, false, kind);
+    }
+    assert_eq!(counters.over_copy_kinds(0), kinds[..OVER_COPY_KINDS]);
+    assert_eq!(counters.metrics().over_copies_unkept_kind, 3);
+    counters.over_copied(64, false, kinds[OVER_COPY_KINDS]);
+    counters.over_copied(64, false, kinds[OVER_COPY_KINDS - 1]);
+    let m = counters.metrics();
+    assert_eq!(m.over_copies_unkept_kind, 4);
+    assert_eq!(m.over_copies, kinds.len() as u64 + 5);
+}
+
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use super::moved;
-    use crate::counters::OverCause;
+    use crate::counters::{OverCause, OverCopyKind};
     use crate::tests::command::on_device::{each_device, finished};
     use crate::tests::import::on_device::{free, host_memory, releasing, wait_until};
     use crate::texture::TextureObject;
@@ -126,8 +167,9 @@ mod on_device {
     /// Reads `texture` (`height` rows) by a blit into a Shared buffer, in a command buffer of its
     /// own, and checks the copies it counted: a copied texture moves the totals by its one copy
     /// in, of its texels' bytes, and its cause's pair (and the imported pair, where `imported`)
-    /// alike, every other cause's pair still; one in place moves nothing. Returns the texture's
-    /// cause, `None` in place.
+    /// alike, every other cause's pair still, and the counters name its kind (its cause,
+    /// RGBA8Unorm, its size and usage) once, where no texture before named it; one in place moves
+    /// nothing and names none. Returns the texture's cause, `None` in place.
     fn read_once(
         (name, what): (&str, &str),
         device: &Device,
@@ -135,13 +177,15 @@ mod on_device {
         texture: &Texture,
         (height, imported): (u32, bool),
     ) -> Option<OverCause> {
-        let cause = texture.copied_over().map(|(_, copy)| copy.cause);
+        let kind = texture.copied_over().map(|(_, copy)| copy.kind);
+        let cause = kind.map(|kind| kind.cause);
         let bytes = ROW * u64::from(height);
         let out_block = (device.take_block(MemoryClass::Shared, bytes))
             .unwrap_or_else(|error| panic!("{name}: {error}"));
         let out = (device.new_buffer(out_block.id, 0, bytes, None)).expect("a buffer");
         let counters = device.counters();
         let before = counters.metrics();
+        let known = counters.over_copy_kinds(0);
         let command_buffer = queue.command_buffer().expect("a command buffer");
         let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
         let layout = BufferLayout {
@@ -196,6 +240,23 @@ mod on_device {
                 "{name}: {what} ({cause:?}): {other:?}'s pair"
             );
         }
+        if let Some(kind) = kind {
+            let shape = (kind.pixel_format, kind.width, kind.height);
+            assert_eq!(
+                shape,
+                (PixelFormat::RGBA8Unorm, WIDTH, height),
+                "{name}: {what}: the kind"
+            );
+        }
+        let named: Vec<OverCopyKind> = kind
+            .filter(|kind| !known.contains(kind))
+            .into_iter()
+            .collect();
+        assert_eq!(
+            counters.over_copy_kinds(known.len()),
+            named,
+            "{name}: {what}: the kinds named"
+        );
         drop((command_buffer, out));
         (device.release_block(out_block)).unwrap_or_else(|error| panic!("{name}: {error}"));
         cause

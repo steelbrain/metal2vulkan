@@ -73,7 +73,10 @@ pub use blit::{BlitCommandEncoder, BlitOption, BufferLayout, TexturePlace};
 pub use block::Block;
 pub use buffer::{Buffer, MAX_BUFFER_LENGTH};
 pub use command::{CommandBuffer, CommandBufferError, CommandBufferStatus, DeviceLoss};
-pub use counters::{Counters, Gauges, Metrics, SiteAllocations, Timed, VariantMake, VariantStart};
+pub use counters::{
+    Counters, Gauges, Metrics, OverCause, OverCopyKind, SiteAllocations, Timed, VariantMake,
+    VariantStart,
+};
 #[cfg(windows)]
 pub use d3d11::D3d11Plane;
 pub use depth_stencil::DepthStencilState;

@@ -41,7 +41,7 @@
 use crate::arrays::{Owner, ResourceId};
 use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::copy_out;
-use crate::counters::{Counters, Gauge, Metric, OverCause, Part, Site};
+use crate::counters::{Counters, Gauge, Metric, OverCause, OverCopyKind, Part, Site};
 use crate::device::{lock, Core, Device};
 use crate::error::{Error, Gap, Limit, Refusal, RenderPassKind, TextureViewKind};
 use crate::hazard::HeapId;
@@ -5144,7 +5144,13 @@ pub(crate) trait TextureObject {
             shared: named.buffer.is_shared(),
             imported: device_copy.is_none() && block.memory.imported(),
             exported: device_copy.is_none() && block.memory.exported(),
-            cause,
+            kind: OverCopyKind {
+                cause,
+                pixel_format: d.pixel_format,
+                width: d.width,
+                height: d.height,
+                usage: d.usage,
+            },
         };
         Some((&named.buffer, copy))
     }
@@ -5627,9 +5633,10 @@ pub(crate) struct OverCopy {
     /// The bytes shaders reach are in an exported block, whose copies in wait for an event that
     /// changes them (`crate::over::ExportedOvers`).
     pub(crate) exported: bool,
-    /// Why the texture is not in place: the pair of [`Metrics`](crate::Metrics) its copies count
-    /// in too.
-    pub(crate) cause: OverCause,
+    /// Why the texture is not in place (the pair of [`Metrics`](crate::Metrics) its copies count
+    /// in too), and its pixel format, size and usage: the kind its copies name
+    /// ([`Counters::over_copy_kinds`]).
+    pub(crate) kind: OverCopyKind,
 }
 
 impl crate::kept::Handle for Texture {

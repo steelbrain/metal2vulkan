@@ -4,6 +4,7 @@
 //! to its own; nothing turns them on or off.
 
 use crate::pipeline::DispatchVariant;
+use crate::{PixelFormat, TextureUsage};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -554,12 +555,13 @@ impl Site {
 /// The number of [`Site`]s.
 const SITES: usize = Site::PrivateArena as usize + 1;
 
-/// Why a texture over a buffer lives in an image of its own that the device copies its bytes into
-/// and back (`crate::over`), as the texture's making decides it (`crate::texture::check_over`,
-/// then the in-place image's make): the [`Metrics`] pair its copies count in. No Metal
-/// counterpart: Metal makes no such copy.
+/// No Metal counterpart, as Metal makes no such copy: why a texture over a buffer
+/// ([`Buffer::new_texture`](crate::Buffer::new_texture)) lives in an image of its own that the
+/// device copies its bytes into and back, as the texture's making decides it: the [`Metrics`] pair
+/// its copies count in, and an [`OverCopyKind`]'s cause.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum OverCause {
+pub enum OverCause {
     /// The buffer's bytes are in host memory's import ([`Metrics::over_copies_host_memory`]).
     HostMemory,
     /// A dma-buf's one import that takes no image here ([`Metrics::over_copies_dma_buf`]).
@@ -588,6 +590,28 @@ pub(crate) enum OverCause {
 
 /// The number of [`OverCause`]s.
 const OVER_CAUSES: usize = OverCause::ImageMemory as usize + 1;
+
+/// The kinds of counted copy [`Counters::over_copy_kinds`] keeps: the first this many copied.
+pub(crate) const OVER_COPY_KINDS: usize = 256;
+
+/// No Metal counterpart, as Metal makes no such copy: a kind of texture over a buffer that the
+/// device copies into an image of its own and back ([`Metrics::over_copies`]), as the device first
+/// copied one ([`Counters::over_copy_kinds`]): why, and the texture's pixel format, size and
+/// usage.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OverCopyKind {
+    /// Why the texture is not in place.
+    pub cause: OverCause,
+    /// The texture's pixel format.
+    pub pixel_format: PixelFormat,
+    /// Its width, in texels.
+    pub width: u32,
+    /// Its height, in texels.
+    pub height: u32,
+    /// Its usage, as its descriptor stated it.
+    pub usage: TextureUsage,
+}
 
 /// No Metal counterpart: a device's counters ([`Device::counters`](crate::Device::counters)).
 ///
@@ -706,6 +730,9 @@ struct Atomics {
     over_copy_bytes_imported: AtomicU64,
     /// Each [`OverCause`]'s over-copies, at its index: their count and bytes.
     over_by_cause: [[AtomicU64; 2]; OVER_CAUSES],
+    /// The first [`OVER_COPY_KINDS`] kinds copied, in that order ([`Counters::over_copy_kinds`]).
+    over_kinds: Mutex<Vec<OverCopyKind>>,
+    over_copies_unkept_kind: AtomicU64,
     attachment_read_copies: AtomicU64,
     attachment_read_copy_bytes: AtomicU64,
     resolve_copies: AtomicU64,
@@ -1319,8 +1346,10 @@ impl Counters {
     /// ([`Metrics::over_copies`], [`Metrics::over_copy_bytes`]), which count in
     /// [`Metrics::bytes_copied`] too, and where the bytes shaders reach of the buffer are in an
     /// imported block (`imported`), in [`Metrics::over_copies_imported`] and
-    /// [`Metrics::over_copy_bytes_imported`]; and in the pair of the texture's `cause`.
-    pub(crate) fn over_copied(&self, bytes: u64, imported: bool, cause: OverCause) {
+    /// [`Metrics::over_copy_bytes_imported`]; in the pair of the texture's cause; and its `kind`
+    /// kept where it is new and fewer than [`OVER_COPY_KINDS`] are kept, else, new,
+    /// [`Metrics::over_copies_unkept_kind`].
+    pub(crate) fn over_copied(&self, bytes: u64, imported: bool, kind: OverCopyKind) {
         let a = &self.atomics;
         a.over_copies.fetch_add(1, Relaxed);
         a.over_copy_bytes.fetch_add(bytes, Relaxed);
@@ -1329,9 +1358,28 @@ impl Counters {
             a.over_copies_imported.fetch_add(1, Relaxed);
             a.over_copy_bytes_imported.fetch_add(bytes, Relaxed);
         }
-        let [copies, copy_bytes] = &a.over_by_cause[cause as usize];
+        let [copies, copy_bytes] = &a.over_by_cause[kind.cause as usize];
         copies.fetch_add(1, Relaxed);
         copy_bytes.fetch_add(bytes, Relaxed);
+        let mut kinds = (a.over_kinds.lock()).unwrap_or_else(PoisonError::into_inner);
+        if kinds.contains(&kind) {
+            return;
+        }
+        if kinds.len() < OVER_COPY_KINDS {
+            kinds.push(kind);
+        } else {
+            a.over_copies_unkept_kind.fetch_add(1, Relaxed);
+        }
+    }
+
+    /// No Metal counterpart, as Metal makes no such copy: the kinds of texture over a buffer the
+    /// device copied into an image of its own and back ([`Metrics::over_copies`]), the first 256
+    /// in the order first copied, from the `from`th on. A reader that passes the number it has
+    /// read gets each kind once, as it is first copied. Once 256 are kept, a copy of a kind not
+    /// among them counts in [`Metrics::over_copies_unkept_kind`] instead.
+    pub fn over_copy_kinds(&self, from: usize) -> Vec<OverCopyKind> {
+        let kinds = (self.atomics.over_kinds.lock()).unwrap_or_else(PoisonError::into_inner);
+        kinds.get(from..).unwrap_or_default().to_vec()
     }
 
     /// `copies` more copies of attachments' images into their shadows, of `bytes`
@@ -1775,6 +1823,7 @@ impl Counters {
             over_copy_bytes_alignment: over(OverCause::Alignment)[1],
             over_copies_image_memory: over(OverCause::ImageMemory)[0],
             over_copy_bytes_image_memory: over(OverCause::ImageMemory)[1],
+            over_copies_unkept_kind: a.over_copies_unkept_kind.load(Relaxed),
             attachment_read_copies: a.attachment_read_copies.load(Relaxed),
             attachment_read_copy_bytes: a.attachment_read_copy_bytes.load(Relaxed),
             resolve_copies: a.resolve_copies.load(Relaxed),
@@ -2559,6 +2608,10 @@ pub struct Metrics {
     pub over_copies_image_memory: u64,
     /// The bytes of those copies, which count in [`over_copy_bytes`](Self::over_copy_bytes) too.
     pub over_copy_bytes_image_memory: u64,
+    /// Of [`over_copies`](Self::over_copies), those of a kind
+    /// [`Counters::over_copy_kinds`] does not name: first copied once it held its 256 kinds. Not
+    /// 0 says the kinds are full and the copies are not all named.
+    pub over_copies_unkept_kind: u64,
     /// Idle allocations the block-maker thread freed: one at a time, each once it had been idle,
     /// holding no live block, for 250 ms, whatever the device's queues were doing.
     pub allocations_freed: u64,

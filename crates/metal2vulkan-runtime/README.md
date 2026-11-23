@@ -1082,11 +1082,17 @@ the Direct3D 11 texture's payload until it is freed.
   application's responsibility to synchronize device and non-device access to the payload as
   defined in Host Access to Device Memory Objects" (Vulkan 1.4, Host External Memory). The host
   reaches a linear image only in a host-accessible layout, which such an image cannot be made in.
-  In a guest walk on an M3 Max on Mesa's Mac driver (rt at 306d357141, job m3-max-66271), whose
-  guest pages are imported by address (20 steps, 5,969 presents in 481 s), these copies came to
-  4.67 GB, 97.2% of the walk's 4.81 GB of over-copies, every one over a no-copy buffer on a guest
-  program's own pages. On average that is 9.7% of a 1080p frame's bytes a present, and from 0.44%
-  to 45.7% a present in the steps that present more than once.
+  The drivers would make that image: for host memory's handle the external image query offers a
+  linear image of every format and usage it offers one of without a handle (13 colour formats,
+  read, written and rendered, asked of lavapipe, RADV and ANV of Mesa 26.2.6, NVIDIA's 620.70.06
+  and Mesa 26.3.1's Mac driver, which makes no linear render target with or without one), and
+  each one asked binds in a host-memory import, so the bar is the undefined start that
+  `VUID-VkImageCreateInfo-pNext-01443` makes mandatory, not the driver. In a guest walk on an M3
+  Max on Mesa's Mac driver (rt at 306d357141, job m3-max-66271), whose guest pages are imported
+  by address (20 steps, 5,969 presents in 481 s), these copies came to 4.67 GB, 97.2% of the
+  walk's 4.81 GB of over-copies, every one over a no-copy buffer on a guest program's own pages.
+  On average that is 9.7% of a 1080p frame's bytes a present, and from 0.44% to 45.7% a present in
+  the steps that present more than once.
 - A texture over a buffer in a dma-buf's one import is the counted copy too on a device that
   offers no linear image for a dma-buf import without a dedicated allocation (Imported blocks).
   On the Radeon 780M (RADV) the external image query refuses the dma-buf handle with linear
@@ -1491,7 +1497,10 @@ made, with no lock, and never rewritten for layouts.
   linear tiling lacks (`_linear_features`), then the linear image as made: its row pitch or
   start (`_pitch`), a render target's reach (`_render_reach`), the place off its memory
   alignment (`_alignment`) and its other memory requirements (`_image_memory`), each with its
-  `over_copy_bytes_` field. When is decided by the buffer's storage:
+  `over_copy_bytes_` field. `Counters::over_copy_kinds(from)` names each kind of copied texture
+  once, at its first copy (an `OverCopyKind`: its `OverCause`, pixel format, width, height and
+  usage), the first 256 kinds in that order; once it holds 256, a copy of a kind not among them
+  counts in `Metrics::over_copies_unkept_kind`. When is decided by the buffer's storage:
   - Over a Shared buffer (or a Managed one without a device copy), once a submission: the upload
     that leads it copies the bytes into every such texture a segment of it uses before any command
     of the segment wrote the buffer, between one pair of barriers. Inside a segment a command that
