@@ -13,6 +13,10 @@
 //! acquires them from `VK_QUEUE_FAMILY_EXTERNAL` at its start and releases them at its end: three
 //! in `Metrics::d3d11_plane_submissions`, three acquires and three releases, the consumer's
 //! `external_writes_done` and `release_surface_to_external` calls, still made, recording none.
+//! Two reads committed back to back on queues of their own, the first not waited for before the
+//! second commits, read picture 1 exactly and count two plane-keeping submissions, two acquires
+//! and two releases; on an instance without the validation layer, 64 reads committed back to back
+//! on one queue are timed, per command buffer, and printed.
 //! While the surface lives, the surface imports gauge holds its two planes; it has no buffer and
 //! no export handle. The same planes made with `PixelFormatView` usage take a swizzled view in
 //! another format of their class (`R8Uint` of the luma, `RG8Uint` of the chroma) exactly where
@@ -99,15 +103,16 @@ mod on_device {
     mod picture {
         use super::d3d::{self, D3d, SharedTexture};
         use crate::d3d11::{import_query, plane_list};
-        use crate::tests::command::on_device::{each_device, finished, within};
+        use crate::tests::command::on_device::{each_device, finished, on_each_device, within};
         use crate::texture::TextureObject;
         use crate::{
-            BufferLayout, D3d11Plane, Device, Error, Gap, IndexClass, MemoryClass, PixelFormat,
-            Surface, TextureDescriptor, TexturePlace, TextureSwizzle, TextureSwizzleChannels,
-            TextureType, TextureUsage, TextureViewKind,
+            Buffer, BufferLayout, CommandBuffer, D3d11Plane, Device, Error, Gap, IndexClass,
+            MemoryClass, PixelFormat, Surface, TextureDescriptor, TexturePlace, TextureSwizzle,
+            TextureSwizzleChannels, TextureType, TextureUsage, TextureViewKind,
         };
         use ash::vk;
         use std::os::windows::io::AsHandle;
+        use std::time::Instant;
 
         /// A plane: its width and height, its texel's bytes, rt's format and the Direct3D 11
         /// texture's, in rt's terms and in DXGI's.
@@ -221,11 +226,53 @@ mod on_device {
 
         /// rt reads both planes into one Shared buffer, packed; their bytes.
         fn rt_read(name: &str, device: &Device, surface: &Surface) -> Vec<u8> {
-            let len = PLANES.iter().map(Plane::bytes).sum::<usize>() as u64;
+            read_bytes(name, rt_read_committed(name, device, surface))
+        }
+
+        /// The bytes of a picture's two planes, packed.
+        fn picture_len() -> u64 {
+            PLANES.iter().map(Plane::bytes).sum::<usize>() as u64
+        }
+
+        /// A new Shared buffer of a picture's bytes.
+        fn picture_buffer(device: &Device) -> Buffer {
+            let len = picture_len();
             let block = (device.take_block(MemoryClass::Shared, len)).expect("a block");
-            let out = (device.new_buffer(block.id, 0, len, None)).expect("a buffer");
+            (device.new_buffer(block.id, 0, len, None)).expect("a buffer")
+        }
+
+        /// rt's read of both planes into a new Shared buffer, packed, committed in a command
+        /// buffer of a queue of its own and not waited for: the command buffer and the buffer.
+        fn rt_read_committed(
+            name: &str,
+            device: &Device,
+            surface: &Surface,
+        ) -> (CommandBuffer, Buffer) {
+            let out = picture_buffer(device);
             let queue = device.new_command_queue(1).expect("a queue");
             let command_buffer = queue.command_buffer().expect("a command buffer");
+            encode_read(name, &command_buffer, surface, &out);
+            command_buffer.commit().expect("a commit");
+            (command_buffer, out)
+        }
+
+        /// The bytes of a read ([`rt_read_committed`]) once its command buffer completed.
+        fn read_bytes(name: &str, (command_buffer, out): (CommandBuffer, Buffer)) -> Vec<u8> {
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            let contents = out.contents().expect("Shared");
+            // SAFETY: the buffer's bytes, which no pending command reaches.
+            unsafe { std::slice::from_raw_parts(contents.as_ptr(), picture_len() as usize) }
+                .to_vec()
+        }
+
+        /// Encodes the blits of both planes into `out`, packed, in `command_buffer`.
+        fn encode_read(
+            name: &str,
+            command_buffer: &CommandBuffer,
+            surface: &Surface,
+            out: &Buffer,
+        ) {
             let mut encoder = command_buffer.blit_command_encoder().expect("an encoder");
             for ((texture, plane), offset) in surface.planes().iter().zip(&PLANES).zip(offsets()) {
                 let layout = BufferLayout {
@@ -238,18 +285,32 @@ mod on_device {
                     texture,
                     TexturePlace::default(),
                     size,
-                    &out,
+                    out,
                     layout,
                 ))
                 .unwrap_or_else(|error| panic!("{name}: the read: {error}"));
             }
             encoder.end_encoding();
-            command_buffer.commit().expect("a commit");
-            finished(name, &command_buffer);
-            assert_eq!(command_buffer.error(), None, "{name}");
-            let contents = out.contents().expect("Shared");
-            // SAFETY: the buffer's bytes, which no pending command reaches.
-            unsafe { std::slice::from_raw_parts(contents.as_ptr(), len as usize) }.to_vec()
+        }
+
+        /// The surface of `textures`, imported by their handles, its planes reached through their
+        /// views alone.
+        fn import(name: &str, device: &Device, textures: &[SharedTexture; 2]) -> Surface {
+            let planes: Vec<D3d11Plane<'_>> = (textures.iter().zip(&PLANES))
+                .map(|(texture, plane)| D3d11Plane {
+                    handle: texture.handle.as_handle(),
+                    image_format: plane.image,
+                    descriptor: TextureDescriptor::new(
+                        TextureType::Type2D,
+                        plane.view,
+                        plane.width,
+                        plane.height,
+                    ),
+                    index: None,
+                })
+                .collect();
+            (device.import_d3d11_surface(&planes))
+                .unwrap_or_else(|error| panic!("{name}: the import: {error}"))
         }
 
         /// rt writes `bytes` (packed) into both planes and releases them to Direct3D 11, and
@@ -406,6 +467,114 @@ mod on_device {
                 );
                 drop(surface);
             });
+        }
+
+        /// Two reads of the planes Direct3D 11 drew, each a command buffer of a queue of its own,
+        /// so each goes in a submission of its own, the second committed before the first is
+        /// waited for: both read picture 1 exactly, and the two submissions count two in
+        /// `Metrics::d3d11_plane_submissions`, with two acquires and two releases. Each acquire
+        /// follows a global barrier, which orders the first submission's release before the
+        /// second's acquire on rt's one queue; the barriers recorded are printed. A job may run it
+        /// under the validation layer's synchronization checks
+        /// (`VK_KHRONOS_VALIDATION_VALIDATE_SYNC`), whose messages fail it as any other does.
+        #[test]
+        fn every_device_reads_direct3d_11_planes_twice_back_to_back() {
+            each_device("import_d3d11_surface_back_to_back", |name, _, device| {
+                let luid = luid(&device).unwrap_or_else(|| panic!("{name}: no valid LUID"));
+                let d3d = D3d::on_luid(luid)
+                    .unwrap_or_else(|| panic!("{name}: no DXGI adapter of LUID {luid:02x?}"));
+                let textures = PLANES
+                    .each_ref()
+                    .map(|p| d3d.shared_texture(p.width, p.height, p.dxgi));
+                let surface = import(name, &device, &textures);
+                d3d_draw(&d3d, &textures, 1);
+                surface.external_writes_done().expect("the acquire");
+                let counters = device.counters();
+                let before = counters.metrics();
+                let first = rt_read_committed(name, &device, &surface);
+                let second = rt_read_committed(name, &device, &surface);
+                let reads = [read_bytes(name, first), read_bytes(name, second)];
+                let one = picture(1);
+                for (at, read) in reads.iter().enumerate() {
+                    let n = at + 1;
+                    assert_eq!(compare(&one, read).0, None, "{name}: read {n} of picture 1");
+                }
+                let metrics = counters.metrics();
+                let handed = [
+                    metrics.d3d11_plane_submissions - before.d3d11_plane_submissions,
+                    metrics.external_acquires - before.external_acquires,
+                    metrics.external_releases - before.external_releases,
+                ];
+                println!(
+                    "d3d11-back-to-back: {name}: two reads committed back to back read picture 1 \
+                     exact; plane-keeping submissions, acquires, releases {handed:?}; barriers {}",
+                    metrics.barriers - before.barriers
+                );
+                assert_eq!(
+                    handed,
+                    [2, 2, 2],
+                    "{name}: each read's submission hands the planes over once"
+                );
+            });
+        }
+
+        /// How many reads [`every_device_times_back_to_back_reads_of_direct3d_11_planes`] commits
+        /// in a run.
+        const READS: u32 = 64;
+
+        /// `READS` reads of the planes Direct3D 11 drew into one Shared buffer, each a command
+        /// buffer of one queue committed as soon as it is encoded, the last waited for: the wall
+        /// time from the first's encoding to the last's completion over `READS`, in microseconds,
+        /// for each of five runs, and the plane-keeping submissions each made; their median
+        /// printed with them. On an instance without the validation layer, whose own cost would be
+        /// the count. Printed only.
+        #[test]
+        fn every_device_times_back_to_back_reads_of_direct3d_11_planes() {
+            let instance = crate::tests::validation::bare(&[]);
+            on_each_device(
+                "import_d3d11_surface_read_time",
+                &instance,
+                |name, _, device| {
+                    let luid = luid(&device).unwrap_or_else(|| panic!("{name}: no valid LUID"));
+                    let d3d = D3d::on_luid(luid)
+                        .unwrap_or_else(|| panic!("{name}: no DXGI adapter of LUID {luid:02x?}"));
+                    let textures = PLANES
+                        .each_ref()
+                        .map(|p| d3d.shared_texture(p.width, p.height, p.dxgi));
+                    let surface = import(name, &device, &textures);
+                    d3d_draw(&d3d, &textures, 1);
+                    surface.external_writes_done().expect("the acquire");
+                    let out = picture_buffer(&device);
+                    let queue = device.new_command_queue(READS).expect("a queue");
+                    let counters = device.counters();
+                    let mut runs = Vec::new();
+                    for _ in 0..5 {
+                        let before = counters.metrics().d3d11_plane_submissions;
+                        let began = Instant::now();
+                        let mut last = None;
+                        for _ in 0..READS {
+                            let command_buffer = queue.command_buffer().expect("a command buffer");
+                            encode_read(name, &command_buffer, &surface, &out);
+                            command_buffer.commit().expect("a commit");
+                            last = Some(command_buffer);
+                        }
+                        let last = last.expect("a read");
+                        finished(name, &last);
+                        assert_eq!(last.error(), None, "{name}");
+                        let micros = began.elapsed().as_micros() as u64 / u64::from(READS);
+                        let kept = counters.metrics().d3d11_plane_submissions - before;
+                        runs.push((micros, kept));
+                    }
+                    let mut sorted: Vec<u64> = runs.iter().map(|&(micros, _)| micros).collect();
+                    sorted.sort_unstable();
+                    println!(
+                        "d3d11-read-time: {name}: {READS} reads committed back to back: {} us per \
+                     command buffer, the median of five runs; each run's us and plane-keeping \
+                     submissions {runs:?}",
+                        sorted[2]
+                    );
+                },
+            );
         }
 
         /// Each plane made with `ShaderRead` and `PixelFormatView` usage, reached through its views
