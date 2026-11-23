@@ -582,6 +582,7 @@ fn select_derivative(
         (DerivativeOp::Fwidth, false) => DerivOp::Fwidth,
     };
     cx.tangled.insert(id);
+    cx.derivatives.insert(id);
     Ok(BarrierStrategy::Derivative(Deriv { op, value }))
 }
 

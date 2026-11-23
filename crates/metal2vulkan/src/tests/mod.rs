@@ -129,6 +129,7 @@ mod engine_private_memory;
 mod engine_private_render_state;
 mod engine_profile_f;
 mod engine_pull_model;
+mod engine_quad_loops;
 mod engine_quad_ops;
 mod engine_qualified_signature;
 mod engine_rate_map;

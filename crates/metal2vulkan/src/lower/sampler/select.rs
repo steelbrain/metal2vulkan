@@ -2395,6 +2395,7 @@ fn select_one(
     let value = id(cx, Value::Inst(at))?;
     if tangled {
         cx.tangled.insert(value);
+        cx.derivatives.insert(value);
     }
     let clamp_reference = clamps_reference(cx, comparison, sampler)?;
     let sampling = Sampling {

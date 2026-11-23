@@ -1461,8 +1461,10 @@ runtime's `Error::basis` answers a translation error so.
 
 `precision_notes` (a `PrecisionNote`, each documenting its bound), and `reconvergence` says
 whether subgroup reconvergence after divergence matches Metal's
-(`Reconvergence::ImplementationDefined` where the profile lacks maximal reconvergence). A note
-that holds only under some bound values is in `specialized_notes`;
+(`Reconvergence::ImplementationDefined` where the profile lacks maximal reconvergence and the
+stage holds a group operation or barrier that depends on it, or a fragment function's derivative,
+implicit-LOD sample or LOD query in a loop that a back edge re-enters from inside a selection). A
+note that holds only under some bound values is in `specialized_notes`;
 `stage.precision_notes_bound(&specialization, &|key| bound(key))` gives the notes a pipeline
 created under `specialization` reaches where a draw or dispatch binds the values `bound` gives.
 Section 9 lists every note.
@@ -1566,7 +1568,13 @@ bound.
   divergent control flow the device decides which lanes run it together, where Metal's lanes
   reconverge maximally, so such an operation may see other lanes active than Metal's. Under
   subgroup-uniform control flow (`shaderSubgroupUniformControlFlow`) the lanes reconverge where
-  control flow is uniform. Static per stage: recorded for any tangled instruction in the entry.
+  control flow is uniform. A fragment function's derivatives, implicit-LOD samples and LOD
+  queries count only inside a loop that a back edge re-enters from inside a selection (a
+  `continue` there, or two latches): Metal leaves derivatives undefined within nonuniform control
+  flow, SPIR-V reconverges the quad wherever it rejoins at a merge, and only maximal
+  reconvergence rejoins it at such a loop's next iteration. Elsewhere such an entry states no
+  reconvergence mode on any device and records no note. Static per stage: recorded for any such
+  instruction in the entry.
 - `metal2vulkan-degrade-simdgroup-access-order` (precision). `SimdgroupAccessOrder`: A kernel
   holds two accesses of threadgroup or device memory, at least one a write, that different threads
   of one SIMD-group may make to the same bytes between two barriers, and no barrier or atomic

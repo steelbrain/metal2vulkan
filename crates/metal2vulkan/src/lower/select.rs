@@ -519,6 +519,10 @@ pub struct SelectCx<'a> {
     /// Tangled instructions (subgroup/quad ops, derivatives, implicit-LOD samples, barriers),
     /// which the families that select them add.
     pub tangled: BTreeSet<ValueId>,
+    /// The tangled instructions that read other lanes only to take derivatives: `dfdx`, `dfdy`
+    /// and `fwidth`, implicit-LOD samples and LOD queries (`lower::simd`'s module,
+    /// **Reconvergence**).
+    pub derivatives: BTreeSet<ValueId>,
     /// Each family's own plan.
     pub families: FamilyPlans,
     /// The offset shapes the access family has read while selecting this function's typed
@@ -1245,6 +1249,7 @@ pub fn select(
         descriptors: DescriptorCounts::default(),
         simd: SimdClass::None,
         tangled: BTreeSet::new(),
+        derivatives: BTreeSet::new(),
         families: FamilyPlans::default(),
         shapes: access::local::Shapes::default(),
         root_sets,

@@ -3137,6 +3137,9 @@ fn lower_bounded<K>(
         let modes = crate::lower::arith::narrow::controlled_modes(p).unwrap_or_default();
         module.declare_modes(&modes)?;
     }
+    // A fragment entry whose derivatives alone are tangled takes its reconvergence mode only where
+    // the module holds one of them in a loop a back edge re-enters from inside a selection.
+    let reconvergence = crate::lower::simd::quad_loop::settle(&plan.families.simd, &mut module)?;
     // Native half rounding and widening: a module that rounds through the device's quantize or
     // conversion, or widens a `half` by the device where that is not controlled to be Metal's,
     // records each kind, and requires no fact.
@@ -3245,7 +3248,6 @@ fn lower_bounded<K>(
     }
     // Implementation-defined where a tangled instruction runs without maximal reconvergence
     // (`lower::simd` chooses the entry's reconvergence mode), which the stage's note records.
-    let reconvergence = crate::lower::simd::reconvergence(&plan);
     if reconvergence == Reconvergence::ImplementationDefined
         && !precision.contains(&PrecisionNote::DeviceReconvergence)
     {

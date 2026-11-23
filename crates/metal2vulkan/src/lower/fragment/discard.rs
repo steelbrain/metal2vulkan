@@ -38,9 +38,8 @@
 //! discarded thread only while its quad keeps a live thread, and drops a quad whose every thread is
 //! discarded from the simdgroup. Demote, which the profile lacks there, maps Metal's helper to
 //! Vulkan's, as for every other helper lane, and is the form every profile with it takes;
-//! `MaximallyReconvergesKHR`, which an entry with a tangled instruction
-//! declares where the profile has it (`lower::simd`), keeps such a helper a lane of later subgroup
-//! operations. Demote needs no guard: Vulkan helper invocations have no memory side effects and
+//! `MaximallyReconvergesKHR`, which an entry with a subgroup operation declares where the profile
+//! has it (`lower::simd`), keeps such a helper a lane of later subgroup operations. Demote needs no guard: Vulkan helper invocations have no memory side effects and
 //! their outputs are discarded.
 //!
 //! **A quad of helpers alone**. Metal drops a quad whose every thread is discarded from the

@@ -477,7 +477,9 @@ pub struct ComputePipelineMetalInfo {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Reconvergence {
-    /// Maximal reconvergence (or no tangled operation depends on it).
+    /// Maximal reconvergence (or no tangled operation depends on it: among a fragment function's
+    /// derivatives, implicit-LOD samples and LOD queries, only one in a loop a back edge re-enters
+    /// from inside a selection does).
     Guaranteed,
     /// Reconvergence after divergence is implementation-defined on this profile.
     ImplementationDefined,
@@ -1875,8 +1877,11 @@ pub enum PrecisionNote {
     /// which lanes run it together, where Metal's lanes reconverge maximally, so such an operation
     /// may see other lanes active than Metal's. Under subgroup-uniform control flow
     /// (`shaderSubgroupUniformControlFlow`) the lanes reconverge where control flow is uniform.
-    /// Static per stage: recorded for any tangled instruction in the entry, as the stage's
-    /// `reconvergence` is.
+    /// A fragment function's derivatives, implicit-LOD samples and LOD queries, which Metal
+    /// leaves undefined within nonuniform control flow, count only inside a loop that a back
+    /// edge re-enters from inside a selection (a `continue` there, or two latches), where SPIR-V
+    /// reconverges the quad for the next iteration only under maximal reconvergence. Static per
+    /// stage: recorded for any such instruction in the entry, as the stage's `reconvergence` is.
     ///
     /// Validation derives no tolerance from it: a difference stays a mismatch, which the note
     /// explains.

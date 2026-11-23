@@ -182,7 +182,14 @@
 //! threadgroup barrier the lockstep pass inserted stands where the whole threadgroup runs together
 //! and depends on no reconvergence (`sync::barrier::BarrierPlan::uniform_placed`): an entry whose
 //! only tangled instructions are such barriers declares no mode and records `Guaranteed`, as does
-//! an emulated kernel whose others are emulated sites (`workgroup::check`).
+//! an emulated kernel whose others are emulated sites (`workgroup::check`). A fragment's
+//! derivatives, implicit-LOD samples and LOD queries (`SelectCx::derivatives`) are Metal's only
+//! where the quad reaches them together (MSL 6.11.1.1), which SPIR-V's own reconvergence gives
+//! but in a loop a back edge re-enters from inside a selection: a fragment entry whose other
+//! tangled instructions depend on no reconvergence takes the mode, and records
+//! `ImplementationDefined` where the profile has no maximal reconvergence, only where its module
+//! holds one of them in such a loop (`quad_loop`); elsewhere it declares no mode and records
+//! `Guaranteed`.
 
 pub mod agx;
 pub mod divergent;
@@ -190,6 +197,7 @@ mod group;
 pub mod lockstep;
 pub mod matrix;
 pub mod pressure;
+pub mod quad_loop;
 #[cfg(test)]
 mod tests;
 pub mod uniform;
@@ -212,7 +220,7 @@ use crate::lower::arith::legal::{form_on, wide_form_on, Form, Held, LoweredConst
 use crate::lower::emit::EmitCx;
 use crate::lower::select::{FamilyPlans, Plan, SelectCx};
 use crate::lower::strategy::{FamilyStrategy, Strategy};
-use crate::pipeline::artifact::{PrecisionNote, Reconvergence};
+use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::sym::Stage;
 use crate::spirv::builder::{FunctionBuilder, ModuleBuilder};
 use crate::spirv::error::BResult;
@@ -320,6 +328,12 @@ pub struct SimdPlan {
     pub mode: ReconvergenceMode,
     /// A tangled instruction runs without maximal reconvergence on this profile.
     pub implementation_defined: bool,
+    /// A fragment entry whose only tangled instructions that depend on reconvergence take
+    /// derivatives (`SelectCx::derivatives`): the mode and `implementation_defined` the profile
+    /// gives a tangled entry, which the entry takes only where its module holds such an
+    /// instruction in a loop a back edge re-enters from inside a selection
+    /// ([`quad_loop::settle`]). Elsewhere it states no mode and its reconvergence is guaranteed.
+    pub quad_loops: Option<(ReconvergenceMode, bool)>,
     /// In the `Emulated` tier, the words each lane publishes to the scratch in the widest
     /// exchange of the function; 0 when no operation exchanges values.
     pub exchange_words: u32,
@@ -451,16 +465,6 @@ pub fn widest_pin(cx: &SelectCx<'_>, m: &mut Meter) -> Result<bool, Error> {
     Ok(pressure::peak_words(cx.entry, cx.body, m)? > WIDEST_PIN_WORDS)
 }
 
-/// The artifact's reconvergence: `ImplementationDefined` when the entry holds a tangled instruction
-/// and the profile has no maximal reconvergence.
-pub fn reconvergence(plan: &Plan) -> Reconvergence {
-    if plan.families.simd.implementation_defined {
-        Reconvergence::ImplementationDefined
-    } else {
-        Reconvergence::Guaranteed
-    }
-}
-
 /// `c` raised by operation classes `ops`: a cross-lane class with them added. The matrix class
 /// already implies cross-lane use.
 pub fn raise(c: SimdClass, ops: OpBits) -> SimdClass {
@@ -541,12 +545,23 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
             .into());
         }
     }
+    // A fragment's derivatives, implicit levels and LOD queries depend on reconvergence only in a
+    // loop a back edge re-enters from inside a selection, which the emitted module shows
+    // (`quad_loop::settle`).
     let barriers = &cx.families.barrier;
-    if cx
-        .tangled
-        .iter()
-        .any(|&v| crate::lower::sync::barrier::reconverges(barriers, v))
-    {
+    let fragment = cx.stage == Stage::Fragment;
+    let (mut others, mut derivatives) = (false, false);
+    for &v in &cx.tangled {
+        if !crate::lower::sync::barrier::reconverges(barriers, v) {
+            continue;
+        }
+        if fragment && cx.derivatives.contains(&v) {
+            derivatives = true;
+        } else {
+            others = true;
+        }
+    }
+    if others || derivatives {
         let model = &cx.profile.fields().subgroup;
         let (mode, defined) = if model.maximal_reconvergence {
             (ReconvergenceMode::Maximal, false)
@@ -555,8 +570,12 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
         } else {
             (ReconvergenceMode::None, true)
         };
-        cx.families.simd.mode = mode;
-        cx.families.simd.implementation_defined = defined;
+        if others {
+            cx.families.simd.mode = mode;
+            cx.families.simd.implementation_defined = defined;
+        } else {
+            cx.families.simd.quad_loops = Some((mode, defined));
+        }
     }
     Ok(())
 }
