@@ -1759,8 +1759,11 @@ fn fragment_quad_votes_are_quad_vote_instructions() {
 /// data value and one fill value) and `fragment_quad_fills_and_rotations` (two fills and two
 /// rotations of the same values) read 8 lanes. Under a branch on the pixel, a quad may not be
 /// whole: `fragment_quad_ops_divergent` (a product and two prefix scans of one value, and an OR of
-/// another) asks `OpGroupNonUniformQuadAnyKHR` 4 times, once for each quad lane, and reads 8 lanes,
-/// and `fragment_quad_first_in_a_speculated_arm` votes 4 times and reads 4. None holds a ballot. A
+/// another) asks `OpGroupNonUniformQuadAnyKHR` 4 times, once for each quad lane, and reads 8 lanes.
+/// `fragment_quad_first_in_a_speculated_arm`'s arm is speculated as Metal's backend speculates it
+/// (`air::canon::speculate`), so its first lane's broadcast runs in its branch's block, which every
+/// invocation executes, and reads lane 0 by one `OpGroupNonUniformQuadBroadcast`, as Metal answers
+/// lane 0 whether that lane takes the arm or not. None holds a ballot. A
 /// kernel's quad scans (`quad_float_scans`), whose quads hold no helpers, take no quad vote.
 #[test]
 fn fragment_quad_operations_read_their_quads_by_quad_instructions() {
@@ -1780,7 +1783,7 @@ fn fragment_quad_operations_read_their_quads_by_quad_instructions() {
             (&quads, "fragment_quad_fills", 0, 8, 0),
             (&quads, "fragment_quad_fills_and_rotations", 0, 8, 0),
             (&quads, "fragment_quad_ops_divergent", 4, 8, 0),
-            (&quads, "fragment_quad_first_in_a_speculated_arm", 4, 4, 0),
+            (&quads, "fragment_quad_first_in_a_speculated_arm", 0, 1, 0),
         ] {
             let a = compile(bc, entry, &p).expect("compile");
             let (_, words) = link_and_validate(&a, &p).expect("valid");
