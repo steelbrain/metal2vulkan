@@ -19,6 +19,9 @@
 //!   encoder took before is the runtime's refusal, Metal's own, skipped and counted by its kind;
 //!   in an `Accumulate` pass both modes are the runtime's gap, skipped and counted, and the buffer
 //!   keeps its bytes.
+//! - A compute encoder's residency declarations play through the runtime: after
+//!   `useResource:usage:`, `useResources:count:usage:`, `useHeap:` and `useHeaps:count:`, a
+//!   dispatch plays, nothing refused or skipped.
 //! - A compute pipeline state the runtime answers with a typed gap is skipped and counted by the
 //!   gap, and a dispatch of it is skipped, and the play goes on.
 //! - Each pipeline state's making is split by the runtime's counters into the translator's time,
@@ -429,16 +432,16 @@ fn draw_with_clamps(dir: &ScratchDir, green: &[u8], then: Then, clamp: Option<f3
                     ),
                     (
                         "useResources:count:usage:",
-                        vec![buffers.clone(), Value::Uint(2), read.clone()],
+                        vec![buffers.clone(), read.clone()],
                     ),
                     (
                         "useResources:count:usage:stages:",
-                        vec![buffers, Value::Uint(2), read, both.clone()],
+                        vec![buffers, read, both.clone()],
                     ),
                     ("useHeap:", vec![heap.clone()]),
                     ("useHeap:stages:", vec![heap, fragment]),
-                    ("useHeaps:count:", vec![heaps.clone(), Value::Uint(1)]),
-                    ("useHeaps:count:stages:", vec![heaps, Value::Uint(1), both]),
+                    ("useHeaps:count:", vec![heaps.clone()]),
+                    ("useHeaps:count:stages:", vec![heaps, both]),
                 ];
                 for (selector, args) in uses {
                     w.call(selector, 13, 0, &args, &[])?;
@@ -1280,6 +1283,67 @@ fn a_kernel_reads_and_writes_the_textures_a_range_binds() {
         .flat_map(|t| [0xFF - t[0], 0xFF - t[1], 0xFF - t[2], t[3]])
         .collect();
     assert_eq!(rows, inverse, "{lines:?}");
+    assert_eq!(report.first_skip, None);
+}
+
+/// A compute encoder's four residency declarations play through the runtime before a dispatch:
+/// `useResource:usage:` and `useResources:count:usage:` (each listed buffer with its usage) through
+/// `use_resource`, `useHeap:` and `useHeaps:count:` (each listed heap) through `use_heap`, as the
+/// stream records them (each C array and its count one list): the play ends, no call refused,
+/// nothing skipped.
+#[test]
+fn a_compute_encoder_s_residency_declarations_play_through_the_runtime() {
+    let dir = ScratchDir::new("rt-replay-compute-uses").unwrap();
+    let workloads = metal2vulkan_devtools::fixtures_dir().join("harness/workloads.ll");
+    let path = written(&dir, |w| {
+        let library = library_of(&dir, &workloads, &[("scale_offset", 2, 0)]);
+        let library = w.blob(&library)?;
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 2, &[], &[])?;
+        let library = [Value::Blob(library)];
+        w.call("newLibraryWithData:error:", 1, 3, &library, &[])?;
+        let kernel = [Value::Str("scale_offset".into())];
+        w.call("newFunctionWithName:", 3, 4, &kernel, &[])?;
+        let made = "newComputePipelineStateWithFunction:error:";
+        w.call(made, 1, 5, &[Value::Object(4)], &[])?;
+        let made = [Value::Uint(64), Value::Uint(0)];
+        w.call("newBufferWithLength:options:", 1, 6, &made, &[])?;
+        w.call("newBufferWithLength:options:", 1, 7, &made, &[])?;
+        let block = [Value::Uint(0x1_0000), Value::Uint(0)];
+        w.call("m2v.newBlockWithLength:storageMode:", 1, 10, &block, &[])?;
+        w.call("commandBuffer", 2, 8, &[], &[])?;
+        w.call("computeCommandEncoder", 8, 9, &[], &[])?;
+        w.call("setComputePipelineState:", 9, 0, &[Value::Object(5)], &[])?;
+        let affine = [Value::Bytes(vec![0; 8]), Value::Uint(8), Value::Uint(2)];
+        w.call("setBytes:length:atIndex:", 9, 0, &affine, &[])?;
+        let bind = |buffer, at| [Value::Object(buffer), Value::Uint(0), Value::Uint(at)];
+        w.call("setBuffer:offset:atIndex:", 9, 0, &bind(6, 0), &[])?;
+        w.call("setBuffer:offset:atIndex:", 9, 0, &bind(7, 1), &[])?;
+        // MTLResourceUsageRead and Write.
+        let (read, write) = (Value::Uint(1), Value::Uint(2));
+        let buffers = Value::List(vec![Value::Object(6), Value::Object(7)]);
+        let heaps = Value::List(vec![Value::Object(10)]);
+        let uses = [
+            ("useResource:usage:", vec![Value::Object(6), read]),
+            ("useResources:count:usage:", vec![buffers, write]),
+            ("useHeap:", vec![Value::Object(10)]),
+            ("useHeaps:count:", vec![heaps]),
+        ];
+        for (selector, args) in uses {
+            w.call(selector, 9, 0, &args, &[])?;
+        }
+        let size = |n| uints(&[("width", n), ("height", 1), ("depth", 1)]);
+        let dispatch = "dispatchThreads:threadsPerThreadgroup:";
+        w.call(dispatch, 9, 0, &[size(4), size(4)], &[])?;
+        w.call("endEncoding", 9, 0, &[], &[])?;
+        w.call("commit", 8, 0, &[], &[])?;
+        w.call(WAIT_COMPLETED, 8, 0, &[], &[])
+    });
+    let (report, _) = play("compute-uses", &path);
+    let executed = &report.total.executed;
+    for skipped in ["skipped_dispatches", "skipped_calls"] {
+        assert_eq!(executed[skipped], 0, "{skipped}: {executed:?}");
+    }
     assert_eq!(report.first_skip, None);
 }
 

@@ -2076,6 +2076,35 @@ fn a_dispatch_reads_a_buffer_only_where_its_state_or_its_usage_reads_it() {
     );
 }
 
+/// A buffer `useResources:count:usage:` names is read or written by its usage's bits, each of the
+/// list as `useResource:usage:` reads or writes its one (the stream records the C array and its
+/// count as one list, then the usage): the two used for writing are written, not read, and the
+/// two used for reading are read, surely.
+#[test]
+fn a_dispatch_reads_or_writes_each_buffer_a_plural_use_names_by_its_usage() {
+    let mut unwritten = Unwritten::default();
+    for id in 2..=5 {
+        unwritten.made(id, None);
+    }
+    unwritten.state(12, Some(Vec::new()));
+    let used = |ids: &[u64], usage: u64| {
+        let list = Value::List(ids.iter().map(|&id| Value::Object(id)).collect());
+        encoder_call(
+            "useResources:count:usage:",
+            12,
+            vec![list, Value::Uint(usage)],
+        )
+    };
+    unwritten.encoded(&used(&[2, 3], 2), 10, true);
+    unwritten.encoded(&used(&[4, 5], 1), 10, true);
+    unwritten.encoded(&dispatch_of(12), 10, true);
+    unwritten.committed(10);
+    assert_eq!(
+        unwritten.line(),
+        unwritten_line(2, 0, "#4 in #10, #5 in #10")
+    );
+}
+
 /// A buffer made in a Shared block over bytes of it that a recorded write or a GPU pass reached
 /// before its making is not unwritten: the block's bytes are what the program's were. One made
 /// over bytes nothing reached is.
@@ -2693,6 +2722,72 @@ fn a_heap_texture_write_covers_the_buffer_and_texture_it_meets_until_they_are_wr
             .count(),
         3
     );
+}
+
+/// A compute encoder's plural residency declarations take covers off as their single forms do,
+/// each of the list (the stream records each C array and its count as one list):
+/// `useResources:count:usage:` with write usage writes each object it names, and
+/// `useHeaps:count:` binds each heap's objects, counted apart as a binding.
+#[test]
+fn a_compute_encoder_s_plural_uses_take_covers_off_as_the_single_forms_do() {
+    let mut kept = Kept::default();
+    kept.heap_answers.insert(4, (0x1000, 0x1000));
+    kept.kernel_writes.insert(9, vec![0]);
+    let encoded = |w: &mut StreamWriter<File>, at: u64| {
+        w.call("commandBuffer", 6, at, &[], &[])?;
+        w.call("computeCommandEncoder", at, at + 1, &[], &[])?;
+        w.call(
+            "setComputePipelineState:",
+            at + 1,
+            0,
+            &[Value::Object(9)],
+            &[],
+        )?;
+        let slot = [Value::Object(5), Value::Uint(0)];
+        w.call("setTexture:atIndex:", at + 1, 0, &slot, &[])?;
+        let size = map(&[("width", Value::Uint(1)), ("height", Value::Uint(1))]);
+        let groups = [size.clone(), size];
+        let dispatch = "dispatchThreadgroups:threadsPerThreadgroup:";
+        w.call(dispatch, at + 1, 0, &groups, &[])?;
+        w.call("endEncoding", at + 1, 0, &[], &[])?;
+        w.call("commit", at, 0, &[], &[])
+    };
+    let used = |w: &mut StreamWriter<File>, at: u64, selector: &str, args: &[Value]| {
+        w.call("commandBuffer", 6, at, &[], &[])?;
+        w.call("computeCommandEncoder", at, at + 1, &[], &[])?;
+        w.call(selector, at + 1, 0, args, &[])?;
+        w.call("endEncoding", at + 1, 0, &[], &[])?;
+        w.call("commit", at, 0, &[], &[])
+    };
+    let (report, ended) = played(&mut kept, |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newHeapWithDescriptor:", 1, 2, &heap_of(0x1_0000, 1), &[])?;
+        let buffer = [Value::Uint(0x1000), Value::Uint(0), Value::Uint(0)];
+        w.call("newBufferWithLength:options:offset:", 2, 3, &buffer, &[])?;
+        w.call("m2v.textureDescriptor", 0, 4, &[map(&[])], &[])?;
+        let texture = [Value::Object(4), Value::Uint(0)];
+        w.call("newTextureWithDescriptor:offset:", 2, 5, &texture, &[])?;
+        w.call("newCommandQueue", 1, 6, &[], &[])?;
+        let made = "newComputePipelineStateWithFunction:error:";
+        w.call(made, 1, 9, &[], &[])?;
+        // Covered by the write of #5, then written by the plural use with write usage (2).
+        encoded(w, 20)?;
+        let list = Value::List(vec![Value::Object(3)]);
+        used(w, 30, "useResources:count:usage:", &[list, Value::Uint(2)])?;
+        w.call("m2v.check", 0, 0, &[Value::Object(3)], &[])?;
+        // Covered again, then bound by the plural use of its heap.
+        encoded(w, 40)?;
+        let heaps = Value::List(vec![Value::Object(2)]);
+        used(w, 50, "useHeaps:count:", &[heaps])?;
+        w.call("m2v.check", 0, 0, &[Value::Object(3)], &[])
+    });
+    ended.unwrap();
+    let covered: Vec<(u64, bool)> = (report.checks.iter())
+        .map(|check| (check.object, check.covered))
+        .collect();
+    assert_eq!(covered, [(3, false), (3, false)]);
+    assert_eq!(report.covered, 2, "each write of #5 covers #3");
+    assert_eq!(report.binding_uncovers, 1, "the heap's use is a binding");
 }
 
 /// A texture bound through a range takes the slot of the range's location plus its place in the
