@@ -106,6 +106,30 @@ impl RtSide<'_> {
                 }
                 Ok(())
             }
+            ComputeStep::ClampedSampler {
+                sampler,
+                lod_min,
+                lod_max,
+                index,
+            } => (encoder.set_sampler_state_with_lod_clamps(
+                Some(self.held_sampler(*sampler)?),
+                *lod_min,
+                *lod_max,
+                *index,
+            ))
+            .map_err(of_rt),
+            ComputeStep::ClampedSamplers { samplers, first } => {
+                for (at, (sampler, lod_min, lod_max)) in (*first..).zip(samplers) {
+                    (encoder.set_sampler_state_with_lod_clamps(
+                        Some(self.held_sampler(*sampler)?),
+                        *lod_min,
+                        *lod_max,
+                        at,
+                    ))
+                    .map_err(of_rt)?;
+                }
+                Ok(())
+            }
             ComputeStep::ThreadgroupMemory { length, index } => {
                 (encoder.set_threadgroup_memory_length(*length, *index)).map_err(of_rt)
             }
@@ -149,15 +173,13 @@ impl RtSide<'_> {
                 *threads,
             ))
             .map_err(of_rt),
-            // The attribute-stride setters, the stage-in region, the LOD-clamped samplers and
-            // heaps: the runtime has no counterpart yet.
+            // The attribute-stride setters, the stage-in region and heaps: the runtime has no
+            // counterpart yet.
             ComputeStep::BufferWithStride { .. }
             | ComputeStep::BuffersWithStrides { .. }
             | ComputeStep::BufferOffsetWithStride { .. }
             | ComputeStep::BytesWithStride { .. }
             | ComputeStep::StageInRegion { .. }
-            | ComputeStep::ClampedSampler { .. }
-            | ComputeStep::ClampedSamplers { .. }
             | ComputeStep::UseHeap { .. }
             | ComputeStep::UseHeaps { .. } => Err(Failure::unavailable(step.call())),
         }

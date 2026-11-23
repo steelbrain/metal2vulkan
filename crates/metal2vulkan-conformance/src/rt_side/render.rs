@@ -571,6 +571,50 @@ impl RtSide<'_> {
                     (encoder.set_fragment_sampler_state(Some(sampler(*held)?), index))
                         .map_err(of_rt)
                 }),
+            RenderStep::VertexSamplerClamped {
+                sampler: held,
+                clamp,
+                index,
+            } => (encoder.set_vertex_sampler_state_with_lod_clamps(
+                Some(sampler(*held)?),
+                clamp.min,
+                clamp.max,
+                *index,
+            ))
+            .map_err(of_rt),
+            RenderStep::FragmentSamplerClamped {
+                sampler: held,
+                clamp,
+                index,
+            } => (encoder.set_fragment_sampler_state_with_lod_clamps(
+                Some(sampler(*held)?),
+                clamp.min,
+                clamp.max,
+                *index,
+            ))
+            .map_err(of_rt),
+            RenderStep::VertexSamplersClamped { samplers, first } => {
+                (samplers.iter().zip(*first..)).try_for_each(|((held, clamp), index)| {
+                    (encoder.set_vertex_sampler_state_with_lod_clamps(
+                        Some(sampler(*held)?),
+                        clamp.min,
+                        clamp.max,
+                        index,
+                    ))
+                    .map_err(of_rt)
+                })
+            }
+            RenderStep::FragmentSamplersClamped { samplers, first } => {
+                (samplers.iter().zip(*first..)).try_for_each(|((held, clamp), index)| {
+                    (encoder.set_fragment_sampler_state_with_lod_clamps(
+                        Some(sampler(*held)?),
+                        clamp.min,
+                        clamp.max,
+                        index,
+                    ))
+                    .map_err(of_rt)
+                })
+            }
             RenderStep::Viewport(rect) => encoder.set_viewport(viewport(rect)).map_err(of_rt),
             RenderStep::Viewports(rects) => {
                 let viewports: Vec<rt::Viewport> = rects.iter().map(viewport).collect();

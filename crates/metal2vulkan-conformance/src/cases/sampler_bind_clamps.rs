@@ -4,6 +4,12 @@
 //! pair whose lower bound is above its upper reads, and whether a plain bind after a clamped one
 //! reads the descriptor's clamps again.
 //!
+//! **What Metal answered** on the M3 Max, in both cases alike: the bind's pair **replaces** the
+//! descriptor's clamps, `(0, 4)` reading every level a state of `(1, 3)` never reads; a pair whose
+//! lower bound is above its upper reads every sample at the upper bound's level, as the clamps
+//! `(max, max)`; and a plain bind after a clamped one reads the descriptor's own clamps again.
+//! Metal's validation layer refuses none of the pairs. `tests` hold these of the recordings.
+//!
 //! One sampler state in both cases: nearest filters, a nearest mip filter, clamped to the edge,
 //! `lodMinClamp` 1 and `lodMaxClamp` 3. The texture is 16 by 16 `R32Float` with all five levels,
 //! every texel of level `l` holding `l + 1`, so a sample names the level it read and nothing else.
@@ -112,7 +118,12 @@ struct Row {
 
 /// Every row. The pairs are the state's own, one wider on both sides, one inside it, one below and
 /// one above it overlapping it, one wholly below and one wholly above it, one unbounded, two whose
-/// lower bound is above the upper, and NaN in each place.
+/// lower bound is above the upper, one whose lower bound is below 0 and one wholly past the
+/// texture's levels.
+///
+/// No pair holds a NaN: Metal documents no NaN clamp, and the M3 Max read `(NaN, 4)` as the
+/// state's own clamps and `(0, NaN)` as levels up to 2 (job m3-max-70005), no rule a case can hold
+/// a device to.
 const ROWS: [Row; 17] = [
     Row {
         name: "plain",
@@ -159,12 +170,12 @@ const ROWS: [Row; 17] = [
         binds: &[Bind::Clamped(LodClamp::new(4.0, 0.0))],
     },
     Row {
-        name: "nan-min",
-        binds: &[Bind::Clamped(LodClamp::new(f32::NAN, 4.0))],
+        name: "negative-lower",
+        binds: &[Bind::Clamped(LodClamp::new(-2.0, 2.0))],
     },
     Row {
-        name: "nan-max",
-        binds: &[Bind::Clamped(LodClamp::new(0.0, f32::NAN))],
+        name: "past-the-levels",
+        binds: &[Bind::Clamped(LodClamp::new(6.0, 9.0))],
     },
     Row {
         name: "range-form",
@@ -628,4 +639,94 @@ fn target_spec() -> TargetSpec {
 /// Both cases.
 pub fn all() -> Vec<Box<dyn Case>> {
     vec![Box::new(KernelBinds), Box::new(FragmentBinds)]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The clamps a row's last binding samples with by the rule Metal's recordings show: a plain
+    /// binding the state's own; a pair replaces them, and a pair whose lower bound is above its
+    /// upper is the upper bound twice.
+    fn clamps(row: &Row) -> (f32, f32) {
+        match row.binds.last() {
+            Some(Bind::Clamped(clamp) | Bind::Range(clamp)) if clamp.min > clamp.max => {
+                (clamp.max, clamp.max)
+            }
+            Some(Bind::Clamped(clamp) | Bind::Range(clamp)) => (clamp.min, clamp.max),
+            Some(Bind::Plain) | None => (OWN.min, OWN.max),
+        }
+    }
+
+    /// What a sample at level `at` reads under `(lo, hi)`: the level clamped into them, then to the
+    /// texture's last, as its texels' `level + 1`. Every level and bound here is whole, so a
+    /// nearest mip filter reads the clamped level itself.
+    fn reads(at: f32, (lo, hi): (f32, f32)) -> f32 {
+        at.max(lo).min(hi).clamp(0.0, (LEVELS - 1) as f32) + 1.0
+    }
+
+    /// The `float`s of `bytes`.
+    fn floats(bytes: &[u8]) -> Vec<f32> {
+        let (words, _) = bytes.as_chunks::<4>();
+        words.iter().map(|word| f32::from_le_bytes(*word)).collect()
+    }
+
+    /// The bytes every outcome of `case`'s recording holds at `row/leaf`.
+    fn recorded(case: &str, row: &str, leaf: &str) -> Vec<Vec<u8>> {
+        let recording =
+            crate::recording::read(case).unwrap_or_else(|e| panic!("{case}: no recording: {e}"));
+        let mut out = Vec::new();
+        for answer in &recording.answers {
+            for outcome in &answer.outcomes {
+                let held = (outcome.transcript.root.child(row))
+                    .and_then(|node| node.child(leaf))
+                    .map(|node| &node.observed.value);
+                match held {
+                    Some(Value::Bytes(bytes)) => out.push(bytes.clone()),
+                    other => panic!("{case}: {row}/{leaf} holds {other:?}"),
+                }
+            }
+        }
+        assert!(!out.is_empty(), "{case}: no Metal answer");
+        out
+    }
+
+    /// Metal's kernel answer is the rule's at every lane of every row: a pair replaces the
+    /// descriptor's clamps, and a lower bound above the upper reads at the upper.
+    #[test]
+    fn metal_replaces_the_clamps_at_a_kernel_bind() {
+        for row in &ROWS {
+            let want: Vec<f32> = KERNEL_LEVELS
+                .iter()
+                .map(|&at| reads(at, clamps(row)))
+                .collect();
+            for bytes in recorded(KERNEL_NAME, row.name, "sampled") {
+                assert_eq!(floats(&bytes), want, "{}", row.name);
+            }
+        }
+    }
+
+    /// Metal's fragment answer is the same rule's at every pixel: quad `q` samples at level `q`.
+    #[test]
+    fn metal_replaces_the_clamps_at_a_fragment_bind() {
+        for row in &ROWS {
+            let line = (0..WIDTH).map(|x| reads((x / 2) as f32, clamps(row)));
+            let want: Vec<f32> = line.clone().chain(line).collect();
+            for bytes in recorded(FRAGMENT_NAME, row.name, "texels") {
+                assert_eq!(floats(&bytes), want, "{}", row.name);
+            }
+        }
+    }
+
+    /// The rows tell replacing from narrowing: under narrowing, `(0, 4)` would read as the state's
+    /// own `(1, 3)`. And the state's clamps are not the texture's, so a plain binding is a
+    /// question too.
+    #[test]
+    fn the_rows_part_replacing_from_narrowing() {
+        let own = KERNEL_LEVELS.map(|at| reads(at, (OWN.min, OWN.max)));
+        let wider = KERNEL_LEVELS.map(|at| reads(at, (0.0, 4.0)));
+        let unclamped = KERNEL_LEVELS.map(|at| reads(at, (0.0, f32::MAX)));
+        assert_ne!(own, wider);
+        assert_ne!(own, unclamped);
+    }
 }
