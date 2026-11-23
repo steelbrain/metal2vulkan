@@ -27,7 +27,7 @@ use metal2vulkan_validation::translation_audit::{
 };
 use metal2vulkan_validation::worker;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Instant;
 
@@ -36,17 +36,26 @@ pub(super) const PLAN_WORKER: &str = "--specialization-plan";
 /// The worker argument that attempts one row under one set; the profile follows it.
 pub(super) const SET_WORKER: &str = "--specialization-set";
 
+/// How one run selects and reports: its workers (`--jobs`), its report's detail
+/// (`--summary-only`), its limit (`--limit`), and its rows (`--hash-file`; every row without it).
+#[derive(Clone, Copy)]
+pub(super) struct Run<'a> {
+    pub(super) jobs: usize,
+    pub(super) summary_only: bool,
+    pub(super) limit: usize,
+    pub(super) only: Option<&'a BTreeSet<String>>,
+}
+
 /// Plan at most `limit` rows that need it, then attempt each profile's pending sets of the planned
-/// rows, at most `limit` attempts per profile (whole rows). Fails when a plan or an attempt was
+/// rows, at most `limit` attempts per profile (whole rows); with `only`, of its rows alone, each
+/// reported on a `specialization-row` line per profile. Fails when a plan or an attempt was
 /// stopped at, or ran above, the 20-s or 500-MiB ceilings, or an attempt's ledger peak is below
 /// the floor of its allocator peak, after reporting everything. The lane has no separate budgets
 /// audit, so its own exit is the budget gate of its attempts.
 pub(super) fn audit_specialization(
     root: &Path,
     index: &Path,
-    jobs: usize,
-    summary_only: bool,
-    limit: usize,
+    run: Run<'_>,
     profiles: &[String],
 ) -> Result<(), String> {
     // An attempt resolves a visible function's module through the library-module index, which
@@ -57,15 +66,15 @@ pub(super) fn audit_specialization(
         linked.shards_scanned, linked.bytes_scanned
     );
     let mut breached = Vec::new();
-    let (plan_breaches, unplanned) = plan_rows(root, index, jobs, summary_only, limit)?;
+    let (plan_breaches, unplanned) = plan_rows(root, index, run)?;
     if !plan_breaches.is_empty() {
         breached.push(format!("planning ({})", plan_breaches.len()));
     }
     let planner = audit::planner_key();
     let plans = audit::plans(index, &planner)?;
-    print_plan_summary(&planner, &plans, unplanned, summary_only);
+    print_plan_summary(&planner, &plans, unplanned, run.summary_only);
     for profile in profiles {
-        let breaches = attempt_profile(root, index, jobs, summary_only, limit, profile, &plans)?;
+        let breaches = attempt_profile(root, index, run, profile, &plans)?;
         if !breaches.is_empty() {
             breached.push(format!("{profile} ({})", breaches.len()));
         }
@@ -196,17 +205,17 @@ fn authored_inputs(
 /// Plan at most `limit` rows without a current plan (or whose authored cases changed), in hash
 /// order, each in a killable worker, checkpointing the plans. Returns the ceiling breaches and how
 /// many rows are still to plan (a later run plans them; until then no set of theirs is selected).
-fn plan_rows(
-    root: &Path,
-    index: &Path,
-    jobs: usize,
-    summary_only: bool,
-    limit: usize,
-) -> Result<(Vec<String>, usize), String> {
+fn plan_rows(root: &Path, index: &Path, run: Run<'_>) -> Result<(Vec<String>, usize), String> {
+    let Run {
+        jobs,
+        summary_only,
+        limit,
+        only,
+    } = run;
     let planner = audit::planner_key();
     let started = Instant::now();
     let cases = audit::case_ids(index)?;
-    let keys = audit::rows_to_plan(index, &planner, &cases, limit)?;
+    let keys = audit::rows_to_plan(index, &planner, &cases, only, limit)?;
     let selection_ms = started.elapsed().as_millis();
     let store = CorpusStore::new(root);
     let mut budgets = BudgetAccumulator::new();
@@ -277,7 +286,7 @@ fn plan_rows(
             audit::write_plans(index, &planner, &plans)
         },
     )?;
-    let unplanned = audit::rows_to_plan(index, &planner, &cases, usize::MAX)?.len();
+    let unplanned = audit::rows_to_plan(index, &planner, &cases, only, usize::MAX)?.len();
     let (slowest_row, slowest_ms) = sweep.slowest();
     println!(
         "specialization-plan-batch\tplanner={planner}\tselected={}\tplanned={planned}\tunplanned_remaining={unplanned}\tstopped_not_recorded={stopped}\tindex_select_ms={selection_ms}\tplan_ms={}\tslowest_air_sha256={slowest_row}\tslowest_ms={slowest_ms}\tparent_peak_rss_bytes={}\t{}\tindexed_rows={}\treread_rows={}\tsource_shards_opened={}\tsource_bytes_read={}",
@@ -454,19 +463,23 @@ struct LaneTally {
 fn attempt_profile(
     root: &Path,
     index: &Path,
-    jobs: usize,
-    summary_only: bool,
-    limit: usize,
+    run: Run<'_>,
     profile_stem: &str,
     plans: &BTreeMap<String, RowPlan>,
 ) -> Result<Vec<String>, String> {
+    let Run {
+        jobs,
+        summary_only,
+        limit,
+        only,
+    } = run;
     let profile = engine::load_profile(profile_stem)?;
     let fingerprint = audit::fingerprint(profile_stem, &profile);
     let plain = engine_fingerprint(profile_stem, &profile);
     drop(profile);
     let started = Instant::now();
     let input_rows = audit::plain_input_rows(index, &plain)?;
-    let pending = audit::pending(index, &fingerprint, plans, &input_rows, limit)?;
+    let pending = audit::pending(index, &fingerprint, plans, &input_rows, only, limit)?;
     let selection_ms = started.elapsed().as_millis();
     let keys = pending.keys().cloned().collect::<Vec<_>>();
     let selected_attempts = pending.values().map(Vec::len).sum::<usize>();
@@ -574,7 +587,7 @@ fn attempt_profile(
         &batch,
         summary_only,
     );
-    print_profile_report(index, profile_stem, &fingerprint, &plain, summary_only)?;
+    print_profile_report(index, profile_stem, &fingerprint, &plain, run)?;
     Ok(batch.failures())
 }
 
@@ -810,14 +823,18 @@ fn print_plan_summary(
 
 /// The profile's report over every attempt recorded under `fingerprint`: rows by plain outcome,
 /// outcomes by kind, the inputs derived and left, the refusal classes ranked by rows (ray tracing
-/// listed apart, out of scope for the launch), and the recorded attempts' budgets.
+/// listed apart, out of scope for the launch), the recorded attempts' budgets, and each selected
+/// row's verdict ([`audit::row_verdicts`]).
 fn print_profile_report(
     index: &Path,
     profile_stem: &str,
     fingerprint: &str,
     plain: &str,
-    summary_only: bool,
+    run: Run<'_>,
 ) -> Result<(), String> {
+    let Run {
+        summary_only, only, ..
+    } = run;
     let attempts = audit::recorded(index, profile_stem, fingerprint)?;
     let report = audit::report(&attempts);
     println!(
@@ -891,6 +908,24 @@ fn print_profile_report(
         .collect::<Vec<_>>();
     let recorded = BudgetReport::from_rows(&rows);
     print_budget_report("specialization-budgets", profile_stem, &recorded, true);
+    let verdicts = only.map(|rows| audit::row_verdicts(rows, &attempts, &plain_outcomes));
+    for (air, row) in verdicts.unwrap_or_default() {
+        let refusals = row
+            .refusals
+            .iter()
+            .map(|((label, key), sets)| format!("{label} {key} ({sets})"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        println!(
+            "specialization-row\tprofile={profile_stem}\tair={}\tplain={}\tplain_key={}\tsets={}\ttranslated={}\tunder={}\trefusals={refusals}",
+            air.get(..12).unwrap_or(&air),
+            row.plain.0,
+            row.plain.1,
+            row.attempts,
+            row.translated,
+            row.under(),
+        );
+    }
     Ok(())
 }
 

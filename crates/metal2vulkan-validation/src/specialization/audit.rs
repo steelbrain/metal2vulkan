@@ -137,11 +137,12 @@ pub fn case_ids(index: &Path) -> Result<BTreeMap<String, Vec<String>>, String> {
 
 /// The rows to plan, in hash order, at most `limit`: every indexed row without a plan under
 /// `planner`, and every row whose authored case ids (`cases`, [`case_ids`]) are not the ones its
-/// plan was made with.
+/// plan was made with; with `only`, those of its rows alone.
 pub fn rows_to_plan(
     index: &Path,
     planner: &str,
     cases: &BTreeMap<String, Vec<String>>,
+    only: Option<&BTreeSet<String>>,
     limit: usize,
 ) -> Result<Vec<String>, String> {
     let connection = open(index)?;
@@ -190,7 +191,11 @@ pub fn rows_to_plan(
             }
         }
     }
-    Ok(out.into_iter().take(limit).collect())
+    Ok(out
+        .into_iter()
+        .filter(|air| only.is_none_or(|rows| rows.contains(air)))
+        .take(limit)
+        .collect())
 }
 
 /// Record each row's plan under `planner`, with the case ids its authored sets came from. A row
@@ -398,6 +403,63 @@ pub fn rows_by_plain_outcome(
     out
 }
 
+/// One row over its recorded attempts: its plain outcome, the sets it was attempted and
+/// translated under, and every other outcome with the number of sets that reached it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RowVerdict {
+    pub plain: (String, String),
+    pub attempts: usize,
+    pub translated: usize,
+    pub refusals: BTreeMap<(String, String), usize>,
+}
+
+impl RowVerdict {
+    /// Under which sets the row translates: `every`, `some` or `none`, or `unattempted`.
+    pub fn under(&self) -> &'static str {
+        match (self.attempts, self.translated) {
+            (0, _) => "unattempted",
+            (n, t) if n == t => "every",
+            (_, 0) => "none",
+            _ => "some",
+        }
+    }
+}
+
+/// The [`RowVerdict`] of each of `rows` over `attempts`, its plain outcome read from `plain`
+/// ([`plain_outcomes`]; `unrecorded` where the plain census has none).
+pub fn row_verdicts(
+    rows: &BTreeSet<String>,
+    attempts: &[RecordedAttempt],
+    plain: &BTreeMap<String, (String, String)>,
+) -> BTreeMap<String, RowVerdict> {
+    let unrecorded = ("unrecorded".to_string(), String::new());
+    let mut out = rows
+        .iter()
+        .map(|air| {
+            let plain = plain.get(air).unwrap_or(&unrecorded).clone();
+            (
+                air.clone(),
+                RowVerdict {
+                    plain,
+                    ..RowVerdict::default()
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    for attempt in attempts {
+        let Some(row) = out.get_mut(&attempt.air_sha256) else {
+            continue;
+        };
+        row.attempts += 1;
+        if attempt.outcome.0 == "translated" {
+            row.translated += 1;
+        } else {
+            *row.refusals.entry(attempt.outcome.clone()).or_default() += 1;
+        }
+    }
+    out
+}
+
 /// The rows whose plain compile, recorded under `plain` (the profile's engine census key),
 /// needed a pipeline input other than function constants; or why the plain census cannot be
 /// used: it does not cover every indexed row.
@@ -450,12 +512,13 @@ pub fn plain_input_rows(index: &Path, plain: &str) -> Result<BTreeSet<String>, S
 
 /// The sets each row still has to be attempted under `fingerprint`: every set of its plan, and
 /// the [`PendingSet::inputs`] set of each `input_rows` row, less those recorded; at most `limit`
-/// attempts, whole rows in hash order.
+/// attempts, whole rows in hash order; with `only`, those of its rows alone.
 pub fn pending(
     index: &Path,
     fingerprint: &str,
     plans: &BTreeMap<String, RowPlan>,
     input_rows: &BTreeSet<String>,
+    only: Option<&BTreeSet<String>>,
     limit: usize,
 ) -> Result<BTreeMap<String, Vec<PendingSet>>, String> {
     let connection = open(index)?;
@@ -472,6 +535,7 @@ pub fn pending(
     let rows = plans
         .keys()
         .chain(input_rows)
+        .filter(|air| only.is_none_or(|rows| rows.contains(*air)))
         .cloned()
         .collect::<BTreeSet<_>>();
     let mut out = BTreeMap::new();
@@ -973,7 +1037,7 @@ mod tests {
         let planner = "planner";
         let cases = case_ids(&index).unwrap();
         assert_eq!(cases.get(&a).unwrap(), &vec!["case-1".to_string()]);
-        let selected = rows_to_plan(&index, planner, &cases, usize::MAX).unwrap();
+        let selected = rows_to_plan(&index, planner, &cases, None, usize::MAX).unwrap();
         assert_eq!(selected, vec![a.clone(), b.clone(), c.clone()]);
         write_plans(
             &index,
@@ -985,13 +1049,13 @@ mod tests {
             ],
         )
         .unwrap();
-        assert!(rows_to_plan(&index, planner, &cases, usize::MAX)
+        assert!(rows_to_plan(&index, planner, &cases, None, usize::MAX)
             .unwrap()
             .is_empty());
         let plans = plans(&index, planner).unwrap();
         let input_rows = plain_input_rows(&index, "plain").unwrap();
         assert_eq!(input_rows, BTreeSet::from([b.clone()]));
-        let todo = pending(&index, "fp", &plans, &input_rows, usize::MAX).unwrap();
+        let todo = pending(&index, "fp", &plans, &input_rows, None, usize::MAX).unwrap();
         assert_eq!(todo.len(), 2);
         assert_eq!(todo[&a].len(), 2);
         assert_eq!(todo[&b], vec![PendingSet::inputs()]);
@@ -1007,7 +1071,7 @@ mod tests {
             result(&b, &todo[&b][0], Outcome::Translated),
         ];
         assert_eq!(write_results(&index, "p", "fp", &results).unwrap(), 1);
-        let todo = pending(&index, "fp", &plans, &input_rows, usize::MAX).unwrap();
+        let todo = pending(&index, "fp", &plans, &input_rows, None, usize::MAX).unwrap();
         assert_eq!(todo.keys().collect::<Vec<_>>(), vec![&a]);
         assert_eq!(
             todo[&a].len(),
@@ -1021,12 +1085,12 @@ mod tests {
             &[result(&a, &todo[&a][0], Outcome::Translated)],
         )
         .unwrap();
-        assert!(pending(&index, "fp", &plans, &input_rows, usize::MAX)
+        assert!(pending(&index, "fp", &plans, &input_rows, None, usize::MAX)
             .unwrap()
             .is_empty());
         // Another fingerprint selects everything again.
         assert_eq!(
-            pending(&index, "other", &plans, &input_rows, usize::MAX)
+            pending(&index, "other", &plans, &input_rows, None, usize::MAX)
                 .unwrap()
                 .len(),
             2
@@ -1038,7 +1102,7 @@ mod tests {
             .unwrap();
         let cases = case_ids(&index).unwrap();
         assert_eq!(
-            rows_to_plan(&index, planner, &cases, usize::MAX).unwrap(),
+            rows_to_plan(&index, planner, &cases, None, usize::MAX).unwrap(),
             vec![c.clone()]
         );
         // The same plan again keeps a row's attempts; a changed one (a function its cases now
@@ -1049,7 +1113,7 @@ mod tests {
             &[(a.clone(), vec!["case-1".into()], row_plan(&[0, 1]))],
         )
         .unwrap();
-        assert!(pending(&index, "fp", &plans, &input_rows, usize::MAX)
+        assert!(pending(&index, "fp", &plans, &input_rows, None, usize::MAX)
             .unwrap()
             .is_empty());
         let linked = RowPlan {
@@ -1061,7 +1125,7 @@ mod tests {
         };
         write_plans(&index, planner, &[(b.clone(), Vec::new(), linked)]).unwrap();
         let plans = super::plans(&index, planner).unwrap();
-        let todo = pending(&index, "fp", &plans, &input_rows, usize::MAX).unwrap();
+        let todo = pending(&index, "fp", &plans, &input_rows, None, usize::MAX).unwrap();
         assert_eq!(todo.keys().collect::<Vec<_>>(), vec![&b]);
         // A plain census that does not cover every row refuses.
         connection
@@ -1112,7 +1176,7 @@ mod tests {
             &[],
         );
         let plans = BTreeMap::from([(a.clone(), row_plan(&[0, 1, 2])), (b, row_plan(&[0]))]);
-        let todo = pending(&index, "fp", &plans, &BTreeSet::new(), 1).unwrap();
+        let todo = pending(&index, "fp", &plans, &BTreeSet::new(), None, 1).unwrap();
         assert_eq!(todo.keys().collect::<Vec<_>>(), vec![&a]);
         assert_eq!(todo[&a].len(), 3);
     }
@@ -1239,5 +1303,59 @@ mod tests {
             }
         );
         assert_eq!(classes[&("unrecorded".into(), String::new())].rows, 1);
+    }
+
+    /// A selection plans and attempts its rows alone, before the limit; each selected row's
+    /// verdict counts its sets and names the outcomes of those that did not translate, and a
+    /// selected row without an attempt is `unattempted`.
+    #[test]
+    fn a_selection_plans_and_attempts_its_rows_alone_and_each_has_a_verdict() {
+        let dir = crate::ScratchDir::new("specialization-audit-selection").unwrap();
+        let (a, b, c) = ("aa".repeat(32), "bb".repeat(32), "cc".repeat(32));
+        let index = index(
+            dir.path(),
+            &[
+                (&a, "unsupported", "not_implemented Lowering(Access)"),
+                (&b, "translated", ""),
+                (&c, "needs_input", "LinkedFunction"),
+            ],
+            &[],
+        );
+        let only = BTreeSet::from([b.clone(), c.clone()]);
+        let cases = case_ids(&index).unwrap();
+        assert_eq!(
+            rows_to_plan(&index, "planner", &cases, Some(&only), 1).unwrap(),
+            vec![b.clone()]
+        );
+        let plans = BTreeMap::from([(a.clone(), row_plan(&[0])), (b.clone(), row_plan(&[0, 1]))]);
+        let input_rows = plain_input_rows(&index, "plain").unwrap();
+        let todo = pending(&index, "fp", &plans, &input_rows, Some(&only), 2).unwrap();
+        assert_eq!(todo.keys().collect::<Vec<_>>(), vec![&b]);
+        let todo = pending(&index, "fp", &plans, &input_rows, Some(&only), usize::MAX).unwrap();
+        assert_eq!(todo.keys().collect::<Vec<_>>(), vec![&b, &c]);
+        let refused = ("unsupported", "not_implemented AgxUnmodeled");
+        let attempts = vec![
+            recorded_attempt(&a, &[SpecKind::Zero], refused, false),
+            recorded_attempt(&b, &[SpecKind::Zero], ("translated", ""), false),
+            recorded_attempt(&b, &[SpecKind::One], refused, false),
+            recorded_attempt(&b, &[SpecKind::Covering], refused, false),
+        ];
+        let plain = plain_outcomes(&index, "plain").unwrap();
+        let rows = BTreeSet::from([a.clone(), b.clone(), c.clone()]);
+        let verdicts = row_verdicts(&rows, &attempts, &plain);
+        assert_eq!(verdicts[&a].under(), "none");
+        assert_eq!(
+            verdicts[&a].plain,
+            (
+                "unsupported".into(),
+                "not_implemented Lowering(Access)".into()
+            )
+        );
+        let row = &verdicts[&b];
+        assert_eq!((row.attempts, row.translated, row.under()), (3, 1, "some"));
+        assert_eq!(row.refusals[&(refused.0.into(), refused.1.into())], 2);
+        assert_eq!(verdicts[&c].under(), "unattempted");
+        let one = row_verdicts(&BTreeSet::from([b.clone()]), &attempts[1..2], &plain);
+        assert_eq!(one[&b].under(), "every");
     }
 }
