@@ -1667,6 +1667,92 @@ fn fragment_quad_reductions_read_their_quads_by_quad_instructions() {
     assert!(fragments > 0, "no committed profile has quad control");
 }
 
+/// A fragment that writes its quad's `quad_any` and `quad_all` of a predicate of its position.
+const FRAGMENT_QUAD_VOTES: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
+target triple = "air64_v28-apple-macosx26.0.0"
+
+define <4 x i32> @quad_votes(<4 x float> %pos) {
+entry:
+  %xy = shufflevector <4 x float> %pos, <4 x float> poison, <2 x i32> <i32 0, i32 1>
+  %p = call <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float> %xy)
+  %x = extractelement <2 x i32> %p, i64 0
+  %y = extractelement <2 x i32> %p, i64 1
+  %right = icmp ugt i32 %x, %y
+  %left = icmp ule i32 %x, %y
+  %any = call i1 @air.quad_any(i1 %right)
+  %all = call i1 @air.quad_all(i1 %left)
+  %a = zext i1 %any to i32
+  %b = zext i1 %all to i32
+  %o0 = insertelement <4 x i32> <i32 0, i32 0, i32 0, i32 1>, i32 %a, i64 0
+  %o = insertelement <4 x i32> %o0, i32 %b, i64 1
+  ret <4 x i32> %o
+}
+
+declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
+declare i1 @air.quad_any(i1)
+declare i1 @air.quad_all(i1)
+
+!air.fragment = !{!0}
+!0 = !{ptr @quad_votes, !1, !3}
+!1 = !{!2}
+!2 = !{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"uint4"}
+!3 = !{!4}
+!4 = !{i32 0, !"air.position", !"air.center", !"air.no_perspective", !"air.arg_type_name", !"float4", !"air.arg_name", !"pos"}
+"#;
+
+/// A fragment's quad votes are Vulkan's quad votes, which it runs over the quad's helpers in every
+/// entry (section 9.31): on every committed profile with `shaderQuadControl`, [`FRAGMENT_QUAD_VOTES`]
+/// holds one `OpGroupNonUniformQuadAllKHR`, one `OpGroupNonUniformQuadAnyKHR` and no ballot. A
+/// kernel's quad votes (`a3_quad_votes_divergent`), whose quads hold no helpers, take no quad vote
+/// instruction.
+#[test]
+fn fragment_quad_votes_are_quad_vote_instructions() {
+    let fragment = match metal2vulkan_devtools::llvm_assemble_text(FRAGMENT_QUAD_VOTES) {
+        Ok(bitcode) => bitcode,
+        Err(AssembleError::Missing(why)) => {
+            eprintln!("SKIPPED: {why}");
+            return;
+        }
+        Err(AssembleError::Rejected(why)) => panic!("llvm-as rejected quad_votes: {why}"),
+    };
+    let Some(kernel) = assemble("a3_quad_votes_divergent") else {
+        return;
+    };
+    let count = |text: &str, op: &str| text.lines().filter(|l| l.contains(op)).count();
+    let mut fragments = 0;
+    for (name, p) in committed_profiles().expect("profiles") {
+        if !p.fields().subgroup.quad_control {
+            continue;
+        }
+        let a = compile(&fragment, "quad_votes", &p).expect("compile");
+        let (_, words) = link_and_validate(&a, &p).expect("valid");
+        let text = spirv_dis(&words);
+        assert_eq!(
+            [
+                count(&text, "OpGroupNonUniformQuadAllKHR"),
+                count(&text, "OpGroupNonUniformQuadAnyKHR"),
+                count(&text, "OpGroupNonUniformBallot "),
+            ],
+            [1, 1, 0],
+            "quad_votes on {name}"
+        );
+        fragments += 1;
+        if let Ok(a) = compile(&kernel, "a3_quad_votes_divergent", &p) {
+            let (_, words) = link_and_validate(&a, &p).expect("valid");
+            let text = spirv_dis(&words);
+            assert_eq!(
+                [
+                    count(&text, "OpGroupNonUniformQuadAllKHR"),
+                    count(&text, "OpGroupNonUniformQuadAnyKHR"),
+                ],
+                [0, 0],
+                "a3_quad_votes_divergent on {name}"
+            );
+        }
+    }
+    assert!(fragments > 0, "no committed profile has quad control");
+}
+
 /// MoltenVK 1.4.2 drops `VK_KHR_shader_quad_control` (`shaderQuadControl`) on Apple's GPUs. The
 /// committed `moltenvk-m3` description, a capture of 1.4.2 that states neither the feature nor
 /// its extension, refuses each fragment function whose group operations observe other lanes,

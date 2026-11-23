@@ -164,14 +164,18 @@ pub(super) fn exec(p: &Prog<'_>, op: &GroupInst, size: u32, lanes: &[&Lane]) -> 
             };
             per_lane(&|id| from(&vals, i64::from(id ^ x)))
         }
-        GroupInst::QuadAny(v) => {
+        GroupInst::QuadAll(v) | GroupInst::QuadAny(v) => {
+            let all = matches!(op, GroupInst::QuadAll(_));
             let vals = operand(*v)?;
             per_lane(&|id| {
-                let mut any = false;
+                // `all` holds unless a lane of the quad's is false; `any` once one is true.
+                let mut r = all;
                 for (k, b) in &vals {
-                    any |= (*k & !3) == (id & !3) && b.s()? != 0;
+                    if (*k & !3) == (id & !3) && (b.s()? != 0) != all {
+                        r = !all;
+                    }
                 }
-                Ok(Val::S(u64::from(any)))
+                Ok(Val::S(u64::from(r)))
             })
         }
     }

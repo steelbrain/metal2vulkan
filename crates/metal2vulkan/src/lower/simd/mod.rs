@@ -102,7 +102,7 @@
 //! declares `MaximallyReconvergesKHR` (section 9.31, "Helper Invocations"), as every such entry
 //! does (**Reconvergence**, below): a profile with `shaderQuadControl` has maximal reconvergence,
 //! which every device with the one supports (`Device::from_queries` refuses a description listing
-//! the one without the other). A quad reduction
+//! the one without the other). A quad reduction or vote
 //! there reads its quad through quad instructions alone. A profile without `shaderQuadControl`
 //! refuses such a function.
 //!
@@ -121,8 +121,9 @@
 //! over the quad's four lanes in Metal's order, each lane read by a shuffle under its bit of the
 //! ballot of the active lanes (a fragment's reduction by `OpGroupNonUniformQuadBroadcast` under
 //! `OpGroupNonUniformQuadAnyKHR` of its quad lane, **Helpers** above), and the ballot word for
-//! votes, `is_first`, the active mask, and `quad_ballot` (the quad's four bits, quad lane `j` at
-//! bit `j`). A simdgroup's `simd_active_threads_mask` is
+//! votes (a fragment's by `OpGroupNonUniformQuadAllKHR` and `…AnyKHR`), `is_first`, the active
+//! mask, and `quad_ballot` (the quad's four bits, quad lane `j` at bit `j`). A simdgroup's
+//! `simd_active_threads_mask` is
 //! the ballot of `true`, held as the 64-bit ballot is. A fragment's `[[thread_index_in_quadgroup]]`
 //! is the subgroup lane's low two bits ([`select_param`]), or, on a profile without the fragment
 //! quad tier, the pixel's place in its aligned 2x2 block, read from `FragCoord`.
@@ -214,8 +215,8 @@ pub struct GroupPlan {
     /// outside kernels, where a quad may lack a lane.
     pub quad_instructions: bool,
     /// The function is a fragment function, whose quads hold helpers ([`full_quads`]): a quad
-    /// reduction reads its quad through quad instructions, which Vulkan runs over the quad's
-    /// helpers whatever the entry's reconvergence (section 9.31, "Helper Invocations").
+    /// reduction or vote reads its quad through quad instructions, which Vulkan runs over the
+    /// quad's helpers whatever the entry's reconvergence (section 9.31, "Helper Invocations").
     pub helpers: bool,
 }
 

@@ -1342,8 +1342,8 @@ impl Deriver<'_> {
                 }
                 (Cap::GroupNonUniformQuad, SubgroupOp::Quad)
             }
-            // `SPV_KHR_quad_control`'s quad vote, a fragment's (`lower::simd`).
-            GroupInst::QuadAny(_) => {
+            // `SPV_KHR_quad_control`'s quad votes, a fragment's (`lower::simd`).
+            GroupInst::QuadAll(_) | GroupInst::QuadAny(_) => {
                 self.ext(SpirvExtension::KhrQuadControl);
                 self.feat(VkFeature::ShaderQuadControl);
                 (Cap::QuadControlKHR, SubgroupOp::Quad)

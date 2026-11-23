@@ -1,7 +1,7 @@
 //! Subgroup (`GroupNonUniform*`) constructors.
 //!
-//! The execution scope is always `Subgroup` (the quad vote, `OpGroupNonUniformQuadAnyKHR`, has no
-//! scope operand); cluster sizes are constant powers of two. Which ops a
+//! The execution scope is always `Subgroup` (the quad votes, `OpGroupNonUniformQuadAllKHR` and
+//! `…AnyKHR`, have no scope operand); cluster sizes are constant powers of two. Which ops a
 //! device supports (and in which stages) is the profile's concern, checked by requirement
 //! derivation; every subgroup operation is tangled.
 
@@ -162,12 +162,22 @@ impl FunctionBuilder<'_> {
         self.group(GroupInst::QuadSwap { value, dir, dir_id }, v.ty)
     }
 
-    /// `OpGroupNonUniformQuadAnyKHR` of a `bool` scalar. Result: `bool`.
-    pub fn group_quad_any(&mut self, pred: Value) -> BResult<Value> {
-        self.want(crate::spv::Op::GroupNonUniformQuadAnyKHR, 0, pred, |n| {
-            n.is_bool() && n.is_scalar()
-        })?;
+    /// `OpGroupNonUniformQuadAllKHR` (`all`) or `…AnyKHR` of a `bool` scalar. Result: `bool`.
+    pub fn group_quad_vote(&mut self, all: bool, pred: Value) -> BResult<Value> {
+        let op = if all {
+            crate::spv::Op::GroupNonUniformQuadAllKHR
+        } else {
+            crate::spv::Op::GroupNonUniformQuadAnyKHR
+        };
+        self.want(op, 0, pred, |n| n.is_bool() && n.is_scalar())?;
         let ty = self.bool_ty(1)?;
-        self.group(GroupInst::QuadAny(pred), ty)
+        self.group(
+            if all {
+                GroupInst::QuadAll(pred)
+            } else {
+                GroupInst::QuadAny(pred)
+            },
+            ty,
+        )
     }
 }

@@ -701,7 +701,6 @@ pub enum Op {
     ConstantStringAMDX = 5103,
     #[cfg(test)]
     SpecConstantStringAMDX = 5104,
-    #[cfg(test)]
     GroupNonUniformQuadAllKHR = 5110,
     GroupNonUniformQuadAnyKHR = 5111,
     #[cfg(test)]
@@ -2194,7 +2193,6 @@ impl std::fmt::Debug for Op {
             Self::ConstantStringAMDX => "ConstantStringAMDX",
             #[cfg(test)]
             Self::SpecConstantStringAMDX => "SpecConstantStringAMDX",
-            #[cfg(test)]
             Self::GroupNonUniformQuadAllKHR => "GroupNonUniformQuadAllKHR",
             Self::GroupNonUniformQuadAnyKHR => "GroupNonUniformQuadAnyKHR",
             #[cfg(test)]
@@ -3889,7 +3887,6 @@ impl Op {
             5103 => Self::ConstantStringAMDX,
             #[cfg(test)]
             5104 => Self::SpecConstantStringAMDX,
-            #[cfg(test)]
             5110 => Self::GroupNonUniformQuadAllKHR,
             5111 => Self::GroupNonUniformQuadAnyKHR,
             #[cfg(test)]

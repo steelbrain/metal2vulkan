@@ -115,15 +115,16 @@ pub fn cluster_ops(g: &GroupPlan) -> OpBits {
 /// Quads are the same in every tier: aligned groups of four subgroup lanes. A reduction, a
 /// prefix sum or product and the first active lane's broadcast read the quad's lanes by shuffles
 /// under the ballot of its active lanes, in Metal's order, except a fragment's reduction, which
-/// reads them by quad instructions ([`quad_reduce`]); a vote is the quad's bits of the ballot. A
-/// broadcast or shuffle-xor by a constant lane or mask is Vulkan's quad class where the stage
-/// takes it, and a shuffle elsewhere.
+/// reads them by quad instructions ([`quad_reduce`]); a vote is the quad's bits of the ballot,
+/// except a fragment's, which is the quad vote instruction. A broadcast or shuffle-xor by a
+/// constant lane or mask is Vulkan's quad class where the stage takes it, and a shuffle elsewhere.
 fn quad_ops(g: &GroupPlan) -> OpBits {
     use GroupOp as G;
     match (g.op, g.konst) {
         (G::ShuffleXor, Some(0)) => OpBits::NONE,
         (G::Broadcast | G::ShuffleXor, Some(_)) if g.quad_instructions => OpBits::QUAD,
         (op, _) if g.helpers && combines(op) && !scan(op) => OpBits::QUAD,
+        (G::All | G::Any, _) if g.helpers => OpBits::QUAD,
         (G::BroadcastFirst, _) => OpBits::BALLOT.union(OpBits::SHUFFLE),
         (op, _) if combines(op) => OpBits::BALLOT.union(OpBits::SHUFFLE),
         (G::All | G::Any | G::Ballot | G::IsFirst | G::ActiveThreadsMask, _) => OpBits::BALLOT,
@@ -862,7 +863,7 @@ fn quad_reduce(
         let q = bin_k(fb, BinOp::BitwiseAnd, ln.l, 3)?;
         for j in 0..4 {
             let me = bin_k(fb, BinOp::IEqual, q, j)?;
-            let on = fb.group_quad_any(me)?;
+            let on = fb.group_quad_vote(false, me)?;
             let i = k(fb, j)?;
             lanes.push((fb.group_quad_broadcast(x, i)?, on));
         }
@@ -1168,7 +1169,10 @@ fn quad_op(
         (G::Sum | G::Product | G::Min | G::Max | G::And | G::Or | G::Xor, _) => {
             quad_reduce(fb, ln, g, v()?)
         }
-        // Over the active lanes: every one's predicate holds, or one's does.
+        // Over the active lanes: every one's predicate holds, or one's does. A fragment's quad
+        // holds helpers, which take part (`full_quads`): there the quad vote, which Vulkan runs
+        // over them whatever the entry's reconvergence (section 9.31, "Helper Invocations").
+        (G::All | G::Any, _) if g.helpers => fb.group_quad_vote(g.op == G::All, v()?),
         (G::All | G::Any, _) => {
             let word = ln.word(fb, v()?)?;
             let held = ln.quad_bits(fb, word)?;

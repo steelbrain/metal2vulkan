@@ -718,6 +718,10 @@ pub enum GroupInst {
         dir: QuadDirection,
         dir_id: ConstId,
     },
+    /// `OpGroupNonUniformQuadAllKHR` (`SPV_KHR_quad_control`): whether a `bool` predicate holds
+    /// for every active invocation of the calling invocation's quad, helpers included. Like
+    /// [`GroupInst::QuadAny`], it has no execution scope operand.
+    QuadAll(Value),
     /// `OpGroupNonUniformQuadAnyKHR` (`SPV_KHR_quad_control`): whether a `bool` predicate holds
     /// for any active invocation of the calling invocation's quad, helpers included. The
     /// instruction has no execution scope operand: its scope is the quad, and the serializer
@@ -737,6 +741,7 @@ impl GroupInst {
             | GroupInst::Ballot(v)
             | GroupInst::Arith { value: v, .. }
             | GroupInst::QuadSwap { value: v, .. }
+            | GroupInst::QuadAll(v)
             | GroupInst::QuadAny(v) => f(*v),
             GroupInst::BallotBitExtract {
                 ballot: a,
@@ -760,6 +765,7 @@ impl GroupInst {
             | GroupInst::Ballot(v)
             | GroupInst::Arith { value: v, .. }
             | GroupInst::QuadSwap { value: v, .. }
+            | GroupInst::QuadAll(v)
             | GroupInst::QuadAny(v) => f(v),
             GroupInst::BallotBitExtract {
                 ballot: a,
@@ -791,6 +797,7 @@ impl GroupInst {
             | GroupInst::BallotBitExtract { .. }
             | GroupInst::Shuffle { .. }
             | GroupInst::QuadBroadcast { .. }
+            | GroupInst::QuadAll(_)
             | GroupInst::QuadAny(_) => {}
         }
     }
@@ -812,6 +819,7 @@ impl GroupInst {
             GroupInst::Arith { op, .. } => op.to_spirv(),
             GroupInst::QuadBroadcast { .. } => Op::GroupNonUniformQuadBroadcast,
             GroupInst::QuadSwap { .. } => Op::GroupNonUniformQuadSwap,
+            GroupInst::QuadAll(_) => Op::GroupNonUniformQuadAllKHR,
             GroupInst::QuadAny(_) => Op::GroupNonUniformQuadAnyKHR,
         }
     }
