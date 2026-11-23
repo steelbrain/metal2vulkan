@@ -2025,9 +2025,8 @@ mod on_device {
     }
 
     /// A device on a cache directory a device before it used lowers nothing at creation, and asks
-    /// the translator nothing: the tiling kernel's lowering and the observing kernel's
-    /// partial-threadgroups variant, its state's only module, are read from the directory, each
-    /// once, so no stage entry
+    /// the translator nothing: the tiling kernel's lowering and the observing kernel's plain one
+    /// and partial-threadgroups variant are read from the directory, each once, so no stage entry
     /// is decoded, and the tile's `VkPipeline` is made through a pipeline cache started from the
     /// device's blob.
     /// The first device's writes (`Metrics::cache_bytes_written`) are at least the files' bytes,
@@ -2059,8 +2058,8 @@ mod on_device {
                 ];
                 let metrics = counters.metrics();
                 let counted = (metrics.translations, metrics.translations_loaded);
-                // The tiling kernel's lowering and the observing kernel's variant.
-                let want = [(2, 0), (0, 2)][round];
+                // The tiling kernel's lowering, the observing kernel's plain one and its variant.
+                let want = [(3, 0), (0, 3)][round];
                 assert_eq!(counted, want, "{name}: device {round} on the directory");
                 if round == 1 {
                     let decoded = device.core().entries.held();
@@ -2091,7 +2090,7 @@ mod on_device {
                 }
             }
             let _ = std::fs::remove_dir_all(&dir);
-            println!("{name}: 2 lowerings and the blob written, nothing by a second device");
+            println!("{name}: 3 lowerings and the blob written, nothing by a second device");
         }
     }
 

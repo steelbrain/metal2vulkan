@@ -1401,12 +1401,12 @@ pub(crate) fn size_checked(interface: &Interface, size: [u32; 3]) -> Result<(), 
 /// for a threadgroup that is not whole groups of a module that runs only whole ones (the
 /// partial-threadgroups variant has none), each lowered with the state. An observer's whole grids,
 /// threadgroup dispatches and indirect dispatches run its plain module.
-pub(crate) fn decide<'a>(
-    compiled: &'a Compiled,
+pub(crate) fn decide(
+    compiled: &Compiled,
     direct: Option<Direct>,
     size: [u32; 3],
     max: u32,
-) -> Result<(Choice, Module, &'a Kernel), Error> {
+) -> Result<(Choice, Module, &Kernel), Error> {
     let choice = choose(&compiled.form, direct, size);
     let partial_threadgroups = |site: PartialThreadgroupsSite| {
         Error::Unsupported(Gap::PartialThreadgroups {
