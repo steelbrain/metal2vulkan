@@ -663,13 +663,16 @@ fn play(options: &BTreeMap<String, String>) -> i32 {
     }
 }
 
+/// A play's state log, its state threads and its state keys (`NewRuntime::with_states`).
+type StateOptions = (Option<std::fs::File>, usize, Option<HashSet<String>>);
+
 /// The play's state options: the state log `--state-log` names, made; the threads of
 /// `--state-threads`, 0 where it names none; and the keys of `--state-keys`, each 64 hex digits.
 /// The threads and the keys need a states-only play, which binds no state.
 fn state_options(
     options: &BTreeMap<String, String>,
     states_only: bool,
-) -> Result<(Option<std::fs::File>, usize, Option<HashSet<String>>), String> {
+) -> Result<StateOptions, String> {
     let threads = match options.get("state-threads").map(|n| n.parse::<usize>()) {
         None => 0,
         Some(Ok(threads)) => threads,
