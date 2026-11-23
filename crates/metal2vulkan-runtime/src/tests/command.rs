@@ -367,6 +367,29 @@ pub(crate) mod on_device {
         }
     }
 
+    /// A body of [`each_device`] starts once the reaper has seeded the device's pipeline cache,
+    /// which sets `pipeline_cache_bytes` after `Device::new` returns: with the seed made to wait
+    /// 200 ms at its start, the body still finds it done, so the gauges it reads first are the
+    /// ones its work starts from (an import refused under AMD's open driver read 0, then 52).
+    #[test]
+    fn every_device_body_starts_once_the_pipeline_cache_is_seeded() {
+        let delayed = || {
+            crate::cache::Caches::delay_next_seed(Duration::from_millis(200));
+            DeviceOptions::default()
+        };
+        each_device_with("seeded_before_the_body", delayed, |name, _, device| {
+            let caches = &device.core().caches;
+            assert!(caches.is_seeded(), "{name}: the body began before the seed");
+            let bytes = device.counters().gauges().pipeline_cache_bytes;
+            thread::sleep(Duration::from_millis(50));
+            assert_eq!(
+                device.counters().gauges().pipeline_cache_bytes,
+                bytes,
+                "{name}: the seed's gauge"
+            );
+        });
+    }
+
     /// The completion thread's host wait with a timeout of 0, which every retirement rests on
     /// (`complete::reached_by_wait`), reports the progress value the semaphore holds as reached,
     /// and a value no submission has yet signalled as not reached, at once.

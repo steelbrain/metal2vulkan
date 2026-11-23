@@ -972,6 +972,10 @@ pub(crate) struct Caches {
     /// Where the seed waits before it makes the blob's cache the one creations take.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) seed_hold: Hold,
+    /// How long the seed waits at its start, before it makes the empty cache and sets
+    /// `Gauge::PipelineCacheBytes`, for a test.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    seed_delay: Duration,
     /// Where a look waits before it tries [`Caches::creations`].
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) look_hold: Hold,
@@ -995,6 +999,8 @@ thread_local! {
     /// Whether the caches made next on this thread hold their seed before it takes the blob's
     /// cache, for a test.
     static HOLD_NEXT_SEED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// How long the seed of the caches made next on this thread waits at its start, for a test.
+    static DELAY_NEXT_SEED: std::cell::Cell<Duration> = const { std::cell::Cell::new(Duration::ZERO) };
 }
 
 /// A point the reaper waits at while a test holds it.
@@ -1277,6 +1283,8 @@ impl Caches {
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             seed_hold: Hold::new(HOLD_NEXT_SEED.with(std::cell::Cell::take)),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+            seed_delay: DELAY_NEXT_SEED.with(std::cell::Cell::take),
+            #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             look_hold: Hold::new(false),
             #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
             alone_hold: Hold::new(false),
@@ -1294,6 +1302,13 @@ impl Caches {
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
     pub(crate) fn hold_next_seed() {
         HOLD_NEXT_SEED.with(|hold| hold.set(true));
+    }
+
+    /// Makes the seed of the device made next on this thread wait `by` at its start, before it
+    /// makes the empty cache and sets `Gauge::PipelineCacheBytes`, for a test.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn delay_next_seed(by: Duration) {
+        DELAY_NEXT_SEED.with(|delay| delay.set(by));
     }
 
     /// Creations that have not ended, those waiting for [`Caches::creations`] among them.
@@ -1510,6 +1525,8 @@ impl Caches {
     ///
     /// `device` is the device of the caches.
     pub(crate) unsafe fn seed(&self, device: &ash::Device, counters: &Counters) {
+        #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+        std::thread::sleep(self.seed_delay);
         // SAFETY: no data.
         let empty = unsafe { make_cache(device, &[]) };
         // Read before any creation takes the cache: creations wait for `made`.
