@@ -6,8 +6,11 @@
 //! own. A third run takes a program's steps in separate serial compute encoders of one command
 //! buffer: heap H1 holds A and C at offset 0, heap H2 holds B0 and B at offset 0; B0 is written,
 //! then A through its view, then A is read while B is written through its view (`invert_texels`),
-//! then C through its view, then C and B are read. Each read is the texels its texture's last
-//! write wrote, as on a Mac, whose heap textures alias by the same rules.
+//! then C through its view, then C and B are read. A fourth and fifth take a program's shapes:
+//! 2D arrays of `RGBA16Float` at offset 0 of one heap, eight of 1 to 312 layers each written and
+//! read through a 2D view of its first slice, then a 512 by 512 array of one layer written through
+//! a 2D view and read through another, in one command buffer and across two. Each read is the
+//! texels its texture's last write wrote, as on a Mac, whose heap textures alias by the same rules.
 //!
 //! Vulkan's memory aliasing asks that an image over bytes another image wrote move from
 //! `VK_IMAGE_LAYOUT_UNDEFINED` before it is used; a device that keeps a compression state beside
@@ -28,6 +31,9 @@ mod on_device {
     /// Each Shared buffer's place in its block: past the largest buffer, at a multiple of every
     /// memory alignment.
     const AT: u64 = 1 << 20;
+
+    /// As [`AT`], past a 512 by 512 texture's input.
+    const BIG: u64 = 4 << 20;
 
     /// The six textures at offset 0 of one heap: each one's format, width and height.
     const SIX: [(PixelFormat, u32, u32); 6] = [
@@ -110,26 +116,31 @@ mod on_device {
         }
     }
 
-    /// Shared buffers in a block of their own, each `AT` bytes apart.
+    /// Shared buffers in a block of their own, each `at` bytes apart.
     struct Buffers {
         block: Block,
+        at: u64,
         next: u64,
     }
 
     impl Buffers {
         fn new(name: &str, device: &Device, count: u64) -> Buffers {
-            let block = (device.take_block(MemoryClass::Shared, count * AT))
+            Buffers::apart(name, device, count, AT)
+        }
+
+        fn apart(name: &str, device: &Device, count: u64, at: u64) -> Buffers {
+            let block = (device.take_block(MemoryClass::Shared, count * at))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            Buffers { block, next: 0 }
+            Buffers { block, at, next: 0 }
         }
 
         /// The next buffer, holding `floats`.
         fn of(&mut self, name: &str, device: &Device, floats: &[f32]) -> Buffer {
             let len = (floats.len() * 4) as u64;
-            assert!(len <= AT, "{name}: a buffer past its place");
+            assert!(len <= self.at, "{name}: a buffer past its place");
             let buffer = (device.new_buffer(self.block.id, self.next, len, None))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            self.next += AT;
+            self.next += self.at;
             let contents = buffer.contents().expect("Shared");
             // SAFETY: the buffer holds `len` bytes, and no command uses it yet.
             unsafe {
@@ -397,6 +408,128 @@ mod on_device {
         wrong.into_iter().flatten().collect()
     }
 
+    /// The 2D arrays at offset 0 of one heap ahead of the last: each one's width, height and
+    /// layers.
+    const ARRAYS: [(u32, u32, u32); 8] = [
+        (256, 256, 4),
+        (128, 128, 8),
+        (64, 64, 16),
+        (32, 32, 32),
+        (16, 16, 52),
+        (16, 16, 312),
+        (1, 1, 312),
+        (1, 1, 8),
+    ];
+
+    /// A 2D array of `RGBA16Float` numbered `t`, `width` by `height` by `layers`, at offset 0 of
+    /// `heap`, at index `index`, with two 2D views of its first slice at `index + 1` (written)
+    /// and `index + 2` (read): the array and the views as a [`Placed`].
+    fn array(
+        name: &str,
+        device: &Device,
+        heap: HeapRange,
+        (t, width, height, layers): (u32, u32, u32, u32),
+        index: u32,
+    ) -> (Texture, Placed) {
+        let format = PixelFormat::RGBA16Float;
+        let mut d = TextureDescriptor::new(TextureType::Type2DArray, format, width, height);
+        d.array_length = layers;
+        d.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+        d.storage_mode = StorageMode::Private;
+        let fit = (device.heap_texture_size_and_align(&d))
+            .unwrap_or_else(|error| panic!("{name}: array {t}: {error}"));
+        assert!(fit.size <= heap.len, "{name}: array {t}: {fit:?}");
+        let texture = (device.new_heap_texture(&d, Some(index), heap, 0))
+            .unwrap_or_else(|error| panic!("{name}: array {t}: {error}"));
+        let view = |at: u32| {
+            (texture.new_texture_view(format, TextureType::Type2D, 0..1, 0..1, Some(at)))
+                .unwrap_or_else(|error| panic!("{name}: array {t}'s view: {error}"))
+        };
+        let placed = Placed {
+            t,
+            format,
+            width,
+            height,
+            texture: view(index + 2),
+            view: view(index + 1),
+        };
+        (texture, placed)
+    }
+
+    /// A program's shapes over one memory: the [`ARRAYS`] at offset 0 of one heap, each written
+    /// through a 2D view of its first slice and read through another, then a 512 by 512 array of
+    /// one layer at the same offset written and read the same way; in one command buffer where
+    /// `one`, else the arrays' steps in one and the last array's in a second. A line for each
+    /// read that is not its write.
+    fn arrays(name: &str, device: &Device, kernels: &Kernels, one: bool) -> Vec<String> {
+        let len = MemoryClass::Private.block_len();
+        let block = (device.take_block(MemoryClass::Private, len))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let heap = HeapRange {
+            block: block.id,
+            offset: 0,
+            len,
+        };
+        let first = 4400;
+        let count = ARRAYS.len() as u32 + 1;
+        let _grant = (device.grant_indices(IndexClass::Texture, first, 3 * count))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let shapes = (ARRAYS.iter().copied()).chain([(512, 512, 1)]);
+        let (arrays, placed): (Vec<Texture>, Vec<Placed>) = (shapes.enumerate())
+            .map(|(t, (width, height, layers))| {
+                let at = first + 3 * t as u32;
+                array(
+                    name,
+                    device,
+                    heap,
+                    (20 + t as u32, width, height, layers),
+                    at,
+                )
+            })
+            .unzip();
+        let mut buffers = Buffers::apart(name, device, 2 * u64::from(count), BIG);
+        let inputs: Vec<(Vec<f32>, Buffer)> = (placed.iter())
+            .map(|p| {
+                let floats = input(p);
+                let buffer = buffers.of(name, device, &floats);
+                (floats, buffer)
+            })
+            .collect();
+        let outs: Vec<Buffer> = (inputs.iter())
+            .map(|(floats, _)| buffers.of(name, device, &vec![f32::NAN; floats.len()]))
+            .collect();
+        let queue = device.new_command_queue(4).expect("a queue");
+        let mut cbs = Vec::new();
+        let mut cb = queue.command_buffer().expect("a command buffer");
+        let last = placed.len() - 1;
+        for (at, (p, ((_, input), out))) in placed.iter().zip(inputs.iter().zip(&outs)).enumerate()
+        {
+            if at == last && !one {
+                cb.commit().expect("a commit");
+                cbs.push(cb);
+                cb = queue.command_buffer().expect("a command buffer");
+            }
+            write(name, &cb, kernels, p, input);
+            read(name, &cb, kernels, p, out);
+        }
+        cb.commit().expect("a commit");
+        cbs.push(cb);
+        for cb in &cbs {
+            finished(name, cb);
+            assert_eq!(cb.error(), None, "{name}");
+        }
+        let what = match one {
+            true => "arrays in one command buffer",
+            false => "arrays, the last in a second command buffer",
+        };
+        let wrong: Vec<String> = (placed.iter().zip(inputs.iter().zip(&outs)))
+            .filter_map(|(p, ((floats, _), out))| wrong(what, p, out, &reads(p, floats)))
+            .collect();
+        drop((placed, arrays, inputs, outs, cbs, queue));
+        (device.release_block(block)).unwrap_or_else(|error| panic!("{name}: {error}"));
+        wrong
+    }
+
     /// Six heap textures at offset 0 of one heap, each written through its view and read through
     /// itself in turn in one command buffer: each read is its write.
     #[test]
@@ -438,6 +571,35 @@ mod on_device {
             let wrong = steps(name, &device, &kernels);
             assert!(wrong.is_empty(), "{name}: {wrong:#?}");
             println!("heap alias: {name}: the aliased steps read back in separate encoders");
+        });
+    }
+
+    /// A program's shapes, 2D arrays over one memory, in one command buffer: each read is its
+    /// write.
+    #[test]
+    fn every_device_reads_each_aliased_array_s_write_in_one_command_buffer() {
+        let Some(libraries) = libraries() else {
+            return;
+        };
+        each_device("heap_alias_arrays_one", |name, _, device| {
+            let kernels = kernels(name, &device, &libraries);
+            let wrong = arrays(name, &device, &kernels, true);
+            assert!(wrong.is_empty(), "{name}: {wrong:#?}");
+            println!("heap alias: {name}: the aliased arrays read back in one command buffer");
+        });
+    }
+
+    /// As in one command buffer, with the last array's steps in a second.
+    #[test]
+    fn every_device_reads_each_aliased_array_s_write_across_command_buffers() {
+        let Some(libraries) = libraries() else {
+            return;
+        };
+        each_device("heap_alias_arrays_across", |name, _, device| {
+            let kernels = kernels(name, &device, &libraries);
+            let wrong = arrays(name, &device, &kernels, false);
+            assert!(wrong.is_empty(), "{name}: {wrong:#?}");
+            println!("heap alias: {name}: the aliased arrays read back across command buffers");
         });
     }
 }
