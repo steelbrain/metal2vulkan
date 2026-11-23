@@ -3223,6 +3223,15 @@ impl Walk<'_, '_> {
         };
         let Some(sig) = sig else {
             if call.args.iter().any(|a| self.is_ptr(*a)) || self.is_ptr(Value::Inst(id)) {
+                // An AGX operation has no signature only where its contract is not modeled: the
+                // refusal names that, not the access it cannot follow.
+                if let Callee::Llvm {
+                    op: crate::air::intrinsics::LlvmIntrinsic::Agx(_),
+                    ..
+                } = call.callee
+                {
+                    return Err(crate::lower::simd::agx::unmodeled());
+                }
                 return Err(not_lowered());
             }
             return Ok(());

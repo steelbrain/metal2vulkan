@@ -7599,6 +7599,7 @@ variant	metal2vulkan-air::intrinsics::AgxOp::ClusterNum	ClusterNum
 variant	metal2vulkan-air::intrinsics::AgxOp::EdgeCheck	EdgeCheck
 variant	metal2vulkan-air::intrinsics::AgxOp::LoadEmask	LoadEmask { space: AgxSpace, ty: NumTy }
 variant	metal2vulkan-air::intrinsics::AgxOp::MatMad	MatMad { elem: Elem, dim: u8 }
+variant	metal2vulkan-air::intrinsics::AgxOp::Shfl	Shfl
 variant	metal2vulkan-air::intrinsics::AgxOp::StoreEmask	StoreEmask { space: AgxSpace, ty: NumTy }
 variant	metal2vulkan-air::intrinsics::AgxOp::Unmodeled	Unmodeled(Sym)
 variant	metal2vulkan-air::intrinsics::AgxSpace::Global	Global

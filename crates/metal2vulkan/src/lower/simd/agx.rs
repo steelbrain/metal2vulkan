@@ -1,7 +1,8 @@
 //! The AGX lane intrinsics `llvm.agx{2,3}.*`, ported from the old engine's device-measured
 //! lowerings (`passes/air_calls/agx_emask.rs`, `passes/air_calls/matrix.rs`,
-//! `native/emitter/ops/air_calls.rs`). Every other AGX operation (`Agx(Unmodeled)`: the `wide`
-//! emask forms, `igemm`, …) is refused as `Unsupported{AgxUnmodeled, NotImplemented}`;
+//! `native/emitter/ops/air_calls.rs`), and the bit interleave measured on an M3 Max. Every other
+//! AGX operation (`Agx(Unmodeled)`: the `wide` emask forms, `igemm`, …) is refused as
+//! `Unsupported{AgxUnmodeled, NotImplemented}`, by the memory analysis where it takes a pointer;
 //! `llvm.agx3.yield`, a delay with no data effect, never reaches lowering: decode drops it
 //! (`air::intrinsics::Dropped::AgxYield`).
 //!
@@ -20,6 +21,12 @@
 //!   over the threadgroup and chosen by the hardware (0..=36 measured on an M3 Max). Vulkan has
 //!   no cluster; the constant 0 is a value the hardware itself gives (one cluster), and it keeps
 //!   the value uniform.
+//! - **`llvm.agx2.shfl(a, b)`** interleaves the bits of its two `i16` operands into an `i32`: bit
+//!   `2i` is bit `i` of `a`, bit `2i + 1` bit `i` of `b` (measured on an M3 Max over all 2^32
+//!   pairs; MSL documents the same contract for `interleave(ushort, ushort)`, which compiles to
+//!   another intrinsic). Each operand, held zero-extended in its container, is spread to the even
+//!   bits by four mask-and-shift steps, and `b`'s is shifted up by one. Per-thread arithmetic,
+//!   exact on every device, no subgroup operation.
 //! - **`llvm.agx2.{f16,f32}matmad{4x4,8x8}.v2{f16,f32}(a, b, c)`** is `c + a·b` over an 8x8
 //!   tile distributed two cells per lane over the 32 lanes of the simdgroup (device-measured
 //!   storage mapping: lane `L` owns row `((L >> 1) & 3) | ((L >> 4) << 2)`, columns
@@ -70,6 +77,8 @@ pub enum AgxStrategy {
     EdgeCheck(Form),
     /// `llvm.agx2.cluster.num`: the constant 0 in its `i32` form.
     ClusterNum(Form),
+    /// `llvm.agx2.shfl`: the bit interleave of two `i16`s.
+    Shfl,
     /// `llvm.agx2.*matmad*`.
     MatMad(MatMad),
     /// `llvm.agx3.{load,store}.with.emask.*`.
@@ -107,6 +116,7 @@ impl AgxStrategy {
         match self {
             AgxStrategy::EdgeCheck(_) => "agx.edgecheck".into(),
             AgxStrategy::ClusterNum(_) => "agx.cluster_num".into(),
+            AgxStrategy::Shfl => "agx.shfl".into(),
             AgxStrategy::MatMad(MatMad { dim: 4, .. }) => "agx.matmad4x4".into(),
             AgxStrategy::MatMad(_) => "agx.matmad8x8".into(),
             AgxStrategy::Emask(e) if e.value.is_some() => {
@@ -124,6 +134,7 @@ impl AgxStrategy {
         match self {
             AgxStrategy::EdgeCheck(_) => 4 * 48 + 32,
             AgxStrategy::ClusterNum(_) => 12,
+            AgxStrategy::Shfl => 26 * 6 + 32,
             AgxStrategy::MatMad(m) => {
                 let round = narrow::round_words(m.form);
                 96 + u32::from(m.dim) * (72 + 2 * round)
@@ -166,15 +177,15 @@ pub(super) fn select(
     }
     check_operands(cx, &call.args)?;
     match *op {
-        AgxOp::EdgeCheck | AgxOp::ClusterNum => {
+        AgxOp::EdgeCheck | AgxOp::ClusterNum | AgxOp::Shfl => {
             let form = form_on(cx.entry, cx.profile, inst.ty)?;
             if !form.is_int() || form.lanes != 1 || form.container() != 32 {
                 return Err(cx.invariant("an AGX integer result outside its signature"));
             }
-            Ok(if *op == AgxOp::EdgeCheck {
-                AgxStrategy::EdgeCheck(form)
-            } else {
-                AgxStrategy::ClusterNum(form)
+            Ok(match op {
+                AgxOp::EdgeCheck => AgxStrategy::EdgeCheck(form),
+                AgxOp::ClusterNum => AgxStrategy::ClusterNum(form),
+                _ => AgxStrategy::Shfl,
             })
         }
         AgxOp::MatMad { elem, dim } => select_matmad(cx, at, inst, call, elem, dim),
@@ -299,6 +310,13 @@ pub(super) fn emit<'c>(
             edgecheck(fb, nth(&a, 0)?, nth(&a, 1)?, nth(&a, 2)?)?
         }
         AgxStrategy::ClusterNum(form) => ops::splat(fb, *form, 0)?,
+        AgxStrategy::Shfl => {
+            let a = args(cx, fb, at)?;
+            let even = spread(fb, nth(&a, 0)?)?;
+            let odd = spread(fb, nth(&a, 1)?)?;
+            let odd = bin_k(fb, BinOp::ShiftLeftLogical, odd, 1)?;
+            fb.binary(BinOp::BitwiseOr, even, odd)?
+        }
         AgxStrategy::MatMad(m) => {
             let a = args(cx, fb, at)?;
             matmad(cx, fb, at, m, &a)?
@@ -345,6 +363,23 @@ fn edgecheck(
         };
     }
     Ok(acc)
+}
+
+/// The 16 bits of `x` (an `i16` held zero-extended) spread to the even bits of a word, bit `i` to
+/// bit `2i`: each step moves the upper half of every group of bits up by the step, and the mask
+/// keeps the moved halves and the lower ones.
+fn spread(fb: &mut FunctionBuilder<'_>, mut x: SValue) -> BResult<SValue> {
+    for (step, mask) in [
+        (8, 0x00FF_00FF),
+        (4, 0x0F0F_0F0F),
+        (2, 0x3333_3333),
+        (1, 0x5555_5555),
+    ] {
+        let up = bin_k(fb, BinOp::ShiftLeftLogical, x, step)?;
+        let both = fb.binary(BinOp::BitwiseOr, x, up)?;
+        x = bin_k(fb, BinOp::BitwiseAnd, both, mask)?;
+    }
+    Ok(x)
 }
 
 /// `c + a·b` of the distributed tile ([`super::matrix::tile_mad`]), each step rounded to the

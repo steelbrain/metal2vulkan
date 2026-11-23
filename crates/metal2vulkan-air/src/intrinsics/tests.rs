@@ -939,6 +939,7 @@ fn llvm_bases_decode_against_their_declarations() {
         "llvm.agx2.f64matmad8x8.v2f64",
         "llvm.agx2.f32matmad16x16.v2f32",
         "llvm.agx3.igemm.v8i32.i64.i64.v8i32",
+        "llvm.agx3.shfl",
     ] {
         assert_eq!(
             llvm(name, v4f32, &[p1]),
@@ -996,6 +997,15 @@ fn llvm_bases_decode_against_their_declarations() {
     );
     assert_eq!(
         llvm("llvm.agx2.cluster.num", i16s, &[]),
+        DeclClass::Mismatch
+    );
+    // The `agx2` bit interleave.
+    assert_eq!(
+        llvm("llvm.agx2.shfl", i32s, &[i16s, i16s]),
+        DeclClass::Llvm(LlvmIntrinsic::Agx(AgxOp::Shfl))
+    );
+    assert_eq!(
+        llvm("llvm.agx2.shfl", i32s, &[i32s, i32s]),
         DeclClass::Mismatch
     );
     for (name, elem, dim) in [

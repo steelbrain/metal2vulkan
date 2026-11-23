@@ -93,11 +93,15 @@ impl AgxSpace {
 /// `agx_emask` and `matrix` lowerings): the `agx3` lane-masked accesses and their mask builder
 /// (lane `i` of an emask access is active exactly when bit `i` of the first `i16` mask is set; the
 /// second `i16` is a constant of the shape; the third, the element stride, has no effect), the
-/// `agx2` cluster number, and the `agx2` distributed-register matrix multiply-adds.
+/// `agx2` cluster number, the `agx2` distributed-register matrix multiply-adds, and the `agx2`
+/// bit interleave (measured on an M3 Max over every pair of operands).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum AgxOp {
     /// `llvm.agx2.cluster.num`: `i32 ()`, the physical GPU cluster the threadgroup runs on.
     ClusterNum,
+    /// `llvm.agx2.shfl`: `i32 (i16 a, i16 b)`, the bit interleave: bit `2i` of the result is bit
+    /// `i` of `a`, and bit `2i + 1` is bit `i` of `b`.
+    Shfl,
     /// `llvm.agx2.{f16,f32}matmad{4x4,8x8}.v2{f16,f32}`: `<2 x T> (<2 x T> a, <2 x T> b,
     /// <2 x T> c)`, `c + a·b` over the 8x8 tile (or over each of its four 4x4 quadrants) whose
     /// cells are distributed two per lane over the 32 lanes of the simdgroup. `elem` is `F16`
@@ -140,11 +144,13 @@ impl AgxOp {
         }
     }
 
-    /// Parse an `agx2` name: the cluster number, and the matrix multiply-adds, whose overload
-    /// suffix must spell their element (`v2f16` or `v2f32`).
+    /// Parse an `agx2` name: the cluster number, the bit interleave, and the matrix
+    /// multiply-adds, whose overload suffix must spell their element (`v2f16` or `v2f32`).
     fn parse2(rest: &str) -> Option<AgxOp> {
-        if rest == "cluster.num" {
-            return Some(AgxOp::ClusterNum);
+        match rest {
+            "cluster.num" => return Some(AgxOp::ClusterNum),
+            "shfl" => return Some(AgxOp::Shfl),
+            _ => {}
         }
         let (op, suffix) = rest.split_once('.')?;
         let (elem, dim) = match op {
@@ -187,6 +193,7 @@ impl AgxOp {
         let i32s = Operand::Num(NumTy::scalar(Elem::I32));
         Some(match *self {
             AgxOp::ClusterNum => Signature::new(i32s, &[]),
+            AgxOp::Shfl => Signature::new(i32s, &[i16s, i16s]),
             AgxOp::MatMad { elem, .. } => {
                 let v2 = Operand::Num(NumTy { elem, lanes: 2 });
                 Signature::new(v2, &[v2, v2, v2])
