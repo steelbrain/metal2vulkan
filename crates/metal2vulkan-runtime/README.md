@@ -3916,6 +3916,15 @@ cache is answered compile-required on both.
   26 streams' libraries calls a SIMD-group, quad or SIMD-group matrix function (each library whose
   bytes name one disassembled with `llvm-dis`, jobs m3-max-52530, 52531, 52532, 52557 and 52604).
   Their libraries that call quad functions, 2 to 5 a stream, call them from no fragment function.
+- Under AMD's open Linux driver (AMDVLK 2025.Q2.1) on the RX 7900 XTX and the Radeon 780M, a
+  fragment function's SIMD-group operations leave out the helpers of a partly covered quad, which
+  Metal counts as active lanes: a ballot or active mask lacks their bits, a vote, sum or prefix sum
+  leaves them out, and a shuffle from a helper reads the calling lane's own value (the device
+  test's SIMD-group functions, job m3-max-71001). The entry declares `MaximallyReconvergesKHR` and
+  `RequireFullQuadsKHR`, under which Vulkan keeps the helpers active for every instruction
+  (section 9.31, "Helper Invocations"); RADV on the same cards gives Metal's answers. No exact form
+  exists: Vulkan runs no SIMD-group-wide instruction over the helpers otherwise, as it runs its
+  quad instructions. It is a driver bug, and the answers stay so on that driver.
 - On a device without `shaderResourceMinLod` (Min-LOD clamps, under Floor), a function that samples
   with a `min_lod_clamp` other than 0 is refused at creation, an `Error::Translation` naming
   `MinLodClamp` and `shaderResourceMinLod`. Of the venues dumped, the UHD 630's Windows driver
