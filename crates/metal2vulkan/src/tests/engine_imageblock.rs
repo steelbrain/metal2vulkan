@@ -43,7 +43,7 @@ use crate::pipeline::facts::{Mechanism, RuntimeFact};
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::lower_inputs::{StorageImageChoice, StorageImageClass};
 use crate::pipeline::sym::{
-    Axis, PushField, ResourceKind, ResourceSlot, SampledType, SlotClass, SlotRef, SpecKey, Stage,
+    PushField, ResourceKind, ResourceSlot, SampledType, SlotClass, SlotRef, SpecKey, Stage,
 };
 use crate::pipeline::testing::{
     engine_dir, fixtures_dir, llvm_assemble, typed_module, typed_module_with, AssembleError,
@@ -118,10 +118,9 @@ fn run(
         "the plan depends on the imageblock size"
     );
     let mut spec = BTreeMap::new();
-    spec.insert(SpecKey::LocalSize(Axis::X), u64::from(d.local[0]));
-    spec.insert(SpecKey::LocalSize(Axis::Y), u64::from(d.local[1]));
-    spec.insert(SpecKey::LocalSize(Axis::Z), 1);
-    spec.insert(SpecKey::FlatLocalSize, u64::from(d.local[0] * d.local[1]));
+    spec.extend(crate::pipeline::threadgroup_constants([
+        d.local[0], d.local[1], 1,
+    ]));
     spec.insert(SpecKey::ImageblockWidth, u64::from(d.block[0]));
     spec.insert(SpecKey::ImageblockHeight, u64::from(d.block[1]));
     for &(n, len) in d.threadgroup {

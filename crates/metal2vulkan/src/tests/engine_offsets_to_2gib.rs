@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use super::engine_word_phases::{bounds_word, identity_profiles, slot_word, ZERO_UNMAPPED};
 use crate::lower::dispatch::region_bytes;
 use crate::pipeline::interface::PushLoc;
-use crate::pipeline::sym::{Axis, PushField, SpecKey};
+use crate::pipeline::sym::PushField;
 use crate::pipeline::testing::{compile_kept, engine_dir, llvm_assemble, AssembleError};
 use crate::spirv::interp::{run, Buffer, Config, Resources};
 
@@ -116,12 +116,7 @@ fn accesses_up_to_2_gib_land_at_their_own_words() {
             let (b, o) = at(word);
             bytes[b][o..o + 4].copy_from_slice(&(0x5000_0000 | t as u32).to_le_bytes());
         }
-        let spec = BTreeMap::from([
-            (SpecKey::LocalSize(Axis::X), u64::from(THREADS)),
-            (SpecKey::LocalSize(Axis::Y), 1),
-            (SpecKey::LocalSize(Axis::Z), 1),
-            (SpecKey::FlatLocalSize, u64::from(THREADS)),
-        ]);
+        let spec = BTreeMap::from(crate::pipeline::threadgroup_constants([THREADS, 1, 1]));
         let res = Resources {
             buffers: [IDX, SLOT, SLOT + 4 * u64::from(HIGH)]
                 .into_iter()

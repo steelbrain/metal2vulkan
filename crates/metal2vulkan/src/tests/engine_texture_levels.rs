@@ -35,7 +35,7 @@ use crate::lower::texture::max_levels;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{
-    Axis, PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage,
+    PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage,
 };
 use crate::pipeline::testing::{
     compile, engine_dir, link_and_validate, llvm_assemble, profile, typed_module, AssembleError,
@@ -226,13 +226,7 @@ fn run(
     images: &[Image],
 ) -> Result<(Vec<Vec<u8>>, Vec<Image>), String> {
     let mut spec = BTreeMap::new();
-    for (axis, n) in [Axis::X, Axis::Y, Axis::Z].into_iter().zip(r.local) {
-        spec.insert(SpecKey::LocalSize(axis), u64::from(n));
-    }
-    spec.insert(
-        SpecKey::FlatLocalSize,
-        u64::from(r.local.iter().product::<u32>()),
-    );
+    spec.extend(crate::pipeline::threadgroup_constants(r.local));
     spec.extend(r.spec.iter().copied());
     let buffers: Vec<Buffer> = r
         .buffers

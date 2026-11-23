@@ -42,7 +42,7 @@ use crate::library::FunctionConstantValues;
 use crate::lower::select::{LowerInputs, Plan};
 use crate::pipeline::compile::{compile_bitcode, EntryRef};
 use crate::pipeline::facts::RuntimeFact;
-use crate::pipeline::sym::{Axis, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
     llvm_assemble, profile, typed_module, typed_module_with, AssembleError, Scratch,
 };
@@ -1444,11 +1444,7 @@ fn run_words(plan: &Plan, m: &TypedModule, threads: u32, lanes: SubgroupSize) ->
 fn run_shape(plan: &Plan, m: &TypedModule, local: [u32; 3], lanes: SubgroupSize) -> Vec<u32> {
     let threads = local.iter().product::<u32>();
     let mut spec = BTreeMap::new();
-    for (a, v) in [Axis::X, Axis::Y, Axis::Z].into_iter().zip(local) {
-        spec.insert(SpecKey::LocalSize(a), u64::from(v));
-    }
-    // The flattened tiers' Vulkan workgroup width.
-    spec.insert(SpecKey::FlatLocalSize, u64::from(threads));
+    spec.extend(crate::pipeline::threadgroup_constants(local));
     let res = Resources {
         buffers: vec![Buffer {
             slot: Some(ResourceSlot {
@@ -1891,10 +1887,7 @@ fn a_conflict_across_iterations_takes_a_barrier_at_the_loop_header() {
 fn run_over(plan: &Plan, m: &TypedModule, input: &[u32], lanes: SubgroupSize) -> Vec<u32> {
     let threads = input.len() as u32;
     let mut spec = BTreeMap::new();
-    for (a, v) in [Axis::X, Axis::Y, Axis::Z].into_iter().zip([threads, 1, 1]) {
-        spec.insert(SpecKey::LocalSize(a), u64::from(v));
-    }
-    spec.insert(SpecKey::FlatLocalSize, u64::from(threads));
+    spec.extend(crate::pipeline::threadgroup_constants([threads, 1, 1]));
     let slot = |index| {
         Some(ResourceSlot {
             stage: Stage::Kernel,

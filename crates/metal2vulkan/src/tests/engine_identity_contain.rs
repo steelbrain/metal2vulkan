@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::engine_word_phases::{identity_profiles, slot_word};
 use crate::lower::dispatch::region_bytes;
 use crate::pipeline::interface::PushLoc;
-use crate::pipeline::sym::{Axis, PushField, SlotClass, SlotRef, SpecKey, Stage};
+use crate::pipeline::sym::{PushField, SlotClass, SlotRef, Stage};
 use crate::pipeline::testing::{compile_kept, link_and_validate, llvm_assemble, AssembleError};
 use crate::spirv::interp::{run, Buffer, Config, Resources};
 
@@ -311,12 +311,7 @@ fn dispatch(k: u32, bounds: [(u32, u32); 2], (data_at, out_at): (u64, u64)) -> (
             buffer(ZERO, vec![0; 16]),
         ],
         push,
-        spec: BTreeMap::from([
-            (SpecKey::LocalSize(Axis::X), u64::from(THREADS)),
-            (SpecKey::LocalSize(Axis::Y), 1),
-            (SpecKey::LocalSize(Axis::Z), 1),
-            (SpecKey::FlatLocalSize, u64::from(THREADS)),
-        ]),
+        spec: BTreeMap::from(crate::pipeline::threadgroup_constants([THREADS, 1, 1])),
     };
     let got = run(&module, &Config::default(), res).unwrap_or_else(|e| panic!("{stem}: {e}"));
     let words = got.buffers[1]

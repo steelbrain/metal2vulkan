@@ -26,7 +26,7 @@ use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::lower_inputs::LoweringInputs;
 use crate::pipeline::stage_io::{IoRole, StageBuiltin};
-use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
     engine_dir, link_and_validate, llvm_assemble, meter, profile, typed_module_specialized,
     AssembleError,
@@ -81,10 +81,7 @@ fn compile_with(
 /// `out` filled with a sentinel first; identical in both scheduling orders.
 fn run_kernel(plan: &Plan, m: &TypedModule) -> Vec<u32> {
     let mut spec = BTreeMap::new();
-    for (axis, v) in [(Axis::X, 4), (Axis::Y, 1), (Axis::Z, 1)] {
-        spec.insert(SpecKey::LocalSize(axis), v);
-    }
-    spec.insert(SpecKey::FlatLocalSize, 4);
+    spec.extend(crate::pipeline::threadgroup_constants([4, 1, 1]));
     // Zero push bytes: each buffer is bound at its start, and the dispatch is one region at the
     // grid's origin.
     for f in &plan.push.fields {

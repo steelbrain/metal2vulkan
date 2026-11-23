@@ -24,7 +24,7 @@ use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{
-    Axis, CombinedSampler, PushField, ResourceKind, ResourceSlot, SamplerRef, SlotClass, SlotRef,
+    CombinedSampler, PushField, ResourceKind, ResourceSlot, SamplerRef, SlotClass, SlotRef,
     SpecKey, Stage,
 };
 use crate::pipeline::testing::{
@@ -91,10 +91,7 @@ fn texture_slot(index: u32) -> SlotRef {
 /// Resources of a dispatch of 1x1x1 threadgroups, `[[buffer(i)]]` holding `init[i]`.
 fn resources(plan: &Plan, init: &[Vec<u8>]) -> Resources {
     let mut spec = BTreeMap::new();
-    for axis in [Axis::X, Axis::Y, Axis::Z] {
-        spec.insert(SpecKey::LocalSize(axis), 1);
-    }
-    spec.insert(SpecKey::FlatLocalSize, 1);
+    spec.extend(crate::pipeline::threadgroup_constants([1, 1, 1]));
     let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {
         match (f.field, f.loc) {

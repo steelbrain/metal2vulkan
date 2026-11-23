@@ -108,10 +108,7 @@ fn volume(index: u32, texels: impl Fn(u32) -> [u32; 4]) -> Image {
 /// must agree: `out`, `q` and the images.
 fn run_volume(m: &TypedModule, plan: &Plan, images: &[Image]) -> (Vec<u8>, Vec<u8>, Vec<Image>) {
     let mut spec = BTreeMap::new();
-    for axis in [Axis::X, Axis::Y, Axis::Z] {
-        spec.insert(SpecKey::LocalSize(axis), 1);
-    }
-    spec.insert(SpecKey::FlatLocalSize, 1);
+    spec.extend(crate::pipeline::threadgroup_constants([1, 1, 1]));
     let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     let [w, h, d] = EXTENT;
     let texels = (w * h * d) as usize;

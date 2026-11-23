@@ -23,7 +23,7 @@ use crate::device::profile::DeviceProfile;
 use crate::lower::select::{LowerInputs, Plan};
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::lower_inputs::{StorageImageChoice, StorageImageClass};
-use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef};
+use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef};
 use crate::pipeline::sym::{SpecKey, Stage};
 use crate::pipeline::testing::{
     link_and_validate, llvm_assemble, typed_module_with, AssembleError,
@@ -257,10 +257,7 @@ fn image_of(width: u32, texels: impl Fn(u32) -> [u32; 4], robust: Option<[u32; 4
 /// the texture reading alpha 0 where the format's own rule applies.
 fn resources(plan: &Plan, buffer: Vec<u8>) -> Resources {
     let mut map = BTreeMap::new();
-    for axis in [Axis::X, Axis::Y, Axis::Z] {
-        map.insert(SpecKey::LocalSize(axis), 1);
-    }
-    map.insert(SpecKey::FlatLocalSize, 1);
+    map.extend(crate::pipeline::threadgroup_constants([1, 1, 1]));
     map.insert(SpecKey::OutOfBoundsAlpha(SLOT), 0);
     let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {

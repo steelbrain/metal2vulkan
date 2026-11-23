@@ -47,8 +47,7 @@ use crate::metal::format::storage_image_choice;
 use crate::metal::PixelFormat;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{
-    Axis, PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage,
-    SyntheticBinding,
+    PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, Stage, SyntheticBinding,
 };
 use crate::pipeline::testing::{compile_with, llvm_assemble, typed_module_with, AssembleError};
 use crate::spirv::interp::{run, run_with_images, Buffer, Config, Image, Order, Resources};
@@ -148,10 +147,7 @@ fn slot(kind: ResourceKind, index: u32) -> ResourceSlot {
 /// 0, and the local size.
 fn resources(plan: &Plan) -> Resources {
     let mut spec = BTreeMap::new();
-    spec.insert(SpecKey::LocalSize(Axis::X), u64::from(LOCAL));
-    spec.insert(SpecKey::LocalSize(Axis::Y), 1);
-    spec.insert(SpecKey::LocalSize(Axis::Z), 1);
-    spec.insert(SpecKey::FlatLocalSize, u64::from(LOCAL));
+    spec.extend(crate::pipeline::threadgroup_constants([LOCAL, 1, 1]));
     let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {
         match (f.field, f.loc) {
@@ -517,10 +513,7 @@ fn our_moves() -> Vec<OurMove> {
 /// constant blob where the plan has one, and the local size.
 fn move_resources(plan: &Plan, threads: u32) -> Resources {
     let mut spec = BTreeMap::new();
-    spec.insert(SpecKey::LocalSize(Axis::X), u64::from(MOVE_LOCAL));
-    spec.insert(SpecKey::LocalSize(Axis::Y), 1);
-    spec.insert(SpecKey::LocalSize(Axis::Z), 1);
-    spec.insert(SpecKey::FlatLocalSize, u64::from(MOVE_LOCAL));
+    spec.extend(crate::pipeline::threadgroup_constants([MOVE_LOCAL, 1, 1]));
     let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {
         match (f.field, f.loc) {

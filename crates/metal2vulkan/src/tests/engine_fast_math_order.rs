@@ -31,7 +31,7 @@
 use std::collections::BTreeSet;
 
 use crate::pipeline::artifact::PrecisionNote;
-use crate::pipeline::sym::{Axis, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
     compile, link_and_validate, llvm_assemble, typed_module, AssembleError, Scratch,
 };
@@ -308,10 +308,7 @@ fn interpret(
         bytes,
     };
     let mut spec = std::collections::BTreeMap::new();
-    for axis in [Axis::X, Axis::Y, Axis::Z] {
-        spec.insert(SpecKey::LocalSize(axis), 1);
-    }
-    spec.insert(SpecKey::FlatLocalSize, 1);
+    spec.extend(crate::pipeline::threadgroup_constants([1, 1, 1]));
     let resources = Resources {
         buffers: vec![
             buffer(0, input.iter().flat_map(|w| w.to_le_bytes()).collect()),

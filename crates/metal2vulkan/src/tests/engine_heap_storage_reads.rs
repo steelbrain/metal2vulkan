@@ -25,8 +25,7 @@ use crate::error::{Capability, Error, Feature, Needs};
 use crate::library::Library;
 use crate::memory::handles::{Lookup, FLAG_STORAGE_UNREADABLE};
 use crate::pipeline::sym::{
-    Axis, HandleClass, ImageAccess, ImageHandleClass, ResourceKind, ResourceSlot, SpecKey, Stage,
-    SyntheticBinding,
+    HandleClass, ImageAccess, ImageHandleClass, ResourceKind, ResourceSlot, Stage, SyntheticBinding,
 };
 use crate::pipeline::testing::{llvm_assemble, typed_module, AssembleError};
 use crate::pipeline::{
@@ -258,10 +257,7 @@ fn a_flagged_member_reads_the_null_element() {
     };
     for (id, want) in [(READABLE_ID, texels(1.0)), (FLAGGED_ID, vec![[0; 4]; 4])] {
         let mut spec = BTreeMap::new();
-        for axis in [Axis::X, Axis::Y, Axis::Z] {
-            spec.insert(SpecKey::LocalSize(axis), 1);
-        }
-        spec.insert(SpecKey::FlatLocalSize, 1);
+        spec.extend(crate::pipeline::threadgroup_constants([1, 1, 1]));
         let res = Resources {
             buffers: vec![
                 buffer(ResourceKind::Buffer, 0, id.to_le_bytes().to_vec()),

@@ -22,7 +22,7 @@ use crate::device::profile::DeviceProfile;
 use crate::device::DevicePolicy;
 use crate::lower::select::Plan;
 use crate::pipeline::interface::PushLoc;
-use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
     compile, device_nan_bits, link_and_validate, llvm_assemble, profile, typed_module,
     AssembleError,
@@ -130,10 +130,7 @@ fn out_slot() -> ResourceSlot {
 /// Output buffer 0 of 128 zero words and 64 threads.
 fn resources(plan: &Plan) -> Resources {
     let mut s = BTreeMap::new();
-    s.insert(SpecKey::LocalSize(Axis::X), 64);
-    s.insert(SpecKey::LocalSize(Axis::Y), 1);
-    s.insert(SpecKey::LocalSize(Axis::Z), 1);
-    s.insert(SpecKey::FlatLocalSize, 64);
+    s.extend(crate::pipeline::threadgroup_constants([64, 1, 1]));
     let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {
         match (f.field, f.loc) {

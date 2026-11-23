@@ -26,7 +26,7 @@ use crate::metal::{TextureSwizzle as S, TextureSwizzleChannels as C};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::lower_inputs::{StorageImageChoice, StorageImageClass};
-use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef};
+use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef};
 use crate::pipeline::sym::{SpecKey, Stage};
 use crate::pipeline::testing::{
     engine_dir, link_and_validate, llvm_assemble, typed_module_with, AssembleError,
@@ -356,10 +356,7 @@ fn image(texels: impl Fn(u32) -> [u32; 4], robust: Option<[u32; 4]>) -> Image {
 /// Resources of a dispatch of one-thread threadgroups, buffer 0 holding `buffer`, with `spec`.
 fn resources(plan: &Plan, buffer: Vec<u8>, spec: &[(SpecKey, u64)]) -> Resources {
     let mut map = BTreeMap::new();
-    for axis in [Axis::X, Axis::Y, Axis::Z] {
-        map.insert(SpecKey::LocalSize(axis), 1);
-    }
-    map.insert(SpecKey::FlatLocalSize, 1);
+    map.extend(crate::pipeline::threadgroup_constants([1, 1, 1]));
     map.extend(spec.iter().copied());
     let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {

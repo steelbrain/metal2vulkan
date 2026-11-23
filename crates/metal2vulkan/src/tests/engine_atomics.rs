@@ -37,9 +37,7 @@ use crate::memory::static_root::analyze_memory;
 use crate::pipeline::compile::{compile_bitcode, EntryRef};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::PushLoc;
-use crate::pipeline::sym::{
-    Axis, PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage,
-};
+use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, Stage};
 use crate::pipeline::testing::{
     compile, fixtures_dir, link_and_validate, llvm_assemble, meter, profile, status_reach,
     status_reach_on, typed_module, AssembleError,
@@ -149,10 +147,7 @@ const STATUS_BYTES: usize =
 /// its root-table entry, for a plan that reaches slots by device address (typed atomics).
 fn resources(plan: &Plan, init: &[Vec<u32>], threads: u32) -> Resources {
     let mut s = BTreeMap::new();
-    s.insert(SpecKey::LocalSize(Axis::X), u64::from(threads));
-    s.insert(SpecKey::LocalSize(Axis::Y), 1);
-    s.insert(SpecKey::LocalSize(Axis::Z), 1);
-    s.insert(SpecKey::FlatLocalSize, u64::from(threads));
+    s.extend(crate::pipeline::threadgroup_constants([threads, 1, 1]));
     let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {
         let (at, value) = match (f.field, f.loc) {
@@ -991,10 +986,7 @@ fn device_address_atomics_are_exact_and_contained() {
         }
     }
     let mut s = BTreeMap::new();
-    s.insert(SpecKey::LocalSize(Axis::X), 4);
-    s.insert(SpecKey::LocalSize(Axis::Y), 1);
-    s.insert(SpecKey::LocalSize(Axis::Z), 1);
-    s.insert(SpecKey::FlatLocalSize, 4);
+    s.extend(crate::pipeline::threadgroup_constants([4, 1, 1]));
     let res = Resources {
         buffers: vec![
             Buffer {

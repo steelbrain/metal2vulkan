@@ -47,7 +47,7 @@ use crate::lower::select::Plan;
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::PushLoc;
-use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
     compile_kept, engine_dir, link_and_validate, llvm_assemble, profile, typed_module_with,
     AssembleError,
@@ -296,10 +296,7 @@ fn run_all(
     bufs: &[Vec<u8>],
 ) -> Vec<Vec<u8>> {
     let mut spec = BTreeMap::new();
-    for (a, v) in [Axis::X, Axis::Y, Axis::Z].into_iter().zip([local, 1, 1]) {
-        spec.insert(SpecKey::LocalSize(a), u64::from(v));
-    }
-    spec.insert(SpecKey::FlatLocalSize, u64::from(local));
+    spec.extend(crate::pipeline::threadgroup_constants([local, 1, 1]));
     let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {
         assert!(matches!(f.loc, PushLoc::Push { .. }), "{f:?}");

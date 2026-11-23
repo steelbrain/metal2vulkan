@@ -35,8 +35,8 @@ use crate::device::{DevicePolicy, DeviceProfile, SubgroupSizes};
 use crate::pipeline::compile::compile_bitcode_kept;
 use crate::pipeline::testing::{link_and_validate, meter, profile};
 use crate::pipeline::{
-    Axis, EntryRef, LoweringInputs, PushField, PushLoc, ResourceKind, ResourceSlot, SlotClass,
-    SlotRef, SpecKey, Stage,
+    EntryRef, LoweringInputs, PushField, PushLoc, ResourceKind, ResourceSlot, SlotClass, SlotRef,
+    SpecKey, Stage,
 };
 use crate::spirv::interp::{
     run, BarrierRule, Buffer, Config, Order, Outcome, Resources, SubgroupSize,
@@ -310,10 +310,7 @@ impl Execute for CpuInterp {
             }
         }
         let mut spec = BTreeMap::new();
-        spec.insert(SpecKey::LocalSize(Axis::X), u64::from(self.threads));
-        spec.insert(SpecKey::LocalSize(Axis::Y), 1);
-        spec.insert(SpecKey::LocalSize(Axis::Z), 1);
-        spec.insert(SpecKey::FlatLocalSize, u64::from(self.threads));
+        spec.extend(crate::pipeline::threadgroup_constants([self.threads, 1, 1]));
 
         // Every kernel buffer backs its slot and is reachable at its device address.
         let contents = std::iter::once(kernel.output_init.clone())

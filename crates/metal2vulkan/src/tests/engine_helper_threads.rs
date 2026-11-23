@@ -19,7 +19,7 @@ use crate::device::requirements::VkFeature;
 use crate::device::subgroup::Tier;
 use crate::device::{DevicePolicy, DeviceProfile};
 use crate::lower::fragment::DiscardForm;
-use crate::pipeline::sym::{Axis, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
     compile, engine_dir, link_and_validate, llvm_assemble, moltenvk_msl_compile, profile,
     typed_module, AssembleError,
@@ -255,10 +255,7 @@ fn kernel_words(p: &DeviceProfile, tier: Tier, lanes: SubgroupSize, local: u32) 
     let (plan, m) = typed_module(&bc, entry, p).unwrap_or_else(|e| panic!("{entry}: {e}"));
     assert_eq!(plan.simd.1, tier, "{entry}");
     let mut spec = BTreeMap::new();
-    for (a, v) in [Axis::X, Axis::Y, Axis::Z].into_iter().zip([local, 1, 1]) {
-        spec.insert(SpecKey::LocalSize(a), u64::from(v));
-    }
-    spec.insert(SpecKey::FlatLocalSize, u64::from(local));
+    spec.extend(crate::pipeline::threadgroup_constants([local, 1, 1]));
     let res = Resources {
         buffers: vec![Buffer {
             slot: Some(ResourceSlot {

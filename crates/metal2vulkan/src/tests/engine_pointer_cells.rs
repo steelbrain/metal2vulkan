@@ -27,9 +27,7 @@ use crate::error::{Error, Feature, LowerFamily, Needs};
 use crate::lower::select::Plan;
 use crate::metal::PixelFormat;
 use crate::pipeline::interface::PushLoc;
-use crate::pipeline::sym::{
-    Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage, SyntheticBinding,
-};
+use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, Stage, SyntheticBinding};
 use crate::pipeline::testing::{
     compile, compile_given_storage_format, link_and_validate, llvm_assemble, profile, typed_module,
     AssembleError,
@@ -119,10 +117,7 @@ fn words(bytes: &[u8]) -> Vec<u32> {
 /// The resources of `plan` with buffer `i` holding `bufs[i]`, each bound at its start.
 fn resources(plan: &Plan, bufs: &[Vec<u32>]) -> Resources {
     let mut spec = BTreeMap::new();
-    spec.insert(SpecKey::LocalSize(Axis::X), u64::from(THREADS));
-    spec.insert(SpecKey::LocalSize(Axis::Y), 1);
-    spec.insert(SpecKey::LocalSize(Axis::Z), 1);
-    spec.insert(SpecKey::FlatLocalSize, u64::from(THREADS));
+    spec.extend(crate::pipeline::threadgroup_constants([THREADS, 1, 1]));
     let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {
         match (f.field, f.loc) {

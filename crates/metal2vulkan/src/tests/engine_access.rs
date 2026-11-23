@@ -45,7 +45,7 @@ use crate::pipeline::compile::{compile_bitcode, plan_bitcode, EntryRef};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::{BufferForm, PushLoc, SlotInterface, Window};
 use crate::pipeline::sym::{
-    Axis, PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage, Symbol,
+    PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage, Symbol,
 };
 use crate::pipeline::testing::{
     compile, device_nan_bits, engine_dir, link_and_validate, llvm_assemble, meter, typed_module,
@@ -2199,10 +2199,7 @@ declare float @air.convert.f.f32.u.i32(i32)
 /// Eight threads, one threadgroup: the spec the interpreter runs a kernel's grid of 8 at.
 fn eight_threads() -> BTreeMap<SpecKey, u64> {
     let mut spec = BTreeMap::new();
-    spec.insert(SpecKey::LocalSize(Axis::X), 8);
-    spec.insert(SpecKey::LocalSize(Axis::Y), 1);
-    spec.insert(SpecKey::LocalSize(Axis::Z), 1);
-    spec.insert(SpecKey::FlatLocalSize, 8);
+    spec.extend(crate::pipeline::threadgroup_constants([8, 1, 1]));
     spec
 }
 

@@ -28,9 +28,7 @@ use crate::metal::PixelFormat;
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::compile::{compile_bitcode, EntryRef};
 use crate::pipeline::facts::RuntimeFact;
-use crate::pipeline::sym::{
-    Axis, ResourceKind, ResourceSlot, SampledType, SlotClass, SlotRef, SpecKey, Stage,
-};
+use crate::pipeline::sym::{ResourceKind, ResourceSlot, SampledType, SlotClass, SlotRef, Stage};
 use crate::pipeline::testing::{
     device_nan_bits, link_and_validate, llvm_assemble, meter, profile, typed_module_with,
     AssembleError,
@@ -226,10 +224,7 @@ fn resource(m: &TypedModule) -> ResourceSlot {
 /// per texel.
 fn resources(plan: &Plan, bytes: u32) -> Resources {
     let mut spec = BTreeMap::new();
-    for axis in [Axis::X, Axis::Y, Axis::Z] {
-        spec.insert(SpecKey::LocalSize(axis), 1);
-    }
-    spec.insert(SpecKey::FlatLocalSize, 1);
+    spec.extend(crate::pipeline::threadgroup_constants([1, 1, 1]));
     let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     let out = Buffer {
         slot: Some(ResourceSlot {
@@ -803,10 +798,7 @@ fn integer_writes_saturate_to_the_bound_formats_channels() {
                 }
                 assert_eq!(words, usize::from(!declares), "{what}: the slot's word");
                 let mut spec = BTreeMap::new();
-                for axis in [Axis::X, Axis::Y, Axis::Z] {
-                    spec.insert(SpecKey::LocalSize(axis), 1);
-                }
-                spec.insert(SpecKey::FlatLocalSize, 1);
+                spec.extend(crate::pipeline::threadgroup_constants([1, 1, 1]));
                 let res = Resources {
                     buffers: vec![Buffer {
                         slot: Some(ResourceSlot {
@@ -905,10 +897,7 @@ fn integer_writes_into_narrow_floats_take_the_devices_conversion() {
                 .flat_map(|n| (0..4).flat_map(move |c| lane(n, c).to_le_bytes()))
                 .collect();
             let mut spec = BTreeMap::new();
-            for axis in [Axis::X, Axis::Y, Axis::Z] {
-                spec.insert(SpecKey::LocalSize(axis), 1);
-            }
-            spec.insert(SpecKey::FlatLocalSize, 1);
+            spec.extend(crate::pipeline::threadgroup_constants([1, 1, 1]));
             let res = Resources {
                 buffers: vec![Buffer {
                     slot: Some(ResourceSlot {

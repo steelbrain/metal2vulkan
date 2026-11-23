@@ -22,7 +22,7 @@ use crate::error::{Error, Feature};
 use crate::lower::access::local::Home;
 use crate::lower::select::{LowerInputs, Plan};
 use crate::pipeline::interface::PushLoc;
-use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
 use crate::pipeline::testing::{
     compile, compile_with, description, link_and_validate, llvm_assemble, typed_module,
     typed_module_with, AssembleError,
@@ -182,10 +182,7 @@ fn workgroup_inits(m: &TypedModule) -> Vec<(bool, bool)> {
 /// Output buffer 0 of `words` zero words, threadgroups of [`THREADS`], and `spec` besides.
 fn resources(plan: &Plan, words: usize, spec: &[(SpecKey, u64)]) -> Resources {
     let mut s = BTreeMap::new();
-    s.insert(SpecKey::LocalSize(Axis::X), u64::from(THREADS));
-    s.insert(SpecKey::LocalSize(Axis::Y), 1);
-    s.insert(SpecKey::LocalSize(Axis::Z), 1);
-    s.insert(SpecKey::FlatLocalSize, u64::from(THREADS));
+    s.extend(crate::pipeline::threadgroup_constants([THREADS, 1, 1]));
     s.extend(spec.iter().copied());
     // Zero push bytes: the output is bound at its start, and the dispatch is one region at the
     // grid's origin.

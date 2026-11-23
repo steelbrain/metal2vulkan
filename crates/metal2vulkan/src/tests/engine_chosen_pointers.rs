@@ -32,7 +32,7 @@ use crate::library::FunctionConstantValues;
 use crate::lower::select::LowerInputs;
 use crate::pipeline::compile::{compile_bitcode_linked, EntryRef, LinkedSource};
 use crate::pipeline::interface::PushLoc;
-use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
     engine_dir, link_and_validate, llvm_assemble, meter, profile, typed_module_linked_with,
     AssembleError,
@@ -154,12 +154,7 @@ fn dispatch(
         }
     }
     let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
-    let spec = BTreeMap::from([
-        (SpecKey::LocalSize(Axis::X), u64::from(N)),
-        (SpecKey::LocalSize(Axis::Y), 1),
-        (SpecKey::LocalSize(Axis::Z), 1),
-        (SpecKey::FlatLocalSize, u64::from(N)),
-    ]);
+    let spec = BTreeMap::from(crate::pipeline::threadgroup_constants([N, 1, 1]));
     let res = Resources {
         buffers: buffers
             .iter()

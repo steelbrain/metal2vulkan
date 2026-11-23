@@ -18,7 +18,7 @@ use std::path::Path;
 use crate::device::requirements::VkFeature;
 use crate::device::{Device, DeviceDescription, DevicePolicy, DeviceProfile};
 use crate::lower::select::Plan;
-use crate::pipeline::sym::{Axis, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
     compile, engine_dir, link_and_validate, llvm_assemble, llvm_assemble_text, metal_assemble,
     typed_module, AssembleError,
@@ -111,10 +111,7 @@ fn run_kernel(
     buffers: &[Vec<u8>],
 ) -> Vec<Vec<u8>> {
     let mut spec = BTreeMap::new();
-    for (axis, v) in [(Axis::X, threads), (Axis::Y, 1), (Axis::Z, 1)] {
-        spec.insert(SpecKey::LocalSize(axis), u64::from(v));
-    }
-    spec.insert(SpecKey::FlatLocalSize, u64::from(threads));
+    spec.extend(crate::pipeline::threadgroup_constants([threads, 1, 1]));
     let res = Resources {
         buffers: buffers
             .iter()

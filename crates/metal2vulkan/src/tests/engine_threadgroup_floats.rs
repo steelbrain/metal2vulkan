@@ -26,7 +26,7 @@ use crate::device::{Device, DevicePolicy};
 use crate::lower::select::Plan;
 use crate::memory::arena::TgWords;
 use crate::pipeline::interface::PushLoc;
-use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
 use crate::pipeline::testing::{
     compile, description, link_and_validate, llvm_assemble, typed_module, AssembleError,
 };
@@ -271,10 +271,7 @@ fn resources(plan: &Plan, spec: &[(SpecKey, u64)]) -> Resources {
 /// Output buffer 0 of `out_words` zero words, 64 threads, and `spec` besides.
 fn resources_of(plan: &Plan, spec: &[(SpecKey, u64)], out_words: usize) -> Resources {
     let mut s = BTreeMap::new();
-    s.insert(SpecKey::LocalSize(Axis::X), 64);
-    s.insert(SpecKey::LocalSize(Axis::Y), 1);
-    s.insert(SpecKey::LocalSize(Axis::Z), 1);
-    s.insert(SpecKey::FlatLocalSize, 64);
+    s.extend(crate::pipeline::threadgroup_constants([64, 1, 1]));
     s.extend(spec.iter().copied());
     // Zero push bytes: the output is bound at its start, and the dispatch is one region at the
     // grid's origin.

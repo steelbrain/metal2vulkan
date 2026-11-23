@@ -261,10 +261,7 @@ pub(super) fn run_samples(
     what: &str,
 ) -> Vec<[u32; 4]> {
     let mut spec = BTreeMap::new();
-    for axis in [Axis::X, Axis::Y, Axis::Z] {
-        spec.insert(SpecKey::LocalSize(axis), 1);
-    }
-    spec.insert(SpecKey::FlatLocalSize, 1);
+    spec.extend(crate::pipeline::threadgroup_constants([1, 1, 1]));
     if let Some(w) = swizzle {
         spec.insert(SpecKey::TextureSwizzle(SOURCE), u64::from(w));
     }

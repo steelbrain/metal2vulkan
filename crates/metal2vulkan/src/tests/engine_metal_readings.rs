@@ -25,7 +25,7 @@ use crate::lower::select::Plan;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::layout::BindingSource;
 use crate::pipeline::link::{link, LinkInputs};
-use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
     compile, engine_dir, link_and_validate, llvm_assemble, profile, typed_module, AssembleError,
 };
@@ -205,10 +205,7 @@ fn combined_slot(m: &TypedModule) -> ResourceSlot {
 /// execution status.
 fn resources(plan: &Plan, init: &[Vec<u8>]) -> Resources {
     let mut spec = BTreeMap::new();
-    for axis in [Axis::X, Axis::Y, Axis::Z] {
-        spec.insert(SpecKey::LocalSize(axis), 1);
-    }
-    spec.insert(SpecKey::FlatLocalSize, 1);
+    spec.extend(crate::pipeline::threadgroup_constants([1, 1, 1]));
     let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {
         match (f.field, f.loc) {
@@ -443,9 +440,8 @@ fn an_integer_texture_samples_nearest_through_a_linear_sampler() {
             }
         }
         let mut res = resources(&plan, &[vec![0xab; 8 * 4]]);
-        res.spec.insert(SpecKey::LocalSize(Axis::X), 2);
-        res.spec.insert(SpecKey::LocalSize(Axis::Y), 2);
-        res.spec.insert(SpecKey::FlatLocalSize, 4);
+        res.spec
+            .extend(crate::pipeline::threadgroup_constants([2, 2, 1]));
         let out = run(&m, &res, &image, 1);
         for y in 0..2u32 {
             for x in 0..2u32 {
@@ -498,8 +494,8 @@ fn a_multi_level_break_tail_runs_once_per_outer_iteration() {
         &plan,
         &[bytes(&stop), bytes(&TRIPS), vec![0xab; 8 * LANES as usize]],
     );
-    res.spec.insert(SpecKey::LocalSize(Axis::X), LANES.into());
-    res.spec.insert(SpecKey::FlatLocalSize, LANES.into());
+    res.spec
+        .extend(crate::pipeline::threadgroup_constants([LANES, 1, 1]));
     let out = interp_run(&m, &Config::default(), res)
         .unwrap_or_else(|e| panic!("interpreter: {e:?}"))
         .buffers;

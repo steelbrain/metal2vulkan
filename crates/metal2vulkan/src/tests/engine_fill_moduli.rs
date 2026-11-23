@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use crate::device::subgroup::Tier;
 use crate::device::{DevicePolicy, DeviceProfile};
 use crate::lower::select::Plan;
-use crate::pipeline::sym::{Axis, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{engine_dir, llvm_assemble, profile, typed_module, AssembleError};
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources, SubgroupSize};
 use crate::spirv::ir::TypedModule;
@@ -142,10 +142,7 @@ fn run_entry(
     dm: &[u32; 8],
 ) -> Vec<u8> {
     let mut spec = BTreeMap::new();
-    for (a, v) in [Axis::X, Axis::Y, Axis::Z].into_iter().zip([local, 1, 1]) {
-        spec.insert(SpecKey::LocalSize(a), u64::from(v));
-    }
-    spec.insert(SpecKey::FlatLocalSize, u64::from(local));
+    spec.extend(crate::pipeline::threadgroup_constants([local, 1, 1]));
     let bytes = [
         f32s(&(0..local).map(xf).collect::<Vec<_>>()),
         vec![0xAB; expected(entry, local, dm).len()],

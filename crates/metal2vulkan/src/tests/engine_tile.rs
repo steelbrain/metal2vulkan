@@ -48,7 +48,7 @@ use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::layout::BindingSource;
 use crate::pipeline::sym::{
-    Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage, SyntheticBinding,
+    PushField, ResourceKind, ResourceSlot, SpecKey, Stage, SyntheticBinding,
 };
 use crate::pipeline::testing::{engine_dir, llvm_assemble, typed_module_with, AssembleError};
 use crate::pipeline::{
@@ -192,13 +192,11 @@ fn run_images(
 ) -> (Vec<u8>, Vec<Vec<[u32; 4]>>) {
     assert!(plan.facts.contains(&RuntimeFact::TileFunction));
     let mut spec = BTreeMap::new();
-    spec.insert(SpecKey::LocalSize(Axis::X), u64::from(d.threads[0]));
-    spec.insert(SpecKey::LocalSize(Axis::Y), u64::from(d.threads[1]));
-    spec.insert(SpecKey::LocalSize(Axis::Z), 1);
-    spec.insert(
-        SpecKey::FlatLocalSize,
-        u64::from(d.threads[0] * d.threads[1]),
-    );
+    spec.extend(crate::pipeline::threadgroup_constants([
+        d.threads[0],
+        d.threads[1],
+        1,
+    ]));
     spec.insert(SpecKey::ImageblockWidth, u64::from(d.tile[0]));
     spec.insert(SpecKey::ImageblockHeight, u64::from(d.tile[1]));
     spec.insert(SpecKey::RenderAreaWidth, u64::from(d.area[0]));
@@ -589,13 +587,11 @@ fn run_memory(
     out: usize,
 ) -> (Vec<u8>, Vec<u8>) {
     let mut spec = BTreeMap::new();
-    spec.insert(SpecKey::LocalSize(Axis::X), u64::from(d.threads[0]));
-    spec.insert(SpecKey::LocalSize(Axis::Y), u64::from(d.threads[1]));
-    spec.insert(SpecKey::LocalSize(Axis::Z), 1);
-    spec.insert(
-        SpecKey::FlatLocalSize,
-        u64::from(d.threads[0] * d.threads[1]),
-    );
+    spec.extend(crate::pipeline::threadgroup_constants([
+        d.threads[0],
+        d.threads[1],
+        1,
+    ]));
     spec.insert(SpecKey::TileThreadgroupLength, u64::from(d.tile_length));
     spec.insert(SpecKey::TileGridWidth, u64::from(d.grid[0]));
     for (index, &offset) in d.offsets.iter().enumerate() {

@@ -43,7 +43,7 @@ use crate::lower::select::Plan;
 use crate::pipeline::facts::{Mechanism, RuntimeFact};
 use crate::pipeline::interface::PushLoc;
 
-use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
     compile, engine_dir, link_and_validate, llvm_assemble, profile, typed_module,
     typed_module_with, AssembleError, Scratch,
@@ -128,11 +128,8 @@ fn run_all(
     constant: Option<u32>,
 ) -> Vec<u32> {
     let mut spec = BTreeMap::new();
-    for (a, v) in [Axis::X, Axis::Y, Axis::Z].into_iter().zip(local) {
-        spec.insert(SpecKey::LocalSize(a), u64::from(v));
-    }
+    spec.extend(crate::pipeline::threadgroup_constants(local));
     let n: u32 = local.iter().product();
-    spec.insert(SpecKey::FlatLocalSize, u64::from(n));
     let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     let mut addressed = false;
     for f in &plan.push.fields {
@@ -1423,10 +1420,7 @@ fn a_multi_level_break_tail_runs_once_per_outer_iteration_emulated() {
             })
             .collect();
         let mut spec = BTreeMap::new();
-        spec.insert(SpecKey::LocalSize(Axis::X), u64::from(LANES));
-        spec.insert(SpecKey::LocalSize(Axis::Y), 1);
-        spec.insert(SpecKey::LocalSize(Axis::Z), 1);
-        spec.insert(SpecKey::FlatLocalSize, u64::from(LANES));
+        spec.extend(crate::pipeline::threadgroup_constants([LANES, 1, 1]));
         let res = Resources {
             buffers,
             push: vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)],
@@ -2081,11 +2075,8 @@ fn row_tile_words(local: [u32; 3]) -> Vec<u32> {
 /// pinned tiers' Vulkan workgroup).
 fn run_local(plan: &Plan, m: &TypedModule, local: [u32; 3], lanes: SubgroupSize) -> Vec<u32> {
     let mut spec = BTreeMap::new();
-    for (a, v) in [Axis::X, Axis::Y, Axis::Z].into_iter().zip(local) {
-        spec.insert(SpecKey::LocalSize(a), u64::from(v));
-    }
+    spec.extend(crate::pipeline::threadgroup_constants(local));
     let n: u32 = local.iter().product();
-    spec.insert(SpecKey::FlatLocalSize, u64::from(n));
     let res = Resources {
         buffers: vec![Buffer {
             slot: Some(ResourceSlot {

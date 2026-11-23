@@ -29,7 +29,7 @@ use crate::metal::bicubic::{texels, BicubicTexels};
 use crate::metal::PixelFormat;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{
-    Axis, PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage,
+    PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage,
 };
 use crate::pipeline::testing::{
     compile, compile_with, count_op, engine_dir, link_and_validate, llvm_assemble, profile,
@@ -287,10 +287,7 @@ const TEXTURE: SlotRef = SlotRef {
 /// the texture slot's `BicubicTexels` specialization `class`.
 fn resources(plan: &Plan, init: &[Vec<u8>], class: BicubicTexels) -> Resources {
     let mut spec = BTreeMap::new();
-    for axis in [Axis::X, Axis::Y, Axis::Z] {
-        spec.insert(SpecKey::LocalSize(axis), 1);
-    }
-    spec.insert(SpecKey::FlatLocalSize, 1);
+    spec.extend(crate::pipeline::threadgroup_constants([1, 1, 1]));
     spec.insert(SpecKey::BicubicTexels(TEXTURE), u64::from(class.0));
     let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {

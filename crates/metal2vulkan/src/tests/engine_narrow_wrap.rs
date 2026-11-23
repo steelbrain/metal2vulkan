@@ -16,7 +16,7 @@ use crate::device::{Device, DevicePolicy, DeviceProfile};
 use crate::lower::arith::ArithStrategy;
 use crate::lower::select::Plan;
 use crate::lower::strategy::Strategy;
-use crate::pipeline::sym::{Axis, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
     compile, description, link_and_validate, llvm_assemble_text, typed_module, AssembleError,
 };
@@ -273,10 +273,7 @@ fn unmasked_narrow_results_answer_the_same_words() {
     let p = queried(ctor);
     let (plan, m) = typed_module(&bc, ENTRY, &p).unwrap_or_else(|e| panic!("{ctor}: {e:?}"));
     let mut spec = BTreeMap::new();
-    for (axis, v) in [(Axis::X, THREADS), (Axis::Y, 1), (Axis::Z, 1)] {
-        spec.insert(SpecKey::LocalSize(axis), u64::from(v));
-    }
-    spec.insert(SpecKey::FlatLocalSize, u64::from(THREADS));
+    spec.extend(crate::pipeline::threadgroup_constants([THREADS, 1, 1]));
     let buffers = [input, vec![0xAB; THREADS as usize * WORDS * 4]];
     let res = Resources {
         buffers: buffers

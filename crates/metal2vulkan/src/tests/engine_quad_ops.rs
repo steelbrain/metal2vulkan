@@ -31,7 +31,7 @@ use crate::device::subgroup::Tier;
 use crate::device::{DevicePolicy, DeviceProfile};
 use crate::lower::arith::legal::f64_to_f16;
 use crate::lower::select::Plan;
-use crate::pipeline::sym::{Axis, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{engine_dir, llvm_assemble, profile, typed_module, AssembleError};
 use crate::pipeline::PrecisionNote;
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources, SubgroupSize};
@@ -280,10 +280,7 @@ fn run_buffers(
     bytes: [Vec<u8>; 3],
 ) -> Vec<u8> {
     let mut spec = BTreeMap::new();
-    for (a, v) in [Axis::X, Axis::Y, Axis::Z].into_iter().zip([local, 1, 1]) {
-        spec.insert(SpecKey::LocalSize(a), u64::from(v));
-    }
-    spec.insert(SpecKey::FlatLocalSize, u64::from(local));
+    spec.extend(crate::pipeline::threadgroup_constants([local, 1, 1]));
     let res = Resources {
         buffers: bytes
             .into_iter()

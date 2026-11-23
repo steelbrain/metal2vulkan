@@ -31,7 +31,7 @@ use crate::pipeline::compile::{compile_bitcode, EntryRef};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{
-    Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage, SyntheticBinding,
+    PushField, ResourceKind, ResourceSlot, SpecKey, Stage, SyntheticBinding,
 };
 use crate::pipeline::testing::{
     compile, engine_dir, link_and_validate, llvm_assemble, profile, typed_module, AssembleError,
@@ -91,10 +91,7 @@ fn resources(
     spec: &[(SpecKey, u64)],
 ) -> Resources {
     let mut s = BTreeMap::new();
-    s.insert(SpecKey::LocalSize(Axis::X), u64::from(threads));
-    s.insert(SpecKey::LocalSize(Axis::Y), 1);
-    s.insert(SpecKey::LocalSize(Axis::Z), 1);
-    s.insert(SpecKey::FlatLocalSize, u64::from(threads));
+    s.extend(crate::pipeline::threadgroup_constants([threads, 1, 1]));
     s.extend(spec.iter().copied());
     let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {

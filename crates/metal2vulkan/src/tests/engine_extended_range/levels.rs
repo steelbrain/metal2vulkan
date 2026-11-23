@@ -309,10 +309,7 @@ pub(super) fn run_levels(
     what: &str,
 ) -> Vec<[u32; 4]> {
     let mut spec = BTreeMap::new();
-    for axis in [Axis::X, Axis::Y, Axis::Z] {
-        spec.insert(SpecKey::LocalSize(axis), 1);
-    }
-    spec.insert(SpecKey::FlatLocalSize, 1);
+    spec.extend(crate::pipeline::threadgroup_constants([1, 1, 1]));
     if let Some(desc) = desc {
         let s = plan
             .families

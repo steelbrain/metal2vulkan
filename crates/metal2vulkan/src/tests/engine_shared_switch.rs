@@ -28,7 +28,7 @@ use crate::metal::bicubic::BicubicTexels;
 use crate::metal::PixelFormat;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{
-    Axis, PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage,
+    PushField, ResourceKind, ResourceSlot, SlotClass, SlotRef, SpecKey, Stage,
 };
 use crate::pipeline::testing::{
     compile, compile_kept, link_and_validate, llvm_assemble, profile, typed_module, AssembleError,
@@ -278,10 +278,7 @@ fn texture(index: u32) -> SlotRef {
 /// the specializations `spec`.
 fn resources(plan: &Plan, init: &[Vec<u8>], spec: &[(SpecKey, u64)]) -> Resources {
     let mut s = BTreeMap::new();
-    for axis in [Axis::X, Axis::Y, Axis::Z] {
-        s.insert(SpecKey::LocalSize(axis), 1);
-    }
-    s.insert(SpecKey::FlatLocalSize, 1);
+    s.extend(crate::pipeline::threadgroup_constants([1, 1, 1]));
     s.extend(spec.iter().copied());
     let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {
@@ -344,10 +341,7 @@ fn identity_resources(plan: &Plan, init: &[Vec<u8>], classes: &[u32], lanes: u32
         push[o..o + bytes.len()].copy_from_slice(&bytes);
     }
     let mut spec = BTreeMap::new();
-    for axis in [Axis::X, Axis::Y, Axis::Z] {
-        spec.insert(SpecKey::LocalSize(axis), 1);
-    }
-    spec.insert(SpecKey::FlatLocalSize, 1);
+    spec.extend(crate::pipeline::threadgroup_constants([1, 1, 1]));
     let buffers = init
         .iter()
         .enumerate()

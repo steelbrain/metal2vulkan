@@ -22,7 +22,7 @@ use crate::library::FunctionConstantValues;
 use crate::lower::dispatch::region_bytes;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::PushLoc;
-use crate::pipeline::sym::{Axis, PushField, SpecKey};
+use crate::pipeline::sym::PushField;
 use crate::pipeline::testing::{
     compile, compile_kept, description, engine_dir, link_and_validate, llvm_assemble, meter,
     specialized_entry, AssembleError,
@@ -299,12 +299,7 @@ fn dispatch(
             _ => return Err(format!("unexpected push field {f:?}")),
         }
     }
-    let spec = BTreeMap::from([
-        (SpecKey::LocalSize(Axis::X), u64::from(THREADS)),
-        (SpecKey::LocalSize(Axis::Y), 1),
-        (SpecKey::LocalSize(Axis::Z), 1),
-        (SpecKey::FlatLocalSize, u64::from(THREADS)),
-    ]);
+    let spec = BTreeMap::from(crate::pipeline::threadgroup_constants([THREADS, 1, 1]));
     let [first, second] = buffers;
     let res = Resources {
         buffers: [first, second]

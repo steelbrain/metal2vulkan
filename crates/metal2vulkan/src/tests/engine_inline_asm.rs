@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use crate::air::error::DiagName;
 use crate::device::DevicePolicy;
 use crate::error::{Error, Feature, Needs};
-use crate::pipeline::sym::{Axis, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
     compile, engine_dir, link_and_validate, llvm_assemble, llvm_assemble_text, metal_assemble,
     profile, typed_module, AssembleError,
@@ -85,10 +85,7 @@ fn the_loop_that_held_the_empty_asm_runs_every_iteration() {
     for (what, bc) in spellings() {
         let (plan, m) = typed_module(&bc, "asm_in_loop", &p).unwrap_or_else(|e| panic!("{e:?}"));
         let mut spec = BTreeMap::new();
-        for (axis, v) in [(Axis::X, 4), (Axis::Y, 1), (Axis::Z, 1)] {
-            spec.insert(SpecKey::LocalSize(axis), v);
-        }
-        spec.insert(SpecKey::FlatLocalSize, 4);
+        spec.extend(crate::pipeline::threadgroup_constants([4, 1, 1]));
         let slot = |index| ResourceSlot {
             stage: Stage::Kernel,
             kind: ResourceKind::Buffer,

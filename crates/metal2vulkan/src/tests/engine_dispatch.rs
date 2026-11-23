@@ -21,7 +21,7 @@ use crate::lower::dispatch::{region_bytes, LocalSizeForm};
 use crate::lower::select::Plan;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::PushLoc;
-use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
 use crate::pipeline::testing::{
     compile, device_f, engine_dir, link_and_validate, llvm_assemble, profile, status_reach,
     status_reach_on, typed_module, AssembleError, Scratch, StatusReach, PROFILE_F,
@@ -79,11 +79,8 @@ const STATUS_BYTES: usize =
 /// word 0 of buffer 0.
 fn run_word0(plan: &Plan, m: &TypedModule, d: &Dispatch) -> u32 {
     let mut spec = BTreeMap::new();
-    for (a, v) in [Axis::X, Axis::Y, Axis::Z].into_iter().zip(d.local) {
-        spec.insert(SpecKey::LocalSize(a), u64::from(v));
-    }
+    spec.extend(crate::pipeline::threadgroup_constants(d.local));
     let n: u32 = d.local.iter().product();
-    spec.insert(SpecKey::FlatLocalSize, u64::from(n));
     let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {
         let PushLoc::Push { offset } = f.loc else {
@@ -516,11 +513,8 @@ fn run_derivatives(
     local: [u32; 3],
 ) -> Result<Vec<u32>, crate::spirv::interp::InterpError> {
     let mut spec = BTreeMap::new();
-    for (a, v) in [Axis::X, Axis::Y, Axis::Z].into_iter().zip(local) {
-        spec.insert(SpecKey::LocalSize(a), u64::from(v));
-    }
+    spec.extend(crate::pipeline::threadgroup_constants(local));
     let n: u32 = local.iter().product();
-    spec.insert(SpecKey::FlatLocalSize, u64::from(n));
     for f in &plan.push.fields {
         assert!(
             matches!(
@@ -753,10 +747,7 @@ fn a_position_first_used_in_sibling_arms_is_derived_once() {
     let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let (plan, m) = typed_module(&arms, "k", &p).expect("compile");
     let mut spec = BTreeMap::new();
-    for a in [Axis::X, Axis::Y, Axis::Z] {
-        spec.insert(SpecKey::LocalSize(a), if a == Axis::X { 4 } else { 1 });
-    }
-    spec.insert(SpecKey::FlatLocalSize, 4);
+    spec.extend(crate::pipeline::threadgroup_constants([4, 1, 1]));
     let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     let res = Resources {
         buffers: vec![Buffer {
@@ -857,10 +848,7 @@ done:
     let p = profile("moltenvk-m3", DevicePolicy::RESIDENT_TABLES).expect("profile");
     let (plan, m) = typed_module(&bc, "k", &p).expect("compile");
     let mut spec = BTreeMap::new();
-    for a in [Axis::X, Axis::Y, Axis::Z] {
-        spec.insert(SpecKey::LocalSize(a), if a == Axis::X { 4 } else { 1 });
-    }
-    spec.insert(SpecKey::FlatLocalSize, 4);
+    spec.extend(crate::pipeline::threadgroup_constants([4, 1, 1]));
     let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     let res = Resources {
         buffers: vec![Buffer {

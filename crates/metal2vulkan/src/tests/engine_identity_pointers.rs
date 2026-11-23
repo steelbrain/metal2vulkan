@@ -36,7 +36,7 @@ use crate::error::{Error, Feature, LowerFamily, Needs};
 use crate::lower::dispatch::region_bytes;
 use crate::lower::select::Plan;
 use crate::pipeline::interface::PushLoc;
-use crate::pipeline::sym::{Axis, PushField, SlotClass, SlotRef, SpecKey, Stage};
+use crate::pipeline::sym::{PushField, SlotClass, SlotRef, SpecKey, Stage};
 use crate::pipeline::testing::{
     compile, compile_kept, engine_dir, link_and_validate, llvm_assemble, llvm_assemble_text,
     AssembleError,
@@ -163,12 +163,7 @@ fn buffers(at: &[(u64, &[u8])]) -> Vec<Buffer> {
 }
 
 fn spec() -> BTreeMap<SpecKey, u64> {
-    BTreeMap::from([
-        (SpecKey::LocalSize(Axis::X), u64::from(GROUP)),
-        (SpecKey::LocalSize(Axis::Y), 1),
-        (SpecKey::LocalSize(Axis::Z), 1),
-        (SpecKey::FlatLocalSize, u64::from(GROUP)),
-    ])
+    BTreeMap::from(crate::pipeline::threadgroup_constants([GROUP, 1, 1]))
 }
 
 fn config() -> Config {

@@ -31,7 +31,7 @@ use crate::lower::select::Plan;
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::sym::{
-    Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage, SyntheticBinding,
+    PushField, ResourceKind, ResourceSlot, SpecKey, Stage, SyntheticBinding,
 };
 use crate::pipeline::testing::{
     compile, fixtures_dir, link_and_validate, llvm_assemble, profile, typed_module, AssembleError,
@@ -135,10 +135,7 @@ fn words(bytes: &[u8]) -> Vec<u32> {
 /// `spec` besides the local size, and the blob when the plan reads one.
 fn resources(plan: &Plan, init: &[Vec<u8>], threads: u32, spec: &[(SpecKey, u64)]) -> Resources {
     let mut s = BTreeMap::new();
-    s.insert(SpecKey::LocalSize(Axis::X), u64::from(threads));
-    s.insert(SpecKey::LocalSize(Axis::Y), 1);
-    s.insert(SpecKey::LocalSize(Axis::Z), 1);
-    s.insert(SpecKey::FlatLocalSize, u64::from(threads));
+    s.extend(crate::pipeline::threadgroup_constants([threads, 1, 1]));
     s.extend(spec.iter().copied());
     let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {

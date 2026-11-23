@@ -6,7 +6,7 @@
 
 use super::*;
 use crate::device::DevicePolicy;
-use crate::pipeline::sym::{Axis, ResourceKind, ResourceSlot, Stage};
+use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::spirv::interp::{run, Buffer, Config, Order, Resources, SubgroupSize};
 use crate::spirv::ir::{natural_layout, ExecModel, LayoutRule, StorageClass, TypedModule};
 use crate::spirv::testing::assert_valid;
@@ -218,18 +218,9 @@ fn run_region(
     let groups = r.groups.iter().product::<u32>();
     let words = record_words();
     let mut spec = BTreeMap::new();
-    for (a, v) in [Axis::X, Axis::Y, Axis::Z].into_iter().zip(r.local) {
-        spec.insert(SpecKey::LocalSize(a), u64::from(v));
-    }
-    if form == LocalSizeForm::Flat {
-        spec.insert(SpecKey::FlatLocalSize, u64::from(n));
-    }
     // A module that declares it runs a region deeper than `DEEP_THREADGROUP` as one row; any other
     // reads no such key.
-    spec.insert(
-        SpecKey::DeepThreadgroup,
-        u64::from(r.local[2] > DEEP_THREADGROUP),
-    );
+    spec.extend(crate::pipeline::threadgroup_constants(r.local));
     let mut push = Vec::new();
     if let Some((base, threads, nominal)) = r.multi {
         spec.insert(SpecKey::MultiRegion, 1);
@@ -563,12 +554,7 @@ fn run_partial(
     let count = groups.iter().product::<u32>() * n;
     let words = record_words() + 1;
     let mut spec = BTreeMap::new();
-    for (a, v) in [Axis::X, Axis::Y, Axis::Z].into_iter().zip(l) {
-        spec.insert(SpecKey::LocalSize(a), u64::from(v));
-    }
-    if form == LocalSizeForm::Flat {
-        spec.insert(SpecKey::FlatLocalSize, u64::from(n));
-    }
+    spec.extend(crate::pipeline::threadgroup_constants(l));
     spec.insert(SpecKey::MultiRegion, 1);
     let push = match flagged {
         true => nonuniform_region_bytes([0; 3], threads, l),

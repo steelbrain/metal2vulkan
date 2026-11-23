@@ -34,7 +34,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::device::{DevicePolicy, DeviceProfile};
 use crate::lower::select::Plan;
 use crate::pipeline::interface::PushLoc;
-use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
     compile, engine_dir, fixtures_dir, link_and_validate, link_standalone, llvm_assemble, meter,
     profile, typed_module, AssembleError,
@@ -693,10 +693,7 @@ fn thread_atomic_words(t: u32) -> [u32; 24] {
 /// `words` zero words and the local size.
 fn one_buffer(plan: &Plan, words: usize, threads: u32) -> Resources {
     let mut spec = BTreeMap::new();
-    spec.insert(SpecKey::LocalSize(Axis::X), u64::from(threads));
-    spec.insert(SpecKey::LocalSize(Axis::Y), 1);
-    spec.insert(SpecKey::LocalSize(Axis::Z), 1);
-    spec.insert(SpecKey::FlatLocalSize, u64::from(threads));
+    spec.extend(crate::pipeline::threadgroup_constants([threads, 1, 1]));
     let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {
         match (f.field, f.loc) {

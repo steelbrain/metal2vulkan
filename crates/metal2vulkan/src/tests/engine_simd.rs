@@ -24,7 +24,7 @@ use crate::lower::select::Plan;
 use crate::pipeline::artifact::{PrecisionNote, Reconvergence};
 use crate::pipeline::facts::RuntimeFact;
 use crate::pipeline::interface::PushLoc;
-use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
 use crate::pipeline::testing::{
     compile, compile_kept, engine_dir, link_and_validate, llvm_assemble, profile, typed_module,
     AssembleError, Scratch,
@@ -84,11 +84,8 @@ fn moltenvk() -> DeviceProfile {
 /// with `lanes`-wide subgroups, identical in both scheduling orders.
 fn run_all(plan: &Plan, m: &TypedModule, local: [u32; 3], lanes: SubgroupSize) -> Vec<u32> {
     let mut spec = BTreeMap::new();
-    for (a, v) in [Axis::X, Axis::Y, Axis::Z].into_iter().zip(local) {
-        spec.insert(SpecKey::LocalSize(a), u64::from(v));
-    }
+    spec.extend(crate::pipeline::threadgroup_constants(local));
     let n: u32 = local.iter().product();
-    spec.insert(SpecKey::FlatLocalSize, u64::from(n));
     let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {
         assert!(matches!(f.loc, PushLoc::Push { .. }), "{f:?}");

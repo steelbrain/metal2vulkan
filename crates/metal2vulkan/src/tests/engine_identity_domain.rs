@@ -93,13 +93,7 @@ fn data() -> Vec<u8> {
 }
 
 fn spec() -> BTreeMap<crate::pipeline::sym::SpecKey, u64> {
-    use crate::pipeline::sym::{Axis, SpecKey};
-    BTreeMap::from([
-        (SpecKey::LocalSize(Axis::X), 1),
-        (SpecKey::LocalSize(Axis::Y), 1),
-        (SpecKey::LocalSize(Axis::Z), 1),
-        (SpecKey::FlatLocalSize, 1),
-    ])
+    BTreeMap::from(crate::pipeline::threadgroup_constants([1, 1, 1]))
 }
 
 /// What kernel `entry` stores under the identity domains on lavapipe, `data` bound at `bind`,

@@ -26,7 +26,7 @@ use crate::error::{Error, Feature, LowerFamily, Needs};
 use crate::library::FunctionArtifact;
 use crate::lower::select::Plan;
 use crate::pipeline::interface::PushLoc;
-use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
     compile, engine_dir, link_and_validate, llvm_assemble, metal_assemble, moltenvk_msl_compile,
     profile, typed_module, AssembleError,
@@ -223,10 +223,7 @@ fn words(bytes: &[u8]) -> Vec<u32> {
 /// execution status.
 fn resources(plan: &Plan, init: &[Vec<u8>]) -> Resources {
     let mut spec = BTreeMap::new();
-    for axis in [Axis::X, Axis::Y, Axis::Z] {
-        spec.insert(SpecKey::LocalSize(axis), 1);
-    }
-    spec.insert(SpecKey::FlatLocalSize, 1);
+    spec.extend(crate::pipeline::threadgroup_constants([1, 1, 1]));
     let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {
         match (f.field, f.loc) {

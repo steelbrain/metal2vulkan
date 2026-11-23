@@ -50,7 +50,7 @@ use crate::metal::DataType;
 use crate::pipeline::compile::{compile_bitcode, EntryRef};
 use crate::pipeline::interface::PushLoc;
 use crate::pipeline::lower_inputs::LoweringInputs;
-use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
     engine_dir, link_and_validate, llvm_assemble, meter, profile, typed_module_specialized,
     AssembleError, Scratch,
@@ -283,10 +283,7 @@ impl Kernel {
 
 fn resources(plan: &Plan, threads: u32, init: &[Vec<u8>]) -> Resources {
     let mut spec = BTreeMap::new();
-    spec.insert(SpecKey::LocalSize(Axis::X), u64::from(threads));
-    spec.insert(SpecKey::LocalSize(Axis::Y), 1);
-    spec.insert(SpecKey::LocalSize(Axis::Z), 1);
-    spec.insert(SpecKey::FlatLocalSize, u64::from(threads));
+    spec.extend(crate::pipeline::threadgroup_constants([threads, 1, 1]));
     let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for f in &plan.push.fields {
         assert!(

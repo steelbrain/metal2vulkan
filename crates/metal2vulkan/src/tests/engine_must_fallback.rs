@@ -38,7 +38,7 @@ use crate::error::{DescriptorError, Error};
 use crate::library::Library;
 use crate::lower::select::Plan;
 use crate::pipeline::interface::PushLoc;
-use crate::pipeline::sym::{Axis, PushField, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
     compile, link_and_validate, llvm_assemble, typed_module, AssembleError,
 };
@@ -171,10 +171,7 @@ fn vector_bytes(gid: u32) -> Vec<u8> {
 /// its start.
 fn resources(plan: &Plan, bytes: Vec<u8>) -> Resources {
     let mut spec = BTreeMap::new();
-    spec.insert(SpecKey::LocalSize(Axis::X), u64::from(THREADS));
-    spec.insert(SpecKey::LocalSize(Axis::Y), 1);
-    spec.insert(SpecKey::LocalSize(Axis::Z), 1);
-    spec.insert(SpecKey::FlatLocalSize, u64::from(THREADS));
+    spec.extend(crate::pipeline::threadgroup_constants([THREADS, 1, 1]));
     let mut push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     for field in &plan.push.fields {
         match (field.field, field.loc) {

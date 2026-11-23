@@ -40,7 +40,7 @@ use crate::lower::arith::narrow::Fp8Layout;
 use crate::lower::select::Plan;
 use crate::pipeline::artifact::PrecisionNote;
 use crate::pipeline::interface::{AccessSet, Window};
-use crate::pipeline::sym::{Axis, ResourceKind, ResourceSlot, SpecKey, Stage};
+use crate::pipeline::sym::{ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
     compile, engine_dir, fixtures_dir, link_and_validate, llvm_assemble, metal_assemble, profile,
     typed_module, AssembleError,
@@ -174,10 +174,7 @@ fn run_all(
     bufs: &[Vec<u8>],
 ) -> Vec<Vec<u8>> {
     let mut spec = BTreeMap::new();
-    for (a, v) in [Axis::X, Axis::Y, Axis::Z].into_iter().zip([local, 1, 1]) {
-        spec.insert(SpecKey::LocalSize(a), u64::from(v));
-    }
-    spec.insert(SpecKey::FlatLocalSize, u64::from(local));
+    spec.extend(crate::pipeline::threadgroup_constants([local, 1, 1]));
     let push = vec![0u8; plan.push.push_range.map_or(0, |(_, end)| end as usize)];
     let res = Resources {
         buffers: bufs
