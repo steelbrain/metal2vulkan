@@ -324,7 +324,7 @@ Columns:
 | `ThreadgroupThreads` | A dispatch whose threadgroup is within Metal's `maxTotalThreadsPerThreadgroup` for the kernel and past the state's on this device | at the device's limit | `device`: the device's compute work-group and shared-memory limits | 1: `crates/metal2vulkan-runtime/src/encoder.rs (size_checked)` | `-` |
 | `BytesLength` | `setBytes` data longer than one parameter ring chunk | every device (a public call's own check of its arguments) | `ours`: a ring chunk is 64 KiB | 2: `crates/metal2vulkan-runtime/src/encoder.rs (set_bytes)`, `crates/metal2vulkan-runtime/src/render_encoder.rs (set_bytes)` | `-` |
 | `IndexRange` | A grant of no indices, or one past its class's range (`Device::grant_indices`, [`IndexClass::range`]) | every device (a public call's own check of its arguments) | `ours`: the descriptor arrays are 65,536 sampled and 65,536 storage textures, one index of both a texture's, and 4,000 samplers of each use, and index 0 is nil | 1: `crates/metal2vulkan-runtime/src/arrays.rs (grant)` | `-` |
-| `TextureSize` | A texture whose extent or array layers are past what the device makes of its format, type, usage and sample count | at the device's limit | `device`: the image format query's `maxExtent` and `maxArrayLayers`, and `maxTexelBufferElements` | 2: `crates/metal2vulkan-runtime/src/texture.rs (plan)`, `crates/metal2vulkan-runtime/src/texture.rs (texel_texture)` | `-` |
+| `TextureSize` | A texture whose extent or array layers are past what the device makes of its format, type, usage and sample count | at the device's limit | `device`: the image format query's `maxExtent` and `maxArrayLayers`, and `maxTexelBufferElements` | 2: `crates/metal2vulkan-runtime/src/texture.rs (planned)`, `crates/metal2vulkan-runtime/src/texture.rs (texel_texture)` | `-` |
 | `DeviceSamplers` | A sampler state whose device samplers would take the device past its `maxSamplerAllocationCount`, less the sampler arrays' two defaults... | at the device's limit | `device`: the device's `maxSamplerAllocationCount` | 1: `crates/metal2vulkan-runtime/src/sampler.rs (take)` | `-` |
 | `LodClampVariants` | A sampler state bound with LOD clamps of its own past the variants the runtime holds at once | every device (a public call's own check of its arguments) | `ours`: the runtime's 4,000 variant elements | 1: `crates/metal2vulkan-runtime/src/arrays.rs (place_variant)` | `-` |
 | `MemoryAllocations` | A `VkDeviceMemory` allocation past the device's `maxMemoryAllocationCount` live ones, refused before the driver is called | at the device's limit | `device`: the device's `maxMemoryAllocationCount` | 1: `crates/metal2vulkan-runtime/src/memory.rs (allocate)` | `-` |
@@ -335,7 +335,7 @@ Columns:
 | `SparseAddressSpace` | An import over several dma-bufs (`Device::import_dma_bufs`, on Unix) whose sparse buffer would take the device's sparse address space past its... | at the device's limit | `device`: `sparseAddressSpaceSize` | 1: `crates/metal2vulkan-runtime/src/import.rs (reserve)` | `-` |
 | `NoExport` | An export of a handle the device does not give (`Device::new_exported_block`) | at the device's limit | `device`: the device's extensions and its external buffer properties | 5: `crates/metal2vulkan-runtime/src/export.rs (handle, 2 sites)`, `crates/metal2vulkan-runtime/src/export.rs (new_exported_block)` (+2) | `-` |
 | `ExportType` | An export of a handle the device gives, but not in the one form an export takes (`Device::new_exported_block`) | at the device's limit | `device`: its extensions and the buffer's memory requirements | 6: `crates/metal2vulkan-runtime/src/export.rs (new_exported_block)`, `crates/metal2vulkan-runtime/src/import.rs (surface_import)` (+4) | `-` |
-| `TextureSamples` | A multisample texture of a sample count the device does not make for its format, type and usage | at the device's limit | `device`: the image format query's `sampleCounts` | 1: `crates/metal2vulkan-runtime/src/texture.rs (plan)` | `-` |
+| `TextureSamples` | A multisample texture of a sample count the device does not make for its format, type and usage | at the device's limit | `device`: the image format query's `sampleCounts` | 1: `crates/metal2vulkan-runtime/src/texture.rs (planned)` | `-` |
 
 ## 8. The runtime's `Gap` (`Error::Unsupported(Gap)`)
 
@@ -614,7 +614,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Limit::ThreadgroupThreads`: `crates/metal2vulkan-runtime/src/encoder.rs (size_checked)`
 - `rt:Limit::BytesLength`: `crates/metal2vulkan-runtime/src/encoder.rs (set_bytes)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (set_bytes)`
 - `rt:Limit::IndexRange`: `crates/metal2vulkan-runtime/src/arrays.rs (grant)`
-- `rt:Limit::TextureSize`: `crates/metal2vulkan-runtime/src/texture.rs (plan)`; `crates/metal2vulkan-runtime/src/texture.rs (texel_texture)`
+- `rt:Limit::TextureSize`: `crates/metal2vulkan-runtime/src/texture.rs (planned)`; `crates/metal2vulkan-runtime/src/texture.rs (texel_texture)`
 - `rt:Limit::DeviceSamplers`: `crates/metal2vulkan-runtime/src/sampler.rs (take)`
 - `rt:Limit::LodClampVariants`: `crates/metal2vulkan-runtime/src/arrays.rs (place_variant)`
 - `rt:Limit::MemoryAllocations`: `crates/metal2vulkan-runtime/src/memory.rs (allocate)`
@@ -625,7 +625,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Limit::SparseAddressSpace`: `crates/metal2vulkan-runtime/src/import.rs (reserve)`
 - `rt:Limit::NoExport`: `crates/metal2vulkan-runtime/src/export.rs (handle, 2 sites)`; `crates/metal2vulkan-runtime/src/export.rs (new_exported_block)`; `crates/metal2vulkan-runtime/src/surface.rs (dma_buf_in_place)`; `crates/metal2vulkan-runtime/src/surface.rs (new_exported_surface)`
 - `rt:Limit::ExportType`: `crates/metal2vulkan-runtime/src/export.rs (new_exported_block)`; `crates/metal2vulkan-runtime/src/import.rs (surface_import)`; `crates/metal2vulkan-runtime/src/memory.rs (export)`; `crates/metal2vulkan-runtime/src/memory.rs (surface_view)`; `crates/metal2vulkan-runtime/src/surface.rs (dma_buf_in_place)`; `crates/metal2vulkan-runtime/src/surface.rs (new_exported_surface)`
-- `rt:Limit::TextureSamples`: `crates/metal2vulkan-runtime/src/texture.rs (plan)`
+- `rt:Limit::TextureSamples`: `crates/metal2vulkan-runtime/src/texture.rs (planned)`
 - `rt:Gap::IndirectCommandBuffers`: `crates/metal2vulkan-runtime/src/indirect.rs (new_indirect_command_buffer)`; `crates/metal2vulkan-runtime/src/indirect.rs (shape)`; `crates/metal2vulkan-runtime/src/pipeline.rs (compute_pipeline_state)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (draw)`; `crates/metal2vulkan-runtime/src/render_encoder.rs (execution_part)`
 - `rt:Gap::KernelInput`: `crates/metal2vulkan-runtime/src/pipeline.rs (gap)`
 - `rt:Gap::StageIn`: `crates/metal2vulkan-runtime/src/encoder.rs (set_stage_in_region_with_indirect_buffer)`; `crates/metal2vulkan-runtime/src/pipeline.rs (of)`
@@ -636,7 +636,7 @@ Each refusal's sites, with the function that builds it.
 - `rt:Gap::IndirectPrivateArena`: `crates/metal2vulkan-runtime/src/encoder.rs (dispatch)`
 - `rt:Gap::MemorylessTexture`: `crates/metal2vulkan-runtime/src/texture.rs (checked)`
 - `rt:Gap::TextureBufferSwizzle`: `crates/metal2vulkan-runtime/src/texture.rs (texel_texture)`
-- `rt:Gap::TextureFormat`: `crates/metal2vulkan-runtime/src/texture.rs (attachment_view)`; `crates/metal2vulkan-runtime/src/texture.rs (form)`; `crates/metal2vulkan-runtime/src/texture.rs (plan)`; `crates/metal2vulkan-runtime/src/texture.rs (texel_form)`
+- `rt:Gap::TextureFormat`: `crates/metal2vulkan-runtime/src/texture.rs (attachment_view)`; `crates/metal2vulkan-runtime/src/texture.rs (form)`; `crates/metal2vulkan-runtime/src/texture.rs (planned)`; `crates/metal2vulkan-runtime/src/texture.rs (texel_form)`
 - `rt:Gap::MipmapFilter`: `crates/metal2vulkan-runtime/src/blit.rs (generate_mipmaps)`
 - `rt:Gap::CubicSampler`: `crates/metal2vulkan-runtime/src/sampler.rs (new_sampler_state)`
 - `rt:Gap::TextureBytes`: `crates/metal2vulkan-runtime/src/blit.rs (buffer_copy, 2 sites)`; `crates/metal2vulkan-runtime/src/blit.rs (with_option)`; `crates/metal2vulkan-runtime/src/texture.rs (check_places)`; `crates/metal2vulkan-runtime/src/texture.rs (copy)`

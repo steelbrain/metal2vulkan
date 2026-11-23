@@ -1403,7 +1403,9 @@ pub enum Gap {
     /// read, without a format. No storage element: the device does not store the texture's format
     /// through a storage image without a format (an 8-bit sRGB format, `RGB9E5Float` or
     /// `BGR10A2Unorm` where the device lacks its storage), or holds it through a view of another
-    /// (an `A8Unorm` held in red, an extended-range format). Metal writes and reads such a
+    /// (an `A8Unorm` held in red, an extended-range format); a view of a format the device stores,
+    /// of such a texture, has one where the device makes the texture's image extended for it
+    /// (`StorageElementCase::Unextended` where it does not). Metal writes and reads such a
     /// texture; the runtime would drop the writes and read zeros. Not read without a format: the
     /// storage element's format lacks `VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT`, which
     /// a device without `shaderStorageImageReadWithoutFormat` answers per format (`BGRA8Unorm`,
@@ -1436,8 +1438,8 @@ pub enum Gap {
         slot: Option<u32>,
         /// The texture's pixel format.
         pixel_format: PixelFormat,
-        /// Which of the three it is: no storage element, or one the device cannot write or read
-        /// without a format.
+        /// Which it is: no storage element, none for a view of a texture the device did not make
+        /// extended for it, or one the device cannot write or read without a format.
         case: StorageElementCase,
         /// What holds the texture's texels.
         backing: TextureBacking,
@@ -1993,6 +1995,12 @@ pub enum StorageElementCase {
     /// The texture, made for shader writes, has no storage element on this device: its format
     /// has no storage image here, or the runtime holds it through a view of another format.
     Absent,
+    /// A view, of a format the device stores, of a texture made for shader writes whose own format
+    /// it does not store, has no storage element: the device's image format query does not make
+    /// the texture's image with `VK_IMAGE_CREATE_EXTENDED_USAGE_BIT` and the storage usage for its
+    /// views of another format beside every other usage it makes it with (the optimal image's
+    /// query, or, in place over a buffer, the linear image's).
+    Unextended,
     /// A texture buffer whose format's buffer features lack
     /// `VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT`, which a function writes without a
     /// format.

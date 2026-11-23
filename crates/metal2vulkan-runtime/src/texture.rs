@@ -218,8 +218,9 @@ pub(crate) struct TextureInner {
     format: vk::Format,
     /// Its views' format reads as storage without a format ([`Plan`]'s `storage_reads`).
     storage_reads: bool,
-    /// The usage its views take where their format is not the image's (`VkImageViewUsageCreateInfo`):
-    /// the image's that the format's features hold. `None` where its views take the image's.
+    /// The usage its views take where their format is not the image's, or the image is extended
+    /// for its views' storage ([`Plan`]'s `extended`) (`VkImageViewUsageCreateInfo`): the image's
+    /// that the format's features hold. `None` where its views take the image's.
     views_usage: Option<vk::ImageUsageFlags>,
     /// How bytes move between the image and the CPU or another image; `None` where no copy is
     /// built.
@@ -402,6 +403,10 @@ struct View {
     /// parent's, as Metal combines them, or its parent's where it was made with none.
     reads: TextureSwizzleChannels,
     views: Views,
+    /// The view is of a format the device stores, which its texture, made for shader writes,
+    /// lists, but the device's image format query made the image without the storage usage for it
+    /// ([`Plan`]'s `extended`): it has no storage element ([`StorageElementCase::Unextended`]).
+    unextended: bool,
 }
 
 /// A texture view's image views, which the reaper frees once the view is gone.
@@ -1487,7 +1492,7 @@ impl Device {
         // Over a buffer in place, the memory its image lies in (`check_over`).
         let mut laid = None;
         let (named, first, home) = match &source {
-            Source::Plain | Source::Heap(..) => (None, vk::ImageLayout::UNDEFINED, plan.home),
+            Source::Plain | Source::Heap(..) => (None, vk::ImageLayout::UNDEFINED, plan.home()),
             Source::Managed(bytes, places) => {
                 check_places(&d, plan.unit, bytes, places)?;
                 let named = Named {
@@ -1495,7 +1500,7 @@ impl Device {
                     places: places.to_vec(),
                     form: Form::Managed,
                 };
-                (Some(named), vk::ImageLayout::UNDEFINED, plan.home)
+                (Some(named), vk::ImageLayout::UNDEFINED, plan.home())
             }
             Source::Over(buffer, offset, bytes_per_row) => {
                 let checked =
@@ -1513,7 +1518,7 @@ impl Device {
                         Err(cause) => Form::Copied(cause),
                     },
                 };
-                (Some(named), vk::ImageLayout::UNDEFINED, plan.home)
+                (Some(named), vk::ImageLayout::UNDEFINED, plan.home())
             }
         };
         let (mut named, mut first, mut home) = (named, first, home);
@@ -1592,7 +1597,7 @@ impl Device {
         // that the submissions copy the bytes into and back.
         if let (Err(Unmade::Unfit(cause)), Some(named)) = (&made, &mut named) {
             named.form = Form::Copied(*cause);
-            (first, home) = (vk::ImageLayout::UNDEFINED, plan.home);
+            (first, home) = (vk::ImageLayout::UNDEFINED, plan.home());
             block = None;
             acquired = None;
             // SAFETY: as above.
@@ -1693,13 +1698,14 @@ impl Device {
             }
             None => None,
         };
+        let views_usage = plan.own_views(image.usage);
         let inner = TextureInner {
             core: Arc::clone(core),
             descriptor: d,
             body: Body::Image(image),
             format: plan.format,
             storage_reads: plan.storage_reads,
-            views_usage: None,
+            views_usage,
             unit: plan.unit,
             index,
             word: plan.word,
@@ -1767,7 +1773,15 @@ struct Plan {
     /// whose format lacks it is outside Vulkan's valid usage
     /// (`VUID-vkCmdDispatch-OpTypeImage-07028`).
     storage_reads: bool,
+    /// The home layout of the texture's own views; [`Plan::home`] is the image's.
     home: vk::ImageLayout,
+    /// The image takes the storage usage for its views of another format it lists, which store
+    /// where its own format does not ([`plan`]): it is made with
+    /// `VK_IMAGE_CREATE_EXTENDED_USAGE_BIT` (a usage "supported for at least one of the formats a
+    /// `VkImageView` created from the image can have"), at home in the general layout, the layout
+    /// of a storage view, and its own format's views take the usage that format holds
+    /// (`VUID-VkImageViewCreateInfo-usage-02275`).
+    extended: bool,
     /// A draw may read an attachment of its own pass through the texture, and each sampled view
     /// has a second element ([`Image`]'s `attachment_reads`): the image has the feedback usage on
     /// a device with the attachment feedback loop, and a shadow on one without it.
@@ -1889,13 +1903,49 @@ impl Plan {
             storage: false,
             attachment_reads: false,
             linear_resolves: false,
+            ..self.unextended()
+        }
+    }
+
+    /// The plan without the storage usage for its views of another format (`extended`).
+    fn unextended(&self) -> Plan {
+        let mut usage = self.usage;
+        if self.extended {
+            usage &= !vk::ImageUsageFlags::STORAGE;
+        }
+        Plan {
+            usage,
+            extended: false,
             view_formats: self.view_formats.clone(),
             ..*self
         }
     }
 
-    /// The image's create flags over `shape`'s: mutable where it lists formats for its views, and
-    /// cube-compatible where the plan makes it so.
+    /// Whether the plan, extended, is `plain`'s with the storage usage alone: the device's image
+    /// format query made the image with every other usage, flag and sample count (`plan`).
+    fn keeps(&self, plain: &Plan) -> bool {
+        self.usage == plain.usage | vk::ImageUsageFlags::STORAGE
+            && (self.resolves, self.attachment_reads, self.cube)
+                == (plain.resolves, plain.attachment_reads, plain.cube)
+    }
+
+    /// The image's home layout: the general one where it is extended (`extended`).
+    fn home(&self) -> vk::ImageLayout {
+        match self.extended {
+            true => vk::ImageLayout::GENERAL,
+            false => self.home,
+        }
+    }
+
+    /// The usage its own format's views take (`VkImageViewUsageCreateInfo`) of the image's
+    /// `usage`: the usage that format holds where it is extended (`extended`); `None`, the
+    /// image's, elsewhere.
+    fn own_views(&self, usage: vk::ImageUsageFlags) -> Option<vk::ImageUsageFlags> {
+        self.extended.then_some(usage & self.supported)
+    }
+
+    /// The image's create flags over `shape`'s: mutable where it lists formats for its views,
+    /// cube-compatible where the plan makes it so, and of extended usage where it is extended.
     fn flags(&self, shape: &Shape) -> vk::ImageCreateFlags {
         let mut flags = shape.flags;
         if !self.view_formats.is_empty() {
@@ -1903,6 +1953,9 @@ impl Plan {
         }
         if self.cube {
             flags |= vk::ImageCreateFlags::CUBE_COMPATIBLE;
+        }
+        if self.extended {
+            flags |= vk::ImageCreateFlags::EXTENDED_USAGE;
         }
         flags
     }
@@ -2046,9 +2099,29 @@ fn check_over(
     let fits = |max: Option<vk::Extent3D>| {
         max.is_some_and(|max| d.width <= max.width && d.height <= max.height)
     };
-    let extent = fits(linear_extent(core, shape, plan, laid.handle()));
     let (linear, optimal) = core.format_features(plan.format);
-    let features = linear.contains(optimal & kept_features(plan.usage));
+    // Its linear image's query, and its linear tiling's features of each use its optimal tiling
+    // holds: its format's, and an extended plan's other formats' storage (`Plan::extended`).
+    let held = |plan: &Plan| {
+        let extent = fits(linear_extent(core, shape, plan, laid.handle()));
+        let stored = !plan.extended
+            || (plan.view_formats.iter()).all(|&format| {
+                let (linear, optimal) = core.format_features(format);
+                linear.contains(optimal & kept_features(vk::ImageUsageFlags::STORAGE))
+            });
+        let features = linear.contains(optimal & kept_features(plan.usage)) && stored;
+        (extent, features)
+    };
+    let (mut extent, mut features) = held(plan);
+    // A linear image the device makes plain but not extended is made plain, in place: its views
+    // of another format have no storage element, and no copy is made for them.
+    if plan.extended && !(extent && features) {
+        let plain = plan.unextended();
+        if held(&plain) == (true, true) {
+            (extent, features) = (true, true);
+            *plan = plain;
+        }
+    }
     // In place in a block of the runtime's own, its linear image takes the colour attachment
     // usage where the plan resolves, its tiling's features hold the attachment and the query
     // makes the image with it; else it is made without it, and stays in place.
@@ -2395,18 +2468,51 @@ pub(crate) fn shape(d: &TextureDescriptor) -> Result<Shape, Error> {
 }
 
 /// Decides the image, its views and its home layout, and checks them against the device's image
-/// format query.
+/// format query. A texture shaders write whose own format the device does not store, where a
+/// format it lists for its views does, is extended for those views' storage (`Plan::extended`)
+/// where the device's image format query makes the extended image with every usage, flag and
+/// sample count it makes the plain one with; else it is made plain, and its views of another
+/// format have no storage element (`Gap::StorageElement`).
 fn plan(
     core: &Core,
     d: &TextureDescriptor,
     usage: TextureUsage,
     shape: &Shape,
 ) -> Result<Plan, Error> {
+    match planned(core, d, usage, shape, true) {
+        Ok(plan) if !plan.extended => Ok(plan),
+        extended => {
+            let plain = planned(core, d, usage, shape, false)?;
+            Ok(match extended {
+                Ok(extended) if extended.keeps(&plain) => extended,
+                _ => plain,
+            })
+        }
+    }
+}
+
+/// [`plan`]'s plan, extended where `extend` and the texture takes it.
+fn planned(
+    core: &Core,
+    d: &TextureDescriptor,
+    usage: TextureUsage,
+    shape: &Shape,
+    extend: bool,
+) -> Result<Plan, Error> {
     let mut plan = form(core, d, usage)?;
     let pf = d.pixel_format;
     let gap = || Error::Unsupported(Gap::TextureFormat { pixel_format: pf });
     let profile = core.translator.profile();
-    plan.view_formats = view_formats(profile, pf, usage, &plan);
+    let (view_formats, stored) = view_formats(profile, pf, usage, &plan);
+    plan.view_formats = view_formats;
+    plan.extended = extend
+        && stored
+        && !plan.storage
+        && usage.contains(TextureUsage::SHADER_WRITE)
+        && !multisampled(d.texture_type);
+    if plan.extended {
+        plan.usage |= vk::ImageUsageFlags::STORAGE;
+    }
     // A square 2D array of six slices or more is made cube-compatible where the device's image
     // format query takes the flag (`Plan::cube`).
     let mut cube =
@@ -2552,13 +2658,13 @@ fn viewed(emulation: FormatEmulation) -> bool {
 /// first: those Metal views such a texture as (its sRGB sibling, and with `PixelFormatView` usage
 /// every format `metal::format::views_with_usage` takes) that the device holds for the usage in a
 /// viewed form of the image format's class. Empty where there is none but its own: the image is
-/// then not mutable.
+/// then not mutable. With whether the device stores one of the others ([`stores`]).
 fn view_formats(
     profile: &metal2vulkan::device::DeviceProfile,
     pf: PixelFormat,
     usage: TextureUsage,
     plan: &Plan,
-) -> Vec<vk::Format> {
+) -> (Vec<vk::Format>, bool) {
     let others: Vec<PixelFormat> = match usage.contains(TextureUsage::PIXEL_FORMAT_VIEW) {
         true => (PixelFormat::ALL.iter().copied())
             .filter(|&view| view != pf && formats::views_with_usage(pf, view))
@@ -2566,6 +2672,7 @@ fn view_formats(
         false => formats::srgb_sibling(pf).into_iter().collect(),
     };
     let mut list = vec![plan.format];
+    let mut stored = false;
     for view in others {
         let usages = formats::texture_usages(view, usage);
         let Ok(mapping) = formats::vk_format(view, &usages, profile) else {
@@ -2575,12 +2682,21 @@ fn view_formats(
         let format: vk::Format = mapping.format.into();
         if viewed(mapping.emulation) && class == Some(plan.class) && !list.contains(&format) {
             list.push(format);
+            stored |= stores(profile, &mapping);
         }
     }
     if list.len() == 1 {
         list.clear();
     }
-    list
+    (list, stored)
+}
+
+/// Whether the device stores a texture held as `mapping` through a storage image declared without
+/// a format: the format held directly, with the storage image and its writes without a format.
+fn stores(profile: &metal2vulkan::device::DeviceProfile, mapping: &formats::FormatMapping) -> bool {
+    mapping.emulation == FormatEmulation::Direct
+        && profile.supports_format(mapping.format, FormatUsage::StorageImage)
+        && profile.supports_format(mapping.format, FormatUsage::StorageImageWriteWithoutFormat)
 }
 
 /// Whether textures of `texture_type` are multisampled, which Metal's shaders only read (the
@@ -2637,9 +2753,7 @@ fn form(core: &Core, d: &TextureDescriptor, usage: TextureUsage) -> Result<Plan,
     // shaders only read one (`multisampled`).
     let storage = usage.contains(TextureUsage::SHADER_WRITE)
         && !multisampled(d.texture_type)
-        && mapping.emulation == FormatEmulation::Direct
-        && profile.supports_format(mapping.format, FormatUsage::StorageImage)
-        && profile.supports_format(mapping.format, FormatUsage::StorageImageWriteWithoutFormat);
+        && stores(profile, &mapping);
     let storage_reads =
         profile.supports_format(mapping.format, FormatUsage::StorageImageReadWithoutFormat);
     let render = usage.contains(TextureUsage::RENDER_TARGET);
@@ -2714,6 +2828,7 @@ fn form(core: &Core, d: &TextureDescriptor, usage: TextureUsage) -> Result<Plan,
         storage,
         storage_reads,
         home,
+        extended: false,
         attachment_reads: false,
         aspects,
         unit,
@@ -3199,7 +3314,8 @@ impl Made {
     }
 
     /// Makes `image`'s views of `plan`: its sampled view, where it has one and the image's
-    /// `usage` the sampled usage, and its storage view, where it has one.
+    /// `usage` the sampled usage, and its storage view, where it has one; of the usage its own
+    /// format's views take ([`Plan::own_views`]).
     ///
     /// # Safety
     ///
@@ -3213,12 +3329,13 @@ impl Made {
         plan: &Plan,
         usage: vk::ImageUsageFlags,
     ) -> Result<(Option<vk::ImageView>, Option<vk::ImageView>), Error> {
+        let own = plan.own_views(usage);
         let mut view = |view_type, components, aspect| {
             let format = plan.format;
             // SAFETY: the caller's contract.
             let range = whole(aspect);
             let view =
-                unsafe { image_view(core, image, view_type, format, components, range, None) }?;
+                unsafe { image_view(core, image, view_type, format, components, range, own) }?;
             self.views.push(view);
             Ok::<_, Error>(view)
         };
@@ -3965,9 +4082,10 @@ impl Texture {
             return refused();
         }
         // Another format is built where the image lists it; its views take the image's usage
-        // that the format's features hold.
+        // that the format's features hold, as do the image format's own views where the texture
+        // viewed restricts its views (`Plan`'s `extended`).
         let views_usage = match plan.format == image.format {
-            true => None,
+            true => (inner.views_usage).map(|_| image.usage & plan.supported),
             false if image.view_formats.contains(&plan.format) => {
                 Some(image.usage & plan.supported)
             }
@@ -3975,7 +4093,15 @@ impl Texture {
             false => return gap(TextureViewKind::PixelFormat),
         };
         let usable = views_usage.unwrap_or(image.usage);
+        let stores = plan.storage;
         plan.storage &= usable.contains(vk::ImageUsageFlags::STORAGE);
+        // A format the device stores that the image lists, but holds no storage usage for: the
+        // device did not make it extended for its views (`Plan`'s `extended`). A surface plane's
+        // image is made by its own rule.
+        let unextended = stores
+            && !plan.storage
+            && image.view_formats.contains(&plan.format)
+            && !image.surface();
         if !usable.contains(vk::ImageUsageFlags::SAMPLED) {
             plan.sampled = None;
         }
@@ -4097,6 +4223,7 @@ impl Texture {
                 base,
                 reads,
                 views,
+                unextended,
             }),
             emulation: plan.emulation,
             attachments: Mutex::new(Vec::new()),
@@ -5072,12 +5199,16 @@ pub(crate) trait TextureObject {
     }
 
     /// What a function's storage use of it lacks ([`Gap::StorageElement`] but its slot): no
-    /// storage element ([`unstored`](Self::unstored)), or one the device cannot write without a
+    /// storage element ([`unstored`](Self::unstored)), a view's for the image the device did not
+    /// make extended for it apart (`View`'s `unextended`), or one the device cannot write without a
     /// format where `write` (a write without a format, [`unwritten`](Self::unwritten)), or read
     /// without one where `read` (a storage read without a format, [`unread`](Self::unread)).
     fn storage_gap(&self, write: bool, read: bool) -> Option<StorageGap> {
         let case = if self.unstored().is_some() {
-            StorageElementCase::Absent
+            match &self.object().view {
+                Some(view) if view.unextended => StorageElementCase::Unextended,
+                _ => StorageElementCase::Absent,
+            }
         } else if write && self.unwritten().is_some() {
             StorageElementCase::WriteWithoutFormat
         } else if read && self.unread().is_some() {
@@ -5764,12 +5895,13 @@ pub(crate) unsafe fn discard_surface_image(core: &Core, made: SurfaceImage) {
 impl Device {
     /// A surface plane's texture of `d`, checked as [`Buffer::new_texture`] checks a texture
     /// over a buffer: its image format, the image usage its uses ask, its view formats and its
-    /// texel's bytes.
+    /// texel's bytes. The plane's image is made by the surface's rule, never extended for its
+    /// views' storage (`Plan`'s `extended`).
     pub(crate) fn plane_plan(
         &self,
         d: &TextureDescriptor,
     ) -> Result<crate::surface::PlanePlan, Error> {
-        let (_, plan, _) = self.prepare(d)?;
+        let plan = self.prepare(d)?.1.unextended();
         let texel = over_texel(d, &plan)?;
         Ok(crate::surface::PlanePlan {
             format: plan.format,
@@ -5804,6 +5936,8 @@ impl Device {
             if index.is_some() && !reached(d.pixel_format, usage) {
                 return Err(Error::Refused(Refusal::TextureIndex { index }));
             }
+            // The plane's image is made by the surface's rule ([`Device::plane_plan`]).
+            let plan = plan.unextended();
             let missing = plan.linear_usage() & !made.usage;
             if !missing.is_empty() {
                 return Err(Error::Unsupported(Gap::SurfaceUsage {

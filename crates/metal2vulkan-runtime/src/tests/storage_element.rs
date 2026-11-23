@@ -31,7 +31,7 @@
 //! the fixture's `access::read_write` kernel on every device: where the device's image format query
 //! takes the texture's image with `VK_IMAGE_CREATE_EXTENDED_USAGE_BIT` and the storage usage, the
 //! texture's bytes hold the view's unorm codes and its own read decodes them; elsewhere the dispatch
-//! is `Gap::StorageElement`.
+//! is `Gap::StorageElement`, `StorageElementCase::Unextended`.
 //!
 //! `llvm-as` assembles the functions; without it the tests skip visibly.
 
@@ -558,7 +558,7 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
     /// in the image's tiling (and, linear, where the view format's linear tiling holds what storage
     /// keeps of its optimal tiling). With it, the dispatch writes the view's unorm codes, which the
     /// texture's bytes hold and its own read decodes; without it, the dispatch is
-    /// `Gap::StorageElement`. Prints the query's answer for the
+    /// `Gap::StorageElement`, `StorageElementCase::Unextended`. Prints the query's answer for the
     /// extended image, optimal and linear.
     #[test]
     fn every_device_writes_an_srgb_texture_through_its_unorm_view() {
@@ -653,6 +653,7 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
                         Err(Error::Unsupported(Gap::StorageElement {
                             slot: Some(0),
                             pixel_format: PixelFormat::RGBA8Unorm,
+                            case: StorageElementCase::Unextended,
                             ..
                         })),
                     ) => {

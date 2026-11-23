@@ -1374,7 +1374,15 @@ made, with no lock, and never rewritten for layouts.
   first): its sRGB sibling whatever its usage, as Metal views a texture as its sibling without
   `PixelFormatView` usage, and with that usage every uncompressed colour format of the same bytes
   a texel. A texture of no such format is not mutable. A view of another format takes the image's
-  usage that its format's features hold (`VkImageViewUsageCreateInfo`).
+  usage that its format's features hold (`VkImageViewUsageCreateInfo`). A texture made for shader
+  writes whose own format the device does not store, where a format it lists does (an 8-bit sRGB
+  texture and its unorm sibling), takes the storage usage for those views
+  (`VK_IMAGE_CREATE_EXTENDED_USAGE_BIT`), where the device's image format query makes that image
+  with every usage, flag and sample count it makes the plain one with; in place over a buffer, its
+  linear image too where the linear query makes it and the format's linear tiling holds the
+  storage, else it stays in place plain. Its home is then the general layout, and its own
+  format's views take the usage that format holds. So its view of the stored format has a storage
+  element; with no such image it has none (`StorageElementCase::Unextended`).
 - The sampled element's view is the format's, through its component mapping with the
   descriptor's swizzle composed over it; a depth or stencil format's view takes its depth, else
   its stencil. The storage element is written where the usage has shader write and the device
@@ -1687,7 +1695,8 @@ made, with no lock, and never rewritten for layouts.
 - A texture made for shader writes whose format the device does not store through a storage
   image without a format (the 8-bit sRGB formats, `RGB9E5Float` or `BGR10A2Unorm` where the
   device lacks their storage), or holds through a view of another (an `A8Unorm` held in red, the
-  extended-range formats), has no storage element. A draw or dispatch whose function writes such
+  extended-range formats), has no storage element; its view of a format the device stores has one
+  where its image is extended for it (above). A draw or dispatch whose function writes such
   a texture bound to a slot, or reads it there through its storage image (`access::read_write`),
   is `Gap::StorageElement`. So is, with no slot, a dispatch whose kernel, or a draw whose vertex
   or fragment function, may reach a texture through its storage image beyond its slots (an

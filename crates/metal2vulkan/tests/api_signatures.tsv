@@ -8725,6 +8725,7 @@ variant	metal2vulkan-runtime::StageSource::Compiled	Compiled(CompiledFunction)
 variant	metal2vulkan-runtime::StageSource::Function	Function(FunctionDescriptor)
 variant	metal2vulkan-runtime::StorageElementCase::Absent	Absent
 variant	metal2vulkan-runtime::StorageElementCase::ReadWithoutFormat	ReadWithoutFormat
+variant	metal2vulkan-runtime::StorageElementCase::Unextended	Unextended
 variant	metal2vulkan-runtime::StorageElementCase::WriteWithoutFormat	WriteWithoutFormat
 variant	metal2vulkan-runtime::StorageMode::Managed	Managed
 variant	metal2vulkan-runtime::StorageMode::Memoryless	Memoryless
