@@ -1264,32 +1264,40 @@ pub fn emit(
                 LocalPtr::Value(v) => cx.operand(fb, *v)?,
                 LocalPtr::Offset(c) => k32(fb, *c)?,
             };
-            let two = k32(fb, 2)?;
-            let w = fb.binary(BinOp::ShiftRightLogical, off, two)?;
-            let at = At {
-                p: ArenaMem(decl, WordOps::default()).ptr(fb, w)?,
-                shift: field_shift(fb, o, off)?,
-            };
-            let inb = match *contained {
-                true => {
-                    let size = fb.module().const_value(decl.size)?;
-                    Some(contain::in_bounds(fb, off, size, u64::from(bytes))?)
+            // An unchecked atomic at a constant offset outside the arena lies outside every object
+            // in it, where Metal leaves it undefined, and no access chain may index the arena's
+            // words with a constant past them: it writes nothing and yields zero, as a contained
+            // one out of bounds does (`guarded`).
+            if !*contained && local::outside_arena(fb, off, &decl, u64::from(bytes))? {
+                o.yields().then(|| konst(fb, word, 0)).transpose()?
+            } else {
+                let two = k32(fb, 2)?;
+                let w = fb.binary(BinOp::ShiftRightLogical, off, two)?;
+                let at = At {
+                    p: ArenaMem(decl, WordOps::default()).ptr(fb, w)?,
+                    shift: field_shift(fb, o, off)?,
+                };
+                let inb = match *contained {
+                    true => {
+                        let size = fb.module().const_value(decl.size)?;
+                        Some(contain::in_bounds(fb, off, size, u64::from(bytes))?)
+                    }
+                    false => None,
+                };
+                // A word of a tile's cell the pass does not keep reads as zero and keeps no write
+                // (`access::tile::KeptCells`).
+                let kept = match super::tile::KeptCells::of(cx, fb)? {
+                    Some(cells) => Some(cells.kept(fb, w)?),
+                    None => None,
+                };
+                let guard = match (inb, kept) {
+                    (Some(inb), Some(kept)) => Some(fb.binary(BinOp::LogicalAnd, inb, kept)?),
+                    (inb, kept) => inb.or(kept),
+                };
+                match guard {
+                    Some(guard) => guarded(fb, guard, at, o)?,
+                    None => apply(fb, at, o)?,
                 }
-                false => None,
-            };
-            // A word of a tile's cell the pass does not keep reads as zero and keeps no write
-            // (`access::tile::KeptCells`).
-            let kept = match super::tile::KeptCells::of(cx, fb)? {
-                Some(cells) => Some(cells.kept(fb, w)?),
-                None => None,
-            };
-            let guard = match (inb, kept) {
-                (Some(inb), Some(kept)) => Some(fb.binary(BinOp::LogicalAnd, inb, kept)?),
-                (inb, kept) => inb.or(kept),
-            };
-            match guard {
-                Some(guard) => guarded(fb, guard, at, o)?,
-                None => apply(fb, at, o)?,
             }
         }
         AtomicMem::Wide { ptr, .. } => {

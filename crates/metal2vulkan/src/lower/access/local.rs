@@ -45,9 +45,10 @@
 //! whose `ThreadgroupMemory` is `Native` ([`contained`]): there no threadgroup access is contained, an arena's, its atomics', memory
 //! intrinsics', pointer cells' and imageblock's alike, nor a typed threadgroup object's index, and
 //! one past the memory is undefined, as in Metal (no robustness feature covers arenas). An
-//! unchecked load or store at a constant offset outside the arena, which lies outside every object
-//! in it and may lie past its words, where no access chain may index with a constant, is a zero
-//! load or no store, as a contained one is. Contained,
+//! unchecked load, store or atomic at a constant offset outside the arena, which lies outside every
+//! object in it and may lie past its words, where no access chain may index with a constant, is a
+//! zero load, no store, or an atomic that writes nothing and yields zero, as a contained one is
+//! (the atomic in `atomic`). Contained,
 //! with `inb` the normative check against the arena's exact byte
 //! size, a load reads at `select(inb, off, 0)` and yields `select(inb, v, 0)`, and a store sits in
 //! a builder-closed `if_(inb)`. A dereference of a null private pointer (undefined in Metal) reads
@@ -2091,7 +2092,7 @@ pub(super) fn emit_access_at(
 /// Whether a `bytes`-byte access at `off` lies outside `decl`'s arena by the normative check
 /// (`contain::in_bounds`), decided at translation time: `off` and the arena's size are plain
 /// constants. `false` when either is not one.
-fn outside_arena(
+pub(super) fn outside_arena(
     fb: &mut FunctionBuilder<'_>,
     off: SValue,
     decl: &ArenaDecl,

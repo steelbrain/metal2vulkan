@@ -650,9 +650,10 @@ through buffer arguments it reads at any index.
 - **Threadgroup memory.** No threadgroup memory access is
   bounded: a load or store, atomic, memory intrinsic, pointer cell or imageblock access of a
   threadgroup arena, and a typed threadgroup object's index, run as the program states them, and
-  one past the memory is undefined, as in Metal. A load or store of the arena at a constant offset
-  outside it, undefined in Metal too, is a zero load or no store: no access chain may index the
-  arena's words with a constant past them. A kernel whose every threadgroup access is a
+  one past the memory is undefined, as in Metal. A load, store or atomic of the arena at a constant
+  offset outside it, undefined in Metal too, is a zero load, no store, or an atomic that writes
+  nothing and returns zero: no access chain may index the arena's words with a constant past them.
+  A kernel whose every threadgroup access is a
   whole, aligned `float` (a scalar or a vector of two to four), with no atomic, memory intrinsic,
   imageblock or pointer kept in it, and whose SIMD groups are not emulated, holds its threadgroup
   memory as a `Workgroup` array of `float`: each access is one typed load or store a lane, with no
