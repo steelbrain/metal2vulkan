@@ -229,6 +229,8 @@ pub(crate) enum Metric {
     EmulatedSimdgroupDispatches,
     /// [`Metrics::partial_variant_whole_grids`].
     PartialVariantWholeGrids,
+    /// [`Metrics::partial_variant_ragged_grids`].
+    PartialVariantRaggedGrids,
     /// [`Metrics::private_arena_pieces`].
     PrivateArenaPieces,
     /// [`Metrics::private_arena_blocks`].
@@ -321,6 +323,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::PrivateArenaDispatches,
     Metric::EmulatedSimdgroupDispatches,
     Metric::PartialVariantWholeGrids,
+    Metric::PartialVariantRaggedGrids,
     Metric::PrivateArenaPieces,
     Metric::PrivateArenaBlocks,
     Metric::Translations,
@@ -700,6 +703,7 @@ struct Atomics {
     private_arena_dispatches: AtomicU64,
     emulated_simdgroup_dispatches: AtomicU64,
     partial_variant_whole_grids: AtomicU64,
+    partial_variant_ragged_grids: AtomicU64,
     private_arena_pieces: AtomicU64,
     private_arena_blocks: AtomicU64,
     shared_long_reuses: AtomicU64,
@@ -903,6 +907,7 @@ impl Counters {
             Metric::PrivateArenaDispatches => &a.private_arena_dispatches,
             Metric::EmulatedSimdgroupDispatches => &a.emulated_simdgroup_dispatches,
             Metric::PartialVariantWholeGrids => &a.partial_variant_whole_grids,
+            Metric::PartialVariantRaggedGrids => &a.partial_variant_ragged_grids,
             Metric::PrivateArenaPieces => &a.private_arena_pieces,
             Metric::PrivateArenaBlocks => &a.private_arena_blocks,
             Metric::Translations => &a.translations,
@@ -1779,6 +1784,7 @@ impl Counters {
             private_arena_dispatches: a.private_arena_dispatches.load(Relaxed),
             emulated_simdgroup_dispatches: a.emulated_simdgroup_dispatches.load(Relaxed),
             partial_variant_whole_grids: a.partial_variant_whole_grids.load(Relaxed),
+            partial_variant_ragged_grids: a.partial_variant_ragged_grids.load(Relaxed),
             private_arena_pieces: a.private_arena_pieces.load(Relaxed),
             private_arena_blocks: a.private_arena_blocks.load(Relaxed),
             translations: a.translations.load(Relaxed),
@@ -2397,6 +2403,13 @@ pub struct Metrics {
     /// module where the variant takes the threadgroup and its threadgroup memory, a predicated
     /// walk's vote word with it. No Metal counterpart: Metal compiles one function.
     pub partial_variant_whole_grids: u64,
+    /// Dispatches of a grid that ends in partial threadgroups, `dispatchThreads` of a grid that is
+    /// not a whole number of threadgroups, that ran a kernel's partial-threadgroups variant: a
+    /// kernel that observes its threadgroup partition runs such a grid only on that module, its
+    /// regions flagged so each threadgroup runs only the grid's threads. A ragged grid the
+    /// variant cannot take is refused, and counted nowhere. No Metal counterpart: Metal runs the
+    /// grid on the one function it compiled.
+    pub partial_variant_ragged_grids: u64,
     /// Functions the translator lowered, each a module of a pipeline content the device did not
     /// hold compiled: of a compute content, one for its partial-threadgroups variant, one more for
     /// the plain module of an observing kernel whose state keeps one beside the variant, and one

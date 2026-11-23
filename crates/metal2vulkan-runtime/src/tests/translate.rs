@@ -4692,7 +4692,9 @@ $REGION_META!3 = !{i32 $OUT, !"air.buffer", !"air.location_index", i32 0, i32 1,
     /// word, rounded down to 16 and at most 32 KiB, which the test checks). Each state's
     /// ragged grid of 25 threads, one partial threadgroup of 25, and its whole grid of 1,024
     /// threads: at `room` every one runs and answers the program's inclusive sums,
-    /// `(t + 1)(t + 2) / 2` for thread `t` of its threadgroup. At 32 KiB, where the bytes and the
+    /// `(t + 1)(t + 2) / 2` for thread `t` of its threadgroup, and each ragged grid that runs adds
+    /// one to `Metrics::partial_variant_ragged_grids`, which a whole grid or a refused one leaves
+    /// alone, so the count is above zero at the end. At 32 KiB, where the bytes and the
     /// word pass the device's limit, the ragged grids are refused, `scan_static`'s as
     /// `Gap::PartialThreadgroups` at the vote word (the translator refuses the variant), naming
     /// its static bytes and the limit, and `scan_length`'s as `Limit::ThreadgroupMemory` of the
@@ -4718,6 +4720,7 @@ $REGION_META!3 = !{i32 $OUT, !"air.buffer", !"air.location_index", i32 0, i32 1,
             let queue = device.new_command_queue(4).expect("a queue");
             let mut buffers = Buffers::new(&device, 1 << 16);
             let mut failed = Vec::new();
+            let mut ragged = 0;
             for bytes in told {
                 for declared in [Some(bytes / 4), None] {
                     let bitcode =
@@ -4753,6 +4756,7 @@ $REGION_META!3 = !{i32 $OUT, !"air.buffer", !"air.location_index", i32 0, i32 1,
                         let want: Vec<u32> = (0..grid).map(|t| (t + 1) * (t + 2) / 2).collect();
                         let out = buffers.buffer(4 * 1024);
                         write(&out, 0, &le_bytes(&[0xEEEE_EEEE; 1024]));
+                        let before = device.counters().metrics();
                         let command_buffer = queue.command_buffer().expect("a command buffer");
                         let mut encoder = command_buffer
                             .compute_command_encoder(DispatchType::Serial)
@@ -4768,6 +4772,9 @@ $REGION_META!3 = !{i32 $OUT, !"air.buffer", !"air.location_index", i32 0, i32 1,
                         encoder.end_encoding();
                         command_buffer.commit().expect("a commit");
                         finished(name, &command_buffer);
+                        let counted = device.counters().metrics().partial_variant_ragged_grids
+                            - before.partial_variant_ragged_grids;
+                        ragged += counted;
                         let sums = dispatched.is_ok()
                             && command_buffer.error().is_none()
                             && words(&out, 0, grid as usize) == want;
@@ -4790,6 +4797,9 @@ $REGION_META!3 = !{i32 $OUT, !"air.buffer", !"air.location_index", i32 0, i32 1,
                                 })) if length == u64::from(bytes) + 4 && max == limit
                             ),
                         };
+                        // Each ragged grid that runs is counted once; a whole or refused one is not.
+                        let expected =
+                            expected && counted == u64::from(grid == 25 && dispatched.is_ok());
                         let outcome = match &dispatched {
                             Err(error) => format!("refused: {error:?}"),
                             Ok(()) if command_buffer.error().is_some() => {
@@ -4800,15 +4810,22 @@ $REGION_META!3 = !{i32 $OUT, !"air.buffer", !"air.location_index", i32 0, i32 1,
                         };
                         println!(
                             "{name}: {kernel}, {bytes} of {limit} bytes (vote word {vote:?}), \
-                             [{grid}, 1, 1] in [1024, 1, 1]: {outcome}"
+                             [{grid}, 1, 1] in [1024, 1, 1]: {outcome}; ragged grids counted \
+                             {counted}"
                         );
                         if !expected {
-                            failed.push(format!("{kernel}, {bytes} bytes, grid {grid}: {outcome}"));
+                            failed.push(format!(
+                                "{kernel}, {bytes} bytes, grid {grid}: {outcome}, {counted} counted"
+                            ));
                         }
                     }
                 }
             }
             assert!(failed.is_empty(), "{name}: {failed:?}");
+            assert!(
+                ragged > 0,
+                "{name}: ragged grids on the partial-threadgroups variant, counted"
+            );
         });
     }
 

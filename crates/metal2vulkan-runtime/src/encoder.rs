@@ -1321,8 +1321,11 @@ impl ComputeCommandEncoder {
         if recorded.is_ok() && module == Module::Emulated {
             recording(&mut self.building).count(Metric::EmulatedSimdgroupDispatches);
         }
-        if recorded.is_ok() && module == Module::Partial && !ragged {
-            recording(&mut self.building).count(Metric::PartialVariantWholeGrids);
+        if recorded.is_ok() && module == Module::Partial {
+            recording(&mut self.building).count(match ragged {
+                true => Metric::PartialVariantRaggedGrids,
+                false => Metric::PartialVariantWholeGrids,
+            });
         }
         recorded
     }

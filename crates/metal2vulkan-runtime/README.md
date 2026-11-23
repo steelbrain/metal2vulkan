@@ -2780,7 +2780,8 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   `dispatch_threadgroups`, `dispatch_threadgroups_with_indirect_buffer` or a grid that is not a
   whole number of threadgroups, runs the variant at its own size, every region but a ragged grid's
   unflagged, so one `VkPipeline` of a size runs them all (`Metrics::partial_variant_whole_grids`
-  counts the dispatches of whole threadgroups). A dispatch runs the plain module where the variant
+  counts the dispatches of whole threadgroups, `Metrics::partial_variant_ragged_grids` those of a
+  ragged grid). A dispatch runs the plain module where the variant
   is refused, where its threadgroup memory, the lengths set with the variant's own, passes the
   device's `maxComputeSharedMemorySize` once the variant's predicated walk adds its 4-byte vote
   word (a barrier in a loop; the plain module holds none), or where the threadgroup is not whole
