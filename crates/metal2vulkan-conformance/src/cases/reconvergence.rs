@@ -82,14 +82,16 @@ const LEVELS: u32 = 11;
 /// What `pick` holds: the second source.
 const PICK: u32 = 1;
 
-/// One draw: the site its row is compared at, its vertex function, its fragment function and its
-/// vertex count.
+/// One draw: the site its row is compared at, its vertex function, its fragment function, its
+/// vertex count, and whether its fragment reads `pick` at buffer 1, which the draw then binds. No
+/// other draw binds it: Metal's API validation reports a bound buffer no function reads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Draw {
     site: &'static str,
     vertex: &'static str,
     fragment: &'static str,
     vertices: u32,
+    pick: bool,
 }
 
 impl Draw {
@@ -100,7 +102,13 @@ impl Draw {
             vertex,
             fragment,
             vertices: 3,
+            pick: false,
         }
+    }
+
+    /// The draw, binding `pick`.
+    const fn picking(self) -> Self {
+        Self { pick: true, ..self }
     }
 }
 
@@ -123,12 +131,13 @@ const CONSTRUCTS: [Draw; 10] = [
 const HANDLE_CHOICES: [Draw; 4] = [
     Draw::covering("rs_cover", "rc_select"),
     Draw::covering("rs_cover", "rc_select_quad"),
-    Draw::covering("rs_cover", "rc_pick"),
+    Draw::covering("rs_cover", "rc_pick").picking(),
     Draw {
         site: "rc_pick_cells",
         vertex: "rs_cells",
         fragment: "rc_pick",
         vertices: 3 * 64,
+        pick: true,
     },
 ];
 
@@ -274,8 +283,6 @@ pub struct Reconvergence {
     draws: &'static [Draw],
     /// The first level's value of each source the fragments bind, at textures 0 up.
     sources: &'static [u32],
-    /// Whether the fragments read `pick` at buffer 1.
-    pick: bool,
 }
 
 /// The cases the suite holds.
@@ -286,14 +293,12 @@ pub fn all() -> Vec<Reconvergence> {
             fixture: "reconverge_sample",
             draws: &CONSTRUCTS,
             sources: &[1],
-            pick: false,
         },
         Reconvergence {
             name: "reconvergence-handle-choices",
             fixture: "reconverge_select",
             draws: &HANDLE_CHOICES,
             sources: &[1, 21],
-            pick: true,
         },
     ]
 }
@@ -305,6 +310,11 @@ impl Reconvergence {
             name: self.fixture,
             entry,
         }
+    }
+
+    /// Whether any draw binds `pick`.
+    fn picks(&self) -> bool {
+        self.draws.iter().any(|draw| draw.pick)
     }
 
     /// Every entry the case's pipelines name, once each, vertex functions first.
@@ -388,7 +398,7 @@ impl Case for Reconvergence {
                 "draws",
                 self.draws
                     .iter()
-                    .map(|draw| format!("{}:{}", draw.site, draw.vertices))
+                    .map(|draw| format!("{}:{}:{}", draw.site, draw.vertices, draw.pick))
                     .collect::<Vec<String>>()
                     .join(",")
                     .as_bytes(),
@@ -396,7 +406,7 @@ impl Case for Reconvergence {
             Input::bytes("buffer:0", &data_bytes()),
             Input::bytes("clear", &CLEAR.to_le_bytes()),
         ];
-        if self.pick {
+        if self.picks() {
             inputs.push(Input::bytes("buffer:1", &PICK.to_le_bytes()));
         }
         for (index, base) in self.sources.iter().enumerate() {
@@ -439,7 +449,7 @@ impl Case for Reconvergence {
             )?);
         }
         let data = made(sites, "buffer/0", side.buffer(&data_bytes()))?;
-        let pick = match self.pick {
+        let pick = match self.picks() {
             true => Some(made(sites, "buffer/1", side.buffer(&PICK.to_le_bytes()))?),
             false => None,
         };
@@ -469,7 +479,7 @@ impl Case for Reconvergence {
                     index: 0,
                 },
             ];
-            if let Some(pick) = pick {
+            if let (true, Some(pick)) = (draw.pick, pick) {
                 steps.push(RenderStep::FragmentBuffer {
                     buffer: pick,
                     offset: 0,
