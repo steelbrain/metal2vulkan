@@ -159,6 +159,42 @@ fn slots_and_declared_access_come_from_the_metadata_and_writes_from_the_ir() {
 }
 
 #[test]
+fn program_scope_bindings_are_required_buffers_at_their_slots() {
+    // `psb_scale` and `psb_words` are bound at program scope at buffer(1) and buffer(2), and
+    // `psb_out` at buffer(0), the slot of the kernel's own `out`: each is a required buffer
+    // after the entry's parameters.
+    let interface = of_text(
+        &fixture("engine/kernel_program_scope_buffers.ll"),
+        "program_scope_buffers",
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    let buffers = interface
+        .params_of(|role| match role {
+            ParamRole::Buffer(buffer) => Some(buffer.access),
+            _ => None,
+        })
+        .map(|(param, access)| {
+            (
+                param.binding.param,
+                param.slots().unwrap(),
+                access,
+                param.required(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        buffers,
+        [
+            (0, (0, 1), Access::ReadWrite, true),
+            (2, (1, 1), Access::Read, true),
+            (3, (2, 1), Access::Read, true),
+            (4, (0, 1), Access::ReadWrite, true),
+        ]
+    );
+}
+
+#[test]
 fn predicates_and_computed_slots_resolve_for_the_case_constants() {
     // Textures 0 and 1 are gated by `provide_absent` and bound at slots the static initializer
     // computes; 2 and 3 are unconditional.
