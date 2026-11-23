@@ -993,6 +993,27 @@ the Direct3D 11 texture's payload until it is freed.
   its dma-bufs are refused with `Limit::ImportType`, and a consumer imports those pages by pointer.
   Its sparse buffers import no dma-buf either, so `Device::import_dma_bufs` refuses there, as it
   does on the RTX 3090 (NVIDIA 620.70.06).
+- Under AMD's open Linux driver (AMDVLK 2025.Q2.1, LLPC) on a Radeon 780M (1002:15bf, and the
+  same on a 1002:1900), no no-copy import takes a guest's pages, so the consumer copies them. The
+  pages are shared mappings of memfds, and their dma-buf is a udmabuf of the memfd's pages.
+  `Device::import_dma_buf` refuses with `Limit::ImportType`: the fd's query offers every memory
+  type (0xffff), and the first, the only one the dma-buf rule takes (Imported blocks), is not
+  host-visible and host-coherent. `Device::import_host_memory` of the same pages fails in the
+  driver, an `Error::Vulkan` of `vkAllocateMemory` with `VK_ERROR_INVALID_EXTERNAL_HANDLE`.
+  `Device::dma_buf_granule` is `None` there, so pages that span more than one dma-buf holds have
+  no dma-buf route. Under RADV (Mesa 26.2.6) on the same card the same pages import as dma-bufs
+  (`import_dma_buf`, and `import_dma_bufs` where they span more than one holds). In one guest run
+  of a GPU compute benchmark from a cold boot on the 1002:15bf, the consumer copied the pages of
+  1,693 imports of no-copy buffers and heaps: 1,491 that both calls refused, 165 that span more
+  than one dma-buf holds, and 37 read-only ones, which it copies on every device (no import is
+  read-only, Imported blocks). The writable copies took part in 17,083 commits, compared 1.82 TB,
+  and wrote 0.98 GB to the copies and 60.46 GB back to the pages. The copies' syncs took 230.2 s
+  of the consumer's CPU on the committing and completion threads. Under RADV in the same run, on
+  the same card, 1,622 imports were dma-bufs (168 of them over several), 32 were read-only copies,
+  and the copies' syncs took 5.7 ms. On a Radeon 780M (1002:1900) under AMD's Windows driver
+  (26.11.2, LLPC), in a guest session (not that benchmark run), all 998 of the consumer's
+  host-pointer imports took the pages in place, none refused, and its 97 copies were the
+  read-only ones.
 - An exported surface takes the copy form, its planes copied at each acquire and release, in
   four cases the build found. A copy form's planes are textures over a buffer in the exported
   block, which is Private, so the CPU's `replace_region` and `get_bytes` on them are refused
