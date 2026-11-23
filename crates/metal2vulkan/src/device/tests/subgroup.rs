@@ -4,8 +4,8 @@ use super::profile::device;
 use super::*;
 use crate::device::requirements::VkProperty;
 use crate::device::subgroup::{
-    requirement, tier, OpBits, SimdClass, StageSubgroup, SubgroupModel, SubgroupRequirement,
-    SubgroupSizes, Tier,
+    quad_free, quad_requirement, requirement, tier, OpBits, SimdClass, StageSubgroup,
+    SubgroupModel, SubgroupRequirement, SubgroupSizes, Tier,
 };
 use crate::error::{Capability, Feature};
 use crate::metal::{ArgumentBuffersTier, ReadWriteTextureTier};
@@ -189,6 +189,7 @@ fn fixed_wave64_is_cluster32_without_a_pin() {
             size: None,
             full_subgroups: true,
             local_size_multiple: 64,
+            varying: false,
         }
     );
     assert_eq!(tier(&shuffle, Stage::Fragment, &m), Ok(Tier::Cluster32));
@@ -214,6 +215,7 @@ fn pinnable_ranges_prefer_32() {
             size: Some(32),
             full_subgroups: true,
             local_size_multiple: 32,
+            varying: false,
         }
     );
     assert_eq!(
@@ -222,6 +224,7 @@ fn pinnable_ranges_prefer_32() {
             size: Some(32),
             full_subgroups: false,
             local_size_multiple: 1,
+            varying: false,
         }
     );
     // A range above 32 pins the smallest cluster size.
@@ -250,6 +253,7 @@ fn a_subgroup_requirement_states_its_device_facts() {
         size: Some(32),
         full_subgroups: true,
         local_size_multiple: 32,
+        varying: false,
     };
     let r = facts(pinned, Stage::Kernel);
     assert_eq!(r.features, [VkFeature::SubgroupSizeControl].into());
@@ -348,6 +352,122 @@ fn narrow_subgroups_partial_in_graphics_emulated_in_compute() {
             .unwrap_err()
             .feature,
         Feature::QuadOperations
+    );
+}
+
+/// A quad-only kernel takes its quads from the subgroup at the size the device gives where the
+/// kernel stage runs full subgroups of the class's operations and its narrowest size is below 32,
+/// read from the size range alone: 8 to 32 takes it; 32 to 32 and 32 to 64 keep today's pin to 32;
+/// a narrowest size below 4 is excluded by the guard, since a quad is four lanes of one subgroup.
+/// No other stage takes it. A stage that pins no size runs the API's alone, with no varying flag.
+#[test]
+fn a_quad_only_kernel_reads_the_size_range_alone() {
+    let quad = SimdClass::CrossLane(OpBits::QUAD);
+    let range = |min, max| {
+        let mut st = fixed(32);
+        st.pinnable = true;
+        st.sizes = SubgroupSizes { min, max };
+        model(st)
+    };
+    let m = range(8, 32);
+    assert!(quad_free(&quad, Stage::Kernel, &m));
+    assert!(quad_free(&SimdClass::Quad, Stage::Kernel, &m));
+    assert_eq!(
+        quad_requirement(Stage::Kernel, &m),
+        SubgroupRequirement {
+            size: None,
+            full_subgroups: true,
+            local_size_multiple: 32,
+            varying: true,
+        }
+    );
+    for stage in [Stage::Vertex, Stage::Fragment] {
+        assert!(!quad_free(&quad, stage, &m), "{stage:?}");
+    }
+    for (min, max) in [(4, 4), (8, 8), (16, 64)] {
+        assert!(
+            quad_free(&quad, Stage::Kernel, &range(min, max)),
+            "{min}..{max}"
+        );
+    }
+    // 32 is the narrowest size: the pin to 32 stays.
+    for (min, max) in [(32, 32), (32, 64), (64, 128)] {
+        assert!(
+            !quad_free(&quad, Stage::Kernel, &range(min, max)),
+            "{min}..{max}"
+        );
+    }
+    // The guard: a subgroup narrower than 4 lanes cannot hold a whole quad.
+    for (min, max) in [(1, 32), (2, 32), (1, 1), (2, 2)] {
+        assert!(
+            !quad_free(&quad, Stage::Kernel, &range(min, max)),
+            "{min}..{max}"
+        );
+    }
+    // Without full subgroups, or without the class's operations.
+    let mut m = range(8, 32);
+    m.kernel.full_subgroups = false;
+    assert!(!quad_free(&quad, Stage::Kernel, &m));
+    let mut m = range(8, 32);
+    m.kernel.ops = OpBits(0xff & !OpBits::QUAD.0);
+    assert!(!quad_free(&quad, Stage::Kernel, &m));
+    assert!(quad_free(
+        &SimdClass::CrossLane(OpBits::BALLOT.union(OpBits::SHUFFLE)),
+        Stage::Kernel,
+        &m
+    ));
+    // A stage that pins no size runs the API's.
+    let m = model(fixed(16));
+    assert!(quad_free(&quad, Stage::Kernel, &m));
+    assert_eq!(
+        quad_requirement(Stage::Kernel, &m),
+        SubgroupRequirement {
+            size: None,
+            full_subgroups: true,
+            local_size_multiple: 16,
+            varying: false,
+        }
+    );
+    assert!(!quad_free(&quad, Stage::Kernel, &model(fixed(32))));
+}
+
+/// The committed profiles a quad-only kernel takes its quads from the subgroup at the device's
+/// size on, with their kernel size ranges: none whose narrowest kernel size is 32 (NVIDIA, RDNA,
+/// and `moltenvk-m3`, whose kernel stage pins no size and so runs the API's 32 alone).
+#[test]
+fn quad_free_on_the_committed_profiles() {
+    let quad = SimdClass::CrossLane(OpBits::QUAD);
+    let mut free = Vec::new();
+    for (stem, _) in committed_profiles() {
+        let dev = device(&stem);
+        let model = &dev.profile().fields().subgroup;
+        if !quad_free(&quad, Stage::Kernel, model) {
+            continue;
+        }
+        let st = model.stage(Stage::Kernel);
+        assert_eq!(
+            quad_requirement(Stage::Kernel, model),
+            SubgroupRequirement {
+                size: None,
+                full_subgroups: true,
+                local_size_multiple: st.sizes.max,
+                varying: true,
+            },
+            "{stem}"
+        );
+        free.push(format!("{stem} {}..{}", st.sizes.min, st.sizes.max));
+    }
+    assert_eq!(
+        free,
+        [
+            "gate-lavapipe 4..4",
+            "gate-lavapipe-x86_64 8..8",
+            "intel-arl-anv 8..32",
+            "intel-irisxe-anv 8..32",
+            "intel-irisxe-rplp-anv 8..32",
+            "intel-uhd770-rpls-anv 8..32",
+            "lavapipe 8..8",
+        ]
     );
 }
 

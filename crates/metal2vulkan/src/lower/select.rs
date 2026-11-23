@@ -1692,8 +1692,18 @@ fn finish(
     let model = &p.fields().subgroup;
     let variant = cx.inputs.emulated_simdgroups && stage == Stage::Kernel;
     let lockstep = cx.entry.lockstep.emulated && stage == Stage::Kernel;
+    // A kernel whose every cross-lane operation stays inside its quad takes its quads from the
+    // subgroup at the size the device gives, where the device's narrowest size is below 32: no
+    // pin, so no widest mode to weigh. One with compute derivatives keeps the tier its class
+    // takes: a flattened local size has no derivative quads (`dispatch::plan_kernel`).
+    let quad_free = !variant
+        && !lockstep
+        && !cx.families.barrier.compute_derivatives
+        && simd::quad_only(&sel.strategy)
+        && subgroup::quad_free(&cx.simd, stage, model);
     let widest = !variant
         && !lockstep
+        && !quad_free
         && widest_pin == simd::WidestPin::Weighed
         && simd::widest_pin(&cx, m)?;
     let mut tier = if variant || lockstep || widest {
@@ -1701,9 +1711,12 @@ fn finish(
             cx.facts.insert(RuntimeFact::EmulatedSimdgroups);
         }
         subgroup::emulated_tier(&cx.simd, stage, model)?
+    } else if quad_free {
+        Tier::Direct
     } else {
         subgroup::tier(&cx.simd, stage, model)?
     };
+    cx.families.simd.quad_free = quad_free;
     // A flat grid of the call's threadgroups returns its invocations past the grid before the
     // body (`dispatch::emit_entry`), so the rest of their workgroup cannot meet a workgroup
     // synchronization: a module that would hold one (the emulated tier's exchanges, or a
@@ -1756,7 +1769,11 @@ fn finish(
     simd::full_quads(&mut cx)?;
     // The threadgroup arena's words, now that every access and the tier are known.
     access::local::choose_words(&mut cx, tier);
-    let requirement = subgroup::requirement(tier, stage, &p.fields().subgroup);
+    let requirement = if cx.families.simd.quad_free {
+        subgroup::quad_requirement(stage, &p.fields().subgroup)
+    } else {
+        subgroup::requirement(tier, stage, &p.fields().subgroup)
+    };
     let dispatch = match stage {
         Stage::Kernel | Stage::Object | Stage::Mesh => Some(dispatch::plan_kernel(&mut cx, tier)?),
         Stage::Vertex | Stage::Fragment => None,

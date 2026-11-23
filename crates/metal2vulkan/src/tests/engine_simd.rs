@@ -421,6 +421,75 @@ fn quad_shuffle_matches_the_linear_thread_index() {
     }
 }
 
+/// A quad-only kernel (`quad_shuffle_rotate`) takes its quads from the subgroup at the size the
+/// device gives exactly where the kernel stage runs full subgroups and its narrowest size is below
+/// 32 lanes (and at least 4): the `Direct` tier with full subgroups, no pinned size, the size
+/// varying (`ALLOW_VARYING_SUBGROUP_SIZE`, so `subgroupSizeControl`), and a local size that is a
+/// multiple of the stage's largest size. Elsewhere it keeps the requirement of the tier its class
+/// takes: 32 lanes pinned where 32 is the narrowest size (NVIDIA's 32, RDNA's 32 to 64), the API's
+/// size where the stage pins none (`moltenvk-m3`), and no subgroup where the stage has no quads
+/// (`runtime-floor`).
+#[test]
+fn a_quad_only_kernel_takes_the_size_the_device_gives_below_32() {
+    let Some(bc) = assemble("quad_shuffle") else {
+        return;
+    };
+    let entry = "quad_shuffle_rotate";
+    let mut varying = Vec::new();
+    for (stem, p) in committed_profiles().expect("profiles") {
+        let model = &p.fields().subgroup;
+        let st = model.kernel;
+        let a = compile(&bc, entry, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let (plan, _) = typed_module(&bc, entry, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let flag = a
+            .requirements
+            .stage_flags
+            .contains(&StageCreateFlag::AllowVaryingSubgroupSize);
+        assert_eq!(flag, a.subgroup.varying, "{stem}");
+        if a.subgroup.varying {
+            varying.push(stem.clone());
+            assert_eq!(plan.simd.1, Tier::Direct, "{stem}");
+            assert!((4..32).contains(&st.sizes.min), "{stem}: {st:?}");
+            assert_eq!(
+                a.subgroup,
+                SubgroupRequirement {
+                    size: None,
+                    full_subgroups: true,
+                    local_size_multiple: st.sizes.max,
+                    varying: true,
+                },
+                "{stem}"
+            );
+            assert!(a.facts.contains(&RuntimeFact::LocalSizeConstraint {
+                multiple: st.sizes.max
+            }));
+        } else {
+            assert_eq!(
+                a.subgroup,
+                subgroup::requirement(plan.simd.1, Stage::Kernel, model),
+                "{stem}"
+            );
+            if st.pinnable && st.sizes.min >= 32 {
+                assert_eq!(a.subgroup.size, Some(32), "{stem}");
+            }
+        }
+        assert_eq!(p.check(&a.requirements), Ok(()), "{stem}");
+    }
+    assert_eq!(
+        varying,
+        [
+            "gate-lavapipe",
+            "gate-lavapipe-x86_64",
+            "intel-arl-anv",
+            "intel-irisxe-anv",
+            "intel-irisxe-rplp-anv",
+            "intel-uhd770-rpls-anv",
+            "lavapipe",
+        ]
+    );
+}
+
 /// On every committed profile each kernel compiles, links, relocates, and passes L3 in its
 /// tier. A flattened kernel declares its subgroup requirement and local-size constraint. Where no
 /// subgroup tier runs a 32-lane simdgroup the kernel's simdgroups are emulated: it needs no
@@ -444,10 +513,20 @@ fn simd_kernels_compile_or_refuse_with_the_tier() {
                     link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem} {kernel}: {e}"));
                     if a.interface.declares_spec(SpecKey::FlatLocalSize) {
                         let multiple = a.subgroup.local_size_multiple;
-                        assert!(
-                            multiple >= 32 && a.subgroup.full_subgroups,
-                            "{stem} {kernel}"
-                        );
+                        assert!(a.subgroup.full_subgroups, "{stem} {kernel}");
+                        if a.subgroup.varying {
+                            // A quad-only kernel at the size the device gives: whole subgroups
+                            // of the stage's largest size.
+                            assert!(kernel.starts_with("quad_"), "{stem} {kernel}");
+                            assert_eq!(a.subgroup.size, None, "{stem} {kernel}");
+                            assert_eq!(
+                                multiple,
+                                p.fields().subgroup.kernel.sizes.max,
+                                "{stem} {kernel}"
+                            );
+                        } else {
+                            assert!(multiple >= 32, "{stem} {kernel}");
+                        }
                         assert!(a
                             .facts
                             .contains(&RuntimeFact::LocalSizeConstraint { multiple }));

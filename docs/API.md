@@ -455,7 +455,8 @@ gives the specialization constants' keys, and with the stage's `stage_flags` and
 declares from it, never one alone: a kernel that declares `DeepThreadgroup` takes its Vulkan
 workgroup from the `WorkgroupSize` parts only, so one given its `LocalSize` without them runs
 workgroups of the parts' defaults. A required subgroup size needs `subgroupSizeControl` and the stage in
-`requiredSubgroupSizeStages`; full subgroups need `computeFullSubgroups`. A pipeline compiled for
+`requiredSubgroupSizeStages`; full subgroups need `computeFullSubgroups`; a size that varies
+(`ALLOW_VARYING_SUBGROUP_SIZE`) needs `subgroupSizeControl`. A pipeline compiled for
 one device pins only what that device can take; `DeviceProfile::check` tells whether another
 device can.
 
@@ -495,6 +496,18 @@ faster; from 40 the pinned compile took 1.6 to 24 times the emulated one and its
 25 times. At or below 256 instructions every pinned compile measured took at most 102 ms. Answers
 were the same bits on both tiers. The estimate costs time linear in the body: 5 ms of a 3.4 s
 release translation of a 162,914-instruction kernel.
+
+The 32 lanes are needed only by operations that read outside a quad. A kernel whose every
+cross-lane operation is a quad operation (no simdgroup operation, multiply-add, or simdgroup barrier
+or fence) pins nothing where the kernel stage runs full subgroups, can take a size, and has a
+narrowest size below 32 lanes and at least 4 (ANV's 8 to 32, lavapipe's 8): it takes its quads
+from the subgroup at the size the device gives, with full subgroups,
+`ALLOW_VARYING_SUBGROUP_SIZE` and a local size that is a multiple of `maxSubgroupSize`. A quad is
+four lanes of one subgroup at every such size (Vulkan 9.27.9), so its answers do not change, and
+the widest mode is not weighed for it. The pin to 32 stays where 32 is the device's narrowest size
+(NVIDIA's 32, RDNA's 32 to 64); a device whose compute stage takes no size runs the API's
+`subgroupSize`. A kernel with compute derivatives keeps the tier its class takes.
+
 
 On the emulated tier, a simdgroup operation or barrier in a block whose control flow differs
 between threads is walked predicated: each thread carries a live flag, the threads that do not run

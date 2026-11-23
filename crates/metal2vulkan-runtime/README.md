@@ -2884,7 +2884,12 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   lengths.
 - A kernel whose SIMD groups run one per subgroup of 32 (pinned where the device lists compute in
   `requiredSubgroupSizeStages` with 32 between its sizes, or the device's own 32), or one per
-  32-lane cluster of a 64- or 128-lane subgroup, runs only workgroups of whole subgroups.
+  32-lane cluster of a 64- or 128-lane subgroup, runs only workgroups of whole subgroups. So does
+  a kernel whose every cross-lane operation is a quad operation, on a device that lists compute in
+  `requiredSubgroupSizeStages` and whose narrowest subgroup is below 32 lanes and at least 4: it
+  pins no size, takes its quads from the subgroup at the size the device gives
+  (`ALLOW_VARYING_SUBGROUP_SIZE`), and runs only workgroups of whole subgroups of
+  `maxSubgroupSize`.
 - Such a kernel also has an emulated-SIMD-group variant, whose SIMD groups exchange through
   threadgroup memory between workgroup barriers. A threadgroup that is not whole subgroups (one of
   80 or of 1 thread, or of 32 on a device of 64-lane subgroups) runs it at its own size, the last

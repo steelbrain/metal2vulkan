@@ -673,7 +673,11 @@ pub fn plan_kernel(cx: &mut SelectCx<'_>, tier: Tier) -> Result<DispatchPlan, Er
     cx.facts.insert(RuntimeFact::IndirectGroupCount);
     let mut pinned_subgroup_size = None;
     if local_size == LocalSizeForm::Flat {
-        let req = subgroup::requirement(tier, cx.stage, &cx.profile.fields().subgroup);
+        let req = if cx.families.simd.quad_free {
+            subgroup::quad_requirement(cx.stage, &cx.profile.fields().subgroup)
+        } else {
+            subgroup::requirement(tier, cx.stage, &cx.profile.fields().subgroup)
+        };
         pinned_subgroup_size = req.size;
         cx.facts.insert(RuntimeFact::LocalSizeConstraint {
             multiple: req.local_size_multiple,

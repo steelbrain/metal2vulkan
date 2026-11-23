@@ -1842,6 +1842,127 @@ mod on_device {
         });
     }
 
+    /// `quad_shuffle_rotate` of `quad_shuffle`, a quad-only kernel: each thread reads the next
+    /// lane of its quad, `(t & !3) | ((t + 1) & 3)` of thread `t`, Metal's answer for every whole
+    /// quad, in threadgroups of 64, 32, 40, 12 and 4 threads. Where the device's narrowest compute
+    /// subgroup is below 32 lanes and at least 4, compute can take a size
+    /// (`requiredSubgroupSizeStages`) and runs full subgroups, the kernel takes its quads from the
+    /// subgroup at the size the device gives: no pinned size, `ALLOW_VARYING_SUBGROUP_SIZE`, and
+    /// whole groups of the largest size; elsewhere it keeps the tier its class takes. A
+    /// threadgroup that is not whole groups of the module's runs the emulated-SIMD-group module.
+    /// Prints the dispatches each module ran.
+    #[test]
+    fn every_device_runs_a_quad_only_kernel_at_the_size_it_gives() {
+        use ash::vk;
+
+        let Some(descriptor) = descriptor_of("quad_shuffle", "quad_shuffle_rotate") else {
+            return;
+        };
+        const GROUPS: u32 = 2;
+        each_device("compute_quads", |name, _, device| {
+            let raw = device.raw();
+            let mut vulkan13 = vk::PhysicalDeviceVulkan13Properties::default();
+            let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut vulkan13);
+            // SAFETY: the physical device is the instance's, a Vulkan 1.3 one.
+            unsafe {
+                raw.instance
+                    .get_physical_device_properties2(raw.physical_device, &mut properties)
+            };
+            let mut features13 = vk::PhysicalDeviceVulkan13Features::default();
+            let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut features13);
+            // SAFETY: as above.
+            unsafe {
+                raw.instance
+                    .get_physical_device_features2(raw.physical_device, &mut features)
+            };
+            let (min, max) = (vulkan13.min_subgroup_size, vulkan13.max_subgroup_size);
+            let quad_free = vulkan13
+                .required_subgroup_size_stages
+                .contains(vk::ShaderStageFlags::COMPUTE)
+                && features13.subgroup_size_control == vk::TRUE
+                && features13.compute_full_subgroups == vk::TRUE
+                && (4..32).contains(&min);
+            let state = device
+                .new_compute_pipeline_state(&descriptor, crate::tests::no_constexpr_samplers)
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let interface = &state.inner.compiled.whole.interface;
+            let varying = interface
+                .stage_flags
+                .contains(vk::PipelineShaderStageCreateFlags::ALLOW_VARYING_SUBGROUP_SIZE);
+            assert_eq!(varying, quad_free, "{name}: subgroups {min}..{max}");
+            if quad_free {
+                assert_eq!(
+                    (interface.required_subgroup_size, &interface.multiples[..]),
+                    (None, &[max][..]),
+                    "{name}: the quads at the size the device gives"
+                );
+                assert!(
+                    interface
+                        .stage_flags
+                        .contains(vk::PipelineShaderStageCreateFlags::REQUIRE_FULL_SUBGROUPS),
+                    "{name}"
+                );
+            }
+            let queue = device.new_command_queue(4).expect("a queue");
+            let made = device.counters().metrics().translations;
+            let (mut whole, mut emulated) = (0, 0);
+            for size in [64, 32, 40, 12, 4] {
+                let threads = GROUPS * size;
+                let mut buffers = Buffers::new(&device, 1 << 16);
+                let out = buffers.buffer(u64::from(threads) * 4);
+                let command_buffer = queue.command_buffer().expect("a command buffer");
+                let mut encoder = command_buffer
+                    .compute_command_encoder(DispatchType::Serial)
+                    .expect("an encoder");
+                encoder.set_compute_pipeline_state(&state).expect("a state");
+                encoder.set_buffer(Some(&out), 0, 0).expect("a buffer");
+                let count = || device.counters().metrics().emulated_simdgroup_dispatches;
+                let before = count();
+                encoder
+                    .dispatch_threadgroups([GROUPS, 1, 1], [size, 1, 1])
+                    .unwrap_or_else(|error| panic!("{name}: threadgroups of {size}: {error}"));
+                encoder.end_encoding();
+                command_buffer.commit().expect("a commit");
+                finished(name, &command_buffer);
+                assert_eq!(command_buffer.error(), None, "{name}");
+                let partial = (interface.multiples.iter()).any(|&width| size % width.max(1) != 0);
+                assert_eq!(
+                    count() - before,
+                    u64::from(partial),
+                    "{name}: threadgroups of {size}, whole groups of {:?}: emulated dispatches",
+                    interface.multiples
+                );
+                if partial {
+                    emulated += 1;
+                } else {
+                    whole += 1;
+                }
+                let want: Vec<u32> = (0..size).map(|t| (t & !3) | ((t + 1) & 3)).collect();
+                assert_eq!(
+                    words(&out, 0, want.len()),
+                    want,
+                    "{name}: the quads in threadgroups of {size}"
+                );
+            }
+            assert_eq!(
+                device.counters().metrics().translations,
+                made,
+                "{name}: no translation at a dispatch"
+            );
+            println!(
+                "{name}: quad-only kernel, subgroups {min}..{max}: {} ({:?} pinned, whole groups of \
+                 {:?}); dispatches on that module {whole}, on the emulated module {emulated}",
+                if varying {
+                    "quads at the size the device gives"
+                } else {
+                    "the tier its class takes"
+                },
+                interface.required_subgroup_size,
+                interface.multiples,
+            );
+        });
+    }
+
     /// `simd_shape` of `pad_simd_shape`: each thread's simdgroup index, lane, the threads of its
     /// simdgroup (a simdgroup sum of 1) and its index in the threadgroup, in threadgroups of 80,
     /// 1, 32, 64 and 40 threads. Metal's answer, measured on an M3 Max (macOS 27.0.1) at those

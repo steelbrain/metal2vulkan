@@ -911,7 +911,7 @@ codec_struct! {
         api_version, spirv_capabilities, spirv_extensions, features, extensions, properties,
         limits, formats, stage_flags, denorm_independence, rounding_independence,
     }
-    SubgroupRequirement { size, full_subgroups, local_size_multiple }
+    SubgroupRequirement { size, full_subgroups, local_size_multiple, varying }
 }
 
 codec_enum! {

@@ -14,10 +14,11 @@
 //! operation classes the emitted SPIR-V needs, and `device::subgroup::tier` maps it to the tier
 //! emission follows (`Plan::simd`):
 //!
-//! - `Direct` (a 32-lane subgroup) and `PartialFragment` (a narrower fragment subgroup whose
-//!   upper Metal lanes are permanently inactive): the simdgroup is the subgroup, so reductions,
-//!   scans, votes, `is_first`, and `broadcast_first` are the whole-subgroup
-//!   `OpGroupNonUniform*` instructions, and the Metal lane is `SubgroupLocalInvocationId`.
+//! - `Direct` (a 32-lane subgroup; for a quad-only kernel, the subgroup at the size the device
+//!   gives, below) and `PartialFragment` (a narrower fragment subgroup whose upper Metal lanes are
+//!   permanently inactive): the simdgroup is the subgroup, so reductions, scans, votes,
+//!   `is_first`, and `broadcast_first` are the whole-subgroup `OpGroupNonUniform*` instructions,
+//!   and the Metal lane is `SubgroupLocalInvocationId`.
 //! - `Cluster32` (a 64- or 128-lane subgroup): the simdgroup is the aligned 32-lane cluster of
 //!   the calling lane, `base = L & ~31`, Metal lane `L & 31`. Reductions are `ClusteredReduce`
 //!   with cluster size 32, votes and `is_first`/`broadcast_first` read the cluster's ballot word
@@ -79,6 +80,23 @@
 //! [`WIDEST_PIN_FLOOR`] instructions every pinned compile measured took at most 102 ms. Answers
 //! were the same bits on both tiers in every run. The estimate's own cost is linear in the body:
 //! 5 ms of a 3.4 s release translation of a 162,914-instruction kernel.
+//!
+//! **Quad-only kernels.** The 32 lanes are needed only by operations that read outside a quad; a
+//! kernel with none takes its quads from the subgroup at the size the device gives; the pin to 32
+//! stays where 32 is the device's narrowest size. A kernel whose every cross-lane operation is a
+//! quad operation ([`quad_only`]: no simdgroup operation, multiply-add, or simdgroup barrier or
+//! fence) takes the `Direct` tier with full subgroups and no required size where its kernel stage
+//! runs full subgroups and its narrowest subgroup is below 32 lanes and at least 4
+//! (`device::subgroup::quad_free`, as ANV's 8 to 32 and lavapipe's 8): the size varies where the
+//! stage can pin one (`ALLOW_VARYING_SUBGROUP_SIZE`), and the local size is a multiple of the
+//! stage's largest size (`device::subgroup::quad_requirement`). A quad is four subgroup lanes
+//! from a multiple of 4, all in one subgroup (Vulkan 9.27.9), and a dispatch runs one size
+//! (Vulkan 9.5.2), so at every size of 4 lanes or more each quad is four lanes of one subgroup;
+//! the kernel's simdgroup builtins derive from the linear index (`lower::dispatch`), whatever the
+//! size. Such a kernel pins nothing, so the widest mode is not weighed for it. A threadgroup that
+//! is not a multiple of the largest size runs the emulated variant, as a pinned kernel's does. A
+//! kernel with compute derivatives keeps the tier its class takes: their quads need its
+//! two-dimensional local size, which the flattened tiers do not keep.
 //!
 //! **Partly live groups on subgroups**. On `Direct`, `PartialFragment` and `Cluster32`, an
 //! operation that reads another lane's value by its index (a matrix or AGX multiply-add's cells; a
@@ -350,6 +368,41 @@ pub struct SimdPlan {
     /// depends on which invocations share the simdgroup ([`finish`]). A quad operation does not set
     /// it.
     pub simdgroup_members: bool,
+    /// A kernel whose every cross-lane operation stays inside its quad ([`quad_only`]) on a
+    /// device whose narrowest kernel subgroup is below 32 lanes (`subgroup::quad_free`): its
+    /// `Direct` tier pins no size and takes its quads from the subgroup at the size the device
+    /// gives (`subgroup::quad_requirement`).
+    pub quad_free: bool,
+}
+
+/// Whether every cross-lane operation of a function stays inside its quad: some group operation,
+/// each of quad scope, and no simdgroup-scope operation, multiply-add, barrier or fence. Such a
+/// function needs no 32-lane group: its quads are four aligned subgroup lanes at any subgroup
+/// size that is a multiple of 4 (Vulkan 9.27.9), and its simdgroup builtins derive from the
+/// linear index (`lower::dispatch`), whatever the subgroup size.
+pub fn quad_only(strategy: &[Option<Strategy>]) -> bool {
+    use crate::lower::sync::barrier::BarrierStrategy;
+    use crate::spirv::ir::Scope;
+    let mut quad = false;
+    for s in strategy.iter().flatten() {
+        match s {
+            Strategy::Simd(SimdStrategy::Group(g)) => {
+                if g.scope != GroupScope::Quad {
+                    return false;
+                }
+                quad = true;
+            }
+            Strategy::Simd(SimdStrategy::Agx(_) | SimdStrategy::Matrix(_)) => return false,
+            Strategy::Barrier(BarrierStrategy::Barrier(b)) if b.scope == Scope::Subgroup => {
+                return false
+            }
+            Strategy::Barrier(BarrierStrategy::Fence(f)) if f.scope == Scope::Subgroup => {
+                return false
+            }
+            _ => {}
+        }
+    }
+    quad
 }
 
 /// Whether [`widest_pin`] weighs a kernel for the `Emulated` tier, or the kernel keeps the

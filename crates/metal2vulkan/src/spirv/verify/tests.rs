@@ -747,6 +747,7 @@ fn the_subgroup_facts_stand_only_with_their_requirement() {
         size: Some(32),
         full_subgroups: true,
         local_size_multiple: 32,
+        varying: false,
     };
     let k = kernel_with(Some(pinned));
     let r = &k.m.requirements;

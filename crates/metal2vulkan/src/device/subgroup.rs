@@ -152,6 +152,9 @@ pub struct SubgroupRequirement {
     pub full_subgroups: bool,
     /// Every dispatch region's local size must be a multiple of this (1: no constraint).
     pub local_size_multiple: u32,
+    /// The subgroup size may vary (`ALLOW_VARYING_SUBGROUP_SIZE`): no size is pinned, and the
+    /// device runs the size it picks, one size over a dispatch (Vulkan 9.5.2).
+    pub varying: bool,
 }
 
 impl SubgroupRequirement {
@@ -160,6 +163,7 @@ impl SubgroupRequirement {
         size: None,
         full_subgroups: false,
         local_size_multiple: 1,
+        varying: false,
     };
 
     /// Add to `r` what this requirement of a `stage` function needs of the device beyond its
@@ -170,9 +174,11 @@ impl SubgroupRequirement {
     ///   `subgroupSizeControl`, the stage in `requiredSubgroupSizeStages`, and the size inside
     ///   `[minSubgroupSize, maxSubgroupSize]`;
     /// - full subgroups (`REQUIRE_FULL_SUBGROUPS`) need the stage flag, whose feature is
-    ///   `computeFullSubgroups`.
+    ///   `computeFullSubgroups`;
+    /// - a varying size (`ALLOW_VARYING_SUBGROUP_SIZE`) needs the stage flag, whose feature is
+    ///   `subgroupSizeControl`.
     ///
-    /// A requirement that pins nothing and needs no full subgroups adds nothing. A limit `r`
+    /// A requirement that pins nothing and needs neither flag adds nothing. A limit `r`
     /// already names keeps the stricter value.
     pub fn add_device_facts(&self, stage: Stage, r: &mut Requirements) {
         if let Some(size) = self.size {
@@ -188,6 +194,10 @@ impl SubgroupRequirement {
         }
         if self.full_subgroups {
             r.stage_flags.insert(StageCreateFlag::RequireFullSubgroups);
+        }
+        if self.varying {
+            r.stage_flags
+                .insert(StageCreateFlag::AllowVaryingSubgroupSize);
         }
     }
 }
@@ -440,6 +450,51 @@ pub fn requirement(t: Tier, stage: Stage, model: &SubgroupModel) -> SubgroupRequ
         size: st.pinnable.then_some(size),
         full_subgroups: compute,
         local_size_multiple: if compute { size } else { 1 },
+        varying: false,
+    }
+}
+
+/// Whether a kernel of class `class` whose every cross-lane operation stays inside its quad
+/// (`lower::simd::quad_only`) takes its quads from the subgroup at the size the device gives
+/// (`Tier::Direct` under [`quad_requirement`]): the 32 lanes are needed only by operations that
+/// read outside a quad, so the pin to 32 stays only where 32 is the stage's narrowest size. The
+/// stage runs the class's operations with full subgroups, its narrowest size is below 32, and
+/// every size it runs is a multiple of 4, so a quad is four aligned lanes of one subgroup (Vulkan
+/// 9.27.9). Read from the size range and the operation classes alone.
+pub fn quad_free(class: &SimdClass, stage: Stage, model: &SubgroupModel) -> bool {
+    if stage != Stage::Kernel {
+        return false;
+    }
+    let class = match class {
+        SimdClass::Quad => SimdClass::CrossLane(OpBits::QUAD),
+        SimdClass::CrossLane(ops) => SimdClass::CrossLane(*ops),
+        _ => return false,
+    };
+    let st = model.stage(stage);
+    let (ops, _) = needed_ops(&class);
+    st.supported
+        && st.ops.contains(ops)
+        && st.full_subgroups
+        && st.sizes.min >= 4
+        && st.sizes.min < 32
+}
+
+/// The subgroup requirement of a [`quad_free`] kernel: full subgroups, no pinned size, the size
+/// varying where the stage can pin one (`subgroupSizeControl`), and a local size that is a
+/// multiple of the largest size the stage may run, the only one that guarantees full subgroups of
+/// a size the device picks (`VUID-VkPipelineShaderStageCreateInfo-flags-02758`); without
+/// `subgroupSizeControl` the size is the API's, and the local size a multiple of it.
+pub fn quad_requirement(stage: Stage, model: &SubgroupModel) -> SubgroupRequirement {
+    let st = model.stage(stage);
+    SubgroupRequirement {
+        size: None,
+        full_subgroups: true,
+        local_size_multiple: if st.pinnable {
+            st.sizes.max
+        } else {
+            st.api_size
+        },
+        varying: st.pinnable,
     }
 }
 

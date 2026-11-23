@@ -395,11 +395,15 @@ const DFDX: &str = "  %d = tail call float @air.dfdx.f32(float 1.000000e+00)";
 const DFDX_DECL: &str = "declare float @air.dfdx.f32(float)";
 const SIMD_BARRIER: &str = "  tail call void @air.simdgroup.barrier(i32 0, i32 4)";
 const SIMD_BARRIER_DECL: &str = "declare void @air.simdgroup.barrier(i32, i32)";
+const QUAD_SHUFFLE: &str = "  %q = tail call i32 @air.quad_shuffle.u.i32(i32 1, i16 1)\n  store i32 %q, ptr addrspace(1) %0, align 4";
+const QUAD_SHUFFLE_DECL: &str = "declare i32 @air.quad_shuffle.u.i32(i32, i16)";
 
 /// A kernel's derivatives use `DerivativeGroupLinearKHR` where the profile has
 /// `computeDerivativeGroupLinear` (and depend on a local size that is a multiple of 4), are refused
 /// naming the feature elsewhere, and are refused as `ComputeDerivativesWithSimd` when a simdgroup
-/// barrier flattens the kernel.
+/// barrier flattens the kernel. Beside a quad operation they keep the tier the quad class takes: a
+/// device whose quads are emulated keeps the local size, and no such kernel takes its quads from
+/// the subgroup at the device's size (which would flatten it).
 #[test]
 fn compute_derivatives_need_the_linear_group_and_no_flattening() {
     let Some(deriv) = store_const_with("dfdx", &[DFDX], &[DFDX_DECL]) else {
@@ -412,7 +416,14 @@ fn compute_derivatives_need_the_linear_group_and_no_flattening() {
     ) else {
         return;
     };
-    let (mut ok, mut missing, mut flattened) = (0, 0, 0);
+    let Some(with_quad) = store_const_with(
+        "dfdx-quad",
+        &[DFDX, QUAD_SHUFFLE],
+        &[DFDX_DECL, QUAD_SHUFFLE_DECL],
+    ) else {
+        return;
+    };
+    let (mut ok, mut missing, mut flattened, mut kept) = (0, 0, 0, 0);
     for (stem, p) in committed_profiles().expect("profiles") {
         let linear = p.fields().images.compute_derivative_linear;
         match compile(&deriv, "store_const", &p) {
@@ -455,10 +466,24 @@ fn compute_derivatives_need_the_linear_group_and_no_flattening() {
                 (other, t) => panic!("{stem} {t:?}: {other:?}"),
             }
         }
+        let quad = subgroup::tier(&SimdClass::Quad, Stage::Kernel, &p.fields().subgroup);
+        if linear && quad.is_ok() {
+            match (compile(&with_quad, "store_const", &p), quad) {
+                (Ok(a), Ok(Tier::Emulated)) => {
+                    link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+                    assert_eq!(a.subgroup, SubgroupRequirement::NONE, "{stem}");
+                    kept += 1;
+                }
+                (Err(Error::Unsupported(u)), Ok(Tier::Direct | Tier::Cluster32)) => {
+                    assert_eq!(u.feature, Feature::ComputeDerivativesWithSimd, "{stem}");
+                }
+                (other, t) => panic!("{stem} quad {t:?}: {other:?}"),
+            }
+        }
     }
     assert!(
-        ok > 0 && missing > 0 && flattened > 0,
-        "{ok} ok, {missing} missing, {flattened} flattened"
+        ok > 0 && missing > 0 && flattened > 0 && kept > 0,
+        "{ok} ok, {missing} missing, {flattened} flattened, {kept} kept beside a quad"
     );
 }
 

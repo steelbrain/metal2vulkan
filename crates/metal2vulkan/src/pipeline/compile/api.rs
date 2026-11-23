@@ -1499,6 +1499,9 @@ fn stage_module(c: &CompiledFunction, linked: &Linked, i: usize) -> Result<Stage
     if a.subgroup.full_subgroups {
         stage_flags |= vk::PipelineShaderStageCreateFlags::REQUIRE_FULL_SUBGROUPS;
     }
+    if a.subgroup.varying {
+        stage_flags |= vk::PipelineShaderStageCreateFlags::ALLOW_VARYING_SUBGROUP_SIZE;
+    }
     // A `half` output of a module without fast math keeps its note where its attachment blends.
     let colors = linked
         .graphics
