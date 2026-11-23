@@ -50,9 +50,7 @@
 //! Nothing here can fault a GPU: one triangle (or 64 small ones) a draw over one 64 by 64 target,
 //! and every loop in the fixtures is bounded by a constant or by a data word below 7.
 
-use crate::allowance::Allowance;
 use crate::case::{call, drawn_or_refused, made, Abort, Case, Failure, Input, MetalSource, Side};
-use crate::degradation::Degradation;
 use crate::fixture::{Fixture, METAL_TEXT, RUNTIME_TEXT};
 use crate::recording::ShaderRef;
 use crate::render::{
@@ -336,21 +334,6 @@ impl Case for Reconvergence {
 
     fn metal_source(&self) -> MetalSource {
         MetalSource::Run
-    }
-
-    fn allowances(&self) -> Vec<Allowance> {
-        // Declarations only, so the notices site stays readable; neither loosens a value. A device
-        // without maximal reconvergence runs the fragments' derivatives and implicit-LOD samples
-        // with lanes the device decides (`device-reconvergence`), and a device may shade the
-        // covering triangle as the pieces it clips it into (`quads-split-by-clipping`). A value
-        // either moves stays divergent, a ledger row.
-        [
-            Degradation::DeviceReconvergence,
-            Degradation::QuadsSplitByClipping,
-        ]
-        .into_iter()
-        .map(|kind| crate::replay::notice_allowance(kind.code()))
-        .collect()
     }
 
     fn shaders(&self) -> Result<Vec<ShaderRef>, String> {
