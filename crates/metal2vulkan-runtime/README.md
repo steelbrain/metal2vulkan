@@ -2800,23 +2800,16 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   `NONUNIFORM`), and an invocation past the grid returns before the kernel's body: only there does
   a thread compare its position with the grid's last thread, inside one branch on the flag. Every
   other dispatch, on the same pipeline, branches past that test. An indirect dispatch runs at its
-  own threadgroup size, unflagged. A kernel that observes its partition is lowered as its
-  partial-threadgroups variant at the state's creation, through the cache directory, and plainly
-  too only where the variant's predicated walk adds a 4-byte vote word of threadgroup memory (a
-  barrier in a loop; the plain module holds none) and the kernel takes a threadgroup memory length
-  from the encoder, or its own memory with the word passes the device's
-  `maxComputeSharedMemorySize`, or where the variant is refused: every dispatch, a whole
-  `dispatch_threads` grid,
-  `dispatch_threadgroups`, `dispatch_threadgroups_with_indirect_buffer` or a grid that is not a
-  whole number of threadgroups, runs the variant at its own size, every region but a ragged grid's
-  unflagged, so one `VkPipeline` of a size runs them all (`Metrics::partial_variant_whole_grids`
-  counts the dispatches of whole threadgroups, `Metrics::partial_variant_ragged_grids` those of a
-  ragged grid). A dispatch runs the plain module where the variant
-  is refused, where its threadgroup memory, the lengths set with the variant's own, passes the
-  device's `maxComputeSharedMemorySize` once the variant's predicated walk adds its 4-byte vote
-  word (a barrier in a loop; the plain module holds none), or where the threadgroup is not whole
-  SIMD groups of a kernel that runs only whole ones (below); a ragged grid of such a kernel is
-  refused as `Limit::ThreadgroupMemory`. The translator gives a kernel no order of the
+  own threadgroup size, unflagged. A kernel that observes its partition is lowered plainly and
+  as its partial-threadgroups variant at the state's creation, through the cache directory: its
+  whole `dispatch_threads` grids, `dispatch_threadgroups` and
+  `dispatch_threadgroups_with_indirect_buffer` run the plain module at their own size, and a
+  `dispatch_threads` grid that is not a whole number of threadgroups runs the variant at its size,
+  its regions flagged ragged (`Metrics::partial_variant_ragged_grids` counts those dispatches;
+  `Metrics::partial_variant_whole_grids` stays 0). A ragged grid whose threadgroup memory, the
+  lengths set with the variant's own, passes the device's `maxComputeSharedMemorySize` once the
+  variant's predicated walk adds its 4-byte vote word (a barrier in a loop; the plain module holds
+  none) is refused as `Limit::ThreadgroupMemory`. The translator gives a kernel no order of the
   accesses Apple's SIMD-group lockstep orders (docs/API.md, accepted differences), so only the
   kernel's own barriers, fences, atomics of threadgroup or SIMD-group scope, SIMD-group and quad
   functions, threadgroup memory and builtins of the partition observe it.
@@ -2855,7 +2848,8 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   errors, and the samplers' numbering; then it answers. The main pipeline is the one `VkPipeline`
   whose key the descriptor holds: a tiling kernel's tiles' or an image-only kernel's square
   workgroups', or, where the kernel takes no threadgroup memory length from the encoder, an
-  observing kernel's of a whole and of a ragged grid at the descriptor's
+  observing kernel's two, its plain module's of a whole grid and its partial-threadgroups
+  variant's of a ragged grid, at the descriptor's
   `requiredThreadsPerThreadgroup`, or, where it sets none and the state declares a bound of
   threads (the descriptor's `maxTotalThreadsPerThreadgroup` or the kernel's
   `[[max_total_threads_per_threadgroup(n)]]`), at `[N, 1, 1]`, `N` the state's
@@ -3523,12 +3517,6 @@ cache is answered compile-required on both.
   cache directory. For the observing kernel the device tests run, a grid template over
   threadgroup memory, one lowering took 0.61 to 0.63 ms on an RX 7900 XTX in a release build; a
   larger kernel's lowering takes longer.
-- An observing kernel's whole grids, threadgroup dispatches and indirect dispatches run its
-  partial-threadgroups variant, the module its ragged grids run, so that one `VkPipeline` a size
-  runs them all: a whole grid there is measured 3.5% slower a dispatch on an RX 7900 XTX (4.22
-  against 4.08 µs over the 34,904 whole grids of one recorded stream's 12 bounded observers, job
-  m3-max-67284) and 2.7% faster on an Iris Xe (m3-max-67285), and is not timed per dispatch on
-  NVIDIA; the consumer reopens it.
 - On Intel's Windows driver (101.2145) for the UHD 630, the driver's compile of a tiling kernel's
   `VkPipeline`, the state's main one, took medians of 6,680 to 6,853 µs for the harness's
   `create_state` kernel, in three processes of 40 compiles each with no driver cache hit. The

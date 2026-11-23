@@ -2411,9 +2411,9 @@ pub struct Metrics {
     pub private_arena_blocks: u64,
     /// Dispatches of whole threadgroups, `dispatchThreads` of a whole grid, `dispatchThreadgroups`
     /// or `dispatchThreadgroupsWithIndirectBuffer`, that ran a kernel's partial-threadgroups
-    /// variant: a kernel that observes its threadgroup partition runs every dispatch on that one
-    /// module where the variant takes the threadgroup and its threadgroup memory, a predicated
-    /// walk's vote word with it. No Metal counterpart: Metal compiles one function.
+    /// variant: none, as a kernel that observes its threadgroup partition runs them on its plain
+    /// module and only its ragged grids on the variant. No Metal counterpart: Metal compiles one
+    /// function.
     pub partial_variant_whole_grids: u64,
     /// Dispatches of a grid that ends in partial threadgroups, `dispatchThreads` of a grid that is
     /// not a whole number of threadgroups, that ran a kernel's partial-threadgroups variant: a
@@ -2430,7 +2430,7 @@ pub struct Metrics {
     pub extended_view_dispatches: u64,
     /// Functions the translator lowered, each a module of a pipeline content the device did not
     /// hold compiled: of a compute content, one for its partial-threadgroups variant, one more for
-    /// the plain module of an observing kernel whose state keeps one beside the variant, and one
+    /// the plain module of an observing kernel, which its state keeps beside the variant, and one
     /// more for an emulated-SIMD-group variant the state lowers; of a render content, one for each
     /// of its functions that the cache directory did not hold. A state of a content the device
     /// holds lowers nothing.

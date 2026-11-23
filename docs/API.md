@@ -1280,12 +1280,10 @@ square workgroups. On that variant a grid of whole threadgroups, of `dispatchThr
 `dispatchThreadgroups`, takes the same regions unflagged (each `MultiRegion` 1, every thread
 live), so one `VkPipeline` of a threadgroup size runs all of a kernel's direct dispatches. The
 runtime lowers a kernel that does not observe its partition once, as that variant, and runs every
-direct dispatch of it in its tiles; a kernel that observes its partition runs every dispatch, a
-whole grid, threadgroups, an indirect dispatch or a `dispatchThreads` grid that is not a whole
-number of threadgroups, on its partial-threadgroups variant at its own threadgroup size, where the
-variant takes the dispatch's threadgroup memory (the variant's predicated walk may add a vote
-word); an indirect dispatch states no grid in its region and takes the single-region form,
-unflagged.
+direct dispatch of it in its tiles; a kernel that observes its partition runs its whole grids,
+threadgroup dispatches and indirect dispatches on its plain module at their own threadgroup size,
+and a `dispatchThreads` grid that is not a whole number of threadgroups on its
+partial-threadgroups variant.
 
 ### Levels a slot reads
 

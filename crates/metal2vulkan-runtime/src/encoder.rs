@@ -341,16 +341,14 @@ pub(crate) struct Choice {
 
 /// How a state of `form` runs a dispatch of threadgroup size `size`, direct over `direct` or
 /// indirect, the same on every device:
-/// - indirect: the whole module at its own size ([`decide`] runs an observing kernel's on its
-///   partial-threadgroups variant);
+/// - indirect: the whole module at its own size;
 /// - an image-only kernel ([`Form::Square`]): the whole module at `MultiRegion` 0 in workgroups
 ///   of [`SQUARE`] over a grid one deep, and of its [`image_tile`] over a deeper one, the region
 ///   carrying them, flagged where they do not divide the grid;
 /// - a tiling kernel ([`Form::Tiled`]): its tiles, workgroups of `GRID_TILE_THREADS`, each one
 ///   `grid_tile` tile of the grid, which its region carries;
 /// - an observing kernel ([`Form::Sized`]): its own size, a ragged grid on its
-///   partial-threadgroups variant ([`decide`] runs its whole grids and indirect dispatches there
-///   too).
+///   partial-threadgroups variant.
 ///
 /// A size deeper than `DEEP_THREADGROUP` runs as one row of its threads (`DeepThreadgroup`,
 /// [`Constant::Threadgroup`](crate::pipeline::Constant::Threadgroup)), so every workgroup is
@@ -968,9 +966,9 @@ impl ComputeCommandEncoder {
 
     /// `dispatchThreads:threadsPerThreadgroup:`: the threadgroups the grid's threads fill, the
     /// last along an axis running only the threads left, with the grid's extent a parameter of
-    /// the kernel. A kernel that observes its threadgroup partition runs the grid, a whole number
-    /// of threadgroups or not, on its partial-threadgroups variant, as it runs
-    /// [`dispatch_threadgroups`](Self::dispatch_threadgroups).
+    /// the kernel. A kernel that observes its threadgroup partition runs a grid that is not a
+    /// whole number of threadgroups on its partial-threadgroups variant, and a whole one on its
+    /// plain module, as it runs [`dispatch_threadgroups`](Self::dispatch_threadgroups).
     ///
     /// Err: as [`dispatch_threadgroups`](Self::dispatch_threadgroups);
     /// [`Gap::PartialThreadgroups`] for such a grid of a kernel whose partial-threadgroups
@@ -1144,8 +1142,7 @@ impl ComputeCommandEncoder {
             lengths: &self.threadgroup_lengths,
             imageblock: self.imageblock,
         };
-        let memory = (set, limits.max_shared_memory);
-        let (choice, module, kernel) = decide(inner, direct, size, memory)?;
+        let (choice, module, kernel) = decide(inner, direct, size, limits.max_shared_memory)?;
         let Choice {
             local,
             nominal,
@@ -1398,25 +1395,17 @@ pub(crate) fn size_checked(interface: &Interface, size: [u32; 3]) -> Result<(), 
 }
 
 /// What a dispatch at threadgroup size `size`, direct over `direct` or indirect, of the content
-/// `compiled` runs, with the encoder's threadgroup memory lengths and imageblock size `set`
-/// against the device's `max` bytes, decided once for the dispatch and for
-/// [`ComputePipelineState::prepare_dispatch`]: [`choose`]'s choice, then its module, an
-/// observer's partial-threadgroups variant for a ragged grid, and the emulated variant for a
-/// threadgroup that is not whole groups of a module that runs only whole ones (the
-/// partial-threadgroups variant has none), each lowered with the state. An observer's dispatch of
-/// a whole grid, of threadgroups, or indirect, that its whole module would run runs on the
-/// partial-threadgroups variant instead, unflagged, where the variant is lowered and takes the
-/// threadgroup and its threadgroup memory (the lengths `set` with the variant's own, a predicated
-/// walk's vote word included, within `max`): one module, and one `VkPipeline` a size, runs every
-/// dispatch of it the variant takes. The variant is the state's module itself where its make
-/// lowered no plain module beside it (`pipeline::Partial::Alone`). An indirect dispatch states no
-/// grid in its region, so the variant runs it in the single-region form, every invocation live,
-/// as the translator's dispatch regions say (`lower::dispatch`).
+/// `compiled` runs, on a device of `max` bytes of threadgroup memory, decided once for the
+/// dispatch and for [`ComputePipelineState::prepare_dispatch`]: [`choose`]'s choice, then its
+/// module, an observer's partial-threadgroups variant for a ragged grid, and the emulated variant
+/// for a threadgroup that is not whole groups of a module that runs only whole ones (the
+/// partial-threadgroups variant has none), each lowered with the state. An observer's whole grids,
+/// threadgroup dispatches and indirect dispatches run its plain module.
 pub(crate) fn decide<'a>(
     compiled: &'a Compiled,
     direct: Option<Direct>,
     size: [u32; 3],
-    (set, max): (Sizes<'_>, u32),
+    max: u32,
 ) -> Result<(Choice, Module, &'a Kernel), Error> {
     let choice = choose(&compiled.form, direct, size);
     let partial_threadgroups = |site: PartialThreadgroupsSite| {
@@ -1446,21 +1435,6 @@ pub(crate) fn decide<'a>(
             .find(|&&multiple| !threads.is_multiple_of(u64::from(multiple.max(1))))
             .copied()
     };
-    let observes = matches!(compiled.form, Form::Sized { .. });
-    if observes && choice.module == Module::Whole && short(&compiled.whole).is_none() {
-        if let Ok(partial) = compiled.variant_kernel(Which::Partial, refused) {
-            if short(partial).is_none()
-                && threadgroup_memory(partial, set, choice.local, (compiled.static_length(), max))
-                    .is_ok()
-            {
-                let choice = Choice {
-                    module: Module::Partial,
-                    ..choice
-                };
-                return Ok((choice, Module::Partial, partial));
-            }
-        }
-    }
     let kernel = match choice.module {
         Module::Partial => compiled.variant_kernel(Which::Partial, refused)?,
         _ => &compiled.whole,
