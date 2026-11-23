@@ -2160,6 +2160,32 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   The call's time grows with the new block it is the first to use: 2.1 and 2.5 ms with a 1 MiB
   block, 9.1 ms with 64 MiB and 28.4 ms with 256 MiB (job m3-max-52745); the probe's later
   submissions spent at most 0.18 ms each.
+- On the Mac host (KosmicKrisp, Mesa 26.3.1, on an Apple M3 Max under macOS 27.0.1), the first
+  command buffer committed after an idle pause starts later the more memory the device holds,
+  and the time it adds is spent in the driver's `vkQueueSubmit2`. Measured with a bare Vulkan
+  program on a device of its own (no runtime code), one 256-byte fill committed after a 2 s pause,
+  arms alternating, as p50 / p90 / max of commit to GPU start: with nothing held beyond its own
+  objects, 8.49 / 10.74 / 11.06 ms, 0.18 / 0.31 / 0.71 ms of it in the call; holding 6
+  allocations of 64 MiB, 18.45 / 23.88 / 24.44 ms, 12.32 / 14.66 / 14.68 ms of it in the call
+  (14 each, job m3-max-69600). An earlier job read 5.75 / 8.62 / 9.32 ms with nothing held, 8.12
+  to 9.43 ms at the median with 48 MiB held as 6 x 8, 48 x 1 or 1 x 48 MiB, and 20.55 / 25.73 /
+  28.43 ms with 6 x 64 MiB, 14.03 / 20.80 / 22.27 ms of it in the call (12 each, m3-max-69540).
+  After a 0.1 s pause the held 6 x 64 MiB cost nothing measurable: 0.77 / 0.85 / 0.86 ms against
+  0.79 / 0.86 / 0.87 ms with nothing held (12 each, m3-max-69600). Read from the driver's source,
+  not instrumented: each `VkDeviceMemory` is a Metal heap in one residency set of the device,
+  added to the device's Metal queue, and every `vkQueueSubmit2` commits that set and calls its
+  `requestResidency`. Metal itself pays a like delay for 384 MiB in a residency set added to a
+  queue. In the same job, a Metal program holding 6 x 64 MiB in such a set, committed once and
+  never requested, started the same fill 19.44 / 26.15 / 26.25 ms after its commit, whose call took
+  0.03 ms; requesting residency before each commit put 13.18 / 15.53 / 17.49 ms in the calls and
+  left the start at 20.96 / 23.74 / 26.46 ms; the same buffers in no set read 7.85 / 9.29 /
+  11.52 ms, and an empty set 8.37 / 10.07 / 10.12 ms (14 each). A Metal 4 queue, the kind the
+  driver uses, read alike: 18.86 / 23.09 / 23.35 ms with the set added, and 19.96 / 21.44 / 25.25
+  ms with the request, 12.94 ms of it in the calls at the median. So at this size and pause the
+  delay is Metal's own for bytes in a queue's residency set, where the driver keeps all of a
+  device's memory; the driver's request in each submission moves it into `vkQueueSubmit2`, on
+  the runtime's one submit thread (above). The machine was shared during every run: other
+  sessions were active on it.
 - A command buffer committed while another queue's long command buffers run waits behind up to
   two whole command buffers of that queue. A queue always has room for two submissions, whatever
   their GPU runs (Queues, above), and the runtime never cuts a command buffer, so the room's 16 ms
