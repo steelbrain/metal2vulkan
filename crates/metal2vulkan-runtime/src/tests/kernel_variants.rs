@@ -16,10 +16,10 @@ mod on_device {
     use crate::tests::command::on_device::{each_device, finished, on_each_device, within, Arena};
     use crate::tests::compute::on_device::{step_with_length, words, WORDS};
     use crate::tests::devices_of_the_cfgs_kind;
-    use crate::tests::validation::validation_tool;
+    use crate::tests::validation::{bare, validation_tool};
     use crate::{
         Buffer, CommandBuffer, CommandQueue, ComputeCommandEncoder, ComputePipelineState, Counters,
-        Device, Dispatch, DispatchType, Instance,
+        Device, Dispatch, DispatchType,
     };
 
     /// The keys the walks take: 35 threadgroup sizes, one row wide, at threadgroup memory lengths
@@ -254,10 +254,10 @@ mod on_device {
     /// A kernel's variant made, evicted past the 64 its kernel keeps, and dispatched again: made
     /// again, through the device's pipeline cache. Both makes' times are printed, from their
     /// `VariantMake`s. On an instance without the validation layer, whose checks of each create
-    /// would be the time read.
+    /// would be the time read, on the driver the other device tests open (`validation::bare`).
     #[test]
     fn every_device_makes_an_evicted_variant_again() {
-        let instance = Instance::new(&[]).expect("an instance at the floor");
+        let instance = bare(&[]);
         for (name, physical) in devices_of_the_cfgs_kind(&instance) {
             let tool = validation_tool(&instance, &name, physical.raw());
             println!("kernel_variant_remade: {name}: validation tool {tool:?}");
