@@ -616,6 +616,23 @@ refused by the dma-buf rule above. A buffer placed at an offset in a block it sh
 (`Device::new_buffer`) adds nothing to a submission. So a consumer keeps its imports few and large.
 Not measured: the RX 7900 XTX, the Iris Xe, and imports of other sizes.
 
+On a guest's own work the cost shows in the wall time and the submitting thread's CPU time, not in
+the score. A guest's compute benchmark ran on a Radeon 780M (RADV, Mesa 26.2.6) twice in each of
+two arms. On the device's own answer, unified memory (it is an integrated GPU), the guest makes
+no-copy buffers over its own memory, and about 800 imports are live at the most, about 310 of them
+dma-bufs. On the other answer, given by a probe for this measurement alone, the guest makes Managed
+buffers instead, and about 120 imports are live at the most, one of them a dma-buf. First run, then
+second:
+
+| Guest's buffers | Imports live at most | Time in each `vkQueueSubmit2` | Submitting thread's CPU time | Scored pass | Score | Device memory at peak (Shared and Private) | Jobs |
+|---|---|---|---|---|---|---|---|
+| No-copy | 802, 795 | 0.832, 0.803 ms | 12.99, 12.74 s | 174.4, 172.9 s | 21,711, 21,996 | 988, 821 MiB | m3-max-68988, m3-max-69040 |
+| Managed | 118, 148 | 0.119, 0.114 ms | 2.34, 2.29 s | 162.4, 163.3 s | 22,164, 22,003 | 3.31, 3.34 GiB | m3-max-69016, m3-max-69073 |
+
+Between the arms' means, the submitting thread's CPU time differs by about 10.5 s and the scored
+pass by about 10.8 s; the score differs by 1.1%. The Managed arm holds about 2.3 to 2.5 GiB more
+device memory at its peak.
+
 A texture over a buffer in a dma-buf's one import (`import_dma_buf`) is in place, as over a
 Shared block of the runtime's own (Textures), on a device that offers a linear image for a
 dma-buf import without asking a dedicated allocation. Of the devices run, that is lavapipe alone
