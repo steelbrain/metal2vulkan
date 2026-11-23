@@ -944,6 +944,9 @@ impl Placed {
     }
 }
 
+/// The visible-function tables a run binds, each at its Metal buffer index ([`function_tables`]).
+type BoundTables = [(u32, rt::VisibleFunctionTable)];
+
 /// Encode `case`'s dispatch of `state` over `buffers`, `bound`'s textures and samplers and
 /// `tables` in one command buffer, commit it and wait until it has retired, under the hang
 /// protocol; a command buffer that did not complete fails the run.
@@ -955,7 +958,7 @@ fn dispatched(
         &BTreeMap<u32, Placed>,
         &BTreeMap<FieldKey, Placed>,
         &runtime_textures::Bound,
-        &[(u32, rt::VisibleFunctionTable)],
+        &BoundTables,
     ),
     case: &ComputeCase,
     (dispatch, threads_per_group): (rt::Dispatch, [u32; 3]),
