@@ -22,6 +22,12 @@
 //! diagonal quad only the helper is right of the diagonal, so `quad_any` holds and `quad_all` does
 //! not there, and the other way round in a quad the triangle covers whole.
 //!
+//! The `QUAD_READERS` functions write the other quad operations that count which of their quad's
+//! lanes are active or read the first active one: `quad_ballot`, `quad_active_threads_mask`,
+//! `quad_is_first`, `quad_broadcast_first` and the prefix sums. Each is drawn by that triangle and
+//! by the one across the same edge, which covers one pixel of each diagonal quad and runs its other
+//! three, quad lane 0 among them, as helpers.
+//!
 //! `llvm-as` assembles the functions; without it the test skips visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
@@ -149,17 +155,115 @@ declare i1 @air.quad_all(i1)
 !4 = !{i32 0, !"air.position", !"air.center", !"air.no_perspective", !"air.arg_type_name", !"float4", !"air.arg_name", !"pos"}
 "#;
 
+    /// The functions `MASKS_AND_SCANS` and `SHUFFLES` name. Pixel `(x, y)` takes the word
+    /// `(x * 7 + y * 13) ^ 0x5a` (`word`), the predicate `x > y`, and its quad lane
+    /// `x & 1 | (y & 1) << 1`.
+    const QUAD_READERS: &str = r#"target datalayout = "e-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:64:64-f32:32:32-f64:64:64-v16:16:16-v24:32:32-v32:32:32-v48:64:64-v64:64:64-v96:128:128-v128:128:128-v192:256:256-v256:256:256-v512:512:512-v1024:1024:1024-n8:16:32"
+target triple = "air64_v28-apple-macosx26.0.0"
+
+define <4 x i32> @quad_masks(<4 x float> %pos) {
+entry:
+  %xy = shufflevector <4 x float> %pos, <4 x float> poison, <2 x i32> <i32 0, i32 1>
+  %p = call <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float> %xy)
+  %x = extractelement <2 x i32> %p, i64 0
+  %y = extractelement <2 x i32> %p, i64 1
+  %right = icmp ugt i32 %x, %y
+  %x7 = mul i32 %x, 7
+  %y13 = mul i32 %y, 13
+  %s = add i32 %x7, %y13
+  %w = xor i32 %s, 90
+  %b = call i16 @air.quad_ballot(i1 %right)
+  %m = call i16 @air.quad_active_threads_mask()
+  %f = call i1 @air.quad_is_first()
+  %bf = call i32 @air.quad_broadcast_first.u.i32(i32 %w)
+  %b4 = zext i16 %b to i32
+  %m4 = zext i16 %m to i32
+  %f4 = zext i1 %f to i32
+  %o0 = insertelement <4 x i32> <i32 0, i32 0, i32 0, i32 0>, i32 %b4, i64 0
+  %o1 = insertelement <4 x i32> %o0, i32 %m4, i64 1
+  %o2 = insertelement <4 x i32> %o1, i32 %f4, i64 2
+  %o = insertelement <4 x i32> %o2, i32 %bf, i64 3
+  ret <4 x i32> %o
+}
+
+define <4 x i32> @quad_scans(<4 x float> %pos) {
+entry:
+  %xy = shufflevector <4 x float> %pos, <4 x float> poison, <2 x i32> <i32 0, i32 1>
+  %p = call <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float> %xy)
+  %x = extractelement <2 x i32> %p, i64 0
+  %y = extractelement <2 x i32> %p, i64 1
+  %x7 = mul i32 %x, 7
+  %y13 = mul i32 %y, 13
+  %s = add i32 %x7, %y13
+  %w = xor i32 %s, 90
+  %ex = call i32 @air.quad_prefix_exclusive_sum.u.i32(i32 %w)
+  %in = call i32 @air.quad_prefix_inclusive_sum.u.i32(i32 %w)
+  %o0 = insertelement <4 x i32> <i32 0, i32 0, i32 0, i32 1>, i32 %ex, i64 0
+  %o = insertelement <4 x i32> %o0, i32 %in, i64 1
+  ret <4 x i32> %o
+}
+
+declare <2 x i32> @air.convert.u.v2i32.f.v2f32(<2 x float>)
+declare i16 @air.quad_ballot(i1)
+declare i16 @air.quad_active_threads_mask()
+declare i1 @air.quad_is_first()
+declare i32 @air.quad_broadcast_first.u.i32(i32)
+declare i32 @air.quad_prefix_exclusive_sum.u.i32(i32)
+declare i32 @air.quad_prefix_inclusive_sum.u.i32(i32)
+
+!air.fragment = !{!0, !5}
+!0 = !{ptr @quad_masks, !1, !3}
+!1 = !{!2}
+!2 = !{!"air.render_target", i32 0, i32 0, !"air.arg_type_name", !"uint4"}
+!3 = !{!4}
+!4 = !{i32 0, !"air.position", !"air.center", !"air.no_perspective", !"air.arg_type_name", !"float4", !"air.arg_name", !"pos"}
+!5 = !{ptr @quad_scans, !1, !3}
+"#;
+
+    /// The functions of `QUAD_READERS`, which count which of their quad's lanes are active or read
+    /// the first active one, or sum over the active lanes below, and the operation each word of
+    /// their target holds, in order (a word past them is a constant).
+    const MASKS_AND_SCANS: [(&str, &[&str]); 2] = [
+        (
+            "quad_masks",
+            &[
+                "quad_ballot",
+                "quad_active_threads_mask",
+                "quad_is_first",
+                "quad_broadcast_first",
+            ],
+        ),
+        (
+            "quad_scans",
+            &["quad_prefix_exclusive_sum", "quad_prefix_inclusive_sum"],
+        ),
+    ];
+
     /// The word `fragment_quad_bitwise` takes of pixel `[x, y]`.
     fn word([x, y]: [u32; 2]) -> u32 {
         (x * 7 + y * 13) ^ 0x5a
     }
 
-    /// Draw `state` into an `RGBA32Uint` target by a triangle that covers the pixels `[x, y]` with
-    /// `x <= y`, and read the target back: the edge `x + y = 0.125` (clip space, y up) passes no
-    /// pixel centre and cuts each diagonal quad at its top right pixel, which runs as a helper.
-    fn diagonal(name: &str, device: &Device, state: &RenderPipelineState) -> Vec<u8> {
+    /// The clip-space triangle (y up) that covers the pixels `[x, y]` with `x <= y`: its edge
+    /// `x + y = 0.125` passes no pixel centre and cuts each diagonal quad at its top right pixel,
+    /// quad lane 1, which runs as a helper.
+    const ON_OR_LEFT: [f32; 6] = [-1.0, -1.0, 1.125, -1.0, -1.0, 1.125];
+
+    /// The triangle on the other side of the same edge, which covers the pixels with `x > y`: of
+    /// each diagonal quad it covers the top right pixel alone, and quad lanes 0, 2 and 3 run as
+    /// helpers.
+    const RIGHT: [f32; 6] = [1.25, -1.125, 1.25, 1.25, -1.125, 1.25];
+
+    /// Draw `state` into an `RGBA32Uint` target by the clip-space `triangle` (`ON_OR_LEFT` or
+    /// `RIGHT`), and read the target back.
+    fn diagonal(
+        name: &str,
+        device: &Device,
+        state: &RenderPipelineState,
+        triangle: &[f32; 6],
+    ) -> Vec<u8> {
         let mut buffers = Buffers::new(device);
-        let positions = buffers.of(device, &floats(&[-1.0, -1.0, 1.125, -1.0, -1.0, 1.125]));
+        let positions = buffers.of(device, &floats(triangle));
         let colors = buffers.of(device, &floats(&[0.0; 12]));
         let color = target(device, PixelFormat::RGBA32Uint, TextureUsage::RENDER_TARGET);
         let queue = device.new_command_queue(4).expect("a queue");
@@ -203,6 +307,135 @@ declare i1 @air.quad_all(i1)
             .collect()
     }
 
+    /// Pixel `p`'s quad lane, in Metal's order: top left 0, top right 1, bottom left 2, bottom
+    /// right 3.
+    fn quad_lane([x, y]: [u32; 2]) -> u32 {
+        (x & 1) | ((y & 1) << 1)
+    }
+
+    /// The pixel at quad lane `j` of pixel `p`'s quad.
+    fn mate([x, y]: [u32; 2], j: u32) -> [u32; 2] {
+        [(x & !1) | (j & 1), (y & !1) | (j >> 1)]
+    }
+
+    /// What a `QUAD_READERS` function writes at pixel `p` when the lanes of `active` (bit `j` quad
+    /// lane `j`) take part: Metal's answer where all four do, and where only the covered ones do,
+    /// the answer of a device that leaves the helpers out. Quad lane `j` holds the word of its
+    /// pixel and the predicate "x > y" of it.
+    fn quad_answer(function: &str, p: [u32; 2], active: u32) -> [u32; 4] {
+        let q = quad_lane(p);
+        let on = |j: &u32| (active >> j) & 1 == 1;
+        let w = |j: u32| word(mate(p, j));
+        let right = |j: u32| {
+            let [x, y] = mate(p, j);
+            u32::from(x > y)
+        };
+        let first = active.trailing_zeros();
+        match function {
+            "quad_masks" => [
+                (0..4).filter(on).map(|j| right(j) << j).sum(),
+                active,
+                u32::from(q == first),
+                w(first),
+            ],
+            _ => [
+                (0..q).filter(on).map(w).sum(),
+                (0..=q).filter(on).map(w).sum(),
+                0,
+                1,
+            ],
+        }
+    }
+
+    /// How many covered pixels a word was read at, how many of those were wrong, and how many of
+    /// those held the answer with the quad's helpers left out.
+    #[derive(Clone, Copy, Default)]
+    struct Tally {
+        read: u32,
+        wrong: u32,
+        left_out: u32,
+    }
+
+    /// Make each of `functions` (from `QUAD_READERS`) on every device with quad control, check its
+    /// fragment stage's opcodes with `stage`, draw it by `ON_OR_LEFT` and by `RIGHT`, and check
+    /// each covered pixel's words against Metal's (`quad_answer`), printing each operation's count
+    /// of wrong pixels per triangle. The helpers of the quads a triangle cuts are active lanes of
+    /// their quad: MSL 4.1 section 6.10.2 has "An active thread is a thread that is executing" and
+    /// "Helper threads may also be active and inactive. For example, if a helper thread finishes
+    /// executing, it becomes an inactive helper thread"; section 6.10.3 has "A quad-group function
+    /// is a SIMD-group function ... with an execution width of 4. The active and inactive thread
+    /// terminology is the same", and `quad_active_threads_mask` "sets the bits that represent
+    /// active threads to 1". These functions neither return nor discard before their calls, so
+    /// every helper is executing at each.
+    fn quad_readers(test: &str, functions: &[(&str, &[&str])], stage: impl Fn(&str, &str, &[u32])) {
+        let readers = match llvm_assemble_text(QUAD_READERS) {
+            Ok(bitcode) => Library::from_air(&bitcode).expect("the library"),
+            Err(AssembleError::Missing(why)) => {
+                eprintln!("SKIPPED: {why}");
+                return;
+            }
+            Err(error) => panic!("{test}: {error:?}"),
+        };
+        let Some(examples) = examples() else {
+            return;
+        };
+        each_device(test, |name, _, device| {
+            if !(device.core().translator.profile().enabled().features)
+                .contains(&VkFeature::ShaderQuadControl)
+            {
+                println!("{test}: {name}: no quad control; not made");
+                return;
+            }
+            let mut wrong = Vec::new();
+            for &(function, ops) in functions {
+                let mut d = descriptor(&examples, "colored_fragment", PixelFormat::RGBA32Uint);
+                d.fragment = Some(StageSource::Function(FunctionDescriptor::new(
+                    readers.function(function).expect("the function"),
+                )));
+                stage(name, function, &fragment_ops(name, &device, &d));
+                let state = (device
+                    .new_render_pipeline_state(&d, crate::tests::no_constexpr_samplers))
+                .unwrap_or_else(|error| panic!("{name}: {function}: {error}"));
+                for (side, triangle) in [("x <= y", &ON_OR_LEFT), ("x > y", &RIGHT)] {
+                    let covers = |[x, y]: [u32; 2]| (x > y) == (side == "x > y");
+                    let texels = diagonal(name, &device, &state, triangle);
+                    let mut tallies = vec![Tally::default(); ops.len()];
+                    for p in (0..SIDE).flat_map(|y| (0..SIDE).map(move |x| [x, y])) {
+                        if !covers(p) {
+                            continue;
+                        }
+                        let covered = (0..4)
+                            .filter(|&j| covers(mate(p, j)))
+                            .fold(0, |m, j| m | (1 << j));
+                        let (metal, left_out) = (
+                            quad_answer(function, p, 15),
+                            quad_answer(function, p, covered),
+                        );
+                        let got = words(&texels, p, 4);
+                        for (i, t) in tallies.iter_mut().enumerate() {
+                            t.read += 1;
+                            if got[i] != metal[i] {
+                                t.wrong += 1;
+                                t.left_out += u32::from(got[i] == left_out[i]);
+                            }
+                        }
+                    }
+                    for (op, t) in ops.iter().zip(tallies) {
+                        println!(
+                            "{test}: {name}: {op} drawn over {side}: {} of {} pixels wrong, {} \
+                             of them the answer with the helpers left out",
+                            t.wrong, t.read, t.left_out
+                        );
+                        if t.wrong > 0 {
+                            wrong.push(format!("{op} over {side}"));
+                        }
+                    }
+                }
+            }
+            assert!(wrong.is_empty(), "{name}: wrong: {wrong:?}");
+        });
+    }
+
     /// Where Vulkan offers `shaderQuadControl`, a fragment function's quad operations read their
     /// quad's helpers, as Metal's do; elsewhere the state is refused naming the feature.
     #[test]
@@ -244,7 +477,7 @@ declare i1 @air.quad_all(i1)
                     Err(error) => panic!("{name}: {error}"),
                 };
             assert!(on, "{name}: a state made without quad control");
-            let texels = diagonal(name, &device, &state);
+            let texels = diagonal(name, &device, &state, &ON_OR_LEFT);
             let mut drawn = 0;
             for y in 0..SIDE {
                 for x in (0..SIDE).filter(|&x| x <= y) {
@@ -306,7 +539,7 @@ declare i1 @air.quad_all(i1)
             );
             let state = (device.new_render_pipeline_state(&d, crate::tests::no_constexpr_samplers))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let texels = diagonal(name, &device, &state);
+            let texels = diagonal(name, &device, &state, &ON_OR_LEFT);
             let mut drawn = 0;
             let mut wrong = Vec::new();
             for y in 0..SIDE {
@@ -461,5 +694,24 @@ declare i1 @air.quad_all(i1)
                 count(OP_SAMPLE_IMPLICIT_LOD)
             );
         });
+    }
+
+    /// A fragment's `quad_ballot`, `quad_active_threads_mask`, `quad_is_first`,
+    /// `quad_broadcast_first` and quad prefix sums count the helpers of a quad the triangle cuts as
+    /// the active lanes they are (`quad_readers`), on every device with quad control, and their
+    /// fragment stages hold no ballot: they read their quad through quad instructions, which
+    /// Vulkan runs over the quad's helpers in every entry (section 9.31).
+    #[test]
+    fn every_device_s_quad_masks_and_scans_count_their_quads_helpers() {
+        quad_readers(
+            "quad_masks_and_scans",
+            &MASKS_AND_SCANS,
+            |name, function, ops| {
+                assert!(
+                    !ops.contains(&OP_BALLOT),
+                    "{name}: {function}'s fragment stage holds a ballot"
+                );
+            },
+        );
     }
 }
