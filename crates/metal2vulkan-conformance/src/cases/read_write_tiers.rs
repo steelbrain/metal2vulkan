@@ -90,10 +90,16 @@
 //! view Metal makes of a texture of any usage. A 16 by 16 `RGBA8Unorm_sRGB` texture of read-write
 //! usage, made once plainly and once over a shared buffer at its texels' own pitch, starts as the
 //! family's fill; `scout_read_write_f` swizzles every texel through an `RGBA8Unorm` view of it, so
-//! it reads and writes the unorm codes, and `scout_read_f` then reads every texel through the
-//! texture itself, decoded. The case records that read, the texture's bytes by `getBytes:`, and,
-//! over the buffer, the buffer's bytes. On a device that stores no 8-bit sRGB format a side that
-//! made the texture's image without storage for its view refuses the swizzle at its own site.
+//! it reads and writes the unorm codes, and `scout_read_f` then reads every texel through the same
+//! view. The case records that read, the texture's bytes by `getBytes:`, and, over the buffer, the
+//! buffer's bytes. On a device that stores no 8-bit sRGB format a side that made the texture's
+//! image without storage for its view refuses the swizzle at its own site.
+//!
+//! The read is the view's and not the texture's own, because the texture's own read decodes the
+//! codes, and the decode is the device's own answer (rule 1) rather than this case's subject:
+//! measured on this M3 Max, Metal decodes the code `0x22` to `0.016117217`, where the sRGB
+//! formula gives `0.015996293`, so an exact comparison of the decoded words would compare two
+//! devices' decodes. A view's unorm read is exact on both sides.
 //!
 //! # Why the reported tiers are a case of their own
 //!
@@ -953,7 +959,7 @@ impl Case for HeldReadWrite {
 }
 
 /// A read-write view of an sRGB texture: an `RGBA8Unorm_sRGB` texture, made plainly and over a
-/// buffer, swizzled through an `RGBA8Unorm` view of it, then read through the texture itself.
+/// buffer, swizzled through an `RGBA8Unorm` view of it, then read through the view.
 pub struct SrgbViews;
 
 /// The row pitch of [`SrgbViews`]' texture, and of the buffer under it: its 16 texels of 4 bytes.
@@ -974,7 +980,7 @@ impl SrgbViews {
     }
 
     /// One backing: the texture, its view, the swizzle through the view, the read of the whole
-    /// grid through the texture, the texture's bytes, and the buffer's where it is over one.
+    /// grid through the view, the texture's bytes, and the buffer's where it is over one.
     fn sweep_one(
         side: &mut dyn Side,
         sites: &mut Sites,
@@ -1032,11 +1038,10 @@ impl SrgbViews {
         let out = probe(sites, &format!("{at}/out"), out, |_| Value::Absent)?;
         let grid = [SCOUT_SIDE, SCOUT_SIDE, 1];
         let viewed = [view];
-        let parent = [texture];
         let outs = [out];
         let steps = [
             ("read-write", swizzle, Bindings::textures(&viewed)),
-            ("read", read, Bindings::new(&parent, &outs)),
+            ("read", read, Bindings::new(&viewed, &outs)),
         ];
         for (step, pipeline, bindings) in steps {
             let ran = side.dispatch_threads(pipeline, &bindings, &[], grid, grid);
