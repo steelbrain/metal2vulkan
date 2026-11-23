@@ -1462,6 +1462,7 @@ field	metal2vulkan-runtime::Metrics.gpu_end_to_handler_tail	pub gpu_end_to_handl
 field	metal2vulkan-runtime::Metrics.gpu_end_to_handler_tail_steps_nanos	pub gpu_end_to_handler_tail_steps_nanos: [u64; HANDLER_STEPS]
 field	metal2vulkan-runtime::Metrics.gpu_run	pub gpu_run: [u64; STAGE_BUCKETS]
 field	metal2vulkan-runtime::Metrics.gpu_run_nanos	pub gpu_run_nanos: u64
+field	metal2vulkan-runtime::Metrics.heap_moves	pub heap_moves: u64
 field	metal2vulkan-runtime::Metrics.held_for_room	pub held_for_room: u64
 field	metal2vulkan-runtime::Metrics.held_release_bytes	pub held_release_bytes: u64
 field	metal2vulkan-runtime::Metrics.held_release_starts	pub held_release_starts: u64

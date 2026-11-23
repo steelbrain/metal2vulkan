@@ -81,6 +81,7 @@
 //! are the device's ([`PrecisionNote::DeviceDepthBias`]); a state that tests or writes depth
 //! carries [`PrecisionNote::DepthDenormals`].
 
+use crate::alias;
 use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
@@ -515,10 +516,10 @@ fn slots<'a>(
         false => &[],
     };
     let declared = (declared.iter())
-        .filter(move |(_, access, texture, _)| {
+        .filter(move |(_, access, texture, ..)| {
             (buffers || texture.is_some()) && (!written || access.writes())
         })
-        .filter_map(|(_, access, texture, span)| match (texture, span) {
+        .filter_map(|(_, access, texture, span, _)| match (texture, span) {
             (Some(texture), _) => Some((Reached::Texture(texture), *access)),
             (None, span) => span.map(|span| (Reached::Buffer(span), *access)),
         });
@@ -843,6 +844,12 @@ fn begin(
         let lent = unsafe { building.lend_buffer(buffer) };
         (lent, descriptor.visibility_result_type)
     });
+    // Heap textures it renders into that an alias's write left stale move from undefined first
+    // (`crate::alias`).
+    let places = (pass.targets().map(|t| &t.texture))
+        .chain(resolves().map(|r| &r.texture))
+        .map(|texture| (TextureObject::object(texture).place(), Access::Write));
+    building.places(places)?;
     building.overs_before(overs(), false)?;
     let opens = building.opens_command_buffer();
     let command = building.ordered_command()?;
@@ -1930,14 +1937,22 @@ impl RenderCommandEncoder {
         usage: ResourceUsage,
     ) -> Result<(), Error> {
         let building = self.building();
-        let (id, host, unstored, texture, span) = match resource {
+        let (id, host, unstored, texture, span, place) = match resource {
             Resource::Buffer(buffer) => {
                 if !buffer.is_of(building.device.core()) {
                     return Err(Error::Refused(Refusal::OtherDevice));
                 }
                 building.keep(buffer);
                 let id = [buffer.id(), buffer.tracked_id()];
-                (id, buffer.is_shared(), None, None, Some(buffer.span()))
+                let place = buffer.object().place().cloned();
+                (
+                    id,
+                    buffer.is_shared(),
+                    None,
+                    None,
+                    Some(buffer.span()),
+                    place,
+                )
             }
             Resource::Texture(texture) => {
                 if !texture.is_of(building.device.core()) {
@@ -1953,6 +1968,7 @@ impl RenderCommandEncoder {
                     texture.storage_gap(true, false),
                     Some(lent),
                     None,
+                    texture.object().place().cloned(),
                 )
             }
             Resource::IndirectCommandBuffer(commands) => {
@@ -1975,7 +1991,7 @@ impl RenderCommandEncoder {
             Some((_, each, ..)) => *each = merge(*each, access),
             None => {
                 declared.copied += over::copied(texture.as_deref());
-                declared.each.push((id, access, texture, span));
+                declared.each.push((id, access, texture, span, place));
             }
         }
         self.changed();
@@ -2493,6 +2509,7 @@ impl RenderCommandEncoder {
             || arguments.is_some_and(|buffer| buffer.managed_overs().is_some())
             || factors.is_some_and(|(buffer, _)| buffer.managed_overs().is_some())
             || overs;
+        self.draw_aliases()?;
         match each {
             true => self.draw_reaches(reads, [index_buffer, arguments], overs, commands)?,
             false => {
@@ -3156,6 +3173,47 @@ impl RenderCommandEncoder {
         }
         self.overs_after(commands);
         Ok(())
+    }
+
+    /// A draw's uses of heap placements with links (`crate::alias`): its marks, and the moves of
+    /// the heap textures it writes that an alias's write left stale, recorded between the
+    /// rendering's end and its new beginning. Refused as another command that ends the rendering
+    /// is while a visibility result's query counts the draws.
+    fn draw_aliases(&mut self) -> Result<(), Error> {
+        let Some(state) = &self.pipeline else {
+            return Ok(());
+        };
+        let draws = &state.inner.compiled.draws;
+        let tables = &self.tables;
+        let bound = (draws.buffers.iter()).map(|&(table, slot, access)| {
+            (tables[table].buffer(slot).and_then(|b| b.place()), access)
+        });
+        let textures = (draws.textures.iter()).map(|&(table, slot, access)| {
+            (tables[table].texture(slot).and_then(|t| t.place()), access)
+        });
+        let declared =
+            (self.declared.each.iter()).map(|(_, access, .., place)| (place.as_ref(), *access));
+        let uses = alias::uses(bound.chain(textures).chain(declared));
+        if uses.is_empty() {
+            return Ok(());
+        }
+        let building = (self.building.as_mut())
+            .expect("an encoder holds its command buffer's recording until it ends");
+        let moves = building.aliases(&uses, true)?;
+        drop(uses);
+        if moves.is_empty() {
+            return Ok(());
+        }
+        if self.results.counting() {
+            return Err(self.interrupt_refused());
+        }
+        let command = self.command;
+        self.interrupt(|building, core| {
+            // SAFETY: the rendering ended, and the command buffer keeps each texture it uses
+            // until it retires.
+            unsafe { alias::record(&core.device, command, &moves, &mut |m| building.count(m)) };
+            Ok(())
+        })
     }
 
     /// Whether [`draw_reaches`](Self::draw_reaches) may end the rendering for the draw: where it

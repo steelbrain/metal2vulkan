@@ -1807,10 +1807,19 @@ made, with no lock, and never rewritten for layouts.
 - `Device::pixel_format_info` answers as an Apple M3 Max under macOS 27.0.1, which describes
   none of the values from 630 to 645 (`BGRA10Unorm`, its packed, sRGB, PQ and HLG forms,
   `R10UintX6`, `RG10UintX12` and the rest); an Apple M4 under that release describes them.
-- A heap texture whose bytes another resource of its heap wrote is used again in the layout it
-  moved to once, at its making: rt records no move out of `VK_IMAGE_LAYOUT_UNDEFINED` before that
-  use, where Vulkan's memory aliasing asks that "each of those image subresources must have its
-  layout transitioned from `VK_IMAGE_LAYOUT_UNDEFINED` to a valid layout before it is used".
+- A heap texture whose bytes another resource of its heap wrote moves out of
+  `VK_IMAGE_LAYOUT_UNDEFINED` before its next use that writes it (`Metrics::heap_moves`), as
+  Vulkan's memory aliasing asks: "each of those image subresources must have its layout
+  transitioned from `VK_IMAGE_LAYOUT_UNDEFINED` to a valid layout before it is used". What remains:
+  a read of such a texture before its next write takes no move; a write rt cannot name, through a
+  resource ID or an address outside the encoder's slots and `use_resource` declarations, leaves no
+  texture stale; a declared write (`use_resource` with a usage that writes) counts as a write of
+  the whole resource; a texture placed over another's bytes moves home from undefined at its
+  making, which on a device whose move writes memory may change a live alias's bytes; a move is
+  of the whole image, so where an alias's write met only part of it, the move takes the rest too;
+  and a draw's write of a texture that nothing earlier in its command buffer wrote, nor an alias
+  of it, is checked where the pass's part of the command buffer starts, so its move may go ahead
+  of a read of an alias there.
 - A texture's memory is device-local; where the device has none left, the call fails
   (`Error::Vulkan`).
 - A texture over a buffer other than 2D of one level, sample and slice, or of a depth, stencil

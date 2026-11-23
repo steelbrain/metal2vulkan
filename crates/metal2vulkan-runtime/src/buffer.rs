@@ -1,6 +1,7 @@
 //! Buffers: views of a range of a block, with no Vulkan object of their own; a Managed buffer's
 //! device copy, where the device has one, is a range of a Private block the consumer placed it in.
 
+use crate::alias::Place;
 use crate::capture::Modified;
 use crate::counters::{Gauge, Part};
 use crate::device::{Core, Device};
@@ -64,6 +65,8 @@ pub(crate) struct BufferInner {
     /// The heap the consumer placed it in ([`Device::new_heap_buffer`]), whose id its uses take in
     /// the hazard sets.
     heap: Option<Arc<HeapId>>,
+    /// Its bytes in its heap, which the placements whose bytes meet them link (`crate::alias`).
+    place: Option<Arc<Place>>,
     /// The block the consumer placed it in: of a Managed buffer, the block of its bytes.
     block: Arc<Block>,
     offset: u64,
@@ -115,6 +118,11 @@ impl Drop for DeviceCopy {
 }
 
 impl BufferInner {
+    /// Its bytes' placement in its heap, where it was placed in one (`crate::alias`).
+    pub(crate) fn place(&self) -> Option<&Arc<Place>> {
+        self.place.as_ref()
+    }
+
     /// A capture's take of `ranges` of the buffer ([`crate::capture::Changes::take`]), holding its
     /// blocks from here; none where it has no device copy.
     pub(crate) fn modified(self: &Arc<Self>, ranges: Vec<(u64, u64)>) -> Option<Modified> {
@@ -487,10 +495,13 @@ impl BufferInner {
         core.counters.rise(Gauge::Buffers);
         let gauge = block.memory.class.buffer_gauge();
         core.counters.rise_by(gauge, length);
+        let place = (heap.as_ref())
+            .map(|heap| Place::new(heap, offset, offset.saturating_add(length), None));
         Arc::new(BufferInner {
             core: Arc::clone(core),
             id: core.ids.take(),
             heap,
+            place,
             block,
             offset,
             length,

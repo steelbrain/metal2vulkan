@@ -1,4 +1,5 @@
 mod ahead;
+mod alias;
 mod aliased_encoders;
 mod alpha_test;
 mod argument_sampling;

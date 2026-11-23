@@ -1,5 +1,6 @@
 //! Compute command encoders: their binding state, their dispatches, and where barriers go.
 
+use crate::alias::Place;
 use crate::arena;
 use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::command::{Building, CommandBuffer};
@@ -829,7 +830,7 @@ impl ComputeCommandEncoder {
         usage: ResourceUsage,
     ) -> Result<(), Error> {
         let building = self.building();
-        let (id, shared, unstored, texture, span) = match resource {
+        let (id, shared, unstored, texture, span, place) = match resource {
             Resource::Buffer(buffer) => {
                 if !buffer.is_of(building.device.core()) {
                     return Err(Error::Refused(Refusal::OtherDevice));
@@ -841,6 +842,7 @@ impl ComputeCommandEncoder {
                     None,
                     None,
                     Some(buffer.span()),
+                    buffer.object().place().cloned(),
                 )
             }
             Resource::Texture(texture) => {
@@ -858,6 +860,7 @@ impl ComputeCommandEncoder {
                     texture.storage_gap(true, false),
                     Some(lent),
                     None,
+                    texture.object().place().cloned(),
                 )
             }
             Resource::IndirectCommandBuffer(commands) => {
@@ -884,7 +887,7 @@ impl ComputeCommandEncoder {
             Some((_, declared, ..)) => *declared = merge(*declared, access),
             None => {
                 self.copied += over::copied(texture.as_deref());
-                self.declared.push((id, access, texture, span));
+                self.declared.push((id, access, texture, span, place));
             }
         }
         Ok(())
@@ -1219,6 +1222,9 @@ impl ComputeCommandEncoder {
                 },
             };
             let building = recording(&mut self.building);
+            // Heap textures it writes that an alias's write left stale move from undefined first
+            // (`crate::alias`).
+            building.places(accesses.places(interface))?;
             // Textures over a buffer in an image of their own take their copies first
             // (`crate::over`): looked for where one is bound or declared, the kernel reaches
             // memory outside its resources, or such an image is ahead of its buffer, and among
@@ -1803,7 +1809,13 @@ pub(crate) fn merge(a: Access, b: Access) -> Access {
 /// A `use_resource` declaration, by resource id: its own and its id in the hazard sets; its
 /// access; the texture, where the resource is one; and the memory of the buffer, where it is one,
 /// as the copies over buffers track it (`crate::over`).
-pub(crate) type Declared = ([u32; 2], Access, Option<Lent<Texture>>, Option<Span>);
+pub(crate) type Declared = (
+    [u32; 2],
+    Access,
+    Option<Lent<Texture>>,
+    Option<Span>,
+    Option<Arc<Place>>,
+);
 
 /// What a dispatch touches besides its pipeline's own facts.
 pub(crate) struct Accesses<'a> {
@@ -1868,8 +1880,8 @@ impl Accesses<'_> {
                 Some((Reached::Texture(texture), access))
             });
         let declared = (self.declared.iter())
-            .filter(move |(_, access, texture, _)| (buffers || texture.is_some()) && kept(*access))
-            .filter_map(|(_, access, texture, span)| match (texture, span) {
+            .filter(move |(_, access, texture, ..)| (buffers || texture.is_some()) && kept(*access))
+            .filter_map(|(_, access, texture, span, _)| match (texture, span) {
                 (Some(texture), _) => Some((Reached::Texture(texture), *access)),
                 (None, span) => span.map(|span| (Reached::Buffer(span), *access)),
             });
@@ -1877,6 +1889,27 @@ impl Accesses<'_> {
             .filter(|_| buffers && !written)
             .map(|(_, span)| (Reached::Buffer(span), Access::Read));
         slots.chain(textures).chain(declared).chain(indirect)
+    }
+
+    /// Each heap placement the dispatch of a kernel of `interface` touches through its slots and
+    /// declarations, with its access: `None` for a resource in no heap (`crate::alias`).
+    pub(crate) fn places<'b>(
+        &'b self,
+        interface: &'b Interface,
+    ) -> impl Iterator<Item = (Option<&'b Arc<Place>>, Access)> + 'b {
+        let slots = (interface.buffers.iter()).filter_map(move |&(slot, access)| {
+            match self.slots.get(slot as usize) {
+                Some(Slot::Buffer { buffer, .. }) => Some((buffer.object().place(), access)),
+                _ => None,
+            }
+        });
+        let textures = (interface.textures.iter()).filter_map(move |&(slot, access)| {
+            let texture = self.textures.get(slot as usize)?.as_deref()?;
+            Some((texture.object().place(), access))
+        });
+        let declared =
+            (self.declared.iter()).map(|(_, access, .., place)| (place.as_ref(), *access));
+        slots.chain(textures).chain(declared)
     }
 }
 

@@ -220,6 +220,15 @@ impl BlitCommandEncoder {
         building.keep_texture(source);
         building.keep_texture(destination);
         building.wrote_texture_managed(destination);
+        // A heap texture it writes that an alias's write left stale moves from undefined first
+        // (`crate::alias`).
+        building.places(
+            [
+                (source.object().place(), Access::Read),
+                (destination.object().place(), Access::Write),
+            ]
+            .into_iter(),
+        )?;
         let overs = [
             (Reached::Texture(source.object()), Access::Read),
             (Reached::Texture(destination.object()), Access::ReadWrite),
@@ -448,6 +457,14 @@ impl BlitCommandEncoder {
         building.managed_reach(destination, &mut backs);
         building.managed_backs(backs)?;
         building.wrote_managed(destination);
+        // A write of a heap buffer leaves the textures over its bytes stale (`crate::alias`).
+        building.places(
+            [
+                (source.object().place(), Access::Read),
+                (destination.object().place(), Access::Write),
+            ]
+            .into_iter(),
+        )?;
         let overs = [
             (Reached::Buffer(source.span()), Access::Read),
             (Reached::Buffer(destination.span()), Access::Write),
@@ -547,6 +564,19 @@ impl BlitCommandEncoder {
             true => building.wrote_texture_managed(texture),
             false => building.wrote_managed(buffer),
         }
+        // A heap texture it writes that an alias's write left stale moves from undefined first,
+        // and a write of a heap buffer leaves the textures over its bytes stale (`crate::alias`).
+        let (into, out) = match into_image {
+            true => (Access::Write, Access::Read),
+            false => (Access::Read, Access::Write),
+        };
+        building.places(
+            [
+                (texture.object().place(), into),
+                (buffer.object().place(), out),
+            ]
+            .into_iter(),
+        )?;
         let overs = match into_image {
             true => [
                 (Reached::Texture(texture.object()), Access::ReadWrite),
@@ -673,6 +703,8 @@ impl BlitCommandEncoder {
         building.managed_reach(buffer, &mut backs);
         building.managed_backs(backs)?;
         building.wrote_managed(buffer);
+        // A write of a heap buffer leaves the textures over its bytes stale (`crate::alias`).
+        building.places([(buffer.object().place(), Access::Write)].into_iter())?;
         let overs = [(Reached::Buffer(buffer.span()), Access::Write)];
         building.overs_before(overs, false)?;
         let command = building.ordered_command()?;
@@ -824,6 +856,9 @@ impl BlitCommandEncoder {
         }
         building.keep_texture(texture);
         building.wrote_texture_managed(texture);
+        // Its levels past the first are written: a heap texture an alias's write left stale
+        // moves from undefined first (`crate::alias`).
+        building.places([(texture.object().place(), Access::ReadWrite)].into_iter())?;
         let overs = [(Reached::Texture(texture.object()), Access::ReadWrite)];
         building.overs_before(overs, false)?;
         let command = building.ordered_command()?;

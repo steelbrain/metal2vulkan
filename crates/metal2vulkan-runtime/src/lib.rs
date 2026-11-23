@@ -8,6 +8,7 @@
 
 #![warn(missing_docs)]
 
+mod alias;
 mod arena;
 mod arrays;
 mod blit;

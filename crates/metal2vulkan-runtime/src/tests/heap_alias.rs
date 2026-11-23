@@ -18,7 +18,7 @@
 //! kernels' libraries; without it the tests are skipped, visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
-mod on_device {
+pub(crate) mod on_device {
     use crate::tests::command::on_device::{each_device, finished};
     use crate::tests::draw::on_device::{examples, library};
     use crate::{
@@ -47,19 +47,23 @@ mod on_device {
 
     /// The kernels: `rows_write` and `rows_read` of `examples/texel_rows`, and `invert_texels` of
     /// the runtime's examples.
-    struct Kernels {
+    pub(crate) struct Kernels {
         write: ComputePipelineState,
         read: ComputePipelineState,
         invert: ComputePipelineState,
     }
 
     /// The libraries, or None where `llvm-as` is missing.
-    fn libraries() -> Option<(Library, Library)> {
+    pub(crate) fn libraries() -> Option<(Library, Library)> {
         let rows = library(&fixtures_dir().join("examples/texel_rows.ll"))?;
         Some((rows, examples()?))
     }
 
-    fn kernels(name: &str, device: &Device, (rows, examples): &(Library, Library)) -> Kernels {
+    pub(crate) fn kernels(
+        name: &str,
+        device: &Device,
+        (rows, examples): &(Library, Library),
+    ) -> Kernels {
         let state = |library: &Library, function: &str| {
             let source = StageSource::Function(FunctionDescriptor::new(
                 library.function(function).expect("the function"),
@@ -117,14 +121,14 @@ mod on_device {
     }
 
     /// Shared buffers in a block of their own, each `at` bytes apart.
-    struct Buffers {
+    pub(crate) struct Buffers {
         block: Block,
         at: u64,
         next: u64,
     }
 
     impl Buffers {
-        fn new(name: &str, device: &Device, count: u64) -> Buffers {
+        pub(crate) fn new(name: &str, device: &Device, count: u64) -> Buffers {
             Buffers::apart(name, device, count, AT)
         }
 
@@ -135,7 +139,7 @@ mod on_device {
         }
 
         /// The next buffer, holding `floats`.
-        fn of(&mut self, name: &str, device: &Device, floats: &[f32]) -> Buffer {
+        pub(crate) fn of(&mut self, name: &str, device: &Device, floats: &[f32]) -> Buffer {
             let len = (floats.len() * 4) as u64;
             assert!(len <= self.at, "{name}: a buffer past its place");
             let buffer = (device.new_buffer(self.block.id, self.next, len, None))
@@ -160,21 +164,32 @@ mod on_device {
     }
 
     /// A heap texture: its number, format and extent, the texture and its view.
-    struct Placed {
+    pub(crate) struct Placed {
         t: u32,
         format: PixelFormat,
         width: u32,
         height: u32,
-        texture: Texture,
+        pub(crate) texture: Texture,
         view: Texture,
     }
 
     /// Texture `t` of `format`, `width` by `height`, at offset 0 of `heap`, at index `index`, and
     /// its view at `index + 1`.
-    fn place(
+    pub(crate) fn place(
         name: &str,
         device: &Device,
         heap: HeapRange,
+        shape: (u32, PixelFormat, u32, u32),
+        index: u32,
+    ) -> Placed {
+        place_at(name, device, (heap, 0), shape, index)
+    }
+
+    /// As [`place`], at `offset` in `heap`, a multiple of the texture's alignment there.
+    pub(crate) fn place_at(
+        name: &str,
+        device: &Device,
+        (heap, offset): (HeapRange, u64),
         (t, format, width, height): (u32, PixelFormat, u32, u32),
         index: u32,
     ) -> Placed {
@@ -183,8 +198,12 @@ mod on_device {
         d.storage_mode = StorageMode::Private;
         let fit = (device.heap_texture_size_and_align(&d))
             .unwrap_or_else(|error| panic!("{name}: texture {t}: {error}"));
-        assert!(fit.size <= heap.len, "{name}: texture {t}: {fit:?}");
-        let texture = (device.new_heap_texture(&d, Some(index), heap, 0))
+        assert!(
+            offset + fit.size <= heap.len,
+            "{name}: texture {t}: {fit:?}"
+        );
+        assert_eq!(offset % fit.align, 0, "{name}: texture {t}: {fit:?}");
+        let texture = (device.new_heap_texture(&d, Some(index), heap, offset))
             .unwrap_or_else(|error| panic!("{name}: texture {t}: {error}"));
         let view =
             (texture.new_texture_view(format, TextureType::Type2D, 0..1, 0..1, Some(index + 1)))
@@ -200,7 +219,7 @@ mod on_device {
     }
 
     /// The input `rows_write` writes into `p`: each texel's four values.
-    fn input(p: &Placed) -> Vec<f32> {
+    pub(crate) fn input(p: &Placed) -> Vec<f32> {
         let mut floats = Vec::new();
         for y in 0..p.height {
             for x in 0..p.width {
@@ -212,7 +231,13 @@ mod on_device {
 
     /// Encodes, in a serial compute encoder of its own, `rows_write` of `input` into `p` through
     /// its view.
-    fn write(name: &str, cb: &CommandBuffer, kernels: &Kernels, p: &Placed, input: &Buffer) {
+    pub(crate) fn write(
+        name: &str,
+        cb: &CommandBuffer,
+        kernels: &Kernels,
+        p: &Placed,
+        input: &Buffer,
+    ) {
         let done = |result: Result<(), crate::Error>| {
             result.unwrap_or_else(|error| panic!("{name}: texture {}: {error}", p.t))
         };
@@ -227,7 +252,13 @@ mod on_device {
 
     /// Encodes, in a serial compute encoder of its own, `rows_read` of `p` through itself into
     /// `out`.
-    fn read(name: &str, cb: &CommandBuffer, kernels: &Kernels, p: &Placed, out: &Buffer) {
+    pub(crate) fn read(
+        name: &str,
+        cb: &CommandBuffer,
+        kernels: &Kernels,
+        p: &Placed,
+        out: &Buffer,
+    ) {
         let done = |result: Result<(), crate::Error>| {
             result.unwrap_or_else(|error| panic!("{name}: texture {}: {error}", p.t))
         };

@@ -58,6 +58,7 @@
 //! copies, waits at that commit's number, and the first submission of a command buffer numbered
 //! at or after it takes it, ahead of that command buffer's first segment and outside its waits.
 
+use crate::alias;
 use crate::buffer::{BufferInner, BufferObject, DeviceCopy};
 use crate::capture::{self, Changes, CopyIn, Modified};
 use crate::command::{self, CbInner, CommandBufferError, DeviceLoss, Handler, Pending, Segment};
@@ -540,6 +541,9 @@ struct Batch {
     reached: Vec<Arc<BufferInner>>,
     /// The images of the Direct3D 11 planes its segments use (`Segment::planes`).
     planes: Vec<Arc<Image>>,
+    /// The first failed call recording a command buffer of moves that leads a segment of it
+    /// (`crate::alias::stage`), which loses the device.
+    lost: Option<DeviceLoss>,
 }
 
 /// One part of a submit info: a segment's or an upload's commands and its signals, and for a
@@ -1774,10 +1778,11 @@ impl WorkState {
     fn step(
         &mut self,
         now: u64,
-        counters: &Counters,
+        core: &Core,
         joined: &mut Vec<Joined>,
         ended: &mut Vec<Ended>,
     ) -> Step {
+        let counters = &core.counters;
         let Some((index, waits)) = self.next_ready() else {
             return Step::Idle;
         };
@@ -1882,6 +1887,7 @@ impl WorkState {
             wrote: Vec::new(),
             reached: Vec::new(),
             planes: Vec::new(),
+            lost: None,
         });
         if leads {
             group.run = group.run.saturating_add(run.unwrap_or(u64::MAX));
@@ -1912,6 +1918,19 @@ impl WorkState {
         }
         for image in &segment.planes {
             image.keep_plane(&mut group.planes);
+        }
+        // The moves its checks find owed lead it, in its submit info (`crate::alias`).
+        if !segment.aliased.is_empty() {
+            match alias::stage(core, &mut pending.gpu.recorder, &segment.aliased) {
+                Ok(Some(lead)) => group.segments.push(Staged {
+                    command: Some(vk::CommandBufferSubmitInfo::default().command_buffer(lead)),
+                    ..Staged::default()
+                }),
+                Ok(None) => {}
+                Err(loss) => {
+                    group.lost.get_or_insert(loss);
+                }
+            }
         }
         let staged = stage(segment, &mut group.watch);
         let at = (pending.seq, pending.next);
@@ -2331,7 +2350,7 @@ fn pass<'a>(core: &'a Core, mut state: MutexGuard<'a, WorkState>) -> MutexGuard<
         let now = times::host_time();
         let step = match then.take() {
             Some(index) => Step::Goes(index),
-            None => state.step(now, &core.counters, &mut joined, &mut ended),
+            None => state.step(now, core, &mut joined, &mut ended),
         };
         let index = match step {
             Step::Idle => match state.unheld() {
@@ -2430,6 +2449,7 @@ impl Batch {
             wrote: Vec::new(),
             reached: Vec::new(),
             planes: Vec::new(),
+            lost: None,
         }
     }
 }
@@ -2508,6 +2528,7 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
         held,
         copy_ins,
         mut planes,
+        lost,
         ..
     } = batch;
     let device = &core.device;
@@ -2515,7 +2536,7 @@ fn submit(core: &Core, value: u64, uploads: Vec<Upload>, batch: Batch) {
     // for the copies into textures over a buffer in an image of their own.
     let sides = !overs.is_empty() || !backs.is_empty();
     // The first failed call, which loses the device.
-    let mut ok: Result<(), DeviceLoss> = Ok(());
+    let mut ok: Result<(), DeviceLoss> = lost.map_or(Ok(()), Err);
     let mut empty = None;
     let mut kept = Vec::with_capacity(uploads.len());
     for upload in uploads {

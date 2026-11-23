@@ -38,6 +38,7 @@
 //! it moves it from home to the present layout at its end
 //! ([`CommandBuffer::present_drawable`](crate::CommandBuffer::present_drawable)).
 
+use crate::alias::{Moved, Place};
 use crate::arrays::{Owner, ResourceId};
 use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::copy_out;
@@ -234,6 +235,9 @@ pub(crate) struct TextureInner {
     /// The heap it was placed in ([`Device::new_heap_texture`]), whose id its uses take in the
     /// compute encoders' hazard sets; a view's is its parent's.
     heap: Option<Arc<HeapId>>,
+    /// Its image's bytes in its heap, where it was placed in one, which the placements whose
+    /// bytes meet them link (`crate::alias`); a view's is its parent's.
+    place: Option<Arc<Place>>,
     /// The bytes the host reaches in a buffer: a Managed texture's, or a texture over a buffer's.
     named: Option<Named>,
     /// A view's parent and place in the image ([`Texture::new_texture_view`]); `None` for a
@@ -491,6 +495,10 @@ pub(crate) struct Image {
     /// in place, whose move home keeps the bytes (over a dma-buf's import, the layout of the
     /// bytes the host wrote, which the move's acquire names, `foreign`).
     first: vk::ImageLayout,
+    /// A heap texture's image placed over bytes another resource of its heap reaches
+    /// (`crate::alias`): its move home waits for every earlier command's writes. False for every
+    /// other image.
+    over: bool,
     /// In place over a dma-buf's import (`Device::import_dma_buf`, on Unix): the import's buffer
     /// and the range of it the image's memory is, which its move home acquires from the foreign
     /// queue family (`VK_QUEUE_FAMILY_FOREIGN_EXT`) in one barrier with the image, so that both
@@ -782,10 +790,18 @@ impl Image {
             .dst_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
             .image(self.image)
             .subresource_range(whole(self.aspects));
+        // Placed over another resource's bytes, after every earlier command's writes.
+        let (stages, written) = match self.over {
+            true => (
+                vk::PipelineStageFlags2::ALL_COMMANDS,
+                vk::AccessFlags2::MEMORY_WRITE,
+            ),
+            false => (vk::PipelineStageFlags2::NONE, vk::AccessFlags2::NONE),
+        };
         let Some(zero) = self.zero else {
             let first = barrier
-                .src_stage_mask(vk::PipelineStageFlags2::NONE)
-                .src_access_mask(vk::AccessFlags2::NONE)
+                .src_stage_mask(stages)
+                .src_access_mask(written)
                 .dst_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
                 .dst_access_mask(every)
                 .old_layout(first)
@@ -927,6 +943,7 @@ impl Image {
             cube: plan.cube,
             linear_attachment: false,
             first: vk::ImageLayout::UNDEFINED,
+            over: false,
             homed: AtomicBool::new(false),
             zero: None,
             foreign: None,
@@ -1475,6 +1492,7 @@ impl Device {
             cube: false,
             linear_attachment: false,
             first: vk::ImageLayout::UNDEFINED,
+            over: false,
             // No move home until the consumer acquires it.
             homed: AtomicBool::new(true),
             foreign: None,
@@ -1517,6 +1535,7 @@ impl Device {
             word: plan.word,
             id: core.ids.take(),
             heap: None,
+            place: None,
             named: None,
             view: None,
             emulation: plan.emulation,
@@ -1547,10 +1566,14 @@ impl Device {
             Reach::Views => None,
         };
         let core = self.core();
-        // A heap's texture takes the heap's id in the hazard sets.
-        let heap_id = match &source {
-            Source::Heap(_, heap, _) => Some(core.heap_ids.of(core, heap.block, heap.offset)),
-            _ => None,
+        // A heap's texture takes the heap's id in the hazard sets, and its image's first byte in
+        // the heap's block is its placement's.
+        let (heap_id, heap_at) = match &source {
+            Source::Heap(_, heap, offset) => (
+                Some(core.heap_ids.of(core, heap.block, heap.offset)),
+                Some(heap.offset.saturating_add(*offset)),
+            ),
+            _ => (None, None),
         };
         // Over a buffer in place, the memory its image lies in (`check_over`).
         let mut laid = None;
@@ -1708,6 +1731,16 @@ impl Device {
                 image: Mutex::new(None),
             })
         });
+        // A heap's texture's image is placed among its heap's resources, linked with those whose
+        // bytes meet its (`crate::alias`).
+        let place = (heap_id.as_ref().zip(heap_at)).map(|(heap, at)| {
+            let moved = Moved {
+                image,
+                home,
+                aspects: plan.aspects,
+            };
+            Place::new(heap, at, at.saturating_add(bytes), Some(moved))
+        });
         let image = Arc::new(Image {
             core: Arc::clone(core),
             image,
@@ -1733,6 +1766,7 @@ impl Device {
             cube: plan.cube,
             linear_attachment: false,
             first,
+            over: place.as_ref().is_some_and(|place| place.over()),
             foreign,
             homed: AtomicBool::new(false),
             zero,
@@ -1774,6 +1808,7 @@ impl Device {
             word: plan.word,
             id: core.ids.take(),
             heap: heap_id,
+            place,
             named,
             view: None,
             emulation: plan.emulation,
@@ -3886,6 +3921,11 @@ impl TextureInner {
 }
 
 impl TextureInner {
+    /// Its image's placement in its heap, where it was placed in one (`crate::alias`).
+    pub(crate) fn place(&self) -> Option<&Arc<Place>> {
+        self.place.as_ref()
+    }
+
     /// Its image: its own, or a view's parent's; `None` for a texture buffer.
     fn image_of(&self) -> Option<&Arc<Image>> {
         match &self.body {
@@ -4340,6 +4380,7 @@ impl Texture {
             word: plan.word,
             id: inner.id,
             heap: inner.heap.clone(),
+            place: inner.place.clone(),
             named,
             view: Some(View {
                 parent,
@@ -5997,6 +6038,7 @@ impl Device {
             word: form.word,
             id: core.ids.take(),
             heap: None,
+            place: None,
             named: Some(named),
             view: None,
             emulation: FormatEmulation::Direct,
@@ -6217,6 +6259,7 @@ impl Device {
                 true => home,
                 false => vk::ImageLayout::UNDEFINED,
             },
+            over: false,
             // An image already general owes no move.
             homed: AtomicBool::new(general),
             foreign: None,
@@ -6262,6 +6305,7 @@ impl Device {
             word: plan.word,
             id: core.ids.take(),
             heap: Some(unit),
+            place: None,
             named: None,
             view: None,
             emulation: plan.emulation,

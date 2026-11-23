@@ -313,10 +313,12 @@ pub(crate) enum Metric {
     AccumulatedVisibilityRefused,
     /// [`Metrics::overlapping_copies_refused`].
     OverlappingCopiesRefused,
+    /// [`Metrics::heap_moves`].
+    HeapMoves,
 }
 
 /// The number of [`Metric`]s.
-const METRICS: usize = Metric::OverlappingCopiesRefused as usize + 1;
+const METRICS: usize = Metric::HeapMoves as usize + 1;
 
 /// Every [`Metric`], in its order: each at its own index.
 const METRIC_ORDER: [Metric; METRICS] = [
@@ -371,6 +373,7 @@ const METRIC_ORDER: [Metric; METRICS] = [
     Metric::VisibilityInterruptsRefused,
     Metric::AccumulatedVisibilityRefused,
     Metric::OverlappingCopiesRefused,
+    Metric::HeapMoves,
 ];
 
 // Each metric of the order is at its own index.
@@ -796,6 +799,7 @@ struct Atomics {
     visibility_interrupts_refused: AtomicU64,
     accumulated_visibility_refused: AtomicU64,
     overlapping_copies_refused: AtomicU64,
+    heap_moves: AtomicU64,
     /// Each [`Part`]'s calls, at its index: their count, bytes, total and longest nanoseconds,
     /// and those over each of [`OVER_NANOS`].
     parts: [[AtomicU64; 7]; PARTS],
@@ -964,6 +968,7 @@ impl Counters {
             Metric::VisibilityInterruptsRefused => &a.visibility_interrupts_refused,
             Metric::AccumulatedVisibilityRefused => &a.accumulated_visibility_refused,
             Metric::OverlappingCopiesRefused => &a.overlapping_copies_refused,
+            Metric::HeapMoves => &a.heap_moves,
         }
     }
 
@@ -1903,6 +1908,7 @@ impl Counters {
             visibility_interrupts_refused: a.visibility_interrupts_refused.load(Relaxed),
             accumulated_visibility_refused: a.accumulated_visibility_refused.load(Relaxed),
             overlapping_copies_refused: a.overlapping_copies_refused.load(Relaxed),
+            heap_moves: a.heap_moves.load(Relaxed),
             takes: part(Part::Take),
             take_lock_waits: part(Part::TakeLock),
             take_makes: part(Part::TakeMake),
@@ -2881,6 +2887,13 @@ pub struct Metrics {
     /// and a texture placed in a heap whose memory meets the other side's. Copies the guest
     /// asked for that did not run.
     pub overlapping_copies_refused: u64,
+    /// Heap textures' images moved from undefined to their home layout before a command that
+    /// writes them (a dispatch's slot or declared write, a pass's attachment, a draw's write, a
+    /// blit's destination), because a write over their bytes through another resource of their
+    /// heap left them stale since their last write (Vulkan's memory aliasing): in place, or in a
+    /// command buffer of its own that leads the command's part of its command buffer. No Metal
+    /// counterpart.
+    pub heap_moves: u64,
     /// Takes from the pool on the consumer's threads, each whole: a block of
     /// [`Device::take_block`](crate::Device::take_block) and a texture block, carved from a free
     /// range or from an allocation the take made ([`take_makes`](Self::take_makes)); their bytes

@@ -1,6 +1,7 @@
 //! Command buffers: recorded at once into segments that event waits and signals split, and their
 //! states from creation to retirement.
 
+use crate::alias::{Aliased, Marks, Place};
 use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::complete::Completion;
 use crate::counters::{Metric, Stage, Tally};
@@ -232,6 +233,8 @@ pub(crate) struct Building {
     /// The drawables it presents, each with the consumer's semaphore its end signals
     /// ([`CommandBuffer::present_drawable`]).
     presents: Vec<(Texture, vk::Semaphore)>,
+    /// What its commands did to the heap placements with links they touched (`crate::alias`).
+    marks: Marks,
 }
 
 /// The push constant bytes a command buffer holds, from offset 0, as its pushes left them.
@@ -340,6 +343,9 @@ pub(crate) struct Segment {
     /// Windows): its submission acquires them from `VK_QUEUE_FAMILY_EXTERNAL` at its start and
     /// releases them to it at its end (`crate::submit`).
     pub(crate) planes: Vec<Arc<Image>>,
+    /// The checks at its head and its writes of heap placements with links (`crate::alias`):
+    /// staged, a command buffer of moves leads it where the checks find one owed.
+    pub(crate) aliased: Aliased,
 }
 
 pub(crate) struct Handlers {
@@ -426,6 +432,7 @@ impl CommandBuffer {
                         vertex: Vec::new(),
                         tally: Tally::default(),
                         presents: Vec::new(),
+                        marks: Marks::default(),
                     }),
                     ended: None,
                     times: Times::default(),
@@ -889,6 +896,17 @@ impl CommandBuffer {
         })
     }
 
+    /// For the device tests: the checks of heap placements at the head of each of its segments
+    /// so far (`crate::alias`), in order.
+    #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
+    pub(crate) fn alias_checks_for_test(&self) -> Vec<usize> {
+        let state = self.state();
+        let building = (state.building.as_ref()).expect("a command buffer not yet committed");
+        (building.gpu.segments.iter())
+            .map(|segment| segment.aliased.checks())
+            .collect()
+    }
+
     /// For the device tests: keeps `textures` and `states` until the command buffer retires, as
     /// an encoder that binds them does.
     #[cfg(all(test, any(m2v_gpu, m2v_cpu_icd)))]
@@ -1109,6 +1127,61 @@ impl Building {
         if reach.reaches_indirect() {
             self.args_unordered = false;
         }
+    }
+
+    /// A command's uses of heap placements with links, `uses` (`crate::alias`), before it is
+    /// recorded: its marks, the checks it adds at its segment's head, a segment ended first where
+    /// a check would go ahead of a read of one of the placement's links in it, and the moves owed
+    /// in place, which the caller records before the command ([`record_moves`](Self::record_moves),
+    /// or inside a rendering between its end and its new beginning). Inside a rendering
+    /// (`rendering`) nothing ends: the check goes at the head of the segment the pass is in.
+    pub(crate) fn aliases(
+        &mut self,
+        uses: &[(&Arc<Place>, Access)],
+        rendering: bool,
+    ) -> Result<Vec<vk::ImageMemoryBarrier2<'static>>, Error> {
+        if !rendering && !self.last().signals.is_empty() {
+            self.split()?;
+        }
+        let mut segment = self.gpu.segments.len() - 1;
+        if !rendering && self.last().command.is_some() && self.marks.splits(uses, segment) {
+            self.split()?;
+            segment += 1;
+        }
+        let part = &mut self.gpu.segments[segment].aliased;
+        Ok(self.marks.used(uses, segment, part))
+    }
+
+    /// [`aliases`](Self::aliases) and [`record_moves`](Self::record_moves) for a command outside a
+    /// rendering, of the resources it touches, `uses`: nothing where none is a heap placement
+    /// with links.
+    pub(crate) fn places<'a>(
+        &mut self,
+        uses: impl Iterator<Item = (Option<&'a Arc<Place>>, Access)>,
+    ) -> Result<(), Error> {
+        let uses = crate::alias::uses(uses);
+        if uses.is_empty() {
+            return Ok(());
+        }
+        let moves = self.aliases(&uses, false)?;
+        self.record_moves(&moves)
+    }
+
+    /// Records `moves` ([`aliases`](Self::aliases)) before the next command, outside a rendering.
+    pub(crate) fn record_moves(
+        &mut self,
+        moves: &[vk::ImageMemoryBarrier2<'static>],
+    ) -> Result<(), Error> {
+        if moves.is_empty() {
+            return Ok(());
+        }
+        let command = self.ordered_command()?;
+        let device = &self.device.core().device;
+        let tally = &mut self.tally;
+        // SAFETY: the command buffer records outside any rendering and keeps each texture it uses
+        // until it retires.
+        unsafe { crate::alias::record(device, command, moves, &mut |metric| tally.count(metric)) };
+        Ok(())
     }
 
     /// The fences the encoders wait on and update.
