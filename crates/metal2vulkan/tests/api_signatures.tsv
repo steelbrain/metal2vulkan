@@ -599,6 +599,7 @@ enum	metal2vulkan-runtime::MemoryClass	#[derive(Clone, Copy, Debug, PartialEq, E
 enum	metal2vulkan-runtime::MultisampleDepthResolveFilter	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MultisampleDepthResolveFilter
 enum	metal2vulkan-runtime::MultisampleStencilResolveFilter	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MultisampleStencilResolveFilter
 enum	metal2vulkan-runtime::NumberedSampler	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum NumberedSampler
+enum	metal2vulkan-runtime::OverCause	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum OverCause
 enum	metal2vulkan-runtime::PrecisionNote	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum PrecisionNote
 enum	metal2vulkan-runtime::RangeKind	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum RangeKind
 enum	metal2vulkan-runtime::Refusal	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Refusal
@@ -1486,6 +1487,7 @@ field	metal2vulkan-runtime::Metrics.over_copies_pitch	pub over_copies_pitch: u64
 field	metal2vulkan-runtime::Metrics.over_copies_render_reach	pub over_copies_render_reach: u64
 field	metal2vulkan-runtime::Metrics.over_copies_spilled	pub over_copies_spilled: u64
 field	metal2vulkan-runtime::Metrics.over_copies_surface	pub over_copies_surface: u64
+field	metal2vulkan-runtime::Metrics.over_copies_unkept_kind	pub over_copies_unkept_kind: u64
 field	metal2vulkan-runtime::Metrics.over_copy_bytes	pub over_copy_bytes: u64
 field	metal2vulkan-runtime::Metrics.over_copy_bytes_alignment	pub over_copy_bytes_alignment: u64
 field	metal2vulkan-runtime::Metrics.over_copy_bytes_dedicated	pub over_copy_bytes_dedicated: u64
@@ -1584,6 +1586,11 @@ field	metal2vulkan-runtime::Metrics.visibility_interrupts_refused	pub visibility
 field	metal2vulkan-runtime::Metrics.waits_behind_counter	pub waits_behind_counter: u64
 field	metal2vulkan-runtime::Metrics.zero_source_allocations	pub zero_source_allocations: SiteAllocations
 field	metal2vulkan-runtime::Metrics.zero_writes	pub zero_writes: Timed
+field	metal2vulkan-runtime::OverCopyKind.cause	pub cause: OverCause
+field	metal2vulkan-runtime::OverCopyKind.height	pub height: u32
+field	metal2vulkan-runtime::OverCopyKind.pixel_format	pub pixel_format: PixelFormat
+field	metal2vulkan-runtime::OverCopyKind.usage	pub usage: TextureUsage
+field	metal2vulkan-runtime::OverCopyKind.width	pub width: u32
 field	metal2vulkan-runtime::PixelFormatInfo.cast_class	pub cast_class: u64
 field	metal2vulkan-runtime::PixelFormatInfo.flags	pub flags: u64
 field	metal2vulkan-runtime::PixelFormatInfo.name	pub name: &'static str
@@ -5943,6 +5950,7 @@ method	metal2vulkan-runtime::ComputePipelineState::texture_accesses	pub fn textu
 method	metal2vulkan-runtime::ComputePipelineState::thread_execution_width	pub fn thread_execution_width(&self) -> u32
 method	metal2vulkan-runtime::Counters::gauges	pub fn gauges(&self) -> Gauges
 method	metal2vulkan-runtime::Counters::metrics	pub fn metrics(&self) -> Metrics
+method	metal2vulkan-runtime::Counters::over_copy_kinds	pub fn over_copy_kinds(&self, from: usize) -> Vec<OverCopyKind>
 method	metal2vulkan-runtime::Counters::variant_makes	pub fn variant_makes(&self, from: u64) -> Vec<VariantMake>
 method	metal2vulkan-runtime::DepthStencilState::descriptor	pub fn descriptor(&self) -> &DepthStencilDescriptor
 method	metal2vulkan-runtime::DepthStencilState::precision_note	pub fn precision_note(&self) -> Option<PrecisionNote>
@@ -6837,6 +6845,7 @@ struct	metal2vulkan-runtime::Instance	#[derive(Clone)] pub struct Instance
 struct	metal2vulkan-runtime::Library	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct Library(Arc<LibraryInner>)
 struct	metal2vulkan-runtime::LinkedFunction	#[derive(Clone, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct LinkedFunction
 struct	metal2vulkan-runtime::Metrics	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct Metrics
+struct	metal2vulkan-runtime::OverCopyKind	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub struct OverCopyKind
 struct	metal2vulkan-runtime::PhysicalDevice	#[derive(Clone)] pub struct PhysicalDevice
 struct	metal2vulkan-runtime::PixelFormatInfo	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub struct PixelFormatInfo
 struct	metal2vulkan-runtime::PlaneLayout	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct PlaneLayout
@@ -8454,6 +8463,18 @@ variant	metal2vulkan-runtime::MultisampleStencilResolveFilter::Sample0	Sample0
 variant	metal2vulkan-runtime::NumberedSampler::Constexpr	Constexpr([u64; 2])
 variant	metal2vulkan-runtime::NumberedSampler::Read	Read
 variant	metal2vulkan-runtime::NumberedSampler::Write	Write
+variant	metal2vulkan-runtime::OverCause::Alignment	Alignment
+variant	metal2vulkan-runtime::OverCause::Dedicated	Dedicated
+variant	metal2vulkan-runtime::OverCause::DmaBuf	DmaBuf
+variant	metal2vulkan-runtime::OverCause::DmaBufs	DmaBufs
+variant	metal2vulkan-runtime::OverCause::HostMemory	HostMemory
+variant	metal2vulkan-runtime::OverCause::ImageMemory	ImageMemory
+variant	metal2vulkan-runtime::OverCause::Linear	Linear
+variant	metal2vulkan-runtime::OverCause::LinearFeatures	LinearFeatures
+variant	metal2vulkan-runtime::OverCause::Pitch	Pitch
+variant	metal2vulkan-runtime::OverCause::RenderReach	RenderReach
+variant	metal2vulkan-runtime::OverCause::Spilled	Spilled
+variant	metal2vulkan-runtime::OverCause::Surface	Surface
 variant	metal2vulkan-runtime::PrecisionNote::AnisotropicFilter	AnisotropicFilter
 variant	metal2vulkan-runtime::PrecisionNote::ArgumentPixelSamplerScaling	ArgumentPixelSamplerScaling
 variant	metal2vulkan-runtime::PrecisionNote::BicubicFilterArithmetic	BicubicFilterArithmetic
