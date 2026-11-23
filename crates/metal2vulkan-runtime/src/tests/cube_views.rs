@@ -18,7 +18,11 @@
 //! cube array of two cubes whose slice `s` holds `s` in every texel, each lane reads its face from
 //! the view and six past it from the array.
 //!
-//! `llvm-as` assembles the fixtures; without it the sampling tests skip visibly.
+//! A cube's and a cube array's storage element is the 2D array of its faces, which a kernel's
+//! storage cube writes by face: the owned fixture `cube_face_writes` writes every face of a cube
+//! and of a cube array's second cube, and each face holds exactly its writes.
+//!
+//! `llvm-as` assembles the fixtures; without it the sampling and writing tests skip visibly.
 
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
@@ -353,6 +357,120 @@ mod on_device {
                 "{name}: imageCubeArray enabled; {LANES} lanes sampled a cube array of two \
                  {SIDE} x {SIDE} cubes at its second cube and a cube view of its first, each \
                  the face's slice"
+            );
+        });
+    }
+
+    /// A storage cube and a storage cube array are written by face through each texture's storage
+    /// element, the 2D array of its faces: the owned fixture `cube_face_writes` writes
+    /// `(x, y, f, 1)` at texel `(x, y)` of face `f` of a 2 by 2 `RGBA32Float` cube and of the
+    /// second cube of a cube array of two, each filled with -1 first, and stores the cube's width
+    /// and height and the array's cube count. Every face of the cube and of the array's second
+    /// cube holds its writes, the first cube keeps its fill, and the sizes are 2, 2 and 2.
+    #[test]
+    fn every_device_writes_a_storage_cube_and_a_cube_array_by_face() {
+        let Some(library) = library("cube_face_writes.ll") else {
+            return;
+        };
+        const W: u32 = 2;
+        each_device("storage cubes", |name, _, device| {
+            let function = library.function("cube_face_writes").expect("the kernel");
+            let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+                FunctionDescriptor::new(function),
+            ));
+            let _textures = (device.grant_indices(IndexClass::Texture, 1, 2))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let state = (device
+                .new_compute_pipeline_state(&descriptor, |samplers| Ok(vec![0; samplers.len()])))
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let region = Region {
+                origin: [0; 3],
+                size: [W, W, 1],
+            };
+            let row = u64::from(W * 16);
+            let fill = floats(&[-1.0; (W * W * 4) as usize]);
+            let mut textures = Vec::new();
+            for (index, texture_type, cubes) in
+                [(1, TextureType::Cube, 1), (2, TextureType::CubeArray, 2)]
+            {
+                let mut d = TextureDescriptor::new(texture_type, PixelFormat::RGBA32Float, W, W);
+                d.array_length = cubes;
+                d.usage = TextureUsage::SHADER_READ | TextureUsage::SHADER_WRITE;
+                d.storage_mode = StorageMode::Shared;
+                let texture = (device.new_texture(&d, Some(index)))
+                    .unwrap_or_else(|error| panic!("{name}: {texture_type:?}: {error}"));
+                for slice in 0..6 * cubes {
+                    (texture.replace_region(
+                        region,
+                        0,
+                        slice,
+                        crate::HostBytes::from(&fill[..]),
+                        row,
+                        row * u64::from(W),
+                    ))
+                    .unwrap_or_else(|error| panic!("{name}: slice {slice}: {error}"));
+                }
+                textures.push(texture);
+            }
+            let mut buffers = Buffers::new(&device);
+            let out = buffers.of(&device, &[0; 12]);
+            let queue = device.new_command_queue(1).expect("a queue");
+            let command_buffer = queue.command_buffer().expect("a command buffer");
+            let mut encoder =
+                (command_buffer.compute_command_encoder(DispatchType::Serial)).expect("an encoder");
+            encoder
+                .set_compute_pipeline_state(&state)
+                .expect("the state");
+            encoder
+                .set_texture(Some(&textures[0]), 0)
+                .expect("the cube");
+            encoder
+                .set_texture(Some(&textures[1]), 1)
+                .expect("the cube array");
+            encoder.set_buffer(Some(&out), 0, 0).expect("out");
+            (encoder.dispatch_threadgroups([1, 1, 6], [W, W, 1]))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            encoder.end_encoding();
+            command_buffer.commit().expect("a commit");
+            finished(name, &command_buffer);
+            assert_eq!(command_buffer.error(), None, "{name}");
+            let face = |texture: &crate::Texture, slice: u32| {
+                let mut bytes = vec![0u8; (W * W * 16) as usize];
+                (texture.get_bytes(&mut bytes, row, row * u64::from(W), region, 0, slice))
+                    .unwrap_or_else(|error| panic!("{name}: slice {slice}: {error}"));
+                bytes
+            };
+            let written = |f: u32| {
+                let texels: Vec<f32> = (0..W)
+                    .flat_map(|y| (0..W).flat_map(move |x| [x as f32, y as f32, f as f32, 1.0]))
+                    .collect();
+                floats(&texels)
+            };
+            for f in 0..6 {
+                assert_eq!(
+                    face(&textures[0], f),
+                    written(f),
+                    "{name}: the cube's face {f}"
+                );
+                assert_eq!(
+                    face(&textures[1], f),
+                    fill,
+                    "{name}: the first cube's face {f}"
+                );
+                assert_eq!(
+                    face(&textures[1], 6 + f),
+                    written(f),
+                    "{name}: the second cube's face {f}"
+                );
+            }
+            let contents = out.contents().expect("a Shared buffer");
+            // SAFETY: the dispatch that wrote the buffer completed, and its writes reach the host.
+            let sizes = unsafe { std::slice::from_raw_parts(contents.as_ptr().cast::<u32>(), 3) };
+            assert_eq!(sizes, [W, W, 2], "{name}: width, height and cubes");
+            drop((textures, command_buffer));
+            println!(
+                "{name}: a {W} x {W} storage cube and the second cube of a cube array of two \
+                 written by face, every face exact; width, height and cubes {sizes:?}"
             );
         });
     }
