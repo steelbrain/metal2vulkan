@@ -4448,7 +4448,7 @@ fn argument_buffer_samplers_are_heap_lookups() {
 /// A kernel reading a texture and its sampler from an argument buffer has one set-1 sampler
 /// array, of `heap_sampler_capacity` elements, on every committed profile that compiles it: the
 /// handle table's 65536 where the update-after-bind sampler limits pass it (MoltenVK's 500000,
-/// lavapipe's, NVIDIA's), the update-after-bind limits' 12000 on the runtime's floor. On the M3's profile
+/// lavapipe's, NVIDIA's), the update-after-bind limits' 24000 on the runtime's floor. On the M3's profile
 /// with its per-stage update-after-bind sampler limit lowered to 100, or its set's to 200, the
 /// array and the answer follow it. A profile that refuses the kernel answers 0, and so does the
 /// M3's without `descriptorBindingPartiallyBound` or `shaderSampledImageArrayNonUniformIndexing`,
@@ -4493,7 +4493,7 @@ fn an_argument_sampler_array_has_the_heap_sampler_capacity() {
     for stem in ["moltenvk-m3", "lavapipe", "nvidia-rtx5080-laptop"] {
         assert!(compiled.contains(&(stem, 65536)), "{stem}: {compiled:?}");
     }
-    assert!(compiled.contains(&("runtime-floor", 12000)));
+    assert!(compiled.contains(&("runtime-floor", 24000)));
     let m3 = || {
         (committed_descriptions().expect("descriptions").iter())
             .find(|(stem, _)| stem == "moltenvk-m3")
