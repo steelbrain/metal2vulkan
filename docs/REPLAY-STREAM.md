@@ -1180,12 +1180,10 @@ time' with the counts.
 
 A recording is a timing source only on a card of its own memory class. A guest on a device with
 unified memory builds its work on Shared storage; played on a discrete card, its kernels read and
-write that storage across the bus, which no guest on a discrete card asks for. One GPU compute
-benchmark recorded on an Intel integrated card took about 378 s of an RTX 3090's GPU time in two
-of its frames (m3-max-71535 and 71553), where the same benchmark's guest on that card took 37.1 s
-for all its workloads. Both plays were stopped at their time limits inside frame 368; after the
-second, the card's driver stopped answering (Xid 119, a GSP RPC timeout, 11 minutes later) until
-its node rebooted. No guest touched the card between the plays and the timeout.
+write that storage across the bus, which no guest on a discrete card asks for. One run of a GPU
+compute benchmark, recorded on an Intel integrated card, took 257.2 s of compute in a whole play
+on a Radeon RX 7900 XTX (m3-max-71531), and the same benchmark recorded on that XTX took 10.7 s
+there (m3-max-71625), both plays exit 0 through their last frame.
 
 Stale reads bar no verdict: Metal leaves those bytes undefined and every play takes them by one
 rule. Where the digests differ, they are the first suspect. The exit status is 0 where the
