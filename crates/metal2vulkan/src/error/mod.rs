@@ -890,16 +890,19 @@ pub enum Feature {
     /// `!air.global_bindings`), one or an array, that the entry reads: only a bound buffer becomes
     /// a parameter. Metal takes each: an Apple M3 Max under macOS 27.0.1 runs kernels that read a
     /// bound texture and sampler, a bound sampler array and bound threadgroup memory (m3-max-70306).
+    /// Basis: metal-takes (an Apple M3 Max under macOS 27.0.1, potluck job m3-max-70306)
     ProgramScopeResource,
     /// A buffer bound at program scope at a slot that a parameter of the entry, or another binding
     /// it reads, binds with another role or type. Metal takes it: on an Apple M3 Max under macOS
     /// 27.0.1, a `device float *` and a `constant uint *` bound at one index read the one buffer
     /// bound there (m3-max-70268).
+    /// Basis: metal-takes (an Apple M3 Max under macOS 27.0.1, potluck job m3-max-70268)
     ProgramScopeSharedSlot,
     /// A program-scope binding in the module of a function a pipeline links (a visible function,
     /// or a dynamic library's). Metal takes it: on an Apple M3 Max under macOS 27.0.1, a kernel's
     /// pipeline links another library's visible function, which reads the buffer the kernel's
     /// stage binds at the global's index (m3-max-70306).
+    /// Basis: metal-takes (an Apple M3 Max under macOS 27.0.1, potluck job m3-max-70306)
     ProgramScopeLinked,
     /// A read of a buffer bound at program scope other than a load of the pointer its global
     /// holds. `xcrun metal` 32023.922 writes every read so, `&p` included, so only other AIR reaches
