@@ -324,7 +324,7 @@ pub(crate) const MEMORY_FLAG_NAMES: [(vk::MemoryPropertyFlags, &str); 4] = [
 
 /// The feature structures of Vulkan 1.3 that the floor reads and device creation enables, each
 /// without its `p_next` link.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Features {
     /// `VkPhysicalDeviceFeatures`.
     pub core: vk::PhysicalDeviceFeatures,
@@ -990,6 +990,7 @@ impl std::error::Error for BelowFloor {}
 /// Metal's counterparts are per-family capabilities (`supportsFamily`), and for storage reads
 /// `readWriteTextureSupport`; here each is one Vulkan feature. The SIMD groups' other answers
 /// (subgroup sizes, stages and operations) are properties the translator reads itself.
+#[derive(Debug)]
 pub struct Capabilities {
     /// `shaderFloat16`: `half` arithmetic in 16 bits.
     pub float16: bool,

@@ -6895,9 +6895,9 @@ struct	metal2vulkan-runtime::Viewport	#[derive(Clone, Copy, Debug, PartialEq)] p
 struct	metal2vulkan-runtime::VisibleFunctionTable	#[derive(Clone)] pub struct VisibleFunctionTable
 struct	metal2vulkan-runtime::VisibleFunctionTableDescriptor	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] #[non_exhaustive] pub struct VisibleFunctionTableDescriptor
 struct	metal2vulkan-runtime::floor::BelowFloor	#[derive(Clone, Debug, PartialEq, Eq)] pub struct BelowFloor
-struct	metal2vulkan-runtime::floor::Capabilities	pub struct Capabilities
+struct	metal2vulkan-runtime::floor::Capabilities	#[derive(Debug)] pub struct Capabilities
 struct	metal2vulkan-runtime::floor::DgcFeatures	#[derive(Clone, Copy)] #[repr(C)] pub struct DgcFeatures
-struct	metal2vulkan-runtime::floor::Features	#[derive(Clone, Copy, Default)] pub struct Features
+struct	metal2vulkan-runtime::floor::Features	#[derive(Clone, Copy, Debug, Default)] pub struct Features
 struct	metal2vulkan-runtime::floor::IndirectCommandLimits	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct IndirectCommandLimits
 struct	metal2vulkan-runtime::floor::Maintenance8Features	#[derive(Clone, Copy)] #[repr(C)] pub struct Maintenance8Features
 struct	metal2vulkan-runtime::floor::MemoryTypes	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub struct MemoryTypes
