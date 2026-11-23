@@ -2145,6 +2145,41 @@ fn a_dispatch_reads_or_writes_each_buffer_a_plural_use_names_by_its_usage() {
     );
 }
 
+/// A render encoder's call reaches each buffer it names, a residency declaration's resources
+/// among them as the stream records them (`{Buffer: object}`, each of a list): the buffers a
+/// render encoder's `useResource:usage:stages:` and `useResources:count:usage:` name are not
+/// unwritten when a later dispatch reads them; the one nothing named is.
+#[test]
+fn a_render_encoder_s_residency_declarations_reach_the_buffers_they_name() {
+    use metal2vulkan_runtime::BindingAccess::ReadOnly;
+    let mut unwritten = Unwritten::default();
+    for id in 2..=4 {
+        unwritten.made(id, None);
+    }
+    // MTLResourceUsageRead; MTLRenderStageFragment.
+    let used = vec![buffer_resource(2), Value::Uint(1), Value::Uint(2)];
+    unwritten.encoded(
+        &encoder_call("useResource:usage:stages:", 11, used),
+        10,
+        false,
+    );
+    let listed = vec![Value::List(vec![buffer_resource(3)]), Value::Uint(1)];
+    unwritten.encoded(
+        &encoder_call("useResources:count:usage:", 11, listed),
+        10,
+        false,
+    );
+    unwritten.committed(10);
+    let reads = (0..3).map(|slot| (slot, ReadOnly)).collect();
+    unwritten.state(12, Some(reads));
+    for (slot, id) in (0..).zip([2, 3, 4]) {
+        unwritten.encoded(&bind_at(12, id, slot), 14, true);
+    }
+    unwritten.encoded(&dispatch_of(12), 14, true);
+    unwritten.committed(14);
+    assert_eq!(unwritten.line(), unwritten_line(1, 0, "#4 in #14"));
+}
+
 /// A buffer made in a Shared block over bytes of it that a recorded write or a GPU pass reached
 /// before its making is not unwritten: the block's bytes are what the program's were. One made
 /// over bytes nothing reached is.
@@ -2764,12 +2799,21 @@ fn a_heap_texture_write_covers_the_buffer_and_texture_it_meets_until_they_are_wr
     );
 }
 
-/// A compute encoder's plural residency declarations take covers off as their single forms do,
-/// each of the list (the stream records each C array and its count as one list):
-/// `useResources:count:usage:` with write usage writes each object it names, and
-/// `useHeaps:count:` binds each heap's objects, counted apart as a binding.
+/// A compute encoder's plural residency declarations, and a render encoder's with stages, take
+/// covers off as their single forms do, each of the list (the stream records each C array and its
+/// count as one list, then the usage, then the stages): `useResources:count:usage:` with write
+/// usage writes each object it names, and `useHeaps:count:` binds each heap's objects, counted
+/// apart as a binding.
 #[test]
-fn a_compute_encoder_s_plural_uses_take_covers_off_as_the_single_forms_do() {
+fn plural_uses_of_compute_and_render_encoders_take_covers_off_as_the_single_forms_do() {
+    for render in [false, true] {
+        plural_uses_take_covers_off(render);
+    }
+}
+
+/// [`plural_uses_of_compute_and_render_encoders_take_covers_off_as_the_single_forms_do`] with the
+/// uses on a compute encoder, or on a render encoder with `stages:` where `render`.
+fn plural_uses_take_covers_off(render: bool) {
     let mut kept = Kept::default();
     kept.heap_answers.insert(4, (0x1000, 0x1000));
     kept.kernel_writes.insert(9, vec![0]);
@@ -2794,8 +2838,28 @@ fn a_compute_encoder_s_plural_uses_take_covers_off_as_the_single_forms_do() {
     };
     let used = |w: &mut StreamWriter<File>, at: u64, selector: &str, args: &[Value]| {
         w.call("commandBuffer", 6, at, &[], &[])?;
-        w.call("computeCommandEncoder", at, at + 1, &[], &[])?;
-        w.call(selector, at + 1, 0, args, &[])?;
+        let mut args = args.to_vec();
+        let selector = match render {
+            false => {
+                w.call("computeCommandEncoder", at, at + 1, &[], &[])?;
+                selector.to_owned()
+            }
+            true => {
+                w.call("MTLRenderPassDescriptor.new", 0, at + 2, &[], &[])?;
+                let pass = [Value::Object(at + 2)];
+                w.call(
+                    "renderCommandEncoderWithDescriptor:",
+                    at,
+                    at + 1,
+                    &pass,
+                    &[],
+                )?;
+                // MTLRenderStageVertex | MTLRenderStageFragment.
+                args.push(Value::Uint(3));
+                format!("{selector}stages:")
+            }
+        };
+        w.call(&selector, at + 1, 0, &args, &[])?;
         w.call("endEncoding", at + 1, 0, &[], &[])?;
         w.call("commit", at, 0, &[], &[])
     };
@@ -2825,9 +2889,13 @@ fn a_compute_encoder_s_plural_uses_take_covers_off_as_the_single_forms_do() {
     let covered: Vec<(u64, bool)> = (report.checks.iter())
         .map(|check| (check.object, check.covered))
         .collect();
-    assert_eq!(covered, [(3, false), (3, false)]);
-    assert_eq!(report.covered, 2, "each write of #5 covers #3");
-    assert_eq!(report.binding_uncovers, 1, "the heap's use is a binding");
+    assert_eq!(covered, [(3, false), (3, false)], "render {render}");
+    assert_eq!(
+        report.covered, 2,
+        "each write of #5 covers #3; render {render}"
+    );
+    let uncovers = report.binding_uncovers;
+    assert_eq!(uncovers, 1, "the heap's use is a binding; render {render}");
 }
 
 /// A texture bound through a range takes the slot of the range's location plus its place in the

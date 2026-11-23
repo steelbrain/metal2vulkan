@@ -6,9 +6,11 @@
 //!   a pass's target that its setter records clear to red: a blit copies the target to a buffer,
 //!   which the stream checks green, and nothing is skipped.
 //! - A draw of points after it plays, nothing skipped.
-//! - A render encoder's residency declarations play as nothing: after each of its eight
-//!   `useResource`, `useResources`, `useHeap` and `useHeaps` forms, with stages and without, a
-//!   draw plays, nothing refused or skipped.
+//! - A render encoder's residency declarations play through the runtime: after each of its eight
+//!   `useResource`, `useResources`, `useHeap` and `useHeaps` forms, with stages and without, of
+//!   buffers, a texture and a heap, with read, read and sample, and read and write usage, a draw
+//!   plays, nothing refused or skipped. A skipped texture they name is a skipped call, alone or in
+//!   a list, and binds nothing: the draw after them plays.
 //! - `setLineWidth:` plays: at width 1 a draw of lines after it plays; at width 2 a draw of
 //!   triangles plays and one of lines is the runtime's gap, skipped and counted, and the report
 //!   says the play is no verdict past it: its gap, frame and call.
@@ -230,12 +232,12 @@ fn sampler(index: Option<u64>) -> Value {
     Value::Map(index.into_iter().collect())
 }
 
-/// A recorder struct's map of unsigned fields.
 /// A resource argument, `{Buffer: object}` or `{Texture: object}`.
 fn resource(kind: &str, id: u64) -> Value {
     Value::Map(vec![(kind.into(), Value::Object(id))])
 }
 
+/// A recorder struct's map of unsigned fields.
 fn uints(fields: &[(&str, u64)]) -> Value {
     Value::Map(
         fields
@@ -313,8 +315,9 @@ enum Then {
     Nothing,
     /// The triangle's vertices as points: call 19.
     Points,
-    /// A heap (#16, call 19), the eight residency declarations of a render encoder naming it and
-    /// the vertex buffers (calls 20 to 27), and the triangle again (call 28).
+    /// A heap (#16, call 19) and a texture (#17, call 20), the eight residency declarations of a
+    /// render encoder naming them and the vertex buffers (calls 21 to 28), and the triangle again
+    /// (call 29).
     Uses,
     /// `setLineWidth:` of the width (call 19), the triangle again (call 20), and its first two
     /// vertices as a line (call 21).
@@ -424,27 +427,44 @@ fn draw_with_clamps(dir: &ScratchDir, green: &[u8], then: Then, clamp: Option<f3
             Then::Uses => {
                 let block = [Value::Uint(0x1_0000), Value::Uint(0)];
                 w.call("m2v.newBlockWithLength:storageMode:", 1, 16, &block, &[])?;
-                // MTLResourceUsageRead; MTLRenderStageVertex, Fragment and both.
-                let [read, vertex, fragment, both] = [1, 1, 2, 3].map(Value::Uint);
-                let (buffer, heap) = (resource("Buffer", 8), Value::Object(16));
-                let buffers = Value::List(vec![resource("Buffer", 8), resource("Buffer", 9)]);
+                // RGBA8Unorm, 4 by 4, shader-read, Private.
+                let texture = uints(&[
+                    ("textureType", 2),
+                    ("pixelFormat", 70),
+                    ("width", 4),
+                    ("height", 4),
+                    ("usage", 1),
+                    ("storageMode", 2),
+                ]);
+                w.call("newTextureWithDescriptor:", 1, 17, &[texture], &[])?;
+                // MTLResourceUsageRead, Read | Sample and Read | Write; MTLRenderStageVertex,
+                // Fragment and both.
+                let [read, sampled, written] = [1, 5, 3].map(Value::Uint);
+                let [vertex, fragment, both] = [1, 2, 3].map(Value::Uint);
+                let heap = Value::Object(16);
                 let heaps = Value::List(vec![Value::Object(16)]);
+                let list = |ids: [(&str, u64); 2]| {
+                    Value::List(ids.map(|(kind, id)| resource(kind, id)).to_vec())
+                };
                 let uses = [
-                    ("useResource:usage:", vec![buffer.clone(), read.clone()]),
+                    (
+                        "useResource:usage:",
+                        vec![resource("Buffer", 8), read.clone()],
+                    ),
                     (
                         "useResource:usage:stages:",
-                        vec![resource("Buffer", 9), read.clone(), vertex.clone()],
+                        vec![resource("Texture", 17), sampled, fragment],
                     ),
                     (
                         "useResources:count:usage:",
-                        vec![buffers.clone(), read.clone()],
+                        vec![list([("Buffer", 8), ("Buffer", 9)]), written],
                     ),
                     (
                         "useResources:count:usage:stages:",
-                        vec![buffers, read, both.clone()],
+                        vec![list([("Buffer", 9), ("Texture", 17)]), read, both.clone()],
                     ),
                     ("useHeap:", vec![heap.clone()]),
-                    ("useHeap:stages:", vec![heap, fragment]),
+                    ("useHeap:stages:", vec![heap, vertex]),
                     ("useHeaps:count:", vec![heaps.clone()]),
                     ("useHeaps:count:stages:", vec![heaps, both]),
                 ];
@@ -613,11 +633,14 @@ fn a_draw_of_points_plays_on_the_new_runtime() {
     assert_eq!(report.first_skip, None);
 }
 
-/// A render encoder's eight residency declarations (calls 20 to 27) play as nothing: the play
-/// ends, no call refused, nothing skipped, and the triangle drawn after them (call 28) leaves the
-/// target green.
+/// A render encoder's eight residency declarations (calls 21 to 28) play through the runtime, as
+/// the stream records them (each C array and its count one list, the usage after it, the stages
+/// last): `useResource:usage:` and `useResources:count:usage:`, with stages and without, each
+/// listed buffer or texture with the call's usage (read, read and sample, read and write) through
+/// `use_resource`; `useHeap:` and `useHeaps:count:` through `use_heap`. The play ends, no call
+/// refused, nothing skipped, and the triangle drawn after them (call 29) leaves the target green.
 #[test]
-fn a_render_encoder_s_residency_declarations_play_as_nothing() {
+fn a_render_encoder_s_residency_declarations_play_through_the_runtime() {
     let dir = ScratchDir::new("rt-replay-render-uses").unwrap();
     let green: Vec<u8> = [0u8, 255, 0, 255].repeat(16);
     let path = draw_into_a_pass(&dir, &green, Then::Uses);
@@ -1072,49 +1095,82 @@ fn fragment_buffers_bound_through_a_range_fill_the_slots_from_its_location() {
     }
 }
 
+/// A texture the play skips (#16): RGB10A8_2P_XR10 over a surface of two planes (buffer #15's),
+/// which reads across them.
+fn across_planes(w: &mut StreamWriter<File>) -> std::io::Result<()> {
+    let pages = [Value::Uint(4096), Value::Uint(0)];
+    w.call("newBufferWithLength:options:", 1, 15, &pages, &[])?;
+    let texture = uints(&[
+        ("textureType", 2),
+        ("pixelFormat", 550),
+        ("width", 2),
+        ("height", 2),
+        ("usage", 1),
+        ("storageMode", 0),
+    ]);
+    let facts = Value::Map(vec![
+        (
+            "pixelFormat".into(),
+            Value::Uint(u64::from(u32::from_be_bytes(*b"&b3a"))),
+        ),
+        ("planeCount".into(), Value::Uint(2)),
+        ("width".into(), Value::Uint(2)),
+        ("height".into(), Value::Uint(2)),
+        ("chromaOffset".into(), Value::Uint(2048)),
+        ("chromaBytesPerRow".into(), Value::Uint(8)),
+        ("ycbcrMatrix".into(), Value::Nil),
+    ]);
+    let plane = Value::Map(vec![
+        ("plane".into(), Value::Uint(0)),
+        ("offset".into(), Value::Uint(0)),
+        ("bytesPerRow".into(), Value::Uint(8)),
+        ("planar".into(), Value::Bool(true)),
+        ("facts".into(), facts),
+    ]);
+    let surface = "newTextureWithDescriptor:iosurface:plane:";
+    w.call(surface, 15, 16, &[texture, plane], &[])
+}
+
+/// A render encoder's residency declarations of a skipped object count it as a skipped call, as
+/// a compute encoder's do, each of a list as its single form: the skipped texture
+/// ([`across_planes`]) used by `useResource:usage:stages:` and listed beside a buffer by
+/// `useResources:count:usage:` is two skipped calls. A residency declaration binds no slot, so
+/// the draw after them plays.
+#[test]
+fn a_render_encoder_s_residency_declarations_count_a_skipped_object_as_a_skipped_call() {
+    let dir = ScratchDir::new("rt-replay-render-uses-skipped").unwrap();
+    let green = [0u8, 255, 0, 255].repeat(16);
+    let path = range_draw(&dir, "colored_fragment", &green, across_planes, |w| {
+        vertices(w)?;
+        // MTLResourceUsageRead; MTLRenderStageFragment.
+        let (read, fragment) = (Value::Uint(1), Value::Uint(2));
+        let used = [resource("Texture", 16), read.clone(), fragment];
+        w.call("useResource:usage:stages:", 13, 0, &used, &[])?;
+        let listed = Value::List(vec![resource("Buffer", 8), resource("Texture", 16)]);
+        w.call("useResources:count:usage:", 13, 0, &[listed, read], &[])?;
+        w.call(DRAW, 13, 0, &TRIANGLE, &[])
+    });
+    let (report, _) = play("render-uses-skipped", &path);
+    assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
+    let executed = &report.total.executed;
+    assert_eq!(
+        executed["skipped_surfaces_across_planes"], 1,
+        "{executed:?}"
+    );
+    assert_eq!(executed["skipped_calls"], 2, "{executed:?}");
+    assert_eq!(executed["skipped_draws"], 0, "{executed:?}");
+}
+
 /// `setVertexTextures:withRange:` binds from the range's location, each slot apart: a skipped
-/// texture (RGB10A8_2P_XR10 over a surface of two planes, which reads across them) bound at
-/// location 1 skips the draws while its slot holds it, a nil bound at location 0 leaves it there,
-/// and a nil bound at location 1 takes it off, so the second draw plays.
+/// texture ([`across_planes`]) bound at location 1 skips the draws while its slot holds it, a nil
+/// bound at location 0 leaves it there, and a nil bound at location 1 takes it off, so the second
+/// draw plays.
 #[test]
 fn a_skipped_texture_bound_to_the_vertex_stage_through_a_range_skips_draws_while_its_slot_holds_it()
 {
     let dir = ScratchDir::new("rt-replay-vertex-textures-range").unwrap();
     let green = [0u8, 255, 0, 255].repeat(16);
-    let make = |w: &mut StreamWriter<File>| {
-        let pages = [Value::Uint(4096), Value::Uint(0)];
-        w.call("newBufferWithLength:options:", 1, 15, &pages, &[])?;
-        let texture = uints(&[
-            ("textureType", 2),
-            ("pixelFormat", 550),
-            ("width", 2),
-            ("height", 2),
-            ("usage", 1),
-            ("storageMode", 0),
-        ]);
-        let facts = Value::Map(vec![
-            (
-                "pixelFormat".into(),
-                Value::Uint(u64::from(u32::from_be_bytes(*b"&b3a"))),
-            ),
-            ("planeCount".into(), Value::Uint(2)),
-            ("width".into(), Value::Uint(2)),
-            ("height".into(), Value::Uint(2)),
-            ("chromaOffset".into(), Value::Uint(2048)),
-            ("chromaBytesPerRow".into(), Value::Uint(8)),
-            ("ycbcrMatrix".into(), Value::Nil),
-        ]);
-        let plane = Value::Map(vec![
-            ("plane".into(), Value::Uint(0)),
-            ("offset".into(), Value::Uint(0)),
-            ("bytesPerRow".into(), Value::Uint(8)),
-            ("planar".into(), Value::Bool(true)),
-            ("facts".into(), facts),
-        ]);
-        let surface = "newTextureWithDescriptor:iosurface:plane:";
-        w.call(surface, 15, 16, &[texture, plane], &[])
-    };
-    let path = range_draw(&dir, "colored_fragment", &green, make, |w| {
+    let path = range_draw(&dir, "colored_fragment", &green, across_planes, |w| {
         vertices(w)?;
         let bind = "setVertexTextures:withRange:";
         let skipped = [Value::List(vec![Value::Object(16)]), range(1, 1)];
