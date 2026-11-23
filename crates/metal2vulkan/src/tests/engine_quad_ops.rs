@@ -343,17 +343,51 @@ fn fixture() -> Option<Vec<u8>> {
     }
 }
 
-/// Every kernel of the fixture under `p` and lowering inputs `inputs`, planned in `tier`, at each
-/// of `widths`, and [`reductions_in_metal_s_order`].
-fn run_kernels(p: &DeviceProfile, inputs: &LoweringInputs, tier: Tier, widths: &[SubgroupSize]) {
+/// Whether `plan` holds a barrier the lockstep pass inserted for emulated simdgroups: a kernel whose
+/// lockstep order the profile keeps only on emulated simdgroups, whatever tier its class takes.
+fn lockstep_emulated(plan: &Plan) -> bool {
+    use crate::lower::strategy::Strategy;
+    use crate::lower::sync::barrier::{BarrierStrategy, Origin};
+    plan.strategy.iter().flatten().any(|s| {
+        matches!(
+            s,
+            Strategy::Barrier(BarrierStrategy::Barrier(b)) if b.origin == Origin::LockstepEmulated
+        )
+    })
+}
+
+/// Every kernel of the fixture under `p` and lowering inputs `inputs`, planned in `tier` (one whose
+/// lockstep order needs emulated simdgroups, [`lockstep_emulated`], in the `Emulated` tier), at
+/// each of `widths` (a module that pins 32 lanes at 32 alone), and
+/// [`reductions_in_metal_s_order`]. Returns how many kernels took their quads from the subgroup at
+/// the size the device gives (a varying size).
+fn run_kernels(
+    p: &DeviceProfile,
+    inputs: &LoweringInputs,
+    tier: Tier,
+    widths: &[SubgroupSize],
+) -> usize {
     let Some(bc) = fixture() else {
-        return;
+        return 0;
     };
     reductions_in_metal_s_order(&bc, p, inputs, tier, widths);
+    let mut varying = 0;
     for (entry, locals, pairs) in KERNELS {
         let (plan, m) =
             typed_module_with(&bc, entry, p, inputs).unwrap_or_else(|e| panic!("{entry}: {e}"));
-        assert_eq!(plan.simd.1, tier, "{entry}");
+        let want = if lockstep_emulated(&plan) {
+            Tier::Emulated
+        } else {
+            tier
+        };
+        assert_eq!(plan.simd.1, want, "{entry}");
+        varying += usize::from(plan.subgroup.varying);
+        let pinned = [SubgroupSize::W32];
+        let widths = if plan.subgroup.size == Some(32) {
+            &pinned[..]
+        } else {
+            widths
+        };
         for &lanes in widths {
             for &local in locals {
                 for dm in pairs {
@@ -367,6 +401,7 @@ fn run_kernels(p: &DeviceProfile, inputs: &LoweringInputs, tier: Tier, widths: &
             }
         }
     }
+    varying
 }
 
 /// Thread `t`'s input of [`reductions_in_metal_s_order`]: each quad holds `1, 2^24, 1, -2^24`,
@@ -458,7 +493,9 @@ fn quad_operations_run_cluster32_at_64_lanes() {
 /// Every kernel of the fixture is quad-only: where the kernel stage's narrowest subgroup is below
 /// 32 lanes (`lavapipe`'s 8; the Intel profiles' 8 to 32) it takes its quads from the subgroup at
 /// the size the device gives, the `Direct` tier with no pinned size, and one module computes
-/// Metal's answers at every size the device may run.
+/// Metal's answers at every size the device may run. A kernel whose lockstep order the profile
+/// keeps only on emulated simdgroups stays emulated, and one the lockstep pass gave a simdgroup
+/// barrier keeps its pin to 32 (run at 32 alone).
 #[test]
 fn quad_operations_run_direct_at_the_size_the_device_gives() {
     use SubgroupSize::{W16, W32, W8};
@@ -467,7 +504,12 @@ fn quad_operations_run_direct_at_the_size_the_device_gives() {
         ("intel-irisxe-rplp-anv", &[W8, W16, W32][..]),
     ] {
         let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
-        run_kernels(&p, &LoweringInputs::new(), Tier::Direct, widths);
+        let varying = run_kernels(&p, &LoweringInputs::new(), Tier::Direct, widths);
+        println!(
+            "{stem}: {varying} of {} kernels at the size the device gives",
+            KERNELS.len()
+        );
+        assert!(varying > 0, "{stem}");
     }
 }
 

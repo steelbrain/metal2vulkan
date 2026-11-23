@@ -1470,20 +1470,24 @@ fn declares_signed_zero_inf_nan(words: &[u32], width: u32) -> bool {
 /// `-0` identity keeps a sum's sign only where signed zeros are preserved). Without all of `nnan`,
 /// `ninf`, and `nsz` on the call its entry declares `SignedZeroInfNanPreserve 32` where the profile
 /// supports it and notes `DeviceSignedZeroInfNan` where it does not; a `fast` call needs neither,
-/// and neither does a shuffle, which moves bits and computes nothing.
+/// and neither does a shuffle, which moves bits and computes nothing. Each profile's tier is its
+/// simdgroup kernels' and its quad kernels' (lavapipe takes its quads from its 8-lane subgroups,
+/// `SimdPlan::quad_free`).
 #[test]
 fn float_group_arithmetic_without_fast_flags_keeps_signed_zeros() {
     let profiles = [
-        ("moltenvk-m3", moltenvk(), Tier::Direct),
-        ("wave64", wave64(), Tier::Cluster32),
+        ("moltenvk-m3", moltenvk(), Tier::Direct, Tier::Direct),
+        ("wave64", wave64(), Tier::Cluster32, Tier::Cluster32),
         (
             "lavapipe",
             profile("lavapipe", DevicePolicy::RESIDENT_TABLES).expect("profile"),
             Tier::Emulated,
+            Tier::Direct,
         ),
         (
             "runtime-floor",
             profile("runtime-floor", DevicePolicy::RESIDENT_TABLES).expect("profile"),
+            Tier::Emulated,
             Tier::Emulated,
         ),
     ];
@@ -1511,21 +1515,22 @@ fn float_group_arithmetic_without_fast_flags_keeps_signed_zeros() {
             let Some(bc) = float_group_kernel(&tag, call, flags, "") else {
                 return;
             };
-            kernels.push((tag, bc, needs));
+            kernels.push((tag, bc, needs, call.starts_with("quad_")));
         }
     }
     for call in ["simd_shuffle", "quad_shuffle"] {
         let Some(bc) = float_group_kernel(call, call, "", ", i16 1") else {
             return;
         };
-        kernels.push((call.to_string(), bc, false));
+        kernels.push((call.to_string(), bc, false, call.starts_with("quad_")));
     }
     let (mut declared, mut noted) = (0, 0);
-    for (stem, p, tier) in &profiles {
+    for (stem, p, simd_tier, quad_tier) in &profiles {
         let supported = p.fields().float_controls.f32.signed_zero_inf_nan_preserve;
-        for (tag, bc, needs) in &kernels {
+        for (tag, bc, needs, quad) in &kernels {
             let (a, plan, _) =
                 compile_kept(bc, "group_k", p).unwrap_or_else(|e| panic!("{stem} {tag}: {e}"));
+            let tier = if *quad { quad_tier } else { simd_tier };
             assert_eq!(plan.simd.1, *tier, "{stem} {tag}");
             let (_, words) =
                 link_and_validate(&a, p).unwrap_or_else(|e| panic!("{stem} {tag}: {e}"));

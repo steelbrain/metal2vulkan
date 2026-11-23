@@ -4,7 +4,10 @@
 //! lanes, nor `roadmap-2022`, whose subgroups are 4 lanes; `vk12-floor` has no subgroup
 //! operations) is planned in the `Emulated` tier: simdgroup
 //! `k` is the linear threads `[32k, 32k + 32)`, and every operation that reads other lanes
-//! publishes through a workgroup scratch between workgroup barriers. The owned fixtures
+//! publishes through a workgroup scratch between workgroup barriers. A kernel whose every
+//! cross-lane operation stays inside its quad takes lavapipe's 8-lane subgroups instead
+//! (`SimdPlan::quad_free`); it is checked here on its emulated-simdgroups variant, which a
+//! dispatch whose threadgroup is not a multiple of 8 runs. The owned fixtures
 //! `engine/simd_uniform` and the workgroup-uniform kernels of `engine/simd_ops` go
 //! through the whole pipeline, pass L3 (`spirv-val` under each profile), and run on the CPU
 //! interpreter at 8, 16, 32, and 64 subgroup lanes in both scheduling orders. Every kernel's
@@ -45,7 +48,7 @@ use crate::pipeline::interface::PushLoc;
 
 use crate::pipeline::sym::{PushField, ResourceKind, ResourceSlot, Stage};
 use crate::pipeline::testing::{
-    compile, engine_dir, link_and_validate, llvm_assemble, profile, typed_module,
+    compile, compile_with, engine_dir, link_and_validate, llvm_assemble, profile, typed_module,
     typed_module_with, AssembleError, Scratch,
 };
 use crate::pipeline::{
@@ -694,9 +697,26 @@ fn run_kernel(stem: &str, bc: &[u8], kernel: &str, words: Option<u32>) {
 /// [`run_kernel`] on profile `stem` under `policy`.
 fn run_kernel_under(stem: &str, policy: DevicePolicy, bc: &[u8], kernel: &str, words: Option<u32>) {
     let p = profile(stem, policy).expect("profile");
-    let (plan, m) = typed_module(bc, kernel, &p).unwrap_or_else(|e| panic!("{stem} {kernel}: {e}"));
+    let inputs = emulating_inputs(stem, &p, bc, kernel);
+    let (plan, m) = typed_module_with(bc, kernel, &p, &inputs)
+        .unwrap_or_else(|e| panic!("{stem} {kernel}: {e}"));
     check_emulated(stem, kernel, &plan, words);
     run_expected(stem, kernel, &plan, &m, &LOCALS);
+}
+
+/// The lowering inputs under which `kernel` of `bc` runs its simdgroups emulated on `p`: its own,
+/// or, for a kernel whose every cross-lane operation stays inside its quad and which `p` runs on
+/// subgroups at the size it gives (`SimdPlan::quad_free`, lavapipe's quad kernels), the
+/// emulated-simdgroups variant, the one a dispatch whose threadgroup is not a multiple of that
+/// size runs.
+fn emulating_inputs(stem: &str, p: &DeviceProfile, bc: &[u8], kernel: &str) -> LoweringInputs {
+    let (own, _) = typed_module(bc, kernel, p).unwrap_or_else(|e| panic!("{stem} {kernel}: {e}"));
+    if own.families.simd.quad_free {
+        assert_eq!(own.simd.1, Tier::Direct, "{stem} {kernel}");
+        emulated_inputs()
+    } else {
+        LoweringInputs::new()
+    }
 }
 
 /// `plan` is `kernel`'s in the emulated tier: no subgroup requirement, the local size kept, and
@@ -759,7 +779,9 @@ fn run_expected(stem: &str, kernel: &str, plan: &Plan, m: &TypedModule, locals: 
 /// subgroup instruction or capability.
 fn validate(stem: &str, bc: &[u8], kernel: &str) {
     let p = profile(stem, DevicePolicy::RESIDENT_TABLES).expect("profile");
-    let a = compile(bc, kernel, &p).unwrap_or_else(|e| panic!("{stem} {kernel}: {e}"));
+    let inputs = emulating_inputs(stem, &p, bc, kernel);
+    let a =
+        compile_with(bc, kernel, &p, &inputs).unwrap_or_else(|e| panic!("{stem} {kernel}: {e}"));
     let (_, words) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem} {kernel}: {e}"));
     let text = spirv_dis(&words);
     assert!(
@@ -1322,10 +1344,13 @@ fn simd_divergent_runs_predicated_on_roadmap_2022() {
     simd_divergent_runs_predicated("runtime-floor");
 }
 
-/// The `OpControlBarrier`s of `kernel` of `bc` compiled on profile `stem` under `policy`.
+/// The `OpControlBarrier`s of `kernel` of `bc` compiled emulated on profile `stem` under `policy`
+/// ([`emulating_inputs`]).
 fn barriers(stem: &str, policy: DevicePolicy, bc: &[u8], kernel: &str) -> usize {
     let p = profile(stem, policy).expect("profile");
-    let a = compile(bc, kernel, &p).unwrap_or_else(|e| panic!("{stem} {kernel}: {e}"));
+    let inputs = emulating_inputs(stem, &p, bc, kernel);
+    let a =
+        compile_with(bc, kernel, &p, &inputs).unwrap_or_else(|e| panic!("{stem} {kernel}: {e}"));
     let (_, words) = link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem} {kernel}: {e}"));
     spirv_dis(&words).matches("OpControlBarrier").count()
 }
