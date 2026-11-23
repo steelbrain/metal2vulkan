@@ -34,8 +34,8 @@ mod on_device {
     use crate::tests::spirv_instructions;
     use crate::{
         Device, Error, FunctionDescriptor, IndexClass, Library, NumberedSampler, PixelFormat,
-        PrimitiveType, Region, RenderPipelineState, StageSource, TextureDescriptor, TextureType,
-        TextureUsage,
+        PrimitiveType, Region, RenderPipelineDescriptor, RenderPipelineState, StageSource,
+        TextureDescriptor, TextureType, TextureUsage,
     };
     use metal2vulkan::device::VkFeature;
     use metal2vulkan::error::Feature;
@@ -43,12 +43,15 @@ mod on_device {
     use metal2vulkan_devtools::{engine_dir, llvm_assemble_text, AssembleError};
 
     /// SPIR-V's `OpEntryPoint`, `OpLoopMerge`, `OpImageSampleImplicitLod`, `OpReturn`,
-    /// `OpReturnValue` and `OpGroupNonUniformQuadAnyKHR`.
+    /// `OpReturnValue`, `OpGroupNonUniformBallot`, `OpGroupNonUniformQuadAllKHR` and
+    /// `OpGroupNonUniformQuadAnyKHR`.
     const OP_ENTRY_POINT: u32 = 15;
     const OP_LOOP_MERGE: u32 = 246;
     const OP_SAMPLE_IMPLICIT_LOD: u32 = 87;
     const OP_RETURN: u32 = 253;
     const OP_RETURN_VALUE: u32 = 254;
+    const OP_BALLOT: u32 = 339;
+    const OP_QUAD_ALL: u32 = 5110;
     const OP_QUAD_ANY: u32 = 5111;
 
     /// The loop's trip count, the first word of the fragment's buffer 0.
@@ -174,6 +177,24 @@ declare i1 @air.quad_all(i1)
         read(&color, 16)
     }
 
+    /// The opcode of each instruction of `d`'s fragment stage as `device`'s translator makes it.
+    fn fragment_ops(name: &str, device: &Device, d: &RenderPipelineDescriptor) -> Vec<u32> {
+        let pipeline = (device.core().translator)
+            .compile_render_pipeline(d, &Budget::standard())
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+        let words = (pipeline.stages.iter())
+            .map(|stage| &stage.spirv)
+            .find(|words| {
+                spirv_instructions(words)
+                    .iter()
+                    .any(|i| i[0] & 0xffff == OP_ENTRY_POINT && i.get(1) == Some(&4))
+            })
+            .expect("a fragment stage");
+        (spirv_instructions(words).iter())
+            .map(|i| i[0] & 0xffff)
+            .collect()
+    }
+
     /// The first `n` words of pixel `[x, y]` of a target `diagonal` read.
     fn words(texels: &[u8], [x, y]: [u32; 2], n: usize) -> Vec<u32> {
         let at = ((y * SIDE + x) * 16) as usize;
@@ -245,9 +266,11 @@ declare i1 @air.quad_all(i1)
         });
     }
 
-    /// `quad_votes`' state is made on every device with quad control, and each pixel the
-    /// triangle covers reads its quad's votes with the helper's predicate counted: a diagonal
-    /// quad's `quad_any(x > y)` holds and its `quad_all(x <= y)` does not, as Metal answers.
+    /// `quad_votes`' state is made on every device with quad control, its fragment stage holding
+    /// one `OpGroupNonUniformQuadAllKHR`, one `OpGroupNonUniformQuadAnyKHR` and no ballot, and
+    /// each pixel the triangle covers reads its quad's votes with the helper's predicate counted:
+    /// a diagonal quad's `quad_any(x > y)` holds and its `quad_all(x <= y)` does not, as Metal
+    /// answers.
     #[test]
     fn every_device_votes_over_its_quads_helpers() {
         let fragment = match llvm_assemble_text(QUAD_VOTES) {
@@ -272,6 +295,15 @@ declare i1 @air.quad_all(i1)
                 println!("quad_votes: {name}: no quad control; not made");
                 return;
             }
+            // The votes are the quad vote instructions, which Vulkan runs over the quad's helpers
+            // in every entry, and no ballot.
+            let ops = fragment_ops(name, &device, &d);
+            let count = |op: u32| ops.iter().filter(|&&o| o == op).count();
+            assert_eq!(
+                [count(OP_QUAD_ALL), count(OP_QUAD_ANY), count(OP_BALLOT)],
+                [1, 1, 0],
+                "{name}: the fragment's quad votes"
+            );
             let state = (device.new_render_pipeline_state(&d, crate::tests::no_constexpr_samplers))
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
             let texels = diagonal(name, &device, &state);
@@ -331,22 +363,8 @@ declare i1 @air.quad_all(i1)
                 println!("quad_sum_after_a_return: {name}: no quad control; not made");
                 return;
             }
-            let pipeline = (core.translator)
-                .compile_render_pipeline(&d, &Budget::standard())
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
-            let words = (pipeline.stages.iter())
-                .map(|stage| &stage.spirv)
-                .find(|words| {
-                    spirv_instructions(words)
-                        .iter()
-                        .any(|i| i[0] & 0xffff == OP_ENTRY_POINT && i.get(1) == Some(&4))
-                })
-                .expect("a fragment stage");
-            let count = |op: u32| {
-                (spirv_instructions(words).iter())
-                    .filter(|i| i[0] & 0xffff == op)
-                    .count()
-            };
+            let ops = fragment_ops(name, &device, &d);
+            let count = |op: u32| ops.iter().filter(|&&o| o == op).count();
             assert!(count(OP_LOOP_MERGE) > 0, "{name}: no loop");
             assert!(
                 count(OP_SAMPLE_IMPLICIT_LOD) > 0,
