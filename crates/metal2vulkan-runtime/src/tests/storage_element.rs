@@ -41,8 +41,8 @@ pub(crate) mod on_device {
         Buffer, ColorAttachmentDescriptor, ComputeCommandEncoder, ComputePipelineDescriptor,
         ComputePipelineState, Device, DispatchType, Error, FunctionDescriptor, Gap, HeapRange,
         IndexClass, Library, MemoryClass, PixelFormat, PrimitiveType, Region, RenderCommandEncoder,
-        RenderPipelineDescriptor, Resource, ResourceUsage, StageSource, StorageMode, Texture,
-        TextureDescriptor, TextureType, TextureUsage,
+        RenderPipelineDescriptor, Resource, ResourceUsage, StageSource, StorageElementCase,
+        StorageMode, Texture, TextureBacking, TextureDescriptor, TextureType, TextureUsage,
     };
     use ash::vk;
     use metal2vulkan_devtools::{engine_dir, llvm_assemble, llvm_assemble_text, AssembleError};
@@ -128,6 +128,8 @@ pub(crate) mod on_device {
                         Err(Error::Unsupported(Gap::StorageElement {
                             slot: Some(0),
                             pixel_format: PixelFormat::RGBA8UnormSRGB,
+                            case: StorageElementCase::Absent,
+                            backing: TextureBacking::Texture,
                         })),
                     ) => {}
                     (stores, other) => {
@@ -297,6 +299,8 @@ declare { <4 x float>, i8 } @air.read_texture_2d.v4f32(ptr addrspace(1), ptr add
                         Err(Error::Unsupported(Gap::StorageElement {
                             slot: None,
                             pixel_format,
+                            case: StorageElementCase::Absent,
+                            backing: TextureBacking::Texture,
                         })),
                     ) if pixel_format == format => refused.push(case.clone()),
                     (unstored, other) => {
@@ -492,6 +496,8 @@ declare void @air.write_texture_2d.v4f32(ptr addrspace(1), <2 x i32>, <4 x float
                         Err(Error::Unsupported(Gap::StorageElement {
                             slot: None,
                             pixel_format,
+                            case: StorageElementCase::Absent,
+                            backing: TextureBacking::Texture,
                         })),
                     ) if pixel_format == format => refused.push(case.clone()),
                     (unstored, other) => {

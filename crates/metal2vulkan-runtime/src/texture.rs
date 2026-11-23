@@ -43,7 +43,9 @@ use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::copy_out;
 use crate::counters::{Counters, Gauge, Metric, OverCause, OverCopyKind, Part, Site};
 use crate::device::{lock, Core, Device};
-use crate::error::{Error, Gap, Limit, Refusal, RenderPassKind, TextureViewKind};
+use crate::error::{
+    Error, Gap, Limit, Refusal, RenderPassKind, StorageElementCase, TextureBacking, TextureViewKind,
+};
 use crate::hazard::HeapId;
 use crate::host_bytes::HostBytes;
 use crate::memory::{self, Block, BlockId, MemoryClass, Own};
@@ -571,8 +573,12 @@ enum Under {
     /// The buffer a texture over a buffer lies over: its block, or its device copy.
     Buffer { _buffer: Buffer },
     /// A surface plane's image in place ([`Device::new_exported_surface`]): the opaque
-    /// handle's allocation it is bound in, or none for a dma-buf's plane on its own import.
-    Surface { _block: Option<Arc<Block>> },
+    /// handle's allocation it is bound in, or none for a dma-buf's plane on its own import; or
+    /// a Direct3D 11 texture's plane (`d3d11`, `Device::import_d3d11_surface`, on Windows).
+    Surface {
+        _block: Option<Arc<Block>>,
+        d3d11: bool,
+    },
 }
 
 /// How a new image the runtime places reads zero until written: the commands its move home
@@ -4452,6 +4458,16 @@ impl Texture {
     }
 }
 
+/// What a function's storage use of a texture lacks ([`TextureObject::storage_gap`]): the
+/// texture's pixel format, the case and what holds its texels, which [`Gap::StorageElement`]
+/// names with the slot.
+#[derive(Clone, Copy)]
+pub(crate) struct StorageGap {
+    pub(crate) pixel_format: PixelFormat,
+    pub(crate) case: StorageElementCase,
+    pub(crate) backing: TextureBacking,
+}
+
 /// What the runtime reads of a texture, through the consumer's handle ([`Texture`]) or through
 /// the texture as a command buffer, a view of it or the submit thread keeps it
 /// ([`TextureInner`]), which holds no handle of the device.
@@ -5038,6 +5054,46 @@ pub(crate) trait TextureObject {
     fn unread(&self) -> Option<PixelFormat> {
         let inner = self.object();
         (inner.stores() && !inner.storage_reads).then_some(inner.descriptor.pixel_format)
+    }
+
+    /// What a function's storage use of it lacks ([`Gap::StorageElement`] but its slot): no
+    /// storage element ([`unstored`](Self::unstored)), or one the device cannot write without a
+    /// format where `write` (a write without a format, [`unwritten`](Self::unwritten)), or read
+    /// without one where `read` (a storage read without a format, [`unread`](Self::unread)).
+    fn storage_gap(&self, write: bool, read: bool) -> Option<StorageGap> {
+        let case = if self.unstored().is_some() {
+            StorageElementCase::Absent
+        } else if write && self.unwritten().is_some() {
+            StorageElementCase::WriteWithoutFormat
+        } else if read && self.unread().is_some() {
+            StorageElementCase::ReadWithoutFormat
+        } else {
+            return None;
+        };
+        Some(StorageGap {
+            pixel_format: self.object().descriptor.pixel_format,
+            case,
+            backing: self.backing(),
+        })
+    }
+
+    /// What holds its texels: a buffer's bytes for a texture buffer and a texture over a buffer,
+    /// else what holds its image; a view's are its parent's.
+    fn backing(&self) -> TextureBacking {
+        let inner = match &self.object().view {
+            Some(view) => &view.parent,
+            None => self.object(),
+        };
+        match (&inner.named, &inner.body) {
+            (Some(_), _) | (None, Body::Texels(_)) => TextureBacking::Buffer,
+            (None, Body::Image(image)) => match (&image._under, image.backing) {
+                (Some(Under::Buffer { .. }), _) => TextureBacking::Buffer,
+                (Some(Under::Surface { d3d11: true, .. }), _) => TextureBacking::D3d11,
+                (Some(Under::Surface { .. }), _) => TextureBacking::SurfacePlane,
+                (_, Backing::Drawable) => TextureBacking::Drawable,
+                _ => TextureBacking::Texture,
+            },
+        }
     }
 
     /// Whether it reads through a swizzle other than each channel's own.
@@ -5664,10 +5720,10 @@ pub(crate) struct SurfaceImage {
     pub(crate) format: vk::Format,
     pub(crate) view_formats: Vec<vk::Format>,
     pub(crate) block: Option<Arc<Block>>,
-    /// The image is in the general layout from its first use, with no move from undefined: a
-    /// Direct3D 11 texture's, which Vulkan takes as general after Direct3D 11's access (section
-    /// 12.5.2).
-    pub(crate) general: bool,
+    /// A Direct3D 11 texture's (`Device::import_d3d11_surface`, on Windows): its image is in the
+    /// general layout from its first use, with no move from undefined, which Vulkan takes as
+    /// general after Direct3D 11's access (section 12.5.2).
+    pub(crate) d3d11: bool,
     /// The image is `LINEAR` and its format renders only through
     /// `VK_FORMAT_FEATURE_2_LINEAR_COLOR_ATTACHMENT_BIT_NV` (`crate::surface::Query::plane`):
     /// the image is marked ([`Image`]'s `linear_attachment`).
@@ -5768,7 +5824,7 @@ impl Device {
         };
         core.counters.rise(Gauge::Textures);
         let home = vk::ImageLayout::GENERAL;
-        let general = made.general;
+        let general = made.d3d11;
         // A view of the image's format as the texture's takes the image's usage that its own
         // format's features hold, as a texture view of another format does.
         let views_usage = (made.format != plan.format).then_some(made.usage & plan.supported);
@@ -5814,7 +5870,10 @@ impl Device {
             foreign: None,
             zero: None,
             drawable: None,
-            _under: Some(Under::Surface { _block: made.block }),
+            _under: Some(Under::Surface {
+                _block: made.block,
+                d3d11: general,
+            }),
         });
         let shadow = ShadowView::of(&image, &plan, index, shape.view_type, whole);
         // The texture's elements of set 1, written as it takes its index; a refusal frees the

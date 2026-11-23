@@ -29,7 +29,8 @@ mod on_device {
     use crate::{
         ComputePipelineDescriptor, ComputePipelineState, DispatchType, Error, FunctionDescriptor,
         Gap, IndexClass, Library, NumberedSampler, PixelFormat, ReadWriteTextureTier, Region,
-        StageSource, TextureDescriptor, TextureType, TextureUsage,
+        StageSource, StorageElementCase, TextureBacking, TextureDescriptor, TextureType,
+        TextureUsage,
     };
     use metal2vulkan::vk;
     use metal2vulkan_devtools::{llvm_assemble_text, AssembleError};
@@ -442,6 +443,11 @@ declare void @air.write_texture_2d.s.v4i32(ptr addrspace(1), <2 x i32>, <4 x i32
                 let (_, optimal) = device.core().format_features(texture.format());
                 let reads = texture.unstored().is_none()
                     && optimal.contains(ash::vk::FormatFeatureFlags2::STORAGE_READ_WITHOUT_FORMAT);
+                // The case its refusal names: no storage element, or one not read without a format.
+                let unread = match texture.unstored() {
+                    Some(_) => StorageElementCase::Absent,
+                    None => StorageElementCase::ReadWithoutFormat,
+                };
                 let out = arena.buffer();
                 let command_buffer = queue.command_buffer().expect("a command buffer");
                 let mut encoder = (command_buffer.compute_command_encoder(DispatchType::Serial))
@@ -463,8 +469,10 @@ declare void @air.write_texture_2d.s.v4i32(ptr addrspace(1), <2 x i32>, <4 x i32
                         Err(Error::Unsupported(Gap::StorageElement {
                             slot: Some(0),
                             pixel_format,
+                            case,
+                            backing: TextureBacking::Texture,
                         })),
-                    ) if pixel_format == format => refused.push(format),
+                    ) if pixel_format == format && case == unread => refused.push(format),
                     (reads, other) => panic!(
                         "{name}: {format:?}, its storage read without a format {reads}: {other:?}"
                     ),

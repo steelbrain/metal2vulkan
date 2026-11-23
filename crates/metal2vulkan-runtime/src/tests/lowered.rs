@@ -4,12 +4,12 @@
 //! itself, so a translator bug, a limit or an input the compute encoder does not supply never
 //! reads as that gap.
 
-use crate::pipeline::Lowered;
+use crate::pipeline::{Lowered, VariantRefusal};
 use crate::{Error, Gap, KernelInputKind};
 use metal2vulkan::error::{Error as TranslationError, InternalError, InternalKind};
 
 /// The emulated variant's gap, as the compute encoder's need of it states it.
-fn partial_simdgroups() -> Error {
+fn partial_simdgroups(_: VariantRefusal) -> Error {
     Error::Unsupported(Gap::PartialSimdgroups {
         threads_per_threadgroup: [30, 1, 1],
         width: 32,
@@ -53,10 +53,10 @@ fn a_lowering_error_is_not_reported_as_the_variant_s_gap() {
     );
     assert!(
         matches!(
-            Lowered::Refused.kernel(partial_simdgroups),
+            Lowered::Refused(VariantRefusal::Translator).kernel(partial_simdgroups),
             Err(Error::Unsupported(Gap::PartialSimdgroups { .. }))
         ),
         "the translator's refusal: {}",
-        reported(&Lowered::Refused)
+        reported(&Lowered::Refused(VariantRefusal::Translator))
     );
 }

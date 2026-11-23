@@ -107,14 +107,14 @@ use crate::render::{DrawPlace, Draws, Raster, RenderPipelineState, FRAGMENT, VER
 use crate::ring::{Placed, CHUNK};
 use crate::sampler::SamplerState;
 use crate::shadow::{self, Area, Held};
-use crate::texture::{Texture, TextureInner, TextureObject};
+use crate::texture::{StorageGap, Texture, TextureInner, TextureObject};
 use crate::visibility::Results;
 use ash::vk;
 use metal2vulkan::bind::alpha_test_code;
 use metal2vulkan::metal::format::{integer_channels_word, BICUBIC_TEXELS_UNBOUND};
 use metal2vulkan::metal::state::{self, input_assembly, DepthStencilDescriptor};
 use metal2vulkan::metal::{
-    CullMode, DepthClipMode, IndexType, PixelFormat, PrimitiveType, TriangleFillMode, Winding,
+    CullMode, DepthClipMode, IndexType, PrimitiveType, TriangleFillMode, Winding,
 };
 use metal2vulkan::pipeline::PrecisionNote;
 use std::sync::Arc;
@@ -338,28 +338,28 @@ impl Facts {
             // Its format's own answers, for the writes and reads declared without a format.
             let formatless = draws.formatless.contains(&(table, slot));
             let unstored = match tables[table].texture(slot) {
-                Some(texture) if stored => (texture.unstored())
-                    .or_else(|| {
-                        texture
-                            .unwritten()
-                            .filter(|_| formatless && access.writes())
-                    })
-                    .or_else(|| texture.unread().filter(|_| formatless && read)),
+                Some(texture) if stored => {
+                    texture.storage_gap(formatless && access.writes(), formatless && read)
+                }
                 _ => None,
             };
-            if let Some(pixel_format) = unstored {
+            if let Some(gap) = unstored {
                 return Err(Error::Unsupported(Gap::StorageElement {
                     slot: Some(slot),
-                    pixel_format,
+                    pixel_format: gap.pixel_format,
+                    case: gap.case,
+                    backing: gap.backing,
                 }));
             }
         }
         // A texture declared written with no storage element, which a function may reach through
         // its storage image beyond its slots.
-        if let (true, Some(pixel_format)) = (draws.unbound_storage, declared.unstored_write) {
+        if let (true, Some(gap)) = (draws.unbound_storage, declared.unstored_write) {
             return Err(Error::Unsupported(Gap::StorageElement {
                 slot: None,
-                pixel_format,
+                pixel_format: gap.pixel_format,
+                case: gap.case,
+                backing: gap.backing,
             }));
         }
         self.attachments = !draws.fetched.is_empty()
@@ -575,9 +575,9 @@ struct Declarations {
     /// A declaration writes a Shared buffer or a texture the host reads through a copy of its own
     /// making (`Texture::host_reads`).
     host_write: bool,
-    /// The pixel format of the first texture a declaration writes that has no storage element
-    /// ([`TextureObject::unstored`]).
-    unstored_write: Option<PixelFormat>,
+    /// What the first texture a declaration writes lacks for it: no storage element, or one the
+    /// device cannot write without a format ([`TextureObject::storage_gap`]).
+    unstored_write: Option<StorageGap>,
 }
 
 /// `MTLRenderCommandEncoder`: one dynamic rendering into its pass's attachments, begun as the
@@ -1930,7 +1930,7 @@ impl RenderCommandEncoder {
                 (
                     id,
                     texture.host_reads(),
-                    texture.unstored().or_else(|| texture.unwritten()),
+                    texture.storage_gap(true, false),
                     Some(lent),
                     None,
                 )

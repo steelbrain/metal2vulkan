@@ -59,7 +59,7 @@ use std::collections::BTreeMap;
 use crate::air::ir::{BlockId, Idx, InstKind, Value, ValueId};
 use crate::budget::Meter;
 use crate::device::subgroup::Tier;
-use crate::error::{Error, Feature, Location, Unsupported};
+use crate::error::{Error, Feature, Location, Needs, Unsupported};
 use crate::graph::LoopForest;
 use crate::lower::select::SelectCx;
 use crate::lower::strategy::{FamilyStrategy, Strategy};
@@ -333,13 +333,14 @@ pub fn barriers(
             // Uniform barriers need the walk only for partial threadgroups, which then stay
             // refused: an object function's draw by the binder, a kernel's variant here, naming
             // the limit its arena and vote word pass.
-            Err(Error::Unsupported(limit)) if !divergent => {
+            Err(Error::Unsupported(Unsupported {
+                needs: Needs::AnyOf(limit),
+                ..
+            })) if !divergent => {
                 if cx.stage == Stage::Kernel {
-                    return Err(Unsupported {
-                        feature: Feature::PartialThreadgroups,
-                        ..limit
-                    }
-                    .into());
+                    return Err(
+                        Unsupported::needs_any_of(Feature::PartialThreadgroups, limit).into(),
+                    );
                 }
                 cx.families.mesh.partial_groups = false;
                 return Ok(());

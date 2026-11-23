@@ -36,7 +36,8 @@ mod on_device {
     use crate::{
         host_time, Block, Buffer, ComputePipelineDescriptor, ComputePipelineState, Device,
         DeviceOptions, DispatchType, Error, FunctionDescriptor, Gap, Gauges, Library, Limit,
-        MemoryClass, PrecisionNote, Refusal, Region, StageSource, MAX_BUFFER_LENGTH,
+        MemoryClass, PartialThreadgroupsSite, PrecisionNote, Refusal, Region, StageSource,
+        MAX_BUFFER_LENGTH,
     };
     use metal2vulkan::metal::{AttributeFormat, IndexType, StepFunction};
     use metal2vulkan::pipeline::{
@@ -4390,7 +4391,7 @@ $REGION_META!4 = !{i32 $OUT, !"air.buffer", !"air.location_index", i32 0, i32 1,
                 let state = state(name, &device, &descriptor);
                 let made = device.counters().metrics();
                 let compiled = &state.inner.compiled;
-                let partial = (compiled.variant_kernel(Which::Partial, || {
+                let partial = (compiled.variant_kernel(Which::Partial, |_| {
                     panic!("{name}: {kernel}: the partial-threadgroups variant is refused")
                 }))
                 .unwrap_or_else(|error| panic!("{name}: {kernel}: {error}"));
@@ -4473,10 +4474,18 @@ $REGION_META!4 = !{i32 $OUT, !"air.buffer", !"air.location_index", i32 0, i32 1,
                 let out = buffers.buffer(4 * 256);
                 encoder.set_buffer(Some(&out), 0, 0).expect("a buffer");
                 match encoder.dispatch_threads([200, 1, 1], [64, 1, 1]) {
-                    Err(Error::Limit(Limit::ThreadgroupMemory { length, max })) => {
+                    Err(Error::Limit(Limit::ThreadgroupMemory {
+                        length,
+                        max,
+                        static_length,
+                    })) => {
                         assert_eq!(
-                            (length, max),
-                            (u64::from(limit) + 4, limit),
+                            (length, max, static_length),
+                            (
+                                u64::from(limit) + 4,
+                                limit,
+                                state.static_threadgroup_memory_length()
+                            ),
                             "{name}: {kernel}"
                         )
                     }
@@ -4597,9 +4606,10 @@ $REGION_META!3 = !{i32 $OUT, !"air.buffer", !"air.location_index", i32 0, i32 1,
     /// threads: at `room` every one runs and answers the program's inclusive sums,
     /// `(t + 1)(t + 2) / 2` for thread `t` of its threadgroup. At 32 KiB, where the bytes and the
     /// word pass the device's limit, the ragged grids are refused, `scan_static`'s as
-    /// `Gap::PartialThreadgroups` (the translator refuses the variant) and `scan_length`'s as
-    /// `Limit::ThreadgroupMemory` of the bytes and the word, and the whole grids run on the plain
-    /// module and answer the sums. Each outcome is printed; the test fails on any other.
+    /// `Gap::PartialThreadgroups` at the vote word (the translator refuses the variant), naming
+    /// its static bytes and the limit, and `scan_length`'s as `Limit::ThreadgroupMemory` of the
+    /// bytes and the word, naming no static bytes; the whole grids run on the plain module and
+    /// answer the sums. Each outcome is printed; the test fails on any other.
     #[test]
     fn every_device_runs_a_1024_thread_observers_ragged_grid_in_the_limit_less_its_vote_word() {
         use crate::pipeline::Which;
@@ -4637,13 +4647,14 @@ $REGION_META!3 = !{i32 $OUT, !"air.buffer", !"air.location_index", i32 0, i32 1,
                     ));
                     let state = state(name, &device, &descriptor);
                     let compiled = &state.inner.compiled;
-                    let vote = (compiled.variant_kernel(Which::Partial, || {
-                        Error::Unsupported(Gap::PartialThreadgroups {
-                            threads_per_grid: [0; 3],
-                            threads_per_threadgroup: [0; 3],
-                        })
+                    // The variant's vote word, or why the translator refused the variant.
+                    let mut refused = None;
+                    let vote = (compiled.variant_kernel(Which::Partial, |why| {
+                        refused = Some(why);
+                        Error::Quiesced
                     }))
-                    .map(|partial| partial.interface.memory.vote);
+                    .map(|partial| partial.interface.memory.vote)
+                    .map_err(|_| refused);
                     let past = bytes + 4 > limit;
                     for grid in [25, 1024] {
                         let want: Vec<u32> = (0..grid).map(|t| (t + 1) * (t + 2) / 2).collect();
@@ -4674,13 +4685,16 @@ $REGION_META!3 = !{i32 $OUT, !"air.buffer", !"air.location_index", i32 0, i32 1,
                                 Err(Error::Unsupported(Gap::PartialThreadgroups {
                                     threads_per_grid: [25, 1, 1],
                                     threads_per_threadgroup: [1024, 1, 1],
-                                    ..
-                                }))
+                                    site: PartialThreadgroupsSite::VoteWord { static_length, max },
+                                })) if static_length == bytes && max == limit
                             ),
                             (true, None) => matches!(
                                 dispatched,
-                                Err(Error::Limit(Limit::ThreadgroupMemory { length, max }))
-                                    if length == u64::from(bytes) + 4 && max == limit
+                                Err(Error::Limit(Limit::ThreadgroupMemory {
+                                    length,
+                                    max,
+                                    static_length: 0,
+                                })) if length == u64::from(bytes) + 4 && max == limit
                             ),
                         };
                         let outcome = match &dispatched {

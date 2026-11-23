@@ -1108,7 +1108,7 @@ impl Device {
                 format: m.format,
                 view_formats: m.list,
                 block: Some(Arc::clone(&block)),
-                general: false,
+                d3d11: false,
                 linear_attachment: linear,
             })
             .collect();
@@ -1400,7 +1400,7 @@ impl Device {
                 format: m.format,
                 view_formats: m.list,
                 block: None,
-                general: false,
+                d3d11: false,
                 linear_attachment: linear,
             });
         }

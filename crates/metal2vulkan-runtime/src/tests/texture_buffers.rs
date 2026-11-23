@@ -33,9 +33,9 @@ mod on_device {
     use crate::{
         BlitOption, Buffer, BufferLayout, ComputePipelineDescriptor, ComputePipelineState, Device,
         DeviceOptions, DispatchType, Error, FunctionDescriptor, Gap, IndexClass, Instance, Library,
-        MemoryClass, PixelFormat, Refusal, Region, StageSource, StorageMode, Texture,
-        TextureDescriptor, TexturePlace, TextureSwizzle, TextureSwizzleChannels, TextureType,
-        TextureUsage, TextureViewKind,
+        MemoryClass, PixelFormat, Refusal, Region, StageSource, StorageElementCase, StorageMode,
+        Texture, TextureBacking, TextureDescriptor, TexturePlace, TextureSwizzle,
+        TextureSwizzleChannels, TextureType, TextureUsage, TextureViewKind,
     };
     use ash::vk;
     use metal2vulkan::device::{DeviceDescription, VkFeature};
@@ -199,6 +199,8 @@ mod on_device {
                     Err(Error::Unsupported(Gap::StorageElement {
                         slot: Some(1),
                         pixel_format: PixelFormat::R32Uint,
+                        case: StorageElementCase::WriteWithoutFormat,
+                        backing: TextureBacking::Buffer,
                     })),
                 ) => {
                     println!("{name}: a texture buffer written without a format is refused");

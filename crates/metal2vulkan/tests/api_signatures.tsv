@@ -600,6 +600,7 @@ enum	metal2vulkan-runtime::MultisampleDepthResolveFilter	#[derive(Clone, Copy, D
 enum	metal2vulkan-runtime::MultisampleStencilResolveFilter	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum MultisampleStencilResolveFilter
 enum	metal2vulkan-runtime::NumberedSampler	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] #[non_exhaustive] pub enum NumberedSampler
 enum	metal2vulkan-runtime::OverCause	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum OverCause
+enum	metal2vulkan-runtime::PartialThreadgroupsSite	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum PartialThreadgroupsSite
 enum	metal2vulkan-runtime::PrecisionNote	#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))] #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)] pub enum PrecisionNote
 enum	metal2vulkan-runtime::RangeKind	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum RangeKind
 enum	metal2vulkan-runtime::Refusal	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum Refusal
@@ -613,10 +614,12 @@ enum	metal2vulkan-runtime::StageFill	#[derive(Clone, Copy, Debug, PartialEq, Eq)
 enum	metal2vulkan-runtime::StageGap	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum StageGap
 enum	metal2vulkan-runtime::StageInKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum StageInKind
 enum	metal2vulkan-runtime::StageSource	#[derive(Clone, Debug, PartialEq, Eq)] pub enum StageSource
+enum	metal2vulkan-runtime::StorageElementCase	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum StorageElementCase
 enum	metal2vulkan-runtime::StorageMode	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum StorageMode
 enum	metal2vulkan-runtime::StoreAction	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum StoreAction
 enum	metal2vulkan-runtime::SurfaceCopy	#[derive(Clone, Copy, Debug, PartialEq, Eq)] #[non_exhaustive] pub enum SurfaceCopy
 enum	metal2vulkan-runtime::SurfaceForm	#[derive(Clone, Copy, Debug, PartialEq, Eq)] pub enum SurfaceForm
+enum	metal2vulkan-runtime::TextureBacking	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TextureBacking
 enum	metal2vulkan-runtime::TextureViewKind	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum TextureViewKind
 enum	metal2vulkan-runtime::VariantStart	#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)] pub enum VariantStart
 enum	metal2vulkan-runtime::VisibilityResultMode	#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)] #[non_exhaustive] pub enum VisibilityResultMode
@@ -8399,12 +8402,12 @@ variant	metal2vulkan-runtime::Gap::MipmapFilter	MipmapFilter { pixel_format: Pix
 variant	metal2vulkan-runtime::Gap::NoStageInRegion	NoStageInRegion
 variant	metal2vulkan-runtime::Gap::OverlappingCopy	OverlappingCopy { pixel_format: PixelFormat }
 variant	metal2vulkan-runtime::Gap::PartialSimdgroups	PartialSimdgroups { threads_per_threadgroup: [u32; 3], width: u32 }
-variant	metal2vulkan-runtime::Gap::PartialThreadgroups	PartialThreadgroups { threads_per_grid: [u32; 3], threads_per_threadgroup: [u32; 3] }
+variant	metal2vulkan-runtime::Gap::PartialThreadgroups	PartialThreadgroups { threads_per_grid: [u32; 3], threads_per_threadgroup: [u32; 3], site: PartialThreadgroupsSite }
 variant	metal2vulkan-runtime::Gap::RenderPass	RenderPass { kind: RenderPassKind }
 variant	metal2vulkan-runtime::Gap::RenderPipeline	RenderPipeline { kind: RenderPipelineKind }
 variant	metal2vulkan-runtime::Gap::StageIn	StageIn { kind: StageInKind }
 variant	metal2vulkan-runtime::Gap::StageSize	StageSize { weight: u64, cause: StageGap }
-variant	metal2vulkan-runtime::Gap::StorageElement	StorageElement { slot: Option<u32>, pixel_format: PixelFormat }
+variant	metal2vulkan-runtime::Gap::StorageElement	StorageElement { slot: Option<u32>, pixel_format: PixelFormat, case: StorageElementCase, backing: TextureBacking }
 variant	metal2vulkan-runtime::Gap::SurfaceUsage	SurfaceUsage { pixel_format: PixelFormat, missing: u32 }
 variant	metal2vulkan-runtime::Gap::SwizzledReadWrite	SwizzledReadWrite { slot: u32 }
 variant	metal2vulkan-runtime::Gap::TextureBufferSwizzle	TextureBufferSwizzle { pixel_format: PixelFormat }
@@ -8458,7 +8461,7 @@ variant	metal2vulkan-runtime::Limit::NoImport	NoImport { handle: ImportHandle }
 variant	metal2vulkan-runtime::Limit::SparseAddressSpace	SparseAddressSpace { len: u64, live: u64, max: u64 }
 variant	metal2vulkan-runtime::Limit::TextureSamples	TextureSamples { sample_count: u32, counts: u32 }
 variant	metal2vulkan-runtime::Limit::TextureSize	TextureSize { extent: [u32; 3], layers: u32, max_extent: [u32; 3], max_layers: u32 }
-variant	metal2vulkan-runtime::Limit::ThreadgroupMemory	ThreadgroupMemory { length: u64, max: u32 }
+variant	metal2vulkan-runtime::Limit::ThreadgroupMemory	ThreadgroupMemory { length: u64, max: u32, static_length: u32 }
 variant	metal2vulkan-runtime::Limit::ThreadgroupThreads	ThreadgroupThreads { size: [u32; 3], max: u32 }
 variant	metal2vulkan-runtime::LinearPlanePassKind::DepthStencil	DepthStencil
 variant	metal2vulkan-runtime::LinearPlanePassKind::OtherColor	OtherColor
@@ -8488,6 +8491,9 @@ variant	metal2vulkan-runtime::OverCause::Pitch	Pitch
 variant	metal2vulkan-runtime::OverCause::RenderReach	RenderReach
 variant	metal2vulkan-runtime::OverCause::Spilled	Spilled
 variant	metal2vulkan-runtime::OverCause::Surface	Surface
+variant	metal2vulkan-runtime::PartialThreadgroupsSite::SimdGroups	SimdGroups { width: u32 }
+variant	metal2vulkan-runtime::PartialThreadgroupsSite::Translator	Translator
+variant	metal2vulkan-runtime::PartialThreadgroupsSite::VoteWord	VoteWord { static_length: u32, max: u32 }
 variant	metal2vulkan-runtime::PrecisionNote::AnisotropicFilter	AnisotropicFilter
 variant	metal2vulkan-runtime::PrecisionNote::ArgumentPixelSamplerScaling	ArgumentPixelSamplerScaling
 variant	metal2vulkan-runtime::PrecisionNote::BicubicFilterArithmetic	BicubicFilterArithmetic
@@ -8714,6 +8720,9 @@ variant	metal2vulkan-runtime::StageInKind::IndexedStepRate	IndexedStepRate
 variant	metal2vulkan-runtime::StageInKind::IndirectRegion	IndirectRegion
 variant	metal2vulkan-runtime::StageSource::Compiled	Compiled(CompiledFunction)
 variant	metal2vulkan-runtime::StageSource::Function	Function(FunctionDescriptor)
+variant	metal2vulkan-runtime::StorageElementCase::Absent	Absent
+variant	metal2vulkan-runtime::StorageElementCase::ReadWithoutFormat	ReadWithoutFormat
+variant	metal2vulkan-runtime::StorageElementCase::WriteWithoutFormat	WriteWithoutFormat
 variant	metal2vulkan-runtime::StorageMode::Managed	Managed
 variant	metal2vulkan-runtime::StorageMode::Memoryless	Memoryless
 variant	metal2vulkan-runtime::StorageMode::Private	Private
@@ -8732,6 +8741,11 @@ variant	metal2vulkan-runtime::SurfaceCopy::Start	Start { plane: usize }
 variant	metal2vulkan-runtime::SurfaceCopy::Tiling	Tiling { plane: usize }
 variant	metal2vulkan-runtime::SurfaceForm::Copy	Copy(SurfaceCopy)
 variant	metal2vulkan-runtime::SurfaceForm::InPlace	InPlace
+variant	metal2vulkan-runtime::TextureBacking::Buffer	Buffer
+variant	metal2vulkan-runtime::TextureBacking::D3d11	D3d11
+variant	metal2vulkan-runtime::TextureBacking::Drawable	Drawable
+variant	metal2vulkan-runtime::TextureBacking::SurfacePlane	SurfacePlane
+variant	metal2vulkan-runtime::TextureBacking::Texture	Texture
 variant	metal2vulkan-runtime::TextureViewKind::CubeOfArray	CubeOfArray
 variant	metal2vulkan-runtime::TextureViewKind::PixelFormat	PixelFormat
 variant	metal2vulkan-runtime::TextureViewKind::Slices	Slices

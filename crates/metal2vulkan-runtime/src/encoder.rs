@@ -5,7 +5,7 @@ use crate::buffer::{Buffer, BufferInner, BufferObject};
 use crate::command::{Building, CommandBuffer};
 use crate::counters::Metric;
 use crate::device::Core;
-use crate::error::{Error, Gap, Limit, Refusal, StageInKind};
+use crate::error::{Error, Gap, Limit, PartialThreadgroupsSite, Refusal, StageInKind};
 use crate::fence::Fence;
 use crate::floor;
 use crate::function_table::VisibleFunctionTable;
@@ -16,15 +16,14 @@ use crate::memory::BlockId;
 use crate::over::{self, Reached, Span};
 use crate::pipeline::{
     address_word, Compiled, ComputePipelineState, FieldValue, Form, Interface, Kernel, Place,
-    Which, PUSH_STAGES, SQUARE,
+    VariantRefusal, Which, PUSH_STAGES, SQUARE,
 };
 use crate::record::Reach;
 use crate::ring::CHUNK;
 use crate::sampler::SamplerState;
-use crate::texture::{Region, Texture, TextureObject};
+use crate::texture::{Region, StorageGap, Texture, TextureObject};
 use ash::vk;
 use metal2vulkan::metal::format::{integer_channels_word, BICUBIC_TEXELS_UNBOUND};
-use metal2vulkan::metal::PixelFormat;
 use metal2vulkan::pipeline::{
     grid_tile, nonuniform_region_bytes, region_bytes, DEEP_THREADGROUP, GRID_TILE_THREADS,
 };
@@ -248,9 +247,10 @@ pub struct ComputeCommandEncoder {
     declared: Vec<Declared>,
     /// A `use_resource` declaration writes a Shared buffer.
     declared_shared_write: bool,
-    /// The pixel format of the first texture a `use_resource` declaration writes that has no
-    /// storage element ([`Texture::unstored`]).
-    declared_unstored_write: Option<PixelFormat>,
+    /// What the first texture a `use_resource` declaration writes lacks for it: no storage
+    /// element, or one the device cannot write without a format
+    /// ([`TextureObject::storage_gap`]).
+    declared_unstored_write: Option<StorageGap>,
     /// The module, workgroup size and `VkPipeline` of the last dispatch, while the state, the
     /// threadgroup memory lengths and the imageblock size are unchanged.
     last: Option<Last>,
@@ -845,7 +845,7 @@ impl ComputeCommandEncoder {
                 (
                     [texture.hazard_id(), texture.tracked_id()],
                     texture.host_reads(),
-                    texture.unstored().or_else(|| texture.unwritten()),
+                    texture.storage_gap(true, false),
                     Some(lent),
                     None,
                 )
@@ -1077,30 +1077,28 @@ impl ComputeCommandEncoder {
                 // Its format's own answers, for the writes and reads declared without a format.
                 let formatless = interface.formatless.contains(&slot);
                 let unstored = match self.textures.get(slot as usize) {
-                    Some(Some(texture)) if stored => (texture.unstored())
-                        .or_else(|| {
-                            texture
-                                .unwritten()
-                                .filter(|_| formatless && access.writes())
-                        })
-                        .or_else(|| texture.unread().filter(|_| formatless && read)),
+                    Some(Some(texture)) if stored => {
+                        texture.storage_gap(formatless && access.writes(), formatless && read)
+                    }
                     _ => None,
                 };
-                if let Some(pixel_format) = unstored {
+                if let Some(gap) = unstored {
                     return Err(Error::Unsupported(Gap::StorageElement {
                         slot: Some(slot),
-                        pixel_format,
+                        pixel_format: gap.pixel_format,
+                        case: gap.case,
+                        backing: gap.backing,
                     }));
                 }
             }
             // A texture declared written with no storage element, which the kernel may reach
             // through its storage image beyond its slots.
-            if let (true, Some(pixel_format)) =
-                (interface.unbound_storage, self.declared_unstored_write)
-            {
+            if let (true, Some(gap)) = (interface.unbound_storage, self.declared_unstored_write) {
                 return Err(Error::Unsupported(Gap::StorageElement {
                     slot: None,
-                    pixel_format,
+                    pixel_format: gap.pixel_format,
+                    case: gap.case,
+                    backing: gap.backing,
                 }));
             }
             self.facts.aligned = true;
@@ -1151,7 +1149,12 @@ impl ComputeCommandEncoder {
         let vk_pipeline = match self.last {
             Some(last) if last.module == module && last.local == local => last.pipeline,
             _ => {
-                let lengths = threadgroup_memory(kernel, set, local, limits.max_shared_memory)?;
+                let lengths = threadgroup_memory(
+                    kernel,
+                    set,
+                    local,
+                    (inner.static_length(), limits.max_shared_memory),
+                )?;
                 let variant = inner.dispatch_key(module, local, lengths);
                 // A variant past the kernel's cells is held by the command buffer from its first
                 // dispatch, so no make evicts it while the command buffer is not retired.
@@ -1398,10 +1401,20 @@ pub(crate) fn decide<'a>(
     (set, max): (Sizes<'_>, u32),
 ) -> Result<(Choice, Module, &'a Kernel), Error> {
     let choice = choose(&compiled.form, direct, size);
-    let partial_threadgroups = || {
+    let partial_threadgroups = |site: PartialThreadgroupsSite| {
         Error::Unsupported(Gap::PartialThreadgroups {
             threads_per_grid: choice.direct.map_or([0; 3], |(threads, ..)| threads),
             threads_per_threadgroup: size,
+            site,
+        })
+    };
+    let refused = |why: VariantRefusal| {
+        partial_threadgroups(match why {
+            VariantRefusal::VoteWord => PartialThreadgroupsSite::VoteWord {
+                static_length: compiled.static_length(),
+                max,
+            },
+            VariantRefusal::Translator => PartialThreadgroupsSite::Translator,
         })
     };
     let threads = choice
@@ -1417,9 +1430,10 @@ pub(crate) fn decide<'a>(
     };
     let observes = matches!(compiled.form, Form::Sized { .. });
     if observes && choice.module == Module::Whole && short(&compiled.whole).is_none() {
-        if let Ok(partial) = compiled.variant_kernel(Which::Partial, partial_threadgroups) {
+        if let Ok(partial) = compiled.variant_kernel(Which::Partial, refused) {
             if short(partial).is_none()
-                && threadgroup_memory(partial, set, choice.local, max).is_ok()
+                && threadgroup_memory(partial, set, choice.local, (compiled.static_length(), max))
+                    .is_ok()
             {
                 let choice = Choice {
                     module: Module::Partial,
@@ -1430,14 +1444,18 @@ pub(crate) fn decide<'a>(
         }
     }
     let kernel = match choice.module {
-        Module::Partial => compiled.variant_kernel(Which::Partial, partial_threadgroups)?,
+        Module::Partial => compiled.variant_kernel(Which::Partial, refused)?,
         _ => &compiled.whole,
     };
-    match short(kernel).as_ref() {
+    match short(kernel) {
         None => Ok((choice, choice.module, kernel)),
-        Some(_) if choice.module == Module::Partial => Err(partial_threadgroups()),
-        Some(&width) => {
-            let partial_simdgroups = || {
+        Some(width) if choice.module == Module::Partial => {
+            Err(partial_threadgroups(PartialThreadgroupsSite::SimdGroups {
+                width,
+            }))
+        }
+        Some(width) => {
+            let partial_simdgroups = |_: VariantRefusal| {
                 Error::Unsupported(Gap::PartialSimdgroups {
                     threads_per_threadgroup: size,
                     width,
@@ -1506,12 +1524,13 @@ impl Lengths {
 /// The threadgroup memory lengths of `kernel`'s threadgroups, from the encoder's `set` (0 for an
 /// index it set none at), each rounded up to a multiple of 16 bytes (`u32::MAX` past the largest,
 /// which no device takes), with its imageblock's size where it reaches one, checked at workgroup
-/// `local` against the device's `max` bytes, the imageblock's cells included.
+/// `local` against the device's `max` bytes, the imageblock's cells included; its refusal names
+/// the content's `static_length` ([`Compiled::static_length`]).
 pub(crate) fn threadgroup_memory(
     kernel: &Kernel,
     set: Sizes<'_>,
     local: [u32; 3],
-    max: u32,
+    (static_length, max): (u32, u32),
 ) -> Result<Lengths, Error> {
     let mut lengths = Lengths::default();
     for (word, &index) in (lengths.words.iter_mut()).zip(&kernel.interface.threadgroups) {
@@ -1530,7 +1549,11 @@ pub(crate) fn threadgroup_memory(
     let threads = local.iter().map(|&axis| u64::from(axis)).product::<u64>();
     let length = (kernel.interface.memory).bytes(lengths.as_slice(), imageblock, threads);
     if length > u64::from(max) {
-        return Err(Error::Limit(Limit::ThreadgroupMemory { length, max }));
+        return Err(Error::Limit(Limit::ThreadgroupMemory {
+            length,
+            max,
+            static_length,
+        }));
     }
     Ok(lengths)
 }

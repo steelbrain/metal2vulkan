@@ -84,8 +84,8 @@ pub use device::{Device, DeviceOptions, RawDevice};
 pub use encoder::{ComputeCommandEncoder, Dispatch, DispatchType, Resource, ResourceUsage};
 pub use error::{
     DrawKind, Error, Gap, IndirectCommandsKind, KernelInputKind, Limit, LinearPlanePassKind,
-    Refusal, RefusalBasis, RenderPassKind, RenderPipelineKind, StageGap, StageInKind,
-    TextureViewKind,
+    PartialThreadgroupsSite, Refusal, RefusalBasis, RenderPassKind, RenderPipelineKind, StageGap,
+    StageInKind, StorageElementCase, TextureBacking, TextureViewKind,
 };
 pub use event::{Event, SharedEvent};
 pub use export::{Export, ExportHandle};

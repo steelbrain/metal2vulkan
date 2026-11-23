@@ -1162,6 +1162,8 @@ pub enum Gap {
         threads_per_grid: [u32; 3],
         /// The threadgroup size asked for.
         threads_per_threadgroup: [u32; 3],
+        /// Why the variant does not run it.
+        site: PartialThreadgroupsSite,
     },
     /// A dispatch of a kernel that reads the stage-in region (`[[grid_origin]]`, `[[grid_size]]`,
     /// a `[[stage_in]]` attribute of a thread-position step) on an encoder that never set one
@@ -1416,6 +1418,11 @@ pub enum Gap {
         slot: Option<u32>,
         /// The texture's pixel format.
         pixel_format: PixelFormat,
+        /// Which of the three it is: no storage element, or one the device cannot write or read
+        /// without a format.
+        case: StorageElementCase,
+        /// What holds the texture's texels.
+        backing: TextureBacking,
     },
     /// A dispatch or a draw whose function samples texture slot `slot` through a constexpr
     /// sampler with Metal's bicubic filter (`filter::bicubic`), where the texture bound there is
@@ -1932,6 +1939,74 @@ pub enum TextureViewKind {
     TextureBuffer,
 }
 
+/// Why an observing kernel's partial-threadgroups variant does not run a grid that ends in
+/// partial threadgroups ([`Gap::PartialThreadgroups`]). Metal has no counterpart: Metal runs every
+/// partial threadgroup.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PartialThreadgroupsSite {
+    /// The translator refused the variant: its predicated walk, which barriers in a loop make
+    /// vote, takes a 4-byte vote word of threadgroup memory beside the kernel's own, and the two
+    /// pass the device's `maxComputeSharedMemorySize`.
+    VoteWord {
+        /// The kernel's own threadgroup memory, in bytes: the state's
+        /// `staticThreadgroupMemoryLength`.
+        static_length: u32,
+        /// The device's `maxComputeSharedMemorySize`, which the kernel's memory and the word were
+        /// held against.
+        max: u32,
+    },
+    /// The translator refused the variant for another of the kernel's structures: SIMD groups it
+    /// emulates, a stage-in region, compute derivatives, an imageblock slice write every
+    /// invocation shares, or another refusal of the variant's lowering or compile.
+    Translator,
+    /// The threadgroup is not whole SIMD groups of the variant, whose tier runs only whole ones.
+    SimdGroups {
+        /// The threads every threadgroup must be a multiple of.
+        width: u32,
+    },
+}
+
+/// Which storage element a function's storage use of a texture lacks
+/// ([`Gap::StorageElement`]). Metal has no counterpart: Metal writes and reads such a texture.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum StorageElementCase {
+    /// The texture, made for shader writes, has no storage element on this device: its format
+    /// has no storage image here, or the runtime holds it through a view of another format.
+    Absent,
+    /// A texture buffer whose format's buffer features lack
+    /// `VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT`, which a function writes without a
+    /// format.
+    WriteWithoutFormat,
+    /// A texture whose storage element's format lacks
+    /// `VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT`, which a function reads as storage
+    /// without a format (`access::read_write`).
+    ReadWithoutFormat,
+}
+
+/// What holds a texture's texels ([`Gap::StorageElement`]). Metal's counterpart is what the
+/// texture's `buffer` and `iosurface` answer.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TextureBacking {
+    /// Memory of its own or a heap's ([`Device::new_texture`](crate::Device::new_texture),
+    /// [`Device::new_heap_texture`](crate::Device::new_heap_texture)), or a view of such a
+    /// texture.
+    Texture,
+    /// A buffer's bytes ([`Buffer::new_texture`](crate::Buffer::new_texture)): a texture buffer,
+    /// or a texture over the buffer.
+    Buffer,
+    /// A plane of an exported surface
+    /// ([`Device::new_exported_surface`](crate::Device::new_exported_surface)).
+    SurfacePlane,
+    /// A plane of a Direct3D 11 texture's import (`Device::import_d3d11_surface`, on Windows).
+    D3d11,
+    /// The consumer's swapchain image
+    /// ([`Device::new_drawable_texture`](crate::Device::new_drawable_texture)).
+    Drawable,
+}
+
 /// A limit a call ran into, with what it was asked.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1960,10 +2035,15 @@ pub enum Limit {
     ///
     /// Basis: device (the device's `maxComputeSharedMemorySize`).
     ThreadgroupMemory {
-        /// The threadgroup memory the dispatch takes, in bytes.
+        /// The threadgroup memory the dispatch takes, in bytes: `static_length`, the lengths set,
+        /// and what the runtime adds beside them (a predicated walk's 4-byte vote word, an
+        /// emulated SIMD group's scratch).
         length: u64,
         /// The device's most.
         max: u32,
+        /// The kernel's own threadgroup memory, in bytes: the state's
+        /// `staticThreadgroupMemoryLength`.
+        static_length: u32,
     },
     /// A dispatch whose threadgroup is within Metal's `maxTotalThreadsPerThreadgroup` for the
     /// kernel and past the state's on this device: the state answers the least of Metal's and
@@ -2714,6 +2794,7 @@ impl fmt::Display for Gap {
             Gap::PartialThreadgroups {
                 threads_per_grid,
                 threads_per_threadgroup,
+                ..
             } => write!(
                 f,
                 "a grid of {threads_per_grid:?} threads in threadgroups of {threads_per_threadgroup:?} ends in partial threadgroups, which this kernel's variant does not run"
@@ -2788,6 +2869,7 @@ impl fmt::Display for Gap {
             Gap::StorageElement {
                 slot: Some(slot),
                 pixel_format,
+                ..
             } => write!(
                 f,
                 "texture slot {slot}, which a function writes or reads as storage, bound to a \
@@ -2797,6 +2879,7 @@ impl fmt::Display for Gap {
             Gap::StorageElement {
                 slot: None,
                 pixel_format,
+                ..
             } => write!(
                 f,
                 "a kernel or a draw's function that may write or read as storage a texture \
@@ -2862,7 +2945,7 @@ impl fmt::Display for Limit {
                 "a block of {len} bytes is past the device's largest, {max} bytes"
             ),
             Limit::BlockIds => f.write_str("every block number has been used"),
-            Limit::ThreadgroupMemory { length, max } => write!(
+            Limit::ThreadgroupMemory { length, max, .. } => write!(
                 f,
                 "{length} bytes of threadgroup memory are past the device's {max}"
             ),

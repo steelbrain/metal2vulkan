@@ -342,7 +342,7 @@ impl Device {
             format,
             view_formats: list,
             block: None,
-            general: true,
+            d3d11: true,
             linear_attachment: false,
         })
     }

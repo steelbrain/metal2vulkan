@@ -124,6 +124,7 @@
 
 use crate::counters::{Counters, Gauge, Metric};
 use crate::device::{lock, Core};
+use crate::pipeline::VariantRefusal;
 use crate::times::host_time;
 use ash::vk;
 use metal2vulkan::cache::{Hash256, ARTIFACT_FORMAT_VERSION, SEMANTICS_VERSION};
@@ -160,13 +161,17 @@ pub(crate) const BLOBS_KEPT: usize = 4;
 /// recorded session's 282 lowerings fill. A lowering larger than this alone is queued where none
 /// waits, so the heaviest kernels, the costliest to lower again, are kept too.
 pub(crate) const PENDING_BYTES: u64 = 8 << 20;
-/// What a translation file holds where the translator refused the lowering: bytes no lowering
-/// encodes to, and that a file cut short is not.
+/// What a translation file holds where the translator refused the lowering, but for the vote word
+/// ([`REFUSED_VOTE`]): bytes no lowering encodes to, and that a file cut short is not.
 const REFUSED: &[u8] = b"m2v-refused";
+/// What a partial-threadgroups variant's translation file holds where the translator refused it
+/// for its predicated walk's vote word ([`VariantRefusal::VoteWord`]): bytes no lowering encodes
+/// to, nor [`REFUSED`] or [`OBSERVES`], and that a file cut short is not.
+const REFUSED_VOTE: &[u8] = b"m2v-refused-vote";
 /// What a partial-threadgroups variant's translation file holds where the translator answered
 /// that the kernel observes its threadgroup partition, until the variant is lowered over it:
-/// bytes no lowering encodes to, nor [`REFUSED`], and that a file cut short is not. The file is
-/// named by the variant's `FunctionCompileKey`, which covers everything that changes the answer:
+/// bytes no lowering encodes to, nor [`REFUSED`] or [`REFUSED_VOTE`], and that a file cut short is
+/// not. The file is named by the variant's `FunctionCompileKey`, which covers everything that changes the answer:
 /// the kernel's AIR, entry, constants and linked functions, its lowering inputs, the device
 /// profile's fingerprint and the translator's semantics version, which a change to the answer
 /// bumps. It is 12 bytes, written and counted as a lowering is, within the store's cap.
@@ -1088,10 +1093,14 @@ fn keep(core: &Core, file: String, bytes: Vec<u8>) {
     }
 }
 
-/// Hands the translator's refusal of the lowering of key digest `key` to the reaper, as
-/// [`keep_translation`] does a lowering.
-pub(crate) fn keep_refusal(core: &Core, key: &[u8]) {
-    keep_translation(core, key, REFUSED.to_vec());
+/// Hands the translator's refusal of the lowering of key digest `key`, and `why`, to the reaper,
+/// as [`keep_translation`] does a lowering.
+pub(crate) fn keep_refusal(core: &Core, key: &[u8], why: VariantRefusal) {
+    let marker = match why {
+        VariantRefusal::VoteWord => REFUSED_VOTE,
+        VariantRefusal::Translator => REFUSED,
+    };
+    keep_translation(core, key, marker.to_vec());
 }
 
 /// Hands the translator's answer that a kernel observes its threadgroup partition to the reaper,
@@ -1435,7 +1444,7 @@ impl Caches {
     ) -> Option<T> {
         let file = Caches::translation_file(key);
         let kept = self.store.as_ref()?.get(&file, |bytes| match bytes {
-            REFUSED | OBSERVES => Some(None),
+            REFUSED | REFUSED_VOTE | OBSERVES => Some(None),
             lowering => decode(lowering).map(Some),
         });
         kept.flatten()
@@ -1464,11 +1473,17 @@ impl Caches {
         }
     }
 
-    /// Whether the translator refused the lowering of key digest `key` on a device before.
-    pub(crate) fn refused(&self, key: &[u8]) -> bool {
-        self.store
-            .as_ref()
-            .is_some_and(|store| store.holds(&Caches::translation_file(key), REFUSED))
+    /// Why the translator refused the lowering of key digest `key` on a device before, where it
+    /// did.
+    pub(crate) fn refused(&self, key: &[u8]) -> Option<VariantRefusal> {
+        let store = self.store.as_ref()?;
+        let file = Caches::translation_file(key);
+        if store.holds(&file, REFUSED_VOTE) {
+            return Some(VariantRefusal::VoteWord);
+        }
+        store
+            .holds(&file, REFUSED)
+            .then_some(VariantRefusal::Translator)
     }
 
     /// Whether the translator answered on a device before that the kernel whose

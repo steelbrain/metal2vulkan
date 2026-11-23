@@ -77,7 +77,8 @@ use crate::stage::{Create, Heavy};
 use crate::times::host_time;
 use ash::vk;
 use metal2vulkan::cache::Hash256;
-use metal2vulkan::error::{Error as TranslationError, Feature};
+use metal2vulkan::device::VkLimit;
+use metal2vulkan::error::{Capability, Error as TranslationError, Feature, Needs, Unsupported};
 use metal2vulkan::library::{CompiledFunction, FunctionCompileKey};
 use metal2vulkan::metal::{BindingAccess, BindingType};
 use metal2vulkan::pipeline::{
@@ -372,9 +373,9 @@ pub(crate) enum Lowered {
     /// The module, and the translator's notes of it.
     Made(Box<Kernel>, Vec<PrecisionNote>),
     /// The translator refused the variant (`Unsupported`), now or on a device on the cache
-    /// directory before (which keeps that it refused, not why): the need's own refusal, the
-    /// variant's gap.
-    Refused,
+    /// directory before (which keeps that it refused, and whether for the vote word): the need's
+    /// own refusal, the variant's gap.
+    Refused(VariantRefusal),
     /// The translator's lowering or compile of the variant failed otherwise, a translator bug or
     /// a limit among them: the need reports this error.
     Translation(TranslationError),
@@ -383,6 +384,40 @@ pub(crate) enum Lowered {
     Unsupplied(KernelInputKind),
     /// `vkCreateShaderModule` failed.
     Failed(vk::Result),
+}
+
+/// Why the translator refused a kernel's variant, which the cache directory keeps with the
+/// refusal and a dispatch's [`Gap::PartialThreadgroups`] names
+/// ([`PartialThreadgroupsSite`](crate::PartialThreadgroupsSite)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum VariantRefusal {
+    /// Its predicated walk's vote word does not fit beside the kernel's threadgroup memory:
+    /// `Unsupported{PartialThreadgroups}` needing the `Limit` of `maxComputeSharedMemorySize`.
+    VoteWord,
+    /// Any other refusal of its lowering or compile.
+    Translator,
+}
+
+impl VariantRefusal {
+    /// Why the translator's refusal `refused` refused the variant.
+    pub(crate) fn of(refused: &Unsupported) -> VariantRefusal {
+        let shared_memory = |capability: &Capability| {
+            matches!(
+                capability,
+                Capability::Limit {
+                    limit: VkLimit::MaxComputeSharedMemorySize,
+                    ..
+                }
+            )
+        };
+        let vote = refused.feature == Feature::PartialThreadgroups
+            && matches!(&refused.needs, Needs::AnyOf(alternatives)
+                if alternatives.iter().flatten().any(shared_memory));
+        match vote {
+            true => VariantRefusal::VoteWord,
+            false => VariantRefusal::Translator,
+        }
+    }
 }
 
 /// How a state runs a direct dispatch.
@@ -1075,9 +1110,9 @@ impl Compiled {
                 // a lowering, and so is its answer that the kernel observes it, which a device on
                 // the directory then reads in place of asking.
                 let variant_key = *translator.function_compile_key(function, &inputs).digest();
-                let variant = if core.caches.refused(&variant_key) {
+                let variant = if let Some(why) = core.caches.refused(&variant_key) {
                     core.counters.count(Metric::TranslationsLoaded);
-                    Found::Refused
+                    Found::Refused(why)
                 } else if let Some(kept) = kept(&core, function, &inputs) {
                     Found::Lowered(kept)
                 } else if core.caches.observed(&variant_key) {
@@ -1097,8 +1132,9 @@ impl Compiled {
                             Err(TranslationError::Unsupported(refused))
                                 if refused.feature == Feature::PartialThreadgroups =>
                             {
-                                cache::keep_refusal(&core, &variant_key);
-                                Found::Refused
+                                let why = VariantRefusal::of(&refused);
+                                cache::keep_refusal(&core, &variant_key, why);
+                                Found::Refused(why)
                             }
                             Err(error) => return Err(Error::translation(error)),
                         }
@@ -1328,7 +1364,7 @@ enum Found {
     /// Lowered, or read from the cache directory.
     Lowered(CompiledFunction),
     /// The translator refused it, at this make or on a device on the cache directory before.
-    Refused,
+    Refused(VariantRefusal),
     /// Not lowered yet: the emulated-SIMD-group variant, which is lowered once the content's
     /// module is, or an observing kernel's partial-threadgroups one, lowered before the plain
     /// module its state keeps beside it where it keeps one ([`keeps_plain`]).
@@ -1368,18 +1404,19 @@ fn link_variant(
     let budget = Budget::standard();
     let compiled = match found {
         Found::Lowered(compiled) => compiled,
-        Found::Refused => return Err(Lowered::Refused),
+        Found::Refused(why) => return Err(Lowered::Refused(why)),
         Found::Unlowered => {
             let key = *translator.function_compile_key(function, inputs).digest();
-            if core.caches.refused(&key) {
+            if let Some(why) = core.caches.refused(&key) {
                 core.counters.count(Metric::TranslationsLoaded);
-                return Err(Lowered::Refused);
+                return Err(Lowered::Refused(why));
             }
             match lower(core, function, inputs, &budget, &core.entries) {
                 Ok(compiled) => compiled,
-                Err(TranslationError::Unsupported(_)) => {
-                    cache::keep_refusal(core, &key);
-                    return Err(Lowered::Refused);
+                Err(TranslationError::Unsupported(refused)) => {
+                    let why = VariantRefusal::of(&refused);
+                    cache::keep_refusal(core, &key, why);
+                    return Err(Lowered::Refused(why));
                 }
                 Err(error) => return Err(Lowered::Translation(error)),
             }
@@ -1391,7 +1428,9 @@ fn link_variant(
         translator.compile_compute_pipeline(&descriptor, &budget)
     }) {
         Ok(pipeline) => Ok((compiled, pipeline)),
-        Err(TranslationError::Unsupported(_)) => Err(Lowered::Refused),
+        Err(TranslationError::Unsupported(refused)) => {
+            Err(Lowered::Refused(VariantRefusal::of(&refused)))
+        }
         Err(error) => Err(Lowered::Translation(error)),
     }
 }
@@ -2243,6 +2282,13 @@ impl PipelineInner {
 }
 
 impl Compiled {
+    /// The kernel's own threadgroup memory: Metal's `staticThreadgroupMemoryLength` of the
+    /// content ([`ComputePipelineState::static_threadgroup_memory_length`]), which a refusal of
+    /// its threadgroup memory names.
+    pub(crate) fn static_length(&self) -> u32 {
+        self.answers.static_threadgroup_memory_length
+    }
+
     /// The content's `which` variant, where it has one.
     fn variant(&self, which: Which) -> Option<&Lowered> {
         match (which, &self.form) {
@@ -2260,14 +2306,14 @@ impl Compiled {
     /// The module of the content's `which` variant, lowered with the state: [`Compiled::whole`]
     /// for a partial-threadgroups variant that is the content's module ([`Partial::Alone`]).
     ///
-    /// Err: `refused` where the content has no such variant or the translator refused it
-    /// ([`Lowered::Refused`]); [`Error::Translation`] where its lowering or compile failed
+    /// Err: `refused` of why where the content has no such variant (as the translator's other
+    /// refusals) or the translator refused it ([`Lowered::Refused`]); [`Error::Translation`] where its lowering or compile failed
     /// otherwise; [`Gap::KernelInput`] where it reads what the encoder does not supply;
     /// [`Error::Vulkan`] where its shader module failed.
     pub(crate) fn variant_kernel(
         &self,
         which: Which,
-        refused: impl FnOnce() -> Error,
+        refused: impl FnOnce(VariantRefusal) -> Error,
     ) -> Result<&Kernel, Error> {
         if let (
             Which::Partial,
@@ -2280,7 +2326,7 @@ impl Compiled {
         }
         match self.variant(which) {
             Some(lowered) => lowered.kernel(refused),
-            None => Err(refused()),
+            None => Err(refused(VariantRefusal::Translator)),
         }
     }
 
@@ -2303,7 +2349,7 @@ impl Compiled {
         }
         match self.variant(which)? {
             Lowered::Made(kernel, _) => Some(&**kernel),
-            Lowered::Refused
+            Lowered::Refused(_)
             | Lowered::Translation(_)
             | Lowered::Unsupplied(_)
             | Lowered::Failed(_) => None,
@@ -2366,7 +2412,8 @@ impl Compiled {
         if (choice.direct).is_some_and(|(_, groups, _)| groups.contains(&0)) {
             return None;
         }
-        let lengths = threadgroup_memory(kernel, set, choice.local, max).ok()?;
+        let lengths =
+            threadgroup_memory(kernel, set, choice.local, (self.static_length(), max)).ok()?;
         Some((kernel, module, choice.local, lengths))
     }
 }
@@ -2379,12 +2426,15 @@ impl Lowered {
         }
     }
 
-    /// The module, or the error a need of the variant reports: `refused` for the translator's
-    /// refusal alone, so no other failure reads as the variant's gap.
-    pub(crate) fn kernel(&self, refused: impl FnOnce() -> Error) -> Result<&Kernel, Error> {
+    /// The module, or the error a need of the variant reports: `refused` of why for the
+    /// translator's refusal alone, so no other failure reads as the variant's gap.
+    pub(crate) fn kernel(
+        &self,
+        refused: impl FnOnce(VariantRefusal) -> Error,
+    ) -> Result<&Kernel, Error> {
         match self {
             Lowered::Made(kernel, _) => Ok(&**kernel),
-            Lowered::Refused => Err(refused()),
+            &Lowered::Refused(why) => Err(refused(why)),
             Lowered::Translation(error) => Err(Error::translation(error.clone())),
             &Lowered::Unsupplied(kind) => Err(gap(kind)),
             &Lowered::Failed(result) => Err(Error::Vulkan {
