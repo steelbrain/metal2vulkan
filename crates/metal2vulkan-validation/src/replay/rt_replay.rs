@@ -231,6 +231,11 @@ fn sampler(index: Option<u64>) -> Value {
 }
 
 /// A recorder struct's map of unsigned fields.
+/// A resource argument, `{Buffer: object}` or `{Texture: object}`.
+fn resource(kind: &str, id: u64) -> Value {
+    Value::Map(vec![(kind.into(), Value::Object(id))])
+}
+
 fn uints(fields: &[(&str, u64)]) -> Value {
     Value::Map(
         fields
@@ -421,14 +426,14 @@ fn draw_with_clamps(dir: &ScratchDir, green: &[u8], then: Then, clamp: Option<f3
                 w.call("m2v.newBlockWithLength:storageMode:", 1, 16, &block, &[])?;
                 // MTLResourceUsageRead; MTLRenderStageVertex, Fragment and both.
                 let [read, vertex, fragment, both] = [1, 1, 2, 3].map(Value::Uint);
-                let (buffer, heap) = (Value::Object(8), Value::Object(16));
-                let buffers = Value::List(vec![Value::Object(8), Value::Object(9)]);
+                let (buffer, heap) = (resource("Buffer", 8), Value::Object(16));
+                let buffers = Value::List(vec![resource("Buffer", 8), resource("Buffer", 9)]);
                 let heaps = Value::List(vec![Value::Object(16)]);
                 let uses = [
                     ("useResource:usage:", vec![buffer.clone(), read.clone()]),
                     (
                         "useResource:usage:stages:",
-                        vec![Value::Object(9), read.clone(), vertex.clone()],
+                        vec![resource("Buffer", 9), read.clone(), vertex.clone()],
                     ),
                     (
                         "useResources:count:usage:",
@@ -1321,10 +1326,10 @@ fn a_compute_encoder_s_residency_declarations_play_through_the_runtime() {
         w.call("setBuffer:offset:atIndex:", 9, 0, &bind(7, 1), &[])?;
         // MTLResourceUsageRead and Write.
         let (read, write) = (Value::Uint(1), Value::Uint(2));
-        let buffers = Value::List(vec![Value::Object(6), Value::Object(7)]);
+        let buffers = Value::List(vec![resource("Buffer", 6), resource("Buffer", 7)]);
         let heaps = Value::List(vec![Value::Object(10)]);
         let uses = [
-            ("useResource:usage:", vec![Value::Object(6), read]),
+            ("useResource:usage:", vec![resource("Buffer", 6), read]),
             ("useResources:count:usage:", vec![buffers, write]),
             ("useHeap:", vec![Value::Object(10)]),
             ("useHeaps:count:", vec![heaps]),

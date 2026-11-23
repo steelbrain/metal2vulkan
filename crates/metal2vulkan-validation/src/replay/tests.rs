@@ -1936,6 +1936,11 @@ fn encoder_call(selector: &str, receiver: u64, args: Vec<Value>) -> Call {
     }
 }
 
+/// Buffer `id` as a resource argument: `{Buffer: object}`.
+fn buffer_resource(id: u64) -> Value {
+    map(&[("Buffer", Value::Object(id))])
+}
+
 /// `setBuffer:offset:atIndex:` of buffer `id` at slot `slot` of encoder `encoder`.
 fn bind_at(encoder: u64, id: u64, slot: u64) -> Call {
     let args = vec![Value::Object(id), Value::Uint(0), Value::Uint(slot)];
@@ -2045,7 +2050,7 @@ fn a_dispatch_reads_a_buffer_only_where_its_state_or_its_usage_reads_it() {
         encoder_call(
             "useResource:usage:",
             17,
-            vec![Value::Object(id), Value::Uint(usage)],
+            vec![buffer_resource(id), Value::Uint(usage)],
         )
     };
     unwritten.encoded(&used(8, 2), 18, true);
@@ -2088,7 +2093,7 @@ fn a_dispatch_reads_or_writes_each_buffer_a_plural_use_names_by_its_usage() {
     }
     unwritten.state(12, Some(Vec::new()));
     let used = |ids: &[u64], usage: u64| {
-        let list = Value::List(ids.iter().map(|&id| Value::Object(id)).collect());
+        let list = Value::List(ids.iter().map(|&id| buffer_resource(id)).collect());
         encoder_call(
             "useResources:count:usage:",
             12,
@@ -2772,7 +2777,7 @@ fn a_compute_encoder_s_plural_uses_take_covers_off_as_the_single_forms_do() {
         w.call(made, 1, 9, &[], &[])?;
         // Covered by the write of #5, then written by the plural use with write usage (2).
         encoded(w, 20)?;
-        let list = Value::List(vec![Value::Object(3)]);
+        let list = Value::List(vec![buffer_resource(3)]);
         used(w, 30, "useResources:count:usage:", &[list, Value::Uint(2)])?;
         w.call("m2v.check", 0, 0, &[Value::Object(3)], &[])?;
         // Covered again, then bound by the plural use of its heap.
