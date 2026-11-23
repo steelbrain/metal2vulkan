@@ -10063,14 +10063,14 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `attribute-format-fetches` | The device's own answer (rule 1): a NaN of a `half` or `RG11B10` stage-in attribute widened by the shader's fetch on the device keeps its payload where Metal re… |
 | `attribute-format-fetches` | The device's own answer (rule 1): a NaN of a `half` or `RG11B10` stage-in attribute widened by the shader's fetch on the device keeps its payload where Metal re… |
 | `attribute-format-fetches` | The device's own answer (rule 1): a NaN of a `half` or `RG11B10` stage-in attribute widened by the shader's fetch on the device keeps its payload where Metal re… |
-| `reconvergence-constructs` | llvmpipe's own answer, on no GPU: after a break to the loop's own merge, the fine pair of the pixels along the diagonal x + y = 62 to 63 of the 64 by 64 target … |
+| `reconvergence-constructs` | llvmpipe's own answer, on no GPU: after a break to the loop's own merge, the fine pair of the pixels along the full-screen triangle's diagonal, x + y = 62 to 63… |
 | `reconvergence-constructs` | The device's own answer (rule 1): llvmpipe's trilinear sample of the R16Float mip chain at a level of detail of q + log2(1.5) answers other bits than Metal's in… |
 | `reconvergence-constructs` | The device's own answer (rule 1): llvmpipe's trilinear sample of the R16Float mip chain at a level of detail of q + log2(1.5) answers other bits than Metal's in… |
 | `reconvergence-constructs` | The device's own answer (rule 1): llvmpipe's trilinear sample of the R16Float mip chain at a level of detail of q + log2(1.5) answers other bits than Metal's in… |
 | `reconvergence-constructs` | The device's own answer (rule 1): llvmpipe's trilinear sample of the R16Float mip chain at a level of detail of q + log2(1.5) answers other bits than Metal's in… |
 | `reconvergence-constructs` | The device's own answer (rule 1): llvmpipe's trilinear sample of the R16Float mip chain at a level of detail of q + log2(1.5) answers other bits than Metal's in… |
 | `reconvergence-constructs` | The device's own answer (rule 1): llvmpipe's trilinear sample of the R16Float mip chain at a level of detail of q + log2(1.5) answers other bits than Metal's in… |
-| `reconvergence-constructs` | llvmpipe's own answer, on no GPU: after a loop of the pixel's own trip count, the fine pair of the pixels along the diagonal x + y = 62 to 63 of the 64 by 64 ta… |
+| `reconvergence-constructs` | llvmpipe's own answer, on no GPU: after a loop of the pixel's own trip count, the fine pair of the pixels along the full-screen triangle's diagonal, x + y = 62 … |
 | `reconvergence-constructs` | The device's own answer (rule 1): llvmpipe's trilinear sample of the R16Float mip chain at a level of detail of q + log2(1.5) answers other bits than Metal's in… |
 | `reconvergence-constructs` | The device's own answer (rule 1): llvmpipe's trilinear sample of the R16Float mip chain at a level of detail of q + log2(1.5) answers other bits than Metal's in… |
 | `reconvergence-handle-choices` | The device's own answer (rule 1): the 780M's trilinear sample of the second source, whose values 21 + n are 16 or more, is one step of a half (1/64) from Metal'… |
