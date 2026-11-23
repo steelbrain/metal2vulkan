@@ -2088,6 +2088,93 @@ mod on_device {
         }
     }
 
+    /// `scan_static` ([`scan_kernel`]) over declared threadgroup memory of the device's
+    /// `maxComputeSharedMemorySize`, whose partial-threadgroups variant the translator refuses for
+    /// its vote word: a device on a cache directory keeps the refusal with its reason (the
+    /// directory holds the vote word's marker), and a device on the directory after it lowers
+    /// nothing, reads the refusal from the directory, and still names the vote word as the site
+    /// of its ragged grid's refusal, with the kernel's static bytes and the limit.
+    #[test]
+    fn every_device_names_the_vote_word_site_from_the_cache_directory() {
+        let instance = crate::tests::validation::instance(&[]);
+        let devices = devices_of_the_cfgs_kind(&instance);
+        assert!(!devices.is_empty(), "no device of this cfg's kind");
+        for (name, physical) in &devices {
+            let dir = std::env::temp_dir().join(format!("m2v-rt-vote-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            for round in 0..2 {
+                let device = on_directory(name, physical, &dir);
+                let limit = device.core().limits.max_shared_memory;
+                let bitcode = match metal2vulkan_devtools::llvm_assemble_text(&scan_kernel(Some(
+                    limit / 4,
+                ))) {
+                    Ok(bitcode) => bitcode,
+                    Err(AssembleError::Missing(why)) => {
+                        eprintln!("SKIPPED: {why}");
+                        return;
+                    }
+                    Err(error) => panic!("scan_static: {error:?}"),
+                };
+                let library = Library::from_air(&bitcode).expect("the library");
+                let function = library.function("scan_static").expect("the kernel");
+                let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
+                    FunctionDescriptor::new(function),
+                ));
+                let counters = device.counters();
+                let state = state(name, &device, &descriptor);
+                let metrics = counters.metrics();
+                if round == 1 {
+                    assert_eq!(
+                        metrics.translations, 0,
+                        "{name}: the second device lowers nothing"
+                    );
+                    assert!(
+                        metrics.translations_loaded > 0,
+                        "{name}: the second device reads the directory"
+                    );
+                }
+                {
+                    let queue = device.new_command_queue(1).expect("a queue");
+                    let mut buffers = Buffers::new(&device, 1 << 16);
+                    let out = buffers.buffer(4 * 1024);
+                    let command_buffer = queue.command_buffer().expect("a command buffer");
+                    let mut encoder = command_buffer
+                        .compute_command_encoder(DispatchType::Serial)
+                        .expect("an encoder");
+                    encoder.set_compute_pipeline_state(&state).expect("a state");
+                    encoder.set_buffer(Some(&out), 0, 0).expect("a buffer");
+                    match encoder.dispatch_threads([25, 1, 1], [1024, 1, 1]) {
+                        Err(Error::Unsupported(Gap::PartialThreadgroups {
+                            site: PartialThreadgroupsSite::VoteWord { static_length, max },
+                            ..
+                        })) if static_length == limit && max == limit => {}
+                        other => panic!("{name}: device {round} on the directory: {other:?}"),
+                    }
+                    encoder.end_encoding();
+                    command_buffer.commit().expect("a commit");
+                    finished(name, &command_buffer);
+                }
+                drop(state);
+                drop(device);
+                // The teardown ends once the reaper wrote what it was given.
+                within("the teardown", || counters.gauges() == Gauges::default());
+                if round == 0 {
+                    let marker = crate::cache::REFUSED_VOTE;
+                    let kept = (files(&dir).iter()).any(|(file, len, _)| {
+                        *len == marker.len() as u64
+                            && std::fs::read(dir.join(file)).is_ok_and(|bytes| bytes == marker)
+                    });
+                    assert!(kept, "{name}: the directory keeps the vote word's refusal");
+                }
+            }
+            let _ = std::fs::remove_dir_all(&dir);
+            println!(
+                "{name}: the vote word named as the site by a first and a second device on the \
+                 directory, the second lowering nothing"
+            );
+        }
+    }
+
     /// What a state of a kernel module answers, and what a dispatch checks of it, beside the
     /// dispatch's own module: for [`every_device_s_observers_answer_the_same_on_their_variant`].
     #[derive(Debug, PartialEq)]

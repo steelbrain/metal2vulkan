@@ -167,7 +167,7 @@ const REFUSED: &[u8] = b"m2v-refused";
 /// What a partial-threadgroups variant's translation file holds where the translator refused it
 /// for its predicated walk's vote word ([`VariantRefusal::VoteWord`]): bytes no lowering encodes
 /// to, nor [`REFUSED`] or [`OBSERVES`], and that a file cut short is not.
-const REFUSED_VOTE: &[u8] = b"m2v-refused-vote";
+pub(crate) const REFUSED_VOTE: &[u8] = b"m2v-refused-vote";
 /// What a partial-threadgroups variant's translation file holds where the translator answered
 /// that the kernel observes its threadgroup partition, until the variant is lowered over it:
 /// bytes no lowering encodes to, nor [`REFUSED`] or [`REFUSED_VOTE`], and that a file cut short is
