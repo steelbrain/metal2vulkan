@@ -1010,7 +1010,8 @@ struct Dump {
     named: HashMap<u64, BTreeSet<u64>>,
     /// The colour attachments the play's render passes store.
     stores: dumps::Stores,
-    /// The texture parts each listed command buffer's render passes stored, until it completes.
+    /// The texture parts each listed command buffer's render passes stored, and the first level
+    /// and slice of each texture its compute encoders bound, until it completes.
     stored: HashMap<u64, BTreeMap<u64, BTreeSet<Part>>>,
     /// The listed command buffers that completed and are not yet written out.
     completed: Vec<u64>,
@@ -1682,7 +1683,8 @@ impl<'b, B: Backend> Player<'b, B> {
 
     /// What a dump (`dumping`) keeps of `call`, played: a buffer it made, a render pass
     /// descriptor's colour attachment it set, an encoder a listed command buffer made, the
-    /// buffers such an encoder's call names and the texture parts its render pass stores.
+    /// buffers such an encoder's call names, the texture parts its render pass stores and the
+    /// textures it binds where it is a compute encoder.
     fn dump_saw(&mut self, call: &Call) {
         let Some(dump) = &mut self.dump else {
             return;
@@ -1725,7 +1727,8 @@ impl<'b, B: Backend> Player<'b, B> {
 
     /// Write out the listed command buffers that completed (`dumping`): each buffer they named,
     /// read now, and its covered ranges now; each colour attachment their render passes stored,
-    /// the parts of it they stored, read now.
+    /// the parts of it they stored, and each texture their compute encoders bound, its first
+    /// level and slice, read now.
     fn dump_completed(&mut self, left_out: &mut Counters) -> Result<(), PlayError> {
         let Some(dump) = &mut self.dump else {
             return Ok(());

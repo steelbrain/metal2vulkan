@@ -3384,14 +3384,15 @@ fn two_dumps(rebound: bool) -> (ScratchDir, ScratchDir) {
 /// The per-command-buffer compare of two plays (`compare_dumps`) leaves out a differing word
 /// under a cover and reports one outside every cover: a texture's write covered the first 0x1000
 /// bytes of buffer #3 after the command buffer bound it, so of the two words that differ, the one
-/// at 0x10 is covered and the one at 0x1800 (word 0x600) is reported, and the plays differ.
+/// at 0x10 is covered and the one at 0x1800 (word 0x600) is reported, and the plays differ. The
+/// texture the encoder binds (#5) is compared too, alike in both.
 #[test]
 fn the_dump_compare_reports_a_differing_word_outside_every_cover() {
     let (a, b) = two_dumps(false);
     let cover = std::fs::read_to_string(a.path().join("cb20-obj3.cover")).unwrap();
     assert_eq!(cover, "0..4096");
     let comparison = compare_dumps(a.path(), b.path()).unwrap();
-    assert_eq!(comparison.compared, 1);
+    assert_eq!(comparison.compared, 2);
     let difference = Difference {
         command_buffer: 20,
         object: 3,
@@ -3439,7 +3440,9 @@ fn the_dump_compare_reports_a_word_whose_cover_the_buffer_s_last_write_voided() 
 }
 
 /// A listed command buffer's dump holds every buffer its encoders named, whatever made it: a
-/// plain buffer, a buffer in a block and a host's padded buffer; a texture it names is no dump.
+/// plain buffer, a buffer in a block and a host's padded buffer; and the texture its compute
+/// encoder binds, as such a texture
+/// (`a_listed_command_buffer_dumps_the_textures_its_compute_encoders_bind`).
 #[test]
 fn a_listed_command_buffer_dumps_every_buffer_it_names_whatever_made_it() {
     let dir = ScratchDir::new("dumps-makers").unwrap();
@@ -3486,7 +3489,7 @@ fn a_listed_command_buffer_dumps_every_buffer_it_names_whatever_made_it() {
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
     names.sort();
-    let dumps = ["cb20-obj3", "cb20-obj4", "cb20-obj5"];
+    let dumps = ["cb20-obj3", "cb20-obj4", "cb20-obj5", "cb20-obj8"];
     let wanted: Vec<String> = (dumps.iter())
         .flat_map(|dump| [format!("{dump}.bin"), format!("{dump}.cover")])
         .collect();
@@ -3604,7 +3607,80 @@ fn a_listed_command_buffer_dumps_the_colour_attachments_its_render_passes_store(
     }
 }
 
-/// Two plays alike agree; a dump one play has alone is reported.
+/// A listed command buffer's dump holds each texture its compute encoders bound, its first level
+/// and slice: command buffer #20's compute encoder binds #8 (`setTexture:atIndex:`) and #9 and
+/// #10 with a nil between them (`setTextures:withRange:`), and #10 again; its render encoder's
+/// fragment texture #11 is no dump, nor is #12, which a compute encoder of command buffer #30,
+/// not listed, binds.
+#[test]
+fn a_listed_command_buffer_dumps_the_textures_its_compute_encoders_bind() {
+    let dir = ScratchDir::new("dumps-compute").unwrap();
+    let (_, ended) = dumped(&mut Kept::default(), dir.path(), |w| {
+        w.call("MTLCreateSystemDefaultDevice", 0, 1, &[], &[])?;
+        w.call("newCommandQueue", 1, 6, &[], &[])?;
+        w.call("m2v.textureDescriptor", 0, 7, &[map(&[])], &[])?;
+        for texture in 8..=12 {
+            w.call(
+                "newTextureWithDescriptor:",
+                1,
+                texture,
+                &[Value::Object(7)],
+                &[],
+            )?;
+        }
+        w.call("MTLRenderPassDescriptor.new", 0, 40, &[], &[])?;
+        w.call("commandBuffer", 6, 20, &[], &[])?;
+        w.call("computeCommandEncoder", 20, 21, &[], &[])?;
+        let one = [Value::Object(8), Value::Uint(0)];
+        w.call("setTexture:atIndex:", 21, 0, &one, &[])?;
+        let list = Value::List(vec![Value::Object(9), Value::Object(0), Value::Object(10)]);
+        let range = map(&[("location", Value::Uint(1)), ("length", Value::Uint(3))]);
+        w.call("setTextures:withRange:", 21, 0, &[list, range], &[])?;
+        let again = [Value::Object(10), Value::Uint(4)];
+        w.call("setTexture:atIndex:", 21, 0, &again, &[])?;
+        w.call("endEncoding", 21, 0, &[], &[])?;
+        w.call(
+            "renderCommandEncoderWithDescriptor:",
+            20,
+            22,
+            &[Value::Object(40)],
+            &[],
+        )?;
+        let fragment = [Value::Object(11), Value::Uint(0)];
+        w.call("setFragmentTexture:atIndex:", 22, 0, &fragment, &[])?;
+        w.call("endEncoding", 22, 0, &[], &[])?;
+        w.call("commit", 20, 0, &[], &[])?;
+        w.call("commandBuffer", 6, 30, &[], &[])?;
+        w.call("computeCommandEncoder", 30, 31, &[], &[])?;
+        let unlisted = [Value::Object(12), Value::Uint(0)];
+        w.call("setTexture:atIndex:", 31, 0, &unlisted, &[])?;
+        w.call("endEncoding", 31, 0, &[], &[])?;
+        w.call("commit", 30, 0, &[], &[])
+    });
+    ended.unwrap();
+    let mut names: Vec<String> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    let dumps = ["cb20-obj10", "cb20-obj8", "cb20-obj9"];
+    let wanted: Vec<String> = (dumps.iter())
+        .flat_map(|dump| [format!("{dump}.bin"), format!("{dump}.cover")])
+        .collect();
+    assert_eq!(names, wanted);
+    let read = |name: &str| std::fs::read(dir.path().join(name)).unwrap();
+    for (dump, texture) in dumps.iter().zip([10u64, 8, 9]) {
+        let first: Vec<u8> = [texture, 0, 0, 0]
+            .iter()
+            .flat_map(|word| word.to_le_bytes())
+            .collect();
+        assert_eq!(read(&format!("{dump}.bin")), first);
+        assert_eq!(read(&format!("{dump}.cover")), b"-");
+    }
+}
+
+/// Two plays alike agree, over buffer #3 and the texture #5 the encoder binds; a dump one play
+/// has alone is reported.
 #[test]
 fn the_dump_compare_agrees_on_alike_plays_and_reports_a_dump_one_play_lacks() {
     let (a, b) = (
@@ -3614,7 +3690,7 @@ fn the_dump_compare_agrees_on_alike_plays_and_reports_a_dump_one_play_lacks() {
     play_covered(a.path(), vec![5; 0x2000], false);
     play_covered(b.path(), vec![5; 0x2000], false);
     let comparison = compare_dumps(a.path(), b.path()).unwrap();
-    assert_eq!((comparison.compared, comparison.agrees()), (1, true));
+    assert_eq!((comparison.compared, comparison.agrees()), (2, true));
     std::fs::write(a.path().join("cb21-obj3.bin"), [0u8; 4]).unwrap();
     let comparison = compare_dumps(a.path(), b.path()).unwrap();
     assert_eq!(comparison.only_one, [("cb21-obj3".to_owned(), 'a')]);

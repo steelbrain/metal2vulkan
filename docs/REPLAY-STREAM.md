@@ -1145,7 +1145,11 @@ stored, each a level, a slice and a depth plane (`level`, `slice` and `depthPlan
 resolve's), one after another by level, then slice, then plane, each laid out as a check reads a
 texture's first level and slice; its `cbC-objT.cover` is `-`, and `cbC-objT.unread` replaces the
 bytes where the backend could not read a part (a multisample texture stored without its resolve,
-for one). A depth or stencil attachment is not written: a texture of a combined depth and
+for one). It writes too each texture the command buffer's compute encoders bound
+(`setTexture:atIndex:` and `setTextures:withRange:`, a nil one left out): its first level and
+slice as a part, read once the command buffer completed as an attachment's parts are, so what the
+command buffer's last write left there; a texture both stored and bound holds each of its parts
+once, in that order. A depth or stencil attachment is not written: a texture of a combined depth and
 stencil format reads back one aspect at a time, through a copy with that aspect's blit option,
 which this read does not make. `command-replay compare-dumps --a DIR --b DIR` compares two plays' dumps word by word (4 bytes), leaving out a word
 wholly inside a range either play held covered, and prints `differs cb #C obj #O: N words outside every cover, the first word

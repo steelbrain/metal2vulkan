@@ -1,12 +1,13 @@
 //! The per-command-buffer compare of two plays (`docs/REPLAY-STREAM.md`, section 10).
 //!
 //! A play asked to dump command buffers ([`Player::dumping`](super::player::Player::dumping))
-//! writes, once each listed command buffer completed, every buffer its encoders named and every
-//! colour attachment its render passes stored ([`Stores`]), as these kinds of file in its
-//! directory:
+//! writes, once each listed command buffer completed, every buffer its encoders named, every
+//! colour attachment its render passes stored and every texture its compute encoders bound
+//! ([`Stores`]), as these kinds of file in its directory:
 //! - `cb<C>-obj<O>.bin`: the buffer's bytes; a texture's, the parts of it the command buffer's
-//!   passes stored (a level, a slice and a depth plane each), in the order of [`Part`], each laid
-//!   out as a check reads a texture's first level and slice;
+//!   passes stored (a level, a slice and a depth plane each), in the order of [`Part`], and a
+//!   compute-bound texture's first level and slice, each laid out as a check reads a texture's
+//!   first level and slice;
 //! - `cb<C>-obj<O>.cover`: the ranges of it the player's cover rule (`covers.rs`) held covered
 //!   then, as `start..end` byte offsets joined by commas, or `-` for none (always `-` for a
 //!   texture);
@@ -25,14 +26,15 @@
 //! A whole-object checksum is no such compare: one word under a cover would make a buffer differ,
 //! and one word outside it would hide behind a cover elsewhere in the buffer.
 //!
-//! A dump holds colour attachments only. A depth or stencil attachment is none: a texture of a
+//! A dump holds colour attachments and compute-bound textures only. A depth or stencil attachment
+//! is none: a texture of a
 //! combined depth and stencil format reads back only one aspect at a time, through a copy with
 //! that aspect's blit option, which the dump's read of a texture part does not make.
 
 use super::player::ReadCopy;
 use super::stream::Call;
 use super::value::{Name, Value};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -171,18 +173,23 @@ impl Colour {
 /// The colour attachments a play's render passes store: each render pass descriptor's, as its
 /// `m2v.setColorAttachment` records set them (`docs/REPLAY-STREAM.md`, section 9), and each
 /// render encoder's whose store action is `MTLStoreActionUnknown`, until the encoder's
-/// `setColorStoreAction:atIndex:` names the action.
+/// `setColorStoreAction:atIndex:` names the action; and the compute encoders, whose bound
+/// textures a dump reads too.
 #[derive(Default)]
 pub(super) struct Stores {
     passes: HashMap<u64, BTreeMap<u64, Colour>>,
     unknown: HashMap<u64, BTreeMap<u64, Colour>>,
+    /// The compute encoders made and not yet ended.
+    computes: HashSet<u64>,
 }
 
 impl Stores {
     /// `call`, played: a colour attachment's setter record on a render pass descriptor, kept. The
     /// texture parts a render pass stores where `call` makes its encoder
     /// (`renderCommandEncoderWithDescriptor:`) or names an attachment's store action left unknown
-    /// (`setColorStoreAction:atIndex:`), into `out`.
+    /// (`setColorStoreAction:atIndex:`), into `out`; and each texture a compute encoder binds
+    /// (`setTexture:atIndex:` and `setTextures:withRange:`), as its first level and slice
+    /// ([`Part::default`]), a nil one left out.
     pub(super) fn saw(&mut self, call: &Call, out: &mut Vec<(u64, Part)>) {
         let uint = |at: usize| call.args.get(at).and_then(Value::as_uint);
         match &*call.selector {
@@ -218,8 +225,26 @@ impl Stores {
                     colour.stored(store, out);
                 }
             }
+            "computeCommandEncoder"
+            | "computeCommandEncoderWithDispatchType:"
+            | "computeCommandEncoderWithDescriptor:"
+                if call.result != 0 =>
+            {
+                self.computes.insert(call.result);
+            }
+            "setTexture:atIndex:" | "setTextures:withRange:"
+                if self.computes.contains(&call.receiver) =>
+            {
+                let bound = match call.args.first() {
+                    Some(Value::List(textures)) => textures.iter().collect(),
+                    first => Vec::from_iter(first),
+                };
+                let bound = bound.into_iter().filter_map(Value::as_object);
+                out.extend(bound.filter(|&t| t != 0).map(|t| (t, Part::default())));
+            }
             "endEncoding" => {
                 self.unknown.remove(&call.receiver);
+                self.computes.remove(&call.receiver);
             }
             _ => {}
         }
