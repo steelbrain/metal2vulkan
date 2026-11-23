@@ -51,7 +51,10 @@ Under the identity domains set 1 has one layout for every pipeline: binding 0 is
 array of 65,536 elements, binding 1 the storage-image array of 65,536, bindings 2, 3 and 4 the
 sampler arrays of 4,000 elements each, and bindings 5 and 6 the uniform and the storage
 texel-buffer arrays of 65,536 elements each, every one partially bound, updated after binding and
-while unused elements are pending, and seen by every stage. Element `i` of each image array is the
+while unused elements are pending, and seen by every stage. Shaders declare the arrays unsized, so
+a consumer's layout may hold more elements than these; the runtime's sampler arrays hold 8,000,
+the last 4,000 for sampler states bound with LOD clamps of their own, which no ID a program
+writes reaches. Element `i` of each image array is the
 texture whose ID holds index `i`, and element `i` of each texel-buffer array the texture buffer
 whose ID holds it (a read texture buffer is a uniform texel buffer, a written one a storage texel
 buffer), so the consumer writes an element once, as it makes the texture, for every pipeline; a

@@ -5,11 +5,18 @@
 //! One descriptor set of the translator's identity domains' seven arrays, made at device creation
 //! and never rewritten for layouts: binding 0 the sampled textures and binding 1 the storage
 //! textures (65,536 each, element `i` of both the texture at index `i`), bindings 2, 3 and 4 the
-//! samplers of each use, plain, depth comparison and integer texture (4,000 each), and bindings 5
-//! and 6 the texture buffers' uniform and storage texel buffers (65,536 each, element `i` of both
-//! the texture buffer at index `i`). Every binding is partially bound and updated after bind, also
-//! while work that uses the set is pending, so writing one element needs no lock: each element has
-//! one owner, which writes it alone.
+//! samplers of each use, plain, depth comparison and integer texture (8,000 each: the 4,000 indices
+//! a resource ID reaches, then 4,000 variant elements), and bindings 5 and 6 the texture buffers'
+//! uniform and storage texel buffers (65,536 each, element `i` of both the texture buffer at index
+//! `i`). Every binding is partially bound and updated after bind, also while work that uses the
+//! set is pending, so writing one element needs no lock: each element has one owner, which writes
+//! it alone.
+//!
+//! A variant element holds a sampler state bound with LOD clamps of its own (`crate::sampler`): the
+//! runtime places it at an index from 4,000 to 7,999, which no grant reaches, and pushes that
+//! index to the slot that binds it. Shaders declare the arrays unsized, so their length is this
+//! layout's, and an argument buffer's sampler index of 4,000 or more reads element 0, so no
+//! program-written ID reaches a variant.
 //!
 //! Every element no live object owns holds a defined value, so a nil, stale or forged index reads
 //! zeros or samples plainly on every device, where an element never written would be undefined
@@ -39,7 +46,9 @@
 use crate::counters::{Counters, Gauge, Metric, Part};
 use crate::device::lock;
 use crate::error::{Error, Limit, Refusal};
-use crate::floor::{BelowFloor, Missing, SAMPLERS, SAMPLER_ARRAYS, TEXTURES};
+use crate::floor::{
+    BelowFloor, Missing, SAMPLERS, SAMPLER_ARRAYS, SAMPLER_ELEMENTS, SAMPLER_VARIANTS, TEXTURES,
+};
 use crate::Device;
 use ash::vk;
 use std::collections::HashMap;
@@ -59,7 +68,9 @@ pub(crate) const UNIFORM_TEXELS_BINDING: u32 = 5;
 pub(crate) const STORAGE_TEXELS_BINDING: u32 = 6;
 
 /// Set 1's bindings, each its binding, descriptor type and count: the arrays a kernel's layout
-/// names under the identity domains, which every pipeline's layout takes from this set.
+/// names under the identity domains, which every pipeline's layout takes from this set. Shaders
+/// declare the arrays unsized, and the set's layout holds [`layout_counts`] elements: more in the
+/// sampled-texture array with the second elements, and in each sampler array its variants'.
 pub(crate) const BINDINGS: [(u32, vk::DescriptorType, u32); 7] = [
     (SAMPLED_BINDING, vk::DescriptorType::SAMPLED_IMAGE, TEXTURES),
     (STORAGE_BINDING, vk::DescriptorType::STORAGE_IMAGE, TEXTURES),
@@ -193,6 +204,8 @@ pub(crate) struct Grants {
     owners: [HashMap<u32, Owner>; 2],
     /// The last owner word given.
     last: u64,
+    /// The variant elements no variant holds, the lowest last.
+    variants: Vec<u32>,
 }
 
 impl Grants {
@@ -201,6 +214,7 @@ impl Grants {
             granted: [Bits::new(TEXTURES), Bits::new(SAMPLERS)],
             owners: [HashMap::new(), HashMap::new()],
             last: 0,
+            variants: (SAMPLERS..SAMPLER_ELEMENTS).rev().collect(),
         }
     }
 
@@ -731,6 +745,50 @@ impl Arrays {
         }
     }
 
+    /// Places a variant of a sampler state at a variant element no variant holds and writes its
+    /// elements there, each of `elements` as [`Arrays::place_samplers`] writes them: its index,
+    /// which no grant reaches.
+    ///
+    /// Err: [`Limit::LodClampVariants`] where every variant element is held.
+    ///
+    /// # Safety
+    ///
+    /// Each sampler is live and of the device whenever work uses it.
+    pub(crate) unsafe fn place_variant(
+        &self,
+        device: &ash::Device,
+        counters: &Counters,
+        elements: &[(usize, Option<vk::Sampler>)],
+    ) -> Result<u32, Error> {
+        let mut grants = lock(&self.grants);
+        let index = (grants.variants.pop()).ok_or(Error::Limit(Limit::LodClampVariants {
+            max: SAMPLER_VARIANTS,
+        }))?;
+        // SAFETY: the caller's contract; no variant held the element, so no work uses it, and the
+        // lock is held.
+        unsafe { self.write_samplers(device, counters, index, elements) };
+        Ok(index)
+    }
+
+    /// The variant at variant element `index` goes: each array's element is its default again and
+    /// the element is free.
+    ///
+    /// # Safety
+    ///
+    /// `index` is a variant element a variant held, and no work in flight reads its elements.
+    pub(crate) unsafe fn vacate_variant(
+        &self,
+        device: &ash::Device,
+        counters: &Counters,
+        index: u32,
+    ) {
+        let mut grants = lock(&self.grants);
+        // SAFETY: the caller's contract; the lock is held, so no variant is placed there before
+        // every element is its default.
+        unsafe { self.write_samplers(device, counters, index, &[(0, None), (1, None), (2, None)]) };
+        grants.variants.push(index);
+    }
+
     /// Writes elements at `index` of the sampler arrays, each `(array, sampler)`, the array 0
     /// plain, 1 comparison and 2 integer texture: the array's default where the sampler is `None`.
     /// An element that holds that sampler already is not written: an equal sampler state, whose
@@ -739,9 +797,9 @@ impl Arrays {
     ///
     /// # Safety
     ///
-    /// The grants' lock is held by a placement, an addition or a vacating of the index, no
-    /// pending work uses an element it changes, and each sampler is live and of the device
-    /// whenever work uses it.
+    /// The grants' lock is held by a placement, an addition or a vacating of the index or of the
+    /// variant element, no pending work uses an element it changes, and each sampler is live and
+    /// of the device whenever work uses it.
     unsafe fn write_samplers(
         &self,
         device: &ash::Device,
@@ -833,9 +891,7 @@ impl Made {
         // SAFETY: the device is live, with the update-after-bind features of each binding's type
         // (the floor's).
         let layout = unsafe {
-            let mut counts = BINDINGS.map(|(_, _, count)| count);
-            counts[SAMPLED_BINDING as usize] = sampled;
-            with_arrays_layout(counts, |info| {
+            with_arrays_layout(layout_counts(seconds), |info| {
                 supported(device, info, 1)?;
                 device
                     .create_descriptor_set_layout(info, None)
@@ -854,7 +910,7 @@ impl Made {
             },
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::SAMPLER,
-                descriptor_count: SAMPLER_ARRAYS * SAMPLERS,
+                descriptor_count: SAMPLER_ARRAYS * SAMPLER_ELEMENTS,
             },
             vk::DescriptorPoolSize {
                 ty: vk::DescriptorType::UNIFORM_TEXEL_BUFFER,
@@ -912,7 +968,7 @@ impl Made {
             seconds,
             grants: Mutex::new(Grants::new()),
             samplers: Mutex::new(
-                vec![[plain, compare, plain]; SAMPLERS as usize].into_boxed_slice(),
+                vec![[plain, compare, plain]; SAMPLER_ELEMENTS as usize].into_boxed_slice(),
             ),
         })
     }
@@ -985,6 +1041,18 @@ pub(crate) unsafe fn supported(
     }
 }
 
+/// The elements of each binding of set 1's layout, by [`BINDINGS`]: theirs, the sampled-texture
+/// array's [`sampled_images`], and each sampler array's [`SAMPLER_ELEMENTS`], its variant elements
+/// past the [`SAMPLERS`] a pipeline's layout names.
+pub(crate) fn layout_counts(seconds: bool) -> [u32; 7] {
+    let mut counts = BINDINGS.map(|(_, _, count)| count);
+    counts[SAMPLED_BINDING as usize] = sampled_images(seconds);
+    for array in 0..SAMPLER_ARRAYS {
+        counts[(FIRST_SAMPLER_BINDING + array) as usize] = SAMPLER_ELEMENTS;
+    }
+    counts
+}
+
 /// The elements of the sampled-texture array: [`TEXTURES`], twice that with the second elements.
 pub(crate) fn sampled_images(seconds: bool) -> u32 {
     match seconds {
@@ -1017,8 +1085,9 @@ unsafe fn fill(
         vk::DescriptorImageInfo::default().image_layout(vk::ImageLayout::GENERAL);
         TEXTURES as usize
     ];
-    let samplers =
-        |sampler| vec![vk::DescriptorImageInfo::default().sampler(sampler); SAMPLERS as usize];
+    let samplers = |sampler| {
+        vec![vk::DescriptorImageInfo::default().sampler(sampler); SAMPLER_ELEMENTS as usize]
+    };
     let (plains, compares) = (samplers(plain), samplers(compare));
     let texels = vec![vk::BufferView::null(); TEXTURES as usize];
     let writes = [

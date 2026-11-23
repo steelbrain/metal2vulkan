@@ -1315,6 +1315,7 @@ field	metal2vulkan-runtime::Gauges.imports	pub imports: u64
 field	metal2vulkan-runtime::Gauges.indirect_command_buffers	pub indirect_command_buffers: u64
 field	metal2vulkan-runtime::Gauges.kernel_entries	pub kernel_entries: u64
 field	metal2vulkan-runtime::Gauges.kernels	pub kernels: u64
+field	metal2vulkan-runtime::Gauges.lod_clamp_variants	pub lod_clamp_variants: u64
 field	metal2vulkan-runtime::Gauges.managed_spilled_bytes	pub managed_spilled_bytes: u64
 field	metal2vulkan-runtime::Gauges.occlusion_pools	pub occlusion_pools: u64
 field	metal2vulkan-runtime::Gauges.pipeline_cache_bytes	pub pipeline_cache_bytes: u64
@@ -8381,7 +8382,6 @@ variant	metal2vulkan-runtime::Gap::IndirectCommandBuffers	IndirectCommandBuffers
 variant	metal2vulkan-runtime::Gap::IndirectPrivateArena	IndirectPrivateArena
 variant	metal2vulkan-runtime::Gap::KernelInput	KernelInput { kind: KernelInputKind }
 variant	metal2vulkan-runtime::Gap::LinearPlanePass	LinearPlanePass { kind: LinearPlanePassKind }
-variant	metal2vulkan-runtime::Gap::LodClamps	LodClamps
 variant	metal2vulkan-runtime::Gap::MemorylessTexture	MemorylessTexture
 variant	metal2vulkan-runtime::Gap::MipmapFilter	MipmapFilter { pixel_format: PixelFormat }
 variant	metal2vulkan-runtime::Gap::NoStageInRegion	NoStageInRegion
@@ -8439,6 +8439,7 @@ variant	metal2vulkan-runtime::Limit::ExportType	ExportType { handle: ExportHandl
 variant	metal2vulkan-runtime::Limit::ImportAlignment	ImportAlignment { handle: ImportHandle, len: u64, alignment: u64 }
 variant	metal2vulkan-runtime::Limit::ImportType	ImportType { handle: ImportHandle, offered: u32, listed: u32 }
 variant	metal2vulkan-runtime::Limit::IndexRange	IndexRange { class: IndexClass, first: u32, count: u32 }
+variant	metal2vulkan-runtime::Limit::LodClampVariants	LodClampVariants { max: u32 }
 variant	metal2vulkan-runtime::Limit::MemoryAllocations	MemoryAllocations { max: u32 }
 variant	metal2vulkan-runtime::Limit::NoExport	NoExport { handle: ExportHandle }
 variant	metal2vulkan-runtime::Limit::NoImport	NoImport { handle: ImportHandle }

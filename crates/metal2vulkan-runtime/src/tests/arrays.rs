@@ -96,7 +96,7 @@ fn an_index_has_one_grant_at_a_time() {
 #[cfg(any(m2v_gpu, m2v_cpu_icd))]
 mod on_device {
     use super::refusal;
-    use crate::arrays::{supported, with_arrays_layout, Arrays, BINDINGS};
+    use crate::arrays::{layout_counts, supported, with_arrays_layout, Arrays};
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         Device, DeviceOptions, IndexClass, PixelFormat, Refusal, SamplerDescriptor, StorageMode,
@@ -198,7 +198,8 @@ mod on_device {
 
     /// The floor's last item, asked of the created device: every device of the cfg's kind
     /// supports both of the runtime's set layouts (`vkGetDescriptorSetLayoutSupport`), the empty
-    /// set 0 and set 1 of the arrays, which `Device::new` asks before it makes them.
+    /// set 0 and set 1 of the arrays, with the sampled-texture array's second elements where the
+    /// device reads attachments, which `Device::new` asks before it makes them.
     #[test]
     fn every_device_supports_the_runtimes_set_layouts() {
         let instance = crate::tests::validation::instance(&[]);
@@ -214,11 +215,13 @@ mod on_device {
             let empty = vk::DescriptorSetLayoutCreateInfo::default();
             // SAFETY: the device is live, with the floor's features.
             unsafe { supported(raw, &empty, 0) }.unwrap_or_else(|error| panic!("{name}: {error}"));
-            with_arrays_layout(BINDINGS.map(|(_, _, count)| count), |info| {
-                // SAFETY: the device is live, with the floor's features.
-                unsafe { supported(raw, info, 1) }
-            })
-            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            for seconds in [false, device.core().attachment_reads] {
+                with_arrays_layout(layout_counts(seconds), |info| {
+                    // SAFETY: the device is live, with the floor's features.
+                    unsafe { supported(raw, info, 1) }
+                })
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            }
             println!("floor: {name}: set layouts 0 and 1 supported");
         }
     }

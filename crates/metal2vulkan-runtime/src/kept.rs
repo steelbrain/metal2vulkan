@@ -53,14 +53,14 @@ pub(crate) trait Handle {
 pub(crate) struct Lent<T: Handle>(ManuallyDrop<T::Kept>);
 
 impl<T: Handle> Lent<T> {
-    /// A borrow of `handle`'s object.
+    /// A borrow of `object`.
     ///
     /// # Safety
     ///
     /// The recording the borrow is used in keeps the object until after the borrow's last use.
-    unsafe fn of(handle: &T) -> Lent<T> {
+    unsafe fn of(object: &T::Kept) -> Lent<T> {
         // SAFETY: the caller keeps the object alive past the borrow's last use.
-        Lent(unsafe { handle.object().uncounted() })
+        Lent(unsafe { object.uncounted() })
     }
 
     /// The object's address ([`Handle::address_of`]).
@@ -165,8 +165,19 @@ impl<T: Handle> Kept<T> {
     /// The borrow is used only while this list keeps its objects, before it is cleared, and while
     /// the recording holds a handle of the object's device: before its commit.
     pub(crate) unsafe fn keep(&mut self, object: &T) -> Lent<T> {
-        if self.addresses.insert(object.address()) {
-            self.list.push(object.kept());
+        // SAFETY: the caller's contract.
+        unsafe { self.keep_object(object.object()) }
+    }
+
+    /// [`keep`](Self::keep) of an object itself, which no handle of the consumer's need hold: a
+    /// sampler state's variant (`crate::sampler`).
+    ///
+    /// # Safety
+    ///
+    /// As [`keep`](Self::keep).
+    pub(crate) unsafe fn keep_object(&mut self, object: &T::Kept) -> Lent<T> {
+        if self.addresses.insert(T::address_of(object)) {
+            self.list.push(object.clone());
         }
         // SAFETY: the list keeps the object now, until it is cleared, past which the caller uses
         // no borrow.

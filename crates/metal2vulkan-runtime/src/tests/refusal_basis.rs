@@ -15,7 +15,8 @@ fn each_refusal_enum_answers_its_declared_basis() {
     assert_eq!(Limit::DeviceSamplers { max: 16 }.basis(), Device);
     assert_eq!(Limit::BlockIds.basis(), Ours);
     assert_eq!(Gap::LinearPlanePass { kind }.basis(), Device);
-    assert_eq!(Gap::LodClamps.basis(), Ours);
+    assert_eq!(Gap::CubicSampler.basis(), Ours);
+    assert_eq!(Limit::LodClampVariants { max: 4000 }.basis(), Ours);
 }
 
 /// A refusal enum's variant answers its own; a device that lacks the floor's mechanism `Device`;
@@ -25,7 +26,7 @@ fn an_error_answers_the_basis_of_what_it_carries() {
     let cases = [
         (Error::Refused(Refusal::Committed), Some(MetalDocumented)),
         (Error::Limit(Limit::BlockIds), Some(Ours)),
-        (Error::Unsupported(Gap::LodClamps), Some(Ours)),
+        (Error::Unsupported(Gap::CubicSampler), Some(Ours)),
         (Error::NoDirectDriverLoading, Some(Device)),
         (Error::translation(Translator::Cancelled), None),
         (Error::out_of_device_memory(), None),

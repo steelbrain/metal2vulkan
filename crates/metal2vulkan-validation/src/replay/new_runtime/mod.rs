@@ -88,9 +88,6 @@ struct Skips {
     guest_ram_writes: u64,
     /// `synchronizeTexture:slice:level:`, which the runtime does not build yet.
     texture_syncs: u64,
-    /// Sampler binds of LOD clamps the runtime answers with `Gap::LodClamps`: clamps whose samples
-    /// read otherwise than the sampler's own.
-    clamped_samplers: u64,
     /// Every other call on a skipped object or naming one, a skipped encoder's among them.
     calls: u64,
     /// The skipped objects whose `gpuResourceID` the player asked: nothing in the play reads
@@ -221,7 +218,6 @@ impl Skips {
             blits,
             guest_ram_writes,
             texture_syncs,
-            clamped_samplers,
             calls,
             resource_ids,
             roots: _,
@@ -236,7 +232,6 @@ impl Skips {
             blits,
             guest_ram_writes,
             texture_syncs,
-            clamped_samplers,
             calls,
             resource_ids,
         ];
@@ -939,6 +934,7 @@ fn named(gauges: rt::Gauges) -> Vec<(&'static str, u64)> {
         ("surface_imports", gauges.surface_imports),
         ("events", gauges.events),
         ("device_samplers", gauges.device_samplers),
+        ("lod_clamp_variants", gauges.lod_clamp_variants),
         ("spilled_bytes", gauges.spilled_bytes),
         ("managed_spilled_bytes", gauges.managed_spilled_bytes),
         ("shared_allocation_bytes", gauges.shared_allocation_bytes),
@@ -3202,7 +3198,6 @@ impl Backend for NewRuntime {
             ("skipped_blits", self.skips.blits),
             ("skipped_guest_ram_writes", self.skips.guest_ram_writes),
             ("skipped_texture_syncs", self.skips.texture_syncs),
-            ("skipped_clamped_samplers", self.skips.clamped_samplers),
             ("substituted_gap_textures", self.substitutes.gaps),
             ("substitutes_read", self.substitutes.read),
             (

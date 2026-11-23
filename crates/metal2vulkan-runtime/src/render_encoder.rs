@@ -1101,7 +1101,7 @@ impl RenderCommandEncoder {
         sampler: Option<&SamplerState>,
         index: u32,
     ) -> Result<(), Error> {
-        self.set_sampler_state(VERTEX, sampler, index)
+        self.set_sampler_state(VERTEX, sampler, None, index)
     }
 
     /// `setFragmentSamplerState:atIndex:` (`setFragmentSamplerStates:withRange:` is a loop of
@@ -1114,18 +1114,25 @@ impl RenderCommandEncoder {
         sampler: Option<&SamplerState>,
         index: u32,
     ) -> Result<(), Error> {
-        self.set_sampler_state(FRAGMENT, sampler, index)
+        self.set_sampler_state(FRAGMENT, sampler, None, index)
     }
 
     /// `setVertexSamplerState:lodMinClamp:lodMaxClamp:atIndex:`
     /// (`setVertexSamplerStates:lodMinClamps:lodMaxClamps:withRange:` is a loop of it): the state
-    /// bound as [`set_vertex_sampler_state`](Self::set_vertex_sampler_state) binds it, where its
-    /// samples read alike with its LOD clamps replaced by these: each bound, held to the levels a
-    /// sample can read (`[0, 15]`; Metal's largest textures have 15 levels), is the state's own so
-    /// held, as a clamp of 1000 over a state's `FLT_MAX` is.
+    /// bound as [`set_vertex_sampler_state`](Self::set_vertex_sampler_state) binds it, sampling
+    /// with these clamps in place of its own, as Metal's bind does: a lower bound above the upper
+    /// reads every sample at the upper's level, as the clamps `(max, max)`, and a NaN bound, which
+    /// Metal documents no answer for, binds the state as it is. Where the clamps read alike with
+    /// the state's own, the state itself is bound; otherwise the slot takes the state's variant of
+    /// them, the state's descriptor with these clamps, whose device samplers come from the
+    /// device's shared ones and whose `gpuResourceID`, at a variant element of set 1's sampler
+    /// arrays, the slot pushes. The state keeps its 16 most recently bound variants for later
+    /// binds.
     ///
-    /// Err: [`Gap::LodClamps`] where they read otherwise (nothing is bound); as
-    /// [`set_vertex_sampler_state`](Self::set_vertex_sampler_state).
+    /// Err, binding nothing: as [`set_vertex_sampler_state`](Self::set_vertex_sampler_state);
+    /// [`Limit::DeviceSamplers`] and [`Error::Vulkan`] as
+    /// [`Device::new_sampler_state`](crate::Device::new_sampler_state)'s device samplers;
+    /// [`Limit::LodClampVariants`] where every variant element is held.
     pub fn set_vertex_sampler_state_with_lod_clamps(
         &mut self,
         sampler: Option<&SamplerState>,
@@ -1133,8 +1140,8 @@ impl RenderCommandEncoder {
         lod_max_clamp: f32,
         index: u32,
     ) -> Result<(), Error> {
-        crate::sampler::clamps_at_bind(sampler, lod_min_clamp, lod_max_clamp)?;
-        self.set_sampler_state(VERTEX, sampler, index)
+        let clamps = Some((lod_min_clamp, lod_max_clamp));
+        self.set_sampler_state(VERTEX, sampler, clamps, index)
     }
 
     /// `setFragmentSamplerState:lodMinClamp:lodMaxClamp:atIndex:`
@@ -1151,21 +1158,25 @@ impl RenderCommandEncoder {
         lod_max_clamp: f32,
         index: u32,
     ) -> Result<(), Error> {
-        crate::sampler::clamps_at_bind(sampler, lod_min_clamp, lod_max_clamp)?;
-        self.set_sampler_state(FRAGMENT, sampler, index)
+        let clamps = Some((lod_min_clamp, lod_max_clamp));
+        self.set_sampler_state(FRAGMENT, sampler, clamps, index)
     }
 
+    /// Binds `sampler` at slot `index` of stage `table`, sampling with the LOD clamps `clamps`
+    /// where it is `Some`
+    /// ([`set_vertex_sampler_state_with_lod_clamps`](Self::set_vertex_sampler_state_with_lod_clamps)).
     fn set_sampler_state(
         &mut self,
         table: usize,
         sampler: Option<&SamplerState>,
+        clamps: Option<(f32, f32)>,
         index: u32,
     ) -> Result<(), Error> {
         if index >= SAMPLER_SLOTS {
             return Err(Error::Refused(Refusal::SamplerArgumentIndex { index }));
         }
         let held = &self.tables[table].samplers[index as usize];
-        if held.as_ref().map(Lent::address) == sampler.map(Handle::address) {
+        if clamps.is_none() && held.as_ref().map(Lent::address) == sampler.map(Handle::address) {
             return Ok(());
         }
         let lent = match sampler {
@@ -1176,10 +1187,17 @@ impl RenderCommandEncoder {
                 }
                 // SAFETY: the encoder's table holds the borrow, and it ends before its command
                 // buffer commits.
-                Some(unsafe { building.lend_sampler(sampler) })
+                Some(match clamps {
+                    None => unsafe { building.lend_sampler(sampler) },
+                    Some((lo, hi)) => unsafe { building.lend_clamped_sampler(sampler, lo, hi) }?,
+                })
             }
             None => None,
         };
+        let held = &self.tables[table].samplers[index as usize];
+        if held.as_ref().map(Lent::address) == lent.as_ref().map(Lent::address) {
+            return Ok(());
+        }
         self.tables[table].samplers[index as usize] = lent;
         self.push_filled = false;
         Ok(())

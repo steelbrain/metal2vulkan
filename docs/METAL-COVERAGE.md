@@ -1240,7 +1240,7 @@ Cheap items a plain app calls first, then medium pieces by how often a plain app
 | `MTLComputeCommandEncoder.setTextures:withRange:` | method | implemented | `ComputeCommandEncoder::set_texture` (runtime): a loop of it |
 | `MTLComputeCommandEncoder.setSamplerState:atIndex:` | method | implemented | `ComputeCommandEncoder::set_sampler_state` (runtime) |
 | `MTLComputeCommandEncoder.setSamplerStates:withRange:` | method | implemented | `ComputeCommandEncoder::set_sampler_state` (runtime): a loop of it |
-| `MTLComputeCommandEncoder.setSamplerState:lodMinClamp:lodMaxClamp:atIndex:` | method | implemented | `ComputeCommandEncoder::set_sampler_state` (runtime) |
+| `MTLComputeCommandEncoder.setSamplerState:lodMinClamp:lodMaxClamp:atIndex:` | method | implemented | `ComputeCommandEncoder::set_sampler_state_with_lod_clamps` (runtime) |
 | `MTLComputeCommandEncoder.setSamplerStates:lodMinClamps:lodMaxClamps:withRange:` | method | implemented | `ComputeCommandEncoder::set_sampler_state_with_lod_clamps` (runtime): a loop of it |
 | `MTLComputeCommandEncoder.setThreadgroupMemoryLength:atIndex:` | method | implemented | `ComputeCommandEncoder::set_threadgroup_memory_length` (runtime) |
 | `MTLComputeCommandEncoder.setImageblockWidth:height:` | method | implemented | `ComputeCommandEncoder::set_imageblock_size` (runtime): a specialization: a new size makes a pipeline at its first dispatch |

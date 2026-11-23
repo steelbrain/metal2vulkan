@@ -1245,7 +1245,7 @@ the Direct3D 11 texture's payload until it is freed.
 Shaders reach textures and samplers by index (`docs/RESOURCE-ID.md`). Every pipeline takes set 1,
 one descriptor set the device makes at creation, of seven arrays whose element `i` is the object
 whose `gpuResourceID` holds index `i`: 65,536 sampled textures (binding 0), 65,536 storage
-textures (binding 1), 4,000 samplers of each use, plain, depth comparison and integer texture
+textures (binding 1), 8,000 samplers of each use, plain, depth comparison and integer texture
 (bindings 2, 3 and 4), and 65,536 uniform and 65,536 storage texel buffers, the texture buffers
 (bindings 5 and 6). A texture's index is the same element of both texture arrays: one with a
 storage view takes both, any other the sampled one alone, and its storage element stays null. A
@@ -1861,12 +1861,23 @@ made, with no lock, and never rewritten for layouts.
   it. A descriptor the translator makes no device sampler of is `Error::Translation`.
 - A state bound with LOD clamps (`set_sampler_state_with_lod_clamps`, and the render encoder's
   `set_vertex_sampler_state_with_lod_clamps` and `set_fragment_sampler_state_with_lod_clamps`:
-  Metal's `lodMinClamp:lodMaxClamp:` forms, whose range forms are loops of them) is bound as it
-  is where its samples read alike with its clamps replaced by these: each bound, held to `[0,
-  15]`, is the state's own so held (`metal::sampler::lod_clamps_read_alike`). A sample's level
-  lies in `[0, 14]` (Metal's largest textures have 15 levels), so a clamp of 1000 over a state's
-  `FLT_MAX`, which a replay stream binds, reads as the state's own. Clamps that read otherwise
-  are `Gap::LodClamps`, and nothing is bound.
+  Metal's `lodMinClamp:lodMaxClamp:` forms, whose range forms are loops of them) samples as Metal
+  answers on an Apple M3 Max (conformance cases `sampler-bind-lod-clamps-kernel` and `-fragment`):
+  the pair replaces the state's clamps, a lower bound above the upper reads every sample at the
+  upper's level, as the clamps `(max, max)`, and a plain bind afterwards reads the state's own
+  clamps again. A NaN bound, which Metal documents no answer for, binds the state as it is.
+- Where the pair reads alike with the state's own (each bound held to `[0, 15]` is the state's own
+  so held, `metal::sampler::lod_clamps_read_alike`, as a clamp of 1000 over a state's `FLT_MAX`
+  is), the state itself is bound. Otherwise the slot takes the state's variant of the pair: the
+  state's descriptor with the pair as its clamps, its device samplers from the same shared
+  samplers (`Limit::DeviceSamplers` bounds them), at one of 4,000 variant elements past the 4,000
+  indices of each sampler array (Set 1 and index grants), whose `gpuResourceID` the slot pushes.
+  No grant and no argument buffer's index reaches a variant element. A state keeps its 16 most
+  recently bound variants for its later binds; a new one past them takes the place of the least
+  recently bound one no command buffer holds, and where command buffers hold all 16, the new one
+  is held by the binding command buffer alone and goes when it retires. Past 4,000 live variants
+  device-wide a bind is `Limit::LodClampVariants`, and nothing is bound. The
+  `lod_clamp_variants` gauge counts the live variants.
 
 ## Queues, command buffers and events
 
@@ -5048,11 +5059,16 @@ pipeline states). So `Device::extensions` names the extension only with its feat
 ### Limits
 
 The descriptor limits are what the runtime's fixed arrays need: 65,536 sampled textures, 65,536
-storage textures, 65,536 read and 65,536 written texture buffers, and three arrays of 4,000
-samplers, one per use (plain, depth comparison, integer texture). A read texture buffer (a uniform
-texel buffer) counts against the sampled-image limits and a written one (a storage texel buffer)
-against the storage-image limits. Vulkan requires at least 500,000 of each texture limit and of
-the two resource totals on a device that supports `descriptorIndexing`, as every lab device does. 4,000 is Vulkan's minimum `maxSamplerAllocationCount`. The compute limits let a threadgroup take
+storage textures, 65,536 read and 65,536 written texture buffers, and three arrays of 8,000
+samplers, one per use (plain, depth comparison, integer texture): 4,000 indices and 4,000 variant
+elements each (Set 1 and index grants). A read texture buffer (a uniform texel buffer) counts
+against the sampled-image limits and a written one (a storage texel buffer) against the
+storage-image limits. Vulkan requires at least 500,000 of each texture and sampler limit and of
+the two resource totals on a device that supports `descriptorIndexing`, as every lab device does.
+4,000 is Vulkan's minimum `maxSamplerAllocationCount`. Of the lab's devices, the least
+`maxPerStageDescriptorUpdateAfterBindSamplers` and `maxDescriptorSetUpdateAfterBindSamplers` is
+500,000 (MoltenVK on an Apple M3 Max) and the least `maxUpdateAfterBindDescriptorsInAllPools`
+1,048,576 (Intel UHD Graphics 630 on Windows). The compute limits let a threadgroup take
 Metal's 1,024 threads in any shape up to 1,024 by 1,024 by 64. `maxColorAttachments` holds
 Metal's eight color attachments on every device; Vulkan 1.3 requires 4 of it, and Vulkan 1.4 8.
 `maxFragmentOutputAttachments` holds a fragment function's output to each of them; Vulkan 1.3 and
@@ -5070,11 +5086,11 @@ below 256 an indirect command reaches fewer vertex slots (Known gaps of indirect
 | `maxDescriptorSetUpdateAfterBindSampledImages` | `131072` | the sampled-texture and read texture-buffer arrays |
 | `maxPerStageDescriptorUpdateAfterBindStorageImages` | `131072` | the storage-texture and written texture-buffer arrays |
 | `maxDescriptorSetUpdateAfterBindStorageImages` | `131072` | the storage-texture and written texture-buffer arrays |
-| `maxPerStageDescriptorUpdateAfterBindSamplers` | `12000` | the three sampler arrays |
-| `maxDescriptorSetUpdateAfterBindSamplers` | `12000` | the three sampler arrays |
+| `maxPerStageDescriptorUpdateAfterBindSamplers` | `24000` | the three sampler arrays; the lab's least is 500,000 |
+| `maxDescriptorSetUpdateAfterBindSamplers` | `24000` | the three sampler arrays; the lab's least is 500,000 |
 | `maxSamplerAllocationCount` | `4000` | Vulkan's minimum: live samplers |
 | `maxPerStageUpdateAfterBindResources` | `262144` | the four texture and texture-buffer arrays in one stage; a fragment stage needs its `maxColorAttachments` more |
-| `maxUpdateAfterBindDescriptorsInAllPools` | `274144` | all seven arrays |
+| `maxUpdateAfterBindDescriptorsInAllPools` | `286144` | all seven arrays; the lab's least is 1,048,576 |
 | `maxComputeWorkGroupInvocations` | `1024` | Metal's most threads per threadgroup |
 | `maxComputeWorkGroupSize[0]` | `1024` | a threadgroup's width |
 | `maxComputeWorkGroupSize[1]` | `1024` | a threadgroup's height |

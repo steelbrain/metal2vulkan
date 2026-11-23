@@ -410,6 +410,8 @@ pub(crate) enum Gauge {
     Textures,
     /// [`Gauges::samplers`].
     Samplers,
+    /// [`Gauges::lod_clamp_variants`].
+    LodClampVariants,
     /// [`Gauges::descriptor_slots`].
     DescriptorSlots,
     /// [`Gauges::pipelines`].
@@ -783,6 +785,7 @@ struct Atomics {
     buffers: AtomicU64,
     textures: AtomicU64,
     samplers: AtomicU64,
+    lod_clamp_variants: AtomicU64,
     pipelines: AtomicU64,
     kernels: AtomicU64,
     kernel_entries: AtomicU64,
@@ -1573,6 +1576,7 @@ impl Counters {
             Gauge::Buffers => &a.buffers,
             Gauge::Textures => &a.textures,
             Gauge::Samplers => &a.samplers,
+            Gauge::LodClampVariants => &a.lod_clamp_variants,
             Gauge::DescriptorSlots => &a.descriptor_slots,
             Gauge::Pipelines => &a.pipelines,
             Gauge::Kernels => &a.kernels,
@@ -1914,6 +1918,7 @@ impl Counters {
             buffers: a.buffers.load(Relaxed),
             textures: a.textures.load(Relaxed),
             samplers: a.samplers.load(Relaxed),
+            lod_clamp_variants: a.lod_clamp_variants.load(Relaxed),
             pipelines: a.pipelines.load(Relaxed),
             kernels: a.kernels.load(Relaxed),
             kernel_entries: a.kernel_entries.load(Relaxed),
@@ -3000,6 +3005,11 @@ pub struct Gauges {
     pub textures: u64,
     /// Sampler states.
     pub samplers: u64,
+    /// Variants of sampler states, each a state bound with LOD clamps of its own, which a state
+    /// keeps for its later binds or work not yet retired holds, each at a variant element of set
+    /// 1's sampler arrays: at most 4,000
+    /// ([`Limit::LodClampVariants`](crate::Limit::LodClampVariants)).
+    pub lod_clamp_variants: u64,
     /// `VkPipeline`s.
     pub pipelines: u64,
     /// Compiled kernels: each the translation of one compute pipeline content (its descriptor's

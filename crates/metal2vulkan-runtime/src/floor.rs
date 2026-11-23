@@ -240,9 +240,18 @@ pub(crate) fn shader_extension(name: &CStr) -> Option<VkExtension> {
 /// supports `descriptorIndexing`.
 pub(crate) const TEXTURES: u32 = 65_536;
 
-/// Slots in each sampler array. 4000 is Vulkan's minimum `maxSamplerAllocationCount`, so every
-/// device can hold a sampler in every slot.
+/// The indices of each sampler array a resource ID reaches: 0, nil, and the consumer's grants, 1
+/// to 3,999. 4000 is Vulkan's minimum `maxSamplerAllocationCount`, so every device can hold a
+/// sampler at every index.
 pub(crate) const SAMPLERS: u32 = 4000;
+
+/// The elements past [`SAMPLERS`] in each sampler array: the variants of sampler states bound with
+/// LOD clamps of their own (`crate::sampler`), at most this many live at once, at indices no grant
+/// and no resource ID reaches.
+pub(crate) const SAMPLER_VARIANTS: u32 = 4000;
+
+/// The elements of each sampler array: the indices resource IDs reach, then the variants'.
+pub(crate) const SAMPLER_ELEMENTS: u32 = SAMPLERS + SAMPLER_VARIANTS;
 
 /// Sampler arrays: one per use of a sampler (plain, depth comparison, integer texture).
 pub(crate) const SAMPLER_ARRAYS: u32 = 3;
@@ -1543,7 +1552,7 @@ fn second_elements_fit(device: &Queried) -> bool {
         && descriptors.max_per_stage_update_after_bind_resources
             >= sampled + 2 * TEXTURES + limits.max_color_attachments
         && descriptors.max_update_after_bind_descriptors_in_all_pools
-            >= sampled + 2 * TEXTURES + SAMPLER_ARRAYS * SAMPLERS
+            >= sampled + 2 * TEXTURES + SAMPLER_ARRAYS * SAMPLER_ELEMENTS
 }
 
 /// Each limit the floor sets: its Vulkan name, the device's value, and the least value the runtime
@@ -1576,12 +1585,12 @@ pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 17] {
         (
             "maxPerStageDescriptorUpdateAfterBindSamplers",
             descriptors.max_per_stage_descriptor_update_after_bind_samplers,
-            SAMPLER_ARRAYS * SAMPLERS,
+            SAMPLER_ARRAYS * SAMPLER_ELEMENTS,
         ),
         (
             "maxDescriptorSetUpdateAfterBindSamplers",
             descriptors.max_descriptor_set_update_after_bind_samplers,
-            SAMPLER_ARRAYS * SAMPLERS,
+            SAMPLER_ARRAYS * SAMPLER_ELEMENTS,
         ),
         (
             "maxSamplerAllocationCount",
@@ -1597,7 +1606,7 @@ pub(crate) fn limits(device: &Queried) -> [(&'static str, u32, u32); 17] {
         (
             "maxUpdateAfterBindDescriptorsInAllPools",
             descriptors.max_update_after_bind_descriptors_in_all_pools,
-            4 * TEXTURES + SAMPLER_ARRAYS * SAMPLERS,
+            4 * TEXTURES + SAMPLER_ARRAYS * SAMPLER_ELEMENTS,
         ),
         (
             "maxComputeWorkGroupInvocations",

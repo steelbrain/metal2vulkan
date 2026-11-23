@@ -860,28 +860,24 @@ fn the_host_s_library_from_source_is_made_of_its_display_library() {
 }
 
 #[test]
-fn a_sampler_bound_with_lod_clamps_plays_where_the_runtime_takes_them() {
+fn a_sampler_bound_with_lod_clamps_plays_with_them() {
     let dir = ScratchDir::new("rt-replay-clamps").unwrap();
     let green: Vec<u8> = [0u8, 255, 0, 255].repeat(16);
-    // The sampler's own clamps, and (0, 1000), which reads as its own (0, FLT_MAX): both bind.
-    for (test, clamp) in [("clamps-own", f32::MAX), ("clamps-1000", 1000.0)] {
+    // The sampler's own clamps, (0, 1000), which reads as its own (0, FLT_MAX), and (0, 2), which
+    // the state's variant of those clamps samples with: each binds, and the draw plays.
+    for (test, clamp) in [
+        ("clamps-own", f32::MAX),
+        ("clamps-1000", 1000.0),
+        ("clamps-2", 2.0),
+    ] {
         let (report, _) = play(
             test,
             &draw_with_clamps(&dir, &green, Then::Nothing, Some(clamp)),
         );
         assert_eq!(Some(report.checks[0].sha256), report.checks[0].recorded);
         let executed = &report.total.executed;
-        assert_eq!(executed["skipped_clamped_samplers"], 0, "{executed:?}");
         assert_eq!(executed["skipped_draws"], 0, "{executed:?}");
     }
-    // (0, 2) reads otherwise: the runtime's gap, the bind and the draw skipped.
-    let (report, _) = play(
-        "clamps-2",
-        &draw_with_clamps(&dir, &green, Then::Nothing, Some(2.0)),
-    );
-    let executed = &report.total.executed;
-    assert_eq!(executed["skipped_clamped_samplers"], 1, "{executed:?}");
-    assert_eq!(executed["skipped_draws"], 1, "{executed:?}");
 }
 
 /// An `NSRange` of `length` objects from `location`.

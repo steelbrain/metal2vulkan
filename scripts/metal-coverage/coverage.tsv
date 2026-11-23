@@ -929,7 +929,7 @@ MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setTexture:atIndex:		
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setTextures:withRange:		I	runtime	ComputeCommandEncoder::set_texture	a loop of it		
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setSamplerState:atIndex:		I	runtime	ComputeCommandEncoder::set_sampler_state			
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setSamplerStates:withRange:		I	runtime	ComputeCommandEncoder::set_sampler_state	a loop of it		
-MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setSamplerState:lodMinClamp:lodMaxClamp:atIndex:		I	runtime	ComputeCommandEncoder::set_sampler_state			
+MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setSamplerState:lodMinClamp:lodMaxClamp:atIndex:		I	runtime	ComputeCommandEncoder::set_sampler_state_with_lod_clamps			
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setSamplerStates:lodMinClamps:lodMaxClamps:withRange:		I	runtime	ComputeCommandEncoder::set_sampler_state_with_lod_clamps	a loop of it		
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setThreadgroupMemoryLength:atIndex:		I	runtime	ComputeCommandEncoder::set_threadgroup_memory_length			
 MTLComputeCommandEncoder.h	MTLComputeCommandEncoder	method	setImageblockWidth:height:		I	runtime	ComputeCommandEncoder::set_imageblock_size	a specialization: a new size makes a pipeline at its first dispatch		

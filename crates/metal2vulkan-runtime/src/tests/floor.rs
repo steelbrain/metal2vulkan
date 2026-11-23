@@ -141,10 +141,10 @@ pub(super) fn at_the_floor() -> Queried {
             .max_descriptor_set_update_after_bind_sampled_images(2 * 65_536)
             .max_per_stage_descriptor_update_after_bind_storage_images(2 * 65_536)
             .max_descriptor_set_update_after_bind_storage_images(2 * 65_536)
-            .max_per_stage_descriptor_update_after_bind_samplers(3 * 4000)
-            .max_descriptor_set_update_after_bind_samplers(3 * 4000)
+            .max_per_stage_descriptor_update_after_bind_samplers(3 * 8000)
+            .max_descriptor_set_update_after_bind_samplers(3 * 8000)
             .max_per_stage_update_after_bind_resources(4 * 65_536 + 8)
-            .max_update_after_bind_descriptors_in_all_pools(4 * 65_536 + 3 * 4000),
+            .max_update_after_bind_descriptors_in_all_pools(4 * 65_536 + 3 * 8000),
         features,
         extensions: DEVICE_EXTENSIONS
             .iter()
@@ -818,15 +818,15 @@ fn each_low_limit_is_named() {
         (
             |d| {
                 d.vulkan12
-                    .max_per_stage_descriptor_update_after_bind_samplers = 11_999
+                    .max_per_stage_descriptor_update_after_bind_samplers = 23_999
             },
             "maxPerStageDescriptorUpdateAfterBindSamplers",
-            12_000,
+            24_000,
         ),
         (
-            |d| d.vulkan12.max_descriptor_set_update_after_bind_samplers = 11_999,
+            |d| d.vulkan12.max_descriptor_set_update_after_bind_samplers = 23_999,
             "maxDescriptorSetUpdateAfterBindSamplers",
-            12_000,
+            24_000,
         ),
         (
             |d| d.limits.max_sampler_allocation_count = 3999,
@@ -839,9 +839,9 @@ fn each_low_limit_is_named() {
             4 * 65_536 + 8,
         ),
         (
-            |d| d.vulkan12.max_update_after_bind_descriptors_in_all_pools = 4 * 65_536 + 11_999,
+            |d| d.vulkan12.max_update_after_bind_descriptors_in_all_pools = 4 * 65_536 + 23_999,
             "maxUpdateAfterBindDescriptorsInAllPools",
-            4 * 65_536 + 12_000,
+            4 * 65_536 + 24_000,
         ),
         (
             |d| d.limits.max_compute_work_group_invocations = 1023,
@@ -1651,7 +1651,7 @@ fn the_attachment_reads_take_the_feedback_loop_where_reported_and_a_copy_elsewhe
         descriptors.max_per_stage_descriptor_update_after_bind_sampled_images = 3 * 65_536;
         descriptors.max_descriptor_set_update_after_bind_sampled_images = 3 * 65_536;
         descriptors.max_per_stage_update_after_bind_resources = 5 * 65_536 + 8;
-        descriptors.max_update_after_bind_descriptors_in_all_pools = 5 * 65_536 + 3 * 4000;
+        descriptors.max_update_after_bind_descriptors_in_all_pools = 5 * 65_536 + 3 * 8000;
     };
     let looped = |device: &mut Queried| {
         (device.extensions).extend(

@@ -7,7 +7,20 @@
 //! and states, and a border colour no address mode reads is not part of a create info, so a
 //! state's integer-texture use takes its plain sampler wherever the two read alike. The device's
 //! `maxSamplerAllocationCount` bounds the samplers, the arrays' two defaults among them; past it a
-//! state is refused. Nothing is made at bind time.
+//! state is refused.
+//!
+//! A state bound with LOD clamps of its own (Metal's `lodMinClamp:lodMaxClamp:` bind forms) samples
+//! as Metal answers on an Apple M3 Max (conformance cases `sampler-bind-lod-clamps-kernel` and
+//! `-fragment`): the bind's pair replaces the state's clamps, a lower bound above the upper reads
+//! every sample at the upper's level, as the clamps `(max, max)`, and a plain bind afterwards
+//! reads the state's own clamps again. Where the pair reads alike with the state's own the state is
+//! bound as it is. Otherwise the bind takes the state's variant of the pair: the state's
+//! descriptor with the pair as its clamps, its device samplers from the same shared samplers, at a
+//! variant element of the sampler arrays (`crate::arrays`), and its own `gpuResourceID`, which the
+//! slot pushes. A state keeps its [`KEPT_VARIANTS`] most recently bound variants for its later
+//! binds; a new one past them takes the place of the least recently bound one no work holds, and
+//! where work holds every one, the new one is held by its command buffer alone. A NaN bound,
+//! which Metal documents no answer for, binds the state as it is.
 
 use crate::arrays::{Owner, ResourceId};
 use crate::counters::Gauge;
@@ -23,7 +36,10 @@ use metal2vulkan::pipeline::{CombinedSampler, PrecisionNote};
 use metal2vulkan::vk::{BorderColor, SamplerAddressMode, SamplerDesc};
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+/// The variants a state keeps for its later binds: the most recently bound ones.
+pub(crate) const KEPT_VARIANTS: usize = 16;
 
 /// The device's samplers: one `VkSampler` for each create info `K`, with how many sampler-array
 /// elements hold it.
@@ -84,24 +100,14 @@ impl<K: Clone + Eq + Hash> SamplerTable<K> {
     }
 }
 
-/// The LOD clamps a sampler state is bound with (Metal's `lodMinClamp:lodMaxClamp:` bind forms):
-/// the state is bound as it is where its samples read alike with its clamps replaced by these
-/// ([`lod_clamps_read_alike`]: each bound held to the levels a sample can read is the state's
-/// own). `None` binds no state and reads no clamps.
-///
-/// Err: [`Gap::LodClamps`] where they read otherwise.
-pub(crate) fn clamps_at_bind(
-    sampler: Option<&SamplerState>,
-    lod_min_clamp: f32,
-    lod_max_clamp: f32,
-) -> Result<(), Error> {
-    match sampler {
-        Some(sampler)
-            if !lod_clamps_read_alike(sampler.descriptor(), lod_min_clamp, lod_max_clamp) =>
-        {
-            Err(Error::Unsupported(Gap::LodClamps))
-        }
-        _ => Ok(()),
+/// The LOD clamps a bind's pair `lod_min_clamp` and `lod_max_clamp` samples with, as Metal answers
+/// (the module docs): the pair, and the upper bound twice where the lower is above it. `None` for
+/// a NaN bound, which binds the state as it is.
+fn bound_clamps(lod_min_clamp: f32, lod_max_clamp: f32) -> Option<(f32, f32)> {
+    match (lod_min_clamp, lod_max_clamp) {
+        (lo, hi) if lo.is_nan() || hi.is_nan() => None,
+        (lo, hi) if lo > hi => Some((hi, hi)),
+        pair => Some(pair),
     }
 }
 
@@ -158,17 +164,30 @@ pub struct SamplerState {
     _device: Device,
 }
 
-/// The state itself: what a handle and a command buffer that uses it hold.
+/// The state itself, or a variant of it: what a handle and a command buffer that uses it hold.
 pub(crate) struct SamplerInner {
     core: Arc<Core>,
     descriptor: SamplerDescriptor,
     index: u32,
-    /// Its owner word at the index.
-    owner: Owner,
     word: u32,
     /// The create info of each array's element at the index, plain, comparison and integer
     /// texture; `None` where the array keeps its default.
     uses: [Option<SamplerDesc>; 3],
+    kind: Kind,
+}
+
+/// What a [`SamplerInner`] is.
+enum Kind {
+    /// A sampler state, at the consumer's index: its owner word there, and the variants it keeps
+    /// ([`KEPT_VARIANTS`] at most), each by its clamps' bits, the least recently bound first.
+    State {
+        owner: Owner,
+        variants: Mutex<Vec<(u64, Arc<SamplerInner>)>>,
+    },
+    /// A variant of a state, bound with LOD clamps of its own, at a variant element. No handle
+    /// and no resource ID of the program's names it: work reaches it only through a slot that
+    /// binds it, whose command buffer holds it until it retires.
+    Variant,
 }
 
 impl SamplerInner {
@@ -184,10 +203,102 @@ impl SamplerInner {
 impl Drop for SamplerInner {
     fn drop(&mut self) {
         let core = &self.core;
-        (core.pool).release(core, Free::SamplerIndex(self.index, self.owner));
-        core.counters.fall(Gauge::Samplers);
+        match self.kind {
+            Kind::State { owner, .. } => {
+                (core.pool).release(core, Free::SamplerIndex(self.index, owner));
+                core.counters.fall(Gauge::Samplers);
+            }
+            Kind::Variant => {
+                // SAFETY: no work in flight reads the variant's elements: each command buffer
+                // that bound it held it until it retired, and no resource ID names it.
+                unsafe { (core.arrays).vacate_variant(&core.device, &core.counters, self.index) };
+                core.counters.fall(Gauge::LodClampVariants);
+            }
+        }
         give_back(core, &self.uses);
     }
+}
+
+impl SamplerInner {
+    /// The variant of a state whose descriptor with a bind's clamps is `descriptor`: its device
+    /// samplers taken from the device's samplers, its elements at a variant element.
+    ///
+    /// Err: as [`uses_of`] and [`take_samplers`]; [`Limit::LodClampVariants`] where every
+    /// variant element is held.
+    fn variant(core: &Arc<Core>, descriptor: &SamplerDescriptor) -> Result<SamplerInner, Error> {
+        let uses = uses_of(core, descriptor)?;
+        let samplers = take_samplers(core, &uses)?;
+        // SAFETY: each sampler is live while the variant holds it.
+        let placed =
+            unsafe { (core.arrays).place_variant(&core.device, &core.counters, &every(samplers)) };
+        let index = match placed {
+            Ok(index) => index,
+            Err(error) => {
+                give_back(core, &uses);
+                return Err(error);
+            }
+        };
+        core.counters.rise(Gauge::LodClampVariants);
+        Ok(SamplerInner {
+            core: Arc::clone(core),
+            descriptor: *descriptor,
+            index,
+            word: SamplerWord::of(descriptor).0,
+            uses,
+            kind: Kind::Variant,
+        })
+    }
+}
+
+/// The translator's create info of each use a state of `descriptor` can be used in, plain,
+/// comparison and integer texture (`metal::sampler::vk_sampler`): the comparison one where its
+/// compare function is not `Never`, `None` otherwise.
+///
+/// Err: [`Error::Translation`] where the translator makes no device sampler of the descriptor.
+fn uses_of(core: &Core, descriptor: &SamplerDescriptor) -> Result<[Option<SamplerDesc>; 3], Error> {
+    let profile = core.translator.profile();
+    let desc = |compare, integer| {
+        vk_sampler(descriptor, SamplerUse::new(compare, integer), profile)
+            .map(canonical)
+            .map_err(Error::translation)
+    };
+    let compare = descriptor.compare_function != CompareFunction::Never;
+    Ok([
+        Some(desc(false, false)?),
+        match compare {
+            true => Some(desc(true, false)?),
+            false => None,
+        },
+        Some(desc(false, true)?),
+    ])
+}
+
+/// One more hold of the device sampler of each of `uses`, made where the device has none: each
+/// array's, `None` where the use is.
+///
+/// Err: [`Limit::DeviceSamplers`]; [`Error::Vulkan`] where `vkCreateSampler` fails. Nothing is
+/// held then.
+fn take_samplers(
+    core: &Core,
+    uses: &[Option<SamplerDesc>; 3],
+) -> Result<[Option<vk::Sampler>; 3], Error> {
+    let mut taken = Vec::with_capacity(3);
+    let mut samplers = [None; 3];
+    for (slot, use_) in uses.iter().enumerate() {
+        let Some(use_) = use_ else { continue };
+        let sampler = lock(&core.samplers).take(use_, || make(core, use_));
+        match sampler {
+            Ok(sampler) => {
+                taken.push(Some(*use_));
+                samplers[slot] = Some(sampler);
+            }
+            Err(error) => {
+                give_back(core, &taken);
+                return Err(error);
+            }
+        }
+    }
+    Ok(samplers)
 }
 
 /// Each sampler array's element at an index, plain, comparison and integer texture, from
@@ -360,37 +471,8 @@ impl Device {
             return Err(Error::Unsupported(Gap::CubicSampler));
         }
         let core = self.core();
-        let profile = core.translator.profile();
-        let desc = |compare, integer| {
-            vk_sampler(descriptor, SamplerUse::new(compare, integer), profile)
-                .map(canonical)
-                .map_err(Error::translation)
-        };
-        let compare = descriptor.compare_function != CompareFunction::Never;
-        let uses = [
-            Some(desc(false, false)?),
-            match compare {
-                true => Some(desc(true, false)?),
-                false => None,
-            },
-            Some(desc(false, true)?),
-        ];
-        let mut taken = Vec::with_capacity(3);
-        let mut samplers = [None; 3];
-        for (slot, use_) in uses.iter().enumerate() {
-            let Some(use_) = use_ else { continue };
-            let sampler = lock(&core.samplers).take(use_, || make(core, use_));
-            match sampler {
-                Ok(sampler) => {
-                    taken.push(Some(*use_));
-                    samplers[slot] = Some(sampler);
-                }
-                Err(error) => {
-                    give_back(core, &taken);
-                    return Err(error);
-                }
-            }
-        }
+        let uses = uses_of(core, descriptor)?;
+        let samplers = take_samplers(core, &uses)?;
         // SAFETY: each sampler is live while the state holds it.
         let placed = unsafe {
             (core.arrays).place_samplers(&core.device, &core.counters, index, &every(samplers))
@@ -398,7 +480,7 @@ impl Device {
         let owner = match placed {
             Ok(owner) => owner,
             Err(error) => {
-                give_back(core, &taken);
+                give_back(core, &uses);
                 return Err(error);
             }
         };
@@ -408,9 +490,12 @@ impl Device {
                 core: Arc::clone(core),
                 descriptor: *descriptor,
                 index,
-                owner,
                 word: SamplerWord::of(descriptor).0,
                 uses,
+                kind: Kind::State {
+                    owner,
+                    variants: Mutex::new(Vec::with_capacity(KEPT_VARIANTS)),
+                },
             }),
             _device: self.clone(),
         })
@@ -444,6 +529,58 @@ impl SamplerState {
     /// The descriptor it was made with.
     pub fn descriptor(&self) -> &SamplerDescriptor {
         &self.inner.descriptor
+    }
+
+    /// The state as it samples with the LOD clamps `lod_min_clamp` and `lod_max_clamp` (Metal's
+    /// `lodMinClamp:lodMaxClamp:` bind forms, the module docs), given to `lend`: the state itself
+    /// where the clamps read alike with its own ([`lod_clamps_read_alike`]) or a bound is NaN, and
+    /// otherwise its variant of them, which it keeps where it can. `lend` runs while the state's
+    /// variants are locked, so it takes its hold of the variant before any later bind can let it
+    /// go.
+    ///
+    /// Err, binding nothing: as [`Device::new_sampler_state`]'s device samplers;
+    /// [`Limit::LodClampVariants`] where every variant element is held.
+    pub(crate) fn with_lod_clamps<R>(
+        &self,
+        lod_min_clamp: f32,
+        lod_max_clamp: f32,
+        lend: impl FnOnce(&Arc<SamplerInner>) -> R,
+    ) -> Result<R, Error> {
+        let state = &self.inner;
+        let pair = bound_clamps(lod_min_clamp, lod_max_clamp);
+        let (lo, hi) = match pair {
+            Some((lo, hi)) if !lod_clamps_read_alike(&state.descriptor, lo, hi) => (lo, hi),
+            _ => return Ok(lend(state)),
+        };
+        // A handle holds a state; a variant has no variants of its own.
+        let Kind::State { variants, .. } = &state.kind else {
+            return Ok(lend(state));
+        };
+        let key = u64::from(lo.to_bits()) | u64::from(hi.to_bits()) << 32;
+        let mut kept = lock(variants);
+        if let Some(at) = kept.iter().position(|(held, _)| *held == key) {
+            let entry = kept.remove(at);
+            let lent = lend(&entry.1);
+            kept.push(entry);
+            return Ok(lent);
+        }
+        // The least recently bound variant no command buffer holds gives its place, and its
+        // element, to the new one.
+        let evicted = match kept.len() < KEPT_VARIANTS {
+            true => None,
+            false => (kept.iter())
+                .position(|(_, variant)| Arc::strong_count(variant) == 1)
+                .map(|at| kept.remove(at)),
+        };
+        drop(evicted);
+        let mut descriptor = state.descriptor;
+        (descriptor.lod_min_clamp, descriptor.lod_max_clamp) = (lo, hi);
+        let variant = Arc::new(SamplerInner::variant(&state.core, &descriptor)?);
+        let lent = lend(&variant);
+        if kept.len() < KEPT_VARIANTS {
+            kept.push((key, variant));
+        }
+        Ok(lent)
     }
 
     /// No Metal counterpart: the static note of a sample of its border, where an address mode

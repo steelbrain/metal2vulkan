@@ -620,11 +620,47 @@ impl ComputeCommandEncoder {
         sampler: Option<&SamplerState>,
         index: u32,
     ) -> Result<(), Error> {
+        self.bind_sampler(sampler, None, index)
+    }
+
+    /// `setSamplerState:lodMinClamp:lodMaxClamp:atIndex:`
+    /// (`setSamplerStates:lodMinClamps:lodMaxClamps:withRange:` is a loop of it): the state bound
+    /// as [`set_sampler_state`](Self::set_sampler_state) binds it, sampling with these clamps in
+    /// place of its own, as Metal's bind does: a lower bound above the upper reads every sample at
+    /// the upper's level, as the clamps `(max, max)`, and a NaN bound, which Metal documents no
+    /// answer for, binds the state as it is. Where the clamps read alike with the state's own, the
+    /// state itself is bound; otherwise the slot takes the state's variant of them, the state's
+    /// descriptor with these clamps, whose device samplers come from the device's shared ones and
+    /// whose `gpuResourceID`, at a variant element of set 1's sampler arrays, the slot pushes. The
+    /// state keeps its 16 most recently bound variants for later binds.
+    ///
+    /// Err, binding nothing: as [`set_sampler_state`](Self::set_sampler_state);
+    /// [`Limit::DeviceSamplers`] and [`Error::Vulkan`] as
+    /// [`Device::new_sampler_state`](crate::Device::new_sampler_state)'s device samplers;
+    /// [`Limit::LodClampVariants`] where every variant element is held.
+    pub fn set_sampler_state_with_lod_clamps(
+        &mut self,
+        sampler: Option<&SamplerState>,
+        lod_min_clamp: f32,
+        lod_max_clamp: f32,
+        index: u32,
+    ) -> Result<(), Error> {
+        self.bind_sampler(sampler, Some((lod_min_clamp, lod_max_clamp)), index)
+    }
+
+    /// Binds `sampler` at slot `index`, sampling with the LOD clamps `clamps` where it is `Some`
+    /// ([`set_sampler_state_with_lod_clamps`](Self::set_sampler_state_with_lod_clamps)).
+    fn bind_sampler(
+        &mut self,
+        sampler: Option<&SamplerState>,
+        clamps: Option<(f32, f32)>,
+        index: u32,
+    ) -> Result<(), Error> {
         if index >= SAMPLER_SLOTS {
             return Err(Error::Refused(Refusal::SamplerArgumentIndex { index }));
         }
         let held = &self.samplers[index as usize];
-        if held.as_ref().map(Lent::address) == sampler.map(Handle::address) {
+        if clamps.is_none() && held.as_ref().map(Lent::address) == sampler.map(Handle::address) {
             return Ok(());
         }
         let lent = match sampler {
@@ -635,32 +671,15 @@ impl ComputeCommandEncoder {
                 }
                 // SAFETY: the encoder's slot holds the borrow, and it ends before its command
                 // buffer commits.
-                Some(unsafe { building.lend_sampler(sampler) })
+                Some(match clamps {
+                    None => unsafe { building.lend_sampler(sampler) },
+                    Some((lo, hi)) => unsafe { building.lend_clamped_sampler(sampler, lo, hi) }?,
+                })
             }
             None => None,
         };
         self.samplers[index as usize] = lent;
         Ok(())
-    }
-
-    /// `setSamplerState:lodMinClamp:lodMaxClamp:atIndex:`
-    /// (`setSamplerStates:lodMinClamps:lodMaxClamps:withRange:` is a loop of it): the state bound
-    /// as [`set_sampler_state`](Self::set_sampler_state) binds it, where its samples read alike
-    /// with its LOD clamps replaced by these: each bound, held to the levels a sample can read
-    /// (`[0, 15]`; Metal's largest textures have 15 levels), is the state's own so held, as a
-    /// clamp of 1000 over a state's `FLT_MAX` is.
-    ///
-    /// Err: [`Gap::LodClamps`] where they read otherwise (nothing is bound); as
-    /// [`set_sampler_state`](Self::set_sampler_state).
-    pub fn set_sampler_state_with_lod_clamps(
-        &mut self,
-        sampler: Option<&SamplerState>,
-        lod_min_clamp: f32,
-        lod_max_clamp: f32,
-        index: u32,
-    ) -> Result<(), Error> {
-        crate::sampler::clamps_at_bind(sampler, lod_min_clamp, lod_max_clamp)?;
-        self.set_sampler_state(sampler, index)
     }
 
     /// `setStageInRegion:`: the region a kernel's `[[grid_origin]]` and `[[grid_size]]` read and

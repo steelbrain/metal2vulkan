@@ -1538,6 +1538,28 @@ impl Building {
         // SAFETY: as `lend_buffer`.
         unsafe { self.gpu.kept.samplers.keep(state) }
     }
+
+    /// Keeps `state` as it samples with the LOD clamps `lod_min_clamp` and `lod_max_clamp`
+    /// ([`SamplerState::with_lod_clamps`]: the state, or its variant of those clamps) until the
+    /// command buffer retires, and lends it for a binding slot.
+    ///
+    /// Err: as [`SamplerState::with_lod_clamps`].
+    ///
+    /// # Safety
+    ///
+    /// As [`lend_buffer`](Self::lend_buffer).
+    pub(crate) unsafe fn lend_clamped_sampler(
+        &mut self,
+        state: &SamplerState,
+        lod_min_clamp: f32,
+        lod_max_clamp: f32,
+    ) -> Result<Lent<SamplerState>, Error> {
+        let kept = &mut self.gpu.kept.samplers;
+        // SAFETY: as `lend_buffer`.
+        state.with_lod_clamps(lod_min_clamp, lod_max_clamp, |bound| unsafe {
+            kept.keep_object(bound)
+        })
+    }
 }
 
 impl CbInner {

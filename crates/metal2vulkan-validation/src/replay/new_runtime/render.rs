@@ -32,13 +32,11 @@ type Slot = (bool, bool, u32);
 /// object.
 const FACTORS: Slot = (false, false, u32::MAX);
 
-/// A render encoder, its stages' buffer and texture slots that hold a skipped object, its stages'
-/// sampler slots whose bind it skipped (`clamped`), and whether its pipeline state is a skipped
-/// one.
+/// A render encoder, its stages' buffer and texture slots that hold a skipped object, and whether
+/// its pipeline state is a skipped one.
 pub(super) struct Render {
     encoder: rt::RenderCommandEncoder,
     skipped: HashSet<Slot>,
-    skipped_samplers: HashSet<(bool, u32)>,
     skipped_pipeline: bool,
     /// The bound pipeline state's record lacks the `tessellation` key.
     unrecorded_tessellation: bool,
@@ -361,7 +359,6 @@ impl NewRuntime {
             Ok(encoder) => unaddressed(Object::Render(Box::new(Render {
                 encoder,
                 skipped: HashSet::new(),
-                skipped_samplers: HashSet::new(),
                 skipped_pipeline: false,
                 unrecorded_tessellation: false,
             }))),
@@ -1056,9 +1053,7 @@ impl NewRuntime {
     /// buffer or texture is a skipped object.
     fn draw_skipped(&mut self, id: u64) -> bool {
         let render = self.render(id);
-        let skipped = render.skipped_pipeline
-            || !render.skipped.is_empty()
-            || !render.skipped_samplers.is_empty();
+        let skipped = render.skipped_pipeline || !render.skipped.is_empty();
         if skipped {
             self.skips.draws += 1;
         }
@@ -1066,9 +1061,7 @@ impl NewRuntime {
     }
 
     /// Binds `sampler` at `slot` of the stage `fragment` names, with the LOD clamps `clamps` where
-    /// the call states them. A bind the runtime answers with [`rt::Gap::LodClamps`] (clamps whose
-    /// samples read otherwise than the sampler's own) binds nothing: it is skipped and counted
-    /// (`clamped_samplers`), and draws are skipped while the slot holds it.
+    /// the call states them.
     fn bind_sampler(
         &mut self,
         id: u64,
@@ -1079,7 +1072,7 @@ impl NewRuntime {
     ) -> Result<(), rt::Error> {
         let encoder = &mut self.render(id).encoder;
         let sampler = sampler.as_ref();
-        let bound = match (clamps, fragment) {
+        match (clamps, fragment) {
             (None, false) => encoder.set_vertex_sampler_state(sampler, slot),
             (None, true) => encoder.set_fragment_sampler_state(sampler, slot),
             (Some([min, max]), false) => {
@@ -1088,18 +1081,6 @@ impl NewRuntime {
             (Some([min, max]), true) => {
                 encoder.set_fragment_sampler_state_with_lod_clamps(sampler, min, max, slot)
             }
-        };
-        match bound {
-            Err(rt::Error::Unsupported(rt::Gap::LodClamps)) => {
-                self.skips.clamped_samplers += 1;
-                self.render(id).skipped_samplers.insert((fragment, slot));
-                Ok(())
-            }
-            Ok(()) => {
-                self.render(id).skipped_samplers.remove(&(fragment, slot));
-                Ok(())
-            }
-            failed => failed,
         }
     }
 

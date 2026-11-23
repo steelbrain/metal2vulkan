@@ -1220,15 +1220,6 @@ pub enum Gap {
     /// Basis: ours (the translator's identity domains do not filter bicubically, and Vulkan's
     /// cubic filter is not Metal's).
     CubicSampler,
-    /// A sampler state bound with LOD clamps its samples read otherwise through
-    /// ([`ComputeCommandEncoder::set_sampler_state_with_lod_clamps`](crate::ComputeCommandEncoder::set_sampler_state_with_lod_clamps)
-    /// and the render encoder's vertex and fragment forms): a bound that differs from the state's
-    /// own once both are held to the levels a sample can read
-    /// ([`lod_clamps_read_alike`](metal2vulkan::metal::sampler::lod_clamps_read_alike)).
-    ///
-    /// Basis: ours (no replay stream binds such clamps: every bind-time clamp the streams make
-    /// reads as its state's own).
-    LodClamps,
     /// [`Texture::replace_region`](crate::Texture::replace_region),
     /// [`Texture::get_bytes`](crate::Texture::get_bytes) or a blit copy between a buffer and a
     /// texture
@@ -2037,6 +2028,17 @@ pub enum Limit {
         /// The most samplers the device's states hold.
         max: u32,
     },
+    /// A sampler state bound with LOD clamps of its own past the variants the runtime holds at
+    /// once: each such bind's clamps are a variant of the state, at a variant element of set 1's
+    /// sampler arrays, and every one of them is held, by a state or by work not yet retired
+    /// ([`ComputeCommandEncoder::set_sampler_state_with_lod_clamps`](crate::ComputeCommandEncoder::set_sampler_state_with_lod_clamps)
+    /// and the render encoder's vertex and fragment forms). Nothing is bound.
+    ///
+    /// Basis: ours (the runtime's 4,000 variant elements).
+    LodClampVariants {
+        /// The most variants live at once.
+        max: u32,
+    },
     /// A `VkDeviceMemory` allocation past the device's `maxMemoryAllocationCount` live ones,
     /// refused before the driver is called: each block, each imported block, each texture's own
     /// memory, each staging buffer of [`Texture::replace_region`](crate::Texture::replace_region)
@@ -2718,9 +2720,6 @@ impl fmt::Display for Gap {
             ),
             Gap::MemorylessTexture => f.write_str("Memoryless textures are not built"),
             Gap::CubicSampler => f.write_str("cubic sampler filters are not built"),
-            Gap::LodClamps => f.write_str(
-                "a sampler state's bind-time LOD clamps that read otherwise than its own are not built",
-            ),
             Gap::TextureBufferSwizzle { pixel_format } => write!(
                 f,
                 "a swizzled texture buffer of {pixel_format:?} is not built"
@@ -2895,6 +2894,10 @@ impl fmt::Display for Limit {
             Limit::DeviceSamplers { max } => {
                 write!(f, "the device holds {max} samplers for sampler states already")
             }
+            Limit::LodClampVariants { max } => write!(
+                f,
+                "{max} sampler states bound with LOD clamps of their own are live already"
+            ),
             Limit::MemoryAllocations { max } => {
                 write!(f, "the device holds {max} memory allocations already")
             }

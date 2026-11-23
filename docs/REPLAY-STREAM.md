@@ -741,9 +741,6 @@ records as text, and
     off a multiple of 8, or one the encoder took before), whose mode stays as it was
     (`skipped_render_commands`, and a line for each gap, or `Refused(KIND)` for each kind of
     refusal, with its first frame and call);
-  - render encoders' sampler binds of LOD clamps the runtime answers with its typed gap (clamps
-    whose samples read otherwise than the sampler's own: `skipped_clamped_samplers`), the draws
-    while the slot holds one skipped with them; a bind it takes plays with its clamps;
   - blit commands that name a skipped object (`skipped_blits`), and by kind:
     `synchronizeTexture:slice:level:` (`skipped_texture_syncs`), and the pieces of a copy from
     the guest's RAM that are not whole 4-byte words at a 4-byte offset, into a buffer with no
