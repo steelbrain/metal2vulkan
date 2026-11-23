@@ -1,0 +1,531 @@
+{
+  "format": 1,
+  "case": "read-write-srgb-unorm-views",
+  "suite_version": 1,
+  "shaders": [
+    {
+      "fixture": "format_scout.ll",
+      "entry": "scout_read_write_f",
+      "source_sha256": "3d6a9f693cb8eaa851e08e12bcce2afce2890bf3973e9b47312f5e18f2157cb9"
+    },
+    {
+      "fixture": "format_scout.air.ll",
+      "entry": "scout_read_write_f",
+      "source_sha256": "3631bf570501999cd192eacf86330e5c45cc74b914cdda669586ada3838dc110"
+    },
+    {
+      "fixture": "format_scout.ll",
+      "entry": "scout_read_f",
+      "source_sha256": "3d6a9f693cb8eaa851e08e12bcce2afce2890bf3973e9b47312f5e18f2157cb9"
+    },
+    {
+      "fixture": "format_scout.air.ll",
+      "entry": "scout_read_f",
+      "source_sha256": "3631bf570501999cd192eacf86330e5c45cc74b914cdda669586ada3838dc110"
+    }
+  ],
+  "answers": [
+    {
+      "key": {
+        "chip": "apple-m3-max",
+        "os_version": "27.0.1",
+        "os_build": "26A434",
+        "metal_level": "27.0.1"
+      },
+      "provenance": "metal_run",
+      "device": "Apple M3 Max",
+      "runs": 3,
+      "outcomes": [
+        {
+          "runs": 3,
+          "transcript": {
+            "root": {
+              "name": "case",
+              "observed": {
+                "value": "absent"
+              },
+              "children": [
+                {
+                  "name": "inputs",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "air",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "3d6a9f693cb8eaa851e08e12bcce2afce2890bf3973e9b47312f5e18f2157cb9"
+                        }
+                      }
+                    },
+                    {
+                      "name": "air-typed",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "3631bf570501999cd192eacf86330e5c45cc74b914cdda669586ada3838dc110"
+                        }
+                      }
+                    },
+                    {
+                      "name": "formats",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "324d14bc6f5f4fd2be575ffe00eb332fe2007f3d9b571858b3e7ede10055ffc5"
+                        }
+                      }
+                    },
+                    {
+                      "name": "texture:fill",
+                      "observed": {
+                        "value": "absent",
+                        "digest": {
+                          "kind": "sha256",
+                          "hex": "495a532a9eefed0aba371791bddc74e4d062e9c73c6016ce6097d83643f291f7"
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "library",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/read-write",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "pipeline/read",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "plain/texture",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "plain/view",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "plain/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "plain/read-write",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "plain/read-write/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "plain/read",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "plain/read/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "plain/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "plain/texels",
+                  "observed": {
+                    "value": {
+                      "bytes": "iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPQ=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 4096
+                          }
+                        },
+                        "element": "u32",
+                        "row_offset": 0,
+                        "row_elements": 1024,
+                        "row_pitch": 4096,
+                        "rows": 1,
+                        "image_pitch": 4096,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "plain/get-bytes",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "plain/bytes",
+                  "observed": {
+                    "value": {
+                      "bytes": "IhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEQ=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 1024
+                          }
+                        },
+                        "element": "u8",
+                        "row_offset": 0,
+                        "row_elements": 1024,
+                        "row_pitch": 1024,
+                        "rows": 1,
+                        "image_pitch": 1024,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "over-a-buffer/buffer",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "over-a-buffer/texture",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "over-a-buffer/view",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "over-a-buffer/out",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "over-a-buffer/read-write",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "over-a-buffer/read-write/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "over-a-buffer/read",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "over-a-buffer/read/status",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": {
+                          "variant": {
+                            "name": "Completed",
+                            "payload": "absent"
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "over-a-buffer/read-back",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "over-a-buffer/texels",
+                  "observed": {
+                    "value": {
+                      "bytes": "iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPYmIiD7NzEw+zczMPquqqj6JiIg97+7uPs3MTD6JiAg+q6qqPomIiD7v7u4+zczMPomICD6JiIg9iYiIPs3MTD7NzMw+q6qqPomIiD3v7u4+zcxMPomICD6rqqo+iYiIPu/u7j7NzMw+iYgIPomIiD2JiIg+zcxMPs3MzD6rqqo+iYiIPe/u7j7NzEw+iYgIPquqqj6JiIg+7+7uPs3MzD6JiAg+iYiIPQ=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 4096
+                          }
+                        },
+                        "element": "u32",
+                        "row_offset": 0,
+                        "row_elements": 1024,
+                        "row_pitch": 4096,
+                        "rows": 1,
+                        "image_pitch": 4096,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "over-a-buffer/get-bytes",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "over-a-buffer/bytes",
+                  "observed": {
+                    "value": {
+                      "bytes": "IhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEQ=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 1024
+                          }
+                        },
+                        "element": "u8",
+                        "row_offset": 0,
+                        "row_elements": 1024,
+                        "row_pitch": 1024,
+                        "rows": 1,
+                        "image_pitch": 1024,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "over-a-buffer/buffer-read",
+                  "observed": {
+                    "value": {
+                      "variant": {
+                        "name": "Ok",
+                        "payload": "absent"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "over-a-buffer/buffer-bytes",
+                  "observed": {
+                    "value": {
+                      "bytes": "IhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEUQzZlURdzMiVUR3ZiIRRDNmVRF3MyJVRHdmIhFEM2ZVEXczIlVEd2YiEQ=="
+                    },
+                    "shape": {
+                      "bytes": {
+                        "region": {
+                          "buffer": {
+                            "offset": 0,
+                            "length": 1024
+                          }
+                        },
+                        "element": "u8",
+                        "row_offset": 0,
+                        "row_elements": 1024,
+                        "row_pitch": 1024,
+                        "rows": 1,
+                        "image_pitch": 1024,
+                        "images": 1,
+                        "gaps": "ignored"
+                      }
+                    }
+                  }
+                },
+                {
+                  "name": "notices",
+                  "observed": {
+                    "value": "absent"
+                  },
+                  "children": [
+                    {
+                      "name": "set",
+                      "observed": {
+                        "value": {
+                          "nothing": "announced_nothing"
+                        }
+                      }
+                    },
+                    {
+                      "name": "counts",
+                      "observed": {
+                        "value": {
+                          "fields": {}
+                        }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "validated": "ran"
+    }
+  ]
+}
