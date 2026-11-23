@@ -24,7 +24,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::air::intrinsics::ImageDim;
-use crate::device::profile::DeviceProfile;
+use crate::device::profile::{DeviceProfile, HandleDomain, PointerDomain};
 use crate::device::requirements::VkFeature;
 use crate::device::requirements::VkLimit;
 use crate::device::{Device, DeviceDescription, DevicePolicy};
@@ -1407,6 +1407,45 @@ fn one_d_textures_have_no_levels() {
         ran += 1;
     }
     assert!(ran > 0);
+}
+
+// ---- Under the identity domains ----
+
+/// The identity domains (`PointerDomain::Identity` with `HandleDomain::Identity`), which the
+/// runtime translates every state under.
+fn identity() -> DevicePolicy {
+    DevicePolicy {
+        pointer_domain: PointerDomain::Identity,
+        handle_domain: HandleDomain::Identity,
+        ..DevicePolicy::RESIDENT_TABLES
+    }
+}
+
+/// Under the identity domains a storage slot written at a level read from a buffer
+/// (`txt_level_write`) is lowered: it states no fact of the bound texture's levels, pushes the
+/// bound level count beside the slot's resource ID, and passes L3.
+#[test]
+fn under_the_identity_domains_a_write_at_a_run_time_level_is_lowered() {
+    let Some(bc) = fixture("txt_level_write") else {
+        return;
+    };
+    for stem in ["lavapipe", "runtime-floor"] {
+        let p = profile(stem, identity()).unwrap_or_else(|e| panic!("{e}"));
+        let a = compile(&bc, "txt_level_write", &p).unwrap_or_else(|e| panic!("{stem}: {e}"));
+        link_and_validate(&a, &p).unwrap_or_else(|e| panic!("{stem}: L3: {e}"));
+        assert!(
+            !(a.facts.iter()).any(|f| matches!(
+                f,
+                RuntimeFact::StorageTextureLevels { .. }
+                    | RuntimeFact::StorageTextureLevelViews { .. }
+            )),
+            "{stem}: {:?}",
+            a.facts
+        );
+        let pushed = |field| (a.interface.push.fields.iter()).any(|f| f.field == field);
+        assert!(pushed(PushField::TextureLevels(tslot(0))), "{stem}");
+        assert!(pushed(PushField::SlotGuestBase(tslot(0))), "{stem}");
+    }
 }
 
 // ---- The binder, end to end ----
