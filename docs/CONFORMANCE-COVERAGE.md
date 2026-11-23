@@ -2299,7 +2299,7 @@ A case whose difference from Metal is recorded rather than compared away. The le
 | `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
 | `border-swizzles-rgba8unorm` | The device's own answer (rule 1): a sample of an 8-bit unorm texel (red 0x40, green 0x80, blue 0xC0 and alpha 0x20) through a swizzled view, the border read thr… |
 | `buffer-blit-empty-ranges` | An accepted difference: Metal documents the copy as invalid, and rt refuses it typed. Apple's copy(from:sourceOffset:to:destinationOffset:size:) page gives dest… |
-| `buffer-blit-overlapping-copies` | An accepted difference: Metal documents the copy as invalid on macOS, and rt refuses it typed. Apple's copy(from:sourceOffset:to:destinationOffset:size:) page: … |
+| `buffer-blit-overlapping-copies` | An accepted difference: Metal documents the copy as invalid, and rt refuses it typed. Apple's copy(from:sourceOffset:to:destinationOffset:size:) page: "You can … |
 | `buffer-depth-samples-d16-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). Known gap (rt READM… |
 | `buffer-depth-samples-s8-54-2` | refused: no stream uses it yet (full selector census 11-19, m3-max-53207-53208, 53213, 53217-53221: 26 streams, no blit with a blit option). Known gap (rt READM… |
 | `buffer-tails-blits` | An accepted difference: Metal documents the texture as the buffer's storage, which these rows run past, and rt refuses it typed. Apple's makeTexture(descriptor:… |
