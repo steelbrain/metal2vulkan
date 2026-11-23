@@ -39,6 +39,7 @@ fn plan(scope: GroupScope, op: GroupOp, form: Form, konst: Option<u32>) -> Group
         arith: combine(op, form, Some(Sign::Signed)).expect("combine"),
         konst,
         quad_instructions: true,
+        helpers: false,
     }
 }
 
@@ -50,14 +51,24 @@ fn without_quads(g: GroupPlan) -> GroupPlan {
     }
 }
 
+/// `plan` in a fragment function, whose quads hold helpers.
+fn in_fragment(g: GroupPlan) -> GroupPlan {
+    GroupPlan {
+        quad_instructions: false,
+        helpers: true,
+        ..g
+    }
+}
+
 /// The classes each operation needs follow the SPIR-V the tier emits: a `Direct` vote is
 /// `OpGroupNonUniformAll` (vote), a `Cluster32` one a ballot word; a `Direct` reduction or product
 /// is arithmetic, a `Cluster32` one clustered; a `Cluster32` prefix sum or product is ballot and
 /// shuffles; a rotate up is a shuffle; a quad broadcast or shuffle-xor by a constant is the quad
-/// class where the stage takes quad instructions and a shuffle elsewhere.
+/// class where the stage takes quad instructions and a shuffle elsewhere; a fragment's quad
+/// reduction is the quad class, its prefix sum ballot and shuffles.
 #[test]
 fn operation_classes_follow_the_tier() {
-    let cases: [(GroupPlan, OpBits, OpBits); 21] = [
+    let cases: [(GroupPlan, OpBits, OpBits); 24] = [
         (
             plan(S::Simdgroup, G::Shuffle, F32, None),
             OpBits::SHUFFLE,
@@ -162,6 +173,21 @@ fn operation_classes_follow_the_tier() {
             plan(S::Quad, G::All, BOOL, None),
             OpBits::BALLOT,
             OpBits::BALLOT,
+        ),
+        (
+            in_fragment(plan(S::Quad, G::Sum, F32, None)),
+            OpBits::QUAD,
+            OpBits::QUAD,
+        ),
+        (
+            in_fragment(plan(S::Quad, G::Xor, LANE_FORM, None)),
+            OpBits::QUAD,
+            OpBits::QUAD,
+        ),
+        (
+            in_fragment(plan(S::Quad, G::PrefixInclusiveSum, F32, None)),
+            OpBits::BALLOT.union(OpBits::SHUFFLE),
+            OpBits::BALLOT.union(OpBits::SHUFFLE),
         ),
     ];
     for (g, d, c) in cases {

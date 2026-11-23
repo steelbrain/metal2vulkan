@@ -95,10 +95,14 @@
 //! is read through the calling lane without the ballot's bit extract or a shuffle naming it.
 //!
 //! **Helpers**. A fragment function whose group operations read, combine, or count other lanes
-//! declares `RequireFullQuadsKHR`, so each quad starts with its four invocations and its helpers
-//! take part in every group operation, as Metal's helpers do in a quad the primitive or the target
-//! cuts (a fill reads a helper's value, a quad sum folds it in). A profile without
-//! `shaderQuadControl` refuses such a function.
+//! declares `RequireFullQuadsKHR`, so each quad starts with its four invocations, as Metal runs the
+//! helpers of a quad the primitive or the target cuts, and they take part in its group operations
+//! (a fill reads a helper's value, a quad sum folds it in). Vulkan runs its quad instructions over
+//! a quad's helpers in every entry, and its other group operations over them only where the entry
+//! declares `MaximallyReconvergesKHR` (section 9.31, "Helper Invocations"), as every such entry
+//! does where the profile has maximal reconvergence (**Reconvergence**, below). A quad reduction
+//! there reads its quad through quad instructions alone. A profile without `shaderQuadControl`
+//! refuses such a function.
 //!
 //! In compute the flattened tiers derive every Metal thread builtin from the subgroup partition
 //! (`lower::dispatch`), so simdgroup `k` is exactly the linear threads `[32k, 32k + 32)` and a
@@ -111,9 +115,12 @@
 //! are Metal's 2×2 pixel quads in fragment and four consecutive linear threads in the flattened
 //! compute tiers): shuffles with `(L & ~3) | (idx & 3)`, `OpGroupNonUniformQuadSwap` and
 //! `OpGroupNonUniformQuadBroadcast` for constant masks and lanes where the stage takes Vulkan's
-//! quad instructions (else the shuffles from the same lanes), `ClusteredReduce` with cluster size 4
-//! for reductions and votes, and the ballot word for `is_first`, the active mask, and `quad_ballot`
-//! (the quad's four bits, quad lane `j` at bit `j`). A simdgroup's `simd_active_threads_mask` is
+//! quad instructions (else the shuffles from the same lanes), reductions, prefix sums and products
+//! over the quad's four lanes in Metal's order, each lane read by a shuffle under its bit of the
+//! ballot of the active lanes (a fragment's reduction by `OpGroupNonUniformQuadBroadcast` under
+//! `OpGroupNonUniformQuadAnyKHR` of its quad lane, **Helpers** above), and the ballot word for
+//! votes, `is_first`, the active mask, and `quad_ballot` (the quad's four bits, quad lane `j` at
+//! bit `j`). A simdgroup's `simd_active_threads_mask` is
 //! the ballot of `true`, held as the 64-bit ballot is. A fragment's `[[thread_index_in_quadgroup]]`
 //! is the subgroup lane's low two bits ([`select_param`]), or, on a profile without the fragment
 //! quad tier, the pixel's place in its aligned 2x2 block, read from `FragCoord`.
@@ -204,6 +211,10 @@ pub struct GroupPlan {
     /// partly live blocks; elsewhere it is a shuffle from the lane it reads, through the live lanes
     /// outside kernels, where a quad may lack a lane.
     pub quad_instructions: bool,
+    /// The function is a fragment function, whose quads hold helpers ([`full_quads`]): a quad
+    /// reduction reads its quad through quad instructions, which Vulkan runs over the quad's
+    /// helpers whatever the entry's reconvergence (section 9.31, "Helper Invocations").
+    pub helpers: bool,
 }
 
 /// The simd strategies.
@@ -482,9 +493,10 @@ pub fn finish(cx: &mut SelectCx<'_>) -> Result<(), Error> {
 /// ([`SimdPlan::full_quads`]), and a profile without `shaderQuadControl` refuses it. Metal runs the
 /// helpers of a quad the primitive or the target cuts, and they take part: a fill or shuffle reads
 /// a helper's value, a reduction folds it in (measured on the M3 Max and the M4). Vulkan launches
-/// and activates them for every group operation only under `RequireFullQuadsKHR`; without it a
-/// helper may be absent or inactive, and no other form gives its value. After the tier, so a stage
-/// without the classes is refused as before.
+/// them only under `RequireFullQuadsKHR`; without it a helper may be absent, and no other form
+/// gives its value. Its quad instructions run over the helpers it launches, and its other group
+/// operations where the entry maximally reconverges (the module's **Helpers**). After the tier,
+/// so a stage without the classes is refused as before.
 pub fn full_quads(cx: &mut SelectCx<'_>) -> Result<(), Error> {
     if cx.stage != Stage::Fragment || !cx.families.simd.observes_lanes {
         return Ok(());
@@ -1019,6 +1031,7 @@ fn select_group(
         konst,
         quad_instructions: cx.stage == Stage::Kernel
             && cx.profile.fields().subgroup.quad_instructions(cx.stage),
+        helpers: cx.stage == Stage::Fragment,
     };
     group::check(&plan).map_err(|()| not_lowered())?;
     if matches!(

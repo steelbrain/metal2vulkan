@@ -1582,6 +1582,7 @@ mod tests {
             arith: None,
             konst: None,
             quad_instructions: true,
+            helpers: false,
         };
         let half4 = Held::Float(FloatFmt::Half);
         let u32_ = Held::Int {

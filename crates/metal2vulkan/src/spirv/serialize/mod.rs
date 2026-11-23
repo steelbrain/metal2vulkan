@@ -2057,7 +2057,11 @@ impl Ser<'_> {
             ),
             Inst::Derivative { op, a } => w.inst(op.to_spirv(), &with(head()?, &[v(*a)?])),
             Inst::Group { scope, op } => {
-                let mut o = with(head()?, &[self.cid(scope.id)?]);
+                // `OpGroupNonUniformQuadAnyKHR` has no execution scope operand.
+                let mut o = match op {
+                    GroupInst::QuadAny(_) => head()?,
+                    _ => with(head()?, &[self.cid(scope.id)?]),
+                };
                 self.group_operands(&mut o, op)?;
                 w.inst(op.to_spirv(), &o)
             }
@@ -2101,7 +2105,8 @@ impl Ser<'_> {
             GroupInst::All(a)
             | GroupInst::Any(a)
             | GroupInst::BroadcastFirst(a)
-            | GroupInst::Ballot(a) => o.push(v(*a)?),
+            | GroupInst::Ballot(a)
+            | GroupInst::QuadAny(a) => o.push(v(*a)?),
             GroupInst::BallotBitExtract { ballot, index } => {
                 o.push(v(*ballot)?);
                 o.push(v(*index)?);

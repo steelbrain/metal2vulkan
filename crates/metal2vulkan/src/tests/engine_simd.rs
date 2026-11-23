@@ -1614,6 +1614,60 @@ fn fragment_group_operations_run_full_quads() {
     );
 }
 
+/// A fragment's quad reduction reads its quad through quad instructions alone, which Vulkan runs
+/// over the quad's helpers in every entry (section 9.31): on every committed profile with
+/// `shaderQuadControl`, `fragment_quad_bitwise`'s AND, OR and XOR each ask
+/// `OpGroupNonUniformQuadAnyKHR` whether each of the four quad lanes takes part and read each by
+/// `OpGroupNonUniformQuadBroadcast` (4 of each per reduction, 12 in all), and its quad prefix sum
+/// alone reads by a ballot and shuffles. A kernel's quad reductions (`quad_bitwise`), whose quads
+/// hold no helpers, keep the ballot of the active lanes and take no quad vote.
+#[test]
+fn fragment_quad_reductions_read_their_quads_by_quad_instructions() {
+    let Some(quads) = assemble("gsm2_quad_ops") else {
+        return;
+    };
+    let count = |text: &str, op: &str| text.lines().filter(|l| l.contains(op)).count();
+    let mut fragments = 0;
+    for (name, p) in committed_profiles().expect("profiles") {
+        if !p.fields().subgroup.quad_control {
+            continue;
+        }
+        let a = compile(&quads, "fragment_quad_bitwise", &p).expect("compile");
+        let (_, words) = link_and_validate(&a, &p).expect("valid");
+        let text = spirv_dis(&words);
+        assert_eq!(
+            count(&text, "OpGroupNonUniformQuadAnyKHR"),
+            12,
+            "fragment_quad_bitwise on {name}"
+        );
+        assert_eq!(
+            count(&text, "OpGroupNonUniformQuadBroadcast"),
+            12,
+            "fragment_quad_bitwise on {name}"
+        );
+        assert_eq!(
+            count(&text, "OpGroupNonUniformBallot "),
+            1,
+            "fragment_quad_bitwise on {name}: the prefix sum's ballot alone"
+        );
+        fragments += 1;
+        if let Ok(a) = compile(&quads, "quad_bitwise", &p) {
+            let (_, words) = link_and_validate(&a, &p).expect("valid");
+            let text = spirv_dis(&words);
+            assert_eq!(
+                count(&text, "OpGroupNonUniformQuadAnyKHR"),
+                0,
+                "quad_bitwise on {name}"
+            );
+            assert!(
+                count(&text, "OpGroupNonUniformBallot ") > 0,
+                "quad_bitwise on {name}"
+            );
+        }
+    }
+    assert!(fragments > 0, "no committed profile has quad control");
+}
+
 /// MoltenVK 1.4.2 drops `VK_KHR_shader_quad_control` (`shaderQuadControl`) on Apple's GPUs. The
 /// committed `moltenvk-m3` description, a capture of 1.4.2 that states neither the feature nor
 /// its extension, refuses each fragment function whose group operations observe other lanes,

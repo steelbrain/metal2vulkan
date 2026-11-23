@@ -164,6 +164,16 @@ pub(super) fn exec(p: &Prog<'_>, op: &GroupInst, size: u32, lanes: &[&Lane]) -> 
             };
             per_lane(&|id| from(&vals, i64::from(id ^ x)))
         }
+        GroupInst::QuadAny(v) => {
+            let vals = operand(*v)?;
+            per_lane(&|id| {
+                let mut any = false;
+                for (k, b) in &vals {
+                    any |= (*k & !3) == (id & !3) && b.s()? != 0;
+                }
+                Ok(Val::S(u64::from(any)))
+            })
+        }
     }
 }
 
