@@ -4710,11 +4710,19 @@ command buffer reads: a render pass's end orders its writes before every later c
   again: one more dispatch, one barrier, and the attachments stored and loaded. With the probe's
   form of the split, Apple's rendering sample's frame (11 such executions) took 1,003.4 us of GPU
   time against 931.8 without it on an RTX 2080, and 617.0 against 588.5 on a Radeon RX 7900 XTX
-  (job 63481, medians of 9). On an RTX 3090 (NVIDIA's 620.70.06) a split costs about 11 us of GPU
-  time: that frame took 1,106.9 us against 978.9 with each part's count written as the command
-  buffer records and no split, and 1,041.7 against 925.0 at one part an execution (job 64194,
-  medians of 9 turns, below). While a visibility result's query counts the draws (after a draw
-  under a `Boolean` or `Counting` mode) the rendering cannot end, so such an execution is refused,
+  (job 63481, medians of 9). On an RTX 3090 (NVIDIA's 620.70.06) the splits and the parts at the
+  bound cost 164.0 us of the light frame's GPU time together (below): it took 1,862.8 us against
+  1,698.8 at one part an execution with each part's count written as the command buffer records
+  and no split (a probe, job m3-max-71730, medians of 9 turns at P0); timestamps around each split
+  put it at 12.7 us. Running the count kernels instead ahead of each render encoder's rendering,
+  in a Vulkan command buffer of their own before the rendering's (a form measured and not taken),
+  made the light frame slower on the 3090: 1,793.2 and 1,880.5 us against 1,686.8 and 1,703.3,
+  and the same draws direct, which run no execution, took 1,088.5 and 1,122.3 us against 1,070.1
+  and 1,070.1, so a command buffer boundary ahead of each of the frame's 6 render encoders'
+  renderings added 18.4 to 52.2 us a frame (job m3-max-71784: the two builds alternated, each
+  pair at one clock state, medians of 9 turns). No form adds a command buffer boundary per render
+  encoder. While a visibility result's query counts the draws (after a draw under a `Boolean` or
+  `Counting` mode) the rendering cannot end, so such an execution is refused,
   `Gap::Draw` of `DrawKind::VisibilityResultInterrupt`, counted in
   `Metrics::visibility_interrupts_refused`; one before the mode's first draw runs.
 - A state made with `supportIndirectCommandBuffers` pays one 8-byte load a vertex on its direct
@@ -4743,25 +4751,40 @@ command buffer reads: a render pass's end orders its writes before every later c
   391.4 drawn directly (job 63460, an RTX 2080 on NVIDIA's 620.70.06, medians of 9). On the XTX a
   part costs about 2.4 us. The frame's parts at the bound took 931.8 us on the 2080 and 588.5 on
   the XTX (job 63481). A part runs its execution whatever its count: on an RTX 3090 a part with
-  count 0 (wholly past its range's last command) costs about 10 us. There the frame's 11
-  executions take 17 parts at the bound, 6 of them with count 0, and took 1,106.9 us against
-  1,041.7 at one part an execution, and 978.9 against 925.0 with no split (job 64194, below).
-- On NVIDIA's driver, `vkCmdExecuteGeneratedCommandsEXT` costs GPU time beyond the draws it runs,
-  measured on one card, an RTX 3090 (620.70.06): the frame above (11 executions over ranges a
-  buffer holds, buffers of 8,162, 785 and 289 commands, 2,132 commands in range) took 925.0 us
-  of GPU time at one part an execution with each part's count written as the command buffer
-  records and no split, against 386.0 us for the same 2,132 draws direct: 539.0 us more, inside
-  the executes. In the runtime's form the frame took 1,106.9 us; of its 720.9 us over direct, the
-  driver's executes take 539.0, the 11 splits about 117 to 128 and the 6 parts with count 0
-  about 54 to 65. With each part preprocessed apart from its execute
-  (`vkCmdPreprocessGeneratedCommandsEXT`), the preprocesses took 263.9 us and the executes
-  592.9. Job 64194: the arms alternating over 9 rounds, every turn at P0 with the SM at 1,950
-  MHz and the memory at 9,751 MHz, medians of 9 turns of at least 300 ms each. The frame's draws
-  are the harness's own (each a strip of 226 quads), so these microseconds are the harness
-  frame's, not a guest frame's. The driver's execute cost is measured on NVIDIA's driver alone:
-  on a Radeon RX 7900 XTX (RADV) a guest's frame of this shape at a held camera pose took 4.305
-  ms of GPU time with its executions against 4.372 ms with the same draws direct, the executions
-  1.5% under.
+  count 0 (wholly past its range's last command) costs about 10 us. There the light frame's 11
+  executions take 17 parts at the bound, 6 of them with count 0, which timestamps around each put
+  at 62.7 us together (a probe, job m3-max-71730).
+- On NVIDIA's driver an execution costs GPU time beyond the draws it runs, each
+  `vkCmdExecuteGeneratedCommandsEXT` call most of all, measured on one card, an RTX 3090 (NVIDIA's
+  620.70.06), against a Radeon RX 7900 XTX (RADV, Mesa 26.2.6).
+  - A guest's frame of this shape at a held camera pose took 3.446 ms of GPU time with its
+    executions against 3.034 ms with the same draws direct on the 3090, 13.6% over (the
+    consumer's jobs m3-max-64069 and m3-max-64113), and 4.305 ms against 4.372 on the XTX, 1.5%
+    under (m3-max-64076 and m3-max-64084).
+  - The light frame, a timing test's at its heaviest scale: 11 executions over ranges a buffer
+    holds in 6 render passes, of buffers of 8,162, 785 and 289 commands, 2,132 commands in range,
+    each command an indexed strip of 2,260 quads over a 32 by 16 pixel cell that binds 7 vertex
+    and 7 fragment buffers, 5 and 4, or 4 and none (17, 12 or 7 tokens). It took 1,868.8 us
+    of GPU time against 1,105.9 with the same draws direct on the 3090, 69.0% over (job
+    m3-max-71730, every turn at P0, the SM at 1,950 MHz), and 719.7 against 558.4 on the XTX,
+    28.9% over (job m3-max-71686, every turn at about 3,000 MHz): medians of 9 alternated turns of
+    two frames in flight, each pair at one clock state, both arms' targets equal to the CPU's
+    texel for texel.
+  - The 3090's 735.5 us over direct in that frame (a probe, job m3-max-71730, medians of 9 turns,
+    each pair at one clock state): about 300 us (41%) is each execute's own preprocessing inside
+    the rendering: the same draws in 22 execute calls took 311.2 us more than in 11, about 28 us a
+    call, and with each part preprocessed apart (`vkCmdPreprocessGeneratedCommandsEXT`) its
+    executes took 294.9 us less while its preprocesses took 218.1. The splits and the parts at the
+    bound take 164.0 us (22%), the commands' 17, 12 or 7 tokens against 7 for every command take
+    63.7 (9%), and the remaining about 190 us (26%) is per-draw cost inside the executes, which no
+    piece measured isolates. Sizing each part by the buffer's capacity rather than its range costs
+    8.0 us. The same probe on the XTX (job m3-max-71686, medians of the 2 to 7 of its 9 pairs at
+    one clock state): about 4.0 us a call, about 80 for the splits and the parts at the bound, and
+    40.3 for the tokens.
+  - Explicit preprocessing gains on NVIDIA and loses on RADV: with each part preprocessed apart, in
+    a rendering ended for it, the light frame took 1,896.7 us against 1,909.8 on the 3090 (job
+    m3-max-71730) and 808.1 against 745.1 on the XTX (job m3-max-71686, 5 and 3 of 9 pairs at one
+    clock state), each with timestamps around each piece, so it is not the runtime's form.
 - A command's buffer slots reach its functions through the push bytes alone, so each slot a
   command binds needs its word in the state's push window, `W` bytes (256, or 128 on a device
   whose `maxPushConstantsSize` is 128), which the vertex and fragment
