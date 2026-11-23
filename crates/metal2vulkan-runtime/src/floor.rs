@@ -324,7 +324,7 @@ pub(crate) const MEMORY_FLAG_NAMES: [(vk::MemoryPropertyFlags, &str); 4] = [
 
 /// The feature structures of Vulkan 1.3 that the floor reads and device creation enables, each
 /// without its `p_next` link.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Default)]
 pub struct Features {
     /// `VkPhysicalDeviceFeatures`.
     pub core: vk::PhysicalDeviceFeatures,
@@ -989,8 +989,9 @@ impl std::error::Error for BelowFloor {}
 ///
 /// Metal's counterparts are per-family capabilities (`supportsFamily`), and for storage reads
 /// `readWriteTextureSupport`; here each is one Vulkan feature. The SIMD groups' other answers
-/// (subgroup sizes, stages and operations) are properties the translator reads itself.
-#[derive(Debug)]
+/// (subgroup sizes, stages and operations) are properties the translator reads itself. Its
+/// `Debug` prints the answers, the extensions and the queue family, and leaves out the feature
+/// structures and the memory properties.
 pub struct Capabilities {
     /// `shaderFloat16`: `half` arithmetic in 16 bits.
     pub float16: bool,
@@ -1043,6 +1044,32 @@ pub struct Capabilities {
     /// What an indirect command buffer's execution may take, where device creation enables
     /// [`INDIRECT_COMMANDS`]; `None` on a device without them.
     pub indirect_commands: Option<IndirectCommandLimits>,
+}
+
+impl std::fmt::Debug for Capabilities {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Capabilities")
+            .field("float16", &self.float16)
+            .field(
+                "storage_read_without_format",
+                &self.storage_read_without_format,
+            )
+            .field("buffer_int64_atomics", &self.buffer_int64_atomics)
+            .field("shared_int64_atomics", &self.shared_int64_atomics)
+            .field("float64", &self.float64)
+            .field("maximal_reconvergence", &self.maximal_reconvergence)
+            .field(
+                "subgroup_uniform_control_flow",
+                &self.subgroup_uniform_control_flow,
+            )
+            .field("texel_offset_operand", &self.texel_offset_operand)
+            .field("attachment_reads", &self.attachment_reads)
+            .field("feedback_loop", &self.feedback_loop)
+            .field("extensions", &self.extensions)
+            .field("queue_family", &self.queue_family)
+            .field("indirect_commands", &self.indirect_commands)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The memory types the runtime allocates its buffers from, each the first memory type with its
