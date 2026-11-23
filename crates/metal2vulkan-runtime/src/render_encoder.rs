@@ -717,7 +717,7 @@ impl CommandBuffer {
         &self,
         descriptor: &RenderPassDescriptor,
     ) -> Result<RenderCommandEncoder, Error> {
-        let mut building = self.open_encoder(false, false)?;
+        let mut building = self.open_encoder()?;
         // SAFETY: the encoder holds `building`, whose device handle keeps the core, until it ends;
         // nothing uses the borrow after that, and a refused descriptor drops it with no use.
         let core = unsafe { Uncounted::of(building.device.core()) };

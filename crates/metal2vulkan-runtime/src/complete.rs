@@ -99,9 +99,6 @@ enum Item {
     Upload(Upload),
     /// A Managed buffer's copy-in the submission took (`crate::capture`).
     CopyIn(CopyIn),
-    /// A submission that carries nothing to retire, a piece before its command buffer's last
-    /// (`crate::piece`): its completion leaves the device room for the next (`crate::submit`).
-    Piece,
 }
 
 impl Done {
@@ -246,7 +243,6 @@ impl Done {
                     Item::Command { .. } => "a command buffer",
                     Item::Upload(_) => "an upload",
                     Item::CopyIn(_) => "a copy-in",
-                    Item::Piece => "a piece",
                 };
                 let reached = match reached_by_wait(device, self.progress, oldest.value) {
                     Ok(reached) => reached.to_string(),
@@ -357,14 +353,6 @@ impl Done {
                 },
             });
         }
-        if state.flight.back().is_none_or(|last| last.value != value) {
-            state.flight.push_back(Retiree {
-                value,
-                held,
-                lost: false,
-                item: Item::Piece,
-            });
-        }
         state.watched.extend(watch);
         self.wake(&mut state, &core.device, flight_only);
     }
@@ -448,7 +436,6 @@ impl Retiree {
                 Item::Command { .. } => "a command buffer",
                 Item::Upload(_) => "an upload",
                 Item::CopyIn(_) => "a copy-in",
-                Item::Piece => "a piece",
             },
             self.value,
             if self.lost { ", lost" } else { "" }
@@ -470,7 +457,6 @@ impl Retiree {
             }
             Item::Upload(upload) => upload.retire(core, end),
             Item::CopyIn(copy_in) => copy_in.retire(core, end),
-            Item::Piece => None,
         }
     }
 
@@ -539,11 +525,9 @@ impl Round {
 }
 
 /// What the completion thread knows of a command buffer's completion as it retires it: its GPU
-/// times where they were read, placed on the host clock and as the GPU wrote them, its round,
-/// and the GPU spans retired before it.
+/// times where they were read, its round, and the GPU spans retired before it.
 pub(crate) struct Completion<'a> {
     pub(crate) gpu_times: Option<(u64, u64)>,
-    pub(crate) ticks: Option<(u64, u64)>,
     pub(crate) round: &'a Round,
     pub(crate) spans: &'a Spans,
 }
@@ -758,7 +742,6 @@ pub(crate) fn run(core: Arc<Core>) {
                     .map(|(stamps, calibration)| calibration.place(&core.ticks, stamps, seen));
                 let completion = Completion {
                     gpu_times: times,
-                    ticks: stamps,
                     round: &round,
                     spans: &spans,
                 };

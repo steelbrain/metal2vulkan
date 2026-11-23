@@ -1880,110 +1880,48 @@ made, with no lock, and never rewritten for layouts.
   each upload that holds a released object. `Metrics::held_releases` and `held_release_bytes`
   count every release they held, and `held_release_starts` those that were the first since they
   came to hold the object, each a submission it started. While
-  the device has room on its `VkQueue`, a command buffer goes at once, alone. It has room while
-  fewer than two of its submissions, of every queue, are not yet seen complete, and while fewer
-  than three are whose expected GPU runs (below) behind the oldest, with the next's, sum to 4 ms
-  or less; a run not yet known counts as past 4 ms. So while a queue's run is not yet known (none
-  of its command buffers has retired with its GPU times), its command buffer goes only where fewer
-  than two submissions are on the device. The device keeps on the `VkQueue` no more than about
-  4 ms of work behind what runs, and one behind it always, whatever the queues, and a command
-  buffer committed later waits behind no more of it: behind a running piece of at most 4 ms
-  (below), such a wait stays within 16 ms. The room goes first to the queue that waited longest: by
-  its turn, its last submission, or none where its command buffer was committed with nothing of
-  its queue queued or in flight, then in commit order. So a command buffer of an idle queue goes
-  at the device's next room, behind what runs and the one behind it, ahead of every queue's
-  backlog, and a backlog whose last piece just completed passes no queue idle longer. A queue's
-  backlog waits for as long as other queues that commit only when idle keep the device's room
-  taken: Metal promises no order between queues, and the runtime keeps no aging rule for it.
-  Where one queue keeps 20 ms command buffers in flight, each signalling a waiter committed to
-  another queue, that waiter takes a place in the room, so the long queue's next starts one
-  completion round trip after the one before it ends: its GPU idle before each grew to about
-  0.45 ms on the RX 7900 XTX (job m3-max-68440) and the Iris Xe (job m3-max-68441) and 0.6 ms on
-  an RTX 3090 (job m3-max-68465), its GPU time a command buffer by 1.0%, 1.4% and 2.5% (by 0.3%,
-  0.9% and 1.1% where the other queue's command buffers wait for nothing).
-  Without room, the ones committed meanwhile are held
+  a queue has room on the device's `VkQueue`, each of its command buffers goes at once, alone. It
+  has room while fewer than two of its submissions are not yet seen complete, and while fewer than
+  three are whose expected GPU runs (below) behind the oldest, with the next's, sum to 16 ms or
+  less; a run not yet known counts as past 16 ms. So a queue whose run is not yet known (none of
+  its command buffers has retired with its GPU times) has room for two submissions, and its third
+  command buffer waits for one seen complete. A queue keeps on the `VkQueue` no more than about 16
+  ms of work behind what runs, and one behind it always, and a command buffer of another queue
+  committed later waits behind no more of it. Without room, the ones committed meanwhile are held
   in one group of at most sixteen, each scheduled as it joins; one the group does not take is held
   too, not yet in a group, scheduled as it would be in one (its waits met, in its queue's order,
   its scheduled handlers run: `Metrics::held_for_room`), and so are its queue's later command
   buffers. The held work goes when a completion leaves room (the completion thread wakes the
   submit thread as it retires; no commit or
   wait is needed), when the host is to wait for one of them (`wait_until_completed`, or
-  `CommandQueue::send_now`, the hint for a wait the runtime does not see), or at teardown. No
-  command buffer goes past one of another queue committed before it, to a queue with nothing
-  queued or running, not yet submitted, with a part ready, that holds a buffer or texture it holds
-  (or where either reaches memory outside its resources), whether the device's room or a host
-  wait would send it: until that one is submitted it is not staged, and its queue neither wants
-  nor takes the room, whose order then sends that one first, as Metal submitted that one at its
-  commit and orders it after (job m3-max-68673). So where that one waits behind a cut command
-  buffer it shares with (below), a later sharer of a third queue waits behind both; without the
-  rule it went between the cut one's pieces and read the buffer before that one wrote it (on
-  lavapipe, job m3-max-68970). A group is asked by its first command buffer, and those that joined
-  it go with it. Two readers of one resource share it here too: an over-hold. Waiting
+  `CommandQueue::send_now`, the hint for a wait the runtime does not see), or at teardown. Waiting
   for a place in the queue sends nothing. A segment that signals an event ends its group, which goes
   at once as it is staged, and so does a presenting command buffer's last (see "Presenting"); so a
-  command buffer that signals an event, in any segment, is staged only once the device has room
-  for it, as one held for room behind it is, and a wait for its signal waits with it, while a
-  presenting one has its queue go at once, through to it, and so does one with nothing for the
-  GPU or one ended before it went, except behind a cut command buffer, whose pieces go at the
-  room's pace: such a one goes after its last piece, as the room comes, and a cut one that
-  presents waits for room at each piece as any cut one does. So of a chain of command buffers, each
-  waiting for the signal of the one before it, the links past the device's room go as earlier
-  ones complete. The
+  command buffer that signals an event, in any segment, is staged only once its queue has room for
+  it, as one held for room behind it is, and a wait for its signal waits with it, while a
+  presenting one has its queue go at once, through to it. The
   driver runs a submission's command buffers as one kernel job, which a job timeout ends as a whole
   (Linux's amdgpu ends a job past its timeout and resets the ring), so a group is bounded by its
   expected GPU run: a queue's expected run follows its command buffers'
   own GPU times as each retires (a longer one raises it at once, a shorter one halves the way toward
   it), and a command buffer joins a group only while the group's expected runs, summed, stay within
-  4 ms. One whose queue has no run yet, or that would take the sum past the bound, goes alone, the
+  16 ms. One whose queue has no run yet, or that would take the sum past the bound, goes alone, the
   group held going first. The bound is tested again as the group goes, with the expected run as it
   then stands: a group past it goes member by member, one `vkQueueSubmit2` each, only the last
   signalling. At most four command buffers join a group while none of the queue's retires, since
   they join on an expected run no completion has updated: in
   a replay stream on an RTX 3090, the most GPU time over four consecutive command buffers of a queue
   was 385.1 ms, within a quarter of amdgpu's default job timeout of 2,000 ms, and over sixteen
-  1,536.6 ms. A command buffer's compute work goes to the `VkQueue` in pieces, each one
-  submission that waits for the device's room as a command buffer does: the runtime cuts it
-  before a compute dispatch that would take the piece's expected GPU run past 4 ms, between the
-  dispatches of a kernel with no measured rate yet, which share a piece of their own, and any
-  other, and where a compute or blit encoder opens after a full piece, never before or inside a
-  render pass (`Metrics::cuts`). A dispatch's expected run is its kernel's rate, the GPU run of
-  one threadgroup as the pieces that ran the kernel measured it, times its threadgroups; an
-  indirect dispatch, whose threadgroups only the GPU reads, counts as one. A command buffer of
-  one segment (not cut, and not split at an event) is one piece, timed by its own two timestamps,
-  which hold no other submission's run, and writes no other; the first piece of several runs from
-  the command buffer's start to a timestamp at the piece's end; each other piece, and a first
-  whose dispatches follow a blit or render encoder's commands, is timed by two timestamps of its
-  own. So a
-  command buffer of another queue committed while one runs goes between two of its pieces
-  (`Metrics::pieces_passed`), unless it holds a buffer or texture the cut one holds (by the ids
-  the hazards track them by, a heap's resources by the heap's), waits on a fence the cut one
-  updates, or either reaches memory outside its resources: then it goes after the last piece
-  (`Metrics::shared_holds`), held only while the cut one's next piece is ready; where that piece
-  waits for an event not yet met, it goes, as Metal's wait stops only its own queue, and the
-  signal may come from the queue it holds. Across queues, a command buffer that shares a tracked
-  resource with an earlier-committed one of another queue goes after it only once that one is
-  submitted, as Metal's hazard tracking orders such a pair against work already submitted, and no
-  more (the M3 Max rows below, jobs m3-max-52432 and m3-max-52415); a cut command buffer that has
-  begun counts as submitted until its next piece waits for an event. An event wait holds only its
-  own queue. A command buffer that waits on a fence goes after each command buffer of another
-  queue that updates it and is held in a group or for room, and after every ready piece of a cut
-  one; Metal's side of that is measured only by the probe under `Fence` below (jobs m3-max-52186
-  and m3-max-52188). Two readers of one
-  resource share it here, so a read waits behind a cut command buffer that only reads what it
-  reads, though no write orders them: an over-hold. The cut command buffer is scheduled as its first piece is submitted,
-  where none of its later pieces waits for an event, and its GPU times run from its first piece's
-  start to its last piece's end, the runs of what went between its pieces included, as on the UHD
-  630 under macOS 26.7.1 a running command buffer's end moved by the run of one that started
-  beside it (job m3-max-68129). The thread holds a segment whose event waits are not met, and its queue's later
+  1,536.6 ms. The thread holds a segment whose event waits are not met, and its queue's later
   command buffers behind it, while the segments before it run, so the host can see a signal the
   command buffer makes before its wait. Other queues go on. Each queue groups on its own count:
-  a command buffer of a queue with nothing queued or running is submitted at the device's next
-  room, ahead of every command buffer committed after it on any queue, its part before an event
-  wait included (of the groups that go at once, the one committed first goes first: on an M3
-  Max, a copy on another queue, committed after a command buffer that fills, waits for the event
-  the copy then signals, and fills again, read the first fill and not the second, job
-  m3-max-68673), while one its queue holds, in a group or for room, may
-  be passed by another queue's command buffer committed after it, which only a fence or an event
+  a command buffer of a queue with nothing running is submitted at once, ahead of every command
+  buffer committed after it on any queue, its part before an event wait included (of the groups
+  that go at once, the one committed first goes first: on an M3 Max, a copy on another queue,
+  committed after a command buffer that fills, waits for the event the copy then signals, and
+  fills again, read the first fill and not the second, job m3-max-68673), while one its queue
+  holds, in a group or for room, may be passed by another queue's command buffer committed after
+  it, which only a fence or an event
   then orders after it. Metal's hazard tracking orders such a pair against work already submitted, and no
   more. Recorded on an M3 Max with macOS 27.0.1, with tracked buffers and no fence, a blit fill on
   one queue and a copy of what it filled on another, committed after it, five runs each: where the
@@ -2062,8 +2000,8 @@ made, with no lock, and never rewritten for layouts.
   `CommandQueue::command_buffer` on a queue whose maximum count are made and not yet completed,
   which a scheduled handler answers the same way. No wait of the runtime's hangs by construction.
   A command buffer of a group is seen complete with the group's last: up to the GPU time of the
-  fifteen after it late. Only a queue that finds the device without room holds a group; one that
-  finds room sends its next command buffer alone. Without a wait or a hint, the lateness is bounded only while the queue has no room,
+  fifteen after it late. Only a queue without room holds a group; one whose
+  submissions have completed sends its next command buffer alone. Without a wait or a hint, the lateness is bounded only while the queue has no room,
   and the completion that leaves room sends the group (the measured lateness is under
   "Known gaps"). A command buffer ended while its queue holds a group joins it, and retires in its
   place; the group goes at once.
@@ -2131,8 +2069,8 @@ made, with no lock, and never rewritten for layouts.
   buffers). A waiter with nothing for the GPU (an encoder that only waits) completes no sooner
   than the last submission that updates its fence, as Metal's does (job m3-max-52194); its GPU
   times are one time, as for any command buffer with nothing for the GPU, where Metal reports a
-  span over the update's run. Work with no fence or event between it is ordered only as the
-  queue rule above says.
+  span over the update's run. Work with no fence between it is ordered as well, where Metal may
+  run it at once.
 - `CommandQueue::abandon` ends every command buffer of the queue held at an event wait or not yet
   scheduled with `NotRun` and runs its handlers, as a Mac drops a dead process's held work, each
   retiring in the queue's order. Segments already submitted still complete, and so does a group
@@ -2185,11 +2123,6 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
 
 ### Known gaps
 
-- A program that relies on commit order between queues for a shared resource, with no event or
-  fence, can read the earlier contents on the runtime, where a Mac's timing usually hides it: work
-  held behind its own queue's can go to the device after another queue's later command buffer.
-  That is Metal's rule (the M3 Max rows in the queue rule above, jobs m3-max-52432 and
-  m3-max-52415).
 - A lost device is not recovered. After a loss, the device and everything made on it stay dead:
   its buffers, textures, heaps, pipeline states, queues and events, and every device address and
   resource ID it handed out. Every later commit ends `DeviceLost`. The consumer may make a new device
@@ -2225,89 +2158,14 @@ while the driver's exit handler waited on a lock, with every runtime thread alre
   The call's time grows with the new block it is the first to use: 2.1 and 2.5 ms with a 1 MiB
   block, 9.1 ms with 64 MiB and 28.4 ms with 256 MiB (job m3-max-52745); the probe's later
   submissions spent at most 0.18 ms each.
-- A command buffer of another queue waits for the whole of what the pieces do not cut: a
-  dispatch whose own expected run passes 4 ms, a render pass and the encoders after it, the
-  dispatches of a kernel whose rate is not yet measured, and the commands of a piece that writes
-  a Managed buffer or while copies over a texture are owed. It waits behind every piece of a cut
-  command buffer that holds one of its buffers or textures, a read of a read included, except
-  while that command buffer's next piece waits for an event. Metal
-  starts it beside the running command buffer: on a Radeon Pro 5300M another queue's command
-  buffer started 0.21 to 0.40 ms after its commit beside a running one (job m3-max-68137), and on
-  an Intel UHD 630 under macOS 26.7.1 one of a queue at a lower priority number started about
-  0.4 ms after its commit, mid-way through a running 60 ms command buffer, whose own run did not
-  change (job m3-max-68129). The runtime starts it at the next piece's boundary.
-- The pieces cost host instructions on every command buffer, cut or not. Measured with the
-  compute harness on an RTX 3090 against the runtime with no pieces (f979769faf; the build with
-  them, fa77a9035b, also fetches a kernel's stage input, a change to pipeline creation and to no
-  encoder's path), four runs of each build in random order (job m3-max-68794), the thread that
-  encodes and commits ran 1,239 more instructions a command buffer in `burst_2000` (2.5%; all
-  threads together ran 513 fewer), 1,609 in `burst_160` (3.5%), 1,633 in `burst_160_shared`
-  (2.7%), 1,843 in `frame_5cb` (2.8%) and 4,566 in `burst_2000x5` (4.4%), whose command buffers
-  open five compute encoders of one dispatch each: about 830 more for each encoder past the
-  first. The rows of one command buffer a run (`waves`, `constant_private` and the two
-  `sampling_distinct` rows) ran 952 to 1,166 more.
-  On an RX 7900 XTX (job m3-max-68607) the rise was 964 in `burst_2000` and 883 in `burst_160`;
-  with parts of the path put back to their form with no pieces (the step's scan for shared
-  resources, the room's ranking of what is ready, the scan as a group closes, the cut test where
-  an encoder opens, the rate kept for each segment as it retires), one or a few at a time, it was
-  848 to 1,014 and 550 to 745, and with all of them 710 and 465: the cost is spread over the
-  path, in no one part of it. On the 3090 no row's time moved by 3% or more beyond its runs'
-  spread: `burst_160`, `burst_160_shared`, `burst_2000`, `burst_2000x5` and
-  `frame_5cb_from_idle` moved 0.2% or less, `bind_2000` 2.6% and `waves` 2.9%; the runs of
-  `frame_5cb`, `waves`, `constant_private` and the two `sampling_distinct` rows spread past 3%
-  within one build, so those rows decide nothing.
-- Each piece is a submission of its own, and the host pays a `vkQueueSubmit2` call's price on
-  the driver for every piece. A guest's compute benchmark over its 371 s timed pass on an Iris Xe
-  (ANV, Mesa 26.2.6), with the pieces (f21db0934c) against the runtime with no pieces
-  (f979769faf), one timed pass each (jobs m3-max-68858 and m3-max-68837): 63,704 submissions
-  against 18,764 (3.4 times), 47.1 s against 15.3 s inside the calls
-  (`Metrics::submit_call_nanos`; about 0.74 ms a call with the pieces), and 49.1 s against
-  15.8 s of the submit thread's CPU time. The GPU's busy time was the same (235.7 s against
-  234.3 s), and so was the score (8,069 against 8,098, 0.36% lower). On an RTX 3090 (NVIDIA
-  620.70.06), two runs of each build alternated, the same guest made 14% to 15% more submissions
-  with the pieces (23,670 and 23,489 against 20,750 and 20,406) and spent 912 and 923 ms against
-  606 and 666 ms inside the calls; the score did not move beyond the base runs' own spread
-  (80,706 and 80,730 with the pieces, 75,949 and 80,946 without; jobs m3-max-68865,
-  m3-max-68889, m3-max-68789 and m3-max-68954).
-- On an RX 7900 XTX (RADV, Mesa 26.2.6) the same guest's compute benchmark scores 3.7% lower
-  on the mean with the pieces (118,115 against 122,618 over eight runs), and the cause is not
-  found. Two pairs were alternated in each of two builds:
-  - with the pieces at f21db0934c, against the runtime with no pieces at f979769faf: 115,608
-    and 121,011 against 121,802 and 124,665 (jobs m3-max-68746, m3-max-68756, m3-max-68738 and
-    m3-max-68783);
-  - with the pieces at fa77a9035b plus counters, against 2953064a1c: 118,494 and 117,345 against
-    124,568 and 119,436 (jobs m3-max-68959, m3-max-68974, m3-max-68955 and m3-max-68969). Every
-    run with the pieces scored under every run without, and the means are 3.35% apart, where the
-    runs without spread 4.1% and those with 1.0%.
-
-  What was read over the last pair:
-  - The submissions, the held starts, the GPU's busy time and the pass's wall time are level. The
-    time inside the calls is 84 ms more over a 118 s pass.
-  - One of the guest's workloads takes more GPU time in every run with the pieces than in every
-    run without: 7.0% more in the last pair, and 10.5% over all eight runs. That workload is cut 1
-    to 6 times a run, with 0 to 2 command buffers held for room.
-  - The other workloads' GPU times are mixed.
-
-  The pieces are kept. On the Iris Xe, the slowest card tested, they bring the image step's
-  frames over 16.7 ms from 6 and 17 to 0 warm, and from 7 to 2 cold. Its benchmark score and the
-  RTX 3090's are level.
-- On the Iris Xe (Mesa's ANV), in the harness row `two_queues`, a command buffer of a second
-  queue whose event wait the end of a command buffer of the first queue signals, committed right
-  after it, starts on the GPU 30.4 µs after the signaller's GPU end at the median, against 9.0 µs
-  with no pieces (jobs m3-max-68441, m3-max-68517, m3-max-68545 and m3-max-68608). Where the
-  waiter waits is not placed. In the same row, a command buffer of the second queue committed
-  every 16.667 ms beside the first queue's backlog of eight (three fills each, 22.5 ms on the GPU
-  at the median) completes 23.7 ms after its commit at the median, against 34.8 ms with no pieces
-  (jobs m3-max-68545 and m3-max-68608), and no other form that keeps Metal's order was found to
-  bring those late frames in.
 - On NVIDIA each submission pays the driver's latency per submission. The runtime submits each
   command buffer as soon as it can, so short command buffers committed back to back reach the GPU
   in several submissions: on an RTX 2080 (harness row `frame_5cb`: five short command buffers a
   run, two runs in flight) a run takes about 2.5 submissions, and each submission boundary leaves
   the GPU idle for about 20-25 µs.
-- One dispatch, render pass or blit encoder whose own GPU run passes the driver's job timeout
-  still ends there: the runtime cuts a command buffer's compute work only between dispatches and
-  where an encoder opens (the pieces above), and joins none to it (the grouping bound above). Linux's amdgpu ends a job past its timeout, 2 s by default (Linux 7.3.3),
+- One command buffer whose own GPU run passes the driver's job timeout still ends there: the
+  runtime does not cut a command buffer's work into shorter jobs, and joins none to it (the
+  grouping bound above). Linux's amdgpu ends a job past its timeout, 2 s by default (Linux 7.3.3),
   and resets the ring, where Metal runs the command buffer within its own watchdog's longer bound.
 - A command buffer whose timestamps are not available when its submission signals reports no GPU
   times: its `gpu_start_time` and `gpu_end_time` are 0, and `Metrics::stamps_not_available`

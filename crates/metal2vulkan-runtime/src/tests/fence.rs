@@ -339,15 +339,14 @@ mod on_device {
         });
     }
 
-    /// A wait on a fence no encoder updated waits for nothing but the device's room, while queue A
-    /// holds in a group an update of another fence: on queue B, a command buffer with work after
-    /// the wait joins a group of its own, held while A's busy work fills the device's room, A's
-    /// group staying held too, and both go when the device has room; on a third queue an encoder
-    /// that only waits on it completes at once. The submissions are counted first, with no round
-    /// of the completion thread run since the wait's commit: a command buffer with nothing for the
-    /// GPU retires in one.
+    /// A wait on a fence no encoder updated waits for nothing, while queue A holds in a group an
+    /// update of another fence: on queue B, a command buffer with work after the wait goes in one
+    /// submission of its own, A's group staying held, and on a third queue an encoder that only
+    /// waits on it completes at once. The submissions are counted first, with no round of the
+    /// completion thread run since the wait's commit: a command buffer with nothing for the GPU
+    /// retires in one.
     #[test]
-    fn every_device_runs_a_wait_on_a_fence_never_updated_when_the_device_has_room() {
+    fn every_device_runs_a_wait_on_a_fence_never_updated_at_once() {
         each_device("fence_never_updated", |name, _, device| {
             let (written, copy) = written_and_copy(&device);
             let updated = device.new_fence();
@@ -379,19 +378,17 @@ mod on_device {
                 let all = after.submissions - before.submissions;
                 let (a_sent, a_held) = work.in_flight(updater.queue());
                 let a_sent = a_sent.saturating_sub(IN_FLIGHT) as u64;
-                let (b_sent, b_held) = work.in_flight(waiter.queue());
-                let b_sent = b_sent as u64;
+                let b_sent = work.in_flight(waiter.queue()).0 as u64;
                 let alone = all.saturating_sub(a_sent + b_sent);
                 let own = after.runtime_command_buffers - before.runtime_command_buffers;
                 let rounds = device.core().pool.rounds() - rounds;
                 assert_eq!(
-                    (all, b_sent, b_held, a_sent, a_held, alone, own, rounds),
-                    (0, 0, true, 0, true, 0, 0, 0),
-                    "{name}: after the wait's commit, the submissions: all of them; B's, and \
-                     whether B holds the wait's group for the device's room; A's group's, and \
-                     whether A still holds it; the runtime's own uploads sent alone; the \
-                     runtime's own command buffers in them (uploads, copy-ins); and the \
-                     completion thread's rounds"
+                    (all, b_sent, a_sent, a_held, alone, own, rounds),
+                    (1, 1, 0, true, 0, 0, 0),
+                    "{name}: after the wait's commit, the submissions: all of them; B's, the \
+                     wait's; A's group's, and whether A still holds it; the runtime's own uploads \
+                     sent alone; the runtime's own command buffers in them (uploads, copy-ins); \
+                     and the completion thread's rounds"
                 );
                 let empty = c.command_buffer().expect("a command buffer");
                 let mut compute =

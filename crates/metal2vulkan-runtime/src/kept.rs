@@ -10,12 +10,11 @@
 //! than the bound. They live in one allocation that moves whole between the queue and its command
 //! buffers ([`Objects`]), so a command buffer allocates and frees none of it.
 
-use crate::buffer::{Buffer, BufferObject};
-use crate::piece::Kernels;
+use crate::buffer::Buffer;
 use crate::pipeline::ComputePipelineState;
 use crate::render::RenderPipelineState;
 use crate::sampler::SamplerState;
-use crate::texture::{Texture, TextureObject};
+use crate::texture::Texture;
 use std::collections::HashSet;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::mem::ManuallyDrop;
@@ -230,10 +229,6 @@ impl DerefMut for Objects {
 /// The lists of each kind a recording keeps.
 #[derive(Default)]
 pub(crate) struct ByKind {
-    /// Its pieces' kernels (`crate::piece::Kernels`), each the content of a state `pipelines`
-    /// keeps, held with no count: emptied before `pipelines` is, as it is dropped first, so no
-    /// copy outlives its state.
-    pub(crate) kernels: Kernels,
     pub(crate) buffers: Kept<Buffer>,
     pub(crate) textures: Kept<Texture>,
     pub(crate) samplers: Kept<SamplerState>,
@@ -242,32 +237,9 @@ pub(crate) struct ByKind {
 }
 
 impl ByKind {
-    /// The ids the hazards track its buffers and textures by, a view's being its texture's and a
-    /// heap's resources' the heap's, each once, sorted.
-    pub(crate) fn tracked(&self) -> Vec<u32> {
-        let mut ids: Vec<u32> = self.ids().collect();
-        ids.sort_unstable();
-        ids.dedup();
-        ids
-    }
-
-    /// Whether one of its buffers or textures is tracked by one of `ids`, sorted.
-    pub(crate) fn meets(&self, ids: &[u32]) -> bool {
-        !ids.is_empty() && self.ids().any(|id| ids.binary_search(&id).is_ok())
-    }
-
-    fn ids(&self) -> impl Iterator<Item = u32> + '_ {
-        let buffers = self.buffers.iter().map(BufferObject::tracked_id);
-        buffers.chain(self.textures.iter().map(TextureObject::tracked_id))
-    }
-
     /// Releases every object, keeping each list's capacity, within [`KEPT_BOUND`], for the next
     /// recording.
     pub(crate) fn clear(&mut self) {
-        match self.kernels.capacity() > KEPT_BOUND {
-            true => self.kernels = Kernels::new(),
-            false => self.kernels.clear(),
-        }
         self.buffers.clear();
         self.textures.clear();
         self.samplers.clear();

@@ -87,9 +87,12 @@ fn a_stage_span_lands_in_its_power_of_two_bucket() {
 #[test]
 fn a_command_buffer_joins_a_group_only_within_the_bound_tested_again_at_the_send() {
     let ms = 1_000_000;
-    assert!(joins(ms, 1, Some(ms)), "within the bound");
-    assert!(joins(ms, 1, Some(GROUP_RUN - ms)), "at the bound");
-    assert!(!joins(ms, 1, Some(GROUP_RUN - ms + 1)), "past it: alone");
+    assert!(joins(10 * ms, 1, Some(ms)), "within the bound");
+    assert!(joins(10 * ms, 1, Some(GROUP_RUN - 10 * ms)), "at the bound");
+    assert!(
+        !joins(10 * ms, 1, Some(GROUP_RUN - 10 * ms + 1)),
+        "past it: alone"
+    );
     assert!(!joins(0, 0, None), "an unknown run: alone");
     assert!(
         !joins(u64::MAX, 1, Some(1)),
@@ -139,7 +142,6 @@ pub(crate) mod on_device {
     use crate::buffer::BufferObject;
     use crate::device::lock;
     use crate::submit::{GROUP_RUN, IN_FLIGHT, UNSEEN_JOINS};
-    use crate::tests::compute::on_device::step;
     use crate::tests::devices_of_the_cfgs_kind;
     use crate::{
         host_time, AllocationId, AllocationInfo, Block, BlockMappings, Buffer, CommandBuffer,
@@ -1064,20 +1066,6 @@ pub(crate) mod on_device {
                 ("plain", &plain, (&a, &b), 1),
                 ("shared", shared.as_event(), (&c, &d), 3),
             ] {
-                // Each queue's expected run 1 ms, the test's own input, set as each round begins,
-                // so the device has room for the round's three submissions at once
-                // (`submit::room`) while Busy's gate holds every completion. The runs the round
-                // before measured would stand in its place (`QueueInner::ran`, rising at once to a
-                // longer run): past 2 ms, on a loaded device, `next` would have no room, and no
-                // completion would come to make it. Printed, the runs it replaces.
-                for queue in [&queue, &signaller_queue] {
-                    let probe = queue.command_buffer().expect("a command buffer");
-                    println!(
-                        "{name}: {label}: a queue's run before the round's input {:?} ns",
-                        probe.queue().expected_run()
-                    );
-                    probe.queue().set_run_for_test(BODY_RUN);
-                }
                 let busy = Busy::new(&device);
                 let signaller = signaller_queue.command_buffer().expect("a command buffer");
                 (signaller.encode_signal_event(event, 1)).expect("a signal");
@@ -1134,7 +1122,7 @@ pub(crate) mod on_device {
     /// Links of a chain on two queues, each but the first waiting for the shared event's value the
     /// link before it signals, then copying the words of every link before it from that link's
     /// buffer, writing its own after them, and signalling the next, all behind busy work: each
-    /// queue's expected run 1 ms, so the device has room for the three links (`submit::room`), every link goes
+    /// queue's expected run 1 ms, so each has room for its links (`submit::room`), every link goes
     /// to the driver and reads `Scheduled`, its scheduled handler run, before the first has run,
     /// and the submit thread holds none of them for a value. No semaphore wait is
     /// submitted for a link: once the busy work ends, the links complete in order, and each holds
@@ -1147,7 +1135,7 @@ pub(crate) mod on_device {
     /// held.
     #[test]
     fn every_device_submits_a_shared_event_chain_across_two_queues_before_its_first_link_runs() {
-        const LINKS: u32 = IN_FLIGHT as u32;
+        const LINKS: u32 = 5;
         each_device("event_chain", |name, _, device| {
             let mut arena = Arena::new(&device);
             let buffers: Vec<Buffer> = (0..=LINKS).map(|_| arena.buffer()).collect();
@@ -1817,15 +1805,15 @@ pub(crate) mod on_device {
         }
     }
 
-    /// A write on a queue with nothing running is submitted when the device has room, before a
-    /// command buffer of another idle queue committed after it, so that one reads the write, with
-    /// no fence or event between them: every queue's submissions go to the device's one
-    /// `VkQueue`, each segment ending in a barrier that reaches the commands after it, and of
-    /// idle queues the device's room goes in commit order (`WorkState::rank`). A third queue's
-    /// busy work holds the GPU and fills the device's room, so both wait, scheduled, and neither
-    /// runs before both are submitted. Metal's hazard tracking orders the same pair of tracked
-    /// buffers where the writer's queue has nothing ahead of it, and not where its queue's own
-    /// work is ahead of it (the README's "Queues, command buffers and events").
+    /// A write on a queue with nothing running is submitted at once, so a command buffer of
+    /// another queue committed after it reads the write, with no fence or event between them:
+    /// every queue's submissions go to the device's one `VkQueue`, each segment ending in a barrier
+    /// that reaches the commands after it. A third queue's busy work holds the GPU, so neither
+    /// runs before both are submitted, and puts as many submissions in flight across the device
+    /// as a queue keeps before it groups: the writer's queue groups on its own count alone.
+    /// Metal's hazard tracking orders the same pair of tracked buffers where the writer's queue
+    /// has nothing ahead of it, and not where its queue's own work is ahead of it (the README's
+    /// "Queues, command buffers and events").
     #[test]
     fn every_device_submits_a_write_on_an_idle_queue_before_another_queues_later_read() {
         each_device("command_cross_queue_order", |name, _, device| {
@@ -1834,23 +1822,16 @@ pub(crate) mod on_device {
             let (busy_queue, writer_queue, reader_queue) =
                 (queue(&device), queue(&device), queue(&device));
             behind_busy(name, &device, &busy_queue, |busy, _, _| {
+                let sent = || device.counters().metrics().submissions;
+                let before = sent();
                 let writer = queue_fill(&writer_queue, &written, 0x5a5a_5a5a);
-                within(name, || writer.status() != CommandBufferStatus::Committed);
+                within(name, || sent() > before);
                 let reader = reader_queue.command_buffer().expect("a command buffer");
                 let mut blit = reader.blit_command_encoder().expect("an encoder");
                 (blit.copy_from_buffer_to_buffer(&written, 0, &read, 0, 256)).expect("a copy");
                 blit.end_encoding();
                 reader.commit().expect("a commit");
-                within(name, || reader.status() != CommandBufferStatus::Committed);
-                let work = &device.core().work;
-                assert_eq!(
-                    (
-                        work.in_flight(writer.queue()),
-                        work.in_flight(reader.queue())
-                    ),
-                    ((0, true), (0, true)),
-                    "{name}: each held in a group for the device's room, nothing in flight"
-                );
+                within(name, || sent() > before + 1);
                 busy.open();
                 finished(name, &reader);
                 finished(name, &writer);
@@ -2031,80 +2012,6 @@ pub(crate) mod on_device {
                 seen,
                 metal_wait_split(),
                 "{name}: (completed, copy, buffer)"
-            );
-        });
-    }
-
-    /// Behind the busy gate ([`Busy::new`]), a long writer runs on one queue: six dispatches of
-    /// `x = x * 2 + 1`, two kernels of unknown rate in turn, so a runtime that cuts a command
-    /// buffer into pieces of a kernel's rate makes six, more than the device's room takes, and
-    /// the rest wait. A copy of what it writes is then committed to an idle queue, and a copy of
-    /// that copy to a third idle queue, with no host wait for either. The third queue ran one
-    /// command buffer before the gate, and its expected run is [`BODY_RUN`], the test's own input,
-    /// so the second copy fits the device's room behind the writer's pieces: a queue whose run is
-    /// unknown has room only with one submission in flight. Once the submit thread has
-    /// looked past the second copy (an empty command buffer committed after it is scheduled) the
-    /// gate opens. Metal submits the first copy at its commit, its queue having nothing ahead of
-    /// it, so its hazard tracking orders that copy after the writer and the second copy after it:
-    /// both read every step. The device's counts are printed once the copies were seen and once
-    /// all completed, so a run shows the shape it held, where its tree counts it: the cuts, the
-    /// copies held behind the writer, and the submissions that went before a cut command buffer's
-    /// pieces not yet submitted.
-    #[test]
-    fn every_device_copies_an_idle_queues_copy_of_a_long_write_into_a_later_sharer() {
-        each_device("command_sharer_behind_held", |name, _, device| {
-            let mut arena = Arena::new(&device);
-            let (written, copied, read) = (arena.buffer(), arena.buffer(), arena.buffer());
-            let kernels = [step(&device), step(&device)];
-            let (writing, copying, reading, probing) = (
-                queue(&device),
-                queue(&device),
-                queue(&device),
-                queue(&device),
-            );
-            let earlier = reading.command_buffer().expect("a command buffer");
-            (earlier.record_for_test(&[], |_, _| {})).expect("a command buffer's commands");
-            earlier.commit().expect("a commit");
-            finished(name, &earlier);
-            earlier.queue().set_run_for_test(BODY_RUN);
-            let busy = Busy::new(&device);
-            let writer = writing.command_buffer().expect("a command buffer");
-            let mut encoder =
-                (writer.compute_command_encoder(DispatchType::Serial)).expect("an encoder");
-            encoder.set_buffer(Some(&written), 0, 0).expect("a buffer");
-            for kernel in kernels.iter().cycle().take(6) {
-                encoder.set_compute_pipeline_state(kernel).expect("a state");
-                (encoder.dispatch_threadgroups([1, 1, 1], [64, 1, 1])).expect("a dispatch");
-            }
-            encoder.end_encoding();
-            writer.commit().expect("a commit");
-            within(name, || writer.status() != CommandBufferStatus::Committed);
-            let copy = |queue: &CommandQueue, from: &Buffer, to: &Buffer| {
-                let command_buffer = queue.command_buffer().expect("a command buffer");
-                let mut blit = command_buffer.blit_command_encoder().expect("an encoder");
-                (blit.copy_from_buffer_to_buffer(from, 0, to, 0, 256)).expect("a copy");
-                blit.end_encoding();
-                command_buffer.commit().expect("a commit");
-                command_buffer
-            };
-            let first = copy(&copying, &written, &copied);
-            let second = copy(&reading, &copied, &read);
-            let probe = probing.command_buffer().expect("a command buffer");
-            probe.commit().expect("a commit");
-            within(name, || probe.status() != CommandBufferStatus::Committed);
-            let counts = device.counters().metrics();
-            println!("{name}: the device's counts once the copies were seen: {counts:?}");
-            busy.open();
-            for command_buffer in [&writer, &first, &second, &probe] {
-                finished(name, command_buffer);
-                assert_eq!(command_buffer.error(), None, "{name}");
-            }
-            let counts = device.counters().metrics();
-            println!("{name}: the device's counts once all completed: {counts:?}");
-            assert_eq!(
-                (word(&written), word(&copied), word(&read)),
-                (63, 63, 63),
-                "{name}: the write's six steps, the first copy and the second"
             );
         });
     }
