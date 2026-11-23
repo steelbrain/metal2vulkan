@@ -206,8 +206,8 @@ pub(crate) mod on_device {
     }
 
     /// Opens each device of the cfg's kind, under the validation layer, waits for the block-maker
-    /// thread's first work, runs `body`, which drops the device, and checks that every gauge
-    /// reaches zero.
+    /// thread's first work and the reaper's (the pipeline cache's seed), runs `body`, which drops
+    /// the device, and checks that every gauge reaches zero.
     pub(crate) fn each_device(test: &str, body: impl FnMut(&str, &Instance, Device)) {
         let instance = crate::tests::validation::instance(&[]);
         on_each_device(test, &instance, body);
@@ -264,6 +264,10 @@ pub(crate) mod on_device {
             // The block-maker thread's first work done, so a body's counts start from a device
             // that holds its fixed-size internals.
             device.core().pool.await_internals();
+            // And the reaper's first work: the seed makes the pipeline cache and sets
+            // `pipeline_cache_bytes` (`Caches::seed`), after `Device::new` returns, so a body that
+            // compares the gauges across its work starts from settled ones.
+            within("the seed", || device.core().caches.is_seeded());
             let counters = device.counters();
             body(name, instance, device);
             within("the teardown", || counters.gauges() == Gauges::default());
