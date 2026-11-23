@@ -32,6 +32,9 @@ mod on_device {
     /// The threads of each dispatch, and the words each writes.
     const THREADS: u32 = 12;
 
+    /// A function a table entry calls, as the CPU computes it.
+    type Op = fn(u32, u32) -> u32;
+
     /// The library of the engine fixture `fixture.ll`, or None where `llvm-as` is missing.
     fn library(fixture: &str) -> Option<Library> {
         match llvm_assemble(&engine_dir().join(format!("{fixture}.ll"))) {
@@ -56,7 +59,7 @@ mod on_device {
 
     /// What `visible_table_dispatch` writes for thread `tid` through a table of `entries`, each
     /// the function an entry calls (`None` for a null entry), at its index.
-    fn expected(entries: &[Option<fn(u32, u32) -> u32>]) -> Vec<u32> {
+    fn expected(entries: &[Option<Op>]) -> Vec<u32> {
         (0..THREADS)
             .map(
                 |tid| match entries.get((tid as usize) % entries.len().max(1)) {
@@ -100,8 +103,8 @@ mod on_device {
         let descriptor = ComputePipelineDescriptor::new(StageSource::Function(
             FunctionDescriptor::new(kernel).with_linked(linked),
         ));
-        let add: fn(u32, u32) -> u32 = |a, b| a + b;
-        let mul: fn(u32, u32) -> u32 = |a, b| a * b;
+        let add: Op = |a, b| a + b;
+        let mul: Op = |a, b| a * b;
         each_device("function_tables", |name, _, device| {
             assert!(device.supports_function_pointers(), "{name}");
             let state = (device
