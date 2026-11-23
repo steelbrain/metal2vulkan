@@ -893,21 +893,26 @@ impl crate::ComputeCommandEncoder<Device> for rt::ComputeCommandEncoder {
     }
 }
 
-/// The gauges the harness reports, by name: all of them, so the matrix's `@drop` check covers
-/// every kind of resource.
+/// The gauges the harness reports, by name: every count of an object kind the runtime keeps
+/// live, so the matrix's `@drop` check and its reading between the 100th and 200th runs cover
+/// each kind. The byte and age gauges, which move with load, and the thread ids are left out.
 fn named(gauges: rt::Gauges) -> Vec<(&'static str, u64)> {
     vec![
         ("buffers", gauges.buffers),
         ("textures", gauges.textures),
         ("samplers", gauges.samplers),
+        ("lod_clamp_variants", gauges.lod_clamp_variants),
         ("pipelines", gauges.pipelines),
         ("kernels", gauges.kernels),
         ("kernel_entries", gauges.kernel_entries),
         ("kernel_variants", gauges.kernel_variants),
+        ("render_contents", gauges.render_contents),
+        ("attachment_views", gauges.attachment_views),
         ("command_buffers", gauges.command_buffers),
         ("descriptor_slots", gauges.descriptor_slots),
         ("blocks", gauges.blocks),
         ("events", gauges.events),
+        ("device_samplers", gauges.device_samplers),
     ]
 }
 
