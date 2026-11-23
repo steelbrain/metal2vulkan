@@ -17,7 +17,7 @@
 
 use super::super::args::{arg, data, index, list, metal, refuse, uint, Fields};
 use super::super::translator::{self, attachment_keys, LINKED_KEYS, PASS_KEYS};
-use super::encoders::first;
+use super::encoders::{first, Use};
 use super::{failed, makes, states, unaddressed, NewRuntime, Object, Skips};
 use crate::replay::player::{Made, PlayError};
 use crate::replay::stream::Call;
@@ -1018,9 +1018,8 @@ impl NewRuntime {
                 self.render(id).encoder.set_line_width(width);
                 Ok(())
             }
-            // A render encoder's residency declarations: no runtime call, as the runtime's render
-            // encoder has none and every object of the play is resident. What they name is noted
-            // before the call plays, as any encoder call's names are.
+            // A render encoder's residency declarations, through the runtime's, with `stages:` or
+            // without ([`uses`](Self::uses)).
             "useResource:usage:"
             | "useResource:usage:stages:"
             | "useResources:count:usage:"
@@ -1028,7 +1027,19 @@ impl NewRuntime {
             | "useHeap:"
             | "useHeap:stages:"
             | "useHeaps:count:"
-            | "useHeaps:count:stages:" => Ok(()),
+            | "useHeaps:count:stages:" => {
+                let uses = self.uses(call)?;
+                let encoder = &mut self.render(id).encoder;
+                uses.iter().try_for_each(|used| match used {
+                    Use::Buffer(buffer, usage) => {
+                        encoder.use_resource(rt::Resource::Buffer(buffer), *usage)
+                    }
+                    Use::Texture(texture, usage) => {
+                        encoder.use_resource(rt::Resource::Texture(texture), *usage)
+                    }
+                    Use::Heap(block) => encoder.use_heap(*block),
+                })
+            }
             _ => return Err(refuse(call, "not played on a render encoder")),
         };
         match result {

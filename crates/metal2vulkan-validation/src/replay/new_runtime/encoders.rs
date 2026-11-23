@@ -79,32 +79,69 @@ fn buffer_layout(call: &Call, at: usize) -> Result<rt::BufferLayout, PlayError> 
     })
 }
 
-/// A residency declaration's usage (`MTLResourceUsage`, argument 1): read, write or both.
+/// A residency declaration's usage (`MTLResourceUsage`, argument 1): an option set of read (1),
+/// write (2) and sample (4).
 fn resource_usage(call: &Call) -> Result<rt::ResourceUsage, PlayError> {
-    Ok(match uint(call, 1)? {
-        1 => rt::ResourceUsage::READ,
-        2 => rt::ResourceUsage::WRITE,
-        3 => rt::ResourceUsage::READ | rt::ResourceUsage::WRITE,
-        raw => return Err(refuse(call, format!("resource usage {raw}"))),
-    })
+    let raw = uint(call, 1)?;
+    let bits = [
+        (1, rt::ResourceUsage::READ),
+        (2, rt::ResourceUsage::WRITE),
+        (4, rt::ResourceUsage::SAMPLE),
+    ];
+    let usage = (bits.into_iter())
+        .filter(|(bit, _)| raw & bit != 0)
+        .map(|(_, usage)| usage)
+        .reduce(|all, usage| all | usage);
+    match usage {
+        Some(usage) if raw & !7 == 0 => Ok(usage),
+        _ => Err(refuse(call, format!("resource usage {raw}"))),
+    }
+}
+
+/// What a residency declaration uses: a buffer or a texture with the call's usage, or a heap's
+/// block.
+pub(super) enum Use {
+    Buffer(rt::Buffer, rt::ResourceUsage),
+    Texture(rt::Texture, rt::ResourceUsage),
+    Heap(rt::BlockId),
 }
 
 impl NewRuntime {
-    /// Compute encoder `id` uses `held` with `usage`: through the runtime's `use_resource`; a
-    /// skipped object counted.
-    fn use_held(&mut self, id: u64, held: Held, usage: rt::ResourceUsage) -> Result<(), rt::Error> {
-        match held {
-            Held::Buffer(buffer) => {
-                (self.compute(id).encoder).use_resource(rt::Resource::Buffer(&buffer), usage)
-            }
-            Held::Texture(texture) => {
-                (self.compute(id).encoder).use_resource(rt::Resource::Texture(&texture), usage)
-            }
-            Held::Skipped => {
-                self.skips.calls += 1;
-                Ok(())
+    /// What residency declaration `call` of a compute or render encoder uses, each of a list as
+    /// its single form, as the stream records it (a C array and its count one list):
+    /// `useResource:usage:`'s resource and each of `useResources:count:usage:`'s list, with the
+    /// usage at argument 1; `useHeap:`'s heap and each of `useHeaps:count:`'s. A render encoder's
+    /// forms with `stages:` read as those without: the runtime takes no stages. A skipped object
+    /// uses nothing, and is counted.
+    pub(super) fn uses(&mut self, call: &Call) -> Result<Vec<Use>, PlayError> {
+        let items = match call.selector.contains("count:") {
+            true => list(call, 0)?,
+            false => std::slice::from_ref(arg(call, 0)?),
+        };
+        let usage = match call.selector.starts_with("useResource") {
+            true => Some(resource_usage(call)?),
+            false => None,
+        };
+        let mut uses = Vec::with_capacity(items.len());
+        for item in items {
+            let used = match usage {
+                Some(usage) => match self.held(call, item)? {
+                    Held::Buffer(buffer) => Some(Use::Buffer(buffer, usage)),
+                    Held::Texture(texture) => Some(Use::Texture(texture, usage)),
+                    Held::Skipped => None,
+                },
+                None => {
+                    let heap =
+                        (item.as_object()).ok_or_else(|| refuse(call, format!("heap {item}")))?;
+                    self.block_of(call, heap)?.map(Use::Heap)
+                }
+            };
+            match used {
+                Some(used) => uses.push(used),
+                None => self.skips.calls += 1,
             }
         }
+        Ok(uses)
     }
 
     /// An event argument: an event's, or a shared event's.
@@ -397,24 +434,18 @@ impl NewRuntime {
                     _ => encoder.dispatch_threadgroups(grid, threads),
                 }
             }
-            "useResource:usage:" => {
-                let usage = resource_usage(call)?;
-                let held = self.resource(call, 0)?;
-                self.use_held(id, held, usage)
-            }
-            // The C array and its count are one list (docs/REPLAY-STREAM.md): each resource of
-            // it used as `useResource:usage:` uses its one.
-            "useResources:count:usage:" => {
-                let usage = resource_usage(call)?;
-                let mut used = Ok(());
-                for item in list(call, 0)? {
-                    let held = self.held(call, item)?;
-                    used = self.use_held(id, held, usage);
-                    if used.is_err() {
-                        break;
+            "useResource:usage:" | "useResources:count:usage:" | "useHeap:" | "useHeaps:count:" => {
+                let uses = self.uses(call)?;
+                let encoder = &mut self.compute(id).encoder;
+                uses.iter().try_for_each(|used| match used {
+                    Use::Buffer(buffer, usage) => {
+                        encoder.use_resource(rt::Resource::Buffer(buffer), *usage)
                     }
-                }
-                used
+                    Use::Texture(texture, usage) => {
+                        encoder.use_resource(rt::Resource::Texture(texture), *usage)
+                    }
+                    Use::Heap(block) => encoder.use_heap(*block),
+                })
             }
             "updateFence:" => {
                 let fence = self.fence_of(call, 0)?;
@@ -423,33 +454,6 @@ impl NewRuntime {
             "waitForFence:" => {
                 let fence = self.fence_of(call, 0)?;
                 self.compute(id).encoder.wait_for_fence(&fence)
-            }
-            "useHeap:" => match self.heap_of(call, 0)? {
-                Some(heap) => self.compute(id).encoder.use_heap(heap),
-                None => {
-                    self.skips.calls += 1;
-                    Ok(())
-                }
-            },
-            // Each heap of the list used as `useHeap:` uses its one.
-            "useHeaps:count:" => {
-                let mut used = Ok(());
-                for item in list(call, 0)? {
-                    let id_of = item
-                        .as_object()
-                        .ok_or_else(|| refuse(call, format!("heap {item}")))?;
-                    used = match self.block_of(call, id_of)? {
-                        Some(heap) => self.compute(id).encoder.use_heap(heap),
-                        None => {
-                            self.skips.calls += 1;
-                            Ok(())
-                        }
-                    };
-                    if used.is_err() {
-                        break;
-                    }
-                }
-                used
             }
             _ => return Err(refuse(call, "not played on a compute encoder")),
         };

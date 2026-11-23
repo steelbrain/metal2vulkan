@@ -631,7 +631,8 @@ records as text, and
   written, and the line says how many of the count were. In a command buffer a dispatch's write
   comes before the later dispatches' reads. What reaches a buffer's bytes: an `m2v.write` into
   it, into its block over them or into another buffer of the block over them; a blit or render
-  encoder's call that names it or such another buffer; and the commit of a command buffer whose
+  encoder's call that names it or such another buffer (a residency declaration's resource
+  included, `{Buffer: object}`); and the commit of a command buffer whose
   dispatch writes it or such another buffer. A buffer made in a block over bytes that a write or a
   GPU pass reached before is not counted. Every commit the player makes counts: a `commit`, an
   `m2v.split` and an `m2v.commitPart` it cuts. A texture over a buffer is not followed. The line
@@ -929,18 +930,17 @@ records as text, and
   buffers, offsets, bytes, textures and sampler states, the viewport, scissor, cull mode, winding,
   blend color and stencil references, the draws (indexed or not, with instance counts, base
   vertex and base instance), fences and memory barriers (their stages are the runtime's to
-  order). Their residency declarations (`useResource:usage:`, `useResources:count:usage:`,
-  `useHeap:` and `useHeaps:count:`, each with `stages:` or without) play as nothing: the
-  runtime's render encoder has no such call, and every object of the play is resident. A bind
-  of a range (`withRange:`) of buffers, textures or sampler states plays as the single-slot bind
-  of each, from the range's location, on render and compute encoders alike.
+  order). A bind of a range (`withRange:`) of buffers, textures or sampler states plays as the
+  single-slot bind of each, from the range's location, on render and compute encoders alike.
   Compute encoders play `setStageInRegion:` (the runtime takes it and it changes nothing a
   dispatch of a kernel without a stage-in argument does, the only kernel it builds) and
   `setImageblockWidth:height:`, whose size the player's pre-pass passes with each dispatch it
-  prepares, 1 by 1 until the encoder sets one. They play their residency declarations through the
-  runtime's compute encoder: `useResource:usage:` and, for each resource of its list,
-  `useResources:count:usage:` through `use_resource` with the usage; `useHeap:` and, for each heap
-  of its list, `useHeaps:count:` through `use_heap`.
+  prepares, 1 by 1 until the encoder sets one. Render and compute encoders play their residency
+  declarations through the runtime's encoder: `useResource:usage:` and, for each resource of its
+  list, `useResources:count:usage:` through `use_resource` with the usage (`MTLResourceUsage`'s
+  read, write and sample bits); `useHeap:` and, for each heap of its list, `useHeaps:count:`
+  through `use_heap`. A render encoder's forms with `stages:` play as those without: the
+  runtime's render encoder takes no stages.
 
 `report.txt` holds one line per item: the mode line (`mode full: every call` or `mode
 states-only: ...`) first, then the line `recorded before the recorder's completion fix: the

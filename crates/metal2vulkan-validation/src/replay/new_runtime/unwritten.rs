@@ -17,7 +17,8 @@
 //!
 //! What reaches a buffer's bytes: an `m2v.write` into it, into its block over them or into another
 //! buffer of the block over them; a call of a blit or render encoder that names it or another
-//! buffer of the block over them (a copy, a fill, an upload from the guest's RAM, an attachment);
+//! buffer of the block over them (a copy, a fill, an upload from the guest's RAM, an attachment, a
+//! residency declaration);
 //! and the commit of a command buffer whose dispatch writes it or another buffer of the block over
 //! them. A block's bytes reached before a buffer is made over them reach the buffer, as those
 //! after do. Every commit the player makes counts here: a `commit`, an `m2v.split` and an

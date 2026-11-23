@@ -644,12 +644,14 @@ pub struct NewRuntime {
     videos: videos::Videos,
 }
 
-/// The objects `values` name, lists included.
+/// The objects `values` name, lists included, and a resource argument's (`{Buffer: object}` or
+/// `{Texture: object}`).
 pub(super) fn objects_named(values: &[Value], out: &mut Vec<u64>) {
     for value in values {
         match value {
             Value::Object(id) => out.push(*id),
             Value::List(items) => objects_named(items, out),
+            Value::Map(_) => out.extend(value.as_resource()),
             _ => {}
         }
     }
@@ -1213,11 +1215,6 @@ impl NewRuntime {
             Object::Fence(fence) => Ok(fence.clone()),
             _ => Err(refuse(call, format!("#{id} is no fence"))),
         }
-    }
-
-    /// The block of the heap argument `at` names; none for a skipped object.
-    fn heap_of(&self, call: &Call, at: usize) -> Result<Option<rt::BlockId>, PlayError> {
-        self.block_of(call, Self::id(call, at)?)
     }
 
     /// The block of heap `id`; none for a skipped object.
